@@ -231,6 +231,80 @@ describe('probeMountInfo', () => {
     expect(await leftoverScratch(vfs, '/tmp')).toEqual([]);
   });
 
+  it('reports as-written when a byte-exact listing returns NFD before NFC', async () => {
+    const vfs = await newVfs();
+    await vfs.mkdir('/tmp', { recursive: true });
+    const wrapped = wrapProbeFs(vfs, {
+      readDir: async (path) => {
+        const entries = await vfs.readDir(path);
+        return [...entries].sort((a, b) => {
+          if (a.name === NFD_PROBE_NAME) return -1;
+          if (b.name === NFD_PROBE_NAME) return 1;
+          return a.name.localeCompare(b.name);
+        });
+      },
+    });
+
+    const info = await probeMountInfo(wrapped, '/tmp');
+    expect(info.unicodeNormalization).toBe('byte-exact');
+    expect(info.unicodeStorage).toBe('as-written');
+    expect(await leftoverScratch(vfs, '/tmp')).toEqual([]);
+  });
+
+  it('deletes S3 prefix objects even when recursive remove is unsupported', async () => {
+    const objects = new Map<string, Uint8Array>();
+    const rel = (path: string) => path.replace(/^\/+|\/+$/g, '');
+    const fs: MountProbeFs = {
+      writeFile: async (path, content) => {
+        const body = typeof content === 'string' ? new TextEncoder().encode(content) : content;
+        objects.set(rel(path), body);
+      },
+      exists: async (path) => objects.has(rel(path)),
+      readDir: async (path) => {
+        const prefix = rel(path);
+        const pre = prefix === '' ? '' : `${prefix}/`;
+        const files = new Set<string>();
+        const dirs = new Set<string>();
+        for (const key of objects.keys()) {
+          if (!key.startsWith(pre)) continue;
+          const rest = key.slice(pre.length);
+          if (!rest) continue;
+          const slash = rest.indexOf('/');
+          if (slash === -1) files.add(rest);
+          else dirs.add(rest.slice(0, slash));
+        }
+        return [
+          ...[...dirs].map((name) => ({ name, type: 'directory' as const })),
+          ...[...files].map((name) => ({ name, type: 'file' as const })),
+        ];
+      },
+      stat: async (path) => {
+        const body = objects.get(rel(path));
+        if (body) {
+          return { type: 'file', size: body.byteLength, mtime: 1, ctime: 1, mode: 0o100644 };
+        }
+        return { type: 'directory', size: 0, mtime: 1, ctime: 1 };
+      },
+      mkdir: async () => {},
+      rm: async (path, options) => {
+        if (options?.recursive) {
+          throw new FsError('EINVAL', 'recursive remove not yet supported on S3', path);
+        }
+        const key = rel(path);
+        if (!objects.has(key)) throw new FsError('ENOENT', 'no such file', path);
+        objects.delete(key);
+      },
+      listMountPoints: () => [{ path: '/mnt/s3', kind: 's3' }],
+    };
+    objects.set('keep', new Uint8Array([1]));
+
+    const info = await probeMountInfo(fs, '/mnt/s3');
+    expect(info.kind).toBe('s3');
+    expect(info.writable).toBe(true);
+    expect([...objects.keys()].filter((k) => k.includes('.slicc-mi-'))).toEqual([]);
+    expect(objects.has('keep')).toBe(true);
+  });
+
   it('removes the scratch directory even when a later write fails', async () => {
     const vfs = await newVfs();
     await vfs.mkdir('/tmp', { recursive: true });

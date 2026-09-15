@@ -221,14 +221,48 @@ export async function probeMountInfo(
   try {
     return await runProbes(fs, dir, mount, scratch);
   } finally {
-    try {
-      await fs.rm(scratch, { recursive: true });
-    } catch (err) {
-      log.warn('mount info: failed to remove scratch dir', {
-        scratch,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    await removeScratch(fs, scratch);
+  }
+}
+
+/**
+ * S3 rejects recursive remove; DA/AEM have no directories (mkdir is a
+ * no-op, so the scratch "dir" is only a key prefix). Delete children
+ * first, then the prefix, so a failed recursive rm cannot leak objects.
+ */
+async function removeScratch(fs: MountProbeFs, scratch: string): Promise<void> {
+  try {
+    const entries = await fs.readDir(scratch);
+    for (const entry of entries) {
+      const child = joinPath(scratch, entry.name);
+      try {
+        await fs.rm(child, entry.type === 'directory' ? { recursive: true } : undefined);
+      } catch {
+        try {
+          await fs.rm(child);
+        } catch {
+          /* last chance is the prefix delete below */
+        }
+      }
     }
+  } catch {
+    /* listing failed — still try to delete the prefix */
+  }
+  try {
+    await fs.rm(scratch, { recursive: true });
+    return;
+  } catch {
+    /* S3 throws EINVAL for recursive; fall through */
+  }
+  try {
+    await fs.rm(scratch);
+  } catch (err) {
+    // S3/DA/AEM prefixes are not objects; ENOENT after deleting children is success.
+    if (err instanceof FsError && err.code === 'ENOENT') return;
+    log.warn('mount info: failed to remove scratch dir', {
+      scratch,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -258,23 +292,19 @@ async function runProbes(
 
   const entries = await fs.readDir(scratch);
   const names = listedNames(entries);
-  const nfcListed = names.find(
-    (n) => n === NFC_PROBE_NAME || n.normalize('NFC') === NFC_PROBE_NAME.normalize('NFC')
-  );
-  const nfdListed = names.find(
-    (n) => n === NFD_PROBE_NAME || n.normalize('NFC') === NFD_PROBE_NAME.normalize('NFC')
-  );
-
-  if (nfcListed) {
-    info.unicodeStorage = unicodeStorageOf(NFC_PROBE_NAME, nfcListed);
-  } else if (nfdListed) {
-    info.unicodeStorage = unicodeStorageOf(NFD_PROBE_NAME, nfdListed);
-  }
-
-  // If we wrote both forms and they collapsed to one listing, storage is
-  // whichever form came back; if both distinct forms are listed, as-written.
-  if (!nfdExists && nfcListed && nfdListed && nfcListed !== nfdListed) {
+  // Exact spellings first: a listing that returns NFD before NFC would
+  // otherwise make both NFC-equivalent finds hit the same NFD entry.
+  const exactNfc = names.find((n) => n === NFC_PROBE_NAME);
+  const exactNfd = names.find((n) => n === NFD_PROBE_NAME);
+  if (exactNfc && exactNfd && exactNfc !== exactNfd) {
     info.unicodeStorage = 'as-written';
+  } else if (exactNfd && !exactNfc) {
+    info.unicodeStorage = 'nfd';
+  } else if (exactNfc && !exactNfd) {
+    info.unicodeStorage = nfdExists ? 'as-written' : 'nfc';
+  } else {
+    const equiv = names.find((n) => n.normalize('NFC') === NFC_PROBE_NAME.normalize('NFC'));
+    if (equiv) info.unicodeStorage = unicodeStorageOf(NFC_PROBE_NAME, equiv);
   }
 
   const caseExact = hasExactName(entries, CASE_PROBE_NAME);
