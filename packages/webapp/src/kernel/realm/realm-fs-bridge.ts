@@ -401,12 +401,14 @@ function removeWithBridgeFallback(
   syncFs: SyncFsCache,
   bridge: SyncFsXhrBridge | undefined,
   resolved: string,
-  opts: { recursive?: boolean; requireFile?: boolean } = {}
+  opts: { recursive?: boolean; requireFile?: boolean } = {},
+  persistDelete?: (path: string) => void
 ): boolean {
   const recursive = opts.recursive === true;
   try {
     if (opts.requireFile) syncFs.unlink(resolved);
     else syncFs.rm(resolved, recursive);
+    persistDelete?.(resolved);
     return true;
   } catch (err) {
     // Only a genuine miss falls through — EISDIR / ENOTEMPTY are real Node
@@ -429,6 +431,7 @@ function removeWithBridgeFallback(
 interface RemovalDeps {
   syncFs: SyncFsCache;
   bridge: SyncFsXhrBridge | undefined;
+  persistDelete?: (path: string) => void;
   resolve: (p: string) => string;
   existsResolved: (resolved: string) => boolean;
   statResolved: (resolved: string) => {
@@ -462,9 +465,10 @@ function createRemovalOps(deps: RemovalDeps) {
     statResolved,
     readBytes,
     writeThrough,
+    persistDelete,
   } = deps;
   const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) =>
-    removeWithBridgeFallback(syncFs, bridge, resolved, opts);
+    removeWithBridgeFallback(syncFs, bridge, resolved, opts, persistDelete);
   return {
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
@@ -596,8 +600,12 @@ function toBytes(data: unknown): Uint8Array {
  * by the pre-loaded {@link SyncFsCache}. These are plain synchronous
  * functions — the realm's AsyncFunction wrapper cannot `await` an RPC
  * round-trip from a sync call site, so the cache is populated once via a
- * `vfs.snapshot` RPC before user code runs, and mutations are diffed and
- * flushed back via `vfs.flushWrites` after user code completes (see
+ * `vfs.snapshot` RPC before user code runs. File-body writes
+ * (`writeFileSync` / `appendFileSync` / …) are durable at call time:
+ * write-through to the live VFS when the SW/SAB bridge is present, otherwise
+ * a fire-and-forget {@link PersistSyncWrite} so a later SIGKILL still sees
+ * them (#3136). Remaining cache-only mutations (mkdir/rm/rename) are diffed
+ * and flushed back via `vfs.flushWrites` after user code completes (see
  * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
  * async and sync method sets, matching Node's `fs` module shape.
  *
@@ -633,11 +641,41 @@ function toBytes(data: unknown): Uint8Array {
  * `/dev/std{in,out,err}` are intercepted BEFORE `resolve()` and never touch
  * the cache or the live VFS — see {@link overlaySyncStdio}.
  */
+/** Host-side apply for cache-only sync writes/deletes. Posted when the SW/SAB bridge is absent (#3136). */
+export type PersistSyncHooks = {
+  write?: (path: string, bytes: Uint8Array) => void;
+  delete?: (path: string) => void;
+};
+
+/** Write-through to the live VFS, or cache + persist hook when the bridge is absent. */
+function writeThroughCacheOrBridge(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  persist: PersistSyncHooks | undefined,
+  resolved: string,
+  bytes: Uint8Array
+): void {
+  if (bridge) {
+    // commitWrite advances the mutation baseline, so this is NOT re-flushed —
+    // deliberately NOT syncFs.writeFile (which would record a mutation the
+    // end-of-run flush re-applies, double-writing).
+    bridge.writeFile(resolved, bytes);
+    syncFs.commitWrite(resolved, bytes);
+  } else {
+    // Cache-only until the end-of-script flush — AND tell the host now so a
+    // SIGKILL of this realm still has the completed write (#3136). The exit
+    // flush re-applies the same bytes (idempotent by content).
+    syncFs.writeFile(resolved, bytes);
+    persist?.write?.(resolved, bytes);
+  }
+}
+
 export function createSyncFsBridge(
   syncFs: SyncFsCache,
   cwd: string,
   bridge?: SyncFsXhrBridge,
-  stdio?: RealmStdioBridge
+  stdio?: RealmStdioBridge,
+  persist?: PersistSyncHooks
 ) {
   function resolve(p: string): string {
     // Lexically normalize ('.'/'..') so the bridge URL carries a clean absolute
@@ -664,18 +702,8 @@ export function createSyncFsBridge(
       throw err;
     }
   }
-  /** Write-through to the live VFS + commit into the cache (read-after-write coherent). */
-  function writeThrough(resolved: string, bytes: Uint8Array): void {
-    if (bridge) {
-      // commitWrite advances the mutation baseline, so this is NOT re-flushed —
-      // deliberately NOT syncFs.writeFile (which would record a mutation the
-      // end-of-run flush re-applies, double-writing).
-      bridge.writeFile(resolved, bytes);
-      syncFs.commitWrite(resolved, bytes);
-    } else {
-      syncFs.writeFile(resolved, bytes);
-    }
-  }
+  const writeThrough = (resolved: string, bytes: Uint8Array): void =>
+    writeThroughCacheOrBridge(syncFs, bridge, persist, resolved, bytes);
   function existsResolved(resolved: string): boolean {
     if (syncFs.exists(resolved)) return true;
     // Node's `existsSync` never throws — a live check that would surface
@@ -750,6 +778,7 @@ export function createSyncFsBridge(
     ...createRemovalOps({
       syncFs,
       bridge,
+      persistDelete: persist?.delete,
       resolve,
       existsResolved,
       statResolved,

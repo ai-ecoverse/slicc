@@ -7,7 +7,9 @@
  * The realm responds with at most one of `RealmDoneMsg` /
  * `RealmErrorMsg` and then goes silent. Between init and done, the
  * realm may issue any number of `RealmRpcRequest` messages; the host
- * answers each with a matching `RealmRpcResponse`.
+ * answers each with a matching `RealmRpcResponse`. It may also post
+ * fire-and-forget `RealmOutputMsg` / `RealmFsWriteMsg` so a later
+ * SIGKILL still has stdout and completed sync writes (#3136).
  *
  * Termination is uncatchable from the realm's side — the host
  * decides via `Realm.terminate()` (`worker.terminate()`), which is
@@ -146,6 +148,39 @@ export interface RealmDoneMsg {
 export interface RealmErrorMsg {
   type: 'realm-error';
   message: string;
+}
+
+/**
+ * Fire-and-forget stdout/stderr chunk. The host accumulates these so a
+ * SIGKILL/timeout still returns output written before the hang (#3136).
+ * `realm-done` remains the authoritative full dump on a normal exit.
+ */
+export interface RealmOutputMsg {
+  type: 'realm-output';
+  stream: 'stdout' | 'stderr';
+  chunk: string;
+}
+
+/**
+ * Fire-and-forget cache-only sync write. Posted when the SW/SAB bridge is
+ * absent so `writeFileSync`/`appendFileSync` still land on the host VFS at
+ * call time — a later `realm.terminate()` cannot run the end-of-script
+ * `flushWrites` (#3136). Idempotent with the exit flush.
+ */
+export interface RealmFsWriteMsg {
+  type: 'realm-fs-write';
+  path: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * Fire-and-forget cache-only sync delete. Paired with {@link RealmFsWriteMsg}
+ * so a write-then-rm in the same turn does not resurrect the file on the host
+ * after a later `realm.terminate()` (#3136 / #2157).
+ */
+export interface RealmFsDeleteMsg {
+  type: 'realm-fs-delete';
+  path: string;
 }
 
 /**

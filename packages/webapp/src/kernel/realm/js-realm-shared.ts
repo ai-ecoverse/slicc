@@ -58,7 +58,14 @@ import {
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import { createSerialBridge, type RealmSerialApi } from './realm-serial-bridge.js';
 import { createTimerHandleTracker, type TimerHandleTracker } from './realm-timer-handles.js';
-import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmFsDeleteMsg,
+  RealmFsWriteMsg,
+  RealmInitMsg,
+  RealmOutputMsg,
+  SerializedFetchResponse,
+} from './realm-types.js';
 import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
@@ -163,7 +170,15 @@ function installSyncBridges(
 ): SyncExecXhrBridge | undefined {
   const sab = resolveSyncSabTransport(init, port);
   const syncFsXhr = resolveSyncFsBridge(init, sab);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio));
+  const persist = {
+    write: (path: string, bytes: Uint8Array): void => {
+      port.postMessage({ type: 'realm-fs-write', path, bytes } satisfies RealmFsWriteMsg);
+    },
+    delete: (path: string): void => {
+      port.postMessage({ type: 'realm-fs-delete', path } satisfies RealmFsDeleteMsg);
+    },
+  };
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio, persist));
   if (!init.syncFsToken) return undefined;
   return createSyncExecXhrBridge(init.syncFsToken, {
     syncFs,
@@ -263,8 +278,10 @@ function createDeviceBridges(rpc: RealmRpcClient): {
 /**
  * Run a `kind:'js'` realm against `port`. Posts exactly one
  * `realm-done` (or `realm-error` on a bootstrap throw, which the
- * caller is expected to surface separately). Returns when the
- * `realm-done` has been posted.
+ * caller is expected to surface separately), plus fire-and-forget
+ * `realm-output` / `realm-fs-write` as the script prints and writes
+ * so a later SIGKILL still has that evidence (#3136). Returns when
+ * the `realm-done` has been posted.
  *
  * `require()` resolves synchronously from a host-built CJS module graph
  * (the `module`/`buildGraph` RPC over `port`), preserving `node:`/`sliccy:`
@@ -274,11 +291,17 @@ function createDeviceBridges(rpc: RealmRpcClient): {
 export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
+  const writeStream = (stream: 'stdout' | 'stderr', chunks: string[], value: unknown): void => {
+    const chunk = typeof value === 'string' ? value : String(value);
+    chunks.push(chunk);
+    // Stream immediately so a later SIGKILL still has this output (#3136).
+    port.postMessage({ type: 'realm-output', stream, chunk } satisfies RealmOutputMsg);
+  };
   const writeStdout = (value: unknown): void => {
-    stdoutChunks.push(typeof value === 'string' ? value : String(value));
+    writeStream('stdout', stdoutChunks, value);
   };
   const writeStderr = (value: unknown): void => {
-    stderrChunks.push(typeof value === 'string' ? value : String(value));
+    writeStream('stderr', stderrChunks, value);
   };
 
   const nodeConsole = createNodeConsole(writeStdout, writeStderr);

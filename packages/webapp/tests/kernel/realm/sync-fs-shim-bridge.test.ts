@@ -76,10 +76,48 @@ test('without a bridge, over-cap readFileSync still throws ENOSYNC (today behavi
   expect(() => shim.readFileSync('/workspace/big.bin')).toThrow(/ENOSYNC/);
 });
 
+test('without a bridge, writeFileSync notifies persistWrite at call time (#3136)', () => {
+  const persisted: Array<{ path: string; text: string }> = [];
+  const syncFs = cache();
+  const shim = createSyncFsBridge(syncFs, '/workspace', undefined, undefined, {
+    write: (path, bytes) => {
+      persisted.push({ path, text: new TextDecoder().decode(bytes) });
+    },
+  });
+  shim.writeFileSync('/workspace/out.txt', 'early');
+  shim.appendFileSync('/workspace/out.txt', ' late');
+  expect(persisted).toEqual([
+    { path: '/workspace/out.txt', text: 'early' },
+    { path: '/workspace/out.txt', text: 'early late' },
+  ]);
+  // Still recorded as cache mutations so the end-of-script flush retries.
+  const m = syncFs.getMutations();
+  expect(m.created.length + m.modified.length).toBeGreaterThan(0);
+});
+
+test('without a bridge, rmSync notifies persist.delete at call time (#3136)', () => {
+  const deleted: string[] = [];
+  const syncFs = cache([
+    { path: '/workspace/gone.txt', content: new Uint8Array([1]), isDirectory: false },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', undefined, undefined, {
+    delete: (path) => {
+      deleted.push(path);
+    },
+  });
+  shim.rmSync('/workspace/gone.txt');
+  expect(deleted).toEqual(['/workspace/gone.txt']);
+});
+
 test('writeFileSync write-throughs to the bridge, invalidates cache, read-after-write coherent', () => {
   const store = new Map<string, Uint8Array>();
   const syncFs = cache();
-  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  const persist = {
+    write: (): void => {
+      throw new Error('persist.write must not run when the SW/SAB bridge is present');
+    },
+  };
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store), undefined, persist);
   shim.writeFileSync('/workspace/out.txt', 'written');
   // Written live through the bridge …
   expect(new TextDecoder().decode(store.get('/workspace/out.txt') as Uint8Array)).toBe('written');

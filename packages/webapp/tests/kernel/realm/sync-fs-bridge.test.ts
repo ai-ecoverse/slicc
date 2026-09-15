@@ -188,7 +188,9 @@ describe('sync FS bridge (integration)', () => {
     ctx.fs.writeFile = async (path: string, content: string | Uint8Array) => {
       if (path === '/workspace/transient.txt') {
         attempts += 1;
-        // First flush attempt (pre-exec) fails; the exit-flush retry succeeds.
+        // First host apply (call-time persist or pre-exec flush) fails; a later
+        // retry (pre-exec or exit flush) succeeds. Call-time persist adds one
+        // extra attempt on top of the original two-flush path (#3136).
         if (attempts === 1) throw new Error('transient backend failure');
       }
       return originalWriteFile(path, content);
@@ -205,7 +207,7 @@ describe('sync FS bridge (integration)', () => {
     expect(out.exitCode).toBe(0);
     // Pre-fix, the failed pre-exec flush still reset the mutation baseline,
     // so the exit flush saw nothing pending and the write was silently lost.
-    expect(attempts).toBe(2);
+    expect(attempts).toBeGreaterThanOrEqual(2);
     expect(await ctx.fs.readFile('/workspace/transient.txt')).toBe('survives');
     // (The failure breadcrumb goes to the worker console, not script stderr.)
   });
