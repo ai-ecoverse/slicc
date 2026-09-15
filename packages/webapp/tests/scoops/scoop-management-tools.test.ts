@@ -800,7 +800,7 @@ describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools'
     const result = await tool.execute({ kind: 'write', detail: '/etc/sudoers' });
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain('Cone decision: deny');
-    expect(result.content).toContain('not approved');
+    expect(result.content).toContain('Not approved');
   });
 
   // Both ends of the round trip: the requester says why it needs this, the
