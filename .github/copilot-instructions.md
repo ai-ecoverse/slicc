@@ -5,7 +5,7 @@ Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage
 
-Bound external calls and surface errors. Cap preload copies globally; cancel queued work on failure and drain active copies.
+Bound external calls and surface errors. Cap preload copies globally; cancel queued work on failure and drain active copies. Test OPFS reloads/async fallbacks; reject live wipes.
 
 ## 2. Cross-runtime parity
 
@@ -34,25 +34,23 @@ Model ID/metadata changes: verify reasoning, input, cost, thinking through
 discovery→enrichment→storage→API. OpenRouter (Free): all pricing dims zero;
 stream refuses IDs not in the live free catalog.
 
-## 7. Tests
-
-OPFS: test native reloads/async fallbacks; reject live wipes.
+## 7. Test coverage
 
 Require mirrored tests, regressions, and coverage floors. OPFS retries need fresh Files, bounded attempts, and error tests.
 
-## 8. Follower surface wiring parity
+## 8. Follower surface wiring parity (often Critical)
 
 Leader broadcasts need follower handlers and UI actions. Check live, follower, and extension
 boot paths; preserve shared fallbacks; prefer capability checks to float names.
 
-## 9. Origin / bridge routing contract (often Major)
+## 9. Origin / bridge routing contract
 
 Thin-bridge UI and API origins differ. Flag same-origin `/api/` assumptions, hardcoded
 origins, and comparisons without slash normalization. Also flag iframe/channel/relay
 messages or UI activation paths that lose routing ownership. Capture owner at the opening
 interaction, not later focus; test shell-open, rail-open, and attention promotion.
 
-## 10. Layer import direction (Major)
+## 10. Layer import direction
 
 Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack and
 cross-package relative imports; move shared code down or to `@slicc/shared-ts`, never grow
@@ -73,7 +71,7 @@ flag any read of it — the compiler cannot catch it yet.
 Capability/command/argument/workflow changes must update matching runtime + developer
 `SKILL.md` files. Run skill-router + sync checks.
 
-## 13. Transcript export — redaction boundary (Critical)
+## 13. Transcript export
 
 Require fail-closed redaction, `reasoningExcluded: true`, sudo-funnel approval
 (`kind: 'export'`; only `NOPASSWD Export` skips it, follower-delegated when headless),

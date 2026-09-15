@@ -20,10 +20,9 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 ## VirtualFS
 
-- Optional `opfsAsyncCache: false` skips the eager ZenFS content copy and uses async fallbacks. Defaults remain enabled; same-database initializers are serialized and explicit configuration conflicts fail with EBUSY. See [preload experiment and native harness](filesystem-preload.md).
-
 - Path: `packages/webapp/src/fs/`. `virtual-fs.ts` POSIX-like FS backed by OPFS (in-memory in Node tests). `restricted-fs.ts` path ACLs. `mount-commands.ts` parses `--source`/`--profile`/`--no-probe`; `path-utils.ts` normalization.
 - `mount/` — `MountBackend` + `backend-local.ts` / `backend-s3.ts` / `backend-da.ts` and shared `RemoteMountCache` (TTL+ETag, IDB). Browser-naive signing: CLI → `/api/s3-sign-and-forward`, extension → SW. `mount-table-store.ts` / `mount-recovery.ts` persist and restore. See `docs/mounts.md`.
+- Optional `opfsAsyncCache: false` skips the eager ZenFS content copy and uses async fallbacks. Defaults remain enabled; same-database initializers are serialized and explicit configuration conflicts fail with EBUSY. See [preload experiment and native harness](filesystem-preload.md).
 
 ## Shell
 

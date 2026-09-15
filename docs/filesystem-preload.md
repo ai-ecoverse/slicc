@@ -26,6 +26,10 @@ API adoption, not a newly released feature or a dependency upgrade.
   regardless of the requested cache mode. Dispose those holders before wiping.
 - No UI, environment variable, or runtime default enables the experiment.
 
+OPFS mount resolution and sidecar repair load on first backend creation from
+`fs/opfs-mount.ts`. This keeps setup code out of the eager worker graph while
+retaining the 16-file preload concurrency limit, repair retry, and write locks.
+
 ## Native browser verification
 
 ```sh
