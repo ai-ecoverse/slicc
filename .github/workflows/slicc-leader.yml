@@ -1,0 +1,316 @@
+name: SLICC leader
+
+# Reusable workflow: boot a SLICC hosted leader on a GitHub Actions runner,
+# keep it alive for `duration`, optionally seed credentials / files / mounts,
+# optionally run one prompt and collect its reply, the exported session, or a
+# VFS file, and optionally lend the runner itself to the leader as an
+# exec-capable follower. Composite actions + scripts live in
+# packages/github-workflow/ (see its README for the input reference).
+#
+# Call it from another repo:
+#   jobs:
+#     slicc:
+#       uses: ai-ecoverse/slicc/.github/workflows/slicc-leader.yml@main
+#       with: { duration: 45m, prompt: 'Summarize /mnt/repo/README.md' }
+#       secrets:
+#         SLICC_CONE_CONFIG: ${{ secrets.SLICC_CONE_CONFIG }}
+#
+# The join URL is a bearer capability. With `mask-join-url: true` (default)
+# it is redacted from logs — and GitHub therefore drops it from the job
+# outputs, so a follow-up job cannot read it. Pass `mask-join-url: false`
+# only for repos whose logs you treat as secret-bearing.
+
+on:
+  workflow_call:
+    inputs:
+      duration:
+        description: Leader lifetime (`30m`, `2h`, `1h30m`; max 350m).
+        type: string
+        default: 30m
+      prompt:
+        description: Optional first prompt; the workflow waits for the turn to complete.
+        type: string
+        default: ''
+      prompt-timeout:
+        description: Wall-clock cap for the prompt turn.
+        type: string
+        default: 30m
+      stop-after-prompt:
+        description: Tear the leader down once the prompt completes instead of holding until `duration`.
+        type: boolean
+        default: false
+      model:
+        description: Model id override (pi-ai alias).
+        type: string
+        default: ''
+      effort-level:
+        description: off|minimal|low|medium|high|xhigh
+        type: string
+        default: ''
+      checkout:
+        description: Check out the calling repository first (needed for `inject-path` / mounts under the workspace).
+        type: boolean
+        default: true
+      inject-path:
+        description: Directory (relative to the workspace) to copy into the VFS after boot.
+        type: string
+        default: ''
+      inject-target:
+        description: VFS directory that receives `inject-path`.
+        type: string
+        default: /
+      mounts:
+        description: Mount table, one `<runner-path>:<slicc-path>` per line.
+        type: string
+        default: ''
+      fetch-file:
+        description: VFS path to copy back as the `<artifact-prefix>-file` artifact.
+        type: string
+        default: ''
+      export-session:
+        description: Export the session transcript bundle as the `<artifact-prefix>-session` artifact.
+        type: boolean
+        default: false
+      expose-follower:
+        description: Lend this runner to the leader as an exec-capable follower.
+        type: boolean
+        default: false
+      follower-runner:
+        description: Runner argv for the follower (`bash -c`, `docker exec -i box sh -c`, …).
+        type: string
+        default: bash -c
+      slicc-version:
+        description: npm version of `sliccy` (node-server) to run.
+        type: string
+        default: latest
+      cli-version:
+        description: Release tag of the Go `slicc` CLI, or `latest`.
+        type: string
+        default: latest
+      slicc-ref:
+        description: Ref of ai-ecoverse/slicc to take the actions from.
+        type: string
+        default: main
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        description: Job timeout; must exceed `duration` plus setup.
+        type: number
+        default: 360
+      port:
+        description: Local bridge port.
+        type: string
+        default: '5710'
+      ui-origin:
+        description: Hosted UI origin override.
+        type: string
+        default: ''
+      tray-worker-base-url:
+        description: Tray relay override.
+        type: string
+        default: ''
+      mask-join-url:
+        description: Redact the join URL (drops it from job outputs).
+        type: boolean
+        default: true
+      artifact-prefix:
+        description: Prefix for uploaded artifacts.
+        type: string
+        default: slicc
+    secrets:
+      SLICC_CONE_CONFIG:
+        description: JSON `{model?, effortLevel?, accounts[], secrets[]}` bundle.
+        required: false
+      SLICC_SECRETS_ENV:
+        description: secrets.env text (`NAME=value` + `NAME_DOMAINS=…`).
+        required: false
+    outputs:
+      join-url:
+        description: Join URL (empty when masked).
+        value: ${{ jobs.leader.outputs.join-url }}
+      tray-id:
+        description: Tray id.
+        value: ${{ jobs.leader.outputs.tray-id }}
+      slicc-version:
+        description: SLICC version the leader reported.
+        value: ${{ jobs.leader.outputs.slicc-version }}
+      response:
+        description: Assistant reply to `prompt` (truncated to 256 KB; full text in the response artifact).
+        value: ${{ jobs.leader.outputs.response }}
+      prompt-exit-code:
+        description: Exit status of the prompt turn.
+        value: ${{ jobs.leader.outputs.prompt-exit-code }}
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Leader lifetime (`30m`, `2h`).
+        default: 30m
+      prompt:
+        description: Optional first prompt.
+        default: ''
+      inject-path:
+        description: Workspace directory to copy into the VFS.
+        default: ''
+      mounts:
+        description: Mount table, one `<runner-path>:<slicc-path>` per line.
+        default: ''
+      fetch-file:
+        description: VFS path to copy back as an artifact.
+        default: ''
+      export-session:
+        description: Export the session bundle.
+        type: boolean
+        default: false
+      expose-follower:
+        description: Lend this runner to the leader as a follower.
+        type: boolean
+        default: false
+      model:
+        description: Model id override.
+        default: ''
+      slicc-version:
+        description: npm version of `sliccy`.
+        default: latest
+      mask-join-url:
+        description: Redact the join URL.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  leader:
+    runs-on: ${{ inputs.runs-on || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.timeout-minutes || 360 }}
+    outputs:
+      join-url: ${{ steps.start.outputs.join-url }}
+      tray-id: ${{ steps.start.outputs.tray-id }}
+      slicc-version: ${{ steps.start.outputs.slicc-version }}
+      response: ${{ steps.prompt.outputs.response }}
+      prompt-exit-code: ${{ steps.prompt.outputs.exit-code }}
+    env:
+      SLICC_GW_HOME: ${{ runner.temp }}/slicc-gw
+    steps:
+      # The caller's repo first: a later checkout into `.` would `git clean`
+      # the tools checkout away.
+      - name: Check out the calling repository
+        if: inputs.checkout || github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check out the SLICC actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ai-ecoverse/slicc
+          ref: ${{ inputs.slicc-ref || 'main' }}
+          path: .slicc-gw
+          sparse-checkout: packages/github-workflow
+          persist-credentials: false
+
+      - name: Start leader
+        id: start
+        uses: ./.slicc-gw/packages/github-workflow/actions/start-leader
+        with:
+          slicc-version: ${{ inputs.slicc-version || 'latest' }}
+          port: ${{ inputs.port || '5710' }}
+          duration: ${{ inputs.duration || '30m' }}
+          mounts: ${{ inputs.mounts }}
+          cone-config: ${{ secrets.SLICC_CONE_CONFIG }}
+          secrets-env: ${{ secrets.SLICC_SECRETS_ENV }}
+          model: ${{ inputs.model }}
+          effort-level: ${{ inputs.effort-level }}
+          ui-origin: ${{ inputs.ui-origin }}
+          tray-worker-base-url: ${{ inputs.tray-worker-base-url }}
+          mask-join-url: ${{ inputs.mask-join-url != false }}
+
+      - name: Install the slicc CLI
+        uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
+        with:
+          version: ${{ inputs.cli-version || 'latest' }}
+
+      - name: Inject files into the VFS
+        if: inputs.inject-path != ''
+        uses: ./.slicc-gw/packages/github-workflow/actions/inject-files
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          source: ${{ github.workspace }}/${{ inputs.inject-path }}
+          target: ${{ inputs.inject-target || '/' }}
+
+      - name: Expose this runner as a follower
+        if: inputs.expose-follower
+        uses: ./.slicc-gw/packages/github-workflow/actions/follow
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          runner: ${{ inputs.follower-runner || 'bash -c' }}
+
+      - name: Prompt
+        id: prompt
+        if: inputs.prompt != ''
+        continue-on-error: true
+        uses: ./.slicc-gw/packages/github-workflow/actions/prompt
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          prompt: ${{ inputs.prompt }}
+          timeout: ${{ inputs.prompt-timeout || '30m' }}
+          output-file: ${{ runner.temp }}/slicc-gw/out/response.md
+
+      - name: Upload response
+        if: inputs.prompt != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-prefix || 'slicc' }}-response
+          path: ${{ runner.temp }}/slicc-gw/out/response.md
+          if-no-files-found: ignore
+
+      - name: Export session
+        if: inputs.export-session
+        uses: ./.slicc-gw/packages/github-workflow/actions/export-session
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          local: ${{ runner.temp }}/slicc-gw/out/session.zip
+
+      - name: Upload session
+        if: inputs.export-session
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-prefix || 'slicc' }}-session
+          path: ${{ runner.temp }}/slicc-gw/out/session.zip
+
+      - name: Fetch VFS file
+        if: inputs.fetch-file != ''
+        uses: ./.slicc-gw/packages/github-workflow/actions/read-file
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          path: ${{ inputs.fetch-file }}
+          local: ${{ runner.temp }}/slicc-gw/out/fetched/${{ inputs.fetch-file }}
+
+      - name: Upload VFS file
+        if: inputs.fetch-file != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-prefix || 'slicc' }}-file
+          path: ${{ runner.temp }}/slicc-gw/out/fetched
+
+      - name: Keep the leader alive until the deadline
+        if: ${{ !(inputs.stop-after-prompt && inputs.prompt != '') }}
+        uses: ./.slicc-gw/packages/github-workflow/actions/keep-alive
+
+      - name: Stop leader
+        if: always()
+        uses: ./.slicc-gw/packages/github-workflow/actions/stop-leader
+
+      - name: Upload leader logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-prefix || 'slicc' }}-leader-logs
+          path: ${{ runner.temp }}/slicc-gw/*.log
+          if-no-files-found: ignore
+
+      - name: Fail if the prompt failed
+        if: inputs.prompt != '' && steps.prompt.outcome != 'success'
+        run: |
+          echo "::error::prompt step ${{ steps.prompt.outcome }} (exit ${{ steps.prompt.outputs.exit-code }})"
+          exit 1

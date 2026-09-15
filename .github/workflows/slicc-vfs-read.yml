@@ -1,0 +1,72 @@
+name: SLICC VFS read
+
+# Reusable workflow: copy one file out of a running leader's VFS and publish
+# it as a workflow artifact.
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Absolute VFS path to read.
+        type: string
+        required: true
+      artifact-name:
+        description: Artifact that receives the file.
+        type: string
+        default: slicc-vfs-file
+      cli-version:
+        description: Release tag of the Go `slicc` CLI, or `latest`.
+        type: string
+        default: latest
+      slicc-ref:
+        description: Ref of ai-ecoverse/slicc to take the actions from.
+        type: string
+        default: main
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+    secrets:
+      SLICC_JOIN_URL:
+        description: The leader's join link.
+        required: true
+    outputs:
+      bytes:
+        description: Bytes copied.
+        value: ${{ jobs.read.outputs.bytes }}
+      artifact-name:
+        description: Name of the uploaded artifact.
+        value: ${{ inputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
+    outputs:
+      bytes: ${{ steps.read.outputs.bytes }}
+    env:
+      SLICC_GW_HOME: ${{ runner.temp }}/slicc-gw
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ai-ecoverse/slicc
+          ref: ${{ inputs.slicc-ref }}
+          path: .slicc-gw
+          sparse-checkout: packages/github-workflow
+          persist-credentials: false
+      - uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
+        with:
+          version: ${{ inputs.cli-version }}
+      - id: read
+        uses: ./.slicc-gw/packages/github-workflow/actions/read-file
+        with:
+          join-url: ${{ secrets.SLICC_JOIN_URL }}
+          path: ${{ inputs.path }}
+          local: ${{ runner.temp }}/slicc-gw/out/${{ inputs.path }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/slicc-gw/out

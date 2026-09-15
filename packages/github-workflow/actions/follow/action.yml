@@ -1,0 +1,44 @@
+name: SLICC — follow
+description: >-
+  Expose this runner to a leader as an exec-capable follower
+  (`slicc <join-url> follow <runner>`), detached, until stop-leader or the
+  job ends. The leader's agent reaches it through its `ssh` shell command.
+  This is remote code execution on the runner by design.
+inputs:
+  join-url:
+    description: The leader's join link.
+    required: true
+  runner:
+    description: Runner argv the leader's commands are appended to (whitespace-split, no quoting). Empty disables exec.
+    default: bash -c
+  eval:
+    description: Persistent-REPL mode (`follow --eval`).
+    default: 'false'
+  eval-quiet:
+    description: Output-quiescence window for eval mode (e.g. `2s`).
+    default: ''
+  connect-timeout:
+    description: How long to wait for the follower to report `connected`.
+    default: 90s
+outputs:
+  pid:
+    description: Follower pid.
+    value: ${{ steps.follow.outputs.pid }}
+  log-path:
+    description: Follower log on the runner.
+    value: ${{ steps.follow.outputs.log-path }}
+  connected:
+    description: Whether `connected` was observed within `connect-timeout`.
+    value: ${{ steps.follow.outputs.connected }}
+runs:
+  using: composite
+  steps:
+    - id: follow
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_RUNNER: ${{ inputs.runner }}
+        INPUT_EVAL: ${{ inputs.eval }}
+        INPUT_EVAL_QUIET: ${{ inputs.eval-quiet }}
+        INPUT_CONNECT_TIMEOUT: ${{ inputs.connect-timeout }}
+      run: node "${{ github.action_path }}/../../scripts/follow.mjs"

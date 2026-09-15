@@ -1,0 +1,15 @@
+name: SLICC — stop leader
+description: >-
+  Tear down the leader, its Chrome, and any followers this job started
+  (reads the state file written by start-leader / follow). Always succeeds;
+  prints the leader log tail. Run it with `if: always()`.
+outputs:
+  log-path:
+    description: node-server log file on the runner.
+    value: ${{ steps.stop.outputs.log-path }}
+runs:
+  using: composite
+  steps:
+    - id: stop
+      shell: bash
+      run: node "${{ github.action_path }}/../../scripts/stop-leader.mjs"

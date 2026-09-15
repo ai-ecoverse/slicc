@@ -18,6 +18,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Review a PR (or tune the bots)    | [review-patterns.md](./review-patterns.md)                                                                             |
 | Add a UI panel or skill           | [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md)                                              |
 | Add a provider (API key or OAuth) | [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md)                                              |
+| Run SLICC in GitHub Actions       | [packages/github-workflow/README.md](../packages/github-workflow/README.md)                                            |
 
 ## Layer Quick Reference
 

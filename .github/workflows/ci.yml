@@ -36,6 +36,7 @@ jobs:
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
+      github-workflow: ${{ steps.filter.outputs.github-workflow }}
       capability-contract: ${{ steps.filter.outputs.capability-contract }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
@@ -82,6 +83,8 @@ jobs:
               - 'packages/cherry/**'
             dev-tools:
               - 'packages/dev-tools/**'
+            github-workflow:
+              - 'packages/github-workflow/**'
             # The CapabilityBroker REST contract (#2276). Replayed by BOTH
             # servers' suites, so a change to it alone must run both jobs —
             # the `shared` filter already pulls in node-server, this pulls in
@@ -343,6 +346,7 @@ jobs:
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
+      needs.changes.outputs.github-workflow == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)

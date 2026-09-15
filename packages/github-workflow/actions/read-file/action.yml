@@ -1,0 +1,34 @@
+name: SLICC — read VFS file
+description: Copy one file from the leader's VFS to the runner, byte-exact.
+inputs:
+  join-url:
+    description: The leader's join link.
+    required: true
+  path:
+    description: Absolute VFS path to read.
+    required: true
+  local:
+    description: Runner path to write.
+    required: true
+  timeout:
+    description: Wall-clock cap.
+    default: 10m
+outputs:
+  bytes:
+    description: Bytes copied.
+    value: ${{ steps.copy.outputs.bytes }}
+  local:
+    description: Runner path written.
+    value: ${{ steps.copy.outputs.local }}
+runs:
+  using: composite
+  steps:
+    - id: copy
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_MODE: read
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_LOCAL: ${{ inputs.local }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+      run: node "${{ github.action_path }}/../../scripts/vfs-file.mjs"

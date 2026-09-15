@@ -1,0 +1,37 @@
+name: SLICC — inject files
+description: Copy a directory tree from the runner into the leader's VFS in one round trip (tar over the exec channel).
+inputs:
+  join-url:
+    description: The leader's join link.
+    required: true
+  source:
+    description: Runner directory to inject.
+    required: true
+  target:
+    description: VFS directory to unpack into.
+    default: /
+  max-bytes:
+    description: Cap on the compressed payload.
+    default: '67108864'
+  timeout:
+    description: Wall-clock cap.
+    default: 10m
+outputs:
+  files:
+    description: Number of files injected.
+    value: ${{ steps.inject.outputs.files }}
+  bytes:
+    description: Compressed payload size.
+    value: ${{ steps.inject.outputs.bytes }}
+runs:
+  using: composite
+  steps:
+    - id: inject
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_SOURCE: ${{ inputs.source }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_MAX_BYTES: ${{ inputs.max-bytes }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+      run: node "${{ github.action_path }}/../../scripts/inject-files.mjs"

@@ -1,0 +1,180 @@
+name: GitHub Workflow Smoke
+
+# End-to-end gate for packages/github-workflow: boots a real hosted leader on
+# the runner (published `sliccy` from npm, the hosted UI from sliccy.ai, a
+# real tray session), drives it with the Go CLI, and exercises every action
+# that does not need an AI provider — exec, VFS read/write round trip, file
+# injection, the mount table, lending the runner as a follower, session
+# export, keep-alive, teardown. A second job runs the reusable
+# `slicc-leader.yml` at this PR's ref so its wiring is covered too.
+#
+# No secrets: there is no provider, so `prompt` is deliberately not part of
+# this gate (it would fail on a credential-less cone).
+
+on:
+  pull_request:
+    paths:
+      - 'packages/github-workflow/**'
+      - '.github/workflows/slicc-*.yml'
+      - '.github/workflows/github-workflow-smoke.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: github-workflow-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  actions:
+    name: Composite actions against a live leader
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SLICC_GW_HOME: ${{ runner.temp }}/slicc-gw
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Start leader
+        id: start
+        uses: ./packages/github-workflow/actions/start-leader
+        with:
+          duration: 8m
+          mounts: |
+            ${{ github.workspace }}/packages/github-workflow:/mnt/gw
+
+      - name: Install the slicc CLI
+        uses: ./packages/github-workflow/actions/install-cli
+
+      - name: exec — uname
+        id: uname
+        uses: ./packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          command: uname -a
+
+      - name: exec — assert output
+        run: |
+          test -n "${{ steps.uname.outputs.stdout }}"
+          test "${{ steps.uname.outputs.exit-code }}" = "0"
+
+      - name: exec — non-zero status is reported, not fatal
+        id: false-cmd
+        uses: ./packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          command: 'false'
+          fail-on-error: 'false'
+
+      - name: exec — assert status
+        run: test "${{ steps.false-cmd.outputs.exit-code }}" != "0"
+
+      - name: write-file
+        uses: ./packages/github-workflow/actions/write-file
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          path: /workspace/smoke/hello.txt
+          content: |
+            hello from run ${{ github.run_id }}
+            second line
+
+      - name: read-file
+        uses: ./packages/github-workflow/actions/read-file
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          path: /workspace/smoke/hello.txt
+          local: ${{ runner.temp }}/roundtrip/hello.txt
+
+      - name: Round trip is byte-exact
+        run: |
+          printf 'hello from run %s\nsecond line\n' "${{ github.run_id }}" > "$RUNNER_TEMP/expected.txt"
+          cmp "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/roundtrip/hello.txt"
+
+      - name: inject-files
+        id: inject
+        uses: ./packages/github-workflow/actions/inject-files
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          source: packages/github-workflow/actions
+          target: /workspace/smoke/inject
+
+      - name: Injected tree is present
+        uses: ./packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          command: ls /workspace/smoke/inject/start-leader/action.yml /workspace/smoke/inject/follow/action.yml
+
+      - name: Mount table is auto-mounted
+        uses: ./packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          command: ls /mnt/gw/README.md && mount list
+
+      - name: follow — lend this runner to the leader
+        id: follow
+        uses: ./packages/github-workflow/actions/follow
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+
+      - name: Leader sees the runner as an exec target
+        id: ssh-list
+        uses: ./packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          command: ssh --list
+
+      - name: Leader runs a command on the runner through ssh
+        id: ssh-exec
+        uses: ./packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          command: ssh "$(ssh --list | sed -n 's/^ *- \(follower-[^ ]*\) (slicc-cli).*/\1/p' | head -1)" 'echo runner-says-$(hostname)'
+
+      - name: Assert follower listed and reachable
+        run: |
+          case "${{ steps.ssh-list.outputs.stdout }}" in
+            *"(slicc-cli)"*) echo "follower advertised" ;;
+            *) echo "::error::no slicc-cli follower in ssh --list"; exit 1 ;;
+          esac
+          case "${{ steps.ssh-exec.outputs.stdout }}" in
+            *"runner-says-"*) echo "ssh round trip ok" ;;
+            *) echo "::error::ssh exec did not reach the runner"; exit 1 ;;
+          esac
+
+      - name: export-session
+        id: export
+        uses: ./packages/github-workflow/actions/export-session
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          local: ${{ runner.temp }}/session.zip
+
+      - name: Session bundle is a valid ZIP with a transcript
+        run: unzip -l "$RUNNER_TEMP/session.zip" | grep -q transcript.json
+
+      - name: keep-alive honours an explicit short deadline
+        uses: ./packages/github-workflow/actions/keep-alive
+        with:
+          until: 20s
+
+      - name: Stop leader
+        if: always()
+        uses: ./packages/github-workflow/actions/stop-leader
+
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-workflow-smoke-logs
+          path: ${{ runner.temp }}/slicc-gw/*.log
+          if-no-files-found: ignore
+
+  reusable:
+    name: Reusable slicc-leader.yml at this ref
+    uses: ./.github/workflows/slicc-leader.yml
+    with:
+      duration: 3m
+      slicc-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      inject-path: packages/github-workflow/actions
+      inject-target: /workspace/smoke
+      fetch-file: /workspace/smoke/start-leader/action.yml
+      artifact-prefix: github-workflow-smoke
