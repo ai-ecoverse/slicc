@@ -461,6 +461,15 @@ inputs deploy both workers and run the live smoke tests. First releases always d
 releases with only unrelated changes refresh the R2 archive and exit before the template
 push, secret writes, both `wrangler deploy` calls, and deployed smoke tests.
 
+The merge-blocking staging path in `.github/workflows/ci.yml` uses the dedicated
+`cloudflare-staging` paths-filter output. It runs for Worker, cloud-core, shared,
+provider-wiring, root dependency/patch, and CI-workflow changes. A general
+webapp/VFS/asset change still gets the local Worker dry-run and the standalone E2E
+gate, but does not pay for an R2 upload or mutate the shared staging Worker. Keep
+the filter aligned with code that compiles into the Worker or materially changes
+the staging deployment path; do not replace it with the broader `root-config` or
+`webapp` outputs.
+
 ### Inspect retry logic
 
 Production hub and preview deploys each retry up to six times with a 15-second delay.
