@@ -131,8 +131,24 @@ export const GELATIERE_BASE_ALLOWED_COMMANDS = [
  */
 const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export type GelatiereSuggestionKind = 'skill' | 'use-case' | 'tip';
-const SUGGESTION_KINDS: ReadonlySet<string> = new Set(['skill', 'use-case', 'tip']);
+/**
+ * `skill-idea` and `issue` are the two kinds that point AWAY from the
+ * catalog: the first when a pass watches the same hand-rolled routine twice
+ * and no installable skill covers it, the second when the friction is
+ * SLICC's own. Both carry a `prompt` and ride the existing `gelatiere-try`
+ * button, so they need no new lick and no new page-side settlement — only a
+ * kind label honest enough that "file a bug" does not render as "Try this".
+ */
+export type GelatiereSuggestionKind = 'skill' | 'use-case' | 'tip' | 'skill-idea' | 'issue';
+const SUGGESTION_KINDS: ReadonlySet<string> = new Set([
+  'skill',
+  'use-case',
+  'tip',
+  'skill-idea',
+  'issue',
+]);
+/** Kinds whose card button replays a stored `prompt` as if the user typed it. */
+const PROMPT_KINDS: ReadonlySet<string> = new Set(['use-case', 'skill-idea', 'issue']);
 
 export interface GelatiereSuggestion {
   /** Stable slug, so a repeat pass recognises what it already said. */
@@ -144,7 +160,7 @@ export interface GelatiereSuggestion {
   skill?: string;
   /** `skill` kind: the exact `upskill …` command that installs it. */
   install?: string;
-  /** `use-case` kind: a message the user could send verbatim. */
+  /** `use-case`, `skill-idea` and `issue` kinds: a message the user could send verbatim. */
   prompt?: string;
   url?: string;
   /** What in the sessions or memory motivated it. */
@@ -552,9 +568,11 @@ function coerceSuggestion(raw: unknown, createdAt: string | null): GelatiereSugg
   // an Install button that runs `install` verbatim, so one without a validated
   // command (missing, or rejected above) would be an actionable card with
   // nothing behind it — stamped taken on click, then the cone finds no
-  // command. A `use-case` is its prompt. Malformed candidates drop here.
+  // command. A `use-case`, `skill-idea` or `issue` IS its prompt — the button
+  // replays the stored text as a user turn, so one without it is a dead pill.
+  // Malformed candidates drop here.
   if (kind === 'skill' && (!skill || !install)) return null;
-  if (kind === 'use-case' && !prompt) return null;
+  if (PROMPT_KINDS.has(kind) && !prompt) return null;
   return {
     id,
     kind: kind as GelatiereSuggestionKind,

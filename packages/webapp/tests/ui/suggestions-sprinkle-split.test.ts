@@ -49,6 +49,61 @@ describe('suggestions.shtml — the stream, standalone', () => {
   it('wears the gelatiere cone as its rail glyph', () => {
     expect(suggestionsShtml).toContain('<link rel="icon" href="ice-cream-cone" />');
   });
+
+  // The stream fills a panel iframe edge to edge and neither host
+  // (`.sprinkle-panel`, `.msg__dip`) adds padding, so the gutter is the
+  // sprinkle's own job — without it the cards sit flush in the panel's
+  // rounded corner. The `*` reset at the top is what makes it necessary.
+  it('owns its gutter — body carries the padding the hosts do not', () => {
+    expect(suggestionsShtml).toContain('* { box-sizing: border-box; margin: 0; padding: 0; }');
+    const body = suggestionsShtml.match(/\n {6}body \{([^}]*)\}/);
+    expect(body?.[1]).toMatch(/padding:\s*\d+px \d+px \d+px;/);
+    // The entries draw no horizontal padding of their own, so the hairline
+    // separators run the full width of the list.
+    expect(suggestionsShtml).toContain('.gelatiere-entry { padding: 18px 0; }');
+  });
+
+  // The empty state is the first thing most users see here: before the first
+  // pass there is nothing to render, and a bare "nothing yet" reads like a
+  // broken panel.
+  it('answers an empty store with what will land here, and three ways in meanwhile', () => {
+    expect(suggestionsShtml).toContain("var EMPTY_HEADLINE = 'Nothing here yet';");
+    expect(suggestionsShtml).toContain('Check back after your next session.');
+    // The use cases come from the command's pinned-host fetch, never from
+    // egress of the sprinkle's own.
+    expect(suggestionsShtml).toContain(
+      "var USE_CASE_COMMAND = 'gelatiere use-cases --limit 3 --json';"
+    );
+    expect(suggestionsShtml).toContain('Meanwhile, from sliccy.com');
+    // Appended after the copy, so a site that will not answer costs nothing.
+    expect(suggestionsShtml).toContain('appendUseCases(stream)');
+    expect(suggestionsShtml).not.toContain('www.sliccy.com/sitemap.xml');
+  });
+
+  // Lucide REPLACES `<i data-lucide>` with an `<svg width="24" height="24">`,
+  // so an `i`-only size rule stops matching the moment the icons render and
+  // every glyph falls back to 24px.
+  it('sizes icons through :is(i, svg), never `i` alone', () => {
+    const iconRules = [
+      ...suggestionsShtml.matchAll(/^ *\.gelatiere-[\w-]+ (.+?) \{[^}]*height: \d+px/gm),
+    ];
+    expect(iconRules.length).toBeGreaterThan(0);
+    for (const rule of iconRules) expect(rule[1]).toBe(':is(i, svg)');
+  });
+
+  it('gives the two prompt-carrying kinds their own label and pill', () => {
+    for (const [kind, label, action] of [
+      ['skill-idea', 'New skill', 'Draft it'],
+      ['issue', 'Report', 'Report it'],
+    ]) {
+      const row = suggestionsShtml.match(new RegExp(`'${kind}':.*`));
+      expect(row?.[0], kind).toContain(`'${label}'`);
+      expect(row?.[0], kind).toContain(`'${action}'`);
+    }
+    // Both ride the existing `gelatiere-try` lick — no new verb to settle.
+    expect(suggestionsShtml).not.toContain('gelatiere-draft');
+    expect(suggestionsShtml).not.toContain('gelatiere-report');
+  });
 });
 
 describe('welcome.shtml — onboarding only', () => {
@@ -61,6 +116,30 @@ describe('welcome.shtml — onboarding only', () => {
     expect(welcomeShtml).not.toContain('gelatiereStream');
     expect(welcomeShtml).not.toContain('/shared/.gelatiere/suggestions.json');
     expect(welcomeShtml).not.toContain('gelatiere-install');
+  });
+});
+
+describe('the suggestion kinds agree across store, recipe and card', () => {
+  const storeSource = read('packages/webapp/src/base/gelatiere-store.ts');
+  const gelatiereMd = read('packages/vfs-root/shared/GELATIERE.md');
+
+  it('every kind the store accepts is documented and renderable', () => {
+    const declared = storeSource.match(/export type GelatiereSuggestionKind = ([^;]+);/)?.[1] ?? '';
+    const kinds = [...declared.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]);
+    expect(kinds).toEqual(['skill', 'use-case', 'tip', 'skill-idea', 'issue']);
+    for (const kind of kinds) {
+      // The card must know how to draw it, and the recipe must say when to
+      // write it — a kind the store accepts but neither renders nor teaches
+      // is a suggestion the user never sees.
+      expect(suggestionsShtml, kind).toContain(`'${kind}':`);
+      expect(gelatiereMd, kind).toContain(`\`${kind}\``);
+    }
+  });
+
+  it('the recipe sends skill-idea and issue somewhere a cone can act', () => {
+    expect(gelatiereMd).toContain('ai-ecoverse/slicc');
+    expect(gelatiereMd).toContain('`prompt` — what to ask a cone to author');
+    expect(gelatiereMd).toContain('`prompt` — what to ask a cone to file');
   });
 });
 
