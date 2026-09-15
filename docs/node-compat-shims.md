@@ -46,7 +46,9 @@ Async methods (RPC-backed, available everywhere):
 `require('fs/promises')` returns the same object. `require('fs').promises`
 also resolves to it.
 
-Sync methods (backed by `SyncFsCache` — in-memory snapshot, standalone only):
+Sync methods (backed by `SyncFsCache` — in-memory snapshot, flushed at
+exit; file-body writes are also durable at call time so a kill/timeout
+still keeps them):
 
 | Method                               | Notes                                                 |
 | ------------------------------------ | ----------------------------------------------------- |
@@ -71,8 +73,15 @@ Sync methods (backed by `SyncFsCache` — in-memory snapshot, standalone only):
 | `renameSync(oldPath, newPath)`       |                                                       |
 
 The sync cache is populated from a VFS snapshot before user code runs and
-flushed back on completion. Files exceeding 1 MB are marked `truncated` and
-throw `ENOSYNC` on sync read (use the async API for large files).
+flushed back on completion. `writeFileSync` / `appendFileSync` /
+`truncateSync` / `copyFileSync` / `cpSync` are durable at call time (SW/SAB
+write-through when the bridge is enabled; otherwise a fire-and-forget host
+apply) so a `timeout`/`kill` of the node realm still leaves the file
+(#3136). Stdout/stderr are streamed to the host as they are written; a
+killed realm returns that captured output plus a
+`--- killed after <N>s (exit <code>) ---` trailer. Files exceeding 1 MB are
+marked `truncated` and throw `ENOSYNC` on sync read (use the async API for
+large files).
 
 **Not available:** `watch`, `watchFile`, `createReadStream`, `createWriteStream`,
 `chown`, `symlink`, `readlink`, `Dirent`-returning readdir. `lstat`, `realpath`,

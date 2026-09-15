@@ -148,6 +148,12 @@ export interface RealmHostOptions {
    * token-scoped dispatchers the SW route uses. Disposed with the host.
    */
   syncSab?: SharedArrayBuffer;
+  /**
+   * Called after a successful mutating VFS op so the runner can drop
+   * matching kill-buffer records — otherwise a later SIGKILL would replay
+   * a stale `writeFileSync` snapshot over a newer exec/async write (#3136).
+   */
+  onHostFsMutation?: (paths: readonly string[]) => void;
 }
 
 let realmUsbOwnerSeq = 0;
@@ -301,7 +307,7 @@ async function dispatch(
 ): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
-      return dispatchVfs(req.op, req.args, ctx);
+      return dispatchVfs(req.op, req.args, ctx, opts.onHostFsMutation);
     case 'exec':
       return dispatchExec(req.op, req.args, ctx, execCtx);
     case 'fetch':
@@ -384,7 +390,20 @@ function resolveHidBackendForHost(opts: RealmHostOptions): HidBackend {
 // Channel: vfs
 // ---------------------------------------------------------------------------
 
-async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+function flushMutationPaths(mutations: SyncFsMutations): string[] {
+  return [
+    ...mutations.deleted,
+    ...mutations.created.map((entry) => entry.path),
+    ...mutations.modified.map((entry) => entry.path),
+  ];
+}
+
+async function dispatchVfs(
+  op: string,
+  args: unknown[],
+  ctx: CommandContext,
+  onMutation?: (paths: readonly string[]) => void
+): Promise<unknown> {
   const path = typeof args[0] === 'string' ? (args[0] as string) : null;
   const resolved = path !== null ? ctx.fs.resolvePath(ctx.cwd, path) : null;
   switch (op) {
@@ -394,9 +413,11 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return ctx.fs.readFileBuffer(resolved!);
     case 'writeFile':
       await ctx.fs.writeFile(resolved!, args[1] as string);
+      if (resolved) onMutation?.([resolved]);
       return true;
     case 'writeFileBinary':
       await ctx.fs.writeFile(resolved!, args[1] as Uint8Array);
+      if (resolved) onMutation?.([resolved]);
       return true;
     case 'readDir':
       return ctx.fs.readdir(resolved!);
@@ -411,6 +432,7 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'rm':
       await ctx.fs.rm(resolved!, { recursive: true });
+      if (resolved) onMutation?.([resolved]);
       return true;
     case 'rename': {
       const newPath = ctx.fs.resolvePath(ctx.cwd, args[1] as string);
@@ -418,6 +440,7 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       // (host → jsh-executor → realm-runner). Rename is not boot-critical.
       const { renameViaFs } = await import('./rename-via-fs.js');
       await renameViaFs(ctx.fs, resolved!, newPath);
+      onMutation?.(resolved ? [resolved, newPath] : [newPath]);
       return true;
     }
     case 'resolvePath':
@@ -437,6 +460,7 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
     case 'flushWrites': {
       const mutations = args[0] as SyncFsMutations;
       await applySyncFsMutations(ctx, mutations);
+      onMutation?.(flushMutationPaths(mutations));
       return true;
     }
     default:

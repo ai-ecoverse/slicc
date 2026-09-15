@@ -140,6 +140,8 @@ One deliberate ADDITION: `/proc/table` has no Linux counterpart. Linux readers w
 
 `runInRealm(opts)` spawns a per-task realm — a `DedicatedWorker` (standalone JS, both-mode Python) or a per-task sandbox iframe (extension JS) — and registers a `kind:'jsh'` (for `kind:'js'`) or `kind:'py'` process. The runner subscribes to `pm.onSignal` and escalates **every** terminating signal that reaches its pid to a synchronous `realm.terminate()` (`worker.terminate()` / `iframe.remove()`, both uncatchable), exiting 137 / 130 / 143 per the POSIX 128+signo convention. Realm code is opaque from the kernel side — there is no cooperative cancel hook to await — so a recorded-but-not-terminated SIGINT would leave the realm running forever (#1116). SIGSTOP / SIGCONT are pause/resume and are ignored here.
 
+Stdout/stderr are streamed to the host as they are written (`realm-output`), and cache-only `writeFileSync`/`appendFileSync` posts (`realm-fs-write`) are applied to `ctx.fs` immediately, so a SIGKILL / `timeout` still returns the pre-hang output and completed file writes (#3136). `realm.terminate()` then runs; a `--- killed after <N>s (exit <code>) ---` trailer is appended. Writes that had not yet posted are best-effort only (SIGKILL-class). The same protocol is used in the standalone worker, the extension iframe, and the in-process test factory.
+
 `runInRealm` takes **no** `AbortSignal`: `pm.signal(pid, …)` is its only stop path. Anything that wants to preempt realm-backed work must therefore own a pid the realm parents under, which is what the bash job below is for.
 
 The user-facing surface is the `node` (`-e`/`script.js`/stdin / `--check`), `.jsh` discovery, and `python`/`python3` (`-c`/`script.py`/stdin) commands. Realm code runs inside an `AsyncFunction` (JS) or Pyodide (Python) with shimmed `console`, `process.argv`/`sys.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)` / Python `SystemExit`. After the JS entry settles, the realm keeps the worker alive while ref'd handles remain — pending RPC (fs/exec/fetch) and user timers — matching Node's event-loop keep-alive; `process.exit()` skips that drain. A macrotask hop after each handle settles lets the continuation after `await fetch()` (including `await res.json()` / `res.text()`, which read the already-buffered body) run before teardown. The realm-host on the kernel side proxies `vfs` (read/write/list/etc.), `exec` (just-bash subcommand), and `fetch` (SecureFetch with secret substitution) over the realm's port, so realm scripts get a full Node-like surface without holding kernel-side state.
@@ -241,7 +243,11 @@ ops. `lstatSync ≡ statSync` and `realpathSync` is lexical-only (no symlink
 model). `accessSync`/`chmodSync` are existence-gated no-ops. `appendFileSync`,
 `truncateSync`, `copyFileSync`, and `cpSync` compose read (cache → bridge) +
 write-through, so an over-cap or post-snapshot source copies its real bytes
-(never a silent 0-byte).
+(never a silent 0-byte). File-body writes are durable at call time: the
+bridge path write-throughs to `ctx.fs` synchronously; the no-bridge path
+posts `realm-fs-write` to the host immediately (and still flushes the cache
+diff at exit as a retry). A killed realm therefore keeps completed
+`writeFileSync`/`appendFileSync` work (#3136).
 
 ## Synchronous exec bridge
 

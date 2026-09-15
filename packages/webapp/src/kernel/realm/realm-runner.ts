@@ -15,7 +15,10 @@
  *      execution in the realm.
  *   5. Resolve on `realm-done` (with the script's exit code) /
  *      `realm-error` (exit 1, message to stderr) / SIGKILL (exit
- *      137 + `realm.terminate()`).
+ *      137 + `realm.terminate()`). Streamed `realm-output` and
+ *      `realm-fs-write` posts are applied as they arrive so a kill
+ *      still returns pre-hang stdout and completed sync writes
+ *      (#3136).
  *
  * Signal contract: realm code is opaque (no cooperative cancel
  * hook), so every terminating signal that reaches the realm pid is
@@ -39,9 +42,12 @@ import type { RealmPortLike } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
   RealmErrorMsg,
+  RealmFsDeleteMsg,
+  RealmFsWriteMsg,
   RealmInitMsg,
   RealmKind,
   RealmMountPoint,
+  RealmOutputMsg,
 } from './realm-types.js';
 import { isSyncSabSupported, SAB_DEFAULT_WINDOW_BYTES, SAB_HEADER_BYTES } from './sync-sab-wire.js';
 
@@ -174,6 +180,119 @@ export interface RealmResult {
   exitCode: number;
 }
 
+const SIGNAL_EXIT_CODE = { SIGKILL: 137, SIGINT: 130, SIGTERM: 143 } as const;
+
+/**
+ * Trailer appended to stderr when the realm is torn down by a terminating
+ * signal rather than `realm-done`. Matches the bash-job `#2415` shape so a
+ * `timeout` kill is diagnosable even when the script printed nothing.
+ */
+export function realmKilledTrailer(elapsedMs: number, exitCode: number): string {
+  const seconds = Math.max(0, elapsedMs) / 1000;
+  const shown =
+    seconds < 10
+      ? seconds
+          .toFixed(2)
+          .replace(/(\.\d*?)0+$/, '$1')
+          .replace(/\.$/, '')
+      : String(Math.round(seconds));
+  return `--- killed after ${shown}s (exit ${exitCode}) ---\n`;
+}
+
+type PendingFsOp =
+  | { op: 'write'; path: string; bytes: Uint8Array }
+  | { op: 'delete'; path: string };
+
+/** Live stdout/stderr + coalesced host VFS mutations streamed from the realm (#3136). */
+interface LiveRealmCapture {
+  stdout: string;
+  stderr: string;
+  /** Latest write/delete per path — appends replace, so the buffer stays O(paths). */
+  pendingByPath: Map<string, PendingFsOp>;
+}
+
+function dropPendingPaths(capture: LiveRealmCapture, paths: readonly string[]): void {
+  for (const path of paths) capture.pendingByPath.delete(path);
+}
+
+/** Apply fire-and-forget live posts. Returns whether the message settles the run. */
+function ingestLiveRealmMessage(
+  data: { type?: string },
+  capture: LiveRealmCapture
+): 'done' | 'error' | 'live' {
+  if (data.type === 'realm-output') {
+    const msg = data as RealmOutputMsg;
+    if (msg.stream === 'stdout') capture.stdout += msg.chunk;
+    else capture.stderr += msg.chunk;
+    return 'live';
+  }
+  if (data.type === 'realm-fs-write') {
+    const msg = data as RealmFsWriteMsg;
+    capture.pendingByPath.set(msg.path, { op: 'write', path: msg.path, bytes: msg.bytes });
+    return 'live';
+  }
+  if (data.type === 'realm-fs-delete') {
+    const msg = data as RealmFsDeleteMsg;
+    capture.pendingByPath.set(msg.path, { op: 'delete', path: msg.path });
+    return 'live';
+  }
+  if (data.type === 'realm-done') return 'done';
+  if (data.type === 'realm-error') return 'error';
+  return 'live';
+}
+
+async function applyPendingFsOp(
+  ctx: CommandContext,
+  op: PendingFsOp,
+  capture: LiveRealmCapture
+): Promise<void> {
+  try {
+    if (op.op === 'write') {
+      const writeFile = ctx.fs?.writeFile?.bind(ctx.fs);
+      if (writeFile) await writeFile(op.path, op.bytes);
+    } else {
+      const rm = ctx.fs?.rm?.bind(ctx.fs);
+      if (rm) await rm(op.path, { recursive: true });
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const kind = op.op === 'write' ? 'write' : 'delete';
+    capture.stderr += `[sync-fs] ERROR: ${kind} of ${op.path} was NOT persisted: ${msg}\n`;
+  }
+}
+
+async function applyCapturedFsOps(
+  ops: readonly PendingFsOp[],
+  ctx: CommandContext,
+  capture: LiveRealmCapture
+): Promise<void> {
+  for (const op of ops) await applyPendingFsOp(ctx, op, capture);
+}
+
+function buildRealmInitMsg(
+  opts: RunInRealmOptions,
+  host: RealmHostHandle,
+  syncSab: SharedArrayBuffer | undefined
+): RealmInitMsg {
+  return {
+    type: 'realm-init',
+    kind: opts.kind,
+    code: opts.code,
+    argv: opts.realmArgv ?? opts.argv,
+    env: opts.env,
+    cwd: opts.cwd,
+    filename: opts.filename,
+    stdin: opts.stdin,
+    pyodideIndexURL: opts.pyodideIndexURL,
+    pyodideAssetRoot: opts.pyodideAssetRoot,
+    pyodideMountDirs: opts.pyodideMountDirs,
+    opfsMountDbName: opts.opfsMountDbName,
+    mountPoints: opts.mountPoints,
+    ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
+    ...(syncSab ? { syncSab } : {}),
+  };
+}
+
 /**
  * Run `code` in a fresh realm of `kind`, hooking the resulting
  * process into `pm` so `ps` / `kill` see it. Resolves with
@@ -214,6 +333,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
   // (`syncFsBridgeEnabled`) is not required to mint its token. Everywhere
   // else the SW transport (when confirmed) or the snapshot remains.
   const syncSab = realm.isolatedThread ? allocateSyncSab(opts.syncSabBytes) : undefined;
+  const capture: LiveRealmCapture = { stdout: '', stderr: '', pendingByPath: new Map() };
   const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
     ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
     pm: opts.pm,
@@ -221,55 +341,90 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     ppid: proc.pid,
     syncFsBridgeEnabled: Boolean(opts.syncFsBridgeEnabled) || syncSab !== undefined,
     ...(syncSab ? { syncSab } : {}),
+    onHostFsMutation: (paths) => dropPendingPaths(capture, paths),
   });
 
   return new Promise<RealmResult>((resolve) => {
-    let settled = false;
+    let settling = false;
+    let stopped = false;
     let unsubSignal: (() => void) | null = null;
     let messageHandler: ((event: MessageEvent) => void) | null = null;
     let errorHandler: ((event: Event) => void) | null = null;
     let messageErrorHandler: ((event: Event) => void) | null = null;
 
-    const cleanup = (): void => {
+    const hardStop = (): void => {
+      if (stopped) return;
+      stopped = true;
       if (messageHandler) realm.controlPort.removeEventListener('message', messageHandler);
       if (realm.removeEventListener) {
         if (errorHandler) realm.removeEventListener('error', errorHandler);
         if (messageErrorHandler) realm.removeEventListener('messageerror', messageErrorHandler);
       }
       unsubSignal?.();
-      host.dispose();
-    };
-
-    const settle = (result: RealmResult, exitForPm: number | null): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
       try {
         realm.terminate();
       } catch {
         /* idempotent on real workers / iframes */
       }
+    };
+
+    const finish = (result: RealmResult, exitForPm: number | null): void => {
+      hardStop();
+      host.dispose();
       opts.pm.exit(proc.pid, exitForPm);
       resolve(result);
     };
 
+    const settleDone = (result: RealmResult, exitForPm: number | null): void => {
+      if (settling) return;
+      settling = true;
+      // Normal exit: the end-of-script / pre-exec flush already committed
+      // VFS mutations. Re-applying the live `realm-fs-write` buffer here
+      // would clobber a later exec overwrite of the same path.
+      void Promise.resolve().then(() => finish(result, exitForPm));
+    };
+
+    const settleKill = (exitCode: number): void => {
+      if (settling) return;
+      settling = true;
+      // One microtask so already-queued persist posts land, then hard-stop
+      // so the realm cannot keep enqueueing. Apply the snapshot after
+      // terminate — do not wait on VFS while the worker is still alive.
+      void Promise.resolve().then(() => {
+        const ops = [...capture.pendingByPath.values()];
+        capture.pendingByPath.clear();
+        hardStop();
+        void applyCapturedFsOps(ops, opts.ctx, capture).finally(() => {
+          const trailer = realmKilledTrailer(Date.now() - proc.startedAt, exitCode);
+          finish({ stdout: capture.stdout, stderr: capture.stderr + trailer, exitCode }, exitCode);
+        });
+      });
+    };
+
     messageHandler = (event: MessageEvent): void => {
       const data = event.data as { type?: string };
-      if (data?.type === 'realm-done') {
+      const kind = ingestLiveRealmMessage(data, capture);
+      if (kind === 'done') {
         const done = event.data as RealmDoneMsg;
-        settle(
+        settleDone(
           { stdout: done.stdout, stderr: done.stderr, exitCode: done.exitCode },
           done.exitCode
         );
-      } else if (data?.type === 'realm-error') {
+      } else if (kind === 'error') {
         const err = event.data as RealmErrorMsg;
-        settle({ stdout: '', stderr: err.message + '\n', exitCode: 1 }, 1);
+        settleDone(
+          { stdout: capture.stdout, stderr: capture.stderr + err.message + '\n', exitCode: 1 },
+          1
+        );
       }
     };
 
     errorHandler = (event: Event): void => {
       const message = (event as ErrorEvent).message ?? 'realm error';
-      settle({ stdout: '', stderr: message + '\n', exitCode: 1 }, 1);
+      settleDone(
+        { stdout: capture.stdout, stderr: capture.stderr + message + '\n', exitCode: 1 },
+        1
+      );
     };
 
     // A `messageerror` means the realm posted a message the host could
@@ -278,10 +433,10 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     // will follow, so settle non-zero here rather than leave the promise
     // hanging (or, worse, let a later spurious settle land at exit 0).
     messageErrorHandler = (): void => {
-      settle(
+      settleDone(
         {
-          stdout: '',
-          stderr: 'realm-runner: worker message could not be deserialized\n',
+          stdout: capture.stdout,
+          stderr: capture.stderr + 'realm-runner: worker message could not be deserialized\n',
           exitCode: 1,
         },
         1
@@ -290,22 +445,18 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
 
     // Realm code is opaque to us (no cooperative cancel hook), so every
     // terminating signal that reaches THIS realm pid is escalated to a
-    // synchronous `realm.terminate()` via `settle`. Without this, a
+    // synchronous `realm.terminate()` via `settleKill`. Without this, a
     // terminal Ctrl-C (SIGINT) or `kill <pid>` (SIGTERM) fanned out from
     // the shell parent would only flip `terminatedBy` and the realm would
     // run forever (#1116). Exit codes follow the POSIX 128+signo
     // convention — pinned here rather than relying on PM's
     // signal-derivation so the runner owns the convention. SIGSTOP /
     // SIGCONT are pause/resume, not termination, so they're ignored.
+    // Streamed stdout and completed sync writes survive the kill (#3136).
     unsubSignal = opts.pm.onSignal((signaled, sig) => {
       if (signaled.pid !== proc.pid) return;
-      if (sig === 'SIGKILL') {
-        settle({ stdout: '', stderr: '', exitCode: 137 }, 137);
-      } else if (sig === 'SIGINT') {
-        settle({ stdout: '', stderr: '', exitCode: 130 }, 130);
-      } else if (sig === 'SIGTERM') {
-        settle({ stdout: '', stderr: '', exitCode: 143 }, 143);
-      }
+      const exitCode = SIGNAL_EXIT_CODE[sig as keyof typeof SIGNAL_EXIT_CODE];
+      if (exitCode !== undefined) settleKill(exitCode);
     });
 
     realm.controlPort.addEventListener('message', messageHandler);
@@ -314,26 +465,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       realm.addEventListener('messageerror', messageErrorHandler);
     }
 
-    const init: RealmInitMsg = {
-      type: 'realm-init',
-      kind: opts.kind,
-      code: opts.code,
-      argv: opts.realmArgv ?? opts.argv,
-      env: opts.env,
-      cwd: opts.cwd,
-      filename: opts.filename,
-      stdin: opts.stdin,
-      pyodideIndexURL: opts.pyodideIndexURL,
-      pyodideAssetRoot: opts.pyodideAssetRoot,
-      pyodideMountDirs: opts.pyodideMountDirs,
-      opfsMountDbName: opts.opfsMountDbName,
-      mountPoints: opts.mountPoints,
-      // Thread the minted sync-fs token (present only when the bridge is
-      // enabled) so the realm can address its own ctx.fs over the SW bridge.
-      ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
-      ...(syncSab ? { syncSab } : {}),
-    };
-    realm.controlPort.postMessage(init);
+    realm.controlPort.postMessage(buildRealmInitMsg(opts, host, syncSab));
   });
 }
 

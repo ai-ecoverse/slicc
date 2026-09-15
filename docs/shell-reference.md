@@ -1923,7 +1923,7 @@ console.clear(); // no-op
 
 #### fs (VirtualFS bridge)
 
-All paths are resolved relative to `process.cwd()`.
+All paths are resolved relative to `process.cwd()`. Sync file-body writes (`writeFileSync`, `appendFileSync`) persist at call time, and stdout/stderr are captured as they print, so a `timeout` or `kill` of the node realm still leaves that evidence (a `--- killed after <N>s (exit <code>) ---` trailer is appended).
 
 ```typescript
 fs.readFile(path): Promise<string>
