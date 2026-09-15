@@ -173,6 +173,20 @@ function gitValueFlagNames(spec: ArgSpec): Set<string> {
  * shorts report the first unknown letter. Used so an unknown flag is named
  * instead of silently stealing a positional (#3121).
  */
+/** First unknown letter in `-abc`, or undefined when the cluster is valid. */
+function unknownClusteredShort(
+  name: string,
+  known: Set<string>,
+  valueNames: Set<string>
+): string | undefined {
+  for (const ch of name) {
+    if (!known.has(ch)) return ch;
+    // `-Xours` / `-bmain`: remaining characters are the attached value.
+    if (valueNames.has(ch)) return undefined;
+  }
+  return undefined;
+}
+
 export function firstUnknownGitFlag(args: readonly string[], spec: ArgSpec): string | undefined {
   const known = gitFlagNames(spec);
   const valueNames = gitValueFlagNames(spec);
@@ -185,9 +199,8 @@ export function firstUnknownGitFlag(args: readonly string[], spec: ArgSpec): str
     if (!m) continue;
     const name = m[2];
     if (m[1] === '-' && name.length > 1 && !m[3] && !known.has(name)) {
-      for (const ch of name) {
-        if (!known.has(ch)) return ch;
-      }
+      const unknown = unknownClusteredShort(name, known, valueNames);
+      if (unknown) return unknown;
       continue;
     }
     if (!known.has(name)) return name;

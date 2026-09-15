@@ -49,4 +49,9 @@ describe('firstUnknownGitFlag', () => {
       firstUnknownGitFlag(['--name-only', '--', '--not-a-flag'], GIT_FLAG_SPECS.diff)
     ).toBeUndefined();
   });
+
+  it('treats characters after a known short value flag as its value', () => {
+    expect(firstUnknownGitFlag(['-bmain', 'url', 'dir'], GIT_FLAG_SPECS.clone)).toBeUndefined();
+    expect(firstUnknownGitFlag(['-Xours', 'feature'], GIT_FLAG_SPECS.merge)).toBeUndefined();
+  });
 });

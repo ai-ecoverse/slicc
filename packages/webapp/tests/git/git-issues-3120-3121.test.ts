@@ -12,6 +12,7 @@ vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal(
 import * as isoGit from 'isomorphic-git';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
+import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
 
 describe('git issues #3120 and #3121', () => {
   let vfs: VirtualFS;
@@ -224,6 +225,84 @@ describe('git issues #3120 and #3121', () => {
       expect(afterReset.stdout).toContain('CONFLICT');
       expect(afterReset.stderr).not.toContain('unmerged files');
       expect(afterReset.stderr).not.toContain('MERGE_HEAD exists');
+    });
+
+    it('does not wipe a dirty worktree when merge --abort has no MERGE_HEAD', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'committed\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await vfs.writeFile('/project/file.txt', 'dirty local edit\n');
+
+      const abort = await git.execute(['merge', '--abort'], '/project');
+      expect(abort.exitCode).toBe(128);
+      expect(abort.stderr).toContain('no merge to abort');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('dirty local edit\n');
+    });
+
+    it('concludes a conflicted merge with a two-parent commit', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'theirs line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+      const theirs = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ours line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+      const ours = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      expect((await git.execute(['merge', 'feature'], '/project')).exitCode).toBe(1);
+      await vfs.writeFile('/project/file.txt', 'resolved\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      const committed = await git.execute(['commit', '-m', 'Merge feature'], '/project');
+      expect(committed.exitCode).toBe(0);
+      expect(await vfs.exists('/project/.git/MERGE_HEAD')).toBe(false);
+
+      const oid = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      const { commit } = await isoGit.readCommit({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        oid,
+      });
+      expect(commit.parent).toHaveLength(2);
+      expect(commit.parent).toEqual(expect.arrayContaining([ours, theirs]));
+    });
+
+    it('prints --name-status for workdir and index diffs', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'old\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await vfs.writeFile('/project/file.txt', 'new\n');
+
+      const workdir = await git.execute(['diff', '--name-status'], '/project');
+      expect(workdir.exitCode).toBe(0);
+      expect(workdir.stdout).toBe('M\tfile.txt\n');
+
+      await git.execute(['add', 'file.txt'], '/project');
+      const staged = await git.execute(['diff', '--cached', '--name-status'], '/project');
+      expect(staged.exitCode).toBe(0);
+      expect(staged.stdout).toBe('M\tfile.txt\n');
+    });
+
+    it('reports a modification of an empty file as M, not A', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/empty.txt', '');
+      await git.execute(['add', 'empty.txt'], '/project');
+      await git.execute(['commit', '-m', 'empty'], '/project');
+      await vfs.writeFile('/project/empty.txt', 'now has text\n');
+      await git.execute(['add', 'empty.txt'], '/project');
+
+      const result = await git.execute(['diff', '--cached', '--name-status'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('M\tempty.txt\n');
     });
   });
 });

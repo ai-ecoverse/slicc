@@ -3,13 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { makeMergeDriver } from './merge-driver.js';
-import {
-  clearMergeState,
-  conflictedWorktreePaths,
-  mergeInProgress,
-  writeMergeState,
-  writeOrigHead,
-} from './merge-state.js';
+import { clearMergeState, mergeInProgress, writeMergeState, writeOrigHead } from './merge-state.js';
 import { tryResolveRevision } from './revision.js';
 import { GIT_FLAG_SPECS, rejectUnknownGitFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
@@ -151,18 +145,17 @@ export async function merge(
 
 /** `git merge --abort` — restore pre-merge HEAD and drop merge state. */
 async function abortMerge(ctx: GitCommandContext, cwd: string): Promise<GitCommandResult> {
-  const inProgress = await mergeInProgress(ctx, cwd);
-  const conflicted = await conflictedWorktreePaths(ctx, cwd);
+  if (!(await mergeInProgress(ctx, cwd))) {
+    return {
+      stdout: '',
+      stderr: 'fatal: There is no merge to abort (MERGE_HEAD missing).\n',
+      exitCode: 128,
+    };
+  }
   try {
     await git.abortMerge({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, commit: 'HEAD' });
   } catch {
-    if (!inProgress && conflicted.length === 0) {
-      return {
-        stdout: '',
-        stderr: 'fatal: There is no merge to abort (MERGE_HEAD missing).\n',
-        exitCode: 128,
-      };
-    }
+    // Index may already match HEAD; still restore the worktree and drop MERGE_HEAD.
   }
   await git.checkout({
     fs: ctx.lfs,

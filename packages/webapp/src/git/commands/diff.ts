@@ -15,7 +15,15 @@ import { matchesPathspec, pathspecCouldMatch, resolveRevision } from './revision
 import { GIT_FLAG_SPECS, NO_INDEX_REFRESH, rejectUnknownGitFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
-type FileChange = { filepath: string; oldContent: string; newContent: string };
+type FileChange = {
+  filepath: string;
+  oldContent: string;
+  newContent: string;
+  /** Whether the old tree/index had this path (empty-file edits are still `M`). */
+  oldPresent?: boolean;
+  /** Whether the new tree/workdir had this path. */
+  newPresent?: boolean;
+};
 
 /** The output-shaping flags every diff mode threads through to the renderer. */
 interface DiffFormatOptions {
@@ -102,33 +110,7 @@ export async function diff(
   const changes = staged
     ? await diffStagedChanges(ctx, cwd, opts.pathspecs)
     : await diffWorkdirChanges(ctx, cwd, opts.pathspecs);
-
-  if (changes.length === 0) {
-    return { stdout: '', stderr: '', exitCode: 0 };
-  }
-
-  if (opts.nameOnly) {
-    const output = changes.map((c) => c.filepath).join('\n') + '\n';
-    return { stdout: output, stderr: '', exitCode: 0 };
-  }
-
-  if (opts.stat) {
-    return formatDiffStat(changes);
-  }
-
-  // Full unified diff
-  let output = '';
-  for (const change of changes) {
-    output += unifiedDiff({
-      oldContent: change.oldContent,
-      newContent: change.newContent,
-      oldName: change.filepath,
-      newName: change.filepath,
-      context: opts.context,
-    });
-  }
-
-  return { stdout: output, stderr: '', exitCode: 0 };
+  return formatChanges(changes, opts);
 }
 
 /** Collect staged changes by comparing a commit tree vs index. */
@@ -163,7 +145,13 @@ async function diffStagedChanges(
       const oldText = await readBlobText(ctx, cwd, headOid);
       const newText = await readBlobText(ctx, cwd, stageOid);
 
-      changes.push({ filepath, oldContent: oldText, newContent: newText });
+      changes.push({
+        filepath,
+        oldContent: oldText,
+        newContent: newText,
+        oldPresent: Boolean(headOid),
+        newPresent: Boolean(stageOid),
+      });
       return undefined;
     },
   });
@@ -240,7 +228,15 @@ async function diffWorkdirChanges(
 
       const oldContent = await readBlobText(ctx, cwd, stageOid);
       const newContent = workBytes ? new TextDecoder().decode(workBytes) : '';
-      if (oldContent !== newContent) changes.push({ filepath, oldContent, newContent });
+      if (oldContent !== newContent) {
+        changes.push({
+          filepath,
+          oldContent,
+          newContent,
+          oldPresent: Boolean(stageOid),
+          newPresent: Boolean(workBytes),
+        });
+      }
       return null;
     },
   });
@@ -444,6 +440,8 @@ async function compareWalkerEntries(
     filepath,
     oldContent: oldContent ? new TextDecoder().decode(oldContent) : '',
     newContent: newContent ? new TextDecoder().decode(newContent) : '',
+    oldPresent: Boolean(oldOid),
+    newPresent: Boolean(newOid),
   };
 }
 
@@ -451,7 +449,9 @@ function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitComma
   if (changes.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
   if (opts.nameStatus) {
     const lines = changes.map((c) => {
-      const status = c.oldContent === '' ? 'A' : c.newContent === '' ? 'D' : 'M';
+      const oldPresent = c.oldPresent ?? c.oldContent !== '';
+      const newPresent = c.newPresent ?? c.newContent !== '';
+      const status = !oldPresent ? 'A' : !newPresent ? 'D' : 'M';
       return `${status}\t${c.filepath}`;
     });
     return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };

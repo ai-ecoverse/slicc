@@ -49,6 +49,18 @@ export async function mergeInProgress(ctx: GitCommandContext, cwd: string): Prom
   return (await readMergeHead(ctx, cwd)) !== undefined;
 }
 
+/** Default merge-commit message written on conflict, if any. */
+export async function readMergeMsg(
+  ctx: GitCommandContext,
+  cwd: string
+): Promise<string | undefined> {
+  try {
+    return await readGitFile(ctx, `${await gitDir(ctx, cwd)}/MERGE_MSG`);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Snapshot HEAD as ORIG_HEAD before a merge attempt, matching real git. */
 export async function writeOrigHead(
   ctx: GitCommandContext,
