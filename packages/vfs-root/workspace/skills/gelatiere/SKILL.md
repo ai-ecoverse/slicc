@@ -59,7 +59,7 @@ The gelatiere left 2 new suggestions; the GitHub skill would have saved the PR d
 ![Suggestions](/shared/sprinkles/suggestions/suggestions.shtml)
 ```
 
-Do not repeat the list in prose, do not install anything, and do not edit `/shared/CLAUDE.md`. Each card carries its own button — **Install** for a `skill`, **Try it** for a `use-case`, **Draft it** for a `skill-idea`, **Report it** for an `issue` — beside a quiet **Not now**.
+Do not repeat the list in prose, do not install anything, and do not edit `/shared/CLAUDE.md`. Each card carries its own button — **Install** for a `skill`, **Try it** for a `use-case`, **Draft it** for a `skill-idea`, **Report it** for an `issue` — beside a quiet **Dismiss**.
 
 ## If you are a cone: a card button was clicked
 
@@ -114,7 +114,7 @@ jq '.[] | select(.id == "skill-github")' /shared/.gelatiere/suggestions.json
   <div class="sprinkle-action-card__header">Install the GitHub skill <span class="sprinkle-badge sprinkle-badge--informative">Skill</span></div>
   <div class="sprinkle-action-card__body">Manage pull requests, issues and workflow runs from chat. Three of your last five sessions opened GitHub by hand.</div>
   <div class="sprinkle-action-card__actions">
-    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick({action:'gelatiere-dismiss', data:{id:'skill-github'}})">Not now</button>
+    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick({action:'gelatiere-dismiss', data:{id:'skill-github'}})">Dismiss</button>
     <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'gelatiere-install', data:{id:'skill-github', skill:'github', install:'upskill ai-ecoverse/skills --path skills/ --skill github', title:'Install the GitHub skill'}})">Install</button>
   </div>
 </div>

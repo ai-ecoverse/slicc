@@ -79,7 +79,7 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
       }
-      /* Buttons sit on the right, dialog-style: quiet "Not now" beside the
+      /* Buttons sit on the right, dialog-style: quiet "Dismiss" beside the
          primary pill. The taken note pushes itself back to the left. */
       .gelatiere-actions {
         display: flex;
@@ -89,7 +89,7 @@
         margin-top: 12px;
       }
       .gelatiere-actions .gelatiere-taken-note { margin-right: auto; }
-      /* "Not now" is a quiet text button — one pill per entry is plenty. */
+      /* "Dismiss" is a quiet text button — one pill per entry is plenty. */
       .gelatiere-quiet-btn {
         background: none;
         border: none;
@@ -191,11 +191,11 @@
       // the same `gelatiere-try` lick; only the label and the pill differ, so
       // "report this to SLICC" does not render as "Try this".
       var KIND_LABELS = {
-        'skill':      { label: 'Skill',     icon: 'package',       action: 'Install' },
-        'use-case':   { label: 'Try this',  icon: 'sparkles',      action: 'Try it' },
-        'tip':        { label: 'Tip',       icon: 'lightbulb',     action: null },
-        'skill-idea': { label: 'New skill', icon: 'wand-sparkles', action: 'Draft it' },
-        'issue':      { label: 'Report',    icon: 'bug',           action: 'Report it' },
+        'skill':      { label: 'Skill',     icon: 'package',       action: 'Install',   done: 'installed' },
+        'use-case':   { label: 'Try this',  icon: 'sparkles',      action: 'Try it',    done: 'tried' },
+        'tip':        { label: 'Tip',       icon: 'lightbulb',     action: null,        done: 'tried' },
+        'skill-idea': { label: 'New skill', icon: 'wand-sparkles', action: 'Draft it',  done: 'drafted' },
+        'issue':      { label: 'Report',    icon: 'bug',           action: 'Report it', done: 'reported' },
       };
       // Rotated daily by the command, so a second visit differs.
       var USE_CASE_COMMAND = 'gelatiere use-cases --limit 3 --json';
@@ -226,15 +226,16 @@
         return btn;
       }
 
-      function gelatiereQuietButton(label, onClick) {
+      function gelatiereQuietButton(label, onClick, title) {
         var btn = el('button', 'gelatiere-quiet-btn', label);
         btn.type = 'button';
+        if (title) btn.title = title;
         btn.onclick = onClick;
         return btn;
       }
 
       // WHAT (icon + imperative title + quiet kind label), WHY (one
-      // paragraph), then one pill and a quiet "Not now". Flat on purpose:
+      // paragraph), then one pill and a quiet "Dismiss". Flat on purpose:
       // the sidebar panel is the box, so the entries draw none of their own.
       function buildSuggestionCard(s) {
         var meta = KIND_LABELS[s.kind] || KIND_LABELS.tip;
@@ -258,7 +259,7 @@
         var actions = el('div', 'gelatiere-actions');
         // Taking an entry keeps it visible: the buttons swap for a quiet
         // confirmation so the user sees what they set in motion. Dismissing
-        // removes it — "Not now" means "stop showing me this".
+        // removes it — "Dismiss" means "stop showing me this".
         function markTaken(note) {
           card.classList.add('gelatiere-entry--taken');
           var done = el('div', 'gelatiere-taken-note');
@@ -267,13 +268,13 @@
           actions.replaceChildren(done);
           if (window.LucideIcons) window.LucideIcons.render();
         }
-        // "Not now" first in the DOM: the row is right-aligned, so the quiet
+        // "Dismiss" first in the DOM: the row is right-aligned, so the quiet
         // button sits left of the primary pill, which keeps the right edge.
-        actions.appendChild(gelatiereQuietButton('Not now', function () {
+        actions.appendChild(gelatiereQuietButton('Dismiss', function () {
           if (window.slicc) slicc.lick({ action: 'gelatiere-dismiss', data: { id: s.id } });
           card.remove();
           if (!document.querySelector('.gelatiere-entry')) renderGelatiereCaughtUp();
-        }));
+        }, "that's not for me"));
         if (s.kind === 'skill') {
           actions.appendChild(gelatierePrimaryButton(meta.action, function () {
             if (window.slicc) slicc.lick({ action: 'gelatiere-install',
@@ -305,11 +306,11 @@
         var wrap = el('div', 'gelatiere-done');
         wrap.appendChild(el('div', 'gelatiere-done-title', 'Done'));
         taken.slice(0, DONE_LEDGER_LIMIT).forEach(function (s) {
+          var meta = KIND_LABELS[s.kind] || KIND_LABELS.tip;
           var row = el('div', 'gelatiere-done-row');
           row.appendChild(lucide('check'));
           row.appendChild(el('span', 'gelatiere-done-title-text', s.title));
-          row.appendChild(el('span', 'gelatiere-done-what',
-            s.kind === 'skill' ? 'installed' : 'tried'));
+          row.appendChild(el('span', 'gelatiere-done-what', meta.done));
           wrap.appendChild(row);
         });
         return wrap;

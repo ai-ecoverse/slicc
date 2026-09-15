@@ -167,7 +167,7 @@ export interface GelatiereSuggestion {
   evidence?: string;
   /** ISO timestamp of the pass that first produced it. */
   createdAt: string;
-  /** ISO timestamp; set when the user waved it away ("Not now" / `gelatiere dismiss`). */
+  /** ISO timestamp; set when the user waved it away ("Dismiss" / `gelatiere dismiss`). */
   dismissedAt?: string;
   /** ISO timestamp; set when the user acted on it ("Install" / "Try it"). */
   takenAt?: string;

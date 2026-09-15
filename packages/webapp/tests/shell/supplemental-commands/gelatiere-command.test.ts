@@ -500,6 +500,21 @@ describe('gelatiere command', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('use-cases keeps an apostrophe inside a double-quoted description', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        url.endsWith('/sitemap.xml')
+          ? sitemapWith(['ready'])
+          : useCasePage('Ready when you are', "You're ready to ship."),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)[0].description).toBe("You're ready to ship.");
+  });
+
   it('use-cases rotates the selection by day when asked for fewer than the site has', async () => {
     const slugs = ['alpha', 'beta', 'gamma', 'delta'];
     const fetchMock = vi.fn(async (url: string) => ({

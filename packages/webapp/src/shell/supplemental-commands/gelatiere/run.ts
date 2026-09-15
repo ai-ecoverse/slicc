@@ -366,10 +366,12 @@ interface UseCase {
 /** `<title>` and the two `<meta>` tags the use-case pages carry, or the slug alone. */
 function parseUseCasePage(slug: string, url: string, html: string): UseCase {
   const meta = (name: string): string => {
+    // Capture the opening quote and require the matching delimiter so a
+    // description like content="You're ready" is not truncated at the apostrophe.
     const found = html.match(
-      new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']*)["']`, 'i')
+      new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=(["'])((?:(?!\\1).)*)\\1`, 'i')
     );
-    return found ? decodeEntities(found[1]).trim() : '';
+    return found ? decodeEntities(found[2]).trim() : '';
   };
   const titleTag = html.match(/<title[^>]*>([^<]*)<\/title>/i);
   return {

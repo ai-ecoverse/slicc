@@ -144,7 +144,7 @@ edit by the user is not.
 ## Stores
 
 - `/shared/.gelatiere/suggestions.json` — every suggestion, newest first, with `createdAt` and,
-  once answered, `takenAt` (Install / Try it) or `dismissedAt` (Not now / `gelatiere dismiss`).
+  once answered, `takenAt` (Install / Try it) or `dismissedAt` (Dismiss / `gelatiere dismiss`).
   Capped at 40; past the cap, dismissed entries are trimmed first, then taken, then the oldest open.
 - `/shared/.gelatiere/state.json` — `passes`, `lastPassAt`, `lastTriggeredAt`, `lastDeliveredAt`.
 - `/shared/.gelatiere/notes.md` — the gelatiere's own cross-pass memory (free-form).
@@ -168,7 +168,8 @@ the store through the dip bridge and renders whatever is open. Its buttons emit:
 The stream renders the three states differently: open suggestions are flat entries (the sidebar
 panel is already a rounded container, so entries draw no box of their own — WHAT as an imperative
 title with a quiet small-caps kind label, WHY as one paragraph, one primary pill plus a text-style
-"Not now"), taken ones collapse into a "Done" ledger (single ellipsized line + installed/tried),
+"Dismiss"), taken ones collapse into a "Done" ledger (single ellipsized line +
+installed/tried/drafted/reported),
 dismissed ones disappear — the store keeps them so a later pass cannot resurrect what the user
 waved away. The **empty** state is a fourth: before the first pass there is nothing to render at
 all, and the panel a new user opens must not read as broken. It names what will land here and when
@@ -193,7 +194,7 @@ not rendered on the entry.
 | ------------ | --------- | ----------- | ------------------- |
 | `skill`      | Skill     | Install     | `gelatiere-install` |
 | `use-case`   | Try this  | Try it      | `gelatiere-try`     |
-| `tip`        | Tip       | — (Not now) | `gelatiere-dismiss` |
+| `tip`        | Tip       | — (Dismiss) | `gelatiere-dismiss` |
 | `skill-idea` | New skill | Draft it    | `gelatiere-try`     |
 | `issue`      | Report    | Report it   | `gelatiere-try`     |
 
