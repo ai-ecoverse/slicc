@@ -98,9 +98,7 @@ function setOutput(key, value) {
 }
 
 function main() {
-  console.log(
-    `🔎 Querying RUM for SLICC errors ${WINDOW_LABEL} on [${HOSTS.join(', ')}]…`
-  );
+  console.log(`🔎 Querying RUM for SLICC errors ${WINDOW_LABEL} on [${HOSTS.join(', ')}]…`);
   const rows = queryErrors();
   console.log(`   ${rows.length} raw error row(s) returned.`);
 
