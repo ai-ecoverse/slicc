@@ -26,6 +26,12 @@ interface RegistryClaimState {
   waiters: Map<string, ClaimWaiter[]>;
   /** Grants that have not yet finished `device.claimInterface`. */
   pendingGrants: Map<string, string>;
+  /**
+   * In-flight grants canceled before `claimInterface` settled. The
+   * claim stays recorded so a new caller cannot jump the FIFO until
+   * the in-flight path releases WebUSB and wakes the next waiter.
+   */
+  cancelledGrants: Map<string, string>;
   listeners: Set<UsbClaimEventListener>;
 }
 
@@ -38,6 +44,7 @@ function stateOf(registry: DeviceHandleRegistry): RegistryClaimState {
       claims: new Map(),
       waiters: new Map(),
       pendingGrants: new Map(),
+      cancelledGrants: new Map(),
       listeners: new Set(),
     };
     byRegistry.set(registry, state);
@@ -151,10 +158,11 @@ export function cancelClaimWait(
 }
 
 /**
- * Drop a grant that has not yet finished `device.claimInterface`.
- * Returns true when `owner` still had that pending grant. Does not
- * wake the next waiter — the in-flight claim path releases WebUSB
- * first, then {@link wakeInterfaceWaiter}.
+ * Mark an in-flight grant canceled without dropping the claim.
+ * The tombstone keeps the interface busy so a new caller cannot
+ * jump queued waiters. Returns true when `owner` still had that
+ * pending grant. Does not wake the next waiter — the in-flight
+ * claim path releases WebUSB first, then {@link wakeInterfaceWaiter}.
  */
 export function takePendingGrant(
   registry: DeviceHandleRegistry,
@@ -163,10 +171,40 @@ export function takePendingGrant(
   owner: string
 ): boolean {
   const key = claimWaitKey(handle, interfaceNumber);
-  const pending = stateOf(registry).pendingGrants;
-  if (pending.get(key) !== owner) return false;
-  pending.delete(key);
-  deleteClaim(registry, handle, interfaceNumber);
+  const state = stateOf(registry);
+  if (state.pendingGrants.get(key) !== owner) return false;
+  state.pendingGrants.delete(key);
+  state.cancelledGrants.set(key, owner);
+  return true;
+}
+
+/** True when `owner`'s in-flight grant was canceled and not yet settled. */
+export function wasGrantCancelled(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): boolean {
+  return stateOf(registry).cancelledGrants.get(claimWaitKey(handle, interfaceNumber)) === owner;
+}
+
+/**
+ * Drop a canceled in-flight tombstone. Returns true when `owner`
+ * had that canceled grant. Does not wake the next waiter.
+ */
+export function settleCancelledGrant(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): boolean {
+  const key = claimWaitKey(handle, interfaceNumber);
+  const state = stateOf(registry);
+  if (state.cancelledGrants.get(key) !== owner) return false;
+  state.cancelledGrants.delete(key);
+  if (claimOwner(registry, handle, interfaceNumber) === owner) {
+    deleteClaim(registry, handle, interfaceNumber);
+  }
   return true;
 }
 
@@ -212,7 +250,9 @@ export function takeOwnerClaims(
       if (heldBy !== owner) continue;
       dropped.push({ handle, interfaceNumber, owner });
       byIface.delete(interfaceNumber);
-      state.pendingGrants.delete(claimWaitKey(handle, interfaceNumber));
+      const key = claimWaitKey(handle, interfaceNumber);
+      state.pendingGrants.delete(key);
+      state.cancelledGrants.delete(key);
     }
     if (byIface.size === 0) state.claims.delete(handle);
   }
@@ -249,6 +289,7 @@ export function releaseInterfaceClaim(
     });
   }
   clearPendingGrant(registry, handle, interfaceNumber, owner);
+  stateOf(registry).cancelledGrants.delete(claimWaitKey(handle, interfaceNumber));
   deleteClaim(registry, handle, interfaceNumber);
   wakeNextWaiter(registry, handle, interfaceNumber);
 }
@@ -292,6 +333,9 @@ export function displaceHandle(
   const prefix = `${handle}:`;
   for (const key of [...state.pendingGrants.keys()]) {
     if (key.startsWith(prefix)) state.pendingGrants.delete(key);
+  }
+  for (const key of [...state.cancelledGrants.keys()]) {
+    if (key.startsWith(prefix)) state.cancelledGrants.delete(key);
   }
   state.claims.delete(handle);
   const seen = new Set<string>();
