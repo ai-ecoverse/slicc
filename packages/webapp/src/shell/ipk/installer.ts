@@ -17,7 +17,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import type { DirEntry, VirtualFS } from '../../fs/index.js';
+import { type DirEntry, FsError, type VirtualFS } from '../../fs/index.js';
 import {
   preflightGlobalBinDelegators,
   reconcileGlobalBinDelegators,
@@ -146,20 +146,16 @@ async function writeEntries(fs: VirtualFS, installDir: string, entries: TarEntry
   }
 }
 
+/** ENOENT → fallback; any other FsError or JSON parse fault is rethrown. */
 async function readJsonOr<T>(fs: VirtualFS, path: string, fallback: T): Promise<T> {
-  if (!(await fs.exists(path))) return fallback;
   let text: string;
   try {
     text = (await fs.readFile(path)) as string;
-  } catch {
-    return fallback;
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return fallback;
+    throw err;
   }
-  if (!text?.trim()) return fallback;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return fallback;
-  }
+  return JSON.parse(text) as T;
 }
 
 interface ProjectManifest {
