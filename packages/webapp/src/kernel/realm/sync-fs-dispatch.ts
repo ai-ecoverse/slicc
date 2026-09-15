@@ -21,7 +21,6 @@
  * not reachable from the SW handler today.
  */
 
-import { renameViaFs } from './rename-via-fs.js';
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 
 export type SyncFsOp =
@@ -140,8 +139,10 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         // Probe `rename` then `mv` (VfsAdapter exposes `mv`); copy+remove
         // only when neither is present, and never when dest is the same inode
         // as source (#3107). Not reachable from the SW handler — kept for
-        // the responder's completeness.
+        // the responder's completeness. First-use import: this module is on
+        // the kernel-worker boot path (host → sync-fs-responder).
         const dest = fs.resolvePath(cwd, req.arg2 ?? '');
+        const { renameViaFs } = await import('./rename-via-fs.js');
         await renameViaFs(fs, resolved, dest);
         return { ok: true, kind: 'void' };
       }

@@ -60,7 +60,6 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
-import { renameViaFs } from './rename-via-fs.js';
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import type { SyncFsToken } from './sync-fs-wire.js';
@@ -415,6 +414,9 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'rename': {
       const newPath = ctx.fs.resolvePath(ctx.cwd, args[1] as string);
+      // First-use import: this file is on the kernel-worker eager graph
+      // (host → jsh-executor → realm-runner). Rename is not boot-critical.
+      const { renameViaFs } = await import('./rename-via-fs.js');
       await renameViaFs(ctx.fs, resolved!, newPath);
       return true;
     }
