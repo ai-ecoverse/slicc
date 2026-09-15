@@ -25,8 +25,17 @@ inputs:
   secrets-env:
     description: secrets.env text (`NAME=value` + `NAME_DOMAINS=a,b` pairs). Pass a secret. Wins over `cone-config.secrets` on collisions.
     default: ''
+  provider:
+    description: Single-provider shortcut — provider id for one apikey account (e.g. `anthropic`, `openai`, `bedrock-camp`). Requires `provider-api-key`.
+    default: ''
+  provider-api-key:
+    description: API key for `provider`. Pass a secret.
+    default: ''
+  provider-base-url:
+    description: Base URL for providers that need one (e.g. `https://bedrock-runtime.us-west-2.amazonaws.com` for `bedrock-camp`).
+    default: ''
   model:
-    description: Model id override (pi-ai alias, e.g. `anthropic:claude-opus-4-6`).
+    description: Model id override (`<provider>:<model>`, e.g. `anthropic:claude-opus-4-6`).
     default: ''
   effort-level:
     description: One of off|minimal|low|medium|high|xhigh.
@@ -106,6 +115,9 @@ runs:
         INPUT_SECRETS_ENV: ${{ inputs.secrets-env }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_EFFORT_LEVEL: ${{ inputs.effort-level }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_PROVIDER_API_KEY: ${{ inputs.provider-api-key }}
+        INPUT_PROVIDER_BASE_URL: ${{ inputs.provider-base-url }}
         INPUT_UI_ORIGIN: ${{ inputs.ui-origin }}
         INPUT_TRAY_WORKER_BASE_URL: ${{ inputs.tray-worker-base-url }}
         INPUT_BOOT_TIMEOUT: ${{ inputs.boot-timeout }}

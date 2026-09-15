@@ -33,27 +33,28 @@ jobs:
 
 What it does, in order: check out your repo (`checkout: true`), boot the leader, install the CLI, inject `inject-path` into the VFS, lend the runner as a follower (`expose-follower`), run `prompt` and wait for the turn, upload the reply (`<artifact-prefix>-response`), export the session (`<artifact-prefix>-session`), fetch `fetch-file` (`<artifact-prefix>-file`), hold until `duration` elapses (or stop right after the prompt with `stop-after-prompt: true`), tear down, upload the leader logs.
 
-| Input                    | Default         | Meaning                                                                                                  |
-| ------------------------ | --------------- | -------------------------------------------------------------------------------------------------------- |
-| `duration`               | `30m`           | Leader lifetime (`90s`, `2h`, `1h30m`; max `350m`, the GitHub job ceiling minus setup)                   |
-| `prompt`                 | `''`            | First user message; the job waits until the turn completes                                               |
-| `prompt-timeout`         | `30m`           | Wall-clock cap for that turn                                                                             |
-| `stop-after-prompt`      | `false`         | Tear down once the reply arrives                                                                         |
-| `model` / `effort-level` | `''`            | Override the bundle's model (pi-ai alias, e.g. `anthropic:claude-opus-4-6`) / effort                     |
-| `checkout`               | `true`          | Check out the calling repository first                                                                   |
-| `inject-path`            | `''`            | Workspace directory copied into the VFS at `inject-target` (default `/`)                                 |
-| `mounts`                 | `''`            | One `<runner-path>:<slicc-path>` per line; live host folders, no copy                                    |
-| `fetch-file`             | `''`            | VFS path published as the `<artifact-prefix>-file` artifact                                              |
-| `export-session`         | `false`         | Publish the redacted transcript bundle as `<artifact-prefix>-session`                                    |
-| `expose-follower`        | `false`         | Run `slicc … follow <follower-runner>` on this runner (default runner `bash -c`)                         |
-| `slicc-version`          | `latest`        | npm version of `sliccy` (node-server)                                                                    |
-| `cli-version`            | `latest`        | Release tag of the Go CLI                                                                                |
-| `slicc-ref`              | `main`          | Ref of this repo the actions are taken from                                                              |
-| `runs-on`                | `ubuntu-latest` | Runner label                                                                                             |
-| `mask-join-url`          | `true`          | Redact the join URL from logs; `false` publishes it as the `<artifact-prefix>-join` artifact (see below) |
-| `artifact-prefix`        | `slicc`         | Prefix for uploaded artifacts                                                                            |
+| Input                            | Default         | Meaning                                                                                                   |
+| -------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| `duration`                       | `30m`           | Leader lifetime (`90s`, `2h`, `1h30m`; max `350m`, the GitHub job ceiling minus setup)                    |
+| `prompt`                         | `''`            | First user message; the job waits until the turn completes                                                |
+| `prompt-timeout`                 | `30m`           | Wall-clock cap for that turn                                                                              |
+| `stop-after-prompt`              | `false`         | Tear down once the reply arrives                                                                          |
+| `model` / `effort-level`         | `''`            | Override the bundle's model (pi-ai alias, e.g. `anthropic:claude-opus-4-6`) / effort                      |
+| `provider` / `provider-base-url` | `''`            | Single API-key provider (with the `SLICC_PROVIDER_API_KEY` secret); base URL where the provider needs one |
+| `checkout`                       | `true`          | Check out the calling repository first                                                                    |
+| `inject-path`                    | `''`            | Workspace directory copied into the VFS at `inject-target` (default `/`)                                  |
+| `mounts`                         | `''`            | One `<runner-path>:<slicc-path>` per line; live host folders, no copy                                     |
+| `fetch-file`                     | `''`            | VFS path published as the `<artifact-prefix>-file` artifact                                               |
+| `export-session`                 | `false`         | Publish the redacted transcript bundle as `<artifact-prefix>-session`                                     |
+| `expose-follower`                | `false`         | Run `slicc … follow <follower-runner>` on this runner (default runner `bash -c`)                          |
+| `slicc-version`                  | `latest`        | npm version of `sliccy` (node-server)                                                                     |
+| `cli-version`                    | `latest`        | Release tag of the Go CLI                                                                                 |
+| `slicc-ref`                      | `main`          | Ref of this repo the actions are taken from                                                               |
+| `runs-on`                        | `ubuntu-latest` | Runner label                                                                                              |
+| `mask-join-url`                  | `true`          | Redact the join URL from logs; `false` publishes it as the `<artifact-prefix>-join` artifact (see below)  |
+| `artifact-prefix`                | `slicc`         | Prefix for uploaded artifacts                                                                             |
 
-Secrets: `SLICC_CONE_CONFIG` (JSON bundle, below) and `SLICC_SECRETS_ENV` (`secrets.env` text). Both optional; without them the cone boots with no provider and `prompt` cannot succeed.
+Secrets: `SLICC_PROVIDER_API_KEY` (with the `provider` input), `SLICC_CONE_CONFIG` (JSON bundle, below) and `SLICC_SECRETS_ENV` (`secrets.env` text). All optional; without a provider account the cone boots but `prompt` cannot succeed.
 
 Outputs: `tray-id`, `slicc-version`, `response` (first 256 KB; the artifact holds all of it), `prompt-exit-code`.
 
@@ -130,7 +131,9 @@ steps:
 
 ## Credentials
 
-Two inputs, both matching what the cloud float already consumes:
+The quickest setup is one API-key provider: `provider` (`anthropic`, `openai`, `bedrock-camp`, …), the `SLICC_PROVIDER_API_KEY` secret (`provider-api-key` on the action), `provider-base-url` where the provider needs one, and `model` as `<provider>:<model>`. The smoke gate runs exactly this with the repo's Bedrock key: `provider: bedrock-camp`, `provider-base-url: https://bedrock-runtime.us-west-2.amazonaws.com`, `model: bedrock-camp:us.anthropic.claude-opus-4-8`.
+
+For several accounts or secrets, two bundle inputs match what the cloud float already consumes:
 
 - **`cone-config`** — a JSON bundle `{ "model", "effortLevel", "accounts": [...], "secrets": [...] }`. `accounts` are provider accounts (`{"providerId":"anthropic","kind":"apikey","apiKey":"…"}` or `{"providerId":"github","kind":"oauth","accessToken":"…"}`); `secrets` are `{ "name", "value", "domains": ["api.example.com"] }`. Store it as one repository secret.
 - **`secrets-env`** — plain `secrets.env` text: `NAME=value` followed by `NAME_DOMAINS=a,b`. Every secret must be domain-scoped; a missing `_DOMAINS` line fails the boot with the offending name.

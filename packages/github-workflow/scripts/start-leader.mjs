@@ -11,7 +11,8 @@
  *
  * Inputs (env, mapped from action.yml): INPUT_SLICC_VERSION, INPUT_NODE_SERVER,
  * INPUT_PORT, INPUT_DURATION, INPUT_MOUNTS, INPUT_CONE_CONFIG,
- * INPUT_SECRETS_ENV, INPUT_MODEL, INPUT_EFFORT_LEVEL, INPUT_UI_ORIGIN,
+ * INPUT_SECRETS_ENV, INPUT_MODEL, INPUT_EFFORT_LEVEL, INPUT_PROVIDER,
+ * INPUT_PROVIDER_API_KEY, INPUT_PROVIDER_BASE_URL, INPUT_UI_ORIGIN,
  * INPUT_TRAY_WORKER_BASE_URL, INPUT_BOOT_TIMEOUT, INPUT_MASK_JOIN_URL,
  * INPUT_CDP_LAUNCH_TIMEOUT.
  */
@@ -100,6 +101,11 @@ function writeCredentialFiles(home) {
     secretsEnvText: input('secrets-env', { raw: true }),
     model: input('model'),
     effortLevel: input('effort-level'),
+    apiKeyAccount: {
+      providerId: input('provider'),
+      apiKey: input('provider-api-key'),
+      baseUrl: input('provider-base-url'),
+    },
   });
   const secretsFile = join(home, 'secrets.env');
   writeFileSync(secretsFile, secretsEnv, { mode: 0o600 });

@@ -15,6 +15,9 @@ name: SLICC leader
 #       secrets:
 #         SLICC_CONE_CONFIG: ${{ secrets.SLICC_CONE_CONFIG }}
 #
+# Or, for a single API-key provider, `provider: anthropic` + the
+# `SLICC_PROVIDER_API_KEY` secret instead of a whole bundle.
+#
 # The join URL is a bearer capability. With `mask-join-url: true` (default)
 # it is redacted from logs and never leaves this job. Job outputs are only
 # readable after the job — and therefore the leader — has ended, so they
@@ -44,8 +47,16 @@ on:
         description: Tear the leader down once the prompt completes instead of holding until `duration`.
         type: boolean
         default: false
+      provider:
+        description: Single-provider shortcut — provider id for one apikey account (`anthropic`, `openai`, `bedrock-camp`, …) using the `SLICC_PROVIDER_API_KEY` secret.
+        type: string
+        default: ''
+      provider-base-url:
+        description: Base URL for providers that need one (e.g. `https://bedrock-runtime.us-west-2.amazonaws.com`).
+        type: string
+        default: ''
       model:
-        description: Model id override (pi-ai alias).
+        description: Model id override (`<provider>:<model>`).
         type: string
         default: ''
       effort-level:
@@ -130,6 +141,9 @@ on:
         required: false
       SLICC_SECRETS_ENV:
         description: secrets.env text (`NAME=value` + `NAME_DOMAINS=…`).
+        required: false
+      SLICC_PROVIDER_API_KEY:
+        description: API key for the `provider` shortcut.
         required: false
     outputs:
       tray-id:
@@ -220,6 +234,9 @@ jobs:
           secrets-env: ${{ secrets.SLICC_SECRETS_ENV }}
           model: ${{ inputs.model }}
           effort-level: ${{ inputs.effort-level }}
+          provider: ${{ inputs.provider }}
+          provider-api-key: ${{ secrets.SLICC_PROVIDER_API_KEY }}
+          provider-base-url: ${{ inputs.provider-base-url }}
           ui-origin: ${{ inputs.ui-origin }}
           tray-worker-base-url: ${{ inputs.tray-worker-base-url }}
           mask-join-url: ${{ inputs.mask-join-url != false }}

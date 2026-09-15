@@ -8,8 +8,11 @@ name: GitHub Workflow Smoke
 # export, keep-alive, teardown. A second job runs the reusable
 # `slicc-leader.yml` at this PR's ref so its wiring is covered too.
 #
-# No secrets: there is no provider, so `prompt` is deliberately not part of
-# this gate (it would fail on a credential-less cone).
+# The prompt legs use the repo's Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`,
+# shared with the Claude review workflows) through the built-in
+# `bedrock-camp` provider. Secrets are absent on fork PRs, so those legs run
+# only for same-repo heads and manual dispatch; every other check is
+# credential-free and runs for everyone.
 
 on:
   pull_request:
@@ -38,9 +41,14 @@ jobs:
         id: start
         uses: ./packages/github-workflow/actions/start-leader
         with:
-          duration: 8m
+          duration: 10m
           mounts: |
             ${{ github.workspace }}/packages/github-workflow:/mnt/gw
+          # Empty on fork PRs → no account, prompt legs are skipped below.
+          provider: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK != '' && 'bedrock-camp' || '' }}
+          provider-api-key: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          provider-base-url: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
+          model: bedrock-camp:${{ vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
 
       - name: Install the slicc CLI
         uses: ./packages/github-workflow/actions/install-cli
@@ -140,6 +148,23 @@ jobs:
             *) echo "::error::ssh exec did not reach the runner"; exit 1 ;;
           esac
 
+      - name: prompt — one turn through Bedrock
+        id: prompt
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+        uses: ./packages/github-workflow/actions/prompt
+        with:
+          join-url: ${{ steps.start.outputs.join-url }}
+          prompt: Reply with exactly the text PONG-${{ github.run_id }} and nothing else.
+          timeout: 5m
+
+      - name: Assert the reply came back
+        if: steps.prompt.outcome == 'success'
+        run: |
+          case "${{ steps.prompt.outputs.response }}" in
+            *"PONG-${{ github.run_id }}"*) echo "prompt round trip ok" ;;
+            *) echo "::error::reply did not contain PONG-${{ github.run_id }}"; exit 1 ;;
+          esac
+
       - name: export-session
         id: export
         uses: ./packages/github-workflow/actions/export-session
@@ -176,3 +201,22 @@ jobs:
       inject-target: /workspace/smoke
       fetch-file: /workspace/smoke/start-leader/action.yml
       artifact-prefix: github-workflow-smoke
+
+  reusable-prompt:
+    name: Reusable slicc-leader.yml with a Bedrock prompt
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/slicc-leader.yml
+    with:
+      duration: 8m
+      stop-after-prompt: true
+      slicc-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      provider: bedrock-camp
+      provider-base-url: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
+      model: bedrock-camp:${{ vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+      prompt: Write the single word PONG into /workspace/pong.txt using the shell, then reply with exactly PONG.
+      prompt-timeout: 5m
+      fetch-file: /workspace/pong.txt
+      export-session: true
+      artifact-prefix: github-workflow-smoke-prompt
+    secrets:
+      SLICC_PROVIDER_API_KEY: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}

@@ -355,6 +355,9 @@ export function serializeSecretsEnv(secrets) {
  * as `@slicc/cloud-core`'s `ConeConfig` plus a raw `secrets.env` text;
  * explicit `model` / `effortLevel` inputs override the bundle's. On a name
  * collision the `secrets.env` text wins over the bundle's `secrets` array.
+ * `apiKeyAccount` is the single-provider shortcut (`provider` +
+ * `provider-api-key` [+ `provider-base-url`] inputs): one apikey account
+ * appended to the bundle's, replacing a bundle account for the same provider.
  *
  * The returned `summary` carries names only — safe to log.
  *
@@ -363,6 +366,7 @@ export function serializeSecretsEnv(secrets) {
  *   secretsEnvText?: string;
  *   model?: string;
  *   effortLevel?: string;
+ *   apiKeyAccount?: { providerId?: string; apiKey?: string; baseUrl?: string };
  * }} input
  * @returns {{
  *   coneConfigJson: string | null;
@@ -397,6 +401,28 @@ function collectSecrets(bundle, secretsEnvText) {
   return [...secrets.values()];
 }
 
+/**
+ * Merge the single-provider shortcut into the bundle's accounts. `provider`
+ * without a key (or vice versa) is a configuration mistake, not a no-op.
+ */
+function mergeApiKeyAccount(accounts, shortcut) {
+  const providerId = (shortcut?.providerId ?? '').trim();
+  const apiKey = (shortcut?.apiKey ?? '').trim();
+  const baseUrl = (shortcut?.baseUrl ?? '').trim();
+  if (!providerId && !apiKey) {
+    if (baseUrl) throw new Error('provider-base-url needs provider and provider-api-key');
+    return accounts;
+  }
+  if (!providerId || !apiKey) {
+    throw new Error('provider and provider-api-key must be given together');
+  }
+  const account = validateAccount(
+    { providerId, kind: 'apikey', apiKey, ...(baseUrl ? { baseUrl } : {}) },
+    'provider'
+  );
+  return [...accounts.filter((a) => a.providerId !== providerId), account];
+}
+
 function resolveEffortLevel(explicit, bundle) {
   const effort = (explicit ?? '').trim() || bundle.effortLevel || null;
   if (effort !== null && !VALID_EFFORT_LEVELS.has(effort)) {
@@ -409,7 +435,10 @@ export function buildConeConfigFiles(input = {}) {
   const bundle = parseBundle(input.coneConfigJson);
   const accountsRaw = bundle.accounts ?? [];
   if (!Array.isArray(accountsRaw)) throw new Error('cone-config: accounts must be an array');
-  const accounts = accountsRaw.map((a, i) => validateAccount(a, i));
+  const accounts = mergeApiKeyAccount(
+    accountsRaw.map((a, i) => validateAccount(a, i)),
+    input.apiKeyAccount
+  );
   const secrets = collectSecrets(bundle, input.secretsEnvText);
   const model = (input.model ?? '').trim() || (isStr(bundle.model) ? bundle.model : '') || null;
   const effortLevel = resolveEffortLevel(input.effortLevel, bundle);

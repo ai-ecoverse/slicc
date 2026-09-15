@@ -259,6 +259,53 @@ describe('buildConeConfigFiles', () => {
     });
     expect(out.secretsEnv).toBe('T=env\nT_DOMAINS=y\nU=1\nU_DOMAINS=z\n');
   });
+  it('synthesizes one apikey account from the provider shortcut', () => {
+    const out = buildConeConfigFiles({
+      apiKeyAccount: {
+        providerId: 'bedrock-camp',
+        apiKey: 'ABSK-1',
+        baseUrl: 'https://bedrock-runtime.us-west-2.amazonaws.com',
+      },
+      model: 'bedrock-camp:us.anthropic.claude-opus-4-8',
+    });
+    expect(JSON.parse(out.coneConfigJson)).toEqual({
+      model: 'bedrock-camp:us.anthropic.claude-opus-4-8',
+      accounts: [
+        {
+          providerId: 'bedrock-camp',
+          kind: 'apikey',
+          apiKey: 'ABSK-1',
+          baseUrl: 'https://bedrock-runtime.us-west-2.amazonaws.com',
+        },
+      ],
+    });
+    expect(out.summary.accountProviderIds).toEqual(['bedrock-camp']);
+  });
+  it('shortcut replaces a bundle account for the same provider and keeps others', () => {
+    const out = buildConeConfigFiles({
+      coneConfigJson: JSON.stringify({
+        accounts: [
+          { providerId: 'anthropic', kind: 'apikey', apiKey: 'old' },
+          { providerId: 'openai', kind: 'apikey', apiKey: 'o' },
+        ],
+      }),
+      apiKeyAccount: { providerId: 'anthropic', apiKey: 'new' },
+    });
+    expect(JSON.parse(out.coneConfigJson).accounts).toEqual([
+      { providerId: 'openai', kind: 'apikey', apiKey: 'o' },
+      { providerId: 'anthropic', kind: 'apikey', apiKey: 'new' },
+    ]);
+  });
+  it('rejects a half-specified provider shortcut', () => {
+    expect(() => buildConeConfigFiles({ apiKeyAccount: { providerId: 'x' } })).toThrow(/together/);
+    expect(() => buildConeConfigFiles({ apiKeyAccount: { apiKey: 'k' } })).toThrow(/together/);
+    expect(() => buildConeConfigFiles({ apiKeyAccount: { baseUrl: 'https://x' } })).toThrow(
+      /provider-base-url/
+    );
+    expect(
+      buildConeConfigFiles({ apiKeyAccount: { providerId: '', apiKey: '' } }).coneConfigJson
+    ).toBeNull();
+  });
   it('writes a cone-config for a bare model but not for secrets alone', () => {
     expect(buildConeConfigFiles({ model: 'm' }).coneConfigJson).toBe('{"model":"m","accounts":[]}');
     expect(buildConeConfigFiles({ secretsEnvText: 'A=1\nA_DOMAINS=d' }).coneConfigJson).toBeNull();
