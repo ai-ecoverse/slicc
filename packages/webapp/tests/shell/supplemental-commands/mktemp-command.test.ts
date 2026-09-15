@@ -165,8 +165,8 @@ describe('mktemp command', () => {
       expect(harness.files.has(result.stdout.trim())).toBe(true);
     });
 
-    it('keeps the unique name when chmod is EOPNOTSUPP (production VFS)', async () => {
-      // `VfsAdapter.chmod()` now fails loudly (#3109). That is "no mode bits",
+    it('keeps the unique name when a backend reports chmod is unsupported', async () => {
+      // A backend can reject metadata changes (#3109). That is "no mode bits",
       // not "left a world-readable file", so mktemp must not take the entry back.
       const { result, path, files, removed } = await run([], { seed: { chmodUnsupported: true } });
       expect(result.exitCode).toBe(0);

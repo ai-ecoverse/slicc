@@ -331,18 +331,15 @@ describe('VfsAdapter', () => {
   });
 
   describe('chmod — no silent no-op (#3109)', () => {
-    it('fails with EOPNOTSUPP on an existing VFS file and leaves the mode unchanged', async () => {
+    it('persists executable bits on an existing VFS file', async () => {
       await adapter.writeFile('/script.sh', '#!/bin/bash\necho ran-ok\n');
       const before = await adapter.stat('/script.sh');
-      expect(before.mode).toBe(0o644);
+      expect(before.mode & 0o7777).toBe(0o644);
 
-      await expect(adapter.chmod('/script.sh', 0o755)).rejects.toMatchObject({
-        code: 'EOPNOTSUPP',
-        message: expect.stringMatching(/executable bit/),
-      });
+      await adapter.chmod('/script.sh', 0o755);
 
       const after = await adapter.stat('/script.sh');
-      expect(after.mode).toBe(0o644);
+      expect(after.mode & 0o7777).toBe(0o755);
       expect(await adapter.readFile('/script.sh')).toBe('#!/bin/bash\necho ran-ok\n');
     });
 
@@ -355,7 +352,7 @@ describe('VfsAdapter', () => {
     it('preserves EIO from the backend instead of mapping it to ENOENT', async () => {
       const { FsError } = await import('../../src/fs/types.js');
       const fake = {
-        stat: async (path: string) => {
+        chmod: async (path: string) => {
           throw new FsError('EIO', 'io error', path);
         },
       };

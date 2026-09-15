@@ -1,8 +1,6 @@
 /**
- * When `./script` fails with a bare Permission denied, the VFS has no
- * executable bit — not a missing chmod, not a special `/tmp`. Append the
- * interpreter hint so the next attempt is `bash file` instead of another
- * `chmod +x` (#3109).
+ * When `./script` fails with a bare Permission denied, append an interpreter
+ * hint. This also helps mounted files whose backend cannot change mode bits.
  */
 
 export interface ShebangExecHintFs {

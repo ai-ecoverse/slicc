@@ -1,6 +1,5 @@
 /**
- * #3109: `chmod +x` must not silently succeed on a VFS that cannot store an
- * executable bit. `bash file` still runs; `./file` stays Permission denied.
+ * Successful chmod must update the executable bit and allow direct execution.
  */
 
 import 'fake-indexeddb/auto';
@@ -8,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 
-describe('chmod +x on a VFS without exec-bit support (#3109)', () => {
+describe('chmod +x on the metadata-capable VFS (#3109)', () => {
   let fs: VirtualFS;
   let shell: AlmostBashShellHeadless;
   let dbCounter = 0;
@@ -26,16 +25,18 @@ describe('chmod +x on a VFS without exec-bit support (#3109)', () => {
     shell.dispose();
   });
 
-  it('fails loudly, leaves the mode unchanged, and still runs via bash', async () => {
+  it('persists the execute bit and runs directly or via bash', async () => {
     await fs.writeFile('/tmp/execbit-probe.sh', '#!/bin/bash\necho ran-ok\n');
 
     const chmod = await shell.executeCommand('chmod +x /tmp/execbit-probe.sh');
-    expect(chmod.exitCode).not.toBe(0);
-    expect(chmod.stderr).toMatch(/EOPNOTSUPP|executable bit/);
+    expect(chmod.exitCode).toBe(0);
+    expect(chmod.stderr).toBe('');
 
-    const listing = await shell.executeCommand('ls -l /tmp/execbit-probe.sh');
-    expect(listing.exitCode).toBe(0);
-    expect(listing.stdout).toMatch(/^-rw-r--r-- /m);
+    expect((await fs.stat('/tmp/execbit-probe.sh')).mode! & 0o7777).toBe(0o755);
+
+    const direct = await shell.executeCommand('./execbit-probe.sh');
+    expect(direct.exitCode).toBe(0);
+    expect(direct.stdout).toContain('ran-ok');
 
     const viaBash = await shell.executeCommand('bash /tmp/execbit-probe.sh');
     expect(viaBash.exitCode).toBe(0);
