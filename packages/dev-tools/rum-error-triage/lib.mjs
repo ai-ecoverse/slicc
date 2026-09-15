@@ -136,21 +136,48 @@ export function selectNewCandidates(rows, existingFps) {
   return aggregateCandidates(rows).filter((c) => !filed.has(c.fingerprint));
 }
 
+// A window start may be given two ways. `since` is an absolute instant and wins;
+// `sinceDays` is the older relative form and remains the default. Absolute is
+// preferred whenever the caller knows where the previous run actually stopped,
+// because a day count can only round: rounding down silently skips errors, and
+// rounding up rescans (and rebills) up to a whole extra day of the RUM table.
+//
+// The value is interpolated into SQL, so it is validated as strictly as the host
+// list above rather than trusted. Anything that is not a plain UTC instant throws,
+// because a wrong window here is invisible in the results - it just looks like a
+// quiet day.
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+
+function buildSinceExpression(opts) {
+  const raw = opts.since == null ? '' : String(opts.since);
+  if (raw === '') {
+    const sinceDays = Number.isFinite(opts.sinceDays)
+      ? Math.max(1, Math.floor(opts.sinceDays))
+      : 1;
+    return `TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${sinceDays} DAY)`;
+  }
+  if (!ISO_INSTANT.test(raw) || Number.isNaN(Date.parse(raw))) {
+    throw new Error(
+      `buildErrorQuery: since must be an ISO-8601 UTC instant like 2026-09-15T03:00:00Z, got ${JSON.stringify(raw)}`
+    );
+  }
+  return `TIMESTAMP("${raw}")`;
+}
+
 /**
  * Build the BigQuery SQL that extracts raw SLICC `error` rows over a window.
  * Returns raw rows (not pre-aggregated) so all normalization/dedup stays in
  * tested JS; only the cheap, clustered SLICC-session filter and a coarse
  * Vite exclusion run server-side.
- * @param {{sinceDays?: number, hosts?: string[], table?: string}} [opts]
+ * @param {{sinceDays?: number, since?: string, hosts?: string[], table?: string}} [opts]
  * @returns {string} a standard-SQL query
  */
 export function buildErrorQuery(opts = {}) {
-  const sinceDays = Number.isFinite(opts.sinceDays) ? Math.max(1, Math.floor(opts.sinceDays)) : 1;
   const hosts = opts.hosts?.length ? opts.hosts : DEFAULT_HOSTS;
   const table = opts.table ?? RUM_TABLE;
   const hostList = hosts.map((h) => `"${String(h).replace(/[^\w.:-]/g, '')}"`).join(',');
   return `
-DECLARE since TIMESTAMP DEFAULT TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${sinceDays} DAY);
+DECLARE since TIMESTAMP DEFAULT ${buildSinceExpression(opts)};
 DECLARE hosts ARRAY<STRING> DEFAULT [${hostList}];
 WITH sess AS (
   SELECT id,
