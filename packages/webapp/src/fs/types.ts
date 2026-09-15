@@ -38,6 +38,11 @@ export interface Stats {
    */
   ino?: number;
   /**
+   * Backing device id, when the backend knows one (hostfs `st_dev`). Inodes
+   * are unique per device — same `ino` on two mounts is not the same file.
+   */
+  dev?: number;
+  /**
    * Owning user id, when the backend knows one (hostfs). Best-effort.
    */
   uid?: number;
@@ -84,6 +89,7 @@ export interface DirEntryStats {
   /** Inode-change time (ms since epoch). */
   ctime?: number;
   ino?: number;
+  dev?: number;
   uid?: number;
   gid?: number;
   /** Full POSIX `st_mode`, type bits included. */
@@ -125,6 +131,7 @@ export function statsFromDirEntry(entry: DirEntry): Stats | undefined {
     mtime: entry.mtime,
     ctime: entry.ctime ?? entry.mtime,
     ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.dev !== undefined ? { dev: entry.dev } : {}),
     ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
     ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
     ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
@@ -199,6 +206,8 @@ export interface FsStatsLike {
   ctimeMs: number;
   /** Inode number. Optional: LightningFS' legacy shape omits it, ZenFS sets it. */
   ino?: number;
+  /** Device id. Optional: hostfs reports `st_dev`; ZenFS may omit it. */
+  dev?: number;
   /** Owning user id. Optional: only ZenFS' shape carries it. */
   uid?: number;
   /** Owning group id. Optional: only ZenFS' shape carries it. */

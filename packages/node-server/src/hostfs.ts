@@ -366,6 +366,7 @@ function ifRangeAllowsRange(req: Request, v: CacheValidator): boolean {
 function statIdentity(s: Stats): {
   ctime: number;
   ino: number;
+  dev: number;
   uid: number;
   gid: number;
   mode: number;
@@ -373,6 +374,7 @@ function statIdentity(s: Stats): {
   return {
     ctime: s.ctimeMs,
     ino: Number(s.ino),
+    dev: Number(s.dev),
     uid: s.uid,
     gid: s.gid,
     mode: s.mode,
@@ -385,6 +387,7 @@ function statPayload(s: Stats): {
   mtime: number;
   ctime: number;
   ino: number;
+  dev: number;
   uid: number;
   gid: number;
   mode: number;

@@ -75,6 +75,16 @@ describe('renameViaFs', () => {
     expect(new TextDecoder().decode(fs.store.get('/to'))).toBe('payload');
   });
 
+  it('falls back to copy+rm when native rename throws (non-hostfs mount)', async () => {
+    const fs = memoryFs({ '/from': 'payload' });
+    fs.rename = async () => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    };
+    await renameViaFs(fs, '/from', '/to');
+    expect(fs.store.has('/from')).toBe(false);
+    expect(new TextDecoder().decode(fs.store.get('/to'))).toBe('payload');
+  });
+
   it('string-identical paths are a no-op', async () => {
     const fs = memoryFs({ '/a': 'x' });
     await renameViaFs(fs, '/a', '/a');

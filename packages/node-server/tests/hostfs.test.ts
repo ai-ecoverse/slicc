@@ -37,6 +37,7 @@ import {
 interface StatIdentity {
   ctime?: number;
   ino?: number;
+  dev?: number;
   uid?: number;
   gid?: number;
   mode?: number;
@@ -187,6 +188,7 @@ describe('hostfs routes', () => {
     const real = await stat(join(root, 'hello.txt'));
     expect(body.ctime).toBe(real.ctimeMs);
     expect(body.ino).toBe(Number(real.ino));
+    expect(body.dev).toBe(Number(real.dev));
     expect(body.uid).toBe(real.uid);
     expect(body.gid).toBe(real.gid);
     // Full st_mode, type bits included — so the executable bit survives.
@@ -356,6 +358,7 @@ describe('stable POST /api/hostfs endpoint', () => {
     const real = await stat(join(root, 'hello.txt'));
     expect(body.ctime).toBe(real.ctimeMs);
     expect(body.ino).toBe(Number(real.ino));
+    expect(body.dev).toBe(Number(real.dev));
     expect(body.uid).toBe(real.uid);
     expect(body.gid).toBe(real.gid);
     expect(body.mode).toBe(real.mode);

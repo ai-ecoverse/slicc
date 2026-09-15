@@ -211,6 +211,7 @@ function transientBridgeError(
 interface RawStatIdentity {
   ctime?: unknown;
   ino?: unknown;
+  dev?: unknown;
   uid?: unknown;
   gid?: unknown;
   mode?: unknown;
@@ -237,6 +238,8 @@ function readStatIdentity(raw: RawStatIdentity): MountStatIdentity {
   if (ctime !== undefined) identity.ctime = ctime;
   const ino = finiteNumber(raw.ino);
   if (ino !== undefined) identity.ino = ino;
+  const dev = finiteNumber(raw.dev);
+  if (dev !== undefined) identity.dev = dev;
   const uid = finiteNumber(raw.uid);
   if (uid !== undefined) identity.uid = uid;
   const gid = finiteNumber(raw.gid);

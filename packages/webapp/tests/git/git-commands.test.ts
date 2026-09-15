@@ -2819,6 +2819,24 @@ EOF`);
       expect(await vfs.exists('/project/SLICC.md')).toBe(false);
     });
 
+    it('falls back to copy+rm when native rename cannot see the mount', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/old.txt', 'content');
+      await git.execute(['add', 'old.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      const spy = vi
+        .spyOn(vfs, 'rename')
+        .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      try {
+        const result = await git.execute(['mv', 'old.txt', 'new.txt'], '/project');
+        expect(result.exitCode).toBe(0);
+        expect(await vfs.exists('/project/old.txt')).toBe(false);
+        expect(await vfs.readTextFile('/project/new.txt')).toBe('content');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('moves file to a subdirectory', async () => {
       await git.execute(['init'], '/project');
       await vfs.writeFile('/project/file.txt', 'content');

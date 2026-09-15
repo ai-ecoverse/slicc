@@ -9,4 +9,11 @@ describe('sameFileIdentity', () => {
     expect(sameFileIdentity({}, { ino: 12 })).toBe(false);
     expect(sameFileIdentity({ ino: 12 }, {})).toBe(false);
   });
+
+  it('same ino on different devices is not the same file', () => {
+    expect(sameFileIdentity({ ino: 12, dev: 1 }, { ino: 12, dev: 2 })).toBe(false);
+    expect(sameFileIdentity({ ino: 12, dev: 1 }, { ino: 12, dev: 1 })).toBe(true);
+    expect(sameFileIdentity({ ino: 12, dev: 1 }, { ino: 12 })).toBe(false);
+    expect(sameFileIdentity({ ino: 12 }, { ino: 12, dev: 1 })).toBe(false);
+  });
 });

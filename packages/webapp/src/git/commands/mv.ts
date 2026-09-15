@@ -53,7 +53,16 @@ export async function mv(
     await ctx.fs.mkdir(dstPath.slice(0, dstSlash), { recursive: true });
   }
 
-  await ctx.fs.rename(srcPath, dstPath);
+  // Native rename is hostfs-only. Picker/S3/DA/AEM mounts live outside
+  // LightningFS, so VirtualFS.rename throws there — keep the historical
+  // read/write/remove fallback after the same-file check (#3107).
+  try {
+    await ctx.fs.rename(srcPath, dstPath);
+  } catch {
+    const content = await ctx.fs.readFile(srcPath, { encoding: 'binary' });
+    await ctx.fs.writeFile(dstPath, content);
+    await ctx.fs.rm(srcPath);
+  }
   await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: dst });
   await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: src });
 

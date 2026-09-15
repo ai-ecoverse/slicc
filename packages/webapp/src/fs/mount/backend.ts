@@ -29,6 +29,8 @@ export interface MountStatIdentity {
   ctime?: number;
   /** Inode number. */
   ino?: number;
+  /** Device id (`st_dev`). Inodes are unique per device. */
+  dev?: number;
   uid?: number;
   gid?: number;
   /** Full POSIX `st_mode`, type bits included — carries the executable bit. */

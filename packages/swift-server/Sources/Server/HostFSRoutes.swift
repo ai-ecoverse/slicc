@@ -644,6 +644,7 @@ enum HostFSRoutes {
         return [
             "ctime": .number(ctimeMs),
             "ino": .number(Double(info.st_ino)),
+            "dev": .number(Double(info.st_dev)),
             "uid": .number(Double(info.st_uid)),
             "gid": .number(Double(info.st_gid)),
             "mode": .number(Double(info.st_mode)),
