@@ -100,31 +100,13 @@
         padding: 4px 0;
       }
       .gelatiere-quiet-btn:hover { color: var(--s2-content-secondary, #a1a1a1); }
-      /* ── Empty state ──
-         The first thing most users ever see here: before the first pass there
-         is nothing to show, and "nothing yet" alone reads like a broken panel.
-         So it says what will appear and when, then hands over three real use
-         cases from www.sliccy.com so the panel is a way in rather than a dead
-         end. */
+      /* ── Empty state + discovery ──
+         Before the first pass there is nothing to render, and "nothing yet"
+         alone reads like a broken panel: it says what will land here, then
+         links three use cases from www.sliccy.com. Both reuse the entry's own
+         head / why classes, so the panel keeps one type ramp and only the
+         link chrome is new. */
       .gelatiere-empty { padding: 2px 0 4px; }
-      .gelatiere-empty__head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 13px;
-        font-weight: 600;
-        line-height: 1.35;
-        color: var(--s2-content-default, #e8e8e8);
-      }
-      .gelatiere-empty__head :is(i, svg) { width: 16px; height: 16px; flex-shrink: 0; }
-      .gelatiere-empty__body {
-        margin-top: 8px;
-        font-size: 12px;
-        line-height: 1.6;
-        color: var(--s2-content-secondary, #a1a1a1);
-      }
-      /* The discovery block: same small-caps heading as the Done ledger, so
-         the two secondary sections of the panel read as one family. */
       .gelatiere-explore {
         margin-top: 18px;
         padding-top: 14px;
@@ -132,30 +114,14 @@
       }
       .gelatiere-explore__link {
         display: block;
-        padding: 9px 0;
+        padding: 10px 0;
         text-decoration: none;
         color: inherit;
       }
       .gelatiere-explore__link + .gelatiere-explore__link {
         border-top: 1px solid var(--s2-border-subtle, var(--s2-gray-200, #e8e8e8));
       }
-      .gelatiere-explore__title {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        line-height: 1.4;
-        color: var(--s2-content-default, #e8e8e8);
-      }
-      .gelatiere-explore__title :is(i, svg) { width: 12px; height: 12px; flex-shrink: 0; opacity: 0.5; }
-      .gelatiere-explore__why {
-        margin-top: 3px;
-        font-size: 12px;
-        line-height: 1.5;
-        color: var(--s2-content-secondary, #a1a1a1);
-      }
-      .gelatiere-explore__link:hover .gelatiere-explore__title { text-decoration: underline; }
+      .gelatiere-explore__link:hover .gelatiere-entry__title { text-decoration: underline; }
       /* An entry the user just acted on: buttons gone, a quiet confirmation
          line in their place. The entry stays until the next render. */
       .gelatiere-entry--taken .gelatiere-entry__head,
@@ -222,9 +188,8 @@
       // cone, which acts on them per the `gelatiere` skill.
       var GELATIERE_SUGGESTIONS_PATH = '/shared/.gelatiere/suggestions.json';
       // `skill-idea` and `issue` are prompt-carrying like `use-case` and ride
-      // the same `gelatiere-try` lick — only the label and the pill differ, so
-      // "write a skill for this" and "report this to SLICC" do not both render
-      // as "Try this".
+      // the same `gelatiere-try` lick; only the label and the pill differ, so
+      // "report this to SLICC" does not render as "Try this".
       var KIND_LABELS = {
         'skill':      { label: 'Skill',     icon: 'package',       action: 'Install' },
         'use-case':   { label: 'Try this',  icon: 'sparkles',      action: 'Try it' },
@@ -232,8 +197,7 @@
         'skill-idea': { label: 'New skill', icon: 'wand-sparkles', action: 'Draft it' },
         'issue':      { label: 'Report',    icon: 'bug',           action: 'Report it' },
       };
-      // What the pass has not produced yet, and where to look meanwhile. Three
-      // rows, rotated daily by the command so a second visit differs.
+      // Rotated daily by the command, so a second visit differs.
       var USE_CASE_COMMAND = 'gelatiere use-cases --limit 3 --json';
       var USE_CASE_CACHE_MS = 12 * 60 * 60 * 1000;
       var EMPTY_HEADLINE = 'Nothing here yet';
@@ -351,10 +315,9 @@
         return wrap;
       }
 
-      // The three use-case rows under an empty stream. `gelatiere use-cases`
-      // owns the fetching (pinned host, one sitemap read plus one page each)
-      // so the sprinkle needs no egress of its own; the result is cached in
-      // sprinkle state for half a day because this runs on every panel open.
+      // `gelatiere use-cases` owns the fetching (pinned host), so the sprinkle
+      // needs no egress of its own; the result is cached in sprinkle state
+      // because this runs on every panel open.
       function readCachedUseCases() {
         try {
           var saved = window.slicc && slicc.getState && slicc.getState();
@@ -379,7 +342,7 @@
       }
 
       // Appended after the empty text, never instead of it: the panel must
-      // read correctly the moment it opens, whether or not the site answers.
+      // read correctly whether or not the site answers.
       function appendUseCases(stream) {
         loadUseCases().then(function (cases) {
           if (!cases.length || !stream.isConnected) return;
@@ -390,11 +353,11 @@
             link.href = c.url;
             link.target = '_blank';
             link.rel = 'noopener';
-            var head = el('div', 'gelatiere-explore__title');
-            head.appendChild(document.createTextNode(c.title));
+            var head = el('div', 'gelatiere-entry__head');
+            head.appendChild(el('span', 'gelatiere-entry__title', c.title));
             head.appendChild(lucide('arrow-up-right'));
             link.appendChild(head);
-            if (c.description) link.appendChild(el('div', 'gelatiere-explore__why', c.description));
+            if (c.description) link.appendChild(el('div', 'gelatiere-why', c.description));
             wrap.appendChild(link);
           });
           stream.appendChild(wrap);
@@ -402,17 +365,16 @@
         });
       }
 
-      // The stream has nothing to act on. `headline` + `body` say what will
-      // land here and when; the use cases say what to do until then.
+      // Nothing to act on: what will land here, then what to do until then.
       function renderGelatiereEmpty(headline, body) {
         var stream = document.getElementById('gelatiereStream');
         stream.innerHTML = '';
         var empty = el('div', 'gelatiere-empty');
-        var head = el('div', 'gelatiere-empty__head');
+        var head = el('div', 'gelatiere-entry__head');
         head.appendChild(lucide('ice-cream-cone'));
-        head.appendChild(el('span', null, headline));
+        head.appendChild(el('span', 'gelatiere-entry__title', headline));
         empty.appendChild(head);
-        empty.appendChild(el('div', 'gelatiere-empty__body', body));
+        empty.appendChild(el('div', 'gelatiere-why', body));
         stream.appendChild(empty);
         stream.hidden = false;
         if (window.LucideIcons) window.LucideIcons.render();

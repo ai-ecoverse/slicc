@@ -31,9 +31,8 @@ Read these in order; each one is cheap. Start with `date -u +%Y-%m-%d` so your e
 2. **Durable memory** — what earlier sessions already established (preferences, projects, pitfalls): `cat /workspace/CLAUDE.md`, and `cat /cones/*/CLAUDE.md 2>/dev/null` for the other cones. A long-lived install's memory files run to a thousand lines each; on those, read the shape first (`grep -n '^## ' FILE`) and `sed -n` only the sections that look relevant.
 3. **Session index** — titles, dates, cones: `jq -r '.[] | "\(.frozenAt[0:10])  \(.cone // "cone")  \(.title)"' /sessions/index.json | tail -30`.
 4. **Recent archives** — the newest few sessions: `ls -t /sessions/*.md | grep -v agent- | head -5`.
-   That list mixes two kinds of file. `/sessions/live-*.md` is a chat still in progress and is
-   usually both the newest and the largest signal there is (megabytes of it) — check
-   `ls -lt /sessions/live-*.md` so an in-flight session is never the one you skipped.
+   `/sessions/live-*.md` in that list is a chat still in progress — usually the newest and largest
+   signal there is, and the easiest to skip. Check `ls -lt /sessions/live-*.md` too.
 5. **Your own notes** — what you concluded last time: `cat /shared/.gelatiere/notes.md 2>/dev/null`.
 
 **Never `cat` an archive.** They reach several megabytes and the `<!-- slicc:session-data ... -->` block is one JSON line holding the whole session. Pull the three signals separately, each on the prose half only:
@@ -62,14 +61,12 @@ Cross the signals above with what SLICC can offer. Spend one command on each; do
 # lives (repo, path, skill, installAll) — the install command is built from those last four.
 gelatiere catalog | jq -r '.data[] | "\(.name)\t\(.description)\ttasks=\(.tasks) role=\(.role) apps=\(.apps)\trepo=\(.repo) path=\(.path) skill=\(.skill) installAll=\(.installAll)"'
 
-# Every shell command SLICC ships, one man page each — the use-case surface.
-# It lists what the WEBSITE documents, which is not everything SLICC ships: a command
-# missing here may still exist, so never tell the user something is absent on this alone.
+# Every documented shell command, one man page each. This is what the WEBSITE documents,
+# not everything SLICC ships — never tell the user a command is absent on this alone.
 gelatiere commands
 
 # What SLICC is FOR, in the site's own words: title, summary and the skills each use case
-# wants. Neither the catalog (what is installable) nor the man pages (what is runnable)
-# says this, and it is where a `use-case` suggestion for untried territory comes from.
+# wants. Where a `use-case` suggestion for untried territory comes from.
 gelatiere use-cases
 
 # The community skills repo, when the catalog looks thin for this user.
@@ -90,35 +87,29 @@ At most the `maxSuggestions` from the config block above, best first. Fewer, sha
 | `skill-idea` | the sessions repeat a routine no installable skill covers — write one instead of installing one                         | `prompt` — what to ask a cone to author                          |
 | `issue`      | SLICC ITSELF is what got in the way: a command that broke, a surface that lied, a capability that is simply missing     | `prompt` — what to ask a cone to file                            |
 
-### `skill-idea` — when nothing installable fits
+### `skill-idea` and `issue` — the two that point away from the catalog
 
-The catalog is small and mostly already installed, so the honest answer to "a recurring routine
-with no skill behind it" is often **write one**, not "install nothing". Suggest this when the same
-multi-step routine shows up in two or more sessions — the same sequence of commands, the same
-prompt retyped, the same checklist reconstructed from memory — and neither `upskill list` nor
-`gelatiere catalog` has anything for it. Name the routine you watched, not a category. The `prompt`
-asks a cone to author it: what the skill does, when it should trigger, and the steps you saw,
-pointing at `skill-creator` if `upskill list` shows it installed.
+The catalog is small and mostly already installed, so do not expect a `skill` every pass. When the
+same multi-step routine shows up in two or more sessions — the same command sequence, the same
+prompt retyped, the same checklist rebuilt from memory — and neither `upskill list` nor `gelatiere
+catalog` covers it, the honest answer is **write one**. Name the routine you watched, not a
+category; the `prompt` asks a cone to author it (what it does, when it triggers, the steps you saw)
+and points at `skill-creator` when `upskill list` shows it installed.
 
 > "You rebuilt the same release checklist by hand in three sessions — tag, changelog, TestFlight
-> notes, then the smoke run. Nothing in the catalog covers it."
-> `prompt`: "Write a skill for my release checklist: …"
+> notes, then the smoke run." `prompt`: "Write a skill for my release checklist: …"
 
-### `issue` — when SLICC is the problem
-
-You see the failures nobody reports: the command that exited 1 for a reason the user then worked
-around, the flag that silently did nothing, the panel that showed stale state. Suggest this when
-the friction is SLICC's own and reproducible from what you read — a real, named failure with the
-session evidence to back it, not a wish. One per pass at the very most; a pass that files
-speculative bugs teaches the user to ignore the card. The `prompt` asks a cone to open the issue
-against `ai-ecoverse/slicc` with the reproduction you saw.
+`issue` is for the failures nobody reports: the command that exited 1 and got worked around, the
+flag that silently did nothing, the panel that showed stale state. Only when the friction is
+SLICC's own AND reproducible from what you read — a named failure with session evidence, not a
+wish. One per pass at the very most: a pass that files speculative bugs teaches the user to ignore
+the card. The `prompt` asks a cone to open it against `ai-ecoverse/slicc` with your reproduction.
 
 > "`chmod +x` reports success and leaves the mode unchanged, so `./script.sh` fails with
-> `Permission denied` and nothing explains why."
-> `prompt`: "File an issue against ai-ecoverse/slicc: chmod appears to succeed but …"
+> `Permission denied`." `prompt`: "File an issue against ai-ecoverse/slicc: chmod appears to …"
 
-Do not reach for this when the user simply did something the hard way (that is a `tip`), when the
-capability exists and they missed it (`use-case`), or when the evidence is one ambiguous error.
+Neither fits when the user simply did something the hard way (that is a `tip`), when the capability
+already exists and they missed it (`use-case`), or when the evidence is one ambiguous error.
 
 ### The `install` command
 
