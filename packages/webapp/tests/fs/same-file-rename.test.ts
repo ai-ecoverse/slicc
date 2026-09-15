@@ -2,8 +2,8 @@
  * Same-inode rename on a hostfs-like mount must be a POSIX no-op (#3107).
  *
  * The fake backend folds lookup by case + NFC so `Slicc.md` / `SLICC.md` and
- * NFD / NFC share one inode, matching APFS via hostfs. VirtualFS must not
- * call backend.rename (which would rewrite the catalog name) and must not
+ * NFD / NFC share one inode, matching APFS via hostfs. VirtualFS routes
+ * same-mount rename to the backend (which POSIX-no-ops) and must not
  * copy+write dest (O_TRUNC of the only copy).
  */
 import 'fake-indexeddb/auto';
@@ -93,15 +93,16 @@ class CaseFoldHostfs implements MountBackend {
     this.files.delete(fold(path.replace(/^\/+/, '')));
   }
 
-  async rename(fromPath: string, toPath: string): Promise<void> {
+  async rename(fromPath: string, toPath: string): Promise<{ noop?: boolean }> {
     this.renameCalls.push([fromPath, toPath]);
     const src = this.lookup(fromPath);
     if (!src) throw new FsError('ENOENT', 'no such file', fromPath);
     const dest = this.lookup(toPath);
-    if (dest && dest.ino === src.ino) return;
+    if (dest && dest.ino === src.ino) return { noop: true };
     this.files.delete(fold(fromPath.replace(/^\/+/, '')));
     src.storedName = toPath.replace(/^\/+/, '');
     this.files.set(fold(src.storedName), src);
+    return {};
   }
 
   async refresh(): Promise<RefreshReport> {
@@ -136,7 +137,7 @@ describe('same-inode rename on a case-/NFC-insensitive mount (#3107)', () => {
   it('case-only rename is a no-op: bytes survive, readdir name unchanged', async () => {
     backend.put('Slicc.md', 'hello-case');
     await vfs.rename('/mnt/kb/Slicc.md', '/mnt/kb/SLICC.md');
-    expect(backend.renameCalls).toEqual([]);
+    expect(backend.renameCalls).toEqual([['Slicc.md', 'SLICC.md']]);
     expect(backend.writeCalls).toEqual([]);
     const names = (await vfs.readDir('/mnt/kb')).map((e) => e.name);
     expect(names).toEqual(['Slicc.md']);
@@ -149,7 +150,7 @@ describe('same-inode rename on a case-/NFC-insensitive mount (#3107)', () => {
     const nfc = `Groeger-Familie${'\u00f6'}.md`;
     backend.put(nfd, 'hello-nfc');
     await vfs.rename(`/mnt/kb/${nfd}`, `/mnt/kb/${nfc}`);
-    expect(backend.renameCalls).toEqual([]);
+    expect(backend.renameCalls).toEqual([[nfd, nfc]]);
     const names = (await vfs.readDir('/mnt/kb')).map((e) => e.name);
     expect(names).toEqual([nfd]);
     expect(await vfs.readTextFile(`/mnt/kb/${nfd}`)).toBe('hello-nfc');
@@ -169,5 +170,101 @@ describe('same-inode rename on a case-/NFC-insensitive mount (#3107)', () => {
     const names = (await vfs.readDir('/mnt/kb')).map((e) => e.name);
     expect(names).toEqual(['to.txt']);
     expect(await vfs.readTextFile('/mnt/kb/to.txt')).toBe('moved');
+  });
+});
+
+/**
+ * Hostfs `stat` follows; hostfs `rename` `lstat`s. Two distinct symlink
+ * directory entries that point at one target share a followed inode, but
+ * renaming one onto the other must still reach the backend (#3107 P2).
+ */
+class FollowedSymlinkHostfs implements MountBackend {
+  readonly kind = 'hostfs' as const;
+  readonly source = 'hostfs:///fake-links';
+  readonly mountId = 'fake-links';
+  readonly renameCalls: Array<[string, string]> = [];
+  private readonly files = new Map<
+    string,
+    { storedName: string; bytes: Uint8Array; ino: number; targetIno: number }
+  >();
+
+  putLink(name: string, ino: number, targetIno: number, body: string): void {
+    this.files.set(name, {
+      storedName: name,
+      bytes: new TextEncoder().encode(body),
+      ino,
+      targetIno,
+    });
+  }
+
+  async readDir(): Promise<MountDirEntry[]> {
+    return [...this.files.values()].map((e) => ({
+      name: e.storedName,
+      kind: 'file' as const,
+      size: e.bytes.byteLength,
+      ino: e.targetIno,
+    }));
+  }
+
+  async readFile(path: string): Promise<Uint8Array> {
+    const entry = this.files.get(path.replace(/^\/+/, ''));
+    if (!entry) throw new FsError('ENOENT', 'no such file', path);
+    return entry.bytes.slice();
+  }
+
+  async writeFile(): Promise<void> {}
+  async mkdir(): Promise<void> {}
+  async remove(path: string): Promise<void> {
+    this.files.delete(path.replace(/^\/+/, ''));
+  }
+
+  async stat(path: string): Promise<MountStat> {
+    const entry = this.files.get(path.replace(/^\/+/, ''));
+    if (!entry) throw new FsError('ENOENT', 'no such file', path);
+    // Followed: both links report the target's inode.
+    return { kind: 'file', size: entry.bytes.byteLength, mtime: 1, ino: entry.targetIno };
+  }
+
+  async rename(fromPath: string, toPath: string): Promise<{ noop?: boolean }> {
+    this.renameCalls.push([fromPath, toPath]);
+    const src = this.files.get(fromPath.replace(/^\/+/, ''));
+    if (!src) throw new FsError('ENOENT', 'no such file', fromPath);
+    const dest = this.files.get(toPath.replace(/^\/+/, ''));
+    if (dest && dest.ino === src.ino) return { noop: true };
+    this.files.delete(fromPath.replace(/^\/+/, ''));
+    src.storedName = toPath.replace(/^\/+/, '');
+    this.files.set(src.storedName, src);
+    return {};
+  }
+
+  async refresh(): Promise<RefreshReport> {
+    return { added: [], removed: [], changed: [], unchanged: 0, errors: [] };
+  }
+
+  describe(): MountDescription {
+    return { displayName: 'fake-links' };
+  }
+
+  async close(): Promise<void> {}
+  getHostPath(): string {
+    return '/fake-links';
+  }
+}
+
+describe('rename of two distinct followed symlinks (#3107)', () => {
+  it('still reaches backend.rename — follow-stat identity must not no-op', async () => {
+    const vfs = await VirtualFS.create({
+      dbName: `followed-symlink-rename-${dbCounter++}`,
+      wipe: true,
+    });
+    const backend = new FollowedSymlinkHostfs();
+    backend.putLink('a', 1, 99, 'x');
+    backend.putLink('b', 2, 99, 'x');
+    await vfs.mkdir('/mnt/kb', { recursive: true });
+    await vfs.mount('/mnt/kb', backend);
+    await vfs.rename('/mnt/kb/a', '/mnt/kb/b');
+    expect(backend.renameCalls).toEqual([['a', 'b']]);
+    const names = (await vfs.readDir('/mnt/kb')).map((e) => e.name);
+    expect(names).toEqual(['b']);
   });
 });

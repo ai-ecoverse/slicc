@@ -780,21 +780,39 @@ describe('same-file rename (#3107)', () => {
     await writeFile(from, payload);
     await link(from, to);
     const before = await stat(from);
-    expect(
-      (
-        await stable({
-          op: 'rename',
-          mount: '/mnt/proj',
-          path: 'hardlink-rename/a.txt',
-          to: 'hardlink-rename/b.txt',
-        })
-      ).status
-    ).toBe(200);
+    const hard = await stable({
+      op: 'rename',
+      mount: '/mnt/proj',
+      path: 'hardlink-rename/a.txt',
+      to: 'hardlink-rename/b.txt',
+    });
+    expect(hard.status).toBe(200);
+    expect(await hard.json()).toEqual({ ok: true, noop: true });
     expect(await listed(dir)).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
     expect(await readFile(from, 'utf8')).toBe(payload);
     expect(await readFile(to, 'utf8')).toBe(payload);
     expect((await stat(from)).ino).toBe(before.ino);
     expect((await stat(from)).size).toBe(payload.length);
+  });
+
+  it('rename of two distinct symlinks to the same target is not a no-op', async () => {
+    const dir = join(root, 'symlink-rename');
+    await mkdir(dir);
+    const target = join(dir, 'target.txt');
+    await writeFile(target, payload);
+    await symlink(target, join(dir, 'a'));
+    await symlink(target, join(dir, 'b'));
+    const res = await stable({
+      op: 'rename',
+      mount: '/mnt/proj',
+      path: 'symlink-rename/a',
+      to: 'symlink-rename/b',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    const names = await listed(dir);
+    expect(names).toEqual(expect.arrayContaining(['target.txt', 'b']));
+    expect(names).not.toContain('a');
   });
 
   it('distinct names still rename', async () => {

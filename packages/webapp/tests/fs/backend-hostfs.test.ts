@@ -95,7 +95,7 @@ describe('HostFsMountBackend', () => {
 
   it('routes rename through the stable endpoint with mount + to in the body', async () => {
     const { backend, calls, bodies } = backendWith(() => ok({ ok: true }));
-    await backend.rename('/a/old.txt', '/a/new.txt');
+    await expect(backend.rename('/a/old.txt', '/a/new.txt')).resolves.toEqual({});
     expect(calls).toEqual(['POST /api/hostfs']);
     expect(bodies[0]).toEqual({
       op: 'rename',
@@ -103,6 +103,11 @@ describe('HostFsMountBackend', () => {
       path: 'a/old.txt',
       to: 'a/new.txt',
     });
+  });
+
+  it('surfaces a POSIX same-inode no-op from the bridge', async () => {
+    const { backend } = backendWith(() => ok({ ok: true, noop: true }));
+    await expect(backend.rename('/a/Slicc.md', '/a/SLICC.md')).resolves.toEqual({ noop: true });
   });
 
   it('rethrows server errno JSON as a faithful FsError', async () => {

@@ -90,4 +90,19 @@ describe('renameViaFs', () => {
     await renameViaFs(fs, '/a', '/a');
     expect([...fs.store.keys()]).toEqual(['/a']);
   });
+
+  it('copy+rm fallback does not treat colliding inodes on different devices as one file', async () => {
+    const fs = memoryFs({ '/a': 'src', '/b': 'dest' });
+    fs.stat = async (path) => {
+      if (path === '/a') return { identity: 'vfs:1:12' };
+      if (path === '/b') return { identity: 'vfs:2:12' };
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    };
+    fs.rename = async () => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    };
+    await renameViaFs(fs, '/a', '/b');
+    expect(fs.store.has('/a')).toBe(false);
+    expect(new TextDecoder().decode(fs.store.get('/b'))).toBe('src');
+  });
 });

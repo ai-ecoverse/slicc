@@ -674,16 +674,17 @@ export class HostFsMountBackend implements MountBackend {
     await this.request('mkdir', path, drainBody, { method: 'POST' });
   }
 
-  async rename(fromPath: string, toPath: string): Promise<void> {
-    await this.request('rename', fromPath, drainBody, {
+  async rename(fromPath: string, toPath: string): Promise<{ noop?: boolean }> {
+    const body = (await this.request('rename', fromPath, readJson, {
       method: 'POST',
       extra: { to: toPath.replace(/^\/+/, '') },
-    });
+    })) as { noop?: unknown };
     const fromRel = this.bodyKey(fromPath);
     const toRel = this.bodyKey(toPath);
     // The backend can rename either a file or a directory. Prefix invalidation
     // handles both and prevents descendants surviving under the old path.
     await this.invalidateCachePrefixes([fromRel, toRel]);
+    return body.noop === true ? { noop: true } : {};
   }
 
   async remove(path: string, opts?: { recursive?: boolean }): Promise<void> {

@@ -649,11 +649,11 @@ export function sameHostFileIdentity(a: Stats, b: Stats): boolean {
  * source copies 0 bytes, and `readdir` still shows the original name
  * (#3107). Compare identity before calling `rename`.
  */
-async function renameOp(from: string, to: string): Promise<{ ok: true }> {
+async function renameOp(from: string, to: string): Promise<{ ok: true; noop?: true }> {
   try {
     const fromStat = await lstat(from);
     const toStat = await lstat(to);
-    if (sameHostFileIdentity(fromStat, toStat)) return { ok: true };
+    if (sameHostFileIdentity(fromStat, toStat)) return { ok: true, noop: true };
   } catch (err) {
     if (errnoCode(err) !== 'ENOENT') throw err;
   }

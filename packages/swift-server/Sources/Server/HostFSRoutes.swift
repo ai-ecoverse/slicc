@@ -584,7 +584,7 @@ enum HostFSRoutes {
 
     private static func renameResponse(from: String, to: String) throws -> Response {
         if pathsDesignateSameFile(from, to) {
-            return try jsonBody(.object(["ok": .bool(true)]))
+            return try jsonBody(.object(["ok": .bool(true), "noop": .bool(true)]))
         }
         try wrapErrno { try FileManager.default.moveItem(atPath: from, toPath: to) }
         return try jsonBody(.object(["ok": .bool(true)]))

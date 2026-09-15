@@ -2543,8 +2543,38 @@ export class VirtualFS {
       /* best effort — rename below throws ENOENT */
     }
     const entryType = oldStat?.type;
-    // Same inode (case / NFC-NFD / hardlink): POSIX no-op. Must not notify
-    // watchers or rewrite the catalog name, and must not fall through to a
+    // Same-mount rename on a backend that supports it natively (hostfs).
+    // Mount subtrees live in the backend, not LightningFS, so the generic
+    // lfs.rename below cannot see them; backends without a native rename
+    // keep the historical behavior. Identity is the backend's job: hostfs
+    // `lstat`s (does not follow), so two distinct symlinks to one target
+    // still rename, while a case-/NFC-equal pair no-ops (#3107).
+    const oldMount = this.findMount(normalizedOld);
+    if (oldMount?.backend.rename) {
+      const newMount = this.findMount(normalizedNew);
+      if (newMount && newMount.backend === oldMount.backend) {
+        let noop = false;
+        try {
+          const result = await oldMount.backend.rename(
+            oldMount.relParts.join('/'),
+            newMount.relParts.join('/')
+          );
+          noop = result?.noop === true;
+        } catch (err) {
+          rebrandFsError(err, normalizedOld);
+        }
+        if (!noop) {
+          this.watcher?.notify([
+            { type: 'delete', path: normalizedOld, entryType },
+            { type: 'create', path: normalizedNew, entryType },
+          ]);
+          this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+        }
+        return;
+      }
+    }
+    // Same inode (case / NFC-NFD / hardlink) on LightningFS / copy paths:
+    // POSIX no-op. Must not notify watchers, and must not fall through to a
     // copy that O_TRUNCs dest before source is read (#3107).
     if (oldStat) {
       try {
@@ -2552,27 +2582,6 @@ export class VirtualFS {
         if (sameFileIdentity(oldStat, newStat)) return;
       } catch {
         /* dest missing — real rename */
-      }
-    }
-    // Same-mount rename on a backend that supports it natively (hostfs).
-    // Mount subtrees live in the backend, not LightningFS, so the generic
-    // lfs.rename below cannot see them; backends without a native rename
-    // keep the historical behavior.
-    const oldMount = this.findMount(normalizedOld);
-    if (oldMount?.backend.rename) {
-      const newMount = this.findMount(normalizedNew);
-      if (newMount && newMount.backend === oldMount.backend) {
-        try {
-          await oldMount.backend.rename(oldMount.relParts.join('/'), newMount.relParts.join('/'));
-        } catch (err) {
-          rebrandFsError(err, normalizedOld);
-        }
-        this.watcher?.notify([
-          { type: 'delete', path: normalizedOld, entryType },
-          { type: 'create', path: normalizedNew, entryType },
-        ]);
-        this.mountIndex.notifyRename(normalizedOld, normalizedNew);
-        return;
       }
     }
     try {

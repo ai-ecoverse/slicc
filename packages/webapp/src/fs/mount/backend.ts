@@ -182,9 +182,11 @@ export interface MountBackend {
    * without it keep the historical behavior (rename inside a mount fails —
    * callers fall back to copy+delete). Hostfs must POSIX-no-op when both
    * paths name the same inode (case / NFC-NFD / hardlink) — copy+delete of
-   * that pair truncates the only copy (#3107).
+   * that pair truncates the only copy (#3107). `noop: true` when the
+   * backend already applied that POSIX no-op (so VirtualFS must not notify
+   * watchers of a move that did not happen).
    */
-  rename?(fromPath: string, toPath: string): Promise<void>;
+  rename?(fromPath: string, toPath: string): Promise<{ noop?: boolean } | void>;
 
   /**
    * Re-walk the source and reconcile cache. With opts.bodies, also
