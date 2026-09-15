@@ -17,10 +17,10 @@
  * A 1-byte file in the same directory always deleted correctly, which is what
  * isolated the trigger to size 0 — every assertion below carries that control.
  *
- * Two patches to `@zenfs/dom` close it (see patches/README.md):
- *   1. `createFile` materializes the OPFS handle, so every file the index
- *      knows about also exists on the backing store.
- *   2. `remove` tolerates an already-absent OPFS entry — the index is
+ * Two protections close it (see patches/README.md):
+ *   1. Upstream `WebAccessFS._create` materializes the OPFS handle, so every
+ *      file the index knows about also exists on the backing store.
+ *   2. Our `remove` patch tolerates an already-absent OPFS entry — the index is
  *      authoritative there, so an entry it knows but OPFS does not is
  *      otherwise undeletable forever (the phantom-deletion class: files
  *      written before fix 1, and sidecar entries whose bytes are gone).
@@ -105,7 +105,7 @@ describe('zero-byte files on the OPFS backend (#2157)', () => {
   });
 
   it('removes an index entry whose backing file is already gone (phantom deletion)', async () => {
-    // Models a file written before the `createFile` fix, or a sidecar entry
+    // Models a file written before the upstream `_create` fix, or a sidecar entry
     // whose OPFS counterpart vanished: the index knows the path, the backing
     // store does not. Every `unlink` used to raise ENOENT, and because ZenFS
     // evicts the vnode only after a SUCCESSFUL unlink, the entry came back.
@@ -181,18 +181,18 @@ describe('zero-byte files on the OPFS backend (#2157)', () => {
   });
 });
 
-describe('@zenfs/dom zero-byte materialization patch (#2157)', () => {
+describe('@zenfs/dom zero-byte materialization protections (#2157)', () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
-  it('the patch is present in the installed dist', () => {
+  it('uses upstream _create while retaining the missing-entry removal patch', () => {
     const src = readFileSync(resolve(repoRoot, 'node_modules/@zenfs/dom/dist/access.js'), 'utf8');
+    expect(src).toContain('async _create(path, inode)');
+    expect(src).not.toContain('async createFile(path, options)');
     expect(
       src.includes('PATCH(#2157)'),
-      'Installed @zenfs/dom no longer materializes a file handle in ' +
-        'createFile / no longer tolerates an absent OPFS entry in remove; ' +
-        'patches/@zenfs+dom+*.patch is missing or failed to apply. Zero-byte ' +
+      'Installed @zenfs/dom no longer tolerates an absent OPFS entry in remove; ' +
+        'patches/@zenfs+dom+*.patch is missing or failed to apply. Phantom ' +
         'files then become undeletable again — see patches/README.md.'
     ).toBe(true);
-    expect(src).toContain('async createFile(path, options)');
   });
 });

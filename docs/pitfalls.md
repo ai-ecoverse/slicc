@@ -585,14 +585,17 @@ at once. A real Chromium reproduction with 30,000 static one-byte files (30 KB)
 fails with `NotReadableError`; a 16-read control over the same tree succeeds.
 No writer is active during mounting. The failure also reproduces on upstream
 core 2.7.3 / dom 1.2.13: [zen-fs/core#318](https://github.com/zen-fs/core/issues/318).
-2.7.3 added a `_crossCopySemaphore` field but never assigns it, so its guard is a
-dead no-op and the preload is still unbounded.
+The released fix is a pair: core 2.7.3 acquires `_crossCopySemaphore`, and dom
+1.2.14 initializes it in `WebAccess.create`. The unmodified pair mounted the
+same 30,000-file tree 3/3 times at dom's default peak of 128. SLICC passes
+`maxOpenFilesForCopy: 16` to retain the more conservative measured limit.
 
-The `@zenfs/core` patch caps payload copies at 16 **across the entire tree**,
-including buffer allocations. Limiting each directory independently multiplies
-concurrency; holding a slot while waiting for a directory's children can deadlock.
-Every leaf releases its slot in `finally`. The first failure cancels queued copies
-before they allocate buffers or read bytes, while already-active copies drain.
+The upstream semaphore caps payload copies **across the entire tree**, including
+buffer allocations. Limiting each directory independently multiplies concurrency;
+holding a slot while waiting for a directory's children can deadlock. Every leaf
+releases its slot in `finally`. The smaller `@zenfs/core` patch now carries only
+the error-path contract: the first failure stops queued copies before they allocate
+buffers or read bytes, while already-active copies drain.
 Failures in `stat` or `readdir` also cancel queued payload work, and later failures
 do not replace the first error. Cancellation does not abort an already-issued
 backend operation; the backend read API has no abort signal.
@@ -708,7 +711,8 @@ committed before that File's `arrayBuffer()` read can invalidate it, causing
 Chromium's `NotReadableError` even though a fresh snapshot is readable.
 One six-byte file is enough; limiting concurrency to one does not prevent the
 interleaving. See [zen-fs/dom#46](https://github.com/zen-fs/dom/issues/46), reproduced
-on upstream dom 1.2.13 / core 2.7.3 as well as our pinned versions.
+on upstream dom 1.2.13 / core 2.7.3. Dom 1.2.14 still uses the same
+single-snapshot read, so the retry patch remains necessary on our pinned version.
 
 The `@zenfs/dom` read patch obtains a fresh File for each byte-read attempt and
 retries native `NotReadableError` at most twice (three total attempts). Retrying
