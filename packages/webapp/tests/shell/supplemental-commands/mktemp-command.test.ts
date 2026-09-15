@@ -25,6 +25,8 @@ interface FakeFsSeed {
   links?: string[];
   /** Fail `chmod` on any path, to exercise the take-it-back branch. */
   chmodFails?: boolean;
+  /** Fail `chmod` with EOPNOTSUPP — unique name must still be returned. */
+  chmodUnsupported?: boolean;
 }
 
 function errno(code: string, syscall: string, path: string): Error {
@@ -76,6 +78,7 @@ function fakeFs(seed: FakeFsSeed = {}) {
     }) as unknown as IFileSystem['mkdir'],
     chmod: vi.fn(async (path: string, mode: number) => {
       if (seed.chmodFails) throw errno('EPERM', 'chmod', path);
+      if (seed.chmodUnsupported) throw errno('EOPNOTSUPP', 'chmod', path);
       modes.set(path, mode);
     }) as unknown as IFileSystem['chmod'],
     rm: vi.fn(async (path: string) => {
@@ -151,10 +154,8 @@ describe('mktemp command', () => {
     });
 
     it('still succeeds against a filesystem whose chmod is a no-op', async () => {
-      // This is the PRODUCTION path, not an edge case: `VfsAdapter.chmod()` is
-      // an explicit no-op because the VFS tracks no permission bits. The
-      // command must return a usable path anyway — the guarantee it makes is a
-      // unique name, not a private one.
+      // A backend that implements chmod as a silent no-op must still return a
+      // usable path — the guarantee is a unique name, not a private one.
       const harness = fakeFs();
       harness.fs.chmod = (async () => {}) as unknown as IFileSystem['chmod'];
       const ctx = mockCommandContext({ cwd: '/workspace', env: new Map(), fs: harness.fs });
@@ -162,6 +163,15 @@ describe('mktemp command', () => {
       const result = await createMktempCommand().execute([], ctx);
       expect(result.exitCode).toBe(0);
       expect(harness.files.has(result.stdout.trim())).toBe(true);
+    });
+
+    it('keeps the unique name when chmod is EOPNOTSUPP (production VFS)', async () => {
+      // `VfsAdapter.chmod()` now fails loudly (#3109). That is "no mode bits",
+      // not "left a world-readable file", so mktemp must not take the entry back.
+      const { result, path, files, removed } = await run([], { seed: { chmodUnsupported: true } });
+      expect(result.exitCode).toBe(0);
+      expect(files.has(path)).toBe(true);
+      expect(removed).toEqual([]);
     });
 
     it('does not promise a mode the runtime cannot apply', async () => {

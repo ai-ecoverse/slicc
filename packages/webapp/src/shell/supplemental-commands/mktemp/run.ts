@@ -408,6 +408,18 @@ function isErrno(error: unknown, code: string): boolean {
 }
 
 /**
+ * True when chmod failed because the filesystem cannot store mode bits.
+ *
+ * That is not "left a world-readable file on a mode-supporting volume":
+ * privacy was never available, and the unique name is still the contract.
+ * Taking the entry back would turn a successful mktemp into a spurious
+ * failure the moment `VfsAdapter.chmod()` started failing loudly (#3109).
+ */
+function isModeUnsupported(error: unknown): boolean {
+  return isErrno(error, 'EOPNOTSUPP') || isErrno(error, 'ENOTSUP') || isErrno(error, 'ENOSYS');
+}
+
+/**
  * True when anything already occupies `path`. Uses `lstat` rather than
  * `exists()` so a symlink — including a dangling one, which `exists()` reports
  * as absent — counts as taken instead of being followed to its target.
@@ -436,16 +448,17 @@ async function pathIsTaken(fs: IFileSystem, path: string): Promise<boolean> {
  * one kernel worker, no other OS processes sharing the VFS — but it is real,
  * and it is a reason to delete this overlay the moment the builtin ships.
  *
- * **The mode is best-effort, and on the shell's own filesystem it does nothing
- * at all.** `VfsAdapter.chmod()` is an explicit no-op — the VFS tracks no
+ * **The mode is best-effort, and on the shell's own filesystem it cannot be
+ * applied.** `VfsAdapter.chmod()` fails with `EOPNOTSUPP` — the VFS tracks no
  * permission bits — so the 0600/0700 that GNU (and upstream) promise cannot be
  * applied here, and the `/tmp` tree is writable and readable by every unit by
  * design (`builtinScoopGrants()` / `ALWAYS_WRITABLE_PREFIXES`). The call is
- * kept because it is correct on any backend that does implement it, and
- * because a THROWING chmod must not leave an entry behind at a mode the caller
- * would misread as private. What this command guarantees is a unique name;
- * privacy is not ours to give, and the help text says so rather than repeating
- * a mode that would be fiction.
+ * kept because it is correct on any backend that does implement it. A throw
+ * that means "this FS has no mode bits" keeps the unique name; a throw that
+ * means "chmod failed on a mode-supporting FS" must not leave an entry behind
+ * at a mode the caller would misread as private. What this command guarantees
+ * is a unique name; privacy is not ours to give, and the help text says so
+ * rather than repeating a mode that would be fiction.
  *
  * @throws an EEXIST-coded error when the name is taken, so the caller retries.
  */
@@ -460,6 +473,7 @@ async function createExclusive(fs: IFileSystem, path: string, directory: boolean
   try {
     await fs.chmod(path, directory ? DIR_MODE : FILE_MODE);
   } catch (error) {
+    if (isModeUnsupported(error)) return;
     // An entry left behind at a loose mode is worse than no entry: the caller
     // would treat the returned path as private. Take it back, then report.
     await fs.rm(path, { recursive: directory, force: true }).catch(() => {});

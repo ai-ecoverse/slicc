@@ -714,8 +714,25 @@ export class VfsAdapter implements IFileSystem {
     return [];
   }
 
-  async chmod(_path: string, _mode: number): Promise<void> {
-    // Our VFS doesn't track permissions — no-op
+  async chmod(path: string, _mode: number): Promise<void> {
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      const exists =
+        this.virtualUsrStat(normalized) !== null || (await this.vfs.exists(normalized));
+      if (!exists) {
+        throw new FsError('ENOENT', 'no such file or directory', normalized);
+      }
+      // Native VFS (and the adapter's fake 0644/0755 stats) cannot store an
+      // executable bit. Succeeding here is the #3109 defect: agents record
+      // `chmod +x` as done, then `./script` fails with a bare Permission
+      // denied and they invent a false cause. Fail loudly; run with the
+      // interpreter instead. Backends that can persist +x are #3108.
+      throw new FsError(
+        'EOPNOTSUPP',
+        'the VFS does not support an executable bit; run it with the interpreter, e.g. bash <file>',
+        normalized
+      );
+    });
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {

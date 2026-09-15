@@ -10,6 +10,7 @@ import { createBiomeCommand } from './biome-command.js';
 import { createBiscottoCommand } from './biscotto-command.js';
 import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
 import { createCherryEmitCommand } from './cherry-emit-command.js';
+import { createChmodCommand } from './chmod-command.js';
 import {
   createClipboardAutoCommand,
   createPbcopyCommand,
@@ -297,6 +298,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createIdCommand(),
     // Shadows just-bash's bundled `whoami`, which answers a hardcoded `user`.
     createWhoamiCommand(),
+    // Shadows just-bash's `chmod`, which maps every FS error to ENOENT.
+    createChmodCommand(),
     createUnlinkCommand(),
     createMktempCommand(),
     // Shadows just-bash `rg` so a byte-limit miss exits instead of aborting
