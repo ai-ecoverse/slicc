@@ -1,6 +1,7 @@
 /** `git status` (long and short/porcelain forms). */
 
 import * as git from 'isomorphic-git';
+import { sgr } from './color.js';
 import { conflictedWorktreePaths, mergeInProgress } from './merge-state.js';
 import { matchesPathspec } from './revision.js';
 import { NO_INDEX_REFRESH } from './shared.js';
@@ -52,7 +53,7 @@ export async function status(
   });
   const { staged, unstaged, untracked } = classifyStatusMatrix(matrix, pathspecs);
 
-  output += formatStatusLong(staged, unstaged, untracked, merging);
+  output += formatStatusLong(staged, unstaged, untracked, merging, ctx.useColor);
 
   return { stdout: output, stderr: '', exitCode: 0 };
 }
@@ -91,7 +92,8 @@ function formatStatusLong(
   staged: string[],
   unstaged: string[],
   untracked: string[],
-  merging = false
+  merging = false,
+  color = false
 ): string {
   let output = '';
 
@@ -99,7 +101,7 @@ function formatStatusLong(
     output += 'Changes to be committed:\n';
     output += '  (use "git restore --staged <file>..." to unstage)\n\n';
     for (const file of staged) {
-      output += `\t\x1b[32m${file}\x1b[0m\n`;
+      output += `\t${sgr(color, '32', file)}\n`;
     }
     output += '\n';
   }
@@ -108,7 +110,7 @@ function formatStatusLong(
     output += 'Changes not staged for commit:\n';
     output += '  (use "git add <file>..." to update what will be committed)\n\n';
     for (const file of unstaged) {
-      output += `\t\x1b[31m${file}\x1b[0m\n`;
+      output += `\t${sgr(color, '31', file)}\n`;
     }
     output += '\n';
   }
@@ -117,7 +119,7 @@ function formatStatusLong(
     output += 'Untracked files:\n';
     output += '  (use "git add <file>..." to include in what will be committed)\n\n';
     for (const file of untracked) {
-      output += `\t\x1b[31m${file}\x1b[0m\n`;
+      output += `\t${sgr(color, '31', file)}\n`;
     }
     output += '\n';
   }

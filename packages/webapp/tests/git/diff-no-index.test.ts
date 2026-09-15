@@ -15,7 +15,7 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { pprintRename } from '../../src/git/commands/diff-no-index.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 
-/** Diff output is colored; assertions compare the plain text. */
+/** Strip SGR if present so assertions compare the plain text. */
 function plain(text: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR escapes is the point.
   return text.replace(/\x1b\[[0-9;]*m/g, '');

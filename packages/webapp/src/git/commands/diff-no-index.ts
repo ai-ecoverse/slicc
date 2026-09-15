@@ -98,7 +98,7 @@ export async function diffNoIndex(
   const changed = pairs.filter((pair) => !bytesEqual(pair.oldBlob.bytes, pair.newBlob.bytes));
   if (changed.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
 
-  return { stdout: render(changed, opts), stderr: '', exitCode: 1 };
+  return { stdout: render(changed, opts, ctx.useColor), stderr: '', exitCode: 1 };
 }
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -109,11 +109,11 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-function render(pairs: readonly Pair[], opts: NoIndexOptions): string {
+function render(pairs: readonly Pair[], opts: NoIndexOptions, color: boolean): string {
   if (opts.nameOnly) {
     return `${pairs.map((pair) => (pair.absent === 'new' ? DEV_NULL : pair.newName)).join('\n')}\n`;
   }
-  if (opts.stat) return formatDiffStatText(pairs.map(statEntry));
+  if (opts.stat) return formatDiffStatText(pairs.map(statEntry), { color });
 
   let output = '';
   for (const pair of pairs) {
@@ -129,6 +129,7 @@ function render(pairs: readonly Pair[], opts: NoIndexOptions): string {
       newName: pair.newName,
       absent: pair.absent,
       context: opts.context,
+      color,
     });
   }
   return output;

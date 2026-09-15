@@ -2,6 +2,7 @@
 
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import { sgr } from './color.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
 import { tryResolveRevision } from './revision.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
@@ -35,7 +36,7 @@ export async function show(
 
   const { commit } = await git.readCommit({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
 
-  let output = formatShowHeader(oid, commit, format);
+  let output = formatShowHeader(oid, commit, format, ctx.useColor);
 
   // Compute diff against parent
   const parentOid = commit.parent.length > 0 ? commit.parent[0] : undefined;
@@ -69,7 +70,12 @@ async function showFileAtCommit(
   return { stdout: content, stderr: '', exitCode: 0 };
 }
 
-function formatShowHeader(oid: string, commit: git.CommitObject, format?: string): string {
+function formatShowHeader(
+  oid: string,
+  commit: git.CommitObject,
+  format?: string,
+  color = false
+): string {
   if (format) {
     return (
       format
@@ -81,7 +87,7 @@ function formatShowHeader(oid: string, commit: git.CommitObject, format?: string
         .replace(/%ad/g, new Date(commit.author.timestamp * 1000).toLocaleString()) + '\n'
     );
   }
-  let output = `\x1b[33mcommit ${oid}\x1b[0m\n`;
+  let output = `${sgr(color, '33', `commit ${oid}`)}\n`;
   output += `Author: ${commit.author.name} <${commit.author.email}>\n`;
   output += `Date:   ${new Date(commit.author.timestamp * 1000).toLocaleString()}\n\n`;
   output += `    ${commit.message.replace(/\n/g, '\n    ')}\n\n`;
