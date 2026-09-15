@@ -189,7 +189,7 @@ class InsensitiveHostFsBackend implements MountBackend {
 }
 
 describe('probeMountInfo', () => {
-  it('/tmp reports case-sensitive, byte-exact names, and no exec bit', async () => {
+  it('/tmp reports case-sensitive, byte-exact names, and executable-bit support', async () => {
     const vfs = await newVfs();
     await vfs.mkdir('/tmp', { recursive: true });
 
@@ -203,7 +203,7 @@ describe('probeMountInfo', () => {
     expect(info.caseSensitivity).toBe('sensitive');
     expect(info.unicodeNormalization).toBe('byte-exact');
     expect(info.unicodeStorage).toBe('as-written');
-    expect(info.executableBit).toBe(false);
+    expect(info.executableBit).toBe(true);
     expect(info.namesRoundTripByteExact).toBe(true);
     expect(info.maxFilenameLength).toBeGreaterThan(0);
     expect(await leftoverScratch(vfs, '/tmp')).toEqual([]);
@@ -422,7 +422,7 @@ describe('mount info command', () => {
     expect(result.exitCode).toBe(0);
     const info = JSON.parse(result.stdout) as { caseSensitivity: string; executableBit: boolean };
     expect(info.caseSensitivity).toBe('sensitive');
-    expect(info.executableBit).toBe(false);
+    expect(info.executableBit).toBe(true);
     expect(await leftoverScratch(vfs, '/tmp')).toEqual([]);
   });
 

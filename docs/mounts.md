@@ -22,6 +22,10 @@ mount unmount /mnt/da
 
 `mount info <path>` (and `probeMountInfo()` in `packages/webapp/src/fs/mount/probe-info.ts`) measures the VFS bridge, not host `diskutil`: it creates a scratch entry, stats it back, and always removes it. Use it before assuming two names are distinct — `/tmp` is byte-exact; a macOS APFS hostfs mount is typically case- and normalization-insensitive, and renaming between those spellings is the #3107 data-loss path.
 
+Built-in VFS paths such as `/tmp` report executable-bit support because `chmod`
+updates their stored mode. Mounted sources report the capability implemented by
+their bridge; unsupported mounted metadata operations still return `ENOSYS`.
+
 Reads cache for 30 s with ETag-conditional revalidation (zero RTT within TTL, 304-on-stale costs one round trip with no body bytes). Writes use `If-Match: <etag>` (or `If-None-Match: *` for new files) and surface concurrent-edit conflicts as `EBUSY`. Mount descriptors persist across browser/server restarts.
 
 ## Choosing a backend

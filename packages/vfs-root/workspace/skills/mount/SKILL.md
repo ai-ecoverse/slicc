@@ -132,6 +132,10 @@ mount info --json /mnt/kb
 
 The report is probed (scratch file, stat back, always cleaned up), not declared from `diskutil`. Fields: `caseSensitivity`, `unicodeNormalization` (`byte-exact` vs `insensitive`), `unicodeStorage` (`nfc` / `nfd` / `as-written`), `executableBit`, `namesRoundTripByteExact`, `maxFilenameLength`, `writable`, `hostBacked`. If `unicodeNormalization` is `insensitive` or `caseSensitivity` is `insensitive`, compare names by folding case and NFC — do not treat a case/Unicode mismatch as a missing file, and do not rename one spelling onto the other.
 
+Built-in VFS paths such as `/tmp` support executable bits through `chmod`.
+Mounted sources report the capability their bridge implements; the host disk's
+capabilities alone do not imply that the mounted metadata operation is supported.
+
 `mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires.
 
 ## Index state and bounds (`mount list`)
