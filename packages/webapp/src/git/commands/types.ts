@@ -18,6 +18,17 @@ export interface GitCommandResult {
   exitCode: number;
 }
 
+/** Extra options for one `GitCommands.execute()` call. */
+export interface GitExecuteOptions {
+  /**
+   * Whether stdout is a terminal. Default false — custom commands always
+   * return a string, and just-bash does not tell them whether that string
+   * will be redirected. Tests that want the TTY/`color.ui=auto` path pass
+   * `true` (issue #3137).
+   */
+  stdoutIsTTY?: boolean;
+}
+
 export interface GitCommandsOptions {
   fs: VirtualFS;
   /** CORS proxy URL for remote operations. */
@@ -94,4 +105,10 @@ export interface GitCommandContext {
    * `commit -F -` / `--file -` reads the commit message from here.
    */
   readonly stdin: string;
+  /**
+   * Whether this invocation should emit SGR colour. Computed once in
+   * `execute()` from `--color` / `--no-color`, `-c color.ui`, `NO_COLOR`,
+   * and whether stdout is a TTY (issue #3137).
+   */
+  readonly useColor: boolean;
 }

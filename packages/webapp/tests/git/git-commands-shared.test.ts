@@ -37,6 +37,9 @@ describe('firstUnknownGitFlag', () => {
   it('returns undefined when every flag is in the spec', () => {
     expect(firstUnknownGitFlag(['-q', 'origin', 'main'], GIT_FLAG_SPECS.fetch)).toBeUndefined();
     expect(firstUnknownGitFlag(['--name-status', 'a', 'b'], GIT_FLAG_SPECS.diff)).toBeUndefined();
+    expect(
+      firstUnknownGitFlag(['--no-color', '--color=never', 'a', 'b'], GIT_FLAG_SPECS.diff)
+    ).toBeUndefined();
   });
 
   it('names an unknown short switch and an unknown long option', () => {

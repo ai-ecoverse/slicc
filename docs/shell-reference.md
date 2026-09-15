@@ -298,6 +298,14 @@ subcommand; `clone`/`fetch`/`pull` accept `-q`/`--quiet`; unknown flags error by
 instead of stealing positionals. `merge --abort` and `reset --hard` clear `MERGE_HEAD`
 (issue #3121).
 
+Colour follows git's `color.ui=auto`: SGR is omitted when stdout is not a TTY, so
+`git diff | grep '^[+-]'` matches changed lines. `--no-color`, `--color=never`,
+`-c color.ui=false`, and `NO_COLOR` also suppress colour in the position where those
+flags are already accepted (`git diff --no-color`, not only `git --no-color diff`).
+`--color` / `--color=always` / `-c color.ui=always` force colour on a redirect
+(issue #3137). `diff` (including `--no-index`), `show`, `status`, `log`, and `branch`
+share the decision.
+
 `log` is the exception — it hands its revision straight to `git.log()`, so it takes whatever
 isomorphic-git accepts and not the suffix forms above.
 
@@ -429,8 +437,9 @@ diff mode uses.
   `new file mode` / `deleted file mode` header lines (SLICC's diff output
   carries no object IDs or modes ANYWHERE, not just here), and no rename or copy
   detection. Implicit `--no-index` — two paths handed to a plain `git diff` run
-  outside a repository — is not inferred; pass the flag. Everything else is
-  byte-for-byte what `git diff --no-index` prints.
+  outside a repository — is not inferred; pass the flag. Colour is off unless
+  stdout is a TTY or `--color` / `color.ui=always` forces it (issue #3137);
+  everything else is byte-for-byte what `git diff --no-index` prints.
 
 `-U<n>` is normalized to `--unified=<n>` before the flag parse: `mri` mis-reads
 a short flag with an attached value (`-U3` becomes `{ '3': …, U: '' }` and eats

@@ -1,6 +1,7 @@
 /** `git branch` — list, create, or delete branches. */
 
 import * as git from 'isomorphic-git';
+import { sgr } from './color.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function branch(
@@ -41,7 +42,7 @@ export async function branch(
   let output = '';
   for (const branch of branches) {
     if (branch === current) {
-      output += `* \x1b[32m${branch}\x1b[0m\n`;
+      output += `* ${sgr(ctx.useColor, '32', branch)}\n`;
     } else {
       output += `  ${branch}\n`;
     }
@@ -55,7 +56,7 @@ export async function branch(
         remote: 'origin',
       });
       for (const branch of remoteBranches) {
-        output += `  \x1b[31mremotes/origin/${branch}\x1b[0m\n`;
+        output += `  ${sgr(ctx.useColor, '31', `remotes/origin/${branch}`)}\n`;
       }
     } catch {
       // No remote branches

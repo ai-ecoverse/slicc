@@ -53,7 +53,9 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
       'skip',
       'follow',
     ],
-    boolean: ['oneline', 'stat', 'reverse', 'all'],
+    // `color` is boolean so `--no-color` rewrites to `{ color: false }` and is
+    // not rejected as unknown; `--color=never` is still a known `--color` (#3137).
+    boolean: ['oneline', 'stat', 'reverse', 'all', 'color'],
     alias: { n: 'max-count', pretty: 'format' },
     '--': true,
   },
@@ -68,6 +70,7 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
       'no-merged',
       'points-at',
     ],
+    boolean: ['color'],
     alias: { l: 'list', u: 'set-upstream-to', t: 'track' },
   },
   checkout: { string: ['b', 'B', 'orphan', 'track', 'start-point', 'conflict'], '--': true },
@@ -76,11 +79,16 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     string: ['format', 'diff-filter', 'unified'],
     // `no-index` is listed for help detection; mri strips any `--no-<x>` to
     // `{ x: false }` on its own, so `diff()` reads BOTH spellings.
-    boolean: ['staged', 'cached', 'name-only', 'name-status', 'stat', 'no-index'],
+    // `color` so `--no-color` / `--color=never` are accepted (issue #3137).
+    boolean: ['staged', 'cached', 'name-only', 'name-status', 'stat', 'no-index', 'color'],
     alias: { pretty: 'format', U: 'unified' },
     '--': true,
   },
-  show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },
+  show: { string: ['format'], boolean: ['stat', 'color'], alias: { pretty: 'format' } },
+  status: {
+    boolean: ['short', 'porcelain', 'color'],
+    alias: { s: 'short' },
+  },
   merge: {
     string: ['message', 'strategy', 'strategy-option'],
     // `ff` / `edit` exist so `--no-ff` / `--no-edit` parse as `{ ff: false }` /
@@ -164,6 +172,19 @@ function gitValueFlagNames(spec: ArgSpec): Set<string> {
     if (group.some((n) => names.has(n))) {
       for (const n of group) names.add(n);
     }
+  }
+  return names;
+}
+
+/**
+ * Union of every subcommand's value-taking flags plus the leading globals
+ * (`-c` / `-C` / `--git-dir` / `--work-tree`). Used so colour rewriting does
+ * not mutate a dash-prefixed *value* (`git commit -m --color=never`).
+ */
+export function allGitValueFlagNames(): Set<string> {
+  const names = new Set(['c', 'C', 'git-dir', 'work-tree']);
+  for (const spec of Object.values(GIT_FLAG_SPECS)) {
+    for (const n of gitValueFlagNames(spec)) names.add(n);
   }
   return names;
 }

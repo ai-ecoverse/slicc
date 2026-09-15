@@ -973,7 +973,7 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('+version2');
     });
 
-    it('uses color in diff output', async () => {
+    it('uses color in diff output on a TTY', async () => {
       await git.execute(['init'], '/project');
       await vfs.writeFile('/project/file.txt', 'old\n');
       await git.execute(['add', 'file.txt'], '/project');
@@ -981,12 +981,13 @@ describe('GitCommands', () => {
 
       await vfs.writeFile('/project/file.txt', 'new\n');
 
-      const result = await git.execute(['diff'], '/project');
+      const result = await git.execute(['diff'], '/project', undefined, undefined, {
+        stdoutIsTTY: true,
+      });
       expect(result.exitCode).toBe(0);
-      // Should contain ANSI color codes
-      expect(result.stdout).toContain('\x1b[31m'); // red for deletions
-      expect(result.stdout).toContain('\x1b[32m'); // green for additions
-      expect(result.stdout).toContain('\x1b[36m'); // cyan for @@ headers
+      expect(result.stdout).toContain('\x1b[31m');
+      expect(result.stdout).toContain('\x1b[32m');
+      expect(result.stdout).toContain('\x1b[36m');
     });
 
     it('handles multiple changed files', async () => {

@@ -110,7 +110,7 @@ export async function diff(
   const changes = staged
     ? await diffStagedChanges(ctx, cwd, opts.pathspecs)
     : await diffWorkdirChanges(ctx, cwd, opts.pathspecs);
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 /** Collect staged changes by comparing a commit tree vs index. */
@@ -172,7 +172,7 @@ async function diffCommitIndex(
     return ambiguousRevision(ref);
   }
   const changes = await diffStagedChanges(ctx, cwd, opts.pathspecs, resolved);
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 /**
@@ -350,7 +350,7 @@ async function diffResolvedTrees(
     },
   });
 
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 async function diffCommitWorkdir(
@@ -394,7 +394,7 @@ async function diffCommitWorkdir(
       return undefined;
     },
   });
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 /** Every directory that has at least one tracked file below it. */
@@ -445,7 +445,11 @@ async function compareWalkerEntries(
   };
 }
 
-function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitCommandResult {
+function formatChanges(
+  ctx: GitCommandContext,
+  changes: FileChange[],
+  opts: DiffFormatOptions
+): GitCommandResult {
   if (changes.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
   if (opts.nameStatus) {
     const lines = changes.map((c) => {
@@ -459,7 +463,7 @@ function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitComma
   if (opts.nameOnly) {
     return { stdout: `${changes.map((c) => c.filepath).join('\n')}\n`, stderr: '', exitCode: 0 };
   }
-  if (opts.stat) return formatDiffStat(changes);
+  if (opts.stat) return formatDiffStat(changes, ctx.useColor);
   const stdout = changes
     .map((change) =>
       unifiedDiff({
@@ -468,6 +472,7 @@ function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitComma
         oldName: change.filepath,
         newName: change.filepath,
         context: opts.context,
+        color: ctx.useColor,
       })
     )
     .join('');
@@ -527,10 +532,12 @@ function ambiguousRevision(ref: string): GitCommandResult {
 }
 
 function formatDiffStat(
-  changes: { filepath: string; oldContent: string; newContent: string }[]
+  changes: { filepath: string; oldContent: string; newContent: string }[],
+  color = false
 ): GitCommandResult {
   const stdout = formatDiffStatText(
-    changes.map((c) => ({ name: c.filepath, oldContent: c.oldContent, newContent: c.newContent }))
+    changes.map((c) => ({ name: c.filepath, oldContent: c.oldContent, newContent: c.newContent })),
+    { color }
   );
   return { stdout, stderr: '', exitCode: 0 };
 }
@@ -568,7 +575,7 @@ export async function diffInitialCommit(
       oldContent: '',
       newContent: f.content,
     }));
-    return formatDiffStat(changes).stdout;
+    return formatDiffStat(changes, ctx.useColor).stdout;
   }
 
   let output = '';
@@ -578,6 +585,7 @@ export async function diffInitialCommit(
       newContent: file.content,
       oldName: file.filepath,
       newName: file.filepath,
+      color: ctx.useColor,
     });
   }
   return output;
