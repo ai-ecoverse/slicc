@@ -23,7 +23,7 @@
       "lines": 99,
       "statements": 97,
       "functions": 98,
-      "branches": 87,
+      "branches": 88,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
