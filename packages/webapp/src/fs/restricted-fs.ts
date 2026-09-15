@@ -679,6 +679,39 @@ export class RestrictedFS {
       this.ephemeralFds.write(path, content);
       return;
     }
+    await this.checkContentWrite(path);
+    return this.vfs.writeFile(path, content, options);
+  }
+
+  async appendFile(path: string, content: FileContent): Promise<void> {
+    const devWrite = VIRTUAL_DEVICES[normalizePath(path)];
+    if (devWrite) {
+      devWrite.write(content);
+      return;
+    }
+    if (EphemeralFdStore.handles(path)) {
+      this.ephemeralFds.append(path, content);
+      return;
+    }
+    await this.checkContentWrite(path);
+    return this.vfs.appendFile(path, content);
+  }
+
+  async chmod(path: string, mode: number): Promise<void> {
+    this.refuseDescriptorTreeOp(path);
+    this.checkWrite(path);
+    const resolved = await this.resolveAndCheckWrite(path);
+    return this.vfs.chmod(resolved, mode);
+  }
+
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    this.refuseDescriptorTreeOp(path);
+    this.checkWrite(path);
+    const resolved = await this.resolveAndCheckWrite(path);
+    return this.vfs.utimes(resolved, atime, mtime);
+  }
+
+  private async checkContentWrite(path: string): Promise<void> {
     this.checkWrite(path);
     await this.checkParentRealpathEscape(path);
     // Also check if destination itself is a symlink pointing outside sandbox
@@ -691,7 +724,6 @@ export class RestrictedFS {
       if (err instanceof FsError && err.code === 'EACCES') throw err;
       // File doesn't exist yet — that's fine, no symlink to follow
     }
-    return this.vfs.writeFile(path, content, options);
   }
 
   /**

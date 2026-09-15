@@ -57,15 +57,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
 
   it('exec filemode survives a reload', async () => {
     const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
-    // `vfs.getLightningFS()` no longer exists; reach the underlying
-    // ZenFS `fs.promises` directly here, since this test exercises a
-    // POSIX surface (`chmod`) that VirtualFS does not re-expose. The
-    // OPFS backend is now mounted at `/__opfs__/<dbName>` (per-dbName
-    // subpath, see `initOpfsBackend`), so direct ZenFS calls must
-    // address the prefixed path.
-    const { fs: zenfs } = await import('@zenfs/core');
     const DB = 'a6-reload-filemode';
-    const ROOT = `/__opfs__/${DB}`;
     {
       const vfs = await VirtualFS.create({
         dbName: DB,
@@ -73,7 +65,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
         wipe: true,
       });
       await vfs.writeFile('/run.sh', '#!/bin/sh\necho ok\n');
-      await zenfs.promises.chmod(`${ROOT}/run.sh`, 0o100755);
+      await vfs.chmod('/run.sh', 0o755);
       await vfs.dispose();
     }
     {
@@ -81,8 +73,26 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
         dbName: DB,
         backend: 'opfs',
       });
-      const st = await zenfs.promises.lstat(`${ROOT}/run.sh`);
-      expect(st.mode & 0o111).not.toBe(0);
+      const st = await vfs.lstat('/run.sh');
+      expect((st.mode ?? 0) & 0o111).not.toBe(0);
+      await vfs.dispose();
+    }
+  });
+
+  it('appended content and requested mtime survive a reload', async () => {
+    const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
+    const dbName = 'a6-reload-append';
+    {
+      const vfs = await VirtualFS.create({ dbName, backend: 'opfs', wipe: true });
+      await vfs.writeFile('/file', 'A');
+      await Promise.all([vfs.appendFile('/file', 'B'), vfs.appendFile('/file', 'C')]);
+      await vfs.utimes('/file', new Date(0), new Date(123456));
+      await vfs.dispose();
+    }
+    {
+      const vfs = await VirtualFS.create({ dbName, backend: 'opfs' });
+      expect(await vfs.readTextFile('/file')).toBe('ABC');
+      expect((await vfs.stat('/file')).mtime).toBe(123456);
       await vfs.dispose();
     }
   });

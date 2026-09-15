@@ -77,6 +77,27 @@ const bodyDrops = () =>
   }) as unknown as Response;
 
 describe('HostFsMountBackend', () => {
+  it('names identity by bridge, device and inode, independent of the mounted pathname', async () => {
+    const one = backendWith(() => ok({ kind: 'file', size: 1, mtime: 0, dev: 1, ino: 42 }));
+    const two = backendWith(() => ok({ kind: 'file', size: 1, mtime: 0, dev: 2, ino: 42 }));
+    const original = await one.backend.stat('original');
+    const renamed = await one.backend.stat('renamed');
+    expect(original.identity).toBeDefined();
+    expect(renamed.identity).toBe(original.identity);
+    expect((await two.backend.stat('original')).identity).not.toBe(original.identity);
+    expect(original.dev).toBe(1);
+    await one.backend.close();
+    await two.backend.close();
+  });
+
+  it('does not synthesize a safe identity from an old or invalid device field', async () => {
+    for (const dev of [undefined, -1, 1.5, '1']) {
+      const { backend } = backendWith(() => ok({ kind: 'file', size: 1, mtime: 0, dev, ino: 42 }));
+      expect((await backend.stat('file')).identity).toBeUndefined();
+      await backend.close();
+    }
+  });
+
   it('derives a stable mount id from the configured target and host paths', () => {
     const first = new HostFsMountBackend({
       targetPath: '/mnt/kb',

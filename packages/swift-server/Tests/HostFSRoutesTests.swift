@@ -305,6 +305,7 @@ final class HostFSRoutesTests: XCTestCase {
         var info = stat()
         XCTAssertEqual(stat(root + "/hello.txt", &info), 0)
         let inode = Double(info.st_ino)
+        let device = Double(info.st_dev)
         let uid = Double(info.st_uid)
         let gid = Double(info.st_gid)
         let fullMode = Double(info.st_mode)
@@ -319,6 +320,7 @@ final class HostFSRoutesTests: XCTestCase {
                     return XCTFail("bad stat shape")
                 }
                 XCTAssertEqual(body["ino"], .number(inode))
+                XCTAssertEqual(body["dev"], .number(device))
                 XCTAssertEqual(body["uid"], .number(uid))
                 XCTAssertEqual(body["gid"], .number(gid))
                 // Full st_mode, so the executable bit survives instead of
@@ -343,6 +345,7 @@ final class HostFSRoutesTests: XCTestCase {
                 }
                 guard case .object(let e)? = hello else { return XCTFail("no hello.txt entry") }
                 XCTAssertEqual(e["ino"], .number(inode))
+                XCTAssertEqual(e["dev"], .number(device))
                 XCTAssertEqual(e["mode"], .number(fullMode))
             }
             // The stable dispatcher shares `statResponse`, so a webapp on the
@@ -355,6 +358,7 @@ final class HostFSRoutesTests: XCTestCase {
                     return XCTFail("bad stat shape")
                 }
                 XCTAssertEqual(body["ino"], .number(inode))
+                XCTAssertEqual(body["dev"], .number(device))
                 XCTAssertEqual(body["uid"], .number(uid))
                 XCTAssertEqual(body["gid"], .number(gid))
                 XCTAssertEqual(body["mode"], .number(fullMode))

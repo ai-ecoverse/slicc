@@ -38,7 +38,7 @@ stream refuses IDs not in the live free catalog.
 
 Probe FS limits through real shells; custom commands must use them.
 
-Require mirrored tests, regressions, and coverage floors. OPFS retries need fresh Files, bounded attempts, and error tests.
+Require mirrored tests and floors. Check OPFS reload/retries, concurrent append, scoped identity, metadata errors, and ACL/sudo gates.
 
 ## 8. Follower surface wiring parity
 

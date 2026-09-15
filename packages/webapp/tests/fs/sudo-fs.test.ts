@@ -130,6 +130,27 @@ describe('SudoFS', () => {
     expect(timeoutMessage).not.toBe(FS_DENIED_MESSAGE);
   });
 
+  it('gates append and metadata mutations, including sudoers self-protection', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+    for (const path of ['/workspace/.git/config', '/etc/sudoers']) {
+      await expect(sfs.appendFile(path, 'bad')).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(sfs.chmod(path, 0o777)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(sfs.utimes(path, new Date(0), new Date(0))).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    }
+    expect(calls).toHaveLength(6);
+    expect(calls.every((call) => call.kind === 'write')).toBe(true);
+    expect(await vfs.readTextFile('/workspace/.git/config')).toBe('cfg');
+    await sfs.appendFile('/workspace/note.txt', '!');
+    await sfs.chmod('/workspace/note.txt', 0o755);
+    await sfs.utimes('/workspace/note.txt', new Date(0), new Date(123456));
+    expect(await vfs.readTextFile('/workspace/note.txt')).toBe('hi!');
+    expect((await vfs.stat('/workspace/note.txt')).mtime).toBe(123456);
+    expect(calls).toHaveLength(6);
+  });
+
   it('always-protects writes to sudoers files regardless of policy', async () => {
     policy = parseSudoers(''); // empty policy — only self-protection active
     const { calls, broker } = makeBroker({ decision: 'deny' });

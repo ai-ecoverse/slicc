@@ -212,6 +212,7 @@ describe('hostfs routes', () => {
     const hello = entries.find((e) => e.name === 'hello.txt');
     const real = await stat(join(root, 'hello.txt'));
     expect(hello?.ino).toBe(Number(real.ino));
+    expect(hello?.dev).toBe(Number(real.dev));
     expect(hello?.uid).toBe(real.uid);
     expect(hello?.gid).toBe(real.gid);
     expect(hello?.mode).toBe(real.mode);
@@ -369,6 +370,7 @@ describe('stable POST /api/hostfs endpoint', () => {
     };
     const hello = entries.find((e) => e.name === 'hello.txt');
     expect(hello?.ino).toBe(Number(real.ino));
+    expect(hello?.dev).toBe(Number(real.dev));
     expect(hello?.mode).toBe(real.mode);
   });
 

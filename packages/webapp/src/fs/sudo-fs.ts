@@ -106,10 +106,10 @@ const READ_ASYNC = [
  * Async CONTENT-write methods routed through a `write` match on the FIRST
  * argument (the path being written to) WITH the content-write flag set, so a
  * no-op virtual device (`/dev/null`) write is auto-allowed — its payload is
- * discarded. Only `writeFile` qualifies: it writes a payload rather than
+ * discarded. `writeFile` and `appendFile` write payloads rather than
  * mutating tree structure.
  */
-const CONTENT_WRITE_ASYNC = ['writeFile'] as const;
+const CONTENT_WRITE_ASYNC = ['writeFile', 'appendFile'] as const;
 /**
  * Async STRUCTURAL-write methods routed through a `write` match on the FIRST
  * argument WITHOUT the content-write flag, so a `/dev/null` destination still
@@ -118,7 +118,7 @@ const CONTENT_WRITE_ASYNC = ['writeFile'] as const;
  * structural writes but are handled by dedicated overrides below because their
  * write target is not the first argument.
  */
-const STRUCTURAL_WRITE_ASYNC = ['mkdir', 'rm'] as const;
+const STRUCTURAL_WRITE_ASYNC = ['mkdir', 'rm', 'chmod', 'utimes'] as const;
 
 /** Dependencies for {@link createSudoFs}. */
 export interface SudoFsDeps {

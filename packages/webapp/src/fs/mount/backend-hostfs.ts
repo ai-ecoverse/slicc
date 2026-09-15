@@ -64,6 +64,7 @@
  */
 
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
+import { inodeIdentity } from '../stat-identity.js';
 import { FsError, type FsErrorCode } from '../types.js';
 import type {
   MountBackend,
@@ -239,7 +240,10 @@ function readStatIdentity(raw: RawStatIdentity): MountStatIdentity {
   const ino = finiteNumber(raw.ino);
   if (ino !== undefined) identity.ino = ino;
   const dev = finiteNumber(raw.dev);
-  if (dev !== undefined) identity.dev = dev;
+  if (dev !== undefined && Number.isSafeInteger(dev) && dev >= 0) {
+    identity.dev = dev;
+    identity.identity = inodeIdentity(`hostfs:${resolveApiUrl(HOSTFS_STABLE_PATH)}`, ino, dev);
+  }
   const uid = finiteNumber(raw.uid);
   if (uid !== undefined) identity.uid = uid;
   const gid = finiteNumber(raw.gid);
