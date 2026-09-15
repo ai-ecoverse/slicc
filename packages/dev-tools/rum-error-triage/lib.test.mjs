@@ -212,4 +212,60 @@ describe('buildErrorQuery', () => {
     const sql = buildErrorQuery({ hosts: ['localhost"; DROP TABLE x; --'] });
     expect(sql).not.toContain('DROP TABLE');
   });
+
+  it('pins an absolute window start when since is supplied', () => {
+    const sql = buildErrorQuery({ since: '2026-09-15T03:00:00Z' });
+    expect(sql).toContain('DEFAULT TIMESTAMP("2026-09-15T03:00:00Z")');
+    // The relative form must be gone entirely, not merely overridden: leaving a
+    // CURRENT_TIMESTAMP() anchor in place would re-open the gap this closes.
+    expect(sql).not.toContain('CURRENT_TIMESTAMP');
+    expect(sql).not.toContain('INTERVAL');
+  });
+
+  it('lets since win over sinceDays when both are given', () => {
+    const sql = buildErrorQuery({ since: '2026-09-15T03:00:00Z', sinceDays: 5 });
+    expect(sql).toContain('TIMESTAMP("2026-09-15T03:00:00Z")');
+    expect(sql).not.toContain('INTERVAL 5 DAY');
+  });
+
+  it('accepts fractional seconds on since', () => {
+    expect(buildErrorQuery({ since: '2026-09-15T03:00:00.123Z' })).toContain(
+      'TIMESTAMP("2026-09-15T03:00:00.123Z")'
+    );
+  });
+
+  it('falls back to the day count when since is blank or absent', () => {
+    // The workflow passes an empty string on a manual dispatch that pins a day
+    // count, so blank must mean "not supplied" rather than "epoch".
+    expect(buildErrorQuery({ since: '', sinceDays: 4 })).toContain('INTERVAL 4 DAY');
+    expect(buildErrorQuery({ since: null, sinceDays: 4 })).toContain('INTERVAL 4 DAY');
+    expect(buildErrorQuery({ since: undefined })).toContain('INTERVAL 1 DAY');
+  });
+
+  it('throws on a since value that is not a plain UTC instant', () => {
+    // A bad window is invisible in the results - it just looks like a quiet day -
+    // so this fails loudly instead of falling back to a default.
+    for (const bad of [
+      '2026-09-15',
+      '2026-09-15T03:00:00',
+      '2026-09-15T03:00:00+02:00',
+      '2026-09-15 03:00:00Z',
+      'CURRENT_TIMESTAMP()',
+      'xyzzy',
+    ]) {
+      expect(() => buildErrorQuery({ since: bad })).toThrow('ISO-8601 UTC instant');
+    }
+  });
+
+  it('rejects an injection attempt through since rather than sanitising it', () => {
+    const attack = '2026-09-15T03:00:00Z") OR TRUE; DROP TABLE x; --';
+    expect(() => buildErrorQuery({ since: attack })).toThrow();
+    // And nothing resembling the payload can reach the SQL by another route.
+    expect(buildErrorQuery({ sinceDays: 1 })).not.toContain('DROP TABLE');
+  });
+
+  it('rejects an impossible date that matches the shape', () => {
+    // Shape-checking alone would wave through month 13; Date.parse catches it.
+    expect(() => buildErrorQuery({ since: '2026-13-45T03:00:00Z' })).toThrow();
+  });
 });
