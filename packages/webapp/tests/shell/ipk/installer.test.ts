@@ -7,6 +7,7 @@ import { GLOBAL_NODE_MODULES, GLOBAL_PACKAGE_JSON } from '../../../src/shell/ipk
 import {
   installPackage,
   installPackages,
+  listLocalPackages,
   uninstallPackages,
 } from '../../../src/shell/ipk/installer.js';
 
@@ -358,6 +359,40 @@ describe('installPackage (single-package path)', () => {
       expect(await fs.readFile('/work/package.json')).toBe(corrupt);
     });
   }
+
+  it('throws on an empty package.json during --save and does not truncate the manifest (#3124)', async () => {
+    const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile('/work/package.json', '');
+    await expect(
+      installPackage('is-number', { fs, fetch: fakeFetch(reg), cwd: '/work' })
+    ).rejects.toThrow(SyntaxError);
+    expect(await fs.readFile('/work/package.json')).toBe('');
+  });
+
+  it('re-extracts when an already-installed package.json is unparseable', async () => {
+    const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    const fetch = fakeFetch(reg);
+    await installPackage('is-number', { fs, fetch, cwd: '/work' });
+    await fs.writeFile('/work/node_modules/is-number/package.json', '{ not json');
+    const result = await installPackage('is-number', { fs, fetch, cwd: '/work' });
+    expect(result.ok).toBe(true);
+    const installed = JSON.parse(
+      (await fs.readFile('/work/node_modules/is-number/package.json')) as string
+    );
+    expect(installed.name).toBe('is-number');
+    expect(installed.version).toBe('7.0.0');
+  });
+
+  it('lists a declared package as version ? when its installed manifest is unparseable', async () => {
+    const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    await installPackage('is-number', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    await fs.writeFile('/work/node_modules/is-number/package.json', '{ not json');
+    const listed = await listLocalPackages(fs, '/work');
+    expect(listed).toEqual([
+      expect.objectContaining({ name: 'is-number', version: '?', range: expect.any(String) }),
+    ]);
+  });
 
   it('records --save-dev installs under devDependencies', async () => {
     const reg = makeRegistry([
