@@ -70,3 +70,44 @@ describe('just-bash cat GNU display flags (just-bash@3.2.0+)', () => {
     expect(r.stdout).toBe('a^Ib$\n');
   });
 });
+
+describe('just-bash rg byte-limit patch (just-bash@3.4.2)', () => {
+  const limits = { maxLiveBytes: 12, maxInputBytes: 100, maxStringLength: 100 };
+
+  it('does not add concurrently searched files to the live-byte limit', async () => {
+    const b = new Bash({
+      files: { '/d/a': 'aaaaaa', '/d/b': 'bbbbbb', '/d/c': 'cccccc' },
+      executionLimits: limits,
+    });
+
+    const result = await b.exec('rg absent /d; echo "after:$?"');
+
+    expect(result.stdout).toBe('after:1\n');
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('returns aggregate limit failures through capturable stderr', async () => {
+    const b = new Bash({
+      files: { '/d/a': 'aaaaaa', '/d/b': 'bbbbbb' },
+      executionLimits: { ...limits, maxInputBytes: 10, maxLiveBytes: 20 },
+    });
+
+    const result = await b.exec('rg absent /d 2>/rg.err; code=$?; echo "after:$code"');
+
+    expect(result.stdout).toBe('after:2\n');
+    expect(result.stderr).toBe('');
+    expect(await b.fs.readFile('/rg.err')).toBe(
+      'rg: aggregate input size limit exceeded (10 bytes)\n'
+    );
+  });
+
+  it('reports the input-byte limit enforced for one decoded file', async () => {
+    const b = new Bash({ files: { '/large': '1234567' }, executionLimits: limits });
+
+    const result = await b.exec('rg absent /large 2>/rg.err; code=$?; echo "after:$code"');
+
+    expect(result.stdout).toBe('after:2\n');
+    expect(await b.fs.readFile('/rg.err')).toBe('rg: live input size limit exceeded (6 bytes)\n');
+  });
+});
