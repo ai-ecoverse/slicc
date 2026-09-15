@@ -120,6 +120,13 @@ export interface VirtualFsOptions {
    * (2026-08-24 field incident). OPFS backend only; memory ignores it.
    */
   onRepairProgress?: () => void;
+  /**
+   * Experimental OPFS option: false skips ZenFS's eager copy into its sync cache.
+   * Async operations remain available; sync fast paths fall back to async.
+   * Omitted on a shared backend, inherits the first opener's choice (default true).
+   * Explicitly conflicting choices for a live dbName fail with EBUSY.
+   */
+  opfsAsyncCache?: boolean;
 }
 
 /**
@@ -319,7 +326,8 @@ export class VirtualFS {
     wipe?: boolean,
     backend?: VfsBackend,
     opfsHandle?: FileSystemDirectoryHandle,
-    onRepairProgress?: () => void
+    onRepairProgress?: () => void,
+    opfsAsyncCache?: boolean
   ) {
     this.dbName = dbName;
     // Assigned before `_ready` kicks off `initOpfsBackend`, which reads it.
@@ -337,7 +345,7 @@ export class VirtualFS {
     this.lfsSync = this.makeDeferredLfsSync();
     this._ready =
       this.backend === 'opfs'
-        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true)
+        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true, opfsAsyncCache)
         : VirtualFS.initMemoryBackend(this, dbName, wipe === true);
     this._ready.then(
       () => {
@@ -414,11 +422,42 @@ export class VirtualFS {
    * {@link opfsBackends} refcount cache (mirrors the memory backend's
    * per-`dbName` semantics); the last `dispose()` umounts the subpath.
    */
+  private static opfsInitChains = new Map<string, Promise<void>>();
+
   private static async initOpfsBackend(
     vfs: VirtualFS,
     providedHandle: FileSystemDirectoryHandle | undefined,
-    wipe: boolean
+    wipe: boolean,
+    asyncCache?: boolean
   ): Promise<void> {
+    const previous = VirtualFS.opfsInitChains.get(vfs.dbName) ?? Promise.resolve();
+    const pending = previous
+      .catch(() => {})
+      .then(() => VirtualFS.resolveOpfsBackend(vfs, providedHandle, wipe, asyncCache));
+    VirtualFS.opfsInitChains.set(vfs.dbName, pending);
+    try {
+      await pending;
+    } finally {
+      if (VirtualFS.opfsInitChains.get(vfs.dbName) === pending) {
+        VirtualFS.opfsInitChains.delete(vfs.dbName);
+      }
+    }
+  }
+
+  private static async resolveOpfsBackend(
+    vfs: VirtualFS,
+    providedHandle: FileSystemDirectoryHandle | undefined,
+    wipe: boolean,
+    asyncCache?: boolean
+  ): Promise<void> {
+    const shared = VirtualFS.opfsBackends.get(vfs.dbName);
+    if (shared && !wipe && asyncCache !== undefined && shared.asyncCache !== asyncCache) {
+      throw new FsError(
+        'EBUSY',
+        'OPFS async cache setting conflicts with the live backend',
+        vfs.dbName
+      );
+    }
     const handle = providedHandle ?? (await VirtualFS.acquireOpfsHandle(vfs.dbName, wipe));
     // ZenFS' `WebAccessFS._loadMetadata` reads `/.metadata.json` eagerly when
     // a `metadata` path is configured and throws ENOENT on first boot of a
@@ -464,6 +503,7 @@ export class VirtualFS {
           handle,
           metadata: '/.metadata.json',
           maxOpenFilesForCopy: OPFS_PRELOAD_MAX_OPEN_FILES,
+          disableAsyncCache: asyncCache === false,
         });
       const { resolveWithSidecarRepair, repairOpfsMetadataSidecar } = await import(
         './sidecar-repair.js'
@@ -514,7 +554,12 @@ export class VirtualFS {
       } catch {
         /* already mounted with this backend — safe to ignore */
       }
-      entry = { backendFs, refs: 0, sidecarDirty: { paths: new Set(), prefixes: new Set() } };
+      entry = {
+        backendFs,
+        refs: 0,
+        asyncCache: asyncCache !== false,
+        sidecarDirty: { paths: new Set(), prefixes: new Set() },
+      };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
     entry.refs += 1;
@@ -619,6 +664,7 @@ export class VirtualFS {
     {
       backendFs: { index?: { toJSON: () => unknown } };
       refs: number;
+      asyncCache: boolean;
       /**
        * Paths this realm mutated since its last successful sidecar write.
        * Shared per `dbName` (like the index itself) so every same-name
@@ -902,8 +948,20 @@ export class VirtualFS {
     const dbName = options?.dbName ?? 'browser-fs';
     const wipe = options?.wipe === true;
     const backend: VfsBackend = options?.backend ?? resolveVfsBackendFromEnv();
-    const vfs = new VirtualFS(dbName, wipe, backend, undefined, options?.onRepairProgress);
-    await vfs._ready;
+    const vfs = new VirtualFS(
+      dbName,
+      wipe,
+      backend,
+      undefined,
+      options?.onRepairProgress,
+      options?.opfsAsyncCache
+    );
+    try {
+      await vfs._ready;
+    } catch (error) {
+      vfs.mountSyncChannel?.close();
+      throw error;
+    }
     if (wipe) {
       await clearMountEntries().catch(() => {});
     }

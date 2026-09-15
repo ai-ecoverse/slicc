@@ -58,6 +58,8 @@ there are additional parity boundaries where bugs hide:
 
 ### 1. Error-path coverage gaps
 
+OPFS cache-mode changes need native-browser reload tests and asynchronous fallbacks. Serialize same-database initializers before validating shared backend configuration; a failed conflicting opener must leave the live backend usable.
+
 **Trigger patterns**
 
 - Recursive filesystem preloads that start every payload read at once, limit each

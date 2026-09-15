@@ -3,11 +3,11 @@
 Review five runtimes (`webapp`, extension, Node, Swift, iOS). Flag concrete risks.
 Catalog: `docs/review-patterns.md`.
 
-## 1. Error-path coverage (often Critical)
+## 1. Error-path coverage
 
 Bound external calls and surface errors. Cap preload copies globally; cancel queued work on failure and drain active copies.
 
-## 2. Cross-runtime parity (often Critical)
+## 2. Cross-runtime parity
 
 Shared behavior needs peer updates or explicit exclusion. Check Node ↔ Swift (endpoints,
 signing, DA `origin` allow-list / `aem://` #2811), browser ↔ extension (mounts, VFS, secrets).
@@ -34,11 +34,13 @@ Model ID/metadata changes: verify reasoning, input, cost, thinking through
 discovery→enrichment→storage→API. OpenRouter (Free): all pricing dims zero;
 stream refuses IDs not in the live free catalog.
 
-## 7. Test coverage
+## 7. Tests
+
+Check OPFS modes with native reloads and async fallbacks.
 
 Require mirrored tests, regressions, and coverage floors. OPFS retries need fresh Files, bounded attempts, and error tests.
 
-## 8. Follower surface wiring parity (often Critical)
+## 8. Follower surface wiring parity
 
 Leader broadcasts need follower handlers and UI actions. Check live, follower, and extension
 boot paths; preserve shared fallbacks; prefer capability checks to float names.
