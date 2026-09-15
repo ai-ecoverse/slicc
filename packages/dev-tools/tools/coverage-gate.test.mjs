@@ -29,6 +29,23 @@ describe('buildVitestArgs', () => {
     expect(args.some((a) => a.startsWith('--coverage.thresholds.'))).toBe(false);
   });
 
+  it('forwards an explicit include list after the excludes', () => {
+    const args = buildVitestArgs('github-workflow', {
+      coverageExclude: ['**/tests/**'],
+      coverageInclude: ['packages/github-workflow/scripts/**'],
+    });
+    expect(args).toContain('--coverage.include=packages/github-workflow/scripts/**');
+    expect(args.indexOf('--coverage.exclude=**/tests/**')).toBeLessThan(
+      args.indexOf('--coverage.include=packages/github-workflow/scripts/**')
+    );
+    expect(buildVitestArgs('x', { coverageInclude: 'not-a-list' })).toEqual([
+      'run',
+      '--project',
+      'x',
+      '--coverage',
+    ]);
+  });
+
   it('forwards a bespoke exclude list', () => {
     const args = buildVitestArgs('chrome-extension', {
       coverageExclude: ['packages/webapp/src/ui/**', 'packages/webapp/src/tools/**'],

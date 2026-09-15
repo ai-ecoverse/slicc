@@ -126,6 +126,21 @@
       "statements": 99,
       "functions": 99,
       "branches": 98
+    },
+    "github-workflow": {
+      "lines": 98,
+      "statements": 98,
+      "functions": 97,
+      "branches": 91,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/*.test.mjs"
+      ],
+      "coverageInclude": ["packages/github-workflow/scripts/**"]
     }
   },
   "swift": {

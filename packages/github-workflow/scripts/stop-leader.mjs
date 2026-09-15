@@ -10,13 +10,23 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { group, homeDir, isAlive, logTail, readState, setOutput, terminate } from './gh-io.mjs';
+import {
+  group,
+  homeDir,
+  isAlive,
+  isMain,
+  logTail,
+  readState,
+  setOutput,
+  terminate,
+  warning,
+} from './gh-io.mjs';
 import { removeCredentialFiles } from './start-leader.mjs';
 
-function chromePidsForProfile(profileDir) {
+export function chromePidsForProfile(profileDir, exec = execFileSync) {
   if (!profileDir || process.platform === 'win32') return [];
   try {
-    const out = execFileSync('pgrep', ['-f', '--', `--user-data-dir=${profileDir}`], {
+    const out = exec('pgrep', ['-f', '--', `--user-data-dir=${profileDir}`], {
       encoding: 'utf8',
     });
     return out
@@ -28,32 +38,33 @@ function chromePidsForProfile(profileDir) {
   }
 }
 
-async function main() {
+export async function main(options = {}) {
   const home = homeDir();
   const state = readState(home);
   if (!state) {
     console.log('[stop-leader] no state file; nothing to stop');
     return;
   }
+  const grace = options.graceMs ?? 20_000;
   for (const pid of state.followers ?? []) {
     if (isAlive(pid)) {
       console.log(`[stop-leader] stopping follower pid=${pid}`);
-      await terminate(pid, 5_000);
+      await terminate(pid, Math.min(grace, 5_000));
     }
   }
   if (typeof state.leader === 'number') {
     if (isAlive(state.leader)) {
       console.log(`[stop-leader] stopping node-server pid=${state.leader}`);
-      await terminate(state.leader, 20_000);
+      await terminate(state.leader, grace);
     } else {
       console.log(`[stop-leader] node-server pid=${state.leader} already exited`);
     }
   }
   removeCredentialFiles(state.secretsFile);
   console.log('[stop-leader] credential files removed');
-  for (const pid of chromePidsForProfile(state.profileDir)) {
+  for (const pid of chromePidsForProfile(state.profileDir, options.exec)) {
     console.log(`[stop-leader] stopping leftover chrome pid=${pid}`);
-    await terminate(pid, 5_000);
+    await terminate(pid, Math.min(grace, 5_000));
   }
   if (state.logPath && existsSync(state.logPath)) {
     group('leader log (tail)', logTail(state.logPath, 120));
@@ -64,6 +75,12 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.log(`::warning::stop-leader: ${err instanceof Error ? err.message : String(err)}`);
-});
+// The direct-run trampoline: unreachable in-process (tests import `main`), so
+// it is excluded from coverage rather than faked through a subprocess.
+/* v8 ignore start */
+if (isMain(import.meta.url)) {
+  main().catch((err) =>
+    warning(`stop-leader: ${err instanceof Error ? err.message : String(err)}`)
+  );
+}
+/* v8 ignore stop */

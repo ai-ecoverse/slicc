@@ -20,14 +20,16 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   addMask,
+  coneConfigPath,
   ensureDir,
   fail,
   group,
   homeDir,
   input,
+  isMain,
+  joinFilePath,
   logTail,
   notice,
   setOutput,
@@ -39,8 +41,6 @@ import {
   buildConeConfigFiles,
   buildLeaderArgs,
   buildLeaderEnv,
-  CONE_CONFIG_PATH,
-  JOIN_FILE_PATH,
   parseBoolean,
   parseDuration,
   parseJoinFile,
@@ -49,12 +49,12 @@ import {
 } from './lib.mjs';
 
 /** Install the published `sliccy` package (node-server) into a private prefix. */
-function installNodeServer(home, version) {
+export function installNodeServer(home, version, exec = execFileSync) {
   const prefix = join(home, 'leader');
   ensureDir(prefix);
   const spec = `sliccy@${version || 'latest'}`;
   console.log(`[start-leader] installing ${spec} into ${prefix}`);
-  execFileSync(
+  exec(
     'npm',
     [
       'install',
@@ -73,7 +73,7 @@ function installNodeServer(home, version) {
   return entry;
 }
 
-function resolveNodeServer(home) {
+export function resolveNodeServer(home, exec = execFileSync) {
   const explicit = input('node-server');
   if (explicit) {
     const entry = resolve(explicit);
@@ -81,7 +81,7 @@ function resolveNodeServer(home) {
     console.log(`[start-leader] using local node-server ${entry}`);
     return entry;
   }
-  return installNodeServer(home, input('slicc-version', { fallback: 'latest' }));
+  return installNodeServer(home, input('slicc-version', { fallback: 'latest' }), exec);
 }
 
 /**
@@ -91,11 +91,11 @@ function resolveNodeServer(home) {
  * by later jobs running as the same user.
  */
 export function removeCredentialFiles(secretsFile) {
-  rmSync(CONE_CONFIG_PATH, { force: true });
+  rmSync(coneConfigPath(), { force: true });
   if (secretsFile) rmSync(secretsFile, { force: true });
 }
 
-function writeCredentialFiles(home) {
+export function writeCredentialFiles(home) {
   const { coneConfigJson, secretsEnv, summary } = buildConeConfigFiles({
     coneConfigJson: input('cone-config', { raw: true }),
     secretsEnvText: input('secrets-env', { raw: true }),
@@ -107,20 +107,21 @@ function writeCredentialFiles(home) {
       baseUrl: input('provider-base-url'),
     },
   });
-  const secretsFile = join(home, 'secrets.env');
+  const secretsFile = join(ensureDir(home), 'secrets.env');
   writeFileSync(secretsFile, secretsEnv, { mode: 0o600 });
+  const target = coneConfigPath();
   if (coneConfigJson) {
     try {
-      ensureDir(dirname(CONE_CONFIG_PATH));
-      writeFileSync(CONE_CONFIG_PATH, coneConfigJson, { mode: 0o600 });
+      ensureDir(dirname(target));
+      writeFileSync(target, coneConfigJson, { mode: 0o600 });
     } catch (err) {
       throw new Error(
-        `cannot write ${CONE_CONFIG_PATH} (${err.code ?? err}); the start-leader action runs ` +
+        `cannot write ${target} (${err.code ?? err}); the start-leader action runs ` +
           '`sudo mkdir -p /slicc && sudo chown "$(id -u)" /slicc` first — is sudo available on this runner?'
       );
     }
   } else {
-    rmSync(CONE_CONFIG_PATH, { force: true });
+    rmSync(target, { force: true });
   }
   console.log(
     `[start-leader] credentials: model=${summary.model ?? '(default)'} effort=${summary.effortLevel ?? '(default)'} ` +
@@ -129,12 +130,17 @@ function writeCredentialFiles(home) {
   return { secretsFile, coneConfigWritten: Boolean(coneConfigJson), summary };
 }
 
-async function pollJoinFile({ child, logPath, startedAt, timeoutMs }) {
+/**
+ * Poll the join file until node-server has minted a tray. Fails fast if the
+ * child exits first; kills it if the boot timeout elapses.
+ */
+export async function pollJoinFile({ child, logPath, startedAt, timeoutMs, pollMs = 1000 }) {
   const deadline = Date.now() + timeoutMs;
   let exited = null;
   child.on('exit', (code, signal) => {
     exited = { code, signal };
   });
+  const file = joinFilePath();
   while (Date.now() < deadline) {
     if (exited) {
       group('leader log (tail)', logTail(logPath, 80));
@@ -144,55 +150,37 @@ async function pollJoinFile({ child, logPath, startedAt, timeoutMs }) {
     }
     let text = null;
     try {
-      text = readFileSync(JOIN_FILE_PATH, 'utf8');
+      text = readFileSync(file, 'utf8');
     } catch {
       // not written yet
     }
     const parsed = parseJoinFile(text, startedAt);
     if (parsed) return parsed;
-    await sleep(1000);
+    await sleep(pollMs);
   }
   group('leader log (tail)', logTail(logPath, 80));
   await terminate(child.pid, 5_000);
   throw new Error(`leader did not report a join URL within ${Math.round(timeoutMs / 1000)}s`);
 }
 
-async function main() {
-  const home = ensureDir(homeDir());
-  const port = parsePort(input('port'));
-  const durationMs = parseDuration(input('duration', { fallback: '30m' }));
-  const bootTimeoutMs = parseDuration(input('boot-timeout', { fallback: '180s' }));
-  const cdpLaunchTimeoutMs = parseDuration(input('cdp-launch-timeout', { fallback: '60s' }));
-  const maskJoinUrl = parseBoolean(input('mask-join-url'), true);
-  const mounts = parseMountLines(input('mounts', { raw: true }), homedir());
-
-  const entry = resolveNodeServer(home);
-  const secretsFile = join(home, 'secrets.env');
-  try {
-    await bootLeader({
-      home,
-      entry,
-      secretsFile,
-      port,
-      durationMs,
-      bootTimeoutMs,
-      cdpLaunchTimeoutMs,
-      maskJoinUrl,
-      mounts,
-    });
-  } catch (err) {
-    removeCredentialFiles(secretsFile);
-    throw err;
-  }
+export function readBootInputs() {
+  return {
+    port: parsePort(input('port')),
+    durationMs: parseDuration(input('duration', { fallback: '30m' })),
+    bootTimeoutMs: parseDuration(input('boot-timeout', { fallback: '180s' })),
+    cdpLaunchTimeoutMs: parseDuration(input('cdp-launch-timeout', { fallback: '60s' })),
+    maskJoinUrl: parseBoolean(input('mask-join-url'), true),
+    mounts: parseMountLines(input('mounts', { raw: true }), homedir()),
+  };
 }
 
-async function bootLeader(opts) {
+export async function bootLeader(opts) {
   const { home, entry, port, durationMs, bootTimeoutMs, cdpLaunchTimeoutMs, maskJoinUrl, mounts } =
     opts;
   const { secretsFile, coneConfigWritten } = writeCredentialFiles(home);
   const profileDir = ensureDir(join(home, 'profile'));
   const logPath = join(home, 'leader.log');
-  rmSync(JOIN_FILE_PATH, { force: true });
+  rmSync(joinFilePath(), { force: true });
 
   const env = buildLeaderEnv({
     base: process.env,
@@ -221,6 +209,7 @@ async function bootLeader(opts) {
     logPath,
     startedAt: startedAt - 1000,
     timeoutMs: bootTimeoutMs,
+    pollMs: opts.pollMs,
   });
   if (maskJoinUrl) addMask(joinInfo.joinUrl);
 
@@ -233,7 +222,7 @@ async function bootLeader(opts) {
       logPath,
       profileDir,
       secretsFile,
-      coneConfigPath: coneConfigWritten ? CONE_CONFIG_PATH : null,
+      coneConfigPath: coneConfigWritten ? coneConfigPath() : null,
       joinUrl: joinInfo.joinUrl,
       trayId: joinInfo.trayId,
       sliccVersion: joinInfo.sliccVersion,
@@ -257,8 +246,26 @@ async function bootLeader(opts) {
     `SLICC leader ready (tray ${joinInfo.trayId ?? '?'}, version ${joinInfo.sliccVersion ?? '?'}); ` +
       `runs until ${new Date(deadline).toISOString()}`
   );
+  return { pid: child.pid, ...joinInfo, deadline };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export async function main(options = {}) {
+  const home = ensureDir(homeDir());
+  const inputs = readBootInputs();
+  const entry = resolveNodeServer(home, options.exec);
+  const secretsFile = join(home, 'secrets.env');
+  try {
+    return await bootLeader({ home, entry, ...inputs, pollMs: options.pollMs });
+  } catch (err) {
+    removeCredentialFiles(secretsFile);
+    throw err;
+  }
+}
+
+// The direct-run trampoline: unreachable in-process (tests import `main`), so
+// it is excluded from coverage rather than faked through a subprocess.
+/* v8 ignore start */
+if (isMain(import.meta.url)) {
   main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
 }
+/* v8 ignore stop */

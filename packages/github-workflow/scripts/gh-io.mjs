@@ -8,7 +8,28 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatGithubOutput, tailLines } from './lib.mjs';
+import { pathToFileURL } from 'node:url';
+import { CONE_CONFIG_PATH, formatGithubOutput, JOIN_FILE_PATH, tailLines } from './lib.mjs';
+
+/**
+ * True when `metaUrl` (a script's `import.meta.url`) is the entry point of
+ * this process. Every orchestrator script exports its `main` and only runs
+ * it behind this guard, so tests can import the module without side effects.
+ */
+export function isMain(metaUrl) {
+  const entry = process.argv[1];
+  return Boolean(entry) && metaUrl === pathToFileURL(entry).href;
+}
+
+/** `/tmp/slicc-join.json` unless overridden (test seam — node-server itself always writes the default). */
+export function joinFilePath() {
+  return process.env.SLICC_GW_JOIN_FILE?.trim() || JOIN_FILE_PATH;
+}
+
+/** `/slicc/cone-config.json` unless overridden (test seam — node-server itself always reads the default). */
+export function coneConfigPath() {
+  return process.env.SLICC_GW_CONE_CONFIG_PATH?.trim() || CONE_CONFIG_PATH;
+}
 
 /**
  * Read a composite-action input. Composite actions do not populate `INPUT_*`
@@ -163,28 +184,54 @@ export function joinUrl() {
 }
 
 /**
+ * The Go CLI reports a failed WebRTC dial before anything reaches the leader.
+ * Those failures are safe to retry — nothing was executed — and they do
+ * happen on a busy runner when execs are issued back to back.
+ */
+export const CONNECT_FAILURE_RE = /tray connect timed out|tray attach|signaling|dial/i;
+export const CONNECT_RETRIES = 3;
+export const CONNECT_RETRY_DELAY_MS = 3_000;
+
+export function isConnectFailure(status, stderr) {
+  return status !== 0 && CONNECT_FAILURE_RE.test(stderr ?? '');
+}
+
+/**
  * Run one command in the leader's virtual shell synchronously and return its
  * stdout bytes. stderr is forwarded to the job log; a non-zero status throws.
- * Used by the byte-exact copy paths (`vfs-file.mjs`, `inject-files.mjs`,
+ * A dial failure is retried up to `CONNECT_RETRIES` times. Used by the
+ * byte-exact copy paths (`vfs-file.mjs`, `inject-files.mjs`,
  * `export-session.mjs`) — the streaming `prompt`/`exec` path is `slicc-run.mjs`.
  *
  * @param {string} url
  * @param {string} command
- * @param {{ stdin?: string | Buffer; timeoutMs: number }} options
+ * @param {{ stdin?: string | Buffer; timeoutMs: number; retries?: number; retryDelayMs?: number }} options
  * @returns {Buffer}
  */
 export function execOnLeader(url, command, options) {
-  const result = spawnSync(cliPath(), [url, 'exec', command], {
-    input: options.stdin,
-    maxBuffer: 512 * 1024 * 1024,
-    timeout: options.timeoutMs,
-    env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1' },
-  });
-  if (result.error) throw result.error;
-  const stderr = result.stderr?.toString('utf8') ?? '';
-  if (stderr.trim()) process.stderr.write(stderr);
-  if (result.status !== 0) {
+  const retries = options.retries ?? CONNECT_RETRIES;
+  const delay = options.retryDelayMs ?? CONNECT_RETRY_DELAY_MS;
+  for (let attempt = 1; ; attempt += 1) {
+    const result = spawnSync(cliPath(), [url, 'exec', command], {
+      input: options.stdin,
+      maxBuffer: 512 * 1024 * 1024,
+      timeout: options.timeoutMs,
+      env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1' },
+    });
+    if (result.error) throw result.error;
+    const stderr = result.stderr?.toString('utf8') ?? '';
+    if (stderr.trim()) process.stderr.write(stderr);
+    if (result.status === 0) return result.stdout ?? Buffer.alloc(0);
+    if (isConnectFailure(result.status, stderr) && attempt < retries) {
+      warning(`leader dial failed (attempt ${attempt}/${retries}); retrying in ${delay / 1000}s`);
+      sleepSync(delay);
+      continue;
+    }
     throw new Error(`leader command failed (status ${result.status}): ${command}`);
   }
-  return result.stdout ?? Buffer.alloc(0);
+}
+
+/** Blocking sleep for the synchronous exec path. */
+export function sleepSync(ms) {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }

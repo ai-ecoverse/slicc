@@ -8,12 +8,11 @@
  * INPUT_SESSION_ID (frozen session id; default the active session),
  * INPUT_VFS_PATH (temporary VFS path), INPUT_TIMEOUT.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { execOnLeader, fail, input, joinUrl, setOutput } from './gh-io.mjs';
-import { buildExportSessionCommand, buildReadCommand, parseDuration } from './lib.mjs';
+import { execOnLeader, fail, input, isMain, joinUrl, setOutput } from './gh-io.mjs';
+import { buildExportSessionCommand, parseDuration } from './lib.mjs';
+import { readVfsFile } from './vfs-file.mjs';
 
-function main() {
+export function main() {
   const url = joinUrl();
   const local = input('local', { required: true });
   const vfsPath = input('vfs-path', { fallback: '/tmp/slicc-session-export.zip' });
@@ -25,17 +24,21 @@ function main() {
   const text = exportOut.toString('utf8').trim();
   if (text) console.log(text);
 
-  const encoded = execOnLeader(url, buildReadCommand(vfsPath), { timeoutMs });
-  const bytes = Buffer.from(encoded.toString('utf8').replace(/\s+/g, ''), 'base64');
-  mkdirSync(dirname(local), { recursive: true });
-  writeFileSync(local, bytes);
-  console.log(`[export-session] ${vfsPath} → ${local} (${bytes.length} bytes)`);
-  setOutput('bytes', bytes.length);
+  const bytes = readVfsFile(url, vfsPath, local, timeoutMs);
+  console.log(`[export-session] ${vfsPath} → ${local} (${bytes} bytes)`);
+  setOutput('bytes', bytes);
   setOutput('local', local);
+  return bytes;
 }
 
-try {
-  main();
-} catch (err) {
-  fail(err instanceof Error ? err.message : String(err));
+// The direct-run trampoline: unreachable in-process (tests import `main`), so
+// it is excluded from coverage rather than faked through a subprocess.
+/* v8 ignore start */
+if (isMain(import.meta.url)) {
+  try {
+    main();
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
 }
+/* v8 ignore stop */

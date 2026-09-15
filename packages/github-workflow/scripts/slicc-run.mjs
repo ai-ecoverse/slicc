@@ -21,30 +21,49 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync, openSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { cliPath, ensureDir, fail, homeDir, input, joinUrl, setOutput } from './gh-io.mjs';
+import {
+  CONNECT_RETRIES,
+  CONNECT_RETRY_DELAY_MS,
+  cliPath,
+  ensureDir,
+  fail,
+  homeDir,
+  input,
+  isConnectFailure,
+  isMain,
+  joinUrl,
+  setOutput,
+  sleep,
+  warning,
+} from './gh-io.mjs';
 import { parseBoolean, parseDuration, truncateForOutput } from './lib.mjs';
 
-const TIMEOUT_EXIT_CODE = 124;
+export const TIMEOUT_EXIT_CODE = 124;
 
-function runCli({ args, stdinFile, outputFile, timeoutMs, quiet }) {
+export function runCli({ args, stdinFile, outputFile, timeoutMs, quiet, killGraceMs = 10_000 }) {
   return new Promise((resolve, reject) => {
     const stdin = stdinFile ? openSync(stdinFile, 'r') : 'ignore';
     const child = spawn(cliPath(), args, {
-      stdio: [stdin, 'pipe', 'inherit'],
+      stdio: [stdin, 'pipe', 'pipe'],
       env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1' },
     });
     const sink = createWriteStream(outputFile);
     const chunks = [];
+    const errChunks = [];
     child.stdout.on('data', (chunk) => {
       chunks.push(chunk);
       sink.write(chunk);
       if (!quiet) process.stdout.write(chunk);
     });
+    child.stderr.on('data', (chunk) => {
+      errChunks.push(chunk);
+      process.stderr.write(chunk);
+    });
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGINT');
-      setTimeout(() => child.kill('SIGKILL'), 10_000).unref();
+      setTimeout(() => child.kill('SIGKILL'), killGraceMs).unref();
     }, timeoutMs);
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -54,13 +73,18 @@ function runCli({ args, stdinFile, outputFile, timeoutMs, quiet }) {
       clearTimeout(timer);
       sink.end(() => {
         const exitCode = timedOut ? TIMEOUT_EXIT_CODE : (code ?? (signal ? 128 : 1));
-        resolve({ exitCode, timedOut, output: Buffer.concat(chunks).toString('utf8') });
+        resolve({
+          exitCode,
+          timedOut,
+          output: Buffer.concat(chunks).toString('utf8'),
+          stderr: Buffer.concat(errChunks).toString('utf8'),
+        });
       });
     });
   });
 }
 
-async function main() {
+export async function main(options = {}) {
   const url = joinUrl();
   const verb = input('verb', { required: true });
   if (verb !== 'prompt' && verb !== 'exec')
@@ -81,13 +105,26 @@ async function main() {
   writeFileSync(textFile, text, { mode: 0o600 });
 
   console.log(`[slicc ${verb}] timeout=${Math.round(timeoutMs / 1000)}s output=${outputFile}`);
-  const result = await runCli({
-    args: [url, verb, `@${textFile}`],
-    stdinFile,
-    outputFile,
-    timeoutMs,
-    quiet,
-  });
+  const retries = options.retries ?? CONNECT_RETRIES;
+  let result;
+  for (let attempt = 1; ; attempt += 1) {
+    result = await runCli({
+      args: [url, verb, `@${textFile}`],
+      stdinFile,
+      outputFile,
+      timeoutMs,
+      quiet,
+      killGraceMs: options.killGraceMs,
+    });
+    // A failed dial never reached the leader, so the message/command was not
+    // delivered and a retry cannot double-execute anything.
+    if (!result.timedOut && isConnectFailure(result.exitCode, result.stderr) && attempt < retries) {
+      warning(`leader dial failed (attempt ${attempt}/${retries}); retrying`);
+      await sleep(options.retryDelayMs ?? CONNECT_RETRY_DELAY_MS);
+      continue;
+    }
+    break;
+  }
   if (!quiet && result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
 
   const { text: truncated, truncated: wasTruncated } = truncateForOutput(
@@ -105,6 +142,13 @@ async function main() {
   if (result.exitCode !== 0 && failOnError) {
     throw new Error(`slicc ${verb} exited with status ${result.exitCode}`);
   }
+  return result;
 }
 
-main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+// The direct-run trampoline: unreachable in-process (tests import `main`), so
+// it is excluded from coverage rather than faked through a subprocess.
+/* v8 ignore start */
+if (isMain(import.meta.url)) {
+  main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+}
+/* v8 ignore stop */

@@ -5,7 +5,8 @@
  * record its pid so `wait-for-deadline.mjs` watches it and
  * `stop-leader.mjs` tears it down. With a runner the leader's agent can run
  * commands here via its `ssh` shell command (`ssh --list` lists the runner as
- * a `follower-<id> (slicc-cli)` exec target). Without one the follower refuses every command.
+ * a `follower-<id> (slicc-cli)` exec target). Without one the follower
+ * refuses every command.
  *
  * Inputs: SLICC_JOIN_URL, INPUT_RUNNER (default `bash -c`), INPUT_EVAL
  * (persistent REPL mode), INPUT_EVAL_QUIET, INPUT_CONNECT_TIMEOUT.
@@ -21,16 +22,19 @@ import {
   homeDir,
   input,
   isAlive,
+  isMain,
   joinUrl,
   logTail,
   readState,
   setOutput,
   sleep,
+  warning,
   writeState,
 } from './gh-io.mjs';
 import { buildFollowArgs, parseBoolean, parseDuration } from './lib.mjs';
 
-async function waitForConnect(child, logPath, timeoutMs) {
+/** Resolve true once the log says `connected`, false on timeout; throws if the child exits first. */
+export async function waitForConnect(child, logPath, timeoutMs, pollMs = 500) {
   const deadline = Date.now() + timeoutMs;
   let exited = null;
   child.on('exit', (code) => {
@@ -48,12 +52,12 @@ async function waitForConnect(child, logPath, timeoutMs) {
       // not written yet
     }
     if (/\bconnected\b/i.test(log)) return true;
-    await sleep(500);
+    await sleep(pollMs);
   }
   return false;
 }
 
-async function main() {
+export async function main(options = {}) {
   const url = joinUrl();
   const home = ensureDir(homeDir());
   const state = readState(home) ?? { followers: [], followerLogs: [] };
@@ -76,10 +80,10 @@ async function main() {
   child.unref();
   console.log(`[follow] pid=${child.pid} runner="${args.slice(4).join(' ')}" log=${logPath}`);
 
-  const connected = await waitForConnect(child, logPath, connectTimeoutMs);
+  const connected = await waitForConnect(child, logPath, connectTimeoutMs, options.pollMs);
   if (!connected) {
     if (!isAlive(child.pid)) throw new Error('slicc follow died while connecting');
-    console.log('::warning::follower has not logged "connected" yet; leaving it running');
+    warning('follower has not logged "connected" yet; leaving it running');
   } else {
     console.log('[follow] connected');
   }
@@ -95,6 +99,13 @@ async function main() {
   setOutput('pid', child.pid);
   setOutput('log-path', logPath);
   setOutput('connected', connected);
+  return { pid: child.pid, connected, logPath };
 }
 
-main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+// The direct-run trampoline: unreachable in-process (tests import `main`), so
+// it is excluded from coverage rather than faked through a subprocess.
+/* v8 ignore start */
+if (isMain(import.meta.url)) {
+  main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+}
+/* v8 ignore stop */

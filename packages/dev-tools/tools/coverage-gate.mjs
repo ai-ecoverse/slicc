@@ -38,6 +38,15 @@ export function buildVitestArgs(pkg, floors, extraArgs = []) {
       args.push(`--coverage.exclude=${pattern}`);
     }
   }
+  // An explicit include list makes files the suite never imported count as
+  // 0% instead of vanishing from the report — vitest only reports loaded
+  // files by default, so a package of standalone scripts (github-workflow)
+  // would otherwise look fully covered as soon as one script had a test.
+  if (Array.isArray(floors.coverageInclude)) {
+    for (const pattern of floors.coverageInclude) {
+      args.push(`--coverage.include=${pattern}`);
+    }
+  }
   return [...args, ...extraArgs];
 }
 

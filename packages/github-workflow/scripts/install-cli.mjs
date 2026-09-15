@@ -17,10 +17,19 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addPath, ensureDir, exportEnv, fail, homeDir, input, setOutput } from './gh-io.mjs';
+import {
+  addPath,
+  ensureDir,
+  exportEnv,
+  fail,
+  homeDir,
+  input,
+  isMain,
+  setOutput,
+} from './gh-io.mjs';
 import { cliAssetName, parseBoolean, pickCliRelease } from './lib.mjs';
 
-const RELEASES_URL = 'https://api.github.com/repos/ai-ecoverse/slicc/releases';
+export const RELEASES_URL = 'https://api.github.com/repos/ai-ecoverse/slicc/releases';
 const PER_PAGE = 100;
 const MAX_PAGES = 5;
 const USER_AGENT = 'slicc-github-workflow';
@@ -31,22 +40,34 @@ function headers(token) {
   return h;
 }
 
-async function fetchJson(url, token) {
-  const res = await fetch(url, { headers: headers(token), signal: AbortSignal.timeout(30_000) });
+async function fetchJson(url, token, fetchImpl) {
+  const res = await fetchImpl(url, {
+    headers: headers(token),
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!res.ok) throw new Error(`GitHub API ${res.status} for ${url}`);
   return res.json();
 }
 
-async function resolveRelease(version, assetName, token) {
+/** Newest release (or the pinned tag) carrying `assetName`. */
+export async function resolveRelease(version, assetName, token, fetchImpl = fetch) {
   if (version && version !== 'latest') {
     const tag = version.startsWith('v') ? version : `v${version}`;
-    const release = await fetchJson(`${RELEASES_URL}/tags/${encodeURIComponent(tag)}`, token);
+    const release = await fetchJson(
+      `${RELEASES_URL}/tags/${encodeURIComponent(tag)}`,
+      token,
+      fetchImpl
+    );
     const hit = pickCliRelease([{ ...release, draft: false, prerelease: false }], assetName);
     if (!hit) throw new Error(`release ${tag} carries no ${assetName} asset`);
     return hit;
   }
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const releases = await fetchJson(`${RELEASES_URL}?per_page=${PER_PAGE}&page=${page}`, token);
+    const releases = await fetchJson(
+      `${RELEASES_URL}?per_page=${PER_PAGE}&page=${page}`,
+      token,
+      fetchImpl
+    );
     const hit = pickCliRelease(releases, assetName);
     if (hit) return hit;
     if (!Array.isArray(releases) || releases.length < PER_PAGE) break;
@@ -56,8 +77,9 @@ async function resolveRelease(version, assetName, token) {
   );
 }
 
-async function download(url, token, destination) {
-  const res = await fetch(url, {
+/** Download to a staging file, then rename into place (never a half-written binary). */
+export async function download(url, token, destination, fetchImpl = fetch) {
+  const res = await fetchImpl(url, {
     headers: { 'user-agent': USER_AGENT, ...(token ? { authorization: `Bearer ${token}` } : {}) },
     signal: AbortSignal.timeout(180_000),
   });
@@ -70,18 +92,22 @@ async function download(url, token, destination) {
   return bytes.length;
 }
 
-async function main() {
-  const assetName = cliAssetName(process.platform, process.arch);
-  if (!assetName) throw new Error(`no slicc CLI build for ${process.platform}/${process.arch}`);
+export async function main(options = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const exec = options.exec ?? execFileSync;
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const assetName = cliAssetName(platform, arch);
+  if (!assetName) throw new Error(`no slicc CLI build for ${platform}/${arch}`);
   const token = input('token');
   const version = input('version', { fallback: 'latest' });
   const installDir = ensureDir(input('install-dir') || join(homeDir(), 'cli'));
-  const binary = join(installDir, process.platform === 'win32' ? 'slicc.exe' : 'slicc');
+  const binary = join(installDir, platform === 'win32' ? 'slicc.exe' : 'slicc');
 
-  const hit = await resolveRelease(version, assetName, token);
+  const hit = await resolveRelease(version, assetName, token, fetchImpl);
   console.log(`[install-cli] ${assetName} from release ${hit.version}`);
-  const bytes = await download(hit.downloadUrl, token, binary);
-  const reported = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
+  const bytes = await download(hit.downloadUrl, token, binary, fetchImpl);
+  const reported = exec(binary, ['--version'], { encoding: 'utf8' }).trim();
   console.log(`[install-cli] installed ${binary} (${bytes} bytes): ${reported}`);
 
   addPath(installDir);
@@ -90,6 +116,13 @@ async function main() {
   if (!parseBoolean(input('telemetry'), false)) exportEnv('SLICC_NO_TELEMETRY', '1');
   setOutput('path', binary);
   setOutput('version', hit.version);
+  return { binary, version: hit.version, bytes };
 }
 
-main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+// The direct-run trampoline: unreachable in-process (tests import `main`), so
+// it is excluded from coverage rather than faked through a subprocess.
+/* v8 ignore start */
+if (isMain(import.meta.url)) {
+  main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+}
+/* v8 ignore stop */
