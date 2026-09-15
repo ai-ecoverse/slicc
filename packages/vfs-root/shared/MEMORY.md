@@ -21,7 +21,7 @@ allowedCommands:
   - mv
   - od # read-only byte inspection of corrupted stores
   - printf
-  - rg # recursive, .gitignore-aware search; what the curator actually uses over find|xargs grep
+  - rg # recursive, .gitignore-aware search; what the curator actually uses over find|xargs grep. Exit 1 = no match; exit 2 = searchable-byte limit (stderr names the budget). Later commands still run.
   - sed
   - sort
   - tail
