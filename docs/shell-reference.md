@@ -19,15 +19,6 @@ or input in separate calls. Shell environment variables cannot raise these limit
 The cone retains the upstream defaults; command timeout and detachment behavior
 are unchanged.
 
-## Filesystem metadata and appends
-
-On the browser filesystem, `>>` serializes appends with other VFS mutations, and
-`chmod` / `touch` persist executable modes and modification times across reloads.
-Mounted filesystems currently report `ENOSYS` for unsupported metadata changes;
-a successful command always means its requested metadata operation was applied.
-Mounted appends serialize SLICC writers sharing a database; external host or remote
-writers still require backend-specific concurrency control.
-
 ## Overview
 
 SLICC uses `just-bash` (a pure-TypeScript Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. The interpreter itself is plain JavaScript — not WASM. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/almost-bash-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
@@ -96,6 +87,15 @@ just-bash ships bash's complete `help` topic table while implementing only part 
 The same loud-failure rule applies to `chmod`. The VFS cannot store permission bits, so `chmod +x` exits non-zero (`EOPNOTSUPP`) rather than reporting success while `ls -l` stays `-rw-r--r--`. Run the file with its interpreter (`bash file`). `./file` cannot work and, on a shebang script, the Permission denied diagnostic names that interpreter. Reporting exec-bit support as a probed mount capability is #3108.
 
 ---
+
+## Filesystem metadata and appends
+
+On the browser filesystem, `>>` serializes appends with other VFS mutations, and
+`chmod` / `touch` persist executable modes and modification times across reloads.
+Mounted filesystems currently report `ENOSYS` for unsupported metadata changes;
+a successful command always means its requested metadata operation was applied.
+Mounted appends serialize SLICC writers sharing a database; external host or remote
+writers still require backend-specific concurrency control.
 
 ## Supplemental Commands
 
