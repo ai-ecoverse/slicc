@@ -1,6 +1,7 @@
 /** `git status` (long and short/porcelain forms). */
 
 import * as git from 'isomorphic-git';
+import { conflictedWorktreePaths, mergeInProgress } from './merge-state.js';
 import { matchesPathspec } from './revision.js';
 import { NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
@@ -23,9 +24,24 @@ export async function status(
 
   try {
     const branch = await git.currentBranch({ fs: ctx.lfs, dir: cwd });
-    output += `On branch ${branch ?? '(no branch)'}\n\n`;
+    output += `On branch ${branch ?? '(no branch)'}\n`;
   } catch {
-    output += 'Not on any branch.\n\n';
+    output += 'Not on any branch.\n';
+  }
+
+  const merging = await mergeInProgress(ctx, cwd);
+  if (merging) {
+    const conflicted = await conflictedWorktreePaths(ctx, cwd);
+    if (conflicted.length > 0) {
+      output += 'You have unmerged paths.\n';
+      output += '  (fix conflicts and run "git commit")\n';
+      output += '  (use "git merge --abort" to abort the merge)\n\n';
+    } else {
+      output += 'All conflicts fixed but you are still merging.\n';
+      output += '  (use "git commit" to conclude merge)\n\n';
+    }
+  } else {
+    output += '\n';
   }
 
   const matrix = await git.statusMatrix({
@@ -36,7 +52,7 @@ export async function status(
   });
   const { staged, unstaged, untracked } = classifyStatusMatrix(matrix, pathspecs);
 
-  output += formatStatusLong(staged, unstaged, untracked);
+  output += formatStatusLong(staged, unstaged, untracked, merging);
 
   return { stdout: output, stderr: '', exitCode: 0 };
 }
@@ -71,7 +87,12 @@ function classifyStatusMatrix(
 }
 
 /** Format long-form status output from classified file lists. */
-function formatStatusLong(staged: string[], unstaged: string[], untracked: string[]): string {
+function formatStatusLong(
+  staged: string[],
+  unstaged: string[],
+  untracked: string[],
+  merging = false
+): string {
   let output = '';
 
   if (staged.length > 0) {
@@ -101,7 +122,7 @@ function formatStatusLong(staged: string[], unstaged: string[], untracked: strin
     output += '\n';
   }
 
-  if (staged.length === 0 && unstaged.length === 0 && untracked.length === 0) {
+  if (staged.length === 0 && unstaged.length === 0 && untracked.length === 0 && !merging) {
     output += 'nothing to commit, working tree clean\n';
   }
 

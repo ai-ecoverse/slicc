@@ -1,6 +1,7 @@
 /** `git reset` — unstage, or move HEAD/index/workdir (soft/mixed/hard). */
 
 import * as git from 'isomorphic-git';
+import { clearMergeState } from './merge-state.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function reset(
@@ -87,8 +88,22 @@ export async function reset(
 
   // --hard: also restore workdir to match the target commit
   await resetWorkdirToCommit(ctx, cwd, targetOid, previouslyTracked);
+  await clearMergeAfterHardReset(ctx, cwd, targetOid);
 
   return { stdout: `HEAD is now at ${targetOid.slice(0, 7)}\n`, stderr: '', exitCode: 0 };
+}
+
+async function clearMergeAfterHardReset(
+  ctx: GitCommandContext,
+  cwd: string,
+  targetOid: string
+): Promise<void> {
+  try {
+    await git.abortMerge({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, commit: targetOid });
+  } catch {
+    /* no leftover unmerged index */
+  }
+  await clearMergeState(ctx, cwd);
 }
 
 async function resetIndexToCommit(ctx: GitCommandContext, cwd: string, oid: string): Promise<void> {

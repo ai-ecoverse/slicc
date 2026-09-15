@@ -3,7 +3,9 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { makeMergeDriver } from './merge-driver.js';
-import { GIT_FLAG_SPECS } from './shared.js';
+import { clearMergeState, mergeInProgress, writeMergeState, writeOrigHead } from './merge-state.js';
+import { tryResolveRevision } from './revision.js';
+import { GIT_FLAG_SPECS, rejectUnknownGitFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 /** Coerce an mri flag value (string | string[] | undefined) to a string[]. */
@@ -12,16 +14,41 @@ function asStringArray(value: unknown): string[] {
   return (Array.isArray(value) ? value : [value]).map((v) => String(v));
 }
 
+function mergeFlags(
+  parsed: ReturnType<typeof parseArgs>,
+  args: string[]
+): {
+  noFf: boolean;
+  ffOnly: boolean;
+  favor: 'ours' | 'theirs' | 'union' | undefined;
+  diff3: boolean;
+} {
+  let favor: 'ours' | 'theirs' | 'union' | undefined;
+  let diff3 = false;
+  for (const opt of asStringArray(parsed.flags['strategy-option'])) {
+    if (opt === 'ours' || opt === 'theirs' || opt === 'union') favor = opt;
+    else if (opt === 'diff3') diff3 = true;
+  }
+  return {
+    noFf: parsed.flags.ff === false || args.includes('--no-ff'),
+    ffOnly: parsed.flags['ff-only'] === true || args.includes('--ff-only'),
+    favor,
+    diff3,
+  };
+}
+
 export async function merge(
   ctx: GitCommandContext,
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const noFf = args.includes('--no-ff');
-  const ffOnly = args.includes('--ff-only');
-  const parsed = parseArgs(args, GIT_FLAG_SPECS.merge);
-  const theirs = parsed.positionals[0];
+  const unknown = rejectUnknownGitFlags(args, GIT_FLAG_SPECS.merge);
+  if (unknown) return unknown;
 
+  const parsed = parseArgs(args, GIT_FLAG_SPECS.merge);
+  if (parsed.flags.abort === true) return abortMerge(ctx, cwd);
+
+  const theirs = parsed.positionals[0];
   if (!theirs) {
     return {
       stdout: '',
@@ -30,21 +57,37 @@ export async function merge(
     };
   }
 
-  // -X/--strategy-option → threeWayMerge favor + diff3 knobs.
-  let favor: 'ours' | 'theirs' | 'union' | undefined;
-  let diff3 = false;
-  for (const opt of asStringArray(parsed.flags['strategy-option'])) {
-    if (opt === 'ours' || opt === 'theirs' || opt === 'union') favor = opt;
-    else if (opt === 'diff3') diff3 = true;
+  if (await mergeInProgress(ctx, cwd)) {
+    return {
+      stdout: '',
+      stderr:
+        'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
+        'Please, commit your changes before you merge.\n',
+      exitCode: 128,
+    };
   }
 
+  const resolvedTheirs = await tryResolveRevision(ctx, cwd, theirs);
+  if (!resolvedTheirs) {
+    return {
+      stdout: '',
+      stderr: `fatal: Could not find ${theirs}.\n`,
+      exitCode: 128,
+    };
+  }
+
+  const { noFf, ffOnly, favor, diff3 } = mergeFlags(parsed, args);
+
   try {
+    const ourOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
+    await writeOrigHead(ctx, cwd, ourOid);
+
     const result = await git.merge({
       fs: ctx.lfs,
       cache: ctx.cache,
       dir: cwd,
       ours: (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? undefined,
-      theirs,
+      theirs: resolvedTheirs,
       fastForward: !noFf,
       fastForwardOnly: ffOnly,
       author: await ctx.resolveAuthor(cwd),
@@ -92,8 +135,37 @@ export async function merge(
 
     return { stdout: 'Merge complete.\n', stderr: '', exitCode: 0 };
   } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'MergeConflictError') {
+      const branch = (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? 'HEAD';
+      await writeMergeState(ctx, cwd, resolvedTheirs, `Merge branch '${theirs}' into ${branch}`);
+    }
     return handleMergeError(err);
   }
+}
+
+/** `git merge --abort` — restore pre-merge HEAD and drop merge state. */
+async function abortMerge(ctx: GitCommandContext, cwd: string): Promise<GitCommandResult> {
+  if (!(await mergeInProgress(ctx, cwd))) {
+    return {
+      stdout: '',
+      stderr: 'fatal: There is no merge to abort (MERGE_HEAD missing).\n',
+      exitCode: 128,
+    };
+  }
+  try {
+    await git.abortMerge({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, commit: 'HEAD' });
+  } catch {
+    // Index may already match HEAD; still restore the worktree and drop MERGE_HEAD.
+  }
+  await git.checkout({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    dir: cwd,
+    ref: (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? 'HEAD',
+    force: true,
+  });
+  await clearMergeState(ctx, cwd);
+  return { stdout: '', stderr: '', exitCode: 0 };
 }
 
 /** Handle merge errors and return appropriate GitCommandResult, or rethrow. */

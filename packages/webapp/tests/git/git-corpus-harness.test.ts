@@ -200,6 +200,13 @@ describe('git corpus — issue #1033 regressions', () => {
     expect(result.stdout).toContain('On branch');
   });
 
+  it('#3121: git --no-color log is log, not a missing command', async () => {
+    await seedRepo('/project');
+    const result = await git.execute(['--no-color', 'log', '-n', '1'], '/project');
+    expect(result.stderr).not.toContain('is not a git command');
+    expect(result.exitCode).toBe(0);
+  });
+
   // #1033 (catalogue) — `--no-pager` global flag must be a no-op.
   it('#1033-nopager: git --no-pager diff works like git diff', async () => {
     await seedRepo('/project');

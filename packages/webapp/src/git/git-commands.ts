@@ -113,7 +113,9 @@ const CACHEABLE_COMMANDS = new Set([
  */
 const GLOBAL_SPEC: ArgSpec = {
   string: ['c', 'C', 'git-dir', 'work-tree'],
-  boolean: ['help', 'version', 'no-pager', 'paginate', 'no-replace-objects'],
+  // `color` is the boolean so `--no-color` rewrites to `{ color: false }`
+  // instead of becoming the subcommand token (#3121).
+  boolean: ['help', 'version', 'no-pager', 'paginate', 'no-replace-objects', 'color'],
   alias: { h: 'help' },
   stopEarly: true,
 };

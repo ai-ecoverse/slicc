@@ -270,7 +270,16 @@ Use `--depth <n>` to request a different history depth.
 `show`, `ls-tree`, `cherry-pick`, `revert`, `rebase`, `diff`, `merge-base` and `rev-parse`
 resolve their revision arguments through one helper, `resolveRevision()` in
 `packages/webapp/src/git/commands/revision.ts`, so they all accept the same tokens: a ref
-(`HEAD`, `main`, `origin/main`, a tag), a full or abbreviated oid, and `~`/`^` suffixes.
+(`HEAD`, `main`, `origin/main`, a tag, `FETCH_HEAD`), a full or abbreviated oid, and `~`/`^` suffixes.
+
+`git diff` compares two commits given as `<sha> <sha>`, `HEAD~1 HEAD`, `A..B`, or `A...B`
+(three-dot is `diff $(merge-base A B) B`). `--name-status` prints `M`/`A`/`D` rows; an
+unsupported commit form fails with a non-zero status rather than an empty successful diff
+(issue #3120). `git fetch` writes `.git/FETCH_HEAD` so `rev-parse FETCH_HEAD` and
+`merge FETCH_HEAD` work. Global options (`--no-color`, `-C`, `-c k=v`) may precede the
+subcommand; `clone`/`fetch`/`pull` accept `-q`/`--quiet`; unknown flags error by name
+instead of stealing positionals. `merge --abort` and `reset --hard` clear `MERGE_HEAD`
+(issue #3121).
 
 `log` is the exception — it hands its revision straight to `git.log()`, so it takes whatever
 isomorphic-git accepts and not the suffix forms above.

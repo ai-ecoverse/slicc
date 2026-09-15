@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { flagString, type GitParsedFlags } from '../../src/git/commands/shared.js';
+import {
+  firstUnknownGitFlag,
+  flagString,
+  GIT_FLAG_SPECS,
+  type GitParsedFlags,
+} from '../../src/git/commands/shared.js';
 
 describe('flagString', () => {
   it('returns undefined for a missing flag', () => {
@@ -25,5 +30,28 @@ describe('flagString', () => {
 
   it('treats an empty array element as undefined', () => {
     expect(flagString({ message: [''] }, 'message')).toBeUndefined();
+  });
+});
+
+describe('firstUnknownGitFlag', () => {
+  it('returns undefined when every flag is in the spec', () => {
+    expect(firstUnknownGitFlag(['-q', 'origin', 'main'], GIT_FLAG_SPECS.fetch)).toBeUndefined();
+    expect(firstUnknownGitFlag(['--name-status', 'a', 'b'], GIT_FLAG_SPECS.diff)).toBeUndefined();
+  });
+
+  it('names an unknown short switch and an unknown long option', () => {
+    expect(firstUnknownGitFlag(['-z', 'origin'], GIT_FLAG_SPECS.fetch)).toBe('z');
+    expect(firstUnknownGitFlag(['--bogus', 'origin'], GIT_FLAG_SPECS.clone)).toBe('bogus');
+  });
+
+  it('does not treat a pathspec after -- as a flag', () => {
+    expect(
+      firstUnknownGitFlag(['--name-only', '--', '--not-a-flag'], GIT_FLAG_SPECS.diff)
+    ).toBeUndefined();
+  });
+
+  it('treats characters after a known short value flag as its value', () => {
+    expect(firstUnknownGitFlag(['-bmain', 'url', 'dir'], GIT_FLAG_SPECS.clone)).toBeUndefined();
+    expect(firstUnknownGitFlag(['-Xours', 'feature'], GIT_FLAG_SPECS.merge)).toBeUndefined();
   });
 });

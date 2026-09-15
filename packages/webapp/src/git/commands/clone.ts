@@ -4,7 +4,13 @@ import * as git from 'isomorphic-git';
 import { joinPath, normalizePath } from '../../fs/path-utils.js';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { expandGitError, flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
+import {
+  expandGitError,
+  flagString,
+  GIT_FLAG_SPECS,
+  type GitParsedFlags,
+  rejectUnknownGitFlags,
+} from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function clone(
@@ -12,11 +18,15 @@ export async function clone(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
+  const unknown = rejectUnknownGitFlags(args, GIT_FLAG_SPECS.clone);
+  if (unknown) return unknown;
+
   // Parse flags first so the url/dir come from positionals — leading flags like
   // `clone --branch X --single-branch <url> <dir>` must round-trip (not treat
   // `--branch` as the URL). Mirrors fetch.ts's positional handling (#1033-3).
   const { flags: rawFlags, positionals } = parseArgs(args, GIT_FLAG_SPECS.clone);
   const flags = rawFlags as GitParsedFlags;
+  const quiet = flags.quiet === true;
 
   if (positionals.length === 0) {
     return {
@@ -40,10 +50,10 @@ export async function clone(
   const branch = flagString(flags, 'branch');
   const singleBranch = flags['single-branch'] !== false;
 
-  let output = `Cloning into '${dir}'...\n`;
+  let output = quiet ? '' : `Cloning into '${dir}'...\n`;
 
   const local = localCloneSource(url, cwd);
-  if (local) return cloneLocal(ctx, local, targetDir, url, dir, output, branch);
+  if (local) return cloneLocal(ctx, local, targetDir, url, dir, output, branch, quiet);
 
   try {
     // The object/pack cache is instance-wide since #2710, so the objects a
@@ -61,11 +71,13 @@ export async function clone(
       noCheckout: false, // Let clone handle checkout
       onAuth: ctx.getOnAuth(),
       onAuthFailure: ctx.getOnAuthFailure(),
-      onProgress: (event) => {
-        if (event.phase === 'Receiving objects') {
-          output += `Receiving objects: ${event.loaded}/${event.total}\n`;
-        }
-      },
+      onProgress: quiet
+        ? undefined
+        : (event) => {
+            if (event.phase === 'Receiving objects') {
+              output += `Receiving objects: ${event.loaded}/${event.total}\n`;
+            }
+          },
     });
   } catch (err: unknown) {
     // #1033-1: surface the real target dir, never the literal `<path>`
@@ -80,18 +92,19 @@ export async function clone(
   // on the memory backend. See "Root cause: git symlink/binary corruption".
   await ctx.fs.flush();
 
-  // List files that were checked out
-  try {
-    const files = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: targetDir });
-    if (files.length > 0) {
-      output += `Checked out ${files.length} files.\n`;
+  if (!quiet) {
+    try {
+      const files = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: targetDir });
+      if (files.length > 0) {
+        output += `Checked out ${files.length} files.\n`;
+      }
+    } catch {
+      // Ignore errors listing files
     }
-  } catch {
-    // Ignore errors listing files
   }
 
   return {
-    stdout: output + 'done.\n',
+    stdout: quiet ? '' : `${output}done.\n`,
     stderr: '',
     exitCode: 0,
   };
@@ -117,7 +130,8 @@ async function cloneLocal(
   sourceUrl: string,
   displayDir: string,
   output: string,
-  requestedBranch?: string
+  requestedBranch?: string,
+  quiet = false
 ): Promise<GitCommandResult> {
   if (targetDir === sourceDir || targetDir.startsWith(`${sourceDir}/`)) {
     return formatCloneError(new Error('destination is inside the source repository'), targetDir);
@@ -155,9 +169,11 @@ async function cloneLocal(
       force: true,
     });
     await ctx.fs.flush();
-    const files = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: targetDir });
-    if (files.length > 0) output += `Checked out ${files.length} files.\n`;
-    return { stdout: `${output}done.\n`, stderr: '', exitCode: 0 };
+    if (!quiet) {
+      const files = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: targetDir });
+      if (files.length > 0) output += `Checked out ${files.length} files.\n`;
+    }
+    return { stdout: quiet ? '' : `${output}done.\n`, stderr: '', exitCode: 0 };
   } catch (err) {
     return formatCloneError(err, targetDir, sourceUrl);
   }
