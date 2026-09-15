@@ -1,12 +1,14 @@
 /**
  * VirtualFS adapter for just-bash's IFileSystem interface.
  *
- * Wraps our VirtualFS (OPFS/IndexedDB backed) so that just-bash
+ * Wraps our VirtualFS (ZenFS/OPFS backed) so that just-bash
  * can use it as its filesystem backend.
  */
 
+import { Buffer } from 'buffer';
 import type {
   BufferEncoding,
+  ByteString,
   CpOptions,
   FileContent,
   FsStat,
@@ -49,23 +51,23 @@ interface DirentEntry {
   isSymbolicLink: boolean;
 }
 
-/**
- * Decode a file's bytes into the string just-bash's `readFile` contract
- * returns. UTF-8 first — valid text files decode cleanly. Binary files (PNG,
- * JPEG, …) contain invalid UTF-8 sequences; fall back to latin1, which maps
- * each byte to a char and so preserves every value.
- */
-function decodeReadBytes(bytes: Uint8Array): string {
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    // Don't use TextDecoder('iso-8859-1') — browsers treat it as windows-1252
-    // per WHATWG spec, remapping bytes 0x80-0x9F to different codepoints.
-    // String.fromCharCode maps each byte directly to its Unicode codepoint.
-    const chars = new Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
-    return chars.join('');
+function fileEncoding(options?: ReadFileOptions | BufferEncoding): BufferEncoding {
+  return (typeof options === 'string' ? options : options?.encoding) ?? 'utf8';
+}
+
+function encodeWriteContent(
+  content: FileContent,
+  options?: WriteFileOptions | BufferEncoding
+): Uint8Array {
+  if (typeof content !== 'string') return content;
+  const encoding = fileEncoding(options);
+  // A binary response cache may save decoding, but must never override a
+  // caller's text encoding merely because its string matches a download.
+  if (encoding === 'binary' || encoding === 'latin1') {
+    const cached = consumeCachedBinary(content);
+    if (cached) return cached;
   }
+  return Buffer.from(content, encoding);
 }
 
 /**
@@ -352,11 +354,12 @@ export class VfsAdapter implements IFileSystem {
       const normalized = normalizePath(path);
       const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
       const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
-      const text = decodeReadBytes(bytes);
-      // Which of the two decodings ran is not recoverable from the string, and
-      // a `curl -d @file` body has to be sent as the bytes on disk rather than
-      // a re-encoding of the string (see request-body-provenance.ts).
-      parkReadBytes(text, bytes);
+      const encoding = fileEncoding(options);
+      const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(encoding);
+      // curl's string-typed request body still needs the original bytes when
+      // UTF-8 decoding substituted invalid sequences. Encoded representations
+      // (hex/base64) are intentional text and must not acquire that provenance.
+      if (encoding !== 'hex' && encoding !== 'base64') parkReadBytes(text, bytes);
       return text;
     });
   }
@@ -368,6 +371,13 @@ export class VfsAdapter implements IFileSystem {
       if (content instanceof Uint8Array) return content;
       return new TextEncoder().encode(content as string);
     });
+  }
+
+  async readFileBytes(path: string): Promise<ByteString> {
+    const bytes = await this.readFileBuffer(path);
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+      'latin1'
+    ) as unknown as ByteString;
   }
 
   /**
@@ -392,52 +402,19 @@ export class VfsAdapter implements IFileSystem {
   async writeFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions | BufferEncoding
+    options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     this.dropListingStats();
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      if (typeof content === 'string') {
-        // Check binary cache first — createProxiedFetch stores original bytes
-        // here for binary responses so we can bypass string encoding entirely.
-        const cachedBytes = consumeCachedBinary(content);
-        if (cachedBytes) {
-          await this.vfs.writeFile(normalized, cachedBytes);
-          return;
-        }
-        // Detect whether the string contains characters above U+00FF.
-        // If so, it's definitely Unicode text (from resp.text()) — use UTF-8 encoding.
-        // If all chars are ≤ 0xFF, it may be latin1-encoded binary data (from curl
-        // fetching images/archives) — use charCodeAt to preserve raw bytes.
-        // ASCII text (all chars ≤ 0x7F) is identical in both encodings.
-        let hasHighCodepoints = false;
-        for (let i = 0; i < content.length; i++) {
-          if (content.charCodeAt(i) > 0xff) {
-            hasHighCodepoints = true;
-            break;
-          }
-        }
-        if (hasHighCodepoints) {
-          // Unicode text — encode as proper UTF-8
-          await this.vfs.writeFile(normalized, new TextEncoder().encode(content));
-        } else {
-          // ASCII or latin1-encoded binary — charCodeAt preserves byte values
-          const bytes = new Uint8Array(content.length);
-          for (let i = 0; i < content.length; i++) {
-            bytes[i] = content.charCodeAt(i);
-          }
-          await this.vfs.writeFile(normalized, bytes);
-        }
-      } else {
-        await this.vfs.writeFile(normalized, content);
-      }
+      await this.vfs.writeFile(normalized, encodeWriteContent(content, options));
     });
   }
 
   async appendFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions | BufferEncoding
+    options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     this.dropListingStats();
     return this.trusted(async () => {
@@ -473,15 +450,7 @@ export class VfsAdapter implements IFileSystem {
         }
       }
       // Convert new content to bytes
-      let newBytes: Uint8Array;
-      if (typeof content === 'string') {
-        newBytes = new Uint8Array(content.length);
-        for (let i = 0; i < content.length; i++) {
-          newBytes[i] = content.charCodeAt(i) & 0xff;
-        }
-      } else {
-        newBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
-      }
+      const newBytes = encodeWriteContent(content, options);
       // Concatenate and write
       const combined = new Uint8Array(existingBytes.length + newBytes.length);
       combined.set(existingBytes);

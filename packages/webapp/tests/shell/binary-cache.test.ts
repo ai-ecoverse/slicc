@@ -124,12 +124,12 @@ describe('binary-cache round-trip through readResponseBody + writeFile', () => {
     // writeFile receives the latin1 body string and recovers exact bytes via
     // the string cache.
     const latin1 = latin1FromBytes(bytes);
-    await adapter.writeFile('/no-url.bin', latin1);
+    await adapter.writeFile('/no-url.bin', latin1, 'binary');
     const written = (await vfs.readFile('/no-url.bin', { encoding: 'binary' })) as Uint8Array;
     expect(Array.from(written)).toEqual(Array.from(bytes));
   });
 
-  it('URL path: writeFile falls back to latin1 charCodeAt, byte-exact', async () => {
+  it('URL path: explicit binary write remains byte-exact without a string cache', async () => {
     const bytes = allByteValues();
     const resp = new Response(bytes.buffer, {
       headers: { 'content-type': 'application/octet-stream' },
@@ -143,8 +143,8 @@ describe('binary-cache round-trip through readResponseBody + writeFile', () => {
     // String cache miss proves the URL path skipped it.
     expect(consumeCachedBinary(latin1)).toBeNull();
 
-    // writeFile still recovers exact bytes via its charCodeAt latin1 fallback.
-    await adapter.writeFile('/url.bin', latin1);
+    // Explicit binary encoding recovers the bytes without a cache hit.
+    await adapter.writeFile('/url.bin', latin1, 'binary');
     const written = (await vfs.readFile('/url.bin', { encoding: 'binary' })) as Uint8Array;
     expect(Array.from(written)).toEqual(Array.from(bytes));
   });

@@ -9,8 +9,8 @@ Bound external calls and surface errors. Cap preload copies globally; cancel que
 
 ## 2. Cross-runtime parity
 
-Shared behavior needs peer updates or explicit exclusion. Check Node ↔ Swift (endpoints,
-signing, DA `origin` allow-list / `aem://` #2811), browser ↔ extension (mounts, VFS, secrets).
+Check Node ↔ Swift endpoints/signing and browser ↔ extension mounts/VFS/secrets.
+FS adapters must honor encodings; test Unicode and binary pipelines without byte guessing.
 
 ## 3. UI state preservation
 
