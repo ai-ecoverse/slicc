@@ -274,7 +274,7 @@ export const BASH_ICONS: Readonly<Record<string, string>> = {
   sqlite3: 'database',
   serve: 'server',
   tsc: 'braces',
-  test: 'flask-conical',
+  tst: 'flask-conical',
   biome: 'paintbrush',
   esbuild: 'zap',
   webhook: 'webhook',

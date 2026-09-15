@@ -134,7 +134,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'python3',
   'sqlite3',
   'tsc',
-  'test',
+  'tst',
   'esbuild',
   'biome',
   'skill',
@@ -248,16 +248,16 @@ describe('commands command', () => {
     expect(lineAfterCategory(result.stdout, 'Languages')?.trim()).toBe('node, jsh');
   });
 
-  it('groups tsc/test/esbuild/biome under Build tools', async () => {
+  it('groups tsc/tst/esbuild/biome under Build tools', async () => {
     const cmd = createCommandsCommand();
-    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'test', 'esbuild', 'biome']));
+    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'tst', 'esbuild', 'biome']));
     expect(result.exitCode).toBe(0);
     const lines = result.stdout.split('\n');
     const idx = lines.findIndex((l) => l.includes('Build tools:'));
     expect(idx).toBeGreaterThan(-1);
     const listing = (lines[idx + 1] ?? '').trim();
     expect(listing).toContain('tsc');
-    expect(listing).toContain('test');
+    expect(listing).toContain('tst');
     expect(listing).toContain('esbuild');
     expect(listing).toContain('biome');
   });

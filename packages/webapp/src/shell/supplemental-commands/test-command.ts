@@ -1,9 +1,13 @@
 /**
- * `test` shell command. Discovers `*.test.{js,ts}` files via a glob
+ * `tst` shell command. Discovers `*.test.{js,ts}` files via a glob
  * (default `**\/*.test.{js,ts}`), TS-transpiles each through the
  * `getTypeScript()` singleton shared with `tsc`, then runs every
  * file in its own isolated realm via `executeJsCode` — same path
  * as `node`, so SIGKILL and per-file isolation come for free.
+ *
+ * Named `tst` (not `test`) because just-bash's POSIX `test` / `[`
+ * builtin is consulted first and would silently swallow this
+ * command (#3122). Keep POSIX `test` as the builtin.
  *
  * The runner is `tst` (https://github.com/dy/tst — 0 deps, ESM
  * native). The browser-side realm can't `import('tst')` directly
@@ -28,10 +32,13 @@ import { executeJsCode } from '../jsh-executor.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
 import { createIpkContextFromCtx } from './tsc-command.js';
 
-const HELP_TEXT = `test - run *.test.{js,ts} files with the bundled tst runner
+/** Shell name. Must not collide with POSIX `test` / `[` (just-bash builtins). */
+export const TST_COMMAND_NAME = 'tst';
+
+const HELP_TEXT = `tst - run *.test.{js,ts} files with the bundled tst runner
 
 Usage:
-  test [options] [glob...]
+  tst [options] [glob...]
 
 Options:
   --reporter=<name>     tap (default) | spec
@@ -64,7 +71,7 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
     if (arg === '--reporter') {
       const v = args[i + 1];
       if (v !== 'tap' && v !== 'spec') {
-        throw new Error('test: --reporter must be tap or spec');
+        throw new Error('tst: --reporter must be tap or spec');
       }
       reporter = v;
       i += 1;
@@ -73,13 +80,13 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
     if (arg.startsWith('--reporter=')) {
       const v = arg.slice('--reporter='.length);
       if (v !== 'tap' && v !== 'spec') {
-        throw new Error('test: --reporter must be tap or spec');
+        throw new Error('tst: --reporter must be tap or spec');
       }
       reporter = v;
       continue;
     }
     if (arg.startsWith('-')) {
-      throw new Error(`test: unknown option: ${arg}`);
+      throw new Error(`tst: unknown option: ${arg}`);
     }
     globs.push(arg);
   }
@@ -136,7 +143,7 @@ export function globToRegExp(pattern: string): RegExp {
 /**
  * Recursively collect files under `cwd` matching any of the given
  * (brace-expanded) glob patterns. Skips `node_modules` and dot-dirs
- * — vitest's default scan does the same, and the test command's
+ * — vitest's default scan does the same, and the tst command's
  * realm path can't usefully introspect those anyway.
  */
 export async function resolveTestFiles(
@@ -219,7 +226,7 @@ async function prepareTstHarness(ts: TypeScriptModule): Promise<string> {
     .replace(/\bimport\.meta\b/g, '({url:""})')
     .replace(
       /await\s+import\(['"](?:worker_threads|fs|path)['"]\)/g,
-      'await Promise.reject(new Error("test: fork mode is not supported in the realm"))'
+      'await Promise.reject(new Error("tst: fork mode is not supported in the realm"))'
     );
   // tst branches on `isNode = typeof process !== 'undefined' && process.versions?.node`
   // to pick between Node-style console output (TAP / pretty) and the
@@ -408,14 +415,14 @@ ${harness}
 const __tstReq = (id) => {
   if (id === "tst") return __tst_module_exports;
   if (id === "tst/assert") return __tst_assert_exports;
-  throw new Error("test: cannot require " + id);
+  throw new Error("tst: cannot require " + id);
 };
 const __localFactories = ${factories};
 const __localCache = Object.create(null);
 const __localReq = (absPath) => {
   if (absPath in __localCache) return __localCache[absPath].exports;
   const factory = __localFactories[absPath];
-  if (!factory) throw new Error("test: local module not bundled: " + absPath);
+  if (!factory) throw new Error("tst: local module not bundled: " + absPath);
   const module = { exports: {} };
   __localCache[absPath] = module;
   factory(module, module.exports, __localReq);
@@ -497,7 +504,7 @@ async function prepareTestRun(
     return {
       done: {
         stdout: '',
-        stderr: `test: no test files matched ${parsed.globs.join(' ')}\n`,
+        stderr: `tst: no test files matched ${parsed.globs.join(' ')}\n`,
         exitCode: 1,
       },
     };
@@ -513,7 +520,7 @@ async function prepareTestRun(
     return {
       done: {
         stdout: '',
-        stderr: `test: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `tst: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       },
     };
@@ -562,7 +569,7 @@ async function runOneTestFile(
   } catch (err) {
     return {
       stdout: '',
-      stderr: `test: ${file}: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `tst: ${file}: ${err instanceof Error ? err.message : String(err)}\n`,
       failed: true,
     };
   }
@@ -572,7 +579,7 @@ async function runOneTestFile(
   } catch (err) {
     return {
       stdout: '',
-      stderr: `test: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `tst: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`,
       failed: true,
     };
   }
@@ -589,7 +596,7 @@ async function runOneTestFile(
   } catch (err) {
     return {
       stdout: '',
-      stderr: `test: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `tst: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`,
       failed: true,
     };
   }
@@ -612,7 +619,7 @@ async function runOneTestFile(
 }
 
 export function createTestCommand(): Command {
-  return defineCommand('test', async (args, ctx) => {
+  return defineCommand(TST_COMMAND_NAME, async (args, ctx) => {
     const prep = await prepareTestRun(args, ctx);
     if ('done' in prep) return prep.done;
     const prefixWithFilename = prep.files.length > 1;
