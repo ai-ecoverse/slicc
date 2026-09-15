@@ -6,6 +6,7 @@
  */
 
 import type { ArgSpec } from '../../shell/arg-parser.js';
+import type { GitCommandResult } from './types.js';
 
 /**
  * Single source of truth for per-subcommand flag parsing. Each entry declares
@@ -31,8 +32,8 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   init: { string: ['initial-branch'], alias: { b: 'initial-branch' } },
   clone: {
     string: ['branch', 'depth', 'origin', 'upload-pack'],
-    boolean: ['single-branch'],
-    alias: { b: 'branch', o: 'origin' },
+    boolean: ['single-branch', 'quiet'],
+    alias: { b: 'branch', o: 'origin', q: 'quiet' },
     default: { 'single-branch': true },
   },
   commit: {
@@ -75,14 +76,17 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     string: ['format', 'diff-filter', 'unified'],
     // `no-index` is listed for help detection; mri strips any `--no-<x>` to
     // `{ x: false }` on its own, so `diff()` reads BOTH spellings.
-    boolean: ['staged', 'cached', 'name-only', 'stat', 'no-index'],
+    boolean: ['staged', 'cached', 'name-only', 'name-status', 'stat', 'no-index'],
     alias: { pretty: 'format', U: 'unified' },
     '--': true,
   },
   show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },
   merge: {
     string: ['message', 'strategy', 'strategy-option'],
-    alias: { m: 'message', s: 'strategy', X: 'strategy-option' },
+    // `ff` / `edit` exist so `--no-ff` / `--no-edit` parse as `{ ff: false }` /
+    // `{ edit: false }` (mri's `--no-<bool>` rewrite) instead of unknown flags.
+    boolean: ['ff', 'ff-only', 'abort', 'edit', 'quiet'],
+    alias: { m: 'message', s: 'strategy', X: 'strategy-option', q: 'quiet' },
   },
   'cherry-pick': {
     boolean: ['no-commit', 'x'],
@@ -109,12 +113,13 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   },
   fetch: {
     string: ['depth', 'o', 'refmap', 'upload-pack', 'negotiation-tip', 'server-option'],
-    boolean: ['prune'],
-    alias: { p: 'prune' },
+    boolean: ['prune', 'quiet'],
+    alias: { p: 'prune', q: 'quiet' },
   },
   pull: {
     string: ['depth', 's', 'strategy', 'X', 'strategy-option', 'upload-pack'],
-    boolean: ['ff-only', 'ff'],
+    boolean: ['ff-only', 'ff', 'quiet'],
+    alias: { q: 'quiet' },
   },
   push: {
     string: ['o', 'push-option', 'receive-pack', 'repo', 'exec', 'signed', '4', '6'],
@@ -134,6 +139,82 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     alias: { h: 'heads', t: 'tags' },
   },
 };
+
+const GIT_FLAG_RE = /^(--?)([^=]+)(=.*)?$/;
+
+/** Names the spec recognizes, including aliases and `--no-<bool>` forms. */
+function gitFlagNames(spec: ArgSpec): Set<string> {
+  const names = new Set<string>(spec.string ?? []);
+  for (const b of spec.boolean ?? []) {
+    names.add(b);
+    names.add(`no-${b}`);
+  }
+  for (const [key, val] of Object.entries(spec.alias ?? {})) {
+    names.add(key);
+    for (const n of Array.isArray(val) ? val : [val]) names.add(n);
+  }
+  return names;
+}
+
+/** Value-taking flag names, expanding alias groups the same way `parseArgs` does. */
+function gitValueFlagNames(spec: ArgSpec): Set<string> {
+  const names = new Set<string>(spec.string ?? []);
+  for (const [key, val] of Object.entries(spec.alias ?? {})) {
+    const group = [key, ...(Array.isArray(val) ? val : [val])];
+    if (group.some((n) => names.has(n))) {
+      for (const n of group) names.add(n);
+    }
+  }
+  return names;
+}
+
+/**
+ * First unrecognized dash-token in `args` (before a `--` terminator). Clustered
+ * shorts report the first unknown letter. Used so an unknown flag is named
+ * instead of silently stealing a positional (#3121).
+ */
+export function firstUnknownGitFlag(args: readonly string[], spec: ArgSpec): string | undefined {
+  const known = gitFlagNames(spec);
+  const valueNames = gitValueFlagNames(spec);
+  const terminator = args.indexOf('--');
+  const head = terminator === -1 ? args : args.slice(0, terminator);
+  for (let i = 0; i < head.length; i++) {
+    const token = head[i];
+    if (!token.startsWith('-') || token === '-') continue;
+    const m = GIT_FLAG_RE.exec(token);
+    if (!m) continue;
+    const name = m[2];
+    if (m[1] === '-' && name.length > 1 && !m[3] && !known.has(name)) {
+      for (const ch of name) {
+        if (!known.has(ch)) return ch;
+      }
+      continue;
+    }
+    if (!known.has(name)) return name;
+    if (!m[3] && valueNames.has(name) && i + 1 < head.length) i++;
+  }
+  return undefined;
+}
+
+/** `error: unknown switch/option \`foo'\` with git's exit 129. */
+export function unknownGitFlagError(flag: string): GitCommandResult {
+  const kind = flag.length === 1 ? 'switch' : 'option';
+  return {
+    stdout: '',
+    stderr: `error: unknown ${kind} \`${flag}\`\n`,
+    exitCode: 129,
+  };
+}
+
+/** Reject `args` against `spec` when an unknown flag is present. */
+export function rejectUnknownGitFlags(
+  args: readonly string[],
+  spec: ArgSpec | undefined
+): GitCommandResult | undefined {
+  if (!spec) return undefined;
+  const unknown = firstUnknownGitFlag(args, spec);
+  return unknown ? unknownGitFlagError(unknown) : undefined;
+}
 
 /** Scalar value mri may store for a parsed CLI flag. */
 export type GitFlagScalar = string | number | boolean;

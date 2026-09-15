@@ -124,6 +124,29 @@ const FLAG_RE = /^(--?)([^=]+)(=.*)?$/;
  * (e.g. `git --bare status` → `--bare` stays the first positional) instead of
  * letting `mri` swallow it as an unknown boolean.
  */
+/**
+ * Flag names in `seg` that the spec does not declare. Clustered shorts (`-qz`)
+ * contribute each unknown letter. These are fed to mri as booleans so an
+ * unknown `-q` cannot swallow the following positional.
+ */
+function unknownBooleanNames(seg: readonly string[], knownNames: Set<string>): string[] {
+  const extra: string[] = [];
+  for (const token of seg) {
+    const m = FLAG_RE.exec(token);
+    if (!m || m[3]) continue;
+    const name = m[2];
+    if (knownNames.has(name)) continue;
+    if (m[1] === '-' && name.length > 1) {
+      for (const ch of name) {
+        if (!knownNames.has(ch)) extra.push(ch);
+      }
+    } else {
+      extra.push(name);
+    }
+  }
+  return extra;
+}
+
 function recognizedNames(spec: ArgSpec): Set<string> {
   const names = new Set<string>(spec.string ?? []);
   for (const b of spec.boolean ?? []) {
@@ -195,18 +218,26 @@ export function parseArgs(argv: readonly string[], spec: ArgSpec = {}): ParsedAr
   }
 
   const valueNames = valueTakingNames(spec);
+  const knownNames = recognizedNames(spec);
 
   let flagSeg: readonly string[] = head;
   let tailPositionals: string[] = [];
   if (spec.stopEarly) {
-    const boundary = stopEarlyBoundary(head, valueNames, recognizedNames(spec));
+    const boundary = stopEarlyBoundary(head, valueNames, knownNames);
     flagSeg = head.slice(0, boundary);
     tailPositionals = head.slice(boundary);
   }
 
+  // mri treats an unknown flag as a string and consumes the next token as its
+  // value (`-q origin` → `{ q: 'origin' }`). Unknown flags must stay booleans
+  // so they cannot steal positionals (#3120 `--name-status`, #3121 `-q`).
+  const extraBools = unknownBooleanNames(flagSeg, knownNames);
+  const boolean =
+    spec.boolean || extraBools.length > 0 ? [...(spec.boolean ?? []), ...extraBools] : undefined;
+
   const parsed = mri<ParsedFlags>(shadowValues(flagSeg, valueNames), {
     string: spec.string ? [...spec.string] : undefined,
-    boolean: spec.boolean ? [...spec.boolean] : undefined,
+    boolean,
     alias: spec.alias as mri.Options['alias'],
     default: spec.default as mri.Options['default'],
   });

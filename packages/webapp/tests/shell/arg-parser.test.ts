@@ -129,6 +129,22 @@ describe('parseArgs', () => {
     });
   });
 
+  it('does not let an unknown flag consume the next positional', () => {
+    const spec = {
+      string: ['depth'],
+      boolean: ['prune'],
+    };
+    const r = parseArgs(['-q', 'origin', 'main'], spec);
+    expect(r.flags.q).toBe(true);
+    expect(r.positionals).toEqual(['origin', 'main']);
+
+    const nameStatus = parseArgs(['--name-status', 'aaa', 'bbb'], {
+      boolean: ['name-only', 'stat'],
+    });
+    expect(nameStatus.flags['name-status']).toBe(true);
+    expect(nameStatus.positionals).toEqual(['aaa', 'bbb']);
+  });
+
   it('returns an empty result for empty input', () => {
     const r = parseArgs([]);
     expect(r.positionals).toEqual([]);

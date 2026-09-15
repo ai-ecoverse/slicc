@@ -3,7 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { GIT_FLAG_SPECS } from './shared.js';
+import { GIT_FLAG_SPECS, rejectUnknownGitFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function pull(
@@ -11,15 +11,19 @@ export async function pull(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
+  const unknown = rejectUnknownGitFlags(args, GIT_FLAG_SPECS.pull);
+  if (unknown) return unknown;
+
   // Same positional-ref bug class as fetch: skip flag values when picking
   // remote/ref out of `pull --ff-only origin main`.
-  const { positionals } = parseArgs(args, GIT_FLAG_SPECS.pull);
+  const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.pull);
   const remote = positionals[0] ?? 'origin';
   const ref = positionals[1];
-  const ffOnly = args.includes('--ff-only');
-  const noFf = args.includes('--no-ff');
+  const ffOnly = flags['ff-only'] === true || args.includes('--ff-only');
+  const noFf = flags.ff === false || args.includes('--no-ff');
+  const quiet = flags.quiet === true;
 
-  let output = `Pulling from ${remote}...\n`;
+  let output = quiet ? '' : `Pulling from ${remote}...\n`;
 
   await git.pull({
     fs: ctx.lfs,
@@ -34,11 +38,13 @@ export async function pull(
     fastForward: !noFf,
     onAuth: ctx.getOnAuth(),
     onAuthFailure: ctx.getOnAuthFailure(),
-    onProgress: (event) => {
-      output += `${event.phase}: ${event.loaded}/${event.total}\n`;
-    },
+    onProgress: quiet
+      ? undefined
+      : (event) => {
+          output += `${event.phase}: ${event.loaded}/${event.total}\n`;
+        },
   });
 
-  output += 'Already up to date.\n';
+  if (!quiet) output += 'Already up to date.\n';
   return { stdout: output, stderr: '', exitCode: 0 };
 }
