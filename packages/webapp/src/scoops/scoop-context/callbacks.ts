@@ -117,7 +117,7 @@ export interface ScoopContextCallbacks {
   /**
    * Cone-only: resolve a pending sudo request by id. On `'always'` the
    * orchestrator additionally persists a NOPASSWD rule into the requesting
-   * scoop's `/scoops/<folder>/etc/sudoers` via the trusted manager sink.
+   * scoop's `/etc/sudoers.d/scoop-<folder>` via the trusted manager sink.
    */
   onSudoResolve?: (
     id: string,

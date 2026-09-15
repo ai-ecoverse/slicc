@@ -388,7 +388,7 @@ parent's own root, so extra-cone children still read that cone).
 directory layout. Every consumer reads it — `ScoopContext` (dirs, cwd, memory
 file, system prompt), `ConeMemoryStore` / `appendConeMemory`, `scoop_scoop`'s
 and the `agent` command's path defaults, and through those the generated
-per-scoop sudoers.
+per-scoop sandbox grants.
 
 | Unit                         | Workspace                    | Memory                       | Scratch (`workspaceFor`) | `$TMPDIR` (`tmpDirFor`) |
 | ---------------------------- | ---------------------------- | ---------------------------- | ------------------------ | ----------------------- |
@@ -397,7 +397,8 @@ per-scoop sudoers.
 | scoop                        | `/scoops/<folder>/workspace` | `/scoops/<folder>/CLAUDE.md` | `/scoops/<folder>`       | `/tmp/<cone>/<folder>`  |
 
 `workspaceFor().scratch` is the unit's private _storage_ root (bash overflow,
-agent archives, the per-scoop sudoers). `tmpDirFor()` is the _shell-visible_
+agent archives). Policy is NOT stored there — a scoop's approved grants live in
+the cone-owned `/etc/sudoers.d/scoop-<folder>` drop-in, outside the sandbox. `tmpDirFor()` is the _shell-visible_
 `$TMPDIR` that `mktemp` resolves against. They are deliberately different
 questions and deliberately different answers.
 

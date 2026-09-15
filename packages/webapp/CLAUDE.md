@@ -89,6 +89,11 @@ Invariants a reviewer must catch; mechanism in the linked docs.
   `/etc/APPROVALS.md` always require approval (hardcoded in `matchPath`). `sudo/panel-responder.ts`
   captures native `confirm` at init; approval chrome mounts via `ui/wc/trusted-layer.ts`; `reason` is
   a FIELD on `deny`, not a `decision`.
+- **Policy is read from `/etc` ONLY** (`docs/approvals.md`): a sudoers-shaped path inside a scoop
+  sandbox (`/scoops/<f>/etc/sudoers`) is REFUSED, not prompted — an approver must never be offered
+  the chance to let a scoop author its own authority. Per-scoop "Always" grants live in
+  `/etc/sudoers.d/scoop-<folder>`; `doReload` filters `scoop-*` OUT of the global merge and
+  `getPolicyForScoop` loads it for its own scoop, so keep those two in sync.
 - **Layouts** (`docs/layouts.md`, behind `panel-layouts` flag): `panelize-shell.ts` RE-PARENTS
   `buildWcShellFrame`'s output — keep `WcShellRefs` valid; `setPanelVisible` adds an unplaced
   panel, never duplicates a placed one.

@@ -9,10 +9,19 @@
  *      (self-protection still applies even with no rules) and the approver
  *      agent's `/etc/APPROVALS.md` instructions.
  *   2. Loads + merges `/etc/sudoers` and every `/etc/sudoers.d/*` drop-in into
- *      a single live `SudoersPolicy`.
+ *      a single live `SudoersPolicy` — EXCEPT the `scoop-<folder>` drop-ins,
+ *      which are per-scoop policy and are loaded only for the scoop that owns
+ *      them (see {@link SudoManager.getPolicyForScoop}). Mixing them into the
+ *      global policy would silently widen every other unit's authority.
  *   3. Re-reads that policy whenever those files change (after an approved
  *      write, a manual edit, or an "Always" NOPASSWD append) so config takes
  *      effect with no restart.
+ *
+ * Policy is read from `/etc` and nowhere else. A scoop's grants used to live at
+ * `/scoops/<folder>/etc/sudoers` — inside the very sandbox they governed, which
+ * meant one approved write let a scoop author its own authority. That path is no
+ * longer honoured (writes to it are refused outright by `matchPath`); a file
+ * found there is discarded fail-closed (no trustworthy provenance) and removed.
  *
  * `getPolicy()` returns the live snapshot — SudoFS and the command guard call
  * it per-op, so a reload is visible immediately. `getBroker()` hands out the
@@ -27,6 +36,7 @@ import {
   type Directive,
   directiveForKind,
   emptyPolicy,
+  legacyScoopSudoersPath,
   matchExport,
   mergePolicies,
   parseSudoers,
@@ -34,7 +44,8 @@ import {
   SUDOERS_FILE,
   type SudoersPolicy,
   sanitizeGrantPattern,
-  scoopSudoersPath,
+  scoopFolderFromGrantsName,
+  scoopGrantsPath,
 } from '../base/sudoers.js';
 import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -73,17 +84,15 @@ function isSudoersPath(path: string): boolean {
   return path === SUDOERS_FILE || path === SUDOERS_D_DIR || path.startsWith(`${SUDOERS_D_DIR}/`);
 }
 
-/** Matches a per-scoop sudoers path; group 1 captures the scoop folder. */
-const SCOOP_SUDOERS_PATH_RE = /^\/scoops\/([^/]+)\/etc\/sudoers$/;
-
-/** Whether `path` is a per-scoop sudoers file (triggers per-scoop reload). */
-function isScoopSudoersPath(path: string): boolean {
-  return SCOOP_SUDOERS_PATH_RE.test(path);
-}
-
-/** Extract the scoop folder from a per-scoop sudoers path, or `null`. */
-function scoopFolderFromPath(path: string): string | null {
-  return SCOOP_SUDOERS_PATH_RE.exec(path)?.[1] ?? null;
+/**
+ * Scoop folder owning the `/etc/sudoers.d/scoop-<folder>` drop-in at `path`,
+ * or `null` for any other path. Drives the per-scoop reload leg of the `/etc`
+ * watcher and the drop-in filter in {@link SudoManager.doReload}.
+ */
+function scoopFolderFromGrantsPath(path: string): string | null {
+  if (!path.startsWith(`${SUDOERS_D_DIR}/`)) return null;
+  const name = path.slice(SUDOERS_D_DIR.length + 1);
+  return name.includes('/') ? null : scoopFolderFromGrantsName(name);
 }
 
 /** Strip a trailing slash (except for the root) so `/x/` + `/**` → `/x/**`. */
@@ -92,28 +101,16 @@ function trimTrailingSlash(s: string): string {
 }
 
 /**
- * First line of the LEGACY generated per-scoop sudoers format (pre-#2416).
- * Those files persisted the ScoopConfig sandbox rules to disk, mixed
- * indistinguishably with appended "Always" grants — which meant a stale file
- * from a previous scoop generation silently retained authority a narrower
- * replacement config had revoked. Files carrying this header are discarded on
- * {@link SudoManager.initScoopPolicy} (fail-closed: ambiguous rules are
- * dropped rather than retained; an "Always" grant re-prompts once).
- */
-const LEGACY_GENERATED_HEADER =
-  '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).';
-
-/**
- * Header for the current per-scoop sudoers format: the file holds ONLY
- * approved "Always" grants. Sandbox grants come from `ScoopConfig` and are
- * registered in memory ({@link SudoManager.registerScoopConfig}), never
- * persisted here — so replacing a scoop's config genuinely revokes the old
- * authority instead of unioning with it.
+ * Header for a per-scoop grants drop-in: the file holds ONLY approved "Always"
+ * grants. Sandbox grants come from `ScoopConfig` and are registered in memory
+ * ({@link SudoManager.registerScoopConfig}), never persisted here — so
+ * replacing a scoop's config genuinely revokes the old authority instead of
+ * unioning with it.
  */
 const SCOOP_SUDOERS_HEADER = [
-  '# Per-scoop sudoers — approved "Always" grants for this scoop.',
-  '# Sandbox grants come from ScoopConfig and are registered in memory, not here.',
-  '# Writes to this file always require approval (self-protected).',
+  '# Approved "Always" grants for one scoop. Loaded only for that scoop.',
+  '# Sandbox grants come from ScoopConfig, in memory — not here.',
+  '# Writes always require approval (self-protected).',
   '',
 ].join('\n');
 
@@ -196,7 +193,6 @@ export class SudoManager {
   private readonly onPolicyReload: (folder?: string) => void;
   private policy: SudoersPolicy = emptyPolicy();
   private unwatch: (() => void) | null = null;
-  private scoopUnwatch: (() => void) | null = null;
   private reloadChain: Promise<void> = Promise.resolve();
   /** Per-scoop drop-in policies keyed by scoop folder. */
   private scoopPolicies: Map<string, SudoersPolicy> = new Map();
@@ -283,8 +279,8 @@ export class SudoManager {
 
   /**
    * Effective policy for a scoop: {@link builtinScoopGrants} ∪ global
-   * `/etc/sudoers` (+ `/etc/sudoers.d/*`) ∪ that scoop's own
-   * `/scoops/<folder>/etc/sudoers`. The cone does not own a scoop folder and
+   * `/etc/sudoers` (+ non-scoop `/etc/sudoers.d/*`) ∪ that scoop's own
+   * `/etc/sudoers.d/scoop-<folder>`. The cone does not own a scoop folder and
    * should keep calling {@link getPolicy} directly — it is unrestricted, so
    * the built-in grants are a no-op for it.
    */
@@ -301,7 +297,7 @@ export class SudoManager {
    * Register a scoop's config-derived sandbox grants directly in memory
    * (#2416). Synchronous — no filesystem round-trip — so the grants are
    * effective before the scoop's first gated operation. This is what makes
-   * `ScoopConfig` authoritative: the on-disk `/scoops/<folder>/etc/sudoers`
+   * `ScoopConfig` authoritative: the on-disk `/etc/sudoers.d/scoop-<folder>`
    * file only ADDS persisted "Always" grants on top; a stale file (folder
    * reuse across scoop generations, restored sessions with changed config)
    * can no longer withhold a configured `writablePaths` entry and raise an
@@ -314,47 +310,32 @@ export class SudoManager {
 
   /**
    * Initialize a scoop's sudo policy: register the config-derived grants in
-   * memory (authoritative — replacing a config revokes the old authority) and
-   * load the on-disk `/scoops/<folder>/etc/sudoers`, which holds ONLY
-   * approved "Always" grants. A file in the legacy generated format (config
-   * rules persisted to disk, pre-#2416) is discarded and rewritten as an
-   * empty Always-only file — its config rules and appended grants are
-   * indistinguishable, and retaining them would let a stale broad sandbox
-   * survive a narrower replacement config. Hand-written files (no legacy
-   * header) are deliberate user policy and load as-is. Writes go through the
-   * raw VFS handle, so the self-protection invariant (which lives in the
-   * {@link createSudoFs} proxy) is not in play here.
+   * memory (authoritative — replacing a config revokes the old authority),
+   * discard any pre-#3106 in-sandbox sudoers file
+   * ({@link migrateLegacyScoopSudoers}), and load the on-disk
+   * `/etc/sudoers.d/scoop-<folder>`, which holds ONLY approved "Always"
+   * grants. Writes go through the raw VFS handle, so the self-protection
+   * invariant (which lives in the {@link createSudoFs} proxy) is not in play
+   * here.
    */
   async initScoopPolicy(folder: string, config?: ScoopConfig | null): Promise<void> {
     this.registerScoopConfig(folder, config);
-    const path = scoopSudoersPath(folder);
-    let existing: string | null = null;
-    try {
-      if (await this.fs.exists(path)) {
-        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
-        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      }
-    } catch (err) {
-      log.warn('Failed to read per-scoop sudoers during init; treating as absent', {
-        folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    if (existing !== null && existing.split('\n', 1)[0]?.trim() === LEGACY_GENERATED_HEADER) {
-      await this.fs.writeFile(path, SCOOP_SUDOERS_HEADER);
-      log.info('Discarded legacy generated per-scoop sudoers (ambiguous rules, fail-closed)', {
-        folder,
-        path,
-      });
+    // Probe with a cheap `exists()` and pull the cleanup in only on a hit:
+    // `sudo-manager` is boot-critical, so the discard belongs outside the kernel
+    // worker's eager first-load closure. New profiles never fetch that chunk.
+    const legacyPath = legacyScoopSudoersPath(folder);
+    if (await this.fs.exists(legacyPath).catch(() => false)) {
+      const { migrateLegacyScoopSudoers } = await import('./migrate-scoop-sudoers.js');
+      await migrateLegacyScoopSudoers(folder, { fs: this.fs });
     }
     await this.reloadScoopPolicy(folder);
   }
 
   /**
    * Append a single `NOPASSWD <directive> <pattern>` rule to a scoop's
-   * `/scoops/<folder>/etc/sudoers`, then reload the cached policy. Used by
-   * the cone-mediated `lick_confirm` flow with `always: true` to durably
-   * widen the requesting scoop's sandbox.
+   * `/etc/sudoers.d/scoop-<folder>` drop-in, then reload the cached policy.
+   * Used by the cone-mediated `lick_confirm` flow with `always: true` to
+   * durably widen the requesting scoop's sandbox.
    *
    * `kind` maps to the sudoers directive: `command → Cmnd`, `read → Read`,
    * `write → Write`. `pattern` is sanitized via {@link sanitizeGrantPattern}
@@ -364,8 +345,9 @@ export class SudoManager {
    *
    * The write goes through the raw VFS handle (this manager owns the
    * untrusted-realm gate), so it bypasses the self-protection invariant on
-   * `/scoops/<folder>/etc/sudoers` writes the same way {@link initScoopPolicy}
-   * does.
+   * `/etc/sudoers.d/*` writes the same way {@link initScoopPolicy} does. That
+   * trusted sink is now the ONLY way a per-scoop grant is ever written: the
+   * scoop itself can reach neither this file nor the old in-sandbox one.
    */
   async appendScoopRule(
     folder: string,
@@ -375,23 +357,19 @@ export class SudoManager {
     const safe = sanitizeGrantPattern(pattern);
     if (!safe) return null;
     const directive = kind === 'command' ? 'Cmnd' : kind === 'read' ? 'Read' : 'Write';
-    const path = scoopSudoersPath(folder);
-
-    let existing = '';
-    try {
-      if (await this.fs.exists(path)) {
-        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
-        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      }
-    } catch (err) {
-      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
+    const path = scoopGrantsPath(folder);
+    if (!path) {
+      log.warn('Unspellable scoop folder; not persisting', { folder });
+      return null;
     }
+
+    const existing = await this.readTextOrEmpty(path);
     // Idempotent (#2416): an "Always" approval for a rule that is already in
     // the file (e.g. a request that was pending while the same grant landed)
     // must not append a duplicate line.
     const line = `NOPASSWD ${directive} ${safe}`;
     if (existing.split('\n').some((l) => l.trim() === line)) {
-      log.info('Per-scoop sudoers rule already present; skipping duplicate append', {
+      log.info('Per-scoop grant already present; skipping duplicate append', {
         folder,
         kind,
         pattern: safe,
@@ -399,7 +377,7 @@ export class SudoManager {
       return safe;
     }
     try {
-      await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
+      await this.fs.mkdir(SUDOERS_D_DIR, { recursive: true });
     } catch {
       /* already exists */
     }
@@ -410,8 +388,20 @@ export class SudoManager {
       : SCOOP_SUDOERS_HEADER;
     await this.fs.writeFile(path, `${prefix}${line}\n`);
     await this.reloadScoopPolicy(folder);
-    log.info('Appended per-scoop sudoers rule', { folder, kind, pattern: safe });
+    log.info('Appended per-scoop grant', { folder, path, kind, pattern: safe });
     return safe;
+  }
+
+  /** Read `path` as text, or `''` when it is absent. Rethrows real FS errors. */
+  private async readTextOrEmpty(path: string): Promise<string> {
+    try {
+      if (!(await this.fs.exists(path))) return '';
+      const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
+      return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'ENOENT') return '';
+      throw err;
+    }
   }
 
   /**
@@ -453,7 +443,7 @@ export class SudoManager {
   }
 
   /**
-   * Force a re-read of `/scoops/<folder>/etc/sudoers` into the per-scoop
+   * Force a re-read of `/etc/sudoers.d/scoop-<folder>` into the per-scoop
    * policy cache. Idempotent and serialized through the per-scoop reload
    * chain. Called from `Orchestrator.createScoopTab` when the file already
    * exists on disk so any "Always" grants from a previous session are
@@ -469,11 +459,9 @@ export class SudoManager {
   dispose(): void {
     this.unwatch?.();
     this.unwatch = null;
-    this.scoopUnwatch?.();
-    this.scoopUnwatch = null;
   }
 
-  /** Re-read `/scoops/<folder>/etc/sudoers` into the per-scoop policy cache. */
+  /** Re-read `/etc/sudoers.d/scoop-<folder>` into the per-scoop policy cache. */
   private reloadScoopPolicy(folder: string): Promise<void> {
     const prev = this.scoopReloadChains.get(folder) ?? Promise.resolve();
     const next = prev.then(() => this.doReloadScoopPolicy(folder));
@@ -482,7 +470,12 @@ export class SudoManager {
   }
 
   private async doReloadScoopPolicy(folder: string): Promise<void> {
-    const path = scoopSudoersPath(folder);
+    const path = scoopGrantsPath(folder);
+    if (!path) {
+      this.scoopPolicies.delete(folder);
+      this.onPolicyReload(folder);
+      return;
+    }
     try {
       if (!(await this.fs.exists(path))) {
         this.scoopPolicies.delete(folder);
@@ -504,6 +497,11 @@ export class SudoManager {
       const entries = await this.fs.readDir(SUDOERS_D_DIR);
       const names = entries
         .filter((e) => e.type === 'file')
+        // `scoop-<folder>` drop-ins are PER-SCOOP policy, not global. They sit
+        // in `/etc/sudoers.d/` so a scoop cannot author them, but merging them
+        // here would hand one scoop's approved "Always" grant to every other
+        // unit — including the cone. `getPolicyForScoop` loads them instead.
+        .filter((e) => scoopFolderFromGrantsName(e.name) === null)
         .map((e) => e.name)
         .sort();
       for (const name of names) {
@@ -616,24 +614,42 @@ export class SudoManager {
     await this.reload();
   }
 
+  /**
+   * Watch `/etc` for policy changes. One subscription covers both legs now
+   * that per-scoop grants live in `/etc/sudoers.d/` too: a `scoop-<folder>`
+   * drop-in reloads only that scoop's cache, anything else reloads the global
+   * policy. A change to the grants directory itself (recursive `rm` / rename
+   * emits only the directory-root event) must also refresh every cached
+   * scoop drop-in — `doReload` deliberately excludes `scoop-*` files, so a
+   * global-only reload would leave deleted `NOPASSWD` grants active.
+   * Routing rather than always doing both keeps a busy scoop's grant appends
+   * from re-parsing every drop-in on the float.
+   */
   private startWatching(): void {
     if (!this.watcher) return;
-    if (!this.unwatch) {
-      this.unwatch = this.watcher.watch('/etc', isSudoersPath, () => {
-        void this.reload();
-      });
-    }
-    if (!this.scoopUnwatch) {
-      this.scoopUnwatch = this.watcher.watch('/scoops', isScoopSudoersPath, (events) => {
-        const folders = new Set<string>();
-        for (const ev of events) {
-          const folder = scoopFolderFromPath(ev.path);
-          if (folder) folders.add(folder);
+    if (this.unwatch) return;
+    this.unwatch = this.watcher.watch('/etc', isSudoersPath, (events) => {
+      const folders = new Set<string>();
+      let global = false;
+      let grantsDirChanged = false;
+      for (const ev of events) {
+        if (ev.path === SUDOERS_D_DIR) {
+          grantsDirChanged = true;
+          continue;
         }
-        for (const folder of folders) {
+        const folder = scoopFolderFromGrantsPath(ev.path);
+        if (folder) folders.add(folder);
+        else global = true;
+      }
+      if (grantsDirChanged) {
+        void this.reload();
+        for (const folder of [...this.scoopPolicies.keys()]) {
           void this.reloadScoopPolicy(folder);
         }
-      });
-    }
+        return;
+      }
+      if (global) void this.reload();
+      for (const folder of folders) void this.reloadScoopPolicy(folder);
+    });
   }
 }

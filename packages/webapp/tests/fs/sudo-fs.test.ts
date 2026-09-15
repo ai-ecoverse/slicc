@@ -15,6 +15,7 @@ import type { MountBackend } from '../../src/fs/mount/backend.js';
 import {
   createSudoFs,
   FS_DENIED_MESSAGE,
+  FS_UNHONORED_SUDOERS_MESSAGE,
   fsSudoMessage,
   GRANTED_FILE,
 } from '../../src/fs/sudo-fs.js';
@@ -141,6 +142,51 @@ describe('SudoFS', () => {
     await vfs.writeFile('/etc/sudoers', 'Cmnd rm -rf *');
     expect(await sfs.readTextFile('/etc/sudoers')).toContain('Cmnd');
     expect(calls).toHaveLength(2);
+  });
+
+  // Issue #3106: a sudoers file inside the sandbox it governs is refused, not
+  // prompted. A prompt would be the vulnerability — an approver saying yes once
+  // would hand the scoop a policy file that could grant it anything.
+  it('refuses writes to an in-sandbox sudoers path with no prompt at all', async () => {
+    policy = parseSudoers('NOPASSWD Write /scoops/**'); // a grant that must NOT win
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(
+      sfs.writeFile('/scoops/andy/etc/sudoers', 'NOPASSWD Cmnd *')
+    ).rejects.toMatchObject({
+      code: 'EACCES',
+      message: expect.stringContaining(FS_UNHONORED_SUDOERS_MESSAGE),
+    });
+    await expect(sfs.mkdir('/scoops/andy/etc/sudoers.d')).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(
+      sfs.writeFile('/scoops/andy/etc/sudoers.d/granted', 'NOPASSWD Cmnd *')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    // An approving broker was wired and never consulted.
+    expect(calls).toHaveLength(0);
+
+    // Peer paths in the same directory are ordinary sandbox content.
+    await vfs.mkdir('/scoops/andy/etc', { recursive: true });
+    await expect(sfs.writeFile('/scoops/andy/etc/notes.md', 'hi')).resolves.toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses the in-sandbox sudoers path through the symlink and rename gates too', async () => {
+    policy = parseSudoers('NOPASSWD Write /scoops/**');
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+    await vfs.mkdir('/scoops/andy/etc', { recursive: true });
+    await vfs.writeFile('/scoops/andy/rules.txt', 'NOPASSWD Cmnd *');
+
+    // `symlink` and `rename` gate their DESTINATION, which is the escape the
+    // content-write path would otherwise miss.
+    await expect(
+      sfs.symlink('/scoops/andy/rules.txt', '/scoops/andy/etc/sudoers')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(
+      sfs.rename('/scoops/andy/rules.txt', '/scoops/andy/etc/sudoers')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    expect(calls).toHaveLength(0);
   });
 
   it('never prompts for no-op device writes even under require-approval default', async () => {
