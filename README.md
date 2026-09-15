@@ -42,6 +42,10 @@ Once you're in, you can:
 
 > Status: active working prototype. The macOS app is the easiest way in today; the extension has been submitted to the Chrome Web Store.
 
+Scoop shells bound supported filesystem traversals and command buffers. See the
+[shell work limits](docs/shell-reference.md#scoop-filesystem-work-limits) for limits
+and command coverage.
+
 ## Why SLICC is different
 
 - **Browser-native, not browser-adjacent.** The agent runtime lives in the browser, and the agent can act on the same browser it lives in. A great mix of power and containment. If you don't like what the AI does, close the browser tab and it's over.

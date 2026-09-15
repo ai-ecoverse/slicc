@@ -58,6 +58,7 @@ import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js'
 import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
+import { filesystemExecutionLimits } from './filesystem-budgets.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
@@ -154,10 +155,14 @@ export interface HeadlessShellOptions {
    * terminal (no tool context) never emits progress and can leave it unset.
    */
   scrubProgressLabel?: (text: string) => Promise<string>;
+  /** Named just-bash preset. Defaults to normal; this does not set an OPFS storage quota. */
+  executionLimitProfile?: NonNullable<
+    ConstructorParameters<typeof Bash>[0]
+  >['executionLimitProfile'];
   /**
-   * just-bash execution limits for this shell. Omit for the bundled defaults
-   * (512 MiB live / input). Tests pass a smaller budget so rg's byte-limit
-   * path is exercisable without multi-hundred-megabyte fixtures (#3106).
+   * Trusted overrides for just-bash limits. Child scoop shells use bounded
+   * filesystem budgets; cones and terminals keep the bundled defaults.
+   * maxFileSystemBytes applies only to Bash's default InMemoryFs, not our VFS.
    */
   executionLimits?: NonNullable<ConstructorParameters<typeof Bash>[0]>['executionLimits'];
 }
@@ -663,7 +668,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       sleep: makeSleepWithProgress(this.progress, {
         isAborted: () => this.activeRunSignal?.aborted ?? false,
       }),
-      executionLimits: options.executionLimits,
+      executionLimitProfile: options.executionLimitProfile,
+      executionLimits: filesystemExecutionLimits(
+        options.isScoop?.() ?? false,
+        options.executionLimits
+      ),
     });
 
     // Network-command post-registration cleanup (Codex P1 on #433).
