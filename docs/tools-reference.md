@@ -577,14 +577,21 @@ with `NOPASSWD`, the call resolves `allow` immediately without a cone prompt. A
 immediately and never reaches the cone — see
 [`docs/approvals.md`](./approvals.md#unhonoured-sudoers-paths-always-refused).
 
-| Property   | Value                                                                                        |
-| ---------- | -------------------------------------------------------------------------------------------- |
-| **Name**   | `sudo_request`                                                                               |
-| **Input**  | `{ kind: 'command'\|'read'\|'write'\|'secret', detail: string, suggested_pattern?: string }` |
-| **Output** | `{ content: "Cone decision: allow\|always\|deny..." }`                                       |
+| Property   | Value                                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| **Name**   | `sudo_request`                                                                                                |
+| **Input**  | `{ kind: 'command'\|'read'\|'write'\|'secret', detail: string, suggested_pattern?: string, reason?: string }` |
+| **Output** | `{ content: "Cone decision: allow\|always\|deny..." }`                                                        |
 
-See [`docs/approvals.md`](./approvals.md) for the threat model. Hidden from the
-chat UI via `hidden-tools.ts` — the user-visible event is the `[sudo-request]`
+Pass `reason` — the cone sees WHAT you are asking for and nothing about why
+unless you say so, and an unexplained escalation is the one most likely to be
+refused. A `bash` command that opens with a comment supplies the same thing
+automatically for gates it triggers, so an explicit `sudo_request` is for the
+cases where you know up front.
+
+See [`docs/approvals.md`](./approvals.md) for the threat model, and
+[Reasons](./approvals.md#reasons--why-not-just-what) for both directions of the
+round trip. Hidden from the chat UI via `hidden-tools.ts` — the user-visible event is the `[sudo-request]`
 channel message the orchestrator delivers to the cone.
 
 ---
@@ -611,11 +618,11 @@ orchestrator dispatches by `lick_id` to the right resolver. Actionable kinds:
   three-way merge of bundled vfs-root content, scoped to the stored `from`→`to`
   tags). "Review changelog" stays a separate agent step.
 
-| Property   | Value                                                     |
-| ---------- | --------------------------------------------------------- |
-| **Name**   | `lick_confirm`                                            |
-| **Input**  | `{ lick_id: string, always?: boolean, pattern?: string }` |
-| **Output** | `{ content: "Approved (once\|always)..." }`               |
+| Property   | Value                                                                      |
+| ---------- | -------------------------------------------------------------------------- |
+| **Name**   | `lick_confirm`                                                             |
+| **Input**  | `{ lick_id: string, always?: boolean, pattern?: string, reason?: string }` |
+| **Output** | `{ content: "Approved (once\|always)..." }`                                |
 
 `always` / `pattern` apply only to **sudo** licks. `pattern` defaults to the
 request's `suggestedPattern`, then to the exact `detail`. `kind: 'secret'`
@@ -637,10 +644,16 @@ and **session-reload (plain)** is dismiss-only — it just acknowledges the
 already-completed reload (there is no `lick_confirm` for it). In every case the
 card flips to its muted dismissed state.
 
+For a **sudo** denial, pass `reason`. The scoop sees it verbatim in the `EACCES`
+/ stderr / tool result it gets back; without it a denial and a misunderstanding
+look identical to the agent, and it will retry or work around the block. The
+tool result says so explicitly when a denial carried no reason. See
+[`docs/approvals.md` — Reasons](./approvals.md#reasons--why-not-just-what).
+
 | Property   | Value                                               |
 | ---------- | --------------------------------------------------- |
 | **Name**   | `lick_dismiss`                                      |
-| **Input**  | `{ lick_id: string }`                               |
+| **Input**  | `{ lick_id: string, reason?: string }`              |
 | **Output** | `{ content: "Denied — the scoop will not run..." }` |
 
 Like `sudo_request` / `list_sudo_requests`, `lick_confirm` / `lick_dismiss`

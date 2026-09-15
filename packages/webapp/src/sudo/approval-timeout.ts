@@ -85,11 +85,22 @@ export function isTimedOut(decision: SudoDecision): boolean {
  * (`sudo`, `secret`) so every layer phrases denial and timeout identically —
  * only the subject changes. Kept here, next to the notices, so the two can
  * never drift apart.
+ *
+ * An approver's {@link SudoDecision.note} is appended verbatim when present.
+ * That is the whole point of the field: a denied agent that is told WHY can
+ * fix the request or stop, where a bare "approval denied" invites a retry or a
+ * workaround. The note is untrusted prose and is never parsed — it is quoted
+ * into the message and nothing else.
  */
 export function sudoRefusalMessage(prefix: string, decision: SudoDecision): string {
   const reason = decision.decision === 'deny' ? decision.reason : undefined;
-  if (!reason) return `${prefix}: approval denied`;
-  return `${prefix}: approval request timed out — ${timeoutNotice(reason)}`;
+  const base = reason
+    ? `${prefix}: approval request timed out — ${timeoutNotice(reason)}`
+    : `${prefix}: approval denied`;
+  // A timeout's note (if any) is appended too: the approver leg that DID answer
+  // may still have said something useful before the other leg ran out.
+  const note = decision.note?.trim();
+  return note ? `${base} — approver's reason: ${note}` : base;
 }
 
 /** Injection seams for {@link withApprovalTimeout}. Defaults use real timers. */

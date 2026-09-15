@@ -79,6 +79,21 @@ export interface SudoRequest {
    * omitted the broker derives one via `quickLabel` (see `suggest-pattern`).
    */
   suggestedPattern?: string;
+  /**
+   * Why the requester needs this, in their own words. Shown to the approver
+   * alongside `detail`, which says only WHAT is being asked.
+   *
+   * An approver deciding on a bare `write /etc/models` has nothing to weigh:
+   * the subject is the same whether the action is routine or the first step of
+   * something the owner would refuse. A scoop supplies this explicitly via
+   * `sudo_request`, or implicitly by opening a `bash` command with a comment.
+   *
+   * UNTRUSTED prose, like `detail`. It is context for a decision, never a
+   * credential: an approver must not treat a confident-sounding reason as
+   * authority, and nothing downstream may parse it. Rendered separately from
+   * the authenticated `requester` line for exactly that reason.
+   */
+  reason?: string;
 }
 
 /** The human's decision. `pattern` is only present for `always`. */
@@ -101,6 +116,17 @@ export interface SudoDecision {
    * branches on `decision === 'deny'`, so a new variant would fail OPEN.
    */
   reason?: SudoTimeoutReason;
+  /**
+   * The approver's own words about the decision — why a `deny` was refused,
+   * or a caveat attached to an `allow`. Surfaced verbatim to the requester by
+   * every enforcement layer, so a denied agent learns what to change instead
+   * of retrying the identical action or inventing a workaround.
+   *
+   * Distinct from {@link SudoDecision.reason}, which is a closed set of
+   * machine-readable timeout tags. This is free text and carries no semantics:
+   * a decision is never inferred from it, and its absence changes nothing.
+   */
+  note?: string;
   /**
    * Which gate the human passed when the decision came from a delegated tray
    * follower: `biometric` (Face ID / Touch ID), `passcode`, or `none` (a plain

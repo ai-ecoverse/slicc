@@ -89,6 +89,9 @@ export function openSudoApprovalDialog(
         req.kind !== 'export'
       )
     );
+    // Below the subject, never above it: `reason` is prose the requester wrote,
+    // and the authenticated rows must be read first.
+    if (req.reason) body.append(row('Reason given', req.reason));
 
     let patternInput: HTMLInputElement | null = null;
     const suggested = req.suggestedPattern?.trim() || req.detail.trim();

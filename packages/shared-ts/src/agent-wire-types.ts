@@ -326,6 +326,12 @@ export interface LickEvent {
   sudoDetail?: string;
   sudoScoopName?: string;
   sudoSuggestedPattern?: string;
+  /**
+   * The requester's stated reason, when they gave one. Untrusted prose, like
+   * `sudoDetail` — rendered after the subject so a reviewer reads WHAT is being
+   * authorized before they read the requester's words about it.
+   */
+  sudoReason?: string;
   targetScoop?: string;
   /**
    * Set ONLY by the leader when it re-emits a lick forwarded from a

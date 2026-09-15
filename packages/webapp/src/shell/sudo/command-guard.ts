@@ -72,6 +72,13 @@ export interface CommandSudoDeps {
    * hard block ("command not found").
    */
   defaultDisposition?: DefaultDisposition;
+  /**
+   * Why the run needs this command, in the requester's words — shown to the
+   * approver beside the subject. Supplied by the shell from the run's leading
+   * comment (`shell/sudo/command-reason.ts`). Untrusted prose: it informs a
+   * decision, it never makes one.
+   */
+  reason?: string;
 }
 
 /** Outcome of an enforcement pass. */
@@ -106,7 +113,11 @@ export async function enforceCommandSudo(
     return { allowed: true };
   }
 
-  const decision = await deps.broker.requestApproval({ kind: 'command', detail: trimmed });
+  const decision = await deps.broker.requestApproval({
+    kind: 'command',
+    detail: trimmed,
+    ...(deps.reason ? { reason: deps.reason } : {}),
+  });
 
   if (decision.decision === 'deny') {
     return { allowed: false, message: commandSudoMessage(decision) };

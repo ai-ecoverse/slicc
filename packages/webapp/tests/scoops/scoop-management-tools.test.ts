@@ -803,6 +803,71 @@ describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools'
     expect(result.content).toContain('not approved');
   });
 
+  // Both ends of the round trip: the requester says why it needs this, the
+  // approver says why it said no. Neither had a channel before.
+  it('sudo_request forwards a normalized reason', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    await tool.execute({
+      kind: 'command',
+      detail: 'git push origin main',
+      reason: '  the release tag is cut\n  and CI is green  ',
+    });
+    expect(onSudoRequest).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+      reason: 'the release tag is cut and CI is green',
+    });
+  });
+
+  it('sudo_request omits an empty reason rather than sending a blank one', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    await tool.execute({ kind: 'command', detail: 'ls', reason: '   ' });
+    expect(onSudoRequest).toHaveBeenCalledWith({ kind: 'command', detail: 'ls' });
+  });
+
+  it("sudo_request quotes the approver's note back to the scoop", async () => {
+    const onSudoRequest = vi.fn(async () => ({
+      decision: 'deny' as const,
+      note: 'push from CI, not from a scoop',
+    }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'command', detail: 'git push origin main' });
+    expect(result.content).toContain("Approver's reason: push from CI, not from a scoop");
+    expect(result.content).toContain('Address the reason above');
+  });
+
+  it('sudo_request says so explicitly when a denial came with no reason', async () => {
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest: vi.fn(async () => ({ decision: 'deny' as const })),
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'command', detail: 'git push origin main' });
+    expect(result.content).toContain('no reason was given');
+  });
+
   it('sudo_request rejects an unknown kind without invoking the callback', async () => {
     const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
     const tools = createScoopManagementTools({
@@ -927,6 +992,54 @@ describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools'
     expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', { decision: 'deny' });
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain('Denied');
+  });
+
+  it('lick_dismiss carries a normalized reason to the requester', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_dismiss')!;
+    const result = await tool.execute({
+      lick_id: 'lick-abc',
+      reason: 'push from CI,\nnot from a scoop',
+    });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', {
+      decision: 'deny',
+      note: 'push from CI, not from a scoop',
+    });
+    expect(result.content).toContain('push from CI, not from a scoop');
+  });
+
+  it('lick_dismiss tells the cone when it denied without explaining', async () => {
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve: vi.fn(async () => ({ settled: true, persisted: false })),
+    });
+    const tool = tools.find((t) => t.name === 'lick_dismiss')!;
+    const result = await tool.execute({ lick_id: 'lick-abc' });
+    expect(result.content).toContain('NO reason');
+  });
+
+  it('lick_confirm can attach a caveat to an approval', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    await tool.execute({ lick_id: 'lick-abc', reason: 'this build only; do not touch src/' });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', {
+      decision: 'allow',
+      note: 'this build only; do not touch src/',
+    });
   });
 
   it('lick_dismiss reports an error when the lick id is unknown', async () => {

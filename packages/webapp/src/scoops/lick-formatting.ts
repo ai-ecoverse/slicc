@@ -267,12 +267,13 @@ function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
     `Kind: ${kind}`,
     `Detail: ${detail}`,
   ];
+  if (event.sudoReason) lines.push(`Reason given: ${event.sudoReason}`);
   if (event.sudoSuggestedPattern) {
     lines.push(`Suggested pattern: ${event.sudoSuggestedPattern}`);
   }
   lines.push(
     '',
-    `Use the lick_confirm tool with lick_id="${lickId}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${lickId}" to deny.`
+    `Use the lick_confirm tool with lick_id="${lickId}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${lickId}" and a reason to deny.`
   );
   return { label, content: lines.join('\n') };
 }
