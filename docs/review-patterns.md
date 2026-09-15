@@ -58,6 +58,11 @@ there are additional parity boundaries where bugs hide:
 
 ### 1. Error-path coverage gaps
 
+Filesystem execution limits must be exercised through an actual shell with the
+supplied VFS. Check that scoop defaults and trusted overrides reach upstream
+commands; do not describe a custom command as bounded unless it consumes those
+limits. `maxFileSystemBytes` is not a quota on an external VFS.
+
 **Trigger patterns**
 
 - Recursive filesystem preloads that start every payload read at once, limit each

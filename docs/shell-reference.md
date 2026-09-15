@@ -4,6 +4,21 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ---
 
+## Scoop filesystem work limits
+
+Scoop shells apply just-bash's filesystem work limits: 100,000 traversal entries,
+256 directory levels, 100,000 traversal work units and glob operations, 32 MiB of
+command input, and 64 MiB of tracked live buffers. Upstream archive commands receive
+128 MiB expanded, 64 MiB compressed/per-entry, and 100,000-entry limits.
+
+These limits are enforced by the upstream commands that support them. SLICC's
+custom `tar`, `unzip`, JavaScript, Python, Git, and browser commands have separate
+implementations; these settings do not bound all their work. They also do not set
+an OPFS storage quota. A limit error means the task should process a smaller tree
+or input in separate calls. Shell environment variables cannot raise these limits.
+The cone retains the upstream defaults; command timeout and detachment behavior
+are unchanged.
+
 ## Overview
 
 SLICC uses `just-bash` (a pure-TypeScript Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. The interpreter itself is plain JavaScript — not WASM. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/almost-bash-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
