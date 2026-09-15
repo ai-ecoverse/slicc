@@ -8,18 +8,19 @@
 import type { NodeReadlineModule } from './helpers/node-readline.js';
 import {
   createNodeModule,
+  createNodePath,
   fmt,
   isPathSpecifier,
   type NodeChildProcess,
   type NodeModuleApi,
   type NodeOs,
+  type NodePath,
   type NodeUtil,
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
   nodeEvents,
   nodeOs,
-  nodePath,
   nodeStream,
   nodeTty,
   nodeUrl,
@@ -201,6 +202,14 @@ export function createModuleSystem(opts: {
     resolveFrom: (fromPath, specifier) => resolveFromParent(fromPath, specifier),
   });
 
+  // Per-realm: `path.resolve(rel)` must use THIS realm's `process.cwd()`, not
+  // a host fallback of `/` (#3110). `processShim.cwd` is the same function
+  // user code sees as `process.cwd()`.
+  const nodePathModule = createNodePath(() => {
+    const cwd = (processShim as { cwd?: () => string } | null)?.cwd?.();
+    return typeof cwd === 'string' && cwd.length > 0 ? cwd : '/';
+  });
+
   const resolveBuiltin = (id: string): { hit: boolean; value?: unknown } => {
     if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
@@ -212,6 +221,7 @@ export function createModuleSystem(opts: {
       childProcess,
       nodeOsModule,
       nodeUtilModule,
+      nodePathModule,
       nodeReadline,
       nodeModule,
     });
@@ -341,6 +351,7 @@ function resolveServedBuiltin(
     childProcess: NodeChildProcess;
     nodeOsModule: NodeOs;
     nodeUtilModule: NodeUtil;
+    nodePathModule: NodePath;
     nodeReadline?: NodeReadlineModule;
     nodeModule?: NodeModuleApi;
   }
@@ -351,13 +362,14 @@ function resolveServedBuiltin(
     childProcess,
     nodeOsModule,
     nodeUtilModule,
+    nodePathModule,
     nodeReadline,
     nodeModule,
   } = served;
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
-  if (bareId === 'path') return { hit: true, value: nodePath };
+  if (bareId === 'path') return { hit: true, value: nodePathModule };
   if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
   if (bareId === 'child_process') return { hit: true, value: childProcess };
   if (bareId === 'process') return { hit: true, value: processShim };
