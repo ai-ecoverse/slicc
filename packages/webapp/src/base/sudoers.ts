@@ -2,7 +2,8 @@
  * Sudoers policy parser + matcher.
  *
  * Pure, framework-free module that loads and evaluates the SLICC sudoers
- * policy (`/etc/sudoers` + `/etc/sudoers.d/*` drop-ins). It parses `Cmnd`,
+ * policy. Policy is read from `/etc/sudoers` + `/etc/sudoers.d/*` drop-ins and
+ * from nowhere else — see {@link isUnhonoredSudoersPath}. It parses `Cmnd`,
  * `Read`, `Write`, and `Export` directives (plus `NOPASSWD`-tagged variants)
  * and answers three questions: does a command segment require approval, does
  * a read/write to a path require approval, and is a transcript export
@@ -22,8 +23,15 @@ export { pathGlobToRegExp } from '../fs/path-utils.js';
 
 const log = createLogger('sudo:sudoers');
 
-/** Outcome of a match against the policy. */
-export type MatchResult = 'require-approval' | 'nopasswd-allow' | 'no-match';
+/**
+ * Outcome of a match against the policy.
+ *
+ * `deny` is a hard refusal that never reaches an approver: it is the answer
+ * for paths SLICC refuses to treat as policy at all (see
+ * {@link isUnhonoredSudoersPath}). Every other outcome is advisory — an
+ * approver can still say yes.
+ */
+export type MatchResult = 'require-approval' | 'nopasswd-allow' | 'no-match' | 'deny';
 
 /** Filesystem operation kind for path matching. */
 export type PathOp = 'read' | 'write';
@@ -67,8 +75,35 @@ export const SUDOERS_D_DIR = '/etc/sudoers.d';
  */
 export const APPROVALS_FILE = '/etc/APPROVALS.md';
 
-/** Matches the canonical per-scoop sudoers path `/scoops/<folder>/etc/sudoers`. */
-const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
+/**
+ * Sudoers-shaped paths inside a scoop sandbox: `/scoops/<folder>/etc/sudoers`
+ * and the `sudoers.d` directory that would sit beside it.
+ *
+ * SLICC honours policy from `/etc/sudoers` and `/etc/sudoers.d/*` and nowhere
+ * else. A policy file living inside the sandbox it governs is the VFS
+ * equivalent of a world-writable `/etc/sudoers`, which sudo(8) refuses to read
+ * for exactly this reason: the subject of the policy must not be able to author
+ * it. Per-scoop grants live in `/etc/sudoers.d/scoop-<folder>` instead — same
+ * scoping, a location the scoop cannot reach.
+ *
+ * Only the sandbox-root shape is matched, not any `**\/etc/sudoers` at depth:
+ * a checkout of this repository inside a scoop legitimately carries
+ * `packages/vfs-root/etc/sudoers` as ordinary file content, and refusing to
+ * write it would break `git clone`.
+ */
+const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers(?:\.d(?:\/.*)?)?$/;
+
+/**
+ * Whether `path` is a sudoers file SLICC deliberately does not honour — today,
+ * the per-scoop shapes matched by {@link SCOOP_SUDOERS_RE}. Writes to these
+ * paths are refused outright (`matchPath` → `'deny'`) rather than raised as an
+ * approval: a prompt would offer an approver the chance to hand a scoop a
+ * policy file that, once honoured, could grant that scoop anything. Reads are
+ * untouched — the file is inert content, not policy.
+ */
+export function isUnhonoredSudoersPath(path: string): boolean {
+  return SCOOP_SUDOERS_RE.test(normalizePath(path));
+}
 
 /**
  * Protected layout directory (self-protected for writes).
@@ -85,15 +120,57 @@ const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
  */
 export const PROTECTED_LAYOUTS_DIR = '/etc/slicc/layouts';
 
-/** Construct the canonical per-scoop sudoers path for `folder`. */
-export function scoopSudoersPath(folder: string): string {
+/** Filename prefix for the per-scoop drop-ins under `/etc/sudoers.d/`. */
+export const SCOOP_GRANTS_PREFIX = 'scoop-';
+
+/**
+ * Whether `folder` can be embedded in a drop-in filename without escaping
+ * `/etc/sudoers.d/`. Scoop folders are generated (`agent-<adjective>-<flavor>`,
+ * a slugged scoop name), so this only ever rejects a caller passing something
+ * it made up.
+ */
+export function isSafeScoopFolder(folder: string): boolean {
+  return folder.length > 0 && folder !== '.' && folder !== '..' && !/[/\\]/.test(folder);
+}
+
+/**
+ * Drop-in holding a scoop's approved "Always" grants:
+ * `/etc/sudoers.d/scoop-<folder>`.
+ *
+ * Root-owned in the SLICC sense — inside the self-protected `/etc/sudoers.d/`
+ * tree, outside every scoop sandbox, so the scoop the grants apply to can
+ * neither write it nor (absent an explicit `Read` rule) see it. `SudoManager`
+ * keeps these drop-ins OUT of the global policy merge and loads each one only
+ * for its own scoop, so a grant stays as narrowly scoped as it was when the
+ * per-scoop file lived in the sandbox.
+ *
+ * Returns `null` for a folder that cannot be spelled as a filename.
+ */
+export function scoopGrantsPath(folder: string): string | null {
+  return isSafeScoopFolder(folder) ? `${SUDOERS_D_DIR}/${SCOOP_GRANTS_PREFIX}${folder}` : null;
+}
+
+/** Scoop folder owning drop-in `name` (bare filename), or `null` if it is not one. */
+export function scoopFolderFromGrantsName(name: string): string | null {
+  return name.startsWith(SCOOP_GRANTS_PREFIX)
+    ? name.slice(SCOOP_GRANTS_PREFIX.length) || null
+    : null;
+}
+
+/**
+ * The pre-#3106 per-scoop sudoers path. Retained only so `SudoManager` can
+ * find a legacy file, migrate its grants into {@link scoopGrantsPath}, and
+ * remove it. Nothing evaluates policy from here any more.
+ */
+export function legacyScoopSudoersPath(folder: string): string {
   return `/scoops/${folder}/etc/sudoers`;
 }
 
 /**
  * Default disposition for `no-match` in an enforcement context. The cone uses
  * `'allow'` (no implicit gating); scoops use `'require-approval'` so any path
- * or command not explicitly granted by their per-scoop sudoers file is gated.
+ * or command not explicitly granted by their `ScoopConfig` sandbox or their
+ * `/etc/sudoers.d/scoop-<folder>` drop-in is gated.
  */
 export type DefaultDisposition = 'allow' | 'require-approval';
 
@@ -264,7 +341,7 @@ export function parseSudoers(text: string): SudoersPolicy {
  * other's scratch files and the cone sees all of them, so nothing secret or
  * trust-bearing belongs here.
  *
- * These live in code rather than in `/scoops/<folder>/etc/sudoers` because
+ * These live in code rather than in `/etc/sudoers.d/scoop-<folder>` because
  * that file carries only persisted "Always" grants (#2416) — a file-based
  * grant would never reach a scoop that was not explicitly granted it.
  *
@@ -346,7 +423,6 @@ function isSelfProtectedWrite(normalized: string): boolean {
     normalized === APPROVALS_FILE ||
     normalized === SUDOERS_D_DIR ||
     normalized.startsWith(`${SUDOERS_D_DIR}/`) ||
-    SCOOP_SUDOERS_RE.test(normalized) ||
     normalized === PROTECTED_LAYOUTS_DIR ||
     normalized.startsWith(`${PROTECTED_LAYOUTS_DIR}/`)
   );
@@ -354,12 +430,16 @@ function isSelfProtectedWrite(normalized: string): boolean {
 
 /**
  * Match a read/write to `path` against the policy. Writes to `/etc/sudoers`,
- * anything under `/etc/sudoers.d/`, any per-scoop sudoers file
- * (`/scoops/<folder>/etc/sudoers`), or anything under `/etc/slicc/layouts/`
- * ALWAYS require approval, regardless of
- * configuration — `NOPASSWD` cannot override the invariant, even though a
- * scoop's sudoers sits inside its own writable tree. Reads of those files
- * are allowed (visudo-style) and fall through to normal matching.
+ * anything under `/etc/sudoers.d/`, or anything under `/etc/slicc/layouts/`
+ * ALWAYS require approval, regardless of configuration — `NOPASSWD` cannot
+ * override the invariant. Reads of those files are allowed (visudo-style) and
+ * fall through to normal matching.
+ *
+ * Writes to a sudoers-shaped path SLICC does not honour as policy
+ * ({@link isUnhonoredSudoersPath} — the per-scoop
+ * `/scoops/<folder>/etc/sudoers` shapes) are `deny`: refused outright, with no
+ * approval raised. Checked before self-protection, because a hard refusal
+ * beats a prompt an approver could answer wrongly.
  *
  * Writes to no-op virtual device files (`/dev/null`, see `virtual-device-paths.ts`)
  * are auto-permitted regardless of policy or default disposition ONLY for CONTENT
@@ -378,6 +458,7 @@ export function matchPath(
 ): MatchResult {
   const normalized = normalizePath(path);
   if (op === 'write') {
+    if (SCOOP_SUDOERS_RE.test(normalized)) return 'deny';
     if (isSelfProtectedWrite(normalized)) return 'require-approval';
     if (opts?.isContentWrite && isNoOpWriteDevicePath(normalized)) return 'nopasswd-allow';
   }

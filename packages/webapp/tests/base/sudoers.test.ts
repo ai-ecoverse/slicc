@@ -5,6 +5,9 @@ import {
   builtinScoopGrants,
   commandGlobToRegExp,
   emptyPolicy,
+  isSafeScoopFolder,
+  isUnhonoredSudoersPath,
+  legacyScoopSudoersPath,
   matchCommand,
   matchPath,
   mergePolicies,
@@ -15,7 +18,8 @@ import {
   SUDOERS_FILE,
   type SudoersPolicy,
   sanitizeGrantPattern,
-  scoopSudoersPath,
+  scoopFolderFromGrantsName,
+  scoopGrantsPath,
 } from '../../src/base/sudoers.js';
 import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
 
@@ -270,34 +274,42 @@ describe('protected layouts self-protection invariant', () => {
   });
 });
 
-describe('per-scoop sudoers self-protection invariant', () => {
-  const scoopPath = scoopSudoersPath('andy-scoop');
+describe('unhonoured (non-root) sudoers paths', () => {
+  const scoopPath = legacyScoopSudoersPath('andy-scoop');
   // A broad NOPASSWD grant covering the scoop's writable home, including the
-  // generated sudoers file. The invariant must defeat it for writes.
+  // sudoers-shaped path inside it. The refusal must defeat it for writes.
   const grant: SudoersPolicy = parseSudoers(
     `NOPASSWD Write /scoops/andy-scoop/**\nNOPASSWD Write ${scoopPath}`
   );
 
-  it('scoopSudoersPath returns the canonical /scoops/<folder>/etc/sudoers shape', () => {
+  it('legacyScoopSudoersPath names the pre-#3106 in-sandbox shape', () => {
     expect(scoopPath).toBe('/scoops/andy-scoop/etc/sudoers');
-    expect(scoopSudoersPath('foo')).toBe('/scoops/foo/etc/sudoers');
+    expect(legacyScoopSudoersPath('foo')).toBe('/scoops/foo/etc/sudoers');
   });
 
-  it('always requires approval for writes to /scoops/<folder>/etc/sudoers, even with NOPASSWD', () => {
-    expect(matchPath(grant, 'write', scoopPath)).toBe('require-approval');
-    expect(matchPath(grant, 'write', '/scoops/other/etc/sudoers')).toBe('require-approval');
+  it('denies writes outright rather than raising an approval', () => {
+    expect(matchPath(grant, 'write', scoopPath)).toBe('deny');
+    expect(matchPath(grant, 'write', '/scoops/other/etc/sudoers')).toBe('deny');
   });
 
-  it('protects the scoop sudoers file even under an empty policy', () => {
-    expect(matchPath(emptyPolicy(), 'write', scoopPath)).toBe('require-approval');
+  it('denies the sudoers.d shape beside it, file or directory', () => {
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/sudoers.d')).toBe('deny');
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/sudoers.d/granted')).toBe('deny');
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/sudoers.d/nested/x')).toBe('deny');
   });
 
-  it('allows reads of the scoop sudoers file (visudo-style)', () => {
+  it('denies under an empty policy too', () => {
+    expect(matchPath(emptyPolicy(), 'write', scoopPath)).toBe('deny');
+  });
+
+  it('leaves reads alone — the file is inert content, not policy', () => {
     expect(matchPath(grant, 'read', scoopPath)).toBe('no-match');
     expect(matchPath(emptyPolicy(), 'read', scoopPath)).toBe('no-match');
+    const readGrant = parseSudoers(`NOPASSWD Read ${scoopPath}`);
+    expect(matchPath(readGrant, 'read', scoopPath)).toBe('nopasswd-allow');
   });
 
-  it('does NOT protect peer paths inside the scoop tree', () => {
+  it('does NOT touch peer paths inside the scoop tree', () => {
     expect(matchPath(grant, 'write', '/scoops/andy-scoop/workspace/file.txt')).toBe(
       'nopasswd-allow'
     );
@@ -305,11 +317,50 @@ describe('per-scoop sudoers self-protection invariant', () => {
     expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/sudoers.bak')).toBe('nopasswd-allow');
   });
 
-  it('normalizes paths before checking the invariant', () => {
-    expect(matchPath(grant, 'write', '/scoops/andy-scoop/./etc/sudoers')).toBe('require-approval');
-    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/../etc/sudoers')).toBe(
-      'require-approval'
-    );
+  it('does NOT touch a repo checkout that merely contains an etc/sudoers', () => {
+    // A `git clone` of this repository inside a scoop carries
+    // `packages/vfs-root/etc/sudoers` as ordinary content; refusing it would
+    // break the clone.
+    expect(
+      matchPath(grant, 'write', '/scoops/andy-scoop/workspace/slicc/packages/vfs-root/etc/sudoers')
+    ).toBe('nopasswd-allow');
+  });
+
+  it('normalizes paths before refusing', () => {
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/./etc/sudoers')).toBe('deny');
+    expect(matchPath(grant, 'write', '/scoops/andy-scoop/etc/../etc/sudoers')).toBe('deny');
+  });
+
+  it('isUnhonoredSudoersPath agrees with the matcher', () => {
+    expect(isUnhonoredSudoersPath(scoopPath)).toBe(true);
+    expect(isUnhonoredSudoersPath('/scoops/andy-scoop/etc/sudoers.d/x')).toBe(true);
+    expect(isUnhonoredSudoersPath(SUDOERS_FILE)).toBe(false);
+    expect(isUnhonoredSudoersPath(`${SUDOERS_D_DIR}/scoop-andy-scoop`)).toBe(false);
+  });
+});
+
+describe('per-scoop grants drop-in naming', () => {
+  it('scopes a scoop under /etc/sudoers.d/scoop-<folder>', () => {
+    expect(scoopGrantsPath('andy-scoop')).toBe('/etc/sudoers.d/scoop-andy-scoop');
+  });
+
+  it('refuses a folder that cannot be spelled as a filename', () => {
+    expect(scoopGrantsPath('../escape')).toBeNull();
+    expect(scoopGrantsPath('a/b')).toBeNull();
+    expect(scoopGrantsPath('')).toBeNull();
+    expect(isSafeScoopFolder('..')).toBe(false);
+    expect(isSafeScoopFolder('ok-folder')).toBe(true);
+  });
+
+  it('round-trips the folder out of a drop-in filename', () => {
+    expect(scoopFolderFromGrantsName('scoop-andy')).toBe('andy');
+    expect(scoopFolderFromGrantsName('granted')).toBeNull();
+    expect(scoopFolderFromGrantsName('scoop-')).toBeNull();
+  });
+
+  it('is still self-protected — it lives under /etc/sudoers.d/', () => {
+    const grant = parseSudoers('NOPASSWD Write /etc/sudoers.d/**');
+    expect(matchPath(grant, 'write', '/etc/sudoers.d/scoop-andy')).toBe('require-approval');
   });
 });
 

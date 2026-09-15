@@ -6,10 +6,14 @@
  * and write is funneled through one `matchPath` check against the live sudoers
  * policy plus the hardcoded self-protection invariant:
  *
- *   - `require-approval` → ask the {@link SudoBroker}; `deny` → `FsError('EACCES')`
- *     (with a distinct message when the prompt merely went unanswered),
- *     `allow` → pass through once, `always` → persist a `NOPASSWD` grant to
- *     `/etc/sudoers.d/granted` (broker-mediated, exempt from future prompts).
+ *   - `deny` → `FsError('EACCES')` with NO prompt. The match itself is the
+ *     refusal: a sudoers-shaped path SLICC does not honour as policy
+ *     (`isUnhonoredSudoersPath`) must not be offered to an approver at all.
+ *   - `require-approval` → ask the {@link SudoBroker}; its `deny` →
+ *     `FsError('EACCES')` (with a distinct message when the prompt merely went
+ *     unanswered), `allow` → pass through once, `always` → persist a `NOPASSWD`
+ *     grant to `/etc/sudoers.d/granted` (broker-mediated, exempt from future
+ *     prompts).
  *   - `nopasswd-allow` / `no-match` → pass straight through to the wrapped fs.
  *
  * Sync fast-paths (`statSync`/`readDirSync`) cannot await the broker, so a
@@ -64,6 +68,15 @@ export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 
 /** `EACCES` message for a gated op the approver explicitly refused. */
 export const FS_DENIED_MESSAGE = 'sudo: approval denied';
+
+/**
+ * `EACCES` message for a write SLICC refuses outright, with no approval raised:
+ * a sudoers-shaped path it does not honour as policy. Names the honoured
+ * locations so the agent stops rather than retrying the same write under a
+ * different spelling.
+ */
+export const FS_UNHONORED_SUDOERS_MESSAGE =
+  'sudo: refusing to write a sudoers file outside /etc — policy is read only from /etc/sudoers and /etc/sudoers.d/, so this file would never take effect';
 
 /**
  * `EACCES` message for a gated op. An unanswered request is kept distinct from
@@ -190,6 +203,13 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     // the raw match result so out-of-sandbox reads don't fire approvals —
     // the surrounding `RestrictedFS` already filters them to ENOENT/[].
     const result = op === 'write' ? applyDefaultDisposition(raw, defaultDisposition) : raw;
+    // A hard `deny` never reaches the broker. The point of refusing these
+    // paths is that no approver — human or cone — should be offered the
+    // chance to say yes; a prompt would be the vulnerability, not the guard.
+    if (result === 'deny') {
+      log.warn('Refusing write to an unhonoured sudoers path', { path: normalized });
+      throw new FsError('EACCES', FS_UNHONORED_SUDOERS_MESSAGE, normalized);
+    }
     if (result !== 'require-approval') return;
     const kind: SudoKind = op;
     const decision = await broker.requestApproval({ kind, detail: normalized });

@@ -131,7 +131,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
   // Wire the sudo enforcement surface. For non-cone scoops the broker
   // routes to the cone (via the `onSudoRequest` callback the orchestrator
   // already hooked up — same wire as `createConeApprovalBroker`), the
-  // policy is the per-scoop merge (global ∪ `/scoops/<folder>/etc/sudoers`),
+  // policy is the per-scoop merge (global ∪ `/etc/sudoers.d/scoop-<folder>`),
   // and the default disposition is `'require-approval'` so any unmatched
   // write OR command escalates to the cone instead of dying with a hard
   // wall. The cone keeps the user broker + `'allow'` default — unchanged.

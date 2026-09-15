@@ -1125,7 +1125,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * Cone-tool surface: settle a pending sudo request and, when the
    * decision is `'always'`, durably widen the requesting scoop's sandbox
    * by appending a `NOPASSWD <directive> <pattern>` line to its
-   * `/scoops/<folder>/etc/sudoers` via the trusted manager sink (which
+   * `/etc/sudoers.d/scoop-<folder>` via the trusted manager sink (which
    * bypasses the self-protection invariant). `kind: 'secret'` never
    * persists — there is no `Secret` directive in the sudoers parser,
    * so the request resolves as an allow-once.

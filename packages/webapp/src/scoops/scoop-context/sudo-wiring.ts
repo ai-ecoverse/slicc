@@ -25,7 +25,7 @@ export interface SudoWiring {
    * `SudoFS` grant sink for `always` decisions. `undefined` for a cone (the
    * gate's default persists to the global `/etc/sudoers.d/granted`); a no-op
    * for non-cone scoops — their `always` decision is already persisted SCOPED
-   * to `/scoops/<folder>/etc/sudoers` by the approval router
+   * to `/etc/sudoers.d/scoop-<folder>` by the approval router
    * (`SudoManager.appendScoopRule`), so the default sink would leak the grant
    * into every unit's policy and accumulate duplicate rules (#2416).
    */

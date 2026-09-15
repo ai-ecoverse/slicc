@@ -36,6 +36,9 @@ other developer docs link here instead of restating the model.
 - **Self-protection is hardcoded.** Writes to `/etc/sudoers`, `/etc/sudoers.d/**`
   and `/etc/APPROVALS.md` always require approval; no `NOPASSWD` rule can override
   this.
+- **Policy is read from `/etc` and nowhere else.** A sudoers file inside the sandbox
+  it governs is refused outright, not prompted — see
+  [Unhonoured sudoers paths](#unhonoured-sudoers-paths-always-refused).
 - **Credentials never reach the agent.** S3 / DA mounts have no approval card because
   the trust boundary lives at the credential resolver (node-server / SW), not in chat.
 
@@ -132,10 +135,36 @@ an approval with no diff to show (#2686). With the file seeded, the merge
 classifies it `unchanged` (or `kept-local` after an owner edit) and writes
 nothing.
 
+### Unhonoured sudoers paths (always refused)
+
+SLICC loads policy from `/etc/sudoers` and `/etc/sudoers.d/*` only. A
+sudoers-shaped path inside a scoop sandbox — `/scoops/<folder>/etc/sudoers`, or
+a `sudoers.d` beside it — is **not** policy, and a write to it is **denied
+outright** (`matchPath` → `'deny'`, `EACCES` with no prompt). The `sudo_request`
+tool route refuses the same subject at admission, so it never spends a cone
+approval either.
+
+Refusing rather than prompting is the point. Until #3106 the in-sandbox file WAS
+honoured, and it was self-protected — so a scoop that wanted broader authority
+wrote its own sudoers file and let the gate escalate. The prompt showed a path,
+not the file's contents; one approval handed the scoop a policy file that could
+say `NOPASSWD Cmnd *`. This is the VFS form of what sudo(8) refuses for a
+world-writable `/etc/sudoers`: the subject of a policy must not be able to author
+it. No approver — human or cone — should be offered that yes.
+
+Scope is exactly the sandbox-root shape. A `git clone` of this repository inside
+a scoop carries `packages/vfs-root/etc/sudoers` as ordinary content and is
+untouched, as are peers such as `/scoops/<folder>/etc/sudoers.bak`. Reads are
+unaffected — the file is inert content, not policy.
+
+Per-scoop grants live in `/etc/sudoers.d/scoop-<folder>` instead: the same
+scoping, in a location the scoop cannot write. See
+[Persisting a scoop "Always" grant](#persisting-a-scoop-always-grant).
+
 ### Built-in scoop grants — `/tmp` (always on)
 
 Every non-cone scoop carries an unconditional `NOPASSWD Read` + `NOPASSWD Write`
-grant on `/tmp` and `/tmp/**`, on top of whatever its own sudoers file says.
+grant on `/tmp` and `/tmp/**`, on top of whatever its own grants drop-in says.
 `/tmp` is global scratch space in SLICC the same way it is on Unix: tooling
 hardcodes `/tmp/<file>` rather than discovering a scratch dir, and without the
 grant every such write escalated to the cone for approval.
@@ -308,13 +337,14 @@ Orchestrator.init()
   └─ new SudoManager({ fs: sharedFs, watcher, capabilityBroker })  // seed + load + watch
        ├─ getBroker()         → createSudoBroker(capabilityBroker) // user broker (cone), #2276
        ├─ getPolicy()         → live merged global SudoersPolicy
-       ├─ getPolicyForScoop() → builtin /tmp grants ∪ global ∪ config grants ∪ /scoops/<folder>/etc/sudoers
+       ├─ getPolicyForScoop() → builtin /tmp grants ∪ global ∪ config grants ∪ /etc/sudoers.d/scoop-<folder>
        └─ getShellConfig()    → { getPolicy, broker, persistCommandGrant }
 
 Orchestrator.createScoopTab(jid)
   ├─ if non-cone: RestrictedFS(..., 'sudo-delegated')   // writes pass through to SudoFS
   ├─ if non-cone: initScoopPolicy(folder, config)  // config grants registered in memory (#2416)
-  │                                                // + load the on-disk Always-grants file
+  │                                                // + migrate any pre-#3106 in-sandbox file
+  │                                                // + load /etc/sudoers.d/scoop-<folder>
   │                                                //   (legacy generated files are discarded)
   └─ new ScoopContext(scoop, callbacks, fs, ..., sudoManager)
 
@@ -440,12 +470,12 @@ directly — it routes through the cone agent. Same goes for the explicit-reques
 surface: a scoop calls `sudo_request` to ask up-front, and the cone resolves the
 request with `lick_confirm` (allow-once or always-and-persist) or `lick_dismiss`.
 
-| Tool                 | Side  | Purpose                                                                                                                                              |
-| -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sudo_request`       | Scoop | Ask the cone for an explicit escalation. Inputs: `kind` (`command`/`read`/`write`/`secret`), `detail`, optional `suggested_pattern`. Blocks on cone. |
-| `lick_confirm`       | Cone  | Confirm a pending actionable lick by `lick_id`. `always=true` additionally appends a `NOPASSWD <directive> <pattern>` line to the scoop's sudoers.   |
-| `lick_dismiss`       | Cone  | Dismiss a pending actionable lick by `lick_id`. The scoop's action does NOT run.                                                                     |
-| `list_sudo_requests` | Cone  | Snapshot outstanding requests (`lick id`, scoop folder, kind, detail).                                                                               |
+| Tool                 | Side  | Purpose                                                                                                                                                   |
+| -------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sudo_request`       | Scoop | Ask the cone for an explicit escalation. Inputs: `kind` (`command`/`read`/`write`/`secret`), `detail`, optional `suggested_pattern`. Blocks on cone.      |
+| `lick_confirm`       | Cone  | Confirm a pending actionable lick by `lick_id`. `always=true` additionally appends a `NOPASSWD <directive> <pattern>` line to the scoop's grants drop-in. |
+| `lick_dismiss`       | Cone  | Dismiss a pending actionable lick by `lick_id`. The scoop's action does NOT run.                                                                          |
+| `list_sudo_requests` | Cone  | Snapshot outstanding requests (`lick id`, scoop folder, kind, detail).                                                                                    |
 
 The pending-request registry lives on the `Orchestrator` (`enqueueSudoRequest`,
 `resolveSudoRequestAndPersist`, `listPendingSudoRequests`). The scoop's gated
@@ -471,11 +501,24 @@ tags its decision `reason: 'cone-timeout'` so the scoop is told its escalation
 went unanswered rather than refused — and, unlike the cone → user leg, is not
 told to wait for a user who was never prompted.
 
+#### Persisting a scoop "Always" grant
+
 "Always" grants for `kind: 'command' | 'read' | 'write'` are persisted via
-`SudoManager.appendScoopRule(folder, kind, pattern)` (raw-VFS write, same trusted
-sink that powers `initScoopPolicy`, so it bypasses the per-scoop self-protection
-on `/scoops/<folder>/etc/sudoers`). Since #2416 that file holds ONLY these
-approved "Always" grants — the `ScoopConfig` sandbox is registered in memory
+`SudoManager.appendScoopRule(folder, kind, pattern)` into
+`/etc/sudoers.d/scoop-<folder>` (raw-VFS write, same trusted sink that powers
+`initScoopPolicy`, so it bypasses the `/etc/sudoers.d/*` self-protection).
+
+That drop-in is **cone-owned**: it sits in `/etc`, outside every sandbox, so the
+scoop it applies to can neither write it nor — absent an explicit `Read` rule —
+see it. `SudoManager` keeps `scoop-*` drop-ins OUT of the global policy merge
+(`doReload` filters them) and loads each one only for its own scoop via
+`getPolicyForScoop`, so a grant stays exactly as narrowly scoped as it was when
+the file lived in the sandbox. Before #3106 it lived at
+`/scoops/<folder>/etc/sudoers`; a file found there is migrated into the drop-in
+once and removed, and writes to that path are now
+[refused outright](#unhonoured-sudoers-paths-always-refused).
+
+Since #2416 the file holds ONLY these approved "Always" grants — the `ScoopConfig` sandbox is registered in memory
 and never persisted, so replacing a scoop's config genuinely revokes the old
 authority instead of unioning with a stale file (a legacy generated file found
 on load is discarded fail-closed; its grants re-prompt once). The append is idempotent — a rule that is
@@ -493,7 +536,7 @@ persisted" so the agent retries the request next time.
 An "always" grant is only as durable as the folder it lands in. One-shot agents
 spawned through `AgentBridge` get a random `agent-<adjective>-<flavor>` folder
 that is dropped when the run ends, so a grant persisted into
-`/scoops/agent-<name>/etc/sudoers` dies with it and the next run starts from
+`/etc/sudoers.d/scoop-agent-<name>` is orphaned when the folder goes and the next run starts from
 zero under a name the cone has never seen. For a recurring unattended agent such
 as the memory curator, that makes escalation a permanent interruption rather
 than a one-time cost: configure its `allowedCommands` to cover the work up
@@ -515,7 +558,7 @@ actions escalate to the cone instead of dying with a hard wall:
   (`NOPASSWD Write <p>` + `<p>/**` per `writablePaths` entry, regardless of
   trailing-slash spelling) are registered **synchronously in memory**
   (`SudoManager.registerScoopConfig`, #2416) on every context creation, so a
-  stale `/scoops/<folder>/etc/sudoers` file — folder reuse across scoop
+  stale `/etc/sudoers.d/scoop-<folder>` file — folder reuse across scoop
   generations, a restore with changed config — or a reload race can never
   withhold a configured path and prompt for it. The on-disk file only ADDS
   persisted "Always" grants on top. The built-in `/tmp` grant does the same
@@ -538,7 +581,7 @@ actions escalate to the cone instead of dying with a hard wall:
 - **Shell commands.** When `ShellSudoConfig.defaultDisposition` is
   `'require-approval'`, `AlmostBashShell` skips the `allowedCommands`
   registration filter entirely and registers every built-in. The
-  per-scoop sudoers file (`NOPASSWD Cmnd <c>*` per `allowedCommands` entry)
+  per-scoop grants drop-in (`NOPASSWD Cmnd <c>*` per `allowedCommands` entry)
   decides at dispatch which commands run unprompted; unmatched commands
   escalate to the cone. Without this, an unmatched command would surface
   as "command not found" — a hard block the agent cannot recover from.

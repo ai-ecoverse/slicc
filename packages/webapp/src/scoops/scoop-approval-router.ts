@@ -18,7 +18,12 @@
  */
 
 import { createLogger } from '../base/logger.js';
-import { matchCommand, matchPath, type SudoersPolicy } from '../base/sudoers.js';
+import {
+  isUnhonoredSudoersPath,
+  matchCommand,
+  matchPath,
+  type SudoersPolicy,
+} from '../base/sudoers.js';
 import {
   type ConeApprovalRouter,
   ConeRequestRegistry,
@@ -223,6 +228,19 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { decision: 'deny' };
     }
 
+    // A write to a sudoers path SLICC does not honour as policy can never be
+    // made to work, so it must not spend a cone approval — and must not offer
+    // an approver the chance to say yes. `matchPath` already refuses it at the
+    // FS gate; this covers the `sudo_request` route, where a scoop asks BEFORE
+    // touching the file.
+    if (request.kind === 'write' && isUnhonoredSudoersPath(request.detail)) {
+      log.warn('Refusing sudo request for an unhonoured sudoers path', {
+        scoopJid,
+        detail: request.detail,
+      });
+      return { decision: 'deny' };
+    }
+
     // Same grant match as settleGrantedRequests, but at admission: a subject
     // the scoop's policy already NOPASSWD-grants must not raise a cone prompt
     // (#2853). The reload sweep still covers requests that were pending when
@@ -318,7 +336,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * Cone-tool surface: settle a pending sudo request and, when the
    * decision is `'always'`, durably widen the requesting scoop's sandbox
    * by appending a `NOPASSWD <directive> <pattern>` line to its
-   * `/scoops/<folder>/etc/sudoers` via the trusted manager sink.
+   * `/etc/sudoers.d/scoop-<folder>` via the trusted manager sink.
    */
   async resolveSudoRequestAndPersist(
     id: string,
@@ -492,7 +510,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
  * kinds have no matching directive here, so they always escalate.
  *
  * Delegates to {@link matchPath} / {@link matchCommand} so self-protection
- * (`/etc/sudoers`, per-scoop sudoers, layouts) stays absolute: a
+ * (`/etc/sudoers`, `/etc/sudoers.d/*`, layouts) stays absolute: a
  * `NOPASSWD Write /**` cannot skip the cone for a protected write.
  */
 function isNopasswdGranted(policy: SudoersPolicy, request: SudoRequest): boolean {

@@ -73,7 +73,7 @@ export interface ScoopManagementToolsConfig {
   onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
   /** Cone-only: resolve a pending sudo request by id. On `'always'` the
    *  orchestrator persists a NOPASSWD rule into the requesting scoop's
-   *  `/scoops/<folder>/etc/sudoers` via the trusted manager sink. */
+   *  `/etc/sudoers.d/scoop-<folder>` via the trusted manager sink. */
   onSudoResolve?: (
     id: string,
     decision: SudoDecision
@@ -907,7 +907,7 @@ function formatAllowOutcome(outcome: SudoOutcome, always: boolean): string {
     return 'Approved (once) — the current action proceeds; future ones will prompt again.';
   }
   if (outcome.persisted) {
-    return `Approved (always) — persisted NOPASSWD rule for ${outcome.kind ?? 'unknown'} pattern "${outcome.persistedPattern}" in /scoops/${outcome.scoopFolder ?? '<unknown>'}/etc/sudoers.`;
+    return `Approved (always) — persisted NOPASSWD rule for ${outcome.kind ?? 'unknown'} pattern "${outcome.persistedPattern}" in /etc/sudoers.d/scoop-${outcome.scoopFolder ?? '<unknown>'}.`;
   }
   if (outcome.persistError) {
     return `Approved (always) but could NOT persist a rule (${outcome.persistError}). The current action is allowed; future occurrences will prompt again.`;
@@ -1031,7 +1031,7 @@ function sudoRequestTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'sudo_request',
     description:
-      "Ask the cone for an explicit sudo escalation before running a sensitive action. Use this when you know up-front that a command, read, or write will be gated and you want a clean approval round-trip instead of letting the gate fire mid-action. Resolves with the cone's decision (allow / always / deny). If your sudoers already grants the subject with NOPASSWD, this resolves allow immediately without prompting the cone. 'always' durably widens your sandbox by appending a NOPASSWD rule to /scoops/<folder>/etc/sudoers. 'deny' (or a timeout / dropped cone) resolves fail-closed.",
+      "Ask the cone for an explicit sudo escalation before running a sensitive action. Use this when you know up-front that a command, read, or write will be gated and you want a clean approval round-trip instead of letting the gate fire mid-action. Resolves with the cone's decision (allow / always / deny). If your sudoers already grants the subject with NOPASSWD, this resolves allow immediately without prompting the cone. 'always' durably widens your sandbox by appending a NOPASSWD rule to the cone-owned /etc/sudoers.d/scoop-<folder> drop-in (you cannot write it yourself). 'deny' (or a timeout / dropped cone) resolves fail-closed.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1254,7 +1254,7 @@ function lickConfirmTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'lick_confirm',
     description:
-      "Confirm (approve) a pending actionable lick by its lick_id — currently a scoop sudo escalation raised via sudo_request. With always=true, the orchestrator additionally appends a NOPASSWD <directive> <pattern> rule to the requesting scoop's /scoops/<folder>/etc/sudoers so the same action won't prompt again. always=false (the default) is allow-once.",
+      "Confirm (approve) a pending actionable lick by its lick_id — currently a scoop sudo escalation raised via sudo_request. With always=true, the orchestrator additionally appends a NOPASSWD <directive> <pattern> rule to the requesting scoop's /etc/sudoers.d/scoop-<folder> drop-in so the same action won't prompt again. always=false (the default) is allow-once.",
     inputSchema: {
       type: 'object',
       properties: {

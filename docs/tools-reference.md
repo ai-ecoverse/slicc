@@ -571,8 +571,11 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 Scoop-only. Ask the cone for an explicit sudo escalation before running a sensitive
 action. The call blocks until the cone resolves via `lick_confirm` / `lick_dismiss` (or
-the registry times out fail-closed). If the scoop's sudoers already grants the subject
-with `NOPASSWD`, the call resolves `allow` immediately without a cone prompt.
+the registry times out fail-closed). If the scoop's policy already grants the subject
+with `NOPASSWD`, the call resolves `allow` immediately without a cone prompt. A
+`write` whose subject is a sudoers path SLICC does not honour resolves `deny`
+immediately and never reaches the cone — see
+[`docs/approvals.md`](./approvals.md#unhonoured-sudoers-paths-always-refused).
 
 | Property   | Value                                                                                        |
 | ---------- | -------------------------------------------------------------------------------------------- |
@@ -593,8 +596,9 @@ orchestrator dispatches by `lick_id` to the right resolver. Actionable kinds:
 
 - **sudo** — a scoop escalation raised via `sudo_request`. With `always=true`,
   the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule
-  to the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action
-  won't prompt again.
+  to the requesting scoop's cone-owned `/etc/sudoers.d/scoop-<folder>` drop-in
+  so the same action won't prompt again. The scoop cannot write that file
+  itself.
 - **navigate·upskill** — confirm runs `upskill [--branch ..] [--path ..] <url> --all`,
   installing every skill under the advertised scope (`upskill`'s on-disk
   "already exists" check still guards duplicate installs). The card itself is
