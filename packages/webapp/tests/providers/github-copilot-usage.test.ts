@@ -95,6 +95,11 @@ describe('fetchCopilotUsage', () => {
     await expect(fetchCopilotUsage('t', respond(200, {}))).resolves.toBeNull();
   });
 
+  it('reports no window for a 404/501 instead of throwing (retired or unsupported endpoint)', async () => {
+    await expect(fetchCopilotUsage('t', respond(404))).resolves.toBeNull();
+    await expect(fetchCopilotUsage('t', respond(501))).resolves.toBeNull();
+  });
+
   it('propagates a transport failure rather than swallowing it', async () => {
     const fetchImpl: UsageFetch = vi.fn(async () => {
       throw new Error('network down');

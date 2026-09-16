@@ -94,6 +94,13 @@ export async function fetchCopilotUsage(
       headers: { ...opts.headers, Authorization: `Bearer ${githubAccessToken}` },
       ...(controller ? { signal: controller.signal } : {}),
     });
+    if (res.status === 404 || res.status === 501) {
+      // Route doesn't exist for this account/deployment (or was retired):
+      // an unsupported endpoint, not a transient failure. Fall in line with
+      // the other budget clients and take the 30-minute "no window" backoff
+      // instead of retrying every 5 minutes forever.
+      return null;
+    }
     if (!res.ok) {
       throw new Error(`GitHub Copilot /copilot_internal/user returned ${res.status}`);
     }
