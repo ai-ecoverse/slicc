@@ -7,6 +7,8 @@ let package = Package(
     // Sliccstart's `SliccstartWidgets` extension. Everything here is
     // Foundation + SwiftUI + WidgetKit — no WebRTC, no AppKit/UIKit — so a
     // widget process stays cheap enough for WidgetKit's memory budget.
+    // Enforced by `npm run lint:swift-forbidden-imports` (WebRTC denylist;
+    // `public` types here are the cross-module surface both hosts import).
     platforms: [.macOS(.v14), .iOS("18.0")],
     products: [
         .library(name: "SliccWidgetKit", targets: ["SliccWidgetKit"])

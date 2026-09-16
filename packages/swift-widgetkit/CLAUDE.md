@@ -4,7 +4,7 @@ Shared widget library in `packages/swift-widgetkit/` — the SPM module `SliccWi
 
 ## Scope
 
-Everything the "Cones & Scoops" home-screen widget draws, for both hosts: the iOS follower's `SliccWidgets.appex` (`packages/ios-app/SliccWidgets/`) and Sliccstart's `SliccstartWidgets.appex` (`packages/swift-launcher/SliccstartWidgets/`). Foundation + SwiftUI + WidgetKit only — **no WebRTC, no AppKit/UIKit, no tray transport**. A widget runs in its own short-lived process under a hard memory budget; anything linked here is loaded to paint a 158pt tile.
+Everything the "Cones & Scoops" home-screen widget draws, for both hosts: the iOS follower's `SliccWidgets.appex` (`packages/ios-app/SliccWidgets/`) and Sliccstart's `SliccstartWidgets.appex` (`packages/swift-launcher/SliccstartWidgets/`). Foundation + SwiftUI + WidgetKit only — **no WebRTC, no AppKit/UIKit, no tray transport**. `public` types here are the cross-module surface both hosts import. Enforced by `npm run lint:swift-forbidden-imports`. A widget runs in its own short-lived process under a hard memory budget; anything linked here is loaded to paint a 158pt tile.
 
 Supports `.macOS(.v14)` and `.iOS("18.0")`.
 
