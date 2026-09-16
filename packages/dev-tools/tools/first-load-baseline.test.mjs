@@ -278,6 +278,36 @@ describe('dependencyDrift', () => {
   });
 
   /**
+   * GitHub Actions' undici lives at
+   * `node_modules/@actions/http-client/node_modules/undici` and is `dev:
+   * true`. A version bump there cannot change dist/ui, so refusing the
+   * baseline would fail the size gate for a change the eager graphs cannot
+   * see (Dependabot PR #3198).
+   */
+  it('skips an un-hoisted nested copy that exists only in the dev tree', () => {
+    lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0', dev: true } });
+    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.changed).toEqual([]);
+    expect(drift.missing).toEqual([]);
+    expect(drift.unrealignable).toEqual([]);
+  });
+
+  it('skips a nested dev copy the change removes', () => {
+    lock(repo, {});
+    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
+    expect(dependencyDrift(repo, tree)).toEqual(empty);
+  });
+
+  it('still flags a nested copy that graduates from dev to production', () => {
+    lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0' } });
+    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
+    expect(dependencyDrift(repo, tree).unrealignable).toEqual([
+      'node_modules/a/node_modules/b (1.0.0 -> 2.0.0, un-hoisted)',
+    ]);
+  });
+
+  /**
    * Nested copies under a parent that is itself being swapped are covered by
    * that parent realignment — there is no independent hole. Knip 6.33.0
    * nests `@oxc-project/types` under `oxc-parser` for exactly this reason.

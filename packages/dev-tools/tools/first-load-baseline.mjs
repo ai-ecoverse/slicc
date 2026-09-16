@@ -29,11 +29,12 @@
  * whose version differs between the base lockfile and HEAD's is replaced in
  * the baseline worktree with the BASE version, fetched via `npm pack`. The
  * delta then measures the dependency change instead of hiding it. When the
- * drift cannot be realigned — an un-hoisted nested path whose ancestor did
- * not also change, a registry failure, or a lockfile refresh too large to
- * be one change — the baseline is reported as unmeasurable rather than
- * quietly wrong, which a CI `pull_request` run treats as a failure (see
- * `check-first-load-size.mjs`).
+ * drift cannot be realigned — an un-hoisted nested production path whose
+ * ancestor did not also change, a registry failure, or a lockfile refresh
+ * too large to be one change — the baseline is reported as unmeasurable
+ * rather than quietly wrong, which a CI `pull_request` run treats as a
+ * failure (see `check-first-load-size.mjs`). Nested copies that exist only
+ * in the dev tree are skipped: they cannot appear in `dist/ui`.
  *
  * WORKSPACE packages are a different matter and must NOT be borrowed from
  * HEAD. npm links them into `node_modules/@scope/name` as RELATIVE symlinks
@@ -156,7 +157,7 @@ export function linkNodeModules(repoRoot, tree) {
  * Read a `package-lock.json`'s `packages` map, or null when unreadable.
  *
  * @param {string} tree
- * @returns {Record<string, {version?: string, name?: string}> | null}
+ * @returns {Record<string, {version?: string, name?: string, dev?: boolean}> | null}
  */
 function readLockPackages(tree) {
   try {
@@ -191,6 +192,21 @@ function ancestorPackageChanged(path, base, head) {
 }
 
 /**
+ * True when a nested copy is not an independent hole: its parent is already
+ * being swapped, or it lives only in the dev tree (cannot appear in dist/ui).
+ *
+ * @param {string} path
+ * @param {{dev?: boolean}} entry base lock entry
+ * @param {Record<string, {version?: string, dev?: boolean}>} base
+ * @param {Record<string, {version?: string, dev?: boolean}>} head
+ */
+function nestedCopyIsCovered(path, entry, base, head) {
+  if (ancestorPackageChanged(path, base, head)) return true;
+  const headEntry = head[path];
+  return entry.dev === true && (headEntry == null || headEntry.dev === true);
+}
+
+/**
  * Dependencies the baseline worktree would otherwise get wrong, split by how
  * badly a failure to fix them matters.
  *
@@ -222,6 +238,14 @@ function ancestorPackageChanged(path, base, head) {
  * specimen: `oxc-parser` 0.143 -> 0.147 nests a matching `@oxc-project/types`,
  * which is not an independent realignment.
  *
+ * Nested copies that exist only in the dev tree (`dev: true` on both sides,
+ * or removed from HEAD while still `dev: true` on the base) are also not
+ * that hole. They cannot appear in `dist/ui`, so leaving them borrowed from
+ * HEAD cannot hide an eager-graph regression. Skipping them is what lets a
+ * Dependabot bump of GitHub Actions' nested undici (PR #3198) measure a
+ * real baseline instead of failing as unmeasurable. A nested copy that
+ * graduates from `dev: true` to production still fails closed.
+ *
  * @param {string} repoRoot
  * @param {string} tree base checkout
  * @returns {{ changed: Drift[], missing: Drift[], unrealignable: string[] } | null}
@@ -246,8 +270,9 @@ export function dependencyDrift(repoRoot, tree) {
     if (to === from) continue;
     const installName = path.slice('node_modules/'.length);
     if (installName.includes('/node_modules/')) {
-      if (ancestorPackageChanged(path, base, head)) continue;
-      unrealignable.push(`${path} (${from} -> ${to ?? 'removed'}, un-hoisted)`);
+      if (!nestedCopyIsCovered(path, entry, base, head)) {
+        unrealignable.push(`${path} (${from} -> ${to ?? 'removed'}, un-hoisted)`);
+      }
       continue;
     }
     // A workspace package linked into node_modules carries the root version;
