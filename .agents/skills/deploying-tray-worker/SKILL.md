@@ -101,6 +101,11 @@ relies on) with retries and bounded concurrency, failing the release hard if any
 fails to upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must
 have R2 Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
 
+The deployed archive-recovery smoke has its own cheap path signal. Changes to the
+Worker-side fallback in `src/index.ts` must enable that smoke even when the built asset
+set is unchanged; do not add those changes to the costly upload signal just to obtain
+fallback coverage.
+
 The R2 API rate-limits bursts of `wrangler r2 object put` calls with `429` / error code
 `971` ("Please wait and consider throttling your request speed"). Concurrency defaults to
 `4` (`--concurrency <n>` to override) and each file gets 5 attempts with jittered

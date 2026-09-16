@@ -36,6 +36,7 @@ jobs:
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cloudflare-r2: ${{ steps.filter.outputs.cloudflare-r2 }}
+      cloudflare-archive-smoke: ${{ steps.filter.outputs.cloudflare-archive-smoke }}
       e2e: ${{ steps.filter.outputs.e2e }}
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
@@ -103,6 +104,12 @@ jobs:
               - 'package-lock.json'
               - 'patches/**'
               - '.github/workflows/ci.yml'
+            # The live recovery smoke is cheap and also guards the Worker-side
+            # ASSETS-miss fallback. Keep that signal independent from the
+            # costly archive copy so fallback-only changes exercise R2 without
+            # re-uploading an unchanged webapp.
+            cloudflare-archive-smoke:
+              - 'packages/cloudflare-worker/src/index.ts'
             # Cost-aware aggregate for the real-browser gate. Keeping this as
             # one named filter makes additions reviewable and avoids making a
             # coverage-floor-only root-config change pay for Playwright.
@@ -1072,7 +1079,7 @@ jobs:
         if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-          SLICC_ARCHIVE_SMOKE: ${{ needs.changes.outputs.cloudflare-r2 == 'true' && '1' || '' }}
+          SLICC_ARCHIVE_SMOKE: ${{ (needs.changes.outputs.cloudflare-r2 == 'true' || needs.changes.outputs.cloudflare-archive-smoke == 'true') && '1' || '' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging

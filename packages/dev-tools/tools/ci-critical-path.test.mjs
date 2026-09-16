@@ -29,12 +29,12 @@ function filterPaths(name, nextName) {
   return [...workflow.slice(start, end).matchAll(/- '([^']+)'/g)].map((match) => match[1]);
 }
 
-function workerStagingR2Paths() {
+function workerStagingFilterPaths(name, nextMarker) {
   const filters = workerStagingWorkflow.indexOf('          filters: |');
-  const start = workerStagingWorkflow.indexOf('            r2:', filters);
-  const end = workerStagingWorkflow.indexOf('\n\n      - uses:', start);
-  expect(start, 'worker staging r2 filter should exist').toBeGreaterThan(filters);
-  expect(end, 'worker staging setup step should follow its r2 filter').toBeGreaterThan(start);
+  const start = workerStagingWorkflow.indexOf(`            ${name}:`, filters);
+  const end = workerStagingWorkflow.indexOf(nextMarker, start);
+  expect(start, `worker staging ${name} filter should exist`).toBeGreaterThan(filters);
+  expect(end, `worker staging marker should follow its ${name} filter`).toBeGreaterThan(start);
   return [...workerStagingWorkflow.slice(start, end).matchAll(/- '([^']+)'/g)].map(
     (match) => match[1]
   );
@@ -76,13 +76,19 @@ describe('CI critical-path routing', () => {
       'package-lock.json',
       'patches/**',
     ];
-    expect(filterPaths('cloudflare-r2', 'e2e')).toEqual([
+    expect(filterPaths('cloudflare-r2', 'cloudflare-archive-smoke')).toEqual([
       ...r2BuildInputs,
       '.github/workflows/ci.yml',
     ]);
-    expect(workerStagingR2Paths()).toEqual([
+    expect(workerStagingFilterPaths('r2', '            archive-smoke:')).toEqual([
       ...r2BuildInputs,
       '.github/workflows/worker-staging.yml',
+    ]);
+    expect(filterPaths('cloudflare-archive-smoke', 'e2e')).toEqual([
+      'packages/cloudflare-worker/src/index.ts',
+    ]);
+    expect(workerStagingFilterPaths('archive-smoke', '\n\n      - uses:')).toEqual([
+      'packages/cloudflare-worker/src/index.ts',
     ]);
 
     const e2ePaths = filterPaths('e2e', 'cherry');
@@ -143,7 +149,10 @@ describe('CI critical-path routing', () => {
     const smoke = stepBody(worker, 'Smoke test staging');
     expect(smoke).toContain("if: env.RUN_CLOUDFLARE_STAGING == 'true'");
     expect(smoke).toContain(
-      "SLICC_ARCHIVE_SMOKE: ${{ needs.changes.outputs.cloudflare-r2 == 'true' && '1' || '' }}"
+      "SLICC_ARCHIVE_SMOKE: ${{ (needs.changes.outputs.cloudflare-r2 == 'true' || needs.changes.outputs.cloudflare-archive-smoke == 'true') && '1' || '' }}"
+    );
+    expect(workerStagingWorkflow).toContain(
+      "SLICC_ARCHIVE_SMOKE: ${{ (steps.changes.outputs.r2 == 'true' || steps.changes.outputs.archive-smoke == 'true') && '1' || '' }}"
     );
   });
 
