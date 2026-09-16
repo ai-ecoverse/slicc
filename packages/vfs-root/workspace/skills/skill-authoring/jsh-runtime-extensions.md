@@ -175,7 +175,7 @@ const { promisify } = require('util');
 const { stdout } = await promisify(exec)('ls -la /workspace');
 ```
 
-The **sync forms** (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — just-bash has no synchronous or long-lived process model. `.bsh` scripts (which run in the target page via CDP, not the realm) have no shell bridge at all, so `require('child_process')` there is unavailable; use `exec()` from a `.jsh` script instead.
+The **sync forms** (`execSync` / `spawnSync` / `execFileSync`) run on the blocking sync-XHR bridge and follow Node's return/throw contracts (`spawnSync` never throws on a non-zero exit). `{ cwd }` sets the child's working directory; `{ env }` **replaces** the child's environment (spread `process.env` to extend). A missing `cwd` is `ENOENT`, not a silent fallback to the parent. They need a controlling Service Worker; on a float without one they throw an error naming the async escape hatch. `fork` always throws — no long-lived process model. `.bsh` scripts (which run in the target page via CDP, not the realm) have no shell bridge at all, so `require('child_process')` there is unavailable; use `exec()` from a `.jsh` script instead.
 
 ## jsh runtime extensions
 

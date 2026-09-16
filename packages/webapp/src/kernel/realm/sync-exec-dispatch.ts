@@ -19,6 +19,7 @@
  * request, an unknown token, a throwing shell) becomes an errno result.
  */
 
+import type { CommandContext } from 'just-bash';
 import { type SyncFsRequest, type SyncFsResult, toErrno } from './sync-fs-dispatch.js';
 import { resolveSyncFsToken, trackSyncExec } from './sync-fs-token-registry.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS } from './sync-fs-wire.js';
@@ -36,6 +37,10 @@ export interface SyncExecRequestPayload {
   stdin?: string;
   /** Caller budget in ms, clamped to {@link SYNC_EXEC_MAX_TIMEOUT_MS}. */
   timeoutMs?: number;
+  /** Child working directory. Absent → the realm's cwd. */
+  cwd?: string;
+  /** Child environment (Node replace semantics). Absent → inherit the parent. */
+  env?: Record<string, string>;
 }
 
 /** SW → responder envelope for one synchronous exec. */
@@ -83,6 +88,60 @@ function normalizeCommand(
   return { cmd: command };
 }
 
+type ErrnoResult = { errno: string; message: string };
+
+/**
+ * Resolve the child's working directory. A missing or non-directory `cwd`
+ * must fail closed — silently falling back to the parent cwd is how
+ * `spawnSync('git', …, { cwd: repoDir })` reported the wrong repository.
+ */
+export async function resolveSyncExecCwd(
+  fs: CommandContext['fs'],
+  baseCwd: string,
+  requested: unknown
+): Promise<{ cwd: string } | ErrnoResult> {
+  if (requested === undefined) return { cwd: baseCwd };
+  if (typeof requested !== 'string') {
+    return { errno: 'EINVAL', message: 'sync-exec: cwd must be a string' };
+  }
+  if (requested.length === 0) {
+    return { errno: 'ENOENT', message: 'sync-exec: cwd is empty' };
+  }
+  const cwd = fs.resolvePath(baseCwd, requested);
+  try {
+    const st = await fs.stat(cwd);
+    if (!st.isDirectory) {
+      return { errno: 'ENOTDIR', message: `sync-exec: cwd is not a directory: ${cwd}` };
+    }
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'EACCES' || code === 'EPERM') {
+      return { errno: code, message: `sync-exec: cwd not accessible: ${cwd}` };
+    }
+    return { errno: 'ENOENT', message: `sync-exec: cwd does not exist: ${cwd}` };
+  }
+  return { cwd };
+}
+
+/** Node `env` is a replace, not a merge. Undefined values are dropped. */
+export function normalizeSyncExecEnv(
+  env: unknown
+): { ok: true; env: Record<string, string> } | ErrnoResult | undefined {
+  if (env === undefined) return undefined;
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
+    return { errno: 'EINVAL', message: 'sync-exec: env must be an object' };
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env as { [name: string]: string | undefined })) {
+    if (value === undefined) continue;
+    if (typeof value !== 'string') {
+      return { errno: 'EINVAL', message: `sync-exec: env[${key}] must be a string` };
+    }
+    out[key] = value;
+  }
+  return { ok: true, env: out };
+}
+
 /**
  * Clamp the caller's budget into `(0, SYNC_EXEC_MAX_TIMEOUT_MS]`. A blocked
  * realm worker cannot be interrupted, so an unbounded or absent budget would
@@ -112,6 +171,14 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   if ('errno' in normalized) {
     return { ok: false, errno: normalized.errno, message: normalized.message };
   }
+  const cwdResult = await resolveSyncExecCwd(entry.fs, entry.cwd, req.cwd);
+  if ('errno' in cwdResult) {
+    return { ok: false, errno: cwdResult.errno, message: cwdResult.message };
+  }
+  const envResult = normalizeSyncExecEnv(req.env);
+  if (envResult !== undefined && 'errno' in envResult) {
+    return { ok: false, errno: envResult.errno, message: envResult.message };
+  }
   // Abort the in-flight `ctx.exec` at the budget so the command cannot outlive
   // the realm's blocked XHR and keep running with no consumer for its result.
   const controller = new AbortController();
@@ -128,10 +195,11 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   const untrack = trackSyncExec(req.token, controller);
   try {
     const result = await entry.exec(normalized.cmd, {
-      cwd: entry.cwd,
+      cwd: cwdResult.cwd,
       signal: controller.signal,
       ...(normalized.args !== undefined ? { args: normalized.args } : {}),
       ...(req.stdin !== undefined ? { stdin: req.stdin } : {}),
+      ...(envResult !== undefined ? { env: envResult.env, replaceEnv: true } : {}),
     });
     return {
       ok: true,

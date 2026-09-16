@@ -17,6 +17,10 @@ export type ExecStartOptions = {
   stdinKind?: 'text' | 'bytes';
   /** Shell-free argv tail (string command form only; array form uses its own tail). */
   args?: string[];
+  /** Child working directory. Absent → the realm's cwd. */
+  cwd?: string;
+  /** Child environment (Node replace semantics). Absent → inherit the parent. */
+  env?: Record<string, string>;
 };
 
 /**
@@ -176,6 +180,8 @@ export function createExecBridge(
       if (buffered !== undefined) startOpts.stdin = buffered;
       if (opts?.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
       if (opts?.args !== undefined) startOpts.args = opts.args;
+      if (opts?.cwd !== undefined) startOpts.cwd = opts.cwd;
+      if (opts?.env !== undefined) startOpts.env = opts.env;
       // Flush-before / re-snapshot-after wrap the killable spawn too: flush
       // before the `exec:start` dispatch, re-snapshot after `done` resolves.
       // The re-snapshot PRESERVES sync writes made while the spawn was in

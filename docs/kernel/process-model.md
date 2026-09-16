@@ -257,13 +257,16 @@ both channels share — marker gate, errno recovery, fail-closed transport — s
 the fs and exec channels differ only in route and payload.
 
 **Route**: `POST /__slicc/exec-sync` with a JSON command envelope (the command
-never has to survive URL encoding). The kernel-worker responder resolves the
-same per-realm token and dispatches through the realm's own **`ctx.exec`** —
-the handle the async `exec` RPC uses — so the sudo command guard, path ACLs,
-and secret masking are inherited unchanged. The token entry widened from
-`{ fs, cwd }` to `{ fs, exec, cwd }`; one token covers both channels because
-they share a mint site, a lifetime, and a revocation, and a realm that can
-drive `ctx.exec` can already reach the filesystem through the shell.
+never has to survive URL encoding). The envelope also carries optional `cwd`
+and `env`; `cwd` is stated against the token's filesystem (missing → `ENOENT`)
+and `env` replaces the child environment (`replaceEnv: true`). The
+kernel-worker responder resolves the same per-realm token and dispatches
+through the realm's own **`ctx.exec`** — the handle the async `exec` RPC uses —
+so the sudo command guard, path ACLs, and secret masking are inherited
+unchanged. The token entry widened from `{ fs, cwd }` to `{ fs, exec, cwd }`;
+one token covers both channels because they share a mint site, a lifetime, and
+a revocation, and a realm that can drive `ctx.exec` can already reach the
+filesystem through the shell.
 
 **Sudo while blocked**: the realm worker is blocked on the XHR, but the sudo
 brokers live in the kernel worker (HTTP) and the page (panel-RPC), so an

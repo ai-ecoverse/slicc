@@ -4,6 +4,8 @@ import {
   clampSyncExecTimeout,
   dispatchSyncExec,
   isSyncExecRequest,
+  normalizeSyncExecEnv,
+  resolveSyncExecCwd,
   SYNC_EXEC_CHANNEL,
 } from '../../../src/kernel/realm/sync-exec-dispatch.js';
 import {
@@ -63,6 +65,142 @@ test('stdin rides through to ctx.exec', async () => {
   const { token, calls } = execToken({ stdout: '', stderr: '', exitCode: 0 });
   await dispatchSyncExec({ token, channel: SYNC_EXEC_CHANNEL, command: 'cat', stdin: 'piped' });
   expect(calls[0]?.opts.stdin).toBe('piped');
+});
+
+function dirFs(dirs: string[], files: string[] = []): CommandContext['fs'] {
+  const dirSet = new Set(dirs);
+  const fileSet = new Set(files);
+  return {
+    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
+    stat: async (p: string) => {
+      if (dirSet.has(p)) {
+        return {
+          isDirectory: true,
+          isFile: false,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(),
+        };
+      }
+      if (fileSet.has(p)) {
+        return {
+          isDirectory: false,
+          isFile: true,
+          isSymbolicLink: false,
+          mode: 0o644,
+          size: 1,
+          mtime: new Date(),
+        };
+      }
+      throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+    },
+  } as CommandContext['fs'];
+}
+
+test('a caller cwd override reaches ctx.exec instead of the token cwd', async () => {
+  const calls: ExecCall[] = [];
+  const exec = (async (cmd: string, opts: Record<string, unknown>) => {
+    calls.push({ cmd, opts });
+    return { stdout: `${opts.cwd}\n`, stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({
+    fs: dirFs(['/workspace', '/shared']),
+    exec,
+    cwd: '/workspace',
+  });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: ['pwd'],
+    cwd: '/shared',
+  });
+  expect(r.ok).toBe(true);
+  expect(calls[0]?.opts.cwd).toBe('/shared');
+});
+
+test('a caller env replaces the child environment', async () => {
+  const calls: ExecCall[] = [];
+  const exec = (async (cmd: string, opts: Record<string, unknown>) => {
+    calls.push({ cmd, opts });
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: dirFs(['/workspace']), exec, cwd: '/workspace' });
+  await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: ['printenv', 'MARKER'],
+    env: { MARKER: 'x' },
+  });
+  expect(calls[0]?.opts.env).toEqual({ MARKER: 'x' });
+  expect(calls[0]?.opts.replaceEnv).toBe(true);
+});
+
+test('a missing cwd fails closed with ENOENT and never reaches exec', async () => {
+  const calls: ExecCall[] = [];
+  const exec = (async (cmd: string, opts: Record<string, unknown>) => {
+    calls.push({ cmd, opts });
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: dirFs(['/workspace']), exec, cwd: '/workspace' });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: ['pwd'],
+    cwd: '/no/such/dir',
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('ENOENT');
+  expect(calls).toHaveLength(0);
+});
+
+test('a file cwd fails closed with ENOTDIR', async () => {
+  const calls: ExecCall[] = [];
+  const exec = (async (cmd: string, opts: Record<string, unknown>) => {
+    calls.push({ cmd, opts });
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({
+    fs: dirFs(['/workspace'], ['/workspace/file.txt']),
+    exec,
+    cwd: '/workspace',
+  });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: ['pwd'],
+    cwd: '/workspace/file.txt',
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('ENOTDIR');
+  expect(calls).toHaveLength(0);
+});
+
+test('a malformed env fails closed with EINVAL before reaching exec', async () => {
+  const { token, calls } = execToken({ stdout: '', stderr: '', exitCode: 0 });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'pwd',
+    env: 'nope' as unknown as Record<string, string>,
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EINVAL');
+  expect(calls).toHaveLength(0);
+});
+
+test('resolveSyncExecCwd inherits the base cwd when omitted', async () => {
+  const r = await resolveSyncExecCwd(dirFs(['/workspace']), '/workspace', undefined);
+  expect(r).toEqual({ cwd: '/workspace' });
+});
+
+test('normalizeSyncExecEnv drops undefined values and rejects non-objects', () => {
+  expect(normalizeSyncExecEnv(undefined)).toBeUndefined();
+  expect(normalizeSyncExecEnv({ A: '1', B: undefined, errno: 'not-an-error' })).toEqual({
+    ok: true,
+    env: { A: '1', errno: 'not-an-error' },
+  });
+  expect(normalizeSyncExecEnv('x')).toMatchObject({ errno: 'EINVAL' });
 });
 
 test('ESCALATION GUARD: an unknown / revoked token fails closed with EACCES', async () => {

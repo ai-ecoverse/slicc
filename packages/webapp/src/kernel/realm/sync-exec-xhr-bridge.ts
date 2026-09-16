@@ -51,6 +51,10 @@ export interface SyncExecOptions {
   input?: string;
   /** Caller budget in ms; clamped server-side to the wire ceiling. */
   timeout?: number;
+  /** Child working directory. Absent → the realm's cwd. */
+  cwd?: string;
+  /** Child environment (Node replace semantics). Absent → inherit the parent. */
+  env?: Record<string, string>;
 }
 
 export interface SyncExecXhrBridge {
@@ -148,6 +152,8 @@ export function createSyncExecXhrBridge(
         command,
         ...(runOpts.args !== undefined ? { args: runOpts.args } : {}),
         ...(runOpts.input !== undefined ? { stdin: runOpts.input } : {}),
+        ...(runOpts.cwd !== undefined ? { cwd: runOpts.cwd } : {}),
+        ...(runOpts.env !== undefined ? { env: runOpts.env } : {}),
         timeoutMs,
       };
       try {

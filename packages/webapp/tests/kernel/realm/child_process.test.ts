@@ -235,6 +235,7 @@ describe('child_process: sync forms without a bridge', () => {
 
 interface FakeHandle {
   commandOrArgv: string | string[];
+  startOpts?: { cwd?: string; env?: Record<string, string> };
   writes: string[];
   killSigs: string[];
   ended: boolean;
@@ -248,7 +249,10 @@ interface FakeHandle {
 function makeFakeBridge() {
   let last: FakeHandle | undefined;
   const bridge = {
-    start(commandOrArgv: string | string[]): FakeHandle {
+    start(
+      commandOrArgv: string | string[],
+      startOpts?: { cwd?: string; env?: Record<string, string> }
+    ): FakeHandle {
       let resolveDone!: (result: CpExecResult) => void;
       let rejectDone!: (error: unknown) => void;
       const done = new Promise<CpExecResult>((resolve, reject) => {
@@ -257,6 +261,7 @@ function makeFakeBridge() {
       });
       const handle: FakeHandle = {
         commandOrArgv,
+        startOpts,
         writes: [],
         killSigs: [],
         ended: false,
@@ -400,6 +405,118 @@ describe('child_process unit: sync forms', () => {
     cp.spawnSync('echo', ['a', 'b'], { shell: true });
     expect(bridge.calls[1]?.command).toBe('echo a b');
   });
+
+  it('spawnSync forwards cwd and env to the sync bridge', () => {
+    const bridge = makeFakeSyncBridge(ok);
+    const cp = createNodeChildProcess(makeFakeBridge(), bridge);
+    cp.spawnSync('pwd', [], { cwd: '/shared', env: { MARKER: 'x' }, encoding: 'utf8' });
+    expect(bridge.calls[0]?.opts).toMatchObject({ cwd: '/shared', env: { MARKER: 'x' } });
+  });
+
+  it('execSync and execFileSync forward cwd and env', () => {
+    const bridge = makeFakeSyncBridge(ok);
+    const cp = createNodeChildProcess(makeFakeBridge(), bridge);
+    cp.execSync('pwd', { cwd: '/shared', env: { MARKER: 'x' }, encoding: 'utf8' });
+    cp.execFileSync('pwd', [], { cwd: '/workspace', env: { MARKER: 'y' }, encoding: 'utf8' });
+    expect(bridge.calls[0]?.opts).toMatchObject({ cwd: '/shared', env: { MARKER: 'x' } });
+    expect(bridge.calls[1]?.command).toEqual(['pwd']);
+    expect(bridge.calls[1]?.opts).toMatchObject({ cwd: '/workspace', env: { MARKER: 'y' } });
+  });
+});
+
+/**
+ * Issue #3156: the live `pwd` / `MARKER` contract, against a bridge that
+ * actually honours `cwd`/`env` the way just-bash does once they arrive.
+ */
+function makeHonoringSyncBridge() {
+  const dirs = new Set(['/shared', '/workspace', '/tmp']);
+  const calls: SyncCall[] = [];
+  return {
+    calls,
+    run(command: string | string[], opts: Record<string, unknown> = {}): CpExecResult {
+      calls.push({ command, opts });
+      const cwd = typeof opts.cwd === 'string' ? opts.cwd : '/workspace';
+      const env = (opts.env as Record<string, string> | undefined) ?? {};
+      if (typeof opts.cwd === 'string' && !dirs.has(opts.cwd)) {
+        throw Object.assign(new Error(`ENOENT: no such file or directory, uv_cwd '${opts.cwd}'`), {
+          code: 'ENOENT',
+        });
+      }
+      const argv = Array.isArray(command) ? command : [command];
+      const file = argv[0];
+      const rest = argv.slice(1);
+      if (file === 'pwd') return { stdout: `${cwd}\n`, stderr: '', exitCode: 0 };
+      if (file === 'printenv')
+        return { stdout: `${env[rest[0] ?? ''] ?? ''}\n`, stderr: '', exitCode: 0 };
+      if (file === 'sh' && rest[0] === '-c') {
+        const script = rest.slice(1).join(' ');
+        if (script.includes('MARKER')) {
+          return { stdout: `${env.MARKER ?? ''}\n`, stderr: '', exitCode: 0 };
+        }
+        return { stdout: `cwd=${cwd}\n`, stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  };
+}
+
+describe('child_process unit: cwd and env (#3156)', () => {
+  it("spawnSync('pwd', [], { cwd: '/shared' }) stdout is /shared", () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
+    const r = cp.spawnSync('pwd', [], { cwd: '/shared', encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(r.error).toBeUndefined();
+    expect(String(r.stdout).trim()).toBe('/shared');
+  });
+
+  it('spawnSync env MARKER is visible in the child', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
+    const r = cp.spawnSync('sh', ['-c', 'echo "$MARKER"'], {
+      env: { MARKER: 'x' },
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    expect(String(r.stdout).trim()).toBe('x');
+  });
+
+  it('execSync and execFileSync honour the same cwd and env', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
+    expect(String(cp.execSync('pwd', { cwd: '/shared', encoding: 'utf8' })).trim()).toBe('/shared');
+    expect(String(cp.execFileSync('pwd', [], { cwd: '/shared', encoding: 'utf8' })).trim()).toBe(
+      '/shared'
+    );
+    expect(
+      String(
+        cp.execFileSync('printenv', ['MARKER'], {
+          env: { MARKER: 'x' },
+          encoding: 'utf8',
+        })
+      ).trim()
+    ).toBe('x');
+  });
+
+  it('a missing cwd errors honestly instead of silently using the parent', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
+    const r = cp.spawnSync('pwd', [], { cwd: '/no/such/dir', encoding: 'utf8' });
+    expect(r.status).toBeNull();
+    expect((r.error as NodeJS.ErrnoException | undefined)?.code).toBe('ENOENT');
+    expect(() => cp.execSync('pwd', { cwd: '/no/such/dir', encoding: 'utf8' })).toThrow(
+      expect.objectContaining({ code: 'ENOENT' })
+    );
+    expect(() => cp.execFileSync('pwd', [], { cwd: '/no/such/dir', encoding: 'utf8' })).toThrow(
+      expect.objectContaining({ code: 'ENOENT' })
+    );
+  });
+
+  it('an invalid cwd/env type throws ERR_INVALID_ARG_TYPE rather than being dropped', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
+    expect(() => cp.spawnSync('pwd', [], { cwd: 12 as unknown as string })).toThrow(
+      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' })
+    );
+    expect(() =>
+      cp.execSync('pwd', { env: 'nope' as unknown as Record<string, string>, encoding: 'utf8' })
+    ).toThrow(expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }));
+  });
 });
 
 describe('child_process unit: streams and events', () => {
@@ -482,6 +599,16 @@ describe('child_process unit: options and overloads', () => {
     const cp = createNodeChildProcess(bridge);
     cp.spawn('ls', { encoding: 'utf8' });
     expect(bridge.lastHandle.commandOrArgv).toEqual(['ls']);
+  });
+
+  it('spawn forwards cwd and env onto exec.start', () => {
+    const bridge = makeFakeBridge();
+    const cp = createNodeChildProcess(bridge);
+    cp.spawn('pwd', [], { cwd: '/shared', env: { MARKER: 'x' } });
+    expect(bridge.lastHandle.startOpts).toMatchObject({
+      cwd: '/shared',
+      env: { MARKER: 'x' },
+    });
   });
 
   it('stdin.write forwards decoded byte chunks and runs the write callback', async () => {
