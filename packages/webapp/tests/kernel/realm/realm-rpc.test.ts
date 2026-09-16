@@ -71,8 +71,9 @@ function makeMockFs(files: Record<string, string> = {}): IFileSystem {
     async writeFile(path: string, content: string | Uint8Array) {
       store.set(path, typeof content === 'string' ? content : new TextDecoder().decode(content));
     },
-    async appendFile() {
-      /* noop */
+    async appendFile(path: string, content: string | Uint8Array) {
+      const suffix = typeof content === 'string' ? content : new TextDecoder().decode(content);
+      store.set(path, (store.get(path) || '') + suffix);
     },
     async exists(path: string) {
       return store.has(path);
@@ -167,6 +168,36 @@ describe('realm RPC: vfs channel', () => {
     const client = new RealmRpcClient(realm);
     await client.call('vfs', 'writeFile', ['/tmp/out.txt', 'written']);
     expect(await fs.readFile('/tmp/out.txt')).toBe('written');
+    client.dispose();
+  });
+
+  it('appendFile is one op into ctx.fs.appendFile and reports the mutation', async () => {
+    const fs = makeMockFs({ '/tmp/log.txt': 'start' });
+    const onHostFsMutation = vi.fn();
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { onHostFsMutation });
+    const client = new RealmRpcClient(realm);
+    await client.call('vfs', 'appendFile', ['/tmp/log.txt', 'A']);
+    expect(await fs.readFile('/tmp/log.txt')).toBe('startA');
+    expect(onHostFsMutation).toHaveBeenCalledWith(['/tmp/log.txt']);
+    client.dispose();
+  });
+
+  it('concurrent appendFile RPCs keep both payloads', async () => {
+    const fs = makeMockFs({ '/tmp/log.txt': '' });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    await Promise.all([
+      client.call('vfs', 'appendFile', ['/tmp/log.txt', 'A']),
+      client.call('vfs', 'appendFile', ['/tmp/log.txt', 'B']),
+    ]);
+    const body = await fs.readFile('/tmp/log.txt');
+    expect(body).toHaveLength(2);
+    expect(body).toContain('A');
+    expect(body).toContain('B');
     client.dispose();
   });
 

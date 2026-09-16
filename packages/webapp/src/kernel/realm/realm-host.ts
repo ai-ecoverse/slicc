@@ -420,6 +420,10 @@ async function dispatchVfs(
       await ctx.fs.writeFile(resolved!, args[1] as Uint8Array);
       if (resolved) onMutation?.([resolved]);
       return true;
+    case 'appendFile':
+      await ctx.fs.appendFile(resolved!, args[1] as string | Uint8Array);
+      if (resolved) onMutation?.([resolved]);
+      return true;
     case 'readDir':
       return ctx.fs.readdir(resolved!);
     case 'exists':
