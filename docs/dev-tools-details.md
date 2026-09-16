@@ -856,7 +856,7 @@ no Swift toolchain. It scans:
 | `widgetkit-no-webrtc`          | `packages/swift-widgetkit/Sources/SliccWidgetKit` (+ tests) | at least one `public`/`open` declaration (the cross-module surface)          |
 
 Forbidden modules: `WebRTC`, `SliccTrayFollower`, `SliccTrayVFS`,
-`SliccTrayKit`. Import collection is the same `collectImportHits` helper
+`SliccTrayKit`, `UIKit`, `AppKit`. Import collection is the same `collectImportHits` helper
 the unused-dependency gate uses (comments and string literals blanked;
 `@_exported` / `canImport` count). The xcodegen pass catches linking
 WebRTC without an `import`. The `slicc-widget-gallery` executable is

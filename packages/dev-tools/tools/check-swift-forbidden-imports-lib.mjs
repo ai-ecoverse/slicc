@@ -32,17 +32,20 @@ export const WIDGET_FORBIDDEN_MODULES = [
   'SliccTrayFollower',
   'SliccTrayVFS',
   'SliccTrayKit',
+  'UIKit',
+  'AppKit',
 ];
 
 const WIDGET_REASON =
   'WidgetKit extensions run in a short-lived process with a hard memory budget; ' +
-  'they must not import WebRTC or the tray-follower modules that pull it in. ' +
-  'Draw through SliccWidgetKit — its `public` API is the cross-module surface.';
+  'they must not import WebRTC, UIKit, AppKit, or the tray-follower modules that ' +
+  'pull WebRTC in. Draw through SliccWidgetKit — its `public` API is the ' +
+  'cross-module surface.';
 
 const WIDGETKIT_REASON =
   'SliccWidgetKit is Foundation + SwiftUI + WidgetKit only. Both widget hosts ' +
   'import this module; its `public` types are the deliberate cross-module ' +
-  'surface. WebRTC and tray-follower modules stay out.';
+  'surface. WebRTC, UIKit, AppKit, and tray-follower modules stay out.';
 
 /**
  * Frozen denylist. Add a rule when a new widget host or SPM library needs
@@ -151,11 +154,22 @@ export function xcodegenTargetDependencies(yml, targetName) {
     const pkg = /(?:^|[-\s])package:\s*(\S+)/.exec(line);
     const tgt = /(?:^|[-\s])target:\s*(\S+)/.exec(line);
     const product = /(?:^|[-\s])product:\s*(\S+)/.exec(line);
-    if (pkg) deps.push({ kind: 'package', name: pkg[1], line: number });
-    if (tgt) deps.push({ kind: 'target', name: tgt[1], line: number });
-    if (product) deps.push({ kind: 'product', name: product[1], line: number });
+    if (pkg) deps.push({ kind: 'package', name: yamlScalar(pkg[1]), line: number });
+    if (tgt) deps.push({ kind: 'target', name: yamlScalar(tgt[1]), line: number });
+    if (product) deps.push({ kind: 'product', name: yamlScalar(product[1]), line: number });
   }
   return deps;
+}
+
+/** Strip YAML quotes from a scalar (`"WebRTC"` / `'WebRTC'` → `WebRTC`). */
+export function yamlScalar(raw) {
+  if (
+    (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) ||
+    (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2)
+  ) {
+    return raw.slice(1, -1);
+  }
+  return raw;
 }
 
 /**
@@ -208,8 +222,9 @@ export function formatHelp(rules = FORBIDDEN_IMPORT_RULES) {
     'Usage:',
     '  node packages/dev-tools/tools/check-swift-forbidden-imports.mjs [--root <dir>] [--help]',
     '',
-    'Fails when a widget (or SliccWidgetKit) imports WebRTC or a tray-follower',
-    'module that pulls it in, or when an xcodegen widget target links one.',
+    'Fails when a widget (or SliccWidgetKit) imports WebRTC, UIKit, AppKit, or a',
+    'tray-follower module that pulls WebRTC in, or when an xcodegen widget target',
+    'links one.',
     'The Swift layer stack is the SPM modules; cross-module API is `public`.',
     '',
     'Rules:',

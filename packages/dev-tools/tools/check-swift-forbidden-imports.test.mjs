@@ -13,6 +13,7 @@ import {
   hasPublicSurface,
   WIDGET_FORBIDDEN_MODULES,
   xcodegenTargetDependencies,
+  yamlScalar,
 } from './check-swift-forbidden-imports-lib.mjs';
 
 const filename = fileURLToPath(import.meta.url);
@@ -47,12 +48,14 @@ describe('FORBIDDEN_IMPORT_RULES', () => {
     ]);
   });
 
-  it('forbids WebRTC and the tray-follower modules that pull it in', () => {
+  it('forbids WebRTC, UIKit/AppKit, and the tray-follower modules that pull WebRTC in', () => {
     expect(WIDGET_FORBIDDEN_MODULES).toEqual([
       'WebRTC',
       'SliccTrayFollower',
       'SliccTrayVFS',
       'SliccTrayKit',
+      'UIKit',
+      'AppKit',
     ]);
     for (const rule of FORBIDDEN_IMPORT_RULES) {
       expect(rule.forbidden).toEqual(WIDGET_FORBIDDEN_MODULES);
@@ -121,6 +124,16 @@ describe('analyzeSource', () => {
     ).toEqual([]);
   });
 
+  it('flags a UIKit import in SliccWidgetKit (the documented no-UIKit boundary)', () => {
+    const findings = analyzeSource({
+      relPath: 'packages/swift-widgetkit/Sources/SliccWidgetKit/View.swift',
+      source: 'import SwiftUI\nimport UIKit\n',
+      rule: WIDGETKIT_RULE,
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain("'UIKit'");
+  });
+
   it('does not flag the modules a widget is allowed to import', () => {
     const source = 'import SliccWidgetKit\nimport SwiftUI\nimport WidgetKit\n';
     expect(
@@ -138,6 +151,14 @@ describe('hasPublicSurface', () => {
   it('does not treat a comment or a string as a public surface', () => {
     expect(hasPublicSurface('// public struct WidgetHost {}\nstruct Internal {}\n')).toBe(false);
     expect(hasPublicSurface('let docs = "public struct WidgetHost"\n')).toBe(false);
+  });
+});
+
+describe('yamlScalar', () => {
+  it('strips matching double and single quotes', () => {
+    expect(yamlScalar('"WebRTC"')).toBe('WebRTC');
+    expect(yamlScalar("'SliccTrayKit'")).toBe('SliccTrayKit');
+    expect(yamlScalar('WebRTC')).toBe('WebRTC');
   });
 });
 
@@ -197,6 +218,25 @@ describe('analyzeXcodegenTarget', () => {
       code: 'forbidden-target-dependency',
       line: 5,
       ruleId: 'ios-widgets-no-webrtc',
+    });
+    expect(findings[0].message).toContain("'WebRTC'");
+  });
+
+  it('flags a quoted YAML package name (`package: "WebRTC"`)', () => {
+    const yml = `targets:
+  SliccWidgets:
+    dependencies:
+      - package: "WebRTC"
+`;
+    const findings = analyzeXcodegenTarget({
+      relPath: 'packages/ios-app/project.yml',
+      yml,
+      rule: WIDGET_RULE,
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      code: 'forbidden-target-dependency',
+      line: 4,
     });
     expect(findings[0].message).toContain("'WebRTC'");
   });

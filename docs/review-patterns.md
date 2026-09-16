@@ -402,7 +402,7 @@ type`, namespace). That one exemption exists because it compiles away
   `findWebcomponentsWebappEscapes` / `scanWebcomponentsWebappEscapes` — zero
   tolerance, no baseline.
 - A Swift `import` (or xcodegen `package:` / `target:` link) of `WebRTC`,
-  `SliccTrayFollower`, `SliccTrayVFS`, or `SliccTrayKit` under
+  `SliccTrayFollower`, `SliccTrayVFS`, `SliccTrayKit`, `UIKit`, or `AppKit` under
   `packages/ios-app/SliccWidgets`, `packages/swift-launcher/SliccstartWidgets`,
   or `packages/swift-widgetkit/Sources/SliccWidgetKit` (issue #3149). Swift
   layering is the SPM modules (`swift-traykit`, `swift-widgetkit`,
