@@ -338,6 +338,35 @@ describe('node command — shebang stripping (Wave 15 / fix B1)', () => {
   });
 });
 
+describe('node command — process.exitCode on normal completion (#3155)', () => {
+  it.each(['ec.js', 'ec.cjs'] as const)(
+    'a %s whose only statement is process.exitCode = 3 exits 3',
+    async (name) => {
+      const path = `/workspace/${name}`;
+      const ctx = createMockCtx({ [path]: 'process.exitCode = 3;\n' }, '/workspace');
+      const result = await createNodeCommand().execute([`./${name}`], ctx);
+      expect(result.exitCode).toBe(3);
+      expect(result.stderr).toBe('');
+    }
+  );
+
+  it('process.exit(3) still exits 3', async () => {
+    const ctx = createMockCtx({ '/workspace/ex.js': 'process.exit(3);\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['./ex.js'], ctx);
+    expect(result.exitCode).toBe(3);
+  });
+
+  it('an uncaught throw still exits 1', async () => {
+    const ctx = createMockCtx(
+      { '/workspace/boom.js': 'process.exitCode = 4;\nthrow new Error("boom");\n' },
+      '/workspace'
+    );
+    const result = await createNodeCommand().execute(['./boom.js'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('boom');
+  });
+});
+
 describe('node command — explicit stdin script tokens (`node /dev/stdin << EOF`)', () => {
   function stdinCtx(code: string, files: Record<string, string> = {}): ResolvedCommandContext {
     return createCommandContext({

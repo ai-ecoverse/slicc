@@ -266,6 +266,56 @@ describe('realm event-loop drain before teardown', () => {
     expect(done.stdout).not.toContain('late');
   });
 
+  it('honours process.exitCode = 3 on a script whose only statement is that assignment (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 3;');
+    expect(done.exitCode).toBe(3);
+    expect(done.stderr).toBe('');
+  });
+
+  it('honours process.exitCode set from a delayed callback after the drain (#3155)', async () => {
+    const code = [
+      'setTimeout(() => {',
+      '  process.stdout.write("from-timer\\n");',
+      '  process.exitCode = 3;',
+      '}, 15);',
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(3);
+    expect(done.stdout).toBe('from-timer\n');
+  });
+
+  it('process.exit(3) still exits 3 when exitCode was previously assigned (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 9; process.exit(3);');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('no-arg process.exit() uses the assigned process.exitCode (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 3; process.exit();');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('process.exit(undefined) exits 0 even when exitCode was previously assigned (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 3; process.exit(undefined);');
+    expect(done.exitCode).toBe(0);
+  });
+
+  it('an invalid process.exitCode assignment is an uncaught throw (exit 1), not a silent 0 (#3155)', async () => {
+    const done = await runRealm('process.exitCode = "failure";');
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toMatch(/must be of type number|ERR_INVALID_ARG_TYPE/);
+  });
+
+  it('process.exit(3) still wins if a finally later assigns process.exitCode (#3155)', async () => {
+    const done = await runRealm('try { process.exit(3); } finally { process.exitCode = 9; }');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('an uncaught throw still exits 1 and discards a previously assigned exitCode (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 4; throw new Error("boom");');
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toContain('boom');
+  });
+
   it('flushes sync-fs mutations made from a delayed callback', async () => {
     const flushWrites: unknown[] = [];
     const code = [

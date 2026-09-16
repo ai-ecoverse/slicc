@@ -498,7 +498,9 @@ async function finishJsRealm(opts: {
 
 /**
  * Run the entry, flush sync-fs, then drain ref'd handles (RPC + timers)
- * unless `process.exit()` already skipped them.
+ * unless `process.exit()` already skipped them. A mere `process.exitCode`
+ * assignment does not skip the drain — Node waits for handles, then exits
+ * with that status (#3155).
  */
 async function runEntryThenDrain(opts: {
   entryCode: string;
@@ -529,7 +531,13 @@ async function runEntryThenDrain(opts: {
   // sync-fs cache after the post-entry flush. Flush again so those
   // writes are not dropped when the realm tears down.
   await flushSyncFsCache(opts.rpc, opts.syncFs, opts.writeStderr);
-  return opts.proc.getDidCallProcessExit() ? opts.proc.getExitCode() : exitCode;
+  // `process.exit(N)` wins. An uncaught throw from the entry is 1 (Node
+  // discards a previously assigned `process.exitCode`). Otherwise honour
+  // `process.exitCode`, including assignments from delayed callbacks (#3155).
+  if (opts.proc.getDidCallProcessExit() || exitCode === 0) {
+    return opts.proc.getExitCode();
+  }
+  return exitCode;
 }
 
 /**

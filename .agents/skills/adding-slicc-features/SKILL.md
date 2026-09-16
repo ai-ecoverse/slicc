@@ -232,7 +232,7 @@ const inputFile = args[0];
 
 | Global / module                        | Methods                                                                                                                                                                                                  |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`                              | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `stdout.write()`, `stderr.write()`                                                                                                                      |
+| `process`                              | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `exitCode` (deferred status; honoured after drain), `stdout.write()`, `stderr.write()`                                                                  |
 | `console`                              | 19 standard methods: `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw); `group*`/`time*`/`count*`/`clear`                         |
 | `require('fs')` / `require('node:fs')` | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
 | `require('sliccy:exec')`               | Callable `exec(cmd)` + `.spawn(argv[])`. Shell command bridge.                                                                                                                                           |

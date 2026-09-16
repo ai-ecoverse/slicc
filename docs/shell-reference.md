@@ -1835,7 +1835,8 @@ script's return value. After the body finishes it keeps the process alive
 while libuv still has ref'd handles — timers (`setTimeout` / `setInterval`)
 and I/O (`fs`, `fetch`, sockets, `child_process`). A pending Promise with
 no handle (`new Promise(() => {})`) does **not** keep it alive.
-`process.exit(N)` skips remaining handles.
+`process.exit(N)` skips remaining handles. `process.exitCode = n` does
+not: the realm drains, then exits with `n` (#3155).
 
 SLICC matches that: `.jsh` / `node` wrap the entry in `AsyncFunction` (so
 top-level `await` works), then drain outstanding RPC (fs/exec/fetch) and
@@ -1855,7 +1856,8 @@ the shell job is SIGKILL'd, the same way hung I/O hangs real Node.
 process.argv: string[]                       // ['node', 'script.jsh', ...args]
 process.env: object                          // Environment variables (+ selected-provider API key, see below)
 process.cwd(): string                        // Current working directory
-process.exit(code?: number)                  // Exit with code (0 default)
+process.exit(code?: number)                  // Exit with code (uses process.exitCode, then 0)
+process.exitCode: number | undefined         // Deferred status; honoured on normal completion (#3155)
 process.stdout.write(s)                      // Write to stdout
 process.stderr.write(s)                      // Write to stderr
 process.stdin.read(): string | null          // Buffered piped stdin; null after EOF or when nothing was piped
