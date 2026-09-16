@@ -6,7 +6,8 @@ import os
 /// SwiftUI wrapper around WKWebView that renders a `.shtml` sprinkle.
 ///
 /// Bridges the sprinkle's JS surface (`window.sprinkle.*`) to the Swift side:
-///   - `lick({action, data})` → forwarded to the leader as `sprinkle.lick`
+///   - `lick({action, data, target})` → forwarded to the leader as `sprinkle.lick`
+///     (`target` becomes its `targetScoop`)
 ///   - `on('update', cb)` / `off` → receives `sprinkle.update` payloads
 ///   - `setState(data)` / `getState()` → UserDefaults-backed (per-sprinkle key)
 ///   - `close()` → invokes the dismiss closure
@@ -271,8 +272,15 @@ struct SprinkleWebView: UIViewRepresentable {
           const sprinkle = {
             get name() { return '__SPRINKLE_NAME__'; },
             lick: function(event) {
-              const body = (typeof event === 'string') ? { action: event } : event;
-              send('lick', { body: body });
+              if (typeof event === 'string') { send('lick', { body: { action: event } }); return; }
+              // `target` is the panel's own recipient (#3089). It travels as
+              // targetScoop, as on the web follower, not inside the body.
+              // Absent keys are omitted: postMessage has no `undefined`.
+              const body = { action: event.action };
+              if (event.data !== undefined) body.data = event.data;
+              const payload = { body: body };
+              if (typeof event.target === 'string' && event.target) payload.targetScoop = event.target;
+              send('lick', payload);
             },
             on: function(eventName, cb) {
               if (eventName === 'update') updateListeners.add(cb);

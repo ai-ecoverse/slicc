@@ -356,6 +356,19 @@ describe('SprinkleFollowerController', () => {
       ]);
     });
 
+    it('forwards an explicit lick target as targetScoop instead of dropping it (#3089)', async () => {
+      sync.contentByName.set('review', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('review', { open: true })]);
+
+      FakeRenderer.instances[0].api.lick({ action: 'publish', data: { id: 7 }, target: 'cone-b' });
+      FakeRenderer.instances[0].api.lick({ action: 'done', target: '' });
+
+      expect(sync.licks).toEqual([
+        { name: 'review', body: { action: 'publish', data: { id: 7 } }, targetScoop: 'cone-b' },
+        { name: 'review', body: { action: 'done', data: undefined }, targetScoop: undefined },
+      ]);
+    });
+
     it('forwards stopCone via a special __stopCone__ sprinkle lick', async () => {
       sync.contentByName.set('welcome', '<p>hi</p>');
       await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);

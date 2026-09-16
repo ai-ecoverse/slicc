@@ -178,6 +178,21 @@ describe('SprinkleManager', () => {
     );
   });
 
+  it('exposes the opening unit for follower-rendered copies of the panel (#3089)', async () => {
+    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dashboard</title>');
+    await vfs.writeFile('/shared/sprinkles/plain/plain.shtml', '<title>Plain</title>');
+    await mgr.refresh();
+
+    expect(mgr.lickOriginUnitIdOf('dash')).toBeUndefined();
+    await mgr.open('dash', undefined, { lickOriginTarget: 'cone-research' });
+    await mgr.open('plain');
+
+    expect(mgr.lickOriginUnitIdOf('dash')).toBe('cone-2');
+    expect(mgr.lickOriginUnitIdOf('plain')).toBeUndefined();
+    mgr.close('dash');
+    expect(mgr.lickOriginUnitIdOf('dash')).toBeUndefined();
+  });
+
   // Regression: under `slicc_opfs_vfs=opfs` the page-side `localFs` is
   // an empty memory VFS — passing it straight to `SprinkleManager`
   // stranded discovery (`fs.walk('/')` yielded nothing) so

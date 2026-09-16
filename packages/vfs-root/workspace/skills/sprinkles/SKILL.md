@@ -311,7 +311,7 @@ sprinkle chat '<div class="sprinkle-action-card">
 
 Available as `slicc` in `<script>` tags and `onclick` attributes:
 
-- `slicc.lick(event)` — send a lick event to the cone (cone routes to the right scoop). Accepts a string shortcut (`slicc.lick('cancel')` → `{ action: 'cancel' }`) or `{ action, data?, target? }`. In a leader-rendered panel, `target` is a cone/scoop name or folder alias and overrides the sprinkle's configured route for that lick. See payload-shape note below.
+- `slicc.lick(event)` — send a lick event to the cone (cone routes to the right scoop). Accepts a string shortcut (`slicc.lick('cancel')` → `{ action: 'cancel' }`) or `{ action, data?, target? }`. `target` is a cone/scoop name or folder alias and overrides the sprinkle's configured route for that lick, on the leader and on followers alike. Without it, a click on any copy of the panel goes to the cone that opened it. See payload-shape note below.
 - `slicc.on('update', function(data) {...})` — receive data sent via `sprinkle send`.
 
 > **Payload shape:** the cone reads `event.data` as the payload — top-level extras outside `action`, `data`, and `target` are silently dropped by the sprinkle bridge. Always use `slicc.lick({ action: 'deploy', data: { env: 'prod' } })`, not `slicc.lick({ action: 'deploy', env: 'prod' })`.

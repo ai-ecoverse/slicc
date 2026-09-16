@@ -1141,6 +1141,16 @@ export class SprinkleManager implements SprinkleManagerHandle {
   }
 
   /**
+   * The unit an open panel's licks originate from — the cone captured when
+   * it was opened, or `undefined` for a closed panel or one opened by the
+   * default root. Follower-rendered copies of the panel route through this
+   * so a click lands where the same click on the leader would (#3089).
+   */
+  lickOriginUnitIdOf(name: string): string | undefined {
+    return this.openSprinkles.get(name)?.lickOriginUnitId;
+  }
+
+  /**
    * Set up watchers that auto-surface newly-added `.shtml` files in
    * the rail and auto-reload already-open sprinkles on content change.
    *
