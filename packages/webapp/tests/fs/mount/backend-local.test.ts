@@ -58,6 +58,28 @@ describe('LocalMountBackend basic ops', () => {
     expect(new TextDecoder().decode(got)).toBe('hi');
   });
 
+  it('writeFile does not hide pre-existing directory entries (#3193)', async () => {
+    const mut = createMutableDirectoryHandle({
+      'keep.txt': 'keep',
+      sub: { 'nested.txt': 'n' },
+    });
+    const backend = LocalMountBackend.fromHandle(mut.handle, { mountId: 'm1' });
+    expect((await backend.readDir('/')).map((e) => e.name).sort()).toEqual(['keep.txt', 'sub']);
+    await backend.writeFile('probe.txt', new TextEncoder().encode('x'));
+    expect((await backend.readDir('/')).map((e) => e.name).sort()).toEqual([
+      'keep.txt',
+      'probe.txt',
+      'sub',
+    ]);
+    await backend.writeFile('sub/probe.txt', new TextEncoder().encode('x'));
+    expect((await backend.readDir('sub')).map((e) => e.name).sort()).toEqual([
+      'nested.txt',
+      'probe.txt',
+    ]);
+    await backend.remove('sub/probe.txt');
+    expect((await backend.readDir('sub')).map((e) => e.name)).toEqual(['nested.txt']);
+  });
+
   it('stat: file returns size and mtime', async () => {
     const handle = createDirectoryHandle({ 'a.txt': 'hello' });
     const backend = LocalMountBackend.fromHandle(handle, { mountId: 'm1' });

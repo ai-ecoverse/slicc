@@ -164,6 +164,45 @@ describe('HostFsMountBackend', () => {
     ]);
   });
 
+  it('writeFile does not replace directory listings with the write-set (#3193)', async () => {
+    const parentEntries = [
+      { name: '_archive', kind: 'directory' as const },
+      { name: 'tech', kind: 'directory' as const },
+      { name: 'readme.md', kind: 'file' as const, size: 1, lastModified: 1 },
+    ];
+    const archiveEntries = [
+      { name: 'index-full.md', kind: 'file' as const, size: 2, lastModified: 2 },
+    ];
+    const { backend } = backendWith((url, init) => {
+      if (init?.method === 'PUT' || String(url).includes('/write')) {
+        archiveEntries.push({ name: '.__probe.tmp', kind: 'file', size: 1, lastModified: 3 });
+        return new Response(null, { status: 200 });
+      }
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      if (body.op === 'list' && body.path === '_archive') return ok({ entries: archiveEntries });
+      if (body.op === 'list') return ok({ entries: parentEntries });
+      return ok({ ok: true });
+    });
+    expect((await backend.readDir('')).map((e) => e.name).sort()).toEqual([
+      '_archive',
+      'readme.md',
+      'tech',
+    ]);
+    await backend.writeFile('_archive/.__probe.tmp', new Uint8Array([120]));
+    expect((await backend.readDir('')).map((e) => e.name).sort()).toEqual([
+      '_archive',
+      'readme.md',
+      'tech',
+    ]);
+    expect((await backend.readDir('_archive')).map((e) => e.name).sort()).toEqual([
+      '.__probe.tmp',
+      'index-full.md',
+    ]);
+    expect(await backend.getCache().getListing('')).toBeNull();
+    expect(await backend.getCache().getListing('_archive')).toBeNull();
+    await backend.close();
+  });
+
   // #2715: the CORS preflight cache is keyed by URL, so the metadata ops all
   // share one stable URL and only the body ops keep a per-path URL.
   it('sends every metadata op to the one stable URL', async () => {
