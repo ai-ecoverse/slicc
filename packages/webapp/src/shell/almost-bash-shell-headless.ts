@@ -176,6 +176,31 @@ function stripRunPid(env: Record<string, string>): Record<string, string> {
   return rest;
 }
 
+function nestedBashExecOptions(
+  opts:
+    | {
+        cwd?: string;
+        env?: Record<string, string>;
+        args?: string[];
+        replaceEnv?: boolean;
+      }
+    | undefined,
+  fallbackEnv: Record<string, string>,
+  fallbackCwd: string
+): {
+  env: Record<string, string>;
+  cwd: string;
+  replaceEnv?: boolean;
+  args?: string[];
+} {
+  return {
+    env: opts?.env ?? fallbackEnv,
+    cwd: opts?.cwd ?? fallbackCwd,
+    ...(opts?.env !== undefined ? { replaceEnv: opts.replaceEnv ?? true } : {}),
+    ...(opts?.args !== undefined ? { args: opts.args } : {}),
+  };
+}
+
 export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
@@ -496,7 +521,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
         stdin: EMPTY_BYTES,
-        exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+        exec: (cmd, opts) =>
+          this.bash.exec(cmd, nestedBashExecOptions(opts, this.lastEnv, this.cwd)),
       },
       this.buildJshProcessConfig()
     );
@@ -856,11 +882,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       const execFn: typeof ctx.exec =
         ctx.exec ??
         ((cmd, opts) =>
-          this.bash.exec(cmd, {
-            env: Object.fromEntries(ctx.env),
-            cwd: opts?.cwd ?? ctx.cwd,
-            args: opts?.args,
-          }));
+          this.bash.exec(cmd, nestedBashExecOptions(opts, Object.fromEntries(ctx.env), ctx.cwd)));
 
       const jshMap = await catalog.getJshCommands(this.currentScanRoots());
       const jshPath = jshMap.get(cmdName);
@@ -1003,7 +1025,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
         stdin: EMPTY_BYTES,
-        exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+        exec: (cmd, opts) =>
+          this.bash.exec(cmd, nestedBashExecOptions(opts, this.lastEnv, this.cwd)),
       },
       this.buildJshProcessConfig(runPid)
     );

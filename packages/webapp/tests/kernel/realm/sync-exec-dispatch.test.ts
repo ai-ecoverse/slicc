@@ -62,6 +62,59 @@ test('stdin rides through to ctx.exec', async () => {
   expect(calls[0]?.opts.stdin).toBe('piped');
 });
 
+test('a per-command cwd overrides the token cwd', async () => {
+  const { token, calls } = execToken({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'pwd',
+    cwd: '/shared',
+  });
+  expect(r.ok).toBe(true);
+  if (r.ok && r.kind === 'json')
+    expect(r.json).toEqual({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+  expect(calls[0]?.opts.cwd).toBe('/shared');
+});
+
+test('env is forwarded with replaceEnv so MARKER is visible and parent env is not merged', async () => {
+  const { token, calls } = execToken({ stdout: 'x\n', stderr: '', exitCode: 0 });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: ['sh', '-c', 'echo "$MARKER"'],
+    env: { MARKER: 'x' },
+  });
+  expect(r.ok).toBe(true);
+  expect(calls[0]?.opts.env).toEqual({ MARKER: 'x' });
+  expect(calls[0]?.opts.replaceEnv).toBe(true);
+});
+
+test('a malformed cwd fails closed with EINVAL before reaching exec', async () => {
+  const { token, calls } = execToken({ stdout: '', stderr: '', exitCode: 0 });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'pwd',
+    cwd: '',
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EINVAL');
+  expect(calls).toHaveLength(0);
+});
+
+test('a malformed env fails closed with EINVAL before reaching exec', async () => {
+  const { token, calls } = execToken({ stdout: '', stderr: '', exitCode: 0 });
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'pwd',
+    env: { MARKER: 1 } as unknown as Record<string, string>,
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EINVAL');
+  expect(calls).toHaveLength(0);
+});
+
 test('ESCALATION GUARD: an unknown / revoked token fails closed with EACCES', async () => {
   const r = await dispatchSyncExec({
     token: 'forged',

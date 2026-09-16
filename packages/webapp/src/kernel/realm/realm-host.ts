@@ -527,10 +527,30 @@ async function dispatchExec(
   throw new Error(`realm-host: unknown exec op '${op}'`);
 }
 
+type ExecStartCallOptions = {
+  stdin?: string;
+  stdinKind?: 'text' | 'bytes';
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+};
+
+type CtxExecCallOptions = {
+  cwd: string;
+  signal: AbortSignal;
+  stdin?: string;
+  stdinKind?: 'text' | 'bytes';
+  args?: string[];
+  env?: Record<string, string>;
+  replaceEnv?: boolean;
+};
+
 function assertExecStartOptions(opts: {
   stdin?: unknown;
   stdinKind?: unknown;
   args?: unknown;
+  cwd?: unknown;
+  env?: unknown;
 }): void {
   if (opts.stdin !== undefined && typeof opts.stdin !== 'string') {
     throw new Error('exec.start: stdin must be a string');
@@ -544,6 +564,57 @@ function assertExecStartOptions(opts: {
   ) {
     throw new Error('exec.start: args must be a string[]');
   }
+  if (opts.cwd !== undefined && (typeof opts.cwd !== 'string' || opts.cwd.length === 0)) {
+    throw new Error('exec.start: cwd must be a non-empty string');
+  }
+  if (opts.env !== undefined) {
+    if (opts.env === null || typeof opts.env !== 'object' || Array.isArray(opts.env)) {
+      throw new Error('exec.start: env must be a string record');
+    }
+    const bag = opts.env as { [key: string]: string | undefined };
+    for (const key of Object.keys(bag)) {
+      const value = bag[key];
+      if (value !== undefined && typeof value !== 'string') {
+        throw new Error('exec.start: env values must be strings');
+      }
+    }
+  }
+}
+
+function parseExecStartArgv(commandOrArgv: unknown): {
+  cmd: string;
+  argvTail?: string[];
+  procArgv: string[];
+} {
+  if (Array.isArray(commandOrArgv)) {
+    if (commandOrArgv.length === 0 || !commandOrArgv.every((a) => typeof a === 'string')) {
+      throw new Error('exec.start: argv must be a non-empty string[]');
+    }
+    const [cmd, ...argvTail] = commandOrArgv as string[];
+    return { cmd: cmd!, argvTail, procArgv: commandOrArgv.slice() as string[] };
+  }
+  if (typeof commandOrArgv === 'string') {
+    return { cmd: commandOrArgv, procArgv: [commandOrArgv] };
+  }
+  throw new Error('exec.start: command must be a string or a non-empty string[]');
+}
+
+function buildCtxExecOptions(
+  opts: ExecStartCallOptions,
+  argvTail: string[] | undefined,
+  cwd: string,
+  signal: AbortSignal
+): CtxExecCallOptions {
+  const execOptions: CtxExecCallOptions = { cwd, signal };
+  if (opts.stdin !== undefined) execOptions.stdin = opts.stdin;
+  if (opts.stdinKind !== undefined) execOptions.stdinKind = opts.stdinKind;
+  if (argvTail !== undefined) execOptions.args = argvTail;
+  else if (opts.args !== undefined) execOptions.args = opts.args;
+  if (opts.env !== undefined) {
+    execOptions.env = opts.env;
+    execOptions.replaceEnv = true;
+  }
+  return execOptions;
 }
 
 async function dispatchExecStart(
@@ -554,7 +625,7 @@ async function dispatchExecStart(
   const [spawnId, commandOrArgv, options] = args as [
     number,
     string | string[],
-    { stdin?: string; stdinKind?: 'text' | 'bytes'; args?: string[] } | undefined,
+    ExecStartCallOptions | undefined,
   ];
   if (typeof spawnId !== 'number') {
     throw new Error('exec.start: spawnId must be a number');
@@ -563,25 +634,12 @@ async function dispatchExecStart(
   if (execCtx.spawns.has(spawnId)) {
     throw new Error(`exec.start: spawnId ${spawnId} is already in use`);
   }
-  let cmd: string;
-  let argvTail: string[] | undefined;
-  let procArgv: string[];
-  if (Array.isArray(commandOrArgv)) {
-    if (commandOrArgv.length === 0 || !commandOrArgv.every((a) => typeof a === 'string')) {
-      throw new Error('exec.start: argv must be a non-empty string[]');
-    }
-    [cmd, ...argvTail] = commandOrArgv;
-    procArgv = commandOrArgv.slice();
-  } else if (typeof commandOrArgv === 'string') {
-    cmd = commandOrArgv;
-    procArgv = [commandOrArgv];
-  } else {
-    throw new Error('exec.start: command must be a string or a non-empty string[]');
-  }
+  const { cmd, argvTail, procArgv } = parseExecStartArgv(commandOrArgv);
 
   const opts = options ?? {};
 
   assertExecStartOptions(opts);
+  const childCwd = opts.cwd ?? ctx.cwd;
   const controller = new AbortController();
   const { pm, owner } = execCtx.opts;
   let pid = 0;
@@ -589,9 +647,10 @@ async function dispatchExecStart(
     const proc = pm.spawn({
       kind: 'shell',
       argv: procArgv,
-      cwd: ctx.cwd,
+      cwd: childCwd,
       owner,
       ...(execCtx.opts.ppid !== undefined ? { ppid: execCtx.opts.ppid } : {}),
+      ...(opts.env !== undefined ? { env: opts.env } : {}),
       adoptAbort: controller,
     });
     pid = proc.pid;
@@ -600,19 +659,7 @@ async function dispatchExecStart(
 
   let result: { stdout: string; stderr: string; exitCode: number } | undefined;
   try {
-    const execOptions: {
-      cwd: string;
-      signal: AbortSignal;
-      stdin?: string;
-      stdinKind?: 'text' | 'bytes';
-      args?: string[];
-    } = { cwd: ctx.cwd, signal: controller.signal };
-    if (opts.stdin !== undefined) execOptions.stdin = opts.stdin;
-    if (opts.stdinKind !== undefined) execOptions.stdinKind = opts.stdinKind;
-
-    if (argvTail !== undefined) execOptions.args = argvTail;
-    else if (opts.args !== undefined) execOptions.args = opts.args;
-    result = await ctx.exec!(cmd, execOptions);
+    result = await ctx.exec!(cmd, buildCtxExecOptions(opts, argvTail, childCwd, controller.signal));
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   } finally {
     execCtx.spawns.delete(spawnId);

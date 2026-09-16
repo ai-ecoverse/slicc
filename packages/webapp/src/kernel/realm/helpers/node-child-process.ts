@@ -19,6 +19,8 @@ export interface CpExecStartOptions {
   stdin?: string;
   stdinKind?: 'text' | 'bytes';
   args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 export interface CpExecBridge {
@@ -28,7 +30,13 @@ export interface CpExecBridge {
 export interface CpSyncExecBridge {
   run(
     command: string | string[],
-    opts?: { args?: string[]; input?: string; timeout?: number }
+    opts?: {
+      args?: string[];
+      input?: string;
+      timeout?: number;
+      cwd?: string;
+      env?: Record<string, string>;
+    }
   ): CpExecResult;
 }
 
@@ -38,6 +46,8 @@ interface CpOptions {
   shell?: boolean | string;
   timeout?: number;
   stdio?: unknown;
+  cwd?: string;
+  env?: Record<string, string | undefined>;
 }
 
 type CpChunk = string | Buffer;
@@ -89,6 +99,39 @@ function cpEncodeChunk(text: string, encoding: string | null | undefined): CpChu
   if (encoding === undefined || encoding === 'utf8' || encoding === 'utf-8') return text;
   if (encoding === 'buffer' || encoding === null) return bufferFrom(text);
   return bufferFrom(text).toString(encoding as BufferEncoding);
+}
+
+type EnvBag = { [key: string]: string | undefined };
+
+function cpStringEnv(env: unknown): Record<string, string> | undefined {
+  if (env === undefined) return undefined;
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
+    throw new TypeError('The "options.env" property must be of type object');
+  }
+  const bag = env as EnvBag;
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(bag)) {
+    const value = bag[key];
+    if (typeof value === 'string') out[key] = value;
+  }
+  return out;
+}
+
+function cpOptionalCwd(cwd: unknown): string | undefined {
+  if (cwd === undefined) return undefined;
+  if (typeof cwd !== 'string') {
+    throw new TypeError('The "options.cwd" property must be of type string');
+  }
+  return cwd;
+}
+
+function cpContext(options: CpOptions): { cwd?: string; env?: Record<string, string> } {
+  const env = cpStringEnv(options.env);
+  const cwd = cpOptionalCwd(options.cwd);
+  return {
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(env !== undefined ? { env } : {}),
+  };
 }
 
 function cpJoin(chunks: CpChunk[], encoding: string | null | undefined): CpChunk {
@@ -182,7 +225,7 @@ function createCpSyncForms(
   const runSync = (
     name: string,
     command: string | string[],
-    opts: { input?: string; timeout?: number }
+    opts: { input?: string; timeout?: number; cwd?: string; env?: Record<string, string> }
   ): CpExecResult => {
     if (!syncExec) {
       throw new Error(
@@ -194,7 +237,10 @@ function createCpSyncForms(
     return syncExec.run(command, opts);
   };
 
-  const runOptions = (options: CpOptions): { input?: string; timeout?: number } => ({
+  const runOptions = (
+    options: CpOptions
+  ): { input?: string; timeout?: number; cwd?: string; env?: Record<string, string> } => ({
+    ...cpContext(options),
     ...(options.input !== undefined ? { input: cpChunkToString(options.input) } : {}),
     ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
   });
@@ -293,7 +339,7 @@ export function createNodeChildProcess(
     spawnfile: string,
     spawnargs: string[]
   ): ChildProcess => {
-    const handle = exec.start(commandOrArgv);
+    const handle = exec.start(commandOrArgv, cpContext(options));
     const child = new ChildProcess(handle, encoding, spawnfile, spawnargs);
     if (options.input !== undefined) child.stdin.write(cpChunkToString(options.input));
     queueMicrotask(() => handle.stdin.end());
