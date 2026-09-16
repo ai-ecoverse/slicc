@@ -243,6 +243,39 @@ describe('realm event-loop drain before teardown', () => {
     expect(done.stdout).not.toContain('late');
   });
 
+  it('honors process.exitCode on normal completion (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 3;');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('honors process.exitCode set from a delayed callback during the drain (#3155)', async () => {
+    const done = await runRealm('setTimeout(() => { process.exitCode = 5; }, 10);');
+    expect(done.exitCode).toBe(5);
+  });
+
+  it('lets pending I/O finish after process.exitCode assignment (#3155)', async () => {
+    const code = `const fs = require('fs'); fs.readFile('/x').then(v => console.log('then:' + v)); process.exitCode = 3;`;
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(3);
+    expect(done.stdout).toContain('then:hello-/x');
+  });
+
+  it('keeps process.exit(n) as an immediate exit (#3155)', async () => {
+    const done = await runRealm('process.exit(3);');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('uses process.exitCode when process.exit() is called with no argument (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 3; process.exit();');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('exits 1 on an uncaught throw even when exitCode was assigned (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 4; throw new Error("boom");');
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toContain('boom');
+  });
+
   it('flushes sync-fs mutations made from a delayed callback', async () => {
     const flushWrites: unknown[] = [];
     const code = [

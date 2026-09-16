@@ -368,7 +368,9 @@ async function runEntryThenDrain(opts: {
   }
 
   await flushSyncFsCache(opts.rpc, opts.syncFs, opts.writeStderr);
-  return opts.proc.getDidCallProcessExit() ? opts.proc.getExitCode() : exitCode;
+  if (opts.proc.getDidCallProcessExit()) return opts.proc.getExitCode();
+  if (exitCode !== 0) return exitCode;
+  return opts.proc.getExitCode();
 }
 
 async function flushSyncFsCache(

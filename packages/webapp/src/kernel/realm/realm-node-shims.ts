@@ -193,10 +193,17 @@ export interface RealmProcessShim {
   platform: string;
   arch: string;
   cwd: () => string;
+  exitCode: number;
   exit: (codeValue?: number) => never;
   stdin: StdinShim;
   stdout: RealmWritableShim;
   stderr: RealmWritableShim;
+}
+
+function coerceExitCode(value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
 export function createProcessShim(
@@ -230,8 +237,14 @@ export function createProcessShim(
     platform: 'linux',
     arch: 'x64',
     cwd: () => init.cwd,
+    get exitCode() {
+      return exitCode;
+    },
+    set exitCode(value: number) {
+      exitCode = coerceExitCode(value, 0);
+    },
     exit: (codeValue?: number) => {
-      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
+      const normalized = coerceExitCode(codeValue, exitCode);
       recordExit(normalized);
       throw new NodeExitError(normalized);
     },

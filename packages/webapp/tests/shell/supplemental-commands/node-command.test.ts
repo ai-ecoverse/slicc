@@ -531,3 +531,31 @@ describe('node command — --input-type', () => {
     expect(result.stderr).toContain('.mjs');
   });
 });
+
+describe('node command — process.exitCode on normal completion (#3155)', () => {
+  it.each(['.js', '.cjs'] as const)(
+    'exits 3 when a %s script only assigns process.exitCode = 3',
+    async (ext) => {
+      const path = `/workspace/ec${ext}`;
+      const ctx = createMockCtx({ [path]: 'process.exitCode = 3;\n' }, '/workspace');
+      const result = await createNodeCommand().execute([path], ctx);
+      expect(result.exitCode).toBe(3);
+    }
+  );
+
+  it('still exits 3 for process.exit(3)', async () => {
+    const ctx = createMockCtx({ '/workspace/ex.js': 'process.exit(3);\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['/workspace/ex.js'], ctx);
+    expect(result.exitCode).toBe(3);
+  });
+
+  it('still exits 1 on an uncaught throw', async () => {
+    const ctx = createMockCtx(
+      { '/workspace/boom.js': 'process.exitCode = 4;\nthrow new Error("boom");\n' },
+      '/workspace'
+    );
+    const result = await createNodeCommand().execute(['/workspace/boom.js'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('boom');
+  });
+});
