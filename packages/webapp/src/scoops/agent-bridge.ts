@@ -193,7 +193,10 @@ export interface AgentSpawnOptions {
    * is the curator of record for the file). All three paths are absolute
    * VFS paths; the scoop itself only ever sees `draftPath`. On a merge
    * the bridge removes `basePath` + `draftPath`; a failed run keeps them
-   * for a retry or a human post-mortem. Runs in the worker realm with the
+   * for a retry or a human post-mortem — except a run cut off at its
+   * bound (`isRunBoundTrip`), whose diverged draft is folded in as a
+   * truncated success (#3157: memory files change only through
+   * `memory_write`, so the draft is never torn). Runs in the worker realm with the
    * bridge's full shared-VFS handle, so a page death after spawn cannot
    * lose the completed rewrite (#1989 companion). A merge failure (I/O
    * error, missing base snapshot) DOWNGRADES the spawn to a non-zero
@@ -567,6 +570,23 @@ interface MergeOutcome {
   conflicts: number;
   /** Present instead of a result when the merge itself failed. */
   error?: string;
+  /**
+   * The run tripped a bound (#1972) and its diverged draft was folded in
+   * anyway — see {@link isRunBoundTrip}. The outcome receipt keeps the
+   * bound note under `reason` beside `status: 'ok'` so the ledger says
+   * "landed, but truncated".
+   */
+  promotedOnTrip?: boolean;
+}
+
+/**
+ * A run the bridge stopped for exceeding a bound — the wall clock or the
+ * turn ceiling — as `RunBounds` phrases it through `onError`. Distinct from
+ * every other failure (a provider error, an abort, a spawn rejection): the
+ * agent was cut off, not broken.
+ */
+export function isRunBoundTrip(finalText: string): boolean {
+  return /^agent run terminated: .*\bbound\b.*\bexceeded\b/.test(finalText);
 }
 
 /**
@@ -681,8 +701,11 @@ async function writeOutcomeReceipt(
           exitCode: result.exitCode,
           finishedAt: new Date().toISOString(),
           // The head of the final text identifies a failure (bound note,
-          // spawn error) without archiving a whole report here.
-          ...(result.exitCode === 0 ? {} : { reason: result.finalText.slice(0, 500) }),
+          // spawn error) without archiving a whole report here. A run that
+          // tripped its bound but landed its draft keeps the note too.
+          ...(result.exitCode === 0 && !merge?.promotedOnTrip
+            ? {}
+            : { reason: result.finalText.slice(0, 500) }),
           ...(merge ? { merge } : {}),
         },
         null,
@@ -953,6 +976,30 @@ async function runScoopToOutcome(
         finalText: `agent: mergeOnSuccess failed: ${merge.error}`,
         exitCode: 1,
       };
+    }
+  } else if (options.mergeOnSuccess && isRunBoundTrip(outcome.finalText)) {
+    // A run cut off at its bound (#3157): the draft is whatever the scoop
+    // had landed by then, and every landing went through `memory_write` —
+    // whole-file, budget-checked, never torn — so a diverged draft is a
+    // valid file that is strictly closer to done than the base. Fold it
+    // in and report a truncated success; a draft that never diverged is
+    // still the plain failure it always was. Any OTHER failure (provider
+    // error, abort) keeps its staging untouched for a post-mortem.
+    merge = await applyMergeOnSuccess(ctx.sharedFs, options.mergeOnSuccess);
+    if (merge.applied) {
+      merge.promotedOnTrip = true;
+      log.info('run tripped its bound; staged rewrite promoted', {
+        target: options.mergeOnSuccess.targetPath,
+        conflicts: merge.conflicts,
+      });
+      outcome = {
+        finalText: `${outcome.finalText} — staged rewrite promoted`,
+        exitCode: 0,
+      };
+    } else if (merge.error === undefined) {
+      // Nothing to promote; forget the empty merge so the receipt reads
+      // as the failure it is.
+      merge = undefined;
     }
   }
   if (outcome.exitCode === 0 && options.successReceiptPath) {
