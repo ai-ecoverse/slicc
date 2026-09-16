@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { baselineFiles, BASELINE_PATH as LAYER_BASELINE_PATH } from './check-layer-back-edges.mjs';
+import { baselineFiles, LAYER_PACKAGES } from './check-layer-back-edges.mjs';
 import { BASELINE_PATH as FLOAT_PROBE_BASELINE_PATH } from './check-no-float-probes.mjs';
 import { BASELINE_PATH as RECORD_BASELINE_PATH } from './check-record-string-unknown.mjs';
 import {
@@ -20,7 +20,6 @@ import {
 
 const SCRIPT = 'check-touched-exemptions';
 
-const LAYER_BASELINE_REL = relative(repoRoot, LAYER_BASELINE_PATH).split('\\').join('/');
 const RECORD_BASELINE_REL = relative(repoRoot, RECORD_BASELINE_PATH).split('\\').join('/');
 const FLOAT_PROBE_BASELINE_REL = relative(repoRoot, FLOAT_PROBE_BASELINE_PATH)
   .split('\\')
@@ -156,8 +155,6 @@ function main() {
   const biomeConfig = readBiomeConfig();
   const baseRef = resolveBaseRef(process.argv);
   const baseConfig = readBaseJson(baseRef, 'biome.json');
-  const layerBaseline = readBaselineFile(LAYER_BASELINE_PATH);
-  const baseLayerBaseline = readBaseJson(baseRef, LAYER_BASELINE_REL);
   const recordBaseline = readBaselineFile(RECORD_BASELINE_PATH);
   const baseRecordBaseline = readBaseJson(baseRef, RECORD_BASELINE_REL);
   const floatProbeBaseline = readBaselineFile(FLOAT_PROBE_BASELINE_PATH);
@@ -169,22 +166,25 @@ function main() {
       baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key, rule.group),
       baseReadable: baseConfig !== null,
     })),
-    {
-      label: 'layer-back-edge',
-      listRef: LAYER_BASELINE_REL,
-      fixIt:
-        'Fix: in this same PR, remove every up-the-stack import from the file (move the\n' +
-        'pure helper into the lower layer — see docs/review-patterns.md § Layer-stack\n' +
-        'import direction), then ratchet the baseline:\n' +
-        '  node packages/dev-tools/tools/check-layer-back-edges.mjs --update',
-      addFixIt:
-        'Fix: remove the new up-the-stack import instead of growing the baseline — move\n' +
-        'the pure helper into the lower layer (see docs/review-patterns.md §\n' +
-        'Layer-stack import direction).',
-      globs: baselineFiles(layerBaseline),
-      baseGlobs: baselineFiles(baseLayerBaseline),
-      baseReadable: baseLayerBaseline !== null,
-    },
+    ...LAYER_PACKAGES.map((pkg) => {
+      const baseline = readBaselineFile(pkg.baselinePath);
+      const baseBaseline = readBaseJson(baseRef, pkg.baselineRel);
+      const label = pkg.id === 'webapp' ? 'layer-back-edge' : `layer-back-edge:${pkg.id}`;
+      return {
+        label,
+        listRef: pkg.baselineRel,
+        fixIt:
+          'Fix: in this same PR, remove every up-the-stack import from the file (move the\n' +
+          'pure helper into the lower layer), then ratchet the baseline:\n' +
+          '  node packages/dev-tools/tools/check-layer-back-edges.mjs --update',
+        addFixIt:
+          'Fix: remove the new up-the-stack or sideways import instead of growing the\n' +
+          `baseline — move the helper into the lower layer (${pkg.stackLabel}).`,
+        globs: baselineFiles(baseline),
+        baseGlobs: baselineFiles(baseBaseline),
+        baseReadable: baseBaseline !== null,
+      };
+    }),
     {
       label: 'record-string-unknown',
       listRef: RECORD_BASELINE_REL,

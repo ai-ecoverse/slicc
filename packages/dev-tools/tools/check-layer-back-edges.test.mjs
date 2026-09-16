@@ -6,17 +6,26 @@ import { describe, expect, it } from 'vitest';
 import {
   BASELINE_PATH,
   baselineFiles,
+  CHROME_EXTENSION_STACK,
+  CLOUDFLARE_WORKER_STACK,
+  chromeExtensionLayerOf,
+  cloudflareWorkerLayerOf,
   compareToBaseline,
   findChromeExtensionWebappEscapes,
   findCrossPackageEscapes,
   findLayerBackEdges,
   findWebcomponentsWebappEscapes,
   isWebappSource,
+  LAYER_PACKAGES,
   layerOf,
+  NODE_SERVER_STACK,
+  nodeServerLayerOf,
   scanBackEdges,
   scanChromeExtensionWebappEscapes,
   scanCrossPackageEscapes,
+  scanLayerBackEdges,
   scanWebcomponentsWebappEscapes,
+  WEBAPP_STACK,
 } from './check-layer-back-edges.mjs';
 
 const filename = fileURLToPath(import.meta.url);
@@ -508,5 +517,197 @@ describe('check-layer-back-edges: end-to-end over the real tree', () => {
     const { code, out } = runGuard();
     expect(code).toBe(0);
     expect(out).toMatch(/ok: no new layer back-edges/);
+    expect(out).toContain('node-server');
+    expect(out).toContain('chrome-extension');
+    expect(out).toContain('cloudflare-worker');
+  });
+
+  it('each package scan matches its committed baseline', () => {
+    for (const stack of LAYER_PACKAGES) {
+      const baseline = JSON.parse(readFileSync(stack.baselinePath, 'utf8'));
+      expect(compareToBaseline(scanLayerBackEdges(stack), baseline), stack.id).toEqual([]);
+    }
+  });
+});
+
+describe('check-layer-back-edges: node-server stack', () => {
+  it('classifies transport, service, and entry files', () => {
+    expect(nodeServerLayerOf('cdp-proxy/chrome-reconnect.ts')).toBe('transport');
+    expect(nodeServerLayerOf('bridge-security.ts')).toBe('transport');
+    expect(nodeServerLayerOf('secrets/env-file.ts')).toBe('service');
+    expect(nodeServerLayerOf('routes/handoff.ts')).toBe('service');
+    expect(nodeServerLayerOf('index.ts')).toBe('entry');
+    expect(nodeServerLayerOf('electron-main.ts')).toBe('entry');
+  });
+
+  it('flags a transport module importing an entrypoint', () => {
+    expect(
+      findLayerBackEdges(
+        'bridge-security.ts',
+        "import { main } from './index.js';",
+        NODE_SERVER_STACK
+      )
+    ).toEqual([{ line: 1, specifier: './index.js', from: 'transport', to: 'entry' }]);
+  });
+
+  it('flags a transport module importing a service', () => {
+    expect(
+      findLayerBackEdges(
+        'hostfs.ts',
+        "import { FileRegistry } from './cloud/registry-file.js';",
+        NODE_SERVER_STACK
+      )
+    ).toEqual([
+      { line: 1, specifier: './cloud/registry-file.js', from: 'transport', to: 'service' },
+    ]);
+  });
+
+  it('allows services and entrypoints to import transport', () => {
+    expect(
+      findLayerBackEdges(
+        'index.ts',
+        "import { mintBridgeToken } from './bridge-security.js';",
+        NODE_SERVER_STACK
+      )
+    ).toEqual([]);
+    expect(
+      findLayerBackEdges(
+        'routes/handoff.ts',
+        "import { buildCorsHeaders } from '../bridge-security.js';",
+        NODE_SERVER_STACK
+      )
+    ).toEqual([]);
+  });
+});
+
+describe('check-layer-back-edges: chrome-extension stack', () => {
+  it('classifies bridge, feature SW, shared helpers, and entry points', () => {
+    expect(chromeExtensionLayerOf('bridge-sw.ts')).toBe('bridge');
+    expect(chromeExtensionLayerOf('secrets-sw.ts')).toBe('bridge');
+    expect(chromeExtensionLayerOf('secrets-storage.ts')).toBe('bridge');
+    expect(chromeExtensionLayerOf('secrets-entry.ts')).toBe('entry');
+    expect(chromeExtensionLayerOf('service-worker.ts')).toBe('entry');
+    expect(chromeExtensionLayerOf('sidepanel-entry.ts')).toBe('entry');
+    expect(chromeExtensionLayerOf('cdp-proxy-sw.ts')).toBe('sw');
+    expect(chromeExtensionLayerOf('cherry-panel-protocol.ts')).toBe('shared');
+  });
+
+  it('flags a lower layer importing the service-worker entry', () => {
+    expect(
+      findLayerBackEdges(
+        'bridge-sw.ts',
+        "import { x } from './service-worker.js';",
+        CHROME_EXTENSION_STACK
+      )
+    ).toEqual([{ line: 1, specifier: './service-worker.js', from: 'bridge', to: 'entry' }]);
+  });
+
+  it('flags a shared helper importing a feature SW module', () => {
+    expect(
+      findLayerBackEdges(
+        'cherry-panel-protocol.ts',
+        "import { handleRelayMessage } from './relay-sw.js';",
+        CHROME_EXTENSION_STACK
+      )
+    ).toEqual([{ line: 1, specifier: './relay-sw.js', from: 'shared', to: 'sw' }]);
+  });
+
+  it('allows entry points to import bridge-sw and secrets storage', () => {
+    expect(
+      findLayerBackEdges(
+        'service-worker.ts',
+        "import { handleBridgePortConnect } from './bridge-sw.js';",
+        CHROME_EXTENSION_STACK
+      )
+    ).toEqual([]);
+    expect(
+      findLayerBackEdges(
+        'secrets-entry.ts',
+        "import { readSecrets } from './secrets-storage.js';",
+        CHROME_EXTENSION_STACK
+      )
+    ).toEqual([]);
+  });
+});
+
+describe('check-layer-back-edges: cloudflare-worker stack', () => {
+  it('classifies shared, auth, durable objects, routes, and entry', () => {
+    expect(cloudflareWorkerLayerOf('shared.ts')).toBe('shared');
+    expect(cloudflareWorkerLayerOf('links.ts')).toBe('shared');
+    expect(cloudflareWorkerLayerOf('auth/cloud-callback.ts')).toBe('auth');
+    expect(cloudflareWorkerLayerOf('cloud/auth.ts')).toBe('auth');
+    expect(cloudflareWorkerLayerOf('session-tray.ts')).toBe('do');
+    expect(cloudflareWorkerLayerOf('cloud/cloud-sessions-do.ts')).toBe('do');
+    expect(cloudflareWorkerLayerOf('flags.ts')).toBe('route');
+    expect(cloudflareWorkerLayerOf('preview-routes.ts')).toBe('route');
+    expect(cloudflareWorkerLayerOf('index.ts')).toBe('entry');
+    expect(cloudflareWorkerLayerOf('preview-worker.ts')).toBe('entry');
+    expect(cloudflareWorkerLayerOf('preview-bridge-assets.ts')).toBe('shared');
+  });
+
+  it('flags a route importing the worker entry', () => {
+    expect(
+      findLayerBackEdges(
+        'preview-handler.ts',
+        "import type { WorkerEnv } from './index.js';",
+        CLOUDFLARE_WORKER_STACK
+      )
+    ).toEqual([{ line: 1, specifier: './index.js', from: 'route', to: 'entry' }]);
+  });
+
+  it('flags sideways imports between route modules', () => {
+    expect(
+      findLayerBackEdges(
+        'flags.ts',
+        "import { isAllowedOrigin } from './oauth-exchange.js';",
+        CLOUDFLARE_WORKER_STACK
+      )
+    ).toEqual([{ line: 1, specifier: './oauth-exchange.js', from: 'route', to: 'route' }]);
+  });
+
+  it('allows routes to import shared/auth and the entry to import routes', () => {
+    expect(
+      findLayerBackEdges(
+        'preview-bridge-routes.ts',
+        "import { PREVIEW_BRIDGE_JS } from './preview-bridge-assets.js';",
+        CLOUDFLARE_WORKER_STACK
+      )
+    ).toEqual([]);
+    expect(
+      findLayerBackEdges(
+        'flags.ts',
+        "import { jsonResponse } from './shared.js';",
+        CLOUDFLARE_WORKER_STACK
+      )
+    ).toEqual([]);
+    expect(
+      findLayerBackEdges(
+        'index.ts',
+        "import { handleFlagsRequest } from './flags.js';",
+        CLOUDFLARE_WORKER_STACK
+      )
+    ).toEqual([]);
+  });
+
+  it('allows same-layer imports outside the route layer', () => {
+    expect(
+      findLayerBackEdges(
+        'session-tray.ts',
+        "import { handlePush } from './session-tray-push.js';",
+        CLOUDFLARE_WORKER_STACK
+      )
+    ).toEqual([]);
+  });
+});
+
+describe('check-layer-back-edges: package stacks', () => {
+  it('keeps the webapp baseline path stable for boy-scout and exemption wiring', () => {
+    expect(WEBAPP_STACK.baselinePath).toBe(BASELINE_PATH);
+    expect(LAYER_PACKAGES.map((p) => p.id)).toEqual([
+      'webapp',
+      'node-server',
+      'chrome-extension',
+      'cloudflare-worker',
+    ]);
   });
 });
