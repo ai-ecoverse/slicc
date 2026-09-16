@@ -92,6 +92,9 @@ describe('CI critical-path routing', () => {
 
   it('keeps staging deploy and smoke on every trusted PR while path-gating only R2', () => {
     const header = worker.slice(0, worker.indexOf('    steps:'));
+    expect(workerStagingWorkflow).toContain(
+      "run-name: 'staging-mutation-queue · Worker staging · PR #${{ github.event.pull_request.number }}'"
+    );
     expect(header).not.toContain('\n    if:');
     expect(header).toContain(
       "RUN_CLOUDFLARE_STAGING: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}"

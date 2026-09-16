@@ -1,5 +1,5 @@
 name: Worker Staging Deploy
-run-name: staging-mutation-queue · Worker staging · PR #${{ github.event.pull_request.number }}
+run-name: 'staging-mutation-queue · Worker staging · PR #${{ github.event.pull_request.number }}'
 
 on:
   pull_request:
