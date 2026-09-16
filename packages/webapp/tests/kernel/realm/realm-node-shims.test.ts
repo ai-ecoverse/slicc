@@ -5,7 +5,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createNodeConsole } from '../../../src/kernel/realm/realm-node-shims.js';
+import {
+  createNodeConsole,
+  createProcessShim,
+  NodeExitError,
+  numericExitCode,
+} from '../../../src/kernel/realm/realm-node-shims.js';
+import type { RealmInitMsg } from '../../../src/kernel/realm/realm-types.js';
 
 const STANDARD_CONSOLE_METHODS = [
   'log',
@@ -137,5 +143,80 @@ describe('createNodeConsole', () => {
     expect(out()).toBe('default: 1\ndefault: 2\nx: 1\nx: 1\n');
     con.countReset('nope');
     expect(err()).toContain("Count for 'nope' does not exist");
+  });
+});
+
+function makeProcessInit(): RealmInitMsg {
+  return {
+    type: 'realm-init',
+    kind: 'js',
+    code: '',
+    argv: ['node'],
+    env: {},
+    cwd: '/',
+    filename: '[eval]',
+  };
+}
+
+describe('createProcessShim exitCode (#3155)', () => {
+  it('defaults to undefined and getExitCode() is 0', () => {
+    const { processShim, getExitCode, getDidCallProcessExit } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    expect(processShim.exitCode).toBeUndefined();
+    expect(getExitCode()).toBe(0);
+    expect(getDidCallProcessExit()).toBe(false);
+  });
+
+  it('assignment is readable back and getExitCode() returns the number', () => {
+    const { processShim, getExitCode, getDidCallProcessExit } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    processShim.exitCode = 3;
+    expect(processShim.exitCode).toBe(3);
+    expect(getExitCode()).toBe(3);
+    expect(getDidCallProcessExit()).toBe(false);
+  });
+
+  it('no-arg process.exit() uses the assigned exitCode', () => {
+    const { processShim, getExitCode, getDidCallProcessExit } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    processShim.exitCode = 3;
+    expect(() => processShim.exit()).toThrow(NodeExitError);
+    expect(getDidCallProcessExit()).toBe(true);
+    expect(getExitCode()).toBe(3);
+    expect(processShim.exitCode).toBe(3);
+  });
+
+  it('process.exit(n) overrides a previously assigned exitCode', () => {
+    const { processShim, getExitCode } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    processShim.exitCode = 9;
+    try {
+      processShim.exit(3);
+    } catch (err) {
+      expect(err).toBeInstanceOf(NodeExitError);
+      expect((err as NodeExitError).code).toBe(3);
+    }
+    expect(getExitCode()).toBe(3);
+  });
+});
+
+describe('numericExitCode', () => {
+  it('coerces finite numbers and treats undefined/NaN as 0', () => {
+    expect(numericExitCode(3)).toBe(3);
+    expect(numericExitCode('3')).toBe(3);
+    expect(numericExitCode(undefined)).toBe(0);
+    expect(numericExitCode(Number.NaN)).toBe(0);
   });
 });

@@ -22,6 +22,12 @@ export class NodeExitError extends Error {
   }
 }
 
+/** Coerce a `process.exitCode` assignment (or the no-arg `process.exit()` fallback) to a status. */
+export function numericExitCode(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function formatConsoleArg(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return String(value);
@@ -212,6 +218,12 @@ export interface RealmProcessShim {
   arch: string;
   cwd: () => string;
   exit: (codeValue?: number) => never;
+  /**
+   * Node's deferred exit status. Assignment does not unwind the stack;
+   * the realm reads it on a normal completion after the event-loop drain
+   * (#3155). `process.exit(n)` still wins and also writes this field.
+   */
+  exitCode: number | undefined;
   stdin: StdinShim;
   stdout: RealmWritableShim;
   stderr: RealmWritableShim;
@@ -229,10 +241,10 @@ export function createProcessShim(
 } {
   const noColor = !!init.env?.NO_COLOR;
   let didCallProcessExit = false;
-  let exitCode = 0;
+  let assignedExitCode: number | undefined;
   const recordExit = (code: number): void => {
     didCallProcessExit = true;
-    exitCode = code;
+    assignedExitCode = code;
   };
   // A `process.exit()` from a deferred stdin handler (`'data'`/`'end'`/`'close'`)
   // throws its NodeExitError inside a queued microtask, outside runUserCode's
@@ -257,8 +269,18 @@ export function createProcessShim(
     platform: 'linux',
     arch: 'x64',
     cwd: () => init.cwd,
+    get exitCode() {
+      return assignedExitCode;
+    },
+    set exitCode(value: number | undefined) {
+      assignedExitCode = value;
+    },
     exit: (codeValue?: number) => {
-      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
+      // An explicit numeric argument wins. No-arg `process.exit()` uses the
+      // assigned `process.exitCode`, then 0 — Node's documented fallback.
+      const normalized = Number.isFinite(codeValue)
+        ? Number(codeValue)
+        : numericExitCode(assignedExitCode);
       recordExit(normalized);
       throw new NodeExitError(normalized);
     },
@@ -269,7 +291,7 @@ export function createProcessShim(
   return {
     processShim,
     getDidCallProcessExit: () => didCallProcessExit,
-    getExitCode: () => exitCode,
+    getExitCode: () => numericExitCode(assignedExitCode),
     // Exposed so sibling shims that run user handlers in microtasks (the
     // readline shim's deferred 'line' flush) can report a caught
     // `process.exit(N)` the same way the stdin shim does.

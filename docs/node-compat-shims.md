@@ -148,13 +148,16 @@ they throw an error naming the async escape hatch instead.
 ### `process`
 
 `env`, `cwd()`, `exit(code?)` (throws `NodeExitError` to unwind the stack),
-`stdout`, `stderr`, `stdin`, and `argv` (with a non-enumerable
-`argv.parseFlags()` helper). `stdout` and `stderr` accept `write()` and a no-op
-`end()`, so they can be used as stream pipe destinations.
+`exitCode` (deferred status: assignment does not unwind; the realm reads it
+on a normal completion after the event-loop drain, including when set from
+an async callback — #3155), `stdout`, `stderr`, `stdin`, `argv` (with a
+non-enumerable `argv.parseFlags()` helper), plus identity fields
+`versions.node` / `version` / `platform` / `arch`. `stdout` and `stderr`
+accept `write()` and a no-op `end()`, so they can be used as stream pipe
+destinations. No-arg `process.exit()` uses the assigned `exitCode`, then 0.
 
-**Not available:** `platform`, `arch`, `version`, `pid`, `on()`,
-`nextTick()`, `hrtime`. (Source: `createProcessShim` in
-`realm-node-shims.ts` — the shim object has exactly the keys listed above.)
+**Not available:** `pid`, `on()`, `nextTick()`, `hrtime`. (Source:
+`createProcessShim` in `realm-node-shims.ts`.)
 
 ### `console` (global)
 
