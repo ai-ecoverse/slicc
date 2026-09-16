@@ -280,8 +280,9 @@ jobs:
           node-version: 24
           cache: npm
       - uses: ./.github/actions/npm-ci
-      # Includes `lint:swift-deps`, the SPM unused-dependency gate. It parses
-      # `packages/*/Package.swift` as text, so it runs here on ubuntu rather
+      # Includes `lint:swift-deps` (SPM unused-dependency) and
+      # `lint:swift-forbidden-imports` (widget WebRTC denylist). Both parse
+      # manifests and Swift sources as text, so they run here on ubuntu rather
       # than in the macOS Swift jobs — no toolchain required.
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci

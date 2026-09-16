@@ -49,7 +49,9 @@ Numbering matches the root checklist. Full catalog:
    mode; normalize trailing slashes.
 10. **Layer import direction** — no imports up a documented layer stack
     (webapp, node-server, chrome-extension, cloudflare-worker); move pure
-    helpers down. Enforced by `npm run lint:layer-back-edges`.
+    helpers down. Enforced by `npm run lint:layer-back-edges`. Swift: SPM
+    modules + `public` surface; widgets must not import WebRTC
+    (`lint:swift-forbidden-imports`).
 11. **Untyped string-keyed bags** — no new `Record<string, unknown>` in source;
     name the shape, or `// biome-ignore lint/plugin:` with a reason.
 12. **Agent skill freshness** — capability changes → update matching runtime

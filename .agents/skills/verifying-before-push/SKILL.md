@@ -85,9 +85,11 @@ baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `record-string-unknown-baseline.json`), `lint:patches`,
 `lint:swift-pins` (GitHub SPM packages dual-pinned in `Package.swift` and
 xcodegen `project.yml` must overlap — see `packages/dev-tools/swift-pin-reconcile/`),
-`lint:swift-deps` (SPM unused-dependency gate — see below), `lint:dead-flags`
-(registry vs `isFeatureEnabled` / `getFeatureValue` / Cherry host / worker overlay
-keys; waiver `// unused-flag-ok`), and `lint:duplication`.
+`lint:swift-deps` (SPM unused-dependency gate — see below),
+`lint:swift-forbidden-imports` (widget hosts / `SliccWidgetKit` must not import
+WebRTC — see below), `lint:dead-flags` (registry vs `isFeatureEnabled` /
+`getFeatureValue` / Cherry host / worker overlay keys; waiver
+`// unused-flag-ok`), and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
@@ -151,6 +153,14 @@ imports it). Fix the manifest rather than the gate; a product that is genuinely
 linked without being imported gets a `// unused-dep-ok: <reason>` annotation on
 its declaration line. Full semantics:
 [dev-tools-details.md#swift-unused-dependency-gate](../../../docs/dev-tools-details.md#swift-unused-dependency-gate).
+
+`lint:swift-forbidden-imports`
+([`check-swift-forbidden-imports.mjs`](../../../packages/dev-tools/tools/check-swift-forbidden-imports.mjs))
+is the Swift/iOS layering gate: SPM modules are the stack, `public` is the
+cross-module surface, and widget hosts / `SliccWidgetKit` must not import
+WebRTC (or `SliccTrayFollower` / `SliccTrayVFS` / `SliccTrayKit`). Also chained
+into `lint` / `lint:ci`. Full semantics:
+[dev-tools-details.md#swift-forbidden-import-gate](../../../docs/dev-tools-details.md#swift-forbidden-import-gate).
 
 The Go `tidy-check` targets also run inside each module's `make check`, which is
 what the `go-optel` and `slicc-cli` CI jobs invoke.
@@ -293,6 +303,7 @@ npm run lint:swift:format              # swift format lint --strict (config: roo
 npm run format:swift                   # swift format --in-place (fixes the above)
 npm run deadcode:swift                 # Periphery on the 3 SPM packages (informational)
 npm run lint:swift-deps                # SPM unused-dependency gate (hard gate, in lint:ci)
+npm run lint:swift-forbidden-imports   # widget WebRTC denylist (hard gate, in lint:ci)
 cd packages/slicc-cli && make check    # gofmt + tidy-check + vet + golangci-lint + race + coverage
 ```
 

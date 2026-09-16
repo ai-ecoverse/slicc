@@ -39,7 +39,11 @@ crowded, no-cone, nothing-said-yet — get drawn on every run.
 
 A widget is **not a follower**. It runs in its own short-lived process, cannot
 dial a leader, cannot hold a WebRTC data channel, and may run while the app is
-dead. So the contract is one-way: the host app captures the smallest honest
+dead. `npm run lint:swift-forbidden-imports` fails if `SliccWidgets`,
+`SliccstartWidgets`, or `SliccWidgetKit` import WebRTC (or a tray-follower
+module that pulls it in).
+
+So the contract is one-way: the host app captures the smallest honest
 description of the instance and writes it into the shared app group; the widget
 reads it and says how old it is.
 

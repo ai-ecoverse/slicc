@@ -835,6 +835,38 @@ been constant across every float for 90 days is reported as a
 [`feature-flags.md`](feature-flags.md). Covered by
 `check-dead-flags.test.mjs`.
 
+## swift-forbidden-import-gate
+
+`npm run lint:swift-forbidden-imports`
+(`packages/dev-tools/tools/check-swift-forbidden-imports.mjs` + `-lib.mjs`)
+is the Swift/iOS counterpart of the webapp layer-back-edge ratchet. Swift
+layering leans on SPM modules (`swift-traykit`, `swift-widgetkit`,
+`swift-traysession`, `swift-optel`): the cross-module surface is `public`,
+not a directory stack. What the compiler still allows — and WidgetKit's
+memory budget cannot — is a widget process importing WebRTC (or a
+tray-follower module that pulls it in).
+
+The gate is a frozen denylist, chained into `lint` / `lint:ci`, and needs
+no Swift toolchain. It scans:
+
+| Rule                           | Roots                                                       | Also checks                                                                  |
+| ------------------------------ | ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `ios-widgets-no-webrtc`        | `packages/ios-app/SliccWidgets`                             | xcodegen target `SliccWidgets` in `packages/ios-app/project.yml`             |
+| `sliccstart-widgets-no-webrtc` | `packages/swift-launcher/SliccstartWidgets`                 | xcodegen target `SliccstartWidgets` in `packages/swift-launcher/project.yml` |
+| `widgetkit-no-webrtc`          | `packages/swift-widgetkit/Sources/SliccWidgetKit` (+ tests) | at least one `public`/`open` declaration (the cross-module surface)          |
+
+Forbidden modules: `WebRTC`, `SliccTrayFollower`, `SliccTrayVFS`,
+`SliccTrayKit`. Import collection is the same `collectImportHits` helper
+the unused-dependency gate uses (comments and string literals blanked;
+`@_exported` / `canImport` count). The xcodegen pass catches linking
+WebRTC without an `import`. The `slicc-widget-gallery` executable is
+outside the widgetkit root on purpose — it is a design-time AppKit tool,
+not a widget process.
+
+`node …/check-swift-forbidden-imports.mjs --help` lists every rule.
+Behaviour is covered by `check-swift-forbidden-imports.test.mjs`,
+including an end-to-end run against the checked-in sources.
+
 ## swift-coverage-retry
 
 `swift-coverage-check.sh` sources `swift-coverage-runner-retry.sh` in

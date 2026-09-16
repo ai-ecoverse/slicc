@@ -54,11 +54,11 @@ interaction, not later focus; test shell-open, rail-open, and attention promotio
 
 ## 10. Layer import direction
 
-CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → shell/git → cdp → tools → core → scoops → ui` plus node-server/extension/worker. Flag up-stack and cross-package relative imports. chrome-extension/webcomponents→webapp is zero-tolerance except the documented kernel-message type import. Runtime probes below `ui/` use `CapabilityBroker`.
+CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → shell/git → cdp → tools → core → scoops → ui` plus node-server/extension/worker. Flag up-stack and cross-package relative imports. chrome-extension/webcomponents→webapp is zero-tolerance except kernel-message types. Swift: SPM + `public`; widgets must not import WebRTC. Probes below `ui/` use `CapabilityBroker`.
 
 ## 11. Untyped string-keyed bags
 
-Flag new `Record<string, unknown>` in source when the shape is known. Require a named type,
+Flag new `Record<string, unknown>` in source. Require a named type,
 boundary validation, or a justified suppression; never grow the frozen baseline.
 Cone and scoop are roles over one `WorkUnit` (#1666); the record carries no role
 field — route on the unit's policy / `isRootUnit` / `getWorkUnits()`. `isCone` exists

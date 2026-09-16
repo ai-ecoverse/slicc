@@ -401,6 +401,17 @@ type`, namespace). That one exemption exists because it compiles away
   a `(md: string) => string` callback or move the helper down. CI-enforced by
   `findWebcomponentsWebappEscapes` / `scanWebcomponentsWebappEscapes` — zero
   tolerance, no baseline.
+- A Swift `import` (or xcodegen `package:` / `target:` link) of `WebRTC`,
+  `SliccTrayFollower`, `SliccTrayVFS`, or `SliccTrayKit` under
+  `packages/ios-app/SliccWidgets`, `packages/swift-launcher/SliccstartWidgets`,
+  or `packages/swift-widgetkit/Sources/SliccWidgetKit` (issue #3149). Swift
+  layering is the SPM modules (`swift-traykit`, `swift-widgetkit`,
+  `swift-traysession`, `swift-optel`); the cross-module surface is `public`,
+  not a TS-style directory stack. WidgetKit's memory budget still forbids
+  pulling WebRTC into a widget process. CI-enforced by
+  `check-swift-forbidden-imports.mjs` (`npm run lint:swift-forbidden-imports`)
+  — zero tolerance, no baseline. The TS sibling of #3149 owns
+  `check-layer-back-edges.mjs`; do not generalise that script here.
 
 **Historical precedents**
 
@@ -476,6 +487,10 @@ gate fails on any relative import that escapes `packages/webapp/src` into a sibl
 zero tolerance, no baseline (only the inert `?raw`/`?url` asset queries are exempt —
 `?worker` executes its target, so it is still an escape).
 `providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
+Swift/iOS: do not import WebRTC into a widget host or into `SliccWidgetKit`;
+put shared widget pixels on `SliccWidgetKit`'s `public` surface and keep the
+tray-follower modules out of the widget process
+(`npm run lint:swift-forbidden-imports`).
 
 ### 11. Untyped string-keyed bags (`Record<string, unknown>`)
 

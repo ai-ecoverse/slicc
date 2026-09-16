@@ -458,23 +458,38 @@ export function blankStringLiterals(text) {
   return out;
 }
 
+const IMPORT_RE =
+  /^[ \t]*(?:@[\w]+(?:\([^)]*\))?[ \t]+)*(?:@testable[ \t]+)?import[ \t]+(?:(?:struct|class|enum|protocol|typealias|func|var|let|actor|macro)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)/gm;
+const CAN_IMPORT_RE = /canImport\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+
 /**
- * Modules a Swift source imports. Covers plain, attributed
- * (`@_exported`/`@preconcurrency`), submodule (`import A.B` → `A`), and
- * declaration-scoped (`import struct A.B` → `A`) imports, plus
+ * Import sites in a Swift source, with 1-based line numbers. Covers plain,
+ * attributed (`@_exported`/`@preconcurrency`), submodule (`import A.B` → `A`),
+ * and declaration-scoped (`import struct A.B` → `A`) imports, plus
  * `canImport(A)` — a module named in a `#if canImport` check is genuinely
  * consumed by the target even when the import itself is conditional.
  * Comments and string literals are blanked first, so neither can fabricate
- * an import.
+ * an import. Each hit is `{ module, line, kind }` (`kind` is `import` or
+ * `canImport`; `line` is 1-based).
+ */
+export function collectImportHits(swiftSource) {
+  const hits = [];
+  const text = blankStringLiterals(stripComments(swiftSource));
+  for (const m of text.matchAll(IMPORT_RE)) {
+    hits.push({ module: m[1], line: lineOf(text, m.index), kind: 'import' });
+  }
+  for (const m of text.matchAll(CAN_IMPORT_RE)) {
+    hits.push({ module: m[1], line: lineOf(text, m.index), kind: 'canImport' });
+  }
+  return hits;
+}
+
+/**
+ * Modules a Swift source imports. Unique set of `collectImportHits` modules;
+ * the unused-dep gate does not need line numbers.
  */
 export function collectImports(swiftSource) {
-  const modules = new Set();
-  const text = blankStringLiterals(stripComments(swiftSource));
-  const importRe =
-    /^[ \t]*(?:@[\w]+(?:\([^)]*\))?[ \t]+)*(?:@testable[ \t]+)?import[ \t]+(?:(?:struct|class|enum|protocol|typealias|func|var|let|actor|macro)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)/gm;
-  for (const m of text.matchAll(importRe)) modules.add(m[1]);
-  for (const m of text.matchAll(/canImport\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g)) modules.add(m[1]);
-  return modules;
+  return new Set(collectImportHits(swiftSource).map((h) => h.module));
 }
 
 /**
