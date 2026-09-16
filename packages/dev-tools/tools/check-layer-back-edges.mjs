@@ -24,10 +24,16 @@ export const LAYER_RANK = {
   ui: 6,
 };
 
-const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
-
 export function isWebappSource(name) {
   return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name);
+}
+
+export function isPackageSource(name) {
+  return isWebappSource(name) && !name.endsWith('.d.ts');
+}
+
+function isCloudflareWorkerSource(name) {
+  return isPackageSource(name) && name !== 'preview-bridge-assets.ts';
 }
 
 const RELATIVE_IMPORT_RE =
@@ -37,17 +43,226 @@ export function layerOf(relPath) {
   return relPath.split('/')[0];
 }
 
-export function findLayerBackEdges(importerRel, source) {
-  const fromLayer = layerOf(importerRel);
-  const fromRank = LAYER_RANK[fromLayer] ?? UNRANKED_IMPORTER_RANK;
+function canonRel(relPath) {
+  const rel = relPath.split('\\').join('/');
+  const q = rel.indexOf('?');
+  const path = q >= 0 ? rel.slice(0, q) : rel;
+  return path.replace(/\.jsx$/, '.tsx').replace(/\.js$/, '.ts');
+}
+
+function baseName(relPath) {
+  return canonRel(relPath).split('/').pop();
+}
+
+function topDir(relPath) {
+  const rel = canonRel(relPath);
+  const i = rel.indexOf('/');
+  return i === -1 ? '' : rel.slice(0, i);
+}
+
+const NODE_SERVER_ENTRY = new Set([
+  'index.ts',
+  'electron-main.ts',
+  'install-cli.ts',
+  'publish-chrome-web-store.ts',
+  'release-package.ts',
+  'qa-setup.ts',
+]);
+
+const NODE_SERVER_TRANSPORT_FILES = new Set([
+  'bridge-security.ts',
+  'chrome-launch.ts',
+  'fetch-proxy-gzip.ts',
+  'fetch-proxy-headers.ts',
+  'http-keepalive.ts',
+  'hostfs.ts',
+  'hostfs-watch.ts',
+  'file-logger.ts',
+  'runtime-flags.ts',
+  'cli-log-dedup.ts',
+]);
+
+const NODE_SERVER_TRANSPORT_DIRS = new Set(['cdp-proxy']);
+
+const NODE_SERVER_SERVICE_DIRS = new Set(['secrets', 'cloud', 'sudo', 'routes']);
+
+const NODE_SERVER_SERVICE_FILES = new Set([
+  'cloud-status.ts',
+  'secrets-reload-endpoint.ts',
+  'electron-controller.ts',
+  'electron-federated-cdp.ts',
+  'electron-runtime.ts',
+  'electron-tray-follower.ts',
+  'hosted-bootstrap.ts',
+  'launch-url.ts',
+  'links-middleware.ts',
+  'leader-restart.ts',
+  'browser-shutdown.ts',
+]);
+
+export function nodeServerLayerOf(relPath) {
+  const rel = canonRel(relPath);
+  const name = baseName(rel);
+  const top = topDir(rel);
+  if (!top && NODE_SERVER_ENTRY.has(name)) return 'entry';
+  if (NODE_SERVER_TRANSPORT_DIRS.has(top) || (!top && NODE_SERVER_TRANSPORT_FILES.has(name))) {
+    return 'transport';
+  }
+  if (NODE_SERVER_SERVICE_DIRS.has(top) || (!top && NODE_SERVER_SERVICE_FILES.has(name))) {
+    return 'service';
+  }
+  return 'service';
+}
+
+export function chromeExtensionLayerOf(relPath) {
+  const name = baseName(relPath);
+  if (name === 'service-worker.ts' || name.endsWith('-entry.ts')) return 'entry';
+  if (
+    name === 'bridge-sw.ts' ||
+    name === 'secrets-sw.ts' ||
+    name === 'secrets-storage.ts' ||
+    name === 'sw-pinned-port.ts'
+  ) {
+    return 'bridge';
+  }
+  if (name.endsWith('-sw.ts')) return 'sw';
+  return 'shared';
+}
+
+const CLOUDFLARE_ENTRY = new Set(['index.ts', 'preview-worker.ts']);
+
+const CLOUDFLARE_SHARED = new Set([
+  'shared.ts',
+  'links.ts',
+  'timing-safe-equal.ts',
+  'webhook-body.ts',
+  'oauth-registry.ts',
+  'apns.ts',
+  'apns-provider-token.ts',
+  'preview-host.ts',
+  'preview-cache.ts',
+  'persistent-preview-storage.ts',
+  'preview-continuity.ts',
+  'turn-credentials.ts',
+  'preview-bridge-assets.ts',
+]);
+
+const CLOUDFLARE_AUTH_FILES = new Set([
+  'cloud/auth.ts',
+  'cloud/auth-cache.ts',
+  'cloud/auth-middleware.ts',
+  'cloud/error-envelope.ts',
+  'cloud/proxy-config.ts',
+  'cloud/caps.ts',
+  'cloud/local-registry.ts',
+  'cloud/rate-limit.ts',
+]);
+
+const CLOUDFLARE_DO_FILES = new Set(['cloud/cloud-sessions-do.ts', 'cloud/cone-config-bridge.ts']);
+
+export function cloudflareWorkerLayerOf(relPath) {
+  const rel = canonRel(relPath);
+  const name = baseName(rel);
+  if (CLOUDFLARE_ENTRY.has(name)) return 'entry';
+  if (rel.startsWith('auth/') || CLOUDFLARE_AUTH_FILES.has(rel)) return 'auth';
+  if (CLOUDFLARE_DO_FILES.has(rel)) return 'do';
+  if (name.startsWith('session-tray') || name.startsWith('webhook-home')) return 'do';
+  if (CLOUDFLARE_SHARED.has(name)) return 'shared';
+  return 'route';
+}
+
+function makeStack({
+  id,
+  scanRootRel,
+  baselineName,
+  layerRank,
+  layerOfFn,
+  topLayer,
+  forbidLateralLayers,
+  stackLabel,
+  isSource,
+}) {
+  const baselinePath = resolve(dirname(Filename), baselineName);
+  return {
+    id,
+    scanRoot: resolve(repoRoot, scanRootRel),
+    scanRootRel,
+    baselinePath,
+    baselineRel: relative(repoRoot, baselinePath).split('\\').join('/'),
+    layerRank,
+    layerOf: layerOfFn,
+    unrankedImporterRank: layerRank[topLayer] - 0.5,
+    forbidLateralLayers: forbidLateralLayers ?? new Set(),
+    stackLabel,
+    isSource: isSource ?? isPackageSource,
+  };
+}
+
+export const WEBAPP_STACK = makeStack({
+  id: 'webapp',
+  scanRootRel: 'packages/webapp/src',
+  baselineName: 'layer-back-edge-baseline.json',
+  layerRank: LAYER_RANK,
+  layerOfFn: layerOf,
+  topLayer: 'ui',
+  stackLabel: 'fs → shell/git → cdp → tools → core → scoops → ui',
+  isSource: isWebappSource,
+});
+
+export const NODE_SERVER_STACK = makeStack({
+  id: 'node-server',
+  scanRootRel: 'packages/node-server/src',
+  baselineName: 'layer-back-edge-baseline.node-server.json',
+  layerRank: { transport: 0, service: 1, entry: 2 },
+  layerOfFn: nodeServerLayerOf,
+  topLayer: 'entry',
+  stackLabel: 'transport/bridge → services → cli entrypoints',
+});
+
+export const CHROME_EXTENSION_STACK = makeStack({
+  id: 'chrome-extension',
+  scanRootRel: 'packages/chrome-extension/src',
+  baselineName: 'layer-back-edge-baseline.chrome-extension.json',
+  layerRank: { shared: 0, bridge: 1, sw: 2, entry: 3 },
+  layerOfFn: chromeExtensionLayerOf,
+  topLayer: 'entry',
+  stackLabel: 'shared → bridge-sw/secrets-* → feature SW → entry points',
+});
+
+export const CLOUDFLARE_WORKER_STACK = makeStack({
+  id: 'cloudflare-worker',
+  scanRootRel: 'packages/cloudflare-worker/src',
+  baselineName: 'layer-back-edge-baseline.cloudflare-worker.json',
+  layerRank: { shared: 0, auth: 0, do: 0, route: 1, entry: 2 },
+  layerOfFn: cloudflareWorkerLayerOf,
+  topLayer: 'entry',
+  forbidLateralLayers: new Set(['route']),
+  stackLabel: 'shared/links/auth → route modules → index.ts (no sideways route imports)',
+  isSource: isCloudflareWorkerSource,
+});
+
+export const LAYER_PACKAGES = [
+  WEBAPP_STACK,
+  NODE_SERVER_STACK,
+  CHROME_EXTENSION_STACK,
+  CLOUDFLARE_WORKER_STACK,
+];
+
+export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
+  const fromLayer = stack.layerOf(importerRel);
+  const fromRank = stack.layerRank[fromLayer] ?? stack.unrankedImporterRank;
   const importerDir = dirname(importerRel);
   const hits = [];
   const stripped = stripComments(source);
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
     const target = resolve('/', importerDir, m[1]).slice(1);
-    const toLayer = layerOf(target);
-    const toRank = LAYER_RANK[toLayer];
-    if (toRank === undefined || toRank <= fromRank) continue;
+    const toLayer = stack.layerOf(target);
+    const toRank = stack.layerRank[toLayer];
+    if (toRank === undefined) continue;
+    const upward = toRank > fromRank;
+    const lateral =
+      toRank === fromRank && fromLayer === toLayer && stack.forbidLateralLayers.has(fromLayer);
+    if (!upward && !lateral) continue;
     const line = stripped.slice(0, m.index).split('\n').length;
     hits.push({ line, specifier: m[1], from: fromLayer, to: toLayer });
   }
@@ -81,24 +296,32 @@ export function baselineFiles(baseline) {
   return Object.keys(baseline).filter((k) => typeof k === 'string' && k.length > 0);
 }
 
-function collect(dir) {
+function collectFiles(dir, pred) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = resolve(dir, entry.name);
-    if (entry.isDirectory()) out.push(...collect(abs));
-    else if (entry.isFile() && isWebappSource(entry.name)) out.push(abs);
+    if (entry.isDirectory()) out.push(...collectFiles(abs, pred));
+    else if (entry.isFile() && pred(entry.name)) out.push(abs);
   }
   return out;
 }
 
-export function scanBackEdges() {
+function collect(dir) {
+  return collectFiles(dir, isWebappSource);
+}
+
+export function scanLayerBackEdges(stack) {
   const counts = {};
-  for (const abs of collect(SCAN_ROOT)) {
-    const srcRel = relative(SCAN_ROOT, abs).split('\\').join('/');
-    const hits = findLayerBackEdges(srcRel, readFileSync(abs, 'utf8'));
+  for (const abs of collectFiles(stack.scanRoot, stack.isSource)) {
+    const srcRel = relative(stack.scanRoot, abs).split('\\').join('/');
+    const hits = findLayerBackEdges(srcRel, readFileSync(abs, 'utf8'), stack);
     if (hits.length > 0) counts[relative(repoRoot, abs).split('\\').join('/')] = hits.length;
   }
   return counts;
+}
+
+export function scanBackEdges() {
+  return scanLayerBackEdges(WEBAPP_STACK);
 }
 
 export function scanCrossPackageEscapes() {
@@ -228,13 +451,7 @@ export function scanChromeExtensionWebappEscapes() {
 }
 
 function collectTs(dir) {
-  const out = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const abs = resolve(dir, entry.name);
-    if (entry.isDirectory()) out.push(...collectTs(abs));
-    else if (entry.isFile() && /\.tsx?$/.test(entry.name)) out.push(abs);
-  }
-  return out;
+  return collectFiles(dir, (name) => /\.tsx?$/.test(name));
 }
 
 export function scanWebcomponentsWebappEscapes() {
@@ -293,18 +510,47 @@ function reportEscapes(escapes, detailForHit) {
   return true;
 }
 
+function reportPackageFailures(stack, current, baseline, failures) {
+  for (const failure of failures) process.stderr.write(`::error::${failure}\n`);
+  const srcPrefix = `${stack.scanRootRel}/`;
+  for (const [file, count] of Object.entries(current)) {
+    if (count <= (baseline[file] ?? 0)) continue;
+    const hits = findLayerBackEdges(
+      file.slice(srcPrefix.length),
+      readFileSync(resolve(repoRoot, file), 'utf8'),
+      stack
+    );
+    for (const h of hits) {
+      process.stderr.write(`  ${file}:${h.line} ${h.from} → ${h.to}: '${h.specifier}'\n`);
+    }
+  }
+  const lateralNote = stack.forbidLateralLayers.size
+    ? ', and modules in a no-sideways layer may not import each other'
+    : '';
+  process.stderr.write(
+    `\n${failures.length} layer-stack violation(s) in ${stack.id}. The stack ` +
+      `(${stack.stackLabel}) requires imports to point down${lateralNote}. ` +
+      'Move the helper into the lower layer rather than growing the baseline.\n'
+  );
+}
+
 function main() {
-  const current = scanBackEdges();
+  const scanned = LAYER_PACKAGES.map((stack) => ({
+    stack,
+    current: scanLayerBackEdges(stack),
+  }));
   const escapes = scanCrossPackageEscapes();
   const chromeExtEscapes = scanChromeExtensionWebappEscapes();
   const webcomponentsEscapes = scanWebcomponentsWebappEscapes();
 
   if (argv.includes('--update')) {
-    writeFileSync(BASELINE_PATH, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
-    const total = Object.values(current).reduce((a, b) => a + b, 0);
-    process.stdout.write(
-      `baseline updated: ${total} grandfathered layer back-edge(s) in ${Object.keys(current).length} file(s)\n`
-    );
+    const parts = [];
+    for (const { stack, current } of scanned) {
+      writeFileSync(stack.baselinePath, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
+      const total = Object.values(current).reduce((a, b) => a + b, 0);
+      parts.push(`${stack.id}: ${total} in ${Object.keys(current).length} file(s)`);
+    }
+    process.stdout.write(`baseline updated: ${parts.join('; ')}\n`);
     return;
   }
 
@@ -333,37 +579,27 @@ function main() {
     process.exit(1);
   }
 
-  const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
-  const failures = compareToBaseline(current, baseline);
-
-  if (failures.length > 0) {
-    for (const failure of failures) process.stderr.write(`::error::${failure}\n`);
-    const srcPrefix = 'packages/webapp/src/';
-    for (const [file, count] of Object.entries(current)) {
-      if (count <= (baseline[file] ?? 0)) continue;
-      const hits = findLayerBackEdges(
-        file.slice(srcPrefix.length),
-        readFileSync(resolve(repoRoot, file), 'utf8')
-      );
-      for (const h of hits) {
-        process.stderr.write(`  ${file}:${h.line} ${h.from} → ${h.to}: '${h.specifier}'\n`);
-      }
-    }
-    process.stderr.write(
-      `\n${failures.length} layer-stack violation(s). The webapp layer stack ` +
-        '(fs → shell/git → cdp → tools → core → scoops → ui) requires imports to point ' +
-        'down. Move the pure helper into the lower layer (see docs/review-patterns.md § ' +
-        'Layer-stack import direction) rather than growing the baseline.\n'
-    );
-    process.exit(1);
+  let failed = false;
+  for (const { stack, current } of scanned) {
+    const baseline = JSON.parse(readFileSync(stack.baselinePath, 'utf8'));
+    const failures = compareToBaseline(current, baseline);
+    if (failures.length === 0) continue;
+    failed = true;
+    reportPackageFailures(stack, current, baseline, failures);
   }
+  if (failed) process.exit(1);
 
-  const total = Object.values(current).reduce((a, b) => a + b, 0);
+  const total = scanned.reduce(
+    (n, { current }) => n + Object.values(current).reduce((a, b) => a + b, 0),
+    0
+  );
+  const fileCount = scanned.reduce((n, { current }) => n + Object.keys(current).length, 0);
+  const ids = LAYER_PACKAGES.map((p) => p.id).join(', ');
   process.stdout.write(
-    `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, no ` +
+    `ok: no new layer back-edges (${ids}), no cross-package escapes in packages/webapp/src, no ` +
       `packages/chrome-extension (src+tests) → packages/webapp/src escapes, and no ` +
       `packages/webcomponents → packages/webapp/src escapes ` +
-      `(${total} grandfathered in ${Object.keys(current).length} baselined files)\n`
+      `(${total} grandfathered in ${fileCount} baselined files)\n`
   );
 }
 
