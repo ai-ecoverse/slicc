@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     adaptTools: vi.fn((tools: any[]) => tools),
     createLogger: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() })),
     createFileTools: vi.fn(() => [{ name: 'read_file' }, { name: 'write_file' }, { name: 'edit' }]),
+    createMemoryWriteTool: vi.fn(() => ({ name: 'memory_write' })),
     createBashTool: vi.fn(() => ({ name: 'bash' })),
     createRequestSecretTool: vi.fn((_deps: unknown) => ({ name: 'request_secret' })),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
@@ -50,6 +51,7 @@ vi.mock('../../src/core/index.js', () => ({
 
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: mocks.createFileTools,
+  createMemoryWriteTool: mocks.createMemoryWriteTool,
   createBashTool: mocks.createBashTool,
   createRequestSecretTool: mocks.createRequestSecretTool,
 }));
@@ -137,6 +139,7 @@ describe('ScoopContext active tool surface', () => {
       'read_file',
       'write_file',
       'edit',
+      'memory_write',
       'bash',
       'send_message',
       'request_secret',

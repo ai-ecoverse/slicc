@@ -88,7 +88,7 @@ Your memory is organized hierarchically:
 - **${isRoot ? 'Cone' : 'Scoop'} memory** (${workspace.memoryPath}): Your private memory
 
 When you learn something important:
-- Use your memory for context-specific notes (edit with write_file or edit)
+- Use your memory for context-specific notes. Write it ONLY with the memory_write tool (pass \`edits\` for a small change, \`content\` for a rewrite): it enforces the memory budget and its result reports the remaining room, so never follow it with \`wc -c\`. write_file, edit and shell redirections are refused on memory files.
 ${policy.canWriteSharedMemory ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
 
 ${

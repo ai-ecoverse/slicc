@@ -494,6 +494,13 @@ describe('tool presentation', () => {
       ['bash', { command: 'frobnicate --wat' }, "Use Sliccy's computer", 'terminal'],
       ['read_file', { path: '/workspace/CLAUDE.md' }, 'Read CLAUDE.md', 'file-text'],
       ['write_file', { path: '/tmp/a.ts', content: 'x' }, 'Write a.ts', 'file-plus'],
+      ['memory_write', { path: '/workspace/CLAUDE.md', content: 'x' }, 'Update memory', 'brain'],
+      [
+        'memory_write',
+        { path: '/workspace/CLAUDE.md', edits: [{ oldText: 'a', newText: 'b' }] },
+        'Update memory',
+        'brain',
+      ],
       ['edit', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
@@ -712,6 +719,30 @@ describe('tool presentation', () => {
     const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
     expect(writeRow.querySelector('.add')?.textContent).toBe('body');
     expect(writeRow.textContent).toContain('/a.ts');
+  });
+
+  // Codex on #3190: `memory_write` in its `edits` shape must render the
+  // oldText/newText pairs, not the legacy old_string/new_string fields.
+  it('memory_write bodies follow the two shapes: content like a write, edits like an edit', () => {
+    const [, editRow] = messageEls(
+      call(
+        'memory_write',
+        {
+          path: '/workspace/CLAUDE.md',
+          edits: [{ oldText: '- stale fact', newText: '- fresh fact (2026-09-16)' }],
+        },
+        'Wrote /workspace/CLAUDE.md: 120 chars, 5880 under the 6000-char budget.'
+      )
+    );
+    expect(editRow.querySelector('.del')?.textContent).toBe('- stale fact');
+    expect(editRow.querySelector('.add')?.textContent).toBe('- fresh fact (2026-09-16)');
+    expect(editRow.textContent).toContain('/workspace/CLAUDE.md');
+
+    const [, writeRow] = messageEls(
+      call('memory_write', { path: '/workspace/CLAUDE.md', content: '# Memory\n' }, 'ok')
+    );
+    expect(writeRow.querySelector('.del')).toBeNull();
+    expect(writeRow.querySelector('.add')?.textContent).toBe('# Memory\n');
   });
 
   it('still renders legacy edit_file transcript bodies', () => {
