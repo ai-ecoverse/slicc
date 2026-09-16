@@ -2,27 +2,15 @@ package optel
 
 import "math/rand/v2"
 
-
-
-
-
-
-
-
 type SamplingConfig struct {
 	Weight int
 }
 
-
-
 const DefaultWeight = 100
-
 
 func NewSamplingConfig(rate string) SamplingConfig {
 	return SamplingConfig{Weight: ParseWeight(rate)}
 }
-
-
 
 func ParseWeight(rate string) int {
 	switch rate {
@@ -39,9 +27,6 @@ func ParseWeight(rate string) int {
 	}
 }
 
-
-
-
 type RandomSource interface {
 	Float64() float64
 }
@@ -50,24 +35,13 @@ type systemRandomSource struct{}
 
 func (systemRandomSource) Float64() float64 { return rand.Float64() }
 
-
-
-
 var DefaultRandomSource RandomSource = systemRandomSource{}
-
-
-
-
-
-
 
 type Session struct {
 	ID       string
 	Weight   int
 	Selected bool
 }
-
-
 
 func NewSession(id string, config SamplingConfig, random RandomSource) Session {
 	if random == nil {
@@ -79,8 +53,6 @@ func NewSession(id string, config SamplingConfig, random RandomSource) Session {
 		Selected: computeSelected(config.Weight, random),
 	}
 }
-
-
 
 func computeSelected(weight int, random RandomSource) bool {
 	if weight <= 0 {

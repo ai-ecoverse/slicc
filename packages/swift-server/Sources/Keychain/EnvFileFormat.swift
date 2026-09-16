@@ -1,24 +1,14 @@
 import Foundation
 
-
 struct EnvEntry: Sendable, Equatable {
     let key: String
     let value: String
 }
 
-
 private let domainsSuffix = "_DOMAINS"
-
-
-
-
-
 
 enum EnvFileFormat {
 
-    
-    
-    
     static func parse(_ content: String) -> [EnvEntry] {
         var entries: [EnvEntry] = []
         for raw in content.components(separatedBy: "\n") {
@@ -40,36 +30,15 @@ enum EnvFileFormat {
         return entries
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static func isSingleLineValue(_ value: String) -> Bool {
         !value.unicodeScalars.contains { $0 == "\n" || $0 == "\r" }
     }
 
-    
     static func multilineValueError(_ name: String) -> String {
         "Secret \"\(name)\" value cannot contain newlines; the secret store is "
             + "line-oriented and would truncate it to the first line"
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func serialize(_ entries: [EnvEntry]) throws -> String {
         var lines: [String] = []
         for entry in entries {
@@ -81,9 +50,6 @@ enum EnvFileFormat {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    
-    
-    
     static func secretsFromBlob(_ content: String) -> [Secret] {
         let entries = parse(content)
         var values: [String: String] = [:]
@@ -116,8 +82,6 @@ enum EnvFileFormat {
         return result
     }
 
-    
-    
     static func blobFromSecrets(_ secrets: [Secret]) throws -> String {
         var entries: [EnvEntry] = []
         for secret in secrets {
@@ -131,8 +95,6 @@ enum EnvFileFormat {
         return try serialize(entries)
     }
 
-    
-    
     static func parseDomains(_ raw: String) -> [String] {
         raw.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }

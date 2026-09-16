@@ -5,13 +5,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
-
-
 @MainActor
 final class AppDelegateLifecycleTests: XCTestCase {
     private var suiteName: String!
@@ -84,11 +77,6 @@ final class AppDelegateLifecycleTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
     func testTheDelegateIsConstructibleFromTheObjCRuntime() {
         let type: NSObject.Type = SliccstartAppDelegate.self
         let instance = type.init()
@@ -112,11 +100,9 @@ final class AppDelegateLifecycleTests: XCTestCase {
             NSApplication.shared,
             open: [URL(string: "https://example.test/one")!, URL(string: "https://example.test/two")!]
         )
-        
+
         for _ in 0..<8 { await Task.yield() }
 
-        
-        
         XCTAssertTrue(
             process.standaloneLaunches.count + process.openedUrls.count > 0
                 || process.isLeaderReadyCalls > 0,
@@ -124,7 +110,6 @@ final class AppDelegateLifecycleTests: XCTestCase {
         )
     }
 }
-
 
 private final class LifecycleProcess: SliccProcess {
     var stopAllCalls = 0

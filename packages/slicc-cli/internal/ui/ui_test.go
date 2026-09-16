@@ -6,14 +6,12 @@ import (
 	"testing"
 )
 
-
 func envMap(vars map[string]string) Env {
 	return func(key string) (string, bool) {
 		v, ok := vars[key]
 		return v, ok
 	}
 }
-
 
 func notATerminal(t *testing.T) *os.File {
 	t.Helper()
@@ -59,8 +57,7 @@ func TestDetectEnvOverrides(t *testing.T) {
 			if mode.Color != tc.wantColor {
 				t.Errorf("Color = %v, want %v (mode %+v)", mode.Color, tc.wantColor, mode)
 			}
-			
-			
+
 			if mode.Sticky {
 				t.Error("a redirected stream must never be sticky")
 			}

@@ -1,13 +1,8 @@
 import Foundation
 import SliccTraySession
 
-
-
-
 enum ICloudSessionList {
-    
-    
-    
+
     struct DeviceGroup: Equatable, Identifiable {
         let deviceId: String
         let deviceName: String
@@ -15,9 +10,6 @@ enum ICloudSessionList {
         var id: String { deviceId }
     }
 
-    
-    
-    
     static func groups(from sessions: [SyncedTraySession]) -> [DeviceGroup] {
         var order: [String] = []
         var byDevice: [String: [SyncedTraySession]] = [:]
@@ -32,11 +24,6 @@ enum ICloudSessionList {
         }
     }
 
-    
-    
-    
-    
-    
     enum EmptyReason: Equatable {
         case iCloudUnavailable
         case noSessions
@@ -46,9 +33,6 @@ enum ICloudSessionList {
         hasICloudIdentity ? .noSessions : .iCloudUnavailable
     }
 
-    
-    
-    
     static func age(of date: Date, now: Date) -> String {
         let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "just now" }
@@ -58,18 +42,8 @@ enum ICloudSessionList {
     }
 }
 
-
-
-
-
 extension ICloudSessionList {
-    
-    
-    
-    
-    
-    
-    
+
     static func recentRows(
         from recents: [RecentJoin],
         excluding advertised: [SyncedTraySession],
@@ -83,17 +57,12 @@ extension ICloudSessionList {
             isReachable: isReachable)
     }
 
-    
-    
     static func recentTitle(_ recent: RecentJoin) -> String {
         if !recent.label.isEmpty { return recent.label }
         if !recent.displayHost.isEmpty { return recent.displayHost }
         return "Sliccy session"
     }
 
-    
-    
-    
     static func recentSubtitle(
         _ recent: RecentJoin,
         thisDeviceId: String,
@@ -104,8 +73,7 @@ extension ICloudSessionList {
             recent.deviceId == thisDeviceId
             ? "This device"
             : (recent.deviceName.isEmpty ? "Unknown device" : recent.deviceName)
-        
-        
+
         let host = recent.label.isEmpty ? "" : recent.displayHost
         return [
             device, host.isEmpty ? nil : host, age(of: recent.lastConnectedAt, now: now),

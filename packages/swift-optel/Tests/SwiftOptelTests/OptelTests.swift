@@ -2,8 +2,6 @@ import XCTest
 
 @testable import SwiftOptel
 
-
-
 private struct FixedRandomSource: RandomSource {
     let value: Double
     func nextUnitDouble() -> Double { value }
@@ -19,7 +17,7 @@ final class OptelTests: XCTestCase {
         selected: Bool = true
     ) -> Optel {
         let optel = Optel()
-        
+
         let random = FixedRandomSource(value: selected ? 0 : 0.99)
         optel.configure(
             appID: appID,
@@ -118,9 +116,9 @@ final class OptelTests: XCTestCase {
 
     func testSampleBeforeConfigureIsNoOp() {
         let optel = Optel()
-        
+
         optel.sample(.click, source: "x")
-        
+
     }
 
     func testTimeShiftIsNonNegativeForUserCheckpoint() {
@@ -149,9 +147,7 @@ final class OptelTests: XCTestCase {
     }
 
     func testConfigureHonorsOptelRateEnvOverExplicit() {
-        
-        
-        
+
         let mock = RecordingTransport()
         let optel = Optel()
         optel.configure(
@@ -163,7 +159,7 @@ final class OptelTests: XCTestCase {
             environment: ["OPTEL_RATE": "on"]
         )
         optel.sample(.click)
-        
+
         XCTAssertEqual(mock.sent.map { $0.event.weight }, [1, 1])
         XCTAssertEqual(mock.sent.map { $0.event.checkpoint.rawValue }, ["top", "click"])
     }
@@ -184,8 +180,7 @@ final class OptelTests: XCTestCase {
     }
 
     func testConfigureEmptyEnvRateFallsBackToExplicit() {
-        
-        
+
         let mock = RecordingTransport()
         let optel = Optel()
         optel.configure(
@@ -201,11 +196,7 @@ final class OptelTests: XCTestCase {
     }
 
     func testTopBeaconIsFirstOnTheWireUnderConcurrentFirstCallers() {
-        
-        
-        
-        
-        
+
         for trial in 0..<20 {
             let mock = RecordingTransport()
             let optel = makeOptel(transport: mock, selected: true)

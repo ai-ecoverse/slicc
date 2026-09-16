@@ -1,8 +1,5 @@
 import Foundation
 
-
-
-
 enum SafeLeaderMessageLog {
     static func decodeFailureSummary(_ data: Data) -> String {
         let discriminator: String

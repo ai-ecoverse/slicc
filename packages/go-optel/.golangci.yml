@@ -20,6 +20,12 @@ linters:
       min-complexity: 25
     gocognit:
       min-complexity: 30
+    revive:
+      rules:
+        - name: package-comments
+          disabled: true
+        - name: exported
+          disabled: true
   exclusions:
     rules:
       - path: _test\.go

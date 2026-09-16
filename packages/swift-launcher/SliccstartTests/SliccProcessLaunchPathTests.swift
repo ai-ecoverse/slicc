@@ -3,21 +3,9 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
-
-
-
-
-
 @MainActor
 final class SliccProcessLaunchPathTests: XCTestCase {
 
-    
-    
     private final class SpawnRecorder {
         struct Spawned {
             let executablePath: String
@@ -31,7 +19,7 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         var portsInUse: Set<UInt16> = []
         var resolveError: Error?
         var runError: Error?
-        
+
         private(set) var children: [Process] = []
 
         func services() -> SliccProcess.SpawnServices {
@@ -55,15 +43,7 @@ final class SliccProcessLaunchPathTests: XCTestCase {
                         )
                     )
                     if let runError { throw runError }
-                    
-                    
-                    
-                    
-                    
-                    
-                    
-                    
-                    
+
                     process.executableURL = URL(fileURLWithPath: "/bin/sleep")
                     process.arguments = ["45"]
                     process.currentDirectoryURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -100,8 +80,7 @@ final class SliccProcessLaunchPathTests: XCTestCase {
                     storeURL: URL(fileURLWithPath: NSTemporaryDirectory())
                         .appendingPathComponent("launch-records-\(UUID().uuidString).json")
                 ),
-            
-            
+
             trayStatusProbe: TrayStatusProbe { _ in
                 throw URLError(.cannotConnectToHost)
             },
@@ -127,8 +106,6 @@ final class SliccProcessLaunchPathTests: XCTestCase {
             bundleId: "com.test.\(name.lowercased())"
         )
     }
-
-    
 
     func testLaunchingABrowserSpawnsAServerAndRecordsItAsTheLeader() throws {
         let process = makeProcess()
@@ -248,8 +225,6 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         )
     }
 
-    
-
     func testAFollowerCarriesTheJoinUrlAndNeverBecomesTheLeader() throws {
         let process = makeProcess()
         let chrome = target("Chrome")
@@ -303,8 +278,6 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         XCTAssertTrue(recorder.spawns.isEmpty)
     }
 
-    
-
     func testAnElectronAppWaitsForALeaderBeforeItCanStart() {
         let process = makeProcess()
         let signal = target("Signal", type: .electronApp)
@@ -346,8 +319,6 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         XCTAssertEqual(Set(ports).count, 2, "two apps sharing a CDP port would collide: \(ports)")
     }
 
-    
-
     func testStoppingEverythingClearsTheRecordsAndTheLeader() throws {
         let process = makeProcess()
         try process.launchStandalone(target("Chrome"))
@@ -364,10 +335,7 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         let storeURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("detach-\(UUID().uuidString).json")
         let store = LaunchRecordStore(storeURL: storeURL)
-        
-        
-        
-        
+
         addTeardownBlock { try? FileManager.default.removeItem(at: storeURL) }
         let process = makeProcess(records: store)
         try process.launchStandalone(target("Chrome"))
@@ -389,16 +357,11 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         let storeURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("detach-twice-\(UUID().uuidString).json")
         let store = LaunchRecordStore(storeURL: storeURL)
-        
-        
-        
-        
+
         addTeardownBlock { try? FileManager.default.removeItem(at: storeURL) }
         let process = makeProcess(records: store)
         try process.launchStandalone(target("Chrome"))
 
-        
-        
         _ = process.detachAll()
         _ = process.detachAll()
 

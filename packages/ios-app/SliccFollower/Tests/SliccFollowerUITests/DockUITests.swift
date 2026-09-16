@@ -1,7 +1,5 @@
 import XCTest
 
-
-
 final class DockUITests: XCTestCase {
 
     override func setUp() {
@@ -24,8 +22,6 @@ final class DockUITests: XCTestCase {
             "the terminal surface asks for an active leader")
         XCTAssertTrue(placeholder.isHittable)
 
-        
-        
         term.tap()
         let collapsed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),

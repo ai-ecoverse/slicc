@@ -1,17 +1,5 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
 enum MountTablePreference {
     static let key = "autoMountTable"
 
@@ -28,8 +16,7 @@ enum MountTablePreference {
             path.removeLast()
         }
         guard !path.isEmpty else { return nil }
-        
-        
+
         if path != "/" {
             let segments = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
             guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
@@ -39,8 +26,6 @@ enum MountTablePreference {
         return path
     }
 
-    
-    
     static func mapping(
         fromLine line: String,
         homeDirectory: String = NSHomeDirectory()
@@ -61,8 +46,6 @@ enum MountTablePreference {
         return Mapping(hostPath: hostPath, path: path)
     }
 
-    
-    
     static func mappings(from text: String) -> [Mapping] {
         var seen = Set<String>()
         var result: [Mapping] = []
@@ -74,8 +57,6 @@ enum MountTablePreference {
         return result
     }
 
-    
-    
     static func invalidLines(in text: String) -> [String] {
         text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -86,9 +67,6 @@ enum MountTablePreference {
         mappings(from: defaults.string(forKey: key) ?? "")
     }
 
-    
-    
-    
     static func serverArgs(mappings: [Mapping]) -> [String] {
         mappings.map { "--mount=\($0.hostPath):\($0.path)" }
     }
@@ -97,12 +75,9 @@ enum MountTablePreference {
         serverArgs(mappings: mappings(defaults: defaults))
     }
 
-    
-
     static let mountRoot = "/mnt/"
     private static let generatedBase = mountRoot + "folder"
 
-    
     static func sanitizedFolderName(_ name: String) -> String {
         let cleaned = name.lowercased()
             .replacingOccurrences(of: " ", with: "-")
@@ -110,7 +85,6 @@ enum MountTablePreference {
         return cleaned.isEmpty ? "folder" : cleaned
     }
 
-    
     static func defaultTarget(forFolderNamed name: String?, existing: [String]) -> String {
         let base = mountRoot + (name.map(sanitizedFolderName) ?? "folder")
         var candidate = base
@@ -122,22 +96,17 @@ enum MountTablePreference {
         return candidate
     }
 
-    
-    
     static func isGeneratedDefault(_ path: String) -> Bool {
         guard path.hasPrefix(generatedBase) else { return false }
         let suffix = path.dropFirst(generatedBase.count)
         return suffix.isEmpty || suffix.hasPrefix("-")
     }
 
-    
-    
     static func isValidTarget(_ path: String, among targets: [String]) -> Bool {
         guard mapping(fromLine: "/x:\(path)") != nil else { return false }
         return targets.filter { $0 == path }.count == 1
     }
 
-    
     static func displayPath(_ path: String, homeDirectory: String = NSHomeDirectory()) -> String {
         guard !homeDirectory.isEmpty else { return path }
         if path == homeDirectory { return "~" }
@@ -147,8 +116,6 @@ enum MountTablePreference {
         return path
     }
 
-    
-    
     static func serialized(rows: [(hostPath: String, path: String)]) -> String {
         rows.compactMap { row in
             row.hostPath.isEmpty ? nil : "\(row.hostPath):\(row.path)"

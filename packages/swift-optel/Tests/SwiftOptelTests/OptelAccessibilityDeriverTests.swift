@@ -2,7 +2,6 @@
     import XCTest
     @testable import SwiftOptel
 
-    
     private final class FakeElement: OptelAccessibleElement {
         var optelAccessibilityRole: String?
         var optelAccessibilityIdentifier: String?
@@ -113,15 +112,14 @@
         }
 
         func testDepthCapPreventsRunawayWalk() {
-            
+
             let leaf = FakeElement(role: "button", identifier: "deep")
             var current: OptelAccessibleElement = leaf
             for _ in 0..<(OptelAccessibilityDeriver.maxAncestorDepth + 10) {
                 current = FakeElement(role: "AXGroup", parent: current)
             }
             let derived = OptelAccessibilityDeriver.derive(from: current)
-            
-            
+
             XCTAssertEqual(derived.source, "AXGroup")
         }
 

@@ -1,29 +1,12 @@
 import CoreGraphics
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
 enum SVGPath {
 
-    
-    
     static func path(from data: String, viewBox: CGFloat = 24, in rect: CGRect) -> CGPath {
         fitted(parse(data), viewBox: viewBox, in: rect)
     }
 
-    
-    
-    
     static func fitted(_ path: CGPath, viewBox: CGFloat = 24, in rect: CGRect) -> CGPath {
         let scale = min(rect.width, rect.height) / viewBox
         var transform = CGAffineTransform(
@@ -34,7 +17,6 @@ enum SVGPath {
         return path.copy(using: &transform) ?? path
     }
 
-    
     static func parse(_ data: String) -> CGPath {
         let path = CGMutablePath()
         var tokens = Tokenizer(data)
@@ -48,12 +30,10 @@ enum SVGPath {
         return path
     }
 
-    
     private struct Pen {
         var current = CGPoint.zero
         var subpathStart = CGPoint.zero
-        
-        
+
         var lastCubicControl: CGPoint?
         var lastQuadControl: CGPoint?
 
@@ -61,16 +41,12 @@ enum SVGPath {
             relative ? CGPoint(x: current.x + x, y: current.y + y) : CGPoint(x: x, y: y)
         }
 
-        
         mutating func clearReflections() {
             lastCubicControl = nil
             lastQuadControl = nil
         }
     }
 
-    
-    
-    
     private static func nextCommand(
         _ tokens: inout Tokenizer, after previous: Character?
     ) -> Character? {
@@ -82,14 +58,12 @@ enum SVGPath {
         switch previous {
         case "M": return "L"
         case "m": return "l"
-        
+
         case "Z", "z": return nil
         default: return previous
         }
     }
 
-    
-    
     private static func apply(
         _ cmd: Character, _ tokens: inout Tokenizer, _ pen: inout Pen, to path: CGMutablePath
     ) -> Bool {
@@ -212,11 +186,6 @@ enum SVGPath {
         return CGPoint(x: 2 * current.x - control.x, y: 2 * current.y - control.y)
     }
 
-    
-
-    
-    
-    
     private static func appendArc(
         to path: CGMutablePath,
         from start: CGPoint,
@@ -227,15 +196,14 @@ enum SVGPath {
         largeArc: Bool,
         sweep: Bool
     ) {
-        
+
         var rx = abs(rx)
         var ry = abs(ry)
         guard rx > 0, ry > 0, start != end else {
             path.addLine(to: end)
             return
         }
-        
-        
+
         if path.isEmpty { path.move(to: start) }
 
         let phi = xRotationDegrees * .pi / 180
@@ -247,7 +215,6 @@ enum SVGPath {
         let x1p = cosPhi * dx2 + sinPhi * dy2
         let y1p = -sinPhi * dx2 + cosPhi * dy2
 
-        
         let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
         if lambda > 1 {
             let scale = sqrt(lambda)
@@ -289,7 +256,7 @@ enum SVGPath {
 
         let segments = max(1, Int(ceil(abs(delta) / (.pi / 2))))
         let step = delta / CGFloat(segments)
-        
+
         let alpha = 4.0 / 3.0 * tan(step / 4)
 
         var theta = theta1
@@ -316,11 +283,6 @@ enum SVGPath {
         }
     }
 
-    
-
-    
-    
-    
     private struct Tokenizer {
         private let scalars: [Character]
         private var index: Int = 0
@@ -354,8 +316,6 @@ enum SVGPath {
             index += 1
         }
 
-        
-        
         mutating func flag() -> Bool? {
             skipSeparators()
             guard index < scalars.count else { return nil }
@@ -382,7 +342,7 @@ enum SVGPath {
                 } else if char == ".", !sawDot {
                     sawDot = true
                 } else if char == "e" || char == "E", sawDigit {
-                    
+
                     text.append(char)
                     index += 1
                     if index < scalars.count, scalars[index] == "-" || scalars[index] == "+" {

@@ -3,13 +3,7 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
 final class LauncherCoverageBackfillTests: XCTestCase {
-
-    
 
     func testParseSecretsHonoursQuotingCommentsAndDomains() {
         let blob = """
@@ -26,7 +20,7 @@ final class LauncherCoverageBackfillTests: XCTestCase {
         XCTAssertEqual(byName["GITHUB_TOKEN"]?.value, "ghp_with space")
         XCTAssertEqual(byName["GITHUB_TOKEN"]?.domains, ["api.github.com", "*.github.com"])
         XCTAssertEqual(byName["SINGLE"]?.value, "quoted")
-        
+
         XCTAssertNil(byName["EMPTY_DOMAINS_SECRET"])
     }
 
@@ -38,7 +32,7 @@ final class LauncherCoverageBackfillTests: XCTestCase {
         let serialized = EnvFileFormat.serialize(secrets)
         XCTAssertTrue(serialized.contains("A=plain"))
         XCTAssertTrue(serialized.contains("\"has space#\""))
-        
+
         XCTAssertEqual(EnvFileFormat.parseSecrets(serialized), secrets)
     }
 
@@ -59,8 +53,6 @@ final class LauncherCoverageBackfillTests: XCTestCase {
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("*."))
     }
 
-    
-
     func testSecretIdentityAndEquality() {
         let a = Secret(name: "X", value: "1", domains: ["a"])
         let b = Secret(name: "X", value: "2", domains: ["b"])
@@ -77,18 +69,12 @@ final class LauncherCoverageBackfillTests: XCTestCase {
     }
 
     func testReadBlobReturnsEmptyWhenItemAbsent() throws {
-        
-        
-        
+
         _ = try SecretsKeychain.readBlob()
     }
 
-    
-
     func testScanRunsWithAndWithoutPermission() {
-        
-        
-        
+
         let withPermNames = AppScanner.scan(hasAppManagementPermission: true).map(\.name)
         let withoutPermNames = AppScanner.scan(hasAppManagementPermission: false).map(\.name)
         XCTAssertEqual(
@@ -108,8 +94,6 @@ final class LauncherCoverageBackfillTests: XCTestCase {
         XCTAssertFalse(AppScanner.isChromiumBrowser(bundleId: "com.example.NotABrowser"))
     }
 
-    
-
     func testAppRowStatusDotColorAndHelpForEveryCase() {
         let cases: [AppRowStatusDot] = [
             .runningWithDebug, .runningWithoutDebug, .needsPermission,
@@ -122,8 +106,6 @@ final class LauncherCoverageBackfillTests: XCTestCase {
         XCTAssertEqual(AppRowStatusDot.runningWithDebug.color, .green)
         XCTAssertEqual(AppRowStatusDot.needsLeader.color, .gray)
     }
-
-    
 
     func testAppRuntimeStateIsRunningFlag() {
         XCTAssertTrue(AppRuntimeState.runningWithoutDebug.isRunning)
@@ -182,7 +164,7 @@ final class LauncherProcessCoverageTests: XCTestCase {
                 cdpPort: 9222
             )
         ])
-        
+
         let proc = SliccProcess(
             recordStore: store,
             cdpLiveProbe: CDPLiveProbe(fetch: { _ in 0 })
@@ -216,9 +198,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
         XCTAssertFalse(proc.isRunning(target))
     }
 
-    
-    
-    
     func testStaleBrowserWithFreeCdpPortIsReaped() throws {
         let proc = SliccProcess()
         let sleeper = try makeSleeper()
@@ -236,9 +215,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
         XCTAssertFalse(proc.isRunning(target))
     }
 
-    
-    
-    
     func testStaleBrowserThatNeverBoundCdpIsNotReaped() throws {
         let proc = SliccProcess()
         let sleeper = try makeSleeper()
@@ -255,8 +231,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
         proc.stop(target)
     }
 
-    
-    
     func testFreshBrowserWithinGracePeriodIsNotReaped() throws {
         let proc = SliccProcess()
         let sleeper = try makeSleeper()
@@ -272,8 +246,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
         proc.stop(target)
     }
 
-    
-    
     func testStaleBrowserWithBusyCdpPortIsNotReaped() throws {
         let proc = SliccProcess()
         let sleeper = try makeSleeper()
@@ -302,9 +274,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
         )
     }
 
-    
-    
-    
     private static func makeListeningSocket() throws -> (fd: Int32, port: UInt16) {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -338,9 +307,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
     func testRuntimeStateDrivesDebugPortAndAppRunningHelpers() throws {
         let proc = SliccProcess()
 
-        
-        
-        
         let electronSleeper = try makeSleeper()
         addTeardownBlock { if electronSleeper.isRunning { electronSleeper.terminate() } }
         let electron = AppTarget(
@@ -360,8 +326,6 @@ final class LauncherProcessCoverageTests: XCTestCase {
         )
         _ = proc.runtimeState(for: electron, hasAppManagementPermission: true)
 
-        
-        
         let browserSleeper = try makeSleeper()
         addTeardownBlock { if browserSleeper.isRunning { browserSleeper.terminate() } }
         let browser = AppTarget(
@@ -394,8 +358,7 @@ final class LauncherProcessCoverageTests: XCTestCase {
             launchedAppPaths: [electron.path], cdpPort: 39777, servePort: 35777,
             electronAppPath: electron.path, targetName: electron.name
         )
-        
-        
+
         proc.stop(electron)
         XCTAssertFalse(proc.isRunning(electron))
     }
@@ -463,8 +426,7 @@ final class LauncherBootstrapperCoverageTests: XCTestCase {
     }
 
     func testBundledLookupsAndDefaults() {
-        
-        
+
         _ = SliccBootstrapper.isBundled
         _ = SliccBootstrapper.bundledSliccDir
         _ = SliccBootstrapper.bundledServerBinaryPath
@@ -505,8 +467,7 @@ final class LauncherBootstrapperCoverageTests: XCTestCase {
     }
 
     func testDefaultBrowserProbeReadsTheRealLaunchServicesHandler() {
-        
-        
+
         XCTAssertFalse(DefaultBrowserRegistration.isDefault())
         _ = DefaultBrowserRegistration.isRegistrable
     }

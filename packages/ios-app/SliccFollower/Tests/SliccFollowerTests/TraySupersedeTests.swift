@@ -4,18 +4,7 @@ import XCTest
 @testable import SliccTrayFollower
 @testable import SliccTrayKit
 
-
-
-
-
-
-
-
-
-
 final class TraySupersedeTests: XCTestCase {
-
-    
 
     private func attachPlan(
         statusCode: Int = 409,
@@ -41,19 +30,17 @@ final class TraySupersedeTests: XCTestCase {
         let plan = try await attachPlan(
             result: """
                 {"action":"fail","code":"TRAY_SUPERSEDED","error":"moved",
-                 "joinUrl":"https:
+                 "joinUrl":"https://tray.example/join/new.secret"}
                 """)
 
         XCTAssertEqual(plan.action, .fail)
         XCTAssertEqual(plan.code, "TRAY_SUPERSEDED")
         XCTAssertEqual(plan.error, "moved")
-        XCTAssertEqual(plan.supersededByJoinUrl, "https:
+        XCTAssertEqual(plan.supersededByJoinUrl, "https://tray.example/join/new.secret")
     }
 
     func testAttachRejectsSupersededPlanWithoutAJoinUrl() async {
-        
-        
-        
+
         do {
             let plan = try await attachPlan(
                 result: #"{"action":"fail","code":"TRAY_SUPERSEDED","error":"moved"}"#)
@@ -68,8 +55,7 @@ final class TraySupersedeTests: XCTestCase {
     }
 
     func testAttachRejectsSupersededPlanWithABlankJoinUrl() async {
-        
-        
+
         for blank in ["", "   ", "\\n"] {
             do {
                 let plan = try await attachPlan(
@@ -107,15 +93,11 @@ final class TraySupersedeTests: XCTestCase {
             statusCode: 410,
             result: """
                 {"action":"fail","code":"TRAY_EXPIRED","error":"expired",
-                 "joinUrl":"https:
+                 "joinUrl":"https://tray.example/join/should-be-ignored.secret"}
                 """)
 
-        // `joinUrl` is only meaningful for TRAY_SUPERSEDED; a stray one on any
-        // other code must not turn a dead tray into a redirect.
         XCTAssertNil(plan.supersededByJoinUrl)
     }
-
-    // MARK: - Redirect policy
 
     private func plan(code: String, joinUrl: String?) -> FollowerAttachPlan {
         FollowerAttachPlan(
@@ -126,7 +108,7 @@ final class TraySupersedeTests: XCTestCase {
 
     func testFollowsASupersededTrayToItsReplacement() throws {
         let outcome = SupersedeRedirect.outcome(
-            for: plan(code: "TRAY_SUPERSEDED", joinUrl: "https:
+            for: plan(code: "TRAY_SUPERSEDED", joinUrl: "https://tray.example/join/new.secret"),
             redirectsFollowed: 0)
 
         XCTAssertEqual(
@@ -173,8 +155,7 @@ final class TraySupersedeTests: XCTestCase {
     }
 
     func testARelativeOrSchemelessReplacementIsRejected() {
-        
-        
+
         for bad in ["not-a-url", "/join/relative", "join/also-relative"] {
             XCTAssertEqual(
                 SupersedeRedirect.outcome(

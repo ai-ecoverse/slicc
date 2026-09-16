@@ -1,31 +1,16 @@
 import Foundation
 
-
-
-
-
-
-
-
-
 struct ClientFrameBufferGeneration: Equatable, Sendable {
-    
-    
-    
-    
+
     let chromeConnectionID: UUID?
-    
+
     let clientID: UUID?
 }
-
 
 struct ClientFrameBuffer: Sendable {
     let generation: ClientFrameBufferGeneration
     var messages: [ProxyMessage] = []
 }
-
-
-
 
 enum ClientFrameBufferDropReason: String, Sendable {
     case chromeLegReset = "chrome-leg-reset"
@@ -36,11 +21,7 @@ enum ClientFrameBufferDropReason: String, Sendable {
 }
 
 extension CDPProxy {
-    
-    
-    
-    
-    
+
     static func clientFrameBufferDropReason(
         generation: ClientFrameBufferGeneration,
         chromeConnectionID: UUID?,

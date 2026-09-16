@@ -109,15 +109,15 @@ func TestParseFollowArgs(t *testing.T) {
 
 func TestRunnerExecWarning(t *testing.T) {
 	warns := map[string]bool{
-		"":                         false, 
-		"bash":                     true,  
+		"":                         false,
+		"bash":                     true,
 		"bash -c":                  false,
 		"sh -c":                    false,
-		"/bin/zsh":                 true, 
+		"/bin/zsh":                 true,
 		"docker exec -i box sh -c": false,
-		"docker exec -i box bash":  true,  
-		"docker run --rm img":      true,  
-		"python script.py":         false, 
+		"docker exec -i box bash":  true,
+		"docker run --rm img":      true,
+		"python script.py":         false,
 		"fish -c":                  false,
 		"elvish":                   true,
 	}
@@ -145,8 +145,6 @@ func TestFollowMotd(t *testing.T) {
 	}
 }
 
-
-
 func bannerOutput(fa followArgs) string {
 	var buf bytes.Buffer
 	printFollowBanner(ui.New(&buf, ui.Options{Tag: "slicc follow"}), fa)
@@ -156,7 +154,7 @@ func bannerOutput(fa followArgs) string {
 func TestPrintFollowBanner(t *testing.T) {
 	t.Run("art + exec warning + heuristic when runner is bare bash", func(t *testing.T) {
 		out := bannerOutput(followArgs{runner: []string{"bash"}, showBanner: true})
-		if !strings.Contains(out, "follow") { 
+		if !strings.Contains(out, "follow") {
 			t.Error("expected the ASCII wordmark when showArt=true")
 		}
 		if !strings.Contains(out, "the leader can run commands") {
@@ -310,8 +308,6 @@ func TestWatchModesDropTheBarWhenStdoutIsATerminal(t *testing.T) {
 	tty := ui.Mode{Color: true, Sticky: true, Unicode: true}
 	piped := ui.Mode{}
 
-	
-	
 	console, out := watchModes(tty, tty)
 	if console.Sticky {
 		t.Error("kept the status bar while the transcript shares the screen")
@@ -320,7 +316,6 @@ func TestWatchModesDropTheBarWhenStdoutIsATerminal(t *testing.T) {
 		t.Errorf("lost more than the bar: console=%+v out=%+v", console, out)
 	}
 
-	
 	if console, _ = watchModes(tty, piped); !console.Sticky {
 		t.Error("dropped the status bar even though stdout is redirected")
 	}
@@ -329,14 +324,11 @@ func TestWatchModesDropTheBarWhenStdoutIsATerminal(t *testing.T) {
 func TestStickyUnlessLogging(t *testing.T) {
 	tty := ui.Mode{Color: true, Sticky: true, Unicode: true}
 
-	
 	off := logging.New(io.Discard, logging.Config{})
 	if got := stickyUnlessLogging(tty, off); !got.Sticky {
 		t.Error("dropped the status bar while nothing else writes to stderr")
 	}
 
-	
-	
 	on := logging.New(io.Discard, logging.Config{Enabled: true, Level: slog.LevelDebug})
 	got := stickyUnlessLogging(tty, on)
 	if got.Sticky {
@@ -346,8 +338,6 @@ func TestStickyUnlessLogging(t *testing.T) {
 		t.Errorf("lost more than the bar: %+v", got)
 	}
 
-	
-	
 	if got := stickyUnlessLogging(tty, nil); !got.Sticky {
 		t.Error("a nil logger dropped the status bar")
 	}

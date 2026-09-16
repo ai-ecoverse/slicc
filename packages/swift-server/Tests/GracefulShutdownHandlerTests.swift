@@ -51,10 +51,7 @@ final class GracefulShutdownHandlerTests: XCTestCase {
     }
 
     func testRunShutdownSequenceSnapshotsTabsBeforeStoppingTheRecorder() async {
-        
-        
-        
-        
+
         for closeBrowser in [true, false] {
             let tabRecorder = TabRecorderSpy()
 
@@ -121,8 +118,7 @@ final class GracefulShutdownHandlerTests: XCTestCase {
     }
 
     func testDetachShutsDownDependenciesWithoutClosingBrowser() async throws {
-        
-        
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "sleep 30"]
@@ -184,9 +180,7 @@ final class GracefulShutdownHandlerTests: XCTestCase {
     }
 
     func testDetachIsIdempotentWithSubsequentShutdown() async throws {
-        
-        
-        
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "sleep 30"]
@@ -219,7 +213,7 @@ final class GracefulShutdownHandlerTests: XCTestCase {
             ),
             closeBrowser: false
         )
-        
+
         await handler.runShutdownSequence(
             context: ShutdownContext(
                 browserProcess: process,
@@ -249,10 +243,7 @@ final class GracefulShutdownHandlerTests: XCTestCase {
     }
 
     func testRunShutdownSequencePrefersBrowserKillPidOverProcessIdentifierWhenForcingKill() async throws {
-        
-        
-        
-        
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "sleep 30"]
@@ -297,10 +288,7 @@ final class GracefulShutdownHandlerTests: XCTestCase {
     }
 
     func testRunShutdownSequenceFallsBackToProcessIdentifierWhenBrowserKillPidIsNil() async throws {
-        
-        
-        
-        
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "sleep 30"]

@@ -1,6 +1,3 @@
-
-
-
 package execrun
 
 import (
@@ -12,41 +9,28 @@ import (
 	"sync"
 )
 
-
-
 const chunkBytes = 16 * 1024
-
 
 type ChunkFunc func(stream string, data []byte)
 
-
 type Options struct {
-	
-	
-	
 	Runner []string
 	Cwd    string
 	Env    map[string]string
-	
+
 	Stdin   []byte
 	OnChunk ChunkFunc
-	
-	
+
 	Control <-chan string
 }
 
-
 type Result struct {
 	ExitCode int
-	
+
 	Signal string
-	
+
 	Err error
 }
-
-
-
-
 
 func Run(ctx context.Context, command string, opts Options) Result {
 	if len(opts.Runner) == 0 {
@@ -58,10 +42,7 @@ func Run(ctx context.Context, command string, opts Options) Result {
 		cmd.Dir = opts.Cwd
 	}
 	cmd.Env = mergedEnv(opts.Env)
-	
-	
-	
-	
+
 	setProcAttr(cmd)
 
 	stdout, err := cmd.StdoutPipe()
@@ -108,7 +89,7 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	if errors.As(err, &ee) {
 		code := ee.ExitCode()
 		if code < 0 {
-			
+
 			return Result{ExitCode: 137, Signal: "killed"}
 		}
 		return Result{ExitCode: code}

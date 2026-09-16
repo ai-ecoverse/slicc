@@ -10,15 +10,10 @@ import (
 	"time"
 )
 
-
-
-
-
 type checkState struct {
 	CheckedAt     time.Time `json:"checkedAt"`
 	LatestVersion string    `json:"latestVersion"`
 }
-
 
 func DefaultStatePath() (string, error) {
 	dir, err := os.UserCacheDir()
@@ -28,9 +23,6 @@ func DefaultStatePath() (string, error) {
 	return filepath.Join(dir, "slicc", "update-check.json"), nil
 }
 
-
-
-
 type Notifier struct {
 	Checker       *Checker
 	StatePath     string
@@ -38,16 +30,10 @@ type Notifier struct {
 	Version       string
 	Now           func() time.Time
 	CheckInterval time.Duration
-	
-	
-	
+
 	RefreshWait    time.Duration
 	RefreshTimeout time.Duration
 }
-
-
-
-
 
 func NewNotifier(version string, out io.Writer) *Notifier {
 	if !IsReleaseVersion(version) || os.Getenv("SLICC_NO_UPDATE_CHECK") != "" {
@@ -75,7 +61,7 @@ func (n *Notifier) readState() checkState {
 	if err != nil {
 		return state
 	}
-	
+
 	_ = json.Unmarshal(data, &state)
 	return state
 }
@@ -88,14 +74,9 @@ func (n *Notifier) writeState(state checkState) {
 	if err := os.MkdirAll(filepath.Dir(n.StatePath), 0o755); err != nil {
 		return
 	}
-	
+
 	_ = os.WriteFile(n.StatePath, data, 0o600)
 }
-
-
-
-
-
 
 func (n *Notifier) Start() func() {
 	noop := func() {}
@@ -110,8 +91,7 @@ func (n *Notifier) Start() func() {
 	if n.Now().Sub(state.CheckedAt) < n.CheckInterval {
 		return noop
 	}
-	
-	
+
 	n.writeState(checkState{CheckedAt: n.Now(), LatestVersion: state.LatestVersion})
 	done := make(chan struct{})
 	go func() {

@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-
-
 func testRunner() []string {
 	if runtime.GOOS == "windows" {
 		return []string{"cmd", "/c"}
@@ -101,7 +99,7 @@ func TestRunSignalTerminates(t *testing.T) {
 	go func() {
 		done <- Run(context.Background(), "sleep 30", Options{Runner: []string{"sh", "-c"}, Control: control})
 	}()
-	
+
 	time.Sleep(100 * time.Millisecond)
 	control <- "SIGKILL"
 

@@ -2,13 +2,7 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
 final class SliccProcessLaunchArgsTests: XCTestCase {
-
-    
 
     func testStandaloneBrowserArgsAlwaysIncludeLeadFlag() {
         let args = SliccProcess.standaloneBrowserArgs(cdpPort: 9222)
@@ -45,8 +39,6 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertFalse(args.contains("--lead"))
     }
 
-    
-
     func testStandaloneBrowserEnvDefaultsWorkerBaseUrl() {
         let env = SliccProcess.standaloneBrowserEnv(
             executablePath: "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -70,11 +62,7 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
     }
 
     func testStandaloneBridgeTokenIsStableAndNonEmpty() {
-        
-        
-        
-        
-        
+
         XCTAssertEqual(SliccProcess.standaloneBridgeToken, SliccProcess.standaloneBridgeToken)
         XCTAssertFalse(SliccProcess.standaloneBridgeToken.isEmpty)
     }
@@ -96,8 +84,6 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         )
         XCTAssertEqual(env["WORKER_BASE_URL"], SliccProcess.defaultWorkerBaseUrl)
     }
-
-    
 
     func testElectronAppArgsOmitJoinWhenNoLeaderJoinUrl() {
         let args = SliccProcess.electronAppArgs(
@@ -164,8 +150,6 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertFalse(redacted.joined(separator: " ").contains("secret"))
     }
 
-    
-
     func testReattachArgsChromiumBrowserOmitsJoinAndElectronFlags() {
         let args = SliccProcess.reattachArgs(
             targetType: .chromiumBrowser,
@@ -177,9 +161,7 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
     }
 
     func testReattachArgsElectronWithJoinUrlIncludesJoinFlag() {
-        
-        
-        
+
         let args = SliccProcess.reattachArgs(
             targetType: .electronApp,
             electronAppPath: "/Applications/Slack.app",
@@ -224,8 +206,6 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         )
         XCTAssertFalse(args.contains { $0.hasPrefix("--join=") })
     }
-
-    
 
     func testResolveHostedLeaderOriginDefaultsToProductionWhenEnvAbsent() {
         XCTAssertEqual(
@@ -280,10 +260,7 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
     }
 
     func testThinElectronBridgeTokenIsStableAcrossCalls() {
-        
-        
-        
-        
+
         XCTAssertEqual(SliccProcess.thinElectronBridgeToken, SliccProcess.thinElectronBridgeToken)
         XCTAssertFalse(SliccProcess.thinElectronBridgeToken.isEmpty)
     }

@@ -27,7 +27,6 @@ type inbound struct {
 	raw []byte
 }
 
-
 func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	done := make(chan int, 1)
 	finish := func(code int) {
@@ -36,10 +35,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		default:
 		}
 	}
-	
-	
-	
-	
+
 	sawProcessing := false
 	handler := func(typ string, raw []byte) {
 		switch typ {
@@ -65,7 +61,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			if s.ScoopStatus == protocol.ScoopStatusProcessing {
 				sawProcessing = true
 			} else if sawProcessing {
-				finish(0) 
+				finish(0)
 			}
 		case protocol.TypeError:
 			var e struct {
@@ -100,14 +96,11 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		errLineAfterStream("prompt", "connection closed before the turn completed")
 		return 1
 	case <-ctx.Done():
-		
+
 		_ = conn.SendJSON(protocol.Abort{Type: "abort"})
 		return 130
 	}
 }
-
-
-
 
 func readPipedStdinBase64(r io.Reader) (string, error) {
 	if f, ok := r.(*os.File); ok {
@@ -128,7 +121,6 @@ func readPipedStdinBase64(r io.Reader) (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
 }
-
 
 func cmdExec(ctx context.Context, joinURL, command string) int {
 	requestID := newID()
@@ -196,7 +188,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 		errLine("exec", "connection closed")
 		return 1
 	case <-ctx.Done():
-		
+
 		_ = conn.SendJSON(protocol.ExecSignal{Type: "exec.signal", RequestID: requestID, Signal: "SIGINT"})
 		select {
 		case code := <-done:
@@ -208,11 +200,6 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 		}
 	}
 }
-
-
-
-
-
 
 func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 	what := "the leader's agent output"
@@ -264,8 +251,6 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 	}
 }
 
-
-
 type watchRender struct {
 	console *ui.Console
 	out     ui.Mode
@@ -278,13 +263,12 @@ func watchOnce(
 	onJoinURLChanged func(string),
 ) (clean bool, err error) {
 	sawProcessing := false
-	
+
 	inScoop := func(js string) bool { return scoopJid == "" || js == scoopJid }
 	handler := func(typ string, raw []byte) {
 		switch typ {
 		case protocol.TypeUserMessageEcho:
-			
-			
+
 			var m protocol.UserMessageEcho
 			if json.Unmarshal(raw, &m) == nil && inScoop(m.ScoopJid) {
 				fmt.Printf("\n%s\n", r.out.Paint(ui.StyleBold, "> "+m.Text))
@@ -299,8 +283,7 @@ func watchOnce(
 			if json.Unmarshal(raw, &s) != nil {
 				return
 			}
-			
-			
+
 			if s.ScoopStatus == protocol.ScoopStatusProcessing {
 				sawProcessing = true
 			} else if sawProcessing {
@@ -333,12 +316,6 @@ func watchOnce(
 	}
 }
 
-
-
-
-
-
-
 func printWatchEvent(ev protocol.AgentEvent, r watchRender) {
 	switch ev.Type {
 	case protocol.AgentContentDelta:
@@ -360,8 +337,6 @@ func printWatchEvent(ev protocol.AgentEvent, r watchRender) {
 	}
 }
 
-
-
 func compactArgs(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -373,8 +348,6 @@ func compactArgs(raw json.RawMessage) string {
 	return " " + truncateOneLine(buf.String(), 160)
 }
 
-
-
 func truncateOneLine(s string, limit int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
@@ -384,13 +357,8 @@ func truncateOneLine(s string, limit int) string {
 	return string(r[:limit]) + "…"
 }
 
-
-
-
 func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
-	
-	
-	
+
 	var eval *execrun.EvalSession
 	if fa.eval {
 		if len(fa.runner) == 0 {
@@ -458,9 +426,7 @@ func followOnce(
 	console *ui.Console,
 	onJoinURLChanged func(string),
 ) (connected bool, err error) {
-	
-	
-	
+
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -482,7 +448,7 @@ func followOnce(
 		OnMessage: func(typ string, raw []byte) {
 			select {
 			case msgCh <- inbound{typ: typ, raw: raw}:
-			default: 
+			default:
 			}
 		},
 	})
@@ -517,9 +483,6 @@ func followOnce(
 	}
 }
 
-
-
-
 func newConsole(tag string, mode ui.Mode) *ui.Console {
 	return ui.New(os.Stderr, ui.Options{
 		Mode:  mode,
@@ -528,19 +491,12 @@ func newConsole(tag string, mode ui.Mode) *ui.Console {
 	})
 }
 
-
-
-
-
-
 func watchModes(console, out ui.Mode) (ui.Mode, ui.Mode) {
 	if out.Sticky {
 		console.Sticky = false
 	}
 	return console, out
 }
-
-
 
 func outputMode(f *os.File, plain bool) ui.Mode {
 	if plain {
@@ -549,13 +505,6 @@ func outputMode(f *os.File, plain bool) ui.Mode {
 	return stickyUnlessLogging(ui.Detect(f, os.LookupEnv), diagLogger)
 }
 
-
-
-
-
-
-
-
 func stickyUnlessLogging(mode ui.Mode, diag *logging.Logger) ui.Mode {
 	if diag.Enabled() {
 		mode.Sticky = false
@@ -563,23 +512,16 @@ func stickyUnlessLogging(mode ui.Mode, diag *logging.Logger) ui.Mode {
 	return mode
 }
 
-
-
-
-
 func errLine(verb, format string, args ...any) {
 	mode := outputMode(os.Stderr, false)
 	msg := fmt.Sprintf("slicc %s: %s", verb, fmt.Sprintf(format, args...))
 	fmt.Fprintln(os.Stderr, mode.Paint(ui.StyleRed, msg))
 }
 
-
-
 func errLineAfterStream(verb, format string, args ...any) {
 	fmt.Fprintln(os.Stderr)
 	errLine(verb, format, args...)
 }
-
 
 func markConnected(s *ui.Status) {
 	s.State = ui.StateConnected
@@ -587,8 +529,6 @@ func markConnected(s *ui.Status) {
 	s.Attempt = 0
 	s.RetryAt = time.Time{}
 }
-
-
 
 func retrying(failures int, backoff time.Duration) func(*ui.Status) {
 	retryAt := time.Now().Add(backoff)
@@ -599,10 +539,6 @@ func retrying(failures int, backoff time.Duration) func(*ui.Status) {
 	}
 }
 
-
-
-
-
 func linkDiagCounter(console *ui.Console) logging.PionEvent {
 	return func(_ string, level slog.Level, _ string) {
 		if level >= slog.LevelWarn {
@@ -610,9 +546,6 @@ func linkDiagCounter(console *ui.Console) logging.PionEvent {
 		}
 	}
 }
-
-
-
 
 func printSessionSummary(console *ui.Console) {
 	console.Stop()
@@ -626,12 +559,6 @@ func printSessionSummary(console *ui.Console) {
 		plural(st.Sessions-1, "reconnect"),
 		plural(st.Diags, "link diagnostic"))
 }
-
-
-
-
-
-
 
 func followPeer(mode ui.Mode, runner []string) string {
 	who := fmt.Sprintf("%s@%s", currentUser(), shortHost(hostname()))
@@ -655,11 +582,6 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-
-
-
-
-
 const followArt = `   _____ _ _
   / ____| (_)
  | (___ | |_  ___ ___
@@ -667,13 +589,6 @@ const followArt = `   _____ _ _
   ____) | | | (_| (__
  |_____/|_|_|\___\___|   follow
 `
-
-
-
-
-
-
-
 
 func printFollowBanner(console *ui.Console, fa followArgs) {
 	if fa.showBanner {
@@ -702,9 +617,6 @@ func printFollowBanner(console *ui.Console, fa followArgs) {
 	}
 }
 
-
-
-
 func evalRunnerWarning(runner []string) string {
 	base := shellBase(runner[0])
 	if base != "node" {
@@ -718,10 +630,6 @@ func evalRunnerWarning(runner []string) string {
 	return "node buffers piped stdin until EOF — you probably want: follow --eval node -i"
 }
 
-
-
-
-
 func followMotd(runner []string, eval bool) string {
 	if len(runner) == 0 {
 		return ""
@@ -734,31 +642,22 @@ func followMotd(runner []string, eval bool) string {
 		currentUser(), hostname(), runtime.GOOS, runtime.GOARCH, strings.Join(runner, " "))
 }
 
-
-
 var knownShells = map[string]bool{
 	"bash": true, "sh": true, "zsh": true, "dash": true,
 	"ksh": true, "ash": true, "fish": true, "elvish": true,
 }
-
-
 
 var wrapperTools = map[string]bool{
 	"docker": true, "podman": true, "nerdctl": true, "container": true,
 	"kubectl": true, "lxc": true, "lxc-attach": true, "flatpak-spawn": true, "ssh": true,
 }
 
-
-
-
-
 func runnerExecWarning(runner []string) string {
 	if len(runner) == 0 {
 		return ""
 	}
 	joined := strings.Join(runner, " ")
-	
-	
+
 	lastShell := -1
 	for i, tok := range runner {
 		if knownShells[shellBase(tok)] {
@@ -768,7 +667,7 @@ func runnerExecWarning(runner []string) string {
 	if lastShell >= 0 {
 		for _, tok := range runner[lastShell+1:] {
 			if tok == "-c" {
-				return "" 
+				return ""
 			}
 		}
 		base := shellBase(runner[lastShell])
@@ -783,8 +682,6 @@ func runnerExecWarning(runner []string) string {
 	}
 	return ""
 }
-
-
 
 func shellBase(tok string) string {
 	b := tok
@@ -810,12 +707,7 @@ func hostname() string {
 	return "localhost"
 }
 
-
-
-
 var diagLogger = logging.NewFromEnv(os.Stderr)
-
-
 
 func debugLogf(format string, args ...any) {
 	diagLogger.Logf(format, args...)

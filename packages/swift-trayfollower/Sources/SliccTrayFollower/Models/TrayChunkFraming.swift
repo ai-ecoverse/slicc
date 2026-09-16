@@ -1,61 +1,26 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 public enum TrayChunkLimits {
-    
-    
-    
+
     public static let maxMessageBytes = 65536
-    
+
     static let envelopeBytes = 512
-    
-    
-    
+
     static let worstCaseBytesPerCharacter = 4
-    
+
     static let maxChunkBytes = 32 * 1024
-    
+
     public static let maxTotalBytes = 8 * 1024 * 1024
-    
-    
-    
-    
-    
-    
-    
+
     public static let sendHighWaterBytes = 8 * 1024 * 1024
-    
+
     static let maxPending = 8
-    
-    
-    
+
     static let maxChunkCount = 8192
 }
 
-
-
 public enum TrayChunkFraming {
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     public static func frameChunks(_ text: String, chunkId: String = UUID().uuidString) -> [TrayChunkFrame] {
         let budget = max(
             1,
@@ -90,25 +55,17 @@ public enum TrayChunkFraming {
     }
 }
 
-
-
-
-
-
-
-
-
 public struct TrayChunkReassembler {
-    
+
     public enum Rejection: Equatable {
         case malformed
         case oversize
     }
 
     public struct Outcome {
-        
+
         public let message: Data?
-        
+
         public let rejection: Rejection?
 
         static let pending = Outcome(message: nil, rejection: nil)
@@ -138,7 +95,6 @@ public struct TrayChunkReassembler {
 
     public init() {}
 
-    
     public var isEmpty: Bool { buffers.isEmpty }
 
     public mutating func accept(_ frame: TrayChunkFrame) -> Outcome {
@@ -147,8 +103,7 @@ public struct TrayChunkReassembler {
         else {
             return .rejected(.malformed)
         }
-        
-        
+
         if let existing = buffers[frame.chunkId], existing.chunks.count != frame.totalChunks {
             return .rejected(.malformed)
         }

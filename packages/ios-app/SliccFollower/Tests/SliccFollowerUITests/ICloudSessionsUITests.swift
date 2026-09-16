@@ -1,9 +1,5 @@
 import XCTest
 
-
-
-
-
 final class ICloudSessionsUITests: XCTestCase {
 
     override func setUp() {
@@ -20,8 +16,6 @@ final class ICloudSessionsUITests: XCTestCase {
             app.navigationBars["Settings"].waitForExistence(timeout: 60),
             "An empty join URL should open the Settings sheet on launch")
 
-        
-        
         let rows = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "icloud-session-"))
         XCTAssertTrue(
@@ -29,13 +23,9 @@ final class ICloudSessionsUITests: XCTestCase {
             "Seeded fixture sessions should render as rows")
         XCTAssertEqual(rows.count, 3, "Both fixture devices' sessions should be listed")
 
-        
         XCTAssertTrue(app.staticTexts["Chrome on Fixture MacBook"].exists)
         XCTAssertTrue(app.staticTexts["Chrome on Fixture Studio"].exists)
 
-        
-        
-        
         rows.firstMatch.tap()
         let avatar = app.descendants(matching: .any)
             .matching(identifier: "scoop-avatar")
@@ -59,9 +49,6 @@ final class ICloudSessionsUITests: XCTestCase {
             "An empty session list should explain why it is empty")
     }
 
-    
-    
-    
     func testRecentRowsRenderAndTapConnects() {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -80,8 +67,6 @@ final class ICloudSessionsUITests: XCTestCase {
             "Seeded recents should render as rows")
         XCTAssertEqual(rows.count, 2, "This device's recent and the one synced from the iPad")
 
-        
-        
         XCTAssertTrue(app.staticTexts["Safari on Fixture MacBook"].exists)
         XCTAssertTrue(app.staticTexts["127.0.0.1:1"].exists)
         XCTAssertFalse(
@@ -90,8 +75,6 @@ final class ICloudSessionsUITests: XCTestCase {
             ).firstMatch.exists,
             "No row may render a join URL")
 
-        
-        
         rows.firstMatch.tap()
         let avatar = app.descendants(matching: .any)
             .matching(identifier: "scoop-avatar")
@@ -113,7 +96,7 @@ final class ICloudSessionsUITests: XCTestCase {
         XCTAssertTrue(
             app.otherElements["icloud-sessions-empty"].waitForExistence(timeout: 30)
                 || app.staticTexts["icloud-sessions-empty"].waitForExistence(timeout: 5))
-        
+
         XCTAssertFalse(app.staticTexts["Recent"].exists)
     }
 }

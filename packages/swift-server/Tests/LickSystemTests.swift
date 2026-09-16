@@ -153,7 +153,7 @@ final class LickSystemTests: XCTestCase {
             _ = try await firstRecorder.waitForMessage(timeout: 0.1)
             XCTFail("Expected only the active client to receive the request")
         } catch TestTimeoutError.timedOut {
-            
+
         }
 
         let requestId = try XCTUnwrap(request["requestId"]?.stringValue)

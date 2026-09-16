@@ -1,31 +1,9 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 package optel
 
 import (
 	"sync"
 	"time"
 )
-
-
-
 
 type Client struct {
 	mu             sync.Mutex
@@ -38,33 +16,19 @@ type Client struct {
 	wg             sync.WaitGroup
 }
 
-
-
-
 type Options struct {
-	
-	
-	
 	Rate string
-	
+
 	CollectBaseURL string
-	
+
 	Transport Transport
-	
-	
+
 	RandomSource RandomSource
-	
-	
+
 	Debug *bool
-	
-	
-	
+
 	Environment map[string]string
 }
-
-
-
-
 
 func Configure(appID string, opts Options) *Client {
 	rate := ResolveRate(opts.Rate, opts.Environment)
@@ -92,13 +56,6 @@ func Configure(appID string, opts Options) *Client {
 	}
 }
 
-
-
-
-
-
-
-
 func (c *Client) Sample(checkpoint Checkpoint, source, target string) {
 	if c == nil {
 		return
@@ -124,8 +81,6 @@ func (c *Client) Sample(checkpoint Checkpoint, source, target string) {
 	c.send(Event{Checkpoint: checkpoint, T: t, Source: source, Target: target})
 }
 
-
-
 func (c *Client) send(event Event) {
 	event.Weight = c.session.Weight
 	event.ID = c.session.ID
@@ -133,22 +88,12 @@ func (c *Client) send(event Event) {
 	c.transport.Send(event, c.collectBaseURL, &c.wg)
 }
 
-
-
-
-
-
 func (c *Client) ReportError(source string, err error) {
 	if c == nil || err == nil {
 		return
 	}
 	c.Sample(Error, source, Sanitize(err.Error()))
 }
-
-
-
-
-
 
 func (c *Client) Flush(timeout time.Duration) {
 	if c == nil {

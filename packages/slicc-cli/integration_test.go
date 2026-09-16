@@ -16,11 +16,6 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/tray"
 )
 
-
-
-
-
-
 func TestFollowerExecRoundTripOverWebRTC(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -102,6 +97,5 @@ func TestFollowerExecRoundTripOverWebRTC(t *testing.T) {
 		t.Fatalf("stdout = %q, want to contain hello-over-webrtc", out)
 	}
 }
-
 
 var msgCh = make(chan inbound, 64)

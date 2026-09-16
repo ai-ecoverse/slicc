@@ -1,12 +1,7 @@
 import Foundation
 
-
-
-
-
-
 extension AppState {
-    
+
     func swipeToNextScoop() {
         guard !scoops.isEmpty else { return }
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
@@ -14,8 +9,6 @@ extension AppState {
         selectScoop(jid: scoops[nextIndex].jid)
     }
 
-    
-    
     func swipeToPreviousScoop() {
         guard !scoops.isEmpty else { return }
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0

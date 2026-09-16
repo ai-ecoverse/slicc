@@ -1,6 +1,5 @@
 import XCTest
 
-
 final class FilesUITests: XCTestCase {
 
     override func setUp() {

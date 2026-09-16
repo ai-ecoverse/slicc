@@ -3,16 +3,9 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
-
 @MainActor
 final class ConnectionSettleTests: XCTestCase {
 
-    
-    
     private final class ManualHold: @unchecked Sendable {
         private let lock = NSLock()
         private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -31,16 +24,12 @@ final class ConnectionSettleTests: XCTestCase {
             }
         }
 
-        
         var requested: [Duration] {
             lock.lock()
             defer { lock.unlock() }
             return durations
         }
 
-        
-        
-        
         func release() {
             lock.lock()
             let pending = waiters
@@ -75,15 +64,10 @@ final class ConnectionSettleTests: XCTestCase {
         return (settler, recorder)
     }
 
-    
     private final class Recorder {
         var published: [ConnectionHealth] = []
     }
 
-    
-
-    
-    
     func testABlipThatHealsInsideTheHoldNeverReachesTheUI() async {
         let (settler, recorder) = makeSettler()
 
@@ -100,7 +84,6 @@ final class ConnectionSettleTests: XCTestCase {
             "A blip that healed inside the hold must publish nothing at all")
     }
 
-    
     func testTroubleThatOutlastsTheHoldIsPublished() async {
         let (settler, recorder) = makeSettler()
         let dropped = ConnectionHealth(state: .reconnecting, reconnectAttempt: 1)
@@ -116,8 +99,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertEqual(hold.requested, [.seconds(2)], "The hold should be the configured window")
     }
 
-    
-    
     func testASecondBlipEarnsItsOwnHold() async {
         let (settler, recorder) = makeSettler()
 
@@ -133,10 +114,6 @@ final class ConnectionSettleTests: XCTestCase {
             "Only the drop that outlasted its hold should reach the UI")
     }
 
-    
-    
-    
-    
     func testTroubleArrivingDuringTheHoldDoesNotRestartIt() async {
         let (settler, recorder) = makeSettler()
 
@@ -152,9 +129,6 @@ final class ConnectionSettleTests: XCTestCase {
             "The hold should publish the latest reading, once")
     }
 
-    
-
-    
     func testRecoveryIsPublishedImmediately() async {
         let (settler, recorder) = makeSettler(initial: ConnectionHealth(state: .reconnecting))
 
@@ -165,8 +139,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertTrue(hold.requested.isEmpty, "Recovery must not wait on a hold")
     }
 
-    
-    
     func testTroubleRefinesLiveOnceItIsOnScreen() async {
         let (settler, recorder) = makeSettler(
             initial: ConnectionHealth(state: .reconnecting, reconnectAttempt: 1))
@@ -179,8 +151,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertTrue(hold.requested.isEmpty, "Trouble → trouble must not wait on a hold")
     }
 
-    
-    
     func testAStallIsHeldLikeAnyOtherTrouble() async {
         let (settler, recorder) = makeSettler()
 
@@ -194,10 +164,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertTrue(recorder.published.isEmpty)
     }
 
-    
-
-    
-    
     func testTroubleAtLaunchIsNotHeld() async {
         let (settler, recorder) = makeSettler(initial: ConnectionHealth(state: .disconnected))
 
@@ -208,8 +174,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertTrue(hold.requested.isEmpty)
     }
 
-    
-    
     func testSettleImmediatelySkipsTheHold() async {
         let (settler, recorder) = makeSettler()
         let stalled = ConnectionHealth(state: .connected, isStalled: true)
@@ -221,8 +185,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertTrue(hold.requested.isEmpty)
     }
 
-    
-    
     func testSettleImmediatelyCancelsAPendingHold() async {
         let (settler, recorder) = makeSettler()
         let pinned = ConnectionHealth(state: .failed)
@@ -236,8 +198,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertEqual(recorder.published, [pinned])
     }
 
-    
-    
     func testAnUnchangedReadingPublishesNothing() async {
         let (settler, recorder) = makeSettler()
 
@@ -248,13 +208,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertTrue(hold.requested.isEmpty)
     }
 
-    
-
-    
-    
-    
-    
-    
     private func holdParks(_ expected: Int = 1) async {
         for _ in 0..<100 where hold.requested.count < expected {
             await Task.yield()
@@ -262,9 +215,6 @@ final class ConnectionSettleTests: XCTestCase {
         XCTAssertEqual(hold.requested.count, expected, "the hold should have started sleeping")
     }
 
-    
-    
-    
     private func expireHold() async {
         for _ in 0..<100 {
             hold.release()

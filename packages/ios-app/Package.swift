@@ -30,12 +30,9 @@ let package = Package(
         .target(
             name: "SliccTrayKit",
             dependencies: [
-                
-                
-                
+
                 .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
-                
-                
+
                 .product(name: "SliccTrayVFS", package: "swift-traykit"),
             ],
             path: "SliccTrayKit"

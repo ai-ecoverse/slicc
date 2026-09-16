@@ -2,8 +2,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
 final class ElectronAppMatchingTests: XCTestCase {
     func testCandidatePathsIncludeRawStandardizedAndResolvedSpellings() throws {
         let dir = FileManager.default.temporaryDirectory

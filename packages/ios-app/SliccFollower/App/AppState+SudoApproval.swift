@@ -3,13 +3,6 @@ import LocalAuthentication
 import SliccTrayKit
 import UIKit
 
-
-
-
-
-
-
-
 extension AppState {
     func makeSudoApprovalController() -> SudoApprovalController {
         var send: (FollowerToLeaderMessage) -> Bool = { [weak self] in
@@ -40,8 +33,6 @@ extension AppState {
             })
     }
 
-    
-    
     func handleSudoLeaderMessage(_ message: LeaderToFollowerMessage) {
         switch message {
         case .sudoApproveRequest(
@@ -62,43 +53,33 @@ extension AppState {
         }
     }
 
-    
-    
     func followerCapabilities() -> TraySyncCapabilities {
         makeTrayFollowerCapabilities(deviceOwnerAuth: Self.deviceOwnerAuthAvailable())
     }
 
-    
-    
     func startPushRegistration() {
         NotificationCoordinator.shared.requestAuthorizationAndRegister()
         registerPushTokenIfAvailable()
     }
 
-    
     func resolveSudoApproval(requestId: String, decision: SudoApprovalDecision) {
         Task { @MainActor [weak self] in
             await self?.sudoApprovalController.resolve(requestId: requestId, decision: decision)
         }
     }
 
-    
     func wireNotificationActions() {
         let notifications = NotificationCoordinator.shared
         notifications.onSudoDeny = { [weak self] requestId in
             self?.sudoApprovalController.denyFromNotification(requestId: requestId)
         }
-        
-        
+
         notifications.onSudoReview = { _ in }
         notifications.onDeviceToken = { [weak self] _ in
             self?.registerPushTokenIfAvailable()
         }
     }
 
-    
-    
-    
     func registerPushTokenIfAvailable() {
         guard connectionState == .connected,
             let token = NotificationCoordinator.shared.deviceToken
@@ -107,15 +88,11 @@ extension AppState {
             .pushRegister(platform: "ios", token: token, environment: currentApnsEnvironment()))
     }
 
-    
-    
     func notifyTurnEndIfBackgrounded(scoopJid: String) {
         let label = scoops.first(where: { $0.jid == scoopJid })?.assistantLabel ?? activeDisplayName ?? "SLICC"
         NotificationCoordinator.shared.notifyTurnEnd(label: label, trayId: trayId)
     }
 
-    
-    
     static func deviceOwnerAuthAvailable() -> Bool {
         #if DEBUG
             if UITestHooks.stagesSudoApprovalFixture { return true }
@@ -123,8 +100,6 @@ extension AppState {
         return LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
     }
 
-    
-    
     static func authenticateDeviceOwner(reason: String) async -> SudoAuthOutcome {
         let context = LAContext()
         context.localizedCancelTitle = "Deny"
@@ -144,7 +119,7 @@ extension AppState {
     }
 
     #if DEBUG
-        
+
         func configureSudoApprovalFixture() {
             guard UITestHooks.stagesSudoApprovalFixture else { return }
             connectionState = .connected

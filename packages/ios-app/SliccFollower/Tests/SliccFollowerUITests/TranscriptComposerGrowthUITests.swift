@@ -1,28 +1,8 @@
 import UIKit
 import XCTest
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class TranscriptComposerGrowthUITests: XCTestCase {
 
-    
-    
-    
-    
-    
     private let allowedDrift: CGFloat = 60
 
     private let anchorId = "message-fx-delegation-1"
@@ -32,33 +12,17 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    
-    
-    
-    
-    
     override func tearDown() {
         XCUIDevice.shared.orientation = .portrait
         super.tearDown()
     }
 
-    
-
     func testHistoryStaysPutWhenTheComposerAndKeyboardClaimSpace() throws {
         try assertHistoryStaysPut(orientation: .portrait)
     }
 
-    
-    
-    
-    
     func testHistoryStaysPutInLandscape() throws {
-        
-        
-        
-        
-        
-        
+
         try XCTSkipUnless(
             UIDevice.current.userInterfaceIdiom == .pad,
             "landscape drift is measured on iPad; a phone's landscape "
@@ -75,20 +39,12 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             .matching(identifier: anchorId).firstMatch
         waitForSeededTranscript(app)
 
-        
-        
-        
-        
-        
         scrollBackUntilAnchorIsCentred(app: app, anchor: anchor)
         let afterScroll = anchor.frame.midY
         attach(app, name: "1-after-reader-scroll-\(orientation.rawValue)")
 
         let composer = focusedComposer(app)
-        
-        
-        
-        
+
         Thread.sleep(forTimeInterval: 1.5)
         let afterKeyboard = anchor.frame.midY
         attach(app, name: "2-keyboard-up-\(orientation.rawValue)")
@@ -118,10 +74,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
                 + "(moved \(anchor.frame.midY - afterScroll)pt)")
     }
 
-    
-    
-    
-    
     func testTranscriptStillFollowsANewlySentMessage() throws {
         let app = launchWithTranscript()
         waitForSeededTranscript(app)
@@ -138,20 +90,12 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         XCTAssertTrue(
             sentBubble.waitForExistence(timeout: 10),
             "the sent message should be in the transcript")
-        
-        
-        
+
         XCTAssertTrue(
             sentBubble.isHittable,
             "the transcript must scroll to a newly sent message, not leave it below the fold")
     }
 
-    
-    
-    
-    
-    
-    
     func testAnIncomingMessageDoesNotYankAReaderOutOfTheHistory() throws {
         let appendAfter: Double = 15
         let app = launchWithTranscript(appendAfterSeconds: appendAfter)
@@ -162,10 +106,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         scrollBackUntilAnchorIsCentred(app: app, anchor: anchor)
         let beforeIncoming = anchor.frame.midY
 
-        
-        
-        
-        
         Thread.sleep(forTimeInterval: appendAfter + 8)
 
         XCTAssertTrue(anchor.exists, "the reader's row must survive an incoming message")
@@ -174,8 +114,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             "an incoming message yanked the reader out of the history "
                 + "(moved \(anchor.frame.midY - beforeIncoming)pt)")
 
-        
-        
         let incoming = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] %@", "arrived while you were reading back")
         ).firstMatch
@@ -191,18 +129,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             "the scheduled incoming message should have reached the transcript")
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private func type(_ text: String, into composer: XCUIElement, app: XCUIApplication) {
         let before = (composer.value as? String) ?? ""
         app.typeText(text)
@@ -212,12 +138,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             "typing should reach the composer (before: '\(before)', after: '\(after)')")
     }
 
-    
-    
-    
-    
-    
-    
     private func tapSend(_ app: XCUIApplication) {
         let send = app.buttons["composer-send"]
         XCTAssertTrue(send.waitForExistence(timeout: 5), "send button should exist")
@@ -227,11 +147,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         send.tap()
     }
 
-    
-    
-    
-    
-    
     private func focusedComposer(_ app: XCUIApplication) -> XCUIElement {
         let composer = app.textViews.firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "composer should exist")
@@ -242,14 +157,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         return composer
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     private func waitForSeededTranscript(_ app: XCUIApplication) {
         let composer = app.textViews.firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "composer should render")
@@ -266,7 +173,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         print("DRIFT \(side) after \(step): \(drift)pt")
     }
 
-    
     private func attach(_ app: XCUIApplication, name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -274,44 +180,22 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         add(shot)
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private func scrollBackUntilAnchorIsCentred(app: XCUIApplication, anchor: XCUIElement) {
-        
-        
-        
+
         let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.20))
         let bottom = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
 
-        
-        
-        
-        
-        
         let viewport = app.windows.firstMatch.frame
         let lowerBound = viewport.height * 0.20
         let upperBound = viewport.height * 0.72
 
         for _ in 0..<20 {
-            
-            
-            
-            
-            
-            
+
             if anchor.exists {
                 let frame = anchor.frame
                 if frame.height > 0, frame.midY > lowerBound, frame.midY < upperBound { break }
             }
-            
-            
+
             top.press(
                 forDuration: 0.1, thenDragTo: bottom, withVelocity: .slow,
                 thenHoldForDuration: 0)
@@ -322,10 +206,6 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             "anchor row should be on screen to measure against")
     }
 
-    
-    
-    
-    
     private func launchWithTranscript(appendAfterSeconds: Double? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [

@@ -1,24 +1,15 @@
 import Foundation
 import SliccTrayKit
 
-
-
-
-
-
-
-
 struct FrozenSessionIndexEntry: Codable, Equatable, Identifiable {
     let filename: String
     let title: String
-    
-    
+
     let frozenAt: String
     let messageCount: Int
     let sessionId: String?
     let icon: String?
 
-    
     var id: String { sessionId ?? filename }
 
     var path: String { "/sessions/\(filename)" }
@@ -70,10 +61,6 @@ enum FrozenSessionIndex {
         return f
     }()
 
-    
-    
-    
-    
     static func parse(indexJson: String) -> [FrozenSessionIndexEntry]? {
         guard let data = indexJson.data(using: .utf8),
             let raw = try? JSONSerialization.jsonObject(with: data),
@@ -88,18 +75,13 @@ enum FrozenSessionIndex {
         }
     }
 
-    
-    
-    
-    
     static func rebuild(from entries: [TrayFsDirEntry]) -> [FrozenSessionIndexEntry] {
         entries
             .filter { $0.type == .file && $0.name.hasSuffix(".md") && $0.name != "index.json" }
             .map { entry -> FrozenSessionIndexEntry in
                 let stem = String(entry.name.dropLast(3))
                 let (timestamp, slug) = splitArchiveStem(stem)
-                
-                
+
                 let title =
                     stem.hasPrefix("pending-")
                     ? "Pending session" : (slug.isEmpty ? stem : titleize(slug))
@@ -110,10 +92,9 @@ enum FrozenSessionIndex {
                     messageCount: 0
                 )
             }
-            .sorted { $0.filename > $1.filename }  
+            .sorted { $0.filename > $1.filename }
     }
 
-    
     static func search(
         _ entries: [FrozenSessionIndexEntry], query: String
     ) -> [FrozenSessionIndexEntry] {
@@ -122,7 +103,6 @@ enum FrozenSessionIndex {
         return entries.filter { $0.title.localizedCaseInsensitiveContains(trimmed) }
     }
 
-    
     static func metaLine(for entry: FrozenSessionIndexEntry) -> String {
         var parts: [String] = []
         if let date = entry.frozenDate {
@@ -140,10 +120,6 @@ enum FrozenSessionIndex {
         return f
     }()
 
-    
-    
-    
-    
     private static func splitArchiveStem(_ stem: String) -> (timestamp: String?, slug: String) {
         let pattern = #"^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})(?:-(\d{1,3}))?Z-?(.*)$"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
@@ -156,7 +132,7 @@ enum FrozenSessionIndex {
             guard let range = Range(result.range(at: index), in: stem) else { return "" }
             return String(stem[range])
         }
-        
+
         let millis = group(4)
         let seconds = millis.isEmpty ? "\(group(3))Z" : "\(group(3)).\(millis)Z"
         let timestamp = "\(group(1)):\(group(2)):\(seconds)"
@@ -168,10 +144,6 @@ enum FrozenSessionIndex {
     }
 }
 
-
-
-
-
 struct ParsedFrozenArchive {
     let title: String
     let messages: [ChatMessage]
@@ -179,9 +151,7 @@ struct ParsedFrozenArchive {
 }
 
 enum FrozenArchiveParser {
-    
-    
-    
+
     static func withFallbackTimestamps(
         _ archive: ParsedFrozenArchive, frozenAt: Date?
     ) -> ParsedFrozenArchive {
@@ -197,10 +167,6 @@ enum FrozenArchiveParser {
             title: archive.title, messages: messages, usedFallback: archive.usedFallback)
     }
 
-    
-    
-    
-    
     static func parse(markdown: String) -> ParsedFrozenArchive {
         var body = markdown
         var title = "Untitled"
@@ -246,7 +212,7 @@ enum FrozenArchiveParser {
             {
                 return ParsedFrozenArchive(title: title, messages: messages, usedFallback: false)
             }
-            
+
             body.removeSubrange(dataRange)
         }
 
@@ -256,8 +222,6 @@ enum FrozenArchiveParser {
             title: title, messages: parseHeadingFallback(body), usedFallback: true)
     }
 
-    
-    
     private static func parseHeadingFallback(_ body: String) -> [ChatMessage] {
         var messages: [ChatMessage] = []
         let pattern = #"(?m)^## (User|Assistant)\s*\n"#

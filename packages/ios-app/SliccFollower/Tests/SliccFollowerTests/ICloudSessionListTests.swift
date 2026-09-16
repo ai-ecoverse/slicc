@@ -4,11 +4,10 @@ import XCTest
 @testable import SliccFollower
 
 final class ICloudSessionListTests: XCTestCase {
-    
 
     func testGroupsKeyOnDeviceIdAndKeepNewestFirstDeviceOrder() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        
+
         let sessions = [
             makeSession(joinUrl: "https://t.test/join/s1.secret", label: "Chrome on Studio", deviceId: "studio", deviceName: "MacBook Pro", lastSeenAt: now),
             makeSession(
@@ -22,7 +21,7 @@ final class ICloudSessionListTests: XCTestCase {
         let groups = ICloudSessionList.groups(from: sessions)
 
         XCTAssertEqual(groups.map(\.deviceId), ["studio", "book"])
-        
+
         XCTAssertEqual(groups.count, 2)
         XCTAssertEqual(groups[1].sessions.map(\.label), ["Chrome on Book", "Edge on Book"])
     }
@@ -38,14 +37,10 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertTrue(ICloudSessionList.groups(from: []).isEmpty)
     }
 
-    
-
     func testEmptyReasonDistinguishesSignedOutFromNoSessions() {
         XCTAssertEqual(ICloudSessionList.emptyReason(hasICloudIdentity: false), .iCloudUnavailable)
         XCTAssertEqual(ICloudSessionList.emptyReason(hasICloudIdentity: true), .noSessions)
     }
-
-    
 
     func testAgeThresholdsMatchTheLauncher() {
         let now = Date(timeIntervalSince1970: 100_000)
@@ -54,8 +49,6 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertEqual(ICloudSessionList.age(of: now.addingTimeInterval(-7200), now: now), "2h ago")
         XCTAssertEqual(ICloudSessionList.age(of: now.addingTimeInterval(-172_800), now: now), "2d ago")
     }
-
-    
 
     func testSessionsFixtureBackendSeedsTwoDevices() throws {
         UserDefaults.standard.set(true, forKey: "uiTestSessionsFixture")
@@ -69,7 +62,7 @@ final class ICloudSessionListTests: XCTestCase {
         let groups = ICloudSessionList.groups(from: store.sessions)
         XCTAssertEqual(Set(groups.map(\.deviceName)), ["Fixture MacBook", "Fixture Studio"])
         XCTAssertEqual(store.sessions.count, 3)
-        
+
         XCTAssertTrue(store.sessions.allSatisfy { $0.joinUrl.hasPrefix("http://127.0.0.1:1/") })
     }
 
@@ -88,11 +81,6 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertNil(UITestHooks.sessionsFixtureBackend())
     }
 
-    
-
-    
-    
-    
     @MainActor
     func testDiscoveredSessionConnectLeavesManualSurfacesUntouched() {
         UserDefaults.standard.set(true, forKey: "uiTestRecentJoinsEmpty")
@@ -109,8 +97,6 @@ final class ICloudSessionListTests: XCTestCase {
             state.recentJoinStore.recents.contains { $0.joinUrl == secret },
             "A dial that has not connected yet must not be remembered")
     }
-
-    
 
     func testRecentRowsHideATrayTheLiveListAlreadyShows() {
         let now = Date(timeIntervalSince1970: 1_000_000)
@@ -174,7 +160,7 @@ final class ICloudSessionListTests: XCTestCase {
             ICloudSessionList.recentSubtitle(
                 mine, thisDeviceId: "iPad", now: now, unreachable: true),
             "iPhone · tray.sliccy.ai · 2m ago · not responding")
-        
+
         let pasted = makeRecent(
             joinUrl: "https://tray.sliccy.ai/join/x.secret", label: "", deviceName: "iPad",
             lastConnectedAt: now)
@@ -197,7 +183,7 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertEqual(
             Set(store.recents.map(\.label)), ["Safari on Fixture MacBook", ""],
             "The labelled fixture recent must not collide with a live fixture session")
-        
+
         XCTAssertTrue(store.recents.contains { $0.label.isEmpty })
         XCTAssertTrue(store.recents.allSatisfy { $0.joinUrl.hasPrefix("http://127.0.0.1:1/") })
     }
@@ -215,8 +201,6 @@ final class ICloudSessionListTests: XCTestCase {
     func testNoRecentJoinsArgumentsMeansNoBackend() {
         XCTAssertNil(UITestHooks.recentJoinsFixtureBackend())
     }
-
-    
 
     private func makeRecent(
         joinUrl: String,

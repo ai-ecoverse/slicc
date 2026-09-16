@@ -5,43 +5,20 @@ import Hummingbird
 import NIOCore
 import NIOHTTP1
 
-
-
-
-
-
-
-
-
-
-
-
-
 enum SignAndForward {
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
     static func isValidProfileName(_ name: String) -> Bool {
         guard !name.isEmpty else { return false }
         for ch in name.unicodeScalars {
             let v = ch.value
             let alpha = (v >= 0x41 && v <= 0x5A) || (v >= 0x61 && v <= 0x7A)
             let digit = v >= 0x30 && v <= 0x39
-            let punct = v == 0x2E || v == 0x5F || v == 0x2D  
+            let punct = v == 0x2E || v == 0x5F || v == 0x2D
             if !(alpha || digit || punct) { return false }
         }
         return true
     }
 
-    
     static let hopByHopHeaders: Set<String> = [
         "connection",
         "keep-alive",
@@ -53,25 +30,11 @@ enum SignAndForward {
         "upgrade",
     ]
 
-    
-    
-    
-    
     static let defaultDaOrigin = "https://admin.da.live"
 
-    
-    
-    
     static let aemSourceBusOrigin = "https://api.aem.live"
 
-    
-    
-    
-    
-    
     static let allowedDaOrigins: Set<String> = [defaultDaOrigin, aemSourceBusOrigin]
-
-    
 
     struct S3Envelope: Decodable {
         let profile: String?
@@ -87,23 +50,18 @@ enum SignAndForward {
         let imsToken: String?
         let method: String?
         let path: String?
-        
-        
-        
+
         let origin: String?
         let query: [String: String]?
         let headers: [String: String]?
         let bodyBase64: String?
     }
 
-    
     enum DaOriginResult: Equatable {
         case origin(String)
-        
+
         case rejected(String)
     }
-
-    
 
     struct S3Profile: Equatable {
         let accessKeyId: String
@@ -119,10 +77,6 @@ enum SignAndForward {
         case invalidEndpoint(message: String)
     }
 
-    
-    
-    
-    
     static func resolveS3Profile(name: String, lookup: (String) -> String? = defaultSecretLookup) -> Result<S3Profile, SignAndForwardError> {
         guard let accessKeyId = lookup("s3.\(name).access_key_id"), !accessKeyId.isEmpty else {
             return .failure(
@@ -149,17 +103,10 @@ enum SignAndForward {
             ))
     }
 
-    
-    
     static func defaultSecretLookup(_ name: String) -> String? {
         SecretStore.get(name: name)?.value
     }
 
-    
-
-    
-    
-    
     static func buildS3URL(profile: S3Profile, bucket: String, key: String, query: [String: String]?) -> Result<URL, SignAndForwardError> {
         let host: String
         if let endpoint = profile.endpoint {
@@ -171,7 +118,6 @@ enum SignAndForward {
             host = "s3.\(profile.region).amazonaws.com"
         }
 
-        
         let encodedKey = key.split(separator: "/", omittingEmptySubsequences: false)
             .map { percentEncodeURIComponent(String($0)) }
             .joined(separator: "/")
@@ -183,14 +129,10 @@ enum SignAndForward {
         var components = URLComponents()
         components.scheme = "https"
         components.host = hostPart
-        
-        
+
         components.percentEncodedPath = "/\(pathPart)"
         if let query, !query.isEmpty {
-            
-            
-            
-            
+
             let sortedItems = query.sorted(by: { $0.key < $1.key })
                 .map { URLQueryItem(name: $0.key, value: $0.value) }
             components.queryItems = sortedItems
@@ -201,8 +143,6 @@ enum SignAndForward {
         return .success(url)
     }
 
-    
-    
     static func percentEncodeURIComponent(_ s: String) -> String {
         var out = ""
         out.reserveCapacity(s.utf8.count)
@@ -222,11 +162,6 @@ enum SignAndForward {
         return out
     }
 
-    
-
-    
-    
-    
     static func registerRoutes(
         router: Router<some RequestContext>,
         httpClient: HTTPClient,
@@ -240,10 +175,6 @@ enum SignAndForward {
         }
     }
 
-    
-    
-    
-    
     static func handleS3(
         request: Request,
         httpClient: HTTPClient
@@ -299,11 +230,7 @@ enum SignAndForward {
 
         let body: Data?
         if let b64 = env.bodyBase64, !b64.isEmpty {
-            
-            
-            
-            
-            
+
             guard let decoded = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters]) else {
                 return errorResponse(.badRequest, error: "invalid bodyBase64", errorCode: "invalid_request")
             }
@@ -336,13 +263,6 @@ enum SignAndForward {
         )
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func resolveDaOrigin(
         envelopeOrigin: String?,
         defaultOrigin: String = defaultDaOrigin
@@ -354,10 +274,6 @@ enum SignAndForward {
         return .origin(envelopeOrigin)
     }
 
-    
-    
-    
-    
     static func buildDaURL(origin: String, path: String, query: [String: String]?) -> URL? {
         guard var components = URLComponents(string: origin + path) else { return nil }
         if let query, !query.isEmpty {
@@ -369,12 +285,6 @@ enum SignAndForward {
         return components.url
     }
 
-    
-    
-    
-    
-    
-    
     static func handleDa(
         request: Request,
         httpClient: HTTPClient,
@@ -425,7 +335,7 @@ enum SignAndForward {
 
         let body: Data?
         if let b64 = env.bodyBase64, !b64.isEmpty {
-            
+
             guard let decoded = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters]) else {
                 return errorResponse(.badRequest, error: "invalid bodyBase64", errorCode: "invalid_request")
             }
@@ -447,11 +357,6 @@ enum SignAndForward {
         )
     }
 
-    
-
-    
-    
-    
     static let maxEnvelopeBytes = 50 * 1024 * 1024
     static let maxEnvelopeBytesHumanReadable = "50 MB"
 
@@ -462,27 +367,15 @@ enum SignAndForward {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    
-    
-    
-    
-    
     struct ForwardRequest: Equatable {
         let url: String
         let method: SigV4Method
-        
-        
-        
-        
+
         let headers: [String: String]
-        
-        
+
         let body: Data?
     }
 
-    
-    
-    
     static func prepareForwardRequest(
         url: URL,
         method: SigV4Method,
@@ -493,11 +386,7 @@ enum SignAndForward {
         for (name, value) in headers where name.lowercased() != "host" {
             filtered[name] = value
         }
-        
-        
-        
-        
-        
+
         let actualBody: Data?
         if let body, !body.isEmpty, method != .GET && method != .HEAD {
             actualBody = body
@@ -507,10 +396,6 @@ enum SignAndForward {
         return ForwardRequest(url: url.absoluteString, method: method, headers: filtered, body: actualBody)
     }
 
-    
-    
-    
-    
     private static func forward(
         url: URL,
         method: SigV4Method,
@@ -561,10 +446,6 @@ enum SignAndForward {
         return jsonEnvelopeResponse(envelope, status: .ok)
     }
 
-    
-    
-    
-    
     static func buildSuccessEnvelope(status: UInt, headers: HTTPHeaders, body: ByteBuffer) -> LickSystem.JSONValue {
         let upstreamBytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
         let bodyBase64 = Data(upstreamBytes).base64EncodedString()
@@ -583,12 +464,6 @@ enum SignAndForward {
         ])
     }
 
-    
-    
-    
-    
-    
-    
     private static func forwardErrorMessage(_ error: Error) -> String {
         let described = String(describing: error)
         if !described.isEmpty { return described }
@@ -624,9 +499,7 @@ enum SignAndForward {
 }
 
 extension SigV4Method {
-    
-    
-    
+
     var nioHTTPMethod: HTTPMethod {
         switch self {
         case .GET: return .GET

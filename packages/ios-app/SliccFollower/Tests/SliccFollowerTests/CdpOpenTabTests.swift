@@ -2,11 +2,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
-
 final class CdpOpenTabTests: XCTestCase {
 
     @MainActor
@@ -16,7 +11,6 @@ final class CdpOpenTabTests: XCTestCase {
 
         let id = state.cdpOpenTab(url: "about:blank")
 
-        
         for _ in 0..<20 where state.cdpTargets.isEmpty {
             await Task.yield()
         }
@@ -80,8 +74,6 @@ final class CdpOpenTabTests: XCTestCase {
         XCTAssertEqual(state.cdpTargets.map(\.id), [id])
         XCTAssertNotNil(state.cdpWebView(for: id))
     }
-
-    
 
     @MainActor
     func testWebLinksRouteToTheBuiltInBrowserByDefault() {

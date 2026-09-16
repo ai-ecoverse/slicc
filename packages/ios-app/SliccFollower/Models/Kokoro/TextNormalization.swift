@@ -153,7 +153,7 @@ public struct TextNormalization: Sendable {
                 let next = pieces.indices.contains(index + 1) ? basePronunciation(pieces[index + 1]) : nil
                 return next.map(startsWithVowelSound) == true ? "ði" : "ðə"
             }
-            
+
             if lower == "real" { return "ɹˈIl" }
             return lexicon.lookup(word).map { normalizeLexiconPronunciation($0, for: word) }
         }

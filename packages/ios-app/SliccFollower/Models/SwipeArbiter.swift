@@ -1,6 +1,5 @@
 import CoreGraphics
 
-
 struct SwipeArbiter {
     enum Action: Equatable {
         case next
@@ -72,8 +71,6 @@ struct SwipeArbiter {
         return .previous
     }
 
-    
-    
     static func outerAction(
         for translation: CGSize,
         origin: DragOrigin

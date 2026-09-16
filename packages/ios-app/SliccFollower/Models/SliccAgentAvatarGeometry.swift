@@ -1,8 +1,6 @@
 import Foundation
 import SliccTrayKit
 
-
-
 struct SliccAgentAvatarGeometry: Equatable, Sendable {
     enum AvatarType: Equatable, Sendable {
         case cone
@@ -35,9 +33,7 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
     let fill: Double?
     let blink: Bool
     let sideLength: Double
-    
-    
-    
+
     let activity: AvatarExpression.Activity?
 
     init(
@@ -54,28 +50,17 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         self.activity = activity
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     private struct BandPlacement {
-        
+
         let left: Double
         let top: Double
         let width: Double
         let height: Double
-        
+
         let zoom: Double
 
-        
-        
         var unit: Double { zoom * min(width / 200, height / 100) }
 
-        
         func place(x bandX: Double, y bandY: Double) -> Point {
             let fit = min(width / 200, height / 100)
             let originX = left + (width - 200 * fit) / 2
@@ -88,9 +73,6 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         }
     }
 
-    
-    
-    
     private var placement: BandPlacement {
         switch type {
         case .scoop: .init(left: 0.15, top: 0.30, width: 0.70, height: 0.45, zoom: 2.65)
@@ -98,7 +80,6 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         }
     }
 
-    
     private var bandUnit: Double { placement.unit * sideLength }
 
     var tileCornerRadius: Double { 0.269 * sideLength }
@@ -112,7 +93,6 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         }
     }
 
-    
     static let bandStrokeWidth = 4.0
 
     var pupilRadius: Double {
@@ -123,13 +103,11 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         Point(x: -0.3 * pupilRadius, y: -0.35 * pupilRadius)
     }
 
-    
     var maxPupilTravel: Double {
         let unclamped = eyeRadius - pupilRadius - eyeOutlineWidth
         return min(AvatarExpression.maxOffset * bandUnit, max(2 * bandUnit, unclamped))
     }
 
-    
     func clampedPupilOffset(_ proposed: Point) -> Point {
         let distance = hypot(proposed.x, proposed.y)
         guard distance > maxPupilTravel, distance > 0 else { return proposed }
@@ -141,50 +119,32 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         AvatarExpression.fillToPupilScale(fill)
     }
 
-    
-    
-    
-    
-    
     var expressionScale: Double { eyeRadius / AvatarExpression.eyeRadius }
 
-    
     func socketCornerRadius(shape: Double) -> Double {
         AvatarExpression.socketRx(shape: shape) * expressionScale
     }
 
-    
-    
     func pupilCornerRadius(shape: Double, radius: Double) -> Double {
         AvatarExpression.pupilRx(radius: radius, shape: shape)
     }
 
-    
     func lidInset(fraction: Double) -> Double {
         max(0, min(1, fraction)) * eyeDiameter
     }
 
-    
-    
-    
-    
-    
-    
-    
     func browCenter(eyeIndex: Int, raise: Double) -> Point {
         let bandX = eyeIndex == 0 ? AvatarExpression.leftEyeX : AvatarExpression.rightEyeX
         let placed = placement.place(x: bandX, y: AvatarExpression.browY + raise)
         return Point(x: placed.x * sideLength, y: placed.y * sideLength)
     }
 
-    
     var browSize: Point {
         Point(
             x: AvatarExpression.browHalfWidth * 2 * bandUnit,
             y: AvatarExpression.browStroke * bandUnit)
     }
 
-    
     func chordHalfWidth(fraction: Double, shape: Double, edge: LidEdge) -> Double {
         let y =
             edge == .top
@@ -238,12 +198,10 @@ extension ScoopSummary {
             activity: activity)
     }
 
-    
-    
     struct LocalExpressionSignals: Equatable, Sendable {
-        
+
         var toolRunning: Bool
-        
+
         var awaitingUser: Bool
 
         init(toolRunning: Bool = false, awaitingUser: Bool = false) {
@@ -252,32 +210,16 @@ extension ScoopSummary {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func avatarActivity(local: LocalExpressionSignals? = nil) -> AvatarExpression.Activity? {
-        
-        
+
         let refinement = ScoopActivity(activity: activity)
         switch status.lifecycle {
-        
-        
+
         case .broken, .initializing:
             return nil
         case .working:
             if let local { return local.toolRunning ? .working : .thinking }
-            
-            
+
             return refinement == .tool ? .working : .thinking
         case .idle, .unknown:
             if local?.awaitingUser == true { return .awaiting }
@@ -285,8 +227,6 @@ extension ScoopSummary {
         }
     }
 
-    
-    
     private var avatarColor: String {
         if isRootUnit { return "#b07823" }
         let palette = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"]

@@ -1,30 +1,15 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
-
 @MainActor
 final class ChatPresentationState: ObservableObject {
     @Published var activeSurface: DockSurface?
-    
-    
-    
-    
+
     @Published var terminalWasOpened: Bool
     @Published var composerDraft: String
-    
-    
-    
-    
+
     @Published var stagedAttachments: [MessageAttachment] = []
 
-    
-    
-    
-    
-    
-    
     private var terminalModel: TerminalViewModel?
 
     init(
@@ -37,10 +22,6 @@ final class ChatPresentationState: ObservableObject {
         self.composerDraft = composerDraft
     }
 
-    
-    
-    
-    
     func terminal(client: TerminalClient) -> TerminalViewModel {
         if let terminalModel { return terminalModel }
         #if DEBUG

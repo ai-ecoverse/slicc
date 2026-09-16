@@ -1,9 +1,5 @@
 import XCTest
 
-
-
-
-
 final class FrozenSessionsUITests: XCTestCase {
 
     override func setUp() {
@@ -13,9 +9,7 @@ final class FrozenSessionsUITests: XCTestCase {
 
     private func launchWithFrozenFixture(_ extraArguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
-        
-        
-        
+
         app.launchArguments += ["-joinUrl", "http://127.0.0.1:1/join/frozen-ui-test"]
         app.launchArguments += extraArguments
         app.launch()
@@ -35,22 +29,16 @@ final class FrozenSessionsUITests: XCTestCase {
 
         card.tap()
 
-        
         let banner = app.staticTexts["Frozen session — read-only"]
         XCTAssertTrue(banner.waitForExistence(timeout: 30))
         XCTAssertFalse(
             app.staticTexts["composer-placeholder"].exists,
             "The composer must not exist while a frozen session is open")
 
-        
         XCTAssertTrue(app.staticTexts["What did we ship?"].waitForExistence(timeout: 30))
 
-        
-        
         XCTAssertFalse(app.buttons["frozen-rail-button"].exists)
 
-        
-        
         let back = app.buttons["frozen-back"]
         XCTAssertTrue(back.waitForExistence(timeout: 10))
         back.tap()
@@ -58,7 +46,6 @@ final class FrozenSessionsUITests: XCTestCase {
         let rail = app.buttons["frozen-rail-button"]
         XCTAssertTrue(rail.waitForExistence(timeout: 10))
 
-        
         rail.tap()
         let cardAgain = app.buttons["frozen-card-fixture-frozen-1"]
         XCTAssertTrue(cardAgain.waitForExistence(timeout: 30))

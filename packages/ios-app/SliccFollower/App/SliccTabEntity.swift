@@ -2,34 +2,20 @@ import AppIntents
 import Foundation
 import SliccTrayKit
 
-
-
-
-
-
-
-
-
 @AppEntity(schema: .browser.tab)
 struct SliccTabEntity {
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Sliccy Tab")
 
     static let defaultQuery = SliccTabQuery()
 
-    
     let id: String
 
-    
-    
     @Property(title: "Name")
     var name: String
 
     @Property(title: "URL")
     var url: URL?
 
-    
-    
-    
     @Property(title: "Is Private")
     var isPrivate: Bool
 
@@ -44,12 +30,6 @@ struct SliccTabEntity {
         self.init(id: target.id, name: target.title, url: URL(string: target.url))
     }
 
-    
-    
-    
-    
-    
-    
     var displayLabel: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty else { return trimmed }
@@ -62,16 +42,6 @@ struct SliccTabEntity {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
 @MainActor
 final class SliccTabRegistry {
     static let shared = SliccTabRegistry()
@@ -83,11 +53,8 @@ final class SliccTabRegistry {
     }
 }
 
-
-
 struct SliccTabQuery: EntityQuery, EntityStringQuery {
 
-    
     private let tabs: @MainActor () -> [CDPTargetSummary]
 
     init() {

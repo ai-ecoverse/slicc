@@ -1,10 +1,5 @@
 import Foundation
 
-
-
-
-
-
 enum MarkdownBlock: Equatable {
     case paragraph(String)
     case heading(level: Int, text: String)
@@ -15,24 +10,19 @@ enum MarkdownBlock: Equatable {
     case thematicBreak
 }
 
-
-
-
-
 struct MarkdownList: Equatable {
     struct Item: Equatable {
-        
+
         let depth: Int
-        
+
         let marker: String
-        
+
         let text: String
     }
 
     let ordered: Bool
     let items: [Item]
 }
-
 
 struct MarkdownTable: Equatable {
     enum Alignment: Equatable {
@@ -48,43 +38,19 @@ struct MarkdownTable: Equatable {
     var columnCount: Int { header.count }
 }
 
-
-
-
-
-
-
-
-
 enum MarkdownBlockParser {
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private static let cache: NSCache<NSString, CachedBlocks> = {
         let cache = NSCache<NSString, CachedBlocks>()
         cache.countLimit = 256
         return cache
     }()
 
-    
     private final class CachedBlocks {
         let blocks: [MarkdownBlock]
         init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
     }
 
-    
-    
-    
     #if DEBUG
         private(set) nonisolated(unsafe) static var parseCount = 0
 
@@ -151,8 +117,7 @@ enum MarkdownBlockParser {
                     code.append(lines[index])
                     index += 1
                 }
-                
-                
+
                 blocks.append(.codeBlock(language: language, code: code.joined(separator: "\n")))
                 index += 1
                 continue
@@ -190,8 +155,7 @@ enum MarkdownBlockParser {
             if let item = parseListItem(line) {
                 flushQuote()
                 flushParagraph()
-                
-                
+
                 if !listBuffer.isEmpty && listOrdered != item.ordered { flushList() }
                 listOrdered = item.ordered
                 listBuffer.append(item.item)
@@ -201,8 +165,7 @@ enum MarkdownBlockParser {
 
             flushQuote()
             if !listBuffer.isEmpty {
-                
-                
+
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
                     index += 1
                     continue
@@ -217,24 +180,16 @@ enum MarkdownBlockParser {
         return blocks
     }
 
-    
-
     private static func isFence(_ line: String) -> Bool {
         line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
     }
 
-    
-    
     private static func fenceLanguage(_ line: String) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         let language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
         return language.isEmpty ? nil : language
     }
 
-    
-
-    
-    
     static func isThematicBreak(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 3, !trimmed.contains("|") else { return false }
@@ -252,8 +207,6 @@ enum MarkdownBlockParser {
         return count >= 3
     }
 
-    
-
     private static func stripQuoteMarker(_ line: String) -> String {
         var body = line.trimmingCharacters(in: .whitespaces)
         if body.hasPrefix(">") { body.removeFirst() }
@@ -261,10 +214,6 @@ enum MarkdownBlockParser {
         return body
     }
 
-    
-
-    
-    
     static func parseListItem(_ line: String) -> (item: MarkdownList.Item, ordered: Bool)? {
         var indent = 0
         var cursor = line.startIndex
@@ -275,7 +224,6 @@ enum MarkdownBlockParser {
         guard cursor < line.endIndex else { return nil }
         let depth = min(indent / 2, 3)
 
-        
         if line[cursor] == "-" || line[cursor] == "*" || line[cursor] == "+" {
             let afterMarker = line.index(after: cursor)
             guard afterMarker < line.endIndex, line[afterMarker] == " " else { return nil }
@@ -288,7 +236,6 @@ enum MarkdownBlockParser {
             )
         }
 
-        
         var digits = ""
         var scan = cursor
         while scan < line.endIndex, line[scan].isNumber, digits.count < 9 {
@@ -303,8 +250,7 @@ enum MarkdownBlockParser {
         let body = String(line[line.index(after: afterDelimiter)...]).trimmingCharacters(
             in: .whitespaces)
         guard !body.isEmpty else { return nil }
-        
-        
+
         return (
             MarkdownList.Item(depth: depth, marker: "\(digits).", text: body),
             true
@@ -319,10 +265,6 @@ enum MarkdownBlockParser {
         }
     }
 
-    
-
-    
-    
     static func parseTable(_ lines: [String], startingAt start: Int)
         -> (table: MarkdownTable, consumed: Int)?
     {
@@ -342,7 +284,7 @@ enum MarkdownBlockParser {
             guard line.contains("|"), !line.trimmingCharacters(in: .whitespaces).isEmpty else {
                 break
             }
-            
+
             if parseDelimiterRow(line) != nil { break }
             var cells = splitRow(line)
             if cells.count < header.count {
@@ -360,8 +302,6 @@ enum MarkdownBlockParser {
         )
     }
 
-    
-    
     private static func parseDelimiterRow(_ line: String) -> [MarkdownTable.Alignment]? {
         guard line.contains("|"), line.contains("-") else { return nil }
         let cells = splitRow(line)
@@ -386,8 +326,6 @@ enum MarkdownBlockParser {
         return alignments
     }
 
-    
-    
     static func splitRow(_ line: String) -> [String] {
         var cells: [String] = []
         var current = ""
@@ -411,8 +349,7 @@ enum MarkdownBlockParser {
         }
         if escaped { current.append("\\") }
         cells.append(current)
-        
-        
+
         if let first = cells.first, first.trimmingCharacters(in: .whitespaces).isEmpty {
             cells.removeFirst()
         }
@@ -422,17 +359,6 @@ enum MarkdownBlockParser {
         return cells.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static func parseAtxHeading(_ line: String) -> (level: Int, text: String)? {
         var leadingSpaces = 0
         var cursor = line.startIndex

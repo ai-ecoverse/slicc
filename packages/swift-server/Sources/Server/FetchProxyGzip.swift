@@ -2,13 +2,6 @@ import Foundation
 import NIOCore
 import zlib
 
-
-
-
-
-
-
-
 enum FetchProxyGzip {
     static let magic0: UInt8 = 0x1F
     static let magic1: UInt8 = 0x8B
@@ -19,7 +12,6 @@ enum FetchProxyGzip {
         return first == magic0 && second == magic1
     }
 
-    
     static func contentEncodingLooksUncompressed(_ value: String?) -> Bool {
         let encoding = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return encoding.isEmpty || encoding == "identity"
@@ -37,8 +29,6 @@ enum FetchProxyGzipError: Error, Equatable {
     case inflateInit(Int32)
     case inflate(Int32)
 }
-
-
 
 final class GzipInflater {
     private var stream = z_stream()
@@ -59,10 +49,7 @@ final class GzipInflater {
     }
 
     func push(_ input: [UInt8], finish: Bool) throws -> [UInt8] {
-        
-        
-        
-        
+
         if ended { return [] }
         try start()
         if input.isEmpty && !finish { return [] }
@@ -105,10 +92,6 @@ final class GzipInflater {
         return output
     }
 }
-
-
-
-
 
 struct MaybeGunzipState<Iterator: AsyncIteratorProtocol> where Iterator.Element == ByteBuffer {
     var enabled: Bool

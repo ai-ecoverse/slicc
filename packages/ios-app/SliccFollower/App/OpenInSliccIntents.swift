@@ -1,34 +1,5 @@
 import AppIntents
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct OpenInSliccBrowserIntent: AppIntent {
     static let title: LocalizedStringResource = "Open in Sliccy's Browser"
     static let description = IntentDescription(
@@ -39,8 +10,7 @@ struct OpenInSliccBrowserIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        
-        
+
         guard InboundActionCoordinator.shared.receive(url: url, needsConfirmation: false) else {
             throw InboundOpenError.invalidURL
         }
@@ -62,14 +32,6 @@ enum InboundOpenError: Error, CustomLocalizedStringResourceConvertible {
     }
 }
 
-
-
-
-
-
-
-
-
 struct OpenSliccConversationIntent: OpenIntent {
     static let title: LocalizedStringResource = "Open Sliccy Conversation"
     static let description = IntentDescription(
@@ -81,18 +43,13 @@ struct OpenSliccConversationIntent: OpenIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        
-        
+
         guard InboundActionCoordinator.shared.receive(selecting: target.id) else {
             throw InboundOpenError.unknownConversation
         }
         return .result()
     }
 }
-
-
-
-
 
 struct PromptSliccIntent: AppIntent {
     static let title: LocalizedStringResource = "Prompt Sliccy"
@@ -108,9 +65,6 @@ struct PromptSliccIntent: AppIntent {
         return .result(value: reply)
     }
 }
-
-
-
 
 struct GetSliccConversationIntent: AppIntent {
     static let title: LocalizedStringResource = "Get Current Sliccy Conversation"
@@ -145,9 +99,7 @@ struct SliccAppShortcuts: AppShortcutsProvider {
             phrases: ["Get \(.applicationName) conversation"],
             shortTitle: "Get Conversation",
             systemImageName: "doc.text")
-        
-        
-        
+
         AppShortcut(
             intent: OpenSliccConversationIntent(),
             phrases: [

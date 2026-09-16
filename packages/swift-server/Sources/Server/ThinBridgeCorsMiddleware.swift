@@ -2,30 +2,10 @@ import HTTPTypes
 import Hummingbird
 import NIOCore
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
     private static var maxAgeHeader: HTTPField.Name { HTTPField.Name("Access-Control-Max-Age")! }
     private static var contentTypeHeader: HTTPField.Name { .contentType }
 
-    
-    
-    
     let bridgeToken: String?
 
     init(bridgeToken: String? = nil) {
@@ -44,10 +24,6 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
             requestHeadersHeader: requestHeadersHeader
         )
 
-        
-        
-        
-        
         if request.method == .options, let corsHeaders {
             var responseHeaders = corsHeaders
             for field in BridgeSecurity.buildPnaPreflightHeaders() {
@@ -57,11 +33,6 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
             return Response(status: .noContent, headers: responseHeaders)
         }
 
-        
-        
-        
-        
-        
         if let corsHeaders,
             request.uri.path.hasPrefix("/api/"),
             !BridgeSecurity.isLoopbackBridgeOrigin(origin),
@@ -81,14 +52,7 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
 
         var response = try await next(request, context)
         if let corsHeaders {
-            
-            
-            
-            
-            
-            
-            
-            
+
             let exposeHeader = HTTPField.Name("Access-Control-Expose-Headers")!
             let routeExpose = response.headers[exposeHeader]
             for field in corsHeaders {

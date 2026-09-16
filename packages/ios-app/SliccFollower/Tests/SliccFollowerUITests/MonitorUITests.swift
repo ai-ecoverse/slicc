@@ -1,6 +1,5 @@
 import XCTest
 
-
 final class MonitorUITests: XCTestCase {
 
     override func setUp() {

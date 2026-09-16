@@ -3,12 +3,7 @@ import XCTest
 
 @testable import SliccTrayFollower
 
-
-
-
 final class TrayFsTests: XCTestCase {
-
-    
 
     func testReadEncodingRawValues() {
         XCTAssertEqual(TrayFsReadEncoding.utf8.rawValue, "utf-8")
@@ -19,8 +14,6 @@ final class TrayFsTests: XCTestCase {
         XCTAssertEqual(TrayFsWriteEncoding.utf8.rawValue, "utf-8")
         XCTAssertEqual(TrayFsWriteEncoding.base64.rawValue, "base64")
     }
-
-    
 
     func testEveryRequestOpRoundTrips() throws {
         let requests: [TrayFsRequest] = [
@@ -81,8 +74,6 @@ final class TrayFsTests: XCTestCase {
         }
     }
 
-    
-
     func testNodeTypeRoundTrips() throws {
         for type in [TrayFsNodeType.file, .directory, .symlink] {
             XCTAssertEqual(try WireCodec.roundTrip(type), type)
@@ -122,8 +113,6 @@ final class TrayFsTests: XCTestCase {
             }
         }
     }
-
-    
 
     func testSuccessFactory() throws {
         let response = TrayFsResponse.success(.exists(true))

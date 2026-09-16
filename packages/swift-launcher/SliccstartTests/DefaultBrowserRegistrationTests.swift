@@ -2,23 +2,16 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
 final class DefaultBrowserRegistrationTests: XCTestCase {
     private let bundleURL = URL(fileURLWithPath: "/Applications/Sliccstart.app", isDirectory: true)
 
     func testClaimsBothWebSchemes() {
-        
-        
-        
+
         XCTAssertEqual(DefaultBrowserRegistration.handledSchemes, ["http", "https"])
     }
 
     func testMatchesIgnoresTrailingSlashDifferences() {
-        
-        
+
         XCTAssertTrue(
             DefaultBrowserRegistration.matches(
                 handlerURL: URL(fileURLWithPath: "/Applications/Sliccstart.app"),
@@ -73,9 +66,7 @@ final class DefaultBrowserRegistrationTests: XCTestCase {
     }
 
     func testMakeDefaultReportsTheRoleWasNotTakenWhenTheUserDeclines() async {
-        
-        
-        
+
         let system = SystemStub(handler: nil)
 
         let succeeded = await DefaultBrowserRegistration.makeDefault(bundleURL: bundleURL, system: system)
@@ -96,13 +87,11 @@ final class DefaultBrowserRegistrationTests: XCTestCase {
         )
 
         XCTAssertFalse(succeeded)
-        
+
         XCTAssertEqual(system.claimedSchemes, ["http"])
         XCTAssertEqual(reported as? [NSError], [failure])
     }
 }
-
-
 
 private final class SystemStub: DefaultBrowserSystem {
     private let handlerAfterClaim: URL?

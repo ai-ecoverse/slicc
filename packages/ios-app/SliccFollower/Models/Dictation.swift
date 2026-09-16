@@ -2,14 +2,6 @@ import AVFoundation
 import Foundation
 import Speech
 
-
-
-
-
-
-
-
-
 enum DictationPermission: Equatable {
     case granted
     case undetermined
@@ -17,46 +9,26 @@ enum DictationPermission: Equatable {
     case restricted
 }
 
-
-
-
-
 protocol DictationSession {
-    
+
     @MainActor func stop() async -> String
-    
+
     @MainActor func cancel()
 }
 
-
-
-
-
-
 protocol DictationEngine {
-    
-    
+
     var permission: DictationPermission { get }
-    
-    
+
     var statusLine: String { get }
-    
-    
+
     func requestPermission() async -> DictationPermission
-    
-    
+
     func start(
         onPartial: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (String) -> Void
     ) async throws -> DictationSession
 }
-
-
-
-
-
-
-
 
 @MainActor
 final class AppleDictationEngine: DictationEngine {
@@ -114,9 +86,7 @@ final class AppleDictationEngine: DictationEngine {
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        
-        
-        
+
         request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
 
         try audioSession.beginRecording()
@@ -145,11 +115,6 @@ final class AppleDictationEngine: DictationEngine {
         )
     }
 
-    
-    
-    
-    
-    
     @discardableResult
     static func reinstallTap(
         on input: any DictationInputTapping,
@@ -205,12 +170,6 @@ enum DictationError: Error, LocalizedError {
     }
 }
 
-
-
-
-
-
-
 private final class AppleDictationSessionBox: DictationSession, @unchecked Sendable {
     private let audioEngine: AVAudioEngine
     private let audioSession: any AudioSessionCoordinating
@@ -239,9 +198,7 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
                 let isFinal = result.isFinal
                 self.lock.lock()
                 self.latestTranscript = text
-                
-                
-                
+
                 if isFinal { self.finished = true }
                 let continuation = isFinal ? self.takeContinuationLocked() : nil
                 self.lock.unlock()
@@ -255,14 +212,11 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
                 self.lock.lock()
                 let transcript = self.latestTranscript
                 let wasFinished = self.finished
-                
-                
+
                 self.finished = true
                 let continuation = self.takeContinuationLocked()
                 self.lock.unlock()
-                
-                
-                
+
                 if let continuation {
                     continuation.resume(returning: transcript)
                 } else if !wasFinished {
@@ -272,9 +226,6 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
         }
     }
 
-    
-    
-    
     private func takeContinuationLocked() -> CheckedContinuation<String, Never>? {
         guard let continuation = finalContinuation else { return nil }
         finalContinuation = nil

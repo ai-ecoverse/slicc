@@ -10,11 +10,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/cloud"
 )
 
-
-
 var cloudList = cloud.List
-
-
 
 func cmdListSessions(args []string) int {
 	jsonOut := false
@@ -51,8 +47,6 @@ func cmdListSessions(args []string) int {
 	return 0
 }
 
-
-
 func resolveCloudSession(reveal bool, sel cloud.Selector, list func(bool) ([]cloud.Session, error)) (cloud.Session, error) {
 	sessions, err := list(reveal)
 	if err != nil {
@@ -60,9 +54,6 @@ func resolveCloudSession(reveal bool, sel cloud.Selector, list func(bool) ([]clo
 	}
 	return cloud.Select(sessions, sel)
 }
-
-
-
 
 func cmdCloud(ctx context.Context, verb string, args []string) int {
 	sel, rest, err := cloud.ParseSelector(args)

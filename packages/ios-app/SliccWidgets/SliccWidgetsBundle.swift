@@ -2,14 +2,6 @@ import SliccWidgetKit
 import SwiftUI
 import WidgetKit
 
-
-
-
-
-
-
-
-
 @main
 struct SliccWidgetsBundle: WidgetBundle {
     var body: some Widget {

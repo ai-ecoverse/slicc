@@ -4,32 +4,10 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "Settings")
 
-
-
-
 let autoLaunchAppIdKey = "autoLaunchAppId"
-
 
 let terminalFollowCommandKey = "terminalFollowCommand"
 let suppressTerminalWarningKey = "suppressTerminalWarning"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 enum SecretNameValidator {
     static func isValid(_ name: String) -> Bool {
@@ -38,7 +16,7 @@ enum SecretNameValidator {
             let v = scalar.value
             let alpha = (v >= 0x41 && v <= 0x5A) || (v >= 0x61 && v <= 0x7A)
             let digit = v >= 0x30 && v <= 0x39
-            let punct = v == 0x2E || v == 0x5F || v == 0x2D  
+            let punct = v == 0x2E || v == 0x5F || v == 0x2D
             if !(alpha || digit || punct) { return false }
         }
         return true
@@ -62,11 +40,8 @@ struct SettingsView: View {
     }
 }
 
-
-
 struct MountsSettingsView: View {
-    
-    
+
     struct Row: Identifiable, Equatable {
         let id = UUID()
         var path: String
@@ -76,9 +51,6 @@ struct MountsSettingsView: View {
     @State private var rows: [Row] = []
     @State private var selection: Row.ID?
 
-    
-    
-    
     init(rows: [Row] = []) {
         _rows = State(initialValue: rows)
     }
@@ -184,8 +156,6 @@ struct MountsSettingsView: View {
         }
     }
 
-    
-
     private func addRow() {
         let row = Row(path: defaultTarget(), hostPath: "")
         rows.append(row)
@@ -228,8 +198,6 @@ struct MountsSettingsView: View {
         return true
     }
 
-    
-    
     private func assign(folder: URL, to rowId: Row.ID) {
         guard let index = rows.firstIndex(where: { $0.id == rowId }) else { return }
         rows[index].hostPath = folder.path
@@ -238,8 +206,6 @@ struct MountsSettingsView: View {
             rows[index].path = defaultTarget(for: folder)
         }
     }
-
-    
 
     private func defaultTarget(for folder: URL? = nil) -> String {
         MountTablePreference.defaultTarget(
@@ -258,8 +224,6 @@ struct MountsSettingsView: View {
         MountTablePreference.displayPath(path)
     }
 
-    
-
     private func load() {
         rows = MountTablePreference.mappings(defaults: .standard).map {
             Row(path: $0.path, hostPath: $0.hostPath)
@@ -273,20 +237,15 @@ struct MountsSettingsView: View {
     }
 }
 
-
-
 struct StartupSettingsView: View {
     var fileProviderCoordinator: FileProviderCoordinator
-    
-    
+
     var isInstalledLocation: Bool = StartupPreference.isInstalledLocation()
     @AppStorage(StartupPreference.enabledKey) private var launchAtStartup = false
     @State private var topBrowserName: String?
     @State private var isDefaultBrowser = false
     @State private var isRequestingDefaultBrowser = false
 
-    
-    
     static func launchCaption(isInstalled: Bool) -> String {
         let base =
             "Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts."
@@ -326,11 +285,7 @@ struct StartupSettingsView: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
-            
-            
-            
-            
-            
+
             if launchAtStartup || isDefaultBrowser {
                 Divider()
                 defaultBrowserSection
@@ -349,8 +304,7 @@ struct StartupSettingsView: View {
             isDefaultBrowser = DefaultBrowserRegistration.isDefault()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            
-            
+
             isDefaultBrowser = DefaultBrowserRegistration.isDefault()
         }
     }
@@ -388,8 +342,6 @@ struct StartupSettingsView: View {
         return "Sliccstart takes over web links and opens each one in the SLICC browser, starting it first if needed. macOS will ask you to confirm."
     }
 }
-
-
 
 struct TerminalsSettingsView: View {
     @AppStorage(terminalFollowCommandKey) private var followCommand = FollowCommandTemplate.defaultTemplate
@@ -512,8 +464,6 @@ private struct FollowCommandPlaceholderChip: View {
     }
 }
 
-
-
 struct SecretsSettingsView: View {
     @State private var secrets: [Secret] = []
     @State private var unlocked = false
@@ -522,18 +472,12 @@ struct SecretsSettingsView: View {
     @State private var deletionTarget: Secret?
     @State private var errorMessage: String?
 
-    
-    
-    
-    
     init(secrets: [Secret] = [], unlocked: Bool = false, selection: Secret.ID? = nil) {
         _secrets = State(initialValue: secrets)
         _unlocked = State(initialValue: unlocked)
         _selection = State(initialValue: selection)
     }
 
-    
-    
     private static let placeholders: [Secret] = [
         Secret(name: "GITHUB_TOKEN", value: "******", domains: ["api.github.com"]),
         Secret(name: "OPENAI_API_KEY", value: "******", domains: ["api.openai.com"]),
@@ -703,10 +647,6 @@ struct SecretsSettingsView: View {
         }
     }
 
-    
-    
-    
-    
     private func unlock() {
         guard !unlocked else { return }
         do {
@@ -756,8 +696,6 @@ struct SecretsSettingsView: View {
     }
 }
 
-
-
 enum SecretDraft: Identifiable {
     case creating
     case editing(Secret)
@@ -769,8 +707,6 @@ enum SecretDraft: Identifiable {
         }
     }
 }
-
-
 
 struct DomainEntry: Identifiable, Equatable {
     let id = UUID()
@@ -824,9 +760,6 @@ struct SecretEditorSheet: View {
             .filter { !$0.isEmpty }
     }
 
-    
-    
-    
     static func firstInvalidPattern(in patterns: [String]) -> String? {
         for pattern in patterns {
             let trimmed = pattern.trimmingCharacters(in: .whitespaces)
@@ -847,13 +780,6 @@ struct SecretEditorSheet: View {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func validationMessage(
         name rawName: String,
         value: String,

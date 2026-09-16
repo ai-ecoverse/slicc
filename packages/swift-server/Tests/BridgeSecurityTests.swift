@@ -3,12 +3,7 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
 final class BridgeSecurityTests: XCTestCase {
-    
 
     func testAllowedOriginsAreAccepted() {
         XCTAssertTrue(BridgeSecurity.isAllowedOrigin("https://www.sliccy.ai"))
@@ -20,12 +15,10 @@ final class BridgeSecurityTests: XCTestCase {
     func testOriginAllowlistRejectsArbitraryOrigins() {
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin("https://evil.example.com"))
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin("http://localhost:5711"))
-        XCTAssertFalse(BridgeSecurity.isAllowedOrigin("https://sliccy.ai"))  
+        XCTAssertFalse(BridgeSecurity.isAllowedOrigin("https://sliccy.ai"))
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin(nil))
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin(""))
     }
-
-    
 
     func testNormalizeDevOriginTrimsLowercasesAndStripsTrailingSlash() {
         XCTAssertEqual(BridgeSecurity.normalizeDevOrigin("  HTTP://Localhost:8787/  "), "http://localhost:8787")
@@ -48,8 +41,6 @@ final class BridgeSecurityTests: XCTestCase {
             ["http://localhost:8787", "http://127.0.0.1:8787"]
         )
     }
-
-    
 
     func testParseSubprotocolHeaderSplitsOnCommaAndTrims() {
         XCTAssertEqual(BridgeSecurity.parseSubprotocolHeader(nil), [])
@@ -77,8 +68,6 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertNil(BridgeSecurity.selectSubprotocol([], expectedToken: token))
         XCTAssertNil(BridgeSecurity.selectSubprotocol([expected], expectedToken: ""))
     }
-
-    
 
     func testValidateUpgradeAcceptsMatchingOriginAndSubprotocol() {
         let token = "tok-123"
@@ -124,8 +113,6 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertEqual(result.reason, .subprotocolMissingOrMismatched)
     }
 
-    
-
     func testBuildCorsHeadersReturnsNilForDisallowedOrigin() {
         XCTAssertNil(BridgeSecurity.buildCorsHeaders(origin: "https://evil.example.com"))
         XCTAssertNil(BridgeSecurity.buildCorsHeaders(origin: nil))
@@ -137,9 +124,7 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertEqual(headers?[HTTPField.Name("Access-Control-Allow-Origin")!], "https://www.sliccy.ai")
         XCTAssertEqual(headers?[HTTPField.Name("Access-Control-Allow-Credentials")!], "true")
         XCTAssertEqual(headers?[HTTPField.Name("Vary")!], "Origin, Access-Control-Request-Headers")
-        
-        
-        
+
         XCTAssertEqual(
             headers?[HTTPField.Name("Access-Control-Allow-Methods")!],
             "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK"
@@ -150,10 +135,7 @@ final class BridgeSecurityTests: XCTestCase {
     }
 
     func testBuildCorsHeadersAllowsFetchProxyTransportHeaders() {
-        
-        
-        
-        
+
         let headers = BridgeSecurity.buildCorsHeaders(origin: "https://www.sliccy.ai")
         let allowHeaders = headers?[HTTPField.Name("Access-Control-Allow-Headers")!] ?? ""
         XCTAssertTrue(allowHeaders.contains("X-Target-URL"))
@@ -163,8 +145,7 @@ final class BridgeSecurityTests: XCTestCase {
     }
 
     func testBuildCorsHeadersExposesProxyResponseMarkers() {
-        
-        
+
         let headers = BridgeSecurity.buildCorsHeaders(origin: "https://www.sliccy.ai")
         XCTAssertEqual(
             headers?[HTTPField.Name("Access-Control-Expose-Headers")!],
@@ -173,10 +154,7 @@ final class BridgeSecurityTests: XCTestCase {
     }
 
     func testResolveCorsAllowHeadersReflectsExtraRequestedHeaders() {
-        
-        
-        
-        
+
         let resolved = BridgeSecurity.resolveCorsAllowHeaders("X-Custom-One, content-type, X-Custom-Two")
         XCTAssertTrue(resolved.contains("X-Custom-One"))
         XCTAssertTrue(resolved.contains("X-Custom-Two"))
@@ -198,16 +176,12 @@ final class BridgeSecurityTests: XCTestCase {
         )
     }
 
-    
-
     func testMintTokenProducesUniqueValues() {
         let a = BridgeSecurity.mintToken()
         let b = BridgeSecurity.mintToken()
         XCTAssertFalse(a.isEmpty)
         XCTAssertNotEqual(a, b)
     }
-
-    
 
     func testIsLoopbackHostnameAcceptsCanonicalSet() {
         XCTAssertTrue(BridgeSecurity.isLoopbackHostname("localhost"))
@@ -244,18 +218,16 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin("not a url"))
     }
 
-    
-
     func testValidateBridgeTokenAcceptsMatchingToken() {
         XCTAssertTrue(BridgeSecurity.validateBridgeToken("abc123", "abc123"))
     }
 
     func testValidateBridgeTokenRejectsMismatchAndEdgeCases() {
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "abc124"))  
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc", "abc123"))  
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken(nil, "abc123"))  
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("", "abc123"))  
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", nil))  
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", ""))  
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "abc124"))
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc", "abc123"))
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken(nil, "abc123"))
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("", "abc123"))
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", nil))
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", ""))
     }
 }

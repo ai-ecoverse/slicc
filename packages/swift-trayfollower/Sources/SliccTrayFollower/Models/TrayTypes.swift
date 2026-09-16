@@ -1,18 +1,5 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 public struct TraySessionDescription: Codable, Sendable {
     public let type: SDPType
     public let sdp: String
@@ -27,8 +14,6 @@ public struct TraySessionDescription: Codable, Sendable {
         self.sdp = sdp
     }
 }
-
-
 
 public struct TrayIceCandidate: Codable, Sendable {
     public let candidate: String
@@ -49,16 +34,12 @@ public struct TrayIceCandidate: Codable, Sendable {
     }
 }
 
-
-
 public enum TrayBootstrapState: String, Codable, Sendable {
     case pending
     case offered
     case connected
     case failed
 }
-
-
 
 public struct TrayBootstrapFailure: Codable, Sendable {
     public let code: String
@@ -67,8 +48,6 @@ public struct TrayBootstrapFailure: Codable, Sendable {
     public let retryAfterMs: Int?
     public let failedAt: String
 }
-
-
 
 public struct TrayBootstrapStatus: Codable, Sendable {
     public let controllerId: String
@@ -83,8 +62,6 @@ public struct TrayBootstrapStatus: Codable, Sendable {
     public let failure: TrayBootstrapFailure?
 }
 
-
-
 public struct TurnIceServer: Codable, Sendable {
     public let urls: [String]
     public let username: String
@@ -97,17 +74,13 @@ public struct TurnIceServer: Codable, Sendable {
     }
 }
 
-
-
 public struct TrayLeaderSummary: Codable, Sendable {
     public let controllerId: String
     public let connected: Bool
     public let reconnectDeadline: String?
-    
+
     public let lastSeenAt: String?
 }
-
-
 
 public enum TrayBootstrapEvent: Codable, Sendable {
     case offer(sequence: Int, sentAt: String, offer: TraySessionDescription)

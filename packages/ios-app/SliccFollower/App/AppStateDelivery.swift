@@ -2,13 +2,8 @@ import Foundation
 import SliccTraySession
 import UIKit
 
-
-
 extension AppState {
-    
-    
-    
-    
+
     func markUndelivered(_ messageId: String) {
         if let index = messages.firstIndex(where: { $0.id == messageId }) {
             messages[index].error = true
@@ -21,7 +16,6 @@ extension AppState {
         lastError = "The message could not be delivered — it may be too large."
     }
 }
-
 
 extension AppState {
     static func makeSessionStore() -> TraySessionSyncStore {
@@ -37,11 +31,6 @@ extension AppState {
         return TraySessionSyncStore()
     }
 
-    
-    
-    
-    
-    
     static func makeRecentJoinStore() -> RecentJoinStore {
         #if DEBUG
             if let fixture = UITestHooks.recentJoinsFixtureBackend() {

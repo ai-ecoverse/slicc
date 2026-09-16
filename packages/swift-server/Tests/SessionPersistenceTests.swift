@@ -31,7 +31,6 @@ final class SessionPersistenceTests: XCTestCase {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(raw, id)
 
-        
         let attrs = try FileManager.default.attributesOfItem(atPath: sessionIdPath.path)
         if let posix = attrs[.posixPermissions] as? NSNumber {
             XCTAssertEqual(posix.int16Value & 0o777, 0o600)
@@ -63,10 +62,6 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertNotEqual(raw, "not-a-valid-uuid")
     }
 
-    
-    
-    
-    
     func testMaskRoundTripAcrossInjectorReinstantiations() async throws {
         let sid1 = try SecretInjector.readOrCreateSessionId(in: tmpDir)
         let sid2 = try SecretInjector.readOrCreateSessionId(in: tmpDir)

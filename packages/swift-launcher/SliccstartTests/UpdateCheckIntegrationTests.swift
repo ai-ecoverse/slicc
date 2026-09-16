@@ -4,34 +4,15 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
-
-
-
-
-
 final class UpdateCheckIntegrationTests: XCTestCase {
 
-    
-
     func testTolerantProviderFetchesReleasesWithCorrectVersions() async throws {
-        
-        
-        
+
         let provider = TolerantGithubReleaseProvider()
         let releases = try await provider.fetchReleases(
             owner: "ai-ecoverse", repo: "slicc", proxy: nil
         )
 
-        
-        
-        
-        
-        
         let rawData = try await fetchReleasesJSON(owner: "ai-ecoverse", repo: "slicc")
         let rawReleases = try JSONDecoder().decode([Release].self, from: rawData)
         XCTAssertGreaterThanOrEqual(
@@ -39,8 +20,6 @@ final class UpdateCheckIntegrationTests: XCTestCase {
             "Expected at least 5 releases from ai-ecoverse/slicc, got \(rawReleases.count)"
         )
 
-        
-        
         let nonNullVersions = releases.filter { $0.tagName != Version(0, 0, 0) }
         XCTAssertFalse(
             nonNullVersions.isEmpty,
@@ -48,8 +27,6 @@ final class UpdateCheckIntegrationTests: XCTestCase {
                 + "All \(releases.count) releases decoded as Version.null — tolerant decoding may be broken."
         )
 
-        
-        
         let hasSliccstartAsset = releases.contains { release in
             release.assets.contains { asset in
                 asset.name.hasPrefix("Sliccstart-") && asset.name.hasSuffix(".zip")
@@ -61,27 +38,8 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func testPaginationWalkFollowsRealLinkHeaders() async throws {
-        
-        
-        
+
         let pagesFetched = PageCounter()
         let provider = TolerantGithubReleaseProvider(
             currentVersion: Version(0, 0, 0),
@@ -100,16 +58,6 @@ final class UpdateCheckIntegrationTests: XCTestCase {
 
         let releases = try await provider.fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
 
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
         let pages = await pagesFetched.value
         XCTAssertTrue(
             pages > 1 || !releases.isEmpty,
@@ -117,9 +65,6 @@ final class UpdateCheckIntegrationTests: XCTestCase {
                 + "header format may have drifted, leaving `rel=\"next\"` unparsed."
         )
 
-        
-        
-        
         for release in releases {
             XCTAssertTrue(
                 release.assets.contains { $0.name.hasPrefix("Sliccstart-") && $0.name.hasSuffix(".zip") },
@@ -128,24 +73,11 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         }
     }
 
-    
     private actor PageCounter {
         private(set) var value = 0
         func increment() { value += 1 }
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func testStrictDecoderOnRealReleasesProducesNullVersions() async throws {
         let data = try await fetchReleasesJSON(owner: "ai-ecoverse", repo: "slicc")
         let releases = try JSONDecoder().decode([Release].self, from: data)
@@ -161,17 +93,10 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         )
     }
 
-    
-
-    
-    
-    
     private func fetchReleasesJSON(owner: String, repo: String) async throws -> Data {
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
         var request = URLRequest(url: url)
-        
-        
-        
+
         if let token = ProcessInfo.processInfo.environment["GH_TOKEN"], !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }

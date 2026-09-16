@@ -128,8 +128,7 @@ final class OptelTransportTests: XCTestCase {
     }
 
     func testSendIsFireAndForgetAndNonBlocking() {
-        
-        
+
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FailingURLProtocol.self]
         let session = URLSession(configuration: config)
@@ -140,10 +139,7 @@ final class OptelTransportTests: XCTestCase {
     }
 
     func testDebugLoggingEnabledTransportStillFireAndForget() {
-        
-        
-        
-        
+
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FailingURLProtocol.self]
         let session = URLSession(configuration: config)
@@ -158,24 +154,18 @@ final class OptelTransportTests: XCTestCase {
     }
 
     func testDebugLoggingDefaultsToOff() {
-        
-        
+
         let transport = URLSessionOptelTransport()
-        
-        
+
         transport.send(sampleEvent(), collectBaseURL: baseURL)
     }
 
     func testLoggerSubsystemAndCategoryAreStable() {
-        
-        
-        
+
         XCTAssertEqual(URLSessionOptelTransport.loggerSubsystem, "com.slicc.swift-optel")
         XCTAssertEqual(URLSessionOptelTransport.loggerCategory, "transport")
     }
 }
-
-
 
 private final class FailingURLProtocol: URLProtocol {
     override static func canInit(with request: URLRequest) -> Bool { true }

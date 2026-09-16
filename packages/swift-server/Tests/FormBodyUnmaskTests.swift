@@ -2,10 +2,8 @@ import XCTest
 
 @testable import slicc_server
 
-
 final class FormBodyUnmaskTests: XCTestCase {
-    
-    
+
     private static let real = "ab+cd/ef=gh&ij kl%mn"
     private static let sessionId = "session-form-unmask"
 
@@ -30,7 +28,7 @@ final class FormBodyUnmaskTests: XCTestCase {
         )
         XCTAssertEqual(out, "token=ab%2Bcd%2Fef%3Dgh%26ij%20kl%25mn&grant_type=client_credentials")
         XCTAssertFalse(out.contains(self.masked))
-        
+
         XCTAssertEqual(out.components(separatedBy: "&").count, 2)
     }
 
@@ -53,8 +51,7 @@ final class FormBodyUnmaskTests: XCTestCase {
     }
 
     func testUnmasksClientPercentEncodedMaskedToken() {
-        
-        
+
         let out = unmaskFormBody(
             text: "token=\(self.masked)",
             hostname: "api.example.com",
@@ -79,8 +76,7 @@ final class FormBodyUnmaskTests: XCTestCase {
     }
 
     func testMalformedEscapeFallsBackToSubstringReplace() {
-        
-        
+
         let out = unmaskFormBody(
             text: "token=%zz\(self.masked)",
             hostname: "api.example.com",

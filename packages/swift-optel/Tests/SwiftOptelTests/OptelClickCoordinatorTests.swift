@@ -33,9 +33,7 @@ final class OptelClickCoordinatorTests: XCTestCase {
     }
 
     func testClaimAppliesOnlyToCurrentPendingEpoch() {
-        
-        
-        
+
         let older = OptelClickCoordinator.beginMonitorEvent()
         _ = OptelClickCoordinator.beginMonitorEvent()
         OptelClickCoordinator.claimByRefined()
@@ -43,10 +41,7 @@ final class OptelClickCoordinatorTests: XCTestCase {
     }
 
     func testClaimWithoutPriorMonitorEventDoesNotPoisonFutureEpochs() {
-        
-        
-        
-        
+
         OptelClickCoordinator.claimByRefined()
         let nextEpoch = OptelClickCoordinator.beginMonitorEvent()
         XCTAssertFalse(OptelClickCoordinator.wasClaimedByRefined(epoch: nextEpoch))

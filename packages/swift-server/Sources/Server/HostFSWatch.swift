@@ -1,9 +1,6 @@
 import CoreServices
 import Foundation
 
-
-
-
 final class HostFSWatch: @unchecked Sendable {
     private final class StreamContext {
         unowned let watch: HostFSWatch
@@ -17,7 +14,6 @@ final class HostFSWatch: @unchecked Sendable {
         }
     }
 
-    
     static var shared: HostFSWatch?
 
     static let debounceMs: Int = 75
@@ -26,7 +22,7 @@ final class HostFSWatch: @unchecked Sendable {
     private let lickSystem: LickSystem
     private let queue = DispatchQueue(label: "slicc.hostfs-watch")
     private var streams: [FSEventStreamRef] = []
-    
+
     private var streamContexts: [StreamContext] = []
     private var pending: [String: Set<String>] = [:]
     private var flushWorkItems: [String: DispatchWorkItem] = [:]
@@ -35,7 +31,6 @@ final class HostFSWatch: @unchecked Sendable {
         self.lickSystem = lickSystem
     }
 
-    
     func start(roots: [HostFSRoutes.MountRoot]) {
         queue.sync {
             stopLocked()
@@ -99,8 +94,6 @@ final class HostFSWatch: @unchecked Sendable {
         Task { await lickSystem.broadcastLickEvent(event) }
     }
 
-    
-    
     static func toMountRelativePath(root: String, absolutePath: String) -> String {
         let normalizedRoot = (root as NSString).standardizingPath
         let normalizedPath = (absolutePath as NSString).standardizingPath
@@ -138,7 +131,7 @@ final class HostFSWatch: @unchecked Sendable {
         let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
             guard let info else { return }
             let context = Unmanaged<StreamContext>.fromOpaque(info).takeUnretainedValue()
-            
+
             let cfPaths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
             let paths = cfPaths as? [String] ?? []
             for path in paths.prefix(numEvents) {

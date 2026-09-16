@@ -62,17 +62,15 @@ final class EnvFileFormatTests: XCTestCase {
         XCTAssertTrue(EnvFileFormat.parseDomains(" , , ").isEmpty)
     }
 
-    
-
     func testIsValidHostnamePatternAcceptsAllowedShapes() {
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*"))
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("example.com"))
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("api.github.com"))
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*.example.com"))
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*.api.github.com"))
-        
+
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("localhost"))
-        
+
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("my_service.internal"))
         XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("a-b.example.com"))
     }
@@ -80,20 +78,20 @@ final class EnvFileFormatTests: XCTestCase {
     func testIsValidHostnamePatternRejectsBadShapes() {
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern(""))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("   "))
-        
+
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("."))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern(".com"))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("example."))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("a..b"))
-        
+
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("**"))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("*."))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("*foo.com"))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo.*.com"))
-        
+
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("-foo.com"))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo-.com"))
-        
+
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo bar.com"))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo:8080"))
         XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("https://foo.com"))

@@ -3,9 +3,6 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
-
-
-
 final class SliccIconsTests: XCTestCase {
 
     func testScoopToolsUseThePortedConeNotATeacup() {
@@ -30,7 +27,7 @@ final class SliccIconsTests: XCTestCase {
     }
 
     func testAcceptedStandInsStayPut() {
-        
+
         XCTAssertEqual(SliccIcons.tool("bash"), .system("terminal"))
         XCTAssertEqual(SliccIcons.tool("send_message"), .system("message.fill"))
         XCTAssertEqual(SliccIcons.tool("feed_scoop"), .system("fork.knife"))

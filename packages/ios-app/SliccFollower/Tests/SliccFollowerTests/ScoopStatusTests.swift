@@ -9,18 +9,13 @@ final class ScoopStatusTests: XCTestCase {
         XCTAssertEqual(ScoopLifecycle(state: "broken"), .broken)
         XCTAssertEqual(ScoopLifecycle(state: "initializing"), .initializing)
         XCTAssertEqual(ScoopLifecycle(state: "idle"), .idle)
-        
-        
+
         XCTAssertEqual(ScoopLifecycle(state: nil), .unknown)
         XCTAssertEqual(ScoopLifecycle(state: "future-state"), .unknown)
     }
 
     func testLifecycleVocabularyStaysClosed() {
-        
-        
-        
-        
-        
+
         XCTAssertEqual(
             Set(ScoopLifecycle.allCases.map(\.rawValue)),
             ["working", "broken", "initializing", "idle", "unknown"])
@@ -30,8 +25,7 @@ final class ScoopStatusTests: XCTestCase {
         XCTAssertEqual(ScoopActivity(activity: "thinking"), .thinking)
         XCTAssertEqual(ScoopActivity(activity: "tool"), .tool)
         XCTAssertEqual(ScoopActivity(activity: "awaiting"), .awaiting)
-        
-        
+
         XCTAssertNil(ScoopActivity(activity: nil))
         XCTAssertNil(ScoopActivity(activity: "daydreaming"))
         for activity in ScoopActivity.allCases {

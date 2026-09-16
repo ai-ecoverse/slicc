@@ -2,13 +2,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
-
-
 final class LauncherHelpersCoverageTests: XCTestCase {
     private var tempDir: URL!
 
@@ -23,8 +16,6 @@ final class LauncherHelpersCoverageTests: XCTestCase {
             try? FileManager.default.removeItem(at: tempDir)
         }
     }
-
-    
 
     func testAppNameStripsDotAppSuffix() {
         XCTAssertEqual(AppScanner.appName(fromPath: "/Applications/Safari.app"), "Safari")
@@ -87,8 +78,6 @@ final class LauncherHelpersCoverageTests: XCTestCase {
         XCTAssertEqual(AppScanner.checkDebugSupport(atPath: appPath.path), .supported)
     }
 
-    
-
     func testDefaultSliccDirIsHomeDotSliccSlicc() {
         XCTAssertEqual(SliccBootstrapper.defaultSliccDir, NSHomeDirectory() + "/.slicc/slicc")
     }
@@ -127,11 +116,6 @@ final class LauncherHelpersCoverageTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
     func testBundledStaticPropertiesAreEvaluable() {
         _ = SliccBootstrapper.bundledNodePath
         _ = SliccBootstrapper.bundledSliccDir
@@ -139,26 +123,18 @@ final class LauncherHelpersCoverageTests: XCTestCase {
         _ = SliccBootstrapper.isBundled
     }
 
-    
-
     func testTolerantProviderInitWithExplicitTokenIsRetained() {
-        
-        
-        
-        
-        
+
         _ = TolerantGithubReleaseProvider(authToken: "ghp_test_token")
     }
 
     func testTolerantProviderInitWithEmptyTokenFallsThroughToNil() {
-        
-        
+
         _ = TolerantGithubReleaseProvider(authToken: "")
     }
 
     func testTolerantProviderInitWithNilTokenReadsEnvironment() {
-        
-        
+
         _ = TolerantGithubReleaseProvider(authToken: nil)
     }
 }

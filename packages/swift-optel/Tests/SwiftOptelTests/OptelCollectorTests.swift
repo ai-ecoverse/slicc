@@ -2,7 +2,6 @@ import XCTest
 
 @testable import SwiftOptel
 
-
 private struct FixedRandomSource: RandomSource {
     let value: Double
     func nextUnitDouble() -> Double { value }
@@ -22,8 +21,7 @@ final class OptelCollectorTests: XCTestCase {
     }
 
     private func session(selected: Bool, weight: Int = 100) -> SamplingSession {
-        
-        
+
         let random = FixedRandomSource(value: selected ? 0 : 0.99)
         let config = SamplingConfig(weight: selected ? 1 : weight)
         return SamplingSession(id: "abc123def", config: config, random: random)
@@ -85,7 +83,7 @@ final class OptelCollectorTests: XCTestCase {
         collector.enqueue(event(.top))
         collector.attach(session: session(selected: true))
         XCTAssertEqual(mock.sent.count, 1)
-        
+
         collector.attach(session: session(selected: false))
         collector.enqueue(event(.enter))
         XCTAssertEqual(mock.sent.count, 2)

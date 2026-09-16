@@ -283,7 +283,6 @@ final class SliccCliDownloaderTests: XCTestCase {
 private final class CliURLProtocolStub: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
-    
     // swiftlint:disable:next static_over_final_class
     override class func canInit(with request: URLRequest) -> Bool { true }
     // swiftlint:disable:next static_over_final_class

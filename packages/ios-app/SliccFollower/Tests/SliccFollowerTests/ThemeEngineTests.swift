@@ -2,11 +2,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
-
 final class ThemeEngineTests: XCTestCase {
     private struct Vector: Decodable {
         let name: String

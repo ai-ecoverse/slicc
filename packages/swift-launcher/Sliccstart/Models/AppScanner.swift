@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 final class AppScanner {
-    
+
     static var userApplicationsDir: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Applications"
@@ -10,9 +10,8 @@ final class AppScanner {
 
     static func scan(hasAppManagementPermission: Bool = true) -> [AppTarget] {
         var targets: [AppTarget] = []
-        var debugBuilds: [String: AppTarget] = [:]  
+        var debugBuilds: [String: AppTarget] = [:]
 
-        
         let fm = FileManager.default
         if let userApps = try? fm.contentsOfDirectory(atPath: userApplicationsDir) {
             for item in userApps where item.hasSuffix(" Debug.app") {
@@ -34,7 +33,6 @@ final class AppScanner {
             }
         }
 
-        
         for (bundleId, displayName) in AppTarget.knownChromiumBrowsers {
             guard
                 let url = NSWorkspace.shared.urlForApplication(
@@ -56,7 +54,6 @@ final class AppScanner {
                 ))
         }
 
-        
         for (bundleId, displayName) in AppTarget.knownTerminals {
             guard
                 let url = NSWorkspace.shared.urlForApplication(
@@ -81,9 +78,6 @@ final class AppScanner {
                 ))
         }
 
-        
-        
-        
         guard hasAppManagementPermission else {
             for (bundleId, displayName) in AppTarget.knownElectronApps {
                 guard
@@ -92,7 +86,7 @@ final class AppScanner {
                     )
                 else { continue }
                 let appPath = url.path
-                
+
                 if debugBuilds[appPath] != nil { continue }
                 let name = appName(fromPath: appPath)
                 let icon = NSWorkspace.shared.icon(forFile: appPath)
@@ -113,7 +107,6 @@ final class AppScanner {
             }
         }
 
-        
         guard let contents = try? fm.contentsOfDirectory(atPath: "/Applications") else {
             return targets
         }
@@ -122,7 +115,6 @@ final class AppScanner {
             if targets.contains(where: { $0.path == appPath }) { continue }
             guard hasCDPFramework(atPath: appPath) else { continue }
 
-            
             if let debugTarget = debugBuilds[appPath] {
                 targets.append(debugTarget)
                 continue
@@ -151,37 +143,29 @@ final class AppScanner {
         AppTarget.knownChromiumBrowsers.contains { $0.bundleId == bundleId }
     }
 
-    
-    
     static func hasCDPFramework(atPath appPath: String) -> Bool {
         let fm = FileManager.default
-        
+
         if fm.fileExists(atPath: "\(appPath)/Contents/Frameworks/Electron Framework.framework") {
             return true
         }
-        
+
         if fm.fileExists(atPath: "\(appPath)/Contents/Frameworks/MSWebView2.framework") {
             return true
         }
         return false
     }
 
-    
-    
-    
     static func checkDebugSupport(atPath appPath: String) -> ElectronDebugSupport {
         let fm = FileManager.default
         let electronFramework = "\(appPath)/Contents/Frameworks/Electron Framework.framework"
         guard fm.fileExists(atPath: electronFramework) else {
-            return .supported  
+            return .supported
         }
 
-        
-        
-        
         let knownBlockedApps = [
-            "Claude",  
-            "1Password",  
+            "Claude",
+            "1Password",
         ]
 
         let appName = self.appName(fromPath: appPath)
@@ -189,9 +173,6 @@ final class AppScanner {
             return .disabled
         }
 
-        
-        
-        
         return .supported
     }
 

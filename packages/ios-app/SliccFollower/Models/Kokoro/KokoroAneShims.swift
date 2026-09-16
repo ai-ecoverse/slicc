@@ -1,21 +1,8 @@
-
-
-
-
-
-
-
-
-
-
 import Foundation
 import HuggingFace
 import OSLog
 
-
 let ttsLogSubsystem = "com.ondevicetts"
-
-
 
 struct AppLogger: Sendable {
     private let logger: Logger
@@ -25,8 +12,6 @@ struct AppLogger: Sendable {
     func error(_ message: String) { logger.error("\(message, privacy: .public)") }
     func debug(_ message: String) { logger.debug("\(message, privacy: .public)") }
 }
-
-
 
 enum ModelNames {
     enum KokoroAne {
@@ -41,8 +26,6 @@ enum ModelNames {
     }
 }
 
-
-
 enum Repo {
     case kokoro
     case kokoroAne
@@ -51,16 +34,12 @@ enum Repo {
     var folderName: String { "kokoro" }
 }
 
-
-
 enum TtsComputeUnitPreset {
     case `default`
     case allAne
     case cpuAndGpu
     case cpuOnly
 }
-
-
 
 enum KokoroModelProvisioningError: Error, LocalizedError, Equatable, Sendable {
     case offline(String)
@@ -240,7 +219,7 @@ actor KokoroAneResourceDownloader: KokoroAneResourceDownloading {
         variant: KokoroAneVariant, directory: URL,
         progressHandler: KokoroDownloadProgressHandler?
     ) async throws -> URL {
-        
+
         if KokoroModelPresenceChecker.modelsPresent(in: directory, fileManager: fileManager),
             !fileManager.fileExists(atPath: markerURL(in: directory).path)
         {
@@ -264,9 +243,7 @@ actor KokoroAneResourceDownloader: KokoroAneResourceDownloading {
             {
                 return directory
             }
-            
-            
-            
+
             let classified = Self.classify(error)
             if case .storageFailure = classified { throw classified }
             Self.logger.warning(

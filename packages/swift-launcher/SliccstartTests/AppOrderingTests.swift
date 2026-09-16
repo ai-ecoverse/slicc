@@ -3,8 +3,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
 final class AppOrderingTests: XCTestCase {
 
     private func target(_ name: String, _ bundleId: String?, _ type: AppTargetType) -> AppTarget {
@@ -86,9 +84,7 @@ final class AppOrderingTests: XCTestCase {
     }
 
     func testTopBrowserIgnoresNonBrowserTargetsAndHonoursSavedOrder() {
-        
-        
-        
+
         let targets = [
             terminal("Alacritty", "org.alacritty"),
             browser("Chrome", "com.google.Chrome"),
@@ -104,8 +100,7 @@ final class AppOrderingTests: XCTestCase {
     }
 
     func testOrderedBrowsersKeepsEveryBrowserInDisplayOrder() {
-        
-        
+
         let targets = [
             terminal("Alacritty", "org.alacritty"),
             browser("Brave", "com.brave.Browser"),
@@ -163,8 +158,7 @@ final class AppOrderingTests: XCTestCase {
             BrowserLaunchAction.resolve(isRunning: true, hasAttachableSessions: true),
             .standalone
         )
-        
-        
+
         XCTAssertEqual(
             BrowserLaunchAction.resolve(isRunning: false, hasAttachableSessions: false),
             .standalone

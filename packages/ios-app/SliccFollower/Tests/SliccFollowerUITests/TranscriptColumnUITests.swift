@@ -1,28 +1,11 @@
 import XCTest
 
-
-
-
-
-
-
-
-
-
 final class TranscriptColumnUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     func testRegularWidthTranscriptColumnIsCentered() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-uiTestFixtureRoute", "YES"]
@@ -37,8 +20,6 @@ final class TranscriptColumnUITests: XCTestCase {
         let title = app.navigationBars.staticTexts["UI Fixture"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 30), "the fixture route opened")
 
-        
-        
         let timestamp = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "2024")
         ).firstMatch
@@ -50,8 +31,6 @@ final class TranscriptColumnUITests: XCTestCase {
             columnCenter, containerCenter, accuracy: 4,
             "the reading column must be centered in the conversation, not pinned to an edge")
 
-        
-        
         let assistantText = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "Extracted the install steps")
         ).firstMatch

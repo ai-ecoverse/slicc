@@ -190,9 +190,7 @@ describe('DaMountBackend writeFile', () => {
   });
 
   it('omits if-match (instead of sending empty value) when cached etag is empty', async () => {
-    mock.enqueue(
-      new Response('hi', { status: 200, headers: { 'content-length': '2' } })
-    );
+    mock.enqueue(new Response('hi', { status: 200, headers: { 'content-length': '2' } }));
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',

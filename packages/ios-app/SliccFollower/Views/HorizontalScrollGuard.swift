@@ -2,7 +2,6 @@ import Combine
 import SwiftUI
 import UIKit
 
-
 final class HorizontalScrollGestureState: ObservableObject {
     let coordinateSpaceName = UUID()
     fileprivate static let horizontalTouchSlop: CGFloat = 8
@@ -199,12 +198,6 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
         }
     }
 
-    
-    
-    
-    
-    
-    
     private func measuredContent(_ content: Content) -> some View {
         content
             .padding(.horizontal, HorizontalScrollGestureState.horizontalTouchSlop)
@@ -265,8 +258,6 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
             viewportWidth: effectiveViewportWidth(viewportWidth))
     }
 }
-
-
 
 @available(iOS 18.0, *)
 private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
@@ -343,8 +334,7 @@ private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
 
         func handle(_ gesture: UILongPressGestureRecognizer) {
             guard let window = gesture.view?.window else { return }
-            
-            
+
             let location = gesture.location(in: window)
             switch gesture.state {
             case .began:
@@ -415,7 +405,7 @@ private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
 }
 
 extension View {
-    
+
     func horizontalScrollGuard(showsIndicators: Bool = true) -> some View {
         modifier(HorizontalScrollGuardModifier(showsIndicators: showsIndicators))
     }

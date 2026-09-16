@@ -1,10 +1,5 @@
 import SwiftUI
 
-
-
-
-
-
 struct MemoryView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette

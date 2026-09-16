@@ -1,8 +1,3 @@
-
-
-
-
-
 package tray
 
 import (
@@ -26,76 +21,50 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/signaling"
 )
 
-
 const dataChannelLabel = "tray-control"
 
 const (
 	pollInterval        = 1 * time.Second
 	bootstrapMaxWait    = 30 * time.Second
-	maxBufferedAmount   = 1 << 20 
+	maxBufferedAmount   = 1 << 20
 	maxSupersedeRetries = 5
 )
 
-
-
-
 const (
-	
-	
-	
 	maxMessageBytes = 65536
-	
+
 	chunkEnvelopeBytes = 512
-	
-	
-	
+
 	worstCaseBytesPerRune = 4
-	
+
 	maxChunkBytes = 32 * 1024
-	
-	maxTotalMessageBytes = 8 << 20 
-	
+
+	maxTotalMessageBytes = 8 << 20
+
 	maxPendingReassemblies = 8
-	
-	
+
 	maxChunkCount = 8192
 )
 
-
 type Options struct {
-	
 	Runtime string
-	
+
 	Capabilities *protocol.Capabilities
-	
-	
+
 	Motd string
-	
-	
+
 	OnMessage func(msgType string, raw []byte)
-	
-	
-	
-	
-	
+
 	OnActivity func()
-	
-	
-	
-	
+
 	OnLinkDiag logging.PionEvent
-	
-	
-	
+
 	OnJoinURLChanged func(joinURL string)
-	
+
 	Logf func(format string, args ...any)
-	
-	
-	
-	
+
 	LogWanted func(level slog.Level) bool
-	
+
 	HTTPClient *http.Client
 }
 
@@ -104,7 +73,6 @@ func (o Options) logf(format string, args ...any) {
 		o.Logf(format, args...)
 	}
 }
-
 
 type Conn struct {
 	pc   *webrtc.PeerConnection
@@ -115,8 +83,6 @@ type Conn struct {
 
 	sendMu sync.Mutex
 
-	
-	
 	reassemblyMu  sync.Mutex
 	reassembly    map[string]*chunkReassembly
 	reassemblySeq uint64
@@ -125,13 +91,9 @@ type Conn struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	
-	
 	ctx    context.Context
 	cancel context.CancelFunc
 }
-
-
 
 func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 	if opts.Runtime == "" {
@@ -147,15 +109,11 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 		}
 		sig := signaling.New(currentURL, opts.HTTPClient)
 
-		
 		plan, err := attachWait(ctx, sig, controllerID, opts.Runtime, opts.logf)
 		if err != nil {
 			return nil, err
 		}
-		
-		
-		
-		
+
 		if plan.JoinURL != "" {
 			nextURL, err := followSupersede(plan, redirects, opts)
 			if err != nil {
@@ -182,11 +140,6 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 	}
 }
 
-
-
-
-
-
 func followSupersede(plan *signaling.AttachPlan, redirects int, opts Options) (nextURL string, err error) {
 	if redirects >= maxSupersedeRetries {
 		return "", &AttachError{
@@ -200,9 +153,6 @@ func followSupersede(plan *signaling.AttachPlan, redirects int, opts Options) (n
 	opts.logf("tray attach superseded; following redirect (%d/%d)", redirects+1, maxSupersedeRetries)
 	return plan.JoinURL, nil
 }
-
-
-
 
 func handleAttachFail(plan *signaling.AttachPlan) error {
 	if plan.Code == "TRAY_SUPERSEDED" {
@@ -224,8 +174,7 @@ func attachWait(ctx context.Context, sig *signaling.Client, controllerID, runtim
 		if err != nil {
 			return nil, err
 		}
-		
-		
+
 		if plan.Action != "wait" || plan.JoinURL != "" {
 			return plan, nil
 		}
@@ -254,8 +203,7 @@ func dialBootstrap(ctx context.Context, sig *signaling.Client, controllerID stri
 	deadline := time.Now().Add(bootstrapMaxWait)
 	cursor := 0
 	bootstrapID := plan.Bootstrap.BootstrapID
-	
-	
+
 	for {
 		select {
 		case <-c.connected:
@@ -290,7 +238,7 @@ func dialBootstrap(ctx context.Context, sig *signaling.Client, controllerID stri
 			return nil, err
 		}
 		if retryBootstrap != "" {
-			
+
 			bootstrapID = retryBootstrap
 			cursor = 0
 			if err := c.recreatePeer(plan.IceServers, sig, controllerID, &currentBootstrapID); err != nil {
@@ -307,8 +255,6 @@ func dialBootstrap(ctx context.Context, sig *signaling.Client, controllerID stri
 		}
 	}
 }
-
-
 
 func (c *Conn) processEvents(ctx context.Context, sig *signaling.Client, controllerID, bootstrapID string, poll *signaling.BootstrapPlan) (string, error) {
 	for _, ev := range poll.Events {
@@ -351,9 +297,7 @@ func (c *Conn) processEvents(ctx context.Context, sig *signaling.Client, control
 
 func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signaling.Client, controllerID string, bootstrapIDRef *string) error {
 	config := webrtc.Configuration{ICEServers: toPionICE(iceServers)}
-	
-	
-	
+
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
 	settingEngine.LoggerFactory = c.pionLoggerFactory()
@@ -393,13 +337,6 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 	c.mu.Unlock()
 	return nil
 }
-
-
-
-
-
-
-
 
 func (c *Conn) pionLoggerFactory() pionlogging.LoggerFactory {
 	return logging.PionFactory(c.opts.Logf, c.opts.OnLinkDiag, c.opts.LogWanted)
@@ -469,7 +406,7 @@ func (c *Conn) sendLocalCandidate(ctx context.Context, sig *signaling.Client, co
 		idx := int(*init.SDPMLineIndex)
 		trayCand.SDPMLineIndex = &idx
 	}
-	
+
 	go func() {
 		if _, err := sig.SendICECandidate(ctx, controllerID, bootstrapID, trayCand); err != nil {
 			c.opts.logf("tray: failed to send local ICE candidate: %v", err)
@@ -483,21 +420,15 @@ func (c *Conn) setBootstrapID(ref *string, id string) {
 	c.mu.Unlock()
 }
 
-
 type chunkReassembly struct {
 	chunks []string
-	
-	
-	
+
 	seen     []bool
 	received int
 	bytes    int
-	
-	
-	
+
 	seq uint64
 }
-
 
 func (c *Conn) dispatch(data []byte) {
 	if c.opts.OnActivity != nil {
@@ -508,8 +439,7 @@ func (c *Conn) dispatch(data []byte) {
 		c.opts.logf("tray: dropping unparseable message: %v", err)
 		return
 	}
-	
-	
+
 	if env.Type == protocol.TypeChunk {
 		c.acceptChunkFrame(data)
 		return
@@ -518,20 +448,13 @@ func (c *Conn) dispatch(data []byte) {
 	case protocol.TypePing:
 		_ = c.SendJSON(protocol.Pong{Type: protocol.TypePong})
 	case protocol.TypePong:
-		
+
 	default:
 		if c.opts.OnMessage != nil {
 			c.opts.OnMessage(env.Type, data)
 		}
 	}
 }
-
-
-
-
-
-
-
 
 func (c *Conn) acceptChunkFrame(data []byte) {
 	var frame protocol.ChunkFrame
@@ -556,9 +479,7 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 	}
 	entry, ok := c.reassembly[frame.ChunkID]
 	if ok && len(entry.chunks) != frame.TotalChunks {
-		
-		
-		
+
 		c.reassemblyMu.Unlock()
 		c.opts.logf("tray: dropping chunk frame with inconsistent totalChunks (%d, want %d)",
 			frame.TotalChunks, len(entry.chunks))
@@ -575,7 +496,7 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 		c.evictOldestReassemblyLocked()
 	}
 	if entry.seen[frame.ChunkIndex] {
-		c.reassemblyMu.Unlock() 
+		c.reassemblyMu.Unlock()
 		return
 	}
 	entry.chunks[frame.ChunkIndex] = frame.ChunkData
@@ -599,12 +520,9 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 	c.dispatch([]byte(strings.Join(entry.chunks, "")))
 }
 
-
-
 func (c *Conn) evictOldestReassemblyLocked() {
 	for len(c.reassembly) > maxPendingReassemblies {
-		
-		
+
 		var oldestID string
 		var oldest uint64
 		found := false
@@ -632,12 +550,6 @@ func (c *Conn) sendHello() error {
 	})
 }
 
-
-
-
-
-
-
 func (c *Conn) SendJSON(v any) error {
 	payload, err := json.Marshal(v)
 	if err != nil {
@@ -663,8 +575,6 @@ func (c *Conn) SendJSON(v any) error {
 	return nil
 }
 
-
-
 func (c *Conn) sendRaw(payload string) error {
 	c.mu.Lock()
 	dc := c.dc
@@ -672,7 +582,7 @@ func (c *Conn) sendRaw(payload string) error {
 	if dc == nil {
 		return fmt.Errorf("tray: data channel not open")
 	}
-	
+
 	for i := 0; dc.BufferedAmount() > maxBufferedAmount && i < 1000; i++ {
 		select {
 		case <-c.done:
@@ -685,8 +595,6 @@ func (c *Conn) sendRaw(payload string) error {
 	return dc.SendText(payload)
 }
 
-
-
 func newChunkID() string {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
@@ -694,12 +602,6 @@ func newChunkID() string {
 	}
 	return fmt.Sprintf("c%x", buf)
 }
-
-
-
-
-
-
 
 func frameChunks(payload, chunkID string) []protocol.ChunkFrame {
 	budget := (maxMessageBytes - chunkEnvelopeBytes) / worstCaseBytesPerRune
@@ -720,7 +622,7 @@ func frameChunks(payload, chunkID string) []protocol.ChunkFrame {
 				end--
 			}
 			if end == start {
-				end = start + budget 
+				end = start + budget
 			}
 		}
 		slices = append(slices, payload[start:end])
@@ -743,10 +645,7 @@ func frameChunks(payload, chunkID string) []protocol.ChunkFrame {
 	return frames
 }
 
-
 func (c *Conn) Done() <-chan struct{} { return c.done }
-
-
 
 func (c *Conn) Close() {
 	c.markDone()
@@ -768,7 +667,6 @@ func (c *Conn) markDone() {
 	})
 }
 
-
 func (c *Conn) signalConnected() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -778,8 +676,6 @@ func (c *Conn) signalConnected() {
 		close(c.connected)
 	}
 }
-
-
 
 func toPionICE(servers []signaling.TurnIceServer) []webrtc.ICEServer {
 	out := make([]webrtc.ICEServer, 0, len(servers))

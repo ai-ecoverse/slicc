@@ -11,9 +11,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/websocket-kit", from: "2.16.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.2"),
         .package(url: "https://github.com/apple/swift-log", from: "1.15.0"),
-        
-        
-        
+
         .package(path: "../swift-trayfollower"),
     ],
     targets: [

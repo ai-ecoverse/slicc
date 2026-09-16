@@ -45,8 +45,6 @@ func TestPionFactoryRoutesEveryLevel(t *testing.T) {
 	log.Error("e")
 	log.Errorf("e%d", 1)
 
-	
-	
 	if len(lines) != 10 {
 		t.Fatalf("routed %d lines, want 10: %v", len(lines), lines)
 	}
@@ -73,8 +71,7 @@ func TestPionFactoryRoutesEveryLevel(t *testing.T) {
 }
 
 func TestPionFactoryWithNoSinksIsSilent(_ *testing.T) {
-	
-	
+
 	log := PionFactory(nil, nil, nil).NewLogger("ice")
 	log.Errorf("%s", panicOnFormat{})
 	log.Error("plain")
@@ -102,8 +99,7 @@ func TestPionFactoryThroughTheDiagnosticLogger(t *testing.T) {
 }
 
 func TestPionFactoryIsQuietWhenTheLoggerIsOff(t *testing.T) {
-	
-	
+
 	var buf strings.Builder
 	logger := New(&buf, Config{})
 	PionFactory(logger.Logf, nil, logger.EnabledAt).NewLogger("turnc").Error("Fail to refresh permissions")
@@ -112,22 +108,18 @@ func TestPionFactoryIsQuietWhenTheLoggerIsOff(t *testing.T) {
 	}
 }
 
-
 type panicOnFormat struct{}
 
 func (panicOnFormat) String() string { panic("formatted a record nobody consumes") }
 
 func TestPionFactorySkipsFormattingForALoggerThatWouldDropIt(t *testing.T) {
-	
-	
-	
+
 	logger := New(io.Discard, Config{})
 	log := PionFactory(logger.Logf, func(string, slog.Level, string) {}, logger.EnabledAt).NewLogger("ice")
 	log.Tracef("%s", panicOnFormat{})
 	log.Debugf("%s", panicOnFormat{})
 	log.Infof("%s", panicOnFormat{})
 
-	
 	var got string
 	tapped := PionFactory(logger.Logf, func(_ string, _ slog.Level, msg string) { got = msg }, logger.EnabledAt).
 		NewLogger("turnc")
@@ -138,8 +130,7 @@ func TestPionFactorySkipsFormattingForALoggerThatWouldDropIt(t *testing.T) {
 }
 
 func TestPionFactoryFormatsWhatTheLoggerAsksFor(t *testing.T) {
-	
-	
+
 	var buf strings.Builder
 	logger := New(&buf, Config{Enabled: true, Level: slog.LevelDebug})
 	PionFactory(logger.Logf, nil, logger.EnabledAt).NewLogger("ice").Tracef("candidate %d", 7)

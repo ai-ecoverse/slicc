@@ -1,17 +1,10 @@
 import Foundation
 
-
-
-
 public struct AnyCodable: Codable, Equatable {
     public let value: Any?
 
     public init(_ value: Any?) {
-        
-        
-        
-        
-        
+
         if let wrapped = value as? AnyCodable {
             self.value = wrapped.value
         } else {
@@ -65,7 +58,7 @@ public struct AnyCodable: Codable, Equatable {
     }
 
     public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
-        
+
         if lhs.value == nil && rhs.value == nil { return true }
         guard let lData = try? JSONEncoder().encode(lhs),
             let rData = try? JSONEncoder().encode(rhs)
@@ -74,28 +67,10 @@ public struct AnyCodable: Codable, Equatable {
     }
 }
 
-
-
 public enum MessageRole: String, Codable {
     case user
     case assistant
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 public enum MessageAttachmentKind: String, Codable {
     case image
@@ -108,20 +83,19 @@ public enum MessageAttachmentKind: String, Codable {
     }
 }
 
-
 public struct MessageAttachment: Codable, Identifiable, Hashable {
     public let id: String
     public let name: String
     public let mimeType: String
     public let size: Int
     public let kind: MessageAttachmentKind
-    
+
     public var data: String?
-    
+
     public var text: String?
-    
+
     public var path: String?
-    
+
     public var error: String?
 
     public init(
@@ -147,9 +121,6 @@ public struct MessageAttachment: Codable, Identifiable, Hashable {
     }
 }
 
-
-
-
 public struct ChatMessageCost: Codable, Hashable {
     public let input: Double
     public let output: Double
@@ -165,8 +136,6 @@ public struct ChatMessageCost: Codable, Hashable {
         self.total = total
     }
 }
-
-
 
 public struct ChatMessageUsage: Codable, Hashable {
     public let input: Int
@@ -184,26 +153,19 @@ public struct ChatMessageUsage: Codable, Hashable {
     }
 }
 
-
-
-
-
-
 public struct ToolProgressEvent: Codable, Hashable {
-    
+
     public let id: String
-    
+
     public let label: String
-    
+
     public let fraction: Double?
-    
+
     public let etaMs: Double?
-    
+
     public let done: Double?
     public let total: Double?
-    
-    
-    
+
     public let unit: String?
     public let phase: ToolProgressPhase
 
@@ -223,9 +185,6 @@ public struct ToolProgressEvent: Codable, Hashable {
     }
 }
 
-
-
-
 public enum ToolProgressPhase: String, Codable {
     case start
     case update
@@ -236,12 +195,6 @@ public enum ToolProgressPhase: String, Codable {
         self = ToolProgressPhase(rawValue: raw) ?? .update
     }
 }
-
-
-
-
-
-
 
 public enum LickState: String, Codable {
     case pending
@@ -254,12 +207,6 @@ public enum LickState: String, Codable {
     }
 }
 
-
-
-
-
-
-
 public enum CompactionMarkerTrigger: String, Codable {
     case threshold
     case overflow
@@ -270,13 +217,6 @@ public enum CompactionMarkerTrigger: String, Codable {
         self = CompactionMarkerTrigger(rawValue: raw) ?? .threshold
     }
 }
-
-
-
-
-
-
-
 
 public enum CompactionMarkerState: String, Codable {
     case summarizing
@@ -290,17 +230,10 @@ public enum CompactionMarkerState: String, Codable {
     }
 }
 
-
-
-
-
-
-
-
 public struct ChatCompactionMarker: Codable, Equatable {
     public var trigger: CompactionMarkerTrigger
     public var state: CompactionMarkerState
-    
+
     public var transcriptPath: String?
 
     public init(
@@ -313,8 +246,6 @@ public struct ChatCompactionMarker: Codable, Equatable {
         self.transcriptPath = transcriptPath
     }
 }
-
-
 
 public struct ToolCall: Codable, Identifiable, Equatable {
     public let id: String
@@ -334,41 +265,31 @@ public struct ToolCall: Codable, Identifiable, Equatable {
     }
 }
 
-
-
-
-
-
-
-
 public struct ChatMessage: Codable, Identifiable, Equatable {
     public let id: String
     public let role: MessageRole
     public var content: String
-    public let timestamp: Double  
+    public let timestamp: Double
     public var attachments: [MessageAttachment]?
     public var toolCalls: [ToolCall]?
     public var isStreaming: Bool?
-    
+
     public var model: String?
-    
+
     public var usage: ChatMessageUsage?
-    public var source: String?  
-    public var channel: String?  
-    
+    public var source: String?
+    public var channel: String?
+
     public var lickCount: Int?
-    
+
     public var lickParts: [String]?
-    
-    
+
     var lickId: String?
     public var lickState: LickState?
     public var queued: Bool?
-    
-    
+
     public var error: Bool?
-    
-    
+
     public var compaction: ChatCompactionMarker?
 
     public init(

@@ -3,10 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SliccTraySession",
-    
-    
-    
-    
+
     platforms: [.macOS(.v14), .iOS("18.0")],
     products: [
         .library(

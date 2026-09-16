@@ -3,16 +3,9 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
 @MainActor
 final class PttControllerTests: XCTestCase {
 
-    
-
-    
     final class FakeScheduler: PttScheduling {
         final class Entry {
             let afterMs: Int
@@ -33,7 +26,6 @@ final class PttControllerTests: XCTestCase {
             return { entry.cancelled = true }
         }
 
-        
         @MainActor
         func fireNext() {
             guard let index = entries.firstIndex(where: { !$0.cancelled }) else {
@@ -78,13 +70,9 @@ final class PttControllerTests: XCTestCase {
         private(set) var startCount = 0
         private(set) var lastSession: FakeSession?
         var lastPartial: (@MainActor @Sendable (String) -> Void)?
-        
-        
-        
-        
+
         var stallPermission = false
-        
-        
+
         var stallStop = false
 
         init(permission: DictationPermission) { self.permission = permission }
@@ -98,8 +86,6 @@ final class PttControllerTests: XCTestCase {
             return grantOutcome
         }
 
-        
-        
         static func parkForever() async {
             await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
         }
@@ -115,8 +101,6 @@ final class PttControllerTests: XCTestCase {
             return session
         }
     }
-
-    
 
     private func makeController(
         engine: FakeEngine,
@@ -141,16 +125,12 @@ final class PttControllerTests: XCTestCase {
         return (controller, committed)
     }
 
-    
-    
     final class Committed {
         var transcripts: [String] = []
         var quickTaps = 0
         var cancellable: AnyCancellable?
     }
 
-    
-    
     private func waitUntil(
         _ condition: @autoclosure @MainActor () -> Bool,
         timeout: TimeInterval = 2
@@ -160,8 +140,6 @@ final class PttControllerTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
-
-    
 
     func testQuickTapNeverTouchesTheEngine() {
         let engine = FakeEngine(permission: .granted)
@@ -185,7 +163,7 @@ final class PttControllerTests: XCTestCase {
         let (controller, committed) = makeController(engine: engine, scheduler: scheduler)
 
         controller.pressDown()
-        scheduler.fireNext()  
+        scheduler.fireNext()
         XCTAssertEqual(controller.stage, .recording)
 
         await waitUntil(engine.startCount == 1)
@@ -238,14 +216,14 @@ final class PttControllerTests: XCTestCase {
         let (controller, _) = makeController(engine: engine, scheduler: scheduler)
 
         controller.pressDown()
-        scheduler.fireNext()  
+        scheduler.fireNext()
         XCTAssertEqual(controller.stage, .enable)
         XCTAssertEqual(engine.permissionRequests, 0, "the 1s gate stands before the prompt")
 
-        scheduler.fireNext()  
+        scheduler.fireNext()
         XCTAssertEqual(controller.stage, .prompting)
         await waitUntil(engine.permissionRequests == 1)
-        
+
         await waitUntil(controller.stage == .recording)
         XCTAssertEqual(engine.startCount, 1)
     }
@@ -256,7 +234,7 @@ final class PttControllerTests: XCTestCase {
         let (controller, committed) = makeController(engine: engine, scheduler: scheduler)
 
         controller.pressDown()
-        scheduler.fireNext()  
+        scheduler.fireNext()
         controller.pressUp()
 
         XCTAssertEqual(controller.stage, .idle)
@@ -296,8 +274,8 @@ final class PttControllerTests: XCTestCase {
         let (controller, _) = makeController(engine: engine, scheduler: scheduler)
 
         controller.pressDown()
-        scheduler.fireNext()  
-        scheduler.fireNext()  
+        scheduler.fireNext()
+        scheduler.fireNext()
         controller.pressUp()
         XCTAssertEqual(controller.stage, .prompting, "the continuation owns teardown")
 
@@ -369,9 +347,6 @@ final class PttControllerTests: XCTestCase {
         controller.pressUp()
         XCTAssertEqual(controller.stage, .finalizing)
 
-        
-        
-        
         await waitUntil(controller.stage == .idle)
         XCTAssertEqual(controller.stage, .idle)
         XCTAssertTrue(committed.transcripts.isEmpty)
@@ -402,7 +377,7 @@ final class PttControllerTests: XCTestCase {
         controller.pressDown()
         scheduler.fireNext()
         await waitUntil(engine.startCount == 1)
-        
+
         await waitUntil(engine.lastSession != nil)
         try? await Task.sleep(nanoseconds: 50_000_000)
 

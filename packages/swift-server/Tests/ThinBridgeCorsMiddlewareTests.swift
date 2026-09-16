@@ -6,10 +6,6 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
 final class ThinBridgeCorsMiddlewareTests: XCTestCase {
     private static let acAllowOrigin = HTTPField.Name("Access-Control-Allow-Origin")!
     private static let acAllowCredentials = HTTPField.Name("Access-Control-Allow-Credentials")!
@@ -64,7 +60,7 @@ final class ThinBridgeCorsMiddlewareTests: XCTestCase {
                 headers: [.origin: "https://www.sliccy.ai"]
             ) { response in
                 XCTAssertEqual(response.status, .forbidden)
-                
+
                 XCTAssertEqual(response.headers[Self.acAllowOrigin], "https://www.sliccy.ai")
                 let body = String(buffer: response.body)
                 XCTAssertTrue(body.contains("bridge-token-required"))
@@ -149,8 +145,7 @@ final class ThinBridgeCorsMiddlewareTests: XCTestCase {
                 method: .options,
                 headers: [.origin: "https://evil.example.com"]
             ) { response in
-                
-                
+
                 XCTAssertNil(response.headers[Self.acAllowOrigin])
                 XCTAssertNil(response.headers[Self.acAllowPrivateNetwork])
             }
@@ -158,9 +153,7 @@ final class ThinBridgeCorsMiddlewareTests: XCTestCase {
     }
 
     func testPreservesRouteProvidedAccessControlExposeHeaders() async throws {
-        
-        
-        
+
         let routeExpose =
             "Link, X-Proxy-Error, X-Proxy-Set-Cookie, Cache-Control, content-security-policy, x-frame-options"
         let app = Application(

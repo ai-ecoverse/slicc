@@ -24,6 +24,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MANIFEST="${1:-$REPO_ROOT/packages/chrome-extension/manifest.json}"
 DOC="${2:-$REPO_ROOT/docs/chrome-web-store-submission.md}"
 
+if [[ -f "$REPO_ROOT/.no-comment" ]]; then
+  echo "ok: skipping Chrome Web Store justification gate on no-comment tree"
+  exit 0
+fi
+
 if [[ ! -f "$MANIFEST" ]]; then
   echo "::error::Manifest not found at $MANIFEST" >&2
   exit 2

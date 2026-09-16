@@ -2,20 +2,6 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class CrossImplementationTests: XCTestCase {
     private struct Vector {
         let sessionId: String
@@ -49,10 +35,7 @@ final class CrossImplementationTests: XCTestCase {
             value: "value with spaces",
             expected: "3a7af4ae08a5ccb55"
         ),
-        
-        
-        
-        
+
         Vector(
             sessionId: "session-utf16",
             name: "EMOJI_VALUE",
@@ -76,13 +59,6 @@ final class CrossImplementationTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
-    
-    
-
     private static let requestContentTypeTable: [(contentType: String, isText: Bool)] = [
         ("application/x-www-form-urlencoded", true),
         ("application/x-www-form-urlencoded;charset=UTF-8", true),
@@ -96,8 +72,7 @@ final class CrossImplementationTests: XCTestCase {
         ("application/ecmascript", true),
         ("text/html", true),
         ("text/css", true),
-        
-        
+
         ("", false),
         ("image/jpeg", false),
         ("application/octet-stream", false),
@@ -116,14 +91,6 @@ final class CrossImplementationTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-
     private static let formSessionId = "session-form-parity"
     private static let formReal = "ab+cd/ef=gh&ij kl%mn"
     private static let formEncoded = "ab%2Bcd%2Fef%3Dgh%26ij%20kl%25mn"
@@ -135,7 +102,7 @@ final class CrossImplementationTests: XCTestCase {
         ),
         ("%MASKED%", formEncoded),
         ("a=%MASKED%&b=keep&c=%MASKED%", "a=\(formEncoded)&b=keep&c=\(formEncoded)"),
-        
+
         ("a=1&b=hello+world&c=%2Fpath", "a=1&b=hello+world&c=%2Fpath"),
         ("a=&b=", "a=&b="),
     ]
@@ -163,15 +130,6 @@ final class CrossImplementationTests: XCTestCase {
             )
         }
     }
-
-    
-    
-    
-    
-    
-    
-    
-    
 
     private static let frameSessionId = "session-fixed"
     private static let frameSecret = SecretInjector.LoadedSecret(
@@ -279,16 +237,6 @@ final class CrossImplementationTests: XCTestCase {
         XCTAssertNil(out, "empty injector must be a no-op")
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
     private static let responseContentTypeTable: [(contentType: String, isText: Bool)] = [
         ("text/plain", true),
         ("text/html", true),
@@ -312,8 +260,7 @@ final class CrossImplementationTests: XCTestCase {
         ("application/zip", false),
         ("audio/mpeg", false),
         ("video/mp4", false),
-        
-        
+
         ("application/x-www-form-urlencoded", false),
     ]
 
@@ -327,18 +274,6 @@ final class CrossImplementationTests: XCTestCase {
             )
         }
     }
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
 
     private static let secretValueSingleLineTable: [(value: String, isSingleLine: Bool)] = [
         ("ghp_realToken123", true),
@@ -364,8 +299,6 @@ final class CrossImplementationTests: XCTestCase {
         }
     }
 
-    
-    
     func testMultilineValueErrorMessageIsPinned() {
         XCTAssertEqual(
             EnvFileFormat.multilineValueError("PEM_KEY"),

@@ -3,9 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SliccTrayFollower",
-    
-    
-    
+
     platforms: [.macOS(.v14), .iOS("18.0")],
     products: [
         .library(name: "SliccTrayFollower", targets: ["SliccTrayFollower"])

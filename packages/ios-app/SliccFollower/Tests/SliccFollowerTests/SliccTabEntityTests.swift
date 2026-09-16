@@ -3,8 +3,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
 final class SliccTabEntityTests: XCTestCase {
 
     private let targets = [
@@ -17,13 +15,10 @@ final class SliccTabEntityTests: XCTestCase {
         XCTAssertEqual(entity.id, "t1")
         XCTAssertEqual(entity.name, "SLICC docs")
         XCTAssertEqual(entity.url?.absoluteString, "https://sliccy.ai/docs")
-        
-        
+
         XCTAssertFalse(entity.isPrivate)
     }
 
-    
-    
     func testUntitledTabFallsBackToItsHost() {
         XCTAssertEqual(SliccTabEntity(target: targets[1]).displayLabel, "example.com")
     }
@@ -40,8 +35,7 @@ final class SliccTabEntityTests: XCTestCase {
         let query = SliccTabQuery(tabs: { self.targets })
         let byTitle = try await query.entities(matching: "docs")
         XCTAssertEqual(byTitle.map(\.id), ["t1"])
-        
-        
+
         let byURL = try await query.entities(matching: "login")
         XCTAssertEqual(byURL.map(\.id), ["t2"])
         let byId = try await query.entities(for: ["t2", "nope"])
@@ -55,8 +49,6 @@ final class SliccTabEntityTests: XCTestCase {
         XCTAssertEqual(all.map(\.id), ["t1", "t2"])
     }
 
-    
-    
     @MainActor
     func testColdAppHasNoTabs() async throws {
         let query = SliccTabQuery(tabs: { [] })

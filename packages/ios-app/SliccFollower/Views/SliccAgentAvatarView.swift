@@ -1,6 +1,5 @@
 import SwiftUI
 
-
 @MainActor
 struct SliccAgentAvatarView: View {
     let avatar: SliccAgentAvatarGeometry
@@ -26,12 +25,8 @@ struct SliccAgentAvatarView: View {
         _ownExpression = State(initialValue: AvatarExpressionEngine())
     }
 
-    
-    
     private var expression: AvatarExpressionEngine { injectedExpression ?? ownExpression }
 
-    
-    
     private var expressive: Bool { avatar.activity != nil }
 
     private var pupilOffset: SliccAgentAvatarGeometry.Point {
@@ -56,24 +51,17 @@ struct SliccAgentAvatarView: View {
         return parsed
     }
 
-    
-    
     private var expressionDriven: Bool { expressive && avatar.eyes == .open }
 
     var body: some View {
         Group {
             if expressionDriven, !reduceMotion {
-                
-                
-                
-                
+
                 TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
                     layers(snapshot: expression.frame(at: context.date))
                 }
             } else if expressionDriven {
-                
-                
-                
+
                 layers(snapshot: expression.snapshot)
             } else {
                 layers(snapshot: nil)
@@ -87,15 +75,6 @@ struct SliccAgentAvatarView: View {
         .onChange(of: avatar) { _, _ in synchronize() }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private func layers(snapshot: AvatarExpressionEngine.Snapshot?) -> some View {
         ZStack {
             tile(snapshot: snapshot)
@@ -108,7 +87,6 @@ struct SliccAgentAvatarView: View {
         }
     }
 
-    
     private func tile(snapshot: AvatarExpressionEngine.Snapshot?) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: avatar.tileCornerRadius)
@@ -151,8 +129,7 @@ struct SliccAgentAvatarView: View {
                     avatar: avatar,
                     eyeIndex: index,
                     reduceMotion: reduceMotion,
-                    
-                    
+
                     frozenShape: expressive ? expression.snapshot.shape : nil
                 )
                 .position(x: center.x, y: center.y)
@@ -160,16 +137,6 @@ struct SliccAgentAvatarView: View {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private func expressionEyes(
         snapshot: AvatarExpressionEngine.Snapshot
     ) -> some View {
@@ -187,8 +154,6 @@ struct SliccAgentAvatarView: View {
         .frame(width: avatar.sideLength, height: avatar.sideLength)
     }
 
-    
-    
     private func expressionPupilOffset(
         snapshot: AvatarExpressionEngine.Snapshot, eyeIndex: Int
     ) -> SliccAgentAvatarGeometry.Point {
@@ -202,20 +167,17 @@ struct SliccAgentAvatarView: View {
     private func synchronize() {
         tiltController.update(
             geometry: avatar,
-            
+
             motionDisabled: reduceMotion || pupilOffsetOverride != nil
                 || (expressive && avatar.activity != .working))
         expression.configure(
             activity: avatar.activity,
-            
+
             frozen: avatar.eyes != .open,
             reduceMotion: reduceMotion,
             blink: avatar.blink)
     }
 }
-
-
-
 
 private struct ExpressiveAvatarEye: View {
     let avatar: SliccAgentAvatarGeometry
@@ -233,8 +195,6 @@ private struct ExpressiveAvatarEye: View {
         .scaleEffect(y: snapshot.blinkScale)
     }
 
-    
-    
     private var socket: some View {
         let radius = avatar.socketCornerRadius(shape: snapshot.shape)
         return ZStack {
@@ -261,8 +221,6 @@ private struct ExpressiveAvatarEye: View {
         .offset(x: pupilOffset.x, y: pupilOffset.y)
     }
 
-    
-    
     private var lidMask: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: avatar.lidInset(fraction: snapshot.lidTop))
@@ -272,8 +230,6 @@ private struct ExpressiveAvatarEye: View {
         .frame(width: avatar.eyeDiameter, height: avatar.eyeDiameter)
     }
 
-    
-    
     private func chord(edge: SliccAgentAvatarGeometry.LidEdge) -> some View {
         let fraction = edge == .top ? snapshot.lidTop : snapshot.lidBottom
         let inset = avatar.lidInset(fraction: fraction)
@@ -289,28 +245,11 @@ private struct ExpressiveAvatarEye: View {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 private struct ExpressiveAvatarBrows: View {
     let avatar: SliccAgentAvatarGeometry
     let snapshot: AvatarExpressionEngine.Snapshot
     let reduceMotion: Bool
 
-    
-    
-    
     var body: some View {
         ZStack {
             brow(pose: snapshot.brows.left, eyeIndex: 0)
@@ -319,10 +258,6 @@ private struct ExpressiveAvatarBrows: View {
         .frame(width: avatar.sideLength, height: avatar.sideLength)
     }
 
-    
-    
-    
-    
     private func brow(pose: AvatarExpression.BrowPose, eyeIndex: Int) -> some View {
         let center = avatar.browCenter(eyeIndex: eyeIndex, raise: pose.raise)
         let transition: Animation? =
@@ -422,8 +357,7 @@ private struct StaticAvatarEye: View {
     let avatar: SliccAgentAvatarGeometry
     let eyeIndex: Int
     let reduceMotion: Bool
-    
-    
+
     var frozenShape: Double?
 
     var body: some View {

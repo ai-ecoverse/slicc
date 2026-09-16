@@ -2,26 +2,18 @@ import SliccTrayKit
 import SwiftUI
 import WebKit
 
-
-
-
-
-
-
 struct InlineSprinkleView: UIViewRepresentable {
-    
+
     let id: String
-    
+
     let html: String
-    
+
     var targetScoop: String?
-    
+
     var onLick: (_ body: AnyCodable?, _ targetScoop: String?) -> Void
-    
+
     var onHeightChange: (CGFloat) -> Void
 
-    
-    
     @Environment(\.sprinkleThemeCSS) private var themeCSS
 
     func makeCoordinator() -> Coordinator {
@@ -99,12 +91,10 @@ struct InlineSprinkleView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            
+
             webView.evaluateJavaScript("__sliccReportHeight()", completionHandler: nil)
         }
     }
-
-    
 
     private static func wrap(_ fragment: String, themeCSS: String = "") -> String {
         return """
@@ -120,10 +110,6 @@ struct InlineSprinkleView: UIViewRepresentable {
             """
     }
 
-    
-    
-    
-    
     private static let sprinkleCSS: String = """
         :root {
           --s-bg-base: transparent;
@@ -438,8 +424,6 @@ struct InlineSprinkleView: UIViewRepresentable {
         }
         """
 
-    
-
     private static let bridgeJS: String = """
         (function() {
           function send(op, payload) {
@@ -541,15 +525,6 @@ struct InlineSprinkleView: UIViewRepresentable {
         """
 }
 
-
-
-
-
-
-
-
-
-
 private struct InlineSprinkleLickKey: EnvironmentKey {
     static let defaultValue: (AnyCodable?, String?) -> Void = { _, _ in }
 }
@@ -561,23 +536,10 @@ extension EnvironmentValues {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 func extractInlineSprinkles(from content: String) -> (cleaned: String, fragments: [String]) {
-    
+
     let pass1 = extractFencedShtml(from: content)
-    
+
     let pass2 = extractBareSprinkleDivs(from: pass1.cleaned, startIndex: pass1.fragments.count)
     return (pass2.cleaned, pass1.fragments + pass2.fragments)
 }
@@ -589,9 +551,9 @@ private func extractFencedShtml(from content: String) -> (cleaned: String, fragm
     while index < content.endIndex {
         if let openRange = content.range(of: "```shtml", range: index..<content.endIndex) {
             cleaned.append(contentsOf: content[index..<openRange.lowerBound])
-            
+
             let afterOpen = openRange.upperBound
-            
+
             var bodyStart = afterOpen
             if let nl = content.range(of: "\n", range: afterOpen..<content.endIndex) {
                 bodyStart = nl.upperBound
@@ -605,12 +567,12 @@ private func extractFencedShtml(from content: String) -> (cleaned: String, fragm
                 fragments.append(fragment)
                 cleaned.append(sprinkleMarker(index: fragments.count - 1))
                 index = closeRange.upperBound
-                
+
                 if index < content.endIndex, content[index] == "\n" {
                     index = content.index(after: index)
                 }
             } else {
-                
+
                 cleaned.append(contentsOf: content[openRange.lowerBound..<content.endIndex])
                 index = content.endIndex
                 break
@@ -623,30 +585,17 @@ private func extractFencedShtml(from content: String) -> (cleaned: String, fragm
     return (cleaned, fragments)
 }
 
-
-
-
-
-
-
-
-
-
-
-
 private func extractBareSprinkleDivs(
     from content: String,
     startIndex: Int
 ) -> (cleaned: String, fragments: [String]) {
     var fragments: [String] = []
     var cleaned = ""
-    
-    
-    
+
     var i = content.startIndex
     while i < content.endIndex {
         if let fence = nextFencedRange(in: content, from: i) {
-            
+
             let scanResult = scanForSprinkleDivs(
                 in: content,
                 range: i..<fence.lowerBound,
@@ -654,7 +603,7 @@ private func extractBareSprinkleDivs(
             )
             cleaned.append(scanResult.cleaned)
             fragments.append(contentsOf: scanResult.fragments)
-            
+
             cleaned.append(contentsOf: content[fence])
             i = fence.upperBound
         } else {
@@ -671,23 +620,14 @@ private func extractBareSprinkleDivs(
     return (cleaned, fragments)
 }
 
-
-
-
-
-
 private func nextFencedRange(in content: String, from: String.Index) -> Range<String.Index>? {
     guard let openTicks = content.range(of: "```", range: from..<content.endIndex) else {
         return nil
     }
-    
-    
-    
+
     let afterOpen = openTicks.upperBound
     if let closeTicks = content.range(of: "\n```", range: afterOpen..<content.endIndex) {
-        
-        
-        
+
         var end = closeTicks.upperBound
         if let nl = content.range(of: "\n", range: end..<content.endIndex) {
             end = nl.upperBound
@@ -696,11 +636,9 @@ private func nextFencedRange(in content: String, from: String.Index) -> Range<St
         }
         return openTicks.lowerBound..<end
     }
-    
-    
+
     return openTicks.lowerBound..<content.endIndex
 }
-
 
 private func scanForSprinkleDivs(
     in content: String,
@@ -716,10 +654,7 @@ private func scanForSprinkleDivs(
             break
         }
         cleaned.append(contentsOf: content[i..<openStart])
-        
-        
-        
-        
+
         guard let blockEnd = matchDivBlockEnd(in: content, openStart: openStart, end: range.upperBound) else {
             cleaned.append(contentsOf: content[openStart..<range.upperBound])
             break
@@ -728,17 +663,13 @@ private func scanForSprinkleDivs(
         fragments.append(fragment)
         cleaned.append(sprinkleMarker(index: fragmentStart + fragments.count - 1))
         i = blockEnd
-        
+
         if i < range.upperBound, content[i] == "\n" {
             i = content.index(after: i)
         }
     }
     return (cleaned, fragments)
 }
-
-
-
-
 
 private func findSprinkleDivOpen(
     in content: String,
@@ -750,7 +681,7 @@ private func findSprinkleDivOpen(
     while cursor < upper {
         guard let lt = content.range(of: "<", range: cursor..<upper) else { return nil }
         let afterLt = lt.upperBound
-        
+
         if afterLt < upper {
             let three = content[
                 afterLt..<min(
@@ -778,14 +709,12 @@ private func findSprinkleDivOpen(
     return nil
 }
 
-
-
 private func isSprinkleClassed(_ tag: Substring) -> Bool {
-    
+
     let lower = tag.lowercased()
     guard let classRange = lower.range(of: "class") else { return false }
     let after = lower[classRange.upperBound...]
-    
+
     var idx = after.startIndex
     while idx < after.endIndex, after[idx].isWhitespace { idx = after.index(after: idx) }
     guard idx < after.endIndex, after[idx] == "=" else { return false }
@@ -797,14 +726,9 @@ private func isSprinkleClassed(_ tag: Substring) -> Bool {
     idx = after.index(after: idx)
     guard let closeQuote = after[idx...].firstIndex(of: quote) else { return false }
     let classValue = after[idx..<closeQuote]
-    
+
     return classValue.split(whereSeparator: { $0.isWhitespace }).contains { $0.hasPrefix("sprinkle-") }
 }
-
-
-
-
-
 
 private func matchDivBlockEnd(
     in content: String,
@@ -812,7 +736,7 @@ private func matchDivBlockEnd(
     end: String.Index? = nil
 ) -> String.Index? {
     let upper = end ?? content.endIndex
-    
+
     guard let openTagEnd = content.range(of: ">", range: openStart..<upper) else {
         return nil
     }
@@ -822,7 +746,7 @@ private func matchDivBlockEnd(
         guard let lt = content.range(of: "<", range: cursor..<upper) else { return nil }
         let afterLt = lt.upperBound
         if afterLt < upper, content[afterLt] == "/" {
-            
+
             let afterSlash = content.index(after: afterLt)
             if afterSlash < upper {
                 let endLimit = content.index(afterSlash, offsetBy: 3, limitedBy: upper) ?? upper
@@ -839,7 +763,7 @@ private func matchDivBlockEnd(
             }
             cursor = afterLt
         } else {
-            
+
             let endLimit = content.index(afterLt, offsetBy: 3, limitedBy: upper) ?? upper
             let three = content[afterLt..<endLimit]
             if three.lowercased() == "div",
@@ -849,7 +773,7 @@ private func matchDivBlockEnd(
                 guard let gt = content.range(of: ">", range: endLimit..<upper) else {
                     return nil
                 }
-                
+
                 let openTag = content[lt.lowerBound..<gt.upperBound]
                 if !openTag.hasSuffix("/>") {
                     depth += 1

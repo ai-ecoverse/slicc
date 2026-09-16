@@ -1,14 +1,7 @@
 import Foundation
 
-
-
-
-
-
-
 struct KokoroAneVoicePack: Sendable {
 
-    
     let storage: [Float]
 
     init(storage: [Float]) throws {
@@ -20,9 +13,6 @@ struct KokoroAneVoicePack: Sendable {
         self.storage = storage
     }
 
-    
-    
-    
     static func load(from url: URL) throws -> KokoroAneVoicePack {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw KokoroAneError.voicePackMissing(url)
@@ -30,9 +20,7 @@ struct KokoroAneVoicePack: Sendable {
         let data = try Data(contentsOf: url)
 
         if url.pathExtension.lowercased() == "json" {
-            
-            
-            
+
             guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw KokoroAneError.invalidVoicePack("expected a JSON object of rows")
             }
@@ -44,9 +32,7 @@ struct KokoroAneVoicePack: Sendable {
                 guard let rowArr = dict[String(row)] as? [Any] else {
                     throw KokoroAneError.invalidVoicePack("missing row \(row)")
                 }
-                
-                
-                
+
                 guard rowArr.count == cols else {
                     throw KokoroAneError.invalidVoicePack(
                         "row \(row) has \(rowArr.count) elements, expected \(cols)")
@@ -75,8 +61,6 @@ struct KokoroAneVoicePack: Sendable {
         return try KokoroAneVoicePack(storage: storage)
     }
 
-    
-    
     func slice(for phonemeCount: Int) -> (styleS: [Float], styleTimbre: [Float]) {
         let cols = KokoroAneConstants.voicePackCols
         let row = max(min(phonemeCount - 1, KokoroAneConstants.voicePackRows - 1), 0)

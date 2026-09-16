@@ -5,8 +5,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
 final class ScoopSummaryWidgetUnitTests: XCTestCase {
     private func summary(
         jid: String = "j1",
@@ -42,8 +40,6 @@ final class ScoopSummaryWidgetUnitTests: XCTestCase {
         XCTAssertTrue(unit.isActive)
     }
 
-    
-    
     func testAnUnknownActivityFallsBackToTheLifecycleAlone() {
         let unit = summary(state: "working", activity: "vibing").widgetUnit(isActive: false)
         XCTAssertEqual(unit.lifecycle, .working)
@@ -66,8 +62,6 @@ final class ScoopSummaryWidgetUnitTests: XCTestCase {
         XCTAssertEqual(unit.model, "opus", "the provider half stays behind")
     }
 
-    
-    
     func testTheTriggerIsFlattenedAndTruncated() {
         let long = "**fix** the [thing](https://x.test) " + String(repeating: "and more ", count: 60)
         let unit = summary(trigger: long).widgetUnit(isActive: false)
@@ -76,8 +70,6 @@ final class ScoopSummaryWidgetUnitTests: XCTestCase {
         XCTAssertNil(summary(trigger: nil).widgetUnit(isActive: false).detail)
     }
 
-    
-    
     func testTheAssistantLabelNamesTheUnit() {
         XCTAssertEqual(
             summary(name: "folder-name", assistantLabel: "Researcher")
@@ -112,7 +104,6 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.brokenCount, 1)
     }
 
-    
     func testTheInstanceLabelPrefersTheNameAndNeverLeaksTheJoinUrl() {
         let state = makeState()
         state.joinUrl = "https://tray.example.test/join/SECRET"
@@ -133,8 +124,6 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(state.widgetSnapshot().connection, .disconnected)
     }
 
-    
-    
     func testAStreamingTurnIsSkipped() {
         let state = makeState()
         state.messages = [
@@ -169,8 +158,6 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
         XCTAssertNil(state.widgetSnapshot().lastMessage?.unitId)
     }
 
-    
-    
     func testATurnThatFlattensToNothingIsNotThePreview() {
         let state = makeState()
         state.messages = [
@@ -184,32 +171,21 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
         XCTAssertNil(makeState().widgetSnapshot().lastMessage)
     }
 
-    
-
-    
-    
     func testTheSnapshotFollowsTheSettledHealthNotTheRawState() {
         let state = makeState()
         state.activeDisplayName = "Chrome"
         state.connectionState = .connected
         XCTAssertEqual(state.widgetSnapshot().connection, .connected)
 
-        
         state.isLeaderStalled = true
         XCTAssertEqual(
             state.widgetSnapshot().connection, .connected,
             "the settle hold exists so a blip does not reach the tile")
 
-        
-        
-        
         state.settleConnectionImmediately()
         XCTAssertEqual(state.widgetSnapshot().connection, .stalled)
     }
 
-    
-    
-    
     func testDetachLeavesNothingBehind() {
         let state = makeState()
         state.activeDisplayName = "Chrome"
@@ -221,10 +197,6 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.units.isEmpty, "a detached session left its units behind")
         XCTAssertEqual(snapshot.instanceLabel, "SLICC", "the old instance is still named")
 
-        
-        
-        
-        
         XCTAssertEqual(snapshot.connection, .connected)
         state.settleConnectionImmediately()
         XCTAssertTrue(state.widgetSnapshot().isUnavailable)

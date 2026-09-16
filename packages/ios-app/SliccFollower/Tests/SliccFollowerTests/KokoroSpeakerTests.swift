@@ -170,8 +170,7 @@ final class KokoroSpeakerTests: XCTestCase {
     }
 
     func testPrewarmedSynthesizerIsReusedAcrossEquivalentDirectoryURLs() async {
-        
-        
+
         let canonical = FileManager.default.temporaryDirectory
             .appendingPathComponent("kokoro-models", isDirectory: true)
         let equivalent = canonical.appendingPathComponent("nested/..", isDirectory: true)

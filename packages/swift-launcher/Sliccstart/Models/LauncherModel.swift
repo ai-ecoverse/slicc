@@ -5,27 +5,10 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "LauncherModel")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @MainActor
 @Observable
 final class LauncherModel {
 
-    
-    
     @MainActor
     struct UpdateChecking {
         var check: (@escaping () -> Void, @escaping (Error) -> Void) -> Void
@@ -38,8 +21,6 @@ final class LauncherModel {
             )
         }
     }
-
-    
 
     let process: SliccProcess
     let sessionStore: TraySessionSyncStore
@@ -55,8 +36,6 @@ final class LauncherModel {
     private let isBundledBuild: () -> Bool
     private let startupLaunchEnabled: () -> Bool
     private let savedBrowserOrder: () -> [String]
-
-    
 
     var targets: [AppTarget] = []
     var isReady = false
@@ -107,10 +86,6 @@ final class LauncherModel {
         self.savedBrowserOrder = savedBrowserOrder
     }
 
-    
-
-    
-    
     func initialize() async {
         let sliccDir = process.resolvedSliccDir
         let status = checkInstallation(sliccDir)
@@ -128,29 +103,21 @@ final class LauncherModel {
 
         rescan()
 
-        
-        
         let reattached = await process.reattachPersistedRecords(targets: targets)
         if !reattached.isEmpty {
             log.info("initialize: reattached \(reattached.count) running runtime(s)")
-            
-            
+
             process.refreshRuntimeStates(for: targets)
         }
 
         isReady = true
 
-        
-        
-        
         process.startLeaderJoinUrlWatch()
 
         if isBundledBuild() {
             checkForUpdates()
         }
 
-        
-        
         if reattached.isEmpty {
             autoLaunchConfiguredBrowser()
         }
@@ -160,9 +127,6 @@ final class LauncherModel {
         targets = scanApps(permission.isGranted)
     }
 
-    
-    
-    
     func autoLaunchConfiguredBrowser() {
         guard startupLaunchEnabled() else { return }
         guard let target = AppOrdering.topBrowser(in: targets, savedOrder: savedBrowserOrder()) else {
@@ -177,8 +141,6 @@ final class LauncherModel {
             LauncherErrorReport.report(.autoLaunch, error)
         }
     }
-
-    
 
     func launchStandalone(_ target: AppTarget) {
         log.info("onLaunchStandalone: \(target.name, privacy: .public)")
@@ -221,10 +183,7 @@ final class LauncherModel {
         case .cannotStart(.needsPermission):
             permission.openSystemSettings()
         case .cannotStart(.needsLeader):
-            
-            
-            
-            
+
             log.info("handleElectronLaunch: \(target.name, privacy: .public) needs leader; ignoring")
         case .notRunning, .startFailed:
             launchElectron(target)
@@ -244,8 +203,6 @@ final class LauncherModel {
         }
     }
 
-    
-
     func requestDebugBuild(for target: AppTarget) {
         debugBuildTarget = target
         showDebugBuildDialog = true
@@ -255,7 +212,6 @@ final class LauncherModel {
         debugBuildTarget = nil
     }
 
-    
     func confirmDebugBuild() async {
         guard let target = debugBuildTarget else { return }
         await createDebugBuild(for: target)
@@ -271,7 +227,7 @@ final class LauncherModel {
                     self.debugBuildProgress = progress
                 }
             }
-            
+
             rescan()
             showError(
                 "Debug build created!\n\nThe patched version of \(target.name) is now available and will be used automatically."
@@ -290,7 +246,6 @@ final class LauncherModel {
         electronRestartTarget = nil
     }
 
-    
     func confirmElectronRestart() {
         if let target = electronRestartTarget {
             launchElectron(target, forceRestartExistingApp: true)
@@ -303,12 +258,6 @@ final class LauncherModel {
         showAlert = true
     }
 
-    
-
-    
-    
-    
-    
     func checkForUpdates() {
         guard updateCheckStatus.allowsRetry else { return }
         log.info("checkForUpdates: starting")
@@ -325,8 +274,7 @@ final class LauncherModel {
                 Task { @MainActor in
                     let status = UpdateCheckStatus.from(error: error)
                     log.error("checkForUpdates: failed: \(String(describing: error), privacy: .public)")
-                    
-                    
+
                     if status != .upToDate {
                         LauncherErrorReport.report(.updateCheck, error)
                     }
@@ -336,8 +284,6 @@ final class LauncherModel {
         )
     }
 
-    
-    
     func updateRuntime() async {
         isReady = false
         do {
@@ -352,20 +298,12 @@ final class LauncherModel {
         isReady = true
     }
 
-    
-    
-    
     func beginAppUpdate() {
         log.info("onBeginUpdate: detaching for AppUpdater install")
         process.isPreparingForUpdate = true
         process.detachAll()
     }
 
-    
-
-    
-    
-    
     func runtimeTick(isUpdateDownloaded: Bool) {
         guard isReady else { return }
         process.refreshRuntimeStates(for: targets)
@@ -384,15 +322,6 @@ final class LauncherModel {
         process.refreshRuntimeStates(for: targets)
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func leaderJoinUrlChanged(_ newValue: String?, previous: String? = nil) {
         if let previous, !previous.isEmpty, previous != newValue {
             sessionStore.withdraw(joinUrl: previous)
@@ -409,16 +338,6 @@ final class LauncherModel {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func republishLeaderSession() {
         guard isReady else { return }
         Task { [weak self] in
@@ -427,17 +346,13 @@ final class LauncherModel {
                 log.info("republishLeaderSession: leader did not answer — letting the advertisement age out")
                 return
             }
-            
-            
-            
+
             sessionStore.publish(joinUrl: joinUrl, label: process.leaderTargetName ?? "SLICC")
-            
-            
+
             widgetTrayObserver.refresh()
         }
     }
 
-    
     func appManagementPermissionChanged() {
         guard isReady else { return }
         rescan()

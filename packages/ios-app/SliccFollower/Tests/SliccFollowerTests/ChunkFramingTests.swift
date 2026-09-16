@@ -5,25 +5,14 @@ import XCTest
 @testable import SliccTrayFollower
 @testable import SliccTrayKit
 
-
-
-
-
-
-
-
 final class TrayChunkFramingTests: XCTestCase {
 
     private func encode(_ frame: TrayChunkFrame) throws -> Data {
         try JSONEncoder().encode(frame)
     }
 
-    
-
     func testFramesStayWithinTransportLimit() throws {
-        
-        
-        
+
         let payload = #"{"text":"\#(String(repeating: "漢", count: 120_000))"}"#
 
         let frames = TrayChunkFraming.frameChunks(payload)
@@ -48,7 +37,7 @@ final class TrayChunkFramingTests: XCTestCase {
     }
 
     func testFramesSplitOnCharacterBoundaries() {
-        // A frame cut mid-character corrupts both halves.
+
         let text = String(repeating: "🍦", count: 20_000)
 
         let rebuilt = TrayChunkFraming.frameChunks(text).map(\.chunkData).joined()
@@ -58,9 +47,7 @@ final class TrayChunkFramingTests: XCTestCase {
     }
 
     func testOversizedGraphemeClusterDoesNotBlowTheFrameBudget() throws {
-        // An extended grapheme cluster has no size bound: a base character with
-        // tens of thousands of combining scalars is ONE Character. Appending it
-        // whole would emit a frame over the transport limit.
+
         let monster = "a" + String(repeating: "\u{0301}", count: 60_000)
         XCTAssertEqual(monster.count, 1, "precondition: a single Character")
 
@@ -92,8 +79,6 @@ final class TrayChunkFramingTests: XCTestCase {
     func testEmptyPayloadYieldsOneFrame() {
         XCTAssertEqual(TrayChunkFraming.frameChunks("").count, 1)
     }
-
-    // MARK: - Reassembly
 
     func testReassemblesChunkedMessage() {
         var reassembler = TrayChunkReassembler()
@@ -168,8 +153,6 @@ final class TrayChunkFramingTests: XCTestCase {
     func testRejectsMalformedFrame() {
         var reassembler = TrayChunkReassembler()
 
-        // `__chunk` is reserved transport vocabulary: a frame with impossible
-        // indices is rejected, never treated as a message.
         let outcome = reassembler.accept(
             TrayChunkFrame(
                 type: TrayChunkFrame.typeTag,
@@ -186,8 +169,6 @@ final class TrayChunkFramingTests: XCTestCase {
     func testRejectsInconsistentTotalChunks() {
         var reassembler = TrayChunkReassembler()
 
-        // Peer-controlled metadata must not resize a buffer already in flight.
-        // The Go receiver panicked on exactly this shape before it was guarded.
         _ = reassembler.accept(
             TrayChunkFrame(
                 type: TrayChunkFrame.typeTag, chunkId: "x",
@@ -205,8 +186,6 @@ final class TrayChunkFramingTests: XCTestCase {
     func testRejectsExcessiveChunkCount() {
         var reassembler = TrayChunkReassembler()
 
-        // Allocating a buffer for a claimed billion frames would exhaust memory
-        // before any payload arrived.
         let outcome = reassembler.accept(
             TrayChunkFrame(
                 type: TrayChunkFrame.typeTag,
@@ -230,7 +209,6 @@ final class TrayChunkFramingTests: XCTestCase {
             _ = reassembler.accept(frames[0])
         }
 
-        // The oldest was evicted, so completing it yields nothing.
         var completed: Data?
         for frame in started[0].dropFirst() {
             completed = reassembler.accept(frame).message ?? completed

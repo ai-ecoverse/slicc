@@ -1,55 +1,30 @@
 import Foundation
 
-
-
 public enum NewSessionAction: String, Codable {
     case save, skip, erase
 }
 
-
-
-
-
-
-
-
-
-
 public let traySyncProtocolVersion = 8
-
-
-
 
 public enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)
     case contentDone(messageId: String, model: String?, usage: ChatMessageUsage?)
-    
-    
-    
-    
+
     case toolUseStart(
         messageId: String, toolName: String, toolInput: AnyCodable?, toolCallId: String? = nil)
-    
+
     case toolResult(
         messageId: String, toolName: String, result: String, isError: Bool?,
         toolCallId: String? = nil)
-    
-    
+
     case toolProgress(
         messageId: String, toolName: String, progress: ToolProgressEvent,
         toolCallId: String? = nil)
     case toolUI(messageId: String, toolName: String, requestId: String, html: String)
     case toolUIDone(messageId: String, requestId: String)
     case turnEnd(messageId: String)
-    
-    
-    
-    
-    
-    
-    
-    
+
     case compactionNotice(messageId: String, marker: ChatCompactionMarker)
     case error(error: String)
     case screenshot(base64: String, url: String?)
@@ -193,56 +168,32 @@ public enum AgentEvent: Codable {
     }
 }
 
-
-
-
 public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let jid: String
     public let name: String
     public let folder: String
-    
-    
-    
-    
-    
-    
-    
-    
+
     public let isCone: Bool?
-    
-    
-    
+
     public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
-    
-    
-    
-    
+
     public let state: String?
-    
-    
-    
+
     public let activity: String?
-    
+
     public let fill: Double?
-    
-    
-    
-    
+
     public let model: ScoopSummaryModel?
 
     public var id: String { jid }
 
-    
-    
     public init(
         jid: String,
         name: String,
         folder: String,
-        
-        
-        
+
         isCone: Bool?,
         assistantLabel: String,
         trigger: String? = nil,
@@ -266,12 +217,10 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     }
 }
 
-
-
 public struct ScoopSummaryModel: Codable, Hashable {
-    
+
     public let provider: String
-    
+
     public let id: String
 
     public init(provider: String, id: String) {
@@ -280,16 +229,13 @@ public struct ScoopSummaryModel: Codable, Hashable {
     }
 }
 
-
 public struct SprinkleSummary: Codable, Identifiable, Hashable {
     public let name: String
     public let title: String
     public let path: String
     public let open: Bool
     public let autoOpen: Bool
-    
-    
-    
+
     public let icon: String?
 
     public var id: String { name }
@@ -311,16 +257,9 @@ public struct SprinkleSummary: Codable, Identifiable, Hashable {
     }
 }
 
-
-
-
-
-
 public enum TrayThinkingLevel: String, Codable, CaseIterable {
     case off, minimal, low, medium, high, xhigh
 }
-
-
 
 public struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
     public let providerName: String
@@ -337,7 +276,6 @@ public struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
         self.reasoning = reasoning
     }
 }
-
 
 public struct TrayModelSelectionState: Codable, Equatable {
     public let activeModelId: String
@@ -358,11 +296,6 @@ public struct TrayModelSelectionState: Codable, Equatable {
     }
 }
 
-
-
-
-
-
 public struct CherryCapabilities: Codable, Hashable {
     public let navigate: Bool
     public let network: Bool
@@ -374,7 +307,6 @@ public struct CherryCapabilities: Codable, Hashable {
         self.screenshot = screenshot
     }
 }
-
 
 public struct RemoteTargetInfo: Codable, Hashable {
     public let targetId: String
@@ -398,10 +330,6 @@ public struct RemoteTargetInfo: Codable, Hashable {
     }
 }
 
-
-
-
-
 public struct CDPTargetSummary: Identifiable, Hashable {
     public let id: String
     public var title: String
@@ -414,7 +342,6 @@ public struct CDPTargetSummary: Identifiable, Hashable {
     }
 }
 
-
 public struct TrayTargetEntry: Codable, Hashable {
     public let targetId: String
     public let localTargetId: String
@@ -422,10 +349,9 @@ public struct TrayTargetEntry: Codable, Hashable {
     public let title: String
     public let url: String
     public let isLocal: Bool
-    
+
     public var kind: String?
-    
-    
+
     public var capabilities: CherryCapabilities?
 
     public init(
@@ -449,20 +375,6 @@ public struct TrayTargetEntry: Codable, Hashable {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 public struct TrayChunkFrame: Codable {
     public static let typeTag = "__chunk"
 
@@ -482,40 +394,21 @@ public struct TrayChunkFrame: Codable {
         self.chunkData = chunkData
     }
 
-    
-    
-    
     var hasValidIndices: Bool {
         totalChunks > 0 && chunkIndex >= 0 && chunkIndex < totalChunks
     }
 }
 
-
-
-
-
 public struct TraySyncCapabilities: Codable, Equatable {
-    
-    
+
     public let exec: Bool
 
-    
-    
     public let browser: Bool?
 
-    
-    
-    
     public let oauthPopup: Bool?
 
-    
-    
     public let sudoApproval: Bool?
 
-    
-    
-    
-    
     public let biometric: Bool?
 
     public init(
@@ -533,33 +426,12 @@ public struct TraySyncCapabilities: Codable, Equatable {
     }
 }
 
-
-
-
 public let trayFollowerCapabilities = makeTrayFollowerCapabilities(deviceOwnerAuth: false)
-
-
-
-
 
 public func makeTrayFollowerCapabilities(deviceOwnerAuth: Bool) -> TraySyncCapabilities {
     TraySyncCapabilities(
         exec: true, browser: true, sudoApproval: true, biometric: deviceOwnerAuth ? true : nil)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 public enum LeaderToFollowerMessage: Codable {
     case snapshot(messages: [ChatMessage], scoopJid: String)
@@ -582,16 +454,14 @@ public enum LeaderToFollowerMessage: Codable {
         error: String?)
     case sprinkleUpdate(sprinkleName: String, data: AnyCodable?)
     case sprinkleReloaded(sprinkleName: String)
-    
+
     case cdpRequest(
         requestId: String,
         localTargetId: String,
         method: String,
         params: AnyCodable?,
         sessionId: String?)
-    
-    
-    
+
     case cdpResponse(
         requestId: String,
         result: AnyCodable?,
@@ -603,26 +473,17 @@ public enum LeaderToFollowerMessage: Codable {
     case tabOpen(requestId: String, url: String)
     case previewOpen(requestId: String, url: String)
     case cherrySliccEvent(targetId: String, name: String, detail: AnyCodable?)
-    
-    
-    
+
     case fsRequest(requestId: String, request: TrayFsRequest)
-    
+
     case fsResponse(requestId: String, response: TrayFsResponse)
     case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?, stdin: String?)
     case execChunk(requestId: String, stream: String, data: String)
     case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
     case execSignal(requestId: String, signal: String)
-    
-    
-    
+
     case themeApply(themeJson: String?)
-    
-    
-    
-    
-    
-    
+
     case sudoApproveRequest(
         requestId: String,
         kind: String,
@@ -631,11 +492,9 @@ public enum LeaderToFollowerMessage: Codable {
         suggestedPattern: String?,
         scoopName: String?,
         expiresAt: Double)
-    
+
     case sudoApproveCancel(requestId: String)
-    
-    
-    
+
     case hello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping
@@ -762,8 +621,7 @@ public enum LeaderToFollowerMessage: Codable {
         case "theme.apply":
             self = .themeApply(
                 themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
-        
-        
+
         case "transcript.export.pending",
             "transcript.export.denied",
             "transcript.export.start",
@@ -1006,52 +864,27 @@ public enum LeaderToFollowerMessage: Codable {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 public enum FollowerToLeaderMessage: Codable {
-    
-    
-    
-    
-    
+
     case userMessage(
         text: String, messageId: String, steer: Bool = false,
         attachments: [MessageAttachment]? = nil)
-    
-    
+
     case newSession(action: NewSessionAction)
     case abort
     case requestSnapshot(scoopJid: String?)
     case scoopsSelect(scoopJid: String)
     case modelsRequest
-    
-    
-    
+
     case modelSelect(modelId: String, scoopJid: String?)
     case thinkingSet(
         scoopJid: String, thinkingLevel: TrayThinkingLevel, effortOverride: String?)
     case sprinklesRefresh
     case sprinkleFetch(requestId: String, sprinkleName: String)
     case sprinkleLick(sprinkleName: String, body: AnyCodable?, targetScoop: String?)
-    
+
     case targetsAdvertise(targets: [RemoteTargetInfo], runtimeId: String)
-    
-    
-    
-    
+
     case cdpRequest(
         requestId: String,
         targetRuntimeId: String,
@@ -1069,35 +902,24 @@ public enum FollowerToLeaderMessage: Codable {
     case cdpEvent(method: String, params: AnyCodable, sessionId: String?)
     case tabOpened(requestId: String, targetId: String)
     case tabOpenError(requestId: String, error: String)
-    
-    
-    
-    
-    
+
     case tabTeleportRequest(requestId: String, targetId: String)
-    
-    
+
     case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
-    
+
     case fsResponse(requestId: String, response: TrayFsResponse)
     case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?, stdin: String?)
     case execChunk(requestId: String, stream: String, data: String)
     case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
     case execSignal(requestId: String, signal: String)
-    
-    
-    
-    
-    
+
     case lick(event: LickEvent)
-    
-    
-    
+
     case sudoApproveResponse(
         requestId: String, decision: String, pattern: String?, attestation: String?)
-    
+
     case pushRegister(platform: String, token: String, environment: String)
-    
+
     case hello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping
@@ -1269,7 +1091,7 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode("user_message", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
-            
+
             if steer { try container.encode(true, forKey: .steer) }
             if let attachments, !attachments.isEmpty {
                 try container.encode(attachments, forKey: .attachments)

@@ -1,30 +1,16 @@
 import AppUpdater
 import Foundation
 
-
-
-
-
-
 enum UpdateCheckStatus: Equatable {
     case idle
     case checking
     case upToDate
-    
-    
+
     case noInstallableRelease
-    
-    
-    
-    
-    
+
     case translocated
     case failed(String)
 
-    
-    
-    
-    
     static func from(error: Error) -> UpdateCheckStatus {
         if error.isCancelled {
             return .upToDate
@@ -38,12 +24,6 @@ enum UpdateCheckStatus: Equatable {
         return .failed(message(for: error))
     }
 
-    
-    
-    
-    
-    
-    
     private static func isReadOnlyVolumeError(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileWriteVolumeReadOnlyError
@@ -73,7 +53,6 @@ enum UpdateCheckStatus: Equatable {
         }
     }
 
-    
     var detail: String? {
         switch self {
         case .idle, .checking:
@@ -89,8 +68,6 @@ enum UpdateCheckStatus: Equatable {
         }
     }
 
-    
-    
     var allowsRetry: Bool {
         self != .checking
     }

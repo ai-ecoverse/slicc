@@ -1,14 +1,9 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
-
-
 struct SudoApprovalCard: View {
     let request: SudoApprovalRequest
-    
-    
+
     let allowAlways: Bool
     let onDecision: (SudoApprovalDecision) -> Void
 
@@ -21,10 +16,7 @@ struct SudoApprovalCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(request.heading, systemImage: "key.fill")
                 .font(.headline)
-            
-            
-            
-            
+
             if let who = request.requester ?? request.scoopName {
                 detail("Requested by", who)
             }

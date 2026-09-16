@@ -59,8 +59,7 @@ final class FetchProxyGzipTests: XCTestCase {
         let inflater = GzipInflater()
         let first = try inflater.push(gz, finish: true)
         XCTAssertEqual(String(data: Data(first), encoding: .utf8), plainJS)
-        
-        
+
         let again = try inflater.push([], finish: true)
         XCTAssertTrue(again.isEmpty)
     }
@@ -91,7 +90,7 @@ final class FetchProxyGzipTests: XCTestCase {
             _ = try await collect(chunks: [ByteBuffer(bytes: truncated)])
             XCTFail("truncated gzip must throw")
         } catch {
-            
+
         }
     }
 
@@ -290,7 +289,6 @@ private struct ChunkIterator: AsyncIteratorProtocol {
         return chunks[index]
     }
 }
-
 
 func gzipForTest(_ input: [UInt8]) throws -> [UInt8] {
     var stream = z_stream()

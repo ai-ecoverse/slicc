@@ -4,17 +4,8 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
-
-
-
 @MainActor
 final class TranscriptInvalidationTests: XCTestCase {
-
-    
 
     func testParsingTheSameBodyTwiceOnlyParsesOnce() {
         MarkdownBlockParser.resetParseCountForTesting()
@@ -52,10 +43,6 @@ final class TranscriptInvalidationTests: XCTestCase {
                 + "must not serve a stale prefix")
     }
 
-    
-
-    
-    
     func testAnUnchangedRowComparesEqual() {
         let message = Self.message(id: "m1", content: "hello")
         XCTAssertEqual(
@@ -71,15 +58,10 @@ final class TranscriptInvalidationTests: XCTestCase {
             "a streamed token must still invalidate its own row")
     }
 
-    
-    
-    
     func testProgressOnAnotherMessagesToolDoesNotChangeThisRow() {
         let message = Self.message(id: "m1", content: "hello")
         let unrelated = ["other-tool": Self.progress(id: "other-tool", fraction: 0.5)]
 
-        
-        
         let sliced = Self.list(messages: [message], toolProgress: unrelated)
             .progressSliceForTesting(message)
         XCTAssertTrue(
@@ -108,10 +90,6 @@ final class TranscriptInvalidationTests: XCTestCase {
             "its own tool's progress must invalidate the row")
     }
 
-    
-
-    
-    
     func testTimestampFormattersAreSharedAndStillCorrect() throws {
         let calendar = Calendar.current
         let now = Date()
@@ -125,10 +103,6 @@ final class TranscriptInvalidationTests: XCTestCase {
                 .hasPrefix("Yesterday "),
             "yesterday's messages keep the Yesterday prefix")
 
-        
-        
-        
-        
         let longAgo = try XCTUnwrap(calendar.date(byAdding: .day, value: -30, to: now))
         _ = MessageListView.timestampLabel(for: longAgo, calendar: calendar)
         XCTAssertTrue(
@@ -136,12 +110,6 @@ final class TranscriptInvalidationTests: XCTestCase {
             "formatting an older message must not leak its date style into later labels")
     }
 
-    
-
-    
-    
-    
-    
     private static func list(
         messages: [ChatMessage], toolProgress: [String: ToolProgressEvent]
     ) -> MessageListView {

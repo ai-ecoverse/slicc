@@ -2,19 +2,7 @@ package optel
 
 import "strings"
 
-
 const DefaultCollectBaseURL = "https://rum.hlx.page/"
-
-
-
-
-
-
-
-
-
-
-
 
 func BuildReferer(appID, viewPath string) string {
 	var normalized string

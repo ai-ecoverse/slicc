@@ -6,15 +6,6 @@ final class KokoroSettingsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func testEnablingKokoroRequiresSizeAndWiFiConsent() {
         let app = launchSettings(kokoroState: "not-installed")
         XCTAssertFalse(app.descendants(matching: .any)["speech-voice-picker"].exists)
@@ -32,11 +23,6 @@ final class KokoroSettingsUITests: XCTestCase {
             status.label.contains("Wi-Fi"),
             "the Wi-Fi-only rule must be disclosed before the tap that starts it")
 
-        
-        
-        
-        
-        
         let viewport = app.windows.firstMatch.frame
         XCTAssertTrue(
             viewport.intersects(enable.frame),

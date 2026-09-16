@@ -1,10 +1,6 @@
 import Foundation
 import NIOCore
 
-
-
-
-
 final class ChromeInboundMessagePump: @unchecked Sendable {
     enum EnqueueResult: Equatable {
         case enqueued
@@ -44,8 +40,7 @@ final class ChromeInboundMessagePump: @unchecked Sendable {
 
             guard self.buffer.count < self.maxBufferedMessages else {
                 self.isFinished = true
-                
-                
+
                 self.overflowSnapshot = self.buffer
                 return .overflow
             }
@@ -58,8 +53,6 @@ final class ChromeInboundMessagePump: @unchecked Sendable {
         return result
     }
 
-    
-    
     func overflowDiagnosticsSummary() -> String? {
         let snapshot = self.stateQueue.sync { self.overflowSnapshot }
         guard let snapshot else {

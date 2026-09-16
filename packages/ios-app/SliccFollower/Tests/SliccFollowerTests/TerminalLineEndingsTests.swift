@@ -2,8 +2,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
 final class TerminalLineEndingsTests: XCTestCase {
 
     private func normalize(_ chunks: [String]) -> String {
@@ -33,8 +31,7 @@ final class TerminalLineEndingsTests: XCTestCase {
     }
 
     func testCRLFSplitAcrossChunksIsNotDoubled() {
-        
-        
+
         XCTAssertEqual(normalize(["line\r", "\nnext\n"]), "line\r\nnext\r\n")
     }
 
@@ -43,8 +40,7 @@ final class TerminalLineEndingsTests: XCTestCase {
     }
 
     func testLoneCarriageReturnIsPreserved() {
-        
-        
+
         XCTAssertEqual(normalize(["50%\r75%\r100%\n"]), "50%\r75%\r100%\r\n")
     }
 

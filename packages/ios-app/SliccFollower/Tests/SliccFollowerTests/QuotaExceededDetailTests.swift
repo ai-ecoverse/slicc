@@ -3,11 +3,8 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
 final class QuotaExceededDetailTests: XCTestCase {
-    
+
     private static let adobe429 = """
         429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. \
         Resets on 2026-09-14. You can also connect your own LLM provider.",\
@@ -21,8 +18,7 @@ final class QuotaExceededDetailTests: XCTestCase {
     }
 
     func testDropsTheConnectYourOwnProviderSentence() {
-        
-        
+
         let detail = QuotaExceededDetail(content: Self.adobe429)
         XCTAssertEqual(detail?.message.contains("connect your own"), false)
     }
@@ -49,8 +45,7 @@ final class QuotaExceededDetailTests: XCTestCase {
     }
 
     func testSurvivesATruncatedEnvelope() {
-        
-        
+
         let detail = QuotaExceededDetail(
             content: "429 {\"error\":{\"type\":\"quota_exceeded\",\"message\":\"Wee")
         XCTAssertEqual(detail?.message, QuotaExceededDetail.fallbackMessage)

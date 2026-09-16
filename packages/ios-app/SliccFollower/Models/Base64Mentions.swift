@@ -1,43 +1,18 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 enum Base64Mentions {
 
-    
     struct Candidate: Equatable {
-        
+
         let data: String
-        
+
         let declaredMime: String?
-        
+
         let range: Range<String.Index>
     }
 
-    
-    
-    
-    
-    
     static let minimumPayloadCharacters = 128
 
-    
-    
     private static let minimumWrapColumns = 16
 
     private static let dataURLRegex: NSRegularExpression? = {
@@ -45,11 +20,6 @@ enum Base64Mentions {
             pattern: #"data:([\w.+-]+/[\w.+-]+)(?:;[\w.+-]+=[^;,]*)*;base64,([A-Za-z0-9+/=]+)"#)
     }()
 
-    
-    
-    
-    
-    
     private static let bareRunRegex: NSRegularExpression? = {
         let openers = #"\s"'`(\[{<,;:="#
         let closers = #"\s"'`)\]}>,;:.!?"#
@@ -59,11 +29,6 @@ enum Base64Mentions {
         )
     }()
 
-    /// Extract every plausible payload from `text`, in order and without
-    /// overlaps. Most-specific first: `data:` URLs (which carry a declared
-    /// type), then column-wrapped blocks, then bare single-line runs — a wide
-    /// wrap column can clear the bare-run bar on its own, so the block has to
-    /// claim its lines first.
     static func scan(_ text: String) -> [Candidate] {
         guard text.count >= minimumPayloadCharacters else { return [] }
         var found: [Candidate] = []
@@ -95,8 +60,7 @@ enum Base64Mentions {
                 guard let run = Range(match.range(at: 1), in: text) else { continue }
                 if claimed.contains(where: { $0.overlaps(run) }) { continue }
                 let raw = String(text[run])
-                // A whole number of quanta. A real encoder emits the padding;
-                // an unpadded remainder means this run is a slice of something.
+
                 guard raw.count % 4 == 0, let data = normalized(raw) else { continue }
                 found.append(Candidate(data: data, declaredMime: nil, range: run))
                 claimed.append(run)
@@ -107,21 +71,11 @@ enum Base64Mentions {
         return found
     }
 
-    // MARK: - Wrapped blocks
-
     private struct SourceLine {
         let range: Range<String.Index>
         let text: Substring
     }
 
-    /// Column-wrapped base64: what `base64`(1) writes by default.
-    ///
-    /// Reassembly is deliberately narrow, because gluing lines together is
-    /// where a heuristic starts eating prose. A block is believed only when it
-    /// has the exact shape an encoder produces: two or more whole lines, every
-    /// line but the last pure alphabet of the SAME quantum-aligned width, and
-    /// only the last one allowed to carry padding. A stanza of English fails
-    /// on the second rule almost immediately.
     private static func wrappedBlocks(in text: String) -> [Candidate] {
         let lines = scanLines(text)
         var blocks: [Candidate] = []
@@ -133,7 +87,7 @@ enum Base64Mentions {
             }
             let tail = blockEnd(lines, from: index, width: width)
             if tail == index {
-                index += 1  // a single line is the bare-run pattern's job
+                index += 1
                 continue
             }
             var pieces = Array(lines[index...tail])
@@ -141,7 +95,7 @@ enum Base64Mentions {
                 pieces.insert(lead, at: 0)
             }
             if let block = claim(pieces) { blocks.append(block) }
-            index = tail + 1  // never re-enter a block we already walked
+            index = tail + 1
         }
         return blocks
     }
@@ -152,7 +106,7 @@ enum Base64Mentions {
         while true {
             let brk = text[start...].firstIndex(of: "\n")
             let end = brk ?? text.endIndex
-            // A CRLF paste puts the `\r` inside the line; it is a separator.
+
             var trimmed = end
             if trimmed > start, text[text.index(before: trimmed)] == "\r" {
                 trimmed = text.index(before: trimmed)
@@ -167,7 +121,6 @@ enum Base64Mentions {
         !s.isEmpty && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "+" || $0 == "/") }
     }
 
-    /// `^[A-Za-z0-9+/]+={0,2}$` — a block's final, shorter line.
     private static func isPaddedTail(_ s: Substring) -> Bool {
         let padding = s.drop(while: { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "+" || $0 == "/") })
         return s.count > padding.count && padding.count <= 2 && padding.allSatisfy { $0 == "=" }
@@ -182,10 +135,6 @@ enum Base64Mentions {
         return width
     }
 
-    /// Index of the last line of the block starting at `index`: every
-    /// following line of exactly `width`, then optionally one narrower final
-    /// line — but only if nothing MORE of the block follows it, or a ragged
-    /// pair of prose lines (76 then 72) would read as a complete block.
     private static func blockEnd(_ lines: [SourceLine], from index: Int, width: Int) -> Int {
         var last = index
         var j = index + 1
@@ -204,11 +153,6 @@ enum Base64Mentions {
         return last + 1
     }
 
-    /// The tail of the line BEFORE a block, when the payload plainly started
-    /// there: `here it is: <76 chars>` followed by more full-width lines is
-    /// one paste with the user's words in front of it. Without this the block
-    /// is claimed from its SECOND line, stranding the first 76 characters
-    /// beside the chip.
     private static func precedingFragment(_ lines: [SourceLine], at index: Int, width: Int)
         -> SourceLine?
     {
@@ -233,10 +177,6 @@ enum Base64Mentions {
         return Candidate(data: data, declaredMime: nil, range: start..<end)
     }
 
-    // MARK: - Normalisation
-
-    /// Strip whitespace and restore padding, or `nil` when the run is not a
-    /// decodable base64 body.
     static func normalized(_ raw: String) -> String? {
         let stripped = raw.filter { !$0.isWhitespace }
         guard !stripped.isEmpty else { return nil }

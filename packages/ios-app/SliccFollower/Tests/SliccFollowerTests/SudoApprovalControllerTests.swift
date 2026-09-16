@@ -3,9 +3,6 @@ import XCTest
 
 @testable import SliccTrayKit
 
-
-
-
 @MainActor
 final class SudoApprovalControllerTests: XCTestCase {
     private final class Wire {
@@ -87,7 +84,7 @@ final class SudoApprovalControllerTests: XCTestCase {
         prompt(controller, clock: clock)
         XCTAssertEqual(controller.pending.map(\.requestId), ["sudo-1"])
         XCTAssertEqual(recorder.arrived, ["sudo-1"])
-        
+
         prompt(controller, clock: clock)
         XCTAssertEqual(controller.pending.count, 1)
         XCTAssertEqual(recorder.arrived.count, 1)
@@ -183,7 +180,7 @@ final class SudoApprovalControllerTests: XCTestCase {
         XCTAssertTrue(controller.pending.isEmpty)
         XCTAssertTrue(wire.sent.isEmpty)
         XCTAssertEqual(recorder.withdrawn, ["sudo-1"])
-        
+
         controller.cancel(requestId: "nope")
         XCTAssertEqual(recorder.withdrawn, ["sudo-1"])
     }
@@ -214,7 +211,7 @@ final class SudoApprovalControllerTests: XCTestCase {
         controller.denyFromNotification(requestId: "sudo-1")
         XCTAssertTrue(gate.reasons.isEmpty)
         XCTAssertEqual(wire.responses.map(\.decision), ["deny"])
-        
+
         controller.denyFromNotification(requestId: "sudo-1")
         XCTAssertEqual(wire.responses.count, 1)
     }

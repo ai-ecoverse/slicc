@@ -11,12 +11,8 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
-
-
-
 func TestFrameChunksStaysWithinTransportLimit(t *testing.T) {
-	
-	
+
 	payload, err := json.Marshal(map[string]string{"text": strings.Repeat("漢", 120_000)})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -52,8 +48,7 @@ func TestFrameChunksRoundTrips(t *testing.T) {
 }
 
 func TestFrameChunksSplitsOnRuneBoundaries(t *testing.T) {
-	
-	
+
 	payload := strings.Repeat("漢", 100_000)
 
 	for _, frame := range frameChunks(payload, "fixed") {
@@ -88,7 +83,6 @@ func TestFrameChunksEmptyPayloadYieldsOneFrame(t *testing.T) {
 	}
 }
 
-
 func newConnForDispatch(onMessage func(string, []byte)) *Conn {
 	return &Conn{
 		opts: Options{OnMessage: onMessage},
@@ -119,7 +113,6 @@ func TestDispatchReassemblesChunkedMessage(t *testing.T) {
 		c.dispatch(encoded)
 	}
 
-	
 	if gotType != protocol.TypeUserMessageEcho {
 		t.Errorf("got type %q, want %q", gotType, protocol.TypeUserMessageEcho)
 	}
@@ -164,11 +157,6 @@ func TestDispatchCountsEmptyChunkDataAsArrived(t *testing.T) {
 	calls := 0
 	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
 
-	
-	
-	
-	
-	
 	empty := protocol.ChunkFrame{
 		Type: protocol.TypeChunk, ChunkID: "e", ChunkIndex: 0, TotalChunks: 3, ChunkData: "",
 	}
@@ -237,9 +225,6 @@ func TestDispatchSurvivesInconsistentTotalChunks(t *testing.T) {
 	calls := 0
 	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
 
-	
-	
-	
 	first, _ := json.Marshal(protocol.ChunkFrame{
 		Type: protocol.TypeChunk, ChunkID: "x", ChunkIndex: 0, TotalChunks: 2, ChunkData: "a",
 	})
@@ -258,8 +243,6 @@ func TestDispatchRejectsExcessiveChunkCount(t *testing.T) {
 	calls := 0
 	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
 
-	
-	
 	encoded, _ := json.Marshal(protocol.ChunkFrame{
 		Type: protocol.TypeChunk, ChunkID: "huge", ChunkIndex: 0,
 		TotalChunks: 1_000_000_000, ChunkData: "a",
@@ -281,8 +264,6 @@ func TestDispatchDropsMalformedFrame(t *testing.T) {
 	calls := 0
 	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
 
-	
-	
 	bad, _ := json.Marshal(protocol.ChunkFrame{
 		Type:        protocol.TypeChunk,
 		ChunkID:     "bad",
@@ -310,7 +291,6 @@ func TestDispatchEvictsOldestIncompleteReassembly(t *testing.T) {
 		c.dispatch(encoded)
 	}
 
-	
 	for _, frame := range started[0][1:] {
 		encoded, _ := json.Marshal(frame)
 		c.dispatch(encoded)
@@ -320,9 +300,6 @@ func TestDispatchEvictsOldestIncompleteReassembly(t *testing.T) {
 		t.Errorf("handler ran %d times for an evicted reassembly", calls)
 	}
 }
-
-
-
 
 func TestDispatchEvictsOldestEvenWithEmptyChunkID(t *testing.T) {
 	calls := 0
@@ -338,7 +315,6 @@ func TestDispatchEvictsOldestEvenWithEmptyChunkID(t *testing.T) {
 		c.dispatch(encoded)
 	}
 
-	
 	for _, frame := range oldest[1:] {
 		encoded, _ := json.Marshal(frame)
 		c.dispatch(encoded)
@@ -366,10 +342,7 @@ func TestDispatchReportsActivity(t *testing.T) {
 		opts: Options{OnActivity: func() { beats++ }},
 		done: make(chan struct{}),
 	}
-	
-	
-	
-	
+
 	c.dispatch([]byte(`{"type":"ping"}`))
 	c.dispatch([]byte(`{"type":"pong"}`))
 	c.dispatch([]byte(`{"type":"status","scoopStatus":"ready"}`))
@@ -381,13 +354,11 @@ func TestDispatchReportsActivity(t *testing.T) {
 
 func TestDispatchWithoutActivityHookIsFine(_ *testing.T) {
 	c := newConnForDispatch(nil)
-	c.dispatch([]byte(`{"type":"pong"}`)) 
+	c.dispatch([]byte(`{"type":"pong"}`))
 }
 
 func TestPionRecordsReachTheConnsDiagnostics(t *testing.T) {
-	
-	
-	
+
 	var logged []string
 	var counted []slog.Level
 	c := &Conn{

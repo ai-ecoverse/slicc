@@ -20,26 +20,15 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("leftHandedDock") private var leftHandedDock = false
-    
-    
+
     @AppStorage("openLinksInBuiltInBrowser") private var openLinksInBuiltInBrowser = true
-    
-    
-    
+
     @State private var now = Date()
-    
-    
-    
+
     @State private var awaitingConnect = false
-    
-    
-    
-    
-    
-    
+
     @State private var hasICloudIdentity: Bool?
-    
-    
+
     @State private var reachability = SessionReachability()
     private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
@@ -71,23 +60,19 @@ struct SettingsView: View {
             .task {
                 hasICloudIdentity = await Self.probeICloudIdentity()
             }
-            
-            
+
             .onChange(of: appState.connectionState) { _, state in
                 guard awaitingConnect else { return }
                 if state == .connected {
                     awaitingConnect = false
                     dismiss()
                 } else if state == .disconnected || state == .failed || state == .gaveUp {
-                    
-                    
+
                     awaitingConnect = false
                 }
             }
         }
     }
-
-    
 
     private var modelSection: some View {
         Section {
@@ -135,12 +120,6 @@ struct SettingsView: View {
             set: { appState.setThinkingLevel($0) })
     }
 
-    
-
-    
-    
-    
-    
     private var iCloudSessionsSection: some View {
         Section {
             let rows = sessionRowsSortedByReachability
@@ -163,12 +142,7 @@ struct SettingsView: View {
             reachability.probe(appState.sessionStore.sessions)
             reachability.probe(appState.recentJoinStore.recents)
         }
-        
-        
-        
-        
-        
-        
+
         .onChange(of: appState.sessionStore.sessions) { _, sessions in
             reachability.probe(sessions)
         }
@@ -178,9 +152,6 @@ struct SettingsView: View {
         .onReceive(staleTicker) { now = $0 }
     }
 
-    
-    
-    
     private var sessionRowsSortedByReachability: [(session: SyncedTraySession, deviceName: String)] {
         ICloudSessionList.groups(from: appState.sessionStore.sessions)
             .flatMap { group in
@@ -196,8 +167,7 @@ struct SettingsView: View {
 
     private func sessionRow(_ session: SyncedTraySession, deviceName: String) -> some View {
         Button {
-            
-            
+
             guard !session.isStale(ttl: TraySessionSyncStore.defaultTTL, now: Date()) else {
                 appState.sessionStore.reload()
                 return
@@ -225,7 +195,7 @@ struct SettingsView: View {
             }
             .opacity(unreachable ? 0.55 : 1)
         }
-        
+
         .accessibilityIdentifier("icloud-session-\(session.id)")
         .disabled(
             session.isStale(ttl: TraySessionSyncStore.defaultTTL, now: now)
@@ -234,9 +204,7 @@ struct SettingsView: View {
     }
 
     private var sessionsEmptyState: some View {
-        
-        
-        
+
         let reason = ICloudSessionList.emptyReason(
             hasICloudIdentity: hasICloudIdentity ?? true
         )
@@ -254,19 +222,12 @@ struct SettingsView: View {
         .accessibilityIdentifier("icloud-sessions-empty")
     }
 
-    
-    
     private static func probeICloudIdentity() async -> Bool {
         await Task.detached(priority: .userInitiated) {
             FileManager.default.ubiquityIdentityToken != nil
         }.value
     }
 
-    
-
-    
-    
-    
     private var recentSessionsSection: some View {
         Section {
             ForEach(recentRows) { recent in
@@ -279,9 +240,6 @@ struct SettingsView: View {
         }
     }
 
-    
-    
-    
     private var recentRows: [RecentJoin] {
         ICloudSessionList.recentRows(
             from: appState.recentJoinStore.recents,
@@ -293,8 +251,7 @@ struct SettingsView: View {
         let unreachable = reachability.verdicts[recent.id] == .unreachable
         return Button {
             awaitingConnect = true
-            
-            
+
             appState.connectToDiscoveredSession(
                 joinUrl: recent.joinUrl,
                 displayName: recent.label.isEmpty ? nil : recent.label)
@@ -319,19 +276,16 @@ struct SettingsView: View {
             }
             .opacity(unreachable ? 0.55 : 1)
         }
-        
+
         .accessibilityIdentifier("recent-session-\(recent.id)")
         .disabled(appState.connectionState == .connecting)
         .swipeActions(edge: .trailing) {
-            
-            
+
             Button("Remove", role: .destructive) {
                 appState.recentJoinStore.forget(id: recent.id)
             }
         }
     }
-
-    
 
     private var connectionSection: some View {
         Section {
@@ -360,8 +314,6 @@ struct SettingsView: View {
         }
     }
 
-    
-    
     @ViewBuilder
     private var connectActionRow: some View {
         switch appState.connectionState {
@@ -370,9 +322,7 @@ struct SettingsView: View {
                 appState.disconnect()
             }
         case .reconnecting:
-            
-            
-            
+
             Button("Stop Reconnecting", role: .destructive) {
                 appState.disconnect()
             }
@@ -397,9 +347,6 @@ struct SettingsView: View {
         appState.connectionState == .failed || appState.connectionState == .gaveUp
     }
 
-    
-    
-    
     @ViewBuilder
     private var connectionNote: some View {
         switch appState.connectionState {
@@ -425,11 +372,6 @@ struct SettingsView: View {
         }
     }
 
-    
-    
-    
-    
-    
     private var joinUrlHelpDisclosure: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 10) {
@@ -465,8 +407,7 @@ struct SettingsView: View {
                 .font(.footnote.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, alignment: .trailing)
-            
-            
+
             Text((try? AttributedString(markdown: text)) ?? AttributedString(text))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -474,13 +415,9 @@ struct SettingsView: View {
         }
     }
 
-    
-
     private var speechSection: some View {
         SpeechSettingsSection()
     }
-
-    
 
     private var trayInfoSection: some View {
         Section {
@@ -501,8 +438,6 @@ struct SettingsView: View {
             Text("Tray Info")
         }
     }
-
-    
 
     private var openGrantsSection: some View {
         Section {
@@ -542,14 +477,10 @@ struct SettingsView: View {
         return scope.authority + "/" + scope.actionPrefix
     }
 
-    
-
     private var advancedSection: some View {
         Section {
             Toggle("Auto-reconnect", isOn: $appState.autoReconnect)
 
-            
-            
             Toggle("Left-handed dock", isOn: $leftHandedDock)
 
             Toggle("Open links in Sliccy", isOn: $openLinksInBuiltInBrowser)
@@ -570,18 +501,14 @@ struct SettingsView: View {
 
 private struct SpeechSettingsSection: View {
     @StateObject private var kokoroModels = KokoroModelInstallation.shared
-    
-    
-    
+
     @State private var now = Date()
     private let etaTicker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Section {
             if case .notInstalled = kokoroModels.state {
-                
-                
-                
+
                 Button("Download High-Quality English Voice") {
                     kokoroModels.requestInstallation()
                 }
@@ -593,9 +520,7 @@ private struct SpeechSettingsSection: View {
             Text("Speech")
         }
         .onReceive(etaTicker) { tick in
-            
-            
-            
+
             if case .downloading = kokoroModels.state { now = tick }
         }
     }
@@ -626,8 +551,7 @@ private struct SpeechSettingsSection: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             .accessibilityIdentifier("kokoro-install-status")
-            
-            
+
             Button("Play a Short Sample") {
                 VoiceReply.shared.speakReply(
                     markdown: "<!--lang:en-->Kokoro is installed and speaking.")
@@ -653,10 +577,6 @@ private struct SpeechSettingsSection: View {
         }
     }
 
-    
-    
-    
-    
     private func downloadStatusLine(fraction: Double) -> String {
         var line = "Downloading · \(Int(fraction * 100))%"
         if let started = kokoroModels.downloadStartedAt, fraction >= 0.05, fraction < 1 {
@@ -674,7 +594,7 @@ private struct SpeechSettingsSection: View {
             let minutes = Int((seconds / 60).rounded())
             return minutes == 1 ? "1 minute" : "\(minutes) minutes"
         }
-        
+
         return "\(max(10, Int((seconds / 10).rounded()) * 10)) seconds"
     }
 }

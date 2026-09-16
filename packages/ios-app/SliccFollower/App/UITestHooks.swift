@@ -4,52 +4,26 @@ import SliccTraySession
 import UIKit
 
 #if DEBUG
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     enum UITestHooks {
-        
-        
+
         static var inboundOpenURL: URL? {
             UserDefaults.standard.string(forKey: "uiTestInboundOpenURL")
                 .flatMap(URL.init(string:))
         }
 
-        
-        
-        
         static var launchJoinUrl: String? {
             UserDefaults.standard.string(forKey: "joinUrl")
         }
 
-        
-        
         static var routesToFixture: Bool {
             UserDefaults.standard.bool(forKey: "uiTestFixtureRoute")
         }
 
-        
-        
-        
-        
-        
-        
-        
         static var avatarFixtureVariant: String? {
             UserDefaults.standard.string(forKey: "uiTestAvatarFixture")
         }
 
-        
-        
-        
         static func scoopStatusFixture() -> [ScoopSummary]? {
             guard UserDefaults.standard.bool(forKey: "uiTestScoopStatusFixture") else {
                 return nil
@@ -74,16 +48,6 @@ import UIKit
             ]
         }
 
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
         @MainActor
         static func applyUnitRoleFixture(into appState: AppState) -> Bool {
             guard let variant = UserDefaults.standard.string(forKey: "uiTestUnitRoleFixture"),
@@ -122,11 +86,6 @@ import UIKit
                 timestamp: 1_756_000_000_000)
         }
 
-        
-        
-        
-        
-        
         static var reducesMotion: Bool {
             UserDefaults.standard.bool(forKey: "uiTestReduceMotion")
                 || avatarFixtureVariant?.hasSuffix("-static") == true
@@ -141,25 +100,10 @@ import UIKit
                 assistantLabel: label, trigger: nil, state: state, fill: fill)
         }
 
-        
-        
-        
-        
-        
-        
-        
         static var forcedConnectionState: String? {
             UserDefaults.standard.string(forKey: "uiTestConnectionState")
         }
 
-        
-        
-        
-        
-        
-        
-        
-        
         static var connectionBlip: (dropAfter: TimeInterval, healsAfter: TimeInterval?)? {
             guard let raw = UserDefaults.standard.string(forKey: "uiTestConnectionBlip") else {
                 return nil
@@ -171,14 +115,6 @@ import UIKit
             return (dropAfter, parts.count > 1 ? parts[1] : nil)
         }
 
-        
-        
-        
-        
-        
-        
-        
-        
         @MainActor
         static func seedTranscriptFixture(into appState: AppState) {
             guard UserDefaults.standard.bool(forKey: "uiTestTranscriptFixture") else { return }
@@ -189,13 +125,6 @@ import UIKit
             appState.messages = messages
         }
 
-        
-        
-        
-        
-        
-        
-        
         @MainActor
         static func seedShortActionsFixture(into appState: AppState) {
             guard UserDefaults.standard.bool(forKey: "uiTestShortActionsFixture") else { return }
@@ -206,10 +135,6 @@ import UIKit
             appState.messages = messages
         }
 
-        
-        
-        
-        
         @MainActor
         static func scheduleTranscriptAppend(into appState: AppState) {
             let delay = UserDefaults.standard.double(forKey: "uiTestTranscriptAppendAfter")
@@ -228,10 +153,6 @@ import UIKit
             }
         }
 
-        
-        
-        
-        
         @MainActor
         static func scriptCompletedTurn(into appState: AppState) -> Bool {
             guard UserDefaults.standard.bool(forKey: "uiTestCompletedTurn") else { return false }
@@ -256,17 +177,11 @@ import UIKit
             if let raw = forcedConnectionState, let state = ConnectionState(rawValue: raw) {
                 appState.connectionState = state
             }
-            
-            
+
             appState.settleConnectionImmediately()
             return true
         }
 
-        
-        
-        
-        
-        
         static func sessionsFixtureBackend() -> KeyValueSyncBackend? {
             if UserDefaults.standard.bool(forKey: "uiTestSessionsEmpty") {
                 return InMemoryKeyValueBackend()
@@ -322,11 +237,6 @@ import UIKit
             backend.setData(data, forKey: TraySessionSyncStore.storageKeyPrefix + deviceId)
         }
 
-        
-        
-        
-        
-        
         static func recentJoinsFixtureBackend() -> KeyValueSyncBackend? {
             if UserDefaults.standard.bool(forKey: "uiTestRecentJoinsEmpty") {
                 return InMemoryKeyValueBackend()
@@ -342,8 +252,7 @@ import UIKit
                 recents: [
                     RecentJoin(
                         joinUrl: "http://127.0.0.1:1/join/fixture-recent-local",
-                        
-                        
+
                         label: "Safari on Fixture MacBook",
                         deviceId: "ios-under-test",
                         deviceName: "iPhone Under Test",
@@ -356,7 +265,7 @@ import UIKit
                 backend,
                 deviceId: "fixture-ipad",
                 recents: [
-                    
+
                     RecentJoin(
                         joinUrl: "http://127.0.0.1:1/join/fixture-recent-pasted",
                         label: "",
@@ -379,8 +288,6 @@ import UIKit
             backend.setData(data, forKey: RecentJoinStore.storageKeyPrefix + deviceId)
         }
 
-        
-        
         static var opensFrozenRail: Bool {
             UserDefaults.standard.bool(forKey: "uiTestOpenFrozenRail")
         }
@@ -388,9 +295,6 @@ import UIKit
             UserDefaults.standard.bool(forKey: "uiTestOpenFrozenSession")
         }
 
-        
-        
-        
         static func frozenFixture() -> [FrozenSessionIndexEntry]? {
             if UserDefaults.standard.bool(forKey: "uiTestFrozenEmpty") { return [] }
             guard UserDefaults.standard.bool(forKey: "uiTestFrozenFixture") else { return nil }
@@ -412,13 +316,6 @@ import UIKit
             ]
         }
 
-        
-        
-        
-        
-        
-        
-        
         static func speechEngine() -> DictationEngine? {
             guard let raw = UserDefaults.standard.string(forKey: "uiTestSpeechPermission"),
                 let permission = parsePermission(raw)
@@ -430,9 +327,6 @@ import UIKit
                 permission: permission, grantOutcome: grant, script: script)
         }
 
-        
-        
-        
         static func filesFixture(path: String) -> [TrayFsDirEntry]? {
             guard UserDefaults.standard.bool(forKey: "uiTestFilesFixture") else { return nil }
             switch path {
@@ -452,9 +346,6 @@ import UIKit
             }
         }
 
-        
-        
-        
         static func remoteTargetsFixture() -> [TrayTargetEntry]? {
             guard UserDefaults.standard.bool(forKey: "uiTestRemoteTargetsFixture") else {
                 return nil
@@ -488,8 +379,6 @@ import UIKit
             }
         }
 
-        
-        
         static func memoryFixtureMarkdown() -> String? {
             guard UserDefaults.standard.bool(forKey: "uiTestMemoryFixture") else { return nil }
             return """
@@ -508,9 +397,6 @@ import UIKit
                 """
         }
 
-        
-        
-        
         static func opensDockSurface() -> DockSurface? {
             switch UserDefaults.standard.string(forKey: "uiTestOpenDockSurface") {
             case "browser": return .browser
@@ -522,16 +408,10 @@ import UIKit
             }
         }
 
-        
-        
-        
         static var terminalFixtureEnabled: Bool {
             UserDefaults.standard.bool(forKey: "uiTestTerminalFixture")
         }
 
-        
-        
-        
         struct OpenApprovalFixture {
             let requestId: String
             let command: String
@@ -539,9 +419,6 @@ import UIKit
             let sessionIdentity: String
         }
 
-        
-        
-        
         static func openApprovalFixture() -> OpenApprovalFixture? {
             guard stagesOpenApprovalFixture else { return nil }
             return OpenApprovalFixture(
@@ -555,24 +432,14 @@ import UIKit
             UserDefaults.standard.bool(forKey: "uiTestOpenApproval")
         }
 
-        
-        
-        
         static var stagesSudoApprovalFixture: Bool {
             UserDefaults.standard.bool(forKey: "uiTestSudoApproval")
         }
 
-        
-        
-        
-        
         static var stagesAttachmentFixture: Bool {
             UserDefaults.standard.bool(forKey: "uiTestAttachmentFixture")
         }
 
-        
-        
-        
         static var kokoroModelState: KokoroModelInstallationState? {
             switch UserDefaults.standard.string(forKey: "uiTestKokoroState") {
             case "not-installed": return .notInstalled
@@ -583,7 +450,6 @@ import UIKit
             }
         }
 
-        
         static func attachmentFixtureImage() -> UIImage {
             let size = CGSize(width: 320, height: 200)
             let format = UIGraphicsImageRendererFormat()
@@ -596,11 +462,6 @@ import UIKit
             }
         }
 
-        
-        
-        
-        
-        
         static func themeFixtureJson() -> String? {
             switch UserDefaults.standard.string(forKey: "uiTestThemeFixture") {
             case "light":
@@ -617,11 +478,6 @@ import UIKit
             }
         }
 
-        
-        
-        
-        
-        
         static func pttStage() -> (stage: PttStage, caption: String)? {
             guard let raw = UserDefaults.standard.string(forKey: "uiTestPttStage") else {
                 return nil
@@ -649,8 +505,6 @@ import UIKit
             }
         }
 
-        
-        
         static func frozenArchiveFixture(for entry: FrozenSessionIndexEntry) -> String? {
             guard UserDefaults.standard.bool(forKey: "uiTestFrozenFixture") else { return nil }
             return """
@@ -677,11 +531,6 @@ import UIKit
         }
     }
 
-    
-    
-    
-    
-    
     final class ScriptedDictationEngine: DictationEngine {
         private(set) var permission: DictationPermission
         private let grantOutcome: DictationPermission

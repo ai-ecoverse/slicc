@@ -17,8 +17,6 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
-
-
 func testRunner() []string {
 	if runtime.GOOS == "windows" {
 		return []string{"cmd", "/c"}
@@ -148,8 +146,6 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-
-
 func startTestEvalSession(t *testing.T) *execrun.EvalSession {
 	t.Helper()
 	eval, err := execrun.StartEval(execrun.EvalOptions{
@@ -163,8 +159,6 @@ func startTestEvalSession(t *testing.T) *execrun.EvalSession {
 	t.Cleanup(eval.Close)
 	return eval
 }
-
-
 
 func TestFollowEvalHelperProcess(_ *testing.T) {
 	if os.Getenv("SLICC_TEST_EVAL_REPL") == "" {

@@ -42,8 +42,7 @@ final class TerminalViewModel: ObservableObject {
     private var isStarting = false
     private var escapeState = 0
     private var lastRenderedByte: UInt8?
-    
-    
+
     private var lineEndings = TerminalLineEndings()
 
     init(runCommand: @escaping RunCommand, cancelCommand: @escaping CancelCommand) {
@@ -270,10 +269,7 @@ final class TerminalViewModel: ObservableObject {
 
     private func emit(_ raw: Data) {
         guard !raw.isEmpty else { return }
-        
-        
-        
-        
+
         let data = lineEndings.normalize(raw)
         session.receive(data)
         transcriptData.append(data)
@@ -282,7 +278,7 @@ final class TerminalViewModel: ObservableObject {
         }
         lastRenderedByte = data.last
         let bytes = transcriptData.map { $0 }
-        
+
         // swiftlint:disable:next optional_data_string_conversion
         accessibilityTranscript = String(decoding: bytes, as: UTF8.self)
     }
@@ -294,8 +290,7 @@ final class TerminalViewModel: ObservableObject {
 }
 
 extension Character {
-    
-    
+
     fileprivate var terminalDisplayWidth: Int {
         if unicodeScalars.contains(where: { $0.value == 0xFE0F }) { return 2 }
         return unicodeScalars.reduce(0) { max($0, $1.terminalCellWidth) }
@@ -303,9 +298,7 @@ extension Character {
 }
 
 extension UnicodeScalar {
-    
-    
-    
+
     fileprivate var terminalCellWidth: Int {
         if properties.generalCategory == .control
             || properties.generalCategory == .format

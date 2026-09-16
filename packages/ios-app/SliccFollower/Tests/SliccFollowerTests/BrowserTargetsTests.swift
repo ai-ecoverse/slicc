@@ -3,10 +3,6 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
-
-
-
-
 final class BrowserTargetsTests: XCTestCase {
 
     private func target(
@@ -42,8 +38,7 @@ final class BrowserTargetsTests: XCTestCase {
     }
 
     func testSessionQueryAndFragmentDoNotDefeatTheMatch() {
-        
-        
+
         XCTAssertTrue(
             BrowserTargets.isSliccAppPage(
                 "https://www.sliccy.ai/?ws=wss%3A%2F%2Fother#tray=zzz", joinUrl: joinUrl))

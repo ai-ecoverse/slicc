@@ -66,9 +66,7 @@ final class RUMEventTests: XCTestCase {
     }
 
     func testFixtureByteShapeMatchesHelixRumJsPayload() throws {
-        
-        
-        
+
         let event = RUMEvent(
             weight: 100,
             id: "abc123def",
@@ -79,7 +77,7 @@ final class RUMEventTests: XCTestCase {
         )
         let actualData = try JSONEncoder().encode(event)
         let fixture = """
-            {"weight":100,"id":"abc123def","referer":"https:
+            {"weight":100,"id":"abc123def","referer":"https://com.example.app/home",\
             "checkpoint":"click","t":1234,"source":".button#submit",\
             "target":"/api/checkout","value":42}
             """
@@ -95,7 +93,7 @@ final class RUMEventTests: XCTestCase {
         let event = RUMEvent(
             weight: 100,
             id: "abc123def",
-            referer: "https:
+            referer: "https://com.example.app/",
             checkpoint: .raw("custom-cp"),
             t: 1
         )
@@ -124,8 +122,7 @@ final class RUMEventTests: XCTestCase {
 
     func testSessionIDsAreDistinct() {
         let many = (0..<200).map { _ in RUMSessionID.generate() }
-        
-        
+
         XCTAssertGreaterThan(Set(many).count, 195)
     }
 }

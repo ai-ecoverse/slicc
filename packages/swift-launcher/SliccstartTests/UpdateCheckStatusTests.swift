@@ -3,9 +3,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
 final class UpdateCheckStatusTests: XCTestCase {
 
     func testCancelledErrorMeansUpToDate() {
@@ -35,10 +32,6 @@ final class UpdateCheckStatusTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
     func testReadOnlyVolumeErrorMeansTranslocated() {
         let error = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteVolumeReadOnlyError)
         XCTAssertEqual(UpdateCheckStatus.from(error: error), .translocated)

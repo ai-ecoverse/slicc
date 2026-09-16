@@ -13,7 +13,7 @@ let package = Package(
         .package(path: "../swift-widgetkit"),
     ],
     targets: [
-        
+
         .executableTarget(
             name: "Sliccstart",
             dependencies: [
@@ -29,10 +29,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SliccstartTests",
-            
-            
-            
-            
+
             dependencies: [
                 "Sliccstart",
                 "AppUpdater",

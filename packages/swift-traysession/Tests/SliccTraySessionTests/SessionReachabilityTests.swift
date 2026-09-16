@@ -37,12 +37,12 @@ final class SessionReachabilityTests: XCTestCase {
                 return self.response(
                     to: request,
                     status: 409,
-                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https:
+                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https://example.invalid/next"}"#)
             case 1:
                 return self.response(
                     to: request,
                     status: 409,
-                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https:
+                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https://example.invalid/final"}"#)
             default:
                 return self.response(
                     to: request, status: 200, json: #"{"leader":{"connected":true}}"#)
@@ -71,7 +71,7 @@ final class SessionReachabilityTests: XCTestCase {
             self.response(
                 to: request,
                 status: 409,
-                json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https:
+                json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https://example.invalid/next"}"#)
         }
         let reachability = SessionReachability(
             maxSupersedeRedirects: 2, transport: transport.call)
@@ -162,9 +162,6 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(finalCount, 1)
     }
 
-    
-    
-    
     func testFollowsSupersededChainFromTheLinkHeaderAlone() async {
         let transport = RecordingTransport { request, index in
             switch index {
@@ -197,19 +194,18 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(requests.count, 3)
         XCTAssertEqual(requests[1].url?.path, "/next")
         XCTAssertEqual(requests[2].url?.path, "/final")
-        
+
         for request in requests {
             XCTAssertEqual(request.url?.query?.contains("json=true"), true)
         }
     }
 
-    
     func testLinkHeaderWinsOverTheBodyJoinUrl() async {
         let transport = RecordingTransport { request, index in
             index == 0
                 ? self.response(
                     to: request, status: 409,
-                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https:
+                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https://example.invalid/body"}"#,
                     headers: ["Link": #"<https://example.invalid/link>; rel="successor-version""#])
                 : self.response(to: request, status: 200, json: #"{"leader":{"connected":true}}"#)
         }
@@ -225,8 +221,6 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(requests[1].url?.path, "/link")
     }
 
-    
-    
     func testLinkHeaderOutranksATerminal200() async {
         let transport = RecordingTransport { request, index in
             index == 0
@@ -242,15 +236,12 @@ final class SessionReachabilityTests: XCTestCase {
         reachability.probe([tray])
         await waitForVerdict(tray.id, in: reachability)
 
-        
         XCTAssertEqual(reachability.verdicts[tray.id], .unreachable)
         let requests = await transport.requests()
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[1].url?.path, "/moved")
     }
 
-    
-    
     func testLinkHeaderChaseIsBounded() async {
         let transport = RecordingTransport { request, _ in
             self.response(
@@ -266,12 +257,9 @@ final class SessionReachabilityTests: XCTestCase {
 
         XCTAssertEqual(reachability.verdicts[tray.id], .unreachable)
         let requests = await transport.requests()
-        XCTAssertEqual(requests.count, 3)  
+        XCTAssertEqual(requests.count, 3)
     }
 
-    
-    
-    
     func testFollowsA308LocationWithNoLinkOrBody() async {
         let transport = RecordingTransport { request, index in
             index == 0
@@ -289,18 +277,16 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(reachability.verdicts[tray.id], .reachable)
         let requests = await transport.requests()
         XCTAssertEqual(requests.count, 2)
-        
-        
+
         let query = URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?.queryItems
         XCTAssertEqual(query, [URLQueryItem(name: "json", value: "true")])
         XCTAssertEqual(requests[1].url?.path, "/next")
     }
 
-    
     func testIgnoresARelativeOr3xxLessLocation() async {
         let cases: [(Int, String)] = [
-            (308, "/next"),  
-            (200, "https://example.invalid/next"),  
+            (308, "/next"),
+            (200, "https://example.invalid/next"),
         ]
         for (index, item) in cases.enumerated() {
             let reachability = makeReachability { request in

@@ -1,41 +1,18 @@
 import Foundation
 import SliccTrayKit
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 enum ToolCallPathHints {
-    
+
     static let maximumStrings = 24
-    
+
     static let maximumStringLength = 4000
-    
+
     static let maximumHintsPerCall = 8
 
-    
     private static let urlRegex: NSRegularExpression? = {
         try? NSRegularExpression(pattern: #"\b[a-z][a-z0-9+.-]*://\S+"#, options: [.caseInsensitive])
     }()
 
-    
-    
-    
     static func hints(from input: AnyCodable?) -> [String] {
         var strings: [String] = []
         collect(input?.value, depth: 0, into: &strings)
@@ -43,13 +20,10 @@ enum ToolCallPathHints {
         var hints: [String] = []
         var seen = Set<String>()
         for raw in strings {
-            
-            
-            
+
             let text = blankURLs(in: raw)
             for mention in FileMentions.scan(text) where mention.path.contains("/") {
-                
-                
+
                 guard !seen.contains(mention.path) else { continue }
                 seen.insert(mention.path)
                 hints.append(mention.path)
@@ -65,9 +39,6 @@ enum ToolCallPathHints {
             in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
     }
 
-    
-    
-    
     private static func collect(_ value: Any?, depth: Int, into out: inout [String]) {
         guard out.count < maximumStrings else { return }
         if let string = value as? String {
@@ -75,9 +46,7 @@ enum ToolCallPathHints {
             return
         }
         guard depth < 2 else { return }
-        
-        
-        
+
         if let array = value as? [Any?] {
             for element in array { collect(element, depth: depth + 1, into: &out) }
         } else if let array = value as? [Any] {
@@ -90,50 +59,14 @@ enum ToolCallPathHints {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class FileMentionResolver: @unchecked Sendable {
 
-    
-    
-    
-    
     static let defaultTTL: TimeInterval = 30
 
-    
-    
     static let maximumCacheEntries = 512
 
-    
     static let maximumHints = 256
 
-    
     typealias StatProbe = @Sendable (String) async -> Bool
 
     private let probe: StatProbe
@@ -155,8 +88,6 @@ final class FileMentionResolver: @unchecked Sendable {
         self.now = now
     }
 
-    
-    
     func absorb(toolInput: AnyCodable?) {
         let harvested = ToolCallPathHints.hints(from: toolInput)
         guard !harvested.isEmpty else { return }
@@ -171,16 +102,12 @@ final class FileMentionResolver: @unchecked Sendable {
         }
     }
 
-    
     var hints: [String] {
         lock.lock()
         defer { lock.unlock() }
         return hintList
     }
 
-    
-    
-    
     func reset() {
         lock.lock()
         defer { lock.unlock() }
@@ -189,7 +116,6 @@ final class FileMentionResolver: @unchecked Sendable {
         hintSet.removeAll()
     }
 
-    
     func resolve(_ query: String) async -> String? {
         if let cached = cachedVerdict(for: query) { return cached }
         let path = await lookUp(query)
@@ -197,8 +123,6 @@ final class FileMentionResolver: @unchecked Sendable {
         return path
     }
 
-    
-    
     func resolve(all queries: [String]) async -> [String: String] {
         var resolved: [String: String] = [:]
         for query in Set(queries) {
@@ -207,10 +131,6 @@ final class FileMentionResolver: @unchecked Sendable {
         return resolved
     }
 
-    
-
-    
-    
     private func cachedVerdict(for query: String) -> String?? {
         lock.lock()
         defer { lock.unlock() }
@@ -236,9 +156,7 @@ final class FileMentionResolver: @unchecked Sendable {
         if query.hasPrefix("/") {
             return await probe(query) ? query : nil
         }
-        
-        
-        
+
         for candidate in candidateHints(for: normalized) {
             guard await probe(candidate) else { continue }
             return candidate
@@ -250,15 +168,10 @@ final class FileMentionResolver: @unchecked Sendable {
         lock.lock()
         let all = hintList
         lock.unlock()
-        
-        
+
         return all.reversed().filter { Self.matchesSuffix($0, normalized) }
     }
 
-    
-    
-    
-    
     static func normalize(_ query: String) -> String {
         var path = query.trimmingCharacters(in: .whitespaces)
         while path.hasPrefix("./") || path.hasPrefix("../") {
@@ -269,11 +182,6 @@ final class FileMentionResolver: @unchecked Sendable {
         return path
     }
 
-    
-    
-    
-    
-    
     static func matchesSuffix(_ candidate: String, _ query: String) -> Bool {
         if candidate == query { return true }
         guard candidate.hasSuffix(query) else { return false }

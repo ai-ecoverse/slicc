@@ -19,8 +19,11 @@ const WORKER_ENTRY_PREFIX = 'kernel-worker-';
 
 const args = process.argv.slice(2);
 const jsonOnly = args.includes('--json');
+const defaultBaseline = process.env.GITHUB_BASE_REF
+  ? `origin/${process.env.GITHUB_BASE_REF}`
+  : 'origin/main';
 const baselineRef = (
-  args.find((a) => a.startsWith('--baseline=')) ?? '--baseline=origin/main'
+  args.find((a) => a.startsWith('--baseline=')) ?? `--baseline=${defaultBaseline}`
 ).slice('--baseline='.length);
 
 const isMergeGroup = process.env.GITHUB_EVENT_NAME === 'merge_group';

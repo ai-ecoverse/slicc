@@ -1,8 +1,5 @@
 import XCTest
 
-
-
-
 final class SteerUITests: XCTestCase {
 
     override func setUp() {
@@ -15,11 +12,9 @@ final class SteerUITests: XCTestCase {
         app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "streaming"]
         app.launch()
 
-        
         let composer = app.textViews.firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 60))
 
-        
         XCTAssertFalse(app.buttons["send-while-streaming"].exists)
 
         composer.tap()
@@ -30,10 +25,6 @@ final class SteerUITests: XCTestCase {
             send.waitForExistence(timeout: 10),
             "A non-empty composer during a running turn should offer send")
 
-        
-        
-        
-        
         send.press(forDuration: 1.0)
         if !app.buttons["Interrupt & send"].waitForExistence(timeout: 10) {
             send.press(forDuration: 1.2)

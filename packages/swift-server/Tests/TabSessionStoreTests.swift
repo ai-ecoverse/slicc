@@ -15,9 +15,7 @@ final class TabSessionStoreTests: XCTestCase {
     }
 
     func testSanitizeDropsNonWebSchemesAndFlagShapedEntries() {
-        
-        
-        
+
         let urls = TabSessionStore.sanitize(
             rawUrls: [
                 "--headless=new",
@@ -90,7 +88,7 @@ final class TabSessionStoreTests: XCTestCase {
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let payload = #"{"updatedAt":0,"urls":["--headless","https:
+        let payload = #"{"updatedAt":0,"urls":["--headless","https://example.com/a"]}"#
         try Data(payload.utf8).write(to: fileURL)
 
         XCTAssertEqual(

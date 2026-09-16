@@ -2,12 +2,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
-
-
 final class MessageListLayoutTests: XCTestCase {
 
     func testTranscriptUsesReadableRegularWidth() {

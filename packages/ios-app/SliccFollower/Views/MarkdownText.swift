@@ -1,24 +1,5 @@
 import SwiftUI
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct MarkdownText: View {
     @Environment(\.palette) private var palette
     @Environment(\.fileMentionResolver) private var fileMentionResolver
@@ -26,12 +7,6 @@ struct MarkdownText: View {
 
     let content: String
 
-    
-    
-    
-    
-    
-    
     @State private var resolvedFiles: [String: String] = [:]
 
     var body: some View {
@@ -63,14 +38,6 @@ struct MarkdownText: View {
 
     private var blocks: [MarkdownBlock] { MarkdownBlockParser.parse(content) }
 
-    
-
-    
-    
-    
-    
-    
-    
     private func resolveMentions() async {
         guard let resolver = fileMentionResolver else { return }
         try? await Task.sleep(for: .milliseconds(250))
@@ -82,23 +49,14 @@ struct MarkdownText: View {
         resolvedFiles = resolved
     }
 
-    
-    
     private func paragraph(_ markdown: String) -> TranscriptParagraph {
         TranscriptInlineCache.shared.paragraph(markdown: markdown, files: resolvedFiles)
     }
 
-    
-
-    
-    
-    
     private func inlineText(_ text: String) -> Text {
         Text(styledForInlineCode(paragraph(text).attributed))
     }
 
-    
-    
     private func transcriptText(
         _ value: AttributedString, size: CGFloat = 15, weight: UIFont.Weight = .regular,
         italic: Bool = false, inkOpacity: Double = 0.9
@@ -118,7 +76,6 @@ struct MarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    
     @ViewBuilder
     private func markdownTextView(_ text: String) -> some View {
         let plan = paragraph(text)
@@ -139,10 +96,6 @@ struct MarkdownText: View {
         }
     }
 
-    
-    
-    
-    
     private func styledForInlineCode(_ input: AttributedString) -> AttributedString {
         return styledInlineCode(
             input,
@@ -151,10 +104,6 @@ struct MarkdownText: View {
         )
     }
 
-    
-
-    
-    
     @ViewBuilder
     private func headingView(level: Int, text: String) -> some View {
         let size: CGFloat = {
@@ -172,11 +121,6 @@ struct MarkdownText: View {
             .foregroundStyle(palette.ink)
     }
 
-    
-
-    
-    
-    
     private func blockquoteView(text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             RoundedRectangle(cornerRadius: 1.5)
@@ -187,10 +131,6 @@ struct MarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    
-
-    
-    
     private func listView(_ list: MarkdownList) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(list.items.enumerated()), id: \.offset) { _, item in
@@ -211,18 +151,6 @@ struct MarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private func tableView(_ table: MarkdownTable) -> some View {
         let widths = MarkdownTableLayout.columnWidths(for: table)
         let totalWidth = MarkdownTableLayout.totalWidth(for: table)
@@ -241,12 +169,7 @@ struct MarkdownText: View {
                 .stroke(palette.line, lineWidth: 1)
         )
         .horizontalScrollGuard()
-        
-        
-        
-        
-        
-        
+
         .frame(maxWidth: MarkdownTableLayout.totalWidth(for: table), alignment: .leading)
     }
 
@@ -264,10 +187,6 @@ struct MarkdownText: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    
-    
-    
-    
     private func tableCell(
         _ text: String, alignment: MarkdownTable.Alignment, isHeader: Bool,
         column: Int, width: CGFloat
@@ -280,16 +199,12 @@ struct MarkdownText: View {
             )
             .foregroundStyle(palette.ink.opacity(isHeader ? 1.0 : 0.85))
             .multilineTextAlignment(alignment.textAlignment)
-            
-            
-            
-            
+
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, MarkdownTableLayout.cellHorizontalPadding)
             .padding(.vertical, MarkdownTableLayout.cellVerticalPadding)
             .frame(width: width, alignment: alignment.frameAlignment)
-            
-            
+
             .frame(maxHeight: .infinity, alignment: .top)
             .background(isHeader ? palette.field : Color.clear)
             .overlay(alignment: .leading) {
@@ -298,8 +213,6 @@ struct MarkdownText: View {
                 }
             }
     }
-
-    
 
     private func codeBlockView(language: String?, code: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -324,10 +237,7 @@ struct MarkdownText: View {
         .background(palette.field)
         .cornerRadius(8)
         .accessibilityIdentifier("code-block")
-        
-        
-        
-        
+
         .contextMenu {
             Button {
                 TranscriptClipboard.copy(code)
@@ -342,8 +252,6 @@ struct MarkdownText: View {
         }
     }
 }
-
-
 
 extension MarkdownTable.Alignment {
     var textAlignment: TextAlignment {
@@ -364,22 +272,11 @@ extension MarkdownTable.Alignment {
 }
 
 extension Array {
-    
-    
-    
+
     fileprivate subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
 }
-
-
-
-
-
-
-
-
-
 
 func styledInlineCode(
     _ input: AttributedString,
@@ -397,8 +294,6 @@ func styledInlineCode(
     }
     return output
 }
-
-
 
 #Preview {
     ScrollView {

@@ -20,17 +20,11 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
-
-
-
-
-
 var (
 	binOnce sync.Once
 	binPath string
 	binErr  error
 )
-
 
 func sliccBinary(t *testing.T) string {
 	t.Helper()
@@ -54,10 +48,6 @@ func sliccBinary(t *testing.T) string {
 	}
 	return binPath
 }
-
-
-
-
 
 func TestCLIFollowRunsLeaderCommand(t *testing.T) {
 	bin := sliccBinary(t)
@@ -128,9 +118,6 @@ func TestCLIFollowRunsLeaderCommand(t *testing.T) {
 	}
 }
 
-
-
-
 func TestCLIExecRunsOnLeader(t *testing.T) {
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
@@ -173,13 +160,6 @@ func TestCLIExecRunsOnLeader(t *testing.T) {
 		t.Fatalf("exec stdout = %q, want to contain EXEC-E2E-OK; stderr:\n%s", stdout.String(), stderr.String())
 	}
 }
-
-
-
-
-
-
-
 
 func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	bin := sliccBinary(t)
@@ -257,11 +237,6 @@ func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	}
 }
 
-
-
-
-
-
 func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
@@ -294,12 +269,6 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 		t.Fatalf("prompt stdout = %q, want to contain PROMPT-E2E-OK", stdout.String())
 	}
 }
-
-
-
-
-
-
 
 func TestCLIFollowEvalPersistsState(t *testing.T) {
 	bin := sliccBinary(t)
@@ -346,7 +315,7 @@ func TestCLIFollowEvalPersistsState(t *testing.T) {
 			}
 			switch r.RequestID {
 			case "eval-1":
-				
+
 				_ = sendJSON(leader.dc, protocol.ExecRequest{
 					Type: protocol.TypeExecRequest, RequestID: "eval-2", Command: echoCmd,
 				})

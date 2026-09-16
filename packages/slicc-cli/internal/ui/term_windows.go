@@ -8,20 +8,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-
-
 func terminalSize(f *os.File) (int, bool) {
 	var info windows.ConsoleScreenBufferInfo
 	if err := windows.GetConsoleScreenBufferInfo(windows.Handle(f.Fd()), &info); err != nil {
 		return 0, false
 	}
-	
+
 	return int(info.Window.Right - info.Window.Left + 1), true
 }
-
-
-
-
 
 func prepareTerminal(f *os.File) bool {
 	handle := windows.Handle(f.Fd())

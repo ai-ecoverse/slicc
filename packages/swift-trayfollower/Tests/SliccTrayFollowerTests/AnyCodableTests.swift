@@ -3,14 +3,8 @@ import XCTest
 
 @testable import SliccTrayFollower
 
-
-
-
 final class AnyCodableTests: XCTestCase {
 
-    
-    
-    
     private func assertStable(_ json: String) throws {
         let decoded = try WireCodec.decode(AnyCodable.self, from: json)
         let reencoded = try WireCodec.jsonString(decoded)
@@ -78,7 +72,7 @@ final class AnyCodableTests: XCTestCase {
     }
 
     func testWrappedValueIsFlattenedOnInit() throws {
-        
+
         let inner = AnyCodable(7)
         let outer = AnyCodable(inner)
         XCTAssertEqual(outer.value as? Int, 7)
@@ -98,7 +92,7 @@ final class AnyCodableTests: XCTestCase {
     }
 
     func testUnsupportedValueEncodesAsNull() throws {
-        
+
         let encoded = try WireCodec.jsonString(AnyCodable(Date()))
         XCTAssertEqual(encoded, "null")
     }
