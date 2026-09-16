@@ -47,8 +47,9 @@ Numbering matches the root checklist. Full catalog:
    handler + UI action; check all boot paths.
 9. **Origin/bridge routing** — `fetch('/api/...')` must work in thin-bridge
    mode; normalize trailing slashes.
-10. **Layer import direction** — no imports up the documented layer stack;
-    move pure helpers down.
+10. **Layer import direction** — no imports up a documented layer stack
+    (webapp, node-server, chrome-extension, cloudflare-worker); move pure
+    helpers down. Enforced by `npm run lint:layer-back-edges`.
 11. **Untyped string-keyed bags** — no new `Record<string, unknown>` in source;
     name the shape, or `// biome-ignore lint/plugin:` with a reason.
 12. **Agent skill freshness** — capability changes → update matching runtime

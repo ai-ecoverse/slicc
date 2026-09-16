@@ -69,8 +69,9 @@ Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 then `lint:docs` (CLAUDE.md size limits), `lint:no-comments` (no-op on `main`; hard
 fail on the `no-comment` benchmark branch), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
-`lint:layer-back-edges` (no new imports pointing up the layer stack — baseline-ratcheted;
-fix the layering, never grow `layer-back-edge-baseline.json`),
+`lint:layer-back-edges` (no new imports pointing up a per-package layer stack —
+baseline-ratcheted; fix the layering, never grow `layer-back-edge-baseline.json` or
+`layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`),
 `lint:no-float-probes` (the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` —
 `isExtensionRealm`, `isChromeExtensionRealm`, `hasLocalNodeServer`, `resolveFloatTopology`,
 `getChromeExtensionRealm`, `setChromeExtensionRealm`, `hasChromeRuntimeConnect`,
@@ -227,8 +228,12 @@ The gate enforces seven "debt lists" of files grandfathered out of a rule:
   returned, or explicitly handled)
 - `nursery.noMisusedPromises` (`biome.json` `overrides`; promises cannot stand in for
   synchronous callbacks or conditions)
-- Layer-stack back-edges (`packages/dev-tools/tools/layer-back-edge-baseline.json`; cap:
-  **0** imports pointing up the stack `fs → shell/git → cdp → tools → core → scoops → ui`)
+- Layer-stack back-edges (`packages/dev-tools/tools/layer-back-edge-baseline.json` and
+  `layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`; cap:
+  **0** new imports pointing up the matching stack — webapp
+  `fs → shell/git → cdp → tools → core → scoops → ui`, node-server
+  `transport → services → entry`, chrome-extension `shared/page → sw → entry`,
+  cloudflare-worker `shared/links/auth → routes → entry`)
 - Float/topology probes (`packages/dev-tools/tools/float-probe-baseline.json`; cap: **0**
   reads of the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` plus the raw
   `__slicc_connect_mode` global-bag key, under `scoops/`, `tools/`, `kernel/` except
@@ -263,7 +268,8 @@ touch a debt-listed file, you must fully pay down that file's debt in the same P
 touching that file.
 
 To check whether a file is exempt, search `biome.json` for its path under a single-rule
-`"off"` override, and `layer-back-edge-baseline.json` / `float-probe-baseline.json` /
+`"off"` override, and `layer-back-edge-baseline.json` /
+`layer-back-edge-baseline-*.json` / `float-probe-baseline.json` /
 `record-string-unknown-baseline.json` for its path key.
 
 ## Coverage

@@ -586,18 +586,29 @@ external-repo refs, and spec/plan future files. TypeScript ESM
 
 ## layer-back-edge-ratchet
 
-`check-layer-back-edges.mjs` fails on any NEW import in
-`packages/webapp/src/` that points up the stack
+`check-layer-back-edges.mjs` fails on any NEW import that points up a
+documented per-package layer stack. The original webapp stack is
 `fs → shell/git → cdp → tools → core → scoops → ui`
-(e.g. `cdp/` → `scoops/`, or any layer → `ui/`).
+(e.g. `cdp/` → `scoops/`, or any layer → `ui/`). Unranked webapp
+directories (`kernel/`, `providers/`, `speech/`, …) rank just below
+`ui/`: they may import ranked layers but not `ui/`, and are never a
+back-edge target.
 
-Unranked directories (`kernel/`, `providers/`, `speech/`, …) rank just
-below `ui/`: they may import ranked layers but not `ui/`, and are never
-a back-edge target. Pre-existing back-edges are grandfathered per file
-in `layer-back-edge-baseline.json` (one-way ratchet; regenerate after
-paying debt down with `--update`). The baseline doubles as a debt list
-for the boy-scout gate. Chained into `npm run lint`, `lint:ci`,
-pre-commit (webapp-source commits), and the pre-push gate.
+The same script also ratchets the other TypeScript applications (#3149),
+each with its own layer order and baseline file:
+
+| Package             | Stack                                                                                | Baseline                                          |
+| ------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| `webapp`            | `fs → shell/git → cdp → tools → core → scoops → ui`                                  | `layer-back-edge-baseline.json`                   |
+| `node-server`       | `transport → services → entry`                                                       | `layer-back-edge-baseline-node-server.json`       |
+| `chrome-extension`  | `shared/page → sw → entry`                                                           | `layer-back-edge-baseline-chrome-extension.json`  |
+| `cloudflare-worker` | `shared/links/auth → routes → entry` (routes are peer-isolated: no sideways imports) | `layer-back-edge-baseline-cloudflare-worker.json` |
+
+Pre-existing back-edges are grandfathered per file in the matching
+baseline (one-way ratchet; regenerate after paying debt down with
+`--update`). The baselines double as debt lists for the boy-scout gate.
+Chained into `npm run lint`, `lint:ci`, pre-commit (gated-package source
+commits), and the pre-push gate.
 
 The same pass also fails on any relative import that climbs OUT of
 `packages/webapp/src` into a sibling package

@@ -17,14 +17,14 @@ Authoritative procedure:
 [`.agents/skills/verifying-before-push/SKILL.md`](../../../.agents/skills/verifying-before-push/SKILL.md).
 Gate: [`../tools/check-touched-exemptions.mjs`](../tools/check-touched-exemptions.mjs).
 
-| Category id             | Source                                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `function-size`         | `biome.json` override → `complexity.noExcessiveLinesPerFunction: "off"`                        |
-| `cognitive-complexity`  | `biome.json` override → `complexity.noExcessiveCognitiveComplexity: "off"`                     |
-| `floating-promise`      | `biome.json` override → `nursery.noFloatingPromises: "off"`                                    |
-| `misused-promise`       | `biome.json` override → `nursery.noMisusedPromises: "off"`                                     |
-| `layer-back-edge`       | [`../tools/layer-back-edge-baseline.json`](../tools/layer-back-edge-baseline.json)             |
-| `record-string-unknown` | [`../tools/record-string-unknown-baseline.json`](../tools/record-string-unknown-baseline.json) |
+| Category id             | Source                                                                                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `function-size`         | `biome.json` override → `complexity.noExcessiveLinesPerFunction: "off"`                                                                                                 |
+| `cognitive-complexity`  | `biome.json` override → `complexity.noExcessiveCognitiveComplexity: "off"`                                                                                              |
+| `floating-promise`      | `biome.json` override → `nursery.noFloatingPromises: "off"`                                                                                                             |
+| `misused-promise`       | `biome.json` override → `nursery.noMisusedPromises: "off"`                                                                                                              |
+| `layer-back-edge`       | [`../tools/layer-back-edge-baseline.json`](../tools/layer-back-edge-baseline.json) (+ `layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`) |
+| `record-string-unknown` | [`../tools/record-string-unknown-baseline.json`](../tools/record-string-unknown-baseline.json)                                                                          |
 
 Biome globs are parsed with `extractExemptionGlobsFor` from
 [`../tools/size-exemption-lib.mjs`](../tools/size-exemption-lib.mjs), which by
