@@ -201,7 +201,7 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 
 A provider that bills against a **rolling allowance** rather than per token makes session
 dollars the wrong headline: a family-priced model can bill $0.00 while the shared window burns
-down. Two providers report one:
+down. Three providers report one:
 
 - **Adobe** — one 7-day window over `GET /v1/usage` on the LLM proxy (OpenCode Go's public
   shape, same IMS token as `/v1/messages`).
@@ -212,16 +212,24 @@ down. Two providers report one:
   `providers/xai-grok-usage.ts` caps the body before parsing, clamps the percent, and degrades
   to "no window" on any shape it does not recognise. Dropping `?format=credits` silently returns
   the monthly RPC's shape instead.
+- **GitHub Copilot** — the account's rolling monthly premium-interaction allowance (AI
+  Credits), over `GET https://api.github.com/copilot_internal/user` — the same bootstrap call
+  the official `copilot` CLI makes at session start — authenticated with the raw GitHub OAuth
+  access token (`PersistedCopilot.githubAccessToken`, stored as `account.refreshToken`), not the
+  short-lived Copilot completion token. Only `quota_snapshots.premium_interactions` is metered;
+  `chat`/`completions` report `unlimited: true` on every plan seen so far, so an unlimited
+  premium window also degrades to "no window" rather than a 0%-used reading.
 
 - **Provider hook** — `ProviderConfig.getBudgetUsage?()` (`providers/types.ts`). Its contract is
   a three-way answer, and the distinction is load-bearing for the cache: `null` = "this provider
   has no budget concept / the proxy lacks the endpoint" (re-probed in 30 min), **throw** = "the
   call failed" (retried in 5 min, previous reading stays on screen), a window = a reading.
-  Both implementations are pure modules with an injectable `fetch`, so they are testable
+  All three implementations are pure modules with an injectable `fetch`, so they are testable
   without network (`providers/adobe.ts` itself cannot be imported under vitest):
-  `providers/adobe-usage.ts` and `providers/xai-grok-usage.ts`. A 404/501 is an answer — and the
-  likeliest way an undocumented route retires — while every other non-OK status is a failure;
-  Grok's 401/403 throws a "re-login required" message rather than reaching a render path.
+  `providers/adobe-usage.ts`, `providers/xai-grok-usage.ts`, and
+  `providers/github-copilot-usage.ts`. A 404/501 is an answer — and the likeliest way an
+  undocumented route retires — while every other non-OK status is a failure; Grok's 401/403
+  throws a "re-login required" message rather than reaching a render path.
 - **OAuth token masking (`oauthTokenDomains`)** — a budget endpoint on a host the provider does
   not declare in `oauthTokenDomains` has its token **masked**, and the fetch proxy then drops
   the request CLIENT-SIDE: no HTTP status, no body, which reads like a network outage rather
