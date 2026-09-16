@@ -1,4 +1,5 @@
 name: CI
+run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number || github.ref_name }}
 
 on:
   pull_request:
@@ -827,14 +828,9 @@ jobs:
         run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
+    name: Cloudflare staging deploy
     needs: changes
     runs-on: ubuntu-latest
-    # This job and worker-staging.yml both mutate the same staging Worker.
-    # Share one repository-wide lock so neither can replace the deployment
-    # between the other's finalizer and live smoke test.
-    concurrency:
-      group: worker-staging-e2b-slicc-staging
-      cancel-in-progress: false
     permissions:
       actions: read
       contents: read
@@ -845,7 +841,10 @@ jobs:
     # Raised from 15: the job itself runs ~9 minutes, which left no room for
     # the npm-ci action to time out a hung install and retry it (~9 minutes).
     # A single hang would have failed the job instead of recovering from it.
-    timeout-minutes: 25
+    # Turnstyle can wait behind any number of older staging mutations. Unlike
+    # native concurrency, it does not discard the existing pending run when a
+    # third contender arrives.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -892,6 +891,23 @@ jobs:
           name: test-timing-cloudflare-worker
           path: test-results/
           if-no-files-found: ignore
+
+      # Both this job and worker-staging.yml mutate the same staging Worker;
+      # the specialized workflow also overwrites the shared e2b alias. Wait in
+      # FIFO order through the final smoke/preview step. GitHub's native
+      # concurrency keeps only one pending run and would cancel a required CI
+      # job when a third contender arrived.
+      - name: Wait for staging mutation turn
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
+        with:
+          queue-name: staging-mutation-queue
+          same-branch-only: false
+          job-to-wait-for: Cloudflare staging deploy
+          step-to-wait-for: Release staging mutation queue
+          poll-interval-seconds: 10
+          initial-wait-seconds: 20
+          retries: 3
 
       # The preview-storage lifecycle is a cheap, read-only prerequisite for
       # every deploy. Keep it separate from the expensive asset copy so timing
@@ -1087,6 +1103,10 @@ jobs:
           environment: staging
           command: deploy --env staging --config wrangler-preview.jsonc
 
+      - name: Release staging mutation queue
+        if: always()
+        run: true
+
       # GitHub exposes timestamps for every completed step through the Actions
       # jobs API. Publish them as both a run-summary table and machine-readable
       # JSON so archive, deploy, secret, retry, propagation, and local-gate
@@ -1098,7 +1118,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           node packages/dev-tools/tools/ci-job-timing.mjs
-          --job cloudflare-worker
+          --job "Cloudflare staging deploy"
           --title "Cloudflare worker timings"
           --output test-results/cloudflare-worker-phase-timing.json
           --exclude-step "Publish Cloudflare timing diagnostics"

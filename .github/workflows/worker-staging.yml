@@ -1,4 +1,5 @@
 name: Worker Staging Deploy
+run-name: staging-mutation-queue · Worker staging · PR #${{ github.event.pull_request.number }}
 
 on:
   pull_request:
@@ -21,19 +22,6 @@ on:
   # a secret therefore goes through a PR that touches this file — which the
   # path above now guarantees runs.
 
-# Serialize across ALL PRs: this job mutates two shared singletons — the
-# `slicc-staging` e2b template alias (build overwrites it) and the
-# `slicc-tray-hub-staging` worker (deploy overwrites it). Without this, two
-# concurrent PRs or the main CI staging job can interleave (PR A builds → CI
-# overwrites → PR A verifies), giving one run a false pass against another's
-# artifacts. The cloudflare-worker job in ci.yml uses this same group.
-# cancel-in-progress: false → queue rather than cancel, so an in-flight deploy
-# never gets killed half-way. Unrelated CI jobs still run in parallel; only
-# staging mutations serialize.
-concurrency:
-  group: worker-staging-e2b-slicc-staging
-  cancel-in-progress: false
-
 permissions:
   actions: read
   contents: read
@@ -42,9 +30,11 @@ permissions:
 
 jobs:
   deploy-staging:
-    name: Deploy staging + smoke test
+    name: Cloudflare staging deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Turnstyle can wait behind any number of older staging mutations without
+    # GitHub discarding a pending required CI job.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -121,6 +111,22 @@ jobs:
 
       - name: Build dependencies for e2b template
         run: npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @slicc/node-server
+
+      # Queue both the shared e2b alias and staging Worker mutations with the
+      # main CI deployment. Native concurrency holds only one pending run, so
+      # a third contender can cancel the required job even when cancellation
+      # is disabled. Turnstyle waits for every older matching run instead.
+      - name: Wait for staging mutation turn
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
+        with:
+          queue-name: staging-mutation-queue
+          same-branch-only: false
+          job-to-wait-for: Cloudflare staging deploy
+          step-to-wait-for: Release staging mutation queue
+          poll-interval-seconds: 10
+          initial-wait-seconds: 20
+          retries: 3
 
       # Build + verify under the isolated `slicc-staging` alias, NEVER the prod
       # `slicc` alias. This job runs on every PR touching cloudflare-worker/ or
@@ -325,6 +331,10 @@ jobs:
             sleep 15
           done
 
+      - name: Release staging mutation queue
+        if: always()
+        run: true
+
       - name: Publish Cloudflare timing diagnostics
         if: always()
         continue-on-error: true
@@ -332,7 +342,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           node packages/dev-tools/tools/ci-job-timing.mjs
-          --job "Deploy staging + smoke test"
+          --job "Cloudflare staging deploy"
           --title "Worker staging workflow timings"
           --output test-results/worker-staging-phase-timing.json
           --exclude-step "Publish Cloudflare timing diagnostics"

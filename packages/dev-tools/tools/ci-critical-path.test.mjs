@@ -96,10 +96,19 @@ describe('CI critical-path routing', () => {
     expect(header).toContain(
       "RUN_CLOUDFLARE_STAGING: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}"
     );
-    expect(header).toContain('group: worker-staging-e2b-slicc-staging');
-    expect(header).toContain('cancel-in-progress: false');
-    expect(workerStagingWorkflow).toContain('group: worker-staging-e2b-slicc-staging');
-    expect(workerStagingWorkflow).toContain('cancel-in-progress: false');
+    expect(header).not.toContain('worker-staging-e2b-slicc-staging');
+    expect(workerStagingWorkflow).not.toContain('worker-staging-e2b-slicc-staging');
+
+    for (const source of [worker, workerStagingWorkflow]) {
+      expect(source).toContain(
+        'uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3'
+      );
+      expect(source).toContain('queue-name: staging-mutation-queue');
+      expect(source).toContain('same-branch-only: false');
+      expect(source).toContain('job-to-wait-for: Cloudflare staging deploy');
+      expect(source).toContain('step-to-wait-for: Release staging mutation queue');
+      expect(source).toContain('- name: Release staging mutation queue');
+    }
 
     const lifecycle = stepBody(worker, 'Verify preview storage lifecycle');
     expect(lifecycle).toContain("if: env.RUN_CLOUDFLARE_STAGING == 'true'");
@@ -138,10 +147,10 @@ describe('CI critical-path routing', () => {
   it('publishes phase timing summaries for both Cloudflare staging paths', () => {
     const timing = stepBody(worker, 'Publish Cloudflare timing diagnostics');
     expect(timing).toContain('ci-job-timing.mjs');
-    expect(timing).toContain('--job cloudflare-worker');
+    expect(timing).toContain('--job "Cloudflare staging deploy"');
     expect(worker).toContain('name: cloudflare-worker-phase-timing');
 
-    expect(workerStagingWorkflow).toContain('--job "Deploy staging + smoke test"');
+    expect(workerStagingWorkflow).toContain('--job "Cloudflare staging deploy"');
     expect(workerStagingWorkflow).toContain('name: worker-staging-phase-timing');
     expect(workerStagingWorkflow).toContain("steps.changes.outputs.r2 == 'true'");
   });
