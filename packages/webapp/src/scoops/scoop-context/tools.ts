@@ -18,7 +18,12 @@ import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.
 import { resolveModelSelectionForScoop } from '../../providers/account-store.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { TurnGuestGate } from '../../sudo/types.js';
-import { createBashTool, createFileTools, createRequestSecretTool } from '../../tools/index.js';
+import {
+  createBashTool,
+  createFileTools,
+  createMemoryWriteTool,
+  createRequestSecretTool,
+} from '../../tools/index.js';
 import type { BashJobProcess } from '../../tools/types.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { ScoopContextCallbacks } from '../scoop-context.js';
@@ -48,8 +53,10 @@ export interface ScoopToolsDeps {
   shell: AlmostBashShellHeadless;
   /** UNGATED filesystem — internal, fixed-path writes must not trip sudo. */
   fs: VirtualFS;
-  /** Sudo-gated filesystem the agent's file tools operate on. */
+  /** Sudo-gated, memory-guarded filesystem the agent's file tools operate on. */
   gatedFs: VirtualFS;
+  /** Sudo-gated handle without the memory guard — `memory_write` only (#3157). */
+  memoryFs: VirtualFS;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
   getTurnPid: () => number | undefined;
@@ -118,9 +125,22 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
   };
   const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
   const fileTools = createFileTools(deps.gatedFs, unit.workspace.root);
+  // The single write path for memory files (#3157): the guard on `gatedFs`
+  // refuses every other writer, and this tool enforces the budget and reports
+  // the remaining room. The budget follows the session count, read from the
+  // ungated handle — the index is bookkeeping, not something a grant covers.
+  // Lazy on both sides: the tool body and the index reader load on the
+  // first memory write, never into the worker's boot graph.
+  const memoryWriteTool = createMemoryWriteTool(deps.memoryFs, {
+    readSessionCount: async () => {
+      const { readSessionCount } = await import('../cone-memory-budget.js');
+      return readSessionCount(deps.fs);
+    },
+  });
 
   const legacyTools = [
     ...fileTools,
+    memoryWriteTool,
     // Bash output truncation writes its overflow file via the UNGATED fs (an
     // internal, fixed-path write must never trip a sudo prompt) into a temp dir
     // the context can also read back: `/tmp` for the cone, the scoop's own

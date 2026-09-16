@@ -494,6 +494,13 @@ describe('tool presentation', () => {
       ['bash', { command: 'frobnicate --wat' }, "Use Sliccy's computer", 'terminal'],
       ['read_file', { path: '/workspace/CLAUDE.md' }, 'Read CLAUDE.md', 'file-text'],
       ['write_file', { path: '/tmp/a.ts', content: 'x' }, 'Write a.ts', 'file-plus'],
+      ['memory_write', { path: '/workspace/CLAUDE.md', content: 'x' }, 'Update memory', 'brain'],
+      [
+        'memory_write',
+        { path: '/workspace/CLAUDE.md', edits: [{ oldText: 'a', newText: 'b' }] },
+        'Update memory',
+        'brain',
+      ],
       ['edit', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],

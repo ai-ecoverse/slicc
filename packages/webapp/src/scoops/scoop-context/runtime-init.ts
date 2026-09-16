@@ -95,7 +95,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
   log.info('Filesystem ready', { folder: scoop.folder });
   await ensureDirectoryStructure(fs, scoop, unit, tmpDir);
 
-  const { shell, gatedFs, skills } = await initShellAndSkills({
+  const { shell, gatedFs, memoryFs, skills } = await initShellAndSkills({
     scoop,
     unit,
     fs,
@@ -120,6 +120,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     shell,
     fs: fs as VirtualFS,
     gatedFs,
+    memoryFs,
     processManager: deps.processManager,
     processOwner: deps.processOwner,
     getTurnPid: deps.getTurnPid,

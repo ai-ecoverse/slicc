@@ -12,7 +12,7 @@ allowed-tools: bash
 
 # memory — inspect and manage durable cone memory
 
-Durable memory is one markdown file per cone — `/workspace/CLAUDE.md` for the primary cone, `/cones/<folder>/CLAUDE.md` for extra cones. After a chat freezes, a memory-curator scoop rewrites that file from the archived session; `/sessions/index.json` is the per-archive ledger of whether that pass succeeded (`memoryCuratedAt`), failed (`memoryFailed`), is still owed (`memoryPending`), or was skipped by the user (`memorySkipped`).
+Durable memory is one markdown file per cone — `/workspace/CLAUDE.md` for the primary cone, `/cones/<folder>/CLAUDE.md` for extra cones. Agents write these files only through the `memory_write` tool, which enforces the budget (over budget, a write must shrink the file) and reports the remaining room; other writers are refused. After a chat freezes, a memory-curator scoop rewrites that file from the archived session; `/sessions/index.json` is the per-archive ledger of whether that pass succeeded (`memoryCuratedAt`), failed (`memoryFailed`), is still owed (`memoryPending`), or was skipped by the user (`memorySkipped`).
 
 ## Usage
 

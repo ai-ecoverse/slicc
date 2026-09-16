@@ -304,6 +304,7 @@ export const BASH_ICONS: Readonly<Record<string, string>> = {
 export const TOOL_ICONS: Readonly<Record<string, string>> = {
   read_file: 'file-text',
   write_file: 'file-plus',
+  memory_write: 'brain',
   edit: 'file-pen',
   // Kept for persisted transcripts created before the Pi tool alignment.
   edit_file: 'file-pen',
@@ -350,6 +351,8 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
       return path ? `Read ${basenameOf(path)}` : 'Read a file';
     case 'write_file':
       return path ? `Write ${basenameOf(path)}` : 'Write a file';
+    case 'memory_write':
+      return 'Update memory';
     case 'edit':
     case 'edit_file':
       return path ? `Edit ${basenameOf(path)}` : 'Edit a file';
@@ -767,13 +770,20 @@ function toolBody(call: ToolCall): HTMLElement | null {
     header.textContent = path;
     body.append(header);
   }
-  if (call.name === 'write_file') {
+  // `memory_write` renders like `write_file` for a whole-file `content` and
+  // like `edit` for exact `edits` — same two shapes, same two bodies.
+  const memoryEdits =
+    call.name === 'memory_write' &&
+    typeof call.input === 'object' &&
+    call.input !== null &&
+    'edits' in call.input;
+  if (call.name === 'write_file' || (call.name === 'memory_write' && !memoryEdits)) {
     const content = el('span', { class: 'add' });
     content.textContent = cap(inputField(call.input, 'content'));
     body.append(content);
     return body;
   }
-  if (call.name === 'edit' || call.name === 'edit_file') {
+  if (call.name === 'edit' || call.name === 'edit_file' || memoryEdits) {
     appendEditBody(body, call);
     return body;
   }
