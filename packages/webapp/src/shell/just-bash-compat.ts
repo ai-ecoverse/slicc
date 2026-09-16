@@ -61,5 +61,30 @@ export function bytesToStdin(bytes: Uint8Array): ByteString {
   return chars.join('') as unknown as ByteString;
 }
 
+/** Read a `CommandContext.stdin` as raw bytes (1 char per byte). */
+export function stdinAsBytes(b: ByteString): Uint8Array {
+  const latin1 = stdinAsLatin1(b);
+  const bytes = new Uint8Array(latin1.length);
+  for (let i = 0; i < latin1.length; i++) bytes[i] = latin1.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+/**
+ * Build a binary `ExecResult` stdout from raw bytes. Matches just-bash's
+ * `bytesOutput()` contract (`stdoutKind` + legacy `stdoutEncoding`) without
+ * importing the Node-only helper from the browser bundle.
+ */
+export function bytesAsStdout(bytes: Uint8Array): {
+  stdout: string;
+  stdoutKind: 'bytes';
+  stdoutEncoding: 'binary';
+} {
+  return {
+    stdout: stdinAsLatin1(bytesToStdin(bytes)),
+    stdoutKind: 'bytes',
+    stdoutEncoding: 'binary',
+  };
+}
+
 /** The empty `ByteString` (no-stdin sentinel for `CommandContext`). */
 export const EMPTY_BYTES: ByteString = '' as unknown as ByteString;

@@ -24,6 +24,12 @@ export interface MockCommandContextOptions {
   exportedEnv?: Record<string, string>;
   /** Optional CommandContext members merged last (e.g. getRegisteredCommands). */
   overrides?: Partial<CommandContext>;
+  /**
+   * just-bash has no isatty(3). Commands that branch on TTY vs pipe read these
+   * duck-typed flags; omit them to keep the interactive (TTY) default.
+   */
+  stdoutIsTTY?: boolean;
+  stdinIsTTY?: boolean;
 }
 
 export function mockCommandContext(
@@ -33,7 +39,7 @@ export function mockCommandContext(
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
     ...options.fs,
   };
-  return createCommandContext({
+  const ctx = createCommandContext({
     fs: fs as IFileSystem,
     cwd: options.cwd ?? '/home',
     env: options.env ?? new Map<string, string>(),
@@ -41,4 +47,11 @@ export function mockCommandContext(
     ...(options.exportedEnv ? { exportedEnv: options.exportedEnv } : {}),
     ...options.overrides,
   });
+  if (typeof options.stdoutIsTTY === 'boolean') {
+    Object.assign(ctx, { stdoutIsTTY: options.stdoutIsTTY });
+  }
+  if (typeof options.stdinIsTTY === 'boolean') {
+    Object.assign(ctx, { stdinIsTTY: options.stdinIsTTY });
+  }
+  return ctx;
 }

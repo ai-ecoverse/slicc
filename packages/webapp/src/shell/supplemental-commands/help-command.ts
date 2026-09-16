@@ -72,7 +72,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'screencapture',
     ],
   ],
-  ['Audio', ['say', 'afplay', 'chime']],
+  ['Audio', ['say', 'hear', 'afplay', 'chime']],
   [
     'Environment & shell',
     [
