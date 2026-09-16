@@ -1175,7 +1175,8 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
 - `dream` spawns a `memory-dreamer` scoop per target cone that consolidates the memory file itself
   (merge duplicates, drop superseded and stale facts, move over-budget reference knowledge into
   the shared wiki at `/shared/wiki/`, land under budget) — no session archive is
-  read. Instructions come from user-editable `/shared/DREAMING.md`; the pass uses the same staged
+  read. Instructions come from the same user-editable `/etc/MEMORY.md` as curation (the runtime
+  fills `{{TASK}}` with which pass it is; `dreamTimeoutSeconds` bounds it); the pass uses the same staged
   base/draft snapshot and three-way merge as curation, keyed `dream-<date>-<folder>.md`, with the
   outcome in that key's `/sessions/.curation/…/status.json`. Default is detached; `--wait` blocks
   and prints each pass's report (exit 1 if any failed). The gelatiere's nightly runs

@@ -473,7 +473,7 @@ questions and deliberately different answers.
   have no memory at all.
   - `cwd` is the cone's own workspace, and `writablePaths` stays the single
     memory file (an `upskill` install still escalates).
-  - The frontmatter in `/shared/MEMORY.md` is written primary-relative and is
+  - The frontmatter in `/etc/MEMORY.md` is written primary-relative and is
     user-editable, so it is **rebased** onto the target cone rather than taken
     verbatim — `/workspace/CLAUDE.md` → this cone's memory file, `/workspace/`
     → this cone's root. The skills library is never rebased (one library for

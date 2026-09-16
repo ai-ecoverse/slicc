@@ -11,12 +11,12 @@ const USAGE = 'usage: upgrade status | upgrade apply --from=<version> --to=<vers
 const BUNDLED_PREFIX = 'packages/vfs-root';
 const FETCH_TIMEOUT_MS = 30_000;
 // Directory prefixes plus single-file scopes. The instruction contracts
-// (`MEMORY.md`, `DREAMING.md`, `GELATIERE.md`, `wiki/WIKI.md`) and everything
-// under `/etc/` are seeded only when absent, so a change to a
-// curator/dreamer/gelatiere/wiki contract or to a policy file (`sudoers`,
-// `models`, `llmstxtignore`) would
-// otherwise never reach an existing profile; the three-way merge is what makes
-// that safe to ship, since those files are all meant to be user-edited.
+// (`/etc/MEMORY.md` — one document for the curation and dreaming passes —
+// `GELATIERE.md`, `wiki/WIKI.md`) and everything under `/etc/` are seeded
+// only when absent, so a change to a memory/gelatiere/wiki contract or to a
+// policy file (`sudoers`, `models`, `llmstxtignore`) would otherwise never
+// reach an existing profile; the three-way merge is what makes that safe to
+// ship, since those files are all meant to be user-edited.
 //
 // `/etc/sudoers` is self-protected, and the shell runs on the FS-gated handle,
 // so applying a change there still raises a human approval — the upgrade card
@@ -25,8 +25,6 @@ const SCOPES = [
   `${BUNDLED_PREFIX}/workspace/skills/`,
   `${BUNDLED_PREFIX}/shared/sprinkles/`,
   `${BUNDLED_PREFIX}/shared/sounds/`,
-  `${BUNDLED_PREFIX}/shared/MEMORY.md`,
-  `${BUNDLED_PREFIX}/shared/DREAMING.md`,
   `${BUNDLED_PREFIX}/shared/GELATIERE.md`,
   // The wiki schema is a contract file like the ones above; index.md and
   // log.md beside it are user data and stay out of scope.

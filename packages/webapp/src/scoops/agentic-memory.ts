@@ -1,4 +1,4 @@
-import DEFAULT_MEMORY_MD from '../../../vfs-root/shared/MEMORY.md?raw';
+import DEFAULT_MEMORY_MD from '../../../vfs-root/etc/MEMORY.md?raw';
 import {
   type FrontmatterValue,
   parseFrontmatter,
@@ -9,6 +9,10 @@ import {
   validatePaths,
 } from '../base/instruction-frontmatter.js';
 import { createLogger } from '../base/logger.js';
+import {
+  LEGACY_MEMORY_INSTRUCTION_PATHS,
+  MEMORY_INSTRUCTIONS_PATH,
+} from '../base/memory-budget.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import {
   defaultChildVisibleRoots,
@@ -31,9 +35,19 @@ export { DEFAULT_MEMORY_MD };
 
 const log = createLogger('agentic-memory');
 
-export const MEMORY_INSTRUCTIONS_PATH = '/shared/MEMORY.md';
+// The document path lives in `base/` so the `memory` shell command can name
+// it too; seeded only when absent by {@link seedMemoryInstructions}.
+export { LEGACY_MEMORY_INSTRUCTION_PATHS, MEMORY_INSTRUCTIONS_PATH };
 export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 600;
 export const MAX_MEMORY_TIMEOUT_SECONDS = 1200;
+/**
+ * The consolidation pass has no one waiting on it — it runs from the
+ * gelatiere's nightly — so its ceiling is generous. Last night's dreamers
+ * (#3157) needed more than 900 s to compact 80–130 KB files and lost the
+ * finished work to the bound.
+ */
+export const DEFAULT_DREAM_TIMEOUT_SECONDS = 3600;
+export const MAX_DREAM_TIMEOUT_SECONDS = 7200;
 
 /**
  * Exactly the memory file, not the cone's workspace root. The curator is given
@@ -61,7 +75,7 @@ const defaultVisiblePaths = (workspace: WorkUnitWorkspace): string[] => [
  * curator runs unattended and its scoop folder (and any "always" grant the
  * cone persists into it) is destroyed when the run ends, so every gap becomes
  * a recurring interruption that can never be granted away. Keep this list
- * ahead of what the prompt in `vfs-root/shared/MEMORY.md` asks for.
+ * ahead of what the prompt in `vfs-root/etc/MEMORY.md` asks for.
  */
 const DEFAULT_ALLOWED_COMMANDS = [
   'awk',
@@ -113,7 +127,7 @@ const DEFAULT_ALLOWED_COMMANDS = [
 ];
 const MEMORY_FRONTMATTER = {
   arrayKeys: new Set(['writablePaths', 'visiblePaths', 'allowedCommands']),
-  scalarKeys: new Set(['model', 'timeoutSeconds', 'thinkingLevel']),
+  scalarKeys: new Set(['model', 'timeoutSeconds', 'dreamTimeoutSeconds', 'thinkingLevel']),
 };
 
 /**
@@ -139,7 +153,10 @@ interface MemoryConfig {
   allowedCommands: string[];
   model?: string;
   thinkingLevel: ThinkingLevel;
+  /** Wall-clock bound of a curation pass. */
   timeoutSeconds: number;
+  /** Wall-clock bound of a consolidation (dreaming) pass. */
+  dreamTimeoutSeconds: number;
   promptTemplate: string;
 }
 
@@ -162,10 +179,12 @@ export interface CuratorVfs {
  * the three-way merge, receipts, and the wall-clock bound.
  */
 export interface MemoryPassInstructions {
-  /** VFS path of the user-editable instruction document. */
-  path: string;
-  /** Bundled fallback when the VFS copy is missing or invalid. */
-  fallback: string;
+  /**
+   * Which pass this is. Both run under the one document at
+   * {@link MEMORY_INSTRUCTIONS_PATH}; the kind picks the `{{TASK}}`
+   * paragraph and the timeout (`timeoutSeconds` vs `dreamTimeoutSeconds`).
+   */
+  kind: 'curate' | 'dream';
   /**
    * Agent name for `folder` — determines the scratch dir (`/scoops/agent-
    * <name>`) and the collision domain (two passes on the SAME memory file
@@ -235,11 +254,72 @@ export function curatorAgentName(folder: string): string {
 
 /** The curator's instruction set — what a pass without an override runs under. */
 export const CURATOR_INSTRUCTIONS: MemoryPassInstructions = {
-  path: MEMORY_INSTRUCTIONS_PATH,
-  fallback: DEFAULT_MEMORY_MD,
+  kind: 'curate',
   nameFor: curatorAgentName,
   rivalsFor: (folder) => [dreamerAgentName(folder)],
 };
+
+/** Placeholder the document reserves for the runtime's statement of which pass this is. */
+const TASK_PLACEHOLDER = '{{TASK}}';
+
+/** What `{{SESSION_ARCHIVE_PATH}}` reads as when a pass has no archive to mine. */
+const NO_ARCHIVE = '(no session archive this pass)';
+
+/**
+ * The `{{TASK}}` paragraph: the one place the two passes differ in prose.
+ * Named and bounded here rather than in two documents so a user edit to
+ * the shared document reaches both passes.
+ */
+function passTask(
+  instructions: MemoryPassInstructions,
+  sessionArchivePath: string,
+  timeoutMinutes: number
+): string {
+  if (instructions.kind === 'dream') {
+    return (
+      '**Consolidation pass** (the nightly dreaming): there is NO new session to mine — skip ' +
+      '"Mining the session archive" entirely. Your whole job is to make the existing memory ' +
+      'better: consolidated, current, and inside its budget. If the file is missing or empty, ' +
+      'reply with one line saying so and stop; never invent memories. The run is hard-stopped ' +
+      `after ${timeoutMinutes} minutes, so consolidate section by section, writing as you go — a ` +
+      'stopped run then keeps every section already written.'
+    );
+  }
+  return (
+    `**Curation pass**: mine the archived session at ${sessionArchivePath} for what is worth ` +
+    'carrying into future sessions, fold it into the memory, and consolidate the whole file in ' +
+    'the same pass. Work fast: a pass should finish in well under 10 minutes and is hard-stopped ' +
+    `after ${timeoutMinutes} minutes — mine the three signals, write, and stop, rather than ` +
+    'exploring the archive exhaustively.'
+  );
+}
+
+/**
+ * Seed the shared instruction document on first boot, like the other `/etc`
+ * policy files: written only when absent, so a user's edits survive every
+ * later boot (a changed bundled version reaches them through `upgrade`).
+ * Best-effort — the pass falls back to the bundled text when the file is
+ * missing or unreadable, so a failed seed costs nothing but editability.
+ */
+export async function seedMemoryInstructions(fs: {
+  stat(path: string): Promise<unknown>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  writeFile(path: string, content: string): Promise<void>;
+}): Promise<void> {
+  try {
+    await fs.stat(MEMORY_INSTRUCTIONS_PATH);
+    return;
+  } catch {
+    // Absent — seed it.
+  }
+  try {
+    await fs.mkdir('/etc', { recursive: true });
+    await fs.writeFile(MEMORY_INSTRUCTIONS_PATH, DEFAULT_MEMORY_MD);
+    log.info(`Seeded default ${MEMORY_INSTRUCTIONS_PATH}`);
+  } catch (error) {
+    log.warn(`Failed to seed ${MEMORY_INSTRUCTIONS_PATH}`, { error: errorText(error) });
+  }
+}
 
 /**
  * Agent name of the memory dreamer for `folder` (`scoops/memory-dreaming.ts`
@@ -357,7 +437,9 @@ export async function runAgenticMemoryPass(
     const instructions = opts.instructions ?? CURATOR_INSTRUCTIONS;
     const workspace = curatorWorkspaceFor(opts.cone);
     const scratchDir = scratchDirFor(instructions, opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
-    const config = await loadMemoryConfig(opts.vfs, workspace, instructions);
+    const config = await loadMemoryConfig(opts.vfs, workspace);
+    const timeoutSeconds =
+      instructions.kind === 'dream' ? config.dreamTimeoutSeconds : config.timeoutSeconds;
     const draftPath = curationDraftPath(opts.sessionArchivePath);
     try {
       await seedCurationSnapshot(opts.vfs, workspace.memoryPath, opts.sessionArchivePath);
@@ -366,19 +448,32 @@ export async function runAgenticMemoryPass(
       // curator — falling back is safe.
       return { ok: false, reason: `snapshot: ${errorText(error)}`, legacyFallbackSafe: true };
     }
+    // A dream is keyed by a synthetic archive path (`dream-<date>-<cone>`)
+    // that no file backs; the mining recipes must not be pointed at it.
+    const archiveForPrompt = instructions.kind === 'dream' ? NO_ARCHIVE : opts.sessionArchivePath;
+    const timeoutMinutes = Math.max(1, Math.round(timeoutSeconds / 60));
+    const task = passTask(instructions, archiveForPrompt, timeoutMinutes);
+    // A document predating `{{TASK}}` (a customized copy) still gets told
+    // which pass it is — appended, since it has no slot for it.
+    const template = config.promptTemplate.includes(TASK_PLACEHOLDER)
+      ? config.promptTemplate
+      : `${config.promptTemplate.trimEnd()}\n\n${TASK_PLACEHOLDER}`;
     const prompt = rebaseScratchMentions(
-      substitutePlaceholders(config.promptTemplate, {
+      substitutePlaceholders(template, {
         MEMORY_PATH: draftPath,
-        SESSION_ARCHIVE_PATH: opts.sessionArchivePath,
+        SESSION_ARCHIVE_PATH: archiveForPrompt,
         SESSION_COUNT: String(opts.sessionCount),
         BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
         SCRATCH_DIR: scratchDir,
         TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
+        TIMEOUT_MINUTES: String(timeoutMinutes),
+        TASK: task,
       }),
       scratchDir
     );
     const spawnOptions = buildSpawnOptions(
       config,
+      timeoutSeconds,
       prompt,
       opts.sessionArchivePath,
       workspace,
@@ -394,7 +489,7 @@ export async function runAgenticMemoryPass(
     // the in-run bound always wins the race.
     const outcome = await waitForSpawn(
       spawnPromise,
-      config.timeoutSeconds * 1000 + BOUND_GRACE_MS,
+      timeoutSeconds * 1000 + BOUND_GRACE_MS,
       opts.signal
     );
     if (outcome.type === 'timeout') {
@@ -404,7 +499,7 @@ export async function runAgenticMemoryPass(
       // ran) — a real regression, not routine slowness. Log it loudly so
       // it doesn't read as "the curator sometimes times out".
       log.warn('Agentic memory wait timed out past the in-run bound + grace', {
-        timeoutSeconds: config.timeoutSeconds,
+        timeoutSeconds,
         graceMs: BOUND_GRACE_MS,
       });
       return { ok: false, reason: 'timeout', legacyFallbackSafe: false };
@@ -438,32 +533,25 @@ export async function runAgenticMemoryPass(
 
 async function loadMemoryConfig(
   vfs: Pick<LocalVfsClient, 'readFile'>,
-  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE,
-  instructions: MemoryPassInstructions = CURATOR_INSTRUCTIONS
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
 ): Promise<MemoryConfig> {
   try {
-    const raw = await vfs.readFile(instructions.path, { encoding: 'utf-8' });
+    const raw = await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return parseMemoryDocument(text, workspace, documentLabel(instructions));
+    return parseMemoryDocument(text, workspace);
   } catch (error) {
-    log.warn(`Could not load valid ${instructions.path}; using built-in default`, {
+    log.warn(`Could not load valid ${MEMORY_INSTRUCTIONS_PATH}; using built-in default`, {
       error: errorText(error),
     });
-    return parseMemoryDocument(instructions.fallback, workspace, documentLabel(instructions));
+    return parseMemoryDocument(DEFAULT_MEMORY_MD, workspace);
   }
-}
-
-/** Basename of the instruction document, for parse-error messages. */
-function documentLabel(instructions: MemoryPassInstructions): string {
-  return instructions.path.slice(instructions.path.lastIndexOf('/') + 1);
 }
 
 function parseMemoryDocument(
   content: string,
-  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE,
-  label = 'MEMORY.md'
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
 ): MemoryConfig {
-  const document = splitInstructionDocument(content, label);
+  const document = splitInstructionDocument(content, 'MEMORY.md');
   const values = parseFrontmatter(document.frontmatter, MEMORY_FRONTMATTER);
   const writablePaths = readArray(values, 'writablePaths', defaultWritablePaths(workspace));
   if (writablePaths.length === 0) throw new Error('writablePaths must not be empty');
@@ -475,6 +563,12 @@ function parseMemoryDocument(
     DEFAULT_MEMORY_TIMEOUT_SECONDS,
     MAX_MEMORY_TIMEOUT_SECONDS
   );
+  const dreamTimeoutSeconds = readBoundedTimeout(
+    values.dreamTimeoutSeconds,
+    DEFAULT_DREAM_TIMEOUT_SECONDS,
+    MAX_DREAM_TIMEOUT_SECONDS,
+    'dreamTimeoutSeconds'
+  );
   const model = readOptionalString(values.model, 'model');
   return {
     writablePaths: writablePaths.map((path) => rebaseOntoCone(path, workspace)),
@@ -485,6 +579,7 @@ function parseMemoryDocument(
     ...(model ? { model } : {}),
     thinkingLevel: readThinkingLevel(values.thinkingLevel),
     timeoutSeconds,
+    dreamTimeoutSeconds,
     promptTemplate: document.body,
   };
 }
@@ -582,6 +677,7 @@ function redirectWritesToDraft(paths: string[], memoryPath: string, draftPath: s
 
 function buildSpawnOptions(
   config: MemoryConfig,
+  timeoutSeconds: number,
   prompt: string,
   sessionArchivePath: string,
   workspace: WorkUnitWorkspace,
@@ -633,8 +729,8 @@ function buildSpawnOptions(
     outcomeReceiptPath: curationStatusPath(sessionArchivePath),
     // What `timeoutSeconds` always claimed to mean: the RUN stops at the
     // bound (#1972), instead of only the caller's wait resolving while
-    // the agent kept taking turns.
-    maxWallClockMs: config.timeoutSeconds * 1000,
+    // the agent kept taking turns. A dream runs under its own, longer bound.
+    maxWallClockMs: timeoutSeconds * 1000,
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
 }

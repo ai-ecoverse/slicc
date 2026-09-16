@@ -3,8 +3,12 @@ import 'fake-indexeddb/auto';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../../src/scoops/agent-bridge.js';
-import { DEFAULT_MEMORY_MD, runAgenticMemoryPass } from '../../src/scoops/agentic-memory.js';
-import { createDefaultSharedFiles } from '../../src/scoops/skills.js';
+import {
+  DEFAULT_MEMORY_MD,
+  MEMORY_INSTRUCTIONS_PATH,
+  runAgenticMemoryPass,
+  seedMemoryInstructions,
+} from '../../src/scoops/agentic-memory.js';
 
 let dbCounter = 0;
 let vfs: VirtualFS | undefined;
@@ -16,7 +20,7 @@ afterEach(async () => {
 
 const stubVfs = (memoryMd: string) => ({
   readFile: async (path: string) => {
-    if (path === '/shared/MEMORY.md') return memoryMd;
+    if (path === MEMORY_INSTRUCTIONS_PATH) return memoryMd;
     throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
   },
   writeFile: async () => {},
@@ -59,12 +63,13 @@ describe('bundled MEMORY.md', () => {
       sessionCount: 1,
     });
     const { writablePaths = [], name, prompt } = spawn.mock.calls[0][0];
-    expect(writablePaths).toEqual(['/sessions/.curation/frozen.md/draft.md']);
+    // The shipped grant: the staged draft plus the wiki the consolidation step moves knowledge into.
+    expect(writablePaths).toEqual(['/sessions/.curation/frozen.md/draft.md', '/shared/wiki/']);
     const scratchFolder = `/scoops/agent-${name}`;
     // The document names the scratch folder as `{{SCRATCH_DIR}}` — the folder
     // follows the per-cone agent name (#2271) — so the assertion is against
     // the substituted prompt the curator actually receives.
-    expect(prompt).toContain(`${scratchFolder}/draft.md`);
+    expect(prompt).toContain(scratchFolder);
     // Shared `/tmp` is writable too, but a full rewrite of durable memory is
     // readable and clobberable by every other scoop there, so the prompt must
     // not send drafts to it.
@@ -91,12 +96,14 @@ describe('bundled MEMORY.md', () => {
   it('is seeded on a fresh VFS without overwriting user edits', async () => {
     vfs = await VirtualFS.create({ dbName: `memory-default-${dbCounter++}`, wipe: true });
 
-    await createDefaultSharedFiles(vfs);
-    expect(await vfs.readFile('/shared/MEMORY.md', { encoding: 'utf-8' })).toBe(DEFAULT_MEMORY_MD);
+    await seedMemoryInstructions(vfs);
+    expect(await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' })).toBe(
+      DEFAULT_MEMORY_MD
+    );
 
-    await vfs.writeFile('/shared/MEMORY.md', 'custom memory curator');
-    await createDefaultSharedFiles(vfs);
-    expect(await vfs.readFile('/shared/MEMORY.md', { encoding: 'utf-8' })).toBe(
+    await vfs.writeFile(MEMORY_INSTRUCTIONS_PATH, 'custom memory curator');
+    await seedMemoryInstructions(vfs);
+    expect(await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' })).toBe(
       'custom memory curator'
     );
   });

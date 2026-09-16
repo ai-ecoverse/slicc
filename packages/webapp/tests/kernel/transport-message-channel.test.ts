@@ -204,8 +204,9 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
       expect.objectContaining({
         cwd: '/workspace',
         // The curator writes a staged per-archive draft; the bridge merges
-        // it onto /workspace/CLAUDE.md on exit 0 (mergeOnSuccess).
-        writablePaths: ['/sessions/.curation/frozen.md/draft.md'],
+        // it onto /workspace/CLAUDE.md on exit 0 (mergeOnSuccess). The wiki is
+        // the shipped document's second grant (consolidation step 5).
+        writablePaths: ['/sessions/.curation/frozen.md/draft.md', '/shared/wiki/'],
         visiblePaths: ['/sessions/', '/shared/', '/workspace/', '/sessions/.curation/frozen.md/'],
         notifyOnComplete: true,
       })

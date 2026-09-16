@@ -233,11 +233,11 @@ describe('upgrade apply', () => {
     expect(await fs.readFile(second)).toBe('second base\n');
   });
 
-  // `/shared/MEMORY.md` is the memory-curator contract. It is seeded only when
-  // absent, so this merge is the only route by which a curator-rule change
-  // reaches a workspace that already has one.
-  it('merges the curator contract at /shared/MEMORY.md while keeping local edits', async () => {
-    const path = '/shared/MEMORY.md';
+  // `/etc/MEMORY.md` is the memory-pass contract (curation + dreaming). It is
+  // seeded only when absent, so this merge is the only route by which a
+  // rule change reaches a workspace that already has one.
+  it('merges the memory contract at /etc/MEMORY.md while keeping local edits', async () => {
+    const path = '/etc/MEMORY.md';
     await fs.writeFile(path, 'intro\nlocal rule\noutro\n');
 
     const { result, json } = await run(
