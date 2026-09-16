@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createNodeConsole } from '../../../src/kernel/realm/realm-node-shims.js';
+import {
+  createNodeConsole,
+  createProcessShim,
+  NodeExitError,
+} from '../../../src/kernel/realm/realm-node-shims.js';
+import type { RealmInitMsg } from '../../../src/kernel/realm/realm-types.js';
 
 const STANDARD_CONSOLE_METHODS = [
   'log',
@@ -131,5 +136,62 @@ describe('createNodeConsole', () => {
     expect(out()).toBe('default: 1\ndefault: 2\nx: 1\nx: 1\n');
     con.countReset('nope');
     expect(err()).toContain("Count for 'nope' does not exist");
+  });
+});
+
+function makeInit(): RealmInitMsg {
+  return {
+    type: 'realm-init',
+    kind: 'js',
+    code: '',
+    argv: ['node'],
+    env: {},
+    cwd: '/',
+    filename: '[eval]',
+  };
+}
+
+describe('createProcessShim exitCode (#3155)', () => {
+  it('defaults exitCode to 0 and records assignment', () => {
+    const { processShim, getExitCode, getDidCallProcessExit } = createProcessShim(
+      makeInit(),
+      () => undefined,
+      () => undefined
+    );
+    expect(processShim.exitCode).toBe(0);
+    expect(getExitCode()).toBe(0);
+    processShim.exitCode = 3;
+    expect(processShim.exitCode).toBe(3);
+    expect(getExitCode()).toBe(3);
+    expect(getDidCallProcessExit()).toBe(false);
+  });
+
+  it('process.exit(n) throws NodeExitError with n and marks an explicit exit', () => {
+    const { processShim, getExitCode, getDidCallProcessExit } = createProcessShim(
+      makeInit(),
+      () => undefined,
+      () => undefined
+    );
+    expect(() => processShim.exit(7)).toThrow(NodeExitError);
+    expect(getExitCode()).toBe(7);
+    expect(processShim.exitCode).toBe(7);
+    expect(getDidCallProcessExit()).toBe(true);
+  });
+
+  it('process.exit() with no argument uses the assigned exitCode', () => {
+    const { processShim, getExitCode } = createProcessShim(
+      makeInit(),
+      () => undefined,
+      () => undefined
+    );
+    processShim.exitCode = 3;
+    try {
+      processShim.exit();
+      expect.unreachable('process.exit() must throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(NodeExitError);
+      expect((err as NodeExitError).code).toBe(3);
+    }
+    expect(getExitCode()).toBe(3);
   });
 });
