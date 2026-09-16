@@ -90,8 +90,12 @@ test.describe('compaction robustness', () => {
     await expect(marker).toHaveCount(1);
     await expect(marker).toHaveAttribute('trigger', 'threshold');
     await expect(marker).toHaveAttribute('state', 'summarized');
-    // …and the turn completed against the compacted context.
+    // …and a tool continuation completed against the adopted compacted
+    // context. Before this fix, each post-tool model call compacted the same
+    // oversized pre-compaction history again and added another marker.
+    await expect(thread).toContainText('COMPACTION-TOOL-CONTINUATION');
     await expect(thread).toContainText('COMPACTION-DONE-ANSWER');
+    await expect(marker).toHaveCount(1);
     // The clean path never shows the degraded state.
     await expect(thread.locator('slicc-compaction-marker[state="fallback"]')).toHaveCount(0);
     // The marker is NOT an assistant bubble: the model's voice does not carry
