@@ -453,9 +453,9 @@ Nothing else is required for CI configuration:
   - publishes per-step Cloudflare timings in the run summary and `cloudflare-worker-phase-timing` JSON artifact
 - `.github/workflows/worker-staging.yml`
   - provides a specialized, non-required staging deployment on non-fork pull requests that touch Worker, cloud-core, or provider integration paths
-  - serializes runs because the staging Worker and `slicc-staging` e2b alias are shared singletons
+  - shares `worker-staging-e2b-slicc-staging` concurrency with the main CI Worker job because the staging Worker and `slicc-staging` e2b alias are shared singletons
   - uploads the staging-only APNs secrets that the main CI path does not manage
-  - uses its narrower R2 path signal and publishes the same phase timing diagnostics
+  - mirrors the main workflow's complete R2 build-input set inside its narrower workflow trigger, and publishes the same phase timing diagnostics
 - `.github/workflows/worker.yml`
   - manually deploys production from `main` with `workflow_dispatch`
   - archives assets before deploy and smoke-tests the resulting Worker URL

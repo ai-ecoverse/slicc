@@ -24,11 +24,12 @@ on:
 # Serialize across ALL PRs: this job mutates two shared singletons — the
 # `slicc-staging` e2b template alias (build overwrites it) and the
 # `slicc-tray-hub-staging` worker (deploy overwrites it). Without this, two
-# concurrent PRs can interleave (PR A builds → PR B overwrites → PR A's verify
-# boots PR B's template), giving PR A a false pass against PR B's artifacts.
+# concurrent PRs or the main CI staging job can interleave (PR A builds → CI
+# overwrites → PR A verifies), giving one run a false pass against another's
+# artifacts. The cloudflare-worker job in ci.yml uses this same group.
 # cancel-in-progress: false → queue rather than cancel, so an in-flight deploy
-# never gets killed half-way. Unrelated CI (the ci.yml jobs) still runs in
-# parallel; only this workflow's runs serialize.
+# never gets killed half-way. Unrelated CI jobs still run in parallel; only
+# staging mutations serialize.
 concurrency:
   group: worker-staging-e2b-slicc-staging
   cancel-in-progress: false
@@ -52,14 +53,22 @@ jobs:
         with:
           filters: |
             r2:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
+              - 'packages/shared-ts/**'
+              - 'packages/webcomponents/**'
+              - 'packages/spoon/**'
               - 'packages/cloud-core/**'
-              - 'packages/webapp/src/providers/**'
-              - 'packages/webapp/providers/**'
+              - 'packages/dev-tools/providers.build.json'
               - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
               - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
               - 'packages/cloudflare-worker/src/asset-archive.mjs'
               - 'packages/cloudflare-worker/tests/deployed.test.ts'
               - 'packages/cloudflare-worker/wrangler.jsonc'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
               - '.github/workflows/worker-staging.yml'
 
       - uses: actions/setup-node@v7

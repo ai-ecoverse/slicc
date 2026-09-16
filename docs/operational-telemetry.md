@@ -370,8 +370,11 @@ attempt, retry waits, and propagation smoke separately measurable.
 
 `.github/workflows/worker-staging.yml` separately gives relevant non-fork pull requests an
 early, non-required staging deployment and owns the staging-only APNs secret upload. Those
-runs serialize because the Worker and `slicc-staging` e2b alias are shared singletons, and
-they apply the same R2-only-on-asset-change rule within their narrower trigger set.
+runs share the `worker-staging-e2b-slicc-staging` concurrency lock with the main CI Worker
+job because the Worker and `slicc-staging` e2b alias are shared singletons. Its internal R2
+filter mirrors the complete main-workflow build-input set, even though the specialized
+workflow itself has a narrower trigger, so a combined Worker + UI change cannot deploy
+unarchived chunks.
 `packages/cloudflare-worker/tests/deployed.test.ts` is the live-endpoint suite to point at
 either deployment (`WORKER_BASE_URL=https://… npm test -- tests/deployed.test.ts` from
 `packages/cloudflare-worker/`). Production deploys run through the manually dispatched

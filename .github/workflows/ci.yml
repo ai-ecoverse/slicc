@@ -829,6 +829,12 @@ jobs:
   cloudflare-worker:
     needs: changes
     runs-on: ubuntu-latest
+    # This job and worker-staging.yml both mutate the same staging Worker.
+    # Share one repository-wide lock so neither can replace the deployment
+    # between the other's finalizer and live smoke test.
+    concurrency:
+      group: worker-staging-e2b-slicc-staging
+      cancel-in-progress: false
     permissions:
       actions: read
       contents: read
