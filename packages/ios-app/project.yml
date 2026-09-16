@@ -247,7 +247,7 @@ schemes:
 packages:
   GhosttyTerminal:
     url: https://github.com/Lakr233/libghostty-spm
-    exactVersion: 1.5.20260906
+    exactVersion: 1.6.20260909
   HuggingFace:
     url: https://github.com/huggingface/swift-huggingface
     minorVersion: 0.10.1
