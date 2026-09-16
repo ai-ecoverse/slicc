@@ -392,14 +392,23 @@ export function blankStringLiterals(text) {
   return out;
 }
 
-export function collectImports(swiftSource) {
-  const modules = new Set();
+export function collectImportSites(swiftSource) {
+  const sites = [];
   const text = blankStringLiterals(stripComments(swiftSource));
   const importRe =
     /^[ \t]*(?:@[\w]+(?:\([^)]*\))?[ \t]+)*(?:@testable[ \t]+)?import[ \t]+(?:(?:struct|class|enum|protocol|typealias|func|var|let|actor|macro)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)/gm;
-  for (const m of text.matchAll(importRe)) modules.add(m[1]);
-  for (const m of text.matchAll(/canImport\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g)) modules.add(m[1]);
-  return modules;
+  const canImportRe = /canImport\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+  for (const m of text.matchAll(importRe)) {
+    sites.push({ module: m[1], line: lineOf(text, m.index), kind: 'import' });
+  }
+  for (const m of text.matchAll(canImportRe)) {
+    sites.push({ module: m[1], line: lineOf(text, m.index), kind: 'canImport' });
+  }
+  return sites;
+}
+
+export function collectImports(swiftSource) {
+  return new Set(collectImportSites(swiftSource).map((s) => s.module));
 }
 
 export function analyzeManifest({ manifest, importsByTarget, localPackages = new Map() }) {
