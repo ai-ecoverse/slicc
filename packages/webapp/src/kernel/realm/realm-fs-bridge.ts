@@ -611,9 +611,15 @@ function readdirFromCacheOrBridge(
     if (!bridge || !syncFs.isListingIncomplete(resolved) || syncFs.isTombstoned(resolved)) {
       return cached;
     }
-    return overlayReaddir(resolved, cached, bridge.readdir(resolved), (p) =>
-      syncFs.isTombstoned(p)
-    );
+    try {
+      return overlayReaddir(resolved, cached, bridge.readdir(resolved), (p) =>
+        syncFs.isTombstoned(p)
+      );
+    } catch (liveErr) {
+      // Cache-only rename of a synthesized dir: live still has the old path.
+      if ((liveErr as { code?: string })?.code === 'ENOENT') return cached;
+      throw liveErr;
+    }
   } catch (err) {
     const code = (err as { code?: string })?.code;
     if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;

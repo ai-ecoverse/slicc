@@ -709,3 +709,12 @@ test('readdirSync of snapshotted /tmp stays N+1 after write (#3193)', () => {
   shim.unlinkSync('/tmp/d.txt');
   expect(shim.readdirSync('/tmp').sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
 });
+
+test('readdirSync after cache-only rename of a live-only dir does not ENOENT (#3193)', () => {
+  const { store, dirs } = liveTree({ '/shared/keep.md': 'k' });
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store, dirs));
+  shim.writeFileSync('/shared/olddir/probe.txt', 'x');
+  shim.renameSync('/shared/olddir', '/shared/newdir');
+  expect(shim.readdirSync('/shared/newdir')).toEqual(['probe.txt']);
+  expect(shim.readdirSync('/shared').sort()).toEqual(['keep.md', 'newdir']);
+});
