@@ -110,4 +110,50 @@ describe('createScoopAgent context compaction adoption', () => {
     expect(agent.state.messages).toBe(stateBefore);
     expect(onContextCompacted).not.toHaveBeenCalled();
   });
+
+  it('does not overwrite canonical history that moved while compaction was running', async () => {
+    const old = message('old');
+    const recent = message('recent');
+    const summary = message('<context-summary>old</context-summary>');
+    let resolveTransform!: (messages: AgentMessage[]) => void;
+    const transformContext = vi.fn(
+      () =>
+        new Promise<AgentMessage[]>((resolve) => {
+          resolveTransform = resolve;
+        })
+    );
+    const onContextCompacted = vi.fn();
+    const agent = buildAgent([old, recent], transformContext, onContextCompacted);
+    const activeLoopMessages = [old, recent];
+
+    const pending = captures.options?.transformContext?.(activeLoopMessages);
+    const queued = message('queued while compacting');
+    agent.state.messages.push(queued);
+    resolveTransform([summary, recent]);
+    const result = await pending;
+
+    expect(result).toEqual([summary, recent]);
+    expect(activeLoopMessages).toEqual([old, recent]);
+    expect(agent.state.messages).toEqual([old, recent, queued]);
+    expect(onContextCompacted).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt or persist a transformed history after cancellation', async () => {
+    const old = message('old');
+    const summary = message('<context-summary>old</context-summary>');
+    const onContextCompacted = vi.fn();
+    const agent = buildAgent([old], async () => [summary], onContextCompacted);
+    const activeLoopMessages = [old];
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await captures.options?.transformContext?.(
+      activeLoopMessages,
+      controller.signal
+    );
+
+    expect(result).toBe(activeLoopMessages);
+    expect(agent.state.messages).toEqual([old]);
+    expect(onContextCompacted).not.toHaveBeenCalled();
+  });
 });
