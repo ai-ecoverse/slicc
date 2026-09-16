@@ -29,12 +29,14 @@
  * whose version differs between the base lockfile and HEAD's is replaced in
  * the baseline worktree with the BASE version, fetched via `npm pack`. The
  * delta then measures the dependency change instead of hiding it. When the
- * drift cannot be realigned — an un-hoisted nested production path whose
- * ancestor did not also change, a registry failure, or a lockfile refresh
+ * drift cannot be realigned — a registry failure, or a lockfile refresh
  * too large to be one change — the baseline is reported as unmeasurable
  * rather than quietly wrong, which a CI `pull_request` run treats as a
  * failure (see `check-first-load-size.mjs`). Nested copies that exist only
- * in the dev tree are skipped: they cannot appear in `dist/ui`.
+ * in the dev tree are skipped: they cannot appear in `dist/ui`. Un-hoisted
+ * nested production copies are realigned the same way as hoisted ones:
+ * `materializeLinkedParents` splits the parent symlink so the nested
+ * entry can be swapped without writing through the caller's install.
  *
  * WORKSPACE packages are a different matter and must NOT be borrowed from
  * HEAD. npm links them into `node_modules/@scope/name` as RELATIVE symlinks
@@ -207,6 +209,23 @@ function nestedCopyIsCovered(path, entry, base, head) {
 }
 
 /**
+ * Registry name to `npm pack`, from a lockfile path + entry.
+ *
+ * Nested copies live at `node_modules/<parent>/node_modules/<name>`, so the
+ * install directory is not the registry name. Prefer the lock entry's own
+ * `name` (aliases); otherwise take the segment after the last `/node_modules/`.
+ *
+ * @param {string} path
+ * @param {{name?: string}} entry
+ */
+function registryName(path, entry) {
+  if (entry.name) return entry.name;
+  const installName = path.slice('node_modules/'.length);
+  const idx = installName.lastIndexOf('/node_modules/');
+  return idx === -1 ? installName : installName.slice(idx + '/node_modules/'.length);
+}
+
+/**
  * Dependencies the baseline worktree would otherwise get wrong, split by how
  * badly a failure to fix them matters.
  *
@@ -227,16 +246,19 @@ function nestedCopyIsCovered(path, entry, base, head) {
  * show. (An earlier version of this lumped additions and removals together
  * as "present on only one side"; only the addition half of that is right.)
  *
- * `unrealignable` collects drift with nowhere to put it — un-hoisted nested
- * copies like `node_modules/a/node_modules/b`, which `linkNodeModules`
- * borrows as part of their parent — so the caller can refuse to report a
- * delta it cannot trust instead of silently measuring the wrong tree. A
- * nested copy whose ancestor package also changed is NOT that hole: the
- * parent is already in `changed`/`missing` and gets replaced wholesale, so
- * the nested tree travels with it (the same "transitives stay borrowed from
- * HEAD" approximation as `realignDriftedDependencies`). Knip 6.33.0 is the
- * specimen: `oxc-parser` 0.143 -> 0.147 nests a matching `@oxc-project/types`,
- * which is not an independent realignment.
+ * `unrealignable` collects drift with nowhere to put it (today: unused for
+ * nested copies; kept so a future hole can still refuse the baseline).
+ * Un-hoisted nested production copies used to live there because
+ * `linkNodeModules` borrows them as part of their parent, but
+ * `materializeLinkedParents` can split that parent so `installBaseVersion`
+ * swaps the nested entry independently. They now go to `changed`/`missing`
+ * (specimen: Dependabot PR #3200, `node_modules/glob/node_modules/brace-expansion`
+ * 2.0.2 -> 2.1.7). A nested copy whose ancestor package also changed is NOT
+ * an independent hole: the parent is already in `changed`/`missing` and gets
+ * replaced wholesale, so the nested tree travels with it (the same
+ * "transitives stay borrowed from HEAD" approximation as
+ * `realignDriftedDependencies`). Knip 6.33.0 is the specimen: `oxc-parser`
+ * 0.143 -> 0.147 nests a matching `@oxc-project/types`.
  *
  * Nested copies that exist only in the dev tree (`dev: true` on both sides,
  * or removed from HEAD while still `dev: true` on the base) are also not
@@ -244,7 +266,9 @@ function nestedCopyIsCovered(path, entry, base, head) {
  * HEAD cannot hide an eager-graph regression. Skipping them is what lets a
  * Dependabot bump of GitHub Actions' nested undici (PR #3198) measure a
  * real baseline instead of failing as unmeasurable. A nested copy that
- * graduates from `dev: true` to production still fails closed.
+ * graduates from `dev: true` to production is realigned like any other
+ * production nested bump — leaving it borrowed from HEAD would hide the
+ * size of the newly-production package.
  *
  * @param {string} repoRoot
  * @param {string} tree base checkout
@@ -270,9 +294,12 @@ export function dependencyDrift(repoRoot, tree) {
     if (to === from) continue;
     const installName = path.slice('node_modules/'.length);
     if (installName.includes('/node_modules/')) {
-      if (!nestedCopyIsCovered(path, entry, base, head)) {
-        unrealignable.push(`${path} (${from} -> ${to ?? 'removed'}, un-hoisted)`);
-      }
+      if (nestedCopyIsCovered(path, entry, base, head)) continue;
+      // Un-hoisted nested production copy. `materializeLinkedParents` splits
+      // the parent symlink so `installBaseVersion` can swap this entry
+      // independently — treat it as changed/missing, not a hole.
+      const drift = { path, name: registryName(path, entry), from, to };
+      (to === null ? missing : changed).push(drift);
       continue;
     }
     // A workspace package linked into node_modules carries the root version;
@@ -282,7 +309,7 @@ export function dependencyDrift(repoRoot, tree) {
     // `node_modules/undici8` with `name: "undici"`. Fetching `undici8` would
     // request a DIFFERENT package that may well exist on the registry, so
     // trust the lock entry's own name over the directory it landed in.
-    const drift = { path, name: entry.name ?? installName, from, to };
+    const drift = { path, name: registryName(path, entry), from, to };
     (to === null ? missing : changed).push(drift);
   }
   return { changed, missing, unrealignable };
