@@ -73,6 +73,5 @@ export {
   type ToolAdapterProcessConfig,
   type ToolAdapterSecretsConfig,
 } from './tool-adapter.js';
-export { ToolRegistry } from './tool-registry.js';
 // Local types
 export type { AgentConfig, SessionData } from './types.js';
