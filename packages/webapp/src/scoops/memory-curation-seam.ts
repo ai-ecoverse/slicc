@@ -22,6 +22,7 @@ import {
   type AgenticMemoryPassResult,
   type CuratorConeRef,
   runAgenticMemoryPass,
+  seedMemoryInstructions,
 } from './agentic-memory.js';
 import { runMemoryDreamPass } from './memory-dreaming.js';
 
@@ -62,6 +63,11 @@ interface MemorySeamGlobals {
  * float never publishes a bridge at all.
  */
 export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
+  // The seam is built once at kernel boot, off the eager graph — the right
+  // moment to seed `/etc/MEMORY.md` (only when absent) so the user can edit
+  // the document both passes run under. Best-effort and detached: a pass
+  // falls back to the bundled text when the file is missing.
+  void seedMemoryInstructions(sharedFs);
   return {
     async curate(request: MemoryCurateRequest): Promise<AgenticMemoryPassResult> {
       const bridge = (globalThis as unknown as MemorySeamGlobals).__slicc_agent;

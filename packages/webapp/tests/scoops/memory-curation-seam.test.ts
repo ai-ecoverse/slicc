@@ -35,6 +35,12 @@ function fakeVfs(files: Record<string, string>) {
       writes.set(path, body);
     }),
     mkdir: vi.fn(async () => {}),
+    // The seam seeds `/etc/MEMORY.md` only when absent; a fixture that
+    // provides the document must answer the existence probe.
+    stat: vi.fn(async (path: string) => {
+      if (writes.has(path) || files[path] !== undefined) return { size: 1 };
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+    }),
   };
   return { vfs: vfs as unknown as VirtualFS, writes };
 }
@@ -70,7 +76,8 @@ describe('createMemorySeam', () => {
         { filename: 'a.md', title: 'a', frozenAt: '2026-09-01T00:00:00Z', messageCount: 1 },
         { filename: 'b.md', title: 'b', frozenAt: '2026-09-02T00:00:00Z', messageCount: 1 },
       ]),
-      '/shared/DREAMING.md': 'Dream {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions.',
+      '/etc/MEMORY.md':
+        '---\ntimeoutSeconds: 60\n---\nDream {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions.',
       '/workspace/CLAUDE.md': '# memories\n',
     });
 

@@ -1,18 +1,18 @@
 /**
- * Memory dreaming — the nightly refactoring pass over a cone's durable
- * memory. Where the memory curator folds ONE new session archive into the
+ * Memory dreaming — the nightly consolidation pass over a cone's durable
+ * memory. Where the curation pass folds ONE new session archive into the
  * file, the dreamer consolidates the file itself: merges duplicates, drops
  * superseded facts, retires stale sections, and lands under budget. It is
- * `runAgenticMemoryPass` with a different instruction document
- * (`/shared/DREAMING.md`) and agent name — same staged base/draft snapshot,
- * same three-way merge onto the live file, same wall-clock bound.
+ * `runAgenticMemoryPass` under the SAME instruction document
+ * (`/etc/MEMORY.md`, #3157) with a different `{{TASK}}` paragraph, agent name
+ * and wall-clock bound (`dreamTimeoutSeconds`) — same staged base/draft
+ * snapshot, same three-way merge onto the live file.
  *
  * Triggered by the gelatiere's nightly (`memory dream --all` is on its
  * allow-list) or by hand via `memory dream`; both go through the
  * `__slicc_memory` seam.
  */
 
-import DEFAULT_DREAMING_MD from '../../../vfs-root/shared/DREAMING.md?raw';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import {
   type AgenticMemoryPassResult,
@@ -24,17 +24,12 @@ import {
   runAgenticMemoryPass,
 } from './agentic-memory.js';
 
-export { DEFAULT_DREAMING_MD };
-
-export const DREAMING_INSTRUCTIONS_PATH = '/shared/DREAMING.md';
-
 // Defined beside `curatorAgentName` so each pass can name the other as its
 // rival without a module cycle; re-exported here for callers and tests.
 export { dreamerAgentName };
 
 export const DREAMER_INSTRUCTIONS: MemoryPassInstructions = {
-  path: DREAMING_INSTRUCTIONS_PATH,
-  fallback: DEFAULT_DREAMING_MD,
+  kind: 'dream',
   nameFor: dreamerAgentName,
   // A curator over the same file (a "New chat" while the nightly dreams)
   // must not run at the same time — see `MemoryPassInstructions.rivalsFor`.

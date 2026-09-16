@@ -13,6 +13,7 @@ import {
   curatorAgentName,
   curatorScratchDir,
   DEFAULT_MEMORY_MD,
+  MEMORY_INSTRUCTIONS_PATH,
   runAgenticMemoryPass,
 } from '../../src/scoops/agentic-memory.js';
 import { CONE_MEMORY_PATH, computeBudget } from '../../src/scoops/cone-memory-budget.js';
@@ -62,7 +63,7 @@ interface FakeVfs extends CuratorVfs {
 }
 
 /**
- * Path-aware fake: `/shared/MEMORY.md` serves `content` (or throws it);
+ * Path-aware fake: `/etc/MEMORY.md` serves `content` (or throws it);
  * any other read serves what the pass wrote there, or the optional
  * `liveMemory`, or ENOENT — the snapshot-seeding path tolerates all three.
  */
@@ -71,7 +72,7 @@ function fakeVfs(content: string | Error, liveMemory?: string): FakeVfs {
   return {
     writes,
     readFile: vi.fn(async (path: string) => {
-      if (path === '/shared/MEMORY.md') {
+      if (path === MEMORY_INSTRUCTIONS_PATH) {
         if (content instanceof Error) throw content;
         return content;
       }
@@ -148,9 +149,39 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       // this fixture sets timeoutSeconds: 45.
       maxWallClockMs: 45_000,
     });
+    // A document without a `{{TASK}}` slot gets the pass statement appended.
     expect(options.prompt).toBe(
-      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`
+      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}\n\n` +
+        `**Curation pass**: mine the archived session at ${ARCHIVE_PATH} for what is worth carrying into future sessions, ` +
+        'fold it into the memory, and consolidate the whole file in the same pass. Work fast: a pass should finish in ' +
+        'well under 10 minutes and is hard-stopped after 1 minutes — mine the three signals, write, and stop, rather than ' +
+        'exploring the archive exhaustively.'
     );
+  });
+
+  it('fills {{TASK}} and {{TIMEOUT_MINUTES}} in place when the document has the slots', async () => {
+    const memoryMd = `---
+timeoutSeconds: 600
+---
+# Pass
+{{TASK}}
+Bound: {{TIMEOUT_MINUTES}} minutes. File: {{MEMORY_PATH}}.`;
+    const spawn = successSpawn();
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(memoryMd),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    const prompt = spawn.mock.calls[0][0].prompt;
+    expect(prompt.startsWith('# Pass\n**Curation pass**: mine the archived session at ')).toBe(
+      true
+    );
+    expect(prompt).toContain('hard-stopped after 10 minutes');
+    expect(prompt).toContain(`Bound: 10 minutes. File: ${DRAFT_PATH}.`);
+    expect(prompt).not.toContain('{{');
   });
 
   it('persists a durable transcript under the fixed memory-curator name', async () => {
@@ -392,7 +423,7 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result).toEqual({ ok: true, report: 'done' });
     expect(warn).toHaveBeenCalled();
-    expect(spawn.mock.calls[0][0].writablePaths).toEqual([DRAFT_PATH]);
+    expect(spawn.mock.calls[0][0].writablePaths).toEqual([DRAFT_PATH, '/shared/wiki/']);
     expect(spawn.mock.calls[0][0].mergeOnSuccess?.targetPath).toBe(CONE_MEMORY_PATH);
   });
 
@@ -414,7 +445,7 @@ Curate {{MEMORY_PATH}}.`;
     // `/workspace/skills/`. `/workspace/` stays readable so it can orient.
     expect(spawn.mock.calls[0][0]).toMatchObject({
       cwd: '/workspace',
-      writablePaths: [DRAFT_PATH],
+      writablePaths: [DRAFT_PATH, '/shared/wiki/'],
       visiblePaths: ['/sessions/', '/shared/', '/workspace/', `${CURATION_DIR}/`],
       notifyOnComplete: true,
       mergeOnSuccess: {
@@ -638,7 +669,7 @@ Curate {{MEMORY_PATH}}.`;
         // applies that policy to this cone's own file — which is then
         // staged: the curator writes the per-archive draft and the bridge
         // merges it onto this cone's live file on exit 0.
-        writablePaths: [DRAFT_PATH],
+        writablePaths: [DRAFT_PATH, '/shared/wiki/'],
         mergeOnSuccess: {
           targetPath: '/cones/cone-beta/CLAUDE.md',
           basePath: curationBasePath(ARCHIVE_PATH),
@@ -716,7 +747,9 @@ Curate {{MEMORY_PATH}}.`;
       });
 
       const prompt = spawn.mock.calls[0][0].prompt;
-      expect(prompt).toBe(`Draft in \`${scratch}/draft.md\`, then write ${DRAFT_PATH}.`);
+      expect(prompt.startsWith(`Draft in \`${scratch}/draft.md\`, then write ${DRAFT_PATH}.`)).toBe(
+        true
+      );
       expect(prompt).not.toContain(doubled);
     });
 
@@ -732,9 +765,11 @@ Curate {{MEMORY_PATH}}.`;
         cone: BETA,
       });
 
-      expect(spawn.mock.calls[0][0].prompt).toBe(
-        `Draft in \`/scoops/agent-memory-curator-cone-beta/draft.md\`, then write ${DRAFT_PATH}.`
-      );
+      expect(
+        spawn.mock.calls[0][0].prompt.startsWith(
+          `Draft in \`/scoops/agent-memory-curator-cone-beta/draft.md\`, then write ${DRAFT_PATH}.`
+        )
+      ).toBe(true);
     });
 
     it('leaves the primary cone byte-identical when named explicitly', async () => {
@@ -753,7 +788,7 @@ Curate {{MEMORY_PATH}}.`;
       expect(curatorAgentName('cone')).toBe('memory-curator');
       expect(options).toMatchObject({
         cwd: '/workspace',
-        writablePaths: [DRAFT_PATH],
+        writablePaths: [DRAFT_PATH, '/shared/wiki/'],
         name: 'memory-curator',
         mergeOnSuccess: {
           targetPath: CONE_MEMORY_PATH,
@@ -789,7 +824,7 @@ Curate {{MEMORY_PATH}}.`;
       const options = spawn.mock.calls[0][0];
       expect(options.name).toBe('memory-curator-cone-beta-2');
       expect(options.name).toMatch(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
-      expect(options.writablePaths).toEqual([DRAFT_PATH]);
+      expect(options.writablePaths).toEqual([DRAFT_PATH, '/shared/wiki/']);
       expect(options.mergeOnSuccess?.targetPath).toBe('/cones/cone-beta-2/CLAUDE.md');
     });
 
@@ -810,7 +845,7 @@ Curate {{MEMORY_PATH}}.`;
 
       const options = spawn.mock.calls[0][0];
       expect(options.name).toBe('memory-curator');
-      expect(options.writablePaths).toEqual([DRAFT_PATH]);
+      expect(options.writablePaths).toEqual([DRAFT_PATH, '/shared/wiki/']);
       expect(options.mergeOnSuccess?.targetPath).toBe('/cones/Cone_Weird!/CLAUDE.md');
     });
 

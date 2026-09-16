@@ -23,7 +23,11 @@
  * reads of `/sessions/index.json` and the memory files.
  */
 
-import { computeBudget } from '../../../base/memory-budget.js';
+import {
+  computeBudget,
+  LEGACY_MEMORY_INSTRUCTION_PATHS,
+  MEMORY_INSTRUCTIONS_PATH,
+} from '../../../base/memory-budget.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import {
   type FrozenSessionIndexEntry,
@@ -82,8 +86,9 @@ Commands:
 Files:
   /workspace/CLAUDE.md            The primary cone's memory file
   /cones/<folder>/CLAUDE.md       An extra cone's memory file
-  /shared/MEMORY.md               Curator instructions + config (frontmatter)
-  /shared/DREAMING.md             Dreamer instructions + config (frontmatter)
+  /etc/MEMORY.md                  Instructions + config (frontmatter) for BOTH
+                                  passes: timeoutSeconds bounds a curation,
+                                  dreamTimeoutSeconds a dream
   /sessions/index.json            Per-archive curation ledger (memoryPending,
                                   memoryCuratedAt, memoryFailed, memorySkipped)
   /sessions/.curation/health.json Last scheduled runtime health check (boot +
@@ -251,6 +256,16 @@ async function buildStatusReport(fs: VirtualFS): Promise<MemoryStatusReport> {
     checks.push(
       `${curation.failed} archive(s) whose last curation attempt failed — see \`memory log\``
     );
+  }
+  // The curator's and dreamer's documents merged into `/etc/MEMORY.md`
+  // (#3157); a surviving copy of either is no longer read, so a customized
+  // one would be silently ignored without this line.
+  for (const legacy of LEGACY_MEMORY_INSTRUCTION_PATHS) {
+    if ((await readMemoryFile(fs, legacy)) !== null) {
+      checks.push(
+        `${legacy} is no longer read — memory instructions live in ${MEMORY_INSTRUCTIONS_PATH}; carry any customization over, then delete it`
+      );
+    }
   }
   // The "memory system that lies" shape, per cone: curation reports success,
   // but the file that cone's user believes is accumulating memory is missing

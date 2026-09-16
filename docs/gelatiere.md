@@ -118,8 +118,9 @@ edit by the user is not.
    rotates by UTC day.
 3. On the nightly pass only, `GELATIERE.md` has it start the memory-dreaming pass first —
    `memory dream --all`, detached — which spawns one sandboxed `memory-dreamer` scoop per cone (one cone after another — every dreamer may write the shared wiki, whose index and log are not staged; and a dreamer never runs beside a curator over the same file: each names the other as a bridge `exclusiveWith` rival, so the second is rejected with `name already in use` — a "New chat" mid-dream leaves its archive pending for the boot catch-up, a nightly mid-curation skips that cone until the next night)
-   with a memory file to consolidate it under `/shared/DREAMING.md`'s instructions
-   (`scoops/memory-dreaming.ts`, the curator machinery with a different instruction document).
+   with a memory file to consolidate it under `/etc/MEMORY.md`'s instructions
+   (`scoops/memory-dreaming.ts`, the curator machinery under the same document with a
+   consolidation `{{TASK}}` and its own `dreamTimeoutSeconds` bound).
    The gelatiere itself still cannot write memory files; `memory` is on its allow-list for this
    one command, and the dreamers' writes go through the staged draft + three-way merge.
 4. It writes `$TMPDIR/candidates.json` and runs `gelatiere suggest <file> && gelatiere deliver`.

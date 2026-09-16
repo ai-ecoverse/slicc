@@ -1,5 +1,5 @@
 /**
- * The strict YAML subset the agent instruction files use — `/shared/MEMORY.md`
+ * The strict YAML subset the agent instruction files use — `/etc/MEMORY.md`
  * for the memory curator and `/shared/GELATIERE.md` for the gelatiere.
  *
  * Both files are user-editable prompts with a small config block on top, and
@@ -155,12 +155,13 @@ export function readOptionalString(
 export function readBoundedTimeout(
   value: FrontmatterValue | undefined,
   fallback: number,
-  max: number
+  max: number,
+  key = 'timeoutSeconds'
 ): number {
   if (value === undefined) return fallback;
-  if (typeof value !== 'string') throw new Error('timeoutSeconds is invalid');
+  if (typeof value !== 'string') throw new Error(`${key} is invalid`);
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('timeoutSeconds must be positive');
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${key} must be positive`);
   return Math.min(parsed, max);
 }
 
