@@ -7,6 +7,7 @@ import {
   RETRY_BASE_DELAY_MS,
   retryDelayMs,
   runBulkUploads,
+  totalFileBytes,
 } from '../scripts/upload-lib.mjs';
 
 function optionValue(argv: string[], option: string): string {
@@ -100,6 +101,22 @@ describe('buildBulkPutArgs', () => {
       '--remote',
       '--force',
     ]);
+  });
+});
+
+describe('totalFileBytes', () => {
+  it('keeps the log-only byte count best-effort when a file vanishes', async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path.endsWith('gone-def5678g.js')) {
+        throw new Error('ENOENT');
+      }
+      return { size: 1024 };
+    });
+
+    await expect(
+      totalFileBytes(['app-abc1234d.js', 'gone-def5678g.js'], '/assets', stat)
+    ).resolves.toBe(1024);
+    expect(stat).toHaveBeenCalledTimes(2);
   });
 });
 

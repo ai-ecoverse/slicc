@@ -21,6 +21,16 @@ export declare function buildBulkPutArgs(
   concurrency: number
 ): string[];
 
+export interface StatFile {
+  size: number;
+}
+
+export declare function totalFileBytes(
+  files: string[],
+  dir: string,
+  stat?: (path: string) => Promise<StatFile>
+): Promise<number>;
+
 export interface Exec {
   (argv: string[]): Promise<any>;
 }

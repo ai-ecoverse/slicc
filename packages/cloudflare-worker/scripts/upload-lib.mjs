@@ -72,6 +72,24 @@ export function buildBulkPutArgs(bucket, manifestPath, contentType, concurrency)
   ];
 }
 
+/**
+ * Best-effort total used only for progress logging. A file can disappear
+ * between readdir and stat; leave authoritative validation to Wrangler so a
+ * cosmetic byte count cannot prevent the upload from starting.
+ */
+export async function totalFileBytes(files, dir, stat = fs.stat) {
+  const sizes = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return (await stat(join(dir, file))).size;
+      } catch {
+        return 0;
+      }
+    })
+  );
+  return sizes.reduce((sum, size) => sum + size, 0);
+}
+
 /** Base delay for the exponential retry backoff, in milliseconds. */
 export const RETRY_BASE_DELAY_MS = 500;
 

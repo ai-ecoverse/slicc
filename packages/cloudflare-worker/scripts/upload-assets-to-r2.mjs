@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
-import { runBulkUploads } from './upload-lib.mjs';
+import { runBulkUploads, totalFileBytes } from './upload-lib.mjs';
 
 /** Parse command-line arguments. */
 function parseArgs(args) {
@@ -83,8 +83,7 @@ async function main() {
       return;
     }
 
-    const sizes = await Promise.all(files.map((file) => fs.stat(resolve(assetDir, file))));
-    const totalBytes = sizes.reduce((sum, stat) => sum + stat.size, 0);
+    const totalBytes = await totalFileBytes(files, assetDir);
     const startedAt = Date.now();
     console.log(
       `Bulk-uploading ${files.length} files (${formatBytes(totalBytes)}) to R2 bucket '${bucket}' with concurrency ${concurrency}`
