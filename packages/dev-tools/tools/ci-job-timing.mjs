@@ -1,7 +1,12 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildTimingReport, formatTimingSummary, selectJob } from './ci-job-timing-lib.mjs';
+import {
+  buildTimingReport,
+  formatTimingSummary,
+  hasUnsettledStepsBefore,
+  selectJob,
+} from './ci-job-timing-lib.mjs';
 
 function parseArgs(args) {
   const options = { excludedSteps: [] };
@@ -58,11 +63,11 @@ export async function main(args = process.argv.slice(2)) {
   const options = parseArgs(args);
   let jobs = [];
   let job;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
     jobs = await listJobs();
     job = selectJob(jobs, options.job);
-    if (job) break;
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    if (job && !hasUnsettledStepsBefore(job, options.excludedSteps)) break;
+    if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   if (!job) {
     const names = jobs

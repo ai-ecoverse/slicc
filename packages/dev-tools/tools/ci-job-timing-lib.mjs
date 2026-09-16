@@ -24,6 +24,12 @@ export function selectJob(jobs, jobName) {
 export function buildTimingReport(job, options = {}) {
   const nowMs = options.nowMs ?? Date.now();
   const excludedSteps = new Set(options.excludedSteps ?? []);
+  const firstExcludedStepNumber = (job.steps ?? [])
+    .filter((step) => excludedSteps.has(step.name))
+    .reduce(
+      (first, step) => Math.min(first, step.number ?? Number.POSITIVE_INFINITY),
+      Number.POSITIVE_INFINITY
+    );
   const createdMs = timestampMs(job.created_at);
   const startedMs = timestampMs(job.started_at);
 
@@ -45,7 +51,11 @@ export function buildTimingReport(job, options = {}) {
       elapsedMs: elapsedMs(job.started_at, job.completed_at, nowMs),
     },
     steps: (job.steps ?? [])
-      .filter((step) => !excludedSteps.has(step.name))
+      .filter(
+        (step) =>
+          !excludedSteps.has(step.name) &&
+          (step.number ?? Number.POSITIVE_INFINITY) < firstExcludedStepNumber
+      )
       .map((step) => ({
         number: step.number,
         name: step.name,
@@ -56,6 +66,19 @@ export function buildTimingReport(job, options = {}) {
         durationMs: elapsedMs(step.started_at, step.completed_at, nowMs),
       })),
   };
+}
+
+export function hasUnsettledStepsBefore(job, stepNames) {
+  const boundary = (job.steps ?? [])
+    .filter((step) => stepNames.includes(step.name))
+    .reduce(
+      (first, step) => Math.min(first, step.number ?? Number.POSITIVE_INFINITY),
+      Number.POSITIVE_INFINITY
+    );
+  if (!Number.isFinite(boundary)) return false;
+  return (job.steps ?? []).some(
+    (step) => (step.number ?? Number.POSITIVE_INFINITY) < boundary && step.status !== 'completed'
+  );
 }
 
 export function formatDuration(milliseconds) {

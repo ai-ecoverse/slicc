@@ -4,6 +4,7 @@ import {
   elapsedMs,
   formatDuration,
   formatTimingSummary,
+  hasUnsettledStepsBefore,
   selectJob,
 } from './ci-job-timing-lib.mjs';
 
@@ -40,6 +41,14 @@ const job = {
       started_at: '2026-09-16T10:01:16.000Z',
       completed_at: null,
     },
+    {
+      number: 4,
+      name: 'Upload Cloudflare timing diagnostics',
+      status: 'pending',
+      conclusion: null,
+      started_at: null,
+      completed_at: null,
+    },
   ],
 };
 
@@ -72,7 +81,22 @@ describe('CI job timing diagnostics', () => {
       }),
       expect.objectContaining({ name: 'Archive assets to R2 (staging)', durationMs: undefined }),
     ]);
+    expect(report.steps).toHaveLength(2);
     expect(elapsedMs(undefined, undefined, nowMs)).toBeUndefined();
+  });
+
+  it('waits for API consistency before the reporter and ignores later bookkeeping steps', () => {
+    const stale = {
+      ...job,
+      steps: job.steps.map((step) =>
+        step.name === 'Archive assets to R2 (staging)'
+          ? { ...step, status: 'in_progress', conclusion: null }
+          : step
+      ),
+    };
+    expect(hasUnsettledStepsBefore(stale, ['Publish Cloudflare timing diagnostics'])).toBeTruthy();
+
+    expect(hasUnsettledStepsBefore(job, ['Publish Cloudflare timing diagnostics'])).toBeFalsy();
   });
 
   it('renders a scan-friendly Markdown phase table', () => {
