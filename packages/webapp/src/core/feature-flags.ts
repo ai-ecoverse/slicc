@@ -25,6 +25,13 @@ export interface FeatureFlagDefinition {
   readonly floatDefaults?: Readonly<Partial<Record<FeatureFlagFloat, string>>>;
   readonly userToggleable: boolean;
   readonly overridableFloats?: readonly FeatureFlagFloat[];
+  /**
+   * ISO date (`YYYY-MM-DD`) the current bundled default became constant
+   * across floats — introduction, or the graduation date if the default
+   * later flipped. Reset this when graduating. `lint:dead-flags` warns after
+   * 90 days at a constant default; see `docs/feature-flags.md`.
+   */
+  readonly since: string;
 }
 
 export const FEATURE_FLAG_STORAGE_KEY = 'slicc_feature_flags';
@@ -37,6 +44,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
     userToggleable: false,
+    since: '2026-07-31',
   }),
   Object.freeze({
     id: 'panel-layouts',
@@ -47,6 +55,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     // pushing its own layout, so there is one answer to "are panels on here".
     defaultValue: 'off',
     userToggleable: true,
+    since: '2026-08-03',
   }),
   Object.freeze({
     id: 'agentic-memory',
@@ -55,6 +64,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
       'Curate session memory with a background agent instead of a one-shot extraction call.',
     defaultValue: 'off',
     userToggleable: true,
+    since: '2026-08-05',
   }),
   Object.freeze({
     id: 'multiple-cones',
@@ -72,6 +82,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
     userToggleable: false,
+    since: '2026-08-21',
   }),
   Object.freeze({
     id: 'compact-on-idle',
@@ -92,6 +103,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     // (`IdleCompaction.gate`), so there is nothing to carve out per float.
     defaultValue: 'on',
     userToggleable: false,
+    since: '2026-09-02',
   }),
   Object.freeze({
     id: 'memory-v2',
@@ -100,6 +112,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
       'Searchable session history, scoop pre-compaction snapshots, and the gelatiere — a resident advisor that reviews your sessions and suggests skills and use cases.',
     defaultValue: 'off',
     userToggleable: true,
+    since: '2026-09-10',
   }),
 ]);
 
