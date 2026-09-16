@@ -56,6 +56,8 @@ import {
   streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
+import { fetchCopilotUsage } from '../src/providers/github-copilot-usage.js';
+import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {
   DeviceCodePrompter,
   InterceptingOAuthLauncher,
@@ -955,6 +957,32 @@ const defaultDeviceCodePrompter: DeviceCodePrompter = ({ userCode, verificationU
   });
 };
 
+/**
+ * The account's rolling monthly premium-interaction allowance (AI Credits),
+ * or `null` when this account has no metered window.
+ *
+ * GitHub bills premium-model usage (Claude, GPT-5, Codex, Gemini, Grok)
+ * against `quota_snapshots.premium_interactions` — a monthly allowance
+ * reported by `copilot_internal/user`, the same bootstrap call the official
+ * `copilot` CLI makes at session start. `chat`/`completions` report
+ * `unlimited: true` on every plan we've seen; only the premium-model window
+ * is finite, so that's the one surfaced here.
+ *
+ * The call is authenticated with the raw GitHub OAuth access token
+ * (`account.refreshToken` — see `PersistedCopilot`), not the short-lived
+ * Copilot completion token.
+ *
+ * Never logs in and never renews interactively — a decorative counter must
+ * not pop an auth window. Never having connected this provider is simply "no
+ * window" (`null`); an authenticated call that fails is thrown so the cache
+ * retries on the short clock instead of quietly going stale for 30 minutes.
+ */
+async function getBudgetUsage(): Promise<ProviderBudgetWindow | null> {
+  const account = getCopilotAccount();
+  if (!account?.refreshToken) return null;
+  return fetchCopilotUsage(account.refreshToken, fetch, { headers: COPILOT_EXCHANGE_HEADERS });
+}
+
 // ── Provider config ────────────────────────────────────────────────
 
 export const config: ProviderConfig = {
@@ -974,6 +1002,7 @@ export const config: ProviderConfig = {
   ],
 
   getModelIds: buildCopilotModelList,
+  getBudgetUsage,
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,
