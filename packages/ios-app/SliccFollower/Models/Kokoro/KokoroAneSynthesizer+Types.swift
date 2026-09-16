@@ -1,6 +1,5 @@
 import Foundation
 
-
 struct KokoroAneStageTimings: Sendable, Equatable {
     var albert: Double = 0
     var postAlbert: Double = 0
@@ -10,7 +9,6 @@ struct KokoroAneStageTimings: Sendable, Equatable {
     var vocoder: Double = 0
     var tail: Double = 0
 
-    
     var totalMs: Double {
         albert + postAlbert + alignment + prosody + noise + vocoder + tail
     }
@@ -18,20 +16,18 @@ struct KokoroAneStageTimings: Sendable, Equatable {
     init() {}
 }
 
-
 struct KokoroAneSynthesisResult: Sendable {
-    
+
     let samples: [Float]
-    
+
     let sampleRate: Int
-    
+
     let encoderTokens: Int
-    
+
     let acousticFrames: Int
-    
+
     let timings: KokoroAneStageTimings
 
-    
     var durationSeconds: Double {
         Double(samples.count) / Double(sampleRate)
     }
@@ -51,7 +47,6 @@ struct KokoroAneSynthesisResult: Sendable {
     }
 }
 
-
 enum KokoroAneStage: String, CaseIterable, Sendable {
     case albert
     case postAlbert
@@ -61,7 +56,6 @@ enum KokoroAneStage: String, CaseIterable, Sendable {
     case vocoder
     case tail
 
-    
     var bundleName: String {
         switch self {
         case .albert: return "KokoroAlbert.mlmodelc"

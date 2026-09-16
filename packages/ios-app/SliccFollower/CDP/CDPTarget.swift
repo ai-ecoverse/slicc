@@ -4,54 +4,35 @@ import UIKit
 import WebKit
 import os
 
-
-
-
-
-
-
 @MainActor
 final class CDPTarget: NSObject {
 
-    
-
-    
     let targetId: String
-    
-    var sessionId: String?
 
-    
+    var sessionId: String?
 
     let webView: WKWebView
 
-    
-
-    
     private(set) var currentURL: String = "about:blank"
-    
+
     private(set) var currentTitle: String = ""
-    
+
     let frameId: String
-    
+
     private var loaderCounter: Int = 0
-    
+
     var pageEnabled: Bool = false
-    
+
     var runtimeEnabled: Bool = false
-    
+
     var domEnabled: Bool = false
 
-    
-    private(set) var newDocumentScripts: [String: String] = [:]  
+    private(set) var newDocumentScripts: [String: String] = [:]
     private var nextScriptId: Int = 1
 
-    
     private let executionContextId: Int
 
-    
     weak var bridge: CDPBridge?
-
-    
 
     init(targetId: String, webView: WKWebView, contextId: Int) {
         self.targetId = targetId
@@ -62,8 +43,6 @@ final class CDPTarget: NSObject {
         webView.navigationDelegate = self
         webView.uiDelegate = self
     }
-
-    
 
     func targetInfo() -> [String: Any] {
         return [
@@ -76,13 +55,6 @@ final class CDPTarget: NSObject {
         ]
     }
 
-    
-    
-    
-    
-    
-    
-    
     func remoteInfo() -> RemoteTargetInfo {
         RemoteTargetInfo(
             targetId: targetId,
@@ -91,8 +63,6 @@ final class CDPTarget: NSObject {
             kind: "browser",
             capabilities: CherryCapabilities(navigate: true, network: true, screenshot: true))
     }
-
-    
 
     @discardableResult
     func navigate(to urlString: String) -> [String: Any] {
@@ -117,9 +87,6 @@ final class CDPTarget: NSObject {
         webView.goForward()
     }
 
-    
-
-    
     func runtimeEvaluate(
         expression: String,
         awaitPromise: Bool,
@@ -127,12 +94,7 @@ final class CDPTarget: NSObject {
         completion: @escaping ([String: Any]) -> Void
     ) {
         if awaitPromise {
-            
-            
-            
-            
-            
-            
+
             let wrapped = """
                 try {
                   const __r = await (\(expression));
@@ -150,7 +112,7 @@ final class CDPTarget: NSObject {
                 }
             }
         } else {
-            
+
             let wrapped =
                 "(function() { try { return { ok: true, value: (\(expression)) }; } catch(e) { return { ok: false, error: String((e && e.stack) || e) }; } })()"
             webView.evaluateJavaScript(wrapped) { value, error in
@@ -204,7 +166,7 @@ final class CDPTarget: NSObject {
             return ["type": "string", "value": s]
         }
         if let n = value as? NSNumber {
-            
+
             let typeStr = String(cString: n.objCType)
             if typeStr == "c" || typeStr == "B" {
                 return ["type": "boolean", "value": n.boolValue]
@@ -230,8 +192,6 @@ final class CDPTarget: NSObject {
         }
         return ["type": "object", "description": String(describing: value)]
     }
-
-    
 
     func captureScreenshot(format: String, quality: Int?, completion: @escaping (Result<String, Error>) -> Void) {
         let cfg = WKSnapshotConfiguration()
@@ -269,8 +229,6 @@ final class CDPTarget: NSObject {
         }
     }
 
-    
-
     func addScriptToEvaluateOnNewDocument(_ source: String) -> String {
         let id = "script-\(targetId)-\(nextScriptId)"
         nextScriptId += 1
@@ -286,7 +244,7 @@ final class CDPTarget: NSObject {
 
     func removeScriptToEvaluateOnNewDocument(_ identifier: String) {
         newDocumentScripts.removeValue(forKey: identifier)
-        
+
         let remaining = newDocumentScripts.values
         webView.configuration.userContentController.removeAllUserScripts()
         for source in remaining {
@@ -295,8 +253,6 @@ final class CDPTarget: NSObject {
             webView.configuration.userContentController.addUserScript(userScript)
         }
     }
-
-    
 
     fileprivate func emit(_ method: String, _ params: [String: Any]) {
         bridge?.emitEvent(method: method, params: params, sessionId: sessionId)
@@ -328,8 +284,6 @@ final class CDPTarget: NSObject {
     }
 }
 
-
-
 extension CDPTarget: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -357,14 +311,6 @@ extension CDPTarget: WKNavigationDelegate {
         emitLifecycle("networkIdle")
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationResponse: WKNavigationResponse,
@@ -381,14 +327,10 @@ extension CDPTarget: WKNavigationDelegate {
             pageURL: handoff.pageURL, match: handoff.match, title: webView.title)
     }
 
-    
-    
-    
     nonisolated static func handoff(
         isForMainFrame: Bool, response: URLResponse?, fallbackURL: String
     ) -> (pageURL: String, match: HandoffMatch)? {
-        
-        
+
         guard isForMainFrame,
             let http = response as? HTTPURLResponse,
             let header = http.value(forHTTPHeaderField: "Link"),
@@ -419,8 +361,6 @@ extension CDPTarget: WKNavigationDelegate {
         emit("Page.loadEventFired", ["timestamp": Date().timeIntervalSince1970])
     }
 }
-
-
 
 extension CDPTarget: WKUIDelegate {
 

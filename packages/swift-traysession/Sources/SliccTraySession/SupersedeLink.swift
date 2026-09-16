@@ -1,40 +1,12 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 public enum SupersedeLink {
-    
+
     public static let rel = "successor-version"
 
-    
-    
-    
-    
-    
     public static func successor(in header: String?) -> URL? {
         guard let header, !header.isEmpty else { return nil }
-        
+
         let merged = header.replacingOccurrences(of: "\n", with: ", ")
         for value in splitOutsideQuotes(merged, separator: ",") {
             guard value.hasPrefix("<"), let uriEnd = value.firstIndex(of: ">") else { continue }
@@ -50,20 +22,10 @@ public enum SupersedeLink {
         return nil
     }
 
-    
     public static func successor(in response: HTTPURLResponse) -> URL? {
         successor(in: response.value(forHTTPHeaderField: "Link"))
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     public static func redirectTarget(in response: HTTPURLResponse) -> URL? {
         guard (300..<400).contains(response.statusCode),
             let raw = response.value(forHTTPHeaderField: "Location"),
@@ -75,10 +37,6 @@ public enum SupersedeLink {
         return components.url
     }
 
-    
-    
-    
-    
     private static func splitOutsideQuotes(_ input: String, separator: Character) -> [String] {
         var out: [String] = []
         var current = ""
@@ -114,7 +72,6 @@ public enum SupersedeLink {
         return out.filter { !$0.isEmpty }
     }
 
-    
     private static func hasSuccessorRel(_ params: String) -> Bool {
         for param in splitOutsideQuotes(params, separator: ";") {
             guard let eq = param.firstIndex(of: "=") else { continue }
@@ -125,8 +82,7 @@ public enum SupersedeLink {
             if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
                 value = String(value.dropFirst().dropLast())
             }
-            
-            
+
             if value.split(whereSeparator: { $0.isWhitespace })
                 .contains(where: { $0.lowercased() == rel })
             {

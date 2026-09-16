@@ -38,9 +38,6 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertEqual(object["effortOverride"] as? String, "max")
     }
 
-    
-    
-    
     func testModelSelectionNamesTheViewedConeOnTheWire() throws {
         let data = try JSONEncoder().encode(
             FollowerToLeaderMessage.modelSelect(modelId: "example:reasoner", scoopJid: "cone_2"))
@@ -51,8 +48,6 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertEqual(object["scoopJid"] as? String, "cone_2")
     }
 
-    
-    
     func testModelSelectionOmitsTheUnitWhenNoneIsSelected() throws {
         let data = try JSONEncoder().encode(
             FollowerToLeaderMessage.modelSelect(modelId: "example:reasoner", scoopJid: nil))

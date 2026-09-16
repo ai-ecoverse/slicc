@@ -1,21 +1,11 @@
 import Foundation
 import SwiftUI
 
-
-
-
-
 @MainActor
 final class InboundActionCoordinator: ObservableObject {
 
-    
-    
     static let shared = InboundActionCoordinator()
 
-    
-    
-    
-    
     struct PendingOpen: Identifiable, Equatable {
         let id: UUID
         let url: URL
@@ -25,25 +15,19 @@ final class InboundActionCoordinator: ObservableObject {
 
     @Published private(set) var pendingOpen: PendingOpen?
 
-    
-    
-    
-    
     struct PendingPrompt: Identifiable, Equatable {
         let id: UUID
         let prompt: String
         let xSuccess: URL?
         let xError: URL?
         let xCancel: URL?
-        
-        
+
         let needsConfirmation: Bool
         let receivedAt: Date
     }
 
     @Published private(set) var pendingPrompt: PendingPrompt?
 
-    
     struct PendingTranscript: Identifiable, Equatable {
         let id: UUID
         let receivedAt: Date
@@ -51,11 +35,6 @@ final class InboundActionCoordinator: ObservableObject {
 
     @Published private(set) var pendingTranscript: PendingTranscript?
 
-    
-    
-    
-    
-    
     struct PendingSelection: Identifiable, Equatable {
         let id: UUID
         let scoopJid: String
@@ -64,9 +43,6 @@ final class InboundActionCoordinator: ObservableObject {
 
     @Published private(set) var pendingSelection: PendingSelection?
 
-    
-    
-    
     enum Phase: Equatable {
         case running(String)
         case failed(String)
@@ -74,26 +50,19 @@ final class InboundActionCoordinator: ObservableObject {
 
     @Published var phase: Phase?
 
-    
-    
     private var resultContinuations: [UUID: CheckedContinuation<String, Error>] = [:]
 
     static let maxPromptLength = 8192
     static let maxTranscriptBytes = 512 * 1024
-    
-    
+
     static let maxJidLength = 256
 
-    
-    
     private var lastAccepted: (url: URL, at: Date)?
     private var lastPromptAccepted: (prompt: String, at: Date)?
 
     static let maxURLLength = 2048
     private static let dedupWindow: TimeInterval = 3
 
-    
-    
     @discardableResult
     func receive(url raw: URL, needsConfirmation: Bool, now: Date = Date()) -> Bool {
         guard let url = Self.validated(raw) else { return false }
@@ -108,12 +77,6 @@ final class InboundActionCoordinator: ObservableObject {
         return true
     }
 
-    
-    
-    
-    
-    
-    
     @discardableResult
     func receive(deepLink: URL) -> Bool {
         guard deepLink.scheme?.lowercased() == "slicc",
@@ -143,7 +106,6 @@ final class InboundActionCoordinator: ObservableObject {
         }
     }
 
-    
     @discardableResult
     func receive(
         prompt raw: String, xSuccess: URL?, xError: URL?, xCancel: URL?,
@@ -151,8 +113,7 @@ final class InboundActionCoordinator: ObservableObject {
     ) -> Bool {
         let prompt = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, prompt.count <= Self.maxPromptLength else { return false }
-        
-        
+
         if let last = lastPromptAccepted, last.prompt == prompt,
             now.timeIntervalSince(last.at) < Self.dedupWindow
         {
@@ -165,9 +126,6 @@ final class InboundActionCoordinator: ObservableObject {
         return true
     }
 
-    
-    
-    
     func runIntentPrompt(_ text: String) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             guard
@@ -179,7 +137,7 @@ final class InboundActionCoordinator: ObservableObject {
                 return
             }
             guard let id = pendingPrompt?.id else {
-                
+
                 continuation.resume(throwing: InboundActionError.busy)
                 return
             }
@@ -187,7 +145,6 @@ final class InboundActionCoordinator: ObservableObject {
         }
     }
 
-    
     func runTranscriptRequest() async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let request = PendingTranscript(id: UUID(), receivedAt: Date())
@@ -196,14 +153,10 @@ final class InboundActionCoordinator: ObservableObject {
         }
     }
 
-    
     func resolve(id: UUID, with result: Result<String, Error>) {
         resultContinuations.removeValue(forKey: id)?.resume(with: result)
     }
 
-    
-    
-    
     func drainShareInbox(_ inbox: AppGroupInbox = AppGroupInbox()) {
         for request in inbox.drain() {
             _ = receive(url: request.url, needsConfirmation: true)
@@ -214,8 +167,6 @@ final class InboundActionCoordinator: ObservableObject {
         if pendingTranscript?.id == request.id { pendingTranscript = nil }
     }
 
-    
-    
     @discardableResult
     func receive(selecting scoopJid: String, now: Date = Date()) -> Bool {
         let jid = scoopJid.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -228,9 +179,6 @@ final class InboundActionCoordinator: ObservableObject {
         if pendingSelection?.id == selection.id { pendingSelection = nil }
     }
 
-    
-    
-    
     @discardableResult
     func receive(appLink: URL) -> Bool {
         guard let components = URLComponents(url: appLink, resolvingAgainstBaseURL: false),
@@ -259,8 +207,6 @@ final class InboundActionCoordinator: ObservableObject {
         }
     }
 
-    
-    
     func consume(_ action: PendingOpen) {
         if pendingOpen?.id == action.id { pendingOpen = nil }
     }
@@ -269,9 +215,6 @@ final class InboundActionCoordinator: ObservableObject {
         if pendingPrompt?.id == action.id { pendingPrompt = nil }
     }
 
-    
-    
-    
     static func callbackURL(_ raw: String?) -> URL? {
         guard let raw, raw.count <= maxURLLength, let url = URL(string: raw),
             let scheme = url.scheme?.lowercased(),
@@ -280,9 +223,6 @@ final class InboundActionCoordinator: ObservableObject {
         return url
     }
 
-    
-    
-    
     static func validated(_ url: URL) -> URL? {
         guard url.absoluteString.count <= maxURLLength,
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -295,51 +235,26 @@ final class InboundActionCoordinator: ObservableObject {
     }
 }
 
-
-
-
-
-
-
-
 enum InboundSelectionRule {
 
-    
-    
-    
-    
-    
-    
-    
     enum Outcome: Equatable {
-        
+
         case select
-        
+
         case wait
-        
-        
+
         case drop
     }
 
-    
-    
-    
-    
-    
-    
     static let maximumAge: TimeInterval = 120
 
     static func outcome(forSelecting jid: String, roster: [String], age: TimeInterval) -> Outcome {
         if roster.contains(jid) { return .select }
         if age > maximumAge { return .drop }
-        
-        
-        
+
         return roster.isEmpty ? .wait : .drop
     }
 }
-
-
 
 enum InboundActionError: Error, LocalizedError {
     case invalidPrompt
@@ -361,17 +276,6 @@ enum InboundActionError: Error, LocalizedError {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
 @MainActor
 final class InboundPromptWaiter {
     enum Outcome {
@@ -388,8 +292,6 @@ final class InboundPromptWaiter {
         return token
     }
 
-    
-    
     @discardableResult
     func timeout(token: UUID) -> Bool {
         guard let waiter = armed, waiter.token == token else { return false }
@@ -410,11 +312,6 @@ final class InboundPromptWaiter {
         waiter.settle(.failure(error))
     }
 }
-
-
-
-
-
 
 @MainActor
 final class InboundSnapshotWaiter {

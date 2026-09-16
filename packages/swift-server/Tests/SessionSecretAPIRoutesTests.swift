@@ -137,11 +137,6 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
-    
     func testPersistedSetWritesThroughInjectedStore() async throws {
         let fixture = InMemoryPersistedSecrets()
         let injector = SecretInjector(sessionId: "persisted-set-store-fixture", persistedStore: fixture.access)
@@ -177,12 +172,6 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
-    
-    
     func testPersistedSetRefusesNameShadowedByEnvFile() async throws {
         let fixture = InMemoryPersistedSecrets()
         let injector = SecretInjector(
@@ -204,13 +193,12 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
                 XCTAssertFalse(text.contains("api-fixture-value"))
             }
             XCTAssertNil(fixture.get(name: "SHADOWED"), "A shadowed write must not reach the persisted store")
-            
+
             try await client.execute(uri: "/api/secrets/peek?name=SHADOWED", method: .get) { response in
                 XCTAssertEqual(response.status, .notFound)
             }
         }
 
-        
         let injector2 = SecretInjector(
             sessionId: "persisted-set-envfile-fixture-2",
             envFileSecrets: [Secret(name: "SHADOWED", value: "env-file-fixture-value", domains: ["env.example"])],
@@ -286,10 +274,6 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
         XCTAssertNil(fixture.get(name: "SAVED"))
     }
 
-    
-    
-    
-    
     func testScopeRefusesToReSaveAMultilinePersistedValue() async throws {
         let fixture = InMemoryPersistedSecrets([
             Secret(name: "PEM", value: "-----BEGIN KEY-----\nbody\n-----END KEY-----", domains: ["old.example"])
@@ -349,9 +333,7 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
                 XCTAssertEqual(response.status, .ok)
                 XCTAssertEqual(response.headers[Self.allowOrigin], "https://www.sliccy.ai")
             }
-            
-            
-            
+
             let persistedBody = ByteBuffer(
                 string: #"{"name":"PERSISTED","value":"cors-fixture-value","domains":["api.example"]}"#)
             try await client.execute(

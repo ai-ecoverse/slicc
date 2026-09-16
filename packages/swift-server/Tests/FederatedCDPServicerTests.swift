@@ -5,13 +5,7 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
 final class FederatedCDPServicerTests: XCTestCase {
-
-    
 
     func testBuildTargetsAdvertiseKeepsOnlyPagesAsBrowserKind() throws {
         let targets = [
@@ -26,11 +20,9 @@ final class FederatedCDPServicerTests: XCTestCase {
         XCTAssertEqual(runtimeId, "rt-1")
         XCTAssertEqual(advertised.map(\.targetId), ["p1", "p2"])
         XCTAssertTrue(advertised.allSatisfy { $0.kind == "browser" })
-        
+
         XCTAssertEqual(advertised[1].title, "")
     }
-
-    
 
     func testBuildCdpResponsesErrorIsSingleMessage() throws {
         let responses = buildCdpResponses(requestId: "r1", result: nil, error: "boom")
@@ -59,8 +51,7 @@ final class FederatedCDPServicerTests: XCTestCase {
     }
 
     func testBuildCdpResponsesLargeResultChunksAndRoundTrips() throws {
-        
-        
+
         let big = String(repeating: "x", count: 200_000)
         let result: [String: Any] = ["data": big]
         let responses = buildCdpResponses(requestId: "r3", result: result, error: nil)
@@ -82,8 +73,6 @@ final class FederatedCDPServicerTests: XCTestCase {
         let parsed = try JSONSerialization.jsonObject(with: Data(reassembled.utf8)) as? [String: Any]
         XCTAssertEqual(parsed?["data"] as? String, big)
     }
-
-    
 
     func testBuildCdpEventCarriesMethodParamsSession() throws {
         let message = buildCdpEvent(
@@ -107,10 +96,8 @@ final class FederatedCDPServicerTests: XCTestCase {
         XCTAssertNotNil(params.value as? [String: Any])
     }
 
-    
-
     func testChunkSerializedResultRespectsByteBudgetAndConcatenates() {
-        let text = String(repeating: "é", count: 5_000)  
+        let text = String(repeating: "é", count: 5_000)
         let slices = chunkSerializedResult(text, maxBytes: 1_000)
         XCTAssertGreaterThan(slices.count, 1)
         for slice in slices {
@@ -123,15 +110,12 @@ final class FederatedCDPServicerTests: XCTestCase {
         XCTAssertEqual(chunkSerializedResult("", maxBytes: 1_000), [""])
     }
 
-    
-
     func testMessagesForCdpFrameCorrelatesResponsesAndDropsUnknownIds() {
         var pending: [Int: String] = [3: "req-3"]
         let responses = messagesForCdpFrame(["id": 3, "result": ["ok": true]], pending: &pending)
         XCTAssertEqual(responses.count, 1)
         XCTAssertNil(pending[3], "a correlated id is consumed from pending")
 
-        
         XCTAssertTrue(messagesForCdpFrame(["id": 99, "result": [:]], pending: &pending).isEmpty)
 
         var errorPending: [Int: String] = [1: "req-1"]
@@ -141,7 +125,6 @@ final class FederatedCDPServicerTests: XCTestCase {
         }
         XCTAssertEqual(error, "nope")
 
-        
         let events = messagesForCdpFrame(["method": "Page.loadEventFired"], pending: &pending)
         guard case .cdpEvent(let method, _, _) = events.first else {
             return XCTFail("expected cdp.event")
@@ -149,8 +132,6 @@ final class FederatedCDPServicerTests: XCTestCase {
         XCTAssertEqual(method, "Page.loadEventFired")
         XCTAssertTrue(messagesForCdpFrame(["foo": "bar"], pending: &pending).isEmpty)
     }
-
-    
 
     func testHandleCdpRequestWithoutConnectionRepliesNotConnected() async {
         let box = FollowerMessageBox()
@@ -189,8 +170,7 @@ final class FederatedCDPServicerTests: XCTestCase {
         await servicer.handleCdpRequest(
             requestId: "req-1", method: "Runtime.evaluate", params: ["expression": "1"],
             sessionId: "s1")
-        
-        
+
         let sent = await transport.sentFrames
         let sentObject = try XCTUnwrap(
             sent
@@ -199,7 +179,6 @@ final class FederatedCDPServicerTests: XCTestCase {
         XCTAssertEqual(sentObject["sessionId"] as? String, "s1")
         let cdpId = try XCTUnwrap(sentObject["id"] as? Int)
 
-        
         await transport.push(#"{"id":\#(cdpId),"result":{"value":42}}"#)
         try await waitUntil {
             box.messages.contains {
@@ -208,7 +187,6 @@ final class FederatedCDPServicerTests: XCTestCase {
             }
         }
 
-        
         await transport.push(#"{"method":"Target.targetCreated","params":{"targetInfo":{}}}"#)
         try await waitUntil {
             box.messages.contains {
@@ -217,7 +195,6 @@ final class FederatedCDPServicerTests: XCTestCase {
             }
         }
 
-        
         await servicer.stop()
         var cancelled = false
         let deadline = Date().addingTimeInterval(2)
@@ -260,7 +237,6 @@ final class FederatedCDPServicerTests: XCTestCase {
     }
 }
 
-
 final class FollowerMessageBox: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [FollowerToLeaderMessage] = []
@@ -277,9 +253,6 @@ final class FollowerMessageBox: @unchecked Sendable {
         return storage
     }
 }
-
-
-
 
 actor MockCDPWebSocketTransport: CDPWebSocketTransport {
     private var queued: [URLSessionWebSocketTask.Message] = []

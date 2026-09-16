@@ -2,17 +2,12 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
 @MainActor
 final class SliccProcessLeaderProbeTests: XCTestCase {
 
     func testRescheduleLoopEventuallySetsJoinUrlWhenTrayMintsLate() async throws {
         let connecting = Data(#"{"state":"connecting"}"#.utf8)
-        let ready = Data(#"{"state":"connected","joinUrl":"https:
+        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/late.url"}"#.utf8)
 
         actor Counter {
             var n = 0
@@ -22,10 +17,7 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
             }
         }
         let counter = Counter()
-        
-        
-        
-        
+
         let probe = TrayStatusProbe(fetch: { _ in
             let n = await counter.tick()
             return n <= 8 ? (200, connecting) : (200, ready)
@@ -93,10 +85,6 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
             outerBackoff: 0.02
         )
 
-        
-        
-        
-        
         try await Task.sleep(nanoseconds: 200_000_000)
         proc.stopAll()
 
@@ -105,9 +93,7 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         let countLater = await counter.snapshot()
 
         XCTAssertNil(proc.leaderJoinUrl)
-        
-        
-        
+
         XCTAssertLessThanOrEqual(
             countLater - countAtStop,
             2,
@@ -117,7 +103,7 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
 
     func testStartLeaderProbeReplacesPriorLoopWithoutStacking() async throws {
         let connecting = Data(#"{"state":"connecting"}"#.utf8)
-        let ready = Data(#"{"state":"connected","joinUrl":"https:
+        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/replaced.url"}"#.utf8)
 
         actor Counter {
             var n = 0
@@ -127,8 +113,7 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
             }
         }
         let counter = Counter()
-        
-        
+
         let probe = TrayStatusProbe(fetch: { _ in
             let n = await counter.tick()
             return n <= 6 ? (200, connecting) : (200, ready)
@@ -146,12 +131,6 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
             targetName: "TestBrowser"
         )
 
-        
-        
-        
-        
-        
-        
         proc.startLeaderProbe(
             servePort: 35710,
             innerMaxAttempts: 2,
@@ -174,21 +153,14 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         XCTAssertEqual(proc.leaderJoinUrl, "https://example.test/join/replaced.url")
     }
 
-    
-    
-    
-    
-    
-    
     func testProbeWaitsForBrowserRecordRegisteredAfterProbeStart() async throws {
-        let ready = Data(#"{"state":"connected","joinUrl":"https:
+        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/reattached.url"}"#.utf8)
         let probe = TrayStatusProbe(fetch: { _ in (200, ready) })
 
         let proc = SliccProcess(trayStatusProbe: probe)
         let helper = try launchSleeper()
         addTeardownBlock { if helper.isRunning { helper.terminate() } }
 
-        
         proc.startLeaderProbe(
             servePort: 35710,
             innerMaxAttempts: 2,
@@ -214,11 +186,8 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         XCTAssertEqual(proc.leaderJoinUrl, "https://example.test/join/reattached.url")
     }
 
-    
-    
-    
     func testProbeGivesUpWhenBrowserRecordNeverAppears() async throws {
-        let ready = Data(#"{"state":"connected","joinUrl":"https:
+        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/never.url"}"#.utf8)
         actor Counter {
             var n = 0
             func tick() -> Int {
@@ -246,8 +215,6 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         let fetchCount = await counter.snapshot()
         XCTAssertEqual(fetchCount, 0, "must never probe without a browser record")
     }
-
-    
 
     func testLeaderProbeStepStopsOnceJoinUrlIsSet() {
         XCTAssertEqual(
@@ -310,18 +277,9 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         )
     }
 
-    
-
-    
-
-    
-    
-    
-    
-    
     func testRefreshAdoptsATrayReMintedAfterDiscovery() async throws {
         let reminted = Data(
-            #"{"state":"connected","joinUrl":"https:
+            #"{"state":"connected","joinUrl":"https://example.test/join/reminted.url"}"#.utf8)
         let proc = SliccProcess(trayStatusProbe: TrayStatusProbe(fetch: { _ in (200, reminted) }))
         try seedLeader(on: proc)
         proc.leaderJoinUrl = "https://example.test/join/discovered-at-launch.url"
@@ -346,8 +304,6 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
             "a leader that missed one probe is not a leader that is gone")
     }
 
-    
-    
     func testRefreshIgnoresAFollowerBrowser() async throws {
         let proc = SliccProcess(
             trayStatusProbe: TrayStatusProbe(fetch: { _ in
@@ -364,7 +320,7 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
 
     func testTheWatchLoopPicksUpAReMintedTrayWithoutARestart() async throws {
         let reminted = Data(
-            #"{"state":"connected","joinUrl":"https:
+            #"{"state":"connected","joinUrl":"https://example.test/join/watched.url"}"#.utf8)
         let proc = SliccProcess(trayStatusProbe: TrayStatusProbe(fetch: { _ in (200, reminted) }))
         try seedLeader(on: proc)
         proc.leaderJoinUrl = "https://example.test/join/stale.url"

@@ -3,12 +3,7 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
 final class InboundActionsTests: XCTestCase {
-
-    
 
     @MainActor
     func testOpenDeepLinkShortFormEnqueuesConfirmedAction() {
@@ -39,8 +34,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertNil(coordinator.pendingOpen)
     }
 
-    
-
     @MainActor
     func testCredentialBearingAndNonWebURLsAreRejected() {
         let coordinator = InboundActionCoordinator()
@@ -65,8 +58,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertNil(InboundActionCoordinator.callbackURL(nil))
     }
 
-    
-
     @MainActor
     func testReplayedOpenKeepsFirstPendingAction() {
         let coordinator = InboundActionCoordinator()
@@ -86,8 +77,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingPrompt?.id, first)
     }
 
-    
-
     @MainActor
     func testAppLinkRouteMirrorsSchemeContract() {
         let coordinator = InboundActionCoordinator()
@@ -101,8 +90,6 @@ final class InboundActionsTests: XCTestCase {
             coordinator.receive(appLink: URL(string: "https://sliccy.ai/handoff?handoff=x")!),
             "non-/app/ paths never route")
     }
-
-    
 
     @MainActor
     func testWaiterSettlesOnceAndIgnoresForeignScoop() {
@@ -146,8 +133,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertEqual(outcomes.count, 1)
     }
 
-    
-
     @MainActor
     func testStaleSnapshotTimeoutDoesNotDisarmReplacement() {
         let waiter = InboundSnapshotWaiter()
@@ -160,8 +145,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertTrue(settled, "the replacement must remain armed after an earlier timeout")
         XCTAssertFalse(waiter.timeout(token: currentToken))
     }
-
-    
 
     func testInboxRoundTripsAndCaps() throws {
         let suite = "test-inbox-\(UUID().uuidString)"
@@ -181,8 +164,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertTrue(inbox.drain().isEmpty, "drain is one-time — no replay")
     }
 
-    
-
     @MainActor
     func testTranscriptMarkdownRendersRolesAndTruncatesHeadFirst() {
         let filler = String(repeating: "x", count: 64 * 1024)
@@ -199,8 +180,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertTrue(markdown.contains("## Cone"), "assistant sections carry the label")
     }
 
-    
-
     @MainActor
     func testSelectionEnqueuesTheJid() {
         let coordinator = InboundActionCoordinator()
@@ -208,8 +187,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "scoop-42")
     }
 
-    
-    
     @MainActor
     func testEmptyAndOversizedJidsAreRejected() {
         let coordinator = InboundActionCoordinator()
@@ -227,8 +204,6 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "scoop-7")
     }
 
-    
-    
     @MainActor
     func testConsumingAStaleSelectionLeavesTheNewerOne() {
         let coordinator = InboundActionCoordinator()
@@ -241,18 +216,12 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertNil(coordinator.pendingSelection)
     }
 
-    
-
     private func outcome(
         _ jid: String, roster: [String], age: TimeInterval = 0
     ) -> InboundSelectionRule.Outcome {
         InboundSelectionRule.outcome(forSelecting: jid, roster: roster, age: age)
     }
 
-    
-    
-    
-    
     func testEmptyRosterWaitsRatherThanDropping() {
         XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
     }
@@ -261,28 +230,20 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertEqual(outcome("scoop-1", roster: ["other", "scoop-1"]), .select)
     }
 
-    
-    
-    
     func testNonEmptyRosterWithoutTheUnitDrops() {
         XCTAssertEqual(outcome("gone", roster: ["a", "b"]), .drop)
     }
 
-    
-    
     func testAStaleRequestIsDroppedEvenWithNoRosterYet() {
         let old = InboundSelectionRule.maximumAge + 1
         XCTAssertEqual(outcome("scoop-1", roster: [], age: old), .drop)
     }
 
-    
-    
     func testAgeDoesNotOverrideAPresentUnit() {
         let old = InboundSelectionRule.maximumAge + 1
         XCTAssertEqual(outcome("scoop-1", roster: ["scoop-1"], age: old), .select)
     }
 
-    
     func testColdLaunchStaysArmedUntilTheRosterArrives() {
         XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
         XCTAssertEqual(outcome("scoop-1", roster: []), .wait)

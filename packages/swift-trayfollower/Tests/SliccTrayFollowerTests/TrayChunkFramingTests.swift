@@ -3,12 +3,10 @@ import XCTest
 
 @testable import SliccTrayFollower
 
-
 final class TrayChunkFramingTests: XCTestCase {
 
     func testFrameChunksRoundTripsThroughReassembler() throws {
-        
-        
+
         let message = String(repeating: "SLICC-ünïcode-🍦-", count: 5_000)
         let frames = TrayChunkFraming.frameChunks(message, chunkId: "c1")
         XCTAssertGreaterThan(frames.count, 1)

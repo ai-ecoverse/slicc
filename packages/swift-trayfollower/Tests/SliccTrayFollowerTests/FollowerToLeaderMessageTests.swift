@@ -3,16 +3,11 @@ import XCTest
 
 @testable import SliccTrayFollower
 
-
-
-
 final class FollowerToLeaderMessageTests: XCTestCase {
 
     private func roundTrip(_ message: FollowerToLeaderMessage) throws -> FollowerToLeaderMessage {
         try WireCodec.roundTrip(message)
     }
-
-    
 
     func testUserMessageDefaultsOmitSteerAndAttachments() throws {
         let json = try WireCodec.jsonString(FollowerToLeaderMessage.userMessage(text: "hi", messageId: "m1"))
@@ -47,12 +42,10 @@ final class FollowerToLeaderMessageTests: XCTestCase {
     }
 
     func testUserMessageEmptyAttachmentsOmitted() throws {
-        
+
         let json = try WireCodec.jsonString(FollowerToLeaderMessage.userMessage(text: "hi", messageId: "m1", attachments: []))
         XCTAssertFalse(json.contains("attachments"))
     }
-
-    
 
     func testNewSessionAllDispositions() throws {
         for action in [NewSessionAction.save, .skip, .erase] {
@@ -93,8 +86,6 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertEqual(scoopJid, "s1")
     }
 
-    
-
     func testModelsRequestRoundTrip() throws {
         guard case .modelsRequest = try roundTrip(.modelsRequest) else {
             XCTFail("expected modelsRequest")
@@ -111,8 +102,7 @@ final class FollowerToLeaderMessageTests: XCTestCase {
             return
         }
         XCTAssertEqual(modelId, "claude-x")
-        
-        
+
         XCTAssertEqual(scoopJid, "cone_2")
     }
 
@@ -140,8 +130,6 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertEqual(level, .off)
         XCTAssertNil(effort)
     }
-
-    
 
     func testSprinklesRefreshRoundTrip() throws {
         guard case .sprinklesRefresh = try roundTrip(.sprinklesRefresh) else {
@@ -184,8 +172,6 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertNil(body)
         XCTAssertNil(targetScoop)
     }
-
-    
 
     func testTargetsAdvertiseRoundTrip() throws {
         let target = RemoteTargetInfo(
@@ -279,8 +265,6 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertEqual(targetId, "t1")
     }
 
-    
-
     func testFsRequestRoundTrip() throws {
         guard
             case .fsRequest(let requestId, let targetRuntimeId, let request) =
@@ -354,10 +338,8 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertEqual(signal, "SIGINT")
     }
 
-    
-
     func testLickRoundTrip() throws {
-        let body = try WireCodec.anyCodable(#"{"url":"https:
+        let body = try WireCodec.anyCodable(#"{"url":"https://x"}"#)
         let event = LickEvent(type: .navigate, timestamp: "2026-08-08T00:00:00.000Z", body: body, navigateUrl: "https://x")
         guard case .lick(let decoded) = try roundTrip(.lick(event: event)) else {
             XCTFail("expected lick")
@@ -390,8 +372,6 @@ final class FollowerToLeaderMessageTests: XCTestCase {
             return
         }
     }
-
-    
 
     func testUnknownTypeThrows() {
         XCTAssertThrowsError(try WireCodec.decode(FollowerToLeaderMessage.self, from: #"{"type":"not.a.real.type"}"#)) { error in

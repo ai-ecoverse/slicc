@@ -1,38 +1,11 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 public enum OptelEnvConfig {
-    
+
     public static let rateKey = "OPTEL_RATE"
 
-    
     public static let debugKey = "OPTEL_DEBUG"
 
-    
-    
-    
-    
     public static func resolveRate(
         explicit: String?,
         environment: [String: String]
@@ -43,9 +16,6 @@ public enum OptelEnvConfig {
         return explicit
     }
 
-    
-    
-    
     public static func resolveDebugLogging(environment: [String: String]) -> Bool {
         guard let value = environment[debugKey] else { return false }
         switch value.lowercased() {

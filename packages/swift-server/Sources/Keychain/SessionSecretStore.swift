@@ -1,7 +1,5 @@
 import Foundation
 
-
-
 actor SessionSecretStore {
     struct Record: Sendable, Equatable {
         let name: String
@@ -37,7 +35,6 @@ actor SessionSecretStore {
         entries.values.map { SecretEntry(name: $0.name, domains: $0.domains) }
     }
 }
-
 
 func previewSecret(_ value: String, edge: Int = 4) -> String {
     let characters = Array(value)

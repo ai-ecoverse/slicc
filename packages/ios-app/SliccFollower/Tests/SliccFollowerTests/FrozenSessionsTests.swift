@@ -4,7 +4,6 @@ import XCTest
 @testable import SliccTrayKit
 
 final class FrozenSessionsTests: XCTestCase {
-    
 
     func testParsesAModernIndex() throws {
         let json = """
@@ -28,7 +27,7 @@ final class FrozenSessionsTests: XCTestCase {
     func testCorruptIndexReturnsNilSoTheCallerRebuilds() {
         XCTAssertNil(FrozenSessionIndex.parse(indexJson: "not-json"))
         XCTAssertNil(FrozenSessionIndex.parse(indexJson: #"{"filename":"not-an-array"}"#))
-        XCTAssertNil(FrozenSessionIndex.parse(indexJson: #"[{"filename":"tr"#))  // truncated
+        XCTAssertNil(FrozenSessionIndex.parse(indexJson: #"[{"filename":"tr"#))
     }
 
     func testOneBadRowDoesNotTakeDownTheRail() throws {
@@ -37,12 +36,9 @@ final class FrozenSessionsTests: XCTestCase {
         XCTAssertEqual(entries.map(\.title), ["OK"])
     }
 
-    // MARK: - Rebuild from directory scan
-
     func testRebuildRecoversTitleAndTimestampFromFilenames() {
         let entries = FrozenSessionIndex.rebuild(from: [
-            // The canonical writer shape: toISOString().replace(/[:.]/g, "-")
-            // dashes the milliseconds dot too.
+
             TrayFsDirEntry(name: "2026-05-13T19-30-00-123Z-fix-build.md", type: .file),
             TrayFsDirEntry(name: "2026-06-01T08-00-00Z-plan-launch.md", type: .file),
             TrayFsDirEntry(name: "index.json", type: .file),
@@ -50,8 +46,7 @@ final class FrozenSessionsTests: XCTestCase {
             TrayFsDirEntry(name: "pending-ab12.md", type: .file),
         ])
         XCTAssertEqual(entries.count, 3)
-        // Newest first by filename (timestamp prefixes sort chronologically;
-        // pending-* sorts after the dated names).
+
         XCTAssertEqual(entries[0].filename, "pending-ab12.md")
         XCTAssertEqual(entries[0].title, "Pending session")
         XCTAssertEqual(entries[1].title, "Plan Launch")
@@ -59,8 +54,6 @@ final class FrozenSessionsTests: XCTestCase {
         XCTAssertEqual(entries[2].frozenAt, "2026-05-13T19:30:00.123Z")
         XCTAssertNotNil(entries[2].frozenDate)
     }
-
-    // MARK: - Meta line + search
 
     func testMetaLineMatchesTheRailFormat() {
         let entry = FrozenSessionIndexEntry(
@@ -81,8 +74,6 @@ final class FrozenSessionsTests: XCTestCase {
         XCTAssertEqual(FrozenSessionIndex.search(entries, query: "BUILD").map(\.filename), ["a.md"])
         XCTAssertEqual(FrozenSessionIndex.search(entries, query: "  ").count, 2)
     }
-
-    // MARK: - Archive parsing
 
     func testParsesModernArchiveViaSessionDataBlock() {
         let markdown = """
@@ -106,8 +97,7 @@ final class FrozenSessionsTests: XCTestCase {
         XCTAssertEqual(parsed.title, #"Debug "Auth" bug"#)
         XCTAssertEqual(parsed.messages.count, 2)
         XCTAssertEqual(parsed.messages[0].content, "hi")
-        // The writer escapes "-->" inside the block as "-- >"; the parser
-        // must restore it.
+
         XCTAssertEqual(parsed.messages[1].content, "a --> b")
     }
 
@@ -160,8 +150,7 @@ final class FrozenSessionsTests: XCTestCase {
     }
 
     func testRemapNeverTouchesStructuredArchives() {
-        // A data-block message with timestamp 0 keeps the writer's value —
-        // and, by extension, every rich field a rebuild would drop.
+
         let markdown = """
             <!-- slicc:session-data
             [{"id":"m1","role":"assistant","content":"x","timestamp":0,"model":"claude-opus-4-6"}]
@@ -180,7 +169,7 @@ final class FrozenSessionsTests: XCTestCase {
         let frozenAt = Date(timeIntervalSince1970: 1_753_800_000)
         let remapped = FrozenArchiveParser.withFallbackTimestamps(parsed, frozenAt: frozenAt)
         XCTAssertEqual(remapped.messages[0].timestamp, 1_753_800_000_000)
-        // Unknown freeze date leaves the archive untouched.
+
         let untouched = FrozenArchiveParser.withFallbackTimestamps(parsed, frozenAt: nil)
         XCTAssertEqual(untouched.messages[0].timestamp, 0)
     }

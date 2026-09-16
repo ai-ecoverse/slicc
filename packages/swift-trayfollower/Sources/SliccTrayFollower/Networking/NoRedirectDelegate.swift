@@ -1,21 +1,6 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    
 
     func urlSession(
         _ session: URLSession,

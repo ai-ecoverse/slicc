@@ -3,25 +3,7 @@ import Logging
 import SliccTrayFollower
 import WebRTC
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 let electronFollowerRuntimeTag = "slicc-electron"
-
-
-
 
 final class ElectronTrayFollower: NSObject, @unchecked Sendable {
     private let cdpPort: Int
@@ -48,8 +30,6 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         super.init()
     }
 
-    
-    
     func startIfNeeded() {
         let shouldStart: Bool = lock.withLock {
             guard !started, !stopped else { return false }
@@ -63,7 +43,6 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         Task { [weak self] in await self?.run() }
     }
 
-    
     func stop() {
         let toStop: FederatedCDPServicer? = lock.withLock {
             stopped = true
@@ -106,19 +85,12 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
     }
 
-    
-
-    
-    
     private func resolveBrowserWebSocketURL() async -> URL? {
         guard let versionURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/version") else {
             return nil
         }
         do {
-            
-            
-            
-            
+
             var request = URLRequest(url: versionURL)
             request.timeoutInterval = 5
             let (data, _) = try await urlSession.data(for: request)
@@ -129,7 +101,6 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
     }
 
-    
     private func listTargets() async -> [FederatedCdpInspectableTarget] {
         guard let listURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/list") else { return [] }
         do {
@@ -143,8 +114,6 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
     }
 
-    
-    
     static func parseBrowserWebSocketURL(from data: Data) -> URL? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let wsURLString = object["webSocketDebuggerUrl"] as? String
@@ -152,7 +121,6 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         return URL(string: wsURLString)
     }
 
-    
     static func parseInspectableTargets(from data: Data) -> [FederatedCdpInspectableTarget] {
         guard let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return []
@@ -167,16 +135,12 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
     }
 
-    
-
     private func sendToLeader(_ message: FollowerToLeaderMessage) {
         let send: ((Data) -> Bool)? = lock.withLock { channelSend }
         guard let send = send, let data = try? encoder.encode(message) else { return }
         _ = send(data)
     }
 
-    
-    
     func route(_ message: LeaderToFollowerMessage) {
         switch message {
         case .ping:
@@ -193,8 +157,6 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
     }
 
-    
-    
     func dispatchInbound(_ data: Data) {
         if let frame = try? JSONDecoder().decode(TrayChunkFrame.self, from: data),
             frame.type == TrayChunkFrame.typeTag
@@ -214,20 +176,16 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         route(message)
     }
 
-    
-    
     func _testing_installChannelSend(_ send: @escaping (Data) -> Bool) {
         lock.withLock { channelSend = send }
     }
 }
 
-
-
 extension ElectronTrayFollower: TrayFollowerConnectorDelegate {
     func connector(_ connector: TrayFollowerConnector, didConnect channelSend: @escaping (Data) -> Bool) {
         lock.withLock { self.channelSend = channelSend }
         logger.info("Follower tray-control channel open — sent hello, advertising targets")
-        
+
         sendToLeader(
             .hello(
                 protocolVersion: traySyncProtocolVersion, runtime: electronFollowerRuntimeTag,
@@ -261,8 +219,7 @@ extension ElectronTrayFollower: TrayFollowerConnectorDelegate {
     }
 
     func connector(_ connector: TrayFollowerConnector, didGenerateCandidate candidate: RTCIceCandidate) {
-        
-        
+
     }
 
     func connector(_ connector: TrayFollowerConnector, didReceiveData data: Data) {

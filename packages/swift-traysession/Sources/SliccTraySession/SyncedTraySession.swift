@@ -1,32 +1,16 @@
 import CryptoKit
 import Foundation
 
-
-
-
-
-
-
 public struct SyncedTraySession: Codable, Equatable, Identifiable {
-    
-    
-    
-    
-    
-    
+
     public let id: String
-    
-    
+
     public var joinUrl: String
-    
+
     public var label: String
-    
-    
-    
-    
+
     public var deviceId: String
-    
-    
+
     public var deviceName: String
     public var createdAt: Date
     public var lastSeenAt: Date
@@ -57,15 +41,13 @@ public struct SyncedTraySession: Codable, Equatable, Identifiable {
         id = try container.decode(String.self, forKey: .id)
         joinUrl = try container.decode(String.self, forKey: .joinUrl)
         label = try container.decode(String.self, forKey: .label)
-        
+
         deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId) ?? ""
         deviceName = try container.decode(String.self, forKey: .deviceName)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         lastSeenAt = try container.decode(Date.self, forKey: .lastSeenAt)
     }
 
-    
-    
     public static func identifier(forJoinUrl joinUrl: String) -> String {
         SHA256.hash(data: Data(joinUrl.utf8))
             .map { String(format: "%02x", $0) }

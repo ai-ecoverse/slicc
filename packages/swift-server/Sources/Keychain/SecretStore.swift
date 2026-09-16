@@ -1,20 +1,16 @@
 import Foundation
 import Security
 
-
 struct SecretEntry: Sendable, Equatable {
     let name: String
     let domains: [String]
 }
-
 
 struct Secret: Sendable, Equatable {
     let name: String
     let value: String
     let domains: [String]
 }
-
-
 
 struct SecretStoreAccess: Sendable {
     let loadAll: @Sendable () -> [Secret]
@@ -38,14 +34,10 @@ struct SecretStoreAccess: Sendable {
 
 enum SecretStoreError: Error, Sendable, Equatable, LocalizedError {
     case emptyDomains
-    
-    
-    
+
     case multilineValue(name: String)
     case keychainError(status: Int32)
 
-    
-    
     var errorDescription: String? {
         switch self {
         case .multilineValue(let name): return EnvFileFormat.multilineValueError(name)
@@ -54,58 +46,22 @@ enum SecretStoreError: Error, Sendable, Equatable, LocalizedError {
     }
 }
 
-
 private let keychainService = "ai.sliccy.slicc"
-
 
 private let keychainAccount = "__envfile__"
 
-
-
-
-
-
-
-
-
-
-
 enum SecretStore {
 
-    
     private static let lock = NSLock()
 
-    
-    
-    
     private static var nonInteractive: Bool {
         ProcessInfo.processInfo.environment["SLICC_KEYCHAIN_NONINTERACTIVE"] == "1"
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static var setUserInteractionAllowed: (Bool) -> Void = { allowed in
         SecKeychainSetUserInteractionAllowed(allowed)
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private static func withInteractionSuppressed<T>(_ body: () throws -> T) rethrows -> T {
         guard nonInteractive else { return try body() }
         setUserInteractionAllowed(false)
@@ -121,9 +77,7 @@ enum SecretStore {
         guard !domains.isEmpty else {
             throw SecretStoreError.emptyDomains
         }
-        
-        
-        
+
         guard EnvFileFormat.isSingleLineValue(value) else {
             throw SecretStoreError.multilineValue(name: name)
         }
@@ -147,22 +101,10 @@ enum SecretStore {
         readSecrets().map { SecretEntry(name: $0.name, domains: $0.domains) }
     }
 
-    
-    
-    
     static func all() -> [Secret] {
         readSecrets()
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
     static func readBlob() throws -> String {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -171,15 +113,7 @@ enum SecretStore {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
         if nonInteractive {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         }
@@ -201,11 +135,6 @@ enum SecretStore {
         return text
     }
 
-    
-    
-    
-    
-    
     static func writeBlob(_ content: String) throws {
         let valueData = Data(content.utf8)
         let searchQuery: [String: Any] = [
@@ -238,22 +167,11 @@ enum SecretStore {
         throw SecretStoreError.keychainError(status: updateStatus)
     }
 
-    
-
-    
-    
-    
-    
-    
-    
     private static func readSecrets() -> [Secret] {
         do {
             return EnvFileFormat.secretsFromBlob(try readBlob())
         } catch SecretStoreError.keychainError(let status) where status == errSecInteractionNotAllowed {
-            
-            
-            
-            
+
             FileHandle.standardError.write(
                 Data(
                     ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "

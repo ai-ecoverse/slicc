@@ -1,12 +1,5 @@
 import SwiftUI
 
-
-
-
-
-
-
-
 struct MonitorView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -21,8 +14,6 @@ struct MonitorView: View {
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
     }
-
-    
 
     private var connectionSection: some View {
         Section("Connection") {
@@ -42,8 +33,6 @@ struct MonitorView: View {
             }
         }
     }
-
-    
 
     private var scoopsSection: some View {
         Section("Scoops") {
@@ -71,19 +60,12 @@ struct MonitorView: View {
                     }
                 }
                 .accessibilityIdentifier("monitor-scoop-\(scoop.jid)")
-                
-                
-                
+
                 .sliccEntityAnnotation(SliccConversationEntity.self, id: scoop.jid)
             }
         }
     }
 
-    
-
-    
-    
-    
     private var visibleCost: (total: Double, turns: Int) {
         var total = 0.0
         var turns = 0
@@ -103,8 +85,6 @@ struct MonitorView: View {
                 .accessibilityIdentifier("monitor-cost-total")
         }
     }
-
-    
 
     private var surfacesSection: some View {
         Section("Surfaces") {

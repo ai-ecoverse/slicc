@@ -30,12 +30,7 @@ extension TabSessionRecorder: GracefulShutdownTabRecording {}
 
 struct ShutdownContext: @unchecked Sendable {
     var browserProcess: Process?
-    
-    
-    
-    
-    
-    
+
     var browserKillPid: pid_t?
     var browserLabel: String
     var cdpPort: Int
@@ -44,8 +39,7 @@ struct ShutdownContext: @unchecked Sendable {
     var cdpProxy: (any GracefulShutdownChromeProxyControlling)?
     var clientSockets: (any GracefulShutdownClientSocketControlling)?
     var server: (any GracefulShutdownServer)?
-    
-    
+
     var tabRecorder: (any GracefulShutdownTabRecording)?
 
     init(
@@ -155,11 +149,6 @@ actor GracefulShutdownHandler {
         await self.runShutdownSequence(context: context, closeBrowser: true)
     }
 
-    
-    
-    
-    
-    
     func detach() async {
         guard let context else {
             exitHandler(0)
@@ -174,9 +163,7 @@ actor GracefulShutdownHandler {
         GracefulShutdownLastResortRegistry.markGracefulShutdownStarted()
 
         print(closeBrowser ? "\nShutting down..." : "\nDetaching (browser stays open)...")
-        
-        
-        
+
         if let tabRecorder = context.tabRecorder {
             await tabRecorder.snapshotNow()
             await tabRecorder.stop()
@@ -218,21 +205,13 @@ actor GracefulShutdownHandler {
                 let browserWebSocketURL = try await fetchBrowserWebSocketURL(cdpPort)
                 try await sendBrowserCloseCommand(browserWebSocketURL)
             } catch {
-                
+
             }
 
             await waitForBrowserExit(process)
 
             if process.isRunning {
-                
-                
-                
-                
-                
-                
-                
-                
-                
+
                 let killPid = (browserKillPid ?? process.processIdentifier)
                 if killPid > 0 {
                     _ = killProcess(killPid, SIGKILL)
@@ -276,8 +255,7 @@ private struct BrowserVersionPayload: Decodable {
 enum GracefulShutdownLastResortRegistry {
     private static let lock = NSLock()
     private static var browserProcess: Process?
-    
-    
+
     private static var browserKillPid: pid_t?
     private static var gracefulShutdownStarted = false
     private static var didRegisterExitHandler = false
@@ -321,9 +299,6 @@ enum GracefulShutdownLastResortRegistry {
 
         guard shouldCleanup, let process, process.isRunning else { return }
 
-        
-        
-        
         let targetPid = killPid ?? process.processIdentifier
         guard targetPid > 0 else { return }
         _ = Darwin.kill(targetPid, SIGKILL)

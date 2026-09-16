@@ -22,8 +22,7 @@ final class RequestLoggerTests: XCTestCase {
     }
 
     func testLogsOneLinePerRequestIncludingFailedOnes() async throws {
-        
-        
+
         let sink = LogSink()
         let logger = Logger(label: "test.request") { _ in SinkLogHandler(sink: sink) }
         let router = Router(context: BasicRequestContext.self)

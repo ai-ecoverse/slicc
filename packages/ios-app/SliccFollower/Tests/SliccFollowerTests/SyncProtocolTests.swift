@@ -44,10 +44,6 @@ final class SyncProtocolStatusTests: XCTestCase {
     }
 }
 
-
-
-
-
 final class SyncProtocolExecTests: XCTestCase {
     private let messages = [
         """
@@ -87,10 +83,6 @@ final class SyncProtocolExecTests: XCTestCase {
         XCTAssertEqual(actual, expected)
     }
 }
-
-
-
-
 
 final class SyncProtocolTranscriptExportTests: XCTestCase {
     private let exportTypes = [
@@ -135,7 +127,7 @@ final class SyncProtocolTranscriptExportTests: XCTestCase {
 final class SyncProtocolCherryTests: XCTestCase {
     func testRemoteTargetInfoDecodesCherryKindAndCapabilities() throws {
         let json = """
-            {"targetId":"c","title":"Host","url":"https:
+            {"targetId":"c","title":"Host","url":"https://host.example",
              "kind":"cherry","capabilities":{"navigate":true,"network":false,"screenshot":true}}
             """.data(using: .utf8)!
         let target = try JSONDecoder().decode(RemoteTargetInfo.self, from: json)

@@ -1,7 +1,5 @@
 import XCTest
 
-
-
 final class ComposerKeyboardUITests: XCTestCase {
 
     override func setUp() {

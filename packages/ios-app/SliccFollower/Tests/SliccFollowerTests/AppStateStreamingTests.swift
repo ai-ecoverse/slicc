@@ -69,10 +69,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(state.messages.last?.toolCalls?.last?.name, "bash")
     }
 
-    
-    
-    
-    
     @MainActor
     func testParallelSameNamedToolResultsPairByCallId() throws {
         let state = AppState()
@@ -85,7 +81,6 @@ final class AppStateStreamingTests: XCTestCase {
                 scoopJid: "cone", to: state)
         }
 
-        
         for (id, output) in [("call-3", "CCC"), ("call-1", "AAA"), ("call-2", "BBB")] {
             try send(
                 .toolResult(
@@ -99,8 +94,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(calls.map(\.id), ["reply:call-1", "reply:call-2", "reply:call-3"])
     }
 
-    
-    
     @MainActor
     func testToolProgressPairsByCallIdAndClearsOnResult() throws {
         let state = AppState()
@@ -124,8 +117,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(state.toolProgress["reply:call-1"]?.fraction, 0.4)
         XCTAssertNil(state.toolProgress["reply:call-2"])
 
-        
-        
         try send(
             .toolResult(
                 messageId: "reply", toolName: "bash", result: "ok", isError: false,
@@ -134,9 +125,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertTrue(state.toolProgress.isEmpty)
     }
 
-    
-    
-    
     @MainActor
     func testToolProgressEndPhaseAndTurnEndClearUnits() throws {
         let state = AppState()
@@ -162,7 +150,6 @@ final class AppStateStreamingTests: XCTestCase {
             scoopJid: "cone", to: state)
         XCTAssertTrue(state.toolProgress.isEmpty)
 
-        
         try send(
             .toolProgress(
                 messageId: "reply", toolName: "bash",
@@ -174,9 +161,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertTrue(state.toolProgress.isEmpty)
     }
 
-    
-    
-    
     @MainActor
     func testSwitchingScoopsKeepsBackgroundProgress() throws {
         let state = AppState()
@@ -210,13 +194,10 @@ final class AppStateStreamingTests: XCTestCase {
             state.toolProgress["bg:call-1"],
             "a background scoop's bar must survive a scoop switch")
 
-        
         try send(.turnEnd(messageId: "bg"), scoopJid: "other", to: state)
         XCTAssertNil(state.toolProgress["bg:call-1"])
     }
 
-    
-    
     @MainActor
     func testSnapshotPrunesUnitsForRowsItRemoved() throws {
         let state = AppState()
@@ -243,8 +224,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertNil(state.toolProgress["reply:call-1"])
     }
 
-    
-    
     @MainActor
     func testToolProgressForUnknownCallIsIgnored() throws {
         let state = AppState()
@@ -261,9 +240,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertTrue(state.toolProgress.isEmpty)
     }
 
-    
-    
-    
     @MainActor
     func testResultsWithoutCallIdFillEachRowOnce() throws {
         let state = AppState()
@@ -286,8 +262,6 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(Set(calls.compactMap(\.result)), ["first", "second"])
     }
 
-    
-    
     @MainActor
     func testToolCallIndexAcceptsUnscopedLegacyRowId() {
         let calls = [ToolCall(id: "call-1", name: "bash", input: nil)]

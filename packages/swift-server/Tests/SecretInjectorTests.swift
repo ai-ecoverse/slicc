@@ -21,8 +21,6 @@ final class SecretInjectorTests: XCTestCase {
         .init(name: name, realValue: realValue, maskedValue: maskedValue, domains: domains)
     }
 
-    
-
     func testInjectReplacesMatchedMaskWithRealValue() {
         let injector = makeInjector(secrets: [makeSecret()])
         let result = injector.inject(text: "Bearer ghp_masked999abc", hostname: "api.github.com")
@@ -69,7 +67,7 @@ final class SecretInjectorTests: XCTestCase {
             makeSecret(name: "GH", realValue: "ghp_real1", maskedValue: "ghp_mask1", domains: ["api.github.com"]),
             makeSecret(name: "AI", realValue: "sk-real2", maskedValue: "sk-mask2", domains: ["api.openai.com"]),
         ])
-        
+
         let result = injector.inject(text: "ghp_mask1 sk-mask2", hostname: "api.github.com")
         guard case .domainBlocked(let secretName, _) = result else {
             return XCTFail("Expected domainBlocked")
@@ -77,11 +75,9 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(secretName, "AI")
     }
 
-    
-
     func testInjectBodyLeavesMaskedValueWhenDomainDoesNotMatch() {
         let injector = makeInjector(secrets: [makeSecret()])
-        
+
         let result = injector.injectBody(text: "conversation: ghp_masked999abc was used", hostname: "bedrock-runtime.us-west-2.amazonaws.com")
         XCTAssertTrue(result.contains("ghp_masked999abc"))
         XCTAssertFalse(result.contains("ghp_realSecret123"))
@@ -99,14 +95,12 @@ final class SecretInjectorTests: XCTestCase {
             makeSecret(name: "GH", realValue: "ghp_real1", maskedValue: "ghp_mask1", domains: ["api.github.com"]),
             makeSecret(name: "AI", realValue: "sk-real2", maskedValue: "sk-mask2", domains: ["api.openai.com"]),
         ])
-        
+
         let result = injector.injectBody(text: "ghp_mask1 sk-mask2", hostname: "api.github.com")
         XCTAssertTrue(result.contains("ghp_real1"))
         XCTAssertTrue(result.contains("sk-mask2"))
         XCTAssertFalse(result.contains("sk-real2"))
     }
-
-    
 
     func testScrubReplacesRealValuesWithMasked() {
         let injector = makeInjector(secrets: [makeSecret()])
@@ -135,8 +129,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(result, "nothing to scrub here")
     }
 
-    
-
     func testIsEmptyWithNoSecrets() {
         let injector = makeInjector(secrets: [])
         XCTAssertTrue(injector.isEmpty)
@@ -146,8 +138,6 @@ final class SecretInjectorTests: XCTestCase {
         let injector = makeInjector(secrets: [makeSecret()])
         XCTAssertFalse(injector.isEmpty)
     }
-
-    
 
     func testMaskedEnvironmentReturnsMaskedValues() {
         let injector = makeInjector(secrets: [
@@ -160,11 +150,8 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(env.count, 2)
     }
 
-    
-
     func testInitWithSessionIdProducesDeterministicMasks() {
-        
-        
+
         let realValue = "ghp_testValue123"
         let sessionId = "test-session-42"
         let maskedA = mask(sessionId: sessionId, secretName: "GH", realValue: realValue)
@@ -173,8 +160,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNotEqual(maskedA, realValue)
         XCTAssertTrue(maskedA.hasPrefix("ghp_"))
     }
-
-    
 
     private func base64(_ s: String) -> String {
         Data(s.utf8).base64EncodedString()
@@ -241,8 +226,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNil(result.forbidden)
     }
 
-    
-
     func testUrlCredsStripsAndSynthesizesAuthHeader() {
         let injector = makeInjector(secrets: [
             makeSecret(
@@ -304,19 +287,13 @@ final class SecretInjectorTests: XCTestCase {
 
     func testUrlCredsLeavesUnchangedOnMalformedUrl() {
         let injector = makeInjector(secrets: [makeSecret()])
-        
-        
-        
-        
-        
+
         let url = "not a url"
         let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
         XCTAssertEqual(result.url, url)
         XCTAssertNil(result.syntheticAuthorization)
         XCTAssertNil(result.forbidden)
     }
-
-    
 
     func testUnmaskBodyBytesReplacesMaskedInUtf8Body() {
         let injector = makeInjector(secrets: [
@@ -379,8 +356,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(String(data: out, encoding: .utf8), "hello ghp_masked999abc world")
     }
 
-    
-
     func testScrubResponseBytesReplacesRealWithMaskedInUtf8() {
         let injector = makeInjector(secrets: [
             makeSecret(
@@ -402,10 +377,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(out, before)
     }
 
-    
-
-    
-    
     private func uniqueName(_ base: String) -> String {
         "OAUTHTEST_\(UUID().uuidString.prefix(8))_\(base)"
     }
@@ -446,11 +417,10 @@ final class SecretInjectorTests: XCTestCase {
         )
         await injector.reload()
 
-        
         guard let masked = injector.maskedValue(for: name) else {
             return XCTFail("Entry should exist")
         }
-        
+
         let result = injector.inject(text: masked, hostname: "api.example.com")
         guard case .success(let text) = result else { return XCTFail("Expected success") }
         XCTAssertEqual(text, "oauth-real")
@@ -504,13 +474,9 @@ final class SecretInjectorTests: XCTestCase {
         }
     }
 
-    
-
     func testEnvFileShortValueIsConsumableButNotMasked() async throws {
         let name = uniqueName("SHORT_ENV")
-        
-        
-        
+
         let envSecret = Secret(name: name, value: "shortie8", domains: ["api.example.com"])
 
         let injector = SecretInjector(
@@ -521,7 +487,6 @@ final class SecretInjectorTests: XCTestCase {
         )
         await injector.reload()
 
-        
         XCTAssertEqual(
             injector.maskedValue(for: name), "shortie8",
             "Short env-file value must remain consumable with identity masking")
@@ -530,8 +495,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNotNil(masked, "Short value must appear in maskedEntries")
         XCTAssertEqual(masked?.maskedValue, "shortie8")
 
-        
-        
         let injectResult = injector.inject(
             text: "header carrying shortie8 verbatim",
             hostname: "evil.example.com"
@@ -547,9 +510,7 @@ final class SecretInjectorTests: XCTestCase {
 
     func testOAuthShortValueIsConsumableAndOverridesEnvEntry() async throws {
         let name = uniqueName("SHORT_OAUTH")
-        
-        
-        
+
         let envSecret = Secret(name: name, value: "env-file-realLong", domains: ["api.example.com"])
         let oauth = OAuthSecretStore()
         try await oauth.set(name: name, value: "tiny8chr", domains: ["api.example.com"])
@@ -562,9 +523,6 @@ final class SecretInjectorTests: XCTestCase {
         )
         await injector.reload()
 
-        
-        
-        
         XCTAssertEqual(
             injector.maskedValue(for: name), "tiny8chr",
             "Too-short OAuth value overrides env-file entry as consumable-only")
@@ -573,8 +531,6 @@ final class SecretInjectorTests: XCTestCase {
             "saw env-file-realLong here",
             "Overridden env-file real value must not be scrubbed")
     }
-
-    
 
     func testSignHmacComputesSignatureAndNamesTargetHeader() {
         let injector = makeInjector(secrets: [
@@ -624,8 +580,6 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNil(result.signatureHex)
         XCTAssertNil(result.forbidden)
     }
-
-    
 
     func testSignHmacTimestampBoundSignsPrefixedMessageAndReturnsTimestamp() {
         let injector = makeInjector(secrets: [

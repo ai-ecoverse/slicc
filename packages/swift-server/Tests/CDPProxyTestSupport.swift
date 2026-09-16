@@ -5,14 +5,8 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
 extension XCTestCase {
-    
-    
+
     func waitUntil(
         _ description: String,
         timeoutMilliseconds: Int = 2_000,
@@ -140,14 +134,10 @@ final class ChromeConnectorHarness: @unchecked Sendable {
         await callback?(event)
     }
 
-    
-    
     func failNextConnects(_ count: Int) {
         self.state.queueConnectFailures(count)
     }
 
-    
-    
     func holdConnectsUntilReleased() {
         self.state.setHoldConnects(true)
     }
@@ -160,7 +150,6 @@ final class ChromeConnectorHarness: @unchecked Sendable {
         self.state.connectCountSnapshot()
     }
 
-    
     func connectAttemptCountSnapshot() -> Int {
         self.state.connectAttemptCountSnapshot()
     }
@@ -224,7 +213,6 @@ final class HarnessState: @unchecked Sendable {
         self.lock.unlock()
     }
 
-    
     func consumeQueuedFailure() -> Bool {
         self.lock.lock()
         defer { self.lock.unlock() }
@@ -356,8 +344,6 @@ actor AsyncGate {
         }
     }
 }
-
-
 
 actor StepGate {
     private var permits = 0

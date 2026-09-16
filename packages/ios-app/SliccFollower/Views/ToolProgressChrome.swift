@@ -1,33 +1,10 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 func toolProgressFraction(_ unit: ToolProgressEvent?) -> Double? {
     guard let raw = unit?.fraction, raw.isFinite else { return nil }
     return min(1, max(0, raw))
 }
-
-
-
-
 
 func toolProgressCaption(_ unit: ToolProgressEvent) -> String {
     var parts: [String] = []
@@ -45,9 +22,6 @@ func toolProgressCaption(_ unit: ToolProgressEvent) -> String {
     return parts.joined(separator: " · ")
 }
 
-
-
-
 func formatProgressBytes(_ bytes: Double) -> String {
     guard bytes.isFinite, bytes >= 0 else { return "" }
     if bytes < 1000 { return "\(Int(bytes.rounded())) B" }
@@ -63,9 +37,6 @@ func formatProgressBytes(_ bytes: Double) -> String {
         : "\(Int(value.rounded())) \(units[index])"
 }
 
-
-
-
 func formatProgressEta(_ milliseconds: Double) -> String {
     let seconds = max(0, Int((milliseconds / 1000).rounded()))
     if seconds < 60 { return "\(seconds)s" }
@@ -73,12 +44,6 @@ func formatProgressEta(_ milliseconds: Double) -> String {
     if minutes < 60 { return String(format: "%dm%02ds", minutes, seconds % 60) }
     return String(format: "%dh%02dm", minutes / 60, minutes % 60)
 }
-
-
-
-
-
-
 
 func aggregateToolProgress(
     calls: [ToolCall], progress: [String: ToolProgressEvent]
@@ -103,12 +68,6 @@ func aggregateToolProgress(
     )
 }
 
-
-
-
-
-
-
 struct ToolProgressIcon: View {
     let glyph: SliccGlyph
     let size: CGFloat
@@ -130,8 +89,6 @@ struct ToolProgressIcon: View {
         self.accent = accent
     }
 
-    
-    
     init(
         systemName: String, size: CGFloat, unit: ToolProgressEvent?,
         base: Color, accent: Color
@@ -144,8 +101,7 @@ struct ToolProgressIcon: View {
     var body: some View {
         SliccGlyphView(glyph: glyph, size: size)
             .foregroundStyle(fill)
-            
-            
+
             .opacity(isBreathing ? 0.45 : 1)
             .animation(
                 isIndeterminate && !reduceMotion
@@ -160,8 +116,6 @@ struct ToolProgressIcon: View {
     private var isIndeterminate: Bool { unit != nil && toolProgressFraction(unit) == nil }
     private var isBreathing: Bool { isIndeterminate && breathing && !reduceMotion }
 
-    
-    
     private var fill: AnyShapeStyle {
         guard let unit else { return AnyShapeStyle(base) }
         guard let fraction = toolProgressFraction(unit) else { return AnyShapeStyle(accent) }
@@ -176,11 +130,6 @@ struct ToolProgressIcon: View {
                 startPoint: .bottom, endPoint: .top))
     }
 }
-
-
-
-
-
 
 struct ToolProgressDots: View {
     let unit: ToolProgressEvent
@@ -209,14 +158,11 @@ struct ToolProgressDots: View {
         Circle()
             .fill(color)
             .frame(width: 5, height: 5)
-            
-            
+
             .opacity(isDone || isActive ? 1 : 0.25)
             .modifier(ToolProgressBlink(active: isActive, delay: Double(index) * 0.2))
     }
 }
-
-
 
 private struct ToolProgressBlink: ViewModifier {
     let active: Bool
@@ -237,11 +183,6 @@ private struct ToolProgressBlink: ViewModifier {
             .onAppear { isAnimating = true }
     }
 }
-
-
-
-
-
 
 struct ToolProgressBar: View {
     let unit: ToolProgressEvent
@@ -270,8 +211,6 @@ struct ToolProgressBar: View {
         .accessibilityHidden(true)
     }
 
-    
-    
     private func indeterminateOffset(width: CGFloat, fraction: Double?) -> CGFloat {
         guard fraction == nil, !reduceMotion else { return 0 }
         return sliding ? width * 0.7 : 0

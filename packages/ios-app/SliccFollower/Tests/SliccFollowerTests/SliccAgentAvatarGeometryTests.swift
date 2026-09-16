@@ -27,10 +27,6 @@ private final class ManuallyEmittingAvatarTiltSource: SliccAgentAvatarTiltSource
 final class SliccAgentAvatarGeometryTests: XCTestCase {
     private let accuracy = 0.000_001
 
-    
-    
-    
-    
     func testScoopGeometryMatchesWebEyeBandPlacement() {
         let geometry = SliccAgentAvatarGeometry(
             type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 100)
@@ -48,10 +44,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(geometry.maxPupilTravel, 16 * unit, accuracy: accuracy)
     }
 
-    
-    
-    
-    
     func testConeGeometryUsesItsOwnEyeBandPlacement() {
         let geometry = SliccAgentAvatarGeometry(
             type: .cone, color: "#B07823", fill: 50, sideLength: 100)
@@ -65,10 +57,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(geometry.maxPupilTravel, 16 * unit, accuracy: accuracy)
     }
 
-    
-    
-    
-    
     func testEyesShareOneBaselineAndMirrorAboutTheTileCentre() {
         for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
             let geometry = SliccAgentAvatarGeometry(
@@ -82,13 +70,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         }
     }
 
-    
-
-    
-    
-    
-    
-    
     func testBrowsRideBandSpaceOverTheirOwnEye() {
         for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
             let geometry = SliccAgentAvatarGeometry(
@@ -108,8 +89,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         }
     }
 
-    
-    
     func testBrowRaiseScalesOneBandUnitAtATime() {
         let geometry = SliccAgentAvatarGeometry(
             type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 100)
@@ -127,11 +106,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
             accuracy: accuracy)
     }
 
-    
-    
-    
-    
-    
     func testRaisedBrowOverhangsTheTileAtRailSize() {
         for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
             let geometry = SliccAgentAvatarGeometry(
@@ -145,8 +119,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
                 center.y - geometry.browSize.y / 2, 0, "\(type) brow no longer clears the top")
         }
 
-        
-        
         let scoop = SliccAgentAvatarGeometry(
             type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 26, activity: .thinking)
         let center = scoop.browCenter(eyeIndex: 0, raise: AvatarExpression.baseBrows.left.raise)
@@ -155,10 +127,6 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(center.y - scoop.browSize.y / 2, -1.710_15, accuracy: 0.000_01)
     }
 
-    
-    
-    
-    
     func testSettledBrowStillClearsTheSocket() {
         let settled = AvatarExpression.baseBrows.right.raise
 
@@ -225,7 +193,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
     }
 
     func testMaxTravelClampsAtBothBounds() {
-        
+
         let lowFill = SliccAgentAvatarGeometry(
             type: .cone, color: "#F59E0B", fill: 0, sideLength: 100)
         let highFill = SliccAgentAvatarGeometry(
@@ -233,11 +201,10 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         let midpoint = SliccAgentAvatarGeometry(
             type: .scoop, color: "#8B5CF6", fill: 67.5, sideLength: 100)
 
-        
         XCTAssertEqual(lowFill.maxPupilTravel, 16 * 1.05, accuracy: accuracy)
-        
+
         XCTAssertEqual(highFill.maxPupilTravel, 2 * 0.9275, accuracy: accuracy)
-        
+
         XCTAssertEqual(
             midpoint.maxPupilTravel,
             (38 - 18 * 1.6 - 4) * 0.9275, accuracy: accuracy)
@@ -249,7 +216,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
 
         XCTAssertEqual(geometry.clampedPupilOffset(.init(x: 1, y: 2)), .init(x: 1, y: 2))
         let clamped = geometry.clampedPupilOffset(.init(x: 30, y: 40))
-        
+
         XCTAssertEqual(clamped.x, 30 * geometry.maxPupilTravel / 50, accuracy: accuracy)
         XCTAssertEqual(clamped.y, 40 * geometry.maxPupilTravel / 50, accuracy: accuracy)
         XCTAssertEqual(hypot(clamped.x, clamped.y), geometry.maxPupilTravel, accuracy: accuracy)

@@ -1,11 +1,6 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
-
-
-
 struct SprinkleDetailView: View {
     @EnvironmentObject var appState: AppState
     let sprinkle: SprinkleSummary
@@ -29,8 +24,7 @@ struct SprinkleDetailView: View {
                         )
                     },
                     onClose: {
-                        
-                        
+
                         self.content = nil
                     }
                 )

@@ -1,9 +1,5 @@
 import Foundation
 
-
-
-
-
 struct MemoryRow: Identifiable, Equatable {
     enum Tag: String {
         case user, feedback, project
@@ -16,14 +12,11 @@ struct MemoryRow: Identifiable, Equatable {
     let tag: Tag?
 }
 
-
-
-
 enum MemoryStore {
     static let memoryPath = "/workspace/CLAUDE.md"
-    
+
     static let titleTarget = 64
-    
+
     static let titleMax = 96
 
     private static let feedbackSection = try! NSRegularExpression(
@@ -33,10 +26,7 @@ enum MemoryStore {
         pattern:
             "\\b(user|preferences?|identit(?:y|ies)|accounts?|personal|interface|working rhythm|keyboard|accessibility)\\b",
         options: [.caseInsensitive])
-    
-    
-    
-    
+
     private static let autoExtractedSection = try! NSRegularExpression(
         pattern: "^Auto-extracted \\(", options: [])
 
@@ -52,10 +42,6 @@ enum MemoryStore {
         return .project
     }
 
-    
-    
-    
-    
     static func splitTitle(_ text: String) -> (title: String, rest: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > titleMax else { return (trimmed, "") }
@@ -75,7 +61,6 @@ enum MemoryStore {
         return (title, rest)
     }
 
-    
     static func parse(_ markdown: String) -> [MemoryRow] {
         var rows: [MemoryRow] = []
         var section = ""
@@ -112,16 +97,14 @@ enum MemoryStore {
                 if stripped.isEmpty {
                     flush()
                 } else {
-                    
+
                     pending.append(stripped)
                 }
             }
         }
         flush()
         if rows.isEmpty {
-            
-            
-            
+
             let prose =
                 markdown
                 .split(separator: "\n", omittingEmptySubsequences: true)

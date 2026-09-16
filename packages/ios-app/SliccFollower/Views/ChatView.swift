@@ -3,10 +3,6 @@ import SwiftUI
 import UIKit
 import os
 
-
-
-
-
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var inboundActions: InboundActionCoordinator
@@ -17,28 +13,21 @@ struct ChatView: View {
     @StateObject private var ptt = PttController(
         engine: InputBar.makeDictationEngine(),
         prepareForRecording: { VoiceReply.shared.stopSpeaking() })
-    
-    
-    
+
     @StateObject var transcriptActions = TranscriptActionModel()
     @State private var showSettings = false
     @State private var hasAppeared = false
-    
+
     @State private var fixtureMode = false
-    
-    
+
     @State private var showFrozenSessions = false
-    
-    
+
     @AppStorage("leftHandedDock") private var leftHandedDock = false
-    
+
     @AppStorage("inboundAlwaysOpenHosts") private var alwaysOpenHosts = ""
-    
-    
+
     @AppStorage("inboundAlwaysAllowPrompts") private var alwaysAllowPrompts = false
-    
-    
-    
+
     @AppStorage("openLinksInBuiltInBrowser") var openLinksInBuiltInBrowser = true
 
     init() {
@@ -46,8 +35,6 @@ struct ChatView: View {
             wrappedValue: ChatPresentationState(composerDraft: Self.seededComposerText()))
     }
 
-    
-    
     init(presentation: @autoclosure @escaping () -> ChatPresentationState) {
         _presentation = StateObject(wrappedValue: presentation())
     }
@@ -64,22 +51,16 @@ struct ChatView: View {
                 regularShell
             }
         }
-        
-        
-        
-        
-        
+
         .transcriptActionSheets(transcriptActions)
-        
-        
+
         .preferredColorScheme(appState.leaderTheme.map { $0.base == .light ? .light : .dark })
         .environment(
             \.palette,
             ThemePalette.resolve(theme: appState.leaderTheme, systemScheme: systemScheme)
         )
         .environment(\.sprinkleThemeCSS, appState.leaderTheme?.sprinkleCSSOverrides ?? "")
-        
-        
+
         .onChange(of: presentation.composerDraft) { _, _ in
             appState.avatarExpression.scrutinize()
             appState.avatarExpression.wake()
@@ -98,8 +79,7 @@ struct ChatView: View {
                 if let themeJson = UITestHooks.themeFixtureJson() {
                     appState.applyLeaderTheme(themeJson)
                 }
-                
-                
+
                 if let surface = UITestHooks.opensDockSurface() {
                     presentation.activeSurface = surface
                     presentation.terminalWasOpened = surface == .term
@@ -110,17 +90,14 @@ struct ChatView: View {
                 if let inboundURL = UITestHooks.inboundOpenURL {
                     _ = inboundActions.receive(url: inboundURL, needsConfirmation: true)
                 }
-                
-                
+
                 scheduleConnectionBlip()
                 if UITestHooks.scriptCompletedTurn(into: appState) {
                     return
                 }
                 if let forced = UITestHooks.forcedConnectionState {
                     applyForcedConnectionState(forced)
-                    
-                    
-                    
+
                     UITestHooks.seedTranscriptFixture(into: appState)
                     UITestHooks.seedShortActionsFixture(into: appState)
                     UITestHooks.scheduleTranscriptAppend(into: appState)
@@ -135,13 +112,7 @@ struct ChatView: View {
                     return
                 }
             #endif
-            
-            
-            
-            
-            
-            
-            
+
             if appState.connectionState == .gaveUp {
                 showSettings = true
             } else if appState.connectionState == .disconnected {
@@ -193,9 +164,7 @@ struct ChatView: View {
             Text(action.prompt)
         }
         .onChange(of: inboundActions.pendingOpen) { action in
-            
-            
-            
+
             if let action, !action.needsConfirmation || hostAlwaysAllowed(action.url) {
                 executeInboundOpen(action)
             }
@@ -215,9 +184,7 @@ struct ChatView: View {
                 executeInboundSelection(selection)
             }
         }
-        
-        
-        
+
         .onChange(of: appState.scoops) { _ in
             if let selection = inboundActions.pendingSelection {
                 executeInboundSelection(selection)
@@ -225,12 +192,6 @@ struct ChatView: View {
         }
     }
 
-    
-    
-    
-    
-    
-    
     private func executeInboundSelection(
         _ selection: InboundActionCoordinator.PendingSelection
     ) {
@@ -240,37 +201,28 @@ struct ChatView: View {
             age: Date().timeIntervalSince(selection.receivedAt))
         {
         case .wait:
-            
+
             return
         case .drop:
             inboundActions.consume(selection: selection)
         case .select:
             appState.selectScoop(jid: selection.scoopJid)
-            
+
             withAnimation { presentation.activeSurface = nil }
             inboundActions.consume(selection: selection)
         }
     }
 
-    
-    
-    
-    
     private func presentLeaderOpenedTab(_ tabId: String?) {
         guard let tabId else { return }
         withAnimation {
             presentation.activeSurface = .browser
         }
         appState.browserViewingTabId = tabId
-        
-        
+
         appState.leaderOpenedTabId = nil
     }
 
-    
-
-    
-    
     private func executeInboundOpen(_ action: InboundActionCoordinator.PendingOpen) {
         inboundActions.consume(action)
         openInBuiltInBrowser(action.url)
@@ -284,10 +236,6 @@ struct ChatView: View {
         appState.browserViewingTabId = id
     }
 
-    
-    
-    
-    
     private var inboundOpenAlertPresented: Binding<Bool> {
         Binding(
             get: { inboundActions.pendingOpen?.needsConfirmation == true },
@@ -320,7 +268,6 @@ struct ChatView: View {
         inboundActions.resolve(id: action.id, with: .failure(InboundActionError.cancelled))
     }
 
-    
     private func hostAlwaysAllowed(_ url: URL) -> Bool {
         guard let host = url.host()?.lowercased() else { return false }
         return alwaysOpenHosts.split(separator: ",").map(String.init).contains(host)
@@ -364,8 +311,6 @@ struct ChatView: View {
         appState.sendMessage(action.prompt)
     }
 
-    
-    
     private func executeTranscriptExport(_ request: InboundActionCoordinator.PendingTranscript) {
         inboundActions.consume(transcript: request)
         guard appState.connectionState == .connected, !appState.isLeaderStalled else {
@@ -393,8 +338,6 @@ struct ChatView: View {
         appState.requestFreshSnapshot()
     }
 
-    
-    
     @ViewBuilder
     private var inboundPhaseChip: some View {
         if let phase = inboundActions.phase {
@@ -418,9 +361,6 @@ struct ChatView: View {
         }
     }
 
-    
-    
-    
     static func transcriptMarkdown(label: String, messages: [ChatMessage]) -> String {
         var sections: [String] = ["# Sliccy — \(label)"]
         for message in messages {
@@ -444,8 +384,6 @@ struct ChatView: View {
         return rendered
     }
 
-    
-    
     private func fireCallback(_ url: URL?, params: [String: String]) {
         guard let url,
             var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -458,26 +396,16 @@ struct ChatView: View {
         if let final = components.url { openURL(final) }
     }
 
-    
-    
     static func boundedCallbackResult(_ text: String) -> String {
         text.count <= 2000 ? text : String(text.prefix(2000)) + "…"
     }
 
-    
-    
-    
     private var isBrowserFullScreen: Bool {
         presentation.activeSurface == .browser && appState.browserViewingTabId != nil
     }
 
-    
-    
     private var compactShell: some View {
-        
-        
-        
-        
+
         HStack(spacing: 0) {
             if leftHandedDock && !isBrowserFullScreen {
                 dockRail
@@ -493,20 +421,14 @@ struct ChatView: View {
                             inputText: $presentation.composerDraft,
                             stagedAttachments: $presentation.stagedAttachments,
                             ptt: ptt,
-                            
-                            
-                            
-                            
-                            
+
                             toolbarSuppressed: presentation.activeSurface != nil
                         )
                         .environment(\.openURL, transcriptLinkAction)
                         .environment(\.transcriptActions, transcriptActionHandlers)
                         .environment(\.fileMentionResolver, appState.fileMentionResolver)
                     }
-                    
-                    
-                    
+
                     if presentation.terminalWasOpened || presentation.activeSurface == .term {
                         WorkbenchHost(
                             surface: .term,
@@ -525,8 +447,7 @@ struct ChatView: View {
                 }
                 .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
             }
-            
-            
+
             .zIndex(1)
             if !leftHandedDock && !isBrowserFullScreen {
                 dockRail
@@ -534,15 +455,11 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: leftHandedDock ? .topLeading : .topTrailing) {
-            
-            
+
             shellSessionCluster(suppressed: presentation.activeSurface != nil)
         }
     }
 
-    
-    
-    
     @ViewBuilder
     private func shellSessionCluster(suppressed: Bool) -> some View {
         if !isBrowserFullScreen, !suppressed, !fixtureMode {
@@ -557,10 +474,6 @@ struct ChatView: View {
         }
     }
 
-    
-    
-    
-    
     private var regularShell: some View {
         HStack(spacing: 0) {
             if leftHandedDock {
@@ -586,8 +499,7 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: leftHandedDock ? .topLeading : .topTrailing) {
-            
-            
+
             shellSessionCluster(suppressed: false)
         }
     }
@@ -629,11 +541,6 @@ struct ChatView: View {
         }
     }
 
-    
-    
-    
-    
-    
     private var workbench: some View {
         ZStack {
             if presentation.terminalWasOpened || presentation.activeSurface == .term {
@@ -658,9 +565,6 @@ struct ChatView: View {
         DockRail(active: $presentation.activeSurface, sprinkles: appState.sprinkles)
     }
 
-    
-    
-    
     static func seededComposerText() -> String {
         #if DEBUG
             return UserDefaults.standard.string(forKey: "uiTestComposerText") ?? ""
@@ -670,10 +574,7 @@ struct ChatView: View {
     }
 
     #if DEBUG
-        
-        
-        
-        
+
         private func applyForcedConnectionState(_ raw: String) {
             if raw == "stalled" {
                 appState.connectionState = .connected
@@ -692,15 +593,10 @@ struct ChatView: View {
             if state == .reconnecting {
                 appState.reconnectAttempt = 3
             }
-            
-            
+
             appState.settleConnectionImmediately()
         }
 
-        
-        
-        
-        
         private func scheduleConnectionBlip() {
             guard let blip = UITestHooks.connectionBlip else { return }
             Task { @MainActor in
@@ -717,10 +613,6 @@ struct ChatView: View {
     #endif
 }
 
-
-
-
-
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -729,22 +621,16 @@ struct ConversationView: View {
     @Binding var inputText: String
     @Binding var stagedAttachments: [MessageAttachment]
     @ObservedObject var ptt: PttController
-    
-    
-    
+
     var toolbarSuppressed: Bool = false
     @StateObject private var horizontalScrollGestureState = HorizontalScrollGestureState()
-    
-    
+
     @AppStorage("leftHandedDock") private var leftHandedDock = false
 
     var body: some View {
         VStack(spacing: 0) {
             if let frozen = appState.openFrozen {
-                
-                
-                
-                
+
                 MessageListView(
                     messages: frozen.archive.messages,
                     isStreaming: false,
@@ -762,10 +648,7 @@ struct ConversationView: View {
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
         .environment(\.horizontalScrollAction, handleTranscriptSwipe)
         .background(palette.canvas)
-        
-        
-        
-        
+
         .navigationTitle(appState.openFrozen?.entry.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
@@ -790,10 +673,6 @@ struct ConversationView: View {
         }
     }
 
-    
-
-    
-    
     private var identityPlacement: ToolbarItemPlacement {
         leftHandedDock ? .topBarTrailing : .topBarLeading
     }
@@ -801,8 +680,6 @@ struct ConversationView: View {
         leftHandedDock ? .topBarLeading : .topBarTrailing
     }
 
-    
-    
     @ToolbarContentBuilder
     private var identityGroup: some ToolbarContent {
         if appState.openFrozen != nil {
@@ -817,9 +694,7 @@ struct ConversationView: View {
                 .accessibilityIdentifier("frozen-back")
             }
         } else if #available(iOS 26.0, *) {
-            
-            
-            
+
             ToolbarItem(placement: identityPlacement) {
                 switcherPill
             }
@@ -838,8 +713,6 @@ struct ConversationView: View {
         }
     }
 
-    
-    
     private var switcherPill: some View {
         ScoopSwitcher()
             .padding(.horizontal, 12)
@@ -880,12 +753,6 @@ struct ConversationView: View {
                 activity: selectedActivity)
     }
 
-    
-    
-    
-    
-    
-    
     private var selectedActivity: AvatarExpression.Activity? {
         appState.selectedScoop?.avatarActivity(local: appState.localExpressionSignals)
             ?? (appState.awaitingUserSince != nil ? .awaiting : .idle)
@@ -899,8 +766,6 @@ struct ConversationView: View {
         return "\(lifecycleLabel). \(connectionStatusText)"
     }
 
-    
-    
     private var showsConnectionStatic: Bool {
         !appState.settledConnection.isHealthy
     }
@@ -944,20 +809,12 @@ struct ConversationView: View {
                 state: horizontalScrollGestureState,
                 onAction: handleTranscriptSwipe)
 
-            
-            
-            
-            
-            
-            
             if !appState.selectedUnitIsReadOnly {
                 InputBar(
                     text: $inputText,
                     isStreaming: appState.isStreaming,
                     isConnected: appState.settledConnection.state == .connected,
-                    
-                    
-                    
+
                     isStalled: appState.settledConnection.isStalled,
                     steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
                     ptt: ptt,
@@ -994,12 +851,6 @@ struct ConversationView: View {
         }
     }
 }
-
-
-
-
-
-
 
 struct FixtureConversationView: View {
     @Environment(\.palette) private var palette
@@ -1071,8 +922,6 @@ struct FixtureConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    
-    
     private func describeLick(body: AnyCodable?, target: String?) -> String {
         let action: String = {
             guard let value = body?.value else { return "—" }
@@ -1108,8 +957,6 @@ extension View {
     }
 }
 
-
-
 private func arbitratedScoopSwipeGesture(
     state: HorizontalScrollGestureState,
     onAction: @escaping (SwipeArbiter.Action) -> Void
@@ -1130,12 +977,6 @@ private func arbitratedScoopSwipeGesture(
         }
     }
 }
-
-
-
-
-
-
 
 struct ScoopSwitcher: View {
     @EnvironmentObject var appState: AppState
@@ -1162,8 +1003,7 @@ struct ScoopSwitcher: View {
             .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
             .accessibilityHint("Switch scoop")
             .accessibilityIdentifier("scoop-switcher")
-            
-            
+
             .sliccEntityAnnotation(SliccConversationEntity.self, id: appState.selectedScoopJid)
         } else {
             identityLabel
@@ -1174,10 +1014,6 @@ struct ScoopSwitcher: View {
         }
     }
 
-    
-    
-    
-    
     private var identityLabel: some View {
         HStack(spacing: 5) {
             Text(appState.selectedScoop?.assistantLabel ?? "Sliccy")
@@ -1195,9 +1031,6 @@ struct ScoopSwitcher: View {
         }
     }
 
-    
-    
-    
     private func menuTitle(for scoop: ScoopSummary) -> String {
         let kind = scoop.isRootUnit ? "cone" : "scoop"
         let status = scoop.status.accessibilityPhrase(label: scoop.assistantLabel)
@@ -1206,12 +1039,6 @@ struct ScoopSwitcher: View {
             : "\(status) · \(kind)"
     }
 }
-
-
-
-
-
-
 
 struct SessionControlsCluster: View {
     @EnvironmentObject var appState: AppState
@@ -1260,12 +1087,7 @@ struct SessionControlsCluster: View {
                     .foregroundStyle(palette.ink.opacity(0.7))
             }
         }
-        
-        
-        
-        
-        
-        
+
         .disabled(
             appState.newSessionInFlight
                 || !appState.rawConnectionHealth.isHealthy
@@ -1298,8 +1120,6 @@ struct SessionControlsCluster: View {
     }
 }
 
-
-
 private struct ScoopStatusAvatar: View {
     let avatar: SliccAgentAvatarGeometry
     let accessibilityLabel: String
@@ -1314,8 +1134,6 @@ private struct ScoopStatusAvatar: View {
         .accessibilityIdentifier("scoop-avatar")
     }
 }
-
-
 
 #Preview {
     ChatView()

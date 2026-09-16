@@ -1,64 +1,27 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct CompactionMarkerRow: View, Equatable {
     let marker: ChatCompactionMarker
 
     @Environment(\.palette) private var palette
 
-    
-    
-    
-    
-    
     static func == (lhs: CompactionMarkerRow, rhs: CompactionMarkerRow) -> Bool {
         lhs.marker == rhs.marker
     }
 
-    
-    
-    
-    
     private static let amber = Color(red: 0xF5 / 255, green: 0x9E / 255, blue: 0x0B / 255)
 
-    
-    
-    
-    
     private var glyph: SliccGlyph {
         switch marker.state {
         case .summarizing: return .system("arrow.triangle.2.circlepath")
         case .summarized: return .system("archivebox")
         case .fallback: return .system("exclamationmark.triangle")
-        
-        
-        
+
         case .discarded: return .system("archivebox")
         }
     }
 
-    
-    
     private var label: String {
         switch marker.state {
         case .summarizing:
@@ -80,8 +43,6 @@ struct CompactionMarkerRow: View, Equatable {
 
     private var isDegraded: Bool { marker.state == .fallback }
 
-    
-    
     private var chipInk: Color {
         isDegraded ? Self.amber.mix(with: palette.ink, by: 0.45) : palette.inkTertiary
     }
@@ -94,7 +55,6 @@ struct CompactionMarkerRow: View, Equatable {
         isDegraded ? Self.amber.opacity(0.12) : palette.field
     }
 
-    
     private var transcriptName: String? {
         guard let path = marker.transcriptPath, !path.isEmpty else { return nil }
         let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
@@ -124,8 +84,7 @@ struct CompactionMarkerRow: View, Equatable {
     private var chip: some View {
         HStack(spacing: 6) {
             SliccGlyphView(glyph: glyph, size: 11)
-                
-                
+
                 .opacity(marker.state == .summarizing ? 0.55 : 1)
             Text(label)
                 .font(.system(size: 11))
@@ -149,7 +108,7 @@ struct CompactionMarkerRow: View, Equatable {
         .overlay(
             Capsule().strokeBorder(chipBorder, lineWidth: 1)
         )
-        
+
         .layoutPriority(1)
     }
 }

@@ -2,10 +2,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
 final class CDPNetworkDomainTests: XCTestCase {
 
     private func cookie(
@@ -93,19 +89,14 @@ final class CDPNetworkDomainTests: XCTestCase {
     }
 
     func testFilterWithNoUrlsReturnsNothing() {
-        
-        
-        
-        
-        
+
         let cookies = [cookie(name: "a"), cookie(name: "b", domain: "other.test")]
         XCTAssertEqual(CDPNetworkDomain.filter(cookies, urls: []).count, 0)
         XCTAssertEqual(CDPNetworkDomain.filter(cookies, urls: ["about:blank"]).count, 0)
     }
 
     func testDeletionNeedsMoreThanAName() {
-        
-        
+
         let mine = cookie(name: "session", domain: "app.example.com")
         let theirs = cookie(name: "session", domain: "unrelated.test")
         XCTAssertTrue(
@@ -131,15 +122,14 @@ final class CDPNetworkDomainTests: XCTestCase {
 
     func testDeletionPathScoping() {
         let scoped = cookie(name: "t", domain: "example.com", path: "/app")
-        
-        
+
         XCTAssertTrue(
             CDPNetworkDomain.matchesDeletion(
                 scoped, name: "t", domain: "example.com", path: "/app/inner", pathIsExact: false))
         XCTAssertFalse(
             CDPNetworkDomain.matchesDeletion(
                 scoped, name: "t", domain: "example.com", path: "/", pathIsExact: false))
-        
+
         XCTAssertTrue(
             CDPNetworkDomain.matchesDeletion(
                 scoped, name: "t", domain: "example.com", path: "/app", pathIsExact: true))
@@ -149,8 +139,7 @@ final class CDPNetworkDomainTests: XCTestCase {
     }
 
     func testOnlyTheCookieSurfaceClaimsSupport() {
-        
-        
+
         for method in [
             "Network.enable", "Network.disable", "Network.getCookies",
             "Network.setCookies", "Network.deleteCookies", "Network.clearBrowserCookies",

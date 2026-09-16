@@ -7,11 +7,6 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
 final class SudoApproveTests: XCTestCase {
 
     private func request(
@@ -21,8 +16,6 @@ final class SudoApproveTests: XCTestCase {
     ) -> SudoApprove.ApproveRequest {
         SudoApprove.ApproveRequest(kind: kind, detail: detail, suggestedPattern: suggestedPattern)
     }
-
-    
 
     func testAllowOnceReturnsAllow() async {
         let runner: SudoApprove.OsascriptRunner = { _ in "button returned:Allow Once" }
@@ -69,8 +62,6 @@ final class SudoApproveTests: XCTestCase {
         XCTAssertEqual(decision, SudoApprove.Decision(decision: "deny", pattern: nil))
     }
 
-    
-
     func testScriptContainsButtonsAndTitle() async {
         actor ArgvBox {
             var args: [String] = []
@@ -95,8 +86,6 @@ final class SudoApproveTests: XCTestCase {
         XCTAssertTrue(script.contains("default button \"Allow Once\""))
         XCTAssertTrue(script.contains("write: config.json"))
     }
-
-    
 
     private func badRequestRunner(file: StaticString = #filePath, line: UInt = #line) -> SudoApprove.OsascriptRunner {
         { _ in

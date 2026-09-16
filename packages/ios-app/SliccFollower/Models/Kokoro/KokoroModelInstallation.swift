@@ -8,11 +8,6 @@ enum KokoroModelInstallationState: Equatable, Sendable {
     case failed(KokoroModelProvisioningError)
 }
 
-
-
-
-
-
 @MainActor
 final class KokoroModelInstallation: ObservableObject {
     static let shared: KokoroModelInstallation = {
@@ -24,7 +19,7 @@ final class KokoroModelInstallation: ObservableObject {
     }()
 
     @Published private(set) var state: KokoroModelInstallationState
-    
+
     @Published private(set) var downloadStartedAt: Date?
     let usesDeveloperPack: Bool
 
@@ -62,9 +57,6 @@ final class KokoroModelInstallation: ObservableObject {
         }
     }
 
-    
-    
-    
     func requestInstallation() {
         guard !usesDeveloperPack else { return }
         switch state {

@@ -1,9 +1,6 @@
 import Foundation
 import SliccTrayKit
 
-
-
-
 enum DockSurface: Hashable {
     case sprinkle(name: String)
     case browser
@@ -13,21 +10,12 @@ enum DockSurface: Hashable {
     case monitor
 }
 
-
-
 struct DockItem: Identifiable, Hashable {
     let id: String
     let surface: DockSurface
     let systemImage: String
     let label: String
 }
-
-
-
-
-
-
-
 
 enum DockModel {
     static func sprinkleItems(_ sprinkles: [SprinkleSummary]) -> [DockItem] {
@@ -41,7 +29,6 @@ enum DockModel {
         }
     }
 
-    
     static let toolItems: [DockItem] = [
         DockItem(id: "browser", surface: .browser, systemImage: "globe", label: "Browser"),
         DockItem(id: "files", surface: .files, systemImage: "folder", label: "Files"),

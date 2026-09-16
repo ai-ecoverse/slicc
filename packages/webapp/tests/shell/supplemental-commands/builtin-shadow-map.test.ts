@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { INSTALL_PACKAGES } from '../../../src/shell/supplemental-commands/biome-command.js';
@@ -13,6 +13,9 @@ import { BUNDLED_FFMPEG_CORE_VERSION } from '../../../src/shell/supplemental-com
 import { BUNDLED_MAGICK_VERSION } from '../../../src/shell/supplemental-commands/magick-wasm.js';
 import { GLOBAL_IPK_ADD } from '../../../src/shell/supplemental-commands/shared.js';
 import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86-wasm.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const onNoComment = existsSync(resolve(here, '../../../../../.no-comment'));
 
 describe('built-in shadow map', () => {
   it('looks up unscoped and scoped package names', () => {
@@ -67,32 +70,35 @@ describe('formatBuiltinShadowHint', () => {
   });
 });
 
-describe('docs/shell-reference.md builtin-shadow-map table', () => {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const doc = readFileSync(
-    join(here, '..', '..', '..', '..', '..', 'docs', 'shell-reference.md'),
-    'utf8'
-  );
-
-  const tableStart = doc.indexOf('| npm package names');
-  const tableSection = doc.slice(tableStart, doc.indexOf('\n\n', tableStart));
-  const documentedPackages = new Set<string>();
-  for (const row of tableSection.split('\n')) {
-    if (!row.startsWith('|') || row.includes('---') || row.includes('npm package names')) {
-      continue;
+describe.skipIf(onNoComment)('docs/shell-reference.md builtin-shadow-map table', () => {
+  const loadDocumentedPackages = () => {
+    const doc = readFileSync(
+      join(here, '..', '..', '..', '..', '..', 'docs', 'shell-reference.md'),
+      'utf8'
+    );
+    const tableStart = doc.indexOf('| npm package names');
+    const tableSection = doc.slice(tableStart, doc.indexOf('\n\n', tableStart));
+    const documentedPackages = new Set<string>();
+    for (const row of tableSection.split('\n')) {
+      if (!row.startsWith('|') || row.includes('---') || row.includes('npm package names')) {
+        continue;
+      }
+      const [leftCell] = row.slice(1).split('|');
+      for (const match of leftCell.matchAll(/`([^`]+)`/g)) {
+        documentedPackages.add(match[1]);
+      }
     }
-    const [leftCell] = row.slice(1).split('|');
-    for (const match of leftCell.matchAll(/`([^`]+)`/g)) {
-      documentedPackages.add(match[1]);
-    }
-  }
+    return { tableStart, documentedPackages };
+  };
 
   it('locates the shadow-map table in the doc', () => {
+    const { tableStart, documentedPackages } = loadDocumentedPackages();
     expect(tableStart).toBeGreaterThan(-1);
     expect(documentedPackages.size).toBeGreaterThan(0);
   });
 
   it('documents exactly the package names the code maps', () => {
+    const { documentedPackages } = loadDocumentedPackages();
     const mapped = Object.keys(BUILTIN_SHADOW_MAP).sort();
     expect([...documentedPackages].sort()).toEqual(mapped);
   });

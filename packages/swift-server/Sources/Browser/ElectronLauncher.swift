@@ -4,22 +4,7 @@ import Logging
 
 private let electronOverlaySyncIntervalNanoseconds: UInt64 = 1_500_000_000
 
-
-
-
-
-
-
 let electronOverlayPresenceCheckIntervalNanoseconds: UInt64 = 2_000_000_000
-
-
-
-
-
-
-
-
-
 
 let overlayFirstProbeBudgetNanoseconds: UInt64 = 3_000_000_000
 let overlayFirstProbeIntervalNanoseconds: UInt64 = 200_000_000
@@ -297,8 +282,7 @@ final class ElectronLauncher {
             do {
                 try await Task.sleep(nanoseconds: 100_000_000)
             } catch {
-                
-                
+
                 return -1
             }
         }
@@ -335,27 +319,11 @@ private func waitForCDPAvailability(
     throw ElectronLaunchError.cdpNotAvailable("Could not connect to Electron CDP on port \(cdpPort).")
 }
 
-
-
-
-
-
-
 let bridgeRoleQueryParam = "role"
 let bridgeRoleLeader = "leader"
 let bridgeRoleFollower = "follower"
 
-
-
-
-
-
 let trayQueryParam = "tray"
-
-
-
-
-
 
 struct ThinBridgeConfig: Equatable, Sendable {
     let hostedLeaderOrigin: String
@@ -372,23 +340,7 @@ struct ThinOverlayURLOptions {
     let config: ThinBridgeConfig
     let role: OverlayRole
     let activeTab: String?
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     let trayJoinUrl: String?
 
     init(config: ThinBridgeConfig, role: OverlayRole, activeTab: String? = nil, trayJoinUrl: String? = nil) {
@@ -398,12 +350,6 @@ struct ThinOverlayURLOptions {
         self.trayJoinUrl = trayJoinUrl
     }
 }
-
-
-
-
-
-
 
 func buildThinOverlayAppURL(options: ThinOverlayURLOptions) -> String {
     let base = options.config.hostedLeaderOrigin
@@ -425,43 +371,26 @@ func buildThinOverlayAppURL(options: ThinOverlayURLOptions) -> String {
     return components.string ?? "\(trimmed)/electron"
 }
 
-
-
-
-
-
-
 func resolveHostedLeaderOrigin(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
     let explicit = environment["SLICC_HOSTED_LEADER_ORIGIN"] ?? environment["WORKER_BASE_URL"]
     if let explicit, !explicit.isEmpty {
         return explicit.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
     }
-    
+
     return "https://www.sliccy.ai"
 }
-
-
-
-
 
 struct ThinBootstrapSet: Sendable {
     let leader: String
     let follower: String
-    
-    
+
     let status: String
 }
 
 func buildElectronOverlayBootstrapScript(bundleSource: String, appURL: String) -> String {
     let escapedAppURL = appURL.replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
-    
-    
-    
-    
-    
-    
-    
+
     let frameGuard = "try{if(window.top!==window.self)return;}catch(e){return;}"
     let originGuard = "try{if(location.origin===new URL(\"\(escapedAppURL)\").origin)return;}catch(e){}"
     let injectBody =
@@ -521,39 +450,28 @@ private func scoreOverlayTarget(_ target: ElectronInspectableTarget) -> Int {
     return score
 }
 
-
-
-
 enum OverlayInjectionAction: Equatable {
-    
+
     case injectOnly
-    
-    
+
     case injectThenProbe
 }
 
 enum OverlayPostProbeAction: Equatable {
-    
+
     case done
-    
-    
+
     case reloadWithBypass
 }
 
 enum OverlayPostReloadAction: Equatable {
-    
-    
+
     case noEscalationRequested
-    
+
     case done
-    
-    
+
     case escalateToFetchProxy
 }
-
-
-
-
 
 final class ElectronOverlayInjector: @unchecked Sendable {
     private let cdpPort: Int
@@ -562,53 +480,23 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     private let session: URLSession
     private let logger: Logger
     private let probeDelayNanoseconds: UInt64
-    
-    
-    
-    
-    
+
     private let thinBridge: ThinBridgeConfig?
-    
-    
-    
+
     private let bridgeToken: String
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-injector")
     private var sessions: [String: OverlayTargetSession] = [:]
     private var cspBypassedURLs = Set<String>()
-    
-    
-    
-    
-    
+
     private var egressBlockedURLs = Set<String>()
     private var pollTask: Task<Void, Never>?
-    
-    
-    
-    
+
     private var leaderTargetURL: String?
 
-    
-    
-    
-    
-    
     var onEgressBlocked: (@Sendable (String) -> Void)?
 
-    
-    
-    
-    
-    
-    
-    
-    
     private let trayJoinUrl: String?
 
-    
-    
-    
-    
     private let testingThinBootstraps: ThinBootstrapSet?
 
     init(
@@ -633,10 +521,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.testingThinBootstraps = nil
     }
 
-    
-    
-    
-    
     init(
         _testingServePort servePort: Int,
         cdpPort: Int = 9223,
@@ -686,35 +570,20 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             sessions.removeAll()
             return snapshot
         }
-        
-        
-        
-        
+
         for session in toClose {
             Task { await session.gracefulShutdown() }
         }
     }
 
-    
-    
-    
     static func openAction(alreadyCSPBypassed: Bool) -> OverlayInjectionAction {
         alreadyCSPBypassed ? .injectOnly : .injectThenProbe
     }
 
-    
-    
     static func postProbeAction(loaded: Bool) -> OverlayPostProbeAction {
         loaded ? .done : .reloadWithBypass
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func pollOverlayLoaded(
         budgetNanoseconds: UInt64,
         intervalNanoseconds: UInt64,
@@ -735,51 +604,23 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         }
     }
 
-    
-    
-    
     static func postReloadAction(loaded: Bool, escalationRequested: Bool) -> OverlayPostReloadAction {
         guard escalationRequested else { return .noEscalationRequested }
         return loaded ? .done : .escalateToFetchProxy
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func shouldRecordBypassedAfter(probeAction action: OverlayPostProbeAction) -> Bool {
         action == .done
     }
 
-    
-    
-    
     static func shouldRecordBypassedAfter(postReloadAction action: OverlayPostReloadAction) -> Bool {
         action == .done
     }
 
-    
-    
-    
-    
     static func shouldSkipNewDocumentRegistration(currentIdentifier: String?) -> Bool {
         currentIdentifier != nil
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static func overlayEvictedProbeExpression() -> String {
         """
         (function() {
@@ -794,32 +635,14 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         """
     }
 
-    
-    
-    
-    
     static func shouldReinjectForEvictionProbe(_ value: String) -> Bool {
         value == "evicted"
     }
 
-    
-    
-    
-    
-    
     static func shouldAttemptEvictionReinject(closed: Bool, pendingReload: Bool) -> Bool {
         !closed && !pendingReload
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static func shouldReinjectOnNavigationEvent(method: String, params: [String: Any]?) -> Bool {
         if method == "Page.navigatedWithinDocument" { return true }
         if method == "Page.frameNavigated" {
@@ -829,26 +652,10 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         return false
     }
 
-    
-    
-    
-    
-    
     static func overlayHostRemovalExpression() -> String {
         "try{window.__SLICC_ELECTRON_OVERLAY__&&window.__SLICC_ELECTRON_OVERLAY__.remove&&window.__SLICC_ELECTRON_OVERLAY__.remove();var e=document.getElementById('slicc-electron-overlay-root');if(e&&e.remove)e.remove();}catch(e){}"
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static func overlayLoadedProbeExpression() -> String {
         """
         (function() {
@@ -903,10 +710,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             ])
         let liveTargetIDs = Set(selectedTargets.compactMap(\.webSocketDebuggerURL))
 
-        
-        
-        
-        
         let liveTargetURLs = Set(selectedTargets.map(\.url))
         stateQueue.sync {
             if let current = leaderTargetURL, !liveTargetURLs.contains(current) {
@@ -914,7 +717,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             }
         }
 
-        
         let stale: [OverlayTargetSession] = stateQueue.sync {
             var dropped: [OverlayTargetSession] = []
             for (targetID, session) in sessions where !liveTargetIDs.contains(targetID) {
@@ -940,11 +742,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         }
     }
 
-    
-    
-    
-    
-    
     func resolveBootstrapForTarget(
         _ target: ElectronInspectableTarget,
         bootstraps: ThinBootstrapSet
@@ -961,22 +758,14 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         }
     }
 
-    
-    
     func _testing_leaderTargetURL() -> String? {
         stateQueue.sync { leaderTargetURL }
     }
 
-    
-    
-    
     func _testing_seedLeaderTargetURL(_ url: String?) {
         stateQueue.sync { leaderTargetURL = url }
     }
 
-    
-    
-    
     @discardableResult
     func _testing_connectToTarget(_ target: ElectronInspectableTarget) throws -> OverlayTargetSession {
         let bootstraps = try loadBootstrapScripts()
@@ -990,8 +779,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         return session
     }
 
-    
-    
     func _testing_closeConnections() {
         let snapshot: [OverlayTargetSession] = stateQueue.sync {
             let value = Array(sessions.values)
@@ -1042,34 +829,22 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         )
     }
 
-    
-    
     func _testing_bypassedURLs() -> Set<String> {
         stateQueue.sync { cspBypassedURLs }
     }
 
-    
-    
     func _testing_seedBypassedURL(_ url: String) {
         stateQueue.sync { _ = cspBypassedURLs.insert(url) }
     }
 
-    
-    
     func _testing_egressBlockedURLs() -> Set<String> {
         stateQueue.sync { egressBlockedURLs }
     }
 
-    
-    
     func _testing_seedEgressBlockedURL(_ url: String) {
         stateQueue.sync { _ = egressBlockedURLs.insert(url) }
     }
 
-    
-    
-    
-    
     func markEgressBlockedAndNotify(_ url: String) {
         let shouldNotify: Bool = stateQueue.sync {
             let wasEmpty = egressBlockedURLs.isEmpty
@@ -1079,14 +854,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         if shouldNotify { onEgressBlocked?(url) }
     }
 
-    
-    
-    
-    
-    
-    
     func loadBootstrapScripts() throws -> ThinBootstrapSet {
-        
+
         if let testingThin = testingThinBootstraps {
             return testingThin
         }
@@ -1100,10 +869,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         }
 
         let bundleSource = try loadOverlayBundleSource()
-        
-        
-        
-        
+
         let leader = buildElectronOverlayBootstrapScript(
             bundleSource: bundleSource,
             appURL: buildThinOverlayAppURL(

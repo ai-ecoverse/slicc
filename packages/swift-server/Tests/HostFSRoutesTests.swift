@@ -7,8 +7,6 @@ import XCTest
 
 @testable import slicc_server
 
-
-
 final class HostFSRoutesTests: XCTestCase {
     private var root = ""
     private var outside = ""
@@ -24,7 +22,7 @@ final class HostFSRoutesTests: XCTestCase {
         try Data("nope".utf8).write(to: URL(fileURLWithPath: outside + "/secret.txt"))
         try FileManager.default.createSymbolicLink(
             atPath: root + "/escape-link", withDestinationPath: outside)
-        
+
         root = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
     }
 
@@ -53,9 +51,6 @@ final class HostFSRoutesTests: XCTestCase {
         return try JSONDecoder().decode(LickSystem.JSONValue.self, from: data)
     }
 
-    
-    
-    
     func testReadHonorsByteRanges() async throws {
         try await makeApp().test(.router) { client in
             func read(_ range: String?, _ check: @escaping (TestResponse) throws -> Void)
@@ -68,7 +63,7 @@ final class HostFSRoutesTests: XCTestCase {
                     headers: headers
                 ) { response in try check(response) }
             }
-            
+
             try await read("bytes=6-9") { response in
                 XCTAssertEqual(response.status, .partialContent)
                 XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes 6-9/10")
@@ -89,7 +84,7 @@ final class HostFSRoutesTests: XCTestCase {
                 }
                 XCTAssertEqual(body["code"], .string("EINVAL"))
             }
-            
+
             try await read("items=0-2") { response in
                 XCTAssertEqual(response.status, .ok)
                 var buffer = response.body
@@ -104,12 +99,8 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
     func testLargeAndOpenEndedRangesAreStreamed() async throws {
-        
-        
+
         let bigLength = HostFSRoutes.streamChunkBytes * 2 + 12345
         var pattern = Data(count: bigLength)
         for index in stride(from: 0, to: bigLength, by: 4093) {
@@ -130,7 +121,7 @@ final class HostFSRoutesTests: XCTestCase {
                     headers: headers
                 ) { response in try check(response) }
             }
-            
+
             try await readBig("bytes=0-") { response in
                 XCTAssertEqual(response.status, .partialContent)
                 XCTAssertEqual(
@@ -139,7 +130,7 @@ final class HostFSRoutesTests: XCTestCase {
                 var buffer = response.body
                 XCTAssertEqual(buffer.readData(length: buffer.readableBytes) ?? Data(), pattern)
             }
-            
+
             let start = HostFSRoutes.streamChunkBytes - 7
             let end = HostFSRoutes.streamChunkBytes * 2 + 11
             try await readBig("bytes=\(start)-\(end)") { response in
@@ -149,7 +140,7 @@ final class HostFSRoutesTests: XCTestCase {
                     buffer.readData(length: buffer.readableBytes) ?? Data(),
                     pattern.subdata(in: start..<(end + 1)))
             }
-            
+
             try await readBig(nil) { response in
                 XCTAssertEqual(response.status, .ok)
                 var buffer = response.body
@@ -158,10 +149,6 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
     func testConditionalRequests() async throws {
         try await makeApp().test(.router) { client in
             func read(_ headers: HTTPFields, _ check: @escaping (TestResponse) throws -> Void)
@@ -180,10 +167,10 @@ final class HostFSRoutesTests: XCTestCase {
                 lastModified = response.headers[HostFSRoutes.lastModifiedHeader] ?? ""
                 XCTAssertFalse(etag.isEmpty)
                 XCTAssertFalse(lastModified.isEmpty)
-                
+
                 XCTAssertFalse(etag.hasPrefix("W/"))
             }
-            
+
             var conditional = HTTPFields()
             conditional[HostFSRoutes.ifNoneMatchHeader] = etag
             try await read(conditional) { response in
@@ -191,7 +178,7 @@ final class HostFSRoutesTests: XCTestCase {
                 XCTAssertEqual(response.body.readableBytes, 0)
                 XCTAssertEqual(response.headers[HostFSRoutes.etagHeader], etag)
             }
-            
+
             var weak = HTTPFields()
             weak[HostFSRoutes.ifNoneMatchHeader] = "W/" + etag
             try await read(weak) { XCTAssertEqual($0.status, .notModified) }
@@ -201,11 +188,11 @@ final class HostFSRoutesTests: XCTestCase {
             var stale = HTTPFields()
             stale[HostFSRoutes.ifNoneMatchHeader] = "\"stale\""
             try await read(stale) { XCTAssertEqual($0.status, .ok) }
-            
+
             var since = HTTPFields()
             since[HostFSRoutes.ifModifiedSinceHeader] = lastModified
             try await read(since) { XCTAssertEqual($0.status, .notModified) }
-            
+
             var withRange = HTTPFields()
             withRange[HostFSRoutes.rangeHeader] = "bytes=6-9"
             withRange[HostFSRoutes.ifRangeHeader] = etag
@@ -220,30 +207,27 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
     func testChangedMtimeInvalidatesTheValidator() throws {
         let path = root + "/hello.txt"
         let before = HostFSRoutes.cacheValidator(path: path, size: 10, mtimeMs: 1_700_000_000_000)
         let after = HostFSRoutes.cacheValidator(path: path, size: 10, mtimeMs: 1_700_000_060_000)
         XCTAssertNotEqual(before.etag, after.etag)
         XCTAssertNotEqual(before.lastModified, after.lastModified)
-        
+
         let resized = HostFSRoutes.cacheValidator(path: path, size: 11, mtimeMs: 1_700_000_000_000)
         XCTAssertNotEqual(before.etag, resized.etag)
     }
 
-    
     func testParseByteRangeMatchesNodeServer() {
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=0-9", size: 100), .window(start: 0, end: 9))
         XCTAssertEqual(
             HostFSRoutes.parseByteRange("bytes=90-", size: 100), .window(start: 90, end: 99))
         XCTAssertEqual(
             HostFSRoutes.parseByteRange("bytes=-10", size: 100), .window(start: 90, end: 99))
-        
+
         XCTAssertEqual(
             HostFSRoutes.parseByteRange("bytes=-500", size: 100), .window(start: 0, end: 99))
-        
+
         XCTAssertEqual(
             HostFSRoutes.parseByteRange("bytes=6-9999", size: 10), .window(start: 6, end: 9))
         for header in [nil, "", "bytes=", "items=0-1", "bytes=0-1, 5-6", "bytes=a-b"] {
@@ -252,7 +236,7 @@ final class HostFSRoutesTests: XCTestCase {
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=100-200", size: 100), .unsatisfiable)
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=-0", size: 100), .unsatisfiable)
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=9-3", size: 100), .unsatisfiable)
-        
+
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=0-0", size: 0), .unsatisfiable)
     }
 
@@ -294,10 +278,6 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
     func testStatReportsIdentityFieldsForCompareStats() async throws {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: root + "/hello.txt")
@@ -313,13 +293,11 @@ final class HostFSRoutesTests: XCTestCase {
                 XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
                 XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
                 XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
-                
-                
+
                 XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
                 guard case .number(let mode)? = body["mode"] else { return XCTFail("no mode") }
                 XCTAssertEqual(mode_t(mode) & 0o777, 0o755)
-                
-                
+
                 let ctimeMs =
                     Double(info.st_ctimespec.tv_sec) * 1000
                     + Double(info.st_ctimespec.tv_nsec) / 1_000_000
@@ -340,8 +318,7 @@ final class HostFSRoutesTests: XCTestCase {
                 XCTAssertEqual(e["ino"], .number(Double(info.st_ino)))
                 XCTAssertEqual(e["mode"], .number(Double(info.st_mode)))
             }
-            
-            
+
             try await client.execute(
                 uri: "/api/hostfs", method: .post,
                 body: try self.stable(["op": "stat", "mount": "/mnt/proj", "path": "hello.txt"])
@@ -357,10 +334,6 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
     func testTimestampsAreNotRoundedIntoTheNextSecond() async throws {
         let racy = root + "/racy.txt"
         try Data("x".utf8).write(to: URL(fileURLWithPath: racy))
@@ -426,11 +399,11 @@ final class HostFSRoutesTests: XCTestCase {
                 uri: "/api/hostfs/remove?mount=%2Fmnt%2Fproj&path=renamed&recursive=1",
                 method: .delete
             ) { response in XCTAssertEqual(response.status, .ok) }
-            
+
             try await client.execute(
                 uri: "/api/hostfs/remove?mount=%2Fmnt%2Fproj&path=&recursive=1", method: .delete
             ) { response in XCTAssertEqual(response.status, .forbidden) }
-            
+
             try await client.execute(
                 uri: "/api/hostfs/remove?mount=%2Fmnt%2Fproj&path=new", method: .delete
             ) { response in
@@ -478,7 +451,7 @@ final class HostFSRoutesTests: XCTestCase {
                 uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=escape-link%2Fsecret.txt",
                 method: .get
             ) { response in XCTAssertEqual(response.status, .forbidden) }
-            
+
             try await client.execute(
                 uri: "/api/hostfs/write?mount=%2Fmnt%2Fproj&path=escape-link/new.txt",
                 method: .put,
@@ -487,9 +460,6 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
     private func stable(_ body: [String: Any]) throws -> ByteBuffer {
         ByteBuffer(data: try JSONSerialization.data(withJSONObject: body))
     }
@@ -527,7 +497,7 @@ final class HostFSRoutesTests: XCTestCase {
                     "op": "rename", "mount": "/mnt/proj", "path": "post/made", "to": "post/moved",
                 ])
             ) { response in XCTAssertEqual(response.status, .ok) }
-            
+
             try await client.execute(
                 uri: "/api/hostfs", method: .post,
                 body: try self.stable([
@@ -543,9 +513,6 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
     func testStableEndpointErrorsAlwaysCarryACode() async throws {
         try await makeApp().test(.router) { client in
             func expectCode(_ body: [String: Any], _ status: HTTPResponse.Status, _ code: String)
@@ -569,8 +536,7 @@ final class HostFSRoutesTests: XCTestCase {
             try await expectCode(
                 ["op": "remove", "mount": "/mnt/proj", "path": "", "recursive": true], .forbidden,
                 "EACCES")
-            
-            
+
             try await expectCode(
                 ["op": "read", "mount": "/mnt/proj", "path": "hello.txt"], .badRequest, "EINVAL")
             try await expectCode(
@@ -587,9 +553,6 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
-    
-    
-    
     func testStableEndpointOversizedBodyIsCodedEFBIG() async throws {
         try await makeApp().test(.router) { client in
             let oversized = String(repeating: "x", count: HostFSRoutes.stableMaxBodyBytes + 1024)
@@ -611,14 +574,6 @@ final class HostFSRoutesTests: XCTestCase {
         XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs-admin"), "600")
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     func testListOmitsMetadataForAnEntryItCannotStat() async throws {
         try FileManager.default.createSymbolicLink(
             atPath: root + "/dangling", withDestinationPath: root + "/not-there")
@@ -636,14 +591,14 @@ final class HostFSRoutesTests: XCTestCase {
                     return true
                 }
                 guard case .object(let e)? = dangling else { return XCTFail("no dangling entry") }
-                
+
                 XCTAssertEqual(e["kind"], .string("file"))
                 XCTAssertNil(e["size"])
                 XCTAssertNil(e["lastModified"])
                 XCTAssertNil(e["ctime"])
                 XCTAssertNil(e["ino"])
                 XCTAssertNil(e["mode"])
-                
+
                 let hello = entries.first { entry in
                     guard case .object(let h) = entry, case .string("hello.txt")? = h["name"]
                     else { return false }
@@ -652,7 +607,7 @@ final class HostFSRoutesTests: XCTestCase {
                 guard case .object(let h)? = hello else { return XCTFail("no hello.txt entry") }
                 XCTAssertEqual(h["size"], .number(10))
             }
-            
+
             try await client.execute(
                 uri: "/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=dangling", method: .get
             ) { response in

@@ -1,29 +1,13 @@
 import Foundation
 
-
 private let handoffTimestampFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return formatter
 }()
 
-
-
-
-
-
-
-
-
-
-
-
 enum Handoff {
 
-    
-    
-    
-    
     static func validatePayload(_ payload: LickSystem.JSONObject) -> String? {
         if payload["sliccHeader"]?.stringValue != nil {
             return "The legacy `sliccHeader` payload was removed; post `{ verb, target, instruction? }` instead. See docs/slicc-handoff.md."
@@ -38,10 +22,7 @@ enum Handoff {
         if isProvidedNonString(payload["instruction"]) {
             return "instruction must be a string when provided"
         }
-        
-        
-        
-        
+
         if isProvidedNonString(payload["branch"]) {
             return "branch must be a string when provided"
         }
@@ -54,7 +35,6 @@ enum Handoff {
         return nil
     }
 
-    
     static func buildNavigateEvent(_ payload: LickSystem.JSONObject) -> LickSystem.JSONObject {
         var event: LickSystem.JSONObject = [
             "type": .string("navigate_event"),
@@ -78,7 +58,6 @@ enum Handoff {
         return event
     }
 
-    
     private static func isProvided(_ value: LickSystem.JSONValue?) -> Bool {
         guard let value else { return false }
         return value != .null

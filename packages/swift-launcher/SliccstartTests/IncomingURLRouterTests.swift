@@ -2,8 +2,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
 @MainActor
 final class IncomingURLRouterTests: XCTestCase {
 
@@ -24,8 +22,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testNewTabRequestPutsTheWholeUrlInTheQueryString() {
-        
-        
+
         let request = IncomingURLRouter.newTabRequest(
             cdpPort: 9222,
             target: URL(string: "https://example.com/path?a=1&b=2#frag")!
@@ -46,7 +43,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testCreatedTargetIdReadsTheNewTabResponse() {
-        let body = Data(#"{"id":"EE4AC065","type":"page","url":"https:
+        let body = Data(#"{"id":"EE4AC065","type":"page","url":"https://example.com/"}"#.utf8)
         XCTAssertEqual(IncomingURLRouter.createdTargetId(from: body), "EE4AC065")
         XCTAssertNil(IncomingURLRouter.createdTargetId(from: Data("nope".utf8)))
         XCTAssertNil(IncomingURLRouter.createdTargetId(from: Data(#"{"id":""}"#.utf8)))
@@ -71,9 +68,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testActivatesTheBrowserThatOwnsTheLeaderPortNotTheTopBrowser() async {
-        
-        
-        
+
         let leader = LeaderBrowserEndpoint(cdpPort: 9333, appPath: "/Applications/Brave Browser.app")
         let process = LeaderStub(leader: leader)
         let transport = TransportSpy()
@@ -89,8 +84,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testLaunchesTheTopBrowserAndWaitsForItsCdpPort() async {
-        
-        
+
         let process = LeaderStub(leader: nil, endpointAfterPolls: 3, endpointWhenReady: Self.chromeLeader)
         let transport = TransportSpy()
         let router = makeRouter(process: process, transport: transport)
@@ -112,15 +106,12 @@ final class IncomingURLRouterTests: XCTestCase {
         await router.handle([URL(string: "https://example.com/a")!])
 
         XCTAssertEqual(transport.requests, [])
-        
-        
+
         XCTAssertGreaterThan(process.launchedTargets.count, 1)
     }
 
     func testSkipsAFollowerBrowserWhenPickingOneToStart() async {
-        
-        
-        
+
         let browsers = [browserTarget(name: "Google Chrome"), browserTarget(name: "Brave Browser")]
         let process = LeaderStub(leader: nil, followerNames: ["Google Chrome"])
         let transport = TransportSpy()
@@ -133,9 +124,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testReportsWhenTheCreatedTabCannotBeActivated() async {
-        
-        
-        
+
         let process = LeaderStub(leader: Self.chromeLeader)
         let transport = TransportSpy(activateStatus: 500)
         let reported = ErrorSpy()
@@ -191,8 +180,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testKeepsWaitingWhenALaunchAttemptThrows() async {
-        
-        
+
         let process = LeaderStub(
             leader: nil,
             endpointAfterPolls: 3,
@@ -223,8 +211,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testProductionDefaultsResolveTheInstalledBrowsers() {
-        
-        
+
         let router = IncomingURLRouter(process: LeaderStub(leader: nil))
         XCTAssertNotNil(router)
         for browser in IncomingURLRouter.defaultOrderedBrowsers() {
@@ -306,8 +293,6 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 }
 
-
-
 @MainActor
 private final class LeaderStub: LeaderBrowserLaunching {
     private var endpoint: LeaderBrowserEndpoint?
@@ -316,7 +301,6 @@ private final class LeaderStub: LeaderBrowserLaunching {
     private var ticks = 0
     private(set) var launchedTargets: [String] = []
 
-    
     private let followerNames: Set<String>
     private let launchError: Error?
 

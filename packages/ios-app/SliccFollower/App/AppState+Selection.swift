@@ -1,15 +1,8 @@
 import Foundation
 import SliccTrayKit
 
-
-
-
-
-
 extension AppState {
-    
-    
-    
+
     func requestFreshSnapshot() {
         _ = sendToLeader(snapshotRequestForConnection())
     }
@@ -18,26 +11,14 @@ extension AppState {
         .requestSnapshot(scoopJid: selectedScoopJid)
     }
 
-    
     var selectedScoop: ScoopSummary? {
         scoops.first(where: { $0.jid == selectedScoopJid })
     }
 
-    
-    
-    
-    
-    
-    
     var selectedUnitIsReadOnly: Bool {
         selectedScoop?.isReadOnly ?? false
     }
 
-    
-    
-    
-    
-    
     var visibleToolUICards: [ToolUIPlaceholder] {
         selectedUnitIsReadOnly ? [] : toolUICards
     }
@@ -46,15 +27,10 @@ extension AppState {
         (leaderProtocolVersion ?? 0) >= 5
     }
 
-    
-    
-    
     var supportsTabTeleport: Bool {
         (leaderProtocolVersion ?? 0) >= 6
     }
 
-    
-    
     func requestTabTeleport(targetId: String) -> Bool {
         sendToLeader(
             .tabTeleportRequest(
@@ -79,17 +55,11 @@ extension AppState {
         }
     }
 
-    
-    
     func refreshModels() {
         guard supportsModelControls else { return }
         sendToLeader(.modelsRequest)
     }
 
-    
-    
-    
-    
     func selectModel(_ modelId: String) {
         guard supportsModelControls,
             modelCatalog.contains(where: { $0.modelId == modelId })
@@ -97,8 +67,6 @@ extension AppState {
         sendToLeader(.modelSelect(modelId: modelId, scoopJid: selectedScoopJid))
     }
 
-    
-    
     func setThinkingLevel(_ displayLevel: String) {
         guard supportsModelControls, activeModel?.reasoning == true,
             let scoopJid = selectedScoopJid,

@@ -1,18 +1,10 @@
 import Foundation
 import os
 
-
-
 extension AppState {
     private static let themeLogger = Logger(
         subsystem: "com.slicc.follower", category: "AppState")
 
-    
-    
-    
-    
-    
-    
     func applyLeaderTheme(_ themeJson: String?) {
         guard let themeJson else {
             leaderTheme = nil

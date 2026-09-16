@@ -45,9 +45,7 @@ final class PortResolverTests: XCTestCase {
     }
 
     func testStrictModeIgnoresIPv6OnlyOccupierBecauseServerBindsIPv4() async throws {
-        
-        
-        
+
         let ipv6Reserved = try makeIPv6ListeningSocket(port: 0)
         defer { close(ipv6Reserved.fd) }
 
@@ -59,12 +57,7 @@ final class PortResolverTests: XCTestCase {
     }
 
     func testStrictModeSucceedsAcrossTimeWaitResidueFromPreviousListener() async throws {
-        
-        
-        
-        
-        
-        
+
         let listener = try makeListeningSocket(port: 0)
         let port = listener.port
 
@@ -100,11 +93,9 @@ final class PortResolverTests: XCTestCase {
             return
         }
 
-        
         close(accepted)
         close(listener.fd)
 
-        
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let resolved = try await findAvailablePort(startingFrom: port, strict: true)
@@ -115,8 +106,7 @@ final class PortResolverTests: XCTestCase {
         let error = PortResolverError.preferredPortUnavailable(port: 5710)
         let description = error.localizedDescription
         XCTAssertTrue(description.contains("5710"), "got: \(description)")
-        
-        
+
         XCTAssertFalse(description.contains("operation couldn"), "got: \(description)")
     }
 
@@ -129,8 +119,6 @@ final class PortResolverTests: XCTestCase {
         let fd = socket(AF_INET6, SOCK_STREAM, 0)
         XCTAssertGreaterThanOrEqual(fd, 0)
 
-        
-        
         var enableV6Only: Int32 = 1
         _ = withUnsafePointer(to: &enableV6Only) {
             setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, $0, socklen_t(MemoryLayout<Int32>.size))

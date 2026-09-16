@@ -4,8 +4,6 @@ import XCTest
 
 final class EnvFileFormatTests: XCTestCase {
 
-    
-
     func testParseSkipsBlankLinesAndComments() {
         let blob = """
 
@@ -35,8 +33,6 @@ final class EnvFileFormatTests: XCTestCase {
         XCTAssertEqual(entries.map(\.key), ["FOO"])
     }
 
-    // MARK: - serialize
-
     func testSerializeQuotesValuesWithSpacesOrSpecialChars() throws {
         let blob = try EnvFileFormat.serialize([
             EnvEntry(key: "PLAIN", value: "hello"),
@@ -49,8 +45,6 @@ final class EnvFileFormatTests: XCTestCase {
         XCTAssertTrue(blob.contains(#"HASH="abc#def""#))
         XCTAssertTrue(blob.contains(#"QUOTED="v\"x""#))
     }
-
-    // MARK: - secretsFromBlob / blobFromSecrets
 
     func testSecretsBlobRoundTrip() throws {
         let original = [
@@ -99,12 +93,6 @@ final class EnvFileFormatTests: XCTestCase {
         XCTAssertEqual(secrets, [Secret(name: "TOKEN", value: "hello", domains: ["api.example.com"])])
     }
 
-    // MARK: - Multiline rejection (#2828)
-
-    /// The schema is line-oriented, so `serialize` refuses a value carrying a
-    /// line break instead of emitting a blob that parses back truncated. This
-    /// is the fail-closed backstop behind the route-level 400s; the mirrored
-    /// TS assertion lives in `packages/shared-ts/tests/secret-env-schema.test.ts`.
     func testSerializeRejectsMultilineValue() {
         let pem = "-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----"
         XCTAssertThrowsError(try EnvFileFormat.serialize([EnvEntry(key: "PEM", value: pem)])) { error in
@@ -129,9 +117,6 @@ final class EnvFileFormatTests: XCTestCase {
         }
     }
 
-    /// Round-trip proof for the mechanism the rejection exists to prevent:
-    /// without the guard, `KEY="line1<LF>line2"` parses back as the truncated
-    /// first line, so the stored credential is unrecoverable.
     func testMultilineValueWouldNotRoundTrip() {
         let parsed = EnvFileFormat.parse("PEM=\"line1\nline2\"\nPEM_DOMAINS=a.com\n")
         XCTAssertEqual(parsed.first?.value, "\"line1")

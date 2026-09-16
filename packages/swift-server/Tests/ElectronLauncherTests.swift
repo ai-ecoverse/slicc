@@ -4,8 +4,6 @@ import XCTest
 
 @testable import slicc_server
 
-
-
 private final class ProbeCallCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var stored = 0
@@ -93,15 +91,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-
     func testOpenActionInjectsAndProbesOnFirstConnection() {
         XCTAssertEqual(
             ElectronOverlayInjector.openAction(alreadyCSPBypassed: false),
@@ -110,9 +99,7 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testBypassedStateGuardSkipsProbeAndReload() {
-        
-        
-        
+
         XCTAssertEqual(
             ElectronOverlayInjector.openAction(alreadyCSPBypassed: true),
             .injectOnly
@@ -130,23 +117,13 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-
     func testPollOverlayLoadedReturnsAsSoonAsProbeSucceeds() async {
         let attempts = ProbeCallCounter()
         let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
             budgetNanoseconds: 1_000_000_000,
             intervalNanoseconds: 1_000_000,
             probe: {
-                
-                
+
                 attempts.increment() >= 3
             }
         )
@@ -165,8 +142,7 @@ final class ElectronLauncherTests: XCTestCase {
             }
         )
         XCTAssertFalse(loaded, "a frame that never commits must classify as not-loaded so escalation fires")
-        
-        
+
         XCTAssertGreaterThanOrEqual(attempts.value, 1)
         XCTAssertLessThanOrEqual(attempts.value, 5)
     }
@@ -211,12 +187,8 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-
     func testBypassedURLSeedingIsObservable() {
-        
-        
-        
+
         let injector = ElectronOverlayInjector(_testingServePort: 0, cdpPort: 0)
         XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
 
@@ -224,13 +196,9 @@ final class ElectronLauncherTests: XCTestCase {
         injector._testing_seedBypassedURL(url)
         XCTAssertEqual(injector._testing_bypassedURLs(), [url])
 
-        
-        
         injector._testing_seedBypassedURL(url)
         XCTAssertEqual(injector._testing_bypassedURLs(), [url])
     }
-
-    
 
     func testOverlayOriginIncludesExplicitPort() {
         XCTAssertEqual(
@@ -247,28 +215,18 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testOverlayOriginReturnsNilForFileURL() {
-        
-        
-        
-        
+
         XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "file:///tmp/index.html"))
     }
 
     func testOverlayOriginReturnsNilForCustomScheme() {
-        
-        
-        
-        
-        
-        
+
         XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "app://renderer/index.html"))
         XCTAssertNil(OverlayTargetSession.overlayOrigin(for: "chrome-extension://abc/popup.html"))
     }
 
     func testFetchProxyOriginFallsBackForCustomScheme() {
-        
-        
-        
+
         XCTAssertEqual(
             OverlayTargetSession.fetchProxyOrigin(
                 targetURL: "app://renderer/index.html",
@@ -278,12 +236,8 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-
     func testFetchProxyOriginUsesParentOriginWhenHttp() {
-        
-        
-        
+
         XCTAssertEqual(
             OverlayTargetSession.fetchProxyOrigin(
                 targetURL: "https://teams.example/calendar",
@@ -294,11 +248,7 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testFetchProxyOriginFallsBackToIframeHttpOriginForFileURL() {
-        
-        
-        
-        
-        
+
         XCTAssertEqual(
             OverlayTargetSession.fetchProxyOrigin(
                 targetURL: "file:///Applications/AEM%20Desktop.app/Contents/Resources/app.asar/src/renderer/index.html",
@@ -309,8 +259,7 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testFetchProxyOriginUsesServePortInFallback() {
-        
-        
+
         XCTAssertEqual(
             OverlayTargetSession.fetchProxyOrigin(
                 targetURL: "file:///opt/app/index.html",
@@ -319,15 +268,6 @@ final class ElectronLauncherTests: XCTestCase {
             "http://localhost:5730"
         )
     }
-
-    
-    
-    
-    
-    
-    
-    
-    
 
     func testBypassedRecordedAfterImmediateLoadSuccess() {
         XCTAssertTrue(ElectronOverlayInjector.shouldRecordBypassedAfter(probeAction: .done))
@@ -357,15 +297,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-
     func testStopResumesPendingWaitersWithNil() async {
         let session = OverlayTargetSession(
             target: ElectronInspectableTarget(
@@ -393,8 +324,6 @@ final class ElectronLauncherTests: XCTestCase {
             await session._testing_awaitSyntheticWaiter()
         }
 
-        
-        
         let registered = await waitFor(timeout: 1.0) {
             session._testing_pendingWaiterCount() == 1
         }
@@ -434,16 +363,6 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
     func testBootstrapScriptGuardsAgainstSubframes() {
         let script = buildElectronOverlayBootstrapScript(
             bundleSource: "/* bundle */",
@@ -467,8 +386,7 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testBootstrapScriptWrapsInjectionInIIFE() {
-        
-        
+
         let script = buildElectronOverlayBootstrapScript(
             bundleSource: "/* bundle */",
             appURL: "http://localhost:5711/electron"
@@ -488,12 +406,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-
     func testShouldSkipNewDocumentRegistrationWhenAlreadyRegistered() {
         XCTAssertTrue(
             ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: "1")
@@ -506,22 +418,12 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
     func testOverlayEvictedProbeOnlyReportsEvictedWhenMarkerPresentButRootGone() {
         let expression = ElectronOverlayInjector.overlayEvictedProbeExpression()
         XCTAssertTrue(expression.contains("__SLICC_ELECTRON_OVERLAY__"))
         XCTAssertTrue(expression.contains("getElementById('slicc-electron-overlay-root')"))
         XCTAssertTrue(expression.contains("(hasMarker && !hasRoot) ? 'evicted' : 'ok'"))
-        
+
         XCTAssertTrue(expression.contains("return 'ok'"))
     }
 
@@ -584,13 +486,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
-
     func testOverlayHostRemovalExpressionCallsOverlayRemove() {
         let expression = ElectronOverlayInjector.overlayHostRemovalExpression()
         XCTAssertTrue(expression.contains("__SLICC_ELECTRON_OVERLAY__"))
@@ -604,17 +499,6 @@ final class ElectronLauncherTests: XCTestCase {
             "expression must fall back to direct DOM removal so a stale bundle without remove() is still cleaned up"
         )
     }
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
 
     func testOverlayLoadedProbeExpressionWalksLauncherShadowIframe() {
         let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
@@ -632,7 +516,7 @@ final class ElectronLauncherTests: XCTestCase {
 
     func testOverlayLoadedProbeExpressionVerifiesNavigation() {
         let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
-        
+
         XCTAssertTrue(expression.contains("return 'no-host'"))
         XCTAssertTrue(expression.contains("return 'no-iframe'"))
         XCTAssertTrue(expression.contains("return 'no-src'"))
@@ -642,9 +526,7 @@ final class ElectronLauncherTests: XCTestCase {
 
     func testOverlayLoadedProbeExpressionSuccessOnlyInCatch() {
         let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
-        
-        
-        
+
         let okCount = expression.components(separatedBy: "return 'ok'").count - 1
         XCTAssertEqual(okCount, 1, "the only success return must be the catch branch")
         XCTAssertFalse(
@@ -662,8 +544,6 @@ final class ElectronLauncherTests: XCTestCase {
             XCTFail("expression must contain a catch branch with `return 'ok'`")
         }
     }
-
-    
 
     func testShouldInjectElectronOverlayTargetAcceptsHttpsPage() {
         let target = ElectronInspectableTarget(
@@ -778,8 +658,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    
-
     func testElectronInspectableTargetCodableRoundTrip() throws {
         let original = ElectronInspectableTarget(
             type: "page",
@@ -793,25 +671,23 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testElectronInspectableTargetDecodesWebSocketDebuggerUrlCodingKey() throws {
-        
+
         let json = """
-            {"type":"page","title":"Hi","url":"https:
+            {"type":"page","title":"Hi","url":"https://example.com","webSocketDebuggerUrl":"ws://x/y"}
             """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: json)
-        XCTAssertEqual(decoded.webSocketDebuggerURL, "ws:
+        XCTAssertEqual(decoded.webSocketDebuggerURL, "ws://x/y")
         XCTAssertEqual(decoded.title, "Hi")
     }
 
     func testElectronInspectableTargetDecodesMissingOptionalFields() throws {
         let json = """
-            {"type":"page","url":"https:
+            {"type":"page","url":"https://example.com"}
             """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: json)
         XCTAssertNil(decoded.title)
         XCTAssertNil(decoded.webSocketDebuggerURL)
     }
-
-    // MARK: - Error types: errorDescription coverage
 
     func testElectronAppAlreadyRunningErrorExposesMessage() {
         let error = ElectronAppAlreadyRunningError(message: "Slack is already running")
@@ -832,8 +708,6 @@ final class ElectronLauncherTests: XCTestCase {
         let error = ElectronLaunchError.remotDebuggingDisabled("rdb off")
         XCTAssertEqual(error.errorDescription, "rdb off")
     }
-
-    // MARK: - ElectronResolvedApp minimal shape
 
     func testElectronResolvedAppIsAppBundleFlag() {
         let bundleURL = URL(fileURLWithPath: "/Applications/Sample.app")
@@ -856,8 +730,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
         XCTAssertFalse(bareResolved.isAppBundle)
     }
-
-    // MARK: - ElectronLauncher.resolveApp & resolveExecutableURL paths
 
     func testResolveAppForAppBundleReturnsBundleURL() throws {
         let tempDirectory = try makeTempDirectory()
@@ -931,9 +803,6 @@ final class ElectronLauncherTests: XCTestCase {
         let macOSDirectory = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
         try FileManager.default.createDirectory(at: macOSDirectory, withIntermediateDirectories: true)
 
-        // Helpers plus a non-helper binary that does NOT match the bundle's
-        // display name — exercises the directory-scan fallback that skips
-        // helper/crash/gpu/etc. suffixes and picks the remaining real binary.
         for name in ["Main Helper (Renderer)", "Main Helper (GPU)", "Plugin Tool", "Real"] {
             let helperURL = macOSDirectory.appendingPathComponent(name)
             FileManager.default.createFile(atPath: helperURL.path, contents: Data())
@@ -944,8 +813,6 @@ final class ElectronLauncherTests: XCTestCase {
         let executable = try launcher.resolveExecutableURL(in: bundleURL)
         XCTAssertEqual(executable.lastPathComponent, "Real")
     }
-
-    // MARK: - findRunningInstances / terminateRunningApp safety paths
 
     func testFindRunningInstancesReturnsEmptyForFakeBundle() throws {
         let tempDirectory = try makeTempDirectory()
@@ -978,8 +845,6 @@ final class ElectronLauncherTests: XCTestCase {
         try await launcher.terminateRunningApp(appPath: bundleURL.path)
     }
 
-    // MARK: - ElectronOverlayInjector init + start + stop lifecycle
-
     func testElectronOverlayInjectorStartStopDoesNotCrash() async {
         let injector = ElectronOverlayInjector(
             cdpPort: 0,
@@ -988,19 +853,17 @@ final class ElectronLauncherTests: XCTestCase {
             probeDelayNanoseconds: 1_000_000,
             thinBridge: Self.thinBridge
         )
-        // First call wires up the polling task; the second hits the
-        // alreadyRunning guard.
+
         injector.start()
         injector.start()
         XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
         injector.stop()
-        // Idempotent stop: subsequent calls must remain safe.
+
         injector.stop()
     }
 
     func testElectronOverlayInjectorRunsAtLeastOnePollCycleAgainstClosedPort() async {
-        // cdpPort 1 will refuse the /json connection — the polling loop must
-        // catch the error and continue, then cleanly shut down on stop().
+
         let injector = ElectronOverlayInjector(
             cdpPort: 1,
             servePort: 5711,
@@ -1014,12 +877,10 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
     }
 
-    // MARK: - Bootstrap script content + escaping
-
     func testBootstrapScriptIncludesBundleSourceAndInjectionCall() {
         let script = buildElectronOverlayBootstrapScript(
-            bundleSource: "",
-            appURL: "http:
+            bundleSource: "/* MARKER_BUNDLE_42 */",
+            appURL: "http://localhost:5711/electron"
         )
         XCTAssertTrue(script.contains("/* MARKER_BUNDLE_42 */"))
         XCTAssertTrue(script.contains("window.__SLICC_ELECTRON_OVERLAY__"))
@@ -1033,8 +894,6 @@ final class ElectronLauncherTests: XCTestCase {
         )
         XCTAssertTrue(script.contains("back\\\\slash"))
     }
-
-    
 
     func testGracefulShutdownOnClosedSessionIsNoOp() async {
         let session = OverlayTargetSession(
@@ -1062,8 +921,6 @@ final class ElectronLauncherTests: XCTestCase {
         await session.gracefulShutdown()
         XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
     }
-
-    
 
     private static let thinBridge = ThinBridgeConfig(
         hostedLeaderOrigin: "https://www.sliccy.ai",
@@ -1096,10 +953,7 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testBuildThinOverlayAppURLCarriesTrayJoinURLForJoinLaunches() throws {
-        
-        
-        
-        
+
         let joinURL = "https://www.sliccy.ai/join/292c4f92-19ad-495e-a4f9-12f0d4631e2e.07bb9dad"
         let url = buildThinOverlayAppURL(
             options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, trayJoinUrl: joinURL)
@@ -1121,12 +975,7 @@ final class ElectronLauncherTests: XCTestCase {
     }
 
     func testBuildThinOverlayAppURLEmitsExplicitlyEmptyTrayParamForNoTrayIntent() throws {
-        
-        
-        
-        
-        
-        
+
         let url = buildThinOverlayAppURL(
             options: ThinOverlayURLOptions(config: Self.thinBridge, role: .follower, trayJoinUrl: "")
         )
@@ -1207,8 +1056,6 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(result, "https://example.com")
     }
 
-    
-
     private static let leaderMark = "LEADER_BOOTSTRAP_MARKER"
     private static let followerMark = "FOLLOWER_BOOTSTRAP_MARKER"
     private static let statusMark = "STATUS_BOOTSTRAP_MARKER"
@@ -1240,7 +1087,7 @@ final class ElectronLauncherTests: XCTestCase {
 
         let followerScript = injector.resolveBootstrapForTarget(follower, bootstraps: bootstraps)
         XCTAssertEqual(followerScript, Self.followerMark)
-        
+
         XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
     }
 
@@ -1252,7 +1099,6 @@ final class ElectronLauncherTests: XCTestCase {
         let first = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
         XCTAssertEqual(first, Self.leaderMark)
 
-        
         let second = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
         XCTAssertEqual(second, Self.leaderMark)
         XCTAssertEqual(injector._testing_leaderTargetURL(), target.url)
@@ -1267,7 +1113,7 @@ final class ElectronLauncherTests: XCTestCase {
         let bootstraps = try injector.loadBootstrapScripts()
         let script = injector.resolveBootstrapForTarget(other, bootstraps: bootstraps)
         XCTAssertEqual(script, Self.followerMark)
-        
+
         XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
     }
 
@@ -1281,17 +1127,21 @@ final class ElectronLauncherTests: XCTestCase {
         )
         let bootstraps = try injector.loadBootstrapScripts()
 
-        
-        
         XCTAssertTrue(bootstraps.leader.contains("role=leader"))
         XCTAssertTrue(bootstraps.follower.contains("role=follower"))
         XCTAssertTrue(bootstraps.leader.contains(Self.thinBridge.bridgeToken))
         XCTAssertTrue(bootstraps.follower.contains(Self.thinBridge.bridgeToken))
     }
 
-    
-    
-    
+    func testStoppingInjectorGracefullyStopsConnectedSessions() throws {
+        let injector = makeThinInjector()
+        let session = try injector._testing_connectToTarget(
+            thinTarget(url: "https://example.test/", debuggerURL: "ws://127.0.0.1:1/devtools/page/x")
+        )
+        injector.stop()
+        session.stop()
+    }
+
     func testLoadBootstrapScriptsNeverEmitsBundledServePortURL() throws {
         let injector = ElectronOverlayInjector(
             cdpPort: 0,
@@ -1312,8 +1162,6 @@ final class ElectronLauncherTests: XCTestCase {
             )
         }
     }
-
-    
 
     private func waitFor(timeout seconds: Double, predicate: @Sendable () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)

@@ -3,20 +3,18 @@ import XCTest
 @testable import slicc_server
 
 final class KeychainSecretStoreTests: XCTestCase {
-    
+
     private let prefix = "TEST_\(UUID().uuidString.prefix(8))_"
 
     private func secretName(_ base: String) -> String { prefix + base }
 
     override func tearDown() {
-        
+
         for entry in SecretStore.list() where entry.name.hasPrefix(prefix) {
             try? SecretStore.delete(name: entry.name)
         }
         super.tearDown()
     }
-
-    
 
     func testSetAndGetRoundTrip() throws {
         let name = secretName("GITHUB_TOKEN")
@@ -29,8 +27,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(secret?.domains, ["api.github.com", "*.github.com"])
     }
 
-    
-
     func testSetOverwritesExistingSecret() throws {
         let name = secretName("OPENAI_KEY")
         try SecretStore.set(name: name, value: "sk-old", domains: ["api.openai.com"])
@@ -41,13 +37,9 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(secret?.domains, ["api.openai.com", "api.azure.com"])
     }
 
-    
-
     func testGetReturnsNilForMissingSecret() {
         XCTAssertNil(SecretStore.get(name: secretName("DOES_NOT_EXIST")))
     }
-
-    
 
     func testDeleteRemovesSecret() throws {
         let name = secretName("TO_DELETE")
@@ -60,8 +52,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         try SecretStore.delete(name: secretName("NEVER_EXISTED"))
     }
 
-    
-
     func testListReturnsNamesAndDomainsWithoutValues() throws {
         let name1 = secretName("LIST_A")
         let name2 = secretName("LIST_B")
@@ -72,7 +62,7 @@ final class KeychainSecretStoreTests: XCTestCase {
         let names = entries.map(\.name).sorted()
 
         XCTAssertEqual(names, [name1, name2].sorted())
-        
+
         for entry in entries {
             if entry.name == name1 {
                 XCTAssertEqual(entry.domains, ["a.com"])
@@ -82,8 +72,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         }
     }
 
-    
-
     func testSetRejectsEmptyDomains() {
         let name = secretName("NO_DOMAINS")
         XCTAssertThrowsError(try SecretStore.set(name: name, value: "val", domains: [])) { error in
@@ -91,8 +79,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         }
         XCTAssertNil(SecretStore.get(name: name))
     }
-
-    
 
     func testAllReturnsEverySecretInOneCall() throws {
         let n1 = secretName("BULK_A")
@@ -109,25 +95,11 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(byName[n2]?.domains, ["b.com", "*.b.com"])
     }
 
-    
-
-    
-    
-    
     func testReadBlobReturnsEmptyForMissingItem() throws {
-        
-        
-        
+
         XCTAssertNoThrow(try SecretStore.readBlob())
     }
 
-    
-
-    
-    
-    
-    
-    
     func testNonInteractiveFlagDoesNotBreakAccessibleItem() throws {
         setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
         defer { unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE") }
@@ -139,12 +111,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(SecretStore.get(name: name)?.value, "ghp_noninteractive")
     }
 
-    
-    
-    
-    
-    
-    
     func testNonInteractiveReadSuppressesLegacyKeychainInteraction() throws {
         setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
         var calls: [Bool] = []
@@ -161,8 +127,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(calls, [false, true], "read must suppress interaction, then restore it")
     }
 
-    
-    
     func testNonInteractiveWriteSuppressesLegacyKeychainInteraction() throws {
         setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
         var calls: [Bool] = []
@@ -180,8 +144,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(calls.last, true, "write must restore interaction")
     }
 
-    
-    
     func testInteractiveRunLeavesTheInteractionSwitchAlone() throws {
         unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE")
         var calls: [Bool] = []

@@ -2,14 +2,10 @@ import SliccTrayKit
 import SwiftUI
 import UIKit
 
-
-
-
 enum TranscriptPreviewTarget: Identifiable {
-    
-    
+
     case leaderFile(path: String, line: Int?)
-    
+
     case payload(Base64Payload)
 
     var id: String {
@@ -27,12 +23,6 @@ enum TranscriptPreviewTarget: Identifiable {
     }
 }
 
-
-
-
-
-
-
 struct TranscriptShareRequest: Identifiable {
     let id = UUID()
     let items: [Any]
@@ -41,15 +31,11 @@ struct TranscriptShareRequest: Identifiable {
         TranscriptShareRequest(items: [value])
     }
 
-    
-    
     static func blob(name: String, data: Data) -> TranscriptShareRequest? {
         guard let url = TranscriptTempFile.write(name: name, data: data) else { return nil }
         return TranscriptShareRequest(items: [url])
     }
 }
-
-
 
 enum TranscriptTempFile {
     static func write(name: String, data: Data) -> URL? {
@@ -68,26 +54,11 @@ enum TranscriptTempFile {
     }
 }
 
-
-
-
-
-
-
-
 @MainActor
 final class TranscriptActionModel: ObservableObject {
     @Published var preview: TranscriptPreviewTarget?
     @Published var share: TranscriptShareRequest?
 }
-
-
-
-
-
-
-
-
 
 struct TranscriptActionHandlers {
     var preview: (TranscriptPreviewTarget) -> Void = { _ in }
@@ -105,9 +76,6 @@ extension EnvironmentValues {
     }
 }
 
-
-
-
 private struct FileMentionResolverKey: EnvironmentKey {
     static let defaultValue: FileMentionResolver? = nil
 }
@@ -119,20 +87,12 @@ extension EnvironmentValues {
     }
 }
 
-
-
-
 enum TranscriptClipboard {
     static func copy(_ text: String) {
         UIPasteboard.general.string = text
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 }
-
-
-
-
-
 
 struct TranscriptShareSheet: UIViewControllerRepresentable {
     let items: [Any]
@@ -144,11 +104,8 @@ struct TranscriptShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-
-
 extension View {
-    
-    
+
     func transcriptActionSheets(_ model: TranscriptActionModel) -> some View {
         sheet(item: Binding(get: { model.preview }, set: { model.preview = $0 })) { target in
             TranscriptPreviewSheet(target: target)
@@ -159,12 +116,6 @@ extension View {
         }
     }
 }
-
-
-
-
-
-
 
 struct TranscriptPreviewSheet: View {
     let target: TranscriptPreviewTarget
@@ -231,8 +182,7 @@ struct TranscriptPreviewSheet: View {
     private func load() async {
         switch target {
         case .payload(let payload):
-            
-            
+
             loaded = FilesView.OpenFile(name: payload.name, data: payload.bytes)
         case .leaderFile(let path, _):
             guard appState.connectionState == .connected else {

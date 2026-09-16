@@ -1,25 +1,7 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
 public enum OptelSourceDeriver {
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     public static func source(
         element: String,
         identifier: String? = nil,
@@ -46,7 +28,6 @@ public enum OptelSourceDeriver {
         return core
     }
 
-    
     private static func trimmed(_ value: String?) -> String? {
         guard let value else { return nil }
         let result = value.trimmingCharacters(in: .whitespacesAndNewlines)

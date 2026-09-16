@@ -186,6 +186,20 @@ describe('stripSource swift', () => {
     expect(out).toContain('// swift-tools-version: 5.10');
     expect(out).toContain('import PackageDescription');
   });
+
+  it('does not treat // inside #" raw strings as comments', () => {
+    const src = 'let s = #"{"url":"https://tray.example/join"}"#\n// drop me\n';
+    const out = stripSource(src, 'swift', 'a.swift');
+    expect(out).toContain('https://tray.example/join');
+    expect(out).not.toContain('drop me');
+  });
+
+  it('does not treat // inside multiline strings as comments', () => {
+    const src = 'let s = """\nhttps://tray.example/join\n"""\n// drop me\n';
+    const out = stripSource(src, 'swift', 'a.swift');
+    expect(out).toContain('https://tray.example/join');
+    expect(out).not.toContain('drop me');
+  });
 });
 
 describe('stripSource css', () => {

@@ -1,8 +1,6 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
 struct OpenApprovalCard: View {
     let request: OpenApprovalRequest
     let onDecision: (OpenApprovalDecision) -> Void

@@ -1,19 +1,10 @@
 import SwiftUI
 
-
-
-
-
-
-
-
 struct ToolUIPlaceholder: Identifiable, Equatable {
-    
+
     let id: String
     let title: String
 
-    
-    
     static let fallbackTitle = "Approval requested"
 
     init(requestId: String, html: String) {
@@ -21,12 +12,6 @@ struct ToolUIPlaceholder: Identifiable, Equatable {
         self.title = Self.extractTitle(from: html)
     }
 
-    
-    
-    
-    
-    
-    
     static func extractTitle(from html: String) -> String {
         guard let header = firstElementContent(in: html, className: "sprinkle-action-card__header")
         else { return fallbackTitle }
@@ -35,11 +20,6 @@ struct ToolUIPlaceholder: Identifiable, Equatable {
         return title.isEmpty ? fallbackTitle : title
     }
 
-    
-    
-    
-    
-    
     private static func firstElementContent(in html: String, className: String) -> String? {
         guard let classRange = html.range(of: "class=\"\(className)\"") else { return nil }
         guard let openStart = html.range(of: "<", options: .backwards, range: html.startIndex..<classRange.lowerBound)
@@ -68,14 +48,13 @@ struct ToolUIPlaceholder: Identifiable, Equatable {
         return nil
     }
 
-    
     private static func removeNestedElements(from html: String) -> String {
         var result = html
         for className in ["sprinkle-badge", "sprinkle-action-card__meta"] {
             while let inner = firstElementContent(in: result, className: className),
                 let range = result.range(of: inner)
             {
-                
+
                 guard
                     let openStart = result.range(
                         of: "<", options: .backwards, range: result.startIndex..<range.lowerBound),
@@ -88,9 +67,7 @@ struct ToolUIPlaceholder: Identifiable, Equatable {
     }
 
     private static func stripTags(_ html: String) -> String {
-        
-        
-        
+
         let withoutTags = html.replacingOccurrences(
             of: "<[^>]+>", with: "", options: .regularExpression)
         return
@@ -103,8 +80,6 @@ struct ToolUIPlaceholder: Identifiable, Equatable {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
 }
-
-
 
 struct ToolUICardView: View {
     let card: ToolUIPlaceholder

@@ -3,7 +3,6 @@ import XCTest
 @testable import SwiftOptel
 
 final class OptelEnvConfigTests: XCTestCase {
-    
 
     func testResolveRateEnvWinsOverExplicit() {
         XCTAssertEqual(
@@ -32,8 +31,7 @@ final class OptelEnvConfigTests: XCTestCase {
     }
 
     func testResolveRateEmptyEnvFallsBackToExplicit() {
-        
-        
+
         XCTAssertEqual(
             OptelEnvConfig.resolveRate(explicit: "on", environment: ["OPTEL_RATE": ""]),
             "on"
@@ -44,8 +42,7 @@ final class OptelEnvConfigTests: XCTestCase {
     }
 
     func testResolveRatePassesThroughEachAlias() {
-        
-        
+
         let expectedWeights: [String: Int] = ["on": 1, "off": 0, "high": 10, "low": 1000]
         for (alias, expectedWeight) in expectedWeights {
             XCTAssertEqual(
@@ -57,8 +54,7 @@ final class OptelEnvConfigTests: XCTestCase {
     }
 
     func testResolveRatePassesNumericAndGarbageThroughForDefaultFallback() {
-        
-        
+
         for raw in ["42", "0.5", "banana", "bogus"] {
             let resolved = OptelEnvConfig.resolveRate(
                 explicit: "on",
@@ -68,8 +64,6 @@ final class OptelEnvConfigTests: XCTestCase {
             XCTAssertEqual(SamplingConfig(rate: resolved).weight, 100)
         }
     }
-
-    
 
     func testResolveDebugLoggingTruthyValues() {
         for raw in ["1", "true", "on", "yes", "TRUE", "On", "YES"] {
@@ -93,8 +87,6 @@ final class OptelEnvConfigTests: XCTestCase {
         XCTAssertFalse(OptelEnvConfig.resolveDebugLogging(environment: [:]))
         XCTAssertFalse(OptelEnvConfig.resolveDebugLogging(environment: ["OTHER": "1"]))
     }
-
-    
 
     func testEnvKeysMatchDocumentedSpec() {
         XCTAssertEqual(OptelEnvConfig.rateKey, "OPTEL_RATE")

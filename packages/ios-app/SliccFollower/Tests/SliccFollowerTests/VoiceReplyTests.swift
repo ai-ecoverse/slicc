@@ -2,14 +2,9 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
 @MainActor
 final class VoiceReplyTests: XCTestCase {
 
-    
     private final class FakeSpeaker: SpeechSpeaking {
         var spoken: [(text: String, lang: String?)] = []
         var stops = 0
@@ -26,8 +21,6 @@ final class VoiceReplyTests: XCTestCase {
         super.setUp()
         DictationPriming.reset()
     }
-
-    
 
     func testFirstDictatedTurnCarriesThePrimingNote() {
         let marked = DictationPriming.applyMarkers("hello there", isFirst: true)
@@ -72,15 +65,12 @@ final class VoiceReplyTests: XCTestCase {
     }
 
     func testPeekingTheFirstFlagDoesNotSpendIt() {
-        
-        
+
         XCTAssertTrue(DictationPriming.isFirstPending)
         XCTAssertTrue(DictationPriming.isFirstPending)
         DictationPriming.commitFirst()
         XCTAssertFalse(DictationPriming.isFirstPending)
     }
-
-    
 
     func testReplyLangIsParsedAndStripped() {
         let reply = "<!--lang:de-->Guten Tag."
@@ -96,8 +86,6 @@ final class VoiceReplyTests: XCTestCase {
         XCTAssertNil(DictationPriming.replyLang("just prose"))
     }
 
-    
-
     func testFencedCodeIsNotReadAloud() {
         let text = VoiceReply.speechText(
             fromMarkdown: "Here you go:\n\n```sh\nrm -rf /\n```\n\nDone.")
@@ -107,7 +95,7 @@ final class VoiceReplyTests: XCTestCase {
     }
 
     func testUnterminatedFenceDoesNotLeakItsBody() {
-        
+
         let text = VoiceReply.speechText(fromMarkdown: "Sure:\n\n```js\nconst x = 1;\nconst y")
         XCTAssertEqual(text, "Sure:")
     }
@@ -151,8 +139,6 @@ final class VoiceReplyTests: XCTestCase {
         XCTAssertTrue(text.hasSuffix("…"))
         XCTAssertFalse(text.hasSuffix("wor…"), "the cap must not split a word")
     }
-
-    
 
     private func voice(
         _ identifier: String,
@@ -212,9 +198,6 @@ final class VoiceReplyTests: XCTestCase {
         XCTAssertNil(AVSpeechSpeaker.rankedVoice(for: "ja", from: voices))
     }
 
-    
-
-    
     private func answer(
         _ reply: VoiceReply, scoop: String, messageId: String
     ) -> Bool {
@@ -245,9 +228,7 @@ final class VoiceReplyTests: XCTestCase {
     }
 
     func testAReplyAlreadyStreamingCannotClaimALaterMark() {
-        
-        
-        
+
         let reply = VoiceReply(speaker: FakeSpeaker())
         reply.bindReply(scoopJid: "cone", messageId: "typed")
         reply.markSubmission(scoopJid: "cone")
@@ -280,8 +261,7 @@ final class VoiceReplyTests: XCTestCase {
     }
 
     func testRollbackLeavesAnAlreadyBoundMarkAlone() {
-        
-        
+
         let reply = VoiceReply(speaker: FakeSpeaker())
         reply.markSubmission(scoopJid: "cone")
         reply.bindReply(scoopJid: "cone", messageId: "inflight")

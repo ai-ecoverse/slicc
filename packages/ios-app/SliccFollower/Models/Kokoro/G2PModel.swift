@@ -1,8 +1,6 @@
 import CoreML
 import Foundation
 
-
-
 actor G2PModel {
     enum G2PModelError: Error, LocalizedError {
         case vocabLoadFailed(String)
@@ -26,22 +24,17 @@ actor G2PModel {
 
     private let logger = AppLogger(category: "G2PModel")
 
-    
-    
     private let modelsDirectory: URL
 
-    
     private var graphemeToId: [Character: Int]?
     private var idToPhoneme: [Int: String]?
     private var bosTokenId: Int = 1
     private var eosTokenId: Int = 2
     private var unkTokenId: Int = 3
 
-    
     private var encoder: MLModel?
     private var decoder: MLModel?
 
-    
     private var causalMaskCache: [Int: MLMultiArray] = [:]
 
     init(modelsDirectory: URL) {
@@ -63,7 +56,6 @@ actor G2PModel {
             return nil
         }
 
-        
         var inputIds: [Int32] = [Int32(bosTokenId)]
         for ch in word {
             inputIds.append(Int32(graphemeToId[ch] ?? unkTokenId))
@@ -72,13 +64,11 @@ actor G2PModel {
 
         let encLen = inputIds.count
 
-        
         let encoderInput = try MLMultiArray(shape: [1, NSNumber(value: encLen)], dataType: .int32)
         for i in 0..<encLen {
             encoderInput[[0, i] as [NSNumber]] = NSNumber(value: inputIds[i])
         }
 
-        
         let encoderProvider = try MLDictionaryFeatureProvider(
             dictionary: ["input_ids": MLFeatureValue(multiArray: encoderInput)]
         )
@@ -88,20 +78,17 @@ actor G2PModel {
             throw G2PModelError.encoderPredictionFailed
         }
 
-        
         let maxSteps = 64
         var decoderIds: [Int32] = [Int32(bosTokenId)]
 
         for _ in 0..<maxSteps {
             let decLen = decoderIds.count
 
-            
             let decInput = try MLMultiArray(shape: [1, NSNumber(value: decLen)], dataType: .int32)
             for i in 0..<decLen {
                 decInput[[0, i] as [NSNumber]] = NSNumber(value: decoderIds[i])
             }
 
-            
             let posIds = try MLMultiArray(shape: [1, NSNumber(value: decLen)], dataType: .int32)
             for i in 0..<decLen {
                 posIds[[0, i] as [NSNumber]] = NSNumber(value: Int32(i + 2))
@@ -124,7 +111,6 @@ actor G2PModel {
                 throw G2PModelError.decoderPredictionFailed
             }
 
-            
             let vocabSize = logits.shape.last!.intValue
             let lastPos = decLen - 1
             var bestId = 0
@@ -141,7 +127,6 @@ actor G2PModel {
             decoderIds.append(Int32(bestId))
         }
 
-        
         let specialTokens: Set<Int> = [0, bosTokenId, eosTokenId, unkTokenId]
         var phonemes: [String] = []
         for id in decoderIds {
@@ -155,18 +140,10 @@ actor G2PModel {
         return phonemes.isEmpty ? nil : phonemes
     }
 
-    
     func ensureModelsAvailable() throws {
         try loadIfNeeded()
     }
 
-    
-
-    
-    
-    
-    
-    
     private func causalMask(length: Int) throws -> MLMultiArray {
         if let cached = causalMaskCache[length] { return cached }
         let mask = try MLMultiArray(
@@ -187,7 +164,6 @@ actor G2PModel {
 
         let kokoroDir = modelsDirectory
 
-        
         let vocabURL = kokoroDir.appendingPathComponent(ModelNames.G2P.vocabularyFile)
         guard FileManager.default.fileExists(atPath: vocabURL.path) else {
             throw G2PModelError.vocabLoadFailed("\(ModelNames.G2P.vocabularyFile) not found at \(vocabURL.path)")
@@ -223,7 +199,6 @@ actor G2PModel {
 
         logger.info("Loaded G2P vocab (\(gMap.count) graphemes, \(pMap.count) phonemes)")
 
-        
         let encoderURL = kokoroDir.appendingPathComponent(ModelNames.G2P.encoderFile)
         guard FileManager.default.fileExists(atPath: encoderURL.path) else {
             throw G2PModelError.modelLoadFailed("\(ModelNames.G2P.encoderFile) not found at \(encoderURL.path)")

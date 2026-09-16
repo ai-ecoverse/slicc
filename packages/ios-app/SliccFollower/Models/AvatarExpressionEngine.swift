@@ -1,44 +1,28 @@
 import Foundation
 
-
-
-
-
-
-
-
-
 @MainActor
 final class AvatarExpressionEngine {
 
-    
-    
     struct Snapshot: Equatable, Sendable {
         var shape = 0.0
         var lidTop = 0.0
         var lidBottom = 0.0
         var brows = AvatarExpression.baseBrows
         var browsVisible = false
-        
-        
+
         var pupilScale = 1.0
-        
+
         var blinkScale = 1.0
-        
+
         var leftPupilOffset = AvatarExpression.GazePoint(x: 0, y: 0)
         var rightPupilOffset = AvatarExpression.GazePoint(x: 0, y: 0)
     }
 
-    
-    
-    
     private enum Aim: Equatable {
         case centered
         case point(AvatarExpression.GazePoint)
     }
 
-    
-    
     private(set) var snapshot = Snapshot()
 
     private let clock: @MainActor () -> TimeInterval
@@ -76,10 +60,6 @@ final class AvatarExpressionEngine {
         self.random = random
     }
 
-    
-
-    
-    
     func configure(
         activity: AvatarExpression.Activity?,
         frozen: Bool,
@@ -89,7 +69,7 @@ final class AvatarExpressionEngine {
     ) {
         let now = clock()
         if activity != self.activity {
-            
+
             awaitingSince = activity == .awaiting ? now : nil
             gazeChangedAt = nil
         }
@@ -99,8 +79,7 @@ final class AvatarExpressionEngine {
         blinkEnabled = blink
         self.drowseDelay = drowseDelay
         if !primed {
-            
-            
+
             shapeCommitted = AvatarExpression.shapeTarget(for: activity)
             snapshot.shape = shapeCommitted
             primed = true
@@ -108,22 +87,16 @@ final class AvatarExpressionEngine {
         if reduceMotion || frozen { settle(at: now) }
     }
 
-    
-
-    
     func scrutinize() {
         scrutinyUntil = clock() + AvatarExpression.scrutinySeconds
         if reduceMotion || frozen { settle(at: clock()) }
     }
 
-    
     func glower() {
         glowerUntil = clock() + AvatarExpression.glowerSeconds
         if reduceMotion || frozen { settle(at: clock()) }
     }
 
-    
-    
     func wake() {
         let now = clock()
         awaitingSince = now
@@ -135,8 +108,6 @@ final class AvatarExpressionEngine {
         startBlink(at: now)
     }
 
-    
-    
     func resetExpression() {
         let now = clock()
         glowerUntil = nil
@@ -154,19 +125,14 @@ final class AvatarExpressionEngine {
         lastStep = now
     }
 
-    
-
-    
     @discardableResult
     func frame(at date: Date) -> Snapshot {
         advance(to: date.timeIntervalSinceReferenceDate)
     }
 
-    
     @discardableResult
     func advance(to time: TimeInterval) -> Snapshot {
-        
-        
+
         guard !frozen else { return snapshot }
         guard !reduceMotion else {
             settle(at: time)
@@ -189,8 +155,7 @@ final class AvatarExpressionEngine {
     private func integrateShape(at time: TimeInterval, dt: TimeInterval) {
         let target = AvatarExpression.shapeTarget(for: activity)
         if target != shapeCommitted, !committing {
-            
-            
+
             committing = true
             startBlink(at: time)
         }
@@ -212,7 +177,7 @@ final class AvatarExpressionEngine {
         let glower = (glowerUntil ?? 0) > time ? AvatarExpression.glowerLid : 0
         guard activity == .awaiting else { return glower }
         let elapsed = awaitingSince.map { time - $0 } ?? 0
-        
+
         let waited =
             settled && elapsed > drowseDelay
             ? drowseDelay + AvatarExpression.drowseRampSeconds
@@ -223,8 +188,6 @@ final class AvatarExpressionEngine {
     private func lidBottomTarget(at time: TimeInterval) -> Double {
         (scrutinyUntil ?? 0) > time ? AvatarExpression.scrutinyLid : 0
     }
-
-    
 
     private func startBlink(at time: TimeInterval) {
         blinkStarts = [time, time]
@@ -245,7 +208,7 @@ final class AvatarExpressionEngine {
                 blinkStarts[index] = nil
                 continue
             }
-            
+
             if index == 0 { scale = blinkScale(elapsed: elapsed) }
         }
         snapshot.blinkScale = scale
@@ -265,8 +228,6 @@ final class AvatarExpressionEngine {
         progress * progress * (3 - 2 * progress)
     }
 
-    
-    
     private func commitAtApex() {
         if committing {
             shapeCommitted = AvatarExpression.shapeTarget(for: activity)
@@ -297,8 +258,6 @@ final class AvatarExpressionEngine {
         }
     }
 
-    
-
     private func aim(at time: TimeInterval) -> Aim? {
         switch activity {
         case .thinking:
@@ -312,11 +271,10 @@ final class AvatarExpressionEngine {
                     at: time, targets: AvatarExpression.wanderTargets,
                     interval: AvatarExpression.wanderIntervalSeconds))
         case .awaiting:
-            
+
             return .centered
         case .working, nil:
-            
-            
+
             return nil
         }
     }
@@ -361,9 +319,6 @@ final class AvatarExpressionEngine {
             y: AvatarExpression.approach(current: current.y, target: target.y, rate: rate, dt: dt))
     }
 
-    
-    
-    
     private func offset(for aim: Aim, eyeX: Double) -> AvatarExpression.GazePoint {
         guard case .point(let target) = aim else { return .init(x: 0, y: 0) }
         let dx = target.x - eyeX
@@ -374,10 +329,6 @@ final class AvatarExpressionEngine {
         return .init(x: dx / distance * clamp, y: dy / distance * clamp)
     }
 
-    
-
-    
-    
     private func settle(at time: TimeInterval) {
         guard !frozen else { return }
         shapeCommitted = AvatarExpression.shapeTarget(for: activity)

@@ -5,9 +5,7 @@ enum PortResolverError: LocalizedError, Sendable {
     case invalidPort(Int)
     case noAvailablePorts(startingFrom: Int)
     case socketFailure(code: Int32, host: String, port: Int)
-    
-    
-    
+
     case preferredPortUnavailable(port: Int)
 
     var errorDescription: String? {
@@ -24,18 +22,6 @@ enum PortResolverError: LocalizedError, Sendable {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 func findAvailablePort(startingFrom preferred: Int, strict: Bool = false) async throws -> Int {
     guard (0...65_535).contains(preferred) else {
         throw PortResolverError.invalidPort(preferred)
@@ -46,9 +32,7 @@ func findAvailablePort(startingFrom preferred: Int, strict: Bool = false) async 
     }
 
     if strict {
-        
-        
-        
+
         do {
             return try tryListenOnPort(preferred, host: .ipv4)
         } catch let error as PortResolverError {
@@ -103,7 +87,7 @@ private func tryListenOnPortDualStack(_ port: Int) throws -> Int {
         if case .socketFailure(let code, _, _) = error, code == EADDRINUSE {
             throw error
         }
-        
+
     }
     return assignedPort
 }
@@ -115,16 +99,6 @@ private func tryListenOnPort(_ port: Int, host: LoopbackAddress) throws -> Int {
     }
     defer { _ = close(fd) }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     var enableReuseAddr: Int32 = 1
     let reuseAddrResult = withUnsafePointer(to: &enableReuseAddr) {
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, $0, socklen_t(MemoryLayout<Int32>.size))

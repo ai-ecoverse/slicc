@@ -3,38 +3,15 @@ import HTTPTypes
 import Hummingbird
 import NIOCore
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 enum SudoApprove {
 
-    
-    
-    
-    
     typealias OsascriptRunner = @Sendable ([String]) async throws -> String
 
-    
     static let validKinds: Set<String> = ["command", "read", "write", "secret"]
 
     enum SudoApproveError: Error, Equatable {
         case nonZeroExit(code: Int32)
     }
-
-    
 
     struct ApproveRequest: Equatable {
         let kind: String
@@ -53,32 +30,22 @@ enum SudoApprove {
         let suggestedPattern: String?
     }
 
-    
-
-    
-    
     static func describeRequest(_ req: ApproveRequest) -> String {
         "\(req.kind): \(req.detail)"
     }
 
-    
-    
     static func fallbackPattern(_ req: ApproveRequest) -> String {
         let trimmed = req.suggestedPattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty { return trimmed }
         return req.detail.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    
-    
     static func q(_ s: String) -> String {
         "\""
             + s.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
-    
-    
     static func buildScript(request: ApproveRequest, suggested: String) -> String {
         let message = "SLICC sudo — approve \(describeRequest(request))\n\nEdit pattern for \"Always\":"
         return "display dialog \(q(message)) default answer \(q(suggested)) "
@@ -86,8 +53,6 @@ enum SudoApprove {
             + "with title \"SLICC sudo\" with icon caution"
     }
 
-    
-    
     static func parseButton(_ stdout: String) -> String {
         guard let range = stdout.range(of: "button returned:") else { return "" }
         var result = ""
@@ -98,16 +63,11 @@ enum SudoApprove {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    
     static func parseText(_ stdout: String) -> String {
         guard let range = stdout.range(of: "text returned:") else { return "" }
         return String(stdout[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    
-
-    
-    
     static func decide(request: ApproveRequest, runner: OsascriptRunner) async -> Decision {
         let suggested = fallbackPattern(request)
         let script = buildScript(request: request, suggested: suggested)
@@ -125,9 +85,6 @@ enum SudoApprove {
         }
     }
 
-    
-    
-    
     static let defaultRunner: OsascriptRunner = { args in
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
@@ -154,10 +111,6 @@ enum SudoApprove {
         }
     }
 
-    
-
-    
-    
     static func registerRoutes(
         router: Router<some RequestContext>,
         runner: @escaping OsascriptRunner = defaultRunner
@@ -167,8 +120,6 @@ enum SudoApprove {
         }
     }
 
-    
-    
     static func handle(request: Request, runner: OsascriptRunner) async -> Response {
         let env: RequestEnvelope
         do {
@@ -185,8 +136,6 @@ enum SudoApprove {
         )
         return decisionResponse(decision)
     }
-
-    
 
     private static func decodeEnvelope(request: Request) async throws -> RequestEnvelope {
         let buffer = try await request.body.collect(upTo: 1 * 1024 * 1024)

@@ -1,47 +1,23 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 public enum FollowerLickType: String, Codable {
     case navigate
     case discovery
 }
 
-
 public struct LickEvent: Codable, Equatable {
     public let type: FollowerLickType
-    
+
     public let timestamp: String
-    
-    
-    
+
     public let body: AnyCodable?
 
-    
     public var navigateUrl: String?
-    
+
     var discoveryOrigin: String?
     var discoveryKind: String?
     var discoveryUrl: String?
-    
-    
-    
+
     public var targetScoop: String?
 
     public init(

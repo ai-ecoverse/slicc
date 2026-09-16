@@ -4,9 +4,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
 @MainActor
 final class AppStateSudoApprovalTests: XCTestCase {
     private func send(_ message: LeaderToFollowerMessage, to state: AppState) throws {
@@ -29,14 +26,13 @@ final class AppStateSudoApprovalTests: XCTestCase {
         try send(prompt(), to: state)
         XCTAssertEqual(state.sudoApprovals.map(\.requestId), ["sudo-1"])
         XCTAssertEqual(state.sudoApprovals.first?.scoopName, "Researcher")
-        
-        
+
         XCTAssertEqual(state.sudoApprovals.first?.requester, "biscotto \u{201C}Anna\u{201D}")
         XCTAssertEqual(state.sudoApprovals.first?.heading, "Run command?")
 
         try send(.sudoApproveCancel(requestId: "sudo-1"), to: state)
         XCTAssertTrue(state.sudoApprovals.isEmpty)
-        
+
         try send(.sudoApproveCancel(requestId: "nope"), to: state)
     }
 
@@ -67,8 +63,7 @@ final class AppStateSudoApprovalTests: XCTestCase {
         let caps = state.followerCapabilities()
         XCTAssertTrue(caps.exec)
         XCTAssertEqual(caps.sudoApproval, true)
-        
-        
+
         XCTAssertEqual(caps.biometric, AppState.deviceOwnerAuthAvailable() ? true : nil)
     }
 

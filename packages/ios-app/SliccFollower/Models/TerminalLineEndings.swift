@@ -1,28 +1,11 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
 struct TerminalLineEndings {
 
-    
-    
-    
     private var trailingCarriageReturn = false
 
-    
     mutating func normalize(_ data: Data) -> Data {
-        
-        
+
         guard data.contains(0x0A) else {
             if let last = data.last { trailingCarriageReturn = last == 0x0D }
             return data
@@ -40,8 +23,6 @@ struct TerminalLineEndings {
         return out
     }
 
-    
-    
     mutating func reset() {
         trailingCarriageReturn = false
     }

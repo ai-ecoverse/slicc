@@ -8,18 +8,7 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
-
-
-
-
 final class HandoffTests: XCTestCase {
-
-    
 
     func testValidateAcceptsHandoffPayload() {
         XCTAssertNil(
@@ -140,8 +129,7 @@ final class HandoffTests: XCTestCase {
     }
 
     func testValidateAllowsExplicitNullOptionals() {
-        
-        
+
         XCTAssertNil(
             Handoff.validatePayload([
                 "verb": .string("handoff"),
@@ -151,8 +139,6 @@ final class HandoffTests: XCTestCase {
                 "path": .null,
             ]))
     }
-
-    
 
     func testBuildFullHandoffEvent() {
         let event = Handoff.buildNavigateEvent([
@@ -212,15 +198,13 @@ final class HandoffTests: XCTestCase {
         XCTAssertNil(event["path"])
     }
 
-    
-
     func testHandoffRouteAcceptsHandoffAndBroadcastsNavigateEvent() async throws {
         let recorder = MessageRecorder()
         try await self.withApp(recorder: recorder) { client in
             try await self.postHandoff(
                 client,
                 body:
-                    #"{"verb":"handoff","target":"https:
+                    #"{"verb":"handoff","target":"https://example.com/page","instruction":"Continue the signup flow","url":"https://example.com/page","title":"Signup"}"#
             ) { response in
                 XCTAssertEqual(response.status, .ok)
                 XCTAssertEqual(try self.decodeJSONObject(from: response.body), ["ok": .bool(true)])
@@ -241,7 +225,7 @@ final class HandoffTests: XCTestCase {
         try await self.withApp(recorder: recorder) { client in
             try await self.postHandoff(
                 client,
-                body: #"{"verb":"upskill","target":"https:
+                body: #"{"verb":"upskill","target":"https://github.com/o/r","branch":"main","path":"skills/foo"}"#
             ) { response in
                 XCTAssertEqual(response.status, .ok)
                 XCTAssertEqual(try self.decodeJSONObject(from: response.body), ["ok": .bool(true)])
@@ -277,7 +261,7 @@ final class HandoffTests: XCTestCase {
         try await self.withApp { client in
             try await self.postHandoff(
                 client,
-                body: #"{"verb":"launch","target":"https:
+                body: #"{"verb":"launch","target":"https://x.example/"}"#
             ) { response in
                 XCTAssertEqual(response.status, .badRequest)
                 XCTAssertEqual(
@@ -305,7 +289,7 @@ final class HandoffTests: XCTestCase {
         try await self.withApp(recorder: recorder) { client in
             try await self.postHandoff(
                 client,
-                body: #"{"verb":"handoff","target":"https:
+                body: #"{"verb":"handoff","target":"https://example.com/","branch":"main"}"#
             ) { response in
                 XCTAssertEqual(response.status, .badRequest)
                 XCTAssertEqual(
@@ -326,9 +310,7 @@ final class HandoffTests: XCTestCase {
     }
 
     func testHandoffRouteRejectsNonObjectJsonBodyWithoutBroadcast() async throws {
-        
-        
-        
+
         let recorder = MessageRecorder()
         try await self.withApp(recorder: recorder) { client in
             try await self.postHandoff(client, body: "[1,2]") { response in
@@ -341,8 +323,6 @@ final class HandoffTests: XCTestCase {
         }
         await self.assertNoBroadcast(recorder)
     }
-
-    
 
     private func withApp(
         recorder: MessageRecorder? = nil,
@@ -388,8 +368,6 @@ final class HandoffTests: XCTestCase {
         }
     }
 
-    
-    
     private func assertNodeIsoTimestamp(
         _ timestamp: String?, file: StaticString = #filePath, line: UInt = #line
     ) {
@@ -413,7 +391,7 @@ final class HandoffTests: XCTestCase {
             let message = try await recorder.waitForMessage(timeout: 0.2)
             XCTFail("no navigate_event must be broadcast on a rejected payload, got: \(message)")
         } catch {
-            
+
         }
     }
 

@@ -3,8 +3,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
 final class KokoroAneErrorTests: XCTestCase {
     func testErrorDescriptionsAreStable() {
         let vocabURL = URL(fileURLWithPath: "/tmp/vocab.json")

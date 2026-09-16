@@ -15,14 +15,7 @@ private let cdpPortRegex = try! NSRegularExpression(
 struct ChromeProcess: @unchecked Sendable {
     let process: Process
     let cdpPort: Int
-    
-    
-    
-    
-    
-    
-    
-    
+
     let chromePid: pid_t?
 
     init(process: Process, cdpPort: Int, chromePid: pid_t? = nil) {
@@ -42,10 +35,7 @@ struct ChromeLaunchConfig: Sendable {
     let currentDirectoryPath: String?
     let environment: [String: String]
     let launchTimeout: TimeInterval
-    
-    
-    
-    
+
     let restoreUrls: [String]
 
     init(
@@ -79,21 +69,9 @@ enum ChromeLauncherError: LocalizedError, Sendable {
     case chromeExitedBeforeReportingPort(Int32)
     case timedOutWaitingForPort(TimeInterval)
     case cdpUnavailable(Int)
-    
-    
-    
-    
-    
-    
-    
+
     case openLaunchFailed(exitCode: Int32, executable: String)
-    
-    
-    
-    
-    
-    
-    
+
     case chromeAlreadyRunning(port: Int, browser: String?)
 
     var errorDescription: String? {
@@ -126,10 +104,7 @@ struct ChromeLauncher: Sendable {
     private let homeDirectoryProvider: @Sendable () -> String
     private let processFactory: @Sendable () -> Process
     private let fetchData: @Sendable (URL) async throws -> (Data, URLResponse)
-    
-    
-    
-    
+
     private let runningPidsForBundle: @Sendable (URL) -> Set<pid_t>
 
     init(
@@ -145,12 +120,7 @@ struct ChromeLauncher: Sendable {
         },
         processFactory: @escaping @Sendable () -> Process = { Process() },
         fetchData: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = { url in
-            
-            
-            
-            
-            
-            
+
             var request = URLRequest(url: url)
             request.timeoutInterval = 2
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -203,34 +173,7 @@ struct ChromeLauncher: Sendable {
             "--no-default-browser-check",
             "--disable-crash-reporter",
             "--disable-background-tracing",
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
+
             "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard",
             "--disable-background-timer-throttling",
             "--disable-backgrounding-occluded-windows",
@@ -243,10 +186,6 @@ struct ChromeLauncher: Sendable {
             args.append("--load-extension=\(extensionPath)")
         }
 
-        
-        
-        
-        
         args.append(launchUrl)
         args.append(
             contentsOf: TabSessionStore.sanitize(
@@ -257,12 +196,6 @@ struct ChromeLauncher: Sendable {
         return args
     }
 
-    
-    
-    
-    
-    
-    
     func buildOpenLaunchArgs(
         appBundlePath: String,
         chromeArgs: [String]
@@ -270,17 +203,10 @@ struct ChromeLauncher: Sendable {
         return ["-n", "-a", appBundlePath, "-W", "--args"] + chromeArgs
     }
 
-    
-    
-    
     func resolveAppBundle(forExecutable executablePath: String) -> String? {
         let url = URL(fileURLWithPath: executablePath)
         let pathComponents = url.pathComponents
-        
-        
-        
-        
-        
+
         guard let appIndex = pathComponents.lastIndex(where: { $0.lowercased().hasSuffix(".app") }) else {
             return nil
         }
@@ -302,9 +228,6 @@ struct ChromeLauncher: Sendable {
             .path
     }
 
-    
-    
-    
     func migrateLegacyDefaultChromeProfile(newDir: String, candidates: [String]) {
         guard !FileManager.default.fileExists(atPath: newDir) else { return }
         for candidate in candidates {
@@ -324,19 +247,6 @@ struct ChromeLauncher: Sendable {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func clearChromeSessionRestore(userDataDir: String) {
         let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
@@ -346,36 +256,22 @@ struct ChromeLauncher: Sendable {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func clearChromeRestoreState(userDataDir: String) {
         let prefsPath = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
             .appendingPathComponent("Preferences")
         guard let data = try? Data(contentsOf: prefsPath) else {
-            return  
+            return
         }
         guard
             let parsed = try? JSONSerialization.jsonObject(with: data),
             var prefs = parsed as? [String: Any]
         else {
-            return  
+            return
         }
         var profile = prefs["profile"] as? [String: Any] ?? [:]
         if profile["exit_type"] as? String == "Normal", profile["exited_cleanly"] as? Bool == true {
-            return  
+            return
         }
         profile["exit_type"] = "Normal"
         profile["exited_cleanly"] = true
@@ -384,21 +280,8 @@ struct ChromeLauncher: Sendable {
         try? out.write(to: prefsPath)
     }
 
-    
-    
-    
     static let tabLifecycleExemptSites = ["www.sliccy.ai", "sliccy.ai", "localhost"]
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func seedProfilePreferences(userDataDir: String) {
         let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent("Default", isDirectory: true)
@@ -428,13 +311,6 @@ struct ChromeLauncher: Sendable {
         try? out.write(to: prefsPath)
     }
 
-    
-    
-    
-    
-    
-    
-    
     func legacyChromeCandidates(profileDirName: String) -> [String] {
         var bases: [String] = []
         let legacyHomeBase = URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
@@ -474,29 +350,15 @@ struct ChromeLauncher: Sendable {
             throw ChromeLauncherError.invalidChromeExecutable(executable)
         }
 
-        
-        
-        
-        
-        
-        
         if let existing = await probeExistingChrome(cdpPort: config.cdpPort) {
             logger.warning("Chrome already on CDP port \(config.cdpPort): \(existing)")
             throw ChromeLauncherError.chromeAlreadyRunning(port: config.cdpPort, browser: existing)
         }
 
-        
-        
-        
         clearChromeSessionRestore(userDataDir: config.userDataDir)
-        
-        
-        
+
         clearChromeRestoreState(userDataDir: config.userDataDir)
-        
-        
-        
-        
+
         seedProfilePreferences(userDataDir: config.userDataDir)
 
         let process = processFactory()
@@ -521,34 +383,19 @@ struct ChromeLauncher: Sendable {
         let chromeBundleURL: URL?
         let preexistingChromePids: Set<pid_t>
         if let appBundlePath = resolveAppBundle(forExecutable: executable) {
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
+
             process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
             process.arguments = buildOpenLaunchArgs(
                 appBundlePath: appBundlePath,
                 chromeArgs: chromeArgs
             )
             usesLaunchServices = true
-            
-            
-            
-            
-            
+
             let bundleURL = URL(fileURLWithPath: appBundlePath)
             chromeBundleURL = bundleURL
             preexistingChromePids = runningPidsForBundle(bundleURL)
         } else {
-            
-            
-            
+
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = chromeArgs
             usesLaunchServices = false
@@ -564,14 +411,7 @@ struct ChromeLauncher: Sendable {
         if usesLaunchServices {
             actualPort = config.cdpPort
             try await waitForCDPReady(port: actualPort, timeout: config.launchTimeout, process: process)
-            
-            
-            
-            
-            
-            
-            
-            
+
             if let bundleURL = chromeBundleURL {
                 chromePid = await discoverLaunchedChromePid(
                     bundleURL: bundleURL,
@@ -603,11 +443,6 @@ struct ChromeLauncher: Sendable {
         return ChromeProcess(process: process, cdpPort: actualPort, chromePid: chromePid)
     }
 
-    
-    
-    
-    
-    
     func discoverLaunchedChromePid(
         bundleURL: URL,
         existingPids: Set<pid_t>,
@@ -624,14 +459,6 @@ struct ChromeLauncher: Sendable {
         return runningPidsForBundle(bundleURL).subtracting(existingPids).min()
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     private func waitForCDPReady(port: Int, timeout: TimeInterval, process: Process) async throws {
         let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(timeout, 0) * 1_000_000_000)
         let pollIntervalNanos: UInt64 = 100_000_000
@@ -643,7 +470,7 @@ struct ChromeLauncher: Sendable {
                 if exitCode != 0 {
                     throw ChromeLauncherError.openLaunchFailed(exitCode: exitCode, executable: "/usr/bin/open")
                 }
-                
+
             }
 
             do {
@@ -655,8 +482,7 @@ struct ChromeLauncher: Sendable {
                     return
                 }
             } catch {
-                
-                
+
             }
 
             try await Task.sleep(nanoseconds: pollIntervalNanos)
@@ -822,13 +648,6 @@ struct ChromeLauncher: Sendable {
         return nil
     }
 
-    
-    
-    
-    
-    
-    
-    
     func probeExistingChrome(cdpPort: Int) async -> String? {
         guard let versionURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/version") else {
             return nil
@@ -840,9 +659,7 @@ struct ChromeLauncher: Sendable {
             else {
                 return nil
             }
-            
-            
-            
+
             guard Self.extractWebSocketDebuggerURL(from: data) != nil else {
                 return nil
             }
@@ -889,10 +706,7 @@ private final class ChromeOutputMonitor: @unchecked Sendable {
     private func startReading() {
         stdout.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            
-            
-            
-            
+
             if data.isEmpty {
                 handle.readabilityHandler = nil
             }

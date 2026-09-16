@@ -1,27 +1,12 @@
 import Foundation
 import SliccTrayKit
 
-
-
-
-
-
-
 extension AppState {
-    
-    
-    
-    
+
     static func toolRowId(messageId: String, toolCallId: String) -> String {
         "\(messageId):\(toolCallId)"
     }
 
-    
-    
-    
-    
-    
-    
     static func toolCallIndex(
         in calls: [ToolCall]?, messageId: String, toolName: String, toolCallId: String?
     ) -> Int? {
@@ -33,18 +18,12 @@ extension AppState {
         return calls.lastIndex { $0.name == toolName && $0.result == nil }
     }
 
-    
-    
     func applyToolUseStart(
         messageId: String, toolName: String, toolInput: AnyCodable?, toolCallId: String?,
         buffer: inout [ChatMessage], scoopJid: String, isVisible: Bool
     ) {
         guard let idx = buffer.firstIndex(where: { $0.id == messageId }) else { return }
-        
-        
-        
-        
-        
+
         fileMentionResolver.absorb(toolInput: toolInput)
         let rowId = toolCallId.map { Self.toolRowId(messageId: messageId, toolCallId: $0) }
         let tc = ToolCall(id: rowId ?? UUID().uuidString, name: toolName, input: toolInput)
@@ -52,8 +31,6 @@ extension AppState {
         publish(buffer: buffer, scoopJid: scoopJid, isVisible: isVisible)
     }
 
-    
-    
     func applyToolResult(
         messageId: String, toolName: String, result: String, isError: Bool?, toolCallId: String?,
         buffer: inout [ChatMessage], scoopJid: String, isVisible: Bool
@@ -65,18 +42,11 @@ extension AppState {
         else { return }
         buffer[idx].toolCalls?[tcIdx].result = result
         buffer[idx].toolCalls?[tcIdx].isError = isError
-        
-        
-        
+
         if let rowId = buffer[idx].toolCalls?[tcIdx].id { toolProgress[rowId] = nil }
         publish(buffer: buffer, scoopJid: scoopJid, isVisible: isVisible)
     }
 
-    
-    
-    
-    
-    
     func applyToolProgress(
         messageId: String, toolName: String, progress: ToolProgressEvent, toolCallId: String?,
         buffer: [ChatMessage]
@@ -94,21 +64,11 @@ extension AppState {
         }
     }
 
-    
-    
-    
-    
-    
     func clearToolProgress(for message: ChatMessage) {
         guard !toolProgress.isEmpty else { return }
         for call in message.toolCalls ?? [] { toolProgress[call.id] = nil }
     }
 
-    
-    
-    
-    
-    
     func pruneToolProgress(replacing old: [ChatMessage], with new: [ChatMessage]) {
         guard !toolProgress.isEmpty else { return }
         let surviving = Set(new.flatMap { $0.toolCalls ?? [] }.map(\.id))
@@ -117,7 +77,6 @@ extension AppState {
         }
     }
 
-    
     private func publish(buffer: [ChatMessage], scoopJid: String, isVisible: Bool) {
         messagesByScoop[scoopJid] = buffer
         guard isVisible else { return }

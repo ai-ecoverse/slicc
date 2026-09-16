@@ -1,47 +1,29 @@
 import SwiftUI
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct ThemePalette: Equatable {
-    
+
     let canvas: Color
-    
+
     let surface: Color
-    
+
     let field: Color
-    
+
     let ink: Color
-    
+
     let inkSecondary: Color
-    
+
     let inkTertiary: Color
-    
+
     let line: Color
-    
+
     let accent: Color
-    
+
     let bubble: Color
-    
-    
-    
+
     let bubbleText: Color
-    
-    
+
     let isLeaderTheme: Bool
 
-    
-    
     static let dark = ThemePalette(
         canvas: Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255),
         surface: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x2E / 255),
@@ -51,14 +33,12 @@ struct ThemePalette: Equatable {
         inkTertiary: Color.white.opacity(0.5),
         line: Color(white: 1, opacity: 0.1),
         accent: Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255),
-        
-        
+
         bubble: Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255),
         bubbleText: .white,
         isLeaderTheme: false
     )
 
-    
     static let light = ThemePalette(
         canvas: Color(hexToken: "#ffffff") ?? .white,
         surface: Color(hexToken: "#f4f4f6") ?? .white,
@@ -68,15 +48,12 @@ struct ThemePalette: Equatable {
         inkTertiary: Color(hexToken: "#a1a1a1") ?? .gray,
         line: Color(hexToken: "#e5e5e5") ?? .gray,
         accent: Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255),
-        
+
         bubble: Color(hexToken: "#000000") ?? .black,
         bubbleText: .white,
         isLeaderTheme: false
     )
 
-    
-    
-    
     static func fromTheme(_ theme: SliccTheme) -> ThemePalette {
         let base = theme.base == .light ? light : dark
         func token(_ name: String, _ fallback: Color) -> Color {
@@ -92,10 +69,7 @@ struct ThemePalette: Equatable {
             inkTertiary: token("--txt-3", base.inkTertiary),
             line: token("--line", base.line),
             accent: token("--ctx", base.accent),
-            
-            
-            
-            
+
             bubble: token(
                 "--deep",
                 theme.base == .dark
@@ -107,8 +81,6 @@ struct ThemePalette: Equatable {
         )
     }
 
-    
-    
     static func resolve(theme: SliccTheme?, systemScheme: ColorScheme) -> ThemePalette {
         if let theme { return fromTheme(theme) }
         return systemScheme == .light ? light : dark
@@ -116,9 +88,7 @@ struct ThemePalette: Equatable {
 }
 
 extension Color {
-    
-    
-    
+
     init?(hexToken: String) {
         let trimmed = hexToken.trimmingCharacters(in: .whitespaces)
         guard trimmed.hasPrefix("#") else { return nil }
@@ -135,31 +105,24 @@ extension Color {
     }
 }
 
-
-
 private struct ThemePaletteKey: EnvironmentKey {
     static let defaultValue = ThemePalette.dark
 }
 
 extension EnvironmentValues {
-    
-    
+
     var palette: ThemePalette {
         get { self[ThemePaletteKey.self] }
         set { self[ThemePaletteKey.self] = newValue }
     }
 }
 
-
-
 private struct SprinkleThemeCSSKey: EnvironmentKey {
     static let defaultValue = ""
 }
 
 extension EnvironmentValues {
-    
-    
-    
+
     var sprinkleThemeCSS: String {
         get { self[SprinkleThemeCSSKey.self] }
         set { self[SprinkleThemeCSSKey.self] = newValue }
@@ -167,13 +130,7 @@ extension EnvironmentValues {
 }
 
 extension SliccTheme {
-    
-    
-    
-    
-    
-    
-    
+
     var sprinkleCSSOverrides: String {
         var lines: [String] = []
         for (name, value) in tokens.sorted(by: { $0.key < $1.key })

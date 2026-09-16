@@ -4,29 +4,16 @@ import os
 
 private let recentsLog = Logger(subsystem: "ai.sliccy.traysession", category: "RecentJoinStore")
 
-
-
-
-
-
-
-
 public struct RecentJoin: Codable, Equatable, Identifiable {
-    
-    
-    
-    
+
     public let id: String
-    
-    
+
     public var joinUrl: String
-    
-    
+
     public var label: String
-    
+
     public var deviceId: String
-    
-    
+
     public var deviceName: String
     public var firstConnectedAt: Date
     public var lastConnectedAt: Date
@@ -48,9 +35,6 @@ public struct RecentJoin: Codable, Equatable, Identifiable {
         self.lastConnectedAt = lastConnectedAt
     }
 
-    
-    
-    
     public var displayHost: String {
         guard let components = URLComponents(string: joinUrl), let host = components.host else {
             return ""
@@ -64,33 +48,16 @@ public struct RecentJoin: Codable, Equatable, Identifiable {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 @Observable
 public final class RecentJoinStore {
     public static let storageKeyPrefix = "recentJoins.v1."
-    
-    
+
     public static let defaultTTL: TimeInterval = 30 * 24 * 60 * 60
-    
+
     public static let maxRecents = 5
-    
-    
+
     public static let maxPooled = 20
 
-    
-    
     public private(set) var recents: [RecentJoin] = []
 
     @ObservationIgnored private let backend: KeyValueSyncBackend
@@ -125,16 +92,10 @@ public final class RecentJoinStore {
         }
     }
 
-    
-
     public func reload() {
         recents = Self.active(from: decodeAll(), ttl: ttl, now: clock())
     }
 
-    
-    
-    
-    
     public static func rank(
         _ list: [RecentJoin],
         limit: Int = RecentJoinStore.maxRecents,
@@ -147,13 +108,12 @@ public final class RecentJoinStore {
             if lhs.lastConnectedAt != rhs.lastConnectedAt {
                 return lhs.lastConnectedAt > rhs.lastConnectedAt
             }
-            
+
             return lhs.id < rhs.id
         }
         return Array(ordered.prefix(max(0, limit)))
     }
 
-    
     public func ranked(
         limit: Int = RecentJoinStore.maxRecents,
         isReachable: (String) -> Bool
@@ -161,11 +121,6 @@ public final class RecentJoinStore {
         Self.rank(recents, limit: limit, isReachable: isReachable)
     }
 
-    
-
-    
-    
-    
     public func record(joinUrl: String, label: String) {
         let trimmed = joinUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -174,8 +129,7 @@ public final class RecentJoinStore {
         let existing = own.first { $0.id == SyncedTraySession.identifier(forJoinUrl: trimmed) }
         let entry = RecentJoin(
             joinUrl: trimmed,
-            
-            
+
             label: label.isEmpty ? (existing?.label ?? "") : label,
             deviceId: deviceId,
             deviceName: deviceName,
@@ -187,24 +141,16 @@ public final class RecentJoinStore {
         persistOwn(Array(Self.active(from: own, ttl: ttl, now: now).prefix(Self.maxRecents)))
     }
 
-    
-    
-    
     public func forget(id: String) {
         persistOwn(Self.active(from: decodeOwn().filter { $0.id != id }, ttl: ttl, now: clock()))
     }
 
-    
     public func clearLocalHistory() {
         backend.setData(nil, forKey: ownKey)
         _ = backend.synchronize()
         reload()
     }
 
-    
-
-    
-    
     public static func active(from raw: [RecentJoin], ttl: TimeInterval, now: Date) -> [RecentJoin] {
         let merged = merge(raw.filter { !$0.isStale(ttl: ttl, now: now) })
         return Array(
@@ -218,9 +164,6 @@ public final class RecentJoinStore {
                 .prefix(maxPooled))
     }
 
-    
-    
-    
     public static func merge(_ raw: [RecentJoin]) -> [RecentJoin] {
         var byId: [String: RecentJoin] = [:]
         for entry in raw {
@@ -236,15 +179,12 @@ public final class RecentJoinStore {
             } else if winner.label.isEmpty {
                 winner.label = entry.label
             }
-            
-            
+
             winner.firstConnectedAt = earliest
             byId[entry.id] = winner
         }
         return Array(byId.values)
     }
-
-    
 
     private func decodeOwn() -> [RecentJoin] {
         decode(key: ownKey)

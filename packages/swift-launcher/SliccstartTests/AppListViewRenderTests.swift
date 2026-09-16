@@ -7,23 +7,8 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 @MainActor
 final class AppListViewRenderTests: XCTestCase {
-
-    
 
     private func icon() -> NSImage {
         let image = NSImage(size: NSSize(width: 16, height: 16))
@@ -58,8 +43,7 @@ final class AppListViewRenderTests: XCTestCase {
     private func store(remote: [SyncedTraySession] = []) -> TraySessionSyncStore {
         let backend = InMemoryKeyValueBackend()
         if !remote.isEmpty, let encoded = try? JSONEncoder().encode(remote) {
-            
-            
+
             backend.setData(encoded, forKey: TraySessionSyncStore.storageKeyPrefix + "other-device")
         }
         return TraySessionSyncStore(
@@ -88,16 +72,13 @@ final class AppListViewRenderTests: XCTestCase {
         AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart")
     }
 
-    
-    
-    
     private func updaterWithDownloadedUpdate(version: String = "6.105.0") throws -> AppUpdater {
         let json = """
             {
               "tag_name": "v\(version)",
               "prerelease": false,
               "name": "v\(version)",
-              "html_url": "https:
+              "html_url": "https://github.com/ai-ecoverse/slicc/releases/tag/v\(version)",
               "body": "test",
               "assets": [{
                 "name": "Sliccstart-\(version).zip",
@@ -157,11 +138,8 @@ final class AppListViewRenderTests: XCTestCase {
         ]
     }
 
-    // MARK: - Sections
-
     func testEachScannedAppTypeAddsItsOwnSection() {
-        // Every section is conditional on the scan, so each combination is a
-        // distinct body — and an empty scan still has to produce a window.
+
         let empty = digestOf(makeView(targets: []))
         let browsersOnly = digestOf(
             makeView(targets: [target(browser, type: .chromiumBrowser, bundleId: "com.google.Chrome")])
@@ -178,10 +156,7 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testTheExtensionSectionIsAlwaysOfferedEvenWithNothingInstalled() {
-        // The section is unconditional, so there is no "without it" render to
-        // compare against, and its button is `.plain` — which produces no
-        // identifiable AppKit node off-screen. The section list is the real
-        // assertion; the render below only says an empty scan does not crash.
+
         XCTAssertEqual(AppListSection.visibleSections(for: []), [.browserExtension])
         XCTAssertEqual(
             AppListSection.visibleSections(for: mixedScan()),
@@ -192,10 +167,7 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testDebugBuildBadgeChangesHowARowIsDrawn() {
-        // `isDebugBuild` drives BOTH the wrench badge and the "Debug Build"
-        // subtitle, so comparing two list renders would still differ with the
-        // badge deleted. Pin the subtitle on both sides: the badge is then the
-        // only thing that can move.
+
         let row = { (isDebugBuild: Bool) in
             AppRow(
                 target: self.target(
@@ -227,12 +199,8 @@ final class AppListViewRenderTests: XCTestCase {
         ViewHosting.assertRendersDifferently(ready, needsBuild)
     }
 
-    // MARK: - Runtime state
-
     func testALeaderUngatesTheRowsThatNeedOne() throws {
-        // Desktop apps and terminals stay disabled until a browser leader is
-        // BOTH running and has published a join URL — the single gate this
-        // window is built around.
+
         let scan = mixedScan()
         let gated = SliccProcess()
         let ungated = SliccProcess()
@@ -246,7 +214,7 @@ final class AppListViewRenderTests: XCTestCase {
             servePort: 35710,
             targetName: "TestBrowser"
         )
-        ungated.leaderJoinUrl = "https:
+        ungated.leaderJoinUrl = "https://example.test/join/abc.def"
         XCTAssertTrue(ungated.isLeaderReady())
 
         ViewHosting.assertRendersDifferently(
@@ -286,8 +254,7 @@ final class AppListViewRenderTests: XCTestCase {
             )
             seen.insert(digestOf(row, width: 400, height: 44))
         }
-        
-        
+
         XCTAssertGreaterThan(seen.count, 4, "runtime states are not reaching the row")
     }
 
@@ -304,8 +271,6 @@ final class AppListViewRenderTests: XCTestCase {
         )
     }
 
-    
-
     func testUpdateFooterRendersEveryCheckStatus() {
         let statuses: [UpdateCheckStatus] = [
             .idle, .checking, .upToDate, .noInstallableRelease, .translocated, .failed("network down"),
@@ -314,14 +279,12 @@ final class AppListViewRenderTests: XCTestCase {
         for status in statuses {
             digests[status.buttonTitle] = digestOf(makeView(targets: [], updateCheckStatus: status))
         }
-        
+
         XCTAssertEqual(Set(digests.values).count, statuses.count, "\(digests.keys)")
     }
 
     func testAnUnbundledBuildOffersOnlyAPlainUpdateButton() {
-        
-        
-        
+
         let idle = makeView(targets: [], updateCheckStatus: .idle, isBundledBuild: false)
         let failed = makeView(
             targets: [],
@@ -346,11 +309,7 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testAgentActivityDiscouragesRestartingIntoTheUpdate() throws {
-        
-        
-        
-        
-        
+
         XCTAssertEqual(
             AppListView.updateAffordance(hasRecentAgentActivity: false),
             .ready
@@ -372,14 +331,10 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testAStagedUpdateWithoutAVersionStillOffersRestart() throws {
-        
-        
-        
+
         let staged = try updaterWithDownloadedUpdate()
         XCTAssertFalse(digestOf(makeView(targets: [], appUpdater: staged)).isEmpty)
     }
-
-    
 
     func testSessionsSectionAppearsOnlyOnceSomethingIsAdvertised() {
         let none = makeView(targets: [])
@@ -397,11 +352,7 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testALocalBrowserMatchingASessionLendsItsIcon() {
-        
-        
-        
-        
-        
+
         let chrome = target(browser, type: .chromiumBrowser, bundleId: "com.google.Chrome")
         let matching = makeView(
             targets: [chrome],
@@ -417,8 +368,6 @@ final class AppListViewRenderTests: XCTestCase {
             "a session whose label names an installed browser must borrow its icon"
         )
     }
-
-    
 
     func testUnreachableSessionRowIsDimmedAndItsRemoteActionsDisabled() {
         let row = { (verdict: SessionReachability.Verdict?) in
@@ -457,8 +406,7 @@ final class AppListViewRenderTests: XCTestCase {
             onAttachBrowser: {},
             onFollow: {}
         )
-        
-        
+
         XCTAssertEqual(ViewHosting.hostedButtons(local).count, 1)
     }
 
@@ -479,11 +427,8 @@ final class AppListViewRenderTests: XCTestCase {
         ViewHosting.assertRendersDifferently(row(nil), row(icon()), width: 420, height: 60)
     }
 
-    
-
     func testAppRowRendersEveryStatusDot() {
-        
-        
+
         let chrome = target(browser, type: .chromiumBrowser, bundleId: "com.google.Chrome")
         let row = { (state: AppRuntimeState) in
             AppRow(
@@ -501,7 +446,7 @@ final class AppListViewRenderTests: XCTestCase {
             width: 400,
             height: 44
         )
-        
+
         ViewHosting.assertRendersDifferently(
             row(.startFailed(message: "boom")),
             row(.cannotStart(.needsLeader)),
@@ -509,7 +454,7 @@ final class AppListViewRenderTests: XCTestCase {
             width: 400,
             height: 44
         )
-        
+
         XCTAssertNil(AppRow.statusDot(for: .notRunning))
         XCTAssertNotNil(AppRow.statusDot(for: .runningWithDebug(cdpPort: nil)))
     }
@@ -535,8 +480,6 @@ final class AppListViewRenderTests: XCTestCase {
     func testSectionHeaderRenders() {
         XCTAssertFalse(digestOf(SectionHeader("Browsers"), width: 300, height: 30).isEmpty)
     }
-
-    
 
     private func digestOf(_ view: some View, width: CGFloat = 520, height: CGFloat = 700) -> String {
         ViewHosting.digest(of: view, width: width, height: height)

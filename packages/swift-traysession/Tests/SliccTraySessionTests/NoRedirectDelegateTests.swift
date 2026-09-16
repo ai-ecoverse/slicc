@@ -2,8 +2,6 @@ import XCTest
 
 @testable import SliccTraySession
 
-
-
 final class NoRedirectDelegateTests: XCTestCase {
     func testRefusesTheProposedRedirectRequest() {
         let delegate = NoRedirectDelegate()
@@ -26,7 +24,7 @@ final class NoRedirectDelegateTests: XCTestCase {
         }
 
         XCTAssertTrue(handlerCalled)
-        
+
         XCTAssertNil(proposed)
         session.invalidateAndCancel()
     }

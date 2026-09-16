@@ -1,18 +1,11 @@
 import SwiftUI
 import UIKit
 
-
-
-
-
-
-
-
 struct PttOverlayView: View {
     let stage: PttStage
     let caption: String
     let captionIsError: Bool
-    
+
     let statusLine: String
 
     @Environment(\.palette) private var palette
@@ -83,9 +76,7 @@ struct PttOverlayView: View {
                 .fill(palette.accent.opacity(0.6))
                 .frame(height: 1)
         }
-        
-        
-        
+
     }
 
     @ViewBuilder
@@ -98,9 +89,6 @@ struct PttOverlayView: View {
         EnableSweepBar(tint: palette.accent)
     }
 }
-
-
-
 
 private struct PulsingMic: View {
     let active: Bool
@@ -122,9 +110,6 @@ private struct PulsingMic: View {
             }
     }
 }
-
-
-
 
 private struct EnableSweepBar: View {
     let tint: Color
@@ -156,16 +141,6 @@ private struct EnableSweepBar: View {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
 struct PttPressSurface: View {
     let onDown: () -> Void
     let onUp: () -> Void
@@ -191,8 +166,6 @@ struct PttPressSurface: View {
             )
     }
 }
-
-
 
 #Preview("Recording") {
     ZStack {

@@ -1,25 +1,9 @@
 import SwiftUI
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 enum LucideGlyph: String, CaseIterable {
     case iceCreamCone = "ice-cream-cone"
     case iceCreamBowl = "ice-cream-bowl"
 
-    
     var pathData: [String] {
         switch self {
         case .iceCreamCone:
@@ -39,12 +23,7 @@ enum LucideGlyph: String, CaseIterable {
 }
 
 extension LucideGlyph {
-    
-    
-    
-    
-    
-    
+
     var unitPath: CGPath {
         Self.unitPaths[self] ?? CGMutablePath()
     }
@@ -62,10 +41,6 @@ extension LucideGlyph {
     }()
 }
 
-
-
-
-
 struct LucideShape: Shape {
     let glyph: LucideGlyph
 
@@ -74,18 +49,10 @@ struct LucideShape: Shape {
     }
 }
 
-
-
-
-
-
-
-
-
 struct LucideIcon: View {
     let glyph: LucideGlyph
     var size: CGFloat = 16
-    
+
     var strokeWidth: CGFloat = 2
 
     var body: some View {
@@ -96,25 +63,17 @@ struct LucideIcon: View {
                     lineCap: .round,
                     lineJoin: .round)
             )
-            
-            
-            
+
             .padding(strokeWidth * size / 48)
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
 }
 
-
-
-
-
 enum SliccGlyph: Equatable {
     case system(String)
     case lucide(LucideGlyph)
 }
-
-
 
 struct SliccGlyphView: View {
     let glyph: SliccGlyph
@@ -131,11 +90,6 @@ struct SliccGlyphView: View {
     }
 }
 
-
-
-
-
-
 struct ConeScoopGlyph: View {
     let isCone: Bool
     var size: CGFloat = 16
@@ -145,8 +99,6 @@ struct ConeScoopGlyph: View {
             .accessibilityLabel(isCone ? "Cone" : "Scoop")
     }
 }
-
-
 
 #Preview {
     VStack(spacing: 24) {

@@ -8,22 +8,8 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
-
-
-
-
-
 final class FederatedCDPServicerLiveSocketTests: XCTestCase {
 
-    
-    
-    
-    
     private func makeApp(port: Int) -> some ApplicationProtocol {
         let httpRouter = Router()
         httpRouter.get("/health") { _, _ in "ok" }
@@ -62,7 +48,7 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         let method = object["method"] as? String ?? ""
         let result: [String: Any]
         switch method {
-        
+
         case "SLICC.large": result = ["blob": String(repeating: "x", count: 200_000)]
         default: result = ["value": 42, "echoedMethod": method]
         }
@@ -81,10 +67,9 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         let box = FollowerMessageBox()
         let servicer = FederatedCDPServicer(
             runtimeId: "it", logger: Logger(label: "it"), send: { box.add($0) })
-        
+
         await servicer.connect(browserWsUrl: wsURL)
 
-        
         await servicer.handleCdpRequest(
             requestId: "r1", method: "Runtime.evaluate", params: ["expression": "1"], sessionId: nil)
         try await waitUntil {
@@ -96,7 +81,6 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
             }
         }
 
-        
         await servicer.handleCdpRequest(
             requestId: "r2", method: "SLICC.large", params: nil, sessionId: nil)
         try await waitUntil {
@@ -108,7 +92,6 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
             }
         }
 
-        
         try await waitUntil {
             box.messages.contains {
                 if case .cdpEvent(let method, _, _) = $0 { return method == "Test.event" }
@@ -120,13 +103,6 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         serviceTask.cancel()
     }
 
-    
-    
-    
-    
-    
-    
-    
     func testServicerRoundTripsAgainstRealChromeBrowserCDP() async throws {
         guard let chromePath = ChromeLauncher().findChromeExecutable() else {
             throw XCTSkip("No Chrome/Chromium resolvable; skipping real-browser CDP test")
@@ -147,7 +123,7 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         chrome.standardOutput = Pipe()
         chrome.standardError = Pipe()
         try chrome.run()
-        
+
         defer {
             chrome.terminate()
             try? FileManager.default.removeItem(atPath: userDataDir)
@@ -160,7 +136,7 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         let box = FollowerMessageBox()
         let servicer = FederatedCDPServicer(
             runtimeId: "it", logger: Logger(label: "it-chrome"), send: { box.add($0) })
-        await servicer.connect(browserWsUrl: wsURL)  
+        await servicer.connect(browserWsUrl: wsURL)
 
         await servicer.handleCdpRequest(
             requestId: "r1", method: "Target.getTargets", params: nil, sessionId: nil)
@@ -191,7 +167,6 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         return nil
     }
 
-    
     private func waitForServer(port: Int) async throws {
         let health = URL(string: "http://127.0.0.1:\(port)/health")!
         let deadline = Date().addingTimeInterval(10)

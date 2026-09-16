@@ -1,7 +1,5 @@
 import Foundation
 
-
-
 enum TraySignalingError: Error, LocalizedError {
     case invalidResponse(statusCode: Int, body: String)
     case invalidAttachResponse(statusCode: Int, body: String)
@@ -22,11 +20,6 @@ enum TraySignalingError: Error, LocalizedError {
     }
 }
 
-
-
-
-
-
 private struct RawFollowerAttachResponse: Codable {
     let trayId: String
     let controllerId: String
@@ -42,11 +35,10 @@ private struct RawFollowerAttachResponse: Codable {
         let retryAfterMs: Int?
         let error: String?
         let bootstrap: TrayBootstrapStatus?
-        
+
         let joinUrl: String?
     }
 }
-
 
 private struct RawFollowerBootstrapResponse: Codable {
     let trayId: String
@@ -58,8 +50,6 @@ private struct RawFollowerBootstrapResponse: Codable {
     let events: [TrayBootstrapEvent]
     let iceServers: [TurnIceServer]?
 }
-
-
 
 public enum AttachAction: String, Sendable {
     case wait, signal, fail
@@ -76,7 +66,7 @@ public struct FollowerAttachPlan: Sendable {
     public var error: String?
     public var bootstrap: TrayBootstrapStatus?
     public var iceServers: [TurnIceServer]?
-    
+
     public var supersededByJoinUrl: String?
 }
 
@@ -89,29 +79,16 @@ public struct FollowerBootstrapPlan: Sendable {
     public let events: [TrayBootstrapEvent]
 }
 
-
-
 public actor TraySignalingClient {
-    
-    
+
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     public let joinUrl: URL
     private let transport: Transport
 
-    
-    
-    
-    
-    
-    
-    
     private static let redirectSuppressingSession = URLSession(
         configuration: .default, delegate: NoRedirectDelegate(), delegateQueue: nil)
 
-    
-    
-    
     public init(joinUrl: URL, session: URLSession? = nil) {
         let session = session ?? Self.redirectSuppressingSession
         self.init(joinUrl: joinUrl) { try await session.data(for: $0) }
@@ -122,20 +99,11 @@ public actor TraySignalingClient {
         self.transport = transport
     }
 
-    
-
-    
     public func attach(controllerId: String, runtime: String = "slicc-ios") async throws -> FollowerAttachPlan {
         let body: [String: Any] = ["controllerId": controllerId, "runtime": runtime]
         let (data, response) = try await post(body: body)
         let rawText = String(data: data, encoding: .utf8) ?? "(empty)"
 
-        
-        
-        
-        
-        
-        
         let successor =
             (SupersedeLink.successor(in: response)
             ?? SupersedeLink.redirectTarget(in: response))?.absoluteString
@@ -156,8 +124,6 @@ public actor TraySignalingClient {
         return normalizeAttachResponse(raw, successorFromLink: successor)
     }
 
-    
-    
     private static func supersededPlan(controllerId: String, joinUrl: String) -> FollowerAttachPlan {
         FollowerAttachPlan(
             trayId: "",
@@ -174,9 +140,6 @@ public actor TraySignalingClient {
         )
     }
 
-    
-
-    
     public func pollBootstrap(
         controllerId: String, bootstrapId: String, cursor: Int?
     ) async throws -> FollowerBootstrapPlan {
@@ -189,9 +152,6 @@ public actor TraySignalingClient {
         return try await postBootstrapRequest(body: body)
     }
 
-    
-
-    
     public func sendAnswer(
         controllerId: String, bootstrapId: String, answer: TraySessionDescription
     ) async throws -> FollowerBootstrapPlan {
@@ -204,9 +164,6 @@ public actor TraySignalingClient {
         return try await postBootstrapRequest(body: body)
     }
 
-    
-
-    
     public func sendIceCandidate(
         controllerId: String, bootstrapId: String, candidate: TrayIceCandidate
     ) async throws -> FollowerBootstrapPlan {
@@ -224,9 +181,6 @@ public actor TraySignalingClient {
         return try await postBootstrapRequest(body: body)
     }
 
-    
-
-    
     public func retryBootstrap(
         controllerId: String, bootstrapId: String, runtime: String = "slicc-ios"
     ) async throws -> FollowerBootstrapPlan {
@@ -238,8 +192,6 @@ public actor TraySignalingClient {
         ]
         return try await postBootstrapRequest(body: body)
     }
-
-    
 
     private func post(body: [String: Any]) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: joinUrl)
@@ -281,7 +233,6 @@ public actor TraySignalingClient {
         )
     }
 
-    
     private func validateAttachResponse(_ raw: RawFollowerAttachResponse, statusCode: Int, rawText: String) throws {
         guard raw.role == "follower" else {
             throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
@@ -299,20 +250,14 @@ public actor TraySignalingClient {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
         case "redirect":
-            
-            
-            
+
             guard r.code == "TRAY_SUPERSEDED", r.error != nil,
                 r.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             else {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
         case "fail":
-            
-            
-            
-            
-            
+
             if r.code == "TRAY_SUPERSEDED" {
                 let replacement = r.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard r.error != nil, replacement?.isEmpty == false else {
@@ -331,14 +276,10 @@ public actor TraySignalingClient {
         }
     }
 
-    
     private func normalizeAttachResponse(
         _ raw: RawFollowerAttachResponse, successorFromLink: String? = nil
     ) -> FollowerAttachPlan {
-        
-        
-        
-        
+
         let action = AttachAction(rawValue: raw.result.action) ?? .fail
         return FollowerAttachPlan(
             trayId: raw.trayId,
@@ -351,9 +292,7 @@ public actor TraySignalingClient {
             error: raw.result.error,
             bootstrap: raw.result.bootstrap,
             iceServers: raw.iceServers,
-            
-            
-            
+
             supersededByJoinUrl: successorFromLink
                 ?? (raw.result.code == "TRAY_SUPERSEDED" ? raw.result.joinUrl : nil)
         )

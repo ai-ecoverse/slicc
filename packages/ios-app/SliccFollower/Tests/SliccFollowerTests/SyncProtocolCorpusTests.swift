@@ -4,28 +4,6 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class SyncProtocolCorpusTests: XCTestCase {
     private struct CorpusError: Error, CustomStringConvertible {
         let description: String
@@ -42,9 +20,6 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let nestedPayloads: [NestedPayload]
     }
 
-    
-    
-    
     private struct AgentEventFixture {
         let type: String
         let ios: String
@@ -53,23 +28,18 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let eventData: Data
     }
 
-    
-    
     private struct NestedPayload {
         let name: String
         let ios: String
-        
+
         let mirrored: [String]
-        
-        
+
         let dropped: [String]
         let sampleData: Data
     }
 
     private func loadCorpus() throws -> RawCorpus {
-        
-        
-        
+
         guard let url = Bundle(for: Self.self).url(forResource: "tray-sync-corpus", withExtension: "json") else {
             throw CorpusError(
                 description: "tray-sync-corpus.json missing from test bundle — check the project.yml Fixtures copy")
@@ -123,9 +93,6 @@ final class SyncProtocolCorpusTests: XCTestCase {
         )
     }
 
-    
-    
-    
     private func roundTripThroughSwiftMirror(name: String, sample: Data) throws -> [String: Any]? {
         let decoder = JSONDecoder()
         let encoder = JSONEncoder()
@@ -165,9 +132,7 @@ final class SyncProtocolCorpusTests: XCTestCase {
     }
 
     func testCorpusCountsMatchDeclaredCounts() throws {
-        
-        
-        
+
         let corpus = try loadCorpus()
         XCTAssertEqual(corpus.leaderToFollower.count, corpus.declaredLeaderVariantCount)
         XCTAssertEqual(corpus.followerToLeader.count, corpus.declaredFollowerVariantCount)
@@ -183,9 +148,6 @@ final class SyncProtocolCorpusTests: XCTestCase {
             "duplicate agentEvents fixture types")
     }
 
-    
-    
-    
     func testAgentEventCorpusDecodesPerExpectation() throws {
         let corpus = try loadCorpus()
         let decoder = JSONDecoder()
@@ -214,18 +176,13 @@ final class SyncProtocolCorpusTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
-    
     func testAgentEventPayloadFieldsSurviveTheSwiftMirror() throws {
         let corpus = try loadCorpus()
         let decoder = JSONDecoder()
         let encoder = JSONEncoder()
         for fixture in corpus.agentEvents {
             guard let decoded = try? decoder.decode(AgentEvent.self, from: fixture.eventData) else {
-                continue  
+                continue
             }
             let survived =
                 try JSONSerialization.jsonObject(with: try encoder.encode(decoded)) as? [String: Any] ?? [:]
@@ -242,15 +199,6 @@ final class SyncProtocolCorpusTests: XCTestCase {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func testNestedPayloadFieldsSurviveTheSwiftMirror() throws {
         let corpus = try loadCorpus()
         for payload in corpus.nestedPayloads {

@@ -1,35 +1,16 @@
 import Foundation
 import UniformTypeIdentifiers
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct Base64Payload: Equatable, Identifiable {
-    
-    
+
     var id: String { "\(mime):\(bytes.count):\(bytes.prefix(16).map { String($0, radix: 16) }.joined())" }
 
-    
     let bytes: Data
-    
+
     let mime: String
-    
+
     let text: Bool
-    
+
     let source: Source
 
     enum Source: String, Equatable {
@@ -38,12 +19,8 @@ struct Base64Payload: Equatable, Identifiable {
         case content
     }
 
-    
-    
-    
     static let syntheticStem = "payload"
 
-    
     var name: String {
         guard let ext = UTType(mimeType: mime)?.preferredFilenameExtension else {
             return Self.syntheticStem
@@ -51,7 +28,6 @@ struct Base64Payload: Equatable, Identifiable {
         return "\(Self.syntheticStem).\(ext)"
     }
 
-    
     var shortLabel: String {
         if let sub = mime.split(separator: "/").last {
             return sub.uppercased()
@@ -59,13 +35,6 @@ struct Base64Payload: Equatable, Identifiable {
         return mime.uppercased()
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func identify(_ data: String, declaredMime: String? = nil) -> Base64Payload? {
         guard let bytes = Data(base64Encoded: data), !bytes.isEmpty else { return nil }
 
@@ -78,8 +47,7 @@ struct Base64Payload: Equatable, Identifiable {
             return Base64Payload(
                 bytes: bytes, mime: declared, text: isTextMime(declared), source: .declared)
         }
-        
-        
+
         if MagicBytes.looksLikeText(bytes) {
             return Base64Payload(bytes: bytes, mime: "text/plain", text: true, source: .content)
         }
@@ -95,25 +63,19 @@ struct Base64Payload: Equatable, Identifiable {
     }
 }
 
-
-
-
-
-
-
 enum MagicBytes {
     private struct Signature {
         let offset: Int
         let bytes: [UInt8]
         let mime: String
-        
+
         var also: (offset: Int, bytes: [UInt8])?
     }
 
     private static func ascii(_ s: String) -> [UInt8] { Array(s.utf8) }
 
     private static let signatures: [Signature] = [
-        
+
         Signature(offset: 0, bytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], mime: "image/png"),
         Signature(offset: 0, bytes: [0xFF, 0xD8, 0xFF], mime: "image/jpeg"),
         Signature(offset: 0, bytes: ascii("GIF87a"), mime: "image/gif"),
@@ -124,21 +86,21 @@ enum MagicBytes {
             also: (offset: 8, bytes: ascii("WEBP"))),
         Signature(offset: 4, bytes: ascii("ftypavif"), mime: "image/avif"),
         Signature(offset: 0, bytes: [0x00, 0x00, 0x01, 0x00], mime: "image/x-icon"),
-        
+
         Signature(
             offset: 0, bytes: ascii("RIFF"), mime: "audio/wav",
             also: (offset: 8, bytes: ascii("WAVE"))),
         Signature(offset: 0, bytes: ascii("ID3"), mime: "audio/mpeg"),
         Signature(offset: 0, bytes: ascii("fLaC"), mime: "audio/flac"),
         Signature(offset: 4, bytes: ascii("ftypM4A"), mime: "audio/mp4"),
-        
+
         Signature(offset: 4, bytes: ascii("ftypisom"), mime: "video/mp4"),
         Signature(offset: 4, bytes: ascii("ftypmp42"), mime: "video/mp4"),
         Signature(offset: 4, bytes: ascii("ftypqt"), mime: "video/quicktime"),
         Signature(offset: 0, bytes: [0x1A, 0x45, 0xDF, 0xA3], mime: "video/webm"),
-        
+
         Signature(offset: 0, bytes: ascii("%PDF-"), mime: "application/pdf"),
-        
+
         Signature(offset: 0, bytes: [0x00, 0x61, 0x73, 0x6D], mime: "application/wasm"),
         Signature(offset: 0, bytes: [0x50, 0x4B, 0x03, 0x04], mime: "application/zip"),
         Signature(offset: 0, bytes: [0x1F, 0x8B], mime: "application/gzip"),
@@ -157,7 +119,6 @@ enum MagicBytes {
         return true
     }
 
-    
     private static func contains(_ haystack: Data, _ needle: [UInt8]) -> Bool {
         guard !needle.isEmpty, haystack.count >= needle.count else { return false }
         let bytes = Array(haystack)
@@ -168,10 +129,6 @@ enum MagicBytes {
         return false
     }
 
-    
-    
-    
-    
     static func sniff(_ data: Data) -> String? {
         for signature in signatures {
             guard matches(data, at: signature.offset, signature.bytes) else { continue }
@@ -179,10 +136,7 @@ enum MagicBytes {
             return signature.mime
         }
         if matches(data, at: 0, oggMagic) {
-            
-            
-            
-            
+
             let head = data.prefix(64)
             let video = [ascii("theora"), ascii("VP8")].contains { contains(head, $0) }
             return video ? "video/ogg" : "audio/ogg"
@@ -190,14 +144,8 @@ enum MagicBytes {
         return nil
     }
 
-    
-    
     static let textSniffWindow = 4096
 
-    
-    
-    
-    
     static func looksLikeText(_ data: Data) -> Bool {
         if data.isEmpty { return true }
         var window = data.prefix(textSniffWindow)
@@ -217,7 +165,7 @@ enum MagicBytes {
         for scalar in text.unicodeScalars {
             total += 1
             let code = scalar.value
-            
+
             if code == 0x09 || code == 0x0A || code == 0x0D || code == 0x0C || code == 0x1B {
                 continue
             }

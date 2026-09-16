@@ -1,8 +1,5 @@
 import XCTest
 
-
-
-
 final class ReadOnlyScoopUITests: XCTestCase {
     override func setUp() {
         super.setUp()
@@ -27,9 +24,6 @@ final class ReadOnlyScoopUITests: XCTestCase {
         XCTAssertFalse(app.buttons["composer-send"].exists, "No send affordance for a scoop")
         attach(app.screenshot(), named: "scoop-read-only")
 
-        
-        
-        
         let transcript = app.staticTexts["Reviewed 14 files. Two findings, both in the follower."]
         XCTAssertTrue(transcript.waitForExistence(timeout: 10), "Scoop output still renders")
 
@@ -39,8 +33,6 @@ final class ReadOnlyScoopUITests: XCTestCase {
             "Returning to the cone brings the composer back")
     }
 
-    
-    
     func testLaunchingOnAScoopNeverShowsAComposer() {
         let app = launchUnitRoleApp(variant: "scoop")
 

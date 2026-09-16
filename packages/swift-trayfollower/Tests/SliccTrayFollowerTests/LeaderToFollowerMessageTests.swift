@@ -3,15 +3,11 @@ import XCTest
 
 @testable import SliccTrayFollower
 
-
-
 final class LeaderToFollowerMessageTests: XCTestCase {
 
     private func roundTrip(_ message: LeaderToFollowerMessage) throws -> LeaderToFollowerMessage {
         try WireCodec.roundTrip(message)
     }
-
-    
 
     func testSnapshotRoundTrip() throws {
         let message = ChatMessage(id: "m1", role: .assistant, content: "hello", timestamp: 1_700)
@@ -26,7 +22,7 @@ final class LeaderToFollowerMessageTests: XCTestCase {
     }
 
     func testSnapshotToleratesMissingFields() throws {
-        
+
         guard case .snapshot(let messages, let scoopJid) = try WireCodec.decode(LeaderToFollowerMessage.self, from: #"{"type":"snapshot"}"#) else {
             XCTFail("expected snapshot")
             return
@@ -92,8 +88,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertNil(attachments)
     }
 
-    
-
     func testStatusWithScoopJid() throws {
         guard case .status(let scoopStatus, let scoopJid) = try roundTrip(.status(scoopStatus: "thinking", scoopJid: "s1")) else {
             XCTFail("expected status")
@@ -119,8 +113,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         }
         XCTAssertEqual(error, "boom")
     }
-
-    
 
     func testScoopsListRoundTrip() throws {
         let scoop = ScoopSummary(
@@ -218,10 +210,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(name, "s")
     }
 
-    
-
     func testCdpRequestRoundTrip() throws {
-        let params = try WireCodec.anyCodable(#"{"url":"https:
+        let params = try WireCodec.anyCodable(#"{"url":"https://example.com"}"#)
         guard
             case .cdpRequest(let requestId, let localTargetId, let method, let decodedParams, let sessionId) =
                 try roundTrip(.cdpRequest(requestId: "r1", localTargetId: "t1", method: "Page.navigate", params: params, sessionId: "sess"))
@@ -305,8 +295,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertNil(detail)
     }
 
-    
-
     func testFsRequestRoundTrip() throws {
         guard
             case .fsRequest(let requestId, let request) =
@@ -381,8 +369,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(requestId, "r1")
         XCTAssertEqual(signal, "SIGTERM")
     }
-
-    
 
     func testThemeApplyWithJson() throws {
         guard case .themeApply(let themeJson) = try roundTrip(.themeApply(themeJson: #"{"base":"dark"}"#)) else {
@@ -459,8 +445,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
             XCTAssertEqual(decoded, type)
         }
     }
-
-    
 
     func testDiscriminatorsMatchWireTags() throws {
         XCTAssertEqual(try WireCodec.discriminator(LeaderToFollowerMessage.ping), "ping")

@@ -69,7 +69,6 @@ enum SliccAgentAvatarInterfaceOrientation: Equatable, Sendable {
     case landscapeRight
 }
 
-
 @MainActor
 protocol SliccAgentAvatarTiltSource: AnyObject {
     var isDeviceMotionAvailable: Bool { get }
@@ -106,7 +105,6 @@ final class CoreMotionSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
     }
 }
 
-
 @MainActor
 final class FixedSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
     var isDeviceMotionAvailable: Bool
@@ -134,7 +132,6 @@ final class FixedSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
         stopCallCount += 1
     }
 }
-
 
 struct SliccAgentAvatarTiltMapping: Sendable {
     static let defaultFullTravelTilt = Double.pi / 6

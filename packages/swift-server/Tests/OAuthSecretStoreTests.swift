@@ -44,9 +44,6 @@ final class OAuthSecretStoreTests: XCTestCase {
         XCTAssertNil(absent)
     }
 
-    
-    
-    
     func testConcurrentSetsBothSucceed() async throws {
         let store = OAuthSecretStore()
         async let a: Void = store.set(name: "A", value: "1", domains: ["a.com"])
@@ -58,7 +55,7 @@ final class OAuthSecretStoreTests: XCTestCase {
     }
 
     func testEmptyDomainsRejectionExplainsItself() {
-        
+
         XCTAssertEqual(
             OAuthSecretStore.OAuthSecretStoreError.emptyDomains.errorDescription,
             "OAuthSecretStore: domains must be non-empty"

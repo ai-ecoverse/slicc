@@ -3,31 +3,23 @@ import UIKit
 import UserNotifications
 import os
 
-
-
-
-
-
-
 enum SliccNotificationCategory: String, CaseIterable {
     case turnEnd = "SLICC_TURN_END"
     case sudoRequest = "SLICC_SUDO_REQUEST"
 }
 
 enum SliccNotificationAction: String {
-    
+
     case sudoDeny = "SLICC_SUDO_DENY"
-    
+
     case sudoReview = "SLICC_SUDO_REVIEW"
 }
-
 
 enum SliccNotificationKey {
     static let category = "slicc.category"
     static let requestId = "slicc.requestId"
     static let trayId = "slicc.trayId"
 }
-
 
 func makeSliccNotificationCategories() -> Set<UNNotificationCategory> {
     let deny = UNNotificationAction(
@@ -51,8 +43,6 @@ func makeSliccNotificationCategories() -> Set<UNNotificationCategory> {
     return [sudo, turnEnd]
 }
 
-
-
 func sliccNotificationPayload(_ userInfo: [AnyHashable: Any]) -> (category: String?, requestId: String?) {
     if let slicc = userInfo["slicc"] as? [String: Any] {
         return (slicc["category"] as? String, slicc["requestId"] as? String)
@@ -63,9 +53,6 @@ func sliccNotificationPayload(_ userInfo: [AnyHashable: Any]) -> (category: Stri
     )
 }
 
-
-
-
 func currentApnsEnvironment() -> String {
     #if DEBUG
         return "sandbox"
@@ -74,31 +61,25 @@ func currentApnsEnvironment() -> String {
     #endif
 }
 
-
-
 @MainActor
 final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationCoordinator()
 
     private let logger = Logger(subsystem: "com.slicc.follower", category: "Notifications")
 
-    
     @Published private(set) var deviceToken: String?
-    
+
     @Published private(set) var authorized = false
 
-    
     var onSudoDeny: ((String) -> Void)?
     var onSudoReview: ((String) -> Void)?
-    
+
     var onDeviceToken: ((String) -> Void)?
-    
+
     var isActive: () -> Bool = { UIApplication.shared.applicationState == .active }
 
     private var installed = false
 
-    
-    
     func install() {
         guard !installed else { return }
         installed = true
@@ -114,8 +95,6 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         }
     }
 
-    
-    
     func requestAuthorizationAndRegister() {
         let center = UNUserNotificationCenter.current()
         let options: UNAuthorizationOptions = [.alert, .sound, .badge, .timeSensitive]
@@ -132,7 +111,6 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         }
     }
 
-    
     func didRegister(deviceToken data: Data) {
         let hex = data.map { String(format: "%02x", $0) }.joined()
         deviceToken = hex
@@ -143,10 +121,6 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         logger.warning("APNs registration failed: \(error.localizedDescription)")
     }
 
-    
-
-    
-    
     func notifySudoRequest(requestId: String, label: String, trayId: String?) {
         guard !isActive() else { return }
         let content = UNMutableNotificationContent()
@@ -164,7 +138,6 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         schedule(id: "sudo:\(requestId)", content: content)
     }
 
-    
     func notifyTurnEnd(label: String, trayId: String?) {
         guard !isActive() else { return }
         let content = UNMutableNotificationContent()
@@ -177,12 +150,11 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         schedule(id: "turn-end:\(trayId ?? "slicc")", content: content)
     }
 
-    
     func clearSudoNotification(requestId: String) {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: ["sudo:\(requestId)"])
         center.removeDeliveredNotifications(withIdentifiers: ["sudo:\(requestId)"])
-        
+
         center.getDeliveredNotifications { delivered in
             let stale =
                 delivered
@@ -201,13 +173,11 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         }
     }
 
-    
-
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        
+
         let active = await MainActor.run { self.isActive() }
         return active ? [] : [.banner, .sound, .list]
     }
@@ -231,7 +201,6 @@ final class NotificationCoordinator: NSObject, ObservableObject, UNUserNotificat
         }
     }
 }
-
 
 final class SliccAppDelegate: NSObject, UIApplicationDelegate {
     func application(

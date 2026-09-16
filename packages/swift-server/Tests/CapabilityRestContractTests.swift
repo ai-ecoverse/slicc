@@ -6,21 +6,7 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class CapabilityRestContractTests: XCTestCase {
-    
 
     private struct Expectation {
         let status: Int
@@ -45,13 +31,11 @@ final class CapabilityRestContractTests: XCTestCase {
         let expectation: Expectation
     }
 
-    
-    
     private static var fixtureURL: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  
-            .deletingLastPathComponent()  
-            .deletingLastPathComponent()  
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent("shared-ts/fixtures/capability-rest-contract.json")
     }
 
@@ -68,11 +52,6 @@ final class CapabilityRestContractTests: XCTestCase {
         return servers.contains("swift")
     }
 
-    
-
-    
-    
-    
     private func makeRouter(httpClient: HTTPClient) -> Router<BasicRequestContext> {
         let router = Router()
         registerAPIRoutes(
@@ -92,8 +71,6 @@ final class CapabilityRestContractTests: XCTestCase {
         return router
     }
 
-    
-
     func testEveryContractOperationHasARoute() async throws {
         let contract = try Self.loadContract()
         let operations = (contract["operations"] as? [[String: Any]]) ?? []
@@ -108,8 +85,7 @@ final class CapabilityRestContractTests: XCTestCase {
                         continue
                     }
                     guard Self.appliesToSwift(raw["servers"] as? [String]) else { continue }
-                    
-                    
+
                     if path.contains("{") { continue }
                     let verb: HTTPRequest.Method = method == "*" ? .get : Self.verb(method)
                     let body: ByteBuffer? = verb == .post ? ByteBuffer(string: "{}") : nil
@@ -177,8 +153,6 @@ final class CapabilityRestContractTests: XCTestCase {
         }
     }
 
-    
-
     private func assertBody(
         _ buffer: ByteBuffer,
         matches expected: [String: Any],
@@ -220,8 +194,6 @@ final class CapabilityRestContractTests: XCTestCase {
             }
         }
     }
-
-    
 
     private static func verb(_ method: String) -> HTTPRequest.Method {
         switch method.uppercased() {

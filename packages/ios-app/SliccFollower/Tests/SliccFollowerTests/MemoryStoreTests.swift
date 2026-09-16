@@ -2,8 +2,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
 final class MemoryStoreTests: XCTestCase {
 
     func testParsesSectionsAndBullets() {

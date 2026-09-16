@@ -1,11 +1,5 @@
 import Foundation
 
-
-
-
-
-
-
 struct HandoffMatch: Equatable {
     enum Verb: String {
         case handoff
@@ -13,14 +7,13 @@ struct HandoffMatch: Equatable {
     }
 
     let verb: Verb
-    
-    
+
     let target: String
-    
+
     var instruction: String?
-    
+
     var branch: String?
-    
+
     var path: String?
 }
 
@@ -28,14 +21,9 @@ enum HandoffLink {
     static let handoffRel = "https://www.sliccy.ai/rel/handoff"
     static let upskillRel = "https://www.sliccy.ai/rel/upskill"
 
-    
     private static let maxBranchLength = 250
     private static let maxPathLength = 1024
 
-    
-    
-    
-    
     static func extract(from links: [ParsedLink]) -> HandoffMatch? {
         for link in links {
             if link.rel.contains(handoffRel) {
@@ -58,14 +46,6 @@ enum HandoffLink {
         return title
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     private static func applyUpskillParams(
         _ match: inout HandoffMatch, params: [String: String]
     ) {
@@ -80,8 +60,6 @@ enum HandoffLink {
         }
     }
 
-    
-    
     static func canonicalisePath(_ raw: String) -> String {
         var trimmed = raw
         while trimmed.hasSuffix("/") { trimmed.removeLast() }
@@ -91,9 +69,6 @@ enum HandoffLink {
         return trimmed
     }
 
-    
-    
-    
     static func isSafeBranch(_ value: String) -> Bool {
         guard !value.isEmpty, value.count <= maxBranchLength else { return false }
         guard value.allSatisfy(isSafeRefCharacter) else { return false }
@@ -106,8 +81,7 @@ enum HandoffLink {
     static func isSafePath(_ value: String) -> Bool {
         guard !value.isEmpty, value.count <= maxPathLength else { return false }
         guard value.allSatisfy(isSafeRefCharacter) else { return false }
-        
-        
+
         if value.hasPrefix("-") || value.hasPrefix("/") { return false }
         if value.contains("..") { return false }
         return true
@@ -116,9 +90,9 @@ enum HandoffLink {
     private static func isSafeRefCharacter(_ c: Character) -> Bool {
         guard let ascii = c.asciiValue else { return false }
         switch ascii {
-        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A:  
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A:
             return true
-        case 0x2E, 0x5F, 0x2F, 0x2D:  
+        case 0x2E, 0x5F, 0x2F, 0x2D:
             return true
         default:
             return false

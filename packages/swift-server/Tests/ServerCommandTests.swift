@@ -77,10 +77,6 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertEqual(config.joinURL?.absoluteString, "https://join.example/session")
     }
 
-    
-    
-    
-    
     func testJoinFlagParsesUrlAsValue() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--electron", "--electron-app", "/Applications/Slack.app",
@@ -122,12 +118,6 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertEqual(config.joinUrl, "https://tray.example.com/base/join/tray-123.secret")
     }
 
-    
-    
-    
-    
-    
-    
     func testResolveBrowserLaunchURLBuildsCanonicalTrayUrlForJoinFlow() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--join", "https://tray.example.com/base/join/tray-123.secret",
@@ -153,9 +143,6 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
-    
-    
-    
     func testResolveBrowserLaunchURLRejectsLeadAndJoinTogether() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--lead-worker-base-url", "https://worker.example",
@@ -180,12 +167,6 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
-    
-    
-    
-    
-    
-    
     func testLeadWithoutWorkerBaseURLSuggestsOnlyParsableForms() throws {
         let parsed = try ServerCommand.parseAsRoot(["--lead"])
         let command = try XCTUnwrap(parsed as? ServerCommand)
@@ -214,8 +195,6 @@ final class ServerCommandTests: XCTestCase {
         }
     }
 
-    
-    
     func testLeadWorkerBaseURLFormFromTheErrorMessageParses() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--lead", "--lead-worker-base-url", "https://worker.example",
@@ -239,8 +218,6 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
-    
-    
     func testLeadResolvesWorkerBaseURLFromEnvironment() throws {
         let parsed = try ServerCommand.parseAsRoot(["--lead"])
         let command = try XCTUnwrap(parsed as? ServerCommand)
@@ -255,12 +232,6 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
-    
-
-    
-    
-    
-    
     func testResolveBrowserLaunchURLAppendsBridgeParamsInThinMode() throws {
         let parsed = try ServerCommand.parseAsRoot([])
         let command = try XCTUnwrap(parsed as? ServerCommand)
@@ -274,7 +245,6 @@ final class ServerCommandTests: XCTestCase {
             bridgeToken: "tok-abc"
         )
 
-        
         XCTAssertTrue(launchURL.hasPrefix("https://www.sliccy.ai"))
         XCTAssertTrue(launchURL.contains("bridge=ws://localhost:5710/cdp"))
         XCTAssertTrue(launchURL.contains("bridgeToken=tok-abc"))
@@ -301,8 +271,6 @@ final class ServerCommandTests: XCTestCase {
             bridgeToken: "tok-xyz"
         )
 
-        
-        
         XCTAssertTrue(launchURL.hasPrefix("https://slicc-tray-hub-staging.minivelos.workers.dev"))
         XCTAssertTrue(launchURL.contains("tray=https://slicc-tray-hub-staging.minivelos.workers.dev"))
         XCTAssertTrue(launchURL.contains("bridge=ws://localhost:5710/cdp"))
@@ -422,20 +390,18 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertEqual(observedStrict, false)
     }
 
-    
-
     func testIsThinElectronModeRequiresElectronAndHostedOriginEnv() throws {
         let electronConfig = ServerConfig.resolve(
             from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--electron"]) as? ServerCommand),
             arguments: ["slicc-server", "--electron"]
         )
-        
+
         XCTAssertTrue(
             ServerCommand.isThinElectronMode(
                 config: electronConfig,
                 environment: ["SLICC_HOSTED_LEADER_ORIGIN": "https://www.sliccy.ai"]
             ))
-        
+
         XCTAssertFalse(
             ServerCommand.isThinElectronMode(
                 config: electronConfig,
@@ -472,10 +438,6 @@ final class ServerCommandTests: XCTestCase {
             ))
     }
 
-    
-    
-    
-    
     func testResolveBridgeTokenHonorsForwardedTokenOutsideThinModes() {
         let token = ServerCommand.resolveBridgeToken(
             thinBridgeMode: false,
@@ -514,14 +476,6 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertNotEqual(token, "")
     }
 
-    
-
-    
-    
-    
-    
-    
-    
     func testShouldMountThinBridgeCorsSelectedWhenTokenPresentOutsideThinBridge() {
         XCTAssertTrue(
             ServerCommand.shouldMountThinBridgeCors(
@@ -539,8 +493,7 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testNormalizeTrayWorkerBaseURLStripsEverythingButTheOrigin() {
-        
-        
+
         XCTAssertEqual(
             ServerCommand.normalizeTrayWorkerBaseURL(" https://tray.example.com/base/?a=1#f "),
             "https://tray.example.com/base"
@@ -565,13 +518,13 @@ final class ServerCommandTests: XCTestCase {
 
         XCTAssertEqual(secrets.map(\.name), ["GITHUB_TOKEN"])
         XCTAssertEqual(secrets.first?.domains, ["api.github.com"])
-        
+
         XCTAssertNil(ServerCommand.parseEnvFileSecrets(at: url.appendingPathExtension("gone")))
     }
 
     func testLoggerLevelMapsTheCliVocabularyOntoSwiftLog() {
         XCTAssertEqual(ServerCommand.loggerLevel(from: "debug"), .debug)
-        
+
         XCTAssertEqual(ServerCommand.loggerLevel(from: "warn"), .warning)
         XCTAssertEqual(ServerCommand.loggerLevel(from: "error"), .error)
         XCTAssertEqual(ServerCommand.loggerLevel(from: "info"), .info)
@@ -579,8 +532,7 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testShouldMountThinBridgeCorsOffInLegacyModesWithoutToken() {
-        
-        
+
         XCTAssertFalse(
             ServerCommand.shouldMountThinBridgeCors(
                 thinBridgeMode: false,
@@ -609,21 +561,21 @@ final class ServerCommandTests: XCTestCase {
         let command = try XCTUnwrap(parsed as? ServerCommand)
         let config = ServerConfig.resolve(from: command, arguments: ["slicc-server"])
         XCTAssertEqual(config.mounts, [])
-        
+
         XCTAssertEqual(
             ServerConfig.parseMountMapping("/we:ird/dir:/mnt/x"),
             ServerConfig.MountMapping(hostPath: "/we:ird/dir", path: "/mnt/x"))
-        
+
         XCTAssertEqual(
             ServerConfig.parseMountMapping("~/proj:/mnt/p", homeDirectory: "/Users/me"),
             ServerConfig.MountMapping(hostPath: "/Users/me/proj", path: "/mnt/p"))
         XCTAssertNil(ServerConfig.parseMountMapping("~/proj:/mnt/p", homeDirectory: ""))
-        
+
         XCTAssertNil(ServerConfig.parseMountMapping("/a:/"))
         XCTAssertNil(ServerConfig.parseMountMapping("rel:/mnt/x"))
         XCTAssertNil(ServerConfig.parseMountMapping("/a:rel"))
         XCTAssertNil(ServerConfig.parseMountMapping("/mnt/only-target"))
-        
+
         XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt/a/../b"))
         XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt//b"))
         XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt/./b"))

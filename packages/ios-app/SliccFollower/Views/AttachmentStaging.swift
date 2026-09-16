@@ -3,12 +3,6 @@ import SliccTrayKit
 import SwiftUI
 import UIKit
 
-
-
-
-
-
-
 struct StagedAttachmentsRow: View {
     let attachments: [MessageAttachment]
     let onRemove: (MessageAttachment) -> Void
@@ -25,10 +19,7 @@ struct StagedAttachmentsRow: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
         }
-        
-        
-        
-        
+
     }
 
     private func chip(_ attachment: MessageAttachment) -> some View {
@@ -77,15 +68,6 @@ struct StagedAttachmentsRow: View {
         return UIImage(data: bytes)
     }
 }
-
-
-
-
-
-
-
-
-
 
 struct CameraPicker: UIViewControllerRepresentable {
     let onCapture: (UIImage) -> Void

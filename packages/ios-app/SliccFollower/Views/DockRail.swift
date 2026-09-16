@@ -1,19 +1,6 @@
 import SliccTrayKit
 import SwiftUI
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct DockRail: View {
     @Binding var active: DockSurface?
     let sprinkles: [SprinkleSummary]
@@ -23,10 +10,7 @@ struct DockRail: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            
-            
-            
-            
+
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 6) {
                     ForEach(DockModel.sprinkleItems(sprinkles)) { item in
@@ -64,8 +48,7 @@ struct DockRail: View {
             label: item.label,
             isActive: active == item.surface
         ) {
-            
-            
+
             let next = active == item.surface ? nil : item.surface
             if reduceMotion {
                 active = next

@@ -220,7 +220,7 @@ final class KokoroResourceDownloaderTests: XCTestCase {
                 return XCTFail("expected storageFailure, got \(error)")
             }
         }
-        
+
         let requestedModes = await fake.requestedModes()
         XCTAssertEqual(requestedModes, [true])
     }
@@ -242,8 +242,7 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         let (directory, cleanup) = temporaryDirectory()
         defer { cleanup() }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        
-        
+
         let url = try writeVoicePackJSON(
             in: directory,
             rowLengths: [
@@ -283,8 +282,6 @@ final class KokoroResourceDownloaderTests: XCTestCase {
             KokoroAneConstants.voicePackRows * KokoroAneConstants.voicePackCols)
     }
 
-    
-    
     private func writeVoicePackJSON(
         in directory: URL, rowLengths: [Int: Int] = [:], nonNumericInRow: Int? = nil
     ) throws -> URL {

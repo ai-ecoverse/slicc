@@ -1,44 +1,19 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct QuotaExceededDetail: Equatable {
-    
-    
+
     let message: String
-    
+
     let resetsAt: String?
 
-    
     static let label = "Out of AI budget"
 
-    
     static let fallbackMessage = "The usage budget for this provider has been fully used."
 
-    
-    
-    
-    
     private static let typeToken = "quota_exceeded"
 
-    
     private static let connectCtaPattern = #"\s*You can (also )?connect your own LLM provider\.?\s*$"#
 
-    
-    
-    
-    
     init?(content: String) {
         guard content.lowercased().contains(Self.typeToken) else { return nil }
         let error = Self.errorEnvelope(in: content)
@@ -56,9 +31,6 @@ struct QuotaExceededDetail: Equatable {
         }
     }
 
-    
-    
-    
     private static func errorEnvelope(in content: String) -> [String: Any]? {
         guard let start = content.firstIndex(of: "{"), let end = content.lastIndex(of: "}"),
             start < end
@@ -70,9 +42,6 @@ struct QuotaExceededDetail: Equatable {
         return object["error"] as? [String: Any]
     }
 
-    
-    
-    
     var body: String {
         guard let resetsAt, message.range(of: "reset", options: .caseInsensitive) == nil else {
             return message

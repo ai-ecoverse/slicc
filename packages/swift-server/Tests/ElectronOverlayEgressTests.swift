@@ -2,11 +2,6 @@ import XCTest
 
 @testable import slicc_server
 
-
-
-
-
-
 final class ElectronOverlayEgressTests: XCTestCase {
 
     func testIsEgressBlockErrorMatchesAppLayerDenials() {
@@ -14,8 +9,7 @@ final class ElectronOverlayEgressTests: XCTestCase {
         XCTAssertTrue(ElectronOverlayInjector.isEgressBlockError("net::ERR_NETWORK_ACCESS_DENIED"))
         XCTAssertTrue(ElectronOverlayInjector.isEgressBlockError("net::ERR_BLOCKED_BY_CLIENT"))
         XCTAssertTrue(ElectronOverlayInjector.isEgressBlockError("net::ERR_BLOCKED_BY_ADMINISTRATOR"))
-        
-        
+
         XCTAssertFalse(ElectronOverlayInjector.isEgressBlockError("net::ERR_BLOCKED_BY_CSP"))
         XCTAssertFalse(ElectronOverlayInjector.isEgressBlockError("net::ERR_NAME_NOT_RESOLVED"))
         XCTAssertFalse(ElectronOverlayInjector.isEgressBlockError("net::ERR_ABORTED"))
@@ -75,8 +69,7 @@ final class ElectronOverlayEgressTests: XCTestCase {
     }
 
     func testClassifyNetworkEventIgnoresFailureOnUntrackedRequest() {
-        
-        
+
         let signal = ElectronOverlayInjector.classifyNetworkEvent(
             method: "Network.loadingFailed",
             params: ["requestId": "req-2", "type": "Document", "errorText": "net::ERR_ACCESS_DENIED"],
@@ -102,10 +95,10 @@ final class ElectronOverlayEgressTests: XCTestCase {
             statusMessage: "This app blocks the panel."
         )
         XCTAssertTrue(script.contains("/* bundle */"))
-        
+
         XCTAssertTrue(script.contains("appUrl:\"\""))
         XCTAssertTrue(script.contains("statusMessage:\"This app blocks the panel.\""))
-        
+
         XCTAssertTrue(script.contains("window.top!==window.self"))
     }
 

@@ -3,8 +3,6 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
-
-
 final class DockModelTests: XCTestCase {
 
     private func sprinkle(_ name: String, icon: String? = nil) -> SprinkleSummary {
@@ -52,10 +50,7 @@ final class DockModelTests: XCTestCase {
     }
 
     func testEveryDockSurfaceHasARealView() {
-        
-        
-        
-        
+
         let surfaces = DockModel.toolItems.map(\.surface) + [DockSurface.sprinkle(name: "any")]
         for surface in surfaces {
             XCTAssertTrue(

@@ -1,37 +1,10 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
-
-
 enum OverlayPostBody: Equatable {
     case none
     case bytes(Data)
     case unrecoverable(String)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 func decodeCdpRequestPostBody(request: [String: Any]) -> OverlayPostBody {
     if let entries = request["postDataEntries"] as? [[String: Any]], !entries.isEmpty {
@@ -48,7 +21,7 @@ func decodeCdpRequestPostBody(request: [String: Any]) -> OverlayPostBody {
     }
 
     if let postData = request["postData"] as? String, !postData.isEmpty {
-        
+
         if postData.unicodeScalars.allSatisfy({ $0.value <= 0x7f }) {
             return .bytes(Data(postData.utf8))
         }
@@ -62,10 +35,7 @@ func decodeCdpRequestPostBody(request: [String: Any]) -> OverlayPostBody {
 }
 
 extension OverlayPostBody {
-    
-    
-    
-    
+
     var forwardableBytes: Data? {
         if case .bytes(let data) = self { return data }
         return nil

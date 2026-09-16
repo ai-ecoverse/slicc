@@ -3,12 +3,6 @@ import XCTest
 
 @testable import SliccFollower
 
-
-
-
-
-
-
 final class SliccConversationEntityTests: XCTestCase {
 
     private func unit(
@@ -32,8 +26,6 @@ final class SliccConversationEntityTests: XCTestCase {
             lastActivityAt: seconds.map { Date(timeIntervalSince1970: $0) })
     }
 
-    
-
     func testEntityCarriesTheFieldsSiriAndSpotlightRead() {
         let entity = SliccConversationProjection.entity(
             from: unit(
@@ -47,8 +39,6 @@ final class SliccConversationEntityTests: XCTestCase {
         XCTAssertEqual(entity.status, "working")
         XCTAssertFalse(entity.isCone)
     }
-
-    
 
     func testActiveUnitOutranksEverythingElse() {
         let ranked = SliccConversationProjection.ranked([
@@ -67,9 +57,6 @@ final class SliccConversationEntityTests: XCTestCase {
         XCTAssertEqual(ranked.map(\.id), ["newer-cone", "older-cone", "scoop"])
     }
 
-    
-    
-    
     func testUndatedUnitsFallBackToNameOrder() {
         let ranked = SliccConversationProjection.ranked([
             unit("z", name: "Zebra"),
@@ -77,8 +64,6 @@ final class SliccConversationEntityTests: XCTestCase {
         ])
         XCTAssertEqual(ranked.map(\.id), ["a", "z"])
     }
-
-    
 
     func testMatchIsCaseAndDiacriticInsensitiveAcrossNameAndDetail() {
         let units = [
@@ -93,7 +78,6 @@ final class SliccConversationEntityTests: XCTestCase {
             SliccConversationProjection.matching("cafe", in: units).map(\.id), ["1"])
     }
 
-    
     func testEmptyNeedleListsEverythingRanked() {
         let units = [unit("s", name: "S", role: .scoop), unit("c", name: "C")]
         XCTAssertEqual(SliccConversationProjection.matching("   ", in: units).map(\.id), ["c", "s"])
@@ -110,8 +94,6 @@ final class SliccConversationEntityTests: XCTestCase {
             SliccConversationProjection.entities(many).count,
             SliccConversationProjection.maximumResults)
     }
-
-    
 
     func testQueryResolvesByIdentifierAndIgnoresUnknownOnes() async throws {
         let query = SliccConversationQuery(units: {
@@ -134,8 +116,6 @@ final class SliccConversationEntityTests: XCTestCase {
         XCTAssertEqual(suggested.map(\.id), ["cone", "scoop"])
     }
 
-    
-    
     func testQueryWithNoSnapshotIsEmptyNotAFailure() async throws {
         let query = SliccConversationQuery(units: { [] })
         let suggested = try await query.suggestedEntities()

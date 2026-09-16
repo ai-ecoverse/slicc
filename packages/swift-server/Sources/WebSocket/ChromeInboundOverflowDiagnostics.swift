@@ -1,26 +1,8 @@
 import Foundation
 
-
-
-
-
-
-
-
-
-
-
 enum ChromeInboundOverflowDiagnostics {
     static let defaultTopMethodCount = 5
 
-    
-    
-    
-    
-    
-    
-    
-    
     static func summary(
         for messages: [ProxyMessage],
         topMethodCount: Int = defaultTopMethodCount
@@ -64,9 +46,6 @@ enum ChromeInboundOverflowDiagnostics {
         return summary
     }
 
-    
-    
-    
     private static func jsonStringValue(forKey key: String, in text: String) -> String? {
         guard let keyRange = text.range(of: "\"\(key)\":\"") else {
             return nil
