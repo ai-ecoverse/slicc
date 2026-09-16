@@ -12,6 +12,17 @@
     },
     {
       "whenUserMessageMatches": "and the moral is",
+      "content": "FALLBACK-TOOL-CONTINUATION: checking the truncated turn.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "printf 'fallback-compacted-once\\n'"
+          }
+        }
+      ]
+    },
+    {
       "content": "FALLBACK-DONE-ANSWER: the moral survives truncation."
     }
   ]

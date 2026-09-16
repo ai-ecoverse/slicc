@@ -162,6 +162,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     getApiKey: () => getModelApiKey(scoop) ?? undefined,
     transformContext: compactFn,
     streamFn: streamWithSessionId,
+    onContextCompacted: () => deps.sessions.persistNow(),
     captureStructuredOutput: scoop.config?.structuredOutputSchema
       ? deps.onStructuredOutput
       : undefined,

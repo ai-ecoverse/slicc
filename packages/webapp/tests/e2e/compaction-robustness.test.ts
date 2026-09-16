@@ -28,6 +28,7 @@ import {
 } from './fake-llm-helpers.js';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { execInTerminal, readFreezerIndex } from './two-instance-helpers.js';
 
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`./fake-llm/fixtures/${name}.json`, import.meta.url), 'utf8'));
@@ -90,8 +91,12 @@ test.describe('compaction robustness', () => {
     await expect(marker).toHaveCount(1);
     await expect(marker).toHaveAttribute('trigger', 'threshold');
     await expect(marker).toHaveAttribute('state', 'summarized');
-    // …and the turn completed against the compacted context.
+    // …and a tool continuation completed against the adopted compacted
+    // context. Before this fix, each post-tool model call compacted the same
+    // oversized pre-compaction history again and added another marker.
+    await expect(thread).toContainText('COMPACTION-TOOL-CONTINUATION');
     await expect(thread).toContainText('COMPACTION-DONE-ANSWER');
+    await expect(marker).toHaveCount(1);
     // The clean path never shows the degraded state.
     await expect(thread.locator('slicc-compaction-marker[state="fallback"]')).toHaveCount(0);
     // The marker is NOT an assistant bubble: the model's voice does not carry
@@ -99,6 +104,18 @@ test.describe('compaction robustness', () => {
     await expect(
       page.locator('slicc-agent-message', { hasText: 'compacting history' })
     ).toHaveCount(0);
+
+    // Canonical adoption must not cost the original transcript. The snapshot
+    // hook writes the untouched history before replacement, and the Markdown
+    // archive remains the durable source for everything the summary dropped.
+    const liveArchive = (await readFreezerIndex(page)).find((entry) =>
+      entry.filename.startsWith('live-cone-')
+    );
+    expect(liveArchive).toBeDefined();
+    const archived = await execInTerminal(page, `cat /sessions/${liveArchive!.filename}`);
+    expect(archived.exitCode).toBe(0);
+    expect(archived.stdout).toContain('STORY-PART-one');
+    expect(archived.stdout).toContain('STORY-PART-two');
 
     // …and the seam SURVIVES a reload. The row lives in no message list — Pi's
     // history cannot hold bookkeeping about itself — so a reload used to
@@ -136,8 +153,11 @@ test.describe('compaction robustness', () => {
     const marker = thread.locator('slicc-compaction-marker');
     await expect(marker).toHaveCount(1);
     await expect(marker).toHaveAttribute('state', 'fallback');
-    // …and the user's actual question still got its answer.
+    // The fallback is deliberately adopted too: otherwise every tool
+    // continuation retries the same failed compaction and recreates the loop.
+    await expect(thread).toContainText('FALLBACK-TOOL-CONTINUATION');
     await expect(thread).toContainText('FALLBACK-DONE-ANSWER');
+    await expect(marker).toHaveCount(1);
     // The degradation is a marker row, not an assistant bubble.
     await expect(
       page.locator('slicc-agent-message', { hasText: 'older messages truncated' })
