@@ -262,18 +262,43 @@ describe('dependencyDrift', () => {
   });
 
   /**
-   * An un-hoisted copy is borrowed as part of its PARENT's symlink, so there
-   * is no independent entry to swap. Reporting it as unrealignable is what
-   * makes `measureAtCommit` refuse the baseline rather than measure the
-   * wrong tree and call it +0.0 kB.
+   * An un-hoisted nested production copy used to be a hole (`linkNodeModules`
+   * borrows it as part of the parent symlink). `materializeLinkedParents`
+   * can split that parent, so the nested entry is now a realignable `changed`
+   * item — Dependabot PR #3200 (`glob/node_modules/brace-expansion` 2.0.2 ->
+   * 2.1.7) is the specimen. The registry name is the last nested segment, not
+   * the parent path, or `npm pack` would request a package that does not exist.
    */
-  it('flags an un-hoisted nested copy as unrealignable', () => {
-    lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0' } });
-    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0' } });
+  it('reports an un-hoisted nested production copy as changed', () => {
+    lock(repo, { 'node_modules/glob/node_modules/brace-expansion': { version: '2.1.7' } });
+    lock(tree, { 'node_modules/glob/node_modules/brace-expansion': { version: '2.0.2' } });
     const drift = dependencyDrift(repo, tree);
-    expect(drift.changed).toEqual([]);
-    expect(drift.unrealignable).toEqual([
-      'node_modules/a/node_modules/b (1.0.0 -> 2.0.0, un-hoisted)',
+    expect(drift.missing).toEqual([]);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.changed).toEqual([
+      {
+        path: 'node_modules/glob/node_modules/brace-expansion',
+        name: 'brace-expansion',
+        from: '2.0.2',
+        to: '2.1.7',
+      },
+    ]);
+  });
+
+  it('fetches a nested scoped copy under @scope/name, not the parent path', () => {
+    lock(repo, {
+      'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.147.0' },
+    });
+    lock(tree, {
+      'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.143.0' },
+    });
+    expect(dependencyDrift(repo, tree).changed).toEqual([
+      {
+        path: 'node_modules/oxc-parser/node_modules/@oxc-project/types',
+        name: '@oxc-project/types',
+        from: '0.143.0',
+        to: '0.147.0',
+      },
     ]);
   });
 
@@ -299,12 +324,14 @@ describe('dependencyDrift', () => {
     expect(dependencyDrift(repo, tree)).toEqual(empty);
   });
 
-  it('still flags a nested copy that graduates from dev to production', () => {
+  it('realigns a nested copy that graduates from dev to production', () => {
     lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0' } });
     lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
-    expect(dependencyDrift(repo, tree).unrealignable).toEqual([
-      'node_modules/a/node_modules/b (1.0.0 -> 2.0.0, un-hoisted)',
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.changed).toEqual([
+      { path: 'node_modules/a/node_modules/b', name: 'b', from: '1.0.0', to: '2.0.0' },
     ]);
+    expect(drift.unrealignable).toEqual([]);
   });
 
   /**
@@ -529,5 +556,47 @@ describe('materializeLinkedParents', () => {
     mkdirSync(join(tree, 'node_modules/plain'), { recursive: true });
     materializeLinkedParents(join(tree, 'node_modules'), 'plain');
     expect(lstatSync(join(tree, 'node_modules/plain')).isDirectory()).toBe(true);
+  });
+
+  /**
+   * Nested production copies live at `node_modules/<pkg>/node_modules/<dep>`.
+   * Splitting only a scope is not enough: the parent PACKAGE is itself a
+   * symlink (how linkNodeModules mirrors unscoped packages), and replacing
+   * the nested copy in place would write through into the caller's install.
+   */
+  it('splits a package nested node_modules so a nested copy can be replaced locally', () => {
+    mkdirSync(join(repo, 'node_modules/glob/node_modules/brace-expansion'), { recursive: true });
+    mkdirSync(join(repo, 'node_modules/glob/node_modules/minimatch'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules/glob/package.json'), '{}');
+    writeFileSync(
+      join(repo, 'node_modules/glob/node_modules/brace-expansion/marker.txt'),
+      'caller'
+    );
+    writeFileSync(join(repo, 'node_modules/glob/node_modules/minimatch/marker.txt'), 'caller');
+    symlinkSync(join(repo, 'node_modules/glob'), join(tree, 'node_modules/glob'), 'dir');
+
+    materializeLinkedParents(join(tree, 'node_modules'), 'glob/node_modules/brace-expansion');
+    expect(lstatSync(join(tree, 'node_modules/glob')).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(tree, 'node_modules/glob/node_modules')).isSymbolicLink()).toBe(false);
+
+    rmSync(join(tree, 'node_modules/glob/node_modules/brace-expansion'), {
+      force: true,
+      recursive: true,
+    });
+    mkdirSync(join(tree, 'node_modules/glob/node_modules/brace-expansion'));
+    writeFileSync(
+      join(tree, 'node_modules/glob/node_modules/brace-expansion/marker.txt'),
+      'baseline'
+    );
+
+    expect(
+      readFileSync(join(repo, 'node_modules/glob/node_modules/brace-expansion/marker.txt'), 'utf8')
+    ).toBe('caller');
+    expect(
+      readFileSync(join(tree, 'node_modules/glob/node_modules/brace-expansion/marker.txt'), 'utf8')
+    ).toBe('baseline');
+    expect(realpathSync(join(tree, 'node_modules/glob/node_modules/minimatch'))).toBe(
+      realpathSync(join(repo, 'node_modules/glob/node_modules/minimatch'))
+    );
   });
 });

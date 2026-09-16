@@ -1034,14 +1034,20 @@ base source imports it the build fails on its own, so a failed fetch is not
 fatal — aborting would newly fail PRs that merely drop an unused dependency.
 Packages the change **adds** are ignored; the base never had them.
 
-Drift it cannot realign — an un-hoisted nested copy whose ancestor package
-did not also change, or more than 25 changed packages — makes the baseline
-unmeasurable rather than quietly wrong, which a CI `pull_request` run fails.
-A nested copy under a parent that is itself being realigned is covered by
-that parent swap (knip 6.33.0 nesting `@oxc-project/types` under `oxc-parser`
-is the specimen). Transitive dependencies of a realigned package stay
-borrowed from HEAD: a deliberate approximation, since the alternative is a
-full `npm ci` per gate run.
+Drift it cannot realign — more than 25 changed packages, or a failed
+`npm pack` of a required bump — makes the baseline unmeasurable rather
+than quietly wrong, which a CI `pull_request` run fails. Un-hoisted nested
+production copies (`node_modules/<pkg>/node_modules/<dep>`) are realigned
+the same way as hoisted ones: `materializeLinkedParents` splits the parent
+package symlink so the nested entry can be swapped without writing through
+the caller's install (Dependabot PR #3200, `glob/node_modules/brace-expansion`
+2.0.2 -> 2.1.7, is the specimen). A nested copy under a parent that is itself
+being realigned is covered by that parent swap (knip 6.33.0 nesting
+`@oxc-project/types` under `oxc-parser` is the specimen). Nested copies that
+exist only in the dev tree are skipped: they cannot appear in `dist/ui`.
+Transitive dependencies of a realigned package stay borrowed from HEAD: a
+deliberate approximation, since the alternative is a full `npm ci` per gate
+run.
 
 On `merge_group` the delta is skipped — a queue branch is cumulative, so
 its delta is the batch sum and a per-change allowance would fail on
