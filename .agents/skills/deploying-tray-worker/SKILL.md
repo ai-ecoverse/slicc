@@ -90,7 +90,7 @@ its Worker/UI deploy gate skips. Pull-request staging keeps the deploy + live sm
 every trusted PR, but gates the bulk upload on the `cloudflare-r2` path signal: webapp
 sources and bundled workspace dependencies, dependency metadata/patches, or the archive
 contract itself. When that signal is false, the built static output is unchanged, so the
-already archived content hashes remain valid and CI avoids re-putting ~390 identical
+already archived content hashes remain valid and CI avoids re-putting hundreds of identical
 objects. `worker-staging.yml` follows the same rule within its narrower trigger set.
 Its internal R2 filter must mirror the complete `ci.yml` build-input set so a PR that
 combines a workflow-triggering Worker change with any UI input cannot skip the archive.
@@ -106,10 +106,12 @@ Worker-side fallback in `src/index.ts` must enable that smoke even when the buil
 set is unchanged; do not add those changes to the costly upload signal just to obtain
 fallback coverage.
 
-The R2 API rate-limits bursts of `wrangler r2 object put` calls with `429` / error code
-`971` ("Please wait and consider throttling your request speed"). Concurrency defaults to
-`4` (`--concurrency <n>` to override) and each file gets 5 attempts with jittered
-exponential backoff. Raising concurrency re-trips the limit on the ~390-file asset set.
+The uploader validates the complete hash invariant first, groups files by MIME type, and
+runs one `wrangler r2 bulk put` process per content type. This preserves per-object MIME
+metadata while avoiding hundreds of Wrangler startup/auth handshakes. Bulk concurrency
+defaults to `20` (`--concurrency <n>` to override); Wrangler enforces an internal safety
+cap of 1,100 requests per five minutes. A failed content-type manifest gets up to five
+attempts with jittered exponential backoff, and temporary manifests are always removed.
 
 The limit is account-wide, so the other R2 uploaders share it and carry the same
 backoff: `packages/dev-tools/tools/storybook-screenshots-upload.mjs` (bucket
@@ -580,7 +582,7 @@ deploys" above). Then deploy both workers as a pair:
 ```bash
 # From the repository root:
 node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs \
-  --bucket slicc-asset-archive-staging --dir dist/ui/assets
+  slicc-asset-archive-staging --dir dist/ui/assets
 
 cd packages/cloudflare-worker
 npx wrangler deploy --config wrangler.jsonc --env staging

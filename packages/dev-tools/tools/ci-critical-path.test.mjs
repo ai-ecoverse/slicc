@@ -68,6 +68,7 @@ describe('CI critical-path routing', () => {
       'packages/cloud-core/**',
       'packages/dev-tools/providers.build.json',
       'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs',
+      'packages/cloudflare-worker/scripts/upload-lib.mjs',
       'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs',
       'packages/cloudflare-worker/src/asset-archive.mjs',
       'packages/cloudflare-worker/tests/deployed.test.ts',
