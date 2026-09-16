@@ -506,9 +506,13 @@ export class SprinkleFollowerController {
       lick: (event) => {
         const action = typeof event === 'string' ? event : event.action;
         const data = typeof event === 'string' ? undefined : event.data;
-        // Follower-side licks go over the wire — the leader's lick router
-        // owns `getSprinkleRoute(name)`, so we don't compute a targetScoop here.
-        this.sync.sendSprinkleLick(sprinkleName, { action, data });
+        // Follower-side licks go over the wire. The leader's lick router owns
+        // the route table and the panel's opening cone, so the only target sent
+        // from here is one the panel named itself (`slicc.lick({ target })`).
+        // Dropping it would send a `publish` meant for its owner to the
+        // configured route instead (#3089).
+        const target = typeof event === 'string' ? undefined : event.target;
+        this.sync.sendSprinkleLick(sprinkleName, { action, data }, target || undefined);
       },
       on: (event, callback) => {
         if (event !== 'update') return;

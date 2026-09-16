@@ -307,6 +307,9 @@ depending on two files agreeing forever.
 - **PR #1283**: a trailing-slash mismatch caused a silent allowlist failure.
 - **PR #3090 review**: shell-opened sprinkle panels captured their cone, but rail activation
   (including attention-only promotion) did not, so clicks still woke the oldest cone.
+- **Issue #3089 follow-up**: follower-rendered copies of a panel dropped `target` and took
+  the follower's current selection as origin — focus routing. The leader now stamps its own
+  panel owner on follower panel licks; only inline dips keep the follower selection.
 
 **Class size** — 16 call-site fixes across ~10 PRs since the Jun–Jul 2026 thin-bridge tail.
 
