@@ -187,6 +187,69 @@ describe('ScoopLifecycleManager', () => {
     expect(forgetScoop).toHaveBeenCalledWith(supervisor.jid);
   });
 
+  // #3157: the deletes must be settled when `unregister` resolves — a
+  // dangling delete raced the context's final checkpoint and a later spawn
+  // under the same fixed name restored the "dropped" conversation.
+  it('awaits the conversation and session deletes before unregister resolves', async () => {
+    const scoops = new Map([
+      [scoop.jid, scoop],
+      [worker.jid, worker],
+    ]);
+    let conversationDeleted = false;
+    let sessionDeleted = false;
+    const conversationStore = {
+      delete: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              conversationDeleted = true;
+              resolve();
+            }, 10);
+          })
+      ),
+    };
+    const sessionStore = {
+      delete: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              sessionDeleted = true;
+              resolve();
+            }, 10);
+          })
+      ),
+    };
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => sessionStore,
+      getConversationStore: () => conversationStore,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getLickManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      db: { saveScoop: vi.fn(async () => {}), deleteScoop: vi.fn(async () => {}) },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      costTracker: { snapshot: vi.fn() },
+      approvalRouter: { failScoop: vi.fn(() => 0) },
+      completionService: { forgetScoop: vi.fn(), clearResponse: vi.fn() },
+    } as unknown as ScoopLifecycleDeps);
+
+    await manager.unregister(worker.jid);
+
+    expect(conversationStore.delete).toHaveBeenCalledWith(
+      `/scoops/${worker.folder}/workspace::${worker.jid}`
+    );
+    expect(sessionStore.delete).toHaveBeenCalledWith(worker.jid);
+    expect(conversationDeleted).toBe(true);
+    expect(sessionDeleted).toBe(true);
+  });
+
   // #2271: the sink path is bound from the unit's own record, so an extra
   // cone's compaction pass can only append to its own `CLAUDE.md`.
   it('binds each cone memory append to that cone workspace', async () => {

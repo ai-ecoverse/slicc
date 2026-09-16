@@ -101,6 +101,25 @@ describe('WorkUnitConversationStore', () => {
     expect(await store.load(identity.key)).toBeNull();
   });
 
+  // #3157: a dropped unit's final checkpoint is a read-merge-save still in
+  // flight when the drop deletes the record. An unqueued delete landed
+  // between that read and save, the save re-created the record, and the
+  // next spawn under the same fixed name (memory dreamer) restored it.
+  it('delete queues behind in-flight syncs for the same key', async () => {
+    const messages = legacyAgentMessages();
+    const first = store.syncAgentMessages(identity, messages);
+    const second = store.syncAgentMessages(identity, [...messages, ...legacyAgentMessages()]);
+    await store.delete(identity.key);
+    // Once every write that was in flight at delete time has settled, the
+    // record must still be gone — the checkpoint must not have re-created it.
+    await Promise.all([first, second]);
+    expect(await store.load(identity.key)).toBeNull();
+    // The delete only waits for THIS key's chain.
+    const other = { ...identity, key: '/workspace::cone_2', workUnitId: 'cone_2' };
+    await store.syncAgentMessages(other, messages);
+    expect(await store.load(other.key)).not.toBeNull();
+  });
+
   it('lists the keys it holds', async () => {
     await store.syncAgentMessages(identity, legacyAgentMessages());
     expect(await store.listKeys()).toEqual([identity.key]);
