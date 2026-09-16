@@ -277,14 +277,20 @@ class AppState: ObservableObject {
     private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
     let openGrantStore: OpenGrantStore
 
+    /// `fixtureDefaults` is where the tray stores look for their UI-test
+    /// fixture flags. The app leaves it at `.standard` (that is the domain a
+    /// launch argument lands in); a unit test passes an ephemeral suite so its
+    /// `AppState` reads and writes no state the rest of the randomly ordered
+    /// bundle shares — see `IsolatedTestDefaults.swift`.
     init(
         credentialStore: TrayCredentialStore = TrayCredentialStore(),
         fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle(),
-        openGrantStore: OpenGrantStore = OpenGrantStore()
+        openGrantStore: OpenGrantStore = OpenGrantStore(),
+        fixtureDefaults: UserDefaults = .standard
     ) {
         widgetPublisher = WidgetSnapshotPublisher(store: WidgetHost.follower.store)
-        sessionStore = AppState.makeSessionStore()
-        recentJoinStore = AppState.makeRecentJoinStore()
+        sessionStore = AppState.makeSessionStore(fixtureDefaults: fixtureDefaults)
+        recentJoinStore = AppState.makeRecentJoinStore(fixtureDefaults: fixtureDefaults)
         self.credentialStore = credentialStore
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
         self.openGrantStore = openGrantStore

@@ -171,7 +171,9 @@ jobs:
               # unexercised.
               - 'packages/dev-tools/tools/ios-sim-test.sh'
               - 'packages/dev-tools/tools/ios-sim-select.sh'
+              - 'packages/dev-tools/tools/ios-sim-prepare.sh'
               - 'packages/dev-tools/tools/ios-ui-test-exclusions.mjs'
+              - 'packages/dev-tools/tools/check-ios-test-isolation.mjs'
               - 'packages/dev-tools/tools/check-swift-resolved-drift.mjs'
               # A PR that rewrites the iOS CI steps used to get zero iOS
               # validation — only `swift-launcher` reran on a workflow edit,

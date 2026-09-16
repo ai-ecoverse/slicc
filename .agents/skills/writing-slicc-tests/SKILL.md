@@ -429,6 +429,43 @@ Both arguments are **required**:
   packages/swift-launcher SliccstartPackageTests
 ```
 
+## Keep Tests Isolated From Shared State
+
+Isolation is per-suite, and each suite buys it differently:
+
+| Suite                         | Isolation                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| Vitest projects               | One worker thread + a fresh module registry per file; VirtualFS gets a unique `dbName` |
+| `dev-tools`                   | `fileParallelism: false` — two gates overwrite the same on-disk baseline (documented)  |
+| `swift test` packages         | Per-test `UserDefaults(suiteName:)` suites, erased in `tearDown`                       |
+| `ios-app` (`xcodebuild test`) | Serial + **random execution order** + per-test suites + a clean app container per run  |
+
+`ios-app` is the one that needs care. Both bundles are pinned serial
+(`-parallel-testing-enabled NO`): simulator clones race the XCUITest runner's install
+and the losing clone fails preflight with `Busy` before a test runs. Serial execution
+_hides_ order dependence, so three things stand in for parallelism, and
+`npm run lint:ios-test-isolation` fails the build when the first two disappear:
+
+1. **Random execution order** — declared per test target in `packages/ios-app/project.yml`.
+   The Xcode project is generated and uncommitted, so nothing else pins it.
+2. **No writes to `UserDefaults.standard`.** A unit test runs inside the host app's
+   process, so that is the app's own persistent domain: shared by the whole bundle and
+   kept on disk in the simulator container. Take an ephemeral suite instead:
+
+   ```swift
+   let defaults = try makeIsolatedDefaults(flags: ["uiTestSessionsFixture": true])
+   let backend = try XCTUnwrap(UITestHooks.sessionsFixtureBackend(defaults: defaults))
+   ```
+
+   `makeIsolatedDefaults` (`SliccFollowerTests/IsolatedTestDefaults.swift`) names the
+   suite after the test, seeds the flags, and erases the domain in a teardown block that
+   also runs when the test fails. Production reads stay on `.standard`, which is where a
+   UI test's launch arguments land.
+
+3. **A clean app container per run** — `ios-sim-prepare.sh` boots the device and
+   uninstalls both bundles before `xcodebuild test`, so an interrupted run cannot leave a
+   fixture flag on disk for the next one. Both CI legs go through it.
+
 ## Retry Flaky Tests
 
 Retries are configured **per vitest project** in `vitest.config.ts` and gated on `CI` so
