@@ -107,7 +107,14 @@ export function isProductMarkdown(relPath) {
 }
 
 export function isDeletedPath(relPath) {
-  if (relPath === 'README.md' || relPath === 'LICENSE' || relPath === '.no-comment') return false;
+  if (
+    relPath === 'README.md' ||
+    relPath === 'LICENSE' ||
+    relPath === '.no-comment' ||
+    relPath === 'NOCOMMENT.md'
+  ) {
+    return false;
+  }
   if (relPath.startsWith('packages/vfs-root/')) return false;
   const base = basename(relPath);
   if (base === 'CLAUDE.md' || base === 'AGENTS.md') return true;

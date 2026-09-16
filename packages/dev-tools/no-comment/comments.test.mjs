@@ -84,6 +84,7 @@ describe('isDeletedPath / isProductMarkdown', () => {
     expect(isDeletedPath('packages/vfs-root/shared/CLAUDE.md')).toBe(false);
     expect(isProductMarkdown('packages/vfs-root/shared/CLAUDE.md')).toBe(true);
     expect(isDeletedPath('README.md')).toBe(false);
+    expect(isDeletedPath('NOCOMMENT.md')).toBe(false);
     expect(isDeletedPath('LICENSE')).toBe(false);
     expect(isDeletedPath('packages/webapp/src/foo.ts')).toBe(false);
   });
