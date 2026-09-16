@@ -128,9 +128,9 @@
       "branches": 98
     },
     "github-workflow": {
-      "lines": 98,
+      "lines": 99,
       "statements": 98,
-      "functions": 97,
+      "functions": 98,
       "branches": 91,
       "coverageExclude": [
         "**/node_modules/**",
