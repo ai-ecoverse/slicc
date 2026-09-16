@@ -1,8 +1,11 @@
 /**
- * Pure helpers for R2 asset upload, testable with injectable exec.
+ * R2 bulk-upload helpers, testable with an injectable exec function.
  * Imports from ../src/asset-archive.mjs for the single shared predicate + MIME map.
  */
 
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { matchHashedAssetPath, mimeForAssetPath } from '../src/asset-archive.mjs';
 
 /**
@@ -17,30 +20,55 @@ export function assertAllHashed(names) {
 }
 
 /**
- * Build the wrangler r2 object put argv for a single file.
- * @param {string} bucket - R2 bucket name (e.g., "slicc-asset-archive")
- * @param {string} file - filename (e.g., "index-abc123.css")
- * @returns {string[]} argv to pass to execFile('npx', [...])
+ * Group manifest entries by content type. Wrangler's bulk command applies one
+ * content type to the whole manifest, so separate groups preserve the exact
+ * metadata that the old per-object uploader set.
  */
-export function buildPutArgs(bucket, file, dir) {
-  const objectPath = `${bucket}/assets/${file}`;
-  const mime = mimeForAssetPath(`/assets/${file}`);
-  // --file must resolve from the exec's cwd; the caller passes the (absolute)
-  // asset dir. --remote is REQUIRED: `wrangler r2 object put` defaults to LOCAL
-  // (miniflare) storage, which would silently never populate the real bucket.
-  const filePath = dir ? `${dir}/${file}` : file;
+export function buildManifestGroups(files, dir) {
+  assertAllHashed(files);
 
+  const byContentType = new Map();
+  for (const file of files) {
+    const contentType = mimeForAssetPath(`/assets/${file}`);
+    const entries = byContentType.get(contentType) ?? [];
+    entries.push({
+      key: `assets/${file}`,
+      file: dir ? join(dir, file) : file,
+    });
+    byContentType.set(contentType, entries);
+  }
+
+  // Upload the largest group first so the dominant work begins immediately.
+  // The content-type tie-break keeps manifests deterministic for diagnostics.
+  return [...byContentType.entries()]
+    .map(([contentType, entries]) => ({ contentType, entries }))
+    .sort(
+      (left, right) =>
+        right.entries.length - left.entries.length ||
+        left.contentType.localeCompare(right.contentType)
+    );
+}
+
+/**
+ * Build one `wrangler r2 bulk put` argv. `--remote` is mandatory because
+ * Wrangler otherwise defaults to local Miniflare storage; `--force` avoids an
+ * interactive data-catalog prompt in CI.
+ */
+export function buildBulkPutArgs(bucket, manifestPath, contentType, concurrency) {
   return [
     'wrangler',
     'r2',
-    'object',
+    'bulk',
     'put',
-    objectPath,
-    '--file',
-    filePath,
+    bucket,
+    '--filename',
+    manifestPath,
     '--content-type',
-    mime,
+    contentType,
+    '--concurrency',
+    String(concurrency),
     '--remote',
+    '--force',
   ];
 }
 
@@ -54,63 +82,75 @@ const defaultSleep = (ms) =>
 
 /**
  * Delay before retry `attempt`: exponential (500ms, 1s, 2s, 4s, …) with full
- * jitter so a batch that trips the R2 rate limit together doesn't retry in
- * lockstep and trip it again.
+ * jitter so concurrent account activity does not retry in lockstep.
  */
 export function retryDelayMs(attempt, random = Math.random) {
   return Math.round(random() * RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
 }
 
 /**
- * Run uploads with bounded concurrency and per-file retries.
- * @param {string[]} files - filenames (already validated by assertAllHashed)
- * @param {object} opts
- * @param {string} opts.bucket - R2 bucket name
- * @param {string} opts.dir - working directory for file resolution
- * @param {Function} opts.exec - injectable exec function: (argv) => Promise<void>
- * @param {number} [opts.concurrency=1] - max concurrent uploads
- * @param {number} [opts.retries=1] - max attempts per file
- * @param {Function} [opts.sleep] - injectable delay: (ms) => Promise<void>
- * @returns {Promise<void>}
+ * Upload all files through one Wrangler process per content type. Groups run
+ * sequentially so the requested R2 concurrency is the account pressure, not
+ * that value multiplied by the number of MIME types.
  */
-export async function runUploads(
+export async function runBulkUploads(
   files,
-  { bucket, dir, exec, concurrency = 1, retries = 1, sleep = defaultSleep }
+  { bucket, dir, exec, concurrency = 20, retries = 1, sleep = defaultSleep }
 ) {
-  // Validate hash invariant before any upload attempt
-  assertAllHashed(files);
+  // Validate the complete set before creating manifests or uploading anything.
+  const groups = buildManifestGroups(files, dir);
+  if (groups.length === 0) {
+    return { groups: 0, invocations: 0, retries: 0 };
+  }
 
-  // Rolling workers rather than fixed batches: a batch barrier would leave the
-  // other slots idle for the whole backoff of a single retrying file.
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < files.length) {
-      const file = files[cursor++];
-      await uploadWithRetry(file, bucket, dir, exec, retries, sleep);
+  const manifestDir = await fs.mkdtemp(join(tmpdir(), 'slicc-r2-bulk-'));
+  try {
+    // Materialize every manifest before the first remote mutation. A local I/O
+    // failure therefore cannot leave an avoidably partial archive refresh.
+    const manifests = [];
+    for (const [index, group] of groups.entries()) {
+      const manifestPath = join(manifestDir, `manifest-${index + 1}.json`);
+      await fs.writeFile(manifestPath, `${JSON.stringify(group.entries)}\n`, 'utf8');
+      manifests.push({ ...group, manifestPath });
     }
-  };
 
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(concurrency, 1), files.length) }, worker)
-  );
+    let invocations = 0;
+    let retryCount = 0;
+    for (const manifest of manifests) {
+      const attempts = await uploadManifestWithRetry({
+        bucket,
+        manifest,
+        exec,
+        concurrency,
+        retries,
+        sleep,
+      });
+      invocations += attempts;
+      retryCount += attempts - 1;
+    }
+
+    return { groups: groups.length, invocations, retries: retryCount };
+  } finally {
+    await fs.rm(manifestDir, { recursive: true, force: true });
+  }
 }
 
-/**
- * Upload a single file with retries.
- */
-async function uploadWithRetry(file, bucket, dir, exec, retries, sleep) {
+async function uploadManifestWithRetry({ bucket, manifest, exec, concurrency, retries, sleep }) {
   let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const argv = buildPutArgs(bucket, file, dir);
-      await exec(argv);
-      return; // success
+      await exec(
+        buildBulkPutArgs(
+          bucket,
+          manifest.manifestPath,
+          manifest.contentType,
+          Math.max(concurrency, 1)
+        )
+      );
+      return attempt;
     } catch (err) {
       lastError = err;
-      // Back off before retrying. Without this, a retry re-fires instantly
-      // into the same R2 rate-limit window (429 / code 971) and burns every
-      // remaining attempt in milliseconds.
       if (attempt < retries) {
         await sleep(retryDelayMs(attempt));
       }

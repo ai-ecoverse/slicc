@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * CLI wrapper for R2 asset uploads.
+ * CLI wrapper for R2 asset bulk uploads.
  * Usage: node upload-assets-to-r2.mjs <bucket> [--dir <dir>] [--concurrency <n>]
  *
  * Example:
@@ -11,14 +11,9 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { runUploads } from './upload-lib.mjs';
+import { runBulkUploads } from './upload-lib.mjs';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-
-/**
- * Parse command-line arguments.
- */
+/** Parse command-line arguments. */
 function parseArgs(args) {
   const [bucket, ...rest] = args;
   if (!bucket) {
@@ -27,11 +22,11 @@ function parseArgs(args) {
     );
   }
 
-  let dir = 'dist/ui/assets'; // default
-  // 8 spawned ~390 `wrangler r2 object put` calls fast enough to trip the R2
-  // API rate limit (429 / code 971); 4 keeps CI wall-clock acceptable while
-  // staying under it.
-  let concurrency = 4;
+  let dir = 'dist/ui/assets';
+  // Wrangler's bulk uploader rate-limits itself to 1,100 requests per five
+  // minutes. Its default of 20 avoids the old per-object process bottleneck
+  // while remaining inside that account-safe window.
+  let concurrency = 20;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--dir' && i + 1 < rest.length) {
       dir = rest[i + 1];
@@ -47,12 +42,10 @@ function parseArgs(args) {
 }
 
 /**
- * Wraps execFile to make it a Promise<void>.
+ * Wrap execFile as Promise<void>, resolving the repository-pinned Wrangler
+ * through npx and streaming its bulk progress into the CI log.
  */
 function createExec() {
-  // argv is the wrangler command (e.g. ['wrangler','r2','object','put',…]);
-  // run it via `npx` so it resolves without node_modules/.bin on PATH (plain
-  // CI `run:` steps / publish-worker.sh are not npm scripts).
   return (argv) =>
     new Promise((resolve, reject) => {
       const proc = execFile('npx', argv, (err) => {
@@ -60,23 +53,23 @@ function createExec() {
         else resolve();
       });
 
-      // Inherit stdio so wrangler output is visible
       proc.stdout.pipe(process.stdout);
       proc.stderr.pipe(process.stderr);
     });
 }
 
-/**
- * Main entry point.
- */
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
+}
+
+/** Main entry point. */
 async function main() {
   try {
     const { bucket, dir, concurrency } = parseArgs(process.argv.slice(2));
-
-    // Resolve the directory (relative to CWD or absolute)
     const assetDir = resolve(dir);
 
-    // List files in the directory
     let files;
     try {
       files = await fs.readdir(assetDir);
@@ -90,20 +83,27 @@ async function main() {
       return;
     }
 
-    console.log(`Uploading ${files.length} files to R2 bucket '${bucket}'`);
+    const sizes = await Promise.all(files.map((file) => fs.stat(resolve(assetDir, file))));
+    const totalBytes = sizes.reduce((sum, stat) => sum + stat.size, 0);
+    const startedAt = Date.now();
+    console.log(
+      `Bulk-uploading ${files.length} files (${formatBytes(totalBytes)}) to R2 bucket '${bucket}' with concurrency ${concurrency}`
+    );
 
-    // Upload with default exec = npx wrangler
-    await runUploads(files, {
+    const result = await runBulkUploads(files, {
       bucket,
       dir: assetDir,
       exec: createExec(),
-      concurrency, // default 4 — see parseArgs for the rate-limit rationale
-      // 5 attempts with jittered exponential backoff: enough headroom to ride
-      // out a transient R2 429 burst instead of failing the whole deploy gate.
+      concurrency,
+      // A failed bulk process retries its idempotent content-type manifest.
+      // Every successful re-put intentionally refreshes last-modified for GC.
       retries: 5,
     });
 
-    console.log('All files uploaded successfully');
+    const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(
+      `R2 bulk upload complete: ${files.length} files in ${result.groups} content-type batches, ${result.invocations} Wrangler invocations (${result.retries} retries), ${elapsedSeconds}s`
+    );
   } catch (err) {
     console.error('Upload failed:', err.message);
     process.exit(1);

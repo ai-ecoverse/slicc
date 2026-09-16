@@ -85,7 +85,7 @@ jobs:
               - 'packages/cloudflare-worker/**'
             # The staging Worker deploy and live smoke run on every non-fork
             # PR. Only the R2 archive refresh is path-gated: it re-puts the
-            # complete ~390-file asset set, so pay that cost when the webapp
+            # complete asset set, so pay that cost when the webapp
             # build graph or the archive contract can actually change.
             cloudflare-r2:
               - 'packages/webapp/**'
@@ -97,6 +97,7 @@ jobs:
               - 'packages/cloud-core/**'
               - 'packages/dev-tools/providers.build.json'
               - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
+              - 'packages/cloudflare-worker/scripts/upload-lib.mjs'
               - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
               - 'packages/cloudflare-worker/src/asset-archive.mjs'
               - 'packages/cloudflare-worker/tests/deployed.test.ts'
@@ -935,7 +936,7 @@ jobs:
       # #1330 retention: refresh the complete content-hashed asset set before
       # deploying a build whose static output can differ. Worker-only changes
       # still get the staging deploy + live smoke signal, but do not re-copy an
-      # unchanged ~390-file webapp archive (#3146).
+      # unchanged webapp archive (#3146).
       - name: Archive assets to R2 (staging)
         if: env.RUN_CLOUDFLARE_STAGING == 'true' && needs.changes.outputs.cloudflare-r2 == 'true'
         env:

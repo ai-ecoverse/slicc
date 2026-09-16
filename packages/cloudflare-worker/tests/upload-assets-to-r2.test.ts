@@ -1,11 +1,28 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertAllHashed,
-  buildPutArgs,
+  buildBulkPutArgs,
+  buildManifestGroups,
   RETRY_BASE_DELAY_MS,
   retryDelayMs,
-  runUploads,
+  runBulkUploads,
 } from '../scripts/upload-lib.mjs';
+
+function optionValue(argv: string[], option: string): string {
+  const index = argv.indexOf(option);
+  if (index === -1 || argv[index + 1] === undefined) {
+    throw new Error(`Missing ${option} in ${argv.join(' ')}`);
+  }
+  return argv[index + 1];
+}
+
+async function readManifest(argv: string[]) {
+  return JSON.parse(await readFile(optionValue(argv, '--filename'), 'utf8')) as Array<{
+    key: string;
+    file: string;
+  }>;
+}
 
 describe('assertAllHashed', () => {
   it('passes when all names are hashed', () => {
@@ -19,164 +36,174 @@ describe('assertAllHashed', () => {
     expect(() => assertAllHashed(names)).not.toThrow();
   });
 
-  it('throws when a name lacks a hash', () => {
-    const names = [
-      'anthropic-messages-DP3-Xd3J.js',
-      'index.html', // no hash
-      'entry-abcd1234.js.map',
-    ];
-    expect(() => assertAllHashed(names)).toThrow();
-  });
-
-  it('throws when any name is unhashed', () => {
-    const names = ['foo.js']; // no hash
-    expect(() => assertAllHashed(names)).toThrow();
-  });
-});
-
-describe('buildPutArgs', () => {
-  it('yields the correct argv for wrangler r2 object put', () => {
-    const bucket = 'slicc-asset-archive';
-    const file = 'index-a1b2c3d4.css';
-
-    const args = buildPutArgs(bucket, file, 'dist/ui/assets');
-
-    expect(args).toEqual([
-      'wrangler',
-      'r2',
-      'object',
-      'put',
-      'slicc-asset-archive/assets/index-a1b2c3d4.css',
-      '--file',
-      'dist/ui/assets/index-a1b2c3d4.css',
-      '--content-type',
-      'text/css',
-      '--remote',
-    ]);
-  });
-
-  it('handles .js files', () => {
-    const args = buildPutArgs('bucket', 'app-abc1234d.js', 'dist/ui/assets');
-    expect(args).toContain('--content-type');
-    expect(args).toContain('text/javascript');
-    expect(args).toContain('--remote'); // required — wrangler r2 put defaults to local
-  });
-
-  it('handles .wasm files', () => {
-    const args = buildPutArgs('bucket', 'module-xyz78901.wasm');
-    expect(args).toContain('--content-type');
-    expect(args).toContain('application/wasm');
-  });
-});
-
-describe('runUploads', () => {
-  it('calls exec for each file with the correct args', async () => {
-    const execMock = vi.fn().mockResolvedValue(undefined);
-    const files = ['index-a1b2c3d4.css', 'app-def2g5h6.js'];
-
-    await runUploads(files, {
-      bucket: 'test-bucket',
-      dir: '/assets',
-      exec: execMock,
-    });
-
-    expect(execMock).toHaveBeenCalledTimes(2);
-    expect(execMock).toHaveBeenNthCalledWith(1, [
-      'wrangler',
-      'r2',
-      'object',
-      'put',
-      'test-bucket/assets/index-a1b2c3d4.css',
-      '--file',
-      '/assets/index-a1b2c3d4.css',
-      '--content-type',
-      'text/css',
-      '--remote',
-    ]);
-  });
-
-  it('respects concurrency cap', async () => {
-    const execMock = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(resolve, 10);
-        })
+  it('throws when any name lacks a hash', () => {
+    expect(() => assertAllHashed(['anthropic-messages-DP3-Xd3J.js', 'index.html'])).toThrow(
+      'Asset not hashed: index.html'
     );
-    const files = Array.from({ length: 10 }, (_, i) => `file${i}-abc123def${i}.js`);
-
-    const start = Date.now();
-    await runUploads(files, {
-      bucket: 'test-bucket',
-      dir: '/assets',
-      exec: execMock,
-      concurrency: 2,
-    });
-    const elapsed = Date.now() - start;
-
-    // 10 files at 2 concurrent, 10ms each ≥ 50ms
-    expect(elapsed).toBeGreaterThanOrEqual(40);
-    expect(execMock).toHaveBeenCalledTimes(10);
   });
+});
 
-  // Fixed-size batches used to be a barrier: one file backing off held its
-  // whole batch's slots idle. Rolling workers keep every slot busy.
-  it('keeps the other slots busy while one file backs off', async () => {
-    const files = Array.from({ length: 6 }, (_, i) => `file${i}-abc123def${i}.js`);
-    let releaseSlow = () => {};
-    const slowDone = new Promise<void>((resolve) => {
-      releaseSlow = resolve;
+describe('buildManifestGroups', () => {
+  it('preserves object keys, file paths, and per-type metadata groups', () => {
+    const groups = buildManifestGroups(
+      [
+        'app-abc1234d.js',
+        'index-a1b2c3d4.css',
+        'worker-def5678g.js',
+        'AdobeClean-Regular-CVsq5gF7.otf',
+      ],
+      '/assets'
+    );
+
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toEqual({
+      contentType: 'text/javascript',
+      entries: [
+        { key: 'assets/app-abc1234d.js', file: '/assets/app-abc1234d.js' },
+        { key: 'assets/worker-def5678g.js', file: '/assets/worker-def5678g.js' },
+      ],
     });
-    const finished: string[] = [];
+    expect(groups).toEqual(
+      expect.arrayContaining([
+        {
+          contentType: 'text/css',
+          entries: [{ key: 'assets/index-a1b2c3d4.css', file: '/assets/index-a1b2c3d4.css' }],
+        },
+        {
+          contentType: 'font/otf',
+          entries: [
+            {
+              key: 'assets/AdobeClean-Regular-CVsq5gF7.otf',
+              file: '/assets/AdobeClean-Regular-CVsq5gF7.otf',
+            },
+          ],
+        },
+      ])
+    );
+  });
+});
+
+describe('buildBulkPutArgs', () => {
+  it('builds a remote, non-interactive bulk command with bounded concurrency', () => {
+    expect(buildBulkPutArgs('archive', '/tmp/manifest.json', 'text/css', 20)).toEqual([
+      'wrangler',
+      'r2',
+      'bulk',
+      'put',
+      'archive',
+      '--filename',
+      '/tmp/manifest.json',
+      '--content-type',
+      'text/css',
+      '--concurrency',
+      '20',
+      '--remote',
+      '--force',
+    ]);
+  });
+});
+
+describe('runBulkUploads', () => {
+  it('uses one Wrangler process per content type and re-puts every object', async () => {
+    const calls: Array<{ argv: string[]; manifest: Awaited<ReturnType<typeof readManifest>> }> = [];
     const execMock = vi.fn(async (argv: string[]) => {
-      const objectPath = argv[4];
-      if (objectPath.endsWith('file0-abc123def0.js')) {
-        await slowDone;
-      }
-      finished.push(objectPath);
+      calls.push({ argv, manifest: await readManifest(argv) });
     });
+    const files = [
+      'app-abc1234d.js',
+      'worker-def5678g.js',
+      'index-a1b2c3d4.css',
+      'module-xyz78901.wasm',
+    ];
 
-    const run = runUploads(files, {
+    const result = await runBulkUploads(files, {
       bucket: 'test-bucket',
       dir: '/assets',
       exec: execMock,
-      concurrency: 2,
+      concurrency: 7,
     });
 
-    // Everything except the stalled file drains through the free slot.
-    await vi.waitFor(() => expect(finished).toHaveLength(files.length - 1));
-    releaseSlow();
-    await run;
+    expect(result).toEqual({ groups: 3, invocations: 3, retries: 0 });
+    expect(execMock).toHaveBeenCalledTimes(3);
+    for (const { argv } of calls) {
+      expect(argv.slice(0, 5)).toEqual(['wrangler', 'r2', 'bulk', 'put', 'test-bucket']);
+      expect(optionValue(argv, '--concurrency')).toBe('7');
+      expect(argv).toContain('--remote');
+      expect(argv).toContain('--force');
+    }
 
-    expect(execMock).toHaveBeenCalledTimes(files.length);
+    const uploadedKeys = calls.flatMap(({ manifest }) => manifest.map(({ key }) => key));
+    expect(uploadedKeys).toEqual(expect.arrayContaining(files.map((file) => `assets/${file}`)));
   });
 
-  it('retries on exec failure', async () => {
-    let callCount = 0;
-    const execMock = vi.fn(async () => {
-      callCount++;
-      if (callCount < 3) {
-        throw new Error('Temporary failure');
-      }
+  it('removes temporary manifests after a successful upload', async () => {
+    const paths: string[] = [];
+    await runBulkUploads(['file-abc12345.js'], {
+      bucket: 'test-bucket',
+      dir: '/assets',
+      exec: vi.fn(async (argv: string[]) => {
+        const path = optionValue(argv, '--filename');
+        paths.push(path);
+        expect(await readManifest(argv)).toHaveLength(1);
+      }),
     });
-    const files = ['file-abc12345.js'];
 
-    await runUploads(files, {
+    await expect(readFile(paths[0], 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('runs content-type groups sequentially instead of multiplying concurrency', async () => {
+    let releaseFirst = () => {};
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const execMock = vi
+      .fn<(argv: string[]) => Promise<void>>()
+      .mockImplementationOnce(async () => firstDone)
+      .mockResolvedValueOnce(undefined);
+
+    const run = runBulkUploads(['app-abc1234d.js', 'index-a1b2c3d4.css'], {
+      bucket: 'test-bucket',
+      dir: '/assets',
+      exec: execMock,
+      concurrency: 20,
+    });
+
+    await vi.waitFor(() => expect(execMock).toHaveBeenCalledTimes(1));
+    releaseFirst();
+    await run;
+    expect(execMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a failed content-type manifest', async () => {
+    const execMock = vi
+      .fn<(argv: string[]) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('Temporary failure'))
+      .mockRejectedValueOnce(new Error('Temporary failure'))
+      .mockResolvedValueOnce(undefined);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await runBulkUploads(['file-abc12345.js'], {
       bucket: 'test-bucket',
       dir: '/assets',
       exec: execMock,
       retries: 3,
-      sleep: vi.fn().mockResolvedValue(undefined),
+      sleep,
     });
 
+    expect(result).toEqual({ groups: 1, invocations: 3, retries: 2 });
     expect(execMock).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 
-  it('throws after max retries exceeded', async () => {
-    const execMock = vi.fn().mockRejectedValue(new Error('Always fails'));
-    const files = ['file-abc12345.js'];
+  it('throws after max retries and still removes its manifest', async () => {
+    const paths: string[] = [];
+    const execMock = vi.fn(async (argv: string[]) => {
+      paths.push(optionValue(argv, '--filename'));
+      throw new Error('Always fails');
+    });
 
     await expect(
-      runUploads(files, {
+      runBulkUploads(['file-abc12345.js'], {
         bucket: 'test-bucket',
         dir: '/assets',
         exec: execMock,
@@ -186,38 +213,35 @@ describe('runUploads', () => {
     ).rejects.toThrow('Always fails');
 
     expect(execMock).toHaveBeenCalledTimes(2);
+    await expect(readFile(paths[0], 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  // Regression: retries used to re-fire instantly, so a burst of R2 429s
-  // (error 971) exhausted every attempt within milliseconds and failed the
-  // deploy gate.
-  it('backs off between retries instead of re-firing instantly', async () => {
-    const execMock = vi.fn().mockRejectedValue(new Error('429: Too Many Requests'));
-    const sleep = vi.fn().mockResolvedValue(undefined);
-
+  it('does not upload anything when the hash invariant fails', async () => {
+    const execMock = vi.fn();
     await expect(
-      runUploads(['file-abc12345.js'], {
+      runBulkUploads(['unhashed.js', 'valid-abc12345.js'], {
         bucket: 'test-bucket',
         dir: '/assets',
         exec: execMock,
-        retries: 4,
-        sleep,
       })
-    ).rejects.toThrow('429: Too Many Requests');
+    ).rejects.toThrow('Asset not hashed: unhashed.js');
+    expect(execMock).not.toHaveBeenCalled();
+  });
 
-    // One backoff between each pair of attempts, none after the last.
-    expect(sleep).toHaveBeenCalledTimes(3);
-    for (const [ms] of sleep.mock.calls) {
-      expect(ms).toBeGreaterThanOrEqual(0);
-    }
+  it('returns an empty summary without invoking Wrangler for an empty directory', async () => {
+    const execMock = vi.fn();
+    await expect(
+      runBulkUploads([], { bucket: 'test-bucket', dir: '/assets', exec: execMock })
+    ).resolves.toEqual({ groups: 0, invocations: 0, retries: 0 });
+    expect(execMock).not.toHaveBeenCalled();
   });
 
   it('uses a real timer backoff when no sleep is injected', async () => {
     const execMock = vi.fn().mockRejectedValue(new Error('429: Too Many Requests'));
-
     const start = Date.now();
+
     await expect(
-      runUploads(['file-abc12345.js'], {
+      runBulkUploads(['file-abc12345.js'], {
         bucket: 'test-bucket',
         dir: '/assets',
         exec: execMock,
@@ -225,58 +249,20 @@ describe('runUploads', () => {
       })
     ).rejects.toThrow('429: Too Many Requests');
 
-    // Full jitter can round to 0ms, so only the attempt count is asserted.
     expect(execMock).toHaveBeenCalledTimes(2);
     expect(Date.now() - start).toBeLessThan(RETRY_BASE_DELAY_MS * 4);
   });
 
   it('does not sleep when the first attempt succeeds', async () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
-
-    await runUploads(['file-abc12345.js'], {
+    await runBulkUploads(['file-abc12345.js'], {
       bucket: 'test-bucket',
       dir: '/assets',
       exec: vi.fn().mockResolvedValue(undefined),
       retries: 5,
       sleep,
     });
-
     expect(sleep).not.toHaveBeenCalled();
-  });
-
-  it('re-puts every file (no skip)', async () => {
-    const execMock = vi.fn().mockResolvedValue(undefined);
-    const files = ['a-abc12345.js', 'b-def67890.css', 'c-ghi11121.wasm'];
-
-    await runUploads(files, {
-      bucket: 'test-bucket',
-      dir: '/assets',
-      exec: execMock,
-    });
-
-    expect(execMock).toHaveBeenCalledTimes(3);
-    // Verify all files were uploaded (in order)
-    const fileArgs = execMock.mock.calls.map((call) => call[0][4]); // the objectPath arg
-    expect(fileArgs).toEqual([
-      'test-bucket/assets/a-abc12345.js',
-      'test-bucket/assets/b-def67890.css',
-      'test-bucket/assets/c-ghi11121.wasm',
-    ]);
-  });
-
-  it('throws on hash invariant violation', async () => {
-    const execMock = vi.fn();
-    const files = ['unhashed.js', 'valid-abc12345.js'];
-
-    await expect(
-      runUploads(files, {
-        bucket: 'test-bucket',
-        dir: '/assets',
-        exec: execMock,
-      })
-    ).rejects.toThrow();
-
-    expect(execMock).not.toHaveBeenCalled();
   });
 });
 
