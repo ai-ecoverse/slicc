@@ -7,14 +7,13 @@ other, and objects that have grown to do everything.
 The package boundaries in `CLAUDE.md` define the intended layering. Hunt for
 imports that violate it:
 
-- The layer stack flows `fs → shell/git → cdp → tools → core → scoops → ui`.
-  Look for back-edges, e.g. `packages/webapp/src/core/` importing from
-  `packages/webapp/src/ui/`, or low layers reaching up into orchestration.
-  Note: NEW back-edges between any two rungs of the stack are now lint-blocked
-  (`npm run lint:layer-back-edges`); the grandfathered ones live in
-  `packages/dev-tools/tools/layer-back-edge-baseline.json`. Prefer hunting
-  either a baseline entry worth paying down (the god-module split it implies)
-  or boundary violations the lint cannot see: cross-package back-edges and
+- Documented layer stacks (webapp `fs → shell/git → cdp → tools → core → scoops → ui`;
+  node-server `transport → services → entry`; chrome-extension `shared/page → sw → entry`;
+  cloudflare-worker `shared/links/auth → routes → entry`) are lint-blocked
+  (`npm run lint:layer-back-edges`). Grandfathered back-edges live in
+  `packages/dev-tools/tools/layer-back-edge-baseline.json` and the per-package
+  `layer-back-edge-baseline-*.json` files. Prefer hunting a baseline entry worth
+  paying down, or a boundary the lint cannot see: cross-package back-edges and
   circular deps.
 - `packages/node-server/` importing deep `packages/webapp/src/` internals
   instead of a stable entry point; `@slicc/shared-ts` (meant to be

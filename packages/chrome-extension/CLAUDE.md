@@ -129,6 +129,11 @@ exception: a top-level `import type` of `../../webapp/src/kernel/messages.js` (a
 that compiles away). Module list + exact-path allowlist rules:
 `docs/chrome-extension-details.md`.
 
+Inside `src/`, import direction is `shared/page → sw → entry` (`service-worker.ts`
+is the composition root). Page entries (`sidepanel-entry.ts`, `secrets-entry.ts`)
+and shared helpers must not import `*-sw.ts` / `bridge-sw.ts`. Enforced by the same
+gate against `layer-back-edge-baseline-chrome-extension.json`.
+
 ## Runtime Conventions
 
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`

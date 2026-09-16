@@ -5,8 +5,9 @@
 // and intersects them with EVERY debt list: the per-rule exemption glob lists
 // parsed from `biome.json` (see size-exemption-lib.mjs) — function size,
 // cognitive complexity, floating promises, and misused promises — plus three
-// ratchet baselines: layer-stack back-edges (`layer-back-edge-baseline.json`,
-// see check-layer-back-edges.mjs), untyped string-keyed bags
+// ratchet baselines: layer-stack back-edges (`layer-back-edge-baseline.json`
+// and the per-package `layer-back-edge-baseline-*.json` files, see
+// check-layer-back-edges.mjs), untyped string-keyed bags
 // (`record-string-unknown-baseline.json`, see check-record-string-unknown.mjs),
 // and float/topology probes under scoops/tools/kernel
 // (`float-probe-baseline.json`, see check-no-float-probes.mjs), evaluated per
@@ -32,7 +33,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { baselineFiles, BASELINE_PATH as LAYER_BASELINE_PATH } from './check-layer-back-edges.mjs';
+import { baselineFiles, LAYER_STACKS } from './check-layer-back-edges.mjs';
 import { BASELINE_PATH as FLOAT_PROBE_BASELINE_PATH } from './check-no-float-probes.mjs';
 import { BASELINE_PATH as RECORD_BASELINE_PATH } from './check-record-string-unknown.mjs';
 import {
@@ -49,7 +50,6 @@ import {
 
 const SCRIPT = 'check-touched-exemptions';
 
-const LAYER_BASELINE_REL = relative(repoRoot, LAYER_BASELINE_PATH).split('\\').join('/');
 const RECORD_BASELINE_REL = relative(repoRoot, RECORD_BASELINE_PATH).split('\\').join('/');
 const FLOAT_PROBE_BASELINE_REL = relative(repoRoot, FLOAT_PROBE_BASELINE_PATH)
   .split('\\')
@@ -200,8 +200,6 @@ function main() {
   const biomeConfig = readBiomeConfig();
   const baseRef = resolveBaseRef(process.argv);
   const baseConfig = readBaseJson(baseRef, 'biome.json');
-  const layerBaseline = readBaselineFile(LAYER_BASELINE_PATH);
-  const baseLayerBaseline = readBaseJson(baseRef, LAYER_BASELINE_REL);
   const recordBaseline = readBaselineFile(RECORD_BASELINE_PATH);
   const baseRecordBaseline = readBaseJson(baseRef, RECORD_BASELINE_REL);
   const floatProbeBaseline = readBaselineFile(FLOAT_PROBE_BASELINE_PATH);
@@ -213,22 +211,27 @@ function main() {
       baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key, rule.group),
       baseReadable: baseConfig !== null,
     })),
-    {
-      label: 'layer-back-edge',
-      listRef: LAYER_BASELINE_REL,
-      fixIt:
-        'Fix: in this same PR, remove every up-the-stack import from the file (move the\n' +
-        'pure helper into the lower layer — see docs/review-patterns.md § Layer-stack\n' +
-        'import direction), then ratchet the baseline:\n' +
-        '  node packages/dev-tools/tools/check-layer-back-edges.mjs --update',
-      addFixIt:
-        'Fix: remove the new up-the-stack import instead of growing the baseline — move\n' +
-        'the pure helper into the lower layer (see docs/review-patterns.md §\n' +
-        'Layer-stack import direction).',
-      globs: baselineFiles(layerBaseline),
-      baseGlobs: baselineFiles(baseLayerBaseline),
-      baseReadable: baseLayerBaseline !== null,
-    },
+    ...LAYER_STACKS.map((stack) => {
+      const listRef = relative(repoRoot, stack.baselinePath).split('\\').join('/');
+      const layerBaseline = readBaselineFile(stack.baselinePath);
+      const baseLayerBaseline = readBaseJson(baseRef, listRef);
+      return {
+        label: stack.id === 'webapp' ? 'layer-back-edge' : `layer-back-edge (${stack.id})`,
+        listRef,
+        fixIt:
+          'Fix: in this same PR, remove every up-the-stack import from the file (move the\n' +
+          'pure helper into the lower layer — see docs/review-patterns.md § Layer-stack\n' +
+          `import direction; ${stack.id} stack: ${stack.stackLabel}), then ratchet the baseline:\n` +
+          '  node packages/dev-tools/tools/check-layer-back-edges.mjs --update',
+        addFixIt:
+          'Fix: remove the new up-the-stack import instead of growing the baseline — move\n' +
+          'the pure helper into the lower layer (see docs/review-patterns.md §\n' +
+          `Layer-stack import direction; ${stack.id} stack: ${stack.stackLabel}).`,
+        globs: baselineFiles(layerBaseline),
+        baseGlobs: baselineFiles(baseLayerBaseline),
+        baseReadable: baseLayerBaseline !== null,
+      };
+    }),
     {
       label: 'record-string-unknown',
       listRef: RECORD_BASELINE_REL,

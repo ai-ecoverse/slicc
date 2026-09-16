@@ -50,6 +50,14 @@ Defaults: `5710` bridge + `/api` (`PORT` overrides), `9222` Chrome CDP, `9223` E
 
 Chrome's browser-level socket can drop on its own (`messageTooLarge`, inbound-queue overflow), discarding EVERY session behind it. `src/cdp-proxy/chrome-reconnect.ts` re-dials and buffers Client→Chrome frames (`client-frame-buffer.ts`) at parity with swift-server's `CDPProxy` — keep both identical. Close codes (`close-codes.ts`) MUST match `packages/webapp/src/cdp/cdp-client.ts`: 4002 (`CDP_UPSTREAM_RESET_CLOSE_CODE`, non-latching "reset and re-dial") vs 4001 (superseded). Full reconnect + buffer-generation policy in `docs/pitfalls.md`.
 
+## Layer stack
+
+Import direction is `transport → services → entry`, enforced by
+`npm run lint:layer-back-edges` (`layer-back-edge-baseline-node-server.json`).
+Transport is `cdp-proxy/`, `bridge-security.ts`, `fetch-proxy-gzip.ts`,
+`http-keepalive.ts`, `links-middleware.ts`, `runtime-flags.ts`, `cli-log-dedup.ts`.
+`index.ts` and `*-main.ts` are the composition roots. Imports must point down.
+
 ## Main Files
 
 - `src/index.ts` — entry point, server boot, Chrome/Electron launch, CDP WebSocket proxy

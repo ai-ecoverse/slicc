@@ -54,10 +54,7 @@ interaction, not later focus; test shell-open, rail-open, and attention promotio
 
 ## 10. Layer import direction
 
-Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack and
-cross-package relative imports; move shared code down or to `@slicc/shared-ts`, never grow
-baselines. chrome-extension/webcomponents (src+tests)→webapp is zero-tolerance except the
-documented kernel-message type import. Runtime probes below `ui/` use `CapabilityBroker`.
+CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → shell/git → cdp → tools → core → scoops → ui` plus node-server/extension/worker. Flag up-stack and cross-package relative imports. chrome-extension/webcomponents→webapp is zero-tolerance except the documented kernel-message type import. Runtime probes below `ui/` use `CapabilityBroker`.
 
 ## 11. Untyped string-keyed bags
 

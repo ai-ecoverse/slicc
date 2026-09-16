@@ -324,16 +324,26 @@ attention-promotion paths without rebuilding live panel state.
 
 **Trigger patterns**
 
-- Any new `import`/`import type`/`import(...)`/`require(...)` that points UP the stack
-  `fs → shell/git → cdp → tools → core → scoops → ui` — a `ui/` import from any lower layer,
-  but equally `cdp/` importing `scoops/` or `tools/` importing `core/`. Imports must point
-  down, never up. Unranked directories (`providers/`, `kernel/`, `speech/`, `transcript/`,
-  `sudo/`) sit below `ui/`: they may import any ranked layer except `ui/`.
+- Any new `import`/`import type`/`import(...)`/`require(...)` that points UP a documented
+  layer stack. Imports must point down, never up.
+  - **webapp** `fs → shell/git → cdp → tools → core → scoops → ui` — a `ui/` import from any
+    lower layer, but equally `cdp/` importing `scoops/` or `tools/` importing `core/`.
+    Unranked directories (`providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`) sit
+    below `ui/`: they may import any ranked layer except `ui/`.
+  - **node-server** `transport → services → entry` — `cdp-proxy/`, `bridge-security.ts`,
+    `http-keepalive.ts` and the other transport leaves must not import services or
+    `index.ts` / `*-main.ts`.
+  - **chrome-extension** `shared/page → sw → entry` — page entries (`sidepanel-entry.ts`,
+    `secrets-entry.ts`) and shared helpers must not import `*-sw.ts` / `bridge-sw.ts`;
+    SW modules must not import `service-worker.ts`.
+  - **cloudflare-worker** `shared/links/auth → routes → entry` — helpers must not import
+    route modules or `index.ts`; route modules must not import each other sideways.
 - The tell-tale disguise: the imported symbol is a **pure helper** (a parser, a data
   accessor, a constant, a type) that merely _lives_ in a higher-layer god module. The
   import looks harmless; the transitive graph it drags into the kernel-worker bundle is not.
-- `packages/dev-tools/tools/layer-back-edge-baseline.json` growing in a diff — someone is
-  trying to grandfather a new violation instead of fixing it.
+- `packages/dev-tools/tools/layer-back-edge-baseline.json` (or a per-package
+  `layer-back-edge-baseline-*.json`) growing in a diff — someone is trying to grandfather
+  a new violation instead of fixing it.
 - A relative specifier in `packages/webapp/src/` that climbs out of the package
   (`../../../node-server/src/…`). This is the cross-**package** form of the same mistake and
   the ranked layers cannot see it, since they are webapp-internal directories. Shared code
@@ -458,8 +468,11 @@ destination: relocate the pure helper into `@slicc/shared-ts` and import it by p
 from both sides, so one wrong-direction edge becomes two correct ones.
 Deterministic enforcement: `npm run lint:layer-back-edges`
 (`packages/dev-tools/tools/check-layer-back-edges.mjs`) fails on any back-edge not in the
-frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it. The same gate
-fails on any relative import that escapes `packages/webapp/src` into a sibling package —
+matching frozen baseline (`layer-back-edge-baseline.json` for webapp,
+`layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json` for the
+other TS apps); each baseline is a one-way ratchet — shrink it, never grow it. Reviewers
+do not need to eyeball import direction in those packages — the gate is the spec. The same
+gate fails on any relative import that escapes `packages/webapp/src` into a sibling package —
 zero tolerance, no baseline (only the inert `?raw`/`?url` asset queries are exempt —
 `?worker` executes its target, so it is still an escape).
 `providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).

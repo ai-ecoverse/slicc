@@ -98,16 +98,19 @@ export const DEBT_CATEGORIES = [
   {
     id: 'layer-back-edge',
     label: 'layer-stack back-edges',
-    source: 'packages/dev-tools/tools/layer-back-edge-baseline.json',
+    source:
+      'packages/dev-tools/tools/layer-back-edge-baseline.json ' +
+      '(+ layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json)',
     kind: 'baseline',
     baseline: 'layer',
     remediation:
-      'Remove every up-the-stack import from the file (the stack is ' +
-      'fs → shell/git → cdp → tools → core → scoops → ui; move the pure helper DOWN into ' +
-      'the lower layer rather than importing upward — see docs/review-patterns.md § ' +
-      'Layer-stack import direction), then ratchet the baseline with the supported ' +
-      'command: `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`. ' +
-      'Never hand-edit layer-back-edge-baseline.json.',
+      'Remove every up-the-stack import from the file (webapp: ' +
+      'fs → shell/git → cdp → tools → core → scoops → ui; node-server: transport → services → entry; ' +
+      'chrome-extension: shared/page → sw → entry; cloudflare-worker: shared/links/auth → routes → entry; ' +
+      'move the pure helper DOWN into the lower layer rather than importing upward — see ' +
+      'docs/review-patterns.md § Layer-stack import direction), then ratchet the baseline with ' +
+      'the supported command: `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`. ' +
+      'Never hand-edit layer-back-edge-baseline.json or the per-package baseline files.',
   },
   {
     id: 'record-string-unknown',
@@ -404,7 +407,8 @@ Never do any of the following to make a check pass:
   \`coverage-thresholds.json\`, \`jscpd.json\`) — those are one-way ratchets.
 - Never introduce an unsafe cast (\`as any\`, \`as unknown as\`, \`@ts-expect-error\`,
   non-null \`!\` to dodge a type) to silence the type checker.
-- Never hand-edit \`layer-back-edge-baseline.json\` or
+- Never hand-edit \`layer-back-edge-baseline.json\`, the per-package
+  \`layer-back-edge-baseline-*.json\` files, or
   \`record-string-unknown-baseline.json\`; use the \`--update\` commands above.
 - Never bundle unrelated cleanup, reformatting, or drive-by fixes. Remove ONLY
   the now-stale debt entries for \`${file}\`; leave every other entry alone.

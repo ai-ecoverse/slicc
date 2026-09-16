@@ -54,6 +54,14 @@
  * library that webapp depends on; a relative climb into webapp/src inverts
  * that stack and is undeclared in package.json. Zero-tolerance, no baseline,
  * and no type-only exemption — inject a callback or move the helper down.
+ *
+ * The same ratchet also covers the other TypeScript applications (#3149), each
+ * with its own layer order and baseline file so the gate can land green and
+ * shrink later:
+ *   node-server:        transport → services → entry
+ *   chrome-extension:   shared/page → sw → entry (service-worker.ts)
+ *   cloudflare-worker:  shared/links/auth → routes → entry (index.ts);
+ *                       route modules must not import each other sideways
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
@@ -99,6 +107,177 @@ export function isWebappSource(name) {
   return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name);
 }
 
+/** Package source (not a test, not a `.d.ts` ambient). */
+function isPackageSource(name) {
+  return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.endsWith('.d.ts');
+}
+
+/** The stack layer a `packages/webapp/src`-relative path belongs to. */
+export function layerOf(relPath) {
+  return relPath.split('/')[0];
+}
+
+const NODE_SERVER_ENTRY = new Set([
+  'index.ts',
+  'electron-main.ts',
+  'publish-chrome-web-store-main.ts',
+  'release-package-main.ts',
+]);
+const NODE_SERVER_TRANSPORT = new Set([
+  'bridge-security.ts',
+  'fetch-proxy-gzip.ts',
+  'http-keepalive.ts',
+  'links-middleware.ts',
+  'runtime-flags.ts',
+  'cli-log-dedup.ts',
+]);
+
+/** Layer of a `packages/node-server/src`-relative path. */
+export function nodeServerLayerOf(relPath) {
+  const srcRel = toSourcePath(relPath);
+  const top = srcRel.split('/')[0];
+  if (NODE_SERVER_ENTRY.has(srcRel)) return 'entry';
+  if (top === 'cdp-proxy' || NODE_SERVER_TRANSPORT.has(srcRel)) return 'transport';
+  return 'services';
+}
+
+const CHROME_EXT_SHARED = new Set([
+  'sidepanel-entry.ts',
+  'secrets-entry.ts',
+  'secrets-storage.ts',
+  'cherry-panel-protocol.ts',
+  'fetch-proxy-shared.ts',
+  'oauth-flow-options.ts',
+  'discovery-observer.ts',
+]);
+
+/** Layer of a `packages/chrome-extension/src`-relative path. */
+export function chromeExtensionLayerOf(relPath) {
+  const name = toSourcePath(relPath).split('/').pop();
+  if (name === 'service-worker.ts') return 'entry';
+  if (CHROME_EXT_SHARED.has(name)) return 'shared';
+  return 'sw';
+}
+
+const WORKER_SHARED_FILES = new Set([
+  'shared.ts',
+  'links.ts',
+  'timing-safe-equal.ts',
+  'webhook-body.ts',
+  'apns.ts',
+  'apns-provider-token.ts',
+  'oauth-registry.ts',
+  'persistent-preview-storage.ts',
+  'preview-cache.ts',
+  'preview-host.ts',
+  'preview-continuity.ts',
+  'preview-bridge-assets.ts',
+  'turn-credentials.ts',
+  'flags.ts',
+]);
+
+/** Layer of a `packages/cloudflare-worker/src`-relative path. */
+export function cloudflareWorkerLayerOf(relPath) {
+  const srcRel = toSourcePath(relPath);
+  if (srcRel === 'index.ts') return 'entry';
+  if (WORKER_SHARED_FILES.has(srcRel) || srcRel.startsWith('auth/')) return 'shared';
+  // `session-tray-*.ts` are DO internals; `session-tray.ts` itself is the route.
+  if (srcRel.startsWith('session-tray-')) return 'shared';
+  if (srcRel.startsWith('cloud/')) {
+    if (
+      srcRel === 'cloud/handlers.ts' ||
+      srcRel === 'cloud/cloud-sessions-do.ts' ||
+      srcRel.startsWith('cloud/handler')
+    ) {
+      return 'routes';
+    }
+    return 'shared';
+  }
+  return 'routes';
+}
+
+function stripJsTsExt(relPath) {
+  return relPath.replace(/\.[cm]?[jt]sx?$/, '');
+}
+
+/** ESM specifiers use `.js` for `.ts` sources (NodeNext); classify by the on-disk name. */
+function toSourcePath(relPath) {
+  return relPath
+    .replace(/\.jsx$/, '.tsx')
+    .replace(/\.mjs$/, '.mts')
+    .replace(/\.cjs$/, '.cts')
+    .replace(/\.js$/, '.ts');
+}
+
+/**
+ * Per-package layer stacks. `id: 'webapp'` is the original ratchet; the
+ * others land with their own baseline files (#3149).
+ * @type {ReadonlyArray<{
+ *   id: string,
+ *   scanRoot: string,
+ *   baselinePath: string,
+ *   layerRank: Record<string, number>,
+ *   layerOf: (relPath: string) => string,
+ *   unrankedImporterRank: number,
+ *   isolatedLayers: ReadonlySet<string>,
+ *   stackLabel: string,
+ *   accept: (name: string) => boolean,
+ * }>}
+ */
+export const LAYER_STACKS = [
+  {
+    id: 'webapp',
+    scanRoot: SCAN_ROOT,
+    baselinePath: BASELINE_PATH,
+    layerRank: LAYER_RANK,
+    layerOf,
+    unrankedImporterRank: UNRANKED_IMPORTER_RANK,
+    isolatedLayers: new Set(),
+    stackLabel: 'fs → shell/git → cdp → tools → core → scoops → ui',
+    accept: isWebappSource,
+  },
+  {
+    id: 'node-server',
+    scanRoot: resolve(repoRoot, 'packages/node-server/src'),
+    baselinePath: resolve(dirname(Filename), 'layer-back-edge-baseline-node-server.json'),
+    layerRank: { transport: 0, services: 1, entry: 2 },
+    layerOf: nodeServerLayerOf,
+    unrankedImporterRank: 0,
+    isolatedLayers: new Set(),
+    stackLabel: 'transport → services → entry',
+    accept: isPackageSource,
+  },
+  {
+    id: 'chrome-extension',
+    scanRoot: resolve(repoRoot, 'packages/chrome-extension/src'),
+    baselinePath: resolve(dirname(Filename), 'layer-back-edge-baseline-chrome-extension.json'),
+    layerRank: { shared: 0, sw: 1, entry: 2 },
+    layerOf: chromeExtensionLayerOf,
+    unrankedImporterRank: 0,
+    isolatedLayers: new Set(),
+    stackLabel: 'shared/page → sw → entry',
+    accept: isPackageSource,
+  },
+  {
+    id: 'cloudflare-worker',
+    scanRoot: resolve(repoRoot, 'packages/cloudflare-worker/src'),
+    baselinePath: resolve(dirname(Filename), 'layer-back-edge-baseline-cloudflare-worker.json'),
+    layerRank: { shared: 0, routes: 1, entry: 2 },
+    layerOf: cloudflareWorkerLayerOf,
+    unrankedImporterRank: 0,
+    isolatedLayers: new Set(['routes']),
+    stackLabel: 'shared/links/auth → routes → entry',
+    accept: (name) => isPackageSource(name) && name !== 'preview-bridge-assets.ts',
+  },
+];
+
+const WEBAPP_STACK = LAYER_STACKS[0];
+
+/** Look up a stack by `id`; undefined when unknown. */
+export function stackById(id) {
+  return LAYER_STACKS.find((s) => s.id === id);
+}
+
 // Match the specifier of any relative static import / re-export, bare
 // side-effect `import '…'`, dynamic `import('…')`, or `require('…')`.
 // `\s` spans newlines so Prettier's multiline `await import(\n  '../ui/x.js'\n)`
@@ -106,29 +285,41 @@ export function isWebappSource(name) {
 const RELATIVE_IMPORT_RE =
   /(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)['"](\.\.?\/[^'"]+)['"]/g;
 
-/** The stack layer a `packages/webapp/src`-relative path belongs to. */
-export function layerOf(relPath) {
-  return relPath.split('/')[0];
-}
-
 /**
  * Find every import in `source` that points UP the stack from `importerRel`
- * (a `packages/webapp/src`-relative path). Returns
- * `[{ line, specifier, from, to }]`; comments are ignored.
+ * (a scan-root-relative path). Returns `[{ line, specifier, from, to }]`;
+ * comments are ignored. `stack` defaults to the webapp stack so existing
+ * callers keep their original semantics.
+ *
+ * For stacks with `isolatedLayers`, an import between two different files in
+ * the same isolated layer is also a back-edge (sideways route→route).
  */
-export function findLayerBackEdges(importerRel, source) {
-  const fromLayer = layerOf(importerRel);
-  const fromRank = LAYER_RANK[fromLayer] ?? UNRANKED_IMPORTER_RANK;
+export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
+  const fromLayer = stack.layerOf(importerRel);
+  const fromRank = stack.layerRank[fromLayer] ?? stack.unrankedImporterRank;
   const importerDir = dirname(importerRel);
   const hits = [];
   const stripped = stripComments(source);
+  const isolated = stack.isolatedLayers;
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
-    const target = resolve('/', importerDir, m[1]).slice(1);
-    const toLayer = layerOf(target);
-    const toRank = LAYER_RANK[toLayer];
-    if (toRank === undefined || toRank <= fromRank) continue;
+    const specifier = m[1];
+    const queryAt = specifier.indexOf('?');
+    const target = resolve(
+      '/',
+      importerDir,
+      queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
+    ).slice(1);
+    const toLayer = stack.layerOf(target);
+    const toRank = stack.layerRank[toLayer];
+    if (toRank === undefined) continue;
+    const up = toRank > fromRank;
+    const sideways =
+      isolated.has(fromLayer) &&
+      fromLayer === toLayer &&
+      stripJsTsExt(target) !== stripJsTsExt(importerRel);
+    if (!up && !sideways) continue;
     const line = stripped.slice(0, m.index).split('\n').length;
-    hits.push({ line, specifier: m[1], from: fromLayer, to: toLayer });
+    hits.push({ line, specifier, from: fromLayer, to: toLayer });
   }
   return hits;
 }
@@ -183,25 +374,30 @@ export function baselineFiles(baseline) {
 }
 
 /** Recursively collect source files under `dir`. */
-function collect(dir) {
+function collect(dir, accept = isWebappSource) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = resolve(dir, entry.name);
-    if (entry.isDirectory()) out.push(...collect(abs));
-    else if (entry.isFile() && isWebappSource(entry.name)) out.push(abs);
+    if (entry.isDirectory()) out.push(...collect(abs, accept));
+    else if (entry.isFile() && accept(entry.name)) out.push(abs);
   }
   return out;
 }
 
-/** Scan the tree; returns `{ 'packages/webapp/src/...': count }` for files with back-edges. */
-export function scanBackEdges() {
+/** Scan one stack; returns `{ 'packages/<pkg>/src/...': count }` for files with back-edges. */
+export function scanStackBackEdges(stack) {
   const counts = {};
-  for (const abs of collect(SCAN_ROOT)) {
-    const srcRel = relative(SCAN_ROOT, abs).split('\\').join('/');
-    const hits = findLayerBackEdges(srcRel, readFileSync(abs, 'utf8'));
+  for (const abs of collect(stack.scanRoot, stack.accept)) {
+    const srcRel = relative(stack.scanRoot, abs).split('\\').join('/');
+    const hits = findLayerBackEdges(srcRel, readFileSync(abs, 'utf8'), stack);
     if (hits.length > 0) counts[relative(repoRoot, abs).split('\\').join('/')] = hits.length;
   }
   return counts;
+}
+
+/** Scan the webapp tree; returns `{ 'packages/webapp/src/...': count }` for files with back-edges. */
+export function scanBackEdges() {
+  return scanStackBackEdges(WEBAPP_STACK);
 }
 
 /** Scan the tree; returns `{ 'packages/webapp/src/...': [hit] }` for files that escape. */
@@ -467,18 +663,45 @@ function reportEscapes(escapes, detailForHit) {
   return true;
 }
 
+function reportStackFailures(stack, current, baseline, failures) {
+  for (const failure of failures) process.stderr.write(`::error::${failure}\n`);
+  const srcPrefix = `${relative(repoRoot, stack.scanRoot).split('\\').join('/')}/`;
+  for (const [file, count] of Object.entries(current)) {
+    if (count <= (baseline[file] ?? 0)) continue;
+    const hits = findLayerBackEdges(
+      file.slice(srcPrefix.length),
+      readFileSync(resolve(repoRoot, file), 'utf8'),
+      stack
+    );
+    for (const h of hits) {
+      process.stderr.write(`  ${file}:${h.line} ${h.from} → ${h.to}: '${h.specifier}'\n`);
+    }
+  }
+  process.stderr.write(
+    `\n${failures.length} ${stack.id} layer-stack violation(s). The ${stack.id} layer stack ` +
+      `(${stack.stackLabel}) requires imports to point down. Move the pure helper into the ` +
+      'lower layer (see docs/review-patterns.md § Layer-stack import direction) rather than ' +
+      'growing the baseline.\n'
+  );
+}
+
 function main() {
-  const current = scanBackEdges();
+  const stackScans = LAYER_STACKS.map((stack) => ({
+    stack,
+    current: scanStackBackEdges(stack),
+  }));
   const escapes = scanCrossPackageEscapes();
   const chromeExtEscapes = scanChromeExtensionWebappEscapes();
   const webcomponentsEscapes = scanWebcomponentsWebappEscapes();
 
   if (argv.includes('--update')) {
-    writeFileSync(BASELINE_PATH, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
-    const total = Object.values(current).reduce((a, b) => a + b, 0);
-    process.stdout.write(
-      `baseline updated: ${total} grandfathered layer back-edge(s) in ${Object.keys(current).length} file(s)\n`
-    );
+    for (const { stack, current } of stackScans) {
+      writeFileSync(stack.baselinePath, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
+      const total = Object.values(current).reduce((a, b) => a + b, 0);
+      process.stdout.write(
+        `${stack.id} baseline updated: ${total} grandfathered layer back-edge(s) in ${Object.keys(current).length} file(s)\n`
+      );
+    }
     return;
   }
 
@@ -507,37 +730,26 @@ function main() {
     process.exit(1);
   }
 
-  const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
-  const failures = compareToBaseline(current, baseline);
-
-  if (failures.length > 0) {
-    for (const failure of failures) process.stderr.write(`::error::${failure}\n`);
-    const srcPrefix = 'packages/webapp/src/';
-    for (const [file, count] of Object.entries(current)) {
-      if (count <= (baseline[file] ?? 0)) continue;
-      const hits = findLayerBackEdges(
-        file.slice(srcPrefix.length),
-        readFileSync(resolve(repoRoot, file), 'utf8')
-      );
-      for (const h of hits) {
-        process.stderr.write(`  ${file}:${h.line} ${h.from} → ${h.to}: '${h.specifier}'\n`);
-      }
-    }
-    process.stderr.write(
-      `\n${failures.length} layer-stack violation(s). The webapp layer stack ` +
-        '(fs → shell/git → cdp → tools → core → scoops → ui) requires imports to point ' +
-        'down. Move the pure helper into the lower layer (see docs/review-patterns.md § ' +
-        'Layer-stack import direction) rather than growing the baseline.\n'
-    );
-    process.exit(1);
+  let stackFailed = false;
+  for (const { stack, current } of stackScans) {
+    const baseline = JSON.parse(readFileSync(stack.baselinePath, 'utf8'));
+    const failures = compareToBaseline(current, baseline);
+    if (failures.length === 0) continue;
+    stackFailed = true;
+    reportStackFailures(stack, current, baseline, failures);
   }
+  if (stackFailed) process.exit(1);
 
-  const total = Object.values(current).reduce((a, b) => a + b, 0);
+  const totals = stackScans.map(({ stack, current }) => {
+    const n = Object.values(current).reduce((a, b) => a + b, 0);
+    return `${n} ${stack.id}`;
+  });
+  const fileCount = stackScans.reduce((n, { current }) => n + Object.keys(current).length, 0);
   process.stdout.write(
     `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, no ` +
       `packages/chrome-extension (src+tests) → packages/webapp/src escapes, and no ` +
       `packages/webcomponents → packages/webapp/src escapes ` +
-      `(${total} grandfathered in ${Object.keys(current).length} baselined files)\n`
+      `(${totals.join(', ')} grandfathered in ${fileCount} baselined files)\n`
   );
 }
 

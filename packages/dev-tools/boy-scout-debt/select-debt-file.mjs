@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { BASELINE_PATH as LAYER_BASELINE_PATH } from '../tools/check-layer-back-edges.mjs';
+import { LAYER_STACKS } from '../tools/check-layer-back-edges.mjs';
 import { BASELINE_PATH as RECORD_BASELINE_PATH } from '../tools/check-record-string-unknown.mjs';
 import { readBiomeConfig, repoRoot } from '../tools/size-exemption-lib.mjs';
 import { buildCandidates, buildDebtMap, buildPrompt, selectDebtFile } from './lib.mjs';
@@ -124,7 +124,10 @@ function loadCandidates() {
   const repoFiles = trackedFiles();
   const debtMap = buildDebtMap({
     biomeConfig: readBiomeConfig(),
-    layerBaseline: readJson(LAYER_BASELINE_PATH),
+    layerBaseline: LAYER_STACKS.reduce((merged, stack) => {
+      Object.assign(merged, readJson(stack.baselinePath) ?? {});
+      return merged;
+    }, {}),
     recordBaseline: readJson(RECORD_BASELINE_PATH),
     repoFiles,
   });

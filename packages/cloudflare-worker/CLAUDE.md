@@ -5,6 +5,14 @@ leader/follower signaling for tray-connected runtimes; also serves the built web
 assets. Full route/protocol/asset detail:
 [`docs/cloudflare-worker-details.md`](../../docs/cloudflare-worker-details.md).
 
+## Layer stack
+
+Import direction is `shared/links/auth → routes → entry` (`src/index.ts` is the
+composition root), enforced by `npm run lint:layer-back-edges`
+(`layer-back-edge-baseline-cloudflare-worker.json`). Route modules must not import
+each other sideways; helpers (`shared.ts`, `links.ts`, `auth/`, `session-tray-*`)
+must not import routes or `index.ts`.
+
 ## Main Files
 
 - `src/index.ts` — entry + public HTTP routing

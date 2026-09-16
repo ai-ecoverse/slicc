@@ -206,10 +206,13 @@ describe('check-touched-exemptions: float-probe debt list wiring', () => {
     }
   });
 
-  it('passes with the real, empty baseline untouched (sanity: no debt lists at all today)', () => {
+  it('passes when the changed file is not on any real debt list', () => {
     const { code, out } = run({ CHANGED_FILES: FAKE_PATH });
     expect(code).toBe(0);
-    expect(out).toContain('no debt lists found');
+    // Empty ratchets take the "no debt lists found" shortcut; a non-empty
+    // per-package layer baseline (cloudflare-worker at #3149 freeze) still
+    // passes because FAKE_PATH is not on that list.
+    expect(out).toMatch(/no debt lists found|OK \(1 changed file\(s\), 0 still on any debt list\)/);
   });
 });
 
