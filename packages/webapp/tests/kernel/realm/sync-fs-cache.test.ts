@@ -54,8 +54,8 @@ describe('SyncFsCache', () => {
   it('writeFile marks synthesized ancestor dirs as incomplete listings (#3193)', () => {
     const fsCache = new SyncFsCache(emptySnapshot());
     fsCache.writeFile('/shared/dir/probe.tmp', new TextEncoder().encode('x'));
-    expect(fsCache.isListingIncomplete('/shared')).toBe(true);
-    expect(fsCache.isListingIncomplete('/shared/dir')).toBe(true);
+    expect(fsCache.isPartial('/shared')).toBe(true);
+    expect(fsCache.isPartial('/shared/dir')).toBe(true);
     expect(fsCache.readdir('/shared/dir')).toEqual(['probe.tmp']);
   });
 
@@ -67,15 +67,15 @@ describe('SyncFsCache', () => {
       ],
     });
     fsCache.writeFile('/tmp/b.txt', new TextEncoder().encode('b'));
-    expect(fsCache.isListingIncomplete('/tmp')).toBe(false);
+    expect(fsCache.isPartial('/tmp')).toBe(false);
     expect(fsCache.readdir('/tmp').sort()).toEqual(['a.txt', 'b.txt']);
   });
 
   it('mkdir creates a complete listing', () => {
     const fsCache = new SyncFsCache(emptySnapshot());
     fsCache.mkdir('/workspace/new', true);
-    expect(fsCache.isListingIncomplete('/workspace/new')).toBe(false);
-    expect(fsCache.isListingIncomplete('/workspace')).toBe(false);
+    expect(fsCache.isPartial('/workspace/new')).toBe(false);
+    expect(fsCache.isPartial('/workspace')).toBe(false);
   });
 
   it('mkdir recursive creates intermediate dirs', () => {

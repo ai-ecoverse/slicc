@@ -24,13 +24,8 @@ export interface SyncFsEntry {
    * written in-realm, where `content.byteLength` is authoritative.
    */
   size?: number;
-  /**
-   * True when this directory was synthesized as an ancestor of a write rather
-   * than loaded from the snapshot or created by `mkdir`. Its cache children
-   * are the process write-set, not the live listing — `readdir` must re-read
-   * through the fs bridge (#3193).
-   */
-  listingIncomplete?: boolean;
+  /** Write-synthesized ancestor: cache children are the write-set, not the live listing (#3193). */
+  partial?: boolean;
 }
 
 export interface SyncFsSnapshot {
@@ -366,21 +361,12 @@ export class SyncFsCache {
   private ensureParentDirs(path: string): void {
     const dir = dirname(path);
     if (dir === '/') return;
-    if (!this.tree.has(dir)) {
-      // Synthesized ancestors are not a complete listing of the live directory
-      // (#3193): the next readdir must re-read rather than return the write-set.
-      this.mkdir(dir, true, true);
-    }
+    if (!this.tree.has(dir)) this.mkdir(dir, true, true);
   }
 
-  /**
-   * True when `path` is a directory whose cache children are not authoritative
-   * (synthesized by a write under a path the snapshot never contained).
-   */
-  isListingIncomplete(path: string): boolean {
-    const normalized = normalizePath(path);
-    const resolved = this.resolveEntry(normalized);
-    return resolved?.entry.isDirectory === true && resolved.entry.listingIncomplete === true;
+  /** True when `path` was synthesized by a write, so its listing is not authoritative (#3193). */
+  isPartial(path: string): boolean {
+    return this.tree.get(normalizePath(path))?.partial === true;
   }
 
   /**
@@ -498,7 +484,7 @@ export class SyncFsCache {
     return Array.from(names);
   }
 
-  mkdir(path: string, recursive?: boolean, listingIncomplete = false): void {
+  mkdir(path: string, recursive?: boolean, partial = false): void {
     this.touched = true;
     const normalized = normalizePath(path);
     if (this.tree.has(normalized)) {
@@ -514,13 +500,13 @@ export class SyncFsCache {
       if (!recursive) {
         throw enoent(normalized);
       }
-      this.mkdir(dir, true, listingIncomplete);
+      this.mkdir(dir, true, partial);
     }
 
     this.tree.set(normalized, {
       content: new Uint8Array(0),
       isDirectory: true,
-      ...(listingIncomplete ? { listingIncomplete: true } : {}),
+      ...(partial ? { partial: true } : {}),
     });
     this.tombstones.delete(normalized); // dir re-created
     this.removedDirs.delete(normalized);
