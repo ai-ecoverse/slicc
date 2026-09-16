@@ -25,23 +25,23 @@ to pure-JS or RPC-backed implementations, not real Node.js.
 
 Async methods (RPC-backed, available everywhere):
 
-| Method                           | Notes                                           |
-| -------------------------------- | ----------------------------------------------- |
-| `readFile(path, opts?)`          | Supports encoding option; `null` returns Buffer |
-| `writeFile(path, data)`          | String or Uint8Array                            |
-| `appendFile(path, data)`         |                                                 |
-| `cp(src, dest, {recursive?})`    | Recursive copy                                  |
-| `rm(path, {recursive?, force?})` |                                                 |
-| `mkdir(path, {recursive?})`      |                                                 |
-| `mkdtemp(prefix)`                | Random suffix via crypto                        |
-| `rename(oldPath, newPath)`       |                                                 |
-| `access(path)`                   | Throws ENOENT if missing                        |
-| `stat(path)`                     | Returns `{isDirectory, isFile, size}`           |
-| `readdir(path)`                  |                                                 |
-| `unlink(path)`                   | Alias to rm                                     |
-| `copyFile(src, dest)`            |                                                 |
-| `exists(path)`                   |                                                 |
-| `fetchToFile(url, path)`         | SLICC-specific: fetch URL → VFS                 |
+| Method                           | Notes                                                                  |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| `readFile(path, opts?)`          | Supports encoding option; `null` returns Buffer                        |
+| `writeFile(path, data)`          | String or Uint8Array                                                   |
+| `appendFile(path, data)`         | One locked `vfs.appendFile` RPC; concurrent appends keep every payload |
+| `cp(src, dest, {recursive?})`    | Recursive copy                                                         |
+| `rm(path, {recursive?, force?})` |                                                                        |
+| `mkdir(path, {recursive?})`      |                                                                        |
+| `mkdtemp(prefix)`                | Random suffix via crypto                                               |
+| `rename(oldPath, newPath)`       |                                                                        |
+| `access(path)`                   | Throws ENOENT if missing                                               |
+| `stat(path)`                     | Returns `{isDirectory, isFile, size}`                                  |
+| `readdir(path)`                  |                                                                        |
+| `unlink(path)`                   | Alias to rm                                                            |
+| `copyFile(src, dest)`            |                                                                        |
+| `exists(path)`                   |                                                                        |
+| `fetchToFile(url, path)`         | SLICC-specific: fetch URL → VFS                                        |
 
 `require('fs/promises')` returns the same object. `require('fs').promises`
 also resolves to it.

@@ -127,8 +127,8 @@ Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtim
 
 VFS bridge:
 
-| `require('fs')` / `require('node:fs')` | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async. There is no bare `fs` global. |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `require('fs')` / `require('node:fs')` | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `appendFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async. There is no bare `fs` global. |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 
 #### Runtime extensions (live — prefer these over hand-rolled equivalents)
 

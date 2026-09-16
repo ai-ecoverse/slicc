@@ -247,17 +247,13 @@ export function createFsBridge(
   }
 
   async function appendFile(path: string, data: unknown): Promise<void> {
-    let existing: Uint8Array = new Uint8Array(0);
-    const fileExists = await rpc.call<boolean>('vfs', 'exists', [path]);
-    if (fileExists) {
-      const raw = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [path]);
-      existing = raw instanceof Uint8Array ? raw : new Uint8Array(raw as ArrayBuffer);
+    // One RPC into VirtualFS.appendFile (locked). A client-side
+    // exists→read→write lost concurrent appends (#3174).
+    if (typeof data === 'string') {
+      await rpc.call('vfs', 'appendFile', [path, data]);
+      return;
     }
-    const suffix = toBytes(data);
-    const out = new Uint8Array(existing.byteLength + suffix.byteLength);
-    out.set(existing);
-    out.set(suffix, existing.byteLength);
-    await rpc.call('vfs', 'writeFileBinary', [path, out]);
+    await rpc.call('vfs', 'appendFile', [path, toBytes(data)]);
   }
 
   async function cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -794,9 +790,11 @@ export function createSyncFsBridge(
       writeThrough(resolve(path), toBytes(data));
     },
     appendFileSync(path: string, data: unknown): void {
-      // Read-modify-write over the same cache→bridge path (mirrors the async
-      // `appendFile`). NOT atomic vs a concurrent writer — same at-least-once
-      // caveat as `writeFileSync` (spec §11). An absent file is created.
+      // In-process read-modify-write over the cache→bridge path. Cannot
+      // interleave inside one realm (sync), but NOT atomic vs a concurrent
+      // async `appendFile` / second realm — same at-least-once caveat as
+      // `writeFileSync` (spec §11). An absent file is created. The async
+      // sibling is a single locked `vfs.appendFile` RPC (#3174).
       const resolved = resolve(path);
       let existing: Uint8Array = new Uint8Array(0);
       try {

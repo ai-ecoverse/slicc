@@ -1950,6 +1950,7 @@ fs.readFile(path): Promise<string>
 fs.readFileBinary(path): Promise<Uint8Array>
 fs.writeFile(path, content: string): Promise<void>
 fs.writeFileBinary(path, bytes: Uint8Array): Promise<void>
+fs.appendFile(path, data: string | Uint8Array): Promise<void> // one locked RPC; concurrent appends keep every payload
 fs.readDir(path): Promise<string[]>
 fs.exists(path): Promise<boolean>
 fs.stat(path): Promise<{ isDirectory, isFile, size }>

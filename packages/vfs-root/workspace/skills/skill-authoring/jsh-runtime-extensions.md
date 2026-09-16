@@ -42,7 +42,7 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 
 ### Filesystem (VFS bridge)
 
-`require('fs')` and `require('node:fs')` return the VFS bridge (`readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile(url, path)`), plus the sync set (`readFileSync`, `writeFileSync`, `existsSync`, `statSync`, …). All paths are VFS-resolved. There is no bare `fs` global. `writeFileSync` / `appendFileSync` persist at call time, and `console.log` is captured as it prints — a `timeout`/`kill` of the node realm (rc=124/137) still leaves the log file and the stdout written before the hang.
+`require('fs')` and `require('node:fs')` return the VFS bridge (`readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `appendFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile(url, path)`), plus the sync set (`readFileSync`, `writeFileSync`, `appendFileSync`, `existsSync`, `statSync`, …). All paths are VFS-resolved. There is no bare `fs` global. Async `appendFile` is one locked VFS RPC, so concurrent appends to the same path keep every payload. `writeFileSync` / `appendFileSync` persist at call time, and `console.log` is captured as it prints — a `timeout`/`kill` of the node realm (rc=124/137) still leaves the log file and the stdout written before the hang.
 
 Stdio fds and device paths work like Node: `fs.readFileSync(0, 'utf8')` (or `'/dev/stdin'`) reads the full piped stdin without consuming `process.stdin`; `fs.writeFileSync(1, …)` / `fs.writeFileSync(2, …)` (or `/dev/stdout` / `/dev/stderr`) write to stdout/stderr; `existsSync`/`statSync` report the three stream devices as present. Unknown numeric fds and wrong-direction stream ops throw `EBADF`.
 

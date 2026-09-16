@@ -230,15 +230,15 @@ const inputFile = args[0];
 
 **Globals API**:
 
-| Global / module                        | Methods                                                                                                                                                                                                  |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`                              | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `exitCode` (deferred status; honoured after drain), `stdout.write()`, `stderr.write()`                                                                  |
-| `console`                              | 19 standard methods: `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw); `group*`/`time*`/`count*`/`clear`                         |
-| `require('fs')` / `require('node:fs')` | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
-| `require('sliccy:exec')`               | Callable `exec(cmd)` + `.spawn(argv[])`. Shell command bridge.                                                                                                                                           |
-| `require('sliccy:<name>')`             | `http`, `browser`, `skill`, `cli`, `color`, `time`, `fmt`, `pool`, `usb` / `serial` / `hid` — see `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`.                        |
-| `require(id)`                          | Synchronous CJS `require` (`require('sliccy:<name>')`, `require('fs')`, or installed packages).                                                                                                          |
-| `module`, `exports`                    | Available for CJS module pattern (e.g., a `.jsh` consumed by `require('./helper.jsh')`).                                                                                                                 |
+| Global / module                        | Methods                                                                                                                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`                              | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `exitCode` (deferred status; honoured after drain), `stdout.write()`, `stderr.write()`                                                                                            |
+| `console`                              | 19 standard methods: `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw); `group*`/`time*`/`count*`/`clear`                                                   |
+| `require('fs')` / `require('node:fs')` | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `appendFile(path, data)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
+| `require('sliccy:exec')`               | Callable `exec(cmd)` + `.spawn(argv[])`. Shell command bridge.                                                                                                                                                                     |
+| `require('sliccy:<name>')`             | `http`, `browser`, `skill`, `cli`, `color`, `time`, `fmt`, `pool`, `usb` / `serial` / `hid` — see `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`.                                                  |
+| `require(id)`                          | Synchronous CJS `require` (`require('sliccy:<name>')`, `require('fs')`, or installed packages).                                                                                                                                    |
+| `module`, `exports`                    | Available for CJS module pattern (e.g., a `.jsh` consumed by `require('./helper.jsh')`).                                                                                                                                           |
 
 **Discovery**:
 
