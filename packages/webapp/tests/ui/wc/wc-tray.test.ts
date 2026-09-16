@@ -225,7 +225,8 @@ describe('wireWcTray follower sprinkle lick origin (#3089)', () => {
   });
 
   it("keeps the follower's selection for an inline dip lick (#2312)", async () => {
-    const { onSprinkleLick, sendSprinkleLick } = await wireWithPanels({ review: 'cone-b' });
+    // Even with a user panel that is itself named `inline` open on the leader.
+    const { onSprinkleLick, sendSprinkleLick } = await wireWithPanels({ inline: 'cone-b' });
 
     onSprinkleLick('inline', { action: 'ok' }, undefined, 'follower', 'cone-c');
 

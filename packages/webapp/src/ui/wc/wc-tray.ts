@@ -637,16 +637,20 @@ export function buildFollowerOptions(
  * the follower happens to be viewing: that is focus routing, which #2312
  * removed. An owner-less open panel (opened by the default root) yields
  * `undefined`, the same fallback a click on the leader's own copy takes. Only
- * a lick with no open leader panel behind it (an inline dip, `welcome`) keeps
- * the follower's selection. That selection is the leader's own record of the
- * peer, and the dip was rendered inside it.
+ * an inline dip (always named `inline`) or a lick with no open leader panel
+ * behind it (`welcome`) keeps the follower's selection. That selection is the
+ * leader's own record of the peer, and the dip was rendered inside it.
  */
 export function followerSprinkleLickOrigin(
   manager: Pick<SprinkleManager, 'opened' | 'lickOriginUnitIdOf'>,
   sprinkleName: string,
   followerSelectedJid: string | undefined
 ): string | undefined {
-  if (!manager.opened().includes(sprinkleName)) return followerSelectedJid;
+  // `inline` is the wire name of every dip lick (`wc-live-controller.ts`), so
+  // it must never be mistaken for a user panel that happens to share it.
+  if (sprinkleName === 'inline' || !manager.opened().includes(sprinkleName)) {
+    return followerSelectedJid;
+  }
   return manager.lickOriginUnitIdOf(sprinkleName);
 }
 
