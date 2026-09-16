@@ -1,15 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
 package main
 
 import (
@@ -22,7 +10,6 @@ import (
 	"syscall"
 	"time"
 )
-
 
 var version = "dev"
 
@@ -73,18 +60,12 @@ func run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	
-	
-	
 	defer initTelemetry(sub)()
 
-	
-	
 	defer startUpdateNotice()()
 
 	return dispatchJoinVerb(ctx, joinURL, sub, rest)
 }
-
 
 func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) int {
 	switch sub {
@@ -111,9 +92,7 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 		}
 		return cmdExec(ctx, joinURL, command)
 	case "watch":
-		
-		
-		
+
 		rest, plain := takePlainFlag(rest)
 		scoopJid := ""
 		if len(rest) > 0 {
@@ -125,9 +104,7 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 		}
 		return cmdWatch(ctx, joinURL, scoopJid, plain)
 	case "follow":
-		
-		
-		
+
 		fa := parseFollowArgs(rest)
 		if fa.help {
 			usage(os.Stdout)
@@ -202,15 +179,6 @@ NO_COLOR keeps the bar without color.
 `)
 }
 
-
-
-
-
-
-
-
-
-
 func readTextArg(args []string, stdin io.Reader) (string, error) {
 	if len(args) == 1 {
 		switch a := args[0]; {
@@ -231,27 +199,17 @@ func readTextArg(args []string, stdin io.Reader) (string, error) {
 	return strings.Join(args, " "), nil
 }
 
-
-
 type followArgs struct {
 	runner     []string
 	showBanner bool
 	help       bool
-	
-	
+
 	plain bool
-	
-	
+
 	eval bool
-	
-	
+
 	evalQuiet time.Duration
 }
-
-
-
-
-
 
 func parseFollowArgs(rest []string) followArgs {
 	fa := followArgs{showBanner: true}
@@ -290,18 +248,12 @@ func parseFollowArgs(rest []string) followArgs {
 	return fa
 }
 
-
-
-
 func takePlainFlag(rest []string) ([]string, bool) {
 	if len(rest) > 0 && rest[0] == "--plain" {
 		return rest[1:], true
 	}
 	return rest, false
 }
-
-
-
 
 func parseEvalQuiet(value string) time.Duration {
 	d, err := time.ParseDuration(strings.TrimSpace(value))

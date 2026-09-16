@@ -23,6 +23,8 @@ describe('isKeptComment', () => {
   it('keeps Go, Swift, and shell directives', () => {
     expect(isKeptComment('//go:build ignore')).toBe(true);
     expect(isKeptComment('//nolint:errcheck')).toBe(true);
+    expect(isKeptComment('// indirect')).toBe(true);
+    expect(isKeptComment('\tgithub.com/foo v1.0.0 // indirect')).toBe(true);
     expect(isKeptComment('// swiftlint:disable:next force_cast')).toBe(true);
     expect(isKeptComment('// swift-tools-version: 5.10')).toBe(true);
     expect(isKeptComment('//export MyFunc')).toBe(true);

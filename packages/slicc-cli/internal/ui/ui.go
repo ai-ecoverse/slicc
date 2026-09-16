@@ -1,20 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 package ui
 
 import (
@@ -22,25 +5,17 @@ import (
 	"strings"
 )
 
-
-
 const EnvNoTUI = "SLICC_NO_TUI"
-
 
 type Env func(string) (string, bool)
 
-
-
 type Mode struct {
-	
 	Color bool
-	
-	
+
 	Sticky bool
-	
+
 	Unicode bool
 }
-
 
 func Detect(f *os.File, env Env) Mode {
 	if env == nil {
@@ -50,8 +25,7 @@ func Detect(f *os.File, env Env) Mode {
 		return Mode{}
 	}
 	term, _ := env("TERM")
-	
-	
+
 	dumb := term == "dumb"
 	tty := IsTerminal(f) && !dumb
 
@@ -65,7 +39,6 @@ func Detect(f *os.File, env Env) Mode {
 	return Mode{Color: color, Sticky: tty, Unicode: unicodeCapable(env)}
 }
 
-
 func (m Mode) Plain() bool { return !m.Color && !m.Sticky }
 
 func forcedColor(env Env) bool {
@@ -77,9 +50,6 @@ func forcedColor(env Env) bool {
 	return false
 }
 
-
-
-
 func unicodeCapable(env Env) bool {
 	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
 		if v, ok := env(key); ok && v != "" {
@@ -87,8 +57,7 @@ func unicodeCapable(env Env) bool {
 			return strings.Contains(lower, "utf-8") || strings.Contains(lower, "utf8")
 		}
 	}
-	
-	
+
 	if _, ok := env("WT_SESSION"); ok {
 		return true
 	}
@@ -97,9 +66,6 @@ func unicodeCapable(env Env) bool {
 	}
 	return false
 }
-
-
-
 
 func IsTerminal(f *os.File) bool {
 	if f == nil {
@@ -115,9 +81,7 @@ func IsTerminal(f *os.File) bool {
 	return prepareTerminal(f)
 }
 
-
 const DefaultWidth = 80
-
 
 func Width(f *os.File, env Env) int {
 	if env == nil {

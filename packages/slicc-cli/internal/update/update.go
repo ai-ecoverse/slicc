@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 package update
 
 import (
@@ -27,34 +18,24 @@ const (
 	defaultAPIBase  = "https://api.github.com"
 	repoPath        = "ai-ecoverse/slicc"
 	releasesPerPage = 100
-	
-	
-	
-	
+
 	maxReleasePages = 5
 	userAgent       = "slicc-cli"
 )
 
-
 type Release struct {
-	Version  string 
+	Version  string
 	AssetURL string
 }
-
-
 
 type Checker struct {
 	APIBase string
 	HTTP    *http.Client
 	GOOS    string
 	GOARCH  string
-	
-	
-	
+
 	Verify func(ctx context.Context, path string) error
 }
-
-
 
 func NewChecker() *Checker {
 	base := os.Getenv("SLICC_UPDATE_API_BASE")
@@ -69,8 +50,6 @@ func NewChecker() *Checker {
 		Verify:  runVersionCheck,
 	}
 }
-
-
 
 func AssetName(goos, goarch string) string {
 	ext := ""
@@ -115,8 +94,6 @@ func (c *Checker) fetchReleasesPage(ctx context.Context, page int) ([]githubRele
 	return releases, nil
 }
 
-
-
 func (c *Checker) LatestCLIRelease(ctx context.Context) (*Release, error) {
 	asset := AssetName(c.GOOS, c.GOARCH)
 	for page := 1; page <= maxReleasePages; page++ {
@@ -137,18 +114,13 @@ func (c *Checker) LatestCLIRelease(ctx context.Context) (*Release, error) {
 				}
 			}
 		}
-		
+
 		if len(releases) < releasesPerPage {
 			break
 		}
 	}
 	return nil, fmt.Errorf("no recent release carries %s (CLI binaries only attach to releases where packages/slicc-cli changed)", asset)
 }
-
-
-
-
-
 
 func IsReleaseVersion(v string) bool {
 	trimmed := strings.TrimPrefix(strings.TrimSpace(v), "v")
@@ -167,9 +139,6 @@ func IsReleaseVersion(v string) bool {
 	}
 	return true
 }
-
-
-
 
 func IsNewer(latest, current string) bool {
 	parse := func(v string) []int {
@@ -198,8 +167,6 @@ func IsNewer(latest, current string) bool {
 	}
 	return false
 }
-
-
 
 var renameFile = os.Rename
 
@@ -242,10 +209,6 @@ func (c *Checker) downloadTo(ctx context.Context, url, destination string) error
 	return nil
 }
 
-
-
-
-
 func (c *Checker) Apply(ctx context.Context, release *Release, exePath string) error {
 	staging := exePath + ".new"
 	if err := c.downloadTo(ctx, release.AssetURL, staging); err != nil {
@@ -267,8 +230,7 @@ func (c *Checker) Apply(ctx context.Context, release *Release, exePath string) e
 		parked = true
 	}
 	if err := renameFile(staging, exePath); err != nil {
-		
-		
+
 		if parked {
 			_ = renameFile(exePath+".old", exePath)
 		}
@@ -277,8 +239,6 @@ func (c *Checker) Apply(ctx context.Context, release *Release, exePath string) e
 	}
 	return nil
 }
-
-
 
 func RemoveStaleBinary(exePath string) {
 	_ = os.Remove(exePath + ".old")

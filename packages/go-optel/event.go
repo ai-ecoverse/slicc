@@ -1,14 +1,5 @@
 package optel
 
-
-
-
-
-
-
-
-
-
 type Event struct {
 	Weight     int        `json:"weight"`
 	ID         string     `json:"id"`

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-
-
 type recordingTransport struct {
 	mu     sync.Mutex
 	events []Event
@@ -36,7 +34,7 @@ func (r *recordingTransport) snapshot() []Event {
 func TestClientSampleAutoEmitsTopThenCheckpoint(t *testing.T) {
 	rec := &recordingTransport{}
 	c := Configure("slicc-cli", Options{
-		Rate:         "on", 
+		Rate:         "on",
 		Transport:    rec,
 		RandomSource: fakeRandom(0),
 	})
@@ -113,7 +111,7 @@ func TestClientReportErrorNilErrorIsNoop(t *testing.T) {
 
 func TestNilClientIsInertNoop(_ *testing.T) {
 	var c *Client
-	
+
 	c.Sample(Enter, "prompt", "")
 	c.ReportError("dial", errors.New("boom"))
 	c.Flush(10 * time.Millisecond)
@@ -156,8 +154,6 @@ func TestClientFlushTimesOutBoundedly(t *testing.T) {
 		t.Fatalf("Flush did not honor its timeout, took %s", elapsed)
 	}
 }
-
-
 
 type blockingTransport struct {
 	release chan struct{}

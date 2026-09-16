@@ -5,18 +5,10 @@ import (
 	"strings"
 )
 
-
-
-
 const (
 	EnvRateKey  = "OPTEL_RATE"
 	EnvDebugKey = "OPTEL_DEBUG"
 )
-
-
-
-
-
 
 func ResolveRate(explicit string, environment map[string]string) string {
 	if v, ok := lookupEnv(EnvRateKey, environment); ok && v != "" {
@@ -24,9 +16,6 @@ func ResolveRate(explicit string, environment map[string]string) string {
 	}
 	return explicit
 }
-
-
-
 
 func ResolveDebug(environment map[string]string) bool {
 	v, ok := lookupEnv(EnvDebugKey, environment)
@@ -40,8 +29,6 @@ func ResolveDebug(environment map[string]string) bool {
 		return false
 	}
 }
-
-
 
 func lookupEnv(key string, environment map[string]string) (string, bool) {
 	if environment != nil {

@@ -6,9 +6,7 @@ import (
 	"time"
 )
 
-
 type State uint8
-
 
 const (
 	StateConnecting State = iota
@@ -17,47 +15,32 @@ const (
 	StateOffline
 )
 
-
-
-
-
 type Status struct {
-	
 	Started time.Time
-	
+
 	State State
-	
-	
+
 	RetryAt time.Time
-	
+
 	Attempt int
-	
-	
-	
+
 	Sessions int
-	
+
 	Execs int
-	
-	
+
 	Diags int
-	
+
 	LastBeat time.Time
-	
-	
+
 	Peer string
 
 	tape tape
 }
 
-
-
-
 type segment struct {
 	text  string
 	style Style
 }
-
-
 
 func (s *Status) render(m Mode, now time.Time, frame, width int) string {
 	segs := []segment{s.badge(m, now, frame)}
@@ -87,15 +70,9 @@ func (s *Status) render(m Mode, now time.Time, frame, width int) string {
 	if tape := s.tape.render(m); tape != "" {
 		segs = append(segs, segment{tape, StyleNone})
 	}
-	
-	
-	
-	
+
 	return truncateVisible(joinSegments(m, segs, width), width)
 }
-
-
-
 
 func (s *Status) badge(m Mode, now time.Time, frame int) segment {
 	switch s.State {
@@ -121,8 +98,6 @@ func (s *Status) badge(m Mode, now time.Time, frame int) segment {
 	}
 }
 
-
-
 func beatStyle(age time.Duration) Style {
 	switch {
 	case age < 30*time.Second:
@@ -133,10 +108,6 @@ func beatStyle(age time.Duration) Style {
 		return StyleRed
 	}
 }
-
-
-
-
 
 func joinSegments(m Mode, segs []segment, width int) string {
 	const sep = "  "
@@ -162,21 +133,15 @@ func joinSegments(m Mode, segs []segment, width int) string {
 	return b.String()
 }
 
-
 const tapeCells = 16
-
-
-
 
 type tape struct {
 	cells   [tapeCells]State
 	filled  int
 	pending State
-	
-	
+
 	hasPending bool
 }
-
 
 func (t *tape) sample(state State) {
 	if !t.hasPending || state > t.pending {
@@ -184,7 +149,6 @@ func (t *tape) sample(state State) {
 		t.hasPending = true
 	}
 }
-
 
 func (t *tape) commit() {
 	if !t.hasPending {
@@ -215,8 +179,6 @@ func (t *tape) render(m Mode) string {
 	}
 	return b.String()
 }
-
-
 
 func CompactDuration(d time.Duration) string {
 	if d < 0 {

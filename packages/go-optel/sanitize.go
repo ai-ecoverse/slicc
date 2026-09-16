@@ -5,45 +5,13 @@ import (
 	"regexp"
 )
 
-
-
 const MaxMessageLength = 200
-
 
 var urlPattern = regexp.MustCompile(`https?://[^\s"'` + "`" + `)]+`)
 
-
-
-
-
 var posixPathPattern = regexp.MustCompile(`(?i)(/[a-zA-Z][a-zA-Z0-9_.-]*)(?:/[^\s/]+)+`)
 
-
-
 var windowsPathPattern = regexp.MustCompile(`(?i)[A-Z]:\\[^\s"']+`)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 func Sanitize(msg string) string {
 	redacted := urlPattern.ReplaceAllStringFunc(msg, redactURL)
@@ -51,10 +19,6 @@ func Sanitize(msg string) string {
 	redacted = windowsPathPattern.ReplaceAllStringFunc(redacted, redactWindowsPath)
 	return truncate(redacted, MaxMessageLength)
 }
-
-
-
-
 
 func redactURL(match string) string {
 	parsed, err := url.Parse(match)
@@ -64,15 +28,12 @@ func redactURL(match string) string {
 	return parsed.Scheme + "://" + parsed.Host + "/..."
 }
 
-
-
 func redactWindowsPath(match string) string {
 	if len(match) < 2 {
 		return `<path>`
 	}
 	return match[:2] + `\...`
 }
-
 
 func truncate(s string, limit int) string {
 	r := []rune(s)

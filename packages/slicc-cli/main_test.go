@@ -2,8 +2,6 @@ package main
 
 import "testing"
 
-
-
 func TestRunArgDispatch(t *testing.T) {
 	cases := []struct {
 		name string

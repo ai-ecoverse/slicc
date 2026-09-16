@@ -85,10 +85,7 @@ func TestStatusRenderNeverExceedsWidth(t *testing.T) {
 	now := time.Now()
 	peers := []string{
 		"someone@a-very-long-hostname-indeed · docker exec -i sandbox sh -c",
-		
-		
-		
-		
+
 		"私@ホスト · bash -c",
 	}
 	for _, peer := range peers {
@@ -109,7 +106,7 @@ func TestStatusRenderNeverExceedsWidth(t *testing.T) {
 func TestStatusRenderKeepsStateWhenNarrow(t *testing.T) {
 	now := time.Now()
 	st := Status{Started: now, State: StateConnected, Sessions: 1, Execs: 5, Peer: "alice@laptop"}
-	
+
 	got := st.render(unicodeMode, now, 0, 12)
 	if !strings.Contains(got, "connected") {
 		t.Errorf("narrow bar %q dropped the state badge", got)
@@ -137,8 +134,7 @@ func TestTapeWorstStateWins(t *testing.T) {
 	if tp.render(unicodeMode) != "" {
 		t.Error("an empty tape must render nothing")
 	}
-	
-	
+
 	tp.sample(StateConnected)
 	tp.sample(StateOffline)
 	tp.sample(StateConnected)
@@ -174,8 +170,7 @@ func TestTapeRingIsBounded(t *testing.T) {
 
 func TestStatusRenderSkipsOnlyTheFieldsThatDoNotFit(t *testing.T) {
 	now := time.Now()
-	
-	
+
 	st := Status{
 		Started: now, State: StateConnected, Sessions: 1,
 		Peer: "somebody@an-absurdly-long-hostname-that-will-not-fit · bash -c",

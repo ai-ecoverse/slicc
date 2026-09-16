@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 package signaling
 
 import (
@@ -18,12 +11,7 @@ import (
 	"time"
 )
 
-
-
-
-
 const defaultRequestTimeout = 30 * time.Second
-
 
 type TurnIceServer struct {
 	URLs       []string `json:"urls"`
@@ -31,12 +19,10 @@ type TurnIceServer struct {
 	Credential string   `json:"credential"`
 }
 
-
 type SessionDescription struct {
-	Type string `json:"type"` 
+	Type string `json:"type"`
 	SDP  string `json:"sdp"`
 }
-
 
 type IceCandidate struct {
 	Candidate        string  `json:"candidate"`
@@ -45,7 +31,6 @@ type IceCandidate struct {
 	UsernameFragment *string `json:"usernameFragment,omitempty"`
 }
 
-
 type BootstrapFailure struct {
 	Code       string `json:"code"`
 	Message    string `json:"message"`
@@ -53,7 +38,6 @@ type BootstrapFailure struct {
 	RetryAfter *int   `json:"retryAfterMs"`
 	FailedAt   string `json:"failedAt"`
 }
-
 
 type BootstrapStatus struct {
 	ControllerID     string            `json:"controllerId"`
@@ -68,50 +52,36 @@ type BootstrapStatus struct {
 	Failure          *BootstrapFailure `json:"failure"`
 }
 
-
 type BootstrapEvent struct {
 	Sequence  int                 `json:"sequence"`
 	SentAt    string              `json:"sentAt"`
-	Type      string              `json:"type"` 
+	Type      string              `json:"type"`
 	Offer     *SessionDescription `json:"offer,omitempty"`
 	Candidate *IceCandidate       `json:"candidate,omitempty"`
 	Failure   *BootstrapFailure   `json:"failure,omitempty"`
 }
 
-
 type AttachPlan struct {
-	Action       string 
+	Action       string
 	Code         string
 	RetryAfterMs int
 	Error        string
 	Bootstrap    *BootstrapStatus
 	IceServers   []TurnIceServer
-	
-	
-	
+
 	JoinURL string
 	TrayID  string
 }
-
 
 type BootstrapPlan struct {
 	Bootstrap BootstrapStatus
 	Events    []BootstrapEvent
 }
 
-
 type Client struct {
 	joinURL string
 	http    *http.Client
 }
-
-
-
-
-
-
-
-
 
 func New(joinURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
@@ -123,7 +93,6 @@ func New(joinURL string, httpClient *http.Client) *Client {
 	}
 	return &Client{joinURL: joinURL, http: &client}
 }
-
 
 func (c *Client) JoinURL() string { return c.joinURL }
 
@@ -148,19 +117,13 @@ type rawBootstrapResponse struct {
 	Events    []BootstrapEvent `json:"events"`
 }
 
-
 func (c *Client) Attach(ctx context.Context, controllerID, runtime string) (*AttachPlan, error) {
 	body := map[string]any{"controllerId": controllerID, "runtime": runtime}
 	data, meta, err := c.postWithMeta(ctx, body)
 	if err != nil {
 		return nil, err
 	}
-	
-	
-	
-	
-	
-	
+
 	successor := firstNonEmpty(
 		SuccessorVersionFromLinkHeader(meta.Header),
 		RedirectLocation(meta.Status, meta.Header.Get("Location")),
@@ -194,7 +157,6 @@ func (c *Client) Attach(ctx context.Context, controllerID, runtime string) (*Att
 	}, nil
 }
 
-
 func (c *Client) Poll(ctx context.Context, controllerID, bootstrapID string, cursor int) (*BootstrapPlan, error) {
 	return c.postBootstrap(ctx, map[string]any{
 		"action":       "poll",
@@ -204,7 +166,6 @@ func (c *Client) Poll(ctx context.Context, controllerID, bootstrapID string, cur
 	})
 }
 
-
 func (c *Client) SendAnswer(ctx context.Context, controllerID, bootstrapID, answerSDP string) (*BootstrapPlan, error) {
 	return c.postBootstrap(ctx, map[string]any{
 		"action":       "answer",
@@ -213,7 +174,6 @@ func (c *Client) SendAnswer(ctx context.Context, controllerID, bootstrapID, answ
 		"answer":       map[string]any{"type": "answer", "sdp": answerSDP},
 	})
 }
-
 
 func (c *Client) SendICECandidate(ctx context.Context, controllerID, bootstrapID string, cand IceCandidate) (*BootstrapPlan, error) {
 	candidate := map[string]any{"candidate": cand.Candidate}
@@ -233,7 +193,6 @@ func (c *Client) SendICECandidate(ctx context.Context, controllerID, bootstrapID
 		"candidate":    candidate,
 	})
 }
-
 
 func (c *Client) Retry(ctx context.Context, controllerID, bootstrapID, runtime string) (*BootstrapPlan, error) {
 	return c.postBootstrap(ctx, map[string]any{
@@ -264,14 +223,10 @@ func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, error) 
 	return data, err
 }
 
-
-
 type responseMeta struct {
 	Status int
 	Header http.Header
 }
-
-
 
 func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
 	payload, err := json.Marshal(body)
@@ -294,13 +249,6 @@ func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte,
 	}
 	return data, responseMeta{Status: resp.StatusCode, Header: resp.Header}, nil
 }
-
-
-
-
-
-
-
 
 func RedirectLocation(status int, location string) string {
 	if status < 300 || status >= 400 || location == "" {
