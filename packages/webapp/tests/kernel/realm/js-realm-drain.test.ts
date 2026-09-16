@@ -266,6 +266,16 @@ describe('realm event-loop drain before teardown', () => {
     expect(done.stdout).not.toContain('late');
   });
 
+  it('honors process.exitCode when the entry exits normally', async () => {
+    const done = await runRealm('process.exitCode = 3;');
+    expect(done.exitCode).toBe(3);
+  });
+
+  it('honors process.exitCode assigned by a delayed callback', async () => {
+    const done = await runRealm('setTimeout(() => { process.exitCode = 4; }, 10);');
+    expect(done.exitCode).toBe(4);
+  });
+
   it('flushes sync-fs mutations made from a delayed callback', async () => {
     const flushWrites: unknown[] = [];
     const code = [

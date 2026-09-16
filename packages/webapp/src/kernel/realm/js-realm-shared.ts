@@ -510,7 +510,7 @@ async function runEntryThenDrain(opts: {
   proc: ReturnType<typeof createProcessShim>;
   timers: TimerHandleTracker;
 }): Promise<number> {
-  const exitCode = await runUserCode(
+  const entryExitCode = await runUserCode(
     opts.entryCode,
     opts.bridges,
     opts.writeStderr,
@@ -529,7 +529,8 @@ async function runEntryThenDrain(opts: {
   // sync-fs cache after the post-entry flush. Flush again so those
   // writes are not dropped when the realm tears down.
   await flushSyncFsCache(opts.rpc, opts.syncFs, opts.writeStderr);
-  return opts.proc.getDidCallProcessExit() ? opts.proc.getExitCode() : exitCode;
+  if (opts.proc.getDidCallProcessExit()) return opts.proc.getExitCode();
+  return entryExitCode === 0 ? opts.proc.getExitCode() : entryExitCode;
 }
 
 /**

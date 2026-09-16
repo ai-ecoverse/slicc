@@ -211,6 +211,7 @@ export interface RealmProcessShim {
   platform: string;
   arch: string;
   cwd: () => string;
+  exitCode: number | undefined;
   exit: (codeValue?: number) => never;
   stdin: StdinShim;
   stdout: RealmWritableShim;
@@ -229,7 +230,7 @@ export function createProcessShim(
 } {
   const noColor = !!init.env?.NO_COLOR;
   let didCallProcessExit = false;
-  let exitCode = 0;
+  let exitCode: number | undefined;
   const recordExit = (code: number): void => {
     didCallProcessExit = true;
     exitCode = code;
@@ -257,6 +258,20 @@ export function createProcessShim(
     platform: 'linux',
     arch: 'x64',
     cwd: () => init.cwd,
+    get exitCode() {
+      return exitCode;
+    },
+    set exitCode(codeValue: number | undefined) {
+      if (codeValue === undefined) {
+        exitCode = undefined;
+        return;
+      }
+      const normalized = Number(codeValue);
+      if (!Number.isInteger(normalized)) {
+        throw new TypeError('process.exitCode must be an integer');
+      }
+      exitCode = normalized;
+    },
     exit: (codeValue?: number) => {
       const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
       recordExit(normalized);
@@ -269,7 +284,7 @@ export function createProcessShim(
   return {
     processShim,
     getDidCallProcessExit: () => didCallProcessExit,
-    getExitCode: () => exitCode,
+    getExitCode: () => exitCode ?? 0,
     // Exposed so sibling shims that run user handlers in microtasks (the
     // readline shim's deferred 'line' flush) can report a caught
     // `process.exit(N)` the same way the stdin shim does.
