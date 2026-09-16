@@ -1044,10 +1044,13 @@ the caller's install (Dependabot PR #3200, `glob/node_modules/brace-expansion`
 2.0.2 -> 2.1.7, is the specimen). A nested copy under a parent that is itself
 being realigned is covered by that parent swap (knip 6.33.0 nesting
 `@oxc-project/types` under `oxc-parser` is the specimen). Nested copies that
-exist only in the dev tree are skipped: they cannot appear in `dist/ui`.
-Transitive dependencies of a realigned package stay borrowed from HEAD: a
-deliberate approximation, since the alternative is a full `npm ci` per gate
-run.
+exist only in the dev tree (`dev: true`) and DefinitelyTyped `@types/*`
+packages (declaration files; they cannot appear in `dist/ui`) are skipped
+rather than refused — otherwise a types-only bump such as `@types/node`
+24.13.3 → 24.13.4 (PR #3195) fails the gate while `npm pack` realigns a
+package the eager graphs cannot see. Transitive dependencies of a realigned
+package stay borrowed from HEAD: a deliberate approximation, since the
+alternative is a full `npm ci` per gate run.
 
 On `merge_group` the delta is skipped — a queue branch is cumulative, so
 its delta is the batch sum and a per-change allowance would fail on

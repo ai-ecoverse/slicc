@@ -303,6 +303,27 @@ describe('dependencyDrift', () => {
   });
 
   /**
+   * `@types/*` is declaration files only — it cannot appear in dist/ui.
+   * Realigning it is wasted work, and `npm pack` of `@types/node` crashed
+   * the bundle-size job (ENOENT on unpacked `package/`, PR #3195).
+   */
+  it('skips a hoisted @types package bump', () => {
+    lock(repo, { 'node_modules/@types/node': { version: '24.13.4' } });
+    lock(tree, { 'node_modules/@types/node': { version: '24.13.3' } });
+    expect(dependencyDrift(repo, tree)).toEqual(empty);
+  });
+
+  it('skips an un-hoisted nested @types copy the change removes', () => {
+    lock(repo, {});
+    lock(tree, {
+      'node_modules/@earendil-works/pi-coding-agent/node_modules/@types/node': {
+        version: '22.19.19',
+      },
+    });
+    expect(dependencyDrift(repo, tree)).toEqual(empty);
+  });
+
+  /**
    * GitHub Actions' undici lives at
    * `node_modules/@actions/http-client/node_modules/undici` and is `dev:
    * true`. A version bump there cannot change dist/ui, so refusing the
