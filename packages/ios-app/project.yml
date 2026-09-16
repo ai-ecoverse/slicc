@@ -228,6 +228,12 @@ schemes:
       coverageTargets:
         - SliccFollower
       targets:
+        # `randomExecutionOrder` on both entries is load-bearing, not a
+        # preference: it is what makes an order-dependent test fail instead of
+        # passing by luck, now that neither bundle is parallelized. Dropping it
+        # fails `npm run lint:ios-test-isolation`, which also bans the other
+        # half of the contract — a test writing UserDefaults.standard.
+        #
         # Also serial, for the UI bundle's sake rather than its own. The 47
         # unit tests total ~7s, so parallelizing them saves seconds, while the
         # simulator clones it spawns compete with the UI runner's startup and

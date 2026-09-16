@@ -927,6 +927,43 @@ class is gated the day it lands rather than needing to be opted in. The
 gate rejects a registry entry that has no reason, or one naming a
 class/method that no longer exists in the bundle.
 
+## ios-test-isolation-gate
+
+`npm run lint:ios-test-isolation`
+(`packages/dev-tools/tools/check-ios-test-isolation.mjs` + `-lib.mjs`)
+guards the only suite in the repo that cannot buy isolation with
+parallelism. Every vitest project gets a worker thread and a fresh module
+registry per file, and the Swift/Go packages run their targets
+concurrently; both `ios-app` bundles are pinned serial
+(`-parallel-testing-enabled NO`) because cloning simulators races the
+XCUITest runner's install and the clone that loses fails preflight with
+`Busy` before a test runs.
+
+Serial execution hides order dependence rather than exposing it, so
+`ios-app` substitutes two properties the gate keeps honest:
+
+- **Random execution order**, declared per test target in
+  `packages/ios-app/project.yml`. The Xcode project is XcodeGen output
+  and is not committed, so nothing else reads that declaration — dropping
+  it would silently make the bundle order-dependent-friendly again. The
+  gate hand-parses the scheme's test action (these gates stay
+  dependency-free) and rejects a target that omits or disables it.
+- **No test writes `UserDefaults.standard`.** A unit test runs inside the
+  host app's process, which makes that the app's own persistent domain:
+  shared by every test in the bundle _and_ written through to disk in the
+  simulator container, so a value outlives both the test and the run.
+  Tests take a per-test suite from `makeIsolatedDefaults`
+  (`SliccFollowerTests/IsolatedTestDefaults.swift`) instead; reads of
+  `.standard` are untouched, since that is where a UI test's launch
+  arguments land.
+
+The third leg is `ios-sim-prepare.sh`, sourced by both
+`swift-coverage-check.sh` and `ios-sim-test.sh`: it boots the device,
+blocks on `simctl bootstatus`, and uninstalls the app and the UI-test
+runner so a run cannot inherit a killed run's container. Covered by
+`ios-sim-prepare.test.mjs` (stub `xcrun`, no simulator) and
+`check-ios-test-isolation.test.mjs`.
+
 ## swiftpm-lockfile-drift-gate
 
 `packages/dev-tools/tools/check-swift-resolved-drift.mjs` runs AFTER a

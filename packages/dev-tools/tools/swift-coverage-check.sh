@@ -29,10 +29,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # Resolved before any `cd` below — BASH_SOURCE may be a relative path.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Simulator selection is shared with ios-sim-test.sh (the non-coverage CI
-# matrix legs) so the two paths cannot drift.
+# Simulator selection and pre-test preparation are shared with ios-sim-test.sh
+# (the non-coverage CI matrix legs) so the two paths cannot drift.
 # shellcheck source=packages/dev-tools/tools/ios-sim-select.sh
 source "$SCRIPT_DIR/ios-sim-select.sh"
+# shellcheck source=packages/dev-tools/tools/ios-sim-prepare.sh
+source "$SCRIPT_DIR/ios-sim-prepare.sh"
 
 select_iphone_for_sdk() {
   select_ios_sim_for_sdk "$1" iPhone
@@ -126,16 +128,10 @@ if [[ -n "$XCODE_SCHEME" ]]; then
     echo "::error::No available iPhone simulator matching the iOS $SDK_VERSION SDK (install one via 'xcodebuild -downloadPlatform iOS')"
     exit 1
   fi
-  # Boot the simulator and block until it reports ready, instead of letting
-  # `xcodebuild test` boot it lazily. A UI-test runner attaching to a
-  # still-booting device dies with "Timed out while loading Accessibility",
-  # which aborts the whole session before a single test runs — so
-  # `-retry-tests-on-failure` cannot rescue it, as that retries failed tests,
-  # not a runner that never initialized.
-  echo "==> waiting for simulator $UDID to finish booting"
-  xcrun simctl boot "$UDID" 2>/dev/null || true
-  xcrun simctl bootstatus "$UDID" -b ||
-    echo "::warning::simctl bootstatus did not report a clean boot; continuing"
+  # Boot the device and clear the app containers instead of letting
+  # `xcodebuild test` boot lazily onto whatever the last run left behind; see
+  # ios-sim-prepare.sh for why each of those matters.
+  prepare_ios_simulator "$UDID"
 
   echo "==> xcodebuild test -enableCodeCoverage YES ($PACKAGE_DIR, simulator $UDID)"
   mkdir -p .build/coverage

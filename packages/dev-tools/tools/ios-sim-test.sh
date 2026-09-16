@@ -4,8 +4,8 @@
 # SDK, the iPad regular-width regression). The canonical coverage-gated leg
 # stays in swift-coverage-check.sh; this script shares its simulator
 # selection (ios-sim-select.sh), its SLICC_IOS_SIM_UDID override, its
-# pre-boot, and its runner-init retry (swift-coverage-runner-retry.sh) so
-# the legs cannot drift.
+# pre-boot and container reset (ios-sim-prepare.sh), and its runner-init
+# retry (swift-coverage-runner-retry.sh) so the legs cannot drift.
 #
 # Usage:
 #   ios-sim-test.sh --device <name-regex> --result-bundle <path> --only-testing <spec>
@@ -45,6 +45,8 @@ done
 
 # shellcheck source=packages/dev-tools/tools/ios-sim-select.sh
 source "$SCRIPT_DIR/ios-sim-select.sh"
+# shellcheck source=packages/dev-tools/tools/ios-sim-prepare.sh
+source "$SCRIPT_DIR/ios-sim-prepare.sh"
 # shellcheck source=packages/dev-tools/tools/swift-coverage-runner-retry.sh
 source "$SCRIPT_DIR/swift-coverage-runner-retry.sh"
 
@@ -65,13 +67,9 @@ if [[ -z "$UDID" ]]; then
   exit 1
 fi
 
-# Pre-boot: a UI-test runner attaching to a still-booting device dies with
-# "Timed out while loading Accessibility" before a single test runs, which
-# -retry-tests-on-failure cannot rescue.
-echo "==> waiting for simulator $UDID to finish booting"
-xcrun simctl boot "$UDID" 2>/dev/null || true
-xcrun simctl bootstatus "$UDID" -b ||
-  echo "::warning::simctl bootstatus did not report a clean boot; continuing"
+# Pre-boot plus a clean app container — shared with the coverage leg; see
+# ios-sim-prepare.sh for why this run must not inherit the last one's state.
+prepare_ios_simulator "$UDID"
 
 echo "==> xcodebuild test ($ONLY_TESTING, simulator $UDID)"
 # `set -u` + bash 3.2 (what macOS ships) treats an empty array expansion as an

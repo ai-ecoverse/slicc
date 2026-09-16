@@ -24,9 +24,16 @@ extension AppState {
 
 /// Session-store construction, out of the main type body (lint size cap).
 extension AppState {
-    static func makeSessionStore() -> TraySessionSyncStore {
+    /// `fixtureDefaults` decides whether this store is the real iCloud-backed
+    /// one or an in-memory fixture. It is a parameter rather than a read of
+    /// `UserDefaults.standard` so a unit test can hand over an ephemeral suite
+    /// and get a store that touches neither iCloud nor any state another test
+    /// in the (randomly ordered) bundle can see.
+    static func makeSessionStore(
+        fixtureDefaults: UserDefaults = .standard
+    ) -> TraySessionSyncStore {
         #if DEBUG
-            if let fixture = UITestHooks.sessionsFixtureBackend() {
+            if let fixture = UITestHooks.sessionsFixtureBackend(defaults: fixtureDefaults) {
                 return TraySessionSyncStore(
                     backend: fixture,
                     deviceId: "ios-under-test",
@@ -42,9 +49,13 @@ extension AppState {
     /// producer here: a URL pasted into this device is otherwise invisible to
     /// every other one. `deviceName` is passed explicitly because the shared
     /// package is Foundation-only and cannot reach `UIDevice`.
-    static func makeRecentJoinStore() -> RecentJoinStore {
+    /// `fixtureDefaults` carries the same isolation contract as
+    /// `makeSessionStore(fixtureDefaults:)`.
+    static func makeRecentJoinStore(
+        fixtureDefaults: UserDefaults = .standard
+    ) -> RecentJoinStore {
         #if DEBUG
-            if let fixture = UITestHooks.recentJoinsFixtureBackend() {
+            if let fixture = UITestHooks.recentJoinsFixtureBackend(defaults: fixtureDefaults) {
                 return RecentJoinStore(
                     backend: fixture,
                     deviceId: "ios-under-test",

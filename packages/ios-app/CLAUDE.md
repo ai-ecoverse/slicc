@@ -78,6 +78,8 @@ Run `xcodebuild test` on a simulator. The coverage gate boots a matching iPhone,
 
 Object selection, `SliccFileProvider/` exclusion: [`docs`](../../docs/ios-app-details.md#coverage-gate-details).
 
+**Isolation.** Both bundles are serial (`-parallel-testing-enabled NO`; simulator clones race the UI runner's install), so independence is enforced by **random execution order** (declared per test target in `project.yml`) plus per-test state: a test seeds fixture flags through `makeIsolatedDefaults` (`SliccFollowerTests/IsolatedTestDefaults.swift`), **never `UserDefaults.standard`** — inside the host app's process that is the app's persistent domain, shared by the bundle and kept on disk between runs. `ios-sim-prepare.sh` erases both containers before each run. `npm run lint:ios-test-isolation` gates all of it: [`docs`](../../docs/dev-tools-details.md#ios-test-isolation-gate).
+
 ## UI tests (`SliccFollowerUITests`)
 
 `bundle.ui-testing` stays in the scheme; the unit gate excludes it. No test needs a leader — every fixture runs off a `#if DEBUG` launch-argument hook. **CI runs the whole bundle** (both `ios-app-tests` GA cells) minus `ui-test-exclusions.json`; leaving CI takes an entry there with a reason (`npm run lint:ios-ui-tests` rejects stale). Hooks + rules: [`docs`](../../docs/ios-app-details.md#ui-test-details).

@@ -267,11 +267,19 @@ import UIKit
         /// sessions, `-uiTestSessionsEmpty YES` a deterministic empty store.
         /// Join URLs dial 127.0.0.1:1 so a tap reaches Connection Failed
         /// hermetically, like the existing failure-state test.
-        static func sessionsFixtureBackend() -> KeyValueSyncBackend? {
-            if UserDefaults.standard.bool(forKey: "uiTestSessionsEmpty") {
+        ///
+        /// `defaults` is the launch-argument-carrying store in the app (a UI
+        /// test passes `-uiTestSessionsFixture` and the argument domain wins);
+        /// a unit test passes its own ephemeral suite instead, so neither the
+        /// flag nor its absence can travel between tests — or survive a run
+        /// that was interrupted before its cleanup.
+        static func sessionsFixtureBackend(
+            defaults: UserDefaults = .standard
+        ) -> KeyValueSyncBackend? {
+            if defaults.bool(forKey: "uiTestSessionsEmpty") {
                 return InMemoryKeyValueBackend()
             }
-            guard UserDefaults.standard.bool(forKey: "uiTestSessionsFixture") else { return nil }
+            guard defaults.bool(forKey: "uiTestSessionsFixture") else { return nil }
             let backend = InMemoryKeyValueBackend()
             let now = Date()
             seed(
@@ -327,11 +335,16 @@ import UIKit
         /// and one synced from another device (the pasted-elsewhere case the
         /// feature exists for), `-uiTestRecentJoinsEmpty YES` a deterministic
         /// empty store. Join URLs dial 127.0.0.1:1, hermetically unreachable.
-        static func recentJoinsFixtureBackend() -> KeyValueSyncBackend? {
-            if UserDefaults.standard.bool(forKey: "uiTestRecentJoinsEmpty") {
+        ///
+        /// Takes its `defaults` for the same reason as
+        /// `sessionsFixtureBackend(defaults:)`.
+        static func recentJoinsFixtureBackend(
+            defaults: UserDefaults = .standard
+        ) -> KeyValueSyncBackend? {
+            if defaults.bool(forKey: "uiTestRecentJoinsEmpty") {
                 return InMemoryKeyValueBackend()
             }
-            guard UserDefaults.standard.bool(forKey: "uiTestRecentJoinsFixture") else {
+            guard defaults.bool(forKey: "uiTestRecentJoinsFixture") else {
                 return nil
             }
             let backend = InMemoryKeyValueBackend()
