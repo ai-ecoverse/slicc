@@ -92,6 +92,12 @@ describe('feature flag registry', () => {
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
   });
 
+  it('records since as an ISO date on every flag', () => {
+    for (const flag of listFlags()) {
+      expect(flag.since).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
   it('gates panel layouts OFF by default on every float', () => {
     // Uniform across floats — no `floatDefaults` — so there is one answer to
     // "are panels on here", including inside a Cherry embed that pushes a layout.

@@ -43,7 +43,8 @@ Full inventory + per-route semantics:
 
 `FEATURE_FLAGS` (`wrangler.jsonc`) JSON var: `{ base, floats }` (per-float maps overlaying
 `base`); invalid profiles → `{ float: "default", flags: base }`. Keep prod and `env.staging`
-aligned; 5-min cache, changes need deploy.
+aligned; 5-min cache, changes need deploy. Keys must be in the webapp `FeatureFlagId`
+registry; `lint:dead-flags` fails undeclared ones. Lifecycle: [`docs/feature-flags.md`](../../docs/feature-flags.md).
 
 ### Signaling Model
 

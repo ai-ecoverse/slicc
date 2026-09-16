@@ -18,8 +18,9 @@ today. Design rationale and the trust model:
 ## Enabling the panel system
 
 The panel system is gated by the **`panel-layouts` feature flag**, which ships
-`off`. Three ways to turn it on, in precedence order (see
-`packages/webapp/src/core/feature-flags.ts`):
+`off`. Flag lifecycle (who removes a flag, when 100% ships):
+[`feature-flags.md`](feature-flags.md). Three ways to turn it on, in precedence
+order (see `packages/webapp/src/core/feature-flags.ts`):
 
 1. **Per browser, by the user** — the flag is `userToggleable`, so it appears as
    "Panel layouts" in the **Experimental features…** dialog off the avatar menu.

@@ -74,6 +74,7 @@ run_check "custom-lints" bash -c '
   npm run lint:swift-pins --silent &&
   npm run lint:no-raw-chrome-runtime-id --silent &&
   npm run lint:hosted-origin --silent &&
+  npm run lint:dead-flags --silent &&
   npm run lint:duplication --silent
 '
 

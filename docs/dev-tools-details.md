@@ -802,6 +802,28 @@ spans, and the line directly above it. Behaviour is covered by
 `check-swift-unused-deps.test.mjs`, including an end-to-end run against
 the checked-in manifests.
 
+## dead-feature-flag-gate
+
+`npm run lint:dead-flags`
+(`packages/dev-tools/tools/check-dead-flags.mjs`) is the other end of a
+flag's life. The typed registry
+(`packages/webapp/src/core/feature-flags.ts`) already drops unknown ids;
+this gate fails when a declared id has no consumer, and when a consumer
+names an id the registry does not declare. Worker overlay keys in
+`wrangler.jsonc` and `FALLBACK_BASE_FLAGS` in
+`packages/cloudflare-worker/src/flags.ts` are the string-boundary
+sources the `FeatureFlagId` union cannot see.
+
+A wrangler entry is not enough to keep a flag alive. Consumers are
+`isFeatureEnabled('…')`, `getFeatureValue('…')`, and Cherry host `flags`
+object keys. A parked flag is annotated on its registry entry with
+`// unused-flag-ok: <reason>` (or `// unused-dep-ok:`). Every registry
+entry needs `since` (`YYYY-MM-DD`); a flag whose bundled default has
+been constant across every float for 90 days is reported as a
+`stale-flag` warning. Lifecycle:
+[`feature-flags.md`](feature-flags.md). Covered by
+`check-dead-flags.test.mjs`.
+
 ## swift-coverage-retry
 
 `swift-coverage-check.sh` sources `swift-coverage-runner-retry.sh` in

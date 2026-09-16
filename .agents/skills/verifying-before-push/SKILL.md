@@ -84,7 +84,9 @@ baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `record-string-unknown-baseline.json`), `lint:patches`,
 `lint:swift-pins` (GitHub SPM packages dual-pinned in `Package.swift` and
 xcodegen `project.yml` must overlap — see `packages/dev-tools/swift-pin-reconcile/`),
-`lint:swift-deps` (SPM unused-dependency gate — see below), and `lint:duplication`.
+`lint:swift-deps` (SPM unused-dependency gate — see below), `lint:dead-flags`
+(registry vs `isFeatureEnabled` / `getFeatureValue` / Cherry host / worker overlay
+keys; waiver `// unused-flag-ok`), and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
