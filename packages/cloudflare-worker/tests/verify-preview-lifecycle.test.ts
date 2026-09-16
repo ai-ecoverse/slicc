@@ -212,17 +212,27 @@ describe('preview lifecycle prerequisite', () => {
     (file) => {
       const workflow = readFileSync(`.github/workflows/${file}`, 'utf8');
       const gate = workflow.indexOf(`node ${script} ${bucket}`);
+      const upload = workflow.indexOf(
+        'node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs',
+        gate
+      );
       expect(gate).toBeGreaterThan(0);
+      expect(upload).toBeGreaterThan(gate);
       expect(gate).toBeLessThan(workflow.indexOf('command: deploy'));
+      expect(upload).toBeLessThan(workflow.indexOf('command: deploy'));
       for (const mutation of workflow.matchAll(/command: deploy|^\s+secrets: \|/gm)) {
         expect(gate).toBeLessThan(mutation.index);
       }
-      const step = workflow.slice(
+      const gateStep = workflow.slice(
         workflow.lastIndexOf('- name:', gate),
         workflow.indexOf('- name:', gate)
       );
-      expect(step).not.toContain('continue-on-error');
-      expect(step).toContain('upload-assets-to-r2.mjs');
+      const uploadStep = workflow.slice(
+        workflow.lastIndexOf('- name:', upload),
+        workflow.indexOf('- name:', upload)
+      );
+      expect(gateStep).not.toContain('continue-on-error');
+      expect(uploadStep).not.toContain('continue-on-error');
     }
   );
 

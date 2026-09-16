@@ -937,22 +937,26 @@ collide on the port and on the proxy's outbound target. The fake-LLM
 webServer entry also sets `reuseExistingServer: false` so each run
 starts with a fresh turn cursor and fixture.
 
-In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs this
-suite as a hard PR gate feeding the required `ci` summary check. It
-triggers on changes to any runtime the harness drives or bundles —
+In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs the
+reference scenario as the pull-request smoke gate feeding the required
+`ci` summary check. The same job runs the full suite on `merge_group`, so
+the long-tail scenarios remain enforced before landing without delaying
+the first PR signal. It triggers on changes to any runtime the harness drives or bundles —
 `webapp`, `vfs-root`, `assets`, `shared-ts`, `spoon`, `webcomponents`,
-`cloud-core`, `node-server`, `cloudflare-worker` — plus `root-config`
-(dependency bumps, tsconfigs).
+`cloud-core`, `node-server`, `cloudflare-worker` — plus dependency manifests,
+patches, relevant TS/Vitest config, and the CI workflow. The workflow records
+that scope in a dedicated `e2e` paths-filter output; keep it narrower than
+`root-config` so a coverage-floor-only change does not start a browser run.
 The multi-cone leg (`multiple-cones*.test.ts`, #2313) rides the same job with
 no extra gating: it exercises the `multiple-cones` flag end to end — cone
 create / switch / drop, the rail's session actions and their freezer outcomes,
 lick addressing across cones, and the leader + follower pair above.
 Playwright retries twice in CI (`retries` in the config); locally it
-fails fast. The real-Kokoro speech round-trip rides the same job as a
-conditional leg: when the `speech` path filter matches, the run sets
-`RUN_REAL_SPEECH_E2E=1` (un-skipping `speech-roundtrip.test.ts`) and
-frees runner disk first so Chromium's free-disk-derived storage quota
-can hold the staged weights.
+fails fast. The real-Kokoro speech round-trip rides the full merge-queue
+run as a conditional leg: when the `speech` path filter matches, the run
+sets `RUN_REAL_SPEECH_E2E=1` (un-skipping `speech-roundtrip.test.ts`) and
+frees runner disk first so Chromium's free-disk-derived storage quota can
+hold the staged weights.
 
 ### Survive a wrangler Crash
 

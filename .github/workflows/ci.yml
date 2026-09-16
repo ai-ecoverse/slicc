@@ -1,4 +1,5 @@
 name: CI
+run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number || github.ref_name }}
 
 on:
   pull_request:
@@ -34,6 +35,9 @@ jobs:
       spoon: ${{ steps.filter.outputs.spoon }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
+      cloudflare-r2: ${{ steps.filter.outputs.cloudflare-r2 }}
+      cloudflare-archive-smoke: ${{ steps.filter.outputs.cloudflare-archive-smoke }}
+      e2e: ${{ steps.filter.outputs.e2e }}
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
       github-workflow: ${{ steps.filter.outputs.github-workflow }}
@@ -79,6 +83,54 @@ jobs:
               - 'packages/chrome-extension/**'
             cloudflare-worker:
               - 'packages/cloudflare-worker/**'
+            # The staging Worker deploy and live smoke run on every non-fork
+            # PR. Only the R2 archive refresh is path-gated: it re-puts the
+            # complete ~390-file asset set, so pay that cost when the webapp
+            # build graph or the archive contract can actually change.
+            cloudflare-r2:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
+              - 'packages/shared-ts/**'
+              - 'packages/webcomponents/**'
+              - 'packages/spoon/**'
+              - 'packages/cloud-core/**'
+              - 'packages/dev-tools/providers.build.json'
+              - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
+              - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
+              - 'packages/cloudflare-worker/src/asset-archive.mjs'
+              - 'packages/cloudflare-worker/tests/deployed.test.ts'
+              - 'packages/cloudflare-worker/wrangler.jsonc'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
+              - '.github/workflows/ci.yml'
+            # The live recovery smoke is cheap and also guards the Worker-side
+            # ASSETS-miss fallback. Keep that signal independent from the
+            # costly archive copy so fallback-only changes exercise R2 without
+            # re-uploading an unchanged webapp.
+            cloudflare-archive-smoke:
+              - 'packages/cloudflare-worker/src/index.ts'
+            # Cost-aware aggregate for the real-browser gate. Keeping this as
+            # one named filter makes additions reviewable and avoids making a
+            # coverage-floor-only root-config change pay for Playwright.
+            e2e:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
+              - 'packages/shared-ts/**'
+              - 'packages/spoon/**'
+              - 'packages/webcomponents/**'
+              - 'packages/cloud-core/**'
+              - 'packages/node-server/**'
+              - 'packages/cloudflare-worker/**'
+              - 'packages/dev-tools/tools/hf-cache-mirror.mjs'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
+              - 'tsconfig*.json'
+              - 'vitest*.config.*'
+              - '.github/workflows/ci.yml'
             cherry:
               - 'packages/cherry/**'
             dev-tools:
@@ -468,26 +520,21 @@ jobs:
   # readiness probe and `run_worker_first` invariants live in the worker).
   # Before the split, a node-server- or worker-only change never ran the E2E.
   #
-  # The real-Kokoro speech round-trip (`say -o` WAV validation) rides the same
-  # harness, so it runs here as a conditional leg instead of a separate job:
-  # on `speech`-filter changes the run sets `RUN_REAL_SPEECH_E2E=1` (un-skipping
-  # `speech-roundtrip.test.ts`) and first frees runner disk, because staging
-  # the Kokoro-82M weights (~92 MB in OPFS) needs Chromium's per-origin storage
-  # quota — derived from free disk — to not be the variable under test.
+  # Pull requests run the reference fake-LLM scenario: it boots the production
+  # topology, completes three agent turns, and drives CDP, but avoids putting the
+  # suite's long tail on the required `ci` signal. The merge queue runs every
+  # spec before landing. This keeps PR feedback bounded by the ~8-minute webapp
+  # coverage job while preserving the full end-to-end gate at merge time.
+  #
+  # The real-Kokoro speech round-trip (`say -o` WAV validation) rides the full
+  # merge-queue suite: on `speech`-filter changes the run sets
+  # `RUN_REAL_SPEECH_E2E=1` (un-skipping `speech-roundtrip.test.ts`) and first
+  # frees runner disk, because staging the Kokoro-82M weights (~92 MB in OPFS)
+  # needs Chromium's per-origin storage quota — derived from free disk — to not
+  # be the variable under test.
   e2e:
     needs: changes
-    if: >-
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
-      needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.shared == 'true' ||
-      needs.changes.outputs.spoon == 'true' ||
-      needs.changes.outputs.webcomponents == 'true' ||
-      needs.changes.outputs.cloud-core == 'true' ||
-      needs.changes.outputs.node-server == 'true' ||
-      needs.changes.outputs.cloudflare-worker == 'true' ||
-      needs.changes.outputs.root-config == 'true' ||
-      needs.changes.outputs.speech == 'true'
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     # Budget covers setup + three builds + the full suite on one worker, and on
     # the speech leg the kokoro spec alone may take up to its 25-minute test
@@ -518,7 +565,7 @@ jobs:
       # to keep that claim checkable. Speech leg only — ordinary runs don't
       # pay the ~30 s of `rm`.
       - name: Free disk space for the browser storage quota
-        if: needs.changes.outputs.speech == 'true'
+        if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -546,7 +593,7 @@ jobs:
       # (`HF_ENDPOINT`) so a warm run never touches the CDN; the store is keyed
       # on the spec, which pins the exact file list, with a prefix fallback.
       - name: Cache Hugging Face mirror store
-        if: needs.changes.outputs.speech == 'true'
+        if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/hf-mirror
@@ -554,7 +601,7 @@ jobs:
           restore-keys: |
             hf-mirror-
       - name: Start Hugging Face caching mirror
-        if: needs.changes.outputs.speech == 'true'
+        if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: |
           mkdir -p .cache/hf-mirror
           nohup node packages/dev-tools/tools/hf-cache-mirror.mjs \
@@ -563,7 +610,18 @@ jobs:
           for i in $(seq 1 50); do [ -f .cache/hf-mirror.ready ] && break; sleep 0.2; done
           test -f .cache/hf-mirror.ready || { cat .cache/hf-mirror.log; exit 1; }
           echo "HF_ENDPOINT=http://127.0.0.1:8791" >> "$GITHUB_ENV"
-      - name: E2E tests
+      - name: PR E2E smoke test
+        if: github.event_name == 'pull_request'
+        # The reference scenario is the smallest test that crosses every core
+        # seam: real WC composer + kernel worker + fake model + bash tool + CDP.
+        # Its three deterministic turns retain a useful integration signal
+        # without making PRs wait for the 16-minute long tail (#3146).
+        run: npm run test:e2e -- packages/webapp/tests/e2e/reference-scenario.test.ts
+        env:
+          WRANGLER_LOG: debug
+          NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Full E2E suite
+        if: github.event_name != 'pull_request'
         # Includes the two-instance multiple-cones leg (#2313): the same
         # `wrangler dev` that serves the UI is the tray hub a second browser
         # context joins, so the leader/follower specs need no extra service —
@@ -582,7 +640,7 @@ jobs:
           # surfaces changed; everywhere else the test self-skips.
           RUN_REAL_SPEECH_E2E: ${{ needs.changes.outputs.speech == 'true' && '1' || '' }}
       - name: Mirror log
-        if: always() && needs.changes.outputs.speech == 'true'
+        if: always() && github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: cat .cache/hf-mirror.log || true
       - name: Upload Playwright artifacts
         # Playwright's report + trace + screenshots are the primary post-mortem
@@ -783,19 +841,23 @@ jobs:
         run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
+    name: Cloudflare staging deploy
     needs: changes
-    if: >-
-      needs.changes.outputs.cloud-core == 'true' ||
-      needs.changes.outputs.cloudflare-worker == 'true' ||
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
-      needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      # Fork PRs cannot receive the repository's Cloudflare credentials. They
+      # still run every local Worker gate; all trusted PRs deploy + smoke.
+      RUN_CLOUDFLARE_STAGING: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
     # Raised from 15: the job itself runs ~9 minutes, which left no room for
     # the npm-ci action to time out a hung install and retry it (~9 minutes).
     # A single hang would have failed the job instead of recovering from it.
-    timeout-minutes: 25
+    # Turnstyle can wait behind any number of older staging mutations. Unlike
+    # native concurrency, it does not discard the existing pending run when a
+    # third contender arrives.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -843,22 +905,46 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
 
-      # #1330 retention: archive this build's content-hashed assets to the
-      # STAGING R2 bucket BEFORE any deploy attempt so long-lived tabs can
-      # recover gone lazy chunks. Hard-fail gate (NOT continue-on-error) — a
-      # build must never go live unarchived. Shares the deploy step's non-fork
-      # guard so it never runs without Cloudflare secrets on fork PRs.
-      - name: Archive assets to R2 (staging)
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+      # Both this job and worker-staging.yml mutate the same staging Worker;
+      # the specialized workflow also overwrites the shared e2b alias. Wait in
+      # FIFO order through the final smoke/preview step. GitHub's native
+      # concurrency keeps only one pending run and would cancel a required CI
+      # job when a third contender arrived.
+      - name: Wait for staging mutation turn
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4 # v3.3.3
+        with:
+          queue-name: staging-mutation-queue
+          same-branch-only: false
+          job-to-wait-for: Cloudflare staging deploy
+          step-to-wait-for: Release staging mutation queue
+          poll-interval-seconds: 10
+          initial-wait-seconds: 20
+          retries: 3
+
+      # The preview-storage lifecycle is a cheap, read-only prerequisite for
+      # every deploy. Keep it separate from the expensive asset copy so timing
+      # data can distinguish policy verification from R2 object uploads.
+      - name: Verify preview storage lifecycle
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
-          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
-      # Deploy to staging on PRs (not forks) and pushes to main.
+        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
+      # #1330 retention: refresh the complete content-hashed asset set before
+      # deploying a build whose static output can differ. Worker-only changes
+      # still get the staging deploy + live smoke signal, but do not re-copy an
+      # unchanged ~390-file webapp archive (#3146).
+      - name: Archive assets to R2 (staging)
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && needs.changes.outputs.cloudflare-r2 == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+      # Deploy to staging and run the live smoke test for every trusted PR.
+      # The required `ci` summary consumes this job, so the deployed signal is
+      # visible before review/merge rather than deferred to the merge queue.
       #
       # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
       # wrangler-action runs `wrangler secret bulk` BEFORE the `command:`
@@ -878,9 +964,7 @@ jobs:
       # production Worker.
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -891,9 +975,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 1)
         id: deploy_attempt_1_secrets
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -911,11 +993,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 2
-        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         run: sleep 20
       - name: Deploy staging worker (attempt 2)
         id: deploy_attempt_2
-        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -926,7 +1008,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 2)
         id: deploy_attempt_2_secrets
-        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -944,11 +1026,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 3
-        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         run: sleep 40
       - name: Deploy staging worker (attempt 3)
         id: deploy_attempt_3
-        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -959,7 +1041,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 3)
         id: deploy_attempt_3_secrets
-        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -978,7 +1060,7 @@ jobs:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Finalize staging deploy
         id: deploy
-        if: (steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && ((steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success'))
         env:
           DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
           DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
@@ -1000,12 +1082,10 @@ jobs:
           fi
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-          SLICC_ARCHIVE_SMOKE: '1'
+          SLICC_ARCHIVE_SMOKE: ${{ (needs.changes.outputs.cloudflare-r2 == 'true' || needs.changes.outputs.cloudflare-archive-smoke == 'true') && '1' || '' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
@@ -1026,7 +1106,7 @@ jobs:
       # Runs after the main worker so the TRAY_HUB DO (referenced via
       # script_name) is up to date.
       - name: Deploy staging preview worker
-        if: steps.deploy.outcome == 'success'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy.outcome == 'success'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1035,6 +1115,33 @@ jobs:
           workingDirectory: packages/cloudflare-worker
           environment: staging
           command: deploy --env staging --config wrangler-preview.jsonc
+
+      - name: Release staging mutation queue
+        if: always()
+        run: true
+
+      # GitHub exposes timestamps for every completed step through the Actions
+      # jobs API. Publish them as both a run-summary table and machine-readable
+      # JSON so archive, deploy, secret, retry, propagation, and local-gate
+      # regressions are distinguishable without manually adding log markers.
+      - name: Publish Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node packages/dev-tools/tools/ci-job-timing.mjs
+          --job "Cloudflare staging deploy"
+          --title "Cloudflare worker timings"
+          --output test-results/cloudflare-worker-phase-timing.json
+          --exclude-step "Publish Cloudflare timing diagnostics"
+      - name: Upload Cloudflare timing diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloudflare-worker-phase-timing
+          path: test-results/cloudflare-worker-phase-timing.json
+          if-no-files-found: ignore
 
   cloud-core:
     needs: changes

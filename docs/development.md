@@ -412,6 +412,10 @@ CI-only vitest settings, both defined in `vitest.config.ts`:
   writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`,
   `node-server`, and `chrome-extension` CI jobs upload it as `test-timing-<package>`.
   Reproduce locally with `CI=1 npm run test`.
+- **Cloudflare phases** — both staging workflows call
+  `packages/dev-tools/tools/ci-job-timing.mjs` at the end of the job. The Actions summary
+  shows every setup, build, R2, Wrangler, secret, retry, and smoke step with its duration;
+  the corresponding `*-phase-timing` artifact retains the same data as JSON.
 - **Retries** — the `node-server` and `chrome-extension` projects retry once in CI (`0`
   locally); Playwright E2E retries twice in CI. Every other project has no retries.
 
@@ -441,13 +445,20 @@ Nothing else is required for CI configuration:
 
 ### Workflow behavior
 
+- `.github/workflows/ci.yml`
+  - builds, validates, deploys, and smoke-tests the staging Worker on every non-fork pull request; fork PRs still run the local Worker gates because GitHub withholds deployment secrets
+  - gates only the bulk R2 asset refresh (and archive recovery smoke) on `cloudflare-r2`, which tracks the webapp build graph and archive contract; Worker-only changes still deploy and smoke
+  - runs the full Playwright suite on affected `merge_group` batches; the required `ci` summary waits for it before landing
+  - retries staging deploys and the deployed smoke test to tolerate transient Worker propagation failures
+  - publishes per-step Cloudflare timings in the run summary and `cloudflare-worker-phase-timing` JSON artifact
+- `.github/workflows/worker-staging.yml`
+  - provides a specialized, non-required staging deployment on non-fork pull requests that touch Worker, cloud-core, or provider integration paths
+  - shares the FIFO `staging-mutation-queue` Turnstyle queue with the main CI Worker job because the staging Worker and `slicc-staging` e2b alias are shared singletons; native concurrency is not used because it discards an existing pending run when a third contender arrives
+  - uploads the staging-only APNs secrets that the main CI path does not manage
+  - mirrors the main workflow's complete R2 build-input set inside its narrower workflow trigger, runs the cheap archive-recovery smoke for Worker fallback changes without forcing an upload, and publishes the same phase timing diagnostics
 - `.github/workflows/worker.yml`
-  - runs staging deploy + smoke test on pull requests to `main` that touch the Worker/Wrangler config
-  - skips forked PRs because GitHub does not expose deployment secrets there
-  - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
-  - supports manual dispatch with `target=staging|production`
-  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), points Wrangler at `packages/cloudflare-worker/wrangler.jsonc`, and passes its `deployment-url` output into `packages/cloudflare-worker/tests/deployed.test.ts`
-  - retries the deployed smoke test for up to ~90 seconds after deploy so brief `workers.dev` propagation lag does not fail an otherwise healthy rollout
+  - manually deploys production from `main` with `workflow_dispatch`
+  - archives assets before deploy and smoke-tests the resulting Worker URL
 
 ### Local validation commands
 

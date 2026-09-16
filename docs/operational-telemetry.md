@@ -348,23 +348,41 @@ follower that polls without backoff, a preview bridge that never closes. Those s
 a DO-duration spike long before anyone notices a functional regression. The tripwire is,
 in practice, the worker's only automated post-deploy alarm.
 
-**Staging goes first — when the job runs.** The `cloudflare-worker` job in
-`.github/workflows/ci.yml` deploys `slicc-tray-hub-staging`, and when it does a bad change
-is observable on the staging origin before production. Both halves of "when" matter. The
-job is behind a `dorny/paths-filter` gate — one of `cloud-core`, `cloudflare-worker`,
-`webapp`, `vfs-root`, `assets`, or `root-config` must have changed — so a PR touching
-anything else never deploys staging at all. And the deploy steps themselves are guarded by
-`(pull_request && head.repo.fork == false) || push`: there is no push-to-main trigger
-(`on.push` lists a single automation branch, and main lands via `merge_group`, which that
-guard excludes), so in practice staging deploys come from non-fork PRs only. The deploy
-steps are `continue-on-error` with retries, so a staging deploy that failed outright still
-leaves the job green — read the log, not the check mark.
+**Staging goes first — on every trusted pull request.** The `cloudflare-worker` job in
+`.github/workflows/ci.yml` always builds and validates the Worker, then deploys
+`slicc-tray-hub-staging` and runs the live smoke suite for non-fork pull requests. Forks
+still run all local gates, but GitHub withholds the deployment credentials. The required
+`ci` summary waits for this result before review/merge, and `merge_group` rechecks the
+synthetic merge commit.
+
+The expensive operation is isolated instead of dropping the deployment signal. The
+`cloudflare-r2` path filter follows the webapp build graph and the archive contract; only
+matching changes re-put the complete content-hashed asset set and enable the R2 recovery
+smoke. Worker-only changes verify preview-storage lifecycle, deploy, and smoke against the
+archive already associated with the unchanged webapp output. Individual Wrangler attempts
+use `continue-on-error`, but the finalizer fails after three unsuccessful attempts and the
+deployed smoke is a hard gate.
+
+At the end of both staging workflows, `ci-job-timing.mjs` reads the Actions job timestamps
+and emits a run-summary table plus a JSON artifact. That makes npm setup, webapp build,
+local Worker validation, lifecycle verification, bulk R2 copy, each Wrangler/secret
+attempt, retry waits, and propagation smoke separately measurable.
+
+`.github/workflows/worker-staging.yml` separately gives relevant non-fork pull requests an
+early, non-required staging deployment and owns the staging-only APNs secret upload. Those
+runs share the FIFO `staging-mutation-queue` Turnstyle queue with the main CI Worker job
+because the Worker and `slicc-staging` e2b alias are shared singletons. The queue marker
+ends after live smoke/preview deployment, so unrelated trailing workflow work does not hold
+the lock. Native Actions concurrency is intentionally not used here: it retains only one
+pending member and a third contender cancels the prior pending run. The specialized
+workflow's internal R2 filter mirrors the complete main-workflow build-input set, even
+though the workflow itself has a narrower trigger, so a combined Worker + UI change cannot
+deploy unarchived chunks.
 `packages/cloudflare-worker/tests/deployed.test.ts` is the live-endpoint suite to point at
-it (`WORKER_BASE_URL=https://… npm test -- tests/deployed.test.ts` from
-`packages/cloudflare-worker/`). Production deploys run through
-`.github/workflows/worker.yml`; `.github/workflows/worker-staging.yml` is the manual
-staging path. Full runbook — retry logic, routes-only failure classification, R2 archive
-mechanics, ghost-leader analysis — is in
+either deployment (`WORKER_BASE_URL=https://… npm test -- tests/deployed.test.ts` from
+`packages/cloudflare-worker/`). Production deploys run through the manually dispatched
+`.github/workflows/worker.yml`. Full runbook — retry logic, routes-only failure
+classification, R2 archive mechanics, ghost-leader analysis — is in
 [`.agents/skills/deploying-tray-worker/SKILL.md`](../.agents/skills/deploying-tray-worker/SKILL.md)
 (`docs/tray-worker-operations.md` is a stub that redirects there).
 

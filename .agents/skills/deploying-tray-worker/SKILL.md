@@ -82,16 +82,29 @@ script (`packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs`) fails the 
 if any `dist/ui/assets/*` name lacks a hash, and the worker's routing predicate enforces
 the same rule (defined in the shared `asset-archive.mjs` module).
 
-### Run the upload gate before every deploy
+### Run the upload gate before asset-changing deploys
 
-Every deploy path (prod automated via `publish-worker.sh`, prod manual via `worker.yml`,
-staging via `ci.yml` and `worker-staging.yml`) runs the upload step **before the first
-`wrangler deploy` attempt**. The production release script also runs it when its
-worker/UI change gate skips deployment. The upload re-puts the **entire current asset
-set** to the archive (no skip-if-exists; refreshes `last-modified` which the GC relies
-on) with retries and bounded concurrency, failing the release hard if any file fails to
-upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must have R2
-Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
+Production deploy paths (`publish-worker.sh` and `worker.yml`) run the upload before the
+first `wrangler deploy` attempt, and the release script refreshes the archive even when
+its Worker/UI deploy gate skips. Pull-request staging keeps the deploy + live smoke on
+every trusted PR, but gates the bulk upload on the `cloudflare-r2` path signal: webapp
+sources and bundled workspace dependencies, dependency metadata/patches, or the archive
+contract itself. When that signal is false, the built static output is unchanged, so the
+already archived content hashes remain valid and CI avoids re-putting ~390 identical
+objects. `worker-staging.yml` follows the same rule within its narrower trigger set.
+Its internal R2 filter must mirror the complete `ci.yml` build-input set so a PR that
+combines a workflow-triggering Worker change with any UI input cannot skip the archive.
+
+Whenever the upload runs, it must finish **before the first deploy attempt**. It re-puts
+the entire current asset set (no skip-if-exists; refreshes `last-modified` which the GC
+relies on) with retries and bounded concurrency, failing the release hard if any file
+fails to upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must
+have R2 Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
+
+The deployed archive-recovery smoke has its own cheap path signal. Changes to the
+Worker-side fallback in `src/index.ts` must enable that smoke even when the built asset
+set is unchanged; do not add those changes to the costly upload signal just to obtain
+fallback coverage.
 
 The R2 API rate-limits bursts of `wrangler r2 object put` calls with `429` / error code
 `971` ("Please wait and consider throttling your request speed"). Concurrency defaults to
@@ -194,8 +207,8 @@ deployment token permissions listed below when adding this access.
 `publish-worker.sh`, `worker.yml`, `worker-staging.yml`, and the staging deploy
 in `ci.yml` run this read-only gate before deployment and before secret uploads.
 Production release skips still refresh the asset archive but do not read preview
-lifecycle policy. On the deploy path, archive refresh precedes this gate so a
-preview prerequisite failure cannot prevent retention refresh.
+lifecycle policy. The PR staging workflows keep lifecycle verification separate from
+the conditional bulk archive step so their phase timings identify each operation.
 Network/timeout failures, HTTP 429 and 5xx receive at most three GET attempts,
 each bounded to 30 seconds, with 1s then 2s backoff. Exhaustion fails closed with
 instructions to check Cloudflare status/network and rerun. HTTP 401/403 fail
@@ -461,6 +474,29 @@ inputs deploy both workers and run the live smoke tests. First releases always d
 releases with only unrelated changes refresh the R2 archive and exit before the template
 push, secret writes, both `wrangler deploy` calls, and deployed smoke tests.
 
+The merge-blocking staging path in `.github/workflows/ci.yml` deploys the hub, runs the
+live smoke suite, and deploys the preview Worker for every trusted pull request (forks
+cannot receive the deployment credentials). Only the bulk archive refresh and its R2
+recovery smoke are conditional on the dedicated `cloudflare-r2` filter. Keep that filter
+aligned with the webapp build graph and archive contract; Worker-only changes must still
+deploy and smoke without copying an unchanged asset set.
+
+The main `cloudflare-worker` job and `worker-staging.yml` share the
+`staging-mutation-queue` Turnstyle queue. Both mutate the same staging Worker, and the
+specialized workflow also overwrites the shared `slicc-staging` e2b alias, so allowing
+them to overlap could replace one run's artifact between finalization and its smoke test.
+Keep the queue token in both workflow run names, the job names identical, and the
+`Release staging mutation queue` marker after the last deploy/smoke mutation. Do not
+replace this with a native Actions concurrency group: GitHub retains only one pending
+member per group and a third contender cancels that pending run even when
+`cancel-in-progress` is false. Turnstyle waits through every older matching run instead;
+unrelated CI jobs remain parallel.
+
+Both `ci.yml` and `worker-staging.yml` publish an Actions summary table and JSON timing
+artifact generated by `packages/dev-tools/tools/ci-job-timing.mjs`. Use those timings to
+separate install/build/unit-test cost from lifecycle verification, R2 upload, each
+Wrangler deploy/secret attempt, retry waits, and propagation smoke.
+
 ### Inspect retry logic
 
 Production hub and preview deploys each retry up to six times with a 15-second delay.
@@ -537,8 +573,9 @@ npm run build -w @slicc/webapp
 
 ### Upload assets to R2, then deploy
 
-The R2 upload gate **must** run before the first `wrangler deploy` attempt (see
-"Run the upload gate before every deploy" above). Then deploy both workers as a pair:
+A manual deploy must assume its assets changed, so the R2 upload gate **must** run before
+the first `wrangler deploy` attempt (see "Run the upload gate before asset-changing
+deploys" above). Then deploy both workers as a pair:
 
 ```bash
 # From the repository root:
