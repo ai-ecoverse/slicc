@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+const workerStagingWorkflow = readFileSync('.github/workflows/worker-staging.yml', 'utf8');
 
 function jobBody(name, nextName) {
   const start = workflow.indexOf(`\n  ${name}:`);
@@ -46,12 +47,20 @@ describe('CI critical-path routing', () => {
   });
 
   it('tracks the costly checks with dedicated, reviewable path filters', () => {
-    expect(filterPaths('cloudflare-staging', 'e2e')).toEqual([
-      'packages/cloudflare-worker/**',
-      'packages/cloud-core/**',
+    expect(filterPaths('cloudflare-r2', 'e2e')).toEqual([
+      'packages/webapp/**',
+      'packages/vfs-root/**',
+      'packages/assets/**',
       'packages/shared-ts/**',
-      'packages/webapp/src/providers/**',
-      'packages/webapp/providers/**',
+      'packages/webcomponents/**',
+      'packages/spoon/**',
+      'packages/cloud-core/**',
+      'packages/dev-tools/providers.build.json',
+      'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs',
+      'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs',
+      'packages/cloudflare-worker/src/asset-archive.mjs',
+      'packages/cloudflare-worker/tests/deployed.test.ts',
+      'packages/cloudflare-worker/wrangler.jsonc',
       'package.json',
       'package-lock.json',
       'patches/**',
@@ -63,9 +72,22 @@ describe('CI critical-path routing', () => {
     expect(e2ePaths).not.toContain('coverage-thresholds.json');
   });
 
-  it('keeps every live staging mutation on the merge-queue side of the gate', () => {
+  it('keeps staging deploy and smoke on every trusted PR while path-gating only R2', () => {
+    const header = worker.slice(0, worker.indexOf('    steps:'));
+    expect(header).not.toContain('\n    if:');
+    expect(header).toContain(
+      "RUN_CLOUDFLARE_STAGING: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}"
+    );
+
+    const lifecycle = stepBody(worker, 'Verify preview storage lifecycle');
+    expect(lifecycle).toContain("if: env.RUN_CLOUDFLARE_STAGING == 'true'");
+    expect(lifecycle).not.toContain('needs.changes.outputs.cloudflare-r2');
+
+    const archive = stepBody(worker, 'Archive assets to R2 (staging)');
+    expect(archive).toContain("if: env.RUN_CLOUDFLARE_STAGING == 'true'");
+    expect(archive).toContain("needs.changes.outputs.cloudflare-r2 == 'true'");
+
     const stagingSteps = [
-      'Archive assets to R2 (staging)',
       'Deploy staging worker (attempt 1)',
       'Upload staging secrets (attempt 1)',
       'Wait before staging deploy retry 2',
@@ -75,16 +97,30 @@ describe('CI critical-path routing', () => {
       'Deploy staging worker (attempt 3)',
       'Upload staging secrets (attempt 3)',
       'Finalize staging deploy',
-      'Smoke test staging',
       'Deploy staging preview worker',
     ];
 
     for (const name of stagingSteps) {
       const step = stepBody(worker, name);
-      expect(step).toContain("github.event_name == 'merge_group'");
-      expect(step).toContain("needs.changes.outputs.cloudflare-staging == 'true'");
+      expect(step).toContain("env.RUN_CLOUDFLARE_STAGING == 'true'");
+      expect(step).not.toContain('needs.changes.outputs.cloudflare-r2');
     }
 
-    expect(worker).not.toContain('github.event.pull_request.head.repo.fork');
+    const smoke = stepBody(worker, 'Smoke test staging');
+    expect(smoke).toContain("if: env.RUN_CLOUDFLARE_STAGING == 'true'");
+    expect(smoke).toContain(
+      "SLICC_ARCHIVE_SMOKE: ${{ needs.changes.outputs.cloudflare-r2 == 'true' && '1' || '' }}"
+    );
+  });
+
+  it('publishes phase timing summaries for both Cloudflare staging paths', () => {
+    const timing = stepBody(worker, 'Publish Cloudflare timing diagnostics');
+    expect(timing).toContain('ci-job-timing.mjs');
+    expect(timing).toContain('--job cloudflare-worker');
+    expect(worker).toContain('name: cloudflare-worker-phase-timing');
+
+    expect(workerStagingWorkflow).toContain('--job "Deploy staging + smoke test"');
+    expect(workerStagingWorkflow).toContain('name: worker-staging-phase-timing');
+    expect(workerStagingWorkflow).toContain("steps.changes.outputs.r2 == 'true'");
   });
 });

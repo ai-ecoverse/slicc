@@ -348,21 +348,30 @@ follower that polls without backoff, a preview bridge that never closes. Those s
 a DO-duration spike long before anyone notices a functional regression. The tripwire is,
 in practice, the worker's only automated post-deploy alarm.
 
-**Staging goes first — at the merge boundary.** The `cloudflare-worker` job in
-`.github/workflows/ci.yml` keeps its pull-request path local: Worker build/dry-run,
-typecheck, and coverage finish without waiting for the shared staging environment. On
-`merge_group`, the live tail uses its own `cloudflare-staging` path signal: Worker,
-cloud-core, shared, provider-wiring, dependency metadata/patch, or CI-workflow changes
-archive the content-hashed assets, deploy `slicc-tray-hub-staging`, and run the smoke test.
-The required `ci` summary waits for that result before the batch lands. General
-webapp/VFS/asset changes still get the local Worker dry-run and standalone Playwright
-coverage, but do not mutate staging merely because their files are served by the Worker.
-Individual Wrangler attempts use `continue-on-error`, but the finalizer fails after three
-unsuccessful attempts and the deployed smoke is a hard gate.
+**Staging goes first — on every trusted pull request.** The `cloudflare-worker` job in
+`.github/workflows/ci.yml` always builds and validates the Worker, then deploys
+`slicc-tray-hub-staging` and runs the live smoke suite for non-fork pull requests. Forks
+still run all local gates, but GitHub withholds the deployment credentials. The required
+`ci` summary waits for this result before review/merge, and `merge_group` rechecks the
+synthetic merge commit.
+
+The expensive operation is isolated instead of dropping the deployment signal. The
+`cloudflare-r2` path filter follows the webapp build graph and the archive contract; only
+matching changes re-put the complete content-hashed asset set and enable the R2 recovery
+smoke. Worker-only changes verify preview-storage lifecycle, deploy, and smoke against the
+archive already associated with the unchanged webapp output. Individual Wrangler attempts
+use `continue-on-error`, but the finalizer fails after three unsuccessful attempts and the
+deployed smoke is a hard gate.
+
+At the end of both staging workflows, `ci-job-timing.mjs` reads the Actions job timestamps
+and emits a run-summary table plus a JSON artifact. That makes npm setup, webapp build,
+local Worker validation, lifecycle verification, bulk R2 copy, each Wrangler/secret
+attempt, retry waits, and propagation smoke separately measurable.
 
 `.github/workflows/worker-staging.yml` separately gives relevant non-fork pull requests an
 early, non-required staging deployment and owns the staging-only APNs secret upload. Those
-runs serialize because the Worker and `slicc-staging` e2b alias are shared singletons.
+runs serialize because the Worker and `slicc-staging` e2b alias are shared singletons, and
+they apply the same R2-only-on-asset-change rule within their narrower trigger set.
 `packages/cloudflare-worker/tests/deployed.test.ts` is the live-endpoint suite to point at
 either deployment (`WORKER_BASE_URL=https://… npm test -- tests/deployed.test.ts` from
 `packages/cloudflare-worker/`). Production deploys run through the manually dispatched

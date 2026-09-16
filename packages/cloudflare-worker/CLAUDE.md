@@ -128,7 +128,8 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 ## CI and Deployment
 
 `release-native.mjs --gate=worker` gates production. Hub + preview configs deploy as a pair
-(shared DO/token format); R2 uploads precede deploy; routes-only failures non-fatal. The
+(shared DO/token format); asset-changing deploys archive R2 first; routes-only failures
+non-fatal. The
 read-only `verify-preview-lifecycle.mjs` gate fails deployment if `sliccy-now-basic-storage`
 lacks a safe `previews/` object-age lifecycle rule, and never mutates policy. TTL math, token
 scopes (`CLOUDFLARE_API_TOKEN`), retries, staging deploy, `serve --bridge`, operator setup:

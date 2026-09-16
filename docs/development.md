@@ -412,6 +412,10 @@ CI-only vitest settings, both defined in `vitest.config.ts`:
   writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`,
   `node-server`, and `chrome-extension` CI jobs upload it as `test-timing-<package>`.
   Reproduce locally with `CI=1 npm run test`.
+- **Cloudflare phases** — both staging workflows call
+  `packages/dev-tools/tools/ci-job-timing.mjs` at the end of the job. The Actions summary
+  shows every setup, build, R2, Wrangler, secret, retry, and smoke step with its duration;
+  the corresponding `*-phase-timing` artifact retains the same data as JSON.
 - **Retries** — the `node-server` and `chrome-extension` projects retry once in CI (`0`
   locally); Playwright E2E retries twice in CI. Every other project has no retries.
 
@@ -442,14 +446,16 @@ Nothing else is required for CI configuration:
 ### Workflow behavior
 
 - `.github/workflows/ci.yml`
-  - keeps pull-request feedback fast by running the Worker build, dry-run, typecheck, and coverage plus the reference fake-LLM E2E scenario
+  - builds, validates, deploys, and smoke-tests the staging Worker on every non-fork pull request; fork PRs still run the local Worker gates because GitHub withholds deployment secrets
+  - gates only the bulk R2 asset refresh (and archive recovery smoke) on `cloudflare-r2`, which tracks the webapp build graph and archive contract; Worker-only changes still deploy and smoke
   - runs the full Playwright suite on affected `merge_group` batches; the required `ci` summary waits for it before landing
-  - runs the staging R2 archive, deploy, and deployed smoke test only when the merge group changes Worker/cloud-core/shared code, provider wiring, dependency metadata/patches, or the CI workflow—not for every webapp/VFS/asset change
   - retries staging deploys and the deployed smoke test to tolerate transient Worker propagation failures
+  - publishes per-step Cloudflare timings in the run summary and `cloudflare-worker-phase-timing` JSON artifact
 - `.github/workflows/worker-staging.yml`
   - provides a specialized, non-required staging deployment on non-fork pull requests that touch Worker, cloud-core, or provider integration paths
   - serializes runs because the staging Worker and `slicc-staging` e2b alias are shared singletons
-  - uploads the staging-only APNs secrets that the merge-queue CI path does not manage
+  - uploads the staging-only APNs secrets that the main CI path does not manage
+  - uses its narrower R2 path signal and publishes the same phase timing diagnostics
 - `.github/workflows/worker.yml`
   - manually deploys production from `main` with `workflow_dispatch`
   - archives assets before deploy and smoke-tests the resulting Worker URL

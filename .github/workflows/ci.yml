@@ -34,7 +34,7 @@ jobs:
       spoon: ${{ steps.filter.outputs.spoon }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
-      cloudflare-staging: ${{ steps.filter.outputs.cloudflare-staging }}
+      cloudflare-r2: ${{ steps.filter.outputs.cloudflare-r2 }}
       e2e: ${{ steps.filter.outputs.e2e }}
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
@@ -80,17 +80,24 @@ jobs:
               - 'packages/chrome-extension/**'
             cloudflare-worker:
               - 'packages/cloudflare-worker/**'
-            # Live staging mutates shared Cloudflare resources and costs ~12m.
-            # Gate it on code that compiles into the Worker (plus the narrow
-            # provider surface that benefits from a deployed preview), not on
-            # every static webapp/VFS/asset change. Those still get the local
-            # Worker dry-run and the standalone E2E harness.
-            cloudflare-staging:
-              - 'packages/cloudflare-worker/**'
-              - 'packages/cloud-core/**'
+            # The staging Worker deploy and live smoke run on every non-fork
+            # PR. Only the R2 archive refresh is path-gated: it re-puts the
+            # complete ~390-file asset set, so pay that cost when the webapp
+            # build graph or the archive contract can actually change.
+            cloudflare-r2:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
               - 'packages/shared-ts/**'
-              - 'packages/webapp/src/providers/**'
-              - 'packages/webapp/providers/**'
+              - 'packages/webcomponents/**'
+              - 'packages/spoon/**'
+              - 'packages/cloud-core/**'
+              - 'packages/dev-tools/providers.build.json'
+              - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
+              - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
+              - 'packages/cloudflare-worker/src/asset-archive.mjs'
+              - 'packages/cloudflare-worker/tests/deployed.test.ts'
+              - 'packages/cloudflare-worker/wrangler.jsonc'
               - 'package.json'
               - 'package-lock.json'
               - 'patches/**'
@@ -821,15 +828,14 @@ jobs:
 
   cloudflare-worker:
     needs: changes
-    if: >-
-      needs.changes.outputs.cloud-core == 'true' ||
-      needs.changes.outputs.cloudflare-worker == 'true' ||
-      needs.changes.outputs.shared == 'true' ||
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
-      needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      # Fork PRs cannot receive the repository's Cloudflare credentials. They
+      # still run every local Worker gate; all trusted PRs deploy + smoke.
+      RUN_CLOUDFLARE_STAGING: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
     # Raised from 15: the job itself runs ~9 minutes, which left no room for
     # the npm-ci action to time out a hung install and retry it (~9 minutes).
     # A single hang would have failed the job instead of recovering from it.
@@ -881,24 +887,29 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
 
-      # #1330 retention: archive this build's content-hashed assets to the
-      # STAGING R2 bucket BEFORE any deploy attempt so long-lived tabs can
-      # recover gone lazy chunks. Hard-fail gate (NOT continue-on-error) — a
-      # build must never go live unarchived. The live staging path runs in the
-      # merge queue, after the PR's fast local worker gates have passed, so the
-      # required PR signal does not wait on R2 upload and propagation (#3146).
-      - name: Archive assets to R2 (staging)
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true'
+      # The preview-storage lifecycle is a cheap, read-only prerequisite for
+      # every deploy. Keep it separate from the expensive asset copy so timing
+      # data can distinguish policy verification from R2 object uploads.
+      - name: Verify preview storage lifecycle
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
-          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
-      # Deploy to staging in the merge queue, where the required `ci` summary
-      # enforces the live smoke test before the batch lands. Pull requests keep
-      # the build, dry-run, typecheck, and coverage gates above but do not wait
-      # for the shared staging environment.
+        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
+      # #1330 retention: refresh the complete content-hashed asset set before
+      # deploying a build whose static output can differ. Worker-only changes
+      # still get the staging deploy + live smoke signal, but do not re-copy an
+      # unchanged ~390-file webapp archive (#3146).
+      - name: Archive assets to R2 (staging)
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && needs.changes.outputs.cloudflare-r2 == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+      # Deploy to staging and run the live smoke test for every trusted PR.
+      # The required `ci` summary consumes this job, so the deployed signal is
+      # visible before review/merge rather than deferred to the merge queue.
       #
       # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
       # wrangler-action runs `wrangler secret bulk` BEFORE the `command:`
@@ -918,7 +929,7 @@ jobs:
       # production Worker.
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -929,7 +940,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 1)
         id: deploy_attempt_1_secrets
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -947,11 +958,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 2
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         run: sleep 20
       - name: Deploy staging worker (attempt 2)
         id: deploy_attempt_2
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -962,7 +973,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 2)
         id: deploy_attempt_2_secrets
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -980,11 +991,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 3
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         run: sleep 40
       - name: Deploy staging worker (attempt 3)
         id: deploy_attempt_3
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -995,7 +1006,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 3)
         id: deploy_attempt_3_secrets
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1014,7 +1025,7 @@ jobs:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Finalize staging deploy
         id: deploy
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && ((steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success'))
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && ((steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success'))
         env:
           DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
           DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
@@ -1036,10 +1047,10 @@ jobs:
           fi
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-          SLICC_ARCHIVE_SMOKE: '1'
+          SLICC_ARCHIVE_SMOKE: ${{ needs.changes.outputs.cloudflare-r2 == 'true' && '1' || '' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
@@ -1060,7 +1071,7 @@ jobs:
       # Runs after the main worker so the TRAY_HUB DO (referenced via
       # script_name) is up to date.
       - name: Deploy staging preview worker
-        if: github.event_name == 'merge_group' && needs.changes.outputs.cloudflare-staging == 'true' && steps.deploy.outcome == 'success'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy.outcome == 'success'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -1069,6 +1080,29 @@ jobs:
           workingDirectory: packages/cloudflare-worker
           environment: staging
           command: deploy --env staging --config wrangler-preview.jsonc
+
+      # GitHub exposes timestamps for every completed step through the Actions
+      # jobs API. Publish them as both a run-summary table and machine-readable
+      # JSON so archive, deploy, secret, retry, propagation, and local-gate
+      # regressions are distinguishable without manually adding log markers.
+      - name: Publish Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node packages/dev-tools/tools/ci-job-timing.mjs
+          --job cloudflare-worker
+          --title "Cloudflare worker timings"
+          --output test-results/cloudflare-worker-phase-timing.json
+          --exclude-step "Publish Cloudflare timing diagnostics"
+      - name: Upload Cloudflare timing diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloudflare-worker-phase-timing
+          path: test-results/cloudflare-worker-phase-timing.json
+          if-no-files-found: ignore
 
   cloud-core:
     needs: changes

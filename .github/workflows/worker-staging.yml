@@ -34,8 +34,10 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   deployments: write
+  pull-requests: read
 
 jobs:
   deploy-staging:
@@ -44,6 +46,21 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: changes
+        with:
+          filters: |
+            r2:
+              - 'packages/cloud-core/**'
+              - 'packages/webapp/src/providers/**'
+              - 'packages/webapp/providers/**'
+              - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
+              - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
+              - 'packages/cloudflare-worker/src/asset-archive.mjs'
+              - 'packages/cloudflare-worker/tests/deployed.test.ts'
+              - 'packages/cloudflare-worker/wrangler.jsonc'
+              - '.github/workflows/worker-staging.yml'
 
       - uses: actions/setup-node@v7
         with:
@@ -119,20 +136,22 @@ jobs:
       #     SLICC_E2B_TEMPLATE_NAME: slicc-staging
       #   run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
-      # #1330 retention: archive this build's content-hashed assets to the
-      # STAGING R2 bucket BEFORE any deploy attempt so long-lived tabs can
-      # recover gone lazy chunks. Hard-fail gate (NOT continue-on-error) — a
-      # build must never go live unarchived. The deploy step has no `if:` to
-      # copy, so this explicit non-fork guard keeps the hard-fail upload from
-      # running without Cloudflare secrets on fork PRs.
-      - name: Archive assets to R2 (staging)
+      - name: Verify preview storage lifecycle
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
-          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
+      # #1330 retention: refresh the archive before a deploy whose webapp
+      # output can differ. A Worker-only change retains the deployed signal
+      # without re-putting the complete unchanged asset set.
+      - name: Archive assets to R2 (staging)
+        if: (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && steps.changes.outputs.r2 == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
 
       # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
       # wrangler-action runs `wrangler secret bulk` BEFORE the `command:`
@@ -276,7 +295,7 @@ jobs:
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-          SLICC_ARCHIVE_SMOKE: '1'
+          SLICC_ARCHIVE_SMOKE: ${{ steps.changes.outputs.r2 == 'true' && '1' || '' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
@@ -296,6 +315,27 @@ jobs:
             echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
             sleep 15
           done
+
+      - name: Publish Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node packages/dev-tools/tools/ci-job-timing.mjs
+          --job "Deploy staging + smoke test"
+          --title "Worker staging workflow timings"
+          --output test-results/worker-staging-phase-timing.json
+          --exclude-step "Publish Cloudflare timing diagnostics"
+
+      - name: Upload Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: worker-staging-phase-timing
+          path: test-results/worker-staging-phase-timing.json
+          if-no-files-found: ignore
 
       - name: Mark deployment successful
         if: success()
