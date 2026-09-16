@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  assignProcessExitCode,
   createNodeConsole,
   createProcessShim,
   NodeExitError,
@@ -210,6 +211,72 @@ describe('createProcessShim exitCode (#3155)', () => {
     }
     expect(getExitCode()).toBe(3);
   });
+
+  it('process.exit(undefined) exits 0 even when exitCode was previously assigned', () => {
+    const { processShim, getExitCode } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    processShim.exitCode = 3;
+    try {
+      processShim.exit(undefined);
+    } catch (err) {
+      expect(err).toBeInstanceOf(NodeExitError);
+      expect((err as NodeExitError).code).toBe(0);
+    }
+    expect(getExitCode()).toBe(0);
+  });
+
+  it('rejects non-integer exitCode assignments instead of coercing them to 0', () => {
+    const { processShim, getExitCode } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    expect(() => {
+      processShim.exitCode = Number.NaN;
+    }).toThrow(/must be an integer/);
+    expect(() => {
+      (processShim as { exitCode: unknown }).exitCode = 'failure';
+    }).toThrow(/must be of type number/);
+    expect(() => {
+      processShim.exitCode = 3.5;
+    }).toThrow(/must be an integer/);
+    expect(processShim.exitCode).toBeUndefined();
+    expect(getExitCode()).toBe(0);
+  });
+
+  it('coerces a numeric-string exitCode assignment the way Node does', () => {
+    const { processShim, getExitCode } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    (processShim as { exitCode: unknown }).exitCode = '3';
+    expect(processShim.exitCode).toBe(3);
+    expect(getExitCode()).toBe(3);
+  });
+
+  it('process.exit(N) still wins if a finally block later assigns exitCode', () => {
+    const { processShim, getExitCode } = createProcessShim(
+      makeProcessInit(),
+      () => undefined,
+      () => undefined
+    );
+    try {
+      try {
+        processShim.exit(3);
+      } finally {
+        processShim.exitCode = 9;
+      }
+    } catch (err) {
+      expect(err).toBeInstanceOf(NodeExitError);
+      expect((err as NodeExitError).code).toBe(3);
+    }
+    expect(processShim.exitCode).toBe(9);
+    expect(getExitCode()).toBe(3);
+  });
 });
 
 describe('numericExitCode', () => {
@@ -218,5 +285,36 @@ describe('numericExitCode', () => {
     expect(numericExitCode('3')).toBe(3);
     expect(numericExitCode(undefined)).toBe(0);
     expect(numericExitCode(Number.NaN)).toBe(0);
+  });
+});
+
+describe('assignProcessExitCode', () => {
+  it('clears on null/undefined, accepts integers and numeric strings', () => {
+    expect(assignProcessExitCode(null)).toBeUndefined();
+    expect(assignProcessExitCode(undefined)).toBeUndefined();
+    expect(assignProcessExitCode(3)).toBe(3);
+    expect(assignProcessExitCode('3')).toBe(3);
+    expect(assignProcessExitCode(' 3')).toBe(3);
+    expect(assignProcessExitCode(0)).toBe(0);
+  });
+
+  it('throws ERR_OUT_OF_RANGE for non-integer numbers', () => {
+    expect(() => assignProcessExitCode(Number.NaN)).toThrow(/must be an integer/);
+    expect(() => assignProcessExitCode(3.5)).toThrow(/must be an integer/);
+    try {
+      assignProcessExitCode(Number.NaN);
+    } catch (err) {
+      expect((err as { code: string }).code).toBe('ERR_OUT_OF_RANGE');
+    }
+  });
+
+  it('throws ERR_INVALID_ARG_TYPE for non-numeric values', () => {
+    expect(() => assignProcessExitCode('failure')).toThrow(/must be of type number/);
+    expect(() => assignProcessExitCode(true)).toThrow(/must be of type number/);
+    try {
+      assignProcessExitCode('failure');
+    } catch (err) {
+      expect((err as { code: string }).code).toBe('ERR_INVALID_ARG_TYPE');
+    }
   });
 });

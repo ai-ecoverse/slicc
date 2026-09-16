@@ -294,6 +294,22 @@ describe('realm event-loop drain before teardown', () => {
     expect(done.exitCode).toBe(3);
   });
 
+  it('process.exit(undefined) exits 0 even when exitCode was previously assigned (#3155)', async () => {
+    const done = await runRealm('process.exitCode = 3; process.exit(undefined);');
+    expect(done.exitCode).toBe(0);
+  });
+
+  it('an invalid process.exitCode assignment is an uncaught throw (exit 1), not a silent 0 (#3155)', async () => {
+    const done = await runRealm('process.exitCode = "failure";');
+    expect(done.exitCode).toBe(1);
+    expect(done.stderr).toMatch(/must be of type number|ERR_INVALID_ARG_TYPE/);
+  });
+
+  it('process.exit(3) still wins if a finally later assigns process.exitCode (#3155)', async () => {
+    const done = await runRealm('try { process.exit(3); } finally { process.exitCode = 9; }');
+    expect(done.exitCode).toBe(3);
+  });
+
   it('an uncaught throw still exits 1 and discards a previously assigned exitCode (#3155)', async () => {
     const done = await runRealm('process.exitCode = 4; throw new Error("boom");');
     expect(done.exitCode).toBe(1);
