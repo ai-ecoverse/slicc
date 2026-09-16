@@ -55,6 +55,7 @@ export class FollowerSudoClient {
         kind: message.kind,
         detail: message.detail,
         ...(message.suggestedPattern ? { suggestedPattern: message.suggestedPattern } : {}),
+        ...(message.reason ? { reason: message.reason } : {}),
         ...(message.scoopName ? { scoopName: message.scoopName } : {}),
         ...(message.requester ? { requester: message.requester } : {}),
         expiresAt: message.expiresAt,

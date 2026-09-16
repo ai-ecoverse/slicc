@@ -216,6 +216,9 @@ export class SudoDelegation {
       // which may be guest-authored, and needs the system's own account of who
       // is asking next to it.
       ...(entry.request.requester ? { requester: entry.request.requester } : {}),
+      // Cross-runtime parity: a delegated reviewer must see the same "why" the
+      // local dialog shows, or approving from a phone means deciding on less.
+      ...(entry.request.reason ? { reason: entry.request.reason } : {}),
       expiresAt: entry.expiresAt,
     });
     if (sent === false) {

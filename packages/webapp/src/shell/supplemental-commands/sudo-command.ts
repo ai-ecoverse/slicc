@@ -3,6 +3,7 @@ import { defineCommand } from 'just-bash';
 import { sudoRefusalMessage } from '../../sudo/approval-timeout.js';
 import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 import { commandSudoSubject } from '../sudo/command-guard.js';
+import { SUDO_REASON_ENV } from '../sudo/command-reason.js';
 
 const SUDO_HELP = `usage: sudo <command> [args...]
 
@@ -93,7 +94,17 @@ export function createSudoCommand(options: SudoCommandOptions = {}): Command {
     // runtime aliases such as `jsh` -> `node`, so its one-shot bypass lines up.
     const subject = commandSudoSubject(args[0], args.slice(1));
 
-    const decision = await broker.requestApproval({ kind: 'command', detail: subject });
+    // Same run-scoped reason the transparent gate uses, read from THIS
+    // command's own env so concurrent runs cannot borrow each other's —
+    // see `shell/sudo/command-reason.ts`. An explicit `sudo` and a gate that
+    // fired on its own should show the approver the same explanation.
+    const reason = ctx.env?.get(SUDO_REASON_ENV);
+
+    const decision = await broker.requestApproval({
+      kind: 'command',
+      detail: subject,
+      ...(reason ? { reason } : {}),
+    });
 
     if (decision.decision === 'deny') {
       return refusalResult(decision);

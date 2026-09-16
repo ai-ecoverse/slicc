@@ -79,6 +79,7 @@ import { createProxiedFetch } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { commandSudoSubject, enforceCommandSudo } from './sudo/command-guard.js';
+import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
@@ -326,8 +327,15 @@ function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined
 
 /** Copy of `env` without the internal per-run tags. */
 function stripRunPid(env: Record<string, string>): Record<string, string> {
-  if (!(RUN_PID_ENV in env) && !(OUTPUT_TEE_ENV in env)) return { ...env };
-  const { [RUN_PID_ENV]: _runPid, [OUTPUT_TEE_ENV]: _tee, ...rest } = env;
+  if (!(RUN_PID_ENV in env) && !(OUTPUT_TEE_ENV in env) && !(SUDO_REASON_ENV in env)) {
+    return { ...env };
+  }
+  const {
+    [RUN_PID_ENV]: _runPid,
+    [OUTPUT_TEE_ENV]: _tee,
+    [SUDO_REASON_ENV]: _reason,
+    ...rest
+  } = env;
   return rest;
 }
 
@@ -1041,10 +1049,16 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
     // terminal Ctrl+C keep a consistent cancellation path.
+    // A script that opens with a comment explains itself; carry that text on
+    // the run so a sudo prompt raised mid-dispatch can show the approver WHY,
+    // not just what. Per-run env (not shell state) so concurrent runs on one
+    // shell never borrow each other's reason — see `SUDO_REASON_ENV`.
+    const sudoReason = extractLeadingCommentReason(command);
     const taggedEnv: Record<string, string> = {
       ...this.lastEnv,
       ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
       ...(outputTeeId === undefined ? {} : { [OUTPUT_TEE_ENV]: outputTeeId }),
+      ...(sudoReason ? { [SUDO_REASON_ENV]: sudoReason } : {}),
     };
     const execOptions: BashExecOptionsWithSignal = {
       // Tagged per run so realm-backed commands can recover THIS run's parent
@@ -1222,11 +1236,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private wrapCommandForSudo(command: Command): Command {
     if (!this.isTransparentGatingEnabled()) return command;
-    const guard = (args: string[]) => this.gateCommandDispatch(command.name, args);
+    const guard = (args: string[], reason?: string) =>
+      this.gateCommandDispatch(command.name, args, reason);
     return {
       ...command,
       async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
-        const denial = await guard(args);
+        // Read the reason from THIS command's own env, the same way
+        // realm-backed commands recover their run pid — a shell shared by
+        // concurrent runs must not hand one run's explanation to another.
+        const denial = await guard(args, ctx.env?.get(SUDO_REASON_ENV));
         if (denial) return denial;
         return command.execute(args, ctx);
       },
@@ -1238,8 +1256,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * `ExecResult` (exit 1, no execution) when approval was refused; `null` when
    * the command may run. No-op when sudo is unconfigured or the active policy
    * is null.
+   *
+   * `reason` is the run's leading-comment explanation, read from the
+   * dispatching command's own environment — see `sudo/command-reason.ts`.
    */
-  private async gateCommandDispatch(name: string, args: string[]): Promise<ExecResult | null> {
+  private async gateCommandDispatch(
+    name: string,
+    args: string[],
+    reason?: string
+  ): Promise<ExecResult | null> {
     const sudo = this.options.sudo;
     if (!sudo) return null;
 
@@ -1265,6 +1290,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         this.pendingCommandGrants.push(pattern);
       },
       defaultDisposition: sudo.defaultDisposition,
+      ...(reason ? { reason } : {}),
     });
     if (result.allowed) return null;
 

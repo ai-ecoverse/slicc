@@ -115,6 +115,64 @@ the FS-gated handle and `/etc/sudoers` is self-protected: the card authorizes th
 merge, the prompt authorizes the policy edit. A user who dismisses the card keeps
 their current policy.
 
+### Reasons — why, not just what
+
+An approver deciding on `Cmnd rm -rf /workspace/build` sees the subject and
+nothing else. The subject is identical whether the action is routine or the
+first step of something the owner would refuse, so the decision is made on half
+the information. Two fields close that, in both directions:
+
+| Field                | Set by        | Reaches                                                                                                                            |
+| -------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `SudoRequest.reason` | the requester | every prompt surface — native `confirm`, `<slicc-dialog>`, the iOS card, the cone's `[sudo-request]` message, `list_sudo_requests` |
+| `SudoDecision.note`  | the approver  | every enforcement message — `SudoFS` `EACCES`, command-guard stderr, `secret`, the `sudo_request` tool result                      |
+
+**A scoop supplies a reason two ways.** Explicitly, via `sudo_request`'s
+`reason` parameter. Or implicitly: a `bash` script that **opens with a comment**
+has that comment lifted as the reason for every gate the run raises
+(`shell/sudo/command-reason.ts`). Agents already write the why down —
+`# clear the stale build before rebuilding` is ordinary shell — so SLICC reads
+it rather than asking for the same sentence twice. Only a comment at the top
+counts, up to the first non-comment line; a comment further down annotates the
+line it precedes, not the run. A shebang is skipped.
+
+The text rides the run's environment under `__SLICC_SUDO_REASON`, the same
+channel `__SLICC_RUN_PID` uses: a command reads it from its OWN `ctx.env`, so
+concurrent runs on one shell cannot borrow each other's reason, and it is
+stripped before the shell's persistent env is updated.
+
+**A cone supplies a rejection reason** through `lick_dismiss`'s `reason`
+parameter (and `lick_confirm`'s, for a caveat on an approval). Without one a
+scoop cannot tell a real refusal from a misunderstanding, and will either retry
+the identical request or route around it; the tool result says so explicitly
+when a denial carried no reason.
+
+Both are **untrusted prose**, normalized by `normalizeSudoReason`
+(`sudo/reason.ts`) to one line of at most 300 characters — the same reasoning as
+`sanitizeGrantPattern`. A multi-line or unbounded string would break a native
+dialog's layout and push the actual SUBJECT of the approval off the approver's
+screen. Every surface renders `reason` **after** `detail` and never above the
+authenticated `requester` line: a reviewer reads what is being authorized, and
+who the system says is asking, before they read the requester's words about it.
+Nothing downstream parses either field, and a confident-sounding reason is never
+authority.
+
+`reason` reaches every approver the same way. It crosses the **capability
+layer** (`ApprovalRequest.reason` → `rest-ops` POST body → `/api/sudo-approve`
+→ `describeRequest` and the Electron / TTY backends; → the extension relay →
+`panel-responder`), so the owner's OWN native dialog shows it — that is the
+primary approval surface, and a reason present only on the cone and tray legs
+would be missing from the prompt a human sees most. It also crosses the **tray
+wire** (`sudo.approve.request.reason`), so a delegated approver on a phone
+decides on the same information.
+
+`note` has a narrower reach by construction: it rides the decision, and a
+decision only has somewhere to be reported where the gate has an output
+channel. An explicit `sudo_request` shows it in the tool result, and a denied
+command gate writes it to stderr. A _successful_ filesystem gate has no channel
+at all — the write simply proceeds — so a caveat attached to an allow does not
+reach a scoop that never asked explicitly. `lick_confirm`'s schema says so.
+
 ### Self-protection (always on)
 
 Writes to `/etc/sudoers`, anything under `/etc/sudoers.d/`, and

@@ -89,7 +89,11 @@ export function resolveSudoRequest(req: SudoRequest, deps: PanelResponderDeps = 
   // attacker-chosen prose (a guest message), so a reviewer needs the
   // authenticated identity before they read a word the requester wrote.
   const who = req.requester ? `Requested by: ${req.requester}\n\n` : '';
-  const label = `Approve ${req.kind}:\n\n${who}${req.detail}\n\nOK = allow · Cancel = deny`;
+  // The requester's stated reason comes AFTER the subject: the subject is what
+  // is actually being authorized, and prose the requester wrote must never be
+  // the first thing a reviewer reads.
+  const why = req.reason ? `\n\nReason given: ${req.reason}` : '';
+  const label = `Approve ${req.kind}:\n\n${who}${req.detail}${why}\n\nOK = allow · Cancel = deny`;
   if (!confirmFn(label)) return { decision: 'deny' };
 
   const suggested = req.suggestedPattern?.trim() || req.detail.trim();

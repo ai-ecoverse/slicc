@@ -623,12 +623,17 @@ public enum LeaderToFollowerMessage: Codable {
     /// from `detail` because `detail` can be prose the requester wrote about
     /// themselves (a biscotto guest message). Dropping it left an iOS reviewer
     /// looking at nothing but the guest's own claim of identity.
+    /// `reason` is the requester's own account of WHY they need this, when
+    /// they gave one. Untrusted prose like `detail`, and rendered after it —
+    /// but dropping it would leave a phone reviewer deciding on strictly less
+    /// than the leader's own dialog shows.
     case sudoApproveRequest(
         requestId: String,
         kind: String,
         detail: String,
         requester: String?,
         suggestedPattern: String?,
+        reason: String?,
         scoopName: String?,
         expiresAt: Double)
     /// The leader withdrew a `sudo.approve.request` (answered elsewhere / timed out).
@@ -653,7 +658,7 @@ public enum LeaderToFollowerMessage: Codable {
         case request, response
         case capabilities, motd
         case command, cwd, env, stream, exitCode, signal, stdin
-        case kind, requester, suggestedPattern, scoopName, expiresAt
+        case kind, requester, suggestedPattern, reason, scoopName, expiresAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -779,6 +784,7 @@ public enum LeaderToFollowerMessage: Codable {
                 requester: try container.decodeIfPresent(String.self, forKey: .requester),
                 suggestedPattern: try container.decodeIfPresent(
                     String.self, forKey: .suggestedPattern),
+                reason: try container.decodeIfPresent(String.self, forKey: .reason),
                 scoopName: try container.decodeIfPresent(String.self, forKey: .scoopName),
                 expiresAt: try container.decode(Double.self, forKey: .expiresAt))
         case "sudo.approve.cancel":
@@ -938,13 +944,14 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
         case .sudoApproveRequest(
             let requestId, let kind, let detail, let requester, let suggestedPattern,
-            let scoopName, let expiresAt):
+            let reason, let scoopName, let expiresAt):
             try container.encode("sudo.approve.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(kind, forKey: .kind)
             try container.encode(detail, forKey: .detail)
             try container.encodeIfPresent(requester, forKey: .requester)
             try container.encodeIfPresent(suggestedPattern, forKey: .suggestedPattern)
+            try container.encodeIfPresent(reason, forKey: .reason)
             try container.encodeIfPresent(scoopName, forKey: .scoopName)
             try container.encode(expiresAt, forKey: .expiresAt)
         case .sudoApproveCancel(let requestId):

@@ -270,6 +270,11 @@ deny each pending request, then keep waiting. Only treat a fan-out as
 complete when every scoop has actually reported completion (via `scoop_wait`
 lick or `scoop_unmute` summaries), not because output files stopped changing.
 
+When you **deny** one, pass `reason` to `lick_dismiss`. The scoop sees the
+subject of its own request and your verdict; without a reason it cannot tell a
+refusal from a misunderstanding, so it retries the same thing or invents a
+workaround. Say what would make it acceptable, if anything would.
+
 ### Notes
 
 - Full response is always persisted to `/shared/scoop-notifications/<timestamp>-<folder>-<id>.md` (bounded to the 200 most recent). The summary string in the tool result is truncated at 20 000 characters; read the VFS path when you need the full output.

@@ -22,6 +22,9 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
     public let requester: String?
     /// The editable default for an "Always" grant.
     public let suggestedPattern: String?
+    /// The requester's own account of WHY, when they gave one. Untrusted
+    /// prose, like `detail` — shown BELOW it, never above `requester`.
+    public let reason: String?
     /// Requesting scoop's label, when the action came from a scoop.
     public let scoopName: String?
     /// When the leader gives up and denies; the card disappears then.
@@ -37,6 +40,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         detail: String,
         requester: String? = nil,
         suggestedPattern: String?,
+        reason: String? = nil,
         scoopName: String?,
         expiresAt: Date,
         receivedAt: Date
@@ -46,6 +50,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         self.detail = detail
         self.requester = requester
         self.suggestedPattern = suggestedPattern
+        self.reason = reason
         self.scoopName = scoopName
         self.expiresAt = expiresAt
         self.receivedAt = receivedAt
@@ -168,6 +173,7 @@ public final class SudoApprovalController {
         detail: String,
         requester: String? = nil,
         suggestedPattern: String?,
+        reason: String? = nil,
         scoopName: String?,
         expiresAt: Date
     ) {
@@ -180,6 +186,7 @@ public final class SudoApprovalController {
             detail: detail,
             requester: requester,
             suggestedPattern: suggestedPattern,
+            reason: reason,
             scoopName: scoopName,
             expiresAt: expiresAt,
             receivedAt: current)

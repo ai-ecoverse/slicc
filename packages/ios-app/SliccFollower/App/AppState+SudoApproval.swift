@@ -46,13 +46,14 @@ extension AppState {
         switch message {
         case .sudoApproveRequest(
             let requestId, let kind, let detail, let requester, let suggestedPattern,
-            let scoopName, let expiresAt):
+            let reason, let scoopName, let expiresAt):
             sudoApprovalController.handle(
                 requestId: requestId,
                 kind: kind,
                 detail: detail,
                 requester: requester,
                 suggestedPattern: suggestedPattern,
+                reason: reason,
                 scoopName: scoopName,
                 expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
         case .sudoApproveCancel(let requestId):
@@ -153,6 +154,7 @@ extension AppState {
                 kind: "command",
                 detail: "git push origin main",
                 suggestedPattern: "git push *",
+                reason: "the release tag is cut and CI is green",
                 scoopName: "Fixture scoop",
                 expiresAt: Date().addingTimeInterval(300))
         }

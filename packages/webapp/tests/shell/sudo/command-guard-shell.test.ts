@@ -27,6 +27,58 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
     return new AlmostBashShellHeadless({ fs, sudo });
   }
 
+  // A script that opens with a comment already says why it is doing what it
+  // does; the approver should see that sentence rather than a bare subject.
+  it('carries a leading comment into the approval prompt', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand(
+      '# drop the stale fixture before regenerating\ntouch /workspace/gated.txt'
+    );
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'touch /workspace/gated.txt',
+      reason: 'drop the stale fixture before regenerating',
+    });
+  });
+
+  it('does not attach a reason when the script has no leading comment', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand('touch /workspace/gated.txt # explained too late');
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'touch /workspace/gated.txt',
+    });
+  });
+
+  it("does not leak one run's reason into the next run on the same shell", async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand('# first run explains itself\ntouch /workspace/gated.txt');
+    await shell.executeCommand('touch /workspace/gated.txt');
+
+    expect(broker.requestApproval).toHaveBeenLastCalledWith({
+      kind: 'command',
+      detail: 'touch /workspace/gated.txt',
+    });
+  });
+
+  it("surfaces the approver's note in the stderr the agent reads", async () => {
+    const broker = brokerReturning({ decision: 'deny', note: 'regenerate it instead of deleting' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    const result = await shell.executeCommand('touch /workspace/gated.txt');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('regenerate it instead of deleting');
+  });
+
   it('blocks a denied command without executing it', async () => {
     const broker = brokerReturning({ decision: 'deny' });
     const shell = makeShell({ getPolicy: () => POLICY, broker });

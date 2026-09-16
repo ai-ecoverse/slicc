@@ -133,6 +133,8 @@ export interface FollowerSyncManagerOptions {
     /** Leader-derived identity of the asker; chrome, not part of `detail`. */
     requester?: string;
     suggestedPattern?: string;
+    /** The requester's stated "why", when given. Untrusted prose; render after `detail`. */
+    reason?: string;
     scoopName?: string;
     expiresAt: number;
     signal: AbortSignal;

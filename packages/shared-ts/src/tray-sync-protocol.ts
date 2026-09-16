@@ -356,6 +356,16 @@ export type LeaderToFollowerMessage =
        */
       requester?: string;
       suggestedPattern?: string;
+      /**
+       * The requester's own account of WHY, when they gave one. Forwarded so a
+       * delegated reviewer decides on the same information the leader's local
+       * prompt would have shown; without it the phone card is strictly worse
+       * than the desktop dialog for the same request.
+       *
+       * Untrusted prose, like `detail` — rendered after the subject, never
+       * above the authenticated `requester` line.
+       */
+      reason?: string;
       /** Requesting scoop's label when the action came from a scoop, else absent. */
       scoopName?: string;
       expiresAt: number;

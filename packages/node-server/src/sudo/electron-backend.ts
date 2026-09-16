@@ -69,7 +69,12 @@ export function createElectronBackend(deps: ElectronBackendDeps = {}): SudoBacke
           message: req.requester
             ? `Approve ${req.kind} from ${req.requester}`
             : `Approve ${req.kind}`,
-          detail: req.detail,
+          // The stated reason goes BELOW the subject in the same detail
+          // block: it is the requester's own prose, and the thing actually
+          // being authorized has to be read first.
+          detail: req.reason?.trim()
+            ? `${req.detail}\n\nReason given: ${req.reason.trim()}`
+            : req.detail,
         });
         response = result.response;
       } catch {

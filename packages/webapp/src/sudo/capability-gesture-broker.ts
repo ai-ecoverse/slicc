@@ -85,6 +85,7 @@ export function createCapabilityGestureSudoBroker(
         detail: req.detail,
         suggestedPattern,
         ...(req.requester ? { requester: req.requester } : {}),
+        ...(req.reason ? { reason: req.reason } : {}),
         ...(req.approver ? { approver: req.approver } : {}),
         ...(signal ? { signal } : {}),
       });

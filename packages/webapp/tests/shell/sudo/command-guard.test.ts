@@ -200,3 +200,75 @@ describe('enforceCommandSudo', () => {
     expect(result.message).toBe(COMMAND_DENIED_MESSAGE);
   });
 });
+
+// The approver sees the subject; `reason` is the only channel that tells them
+// why it is being asked, and `note` is the only one that tells the agent why it
+// was refused.
+describe('enforceCommandSudo reasons', () => {
+  it('forwards the run reason to the broker', async () => {
+    const broker = brokerReturning({ decision: 'allow' });
+
+    await enforceCommandSudo('git push origin main', {
+      policy: GATED,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+      reason: 'the release tag is cut and CI is green',
+    });
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+      reason: 'the release tag is cut and CI is green',
+    });
+  });
+
+  it('omits the key entirely when no reason was given', async () => {
+    const broker = brokerReturning({ decision: 'allow' });
+
+    await enforceCommandSudo('git push origin main', {
+      policy: GATED,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+      reason: '',
+    });
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+    });
+  });
+
+  it("quotes the approver's note into the denial the agent reads", async () => {
+    const broker = brokerReturning({ decision: 'deny', note: 'push from CI, not from a scoop' });
+
+    const result = await enforceCommandSudo('git push origin main', {
+      policy: GATED,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.message).toContain(COMMAND_DENIED_MESSAGE);
+    expect(result.message).toContain('push from CI, not from a scoop');
+  });
+
+  it('still reads as a bare denial when the approver said nothing', async () => {
+    const result = await enforceCommandSudo('git push origin main', {
+      policy: GATED,
+      broker: brokerReturning({ decision: 'deny' }),
+      persistGrant: vi.fn(async () => {}),
+    });
+
+    expect(result.message).toBe(COMMAND_DENIED_MESSAGE);
+  });
+
+  it('keeps a note distinguishable from a timeout, and shows both', () => {
+    const timedOut = commandSudoMessage({
+      decision: 'deny',
+      reason: 'cone-timeout',
+      note: 'the cone was mid-compaction',
+    });
+    expect(timedOut).toContain('timed out');
+    expect(timedOut).toContain('the cone was mid-compaction');
+  });
+});

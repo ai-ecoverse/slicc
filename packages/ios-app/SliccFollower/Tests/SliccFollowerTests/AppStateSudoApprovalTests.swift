@@ -20,6 +20,7 @@ final class AppStateSudoApprovalTests: XCTestCase {
             detail: "git push origin main",
             requester: "biscotto \u{201C}Anna\u{201D}",
             suggestedPattern: "git push *",
+            reason: "the release tag is cut and CI is green",
             scoopName: "Researcher",
             expiresAt: Date().addingTimeInterval(300).timeIntervalSince1970 * 1000)
     }
@@ -32,6 +33,10 @@ final class AppStateSudoApprovalTests: XCTestCase {
         // The leader's own account of the asker reaches the card, so a guest
         // cannot be the only voice describing who they are.
         XCTAssertEqual(state.sudoApprovals.first?.requester, "biscotto \u{201C}Anna\u{201D}")
+        // The requester's stated why survives the wire too — a phone reviewer
+        // must not decide on less than the leader's own dialog shows.
+        XCTAssertEqual(
+            state.sudoApprovals.first?.reason, "the release tag is cut and CI is green")
         XCTAssertEqual(state.sudoApprovals.first?.heading, "Run command?")
 
         try send(.sudoApproveCancel(requestId: "sudo-1"), to: state)
@@ -45,7 +50,7 @@ final class AppStateSudoApprovalTests: XCTestCase {
         try send(
             .sudoApproveRequest(
                 requestId: "late", kind: "write", detail: "/etc/sudoers", requester: nil,
-                suggestedPattern: nil, scoopName: nil, expiresAt: 1000),
+                suggestedPattern: nil, reason: nil, scoopName: nil, expiresAt: 1000),
             to: state)
         XCTAssertTrue(state.sudoApprovals.isEmpty)
     }

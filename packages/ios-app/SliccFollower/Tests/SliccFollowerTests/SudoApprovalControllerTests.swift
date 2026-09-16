@@ -252,11 +252,13 @@ final class SudoApprovalControllerTests: XCTestCase {
         let decoded = try JSONDecoder().decode(
             LeaderToFollowerMessage.self, from: Data(prompt.utf8))
         guard
-            case .sudoApproveRequest(let id, let kind, let detail, _, let pattern, let scoop, let exp) =
+            case .sudoApproveRequest(
+                let id, let kind, let detail, _, let pattern, let reason, let scoop, let exp) =
                 decoded
         else { return XCTFail("expected sudoApproveRequest, got \(decoded)") }
         XCTAssertEqual([id, kind, detail], ["p", "write", "/etc/sudoers"])
         XCTAssertNil(pattern)
+        XCTAssertNil(reason)
         XCTAssertNil(scoop)
         XCTAssertEqual(exp, 1_750_000_300_000)
     }

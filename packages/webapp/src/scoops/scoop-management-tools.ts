@@ -8,6 +8,7 @@
 import { slugify } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { ScoopModelResolution } from '../providers/account-store.js';
+import { normalizeSudoReason } from '../sudo/reason.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
 import { defaultChildVisibleRoots, workspaceFor } from '../work-unit/descriptor.js';
@@ -401,7 +402,8 @@ function validateSudoRequestInput(
     kind,
     detail,
     suggested_pattern: suggestedPattern,
-  } = input as { kind: string; detail: string; suggested_pattern?: string };
+    reason,
+  } = input as { kind: string; detail: string; suggested_pattern?: string; reason?: string };
   if (!SUDO_KINDS.includes(kind as SudoKind)) {
     return {
       ok: false,
@@ -414,10 +416,16 @@ function validateSudoRequestInput(
   if (typeof detail !== 'string' || detail.trim().length === 0) {
     return { ok: false, result: { content: 'detail must be a non-empty string.', isError: true } };
   }
+  // Collapsed to one bounded line for the same reason a persisted grant
+  // pattern is: this text lands in a native dialog and in one-line request
+  // listings, where a multi-line or unbounded string would push the SUBJECT of
+  // the approval off the approver's screen.
+  const safeReason = typeof reason === 'string' ? normalizeSudoReason(reason) : '';
   const request: SudoRequest = {
     kind: kind as SudoKind,
     detail,
     ...(suggestedPattern ? { suggestedPattern } : {}),
+    ...(safeReason ? { reason: safeReason } : {}),
   };
   return { ok: true, request };
 }
@@ -427,9 +435,12 @@ function formatSudoDecision(decision: SudoDecision): string {
   if (decision.decision === 'always' && decision.pattern) {
     lines.push(`Persisted pattern: ${decision.pattern}`);
   }
+  if (decision.note) lines.push(`Approver's reason: ${decision.note}`);
   if (decision.decision === 'deny') {
     lines.push(
-      'The sensitive action was not approved. Do not retry without addressing the reason for refusal.'
+      decision.note
+        ? 'Not approved. Address the reason above before asking again; do not retry as-is and do not route around it.'
+        : 'Not approved, and no reason was given. Do not retry as-is; ask the cone what would make it acceptable, or move on.'
     );
   }
   return lines.join('\n');
@@ -919,17 +930,22 @@ async function executeLickConfirm(
   input: unknown,
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
-  const { lick_id, always, pattern } = input as {
+  const { lick_id, always, pattern, reason } = input as {
     lick_id: string;
     always?: boolean;
     pattern?: string;
+    reason?: string;
   };
   if (typeof lick_id !== 'string' || lick_id.length === 0) {
     return { content: 'lick_id must be a non-empty string.', isError: true };
   }
-  const decision: SudoDecision = always
-    ? { decision: 'always', ...(pattern ? { pattern } : {}) }
-    : { decision: 'allow' };
+  const note = typeof reason === 'string' ? normalizeSudoReason(reason) : '';
+  const decision: SudoDecision = {
+    ...(always
+      ? { decision: 'always' as const, ...(pattern ? { pattern } : {}) }
+      : { decision: 'allow' as const }),
+    ...(note ? { note } : {}),
+  };
   try {
     const outcome = await config.onSudoResolve!(lick_id, decision);
     if (!outcome.settled) {
@@ -955,21 +971,29 @@ async function executeLickDismiss(
   input: unknown,
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
-  const { lick_id } = input as { lick_id: string };
+  const { lick_id, reason } = input as { lick_id: string; reason?: string };
   if (typeof lick_id !== 'string' || lick_id.length === 0) {
     return { content: 'lick_id must be a non-empty string.', isError: true };
   }
+  const note = typeof reason === 'string' ? normalizeSudoReason(reason) : '';
   try {
-    const outcome = await config.onSudoResolve!(lick_id, { decision: 'deny' });
+    const outcome = await config.onSudoResolve!(lick_id, {
+      decision: 'deny',
+      ...(note ? { note } : {}),
+    });
     if (!outcome.settled) {
       return {
         content: `Lick "${lick_id}" is unknown, already resolved, or timed out.`,
         isError: true,
       };
     }
-    log.info('Lick dismissed', { id: lick_id });
+    log.info('Lick dismissed', { id: lick_id, hasReason: !!note });
     if (outcome.message) return { content: outcome.message };
-    return { content: 'Denied — the scoop will not run this action.' };
+    return {
+      content: note
+        ? `Denied, and the scoop was told why: "${note}"`
+        : 'Denied with NO reason, so the scoop cannot tell refusal from misunderstanding. Pass `reason` next time.',
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { content: `lick_dismiss failed: ${msg}`, isError: true };
@@ -985,7 +1009,8 @@ async function executeListSudoRequests(config: ScoopManagementToolsConfig): Prom
     const suggested = p.request.suggestedPattern
       ? ` (suggested: ${p.request.suggestedPattern})`
       : '';
-    return `- ${p.id} — ${folder} — ${p.request.kind}: ${p.request.detail}${suggested}`;
+    const why = p.request.reason ? `\n    reason: ${p.request.reason}` : '';
+    return `- ${p.id} — ${folder} — ${p.request.kind}: ${p.request.detail}${suggested}${why}`;
   });
   return { content: `Pending sudo requests:\n${lines.join('\n')}` };
 }
@@ -1031,7 +1056,7 @@ function sudoRequestTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'sudo_request',
     description:
-      "Ask the cone for an explicit sudo escalation before running a sensitive action. Use this when you know up-front that a command, read, or write will be gated and you want a clean approval round-trip instead of letting the gate fire mid-action. Resolves with the cone's decision (allow / always / deny). If your sudoers already grants the subject with NOPASSWD, this resolves allow immediately without prompting the cone. 'always' durably widens your sandbox by appending a NOPASSWD rule to the cone-owned /etc/sudoers.d/scoop-<folder> drop-in (you cannot write it yourself). 'deny' (or a timeout / dropped cone) resolves fail-closed.",
+      "Ask the cone for an explicit sudo escalation before running a sensitive action. Use this when you know up-front that a command, read, or write will be gated and you want a clean approval round-trip instead of letting the gate fire mid-action. Resolves with the cone's decision (allow / always / deny). If your sudoers already grants the subject with NOPASSWD, this resolves allow immediately without prompting the cone. 'always' durably widens your sandbox by appending a NOPASSWD rule to the cone-owned /etc/sudoers.d/scoop-<folder> drop-in (you cannot write it yourself). 'deny' (or a timeout / dropped cone) resolves fail-closed. Always pass 'reason': the approver sees only what you ask for, never why.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1050,6 +1075,11 @@ function sudoRequestTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'string',
           description:
             'Optional pre-filled glob pattern for an "always" grant (e.g., "git push*" for a command or "/workspace/.git/**" for a path). The cone may override this.',
+        },
+        reason: {
+          type: 'string',
+          description:
+            'Why you need this, in one sentence. Name the goal it unblocks, not the action restated: "the build writes its output there", not "I need to write there". Truncated at 300 characters.',
         },
       },
       required: ['kind', 'detail'],
@@ -1273,6 +1303,11 @@ function lickConfirmTool(config: ScoopManagementToolsConfig): ToolDefinition {
           description:
             'Optional glob pattern to persist when always=true (e.g., "git push*" or "/workspace/.git/**"). Defaults to the request\'s suggestedPattern, then to the exact detail. Ignored when always=false.',
         },
+        reason: {
+          type: 'string',
+          description:
+            'Optional note for the requester — a caveat on the approval. Only reaches a scoop that asked via sudo_request; an implicit filesystem gate has no channel to report it on success. Truncated at 300 characters.',
+        },
       },
       required: ['lick_id'],
     },
@@ -1284,7 +1319,7 @@ function lickDismissTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'lick_dismiss',
     description:
-      'Dismiss a pending actionable lick by its lick_id. For scoop sudo escalation this denies the sensitive action. For llms.txt discovery this silently appends the advertising host to /etc/llmstxtignore.',
+      'Dismiss a pending actionable lick by its lick_id. For scoop sudo escalation this denies the sensitive action — pass a reason, or the scoop just retries. For llms.txt discovery this silently appends the advertising host to /etc/llmstxtignore.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1292,6 +1327,11 @@ function lickDismissTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'string',
           description:
             'The id of the pending actionable lick (as delivered in a sudo-request or llms.txt discovery notification).',
+        },
+        reason: {
+          type: 'string',
+          description:
+            'Why you are refusing, in one sentence; the scoop sees it verbatim. Always give one for a sudo denial — without it the scoop cannot tell refusal from misunderstanding, and retries or works around it. Truncated at 300 characters.',
         },
       },
       required: ['lick_id'],

@@ -327,6 +327,20 @@ describe('node-rest adapter emits the contract wire', () => {
     expect(log[1].body).not.toHaveProperty('requester');
   });
 
+  // The CLI / Electron dialog is the owner's PRIMARY approval surface; a reason
+  // dropped here would be visible on a delegated phone card but not on it.
+  it('carries the requester-stated reason through, and omits it when absent', async () => {
+    const { log, broker } = harness();
+    await broker.approvals.request({
+      kind: 'command',
+      detail: 'git push',
+      reason: 'the release tag is cut',
+    });
+    await broker.approvals.request({ kind: 'command', detail: 'git push' });
+    expect(log[0].body).toHaveProperty('reason', 'the release tag is cut');
+    expect(log[1].body).not.toHaveProperty('reason');
+  });
+
   it('bounds a control-plane call so a wedged server cannot hang a scoop', async () => {
     // A wedged server never rejects — it just never answers — so without the
     // deadline `initShellAndSkills` would await its masked env forever and the

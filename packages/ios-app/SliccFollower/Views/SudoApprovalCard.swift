@@ -39,6 +39,11 @@ struct SudoApprovalCard: View {
                     .textSelection(.enabled)
             }
             .font(.subheadline)
+            // Below the subject: `reason` is prose the REQUESTER wrote, and the
+            // reviewer must read what is actually being authorized first.
+            if let why = request.reason, !why.isEmpty {
+                detail("Reason given", why)
+            }
             if showsPattern {
                 TextField("Always allow pattern", text: $pattern)
                     .font(.system(.subheadline, design: .monospaced))

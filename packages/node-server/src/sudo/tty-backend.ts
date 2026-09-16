@@ -38,6 +38,9 @@ export function createTtyBackend(deps: TtyDeps = {}): SudoBackend {
       try {
         if (req.requester) out.write(`\nRequested by: ${req.requester}`);
         out.write(`\nSLICC sudo — approve ${req.kind}: ${req.detail}\n`);
+        // After the subject: the requester's own words never precede what is
+        // actually being authorized.
+        if (req.reason?.trim()) out.write(`Reason given: ${req.reason.trim()}\n`);
         const choice = (await ask(rl, '[a]llow once / [d]eny / [A]lways (edit pattern): ')).trim();
         if (choice === 'a') return { decision: 'allow' };
         if (choice === 'A') {
