@@ -80,6 +80,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'ffmpeg',
   'screencapture',
   'say',
+  'hear',
   'afplay',
   'chime',
   'echo',

@@ -13,7 +13,10 @@ function installRpc(call: RpcCall): void {
   globalRef.__slicc_panelRpc = { call } as unknown as PanelRpcClient;
 }
 
-const createMockCtx = (files: Record<string, Uint8Array> = {}) =>
+const createMockCtx = (
+  files: Record<string, Uint8Array> = {},
+  opts: { stdin?: string; stdinIsTTY?: boolean } = {}
+) =>
   mockCommandContext({
     fs: {
       readFileBuffer: (async (p: string) => {
@@ -23,7 +26,15 @@ const createMockCtx = (files: Record<string, Uint8Array> = {}) =>
       }) as unknown as IFileSystem['readFileBuffer'],
     },
     cwd: '/workspace',
+    stdin: opts.stdin,
+    stdinIsTTY: opts.stdinIsTTY,
   });
+
+function latin1From(bytes: Uint8Array): string {
+  const chars = new Array<string>(bytes.length);
+  for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]!);
+  return chars.join('');
+}
 
 const run = (args: string[], ctx = createMockCtx()) => createHearCommand().execute(args, ctx);
 
@@ -143,5 +154,90 @@ describe('hear command', () => {
     const ctx = createMockCtx({ '/workspace/notes.txt': new Uint8Array([1]) });
     expect((await run(['-i', 'notes.txt'], ctx)).stderr).toContain('not an audio file');
     expect((await run(['-i', 'missing.wav'], ctx)).stderr).toContain('No such file');
+  });
+
+  it('transcribes stdin once with -i -', async () => {
+    const call = vi.fn().mockResolvedValue({ transcript: 'from stdin', engine: 'enhanced' });
+    installRpc(call);
+    const bytes = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4]);
+    const ctx = createMockCtx({}, { stdin: latin1From(bytes) });
+
+    const result = await run(['-i', '-'], ctx);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledWith(
+      'hear-transcribe',
+      expect.objectContaining({ lang: undefined }),
+      { timeoutMs: 600_000 }
+    );
+    const sent = call.mock.calls[0][1] as { bytes: ArrayBuffer };
+    expect(new Uint8Array(sent.bytes)).toEqual(bytes);
+    expect(call.mock.calls[0][0]).toBe('hear-transcribe');
+    expect(result.stdout).toBe('from stdin\n');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('piped stdin without -i transcribes the bytes once (non-TTY default)', async () => {
+    const call = vi.fn().mockResolvedValue({ transcript: 'piped', engine: 'enhanced' });
+    installRpc(call);
+    const bytes = new Uint8Array([9, 8, 7, 6]);
+    const ctx = createMockCtx({}, { stdin: latin1From(bytes) });
+
+    const result = await run([], ctx);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][0]).toBe('hear-transcribe');
+    const sent = call.mock.calls[0][1] as { bytes: ArrayBuffer };
+    expect(new Uint8Array(sent.bytes)).toEqual(bytes);
+    expect(result.stdout).toBe('piped\n');
+  });
+
+  it('empty -i - fails without capturing the mic', async () => {
+    const call = vi.fn();
+    installRpc(call);
+    const result = await run(['-i', '-'], createMockCtx({}, { stdin: '' }));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no audio on stdin');
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('empty piped stdin (explicit non-TTY) does not fall back to the mic', async () => {
+    const call = vi.fn();
+    installRpc(call);
+    const result = await run([], createMockCtx({}, { stdin: '', stdinIsTTY: false }));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no audio on stdin');
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('documents -i - / stdin in help', async () => {
+    const result = await run(['--help']);
+    expect(result.stdout).toContain('-i');
+    expect(result.stdout).toContain('stdin');
+  });
+
+  it('threads -l through stdin transcription', async () => {
+    const call = vi.fn().mockResolvedValue({ transcript: 'de', engine: 'enhanced' });
+    installRpc(call);
+    const bytes = new Uint8Array([1, 2]);
+    const result = await run(
+      ['-i', '-', '-l', 'de-DE'],
+      createMockCtx({}, { stdin: latin1From(bytes) })
+    );
+    expect(call).toHaveBeenCalledWith(
+      'hear-transcribe',
+      expect.objectContaining({ lang: 'de-DE' }),
+      { timeoutMs: 600_000 }
+    );
+    expect(result.stdout).toBe('de\n');
+  });
+
+  it('keeps the mic path when -d is set even if stdin has bytes', async () => {
+    const call = vi.fn().mockResolvedValue({ transcript: 'mic', engine: 'enhanced' });
+    installRpc(call);
+    const result = await run(
+      ['-d', 'usb'],
+      createMockCtx({}, { stdin: latin1From(new Uint8Array([1, 2, 3])) })
+    );
+    expect(call.mock.calls[0][0]).toBe('hear-capture');
+    expect(result.stdout).toBe('mic\n');
   });
 });

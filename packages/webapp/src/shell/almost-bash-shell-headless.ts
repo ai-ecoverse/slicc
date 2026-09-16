@@ -81,6 +81,7 @@ import { ScriptCatalog } from './script-catalog.js';
 import { commandSudoSubject, enforceCommandSudo } from './sudo/command-guard.js';
 import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
+import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
@@ -682,6 +683,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         options.executionLimits
       ),
     });
+    // just-bash never flags isatty on the command context. Inject `say -o -`
+    // when stdout is a pipe/redirect/capture so WAV bytes reach the consumer
+    // (#3178); TTY `say text` is unchanged. `exec()` applies this plugin.
+    this.bash.registerTransformPlugin(sayStdioPlugin);
 
     // Network-command post-registration cleanup (Codex P1 on #433).
     //

@@ -3,14 +3,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSayCommand } from '../../../src/shell/supplemental-commands/say-command.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-const createMockCtx = (opts?: { writeFile?: (path: string, bytes: Uint8Array) => Promise<void> }) =>
+const createMockCtx = (opts?: {
+  writeFile?: (path: string, bytes: Uint8Array) => Promise<void>;
+  stdoutIsTTY?: boolean;
+}) =>
   mockCommandContext({
     fs: {
       writeFile: opts?.writeFile
         ? (opts.writeFile as unknown as IFileSystem['writeFile'])
         : ((async () => undefined) as IFileSystem['writeFile']),
     },
+    ...(typeof opts?.stdoutIsTTY === 'boolean' ? { stdoutIsTTY: opts.stdoutIsTTY } : {}),
   });
+
+const WAV_BYTES = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0]); // 'RIFF'...
+
+function stdoutBytes(result: { stdout: string }): Uint8Array {
+  const bytes = new Uint8Array(result.stdout.length);
+  for (let i = 0; i < result.stdout.length; i++) bytes[i] = result.stdout.charCodeAt(i) & 0xff;
+  return bytes;
+}
 
 describe('say command', () => {
   afterEach(() => {
@@ -328,12 +340,14 @@ describe('say command', () => {
   });
 
   describe('-o / --out (file output)', () => {
-    it('documents -o / --out in help', async () => {
+    it('documents -o / --out, stdout, and -o - in help', async () => {
       const cmd = createSayCommand();
       const result = await cmd.execute(['--help'], createMockCtx());
       expect(result.stdout).toContain('-o');
       expect(result.stdout).toContain('--out');
       expect(result.stdout).toContain('WAV');
+      expect(result.stdout).toContain('-o -');
+      expect(result.stdout).toContain('stdout');
     });
 
     it('returns error for -o without value', async () => {
@@ -470,6 +484,173 @@ describe('say command', () => {
       expect(result.stderr).toContain('not ready');
       expect(result.stderr).toContain('--warmup');
       vi.doUnmock('../../../src/speech/speak.js');
+    });
+
+    it('worker float: -o - writes WAV bytes to stdout (not a VFS file)', async () => {
+      const call = vi.fn(async (op: string) => {
+        if (op === 'list-voices') return { voices: [] };
+        if (op === 'synthesize-to-wav') return { bytes: WAV_BYTES.buffer.slice(0) };
+        throw new Error(`unexpected op: ${op}`);
+      });
+      vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+        getPanelRpcClient: () => ({ call }),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const writeFile = vi.fn(async () => undefined);
+      const result = await makeCmd().execute(
+        ['-l', 'en-US', '-o', '-', 'piped speech'],
+        createMockCtx({ writeFile })
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdoutKind).toBe('bytes');
+      expect(stdoutBytes(result)).toEqual(WAV_BYTES);
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(call).toHaveBeenCalledWith(
+        'synthesize-to-wav',
+        { text: 'piped speech', lang: 'en-US', rate: 1 },
+        { timeoutMs: 5 * 60_000 }
+      );
+      vi.doUnmock('../../../src/kernel/panel-rpc.js');
+    });
+
+    it('non-TTY stdout without -o writes a WAV (worker float)', async () => {
+      const call = vi.fn(async (op: string) => {
+        if (op === 'list-voices') return { voices: [] };
+        if (op === 'synthesize-to-wav') return { bytes: WAV_BYTES.buffer.slice(0) };
+        throw new Error(`unexpected op: ${op}`);
+      });
+      vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+        getPanelRpcClient: () => ({ call }),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const writeFile = vi.fn(async () => undefined);
+      const result = await makeCmd().execute(
+        ['-l', 'en-US', 'piped speech'],
+        createMockCtx({ writeFile, stdoutIsTTY: false })
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdoutKind).toBe('bytes');
+      expect(stdoutBytes(result)).toEqual(WAV_BYTES);
+      expect(writeFile).not.toHaveBeenCalled();
+      vi.doUnmock('../../../src/kernel/panel-rpc.js');
+    });
+
+    it('non-TTY stdout fails loudly when kokoro is not ready (no empty WAV)', async () => {
+      const call = vi.fn(async (op: string) => {
+        if (op === 'list-voices') return { voices: [] };
+        throw new Error(
+          'on-device voice not ready — run say --warmup and retry once it reports ready'
+        );
+      });
+      vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+        getPanelRpcClient: () => ({ call }),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const result = await makeCmd().execute(
+        ['-l', 'en-US', 'hello'],
+        createMockCtx({ stdoutIsTTY: false })
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stdoutKind).toBeUndefined();
+      expect(result.stderr).toContain('not ready');
+      expect(result.stderr).toContain('--warmup');
+      vi.doUnmock('../../../src/kernel/panel-rpc.js');
+    });
+
+    it('local realm: -o - writes WAV bytes from synthesizeToWav', async () => {
+      vi.stubGlobal('window', {});
+      vi.stubGlobal('speechSynthesis', {
+        getVoices: () => [],
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      vi.doMock('../../../src/speech/speak.js', () => ({
+        kokoroVoicesIfReady: () => [{ id: 'af_heart', name: 'Heart', lang: 'en-US' }],
+        synthesizeToWav: vi.fn(async () => WAV_BYTES),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const writeFile = vi.fn(async () => undefined);
+      const result = await makeCmd().execute(
+        ['-l', 'en-US', '-o', '-', 'hello'],
+        createMockCtx({ writeFile })
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdoutKind).toBe('bytes');
+      expect(stdoutBytes(result)).toEqual(WAV_BYTES);
+      expect(writeFile).not.toHaveBeenCalled();
+      vi.doUnmock('../../../src/speech/speak.js');
+    });
+
+    it('local realm: -o - surfaces the not-ready rejection with empty stdout', async () => {
+      vi.stubGlobal('window', {});
+      vi.stubGlobal('speechSynthesis', {
+        getVoices: () => [],
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      vi.doMock('../../../src/speech/speak.js', () => ({
+        kokoroVoicesIfReady: () => [],
+        synthesizeToWav: vi.fn(async () => {
+          throw new Error(
+            'on-device voice not ready — run say --warmup and retry once it reports ready'
+          );
+        }),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const result = await makeCmd().execute(['-l', 'en-US', '-o', '-', 'hello'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('not ready');
+      vi.doUnmock('../../../src/speech/speak.js');
+    });
+
+    it('TTY say without -o still plays (does not dump WAV)', async () => {
+      const call = vi.fn().mockResolvedValue({ done: true });
+      vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+        getPanelRpcClient: () => ({ call }),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const result = await makeCmd().execute(['-l', 'en-US', 'x'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+      expect(call).toHaveBeenCalledWith(
+        'speak-text',
+        { text: 'x', lang: 'en-US', voice: undefined, rate: 1 },
+        { timeoutMs: 5 * 60_000 }
+      );
+      expect(call).not.toHaveBeenCalledWith(
+        'synthesize-to-wav',
+        expect.anything(),
+        expect.anything()
+      );
+      vi.doUnmock('../../../src/kernel/panel-rpc.js');
     });
 
     it('worker float: surfaces a non-English RPC rejection (page-side eligibility gate)', async () => {

@@ -19,7 +19,9 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { stdinAsBytes } from '../just-bash-compat.js';
 import { detectMimeType } from './shared.js';
+import { type StdioTtyHints, stdinIsTty } from './stdio-tty.js';
 
 type CommandContext = Parameters<Parameters<typeof defineCommand>[1]>[1];
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
@@ -38,8 +40,9 @@ function hearHelp(): CommandResult {
       '  Speech recognition: listens on the microphone until you pause, then\n' +
       '  prints the transcript (modeled on the macOS `hear` CLI).\n\n' +
       '  -i file          Transcribe an audio file (wav/mp3/ogg/webm) instead of\n' +
-      '                   listening; uses the enhanced on-device model (downloads\n' +
-      '                   it on first use)\n' +
+      '                   listening; `-` reads stdin (one-shot). A non-TTY stdin\n' +
+      '                   without -i is the same. Uses the enhanced on-device\n' +
+      '                   model (downloads it on first use)\n' +
       '  -l lang          BCP-47 language tag (default: auto-detect)\n' +
       '  -T seconds       Max listening time (default 30)\n' +
       '  -d deviceId      Microphone device id (see --devices); applies to the\n' +
@@ -219,6 +222,34 @@ async function runStatusOrWarmup(bridge: SpeechBridge, warmup: boolean): Promise
   }
 }
 
+function copyToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buf).set(bytes);
+  return buf;
+}
+
+async function transcribeBytes(
+  bridge: SpeechBridge,
+  parsed: HearArgs,
+  bytes: Uint8Array,
+  label: string
+): Promise<CommandResult> {
+  if (bytes.byteLength === 0) return fail(`no audio on ${label}`);
+  const buf = copyToArrayBuffer(bytes);
+  try {
+    const result = bridge.local
+      ? await (await import('../../speech/hear.js')).hearTranscribe(buf, parsed.lang)
+      : await bridge.panelRpc!.call(
+          'hear-transcribe',
+          { bytes: buf, lang: parsed.lang },
+          { timeoutMs: TRANSCRIBE_RPC_TIMEOUT_MS }
+        );
+    return { stdout: result.transcript + '\n', stderr: '', exitCode: 0 };
+  } catch (err) {
+    return fail(`transcription failed: ${errText(err)}`);
+  }
+}
+
 async function runTranscribeFile(
   bridge: SpeechBridge,
   parsed: HearArgs,
@@ -236,20 +267,7 @@ async function runTranscribeFile(
   if (!mimeType.startsWith('audio/') && !mimeType.startsWith('video/')) {
     return fail(`${inputFile} is not an audio file`);
   }
-  const buf = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(buf).set(bytes);
-  try {
-    const result = bridge.local
-      ? await (await import('../../speech/hear.js')).hearTranscribe(buf, parsed.lang)
-      : await bridge.panelRpc!.call(
-          'hear-transcribe',
-          { bytes: buf, lang: parsed.lang },
-          { timeoutMs: TRANSCRIBE_RPC_TIMEOUT_MS }
-        );
-    return { stdout: result.transcript + '\n', stderr: '', exitCode: 0 };
-  } catch (err) {
-    return fail(`transcription failed: ${errText(err)}`);
-  }
+  return transcribeBytes(bridge, parsed, bytes, inputFile);
 }
 
 async function runCapture(bridge: SpeechBridge, parsed: HearArgs): Promise<CommandResult> {
@@ -292,7 +310,18 @@ export function createHearCommand(): Command {
 
     if (parsed.devices) return runDevices(bridge);
     if (parsed.status || parsed.warmup) return runStatusOrWarmup(bridge, parsed.warmup);
-    if (parsed.inputFile) return runTranscribeFile(bridge, parsed, ctx);
+    if (parsed.inputFile && parsed.inputFile !== '-') {
+      return runTranscribeFile(bridge, parsed, ctx);
+    }
+
+    // Read stdin once. This runtime's stdin is a one-shot buffer — a second
+    // consumer would see EOF. `-i -` always uses it; a non-TTY stdin with
+    // neither `-i` nor a mic device (`-d`) defaults to it (#3178).
+    const stdinBytes = stdinAsBytes(ctx.stdin);
+    const fromStdin =
+      parsed.inputFile === '-' ||
+      (parsed.deviceId == null && !stdinIsTty(ctx as StdioTtyHints, stdinBytes.byteLength));
+    if (fromStdin) return transcribeBytes(bridge, parsed, stdinBytes, 'stdin');
     return runCapture(bridge, parsed);
   });
 }
