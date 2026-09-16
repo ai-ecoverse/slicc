@@ -153,6 +153,37 @@ test('GATE: the sync-exec channel runs through the realm own gated ctx.exec, in 
   expect(seen).toEqual([{ cmd: 'ls', cwd: '/scoops/a' }]);
 });
 
+test('GATE: a caller cwd override is used instead of the token cwd', async () => {
+  const seen: Array<{ cmd: string; cwd: unknown; env: unknown }> = [];
+  const exec = (async (cmd: string, opts: { cwd?: string; env?: Record<string, string> }) => {
+    seen.push({ cmd, cwd: opts.cwd, env: opts.env });
+    return { stdout: 'ok', stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const fs = {
+    resolvePath: (_base: string, path: string) => path,
+    stat: async () => ({
+      isDirectory: true,
+      isFile: false,
+      isSymbolicLink: false,
+      mode: 0o755,
+      size: 0,
+      mtime: new Date(),
+    }),
+  } as unknown as CommandContext['fs'];
+  const token = mintSyncFsToken({ fs, exec, cwd: '/scoops/a' });
+
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'pwd',
+    cwd: '/shared',
+    env: { MARKER: 'x' },
+  });
+
+  expect(r.ok).toBe(true);
+  expect(seen).toEqual([{ cmd: 'pwd', cwd: '/shared', env: { MARKER: 'x' } }]);
+});
+
 test('GATE: a sudo-denying ctx.exec propagates EACCES through the sync-exec channel', async () => {
   // The command guard lives inside ctx.exec (same handle the async exec RPC
   // uses), so a denial must surface as an errno rather than being swallowed.

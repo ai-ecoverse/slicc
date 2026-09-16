@@ -855,7 +855,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
         stdin: EMPTY_BYTES,
-        exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+        exec: (cmd, opts) =>
+          this.bash.exec(cmd, {
+            env: opts?.env ?? this.lastEnv,
+            cwd: opts?.cwd ?? this.cwd,
+            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
+          }),
       },
       this.buildJshProcessConfig()
     );
@@ -1437,9 +1442,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           // opts.args; dropping it would run a bare `workflow` (just-bash's Bash.exec
           // appends opts.args to the command).
           this.bash.exec(cmd, {
-            env: Object.fromEntries(ctx.env),
+            env: opts?.env ?? Object.fromEntries(ctx.env),
             cwd: opts?.cwd ?? ctx.cwd,
             args: opts?.args,
+            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
           }));
 
       // 1) .jsh wins the bare name.
@@ -1609,7 +1615,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
         stdin: EMPTY_BYTES,
-        exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+        exec: (cmd, opts) =>
+          this.bash.exec(cmd, {
+            env: opts?.env ?? this.lastEnv,
+            cwd: opts?.cwd ?? this.cwd,
+            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
+          }),
       },
       this.buildJshProcessConfig(runPid)
     );

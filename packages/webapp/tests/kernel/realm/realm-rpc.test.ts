@@ -307,6 +307,44 @@ describe('realm RPC: exec.start / exec.kill (kill + buffered stdin)', () => {
     client.dispose();
   });
 
+  it('exec.start forwards cwd and env (replace) to ctx.exec', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+    const fs = makeMockFs();
+    fs.stat = async (path: string) => {
+      if (path === '/shared' || path === '/workspace') {
+        return {
+          isDirectory: true,
+          isFile: false,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(),
+        };
+      }
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+    };
+    const ctx = makeCtx({ exec, fs });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('pwd', { cwd: '/shared', env: { MARKER: 'from-env' } });
+    handle.stdin.end();
+    await handle.done;
+
+    expect(exec).toHaveBeenCalledWith(
+      'pwd',
+      expect.objectContaining({
+        cwd: '/shared',
+        env: { MARKER: 'from-env' },
+        replaceEnv: true,
+      })
+    );
+    client.dispose();
+  });
+
   it('array-argv form threads the tail through just-bash `args` (shell-free)', async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
     const ctx = makeCtx({ exec });

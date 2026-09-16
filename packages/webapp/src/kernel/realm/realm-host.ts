@@ -60,6 +60,7 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
+import { normalizeSyncExecEnv, resolveSyncExecCwd } from './sync-exec-dispatch.js';
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import type { SyncFsToken } from './sync-fs-wire.js';
@@ -839,6 +840,8 @@ function assertExecStartOptions(opts: {
   stdin?: unknown;
   stdinKind?: unknown;
   args?: unknown;
+  cwd?: unknown;
+  env?: unknown;
 }): void {
   if (opts.stdin !== undefined && typeof opts.stdin !== 'string') {
     throw new Error('exec.start: stdin must be a string');
@@ -852,6 +855,37 @@ function assertExecStartOptions(opts: {
   ) {
     throw new Error('exec.start: args must be a string[]');
   }
+  if (opts.cwd !== undefined && typeof opts.cwd !== 'string') {
+    throw new Error('exec.start: cwd must be a string');
+  }
+  if (opts.env !== undefined) {
+    if (opts.env === null || typeof opts.env !== 'object' || Array.isArray(opts.env)) {
+      throw new Error('exec.start: env must be an object');
+    }
+    for (const [key, value] of Object.entries(opts.env as { [name: string]: string | undefined })) {
+      if (value !== undefined && typeof value !== 'string') {
+        throw new Error(`exec.start: env[${key}] must be a string`);
+      }
+    }
+  }
+}
+
+function throwExecErrno(result: { errno: string; message: string }): never {
+  throw Object.assign(new Error(result.message), { code: result.errno });
+}
+
+async function resolveExecStartChildOpts(
+  ctx: CommandContext,
+  opts: { cwd?: string; env?: Record<string, string> }
+): Promise<{ cwd: string; env?: Record<string, string> }> {
+  const cwdResult = await resolveSyncExecCwd(ctx.fs, ctx.cwd, opts.cwd);
+  if ('errno' in cwdResult) throwExecErrno(cwdResult);
+  const envResult = normalizeSyncExecEnv(opts.env);
+  if (envResult !== undefined && 'errno' in envResult) throwExecErrno(envResult);
+  return {
+    cwd: cwdResult.cwd,
+    ...(envResult !== undefined ? { env: envResult.env } : {}),
+  };
 }
 
 /**
@@ -873,7 +907,16 @@ async function dispatchExecStart(
   const [spawnId, commandOrArgv, options] = args as [
     number,
     string | string[],
-    { stdin?: string; stdinKind?: 'text' | 'bytes'; args?: string[] } | undefined,
+    (
+      | {
+          stdin?: string;
+          stdinKind?: 'text' | 'bytes';
+          args?: string[];
+          cwd?: string;
+          env?: Record<string, string>;
+        }
+      | undefined
+    ),
   ];
   if (typeof spawnId !== 'number') {
     throw new Error('exec.start: spawnId must be a number');
@@ -906,6 +949,7 @@ async function dispatchExecStart(
   // malformed shape throws a clear error instead of corrupting the just-bash
   // exec call downstream.
   assertExecStartOptions(opts);
+  const childOpts = await resolveExecStartChildOpts(ctx, opts);
   const controller = new AbortController();
   const { pm, owner } = execCtx.opts;
   let pid = 0;
@@ -913,7 +957,7 @@ async function dispatchExecStart(
     const proc = pm.spawn({
       kind: 'shell',
       argv: procArgv,
-      cwd: ctx.cwd,
+      cwd: childOpts.cwd,
       owner,
       ...(execCtx.opts.ppid !== undefined ? { ppid: execCtx.opts.ppid } : {}),
       adoptAbort: controller,
@@ -930,13 +974,19 @@ async function dispatchExecStart(
       stdin?: string;
       stdinKind?: 'text' | 'bytes';
       args?: string[];
-    } = { cwd: ctx.cwd, signal: controller.signal };
+      env?: Record<string, string>;
+      replaceEnv?: boolean;
+    } = { cwd: childOpts.cwd, signal: controller.signal };
     if (opts.stdin !== undefined) execOptions.stdin = opts.stdin;
     if (opts.stdinKind !== undefined) execOptions.stdinKind = opts.stdinKind;
     // Array form's tail is the shell-free argv (wins); string form takes an
     // explicit `args` from options.
     if (argvTail !== undefined) execOptions.args = argvTail;
     else if (opts.args !== undefined) execOptions.args = opts.args;
+    if (childOpts.env !== undefined) {
+      execOptions.env = childOpts.env;
+      execOptions.replaceEnv = true;
+    }
     result = await ctx.exec!(cmd, execOptions);
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   } finally {

@@ -109,6 +109,17 @@ test('argv, stdin and timeout ride the envelope', () => {
   });
 });
 
+test('cwd and env ride the envelope', () => {
+  installFakeXhr();
+  reply = okReply({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+  createSyncExecXhrBridge('t').run(['pwd'], { cwd: '/shared', env: { MARKER: 'x' } });
+  expect(JSON.parse(lastSent!.body)).toMatchObject({
+    command: ['pwd'],
+    cwd: '/shared',
+    env: { MARKER: 'x' },
+  });
+});
+
 test("Node's `{ timeout: 0 }` becomes the default budget, not a 0 transport budget", () => {
   // 0 means "no timeout" in Node. Sending it verbatim made the SW use its
   // 120s fallback while the XHR gave up after only the margin, so any command
