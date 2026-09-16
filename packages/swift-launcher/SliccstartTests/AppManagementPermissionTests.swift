@@ -3,29 +3,10 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class AppManagementPermissionTests: XCTestCase {
 
     func testInitProbesExactlyOnce() {
-        
-        
-        
-        
-        
-        
+
         let permission = AppManagementPermission()
         XCTAssertEqual(permission.probeCount, 1, "init should probe exactly once")
         XCTAssertFalse(permission.isWatching, "init must not register an observer")
@@ -50,11 +31,7 @@ final class AppManagementPermissionTests: XCTestCase {
     }
 
     func testStartWatchingDoesNotRetainATimer() {
-        
-        
-        
-        
-        
+
         let permission = AppManagementPermission()
         permission.startWatchingForGrant()
         defer { permission.stopWatchingForGrant() }
@@ -81,10 +58,7 @@ final class AppManagementPermissionTests: XCTestCase {
     }
 
     func testStartWatchingIsIdempotent() {
-        
-        
-        
-        
+
         let permission = AppManagementPermission()
         permission.startWatchingForGrant()
         permission.startWatchingForGrant()
@@ -94,11 +68,7 @@ final class AppManagementPermissionTests: XCTestCase {
     }
 
     func testActivationNotificationRetriggersProbe() {
-        
-        
-        
-        
-        
+
         let permission = AppManagementPermission()
         permission.startWatchingForGrant()
         defer { permission.stopWatchingForGrant() }
@@ -110,9 +80,7 @@ final class AppManagementPermissionTests: XCTestCase {
             name: NSApplication.didBecomeActiveNotification,
             object: nil
         )
-        
-        
-        
+
         let expectation = XCTestExpectation(description: "main queue drain")
         DispatchQueue.main.async { expectation.fulfill() }
         wait(for: [expectation], timeout: 1.0)
@@ -128,8 +96,7 @@ final class AppManagementPermissionTests: XCTestCase {
     }
 
     func testMultipleActivationsTriggerOneProbeEach() {
-        
-        
+
         let permission = AppManagementPermission()
         permission.startWatchingForGrant()
         defer { permission.stopWatchingForGrant() }

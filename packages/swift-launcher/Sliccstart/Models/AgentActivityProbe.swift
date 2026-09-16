@@ -1,8 +1,5 @@
 import Foundation
 
-
-
-
 struct AgentActivityProbe {
     let fetch: (URL) async throws -> (Int, Data)
 

@@ -11,9 +11,6 @@ enum TraySessionPresentation {
         return presumedReachable + unreachable
     }
 
-    
-    
-    
     static func attachableSessions(
         _ sessions: [SyncedTraySession],
         verdicts: [String: SessionReachability.Verdict]

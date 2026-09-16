@@ -87,8 +87,7 @@ public struct OpenApprovalRequest: Equatable, Identifiable, Sendable {
 }
 
 public final class OpenRequestStore {
-    
-    
+
     public static let defaultTombstoneLimit = 1_024
 
     private struct Entry {
@@ -121,10 +120,6 @@ public final class OpenRequestStore {
         return true
     }
 
-    
-    
-    
-    
     private func evictOldestSettledTombstone() {
         guard seenRequestOrder.count > tombstoneLimit,
             let index = seenRequestOrder.firstIndex(where: { entries[$0] == nil })
@@ -143,7 +138,6 @@ public final class OpenRequestStore {
         entries[id]?.request
     }
 
-    
     public func settle(id: String) -> OpenApprovalRequest? {
         entries.removeValue(forKey: id)?.request
     }
@@ -173,9 +167,6 @@ public enum OpenApprovalLimits {
 public final class OpenApprovalController {
     public static let defaultTimeout: TimeInterval = 120
     public static let waitingProgress = "Waiting for approval on iPhone…\n"
-    
-    
-    
 
     private struct PendingDelivery {
         var messages: [FollowerToLeaderMessage]
@@ -314,9 +305,6 @@ public final class OpenApprovalController {
         settle(requestId: requestId, code: .success, error: nil)
     }
 
-    
-    
-    
     public func handleCallbackURL(_ url: URL) -> Bool {
         guard OpenCallbackCodec.owns(url) else { return false }
         switch OpenCallbackCodec.decode(url) {
@@ -371,7 +359,6 @@ public final class OpenApprovalController {
         requestStore.clearPending()
     }
 
-    
     public func transportAvailable() {
         flushPendingResponses()
     }

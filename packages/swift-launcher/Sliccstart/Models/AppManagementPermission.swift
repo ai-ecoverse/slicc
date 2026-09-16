@@ -3,16 +3,9 @@ import Foundation
 
 @Observable
 
-
 class AppManagementPermission {
     private(set) var isGranted: Bool = false
-    
-    
-    
-    
-    
-    
-    
+
     private(set) var probeCount: Int = 0
     private var activationObserver: NSObjectProtocol?
 
@@ -31,26 +24,6 @@ class AppManagementPermission {
         isGranted = Self.probeAppManagementAccess()
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func startWatchingForGrant() {
         stopWatchingForGrant()
         activationObserver = NotificationCenter.default.addObserver(
@@ -69,48 +42,37 @@ class AppManagementPermission {
         }
     }
 
-    
-    
-    
-    
     var isWatching: Bool {
         activationObserver != nil
     }
 
     func openSystemSettings() {
-        
+
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles") {
             NSWorkspace.shared.open(url)
         }
     }
 
-    
-    
-    
     private static func probeAppManagementAccess() -> Bool {
         let fm = FileManager.default
 
-        
-        
         guard let contents = try? fm.contentsOfDirectory(atPath: "/Applications") else {
             return true
         }
 
-        
         let preferredTestApps = [
             "Slack.app", "Discord.app", "Spotify.app", "Visual Studio Code.app",
             "Microsoft Teams.app", "Figma.app", "Notion.app", "1Password.app",
             "Zoom.app", "Google Chrome.app", "Firefox.app", "Brave Browser.app",
         ]
 
-        
         var testApps: [String] = []
         for preferred in preferredTestApps {
             if contents.contains(preferred) {
                 testApps.append("/Applications/\(preferred)")
             }
         }
-        
+
         for item in contents where item.hasSuffix(".app") && !preferredTestApps.contains(item) {
             testApps.append("/Applications/\(item)")
         }
@@ -119,45 +81,36 @@ class AppManagementPermission {
             let contentsPath = "\(appPath)/Contents"
             guard fm.fileExists(atPath: contentsPath) else { continue }
 
-            
             if isAppleSystemApp(appPath) {
                 continue
             }
 
-            
             if isRootOwned(appPath) {
                 continue
             }
 
             let testFile = "\(contentsPath)/.sliccstart_probe_\(UUID().uuidString)"
 
-            
             errno = 0
 
-            
             if fm.createFile(atPath: testFile, contents: nil) {
-                
+
                 try? fm.removeItem(atPath: testFile)
                 return true
             }
 
-            
             let errorCode = errno
 
-            
-            
             if errorCode == EPERM || errorCode == EACCES {
                 return false
             }
         }
 
-        
         return true
     }
 
-    
     private static func isAppleSystemApp(_ appPath: String) -> Bool {
-        
+
         let sipProtectedApps = [
             "Safari.app", "Mail.app", "Messages.app", "FaceTime.app",
             "Calendar.app", "Contacts.app", "Notes.app", "Reminders.app",
@@ -170,7 +123,6 @@ class AppManagementPermission {
         return sipProtectedApps.contains(appName)
     }
 
-    
     private static func isRootOwned(_ appPath: String) -> Bool {
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: appPath),
@@ -178,6 +130,6 @@ class AppManagementPermission {
         else {
             return false
         }
-        return ownerUID == 0  
+        return ownerUID == 0
     }
 }

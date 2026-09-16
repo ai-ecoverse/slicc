@@ -1,19 +1,6 @@
 import UIKit
 import UniformTypeIdentifiers
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 final class ShareViewController: UIViewController {
 
     private let statusLabel = UILabel()
@@ -65,7 +52,7 @@ final class ShareViewController: UIViewController {
     }
 
     private func handOff(url: URL) {
-        
+
         _ = AppGroupInbox().enqueue(url: url)
         guard
             let encoded = url.absoluteString.addingPercentEncoding(
@@ -79,9 +66,6 @@ final class ShareViewController: UIViewController {
         extensionContext?.completeRequest(returningItems: nil)
     }
 
-    
-    
-    
     private func openViaResponderChain(_ url: URL) -> Bool {
         var responder: UIResponder? = self
         while let current = responder {
@@ -101,8 +85,6 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    
-    
     static func isWebURL(_ url: URL) -> Bool {
         guard url.absoluteString.count <= 2048,
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),

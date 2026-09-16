@@ -86,9 +86,7 @@ final class AppRuntimeStateTests: XCTestCase {
     }
 
     func testElectronAppRunningWithoutDebugStillGatesOnMissingLeader() {
-        
-        
-        
+
         XCTAssertEqual(
             AppRuntimeState.resolve(
                 targetType: .electronApp,
@@ -100,9 +98,7 @@ final class AppRuntimeStateTests: XCTestCase {
     }
 
     func testAlreadyAttachedFollowerIsNotRegatedWhenLeaderFlagDrops() {
-        
-        
-        
+
         XCTAssertEqual(
             AppRuntimeState.resolve(
                 targetType: .electronApp,
@@ -115,9 +111,7 @@ final class AppRuntimeStateTests: XCTestCase {
     }
 
     func testPermissionBlockerWinsOverLeaderBlocker() {
-        
-        
-        
+
         XCTAssertEqual(
             AppRuntimeState.resolve(
                 targetType: .electronApp,

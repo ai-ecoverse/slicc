@@ -3,10 +3,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
 @MainActor
 final class SliccProcessLeaderGatingTests: XCTestCase {
 
@@ -131,8 +127,7 @@ final class SliccProcessLeaderGatingTests: XCTestCase {
             targetName: browser.name
         )
         XCTAssertTrue(proc.isRunning(browser))
-        
-        
+
         XCTAssertNoThrow(try proc.launchBrowserFollower(browser, joinUrl: "https://x.test/join/a.b"))
     }
 
@@ -164,8 +159,6 @@ final class SliccProcessLeaderGatingTests: XCTestCase {
         XCTAssertEqual(proc.leaderTargetName, "LeaderBrowser")
     }
 
-    
-
     private func makeBrowser() -> AppTarget {
         let path = "/Applications/Sliccstart-Test-Browser-\(UUID().uuidString).app"
         return AppTarget(
@@ -183,10 +176,7 @@ final class SliccProcessLeaderGatingTests: XCTestCase {
     }
 
     private func makeElectron() -> AppTarget {
-        
-        
-        
-        
+
         let path = "/Applications/Sliccstart-Test-DoesNotExist-\(UUID().uuidString).app"
         return AppTarget(
             id: path,

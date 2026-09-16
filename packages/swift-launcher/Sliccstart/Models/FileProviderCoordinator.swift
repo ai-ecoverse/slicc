@@ -2,8 +2,6 @@ import Foundation
 import SliccTraySession
 import SliccTrayVFS
 
-
-
 final class FileProviderCoordinator {
     static let enabledKey = "fileProvider.finderEnabled"
 
@@ -33,8 +31,6 @@ final class FileProviderCoordinator {
         self.defaults = defaults
     }
 
-    
-    
     func leaderJoinUrlChanged(_ joinUrl: String?, label: String?) {
         guard let joinUrl, !joinUrl.isEmpty, let url = URL(string: joinUrl) else {
             credentialStore.clear()
@@ -50,7 +46,6 @@ final class FileProviderCoordinator {
         registerIfCredentialsAvailable()
     }
 
-    
     func withdrawOnQuit() {
         domainLifecycle.removeDomain()
     }

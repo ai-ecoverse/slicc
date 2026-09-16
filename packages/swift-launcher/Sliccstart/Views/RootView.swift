@@ -1,23 +1,14 @@
 import AppUpdater
 import SwiftUI
 
-
-
-
-
-
-
-
 struct RootView: View {
     @Bindable var model: LauncherModel
     @ObservedObject var appUpdater: AppUpdater
-    
-    
+
     var isBundledBuild: Bool = SliccBootstrapper.isBundled
 
     private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
-    
-    
+
     private let sessionRepublishTimer = Timer.publish(every: 4 * 60 * 60, on: .main, in: .common)
         .autoconnect()
 
@@ -109,10 +100,6 @@ struct RootView: View {
             )
         }
     }
-
-    
-    
-    
 
     static func debugBuildPrompt(for target: AppTarget) -> String {
         """

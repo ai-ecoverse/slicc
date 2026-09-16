@@ -8,21 +8,13 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProc
 enum AppStartBlocker: Equatable {
     case needsPermission
     case needsDebugBuild
-    
-    
-    
-    
+
     case needsLeader
 }
 
-
-
-
-
-
 struct LeaderBrowserEndpoint: Equatable {
     let cdpPort: UInt16
-    
+
     let appPath: String
 }
 
@@ -63,10 +55,7 @@ enum AppRuntimeState: Equatable {
         if debugPort != nil {
             return .runningWithDebug(cdpPort: debugPort)
         }
-        
-        
-        
-        
+
         if (targetType == .electronApp || targetType == .terminal) && !leaderAvailable {
             return .cannotStart(.needsLeader)
         }
@@ -82,9 +71,6 @@ enum AppRuntimeState: Equatable {
 
 @Observable
 
-
-
-
 class SliccProcess {
     struct LaunchConfiguration: Equatable {
         let executablePath: String
@@ -92,21 +78,12 @@ class SliccProcess {
         let logLabel: String
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     struct SpawnServices {
-        
+
         var resolveLaunchConfiguration: (_ sliccDir: String, _ extraArgs: [String]) throws -> LaunchConfiguration
-        
+
         var runProcess: (Process) throws -> Void
-        
+
         var isPortInUse: (UInt16) -> Bool
 
         static let live = SpawnServices(
@@ -128,30 +105,16 @@ class SliccProcess {
         let targetName: String
         let startedAt: Date
         var observedAppPID: pid_t?
-        
-        
-        
-        
+
         var joinUrl: String?
-        
-        
-        
-        
+
         var bridgeToken: String?
-        
-        
-        
-        
-        
+
         var observedCdpListening: Bool = false
-        
-        
-        
-        
+
         var isFollower: Bool = false
     }
 
-    
     private var launchRecords: [String: LaunchRecord] = [:]
     private var startFailures: [String: String] = [:]
     private var intentionallyStoppingTargets: Set<String> = []
@@ -160,32 +123,12 @@ class SliccProcess {
     var isLaunchingTerminalFollower = false
     var terminalCliDownloadProgress: SliccCliDownloadProgress?
 
-    
-    
-    
     var isPreparingForUpdate = false
 
-    
-    
-    
-    
-    
-    
     var leaderJoinUrl: String?
 
-    
-    
-    
-    
-    
     private var leaderProbeTask: Task<Void, Never>?
 
-    
-    
-    
-    
-    
-    
     private var hasDetached = false
 
     let recordStore: LaunchRecordStore
@@ -212,17 +155,17 @@ class SliccProcess {
 
     var resolvedSliccDir: String { sliccDir }
     private var sliccDir: String {
-        
+
         if let env = ProcessInfo.processInfo.environment["SLICC_DIR"], !env.isEmpty {
             log.info("sliccDir: using SLICC_DIR env = \(env, privacy: .public)")
             return env
         }
-        
+
         if let bundled = SliccBootstrapper.bundledSliccDir {
             log.info("sliccDir: using bundled = \(bundled, privacy: .public)")
             return bundled
         }
-        
+
         let parentDir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
         var dir = parentDir
         for _ in 0..<5 {
@@ -238,16 +181,12 @@ class SliccProcess {
         return SliccBootstrapper.defaultSliccDir
     }
 
-    
-    
     private static let browserPort: UInt16 = 5710
     private static let browserCdpPort: UInt16 = 9222
     private static let electronBasePort: UInt16 = 5711
     private static let electronBaseCdpPort: UInt16 = 9223
     private static let electronLaunchStaleTimeout: TimeInterval = 30
-    
-    
-    
+
     private static let browserLaunchStaleTimeout: TimeInterval = 15
 
     func isRunning(_ target: AppTarget) -> Bool {
@@ -260,9 +199,7 @@ class SliccProcess {
     ) -> AppRuntimeState {
         let debugPort = activeDebugPort(for: target)
         let appIsRunning = target.type == .electronApp && isElectronAppRunning(target)
-        
-        
-        
+
         let requiresLeader = target.type == .electronApp || target.type == .terminal
         let leaderAvailable = !requiresLeader || isLeaderReady()
         return AppRuntimeState.resolve(
@@ -276,10 +213,6 @@ class SliccProcess {
         )
     }
 
-    
-    
-    
-    
     func isLeaderReady() -> Bool {
         guard let url = leaderJoinUrl, !url.isEmpty else { return false }
         return launchRecords.values.contains { $0.targetType == .chromiumBrowser && !$0.isFollower }
@@ -292,16 +225,10 @@ class SliccProcess {
         return await agentActivityProbe.hasRecentActivity(servePorts: servePorts)
     }
 
-    
-    
     var leaderTargetName: String? {
         launchRecords.values.first { $0.targetType == .chromiumBrowser && !$0.isFollower }?.targetName
     }
 
-    
-    
-    
-    
     var leaderBrowserEndpoint: LeaderBrowserEndpoint? {
         guard
             let entry = launchRecords.first(where: {
@@ -313,12 +240,6 @@ class SliccProcess {
         return LeaderBrowserEndpoint(cdpPort: entry.value.cdpPort, appPath: entry.key)
     }
 
-    
-    
-    
-    
-    
-    
     func isRunningAsFollower(_ target: AppTarget) -> Bool {
         guard let record = launchRecords[target.id] else { return false }
         return record.isFollower && record.process.isRunning
@@ -329,8 +250,6 @@ class SliccProcess {
             refreshRuntimeState(for: target)
         }
     }
-
-    
 
     func launchStandalone(_ browser: AppTarget) throws {
         refreshRuntimeState(for: browser)
@@ -356,29 +275,17 @@ class SliccProcess {
                 cdpPort: Self.browserCdpPort,
                 servePort: Self.browserPort,
                 electronAppPath: nil,
-                
-                
-                
+
                 bridgeToken: Self.standaloneBridgeToken
             )
         } catch {
             recordStartFailure(for: browser, message: error.localizedDescription)
             throw error
         }
-        
-        
-        
-        
-        
+
         startLeaderProbe(servePort: Self.browserPort)
     }
 
-    
-
-    
-    
-    
-    
     func launchBrowserFollower(_ browser: AppTarget, joinUrl: String) throws {
         guard browser.type == .chromiumBrowser else { throw LaunchError.invalidTerminalTarget }
         guard !joinUrl.isEmpty else { throw LaunchError.leaderUnavailable }
@@ -413,8 +320,6 @@ class SliccProcess {
         }
     }
 
-    
-
     func launchWithElectronApp(_ app: AppTarget, forceRestartExistingApp: Bool = false) throws {
         refreshRuntimeState(for: app)
         if isRunning(app) {
@@ -432,10 +337,7 @@ class SliccProcess {
         log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
         do {
             var env: [String: String] = ["PORT": "\(port)"]
-            
-            
-            
-            
+
             env.merge(Self.thinElectronEnv()) { _, new in new }
             try spawn(
                 target: app,
@@ -449,9 +351,7 @@ class SliccProcess {
                 servePort: port,
                 electronAppPath: app.path,
                 joinUrl: leaderJoinUrl,
-                
-                
-                
+
                 bridgeToken: Self.thinElectronBridgeToken
             )
         } catch {
@@ -460,16 +360,10 @@ class SliccProcess {
         }
     }
 
-    
-
     func isTerminalCliAvailable() -> Bool {
         terminalFollowerLaunchService.isCliAvailable()
     }
 
-    
-    
-    
-    
     @MainActor
     func launchTerminalFollower(_ target: AppTarget, joinURLOverride: String? = nil) async throws {
         guard target.type == .terminal else { throw LaunchError.invalidTerminalTarget }
@@ -505,35 +399,18 @@ class SliccProcess {
         }
     }
 
-    
-    
-    
-    
-    
-    
     static let defaultWorkerBaseUrl = "https://www.sliccy.ai"
 
-    
-    
-    
-    
     static func standaloneBrowserArgs(
         cdpPort: UInt16, mounts: [MountTablePreference.Mapping] = []
     ) -> [String] {
         ["--cdp-port=\(cdpPort)", "--lead"] + MountTablePreference.serverArgs(mappings: mounts)
     }
 
-    
-    
-    
     static func browserFollowerArgs(cdpPort: UInt16, joinUrl: String) -> [String] {
         ["--cdp-port=\(cdpPort)", "--join=\(joinUrl)"]
     }
 
-    
-    
-    
-    
     static func standaloneBrowserEnv(
         executablePath: String,
         servePort: UInt16,
@@ -548,18 +425,11 @@ class SliccProcess {
             "CHROME_PATH": executablePath,
             "PORT": "\(servePort)",
             "WORKER_BASE_URL": workerBaseUrl,
-            
-            
-            
-            
-            
+
             "SLICC_BRIDGE_TOKEN": bridgeToken,
         ]
     }
 
-    
-    
-    
     static func electronAppArgs(
         electronAppPath: String,
         cdpPort: UInt16,
@@ -576,35 +446,12 @@ class SliccProcess {
         return args
     }
 
-    
-    
-    
-    
-    
-    
     static let thinElectronBridgeToken: String = UUID().uuidString
 
-    
-    
-    
-    
-    
-    
-    
     static let standaloneBridgeToken: String = UUID().uuidString
 
-    
-    
-    
-    
-    
     static let defaultHostedLeaderOrigin = "https://www.sliccy.ai"
 
-    
-    
-    
-    
-    
     static func resolveHostedLeaderOrigin(
         inheritedEnv: [String: String] = ProcessInfo.processInfo.environment
     ) -> String {
@@ -619,12 +466,6 @@ class SliccProcess {
         return defaultHostedLeaderOrigin
     }
 
-    
-    
-    
-    
-    
-    
     static func thinElectronEnv(
         inheritedEnv: [String: String] = ProcessInfo.processInfo.environment,
         bridgeToken: String = thinElectronBridgeToken
@@ -635,42 +476,23 @@ class SliccProcess {
         ]
     }
 
-    
     struct LeaderProbeSnapshot: Sendable {
         let joinUrlAlreadySet: Bool
         let hasBrowserRecord: Bool
     }
 
-    
     enum LeaderProbeStep: Equatable, Sendable {
-        
+
         case probe
-        
-        
+
         case waitForRecord
-        
-        
+
         case stop
     }
 
-    
-    
-    
-    
-    
     static let leaderProbeRecordWaitRounds = 25
     static let leaderProbeRecordWaitDelay: TimeInterval = 0.25
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     static func leaderProbeStep(
         joinUrlAlreadySet: Bool,
         hasBrowserRecord: Bool,
@@ -683,20 +505,6 @@ class SliccProcess {
         return .stop
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func startLeaderProbe(
         servePort: UInt16,
         innerMaxAttempts: Int = 8,
@@ -705,28 +513,16 @@ class SliccProcess {
     ) {
         let probe = trayStatusProbe
         let serveOrigin = "http://127.0.0.1:\(servePort)"
-        
-        
-        
+
         let recordWaitDelay = min(outerBackoff, Self.leaderProbeRecordWaitDelay)
 
         leaderProbeTask?.cancel()
-        
-        
-        
-        
-        
+
         leaderProbeTask = Task { [weak self] in
             var hasObservedBrowserRecord = false
             var recordWaitRoundsLeft = Self.leaderProbeRecordWaitRounds
             while !Task.isCancelled {
-                
-                
-                
-                
-                
-                
-                
+
                 let snapshot: LeaderProbeSnapshot = await MainActor.run { [weak self] in
                     guard let self else { return LeaderProbeSnapshot(joinUrlAlreadySet: true, hasBrowserRecord: false) }
                     return LeaderProbeSnapshot(
@@ -748,10 +544,7 @@ class SliccProcess {
                     log.info("startLeaderProbe: stop condition reached, exiting loop")
                     return
                 case .waitForRecord:
-                    
-                    
-                    
-                    
+
                     recordWaitRoundsLeft -= 1
                     try? await Task.sleep(nanoseconds: UInt64(recordWaitDelay * 1_000_000_000))
                     continue
@@ -780,28 +573,19 @@ class SliccProcess {
                     return
                 }
 
-                
-                
                 try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
             }
         }
     }
 
-    
-    
     var leaderJoinUrlWatchTask: Task<Void, Never>?
 
-    
-    
-    
-    
     var leaderServePort: UInt16? {
         launchRecords.values.first { $0.targetType == .chromiumBrowser && !$0.isFollower }?.servePort
     }
 
-    
     private func nextElectronPorts() -> (port: UInt16, cdpPort: UInt16) {
-        let electronCount = UInt16(launchRecords.count)  
+        let electronCount = UInt16(launchRecords.count)
         for i: UInt16 in 0...20 {
             let port = Self.electronBasePort + electronCount + i
             let cdpPort = Self.electronBaseCdpPort + electronCount + i
@@ -809,12 +593,10 @@ class SliccProcess {
                 return (port, cdpPort)
             }
         }
-        
+
         let port = Self.electronBasePort + electronCount
         return (port, Self.electronBaseCdpPort + electronCount)
     }
-
-    
 
     static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf"
 
@@ -828,8 +610,6 @@ class SliccProcess {
             NSWorkspace.shared.open(url)
         }
     }
-
-    
 
     func stop(_ target: AppTarget) {
         log.info("stop: \(target.name)")
@@ -846,9 +626,6 @@ class SliccProcess {
         leaderJoinUrl = nil
     }
 
-    
-    
-    
     private func clearLeaderIfNoBrowserRunning() {
         let hasBrowser = launchRecords.values.contains { $0.targetType == .chromiumBrowser && !$0.isFollower }
         if !hasBrowser {
@@ -856,16 +633,8 @@ class SliccProcess {
         }
     }
 
-    
-
-    
-    
-    
-    
     @discardableResult
-    
-    
-    
+
     func _testing_seedLaunchRecord(
         id: String,
         process: Process,
@@ -900,10 +669,7 @@ class SliccProcess {
 
     @discardableResult
     func detachAll() -> [PersistedLaunchRecord] {
-        
-        
-        
-        
+
         if hasDetached {
             log.info("detachAll: already detached; returning persisted snapshot")
             return recordStore.load()
@@ -911,9 +677,7 @@ class SliccProcess {
         hasDetached = true
         let snapshot = launchRecords.compactMap { id, record -> PersistedLaunchRecord? in
             guard record.process.isRunning else { return nil }
-            
-            
-            
+
             guard !record.isFollower else { return nil }
             return PersistedLaunchRecord(
                 targetId: id,
@@ -930,8 +694,7 @@ class SliccProcess {
             try recordStore.save(snapshot)
         } catch {
             log.error("detachAll: failed to persist records: \(error.localizedDescription, privacy: .public)")
-            
-            
+
             LauncherErrorReport.report(.updateDetach, error)
         }
 
@@ -943,10 +706,6 @@ class SliccProcess {
         return snapshot
     }
 
-    
-    
-    
-    
     @discardableResult
     func reattachPersistedRecords(targets: [AppTarget]) async -> [String] {
         let records = recordStore.load()
@@ -976,13 +735,6 @@ class SliccProcess {
         return reattached
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func reattachArgs(
         targetType: AppTargetType,
         electronAppPath: String?,
@@ -994,8 +746,7 @@ class SliccProcess {
             "--serve-only",
             "--cdp-port=\(cdpPort)",
         ]
-        
-        
+
         if targetType == .chromiumBrowser {
             args.append(contentsOf: MountTablePreference.serverArgs(mappings: mounts))
         }
@@ -1012,9 +763,7 @@ class SliccProcess {
     }
 
     private func reattach(target: AppTarget, record: PersistedLaunchRecord) throws {
-        
-        
-        
+
         guard !spawnServices.isPortInUse(record.servePort) else {
             throw LaunchError.portInUse(record.servePort)
         }
@@ -1025,11 +774,7 @@ class SliccProcess {
             joinUrl: record.joinUrl,
             mounts: MountTablePreference.mappings(defaults: .standard)
         )
-        
-        
-        
-        
-        
+
         let fallbackToken =
             target.type == .chromiumBrowser
             ? Self.standaloneBridgeToken
@@ -1038,17 +783,11 @@ class SliccProcess {
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
-            
-            
-            
-            
+
             env["SLICC_BRIDGE_TOKEN"] = resolvedBridgeToken
         }
         if target.type == .electronApp {
-            
-            
-            
-            
+
             env.merge(Self.thinElectronEnv(bridgeToken: resolvedBridgeToken)) { _, new in new }
         }
         try spawn(
@@ -1059,23 +798,14 @@ class SliccProcess {
             servePort: record.servePort,
             electronAppPath: record.electronAppPath,
             joinUrl: record.joinUrl,
-            
-            
+
             bridgeToken: resolvedBridgeToken
         )
-        
-        
-        
-        
-        
-        
-        
+
         if target.type == .chromiumBrowser {
             startLeaderProbe(servePort: record.servePort)
         }
     }
-
-    
 
     static func resolveLaunchConfiguration(
         sliccDir: String,
@@ -1119,7 +849,6 @@ class SliccProcess {
         proc.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
         proc.currentDirectoryURL = URL(fileURLWithPath: sliccDir)
 
-        
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         proc.standardOutput = stdoutPipe
@@ -1142,7 +871,7 @@ class SliccProcess {
 
         proc.terminationHandler = { [weak self] p in
             log.info("process exited: \(target.name, privacy: .public) code=\(p.terminationStatus)")
-            
+
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
@@ -1210,14 +939,6 @@ class SliccProcess {
             return
         }
 
-        
-        
-        
-        
-        
-        
-        
-        
         if record.targetType == .chromiumBrowser {
             if spawnServices.isPortInUse(record.cdpPort) {
                 record.observedCdpListening = true
@@ -1237,8 +958,6 @@ class SliccProcess {
             return
         }
 
-        
-        
         if let observedAppPID = record.observedAppPID, Self.isPIDRunning(observedAppPID) {
             return
         }
@@ -1305,11 +1024,6 @@ class SliccProcess {
         }
     }
 
-    
-    
-    
-    
-    
     private func detachLaunchRecord(id: String) {
         guard let record = launchRecords.removeValue(forKey: id) else {
             intentionallyStoppingTargets.remove(id)
@@ -1322,9 +1036,7 @@ class SliccProcess {
             if pid > 0 {
                 _ = Darwin.kill(pid, SIGUSR1)
             }
-            
-            
-            
+
             let deadline = Date().addingTimeInterval(1.5)
             while record.process.isRunning && Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.05)
@@ -1343,10 +1055,7 @@ class SliccProcess {
     }
 
     private func isElectronAppRunning(_ target: AppTarget) -> Bool {
-        
-        
-        
-        
+
         if let observedAppPID = launchRecords[target.id]?.observedAppPID,
             Self.isPIDRunning(observedAppPID)
         {
@@ -1390,13 +1099,6 @@ class SliccProcess {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
     static func candidateBundlePaths(for appPaths: [String]) -> Set<String> {
         var candidates = Set<String>()
         for path in appPaths {
@@ -1409,9 +1111,6 @@ class SliccProcess {
         return candidates
     }
 
-    
-    
-    
     static func appMatches(
         bundlePath: String?,
         executablePath: String?,

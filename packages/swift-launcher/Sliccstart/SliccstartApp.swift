@@ -8,38 +8,16 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 
-
-
-
-
-
-
-
-
-
-
-
 final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let sliccProcess: SliccProcess
     let sessionStore: TraySessionSyncStore
     let fileProviderCoordinator: FileProviderCoordinator
     let appUpdater: AppUpdater
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     override convenience init() {
         self.init(sliccProcess: SliccProcess())
     }
 
-    
-    
     init(
         sliccProcess: SliccProcess = SliccProcess(),
         sessionStore: TraySessionSyncStore = TraySessionSyncStore(),
@@ -60,11 +38,9 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         self.appUpdater = appUpdater
         super.init()
     }
-    
-    
-    
+
     @MainActor lazy var widgetTrayObserver = WidgetTrayObserver()
-    
+
     @MainActor lazy var model = LauncherModel(
         process: sliccProcess,
         sessionStore: sessionStore,
@@ -72,14 +48,9 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         widgetTrayObserver: widgetTrayObserver,
         updateChecking: .live(appUpdater)
     )
-    
-    
-    
+
     @MainActor private var urlRouter: IncomingURLRouter?
 
-    
-    
-    
     func application(_ application: NSApplication, open urls: [URL]) {
         log.info("application(open:): \(urls.count, privacy: .public) url(s)")
         let process = sliccProcess
@@ -92,16 +63,14 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if sliccProcess.isPreparingForUpdate {
-            
-            
-            
+
             log.info("applicationWillTerminate: detaching for update")
             sliccProcess.detachAll()
             return
         }
         log.info("applicationWillTerminate: stopping all processes")
         sliccProcess.stopAll()
-        
+
         sessionStore.withdrawLocalSessions()
         fileProviderCoordinator.withdrawOnQuit()
         MainActor.assumeIsolated { widgetTrayObserver.stop() }

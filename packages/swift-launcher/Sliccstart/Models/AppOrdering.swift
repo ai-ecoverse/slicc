@@ -1,21 +1,16 @@
 import Foundation
 
-
-
-
 enum AppOrdering {
-    
-    
-    
+
     static let browserBundlePriority: [String] = [
         "com.google.Chrome",
         "com.microsoft.edgemac",
         "com.brave.Browser",
         "com.operasoftware.Opera",
         "com.vivaldi.Vivaldi",
-        "company.thebrowser.Browser",  
-        "com.openai.atlas",  
-        "company.thebrowser.dia",  
+        "company.thebrowser.Browser",
+        "com.openai.atlas",
+        "company.thebrowser.dia",
         "com.google.Chrome.beta",
         "com.google.Chrome.dev",
         "com.google.Chrome.canary",
@@ -29,9 +24,6 @@ enum AppOrdering {
         "org.chromium.Chromium",
     ]
 
-    
-    
-    
     static let terminalBundlePriority: [String] = [
         "org.alacritty",
         "net.kovidgoyal.kitty",
@@ -41,9 +33,6 @@ enum AppOrdering {
         "com.apple.Terminal",
     ]
 
-    
-    
-    
     static func ordered(
         _ targets: [AppTarget],
         savedOrder: [String],
@@ -75,8 +64,6 @@ enum AppOrdering {
             .map { $0.element }
     }
 
-    
-    
     static func orderedBrowsers(in targets: [AppTarget], savedOrder: [String]) -> [AppTarget] {
         ordered(
             targets.filter { $0.type == .chromiumBrowser },
@@ -85,24 +72,14 @@ enum AppOrdering {
         )
     }
 
-    
-    
-    
     static func topBrowser(in targets: [AppTarget], savedOrder: [String]) -> AppTarget? {
         orderedBrowsers(in: targets, savedOrder: savedOrder).first
     }
 
-    
-    
-    
     static func persistableOrder(from reordered: [AppTarget]) -> [String] {
         reordered.compactMap { $0.bundleId }
     }
 
-    
-    
-    
-    
     static func reorder(_ ids: [String], moving: String, over: String) -> [String] {
         guard moving != over,
             let from = ids.firstIndex(of: moving),
@@ -114,11 +91,6 @@ enum AppOrdering {
     }
 }
 
-
-
-
-
-
 enum BrowserLaunchAction: Equatable {
     case standalone
     case chooseLeadOrAttach
@@ -127,7 +99,6 @@ enum BrowserLaunchAction: Equatable {
         (isRunning || !hasAttachableSessions) ? .standalone : .chooseLeadOrAttach
     }
 }
-
 
 struct AppOrderStore {
     static let browserKey = "browserOrder"

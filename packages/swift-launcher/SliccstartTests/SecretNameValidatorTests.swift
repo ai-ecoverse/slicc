@@ -2,11 +2,6 @@ import XCTest
 
 @testable import Sliccstart
 
-
-
-
-
-
 final class SecretNameValidatorTests: XCTestCase {
 
     func testAcceptsAlphanumerics() {
@@ -18,8 +13,7 @@ final class SecretNameValidatorTests: XCTestCase {
     }
 
     func testAcceptsDotsForMountProfileKeyShape() {
-        
-        
+
         XCTAssertTrue(SecretNameValidator.isValid("s3.default.access_key_id"))
         XCTAssertTrue(SecretNameValidator.isValid("s3.r2.secret_access_key"))
         XCTAssertTrue(SecretNameValidator.isValid("s3.minio-prod.endpoint"))
@@ -61,43 +55,30 @@ final class SecretNameValidatorTests: XCTestCase {
     }
 
     func testRejectsNonAsciiAlphanumerics() {
-        
-        
-        
-        
-        
-        
-        XCTAssertFalse(SecretNameValidator.isValid("café"))  
-        XCTAssertFalse(SecretNameValidator.isValid("s3.р2.access_key_id"))  
-        XCTAssertFalse(SecretNameValidator.isValid("数字"))  
-        XCTAssertFalse(SecretNameValidator.isValid("token\u{0661}"))  
-        XCTAssertFalse(SecretNameValidator.isValid("token\u{FF11}"))  
-        XCTAssertFalse(SecretNameValidator.isValid("Ω"))  
+
+        XCTAssertFalse(SecretNameValidator.isValid("café"))
+        XCTAssertFalse(SecretNameValidator.isValid("s3.р2.access_key_id"))
+        XCTAssertFalse(SecretNameValidator.isValid("数字"))
+        XCTAssertFalse(SecretNameValidator.isValid("token\u{0661}"))
+        XCTAssertFalse(SecretNameValidator.isValid("token\u{FF11}"))
+        XCTAssertFalse(SecretNameValidator.isValid("Ω"))
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     func testValidatorMatchesServerProfileNameSpec() {
         let cases: [(String, Bool)] = [
-            
+
             ("default", true),
             ("dev-1", true),
             ("team.us_west", true),
             ("ABC123", true),
             ("s3.r2.access_key_id", true),
-            
+
             ("", false),
             ("foo/bar", false),
             ("../etc", false),
             ("foo bar", false),
             ("foo;rm", false),
-            
+
             ("s3.р2.x", false),
             ("\u{FF11}23", false),
         ]
