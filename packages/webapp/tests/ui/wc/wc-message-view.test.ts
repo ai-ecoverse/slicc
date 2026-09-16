@@ -721,6 +721,30 @@ describe('tool presentation', () => {
     expect(writeRow.textContent).toContain('/a.ts');
   });
 
+  // Codex on #3190: `memory_write` in its `edits` shape must render the
+  // oldText/newText pairs, not the legacy old_string/new_string fields.
+  it('memory_write bodies follow the two shapes: content like a write, edits like an edit', () => {
+    const [, editRow] = messageEls(
+      call(
+        'memory_write',
+        {
+          path: '/workspace/CLAUDE.md',
+          edits: [{ oldText: '- stale fact', newText: '- fresh fact (2026-09-16)' }],
+        },
+        'Wrote /workspace/CLAUDE.md: 120 chars, 5880 under the 6000-char budget.'
+      )
+    );
+    expect(editRow.querySelector('.del')?.textContent).toBe('- stale fact');
+    expect(editRow.querySelector('.add')?.textContent).toBe('- fresh fact (2026-09-16)');
+    expect(editRow.textContent).toContain('/workspace/CLAUDE.md');
+
+    const [, writeRow] = messageEls(
+      call('memory_write', { path: '/workspace/CLAUDE.md', content: '# Memory\n' }, 'ok')
+    );
+    expect(writeRow.querySelector('.del')).toBeNull();
+    expect(writeRow.querySelector('.add')?.textContent).toBe('# Memory\n');
+  });
+
   it('still renders legacy edit_file transcript bodies', () => {
     const [, editRow] = messageEls(
       call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')

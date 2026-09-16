@@ -42,6 +42,32 @@ function refusal(path: string): FsError {
 }
 
 /**
+ * Where a write to `path` would actually land. The lexical spelling is not
+ * enough: `/tmp` is writable by every unit, so `ln -s /workspace/CLAUDE.md
+ * /tmp/alias` followed by a write to `/tmp/alias` would reach the memory
+ * file with the guard seeing only the alias. Resolve through `realpath`;
+ * for a path that does not exist yet (a memory file being created through
+ * a symlinked parent), resolve the parent directory and re-attach the name.
+ * A path that resolves nowhere is judged by its spelling alone.
+ */
+async function resolveDestination(fs: VirtualFS, path: string): Promise<string> {
+  const normalized = normalizePath(path);
+  try {
+    return normalizePath(await fs.realpath(normalized));
+  } catch {
+    // Absent — fall through to the parent.
+  }
+  const slash = normalized.lastIndexOf('/');
+  if (slash <= 0) return normalized;
+  try {
+    const parent = normalizePath(await fs.realpath(normalized.slice(0, slash)));
+    return `${parent === '/' ? '' : parent}/${normalized.slice(slash + 1)}`;
+  } catch {
+    return normalized;
+  }
+}
+
+/**
  * Wrap `fs` so writes to memory files are refused (see module doc). Reads,
  * deletes and every other operation pass straight through — deleting a
  * memory file cannot exceed the budget, and refusing it would only break
@@ -54,13 +80,14 @@ export function createMemoryGuardedFs<T extends VirtualFS>(fs: T): T {
     const original = fs[method] as unknown as AnyMethod | undefined;
     if (typeof original !== 'function') continue;
     const index = DESTINATION_ARG[method];
-    overrides[method] = (...args: unknown[]) => {
+    overrides[method] = async (...args: unknown[]) => {
       const destination = args[index];
-      if (typeof destination === 'string' && isMemoryFilePath(normalizePath(destination))) {
-        // Reject asynchronously: every guarded method is async on the
-        // wrapped handle, and a caller `await`ing it expects a rejection,
-        // not a synchronous throw.
-        return Promise.reject(refusal(destination));
+      if (typeof destination === 'string') {
+        // The spelling first (cheap, and what the agent typed), then where
+        // it resolves — an alias to a memory file is still a memory file.
+        if (isMemoryFilePath(destination)) throw refusal(destination);
+        const resolved = await resolveDestination(fs, destination);
+        if (isMemoryFilePath(resolved)) throw refusal(destination);
       }
       return original.apply(fs, args);
     };

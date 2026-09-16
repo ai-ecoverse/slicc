@@ -734,9 +734,13 @@ interface PiEditPairView {
   newText?: unknown;
 }
 
-/** Render both Pi's edits array and the shape retained in older transcripts. */
+/**
+ * Render both Pi's edits array (`edit`, and `memory_write` in its `edits`
+ * shape) and the `old_string`/`new_string` pair retained in older transcripts.
+ */
 function appendEditBody(body: HTMLElement, call: ToolCall): void {
-  if (call.name !== 'edit' || typeof call.input !== 'object' || call.input === null) {
+  const editsShape = call.name === 'edit' || call.name === 'memory_write';
+  if (!editsShape || typeof call.input !== 'object' || call.input === null) {
     appendEditPair(
       body,
       inputField(call.input, 'old_string'),

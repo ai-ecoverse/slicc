@@ -50,6 +50,35 @@ describe('createMemoryGuardedFs', () => {
     expect(await fs.readFile('/tmp/draft.md', { encoding: 'utf-8' })).toBe('draft');
   });
 
+  // Codex on #3190: `/tmp` is writable by every unit, so an alias there must
+  // not be a way around the guard — the write is judged by where it lands.
+  it('refuses a write through a symlink that resolves to a memory file', async () => {
+    await fs.writeFile('/workspace/CLAUDE.md', 'memory');
+    await fs.symlink('/workspace/CLAUDE.md', '/tmp/alias.md');
+    await expect(guarded.writeFile('/tmp/alias.md', 'x')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    await expect(guarded.appendFile('/tmp/alias.md', 'x')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    await expect(guarded.copyFile('/tmp/draft.md', '/tmp/alias.md')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(await fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).toBe('memory');
+  });
+
+  it('refuses creating a memory file through a symlinked parent directory', async () => {
+    await fs.symlink('/workspace', '/tmp/ws');
+    // The memory file does not exist yet, so only the parent resolves.
+    await expect(guarded.writeFile('/tmp/ws/CLAUDE.md', 'x')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    await expect(fs.readFile('/workspace/CLAUDE.md')).rejects.toMatchObject({ code: 'ENOENT' });
+    // A sibling through the same link is still an ordinary write.
+    await guarded.writeFile('/tmp/ws/notes.md', 'notes');
+    expect(await fs.readFile('/workspace/notes.md', { encoding: 'utf-8' })).toBe('notes');
+  });
+
   it('refuses an un-normalized spelling of a memory path too', async () => {
     await expect(guarded.writeFile('/workspace//CLAUDE.md', 'x')).rejects.toMatchObject({
       code: 'EACCES',
