@@ -19,6 +19,10 @@ export interface SyncExecOptions {
   input?: string;
 
   timeout?: number;
+
+  cwd?: string;
+
+  env?: Record<string, string>;
 }
 
 export interface SyncExecXhrBridge {
@@ -91,6 +95,8 @@ export function createSyncExecXhrBridge(
         command,
         ...(runOpts.args !== undefined ? { args: runOpts.args } : {}),
         ...(runOpts.input !== undefined ? { stdin: runOpts.input } : {}),
+        ...(runOpts.cwd !== undefined ? { cwd: runOpts.cwd } : {}),
+        ...(runOpts.env !== undefined ? { env: runOpts.env } : {}),
         timeoutMs,
       };
       try {

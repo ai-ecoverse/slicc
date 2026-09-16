@@ -9,6 +9,10 @@ export type ExecStartOptions = {
   stdinKind?: 'text' | 'bytes';
 
   args?: string[];
+
+  cwd?: string;
+
+  env?: Record<string, string>;
 };
 
 export type ExecHandle = {
@@ -107,6 +111,8 @@ export function createExecBridge(
       if (buffered !== undefined) startOpts.stdin = buffered;
       if (opts?.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
       if (opts?.args !== undefined) startOpts.args = opts.args;
+      if (opts?.cwd !== undefined) startOpts.cwd = opts.cwd;
+      if (opts?.env !== undefined) startOpts.env = opts.env;
 
       void (async () => {
         try {

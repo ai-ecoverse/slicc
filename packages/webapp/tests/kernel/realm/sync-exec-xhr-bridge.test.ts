@@ -107,6 +107,18 @@ test('argv, stdin and timeout ride the envelope', () => {
   });
 });
 
+test('cwd and env ride the XHR envelope', () => {
+  installFakeXhr();
+  reply = okReply({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+  createSyncExecXhrBridge('t').run('pwd', { cwd: '/shared', env: { MARKER: 'x' } });
+  expect(JSON.parse(lastSent!.body)).toMatchObject({
+    command: 'pwd',
+    cwd: '/shared',
+    env: { MARKER: 'x' },
+    channel: 'exec',
+  });
+});
+
 test("Node's `{ timeout: 0 }` becomes the default budget, not a 0 transport budget", () => {
   installFakeXhr();
   reply = okReply({ stdout: '', stderr: '', exitCode: 0 });

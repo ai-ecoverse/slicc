@@ -12,6 +12,10 @@ export interface SyncExecRequestPayload {
   stdin?: string;
 
   timeoutMs?: number;
+
+  cwd?: string;
+
+  env?: Record<string, string>;
 }
 
 export interface SyncExecRequest extends SyncExecRequestPayload {
@@ -27,6 +31,39 @@ export interface SyncExecResultPayload {
 
 export function isSyncExecRequest(req: SyncFsRequest | SyncExecRequest): req is SyncExecRequest {
   return (req as SyncExecRequest).channel === SYNC_EXEC_CHANNEL;
+}
+
+function normalizeCwd(
+  cwd: unknown,
+  fallback: string
+): { cwd: string } | { errno: string; message: string } {
+  if (cwd === undefined) return { cwd: fallback };
+  if (typeof cwd !== 'string' || cwd.length === 0) {
+    return { errno: 'EINVAL', message: 'sync-exec: cwd must be a non-empty string' };
+  }
+  return { cwd };
+}
+
+type EnvBag = { [key: string]: string | undefined };
+
+function normalizeEnv(
+  env: unknown
+): { env?: Record<string, string> } | { errno: string; message: string } {
+  if (env === undefined) return {};
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
+    return { errno: 'EINVAL', message: 'sync-exec: env must be a string record' };
+  }
+  const bag = env as EnvBag;
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(bag)) {
+    const value = bag[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'string') {
+      return { errno: 'EINVAL', message: 'sync-exec: env values must be strings' };
+    }
+    out[key] = value;
+  }
+  return { env: out };
 }
 
 function normalizeCommand(
@@ -71,6 +108,14 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   if ('errno' in normalized) {
     return { ok: false, errno: normalized.errno, message: normalized.message };
   }
+  const cwd = normalizeCwd(req.cwd, entry.cwd);
+  if ('errno' in cwd) {
+    return { ok: false, errno: cwd.errno, message: cwd.message };
+  }
+  const env = normalizeEnv(req.env);
+  if ('errno' in env) {
+    return { ok: false, errno: env.errno, message: env.message };
+  }
 
   const controller = new AbortController();
   let timedOut = false;
@@ -85,10 +130,11 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   const untrack = trackSyncExec(req.token, controller);
   try {
     const result = await entry.exec(normalized.cmd, {
-      cwd: entry.cwd,
+      cwd: cwd.cwd,
       signal: controller.signal,
       ...(normalized.args !== undefined ? { args: normalized.args } : {}),
       ...(req.stdin !== undefined ? { stdin: req.stdin } : {}),
+      ...(env.env !== undefined ? { env: env.env, replaceEnv: true } : {}),
     });
     return {
       ok: true,

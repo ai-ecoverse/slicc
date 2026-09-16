@@ -245,6 +245,31 @@ describe('realm RPC: exec.start / exec.kill (kill + buffered stdin)', () => {
     client.dispose();
   });
 
+  it('exec.start forwards cwd and env to ctx.exec with replaceEnv', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('pwd', { cwd: '/shared', env: { MARKER: 'x' } });
+    handle.stdin.end();
+    const result = await handle.done;
+
+    expect(result.stdout.trim()).toBe('/shared');
+    expect(exec).toHaveBeenCalledWith(
+      'pwd',
+      expect.objectContaining({
+        cwd: '/shared',
+        env: { MARKER: 'x' },
+        replaceEnv: true,
+      })
+    );
+    client.dispose();
+  });
+
   it('buffered stdin (write + end) is delivered as the command stdin', async () => {
     const exec = vi.fn(async (_cmd: string, options: { stdin?: string }) => ({
       stdout: options.stdin ?? '',

@@ -250,6 +250,28 @@ describe('createSyncExecSabTransport — plugs into createSyncExecXhrBridge', ()
     });
   });
 
+  it('cwd and env ride the SAB exec envelope', () => {
+    const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + WINDOW);
+    const k = fakeKernel(sab, (req) => {
+      expect(req).toMatchObject({
+        channel: 'exec',
+        command: 'pwd',
+        cwd: '/shared',
+        env: { MARKER: 'x' },
+      });
+      return { ok: true, kind: 'json', json: { stdout: '/shared\n', stderr: '', exitCode: 0 } };
+    });
+    const transport = createSyncSabTransport(sab, k.port);
+    const exec = createSyncExecXhrBridge('unused-token', {
+      transport: createSyncExecSabTransport(transport),
+    });
+    expect(exec.run('pwd', { cwd: '/shared', env: { MARKER: 'x' } })).toEqual({
+      stdout: '/shared\n',
+      stderr: '',
+      exitCode: 0,
+    });
+  });
+
   it('waits a margin past the command budget so a just-in-time success wins', () => {
     const seen: number[] = [];
     const transport = {
