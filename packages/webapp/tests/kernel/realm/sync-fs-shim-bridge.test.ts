@@ -625,3 +625,87 @@ test('appendFileSync does NOT resurrect a tombstoned (deleted-in-script) path', 
   shim.appendFileSync('/workspace/del.txt', 'NEW');
   expect(shim.readFileSync('/workspace/del.txt', 'utf8')).toBe('NEW');
 });
+
+function liveTree(
+  files: Record<string, string>,
+  extraDirs: string[] = []
+): { store: Map<string, Uint8Array>; dirs: Set<string> } {
+  const store = new Map<string, Uint8Array>();
+  const dirs = new Set<string>(['/', ...extraDirs]);
+  for (const [path, text] of Object.entries(files)) {
+    store.set(path, new TextEncoder().encode(text));
+    let cursor = path.slice(0, path.lastIndexOf('/')) || '/';
+    while (true) {
+      dirs.add(cursor);
+      if (cursor === '/') break;
+      cursor = cursor.slice(0, cursor.lastIndexOf('/')) || '/';
+    }
+  }
+  return { store, dirs };
+}
+
+test('readdirSync after write into live-only /shared keeps pre-existing entries (#3193)', () => {
+  const { store, dirs } = liveTree({
+    '/shared/index.md': 'i',
+    '/shared/wiki.md': 'w',
+    '/shared/log.md': 'l',
+  });
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store, dirs));
+  expect(shim.readdirSync('/shared').sort()).toEqual(['index.md', 'log.md', 'wiki.md']);
+  shim.writeFileSync('/shared/.__probe.tmp', 'x');
+  expect(shim.existsSync('/shared/index.md')).toBe(true);
+  expect(shim.readFileSync('/shared/index.md', 'utf8')).toBe('i');
+  const after = shim.readdirSync('/shared');
+  expect(after).toContain('index.md');
+  expect(after).toContain('.__probe.tmp');
+  expect(after).toHaveLength(4);
+  shim.unlinkSync('/shared/.__probe.tmp');
+  expect(shim.readdirSync('/shared').sort()).toEqual(['index.md', 'log.md', 'wiki.md']);
+});
+
+test('readdirSync of a live-only mount parent is not replaced by the write-set (#3193)', () => {
+  const { store, dirs } = liveTree({
+    '/mnt/kb/_archive/index-full.md': 'i',
+    '/mnt/kb/tech/page.md': 'p',
+    '/mnt/kb/readme.md': 'r',
+  });
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store, dirs));
+  expect(shim.readdirSync('/mnt/kb').sort()).toEqual(['_archive', 'readme.md', 'tech']);
+  expect(shim.readdirSync('/mnt/kb/_archive')).toEqual(['index-full.md']);
+
+  shim.writeFileSync('/mnt/kb/_archive/.__probe.tmp', 'x');
+
+  expect(shim.readdirSync('/mnt/kb').sort()).toEqual(['_archive', 'readme.md', 'tech']);
+  expect(shim.readdirSync('/mnt/kb/_archive').sort()).toEqual(['.__probe.tmp', 'index-full.md']);
+  expect(shim.readdirSync('/mnt/kb/tech')).toEqual(['page.md']);
+  expect(shim.existsSync('/mnt/kb/_archive/index-full.md')).toBe(true);
+
+  shim.unlinkSync('/mnt/kb/_archive/.__probe.tmp');
+  expect(shim.readdirSync('/mnt/kb/_archive')).toEqual(['index-full.md']);
+});
+
+test('readdirSync of snapshotted /tmp stays N+1 after write (#3193)', () => {
+  const entries = [
+    { path: '/tmp', content: new Uint8Array(0), isDirectory: true },
+    textEntry('/tmp/a.txt', 'a'),
+    textEntry('/tmp/b.txt', 'b'),
+    textEntry('/tmp/c.txt', 'c'),
+  ];
+  const { store, dirs } = liveTree({});
+  dirs.add('/tmp');
+  const bridge = fakeBridge(store, dirs);
+  let liveReads = 0;
+  const orig = bridge.readdir.bind(bridge);
+  bridge.readdir = (p: string) => {
+    liveReads += 1;
+    return orig(p);
+  };
+  const shim = createSyncFsBridge(cache(entries), '/workspace', bridge);
+  expect(shim.readdirSync('/tmp').sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+  const before = liveReads;
+  shim.writeFileSync('/tmp/d.txt', 'd');
+  expect(shim.readdirSync('/tmp').sort()).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt']);
+  expect(liveReads).toBe(before);
+  shim.unlinkSync('/tmp/d.txt');
+  expect(shim.readdirSync('/tmp').sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+});

@@ -580,6 +580,47 @@ function overlaySyncStdio(ops: SyncStdioTargets, stdio: RealmStdioBridge | undef
   ops.lstatSync = (path) => (isDevStdioPath(path) ? devStdioStat() : base.lstatSync(path));
 }
 
+/**
+ * Overlay a live directory listing with in-script creates and tombstones.
+ * Used when the cache directory was synthesized by a write (#3193): its own
+ * children are the process write-set, not the real directory.
+ */
+function overlayReaddir(
+  dir: string,
+  cached: string[],
+  live: string[],
+  isTombstoned: (path: string) => boolean
+): string[] {
+  const child = (name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
+  const names = new Set(live);
+  for (const name of cached) names.add(name);
+  for (const name of [...names]) {
+    if (isTombstoned(child(name))) names.delete(name);
+  }
+  return [...names];
+}
+
+/** Cache-first readdir with live overlay for write-synthesized ancestor dirs (#3193). */
+function readdirFromCacheOrBridge(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  resolved: string
+): string[] {
+  try {
+    const cached = syncFs.readdir(resolved);
+    if (!bridge || !syncFs.isListingIncomplete(resolved) || syncFs.isTombstoned(resolved)) {
+      return cached;
+    }
+    return overlayReaddir(resolved, cached, bridge.readdir(resolved), (p) =>
+      syncFs.isTombstoned(p)
+    );
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+    return overlayReaddir(resolved, [], bridge.readdir(resolved), (p) => syncFs.isTombstoned(p));
+  }
+}
+
 /** Coerce a `writeFileSync`/`appendFileSync` data arg to bytes (string | typed array). */
 function toBytes(data: unknown): Uint8Array {
   if (typeof data === 'string') return new TextEncoder().encode(data);
@@ -725,15 +766,8 @@ export function createSyncFsBridge(
       return bridge.stat(resolved);
     }
   }
-  function readdirResolved(resolved: string): string[] {
-    try {
-      return syncFs.readdir(resolved);
-    } catch (err) {
-      const code = (err as { code?: string })?.code;
-      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
-      return bridge.readdir(resolved);
-    }
-  }
+  const readdirResolved = (resolved: string): string[] =>
+    readdirFromCacheOrBridge(syncFs, bridge, resolved);
   function lstatResolved(resolved: string) {
     try {
       return syncFs.lstat(resolved);
