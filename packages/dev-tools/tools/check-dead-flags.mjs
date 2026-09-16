@@ -328,47 +328,101 @@ function objectKeys(objectText) {
   return keys;
 }
 
+/** Byte mask: 1 means this index sits inside a string / template literal. */
+export function stringMask(source) {
+  const mask = new Uint8Array(source.length);
+  let inStr = null;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (inStr) {
+      mask[i] = 1;
+      if (c === '\\') {
+        if (i + 1 < source.length) {
+          mask[i + 1] = 1;
+          i++;
+        }
+        continue;
+      }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') inStr = c;
+  }
+  return mask;
+}
+
+function eachOutsideString(source, regex, onMatch) {
+  const mask = stringMask(source);
+  regex.lastIndex = 0;
+  let m;
+  while ((m = regex.exec(source))) {
+    if (mask[m.index]) continue;
+    onMatch(m);
+  }
+}
+
+function firstArgObject(source, parenIdx) {
+  let i = parenIdx + 1;
+  while (i < source.length && /\s/.test(source[i])) i++;
+  if (source[i] !== '{') return null;
+  const close = matchBracket(source, i);
+  if (close === -1) return null;
+  return { start: i, end: close, text: source.slice(i, close + 1) };
+}
+
+function cherryHitsInFlagsProperty(objectText, absStart, sourceForLines) {
+  const hits = [];
+  const flagsRe = /\bflags\s*:\s*\{/g;
+  let m;
+  while ((m = flagsRe.exec(objectText))) {
+    const brace = objectText.indexOf('{', m.index);
+    const close = matchBracket(objectText, brace);
+    if (close === -1) continue;
+    for (const key of objectKeys(objectText.slice(brace, close + 1))) {
+      hits.push({
+        kind: 'cherry-host',
+        id: key.id,
+        line: lineAt(sourceForLines, absStart + brace + key.index),
+      });
+    }
+  }
+  return hits;
+}
+
 /**
  * Call sites in one source file: `isFeatureEnabled` / `getFeatureValue`
- * string arguments, plus object keys of `flags: { … }` and
- * `applyHostFlagOverrides({ … })`.
+ * string arguments (code, not help text), plus Cherry host keys on
+ * `mountSlicc({ flags })` and `applyHostFlagOverrides({ … })`.
  */
 export function findFlagCallSites(source) {
   const stripped = stripComments(source);
   const hits = [];
 
-  const callRe = /\b(isFeatureEnabled|getFeatureValue)\s*\(\s*(['"])([^'"]+)\2/g;
-  let m;
-  while ((m = callRe.exec(stripped))) {
-    hits.push({
-      kind: m[1],
-      id: m[3],
-      line: lineAt(source, m.index),
-    });
-  }
-
-  const flagsRe = /\bflags\s*:\s*\{/g;
-  while ((m = flagsRe.exec(stripped))) {
-    const brace = stripped.indexOf('{', m.index);
-    const close = matchBracket(stripped, brace);
-    if (close === -1) continue;
-    for (const key of objectKeys(stripped.slice(brace, close + 1))) {
-      hits.push({ kind: 'cherry-host', id: key.id, line: lineAt(source, brace + key.index) });
+  eachOutsideString(
+    stripped,
+    /\b(isFeatureEnabled|getFeatureValue)\s*\(\s*(['"])([^'"]+)\2/g,
+    (m) => {
+      hits.push({ kind: m[1], id: m[3], line: lineAt(source, m.index) });
     }
-  }
+  );
 
-  const hostRe = /\bapplyHostFlagOverrides\s*\(/g;
-  while ((m = hostRe.exec(stripped))) {
-    const paren = stripped.indexOf('(', m.index);
-    let i = paren + 1;
-    while (i < stripped.length && /\s/.test(stripped[i])) i++;
-    if (stripped[i] !== '{') continue;
-    const close = matchBracket(stripped, i);
-    if (close === -1) continue;
-    for (const key of objectKeys(stripped.slice(i, close + 1))) {
-      hits.push({ kind: 'cherry-host', id: key.id, line: lineAt(source, i + key.index) });
+  eachOutsideString(stripped, /\bmountSlicc\s*\(/g, (m) => {
+    const obj = firstArgObject(stripped, stripped.indexOf('(', m.index));
+    if (!obj) return;
+    hits.push(...cherryHitsInFlagsProperty(obj.text, obj.start, source));
+  });
+
+  eachOutsideString(stripped, /\bapplyHostFlagOverrides\s*\(/g, (m) => {
+    const obj = firstArgObject(stripped, stripped.indexOf('(', m.index));
+    if (!obj) return;
+    for (const key of objectKeys(obj.text)) {
+      hits.push({
+        kind: 'cherry-host',
+        id: key.id,
+        line: lineAt(source, obj.start + key.index),
+      });
     }
-  }
+  });
 
   return hits;
 }

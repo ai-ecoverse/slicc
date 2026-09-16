@@ -193,6 +193,19 @@ describe('check-dead-flags: call sites', () => {
     ]);
   });
 
+  it('does not treat isFeatureEnabled mentioned inside a string as a consumer', () => {
+    expect(
+      findFlagCallSites(`
+        const help = "call isFeatureEnabled('ghost-flag')";
+        const also = 'getFeatureValue("ghost-flag")';
+      `)
+    ).toEqual([]);
+  });
+
+  it('does not treat an unrelated flags object as a Cherry host key', () => {
+    expect(findFlagCallSites(`const opts = { flags: { 'dry-run': true } };`)).toEqual([]);
+  });
+
   it('ignores ids mentioned only in comments', () => {
     expect(
       findFlagCallSites(`
