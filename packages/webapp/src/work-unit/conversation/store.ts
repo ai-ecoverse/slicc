@@ -176,16 +176,28 @@ export class WorkUnitConversationStore {
     await transaction(tx);
   }
 
-  /** Forget a unit's conversation (the unit was dropped). */
-  async delete(key: string): Promise<void> {
-    try {
-      const db = await this.getDb();
-      const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
-      tx.objectStore(CONVERSATIONS_STORE).delete(key);
-      await transaction(tx);
-    } catch (err) {
-      log.warn('Conversation record delete failed', { key, error: errorText(err) });
-    }
+  /**
+   * Forget a unit's conversation (the unit was dropped).
+   *
+   * Queued on the same per-key write chain as {@link syncAgentMessages}: a
+   * dropped unit's final checkpoint (`ScoopContext.dispose` → `persistNow`)
+   * is a read-merge-save that may still be in flight, and a delete issued
+   * beside it used to land between the read and the save — the save then
+   * re-created the record and the next unit spawned under the same fixed
+   * name restored the "dropped" conversation (#3157: nightly memory
+   * dreamers resumed the previous night's run).
+   */
+  delete(key: string): Promise<void> {
+    return this.serialize(key, async () => {
+      try {
+        const db = await this.getDb();
+        const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
+        tx.objectStore(CONVERSATIONS_STORE).delete(key);
+        await transaction(tx);
+      } catch (err) {
+        log.warn('Conversation record delete failed', { key, error: errorText(err) });
+      }
+    });
   }
 
   /**

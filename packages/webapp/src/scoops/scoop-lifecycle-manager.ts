@@ -802,17 +802,23 @@ export class ScoopLifecycleManager {
 
     this.destroyTab(jid);
     // Forget the canonical record too — a dropped unit's conversation is
-    // gone from every store, not just the legacy one (#2275).
-    if (scoop) void this.deps.getConversationStore()?.delete(conversationKeyFor(scoop));
-    this.deps
-      .getSessionStore()
-      ?.delete(jid)
-      .catch((err) => {
-        log.warn('Failed to delete agent session', {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+    // gone from every store, not just the legacy one (#2275). Both deletes
+    // are awaited: `destroyTab` just fired the context's final checkpoint,
+    // and a delete left dangling beside it let that checkpoint win the race
+    // and resurrect the record — a later spawn under the same fixed name
+    // (memory curator / dreamer) then restored the dropped run (#3157).
+    await Promise.all([
+      scoop ? this.deps.getConversationStore()?.delete(conversationKeyFor(scoop)) : undefined,
+      this.deps
+        .getSessionStore()
+        ?.delete(jid)
+        .catch((err) => {
+          log.warn('Failed to delete agent session', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }),
+    ]);
     await this.deps.db.deleteScoop(jid);
     scoops.delete(jid);
     this.deps.messageRouter.forgetScoop(jid);
