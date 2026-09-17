@@ -68,6 +68,12 @@ export interface TransformersEnvLike {
    * `extractVfsPathFromPreviewUrl` recognizes the probe URL.
    */
   remotePathTemplate?: string;
+  /**
+   * When true, transformers.js copies every `env.fetch` Response into
+   * CacheStorage. Weights already live in VFS; a second copy of kokoro's
+   * 92 MB quantized ONNX trips Chromium origin quota.
+   */
+  useBrowserCache?: boolean;
 }
 
 /** Idempotency marker on a wrapped `env.fetch` — so a second engine load
@@ -491,6 +497,11 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
   env.allowRemoteModels = false;
   env.allowLocalModels = true;
   env.localModelPath = toPreviewUrl(LOCAL_MODELS_VFS_PATH);
+  // VFS is the cache. transformers.js 4.3+ still copies every env.fetch
+  // Response into CacheStorage when this stays at the browser default
+  // (`true`), doubling the 92 MB kokoro payload and tripping origin quota
+  // (`QuotaExceededError` / OPFS EINVAL) in CI Chromium.
+  env.useBrowserCache = false;
   if (isExtensionFloat()) return;
   // Standalone fix (Wave 13g): transformers@4.2.0's `get_file_metadata`
   // existence probe only confirms a LOCAL file when `localPath` is a non-URL
