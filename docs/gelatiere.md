@@ -3,8 +3,8 @@
 SLICC's resident advisor: a persistent work unit that no cone owns, that reviews how the user
 works — nightly and after a chat session ends — and suggests skills to install, use cases to try,
 habits to change, skills worth writing when nothing installable fits, and bugs worth filing when
-SLICC itself is what got in the way. Suggestions render as cards in the suggestions sprinkle and
-every other cone receives a lick when new ones land.
+SLICC itself is what got in the way. Suggestions render as cards in the suggestions sprinkle, and
+each cone a new suggestion is addressed to receives a lick.
 
 Feature flag: `memory-v2` (Settings → Experimental features, off by default; also in both
 `wrangler.jsonc` `FEATURE_FLAGS` lists — the same flag that gates session search and scoop
@@ -130,9 +130,14 @@ edit by the user is not.
    `prompt`; the stream renders an Install / Try it button for every card and
    stamps it taken on click, so a card without the field behind its button is dropped rather than
    shown — ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
-   dismissed — are never replaced), and stamps `lastPassAt`. `deliver` licks every root cone except
-   the gelatiere with the open suggestions created since `lastDeliveredAt`; nothing new → no lick
-   (unless `--force`). An explicit `--scoop <target>` must resolve against the roster (folder, name
+   dismissed — are never replaced), and stamps `lastPassAt`. Each suggestion may carry `cones`
+   (bare cone folders, the cones whose sessions or memory motivated it). `deliver` licks each root
+   cone except the gelatiere with only the open suggestions addressed to it (`suggestionsForCone`)
+   and created since `lastDeliveredAt`; a suggestion without `cones`, or whose cones are all gone,
+   goes to the primary cone (the roster's first root) alone. A repeat pass that addresses a still-open
+   suggestion to more cones widens its stored `cones` and stamps each newcomer in `retargets`
+   (`widenCones`), so that cone counts it as new at its next delivery (`isNewSince`). A cone with nothing new addressed to
+   it gets no lick (with `--force`, a cone with something open does). An explicit `--scoop <target>` must resolve against the roster (folder, name
    or jid) — an unknown target fails before the delivery ledger is stamped, so the suggestions stay
    "new" for the next attempt — and a targeted send never advances `lastDeliveredAt` (it records
    what every cone has been told), so the next broadcast still reaches the other cones. Suggestion `url` fields survive only as `http(s)` (they render as a

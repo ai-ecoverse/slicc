@@ -206,10 +206,14 @@ describe('gelatiere command', () => {
     expect(missing.stderr).toContain('cannot read /tmp/missing.json');
   });
 
-  it('deliver licks every other root with what is new, then stamps the delivery', async () => {
+  it('deliver licks each cone with what is addressed to it, then stamps the delivery', async () => {
     const fs = memoryFs({
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
         suggestion('new', { createdAt: '2026-09-09T10:00:00.000Z' }),
+        suggestion('research', {
+          createdAt: '2026-09-09T10:00:00.000Z',
+          cones: ['cone-research'],
+        }),
         suggestion('old', { createdAt: '2026-09-01T00:00:00.000Z' }),
       ]),
       [GELATIERE_STATE_PATH]: JSON.stringify({
@@ -219,21 +223,21 @@ describe('gelatiere command', () => {
     });
     const result = await run(fs, ['deliver']);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Delivered 1 new (2 open) to 2 cone(s): cone, cone-research');
-    expect(seam.lick).toHaveBeenCalledTimes(2);
-    expect(seam.lick).toHaveBeenNthCalledWith(
-      1,
-      'cone',
-      expect.objectContaining({
-        action: 'gelatiere-suggestions',
-        data: expect.objectContaining({
-          added: 1,
-          open: 2,
-          skill: expect.stringContaining('SKILL.md'),
-        }),
-      })
+    expect(result.stdout).toContain(
+      'Delivered to 2 cone(s): cone (1 new, 2 open), cone-research (1 new, 1 open)'
     );
-    expect(seam.lick).toHaveBeenNthCalledWith(2, 'cone-research', expect.anything());
+    expect(seam.lick).toHaveBeenCalledTimes(2);
+    const bodyFor = (target: string) =>
+      seam.lick.mock.calls.find(([t]) => t === target)?.[1] as {
+        action: string;
+        data: { added: number; open: number; skill: string; suggestions: GelatiereSuggestion[] };
+      };
+    expect(bodyFor('cone')).toMatchObject({
+      action: 'gelatiere-suggestions',
+      data: { added: 1, open: 2, skill: expect.stringContaining('SKILL.md') },
+    });
+    expect(bodyFor('cone').data.suggestions.map((s) => s.id)).toEqual(['new', 'old']);
+    expect(bodyFor('cone-research').data.suggestions.map((s) => s.id)).toEqual(['research']);
     expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).toBeTruthy();
 
     // Nothing new since that delivery → no lick; --force resends to one target.
@@ -243,7 +247,7 @@ describe('gelatiere command', () => {
     expect(seam.lick).not.toHaveBeenCalled();
     const forced = await run(fs, ['deliver', '--force', '--scoop', 'Research']);
     expect(forced.stdout).toContain(
-      'to 1 cone(s): Research (targeted; the delivery watermark is unchanged)'
+      'to 1 cone(s): Research (0 new, 1 open) (targeted; the delivery watermark is unchanged)'
     );
     expect(seam.lick).toHaveBeenCalledWith('Research', expect.anything());
 
@@ -261,13 +265,53 @@ describe('gelatiere command', () => {
     );
   });
 
+  // The complaint that motivated `cones`: a suggestion about one cone's work
+  // must not interrupt every other cone.
+  it('deliver leaves cones with nothing addressed to them alone', async () => {
+    const fs = memoryFs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion('research', { createdAt: '2026-09-09T10:00:00.000Z', cones: ['cone-research'] }),
+      ]),
+    });
+    const result = await run(fs, ['deliver']);
+    expect(result.stdout).toContain('Delivered to 1 cone(s): cone-research (1 new, 1 open)');
+    expect(seam.lick).toHaveBeenCalledTimes(1);
+    expect(seam.lick).toHaveBeenCalledWith('cone-research', expect.anything());
+
+    seam.lick.mockClear();
+    const primary = await run(fs, ['deliver', '--force', '--scoop', 'cone']);
+    expect(primary.stdout).toContain('Nothing addressed to cone; no lick sent (targeted');
+    expect(seam.lick).not.toHaveBeenCalled();
+  });
+
+  it('a known suggestion a later pass ties to another cone reaches that cone alone', async () => {
+    const fs = memoryFs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion('shared', { createdAt: '2026-09-01T00:00:00.000Z', cones: ['cone'] }),
+      ]),
+      [GELATIERE_STATE_PATH]: JSON.stringify({
+        passes: 1,
+        lastDeliveredAt: '2026-09-05T00:00:00.000Z',
+      }),
+      '/tmp/c.json': JSON.stringify([suggestion('shared', { cones: ['cone', 'cone-research'] })]),
+    });
+    await run(fs, ['suggest', '/tmp/c.json']);
+    const result = await run(fs, ['deliver']);
+    expect(result.stdout).toContain('Delivered to 1 cone(s): cone-research (1 new, 1 open)');
+    expect(seam.lick).toHaveBeenCalledTimes(1);
+    expect(seam.lick).toHaveBeenCalledWith('cone-research', expect.anything());
+  });
+
   // A targeted send reaches ONE cone. If it advanced the global watermark, the
   // next broadcast would find "nothing new" and the other cones would never
   // hear about these suggestions.
   it('a targeted deliver leaves the watermark alone so a later broadcast still reaches the rest', async () => {
     const fs = memoryFs({
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
-        suggestion('new', { createdAt: '2026-09-09T10:00:00.000Z' }),
+        suggestion('new', {
+          createdAt: '2026-09-09T10:00:00.000Z',
+          cones: ['cone', 'cone-research'],
+        }),
       ]),
       [GELATIERE_STATE_PATH]: JSON.stringify({
         passes: 1,
@@ -285,7 +329,7 @@ describe('gelatiere command', () => {
     seam.lick.mockClear();
     const broadcast = await run(fs, ['deliver']);
     expect(broadcast.stdout).toContain(
-      'Delivered 1 new (1 open) to 2 cone(s): cone, cone-research'
+      'Delivered to 2 cone(s): cone (1 new, 1 open), cone-research (1 new, 1 open)'
     );
     expect(seam.lick).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).not.toBe(

@@ -131,17 +131,18 @@ It is built from the catalog row, never from the bare name — `upskill <name>` 
   - `body` is the WHY: one or two sentences, grounded in what you actually saw, that tell the story of the change — what you watched the user do by hand, and what gets better. "You ran the build–serve–screenshot loop 80+ times by hand in your bakery session; a workflow file replays it as one command." It must not restate the title, list features, or repeat `evidence` word for word.
 - `evidence` is one friendly sentence, spoken to the user, saying what you saw that led here — "You told the welcome wizard you're a developer who lives in GitHub". It rides the lick for the cones; the card does not render it, so do not lean on it to justify the suggestion — the why lives in `body`. Never a field dump like `role=developer, tasks=[…]`.
 - `url` is optional: the skill page or the man page.
+- `cones` names who it is for: the folder(s) of the cones whose sessions or memory led to it — the `cone` in the session index or an archive's frontmatter (`cone` is the primary, `cone-<slug>` an extra cone). Only those cones get a lick. Omit it only for advice that is about the whole install, not one cone's work; that goes to the primary cone alone.
 - Never suggest what `upskill list` already shows installed, and never invent a skill or command that is not in the catalog, the repo listing, or the sitemap. A `skill-idea` is the one exception — it names a skill that does NOT exist yet, which is the point; check first that no installable one covers it.
 
 ## Finish
 
-Write the candidates as JSON — `{ "suggestions": [ { "id", "kind", "title", "body", "skill", "install", "prompt", "url", "evidence" } ] }` — to `$TMPDIR/candidates.json`, then run exactly:
+Write the candidates as JSON — `{ "suggestions": [ { "id", "kind", "title", "body", "skill", "install", "prompt", "url", "evidence", "cones" } ] }` — to `$TMPDIR/candidates.json`, then run exactly:
 
 ```bash
 gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
 ```
 
-`suggest` validates and folds the candidates into the store (known ids are kept, dismissed ones stay dismissed); `deliver` licks every other cone with what is new. Then update `/shared/.gelatiere/notes.md` with two or three lines on what you looked at and what you decided against — that file, not your reply, is your memory across passes. Reply with one short line.
+`suggest` validates and folds the candidates into the store (known ids are kept, dismissed ones stay dismissed); `deliver` licks each cone with what is new and addressed to it. Then update `/shared/.gelatiere/notes.md` with two or three lines on what you looked at and what you decided against — that file, not your reply, is your memory across passes. Reply with one short line.
 
 <!-- How to customize
 Add instructions above, for example: prefer skills from a company repo, or always check a team

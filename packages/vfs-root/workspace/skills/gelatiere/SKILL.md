@@ -17,7 +17,7 @@ allowed-tools: bash
 
 # Gelatiere
 
-The gelatiere is a persistent scoop no cone owns (folder `gelatiere`, a read-only tab; the user cannot prompt it). Nightly, and after a chat ends, it reviews the archived sessions, the durable memory, the installed skills, the skill catalog at `https://www.sliccy.com/skills/catalog.json` and the man-page sitemap, and folds a handful of suggestions into `/shared/.gelatiere/suggestions.json`. The suggestions sprinkle (`/shared/sprinkles/suggestions/suggestions.shtml`) shows the open ones as a stream of cards, and every other cone receives one lick per delivery. Feature flag **Memory v2** under Settings → Experimental creates the unit at boot; `gelatiere init` does it by hand.
+The gelatiere is a persistent scoop no cone owns (folder `gelatiere`, a read-only tab; the user cannot prompt it). Nightly, and after a chat ends, it reviews the archived sessions, the durable memory, the installed skills, the skill catalog at `https://www.sliccy.com/skills/catalog.json` and the man-page sitemap, and folds a handful of suggestions into `/shared/.gelatiere/suggestions.json`. The suggestions sprinkle (`/shared/sprinkles/suggestions/suggestions.shtml`) shows the open ones as a stream of cards. Each suggestion names the cones it is for (`cones`, folder names); a delivery licks only those, and installation-wide suggestions go to the primary cone. Feature flag **Memory v2** under Settings → Experimental creates the unit at boot; `gelatiere init` does it by hand.
 
 ## If you are a cone: `gelatiere-suggestions` arrived
 
@@ -35,7 +35,8 @@ The gelatiere is a persistent scoop no cone owns (folder `gelatiere`, a read-onl
         "body": "…",
         "skill": "github",
         "install": "upskill ai-ecoverse/skills --path skills/ --skill github",
-        "evidence": "You told the welcome wizard you live in GitHub."
+        "evidence": "You told the welcome wizard you live in GitHub.",
+        "cones": ["cone"]
       },
       {
         "id": "use-case-fswatch-deploy",
@@ -77,7 +78,7 @@ Your system prompt names you. On every `[Cron Event: gelatiere-nightly]`, `[Spri
 gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
 ```
 
-which is the only way your work reaches the cones. Keep durable notes in `/shared/.gelatiere/notes.md`; your conversation is compacted while you idle. Reply in one line.
+which is the only way your work reaches the cones. Give every suggestion a `cones` list naming the cone folders whose work motivated it, so the others are not interrupted. Keep durable notes in `/shared/.gelatiere/notes.md`; your conversation is compacted while you idle. Reply in one line.
 
 On the NIGHTLY pass only, `GELATIERE.md` has you start the memory-dreaming pass first — `memory dream --all`, detached — which spawns sandboxed memory-dreamer scoops to consolidate each cone's memory file. You never edit memory files yourself.
 
@@ -87,7 +88,7 @@ On the NIGHTLY pass only, `GELATIERE.md` has you start the memory-dreaming pass 
 gelatiere init                 # create the unit + nightly crontask (idempotent)
 gelatiere run                  # ask for a pass now (from any cone's shell)
 gelatiere suggest <file>       # fold candidates JSON into the store (the gelatiere's step)
-gelatiere deliver [--scoop t] [--force]   # lick every other cone with what is new
+gelatiere deliver [--scoop t] [--force]   # lick each cone with what is new and addressed to it
 gelatiere list [--all|--json]  # open suggestions
 gelatiere dismiss <id>         # mark one answered
 gelatiere status               # unit, schedule, last pass / delivery, counts

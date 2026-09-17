@@ -11,7 +11,7 @@
  *   init                 create the unit + its nightly crontask, apply its allow-list (idempotent)
  *   run                  lick the unit: "do a pass now"
  *   suggest <file>       the gelatiere's last step — fold candidates into the store
- *   deliver              the gelatiere's other last step — lick every other cone
+ *   deliver              the gelatiere's other last step — lick each cone with its suggestions
  *   catalog | commands | man <cmd> | use-cases   pinned-host fetches (the unit has no curl)
  *   list | dismiss | status
  *
@@ -21,6 +21,7 @@
  * `base/gelatiere-store.ts`, a legal down-edge.
  */
 
+import type { GelatiereSuggestion } from '../../../base/gelatiere-store.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { defaultLickTarget, type LickTargetEnv } from '../../lick-target-env.js';
 import { parseKnownFlags } from '../subcommand-flags.js';
@@ -61,14 +62,14 @@ const HELP = `usage: gelatiere <command> [options]
 The gelatiere is SLICC's resident advisor: a persistent unit no cone owns that
 reviews your archived sessions — nightly, and after a chat ends — and suggests
 skills to install, use cases to try, and habits to change. Suggestions show up
-as cards in the suggestions sprinkle and every cone gets a lick.
+as cards in the suggestions sprinkle and each cone they address gets a lick.
 
 Commands:
   init [--reset]       Create the gelatiere unit and its nightly crontask (idempotent);
                        --reset first drops every unit the gelatiere owner holds
   run                  Ask the gelatiere for a pass right now
   suggest <file>       Fold a pass's candidates (JSON) into the store — the gelatiere's own step
-  deliver [options]    Lick every other cone with the open suggestions — the gelatiere's other step
+  deliver [options]    Lick each cone with the suggestions addressed to it — the gelatiere's other step
   list [--all|--json]  Show open suggestions (--all includes taken and dismissed)
   dismiss <id>         Wave a suggestion away so it is not shown again
   status               Unit, nightly schedule, last pass, last delivery, counts
@@ -221,17 +222,21 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
   // command still stamped `lastDeliveredAt` — and the next ordinary delivery
   // would then say "nothing new". Validate against the roster before sending.
   const roster = host.roots();
+  if (roster.length === 0) return fail('no cone is running to deliver to');
   const explicit = parsed.values.get('--scoop');
-  const resolves = (r: GelatiereRootLike): boolean =>
-    r.folder === explicit || r.name === explicit || r.jid === explicit;
-  if (explicit && !roster.some(resolves)) {
-    const known = roster.map((r) => r.folder).join(', ') || 'none running';
+  const chosen = explicit
+    ? roster.find((r) => r.folder === explicit || r.name === explicit || r.jid === explicit)
+    : undefined;
+  if (explicit && !chosen) {
+    const known = roster.map((r) => r.folder).join(', ');
     return fail(`unknown delivery target "${explicit}" (cones: ${known})`);
   }
-  const targets = explicit ? [explicit] : roster.map((r) => r.folder);
-  if (targets.length === 0) return fail('no cone is running to deliver to');
-  const body = store.buildGelatiereLickBody(added, open);
-  for (const target of targets) host.lick(target, body);
+  const sent = await lickEachCone(host, roster, chosen ? [chosen] : roster, {
+    since: state.lastDeliveredAt,
+    open,
+    force: parsed.bools.has('--force'),
+    alias: explicit,
+  });
   // `lastDeliveredAt` records what EVERY cone has been told, so only a
   // broadcast advances it. A targeted send that stamped it would make the
   // next ordinary delivery compute "nothing new" and the other cones would
@@ -240,9 +245,45 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
     await store.writeGelatiereState(fs, { ...state, lastDeliveredAt: new Date().toISOString() });
   }
   const note = explicit ? ' (targeted; the delivery watermark is unchanged)' : '';
-  return ok(
-    `Delivered ${added.length} new (${open.length} open) to ${targets.length} cone(s): ${targets.join(', ')}${note}\n`
-  );
+  if (sent.length === 0) {
+    return ok(`Nothing addressed to ${explicit ?? 'any running cone'}; no lick sent${note}\n`);
+  }
+  return ok(`Delivered to ${sent.length} cone(s): ${sent.join(', ')}${note}\n`);
+}
+
+/**
+ * Lick each target with only what is addressed to it (`cones`) — new to it
+ * when created, or when it joined the suggestion's `cones`, after `since`;
+ * installation-wide suggestions go to the primary — the roster's first
+ * cone. A cone with nothing new gets no lick unless `force` and it has
+ * something open. Returns one `target (n new, m open)` line per lick.
+ */
+async function lickEachCone(
+  host: GelatiereSeamLike,
+  roster: readonly GelatiereRootLike[],
+  targets: readonly GelatiereRootLike[],
+  batch: {
+    /** The delivery watermark; what is newer is news. */
+    since: string | undefined;
+    open: readonly GelatiereSuggestion[];
+    force: boolean;
+    /** The spelling the caller used for a `--scoop` target; the lick keeps it. */
+    alias?: string;
+  }
+): Promise<string[]> {
+  const store = await loadStore();
+  const known = new Set(roster.map((r) => r.folder));
+  const primary = roster[0].folder;
+  const sent: string[] = [];
+  for (const root of targets) {
+    const open = store.suggestionsForCone(batch.open, root.folder, primary, known);
+    const added = open.filter((s) => store.isNewSince(s, batch.since, root.folder));
+    if (added.length === 0 && !(batch.force && open.length > 0)) continue;
+    const target = batch.alias ?? root.folder;
+    host.lick(target, store.buildGelatiereLickBody(added, open));
+    sent.push(`${target} (${added.length} new, ${open.length} open)`);
+  }
+  return sent;
 }
 
 async function handleList(args: string[], fs: VirtualFS): Promise<CommandResult> {
