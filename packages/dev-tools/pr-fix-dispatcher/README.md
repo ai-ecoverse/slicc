@@ -88,8 +88,9 @@ That test used to be an allow-list of seven names. `ci.yml` runs thirty jobs, so
 falling through to the `unknown` skip the fallback exists to prevent — and any
 job added later would have joined them in silence. It is now a deny-list of the
 jobs that genuinely evaluate no code: the `ci` aggregator and the `changes`
-paths-filter job. (`release-gate` is not listed because `HARD_SKIP_JOB_PATTERN`
-already blocks it by name, earlier and more strongly.)
+paths-filter job. (Historical `release-gate` is not listed because
+`HARD_SKIP_JOB_PATTERN` already blocks it by name for older runs; the job was
+removed when Release began deferring to the merge queue.)
 
 `bareCheckName()` also strips the trailing matrix leg. GitHub reports these as
 `node-matrix-tests (26)` and `slicc-cli (ubuntu-latest)`, and every name-keyed

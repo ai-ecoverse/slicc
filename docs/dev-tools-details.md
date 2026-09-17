@@ -241,8 +241,9 @@ pick the aggregator either — GitHub lists `ci` first, so `classified[0]` used
 to skip with the aggregator's sentence while `lint` had also failed (PR #3008).
 A failing job that evaluates this repo's code is `code` even with an empty
 excerpt, and that test is a deny-list: everything in `ci.yml` counts except the
-`ci` aggregator and the `changes` paths-filter job (`release-gate` is already
-blocked by name, earlier). It replaced an allow-list that named 7 of the
+`ci` aggregator and the `changes` paths-filter job (historical `release-gate` is
+already blocked by name for older runs; the job was removed when Release began
+deferring to the merge queue). It replaced an allow-list that named 7 of the
 workflow's 30 jobs, so `slicc-cli`, `go-optel`, `cloudflare-worker`,
 `node-server`, `cherry`, `spoon`, `webcomponents`, `cloud-core` and
 `global-install` all fell through to the `unknown` skip this fallback exists to

@@ -3,10 +3,17 @@ name: Release
 on:
   push:
     branches: [main]
+  # Catch up releases deferred while the merge queue was busy (a batch that
+  # empties via dequeue leaves no new `push` to re-trigger). Idle when the
+  # queue is non-empty or there is nothing releasable.
+  schedule:
+    - cron: '15,45 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+  # mergeQueue GraphQL for the defer-while-busy check
+  pull-requests: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -33,13 +40,34 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
+      # Flip of the old merge-queue `release-gate`: Release yields to the
+      # queue, not the other way around. Polling Release from every
+      # merge_group candidate burned the App secondary rate limit and
+      # dequeued green batches. When the queue has entries we set
+      # required=false; the schedule (above) or the next empty-queue push
+      # picks the release back up.
+      - name: Check merge queue
+        id: mq
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node packages/dev-tools/tools/merge-queue-busy.mjs
+
       # Call semantic-release's default commit analyzer directly, avoiding the
       # CLI's repository push-access verification. Non-release pushes stop on
       # this read-only Linux runner before reserving macOS or rebuilding.
       - name: Plan release
         id: release
+        env:
+          QUEUE_BUSY: ${{ steps.mq.outputs.busy }}
         run: |
           set -euo pipefail
+          if [ "${QUEUE_BUSY}" = 'true' ]; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "Merge queue has entries — deferring release until the queue drains."
+            exit 0
+          fi
+
           RELEASE_TYPE="$(node packages/dev-tools/tools/release-plan.mjs)"
 
           if [ "$RELEASE_TYPE" != 'none' ]; then

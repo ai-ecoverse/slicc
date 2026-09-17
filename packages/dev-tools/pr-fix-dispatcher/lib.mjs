@@ -466,8 +466,9 @@ const JOB_NAME_CODE_CATEGORIES = {
  * of non-code jobs is both shorter and self-maintaining: a job added to `ci.yml`
  * tomorrow is a code job by default rather than a silent skip.
  *
- * `release-gate` is absent on purpose — {@link HARD_SKIP_JOB_PATTERN} already
- * blocks it by name, earlier and more strongly.
+ * Historical `release-gate` is absent on purpose — {@link HARD_SKIP_JOB_PATTERN}
+ * already blocks it by name for older runs; the job itself was removed when
+ * Release began deferring to the merge queue instead.
  */
 /**
  * The workflow whose jobs evaluate this repo's code. Promotion by job NAME alone
