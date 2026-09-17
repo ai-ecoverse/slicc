@@ -284,6 +284,24 @@ describe('gelatiere command', () => {
     expect(seam.lick).not.toHaveBeenCalled();
   });
 
+  it('a known suggestion a later pass ties to another cone reaches that cone alone', async () => {
+    const fs = memoryFs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion('shared', { createdAt: '2026-09-01T00:00:00.000Z', cones: ['cone'] }),
+      ]),
+      [GELATIERE_STATE_PATH]: JSON.stringify({
+        passes: 1,
+        lastDeliveredAt: '2026-09-05T00:00:00.000Z',
+      }),
+      '/tmp/c.json': JSON.stringify([suggestion('shared', { cones: ['cone', 'cone-research'] })]),
+    });
+    await run(fs, ['suggest', '/tmp/c.json']);
+    const result = await run(fs, ['deliver']);
+    expect(result.stdout).toContain('Delivered to 1 cone(s): cone-research (1 new, 1 open)');
+    expect(seam.lick).toHaveBeenCalledTimes(1);
+    expect(seam.lick).toHaveBeenCalledWith('cone-research', expect.anything());
+  });
+
   // A targeted send reaches ONE cone. If it advanced the global watermark, the
   // next broadcast would find "nothing new" and the other cones would never
   // hear about these suggestions.

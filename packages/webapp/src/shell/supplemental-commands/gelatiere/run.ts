@@ -232,7 +232,7 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
     return fail(`unknown delivery target "${explicit}" (cones: ${known})`);
   }
   const sent = await lickEachCone(host, roster, chosen ? [chosen] : roster, {
-    added,
+    since: state.lastDeliveredAt,
     open,
     force: parsed.bools.has('--force'),
     alias: explicit,
@@ -252,7 +252,8 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
 }
 
 /**
- * Lick each target with only what is addressed to it (`cones`);
+ * Lick each target with only what is addressed to it (`cones`) — new to it
+ * when created, or when it joined the suggestion's `cones`, after `since`;
  * installation-wide suggestions go to the primary — the roster's first
  * cone. A cone with nothing new gets no lick unless `force` and it has
  * something open. Returns one `target (n new, m open)` line per lick.
@@ -262,7 +263,8 @@ async function lickEachCone(
   roster: readonly GelatiereRootLike[],
   targets: readonly GelatiereRootLike[],
   batch: {
-    added: readonly GelatiereSuggestion[];
+    /** The delivery watermark; what is newer is news. */
+    since: string | undefined;
     open: readonly GelatiereSuggestion[];
     force: boolean;
     /** The spelling the caller used for a `--scoop` target; the lick keeps it. */
@@ -275,7 +277,7 @@ async function lickEachCone(
   const sent: string[] = [];
   for (const root of targets) {
     const open = store.suggestionsForCone(batch.open, root.folder, primary, known);
-    const added = store.suggestionsForCone(batch.added, root.folder, primary, known);
+    const added = open.filter((s) => store.isNewSince(s, batch.since, root.folder));
     if (added.length === 0 && !(batch.force && open.length > 0)) continue;
     const target = batch.alias ?? root.folder;
     host.lick(target, store.buildGelatiereLickBody(added, open));

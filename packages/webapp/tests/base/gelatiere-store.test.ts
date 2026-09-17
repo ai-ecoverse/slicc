@@ -16,6 +16,7 @@ import {
   GELATIERE_SUGGESTIONS_PATH,
   type GelatiereSuggestion,
   type GelatiereVfs,
+  isNewSince,
   isPassDue,
   loadGelatiereConfig,
   MAX_STORED_SUGGESTIONS,
@@ -495,11 +496,33 @@ describe('suggestion cones', () => {
     expect(empty).not.toHaveProperty('cones');
   });
 
+  it('counts a later-joined cone as new for that cone only', () => {
+    const s = suggestion({
+      createdAt: '2026-09-01T00:00:00.000Z',
+      cones: ['cone', 'cone-research'],
+      retargets: [{ cone: 'cone-research', at: '2026-09-10T00:00:00.000Z' }],
+    });
+    const since = '2026-09-05T00:00:00.000Z';
+    expect(isNewSince(s, since, 'cone-research')).toBe(true);
+    expect(isNewSince(s, since, 'cone')).toBe(false);
+    expect(isNewSince(s, since)).toBe(true);
+    expect(isNewSince(s, '2026-09-11T00:00:00.000Z')).toBe(false);
+    expect(isNewSince(s, undefined, 'cone')).toBe(true);
+    expect(suggestionsSince([s], since)).toHaveLength(1);
+  });
+
   it('survives a store round-trip', async () => {
     const vfs = fakeVfs({
-      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([suggestion({ cones: ['cone-bakery'] })]),
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        {
+          ...suggestion({ cones: ['cone-bakery'] }),
+          retargets: [{ cone: 'cone-bakery', at: 't' }, { cone: 1 }, 'junk'],
+        },
+      ]),
     });
-    expect((await readGelatiereSuggestions(vfs))[0].cones).toEqual(['cone-bakery']);
+    const [read] = await readGelatiereSuggestions(vfs);
+    expect(read.cones).toEqual(['cone-bakery']);
+    expect(read.retargets).toEqual([{ cone: 'cone-bakery', at: 't' }]);
   });
 
   it('routes addressed suggestions to their cones and the rest to the primary', () => {
@@ -519,6 +542,37 @@ describe('suggestion cones', () => {
 });
 
 describe('mergeSuggestions', () => {
+  // Ids are stable, so a repeat pass that ties a known suggestion to another
+  // cone can only reach that cone by widening the stored entry.
+  it('widens an open entry to new cones, stamped, and leaves settled ones alone', () => {
+    const existing = [
+      suggestion({ id: 'open', cones: ['cone-bakery'] }),
+      suggestion({ id: 'wide' }),
+      suggestion({ id: 'done', cones: ['cone-bakery'], dismissedAt: 'x' }),
+    ];
+    const at = '2026-09-10T00:00:00.000Z';
+    const { merged, added } = mergeSuggestions(existing, [
+      suggestion({ id: 'open', cones: ['cone-bakery', 'cone-research'], createdAt: at }),
+      suggestion({ id: 'wide', cones: ['cone-research'], createdAt: at }),
+      suggestion({ id: 'done', cones: ['cone-research'], createdAt: at }),
+    ]);
+    expect(added).toEqual([]);
+    expect(merged[0]).toMatchObject({
+      cones: ['cone-bakery', 'cone-research'],
+      retargets: [{ cone: 'cone-research', at }],
+      createdAt: '2026-09-01T00:00:00.000Z',
+    });
+    expect(merged[1]).toMatchObject({ cones: ['cone-research'] });
+    expect(merged[2]).toBe(existing[2]);
+    expect(existing[0].cones).toEqual(['cone-bakery']);
+  });
+
+  it('keeps an entry untouched when the repeat adds no cone', () => {
+    const existing = [suggestion({ id: 'a', cones: ['cone'] })];
+    const { merged } = mergeSuggestions(existing, [suggestion({ id: 'a', cones: ['cone'] })]);
+    expect(merged[0]).toBe(existing[0]);
+  });
+
   it('prepends new ids, keeps existing entries (and their dismissal) verbatim', () => {
     const existing = [suggestion({ id: 'a', dismissedAt: '2026-09-02T00:00:00.000Z' })];
     const { merged, added } = mergeSuggestions(existing, [

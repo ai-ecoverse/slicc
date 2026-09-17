@@ -134,7 +134,9 @@ edit by the user is not.
    (bare cone folders, the cones whose sessions or memory motivated it). `deliver` licks each root
    cone except the gelatiere with only the open suggestions addressed to it (`suggestionsForCone`)
    and created since `lastDeliveredAt`; a suggestion without `cones`, or whose cones are all gone,
-   goes to the primary cone (the roster's first root) alone. A cone with nothing new addressed to
+   goes to the primary cone (the roster's first root) alone. A repeat pass that addresses a still-open
+   suggestion to more cones widens its stored `cones` and stamps each newcomer in `retargets`
+   (`widenCones`), so that cone counts it as new at its next delivery (`isNewSince`). A cone with nothing new addressed to
    it gets no lick (with `--force`, a cone with something open does). An explicit `--scoop <target>` must resolve against the roster (folder, name
    or jid) — an unknown target fails before the delivery ledger is stamped, so the suggestions stay
    "new" for the next attempt — and a targeted send never advances `lastDeliveredAt` (it records

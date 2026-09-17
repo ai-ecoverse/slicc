@@ -173,12 +173,23 @@ export interface GelatiereSuggestion {
    * which `gelatiere deliver` sends to the primary cone only.
    */
   cones?: string[];
+  /**
+   * Cones a later pass added to `cones`, with that pass's stamp. Ids are
+   * stable, so a repeat pass cannot re-create the entry; this is how a cone
+   * that joins later still counts the suggestion as new at its next delivery.
+   */
+  retargets?: GelatiereRetarget[];
   /** ISO timestamp of the pass that first produced it. */
   createdAt: string;
   /** ISO timestamp; set when the user waved it away ("Dismiss" / `gelatiere dismiss`). */
   dismissedAt?: string;
   /** ISO timestamp; set when the user acted on it ("Install" / "Try it"). */
   takenAt?: string;
+}
+
+export interface GelatiereRetarget {
+  cone: string;
+  at: string;
 }
 
 export interface GelatiereState {
@@ -333,12 +344,28 @@ export async function readGelatiereSuggestions(
   for (const entry of parsed) {
     const suggestion = coerceSuggestion(entry, null);
     if (!suggestion) continue;
-    const { dismissedAt, takenAt } = entry as { dismissedAt?: unknown; takenAt?: unknown };
+    const { dismissedAt, takenAt, retargets } = entry as {
+      dismissedAt?: unknown;
+      takenAt?: unknown;
+      retargets?: unknown;
+    };
     if (typeof dismissedAt === 'string' && dismissedAt) suggestion.dismissedAt = dismissedAt;
     if (typeof takenAt === 'string' && takenAt) suggestion.takenAt = takenAt;
+    const widened = storedRetargets(retargets);
+    if (widened.length > 0) suggestion.retargets = widened;
     kept.push(suggestion);
   }
   return kept;
+}
+
+function storedRetargets(value: unknown): GelatiereRetarget[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (r): r is GelatiereRetarget =>
+      Boolean(r) &&
+      typeof (r as GelatiereRetarget).cone === 'string' &&
+      typeof (r as GelatiereRetarget).at === 'string'
+  );
 }
 
 export async function writeGelatiereSuggestions(
@@ -410,19 +437,37 @@ export function takenSuggestions(
   return suggestions.filter((s) => Boolean(s.takenAt));
 }
 
-/** Open suggestions created after `since` (all of them when `since` is absent). */
+/**
+ * Open suggestions that are new after `since` (all of them when `since` is
+ * absent): created later, or addressed to another cone later.
+ */
 export function suggestionsSince(
   suggestions: readonly GelatiereSuggestion[],
   since: string | undefined
 ): GelatiereSuggestion[] {
-  const open = openSuggestions(suggestions);
-  if (!since) return open;
-  const cutoff = Date.parse(since);
-  if (Number.isNaN(cutoff)) return open;
-  return open.filter((s) => {
-    const created = Date.parse(s.createdAt);
-    return Number.isNaN(created) || created > cutoff;
-  });
+  return openSuggestions(suggestions).filter((s) => isNewSince(s, since));
+}
+
+/**
+ * Whether a suggestion is news after `since` — for `cone` when given (its
+ * creation, or that cone joining its `cones`), for any cone otherwise.
+ * An unparseable stamp counts as new: re-telling beats never telling.
+ */
+export function isNewSince(
+  suggestion: GelatiereSuggestion,
+  since: string | undefined,
+  cone?: string
+): boolean {
+  const cutoff = since ? Date.parse(since) : Number.NaN;
+  if (Number.isNaN(cutoff)) return true;
+  const after = (stamp: string): boolean => {
+    const parsed = Date.parse(stamp);
+    return Number.isNaN(parsed) || parsed > cutoff;
+  };
+  if (after(suggestion.createdAt)) return true;
+  return (suggestion.retargets ?? []).some(
+    (r) => (cone === undefined || r.cone === cone) && after(r.at)
+  );
 }
 
 /**
@@ -661,7 +706,8 @@ export function coerceSuggestions(
 /**
  * Fold a pass's suggestions into the store. An id that is already present —
  * open, taken or dismissed — keeps its existing entry (and its settlement
- * stamps), so a repeat pass cannot resurrect what the user already answered.
+ * stamps), so a repeat pass cannot resurrect what the user already answered;
+ * an open one may only gain cones ({@link widenCones}).
  * New entries go first; the oldest fall off past
  * {@link MAX_STORED_SUGGESTIONS}, settled ones (dismissed, then taken) first.
  */
@@ -670,9 +716,10 @@ export function mergeSuggestions(
   incoming: readonly GelatiereSuggestion[],
   maxStored: number = MAX_STORED_SUGGESTIONS
 ): { merged: GelatiereSuggestion[]; added: GelatiereSuggestion[] } {
+  const byId = new Map(incoming.map((s) => [s.id, s]));
   const known = new Set(existing.map((s) => s.id));
   const added = incoming.filter((s) => !known.has(s.id));
-  const merged = [...added, ...existing];
+  const merged = [...added, ...existing.map((s) => widenCones(s, byId.get(s.id)))];
   while (merged.length > maxStored) {
     const dismissedIndex = findLastIndex(merged, (s) => Boolean(s.dismissedAt));
     const settledIndex =
@@ -680,6 +727,29 @@ export function mergeSuggestions(
     merged.splice(settledIndex >= 0 ? settledIndex : merged.length - 1, 1);
   }
   return { merged, added };
+}
+
+/**
+ * A repeat pass that addresses a still-open suggestion to more cones adds
+ * them — stamped, so their next delivery counts it as new — and leaves
+ * everything else on the stored entry alone. A settled entry stays as it is.
+ * An installation-wide entry that a pass now pins to cones becomes targeted.
+ */
+function widenCones(
+  stored: GelatiereSuggestion,
+  repeat: GelatiereSuggestion | undefined
+): GelatiereSuggestion {
+  if (!repeat?.cones || stored.dismissedAt || stored.takenAt) return stored;
+  const have = stored.cones ?? [];
+  const fresh = repeat.cones.filter((cone) => !have.includes(cone));
+  const cones = [...have, ...fresh].slice(0, MAX_SUGGESTION_CONES);
+  const joined = fresh.filter((cone) => cones.includes(cone));
+  if (joined.length === 0) return stored;
+  const retargets = [
+    ...(stored.retargets ?? []),
+    ...joined.map((cone) => ({ cone, at: repeat.createdAt })),
+  ];
+  return { ...stored, cones, retargets };
 }
 
 function findLastIndex<T>(list: readonly T[], predicate: (item: T) => boolean): number {
