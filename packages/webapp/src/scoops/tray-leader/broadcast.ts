@@ -128,12 +128,17 @@ export class BroadcastManager {
     });
   }
 
-  broadcastStatus(status: string): void {
+  /**
+   * Mirror one unit's turn lifecycle. `scoopJid` names the unit that changed;
+   * omitted, the leader's currently displayed unit — the historical default,
+   * which hid a follower-selected cone's turn when the leader was elsewhere.
+   */
+  broadcastStatus(status: string, scoopJid?: string): void {
     if (this.context.followers.followers.size === 0) return;
     this.broadcast({
       type: 'status',
       scoopStatus: status,
-      scoopJid: this.context.options.getScoopJid(),
+      scoopJid: scoopJid ?? this.context.options.getScoopJid(),
     });
   }
 

@@ -314,6 +314,17 @@ describe('LeaderSyncManager', () => {
     expect(sent[1]).toEqual({ type: 'status', scoopStatus: 'processing', scoopJid: 'cone' });
   });
 
+  it('names a status frame with the unit that changed, not the leader selection', () => {
+    const { manager } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    manager.broadcastStatus('processing', 'cone_b');
+
+    const sent = channel.parseSent();
+    expect(sent[1]).toEqual({ type: 'status', scoopStatus: 'processing', scoopJid: 'cone_b' });
+  });
+
   it('does not broadcast when no followers are connected', () => {
     const { manager } = createManager();
     // Should not throw

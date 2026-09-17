@@ -50,6 +50,12 @@ export interface WcLiveWiring {
   getSelected(): WorkUnitSummary | null;
   selectScoop(unit: WorkUnitSummary): void;
   notifyScoopStateChanged?(): void;
+  /**
+   * One unit's kernel status changed. The tray mirrors this as a `status`
+   * frame named with `jid`, so a follower reading that unit sees the turn
+   * even when the leader is displaying another cone.
+   */
+  notifyUnitStatus?(jid: string, status: ScoopStatus): void;
   refreshScoops?(): void;
   notifyReady?(): void;
   /**
@@ -152,6 +158,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       const previous = wiring.statuses.get(jid);
       const next = status as ScoopStatus;
       wiring.statuses.set(jid, next);
+      if (previous !== next) wiring.notifyUnitStatus?.(jid, next);
       if (next !== 'ready' && wiring.awaitingInput === jid) wiring.awaitingInput = null;
       // A turn ENDED: the unit was busy and no longer is. Counted here, at the
       // event, because everything downstream samples — the strip on repaint, a

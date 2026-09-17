@@ -236,6 +236,15 @@ Per-process signalling arrives with the supervisor APIs (#2278), which is also
 where the process group gets an addressable identity. Inventing a `processId`
 argument neither adapter could route would be a lie in the type.
 
+The follower's Stop button is gated on local `processing`, which is set from
+tray `status` frames. Those frames name the unit that changed
+(`broadcastStatus(status, scoopJid)`); the follower applies them only to the
+cone it is viewing (`shouldApplyFollowerStatus`). Tagging the frame with the
+leader's displayed cone left a follower-selected turn without
+`data-processing`, so Stop was swallowed (#3225). Concurrent chunked snapshots
+are assembled per `scoopJid` for the same reason — one global buffer mixed
+transcripts when a follower switched cones quickly.
+
 ## Presentation: one ordering, one descriptor
 
 `work-unit/client/presentation.ts` becomes the single implementation of what

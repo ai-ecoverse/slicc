@@ -1436,6 +1436,8 @@ export function attachWcWorkbench(
           log,
         });
         boot.wiring.notifyScoopStateChanged = () => tray.scheduleScoopsListBroadcast();
+        boot.wiring.notifyUnitStatus = (jid, status) =>
+          tray.broadcastUnitStatus(jid, status === 'processing' ? 'processing' : 'ready');
       }
     })
     .catch((err) => log.error('WC sprinkle/tray wiring failed', err));

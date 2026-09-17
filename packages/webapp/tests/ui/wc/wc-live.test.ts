@@ -280,6 +280,21 @@ describe('createWcLiveCallbacks', () => {
     expect(wiring.controller.setProcessing.mock.calls).toEqual([[true], [false]]);
   });
 
+  it('mirrors every unit status change to followers, including a cone the leader is not displaying', () => {
+    const wiring = makeWiring({ selected: cone });
+    const notifyUnitStatus = vi.fn();
+    wiring.notifyUnitStatus = notifyUnitStatus;
+    const callbacks = createWcLiveCallbacks(wiring);
+    callbacks.onStatusChange('cone-reviewer', 'processing' as never);
+    callbacks.onStatusChange('cone-reviewer', 'processing' as never);
+    callbacks.onStatusChange('cone-reviewer', 'ready' as never);
+    expect(notifyUnitStatus.mock.calls).toEqual([
+      ['cone-reviewer', 'processing'],
+      ['cone-reviewer', 'ready'],
+    ]);
+    expect(wiring.controller.setProcessing).not.toHaveBeenCalled();
+  });
+
   it('stops awaiting the user as soon as the scoop works again, and exposes a refresh', () => {
     const wiring = makeWiring({ selected: cone, scoops: [cone] });
     const callbacks = createWcLiveCallbacks(wiring);
