@@ -16,15 +16,35 @@ import { DIP_PENDING_PLACEHOLDER } from './dip-placeholder.js';
 
 // -- Marked instance with custom renderers --
 
+/** Marks a ```shtml block whose closing fence has not arrived yet. */
+const OPEN_DIP_CLASS = 'msg__dip-open';
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Whether a fenced code token's closing fence is still to come. Reads the
+ * token marked produced, so every fence form it accepts (backticks or
+ * tildes, any length ≥ 3; CRLF is normalized by the lexer) is judged the
+ * same way marked parsed it.
+ */
+function fenceIsOpen(raw: string): boolean {
+  const open = FENCE_OPEN_RE.exec(raw)?.[1];
+  if (!open) return false;
+  const lines = raw.replace(/\n+$/, '').split('\n');
+  if (lines.length < 2) return true;
+  const close = new RegExp(`^ {0,3}\\${open[0]}{${open.length},}[ \\t]*$`);
+  return !close.test(lines.at(-1) ?? '');
+}
+
 const marked = new Marked({
   gfm: true,
   breaks: true,
   async: false,
   renderer: {
-    code({ text, lang }: Tokens.Code): string {
+    code({ text, lang, raw }: Tokens.Code): string {
       const language = lang ?? '';
       const highlighted = highlightCode(text, language);
-      const langClass = language ? ` class="language-${escapeHtml(language)}"` : '';
+      const openDip = language === 'shtml' && fenceIsOpen(raw) ? ` ${OPEN_DIP_CLASS}` : '';
+      const langClass = language ? ` class="language-${escapeHtml(language)}${openDip}"` : '';
       return `<pre><code${langClass}>${highlighted}</code></pre>\n`;
     },
     link({ href, title, tokens }: Tokens.Link): string {
@@ -235,11 +255,11 @@ function forceNewTabLinks(html: string): string {
 
 const SURFACED_ERROR_PARAGRAPH_RE = /<p><strong>Error:<\/strong>\s*([\s\S]*?)<\/p>/g;
 
-// Match a fenced shtml code block as emitted by the marked renderer above.
-// marked wraps a block whose closing fence has not arrived yet in the same
-// <pre><code class="language-shtml">…</code></pre> shape as a finished one.
-const SHTML_CODE_BLOCK_RE = /<pre><code class="language-shtml">[\s\S]*?<\/code><\/pre>/g;
-const SHTML_FENCE_OPEN = '```shtml\n';
+// A ```shtml block the marked renderer above flagged as still open.
+const OPEN_SHTML_CODE_BLOCK_RE = new RegExp(
+  `<pre><code class="language-shtml ${OPEN_DIP_CLASS}">[\\s\\S]*?<\\/code><\\/pre>`,
+  'g'
+);
 
 function renderBaseMessageContent(content: string): string {
   const raw = marked.parse(content) as string;
@@ -254,12 +274,6 @@ function renderSurfacedErrorBlocks(html: string): string {
   );
 }
 
-/** True while `content` ends inside a ```shtml block whose closing fence is still to come. */
-function endsInOpenShtmlFence(content: string): boolean {
-  const start = content.lastIndexOf(SHTML_FENCE_OPEN);
-  return start >= 0 && !content.includes('\n```', start + SHTML_FENCE_OPEN.length - 1);
-}
-
 /**
  * While the assistant streams a fenced ```shtml block, replace its raw
  * markup with a placeholder card so users see a loading hint instead of the
@@ -267,13 +281,8 @@ function endsInOpenShtmlFence(content: string): boolean {
  * closing fence has arrived is complete, and keeps the
  * `pre > code.language-shtml` shape `hydrateDips()` mounts from.
  */
-function replaceOpenShtmlWithDipPlaceholder(html: string, content: string): string {
-  if (!endsInOpenShtmlFence(content)) return html;
-  const last = [...html.matchAll(SHTML_CODE_BLOCK_RE)].at(-1);
-  if (last?.index === undefined) return html;
-  return (
-    html.slice(0, last.index) + DIP_PENDING_PLACEHOLDER + html.slice(last.index + last[0].length)
-  );
+function replaceOpenShtmlWithDipPlaceholder(html: string): string {
+  return html.replace(OPEN_SHTML_CODE_BLOCK_RE, DIP_PENDING_PLACEHOLDER);
 }
 
 /**
@@ -297,7 +306,7 @@ export function renderAssistantMessageContent(content: string, isStreaming = fal
   // Drop the hidden <!--lang:xx--> reply-language marker (used only to pick a
   // TTS voice) so it never reaches the rendered bubble.
   let html = renderSurfacedErrorBlocks(renderBaseMessageContent(stripReplyLangMarker(content)));
-  if (isStreaming) html = replaceOpenShtmlWithDipPlaceholder(html, content);
+  if (isStreaming) html = replaceOpenShtmlWithDipPlaceholder(html);
   return html;
 }
 

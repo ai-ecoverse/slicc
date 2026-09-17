@@ -287,6 +287,39 @@ describe('renderAssistantMessageContent', () => {
       expect(html).toContain('class="language-shtml"');
     });
 
+    it.each([
+      ['tilde fence', '~~~shtml\n<div>x</div>'],
+      ['four-backtick fence around a triple-backtick line', '````shtml\n<div>x</div>\n```'],
+      ['CRLF line endings', '```shtml\r\n<div>x</div>'],
+      ['a closing fence still arriving', '```shtml\n<div>x</div>\n``'],
+      ['a fence closed by the other character', '```shtml\n<div>x</div>\n~~~'],
+    ])('keeps the placeholder for an open block: %s', (_, content) => {
+      const html = renderAssistantMessageContent(`Card:\n\n${content}`, true);
+
+      expect(html).toContain('class="msg__dip-pending"');
+      expect(html).not.toContain('language-shtml');
+    });
+
+    it.each([
+      ['tilde fence', '~~~shtml\n<div>x</div>\n~~~'],
+      ['four-backtick fence', '````shtml\n<div>x</div>\n````'],
+      ['a longer closing fence', '```shtml\n<div>x</div>\n`````'],
+      ['CRLF line endings', '```shtml\r\n<div>x</div>\r\n```\r\n\r\nmore'],
+      ['an indented closing fence', '```shtml\n<div>x</div>\n   ```  '],
+    ])('mounts a closed block while streaming: %s', (_, content) => {
+      const html = renderAssistantMessageContent(`Card:\n\n${content}`, true);
+
+      expect(html).toContain('<pre><code class="language-shtml">');
+      expect(html).not.toContain('msg__dip-pending');
+    });
+
+    it('still hands an unclosed block to hydration once the message is final', () => {
+      const html = renderAssistantMessageContent('```shtml\n<div>x</div>', false);
+
+      expect(html).toContain('class="language-shtml msg__dip-open"');
+      expect(html).not.toContain('msg__dip-pending');
+    });
+
     it('leaves non-shtml fenced blocks untouched while streaming', () => {
       const html = renderAssistantMessageContent('```js\nconst x = 1;\n```', true);
 
