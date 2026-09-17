@@ -80,6 +80,8 @@ export const BISCOTTO_ALLOWED: Record<FollowerToLeaderMessage['type'], boolean> 
   abort: false,
   new_session: false,
   'scoops.select': false,
+  'computer.watch': false,
+  'computer.unwatch': false,
   'model.select': false,
   'models.request': false,
   'thinking.set': false,
@@ -269,6 +271,8 @@ export const BISCOTTO_RECEIVABLE: Record<LeaderToFollowerMessage['type'], boolea
 
   // — the owner's wider workspace, outside this seat's scope —
   'scoops.list': false,
+  'computers.list': false,
+  'computer.frame': false,
   'targets.registry': false,
   'preview.open': false,
   'models.list': false,

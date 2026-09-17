@@ -25,6 +25,7 @@ import type {
   AgentEvent,
   ChatCompactionMarker,
   ChatMessage,
+  ComputerDescriptor,
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
   MessageAttachment,
@@ -339,6 +340,46 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       activeScoopJid: 'cone',
     },
   },
+  // Additive computer roster (#3246). iOS has no computer surface this phase;
+  // the decoder must land on `.unknown` rather than fail the session.
+  'computers.list': {
+    ios: 'unknown',
+    message: {
+      type: 'computers.list',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: { width: 8, height: 8 },
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll',
+            keyboard: true,
+            mouse: 'absolute',
+            scroll: true,
+            exec: false,
+            inputAllowed: true,
+          },
+          pid: null,
+        } satisfies ComputerDescriptor,
+      ],
+    },
+  },
+  'computer.frame': {
+    ios: 'unknown',
+    message: {
+      type: 'computer.frame',
+      id: 'jsh:fake',
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      data: 'QUJD',
+    },
+  },
   'models.list': {
     ios: 'decoded',
     message: {
@@ -605,6 +646,14 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     message: { type: 'request_snapshot', scoopJid: 'cone' },
   },
   'scoops.select': { ios: 'decoded', message: { type: 'scoops.select', scoopJid: 'cone' } },
+  'computer.watch': {
+    ios: 'undecodable',
+    message: { type: 'computer.watch', id: 'jsh:fake', fps: 2, maxWidth: 480 },
+  },
+  'computer.unwatch': {
+    ios: 'undecodable',
+    message: { type: 'computer.unwatch', id: 'jsh:fake' },
+  },
   'models.request': { ios: 'decoded', message: { type: 'models.request' } },
   'model.select': {
     ios: 'decoded',
