@@ -157,6 +157,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'crontask',
   'ps',
   'kill',
+  'jshd',
 ];
 
 describe('commands command', () => {
@@ -240,6 +241,13 @@ describe('commands command', () => {
     const result = await cmd.execute([], createMockCtx(DEFAULT_BUILTIN_COMMANDS));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('Other:');
+  });
+
+  it('groups jshd with ps and kill under Process', async () => {
+    const cmd = createCommandsCommand();
+    const result = await cmd.execute([], createMockCtx(['ps', 'kill', 'jshd']));
+    expect(result.exitCode).toBe(0);
+    expect(lineAfterCategory(result.stdout, 'Process')?.trim()).toBe('ps, kill, jshd');
   });
 
   it('groups jsh beside node under Languages', async () => {

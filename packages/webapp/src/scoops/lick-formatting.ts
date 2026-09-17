@@ -37,6 +37,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'cherry',
   'workflow',
   'bash',
+  'jshd',
   'sudo-request',
   'preview',
   'discovery',
@@ -62,6 +63,7 @@ const LICK_LABELS: Record<LickEvent['type'], string> = {
   cherry: 'Cherry Event',
   workflow: 'Workflow Event',
   bash: 'Background Command',
+  jshd: 'jshd Unit',
   cron: 'Cron Event',
   'sudo-request': 'Scoop Access Request',
   preview: 'Preview',
@@ -95,6 +97,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return (event as { workflowName?: string }).workflowName;
     case 'bash':
       return (event as { bashJobId?: string }).bashJobId;
+    case 'jshd':
+      return (event as { jshdName?: string }).jshdName;
     case 'sudo-request':
       return (event as { sudoScoopName?: string }).sudoScoopName;
     case 'discovery':
@@ -220,6 +224,24 @@ function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
  * usually wants the outcome, not another round trip. The durable output file is
  * named so a truncated preview can still be paged.
  */
+function formatJshdLick(event: LickEvent, label: string): FormattedLick {
+  const name = event.jshdName ?? 'unknown';
+  const restarts = event.jshdRestarts ?? 0;
+  const path = event.resultPath;
+  const tail = path
+    ? `Logs: ${path} (page with \`jshd logs ${name}\`).`
+    : 'No log file was written.';
+  const preview = event.preview?.length ? `\n\n\`\`\`\n${event.preview}\n\`\`\`` : '';
+  return {
+    label,
+    content:
+      `[${label}: ${name}] marked errored after ${restarts} restarts.\n` +
+      `The restart policy stopped trying so the unit does not crash-loop.\n` +
+      `${tail}${preview}\n\n` +
+      `Inspect with \`jshd status ${name}\`; start it again with \`jshd start -n ${name}\` after fixing the script.`,
+  };
+}
+
 function formatBashLick(event: LickEvent, label: string): FormattedLick {
   const jobId = event.bashJobId ?? 'unknown job';
   const pid = event.bashJobPid === undefined ? '' : ` (pid ${event.bashJobPid})`;
@@ -387,6 +409,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'preview') return formatPreviewLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
   if (event.type === 'bash') return formatBashLick(event, label);
+  if (event.type === 'jshd') return formatJshdLick(event, label);
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
   if (event.type === 'navigate') return formatNavigateLick(event, label);
   if (event.type === 'webhook') return formatWebhookLick(event, label);
