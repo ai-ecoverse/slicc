@@ -1,6 +1,7 @@
 // packages/webapp/tests/e2e/split-dip-stream.test.ts
 /**
- * A dip must stay inside the bubble of the message that streamed it.
+ * Dips in a streaming message: they stay inside the bubble that streamed
+ * them, and mount as soon as their fence closes.
  *
  * Live cone, 2026-09-17: an assistant message (text + `bash`) was followed,
  * after the tool call, by a message holding a ```shtml dip. The thread showed
@@ -14,9 +15,13 @@
  * message 2 streamed; when the tab woke, that frame flushed message 2's
  * buffer into message 1.
  *
- * This scenario parks rAF (the tab going to the background), runs the tool
+ * The first scenario parks rAF (the tab going to the background), runs the tool
  * turn, holds the second stream two chunks in (inside the ```shtml fence), and
  * then wakes the frames, as the tab does when the user looks at it again.
+ *
+ * The second holds a stream just past a dip's closing fence: the dip must
+ * already be mounted, and the renders that follow must keep that same
+ * document rather than reload it.
  */
 
 import type { Page } from '@playwright/test';
@@ -89,6 +94,43 @@ async function agentBubbles(page: Page): Promise<Bubble[]> {
   );
 }
 
+async function bootLeader(page: Page): Promise<void> {
+  await seedLocalLlmProvider(page, { modelId: 'fake-dipper' });
+  await seedSkipSwReload(page);
+  await gotoLeader(page);
+  await waitForSW(page);
+  await page.waitForSelector('slicc-input-card');
+  await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
+    timeout: 20_000,
+  });
+}
+
+/** The newest bubble's dip: tagged on first sight, then re-checked for identity. */
+async function probeLastDip(page: Page, token?: string) {
+  return page.evaluate((tag) => {
+    const bubble = Array.from(
+      document.querySelectorAll('slicc-chat-thread slicc-agent-message')
+    ).at(-1);
+    const iframes = Array.from(
+      bubble?.querySelectorAll<HTMLIFrameElement>('.msg__dip iframe') ?? []
+    );
+    const iframe = iframes[0] as (HTMLIFrameElement & { __probe?: string }) | undefined;
+    const win = iframe?.contentWindow as (Window & { __probe?: string }) | null | undefined;
+    if (tag && iframe && win && !iframe.__probe) {
+      iframe.__probe = tag;
+      win.__probe = tag;
+    }
+    return {
+      streaming: bubble?.hasAttribute('streaming') ?? false,
+      iframes: iframes.length,
+      pending: bubble?.querySelectorAll('.msg__dip-pending').length ?? 0,
+      elementProbe: iframe?.__probe ?? null,
+      windowProbe: win?.__probe ?? null,
+      card: win?.document.getElementById('early-card')?.textContent ?? null,
+    };
+  }, token);
+}
+
 test.describe('dip streamed after a tool call', () => {
   test.beforeEach(async () => {
     await resetFakeLlm();
@@ -106,14 +148,7 @@ test.describe('dip streamed after a tool call', () => {
     test.setTimeout(120_000);
 
     await installRafPark(page);
-    await seedLocalLlmProvider(page, { modelId: 'fake-dipper' });
-    await seedSkipSwReload(page);
-    await gotoLeader(page);
-    await waitForSW(page);
-    await page.waitForSelector('slicc-input-card');
-    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
-      timeout: 20_000,
-    });
+    await bootLeader(page);
     const before = (await agentBubbles(page)).length;
 
     await page.evaluate(() => {
@@ -144,5 +179,42 @@ test.describe('dip streamed after a tool call', () => {
     expect(second.text).toContain('Tail after the dip.');
     expect(second.text).not.toContain('```');
     expect(second.dips).toBe(1);
+  });
+
+  test('a dip mounts once its closing fence arrives and survives the rest of the stream', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await bootLeader(page);
+
+    await submitUserMessage(page, 'pour a dip early');
+    // The fence has closed; the prose after it is still held back.
+    await waitForFakeLlmHold();
+    await expect
+      .poll(async () => (await probeLastDip(page, 'early')).iframes, { timeout: 15_000 })
+      .toBe(1);
+    const early = await probeLastDip(page);
+    expect(early.streaming).toBe(true);
+    expect(early.pending).toBe(0);
+    expect(early.elementProbe).toBe('early');
+    await expect.poll(async () => (await probeLastDip(page)).card).toBe('EARLY CARD');
+
+    await releaseFakeLlmHold();
+    await expect(page.locator('slicc-chat-thread')).toContainText('Still typing after the dip.', {
+      timeout: 30_000,
+    });
+    await waitForTurnComplete(page);
+
+    // Same element, same document: the final render carried the dip over
+    // instead of reloading it.
+    const settled = await probeLastDip(page);
+    expect(settled).toMatchObject({
+      streaming: false,
+      iframes: 1,
+      pending: 0,
+      elementProbe: 'early',
+      windowProbe: 'early',
+      card: 'EARLY CARD',
+    });
   });
 });

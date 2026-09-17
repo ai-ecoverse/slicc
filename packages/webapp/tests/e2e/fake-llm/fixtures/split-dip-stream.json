@@ -4,12 +4,25 @@
     {
       "whenUserMessageMatches": "check the thread",
       "content": "Confirming it is not stuck:",
-      "tool_calls": [{ "name": "bash", "arguments": { "command": "echo still-working" } }]
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "echo still-working"
+          }
+        }
+      ]
     },
     {
       "content": "Launched.\n\n```shtml\n<div class=\"sprinkle-action-card\">SPLIT DIP CARD</div>\n```\n\nTail after the dip.",
       "contentChunkSize": 16,
       "holdAfterContentChunks": 2
+    },
+    {
+      "whenUserMessageMatches": "pour a dip early",
+      "content": "Here it is.\n\n```shtml\n<div class=\"sprinkle-action-card\" id=\"early-card\">EARLY CARD</div>\n```\n\nStill typing after the dip.",
+      "contentChunkSize": 16,
+      "holdAfterContentChunks": 6
     }
   ],
   "onOverflow": "error"

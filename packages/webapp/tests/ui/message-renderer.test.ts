@@ -224,13 +224,18 @@ describe('renderAssistantMessageContent', () => {
   describe('streaming dip placeholder', () => {
     const finishedShtml = 'Here you go:\n\n```shtml\n<div class="card">Hi</div>\n```\n\nDone.';
 
-    it('replaces a closed shtml fenced block with the pending placeholder while streaming', () => {
+    it('keeps a closed shtml block hydratable while the rest of the message streams', () => {
       const html = renderAssistantMessageContent(finishedShtml, true);
 
-      expect(html).toContain('class="msg__dip-pending"');
-      expect(html).toContain('Pouring a dip…');
-      expect(html).not.toContain('class="language-shtml"');
-      expect(html).not.toContain('&lt;div class="card"&gt;');
+      expect(html).toContain('class="language-shtml"');
+      expect(html).not.toContain('msg__dip-pending');
+    });
+
+    it('treats a fence closed at the very end of the stream as closed', () => {
+      const html = renderAssistantMessageContent('```shtml\n<div>x</div>\n```', true);
+
+      expect(html).toContain('class="language-shtml"');
+      expect(html).not.toContain('msg__dip-pending');
     });
 
     it('replaces an in-progress (unclosed) shtml fenced block while streaming', () => {
@@ -240,7 +245,9 @@ describe('renderAssistantMessageContent', () => {
       );
 
       expect(html).toContain('class="msg__dip-pending"');
+      expect(html).toContain('Pouring a dip…');
       expect(html).not.toContain('class="language-shtml"');
+      expect(html).not.toContain('&lt;div class="card"&gt;');
     });
 
     it('keeps the shtml code block intact when not streaming so hydrateDips can find it', () => {
@@ -258,15 +265,26 @@ describe('renderAssistantMessageContent', () => {
       expect(html).not.toContain('msg__dip-pending');
     });
 
-    it('replaces every shtml block when multiple appear in one message', () => {
+    it('swaps only the still-open block when an earlier one has closed', () => {
       const html = renderAssistantMessageContent(
-        '```shtml\n<div>one</div>\n```\n\nand\n\n```shtml\n<div>two</div>\n```',
+        '```shtml\n<div>one</div>\n```\n\nand\n\n```shtml\n<div>two',
         true
       );
 
-      const matches = html.match(/msg__dip-pending"/g) ?? [];
-      expect(matches.length).toBe(2);
-      expect(html).not.toContain('class="language-shtml"');
+      expect(html.match(/msg__dip-pending"/g) ?? []).toHaveLength(1);
+      expect(html.match(/class="language-shtml"/g) ?? []).toHaveLength(1);
+      expect(html).toContain('&lt;div&gt;one&lt;/div&gt;');
+      expect(html).not.toContain('two');
+    });
+
+    it('does not swap a closed shtml block when a later code block is still open', () => {
+      const html = renderAssistantMessageContent(
+        '```shtml\n<div>one</div>\n```\n\n```js\nconst x',
+        true
+      );
+
+      expect(html).not.toContain('msg__dip-pending');
+      expect(html).toContain('class="language-shtml"');
     });
 
     it('leaves non-shtml fenced blocks untouched while streaming', () => {

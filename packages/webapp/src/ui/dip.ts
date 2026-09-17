@@ -34,6 +34,7 @@ import {
   type UsbDeviceFilter,
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
+import { DIP_PENDING_PLACEHOLDER } from './dip-placeholder.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
@@ -1328,6 +1329,56 @@ function openDipLink(url: unknown): void {
   }
 }
 
+export interface HydrateDipsOptions {
+  /**
+   * The instances this message's PREVIOUS render hydrated, still in the DOM.
+   * A dip whose source is unchanged moves into the new render instead of
+   * remounting; every instance not carried over is disposed.
+   */
+  previous?: readonly DipInstance[];
+  /**
+   * More content is coming. Without a state-preserving move a mounted dip
+   * would reload on every streamed frame, so it waits as a placeholder.
+   */
+  streaming?: boolean;
+}
+
+/** Where a hydrated dip lives, and what it was hydrated from. */
+const dipSlots = new WeakMap<DipInstance, { key: string; wrapper: HTMLElement }>();
+
+/**
+ * `moveBefore` keeps an iframe's document alive across a move; any other
+ * re-parenting reloads it. Typed as always present, but only newer browsers
+ * ship it.
+ */
+function canCarryDips(): boolean {
+  return typeof (Element.prototype as Partial<ParentNode>).moveBefore === 'function';
+}
+
+/** Move a live dip hydrated from `key` into `target`'s place; null when none can move. */
+function carryDip(pool: DipInstance[], key: string, target: Element): DipInstance | null {
+  const index = pool.findIndex((instance) => {
+    const slot = dipSlots.get(instance);
+    return slot?.key === key && slot.wrapper.isConnected;
+  });
+  const instance = pool[index];
+  const slot = instance && dipSlots.get(instance);
+  if (!slot) return null;
+  try {
+    target.parentNode!.moveBefore(slot.wrapper, target);
+  } catch {
+    return null;
+  }
+  target.remove();
+  pool.splice(index, 1);
+  return instance;
+}
+
+function trackDip(instance: DipInstance, key: string, wrapper: HTMLElement): DipInstance {
+  dipSlots.set(instance, { key, wrapper });
+  return instance;
+}
+
 /**
  * Find all `code.language-shtml` blocks and `img[src$=".shtml"]` elements in
  * a container, replace them with sandboxed dip iframes. Image references are
@@ -1336,12 +1387,19 @@ function openDipLink(url: unknown): void {
  * aborts the in-flight fetch and tears down whatever iframe (if any) was
  * eventually mounted, so callers can rely on disposal even when hydration is
  * still in flight.
+ *
+ * A re-render passes the prior instances as `previous`; see
+ * {@link HydrateDipsOptions}.
  */
 export function hydrateDips(
   containerEl: HTMLElement,
-  onLick: (action: string, data: unknown) => void
+  onLick: (action: string, data: unknown) => void,
+  options: HydrateDipsOptions = {}
 ): DipInstance[] {
   const instances: DipInstance[] = [];
+  const pool = [...(options.previous ?? [])];
+  const carry = canCarryDips();
+  const defer = options.streaming === true && !carry;
 
   //    Fenced ```shtml code blocks
   // Inline dips come from agent output and are NEVER trusted — even if
@@ -1352,19 +1410,40 @@ export function hydrateDips(
   for (const codeEl of codeEls) {
     const preEl = codeEl.parentElement!;
     const shtmlContent = codeEl.textContent ?? '';
+    const key = `shtml:${shtmlContent}`;
+
+    if (defer) {
+      preEl.replaceWith(
+        preEl.ownerDocument.createRange().createContextualFragment(DIP_PENDING_PLACEHOLDER)
+      );
+      continue;
+    }
+    const carried = carry ? carryDip(pool, key, preEl) : null;
+    if (carried) {
+      instances.push(carried);
+      continue;
+    }
 
     const wrapper = document.createElement('div');
     wrapper.className = 'msg__dip';
     preEl.replaceWith(wrapper);
 
-    instances.push(mountDip(wrapper, shtmlContent, onLick, /* trusted */ false));
+    instances.push(
+      trackDip(mountDip(wrapper, shtmlContent, onLick, /* trusted */ false), key, wrapper)
+    );
   }
 
   //    ![alt](/path/to/file.shtml) image references                  
   const imgEls = containerEl.querySelectorAll<HTMLImageElement>('img[src$=".shtml"]');
   for (const imgEl of imgEls) {
     const src = imgEl.getAttribute('src');
-    if (!src) continue;
+    if (!src || defer) continue;
+    const key = `img:${src}`;
+    const carried = carry ? carryDip(pool, key, imgEl) : null;
+    if (carried) {
+      instances.push(carried);
+      continue;
+    }
 
     const wrapper = document.createElement('div');
     wrapper.className = 'msg__dip';
@@ -1389,7 +1468,7 @@ export function hydrateDips(
         }
       },
     };
-    instances.push(placeholder);
+    instances.push(trackDip(placeholder, key, wrapper));
 
     // Resolve the .shtml content. Prefer the preview service worker
     // (handles mounts, MIME types, project-serve mode, etc.), but fall
@@ -1451,6 +1530,7 @@ export function hydrateDips(
       });
   }
 
+  disposeDips(pool);
   return instances;
 }
 
