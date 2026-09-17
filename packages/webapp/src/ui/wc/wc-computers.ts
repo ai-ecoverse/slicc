@@ -16,9 +16,11 @@ import {
   type TabDescriptor,
 } from '@slicc/webcomponents';
 import { classifyImageMarkers } from '../../base/image-markers.js';
+import { coerceComputerFrameBytes, sniffFrameMime } from '../../computers/frame-bytes.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import { ansiToDom } from '../ansi-to-dom.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { frameToDataUrl } from '../computer-frame-url.js';
 import { getComputersStore } from '../computers-store.js';
 
 export const COMPUTER_OVERLAY_PREFIX = 'computer:';
@@ -99,9 +101,7 @@ export function parseFrozenFrameHint(output: string): FrozenFrameHint | null {
   return image?.parsed ? { kind: 'data', src: image.parsed.dataUrl } : null;
 }
 
-export function frameToDataUrl(frame: ComputerFrame): string {
-  return `data:${frame.mime};base64,${uint8ToBase64(frame.bytes)}`;
-}
+export { frameToDataUrl } from '../computer-frame-url.js';
 
 export function computerToTab(
   computer: ComputerDescriptor,
@@ -260,9 +260,9 @@ async function readFrozenPath(path: string): Promise<string | null> {
   try {
     const fs = await openFs();
     const raw = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
-    const bytes = new Uint8Array(new ArrayBuffer(raw.length));
-    bytes.set(raw);
-    return `data:image/jpeg;base64,${uint8ToBase64(bytes)}`;
+    const bytes = coerceComputerFrameBytes(raw);
+    const mime = sniffFrameMime(bytes) ?? 'image/jpeg';
+    return `data:${mime};base64,${uint8ToBase64(bytes)}`;
   } catch (err) {
     runtime?.deps.log.warn('WC computers: frozen frame read failed', { path, err });
     return null;

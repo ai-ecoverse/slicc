@@ -1,5 +1,7 @@
 import type { ComputerFrame } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
+import { DECODABLE_PNG } from '../../src/computers/frame-bytes.js';
+import { frameToDataUrl } from '../../src/ui/computer-frame-url.js';
 import { getComputersStore, resetComputersStoreForTests } from '../../src/ui/computers-store.js';
 
 describe('computers-store', () => {
@@ -43,6 +45,28 @@ describe('computers-store', () => {
     const frame: ComputerFrame | null = store.lastFrame('v86:vm0');
     expect(frame?.seq).toBe(1);
     expect(frame?.bytes).toEqual(bytes);
+  });
+
+  it('compact-copies an offset PNG view so frameToDataUrl keeps the real bytes', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    const padded = new Uint8Array(DECODABLE_PNG.byteLength + 6);
+    padded.fill(0xff);
+    padded.set(DECODABLE_PNG, 3);
+    const view = padded.subarray(3, 3 + DECODABLE_PNG.byteLength);
+    store.applyFrame({
+      type: 'computer-frame',
+      id: 'jsh:fake',
+      seq: 9,
+      mime: 'image/jpeg',
+      width: 1,
+      height: 1,
+      bytes: view,
+    });
+    const frame = store.lastFrame('jsh:fake');
+    expect(frame?.bytes.byteOffset).toBe(0);
+    expect(frame?.bytes).toEqual(DECODABLE_PNG);
+    expect(frameToDataUrl(frame!)).toMatch(/^data:image\/png;base64,/);
   });
 
   it('sends computer-watch and computer-unwatch through the page sender', () => {

@@ -19,6 +19,7 @@ import type {
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { KernelTransport } from '../kernel/transport.js';
 import type { ComputerBackend } from './backend.js';
+import { coerceComputerFrameBytes } from './frame-bytes.js';
 import { installComputerRegistry } from './registry.js';
 
 export const COMPUTER_POLL_TIMEOUT_MS = 8_000;
@@ -71,7 +72,7 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
   const pushFrame = (id: string, frame: ComputerFrame, generation: number): void => {
     const watcher = watchers.get(id);
     if (!watcher || watcher.generation !== generation) return;
-    const copy = frame.bytes.slice();
+    const copy = coerceComputerFrameBytes(frame.bytes);
     send(
       {
         type: 'computer-frame',

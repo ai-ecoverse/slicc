@@ -35,7 +35,7 @@ Every poke writes a frozen JPEG to `$TMPDIR/computer/<name>/<seq>.jpg` and print
 - `backend.ts` — `ComputerBackend` (`describe`, `screenshot`, `input`, optional `text` / `exec` / `subscribe`, `close`)
 - `registry.ts` — `installComputerRegistry` (idempotent). Spawn `ProcessKind 'computer'` or adopt an existing pid (v86 VM, jshd unit). Abort of an owned pid closes the backend; an adopted pid is not killed on `computer rm`
 - `host.ts` — kernel messages `computers`, `computer-frame`, `computer-watch`, `computer-unwatch`. Watches poll `screenshot` when the backend has no `subscribe`
-- `encode-frame.ts` / `frames.ts` / `keys.ts` / `scale.ts`
+- `encode-frame.ts` / `frame-bytes.ts` / `frames.ts` / `keys.ts` / `scale.ts`
 
 The kernel worker lazy-loads `startComputersHost` so computers stay out of the first-load graph.
 

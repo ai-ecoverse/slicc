@@ -146,7 +146,9 @@ after browser tabs and opens `<slicc-image-preview>` live via `setSrc()`.
 the `computer` program: `$ command`, text output (ANSI painted by the host
 through `setComputerOutputRenderer`), and one live/frozen/none frame.
 `decideComputerFrameMode` is the newest-call rule: LIVE only when a
-pushed `computer-frame` is on screen. The host element keeps
+pushed `computer-frame` is on screen. `frameSrc` must be a browser-decodable
+JPEG/PNG data URL — the SOF0-only stub used in kernel tests paints as a
+broken-image icon. The host element keeps
 class `wcmsg-bash` so the action-row progress chrome still matches.
 
 ## File tree + Quick Look (Pierre libraries)

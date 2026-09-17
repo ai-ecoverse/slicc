@@ -7,6 +7,7 @@
  */
 
 import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
+import { coerceComputerFrameBytes } from '../computers/frame-bytes.js';
 import type {
   ComputerFrameMsg,
   ComputerPageControlMsg,
@@ -119,7 +120,7 @@ class ComputersStore {
       mime: msg.mime,
       width: msg.width,
       height: msg.height,
-      bytes: msg.bytes,
+      bytes: coerceComputerFrameBytes(msg.bytes),
     };
     this.frames.set(msg.id, frame);
     for (const listener of [...this.frameListeners]) listener(msg.id, frame);
