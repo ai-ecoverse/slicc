@@ -63,12 +63,20 @@ function headersForBufferedBody(raw: Record<string, string>): Headers {
   return headers;
 }
 
+/** Marks a Request/Response whose body readers already resolve from bytes. */
+const BUFFERED_BODY = Symbol('slicc.realmBufferedBody');
+
+type BufferedBodyHost = Request | Response;
+
 /**
  * Shadow native body readers with Promise.resolve-from-bytes implementations
  * so `await res.json()` is a microtask, not a stream macrotask the drain
- * cannot see.
+ * cannot see. Idempotent: constructed Request/Response wrappers call this
+ * too, and fetch reconstruction must not reset `bodyUsed` (#2862, #3227).
  */
-function attachBufferedBodyReaders(response: Response, bytes: Uint8Array): void {
+export function attachBufferedBodyReaders(body: BufferedBodyHost, bytes: Uint8Array): void {
+  if (BUFFERED_BODY in body) return;
+  Object.defineProperty(body, BUFFERED_BODY, { value: true, configurable: true });
   let used = false;
   const consume = (): Uint8Array => {
     if (used) {
@@ -81,7 +89,7 @@ function attachBufferedBodyReaders(response: Response, bytes: Uint8Array): void 
   const toArrayBuffer = (copy: Uint8Array): ArrayBuffer =>
     copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength) as ArrayBuffer;
   const arrayBuffer = async (): Promise<ArrayBuffer> => toArrayBuffer(consume());
-  Object.defineProperties(response, {
+  Object.defineProperties(body, {
     text: { value: text, configurable: true },
     json: {
       value: async (): Promise<unknown> => JSON.parse(await text()) as unknown,
