@@ -138,6 +138,15 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ).toEqual([]);
   });
 
+  it('allows a scoops/ import type clause whose imported name is the string "buffer-from"', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/orchestrator.ts',
+        `import type { 'buffer-from' as BufferFrom } from '../kernel/messages.js';`
+      )
+    ).toEqual([]);
+  });
+
   it('flags a scoops/ VALUE import whose specifier itself contains "from"', () => {
     expect(
       findLayerBackEdges(
@@ -170,7 +179,7 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ]);
   });
 
-  it('flags a scoops/ interpolated template-literal import() whose text names kernel/', () => {
+  it('flags a scoops/ interpolated template-literal import() whose static path is kernel/', () => {
     expect(
       findLayerBackEdges(
         'scoops/orchestrator.ts',
@@ -182,6 +191,41 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
         specifier: '../kernel/${name}.js',
         from: 'scoops',
         to: 'kernel',
+      },
+    ]);
+  });
+
+  it('does not treat a nested-scoop ../kernel/${…} as the kernel/ layer', () => {
+    expect(
+      findLayerBackEdges('scoops/sub/x.ts', 'const m = await import(`../kernel/${name}.js`);')
+    ).toEqual([]);
+  });
+
+  it('flags a nested-scoop interpolation that can walk into top-level kernel/', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/sub/x.ts',
+        'const m = await import(`../${up}/kernel/messages.js`);'
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../${up}/kernel/messages.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
+  it('flags a static template-literal whose specifier contains $ but not ${', () => {
+    expect(
+      findLayerBackEdges('core/session.ts', 'const m = await import(`../ui/price$.js`);')
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../ui/price$.js',
+        from: 'core',
+        to: 'ui',
       },
     ]);
   });
@@ -304,6 +348,12 @@ describe('check-layer-back-edges: findChromeExtensionWebappEscapes', () => {
     expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([]);
   });
 
+  it('still allows a type-only named import whose imported name is the string "buffer-from"', () => {
+    const source =
+      "import type { 'buffer-from' as ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('src/service-worker.ts', source)).toEqual([]);
+  });
+
   it('flags a VALUE import from kernel/messages.ts (no runtime coupling exemption)', () => {
     const source =
       "import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';";
@@ -371,6 +421,17 @@ describe('check-layer-back-edges: findChromeExtensionWebappEscapes', () => {
         line: 1,
         specifier: '../../webapp/src/net/handoff-link.js',
         to: 'packages/webapp/src/net/handoff-link.js',
+      },
+    ]);
+  });
+
+  it('flags a static template-literal whose specifier contains $ but not ${', () => {
+    const source = 'async function f() { await import(`../../webapp/src/net/price$.js`); }';
+    expect(findChromeExtensionWebappEscapes('src/discovery-observer.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/net/price$.js',
+        to: 'packages/webapp/src/net/price$.js',
       },
     ]);
   });

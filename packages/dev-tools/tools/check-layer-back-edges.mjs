@@ -299,13 +299,31 @@ const RELATIVE_IMPORT_RE =
 const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
 
 /**
- * Absolute index of the `from` keyword in a TYPE_ONLY_NAMED_CLAUSE_RE match.
- * Anchors on `from` followed by a quote so a specifier like `buffer-from.ts`
- * cannot steal the offset (#3237 P2).
+ * Absolute index of the module-clause `from` in a TYPE_ONLY_NAMED_CLAUSE_RE
+ * match. Search starts after the type-brace `}` so a string literal name
+ * like `"buffer-from"` cannot steal the offset (#3237 / #3249 P2).
  */
 function typeOnlyFromKeywordIndex(match) {
-  const kw = /\bfrom\s*['"]/.exec(match[0]);
-  return kw ? match.index + kw.index : -1;
+  const brace = match[0].lastIndexOf('}');
+  if (brace < 0) return -1;
+  const kw = /\bfrom\s*['"]/.exec(match[0].slice(brace));
+  return kw ? match.index + brace + kw.index : -1;
+}
+
+/**
+ * True when a static `kernel` path segment comes after an interpolated
+ * segment. Replacing `${…}` with a normal filename then hides the case
+ * where the interpolation is `..` and walks into top-level `kernel/`
+ * (#3251 P2).
+ */
+function kernelSegmentFollowsInterpolation(raw) {
+  const parts = raw.split('?')[0].split('/');
+  let seenInterp = false;
+  for (const part of parts) {
+    if (part.includes('${')) seenInterp = true;
+    else if (part === 'kernel' && seenInterp) return true;
+  }
+  return false;
 }
 
 /**
@@ -337,13 +355,11 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
     }
   }
 
-  const consider = (specifier, matchIndex) => {
+  const consider = (specifier, matchIndex, resolvedTarget) => {
     const queryAt = specifier.indexOf('?');
-    const target = resolve(
-      '/',
-      importerDir,
-      queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
-    ).slice(1);
+    const target =
+      resolvedTarget ??
+      resolve('/', importerDir, queryAt >= 0 ? specifier.slice(0, queryAt) : specifier).slice(1);
     const toLayer = stack.layerOf(target);
     const toRank = stack.layerRank[toLayer];
     const scoopsKernelValue =
@@ -367,11 +383,23 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   }
   for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
     const raw = m[1];
-    if (raw.includes('$')) {
-      if (stack.id === 'webapp' && fromLayer === 'scoops' && /(?:^|\/)kernel(?:\/|$)/.test(raw)) {
-        const line = stripped.slice(0, m.index).split('\n').length;
-        hits.push({ line, specifier: raw, from: 'scoops', to: 'kernel' });
+    if (raw.includes('${')) {
+      if (
+        stack.id === 'webapp' &&
+        fromLayer === 'scoops' &&
+        kernelSegmentFollowsInterpolation(raw)
+      ) {
+        consider(raw, m.index, 'kernel/__interp__.js');
+        continue;
       }
+      const staticish = raw.replace(/\$\{[^}]*\}/g, '__interp__');
+      const queryAt = staticish.indexOf('?');
+      const target = resolve(
+        '/',
+        importerDir,
+        queryAt >= 0 ? staticish.slice(0, queryAt) : staticish
+      ).slice(1);
+      consider(raw, m.index, target);
       continue;
     }
     consider(raw, m.index);
@@ -574,8 +602,9 @@ function findWebappEscapes(scanRoot, importerRel, source, options = {}) {
   for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
     const raw = m[1];
     const line = stripped.slice(0, m.index).split('\n').length;
-    if (!raw.includes('$')) {
-      // Fully static — resolve exactly like a quoted specifier.
+    if (!raw.includes('${')) {
+      // Fully static — resolve exactly like a quoted specifier. A literal `$`
+      // without `${` is not interpolation (#3249 P2).
       const targetRel = resolveWebappTarget(scanRoot, importerDir, raw);
       if (targetRel !== null) hits.push({ line, specifier: raw, to: targetRel });
       continue;
