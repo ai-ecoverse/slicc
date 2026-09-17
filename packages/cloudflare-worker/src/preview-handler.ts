@@ -98,6 +98,10 @@ function fetchLivePreview(
   const path = url.pathname;
   const vfsPath = path === '/' ? record.entryPath : joinUnderRoot(record.servedRoot, path);
   const asText = isTextLikeByExtension(vfsPath);
+  // A bridged page gets a script injected into its body, so byte offsets of
+  // the stored file no longer describe what the visitor receives: serve such
+  // pages whole (always a valid answer to a Range request).
+  const honourRange = !(record.bridge && /\.html?$/i.test(vfsPath));
 
   return cachedPreviewFetch({
     request,
@@ -114,7 +118,7 @@ function fetchLivePreview(
             servedRoot: record.servedRoot,
             vfsPath,
             asText,
-            ...(range ? { range } : {}),
+            ...(range && honourRange ? { range } : {}),
           }),
         })
       ),
@@ -221,8 +225,8 @@ export async function injectBridge(
   const { previewToken, host, scheme } = opts;
   const contentType = response.headers.get('content-type') || '';
 
-  // Only inject for text/html
-  if (!contentType.includes('text/html')) {
+  // Only inject into a complete text/html body; never into a 206 window.
+  if (response.status !== 200 || !contentType.includes('text/html')) {
     return response;
   }
 

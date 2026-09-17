@@ -267,6 +267,29 @@ describe('preview-inject', () => {
     expect(csp).toMatch(/connect-src 'self' wss:\/\//);
   });
 
+  it('serves bridged html whole: the leader never sees the Range', async () => {
+    for (const bridge of [true, false]) {
+      const { env, previewHost, clientSocket } = await fakeEnv({ bridge });
+      const ranges: Array<string | undefined> = [];
+      clientSocket.addEventListener('message', (event) => {
+        const msg = JSON.parse(event.data ?? '{}') as { type: string; range?: string };
+        if (msg.type === 'preview.request') ranges.push(msg.range);
+      });
+      const res = await handleWorkerRequest(
+        new Request(`https://${previewHost}/index.html`, { headers: { range: 'bytes=0-9' } }),
+        env
+      );
+      expect(ranges).toEqual([bridge ? undefined : 'bytes=0-9']);
+      if (bridge) {
+        expect(res.status).toBe(200);
+        expect(await res.text()).toContain('/__slicc/preview-bridge.js');
+      } else {
+        // This fake leader ignores ranges, so the DO does not slice a status-200 body.
+        expect(res.status).toBe(200);
+      }
+    }
+  });
+
   it('does not inject for non-bridged previews', async () => {
     const { env, previewHost } = await fakeEnv({ bridge: false });
 
@@ -295,6 +318,16 @@ describe('injectBridge (unit)', () => {
     // did not add a second connect-src
     expect(csp.match(/connect-src/g)?.length).toBe(1);
     expect(await res.text()).toContain('/__slicc/preview-bridge.js');
+  });
+
+  it('leaves a 206 window untouched', async () => {
+    const window = new Response('<html><he', {
+      status: 206,
+      headers: { 'content-type': 'text/html', 'content-range': 'bytes 0-9/100' },
+    });
+    const res = await injectBridge(window, opts);
+    expect(res.status).toBe(206);
+    expect(await res.text()).toBe('<html><he');
   });
 
   it('injects the bootstrap even when the document has no <head>', async () => {
