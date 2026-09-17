@@ -174,7 +174,7 @@ export class PreviewAssembler {
 
 interface TrayState {
   controllerToken: string;
-  leader?: { connected: boolean; disconnectedAt?: string } | null;
+  leader?: { connected: boolean; disconnectedAt?: string; lastSeenAt?: string } | null;
   previews?: Record<string, PreviewRecord>;
   trayId: string;
   expiredAt?: string;
@@ -625,17 +625,30 @@ async function scheduleNextPersistentExpiry(deps: PreviewDeps): Promise<void> {
 }
 
 /**
- * Drop live previews once the leader has been disconnected for longer than
- * {@link LIVE_PREVIEW_ORPHAN_MS}. Pass `disconnectedAt` explicitly when the
- * caller is about to clear it (leader reclaim). Returns the dropped tokens.
+ * When the leader was last known to be there. A ghost leader (workerd never
+ * delivered `webSocketClose`) keeps `connected` without a `disconnectedAt`,
+ * but its `lastSeenAt` stops moving; a healthy leader pings far more often
+ * than {@link LIVE_PREVIEW_ORPHAN_MS}, so the silence alone is the signal.
+ */
+export function leaderGoneSince(
+  leader: { disconnectedAt?: string; lastSeenAt?: string } | null | undefined
+): string | undefined {
+  return leader?.disconnectedAt ?? leader?.lastSeenAt;
+}
+
+/**
+ * Drop live previews once the leader has been gone for longer than
+ * {@link LIVE_PREVIEW_ORPHAN_MS}. Pass `goneSince` explicitly when the caller
+ * is about to overwrite the leader's timestamps (reclaim). Returns the
+ * dropped tokens.
  */
 export async function expireOrphanedLivePreviews(
   deps: PreviewDeps,
-  disconnectedAt = deps.getTray()?.leader?.disconnectedAt
+  goneSince = leaderGoneSince(deps.getTray()?.leader)
 ): Promise<string[]> {
   const tray = deps.getTray();
-  if (!tray?.previews || tray.previewTransfer || !disconnectedAt) return [];
-  if (deps.now() - Date.parse(disconnectedAt) < LIVE_PREVIEW_ORPHAN_MS) return [];
+  if (!tray?.previews || tray.previewTransfer || !goneSince) return [];
+  if (deps.now() - Date.parse(goneSince) < LIVE_PREVIEW_ORPHAN_MS) return [];
   const expired = Object.keys(tray.previews).filter(
     (token) => !isPersistent(tray.previews![token]!)
   );

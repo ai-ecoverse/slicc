@@ -289,7 +289,7 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
   ledger does not consume snapshot slots or permit uploads/serving; it is not
   evidence that an old R2 write was cancelled.
   **Live previews expire with the leader.** They are served from the leader's VFS, so
-  once the leader has been disconnected for `LIVE_PREVIEW_ORPHAN_MS` (5 min) they stop
+  once the leader has been disconnected — or, for a ghost socket whose close was never delivered, silent — for `LIVE_PREVIEW_ORPHAN_MS` (5 min) they stop
   resolving and are deleted (lazily on resolve/list/mint, and at leader reclaim, which
   then sends `preview.revoked` for each on the new socket). A rove transfers them
   instead. `GET …/previews` lists snapshots still uploading (`state: 'pending'`).

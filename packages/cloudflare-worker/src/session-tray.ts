@@ -57,6 +57,7 @@ import {
   expirePersistentPreviews,
   failAllPendingPreviews,
   handlePreviewPurge,
+  leaderGoneSince,
   listPreviews as listPreviewsImpl,
   mintPreview as mintPreviewImpl,
   type PreviewAssembler,
@@ -1082,10 +1083,10 @@ export class SessionTrayDurableObject {
         );
       }
       role = 'leader';
-      // A reclaim after a long outage must not revive live previews: they
-      // were served from this leader's VFS and expired with its connection.
+      // A reclaim after a long outage (or a ghost socket that went silent)
+      // must not revive live previews: they expired with the connection.
       this.expiredLivePreviewNotices.push(
-        ...(await expireOrphanedLivePreviews(this.previewDeps(), tray.leader.disconnectedAt))
+        ...(await expireOrphanedLivePreviews(this.previewDeps(), leaderGoneSince(tray.leader)))
       );
       tray.leader.controllerId = controllerId;
       tray.leader.lastSeenAt = nowIso;

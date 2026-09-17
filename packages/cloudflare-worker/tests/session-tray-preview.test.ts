@@ -817,6 +817,25 @@ describe('live previews expire with the leader connection', () => {
     expect(await asPreview(t.stub).listPreviews()).toEqual([]);
   });
 
+  it('drops them when the leader socket goes silent without a close (ghost)', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    // No close event: the runtime never told the DO the socket died.
+    vi.setSystemTime(Date.parse('2026-09-17T10:05:30Z'));
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
+  });
+
+  it('keeps them while the connected leader keeps pinging', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    for (let minute = 1; minute <= 10; minute++) {
+      vi.setSystemTime(Date.parse('2026-09-17T10:00:00Z') + minute * 60_000);
+      t.socket.send(JSON.stringify({ type: 'ping' }));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).not.toBeNull();
+  });
+
   it('stops serving them to visitors during the outage', async () => {
     vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
     const t = await setup();

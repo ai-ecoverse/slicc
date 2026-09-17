@@ -7,6 +7,7 @@ import {
 import {
   dispatchPreviewRoute,
   expireOrphanedLivePreviews,
+  leaderGoneSince,
   listPreviews,
   PREVIEW_FILE_TOO_LARGE,
   PreviewAssembler,
@@ -145,7 +146,7 @@ interface FakeDeps extends PreviewDeps {
     trayId: string;
     controllerToken: string;
     previews: Record<string, PreviewRecord>;
-    leader: { connected: boolean; disconnectedAt?: string } | null;
+    leader: { connected: boolean; disconnectedAt?: string; lastSeenAt?: string } | null;
     previewTransfer?: { phase: 'pending' | 'forwarded' | 'complete' };
   };
   clock: { now: number };
@@ -296,11 +297,34 @@ describe('live preview expiry', () => {
     expect(deps.expiredCalls).toEqual([[live]]);
   });
 
-  it('never expires while the leader is connected', async () => {
+  it('never expires while a connected leader keeps talking', async () => {
     const deps = fakeDeps();
     const live = await mintToken(deps);
-    deps.clock.now = 30 * 86_400_000;
-    expect((await listPreviews(deps)).map((r) => r.previewToken)).toEqual([live]);
+    for (let minutes = 1; minutes <= 60; minutes++) {
+      deps.clock.now = minutes * 60_000;
+      deps.tray.leader = {
+        connected: true,
+        lastSeenAt: new Date(deps.clock.now - 30_000).toISOString(),
+      };
+      expect(await resolvePreview(live, deps)).not.toBeNull();
+    }
+  });
+
+  it('treats a connected but silent (ghost) leader as gone', async () => {
+    const deps = fakeDeps();
+    const live = await mintToken(deps);
+    deps.tray.leader = { connected: true, lastSeenAt: new Date(0).toISOString() };
+    deps.clock.now = LIVE_PREVIEW_ORPHAN_MS - 1;
+    expect(await resolvePreview(live, deps)).not.toBeNull();
+    deps.clock.now = LIVE_PREVIEW_ORPHAN_MS;
+    expect(await resolvePreview(live, deps)).toBeNull();
+    expect(deps.expiredCalls).toEqual([[live]]);
+  });
+
+  it('leaderGoneSince prefers disconnectedAt over lastSeenAt', () => {
+    expect(leaderGoneSince({ disconnectedAt: 'a', lastSeenAt: 'b' })).toBe('a');
+    expect(leaderGoneSince({ lastSeenAt: 'b' })).toBe('b');
+    expect(leaderGoneSince(null)).toBeUndefined();
   });
 
   it('uses the disconnect time handed in by a reclaim', async () => {
