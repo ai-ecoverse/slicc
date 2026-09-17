@@ -84,7 +84,16 @@ export type PanelRpcRequest =
   | { op: 'page-info'; payload?: undefined }
   | {
       op: 'screencapture';
-      payload: { mimeType: string; quality: number };
+      payload: {
+        mimeType: string;
+        quality: number;
+        /** Still frame (default) or timed MediaRecorder clip. */
+        mode?: 'image' | 'video';
+        /** Video length in ms (clamped server-side; default 5s, max 60s). */
+        durationMs?: number;
+        /** Request an audio track from getDisplayMedia when recording video. */
+        audio?: boolean;
+      };
     }
   | {
       op: 'speak-text';
@@ -758,7 +767,13 @@ export type PanelRpcRequest =
 
 export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
-  screencapture: { bytes: ArrayBuffer; width: number; height: number; mimeType: string };
+  screencapture: {
+    bytes: ArrayBuffer;
+    width: number;
+    height: number;
+    mimeType: string;
+    durationMs?: number;
+  };
   'speak-text': { done: true };
   'list-voices': {
     voices: Array<{ name: string; lang: string; default: boolean; onDevice: boolean }>;

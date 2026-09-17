@@ -247,6 +247,7 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 - `open --view <path>` — reads an image from the VFS and returns it. Works with PNG, JPEG, GIF, WebP, SVG.
 - `playwright-cli screenshot --tab=<id>` + `open --view <path>` — screenshot a tab, then view it.
 - `screencapture --view screenshot.png` — capture the user's screen via browser screen sharing.
+- `screencapture --video -V 10 clip.webm` — record a timed screen/window/tab clip (WebM).
 - `playwright-cli snapshot --tab=<id>` — accessibility tree (text). Use to verify content without vision.
 
 **What only the human sees:**
