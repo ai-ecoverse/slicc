@@ -1,5 +1,6 @@
 import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
-import { afterEach, describe, expect, it } from 'vitest';
+import { uint8ToBase64 } from '@slicc/shared-ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComputerBackend } from '../../../src/computers/backend.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
 import {
@@ -170,6 +171,87 @@ describe('computer command', () => {
     const { ctx } = makeCtx();
     const text = await cmd.execute(['text'], ctx);
     expect(text.stdout).toContain('login:');
+  });
+
+  it('add tab uses a local backend when browser is injected without panelRpc', async () => {
+    const jpeg = uint8ToBase64(MINIMAL_JPEG);
+    const tab = {
+      send: vi.fn(async () => ({})),
+      screenshot: vi.fn(async () => jpeg),
+    };
+    const browser = {
+      listAllTargets: vi.fn(async () => [
+        { targetId: 'T1', title: 'Example', url: 'https://example.test/' },
+      ]),
+      withTab: vi.fn(async (_id: string, fn: (t: typeof tab) => Promise<unknown>) => fn(tab)),
+    };
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({ registry, browser: browser as never });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'tab', 'T1', '-n', 'ex'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('tab:T1');
+    expect(registry.get('tab:T1')).toBeTruthy();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(browser.withTab).toHaveBeenCalled();
+    expect(tab.screenshot).toHaveBeenCalled();
+  });
+
+  it('add tab uses panel-RPC when a client is provided', async () => {
+    const jpeg = uint8ToBase64(MINIMAL_JPEG);
+    const call = vi.fn(async (op: string) => {
+      if (op === 'computer-tab-screenshot') {
+        return {
+          mime: 'image/jpeg',
+          base64: jpeg,
+          width: 1,
+          height: 1,
+          title: 'Example',
+          url: 'https://example.test/',
+        };
+      }
+      return { ok: true };
+    });
+    const browser = {
+      listAllTargets: vi.fn(async () => [
+        { targetId: 'T1', title: 'Example', url: 'https://example.test/' },
+      ]),
+      withTab: vi.fn(),
+    };
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      browser: browser as never,
+      panelRpc: { call } as never,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'tab', 'https://example.test/'], ctx);
+    expect(added.exitCode).toBe(0);
+    await cmd.execute(['screenshot'], ctx);
+    expect(call).toHaveBeenCalledWith(
+      'computer-tab-screenshot',
+      expect.objectContaining({ targetId: 'T1' })
+    );
+    expect(browser.withTab).not.toHaveBeenCalled();
+  });
+
+  it('refuses to register a SLICC app tab', async () => {
+    const browser = {
+      listAllTargets: vi.fn(async () => [
+        { targetId: 'APP', title: 'SLICC', url: 'https://www.sliccy.ai/' },
+      ]),
+      withTab: vi.fn(),
+    };
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      browser: browser as never,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'tab', 'APP'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('refusing SLICC app tab');
+    expect(browser.withTab).not.toHaveBeenCalled();
   });
 });
 

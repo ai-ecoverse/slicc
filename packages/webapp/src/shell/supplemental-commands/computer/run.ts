@@ -9,6 +9,7 @@ import type { CommandContext } from 'just-bash';
 import {
   BridgedTabComputerBackend,
   LocalTabComputerBackend,
+  refuseSliccAppTab,
   resolveTabPage,
 } from '../../../computers/adapters/tab.js';
 import type { ComputerBackend } from '../../../computers/backend.js';
@@ -173,6 +174,11 @@ async function verbAdd(
   const pages = await browser.listAllTargets();
   const page = resolveTabPage(pages, spec);
   if ('error' in page) return fail(page.error);
+  try {
+    refuseSliccAppTab(page);
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err));
+  }
   const info = { title: name ?? page.title, url: page.url };
   const browserForced = Boolean(deps.browser) && !deps.panelRpc;
   const rpc = browserForced ? null : lookupRpc(deps);
