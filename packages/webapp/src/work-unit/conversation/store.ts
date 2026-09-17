@@ -9,11 +9,14 @@
  * | `conversations` | `key`     | one {@link WorkUnitConversationRecord}   |
  * | `migrations`    | `id`      | one {@link ConversationMigrationState}   |
  *
+ * This is the ONLY place a conversation is written (#2365). The legacy
+ * stores (`agent-sessions`, `browser-coding-agent`) are left on disk, frozen
+ * at the cut, and read by nothing but the one-time migration.
+ *
  * **Reads never throw.** A record this build cannot parse, a database that
  * will not open, a browser with IndexedDB disabled — every one of them
- * answers `null` from {@link WorkUnitConversationStore.load}, and `null`
- * means "fall back to the legacy stores". That is the kill switch: user
- * history is never gated on this database working.
+ * answers `null` from {@link WorkUnitConversationStore.load}, which readers
+ * treat as "no conversation".
  *
  * Writers do NOT use that lossy read. {@link ConversationReadResult}
  * distinguishes the four ways a read can decline, because two of them must
@@ -45,15 +48,17 @@
 
 import type { AgentMessage } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
+import type { ChatMessage } from '../../scoops/chat-types.js';
 import { entriesFromAgentMessages } from './entries.js';
 import type {
+  ConversationAttachmentOverlay,
   ConversationEntry,
   ConversationMarker,
   ConversationOrigin,
   LegacyConversationKeys,
   WorkUnitConversationRecord,
 } from './types.js';
-import { CONVERSATION_RECORD_VERSION, isReadableRecord } from './types.js';
+import { CONVERSATION_RECORD_VERSION, isReadableRecord, recordSchemaVersion } from './types.js';
 
 const log = createLogger('work-unit-conversation');
 
@@ -70,10 +75,16 @@ const MIGRATIONS_STORE = 'migrations';
  */
 const MAX_MARKERS = 64;
 
+/**
+ * How many {@link ConversationAttachmentOverlay}s one record keeps, oldest
+ * first out — the rows a user can still scroll to are the recent ones.
+ */
+const MAX_ATTACHMENT_OVERLAYS = 256;
+
 /** Resumable cursor of a versioned migration into the canonical store. */
 export interface ConversationMigrationState {
   id: string;
-  /** Schema version this cursor was written for; a bump re-runs everything. */
+  /** Migration version this cursor was written for; a bump re-runs everything. */
   version: number;
   /** Canonical keys already migrated — the resume point after a crash. */
   completedKeys: string[];
@@ -129,7 +140,7 @@ export class WorkUnitConversationStore {
   /**
    * Read one record, or `null` when there is none, when it is unreadable, or
    * when the database itself is unavailable. Callers treat all three the
-   * same: fall back to the legacy stores.
+   * same: no conversation to show.
    */
   async load(key: string): Promise<WorkUnitConversationRecord | null> {
     const result = await this.read(key);
@@ -150,7 +161,7 @@ export class WorkUnitConversationStore {
       if (!record) return { status: 'absent' };
       if (!isReadableRecord(record)) {
         // A record from a NEWER build. Leave it exactly where it is — the
-        // other build still needs it — and let this one use the legacy path.
+        // other build still needs it — and never write over it here.
         log.warn('Ignoring conversation record from a newer schema', {
           key,
           version: record.version,
@@ -168,12 +179,22 @@ export class WorkUnitConversationStore {
     }
   }
 
-  /** Write a record verbatim. Used by the migration and by the sync paths. */
-  async save(record: WorkUnitConversationRecord): Promise<void> {
+  /**
+   * Write a record. Used by the migration and by the sync paths. The stored
+   * `version` is the lowest schema that can express the record
+   * ({@link recordSchemaVersion}), so an older build keeps reading every
+   * record it can understand and declines the rest; a version above this
+   * build's is kept as given. Returns the record as stored.
+   */
+  async save(record: WorkUnitConversationRecord): Promise<WorkUnitConversationRecord> {
+    const version =
+      record.version > CONVERSATION_RECORD_VERSION ? record.version : recordSchemaVersion(record);
+    const stored = { ...record, version };
     const db = await this.getDb();
     const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
-    tx.objectStore(CONVERSATIONS_STORE).put(record);
+    tx.objectStore(CONVERSATIONS_STORE).put(stored);
     await transaction(tx);
+    return stored;
   }
 
   /**
@@ -244,6 +265,52 @@ export class WorkUnitConversationStore {
     }
   }
 
+  /**
+   * Every readable record, for whole-workspace readers (transcript export).
+   * An unreadable database answers an empty list, like every other read.
+   */
+  async loadAll(): Promise<WorkUnitConversationRecord[]> {
+    try {
+      const db = await this.getDb();
+      const records = await request<WorkUnitConversationRecord[]>(
+        db.transaction(CONVERSATIONS_STORE, 'readonly').objectStore(CONVERSATIONS_STORE).getAll()
+      );
+      return records.filter((r) => isReadableRecord(r) && Array.isArray(r.entries));
+    } catch (err) {
+      log.warn('Conversation record listing failed', { error: errorText(err) });
+      return [];
+    }
+  }
+
+  /**
+   * The newest readable record stored under `workspaceId` — how a page-side
+   * reader that only knows a folder (the Freezer, the pre-replay hydration)
+   * finds a unit's conversation without the registry. A folder names exactly
+   * one live unit, so several matches only happen when a dropped unit's
+   * record outlived it; the most recently written one is the live one.
+   */
+  async loadLatestInWorkspace(workspaceId: string): Promise<WorkUnitConversationRecord | null> {
+    try {
+      const prefix = `${workspaceId}::`;
+      const db = await this.getDb();
+      const records = await request<WorkUnitConversationRecord[]>(
+        db
+          .transaction(CONVERSATIONS_STORE, 'readonly')
+          .objectStore(CONVERSATIONS_STORE)
+          .getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`))
+      );
+      let latest: WorkUnitConversationRecord | null = null;
+      for (const record of records) {
+        if (!isReadableRecord(record) || !Array.isArray(record.entries)) continue;
+        if (!latest || record.updatedAt > latest.updatedAt) latest = record;
+      }
+      return latest;
+    } catch (err) {
+      log.warn('Conversation workspace lookup failed', { workspaceId, error: errorText(err) });
+      return null;
+    }
+  }
+
   /** Every canonical key currently stored. */
   async listKeys(): Promise<string[]> {
     try {
@@ -264,9 +331,10 @@ export class WorkUnitConversationStore {
   /**
    * Bring a unit's record in line with Pi's current message list.
    *
-   * Returns the stored record, or `null` when the write could not happen —
-   * a failed canonical write is never fatal, because the legacy store is
-   * still being written on the same turn (the read-old/write-new window).
+   * Returns the stored record, or `null` when the write could not happen.
+   * A failed write is logged, never thrown: the turn goes on, and the next
+   * checkpoint re-ingests the full message list, so a transient failure
+   * costs nothing once the database answers again.
    */
   async syncAgentMessages(
     identity: ConversationIdentity,
@@ -289,7 +357,7 @@ export class WorkUnitConversationStore {
       if (current.status === 'incompatible' || current.status === 'error') {
         // Never write over a newer build's record, and never write over one
         // we merely failed to read — either could destroy history that only
-        // exists there. The legacy store is still written on this same turn.
+        // exists there.
         return null;
       }
       const existing = current.status === 'ok' ? current.record : null;
@@ -298,8 +366,7 @@ export class WorkUnitConversationStore {
         now,
       });
       if (!record) return existing;
-      await this.save(record);
-      return record;
+      return await this.save(record);
     } catch (err) {
       log.warn('Conversation record write failed', {
         key: identity.key,
@@ -321,9 +388,18 @@ export class WorkUnitConversationStore {
    * cue to hold the marker and retry once history has been written
    * (`Bridge.flushPendingMarkers`), which is how a cone that compacts before
    * its first checkpoint still keeps its seam.
+   *
+   * `createWith` opts out of that for an absent record: the marker then
+   * starts a record of its own. An error card needs it — a turn that fails
+   * before Pi holds a single message never checkpoints, so a held card would
+   * never be written (#2365). A compaction seam never passes it.
    */
-  async putMarker(key: string, marker: ConversationMarker): Promise<boolean> {
-    return this.withRecord(key, (record) => {
+  async putMarker(
+    key: string,
+    marker: ConversationMarker,
+    options: { createWith?: ConversationIdentity } = {}
+  ): Promise<boolean> {
+    return this.withRecord(key, options.createWith, (record) => {
       const kept = (record.markers ?? []).filter((m) => m.id !== marker.id);
       kept.push(marker);
       kept.sort((a, b) => a.timestamp - b.timestamp);
@@ -332,11 +408,31 @@ export class WorkUnitConversationStore {
   }
 
   /**
+   * Record the attachment lists of user messages as they are sent (#2365).
+   * Creates the record when needed: the first message of a conversation can
+   * carry an attachment, and it is recorded before the turn checkpoints.
+   * Upserts by message id. `false` when the record could not be written.
+   */
+  async putAttachments(
+    identity: ConversationIdentity,
+    overlays: readonly ConversationAttachmentOverlay[]
+  ): Promise<boolean> {
+    if (overlays.length === 0) return false;
+    const ids = new Set(overlays.map((o) => o.id));
+    return this.withRecord(identity.key, identity, (record) => ({
+      ...record,
+      attachments: [...(record.attachments ?? []).filter((o) => !ids.has(o.id)), ...overlays]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-MAX_ATTACHMENT_OVERLAYS),
+    }));
+  }
+
+  /**
    * Retract a marker — a compaction round that kept nothing must stop
    * claiming it happened (#2843). A no-op when the marker is already gone.
    */
   async deleteMarker(key: string, markerId: string): Promise<boolean> {
-    return this.withRecord(key, (record) => {
+    return this.withRecord(key, undefined, (record) => {
       const kept = (record.markers ?? []).filter((m) => m.id !== markerId);
       if (kept.length === (record.markers?.length ?? 0)) return null;
       return { ...record, markers: kept };
@@ -349,22 +445,30 @@ export class WorkUnitConversationStore {
    */
   private withRecord(
     key: string,
+    createWith: ConversationIdentity | undefined,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
-    return this.serialize(key, () => this.mutateRecord(key, mutate));
+    return this.serialize(key, () => this.mutateRecord(key, createWith, mutate));
   }
 
   private async mutateRecord(
     key: string,
+    createWith: ConversationIdentity | undefined,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
     try {
       const current = await this.read(key);
-      // `absent` joins `incompatible` / `error` here rather than creating a
-      // record: an annotation with no conversation under it would derive to a
-      // transcript that is nothing but seams.
-      if (current.status !== 'ok') return false;
-      const next = mutate(current.record);
+      // `absent` joins `incompatible` / `error` here unless the caller asked
+      // to create: an annotation with no conversation under it would
+      // otherwise derive to a transcript that is nothing but seams.
+      const base =
+        current.status === 'ok'
+          ? current.record
+          : current.status === 'absent' && createWith
+            ? emptyRecord(createWith, Date.now())
+            : null;
+      if (!base) return false;
+      const next = mutate(base);
       if (!next) return false;
       await this.save({ ...next, updatedAt: Date.now() });
       return true;
@@ -428,10 +532,10 @@ export class WorkUnitConversationStore {
   }
 
   /**
-   * Drop every canonical record and cursor. This is the documented ROLLBACK:
-   * the legacy stores are written on every turn for as long as the
-   * read-old/write-new window is open, so a cleared canonical store costs
-   * nothing but the next migration pass. It never touches a legacy store.
+   * Drop every canonical record and cursor. Since #2365 this is NOT a
+   * rollback: the legacy stores stopped being written at the cut, so the
+   * migration pass this re-arms can only bring back history up to that
+   * point. It never touches a legacy store.
    */
   async clearAll(): Promise<void> {
     const db = await this.getDb();
@@ -469,6 +573,9 @@ export class WorkUnitConversationStore {
  *
  * - identical → `null` (nothing to write; the common case mid-turn)
  * - the stored entries are a prefix of the new ones → append the tail
+ * - a `ui-projection` record meeting real Pi history → keep its rendered rows
+ *   as `projectionPrefix` and start the Pi history (not a rewrite: nothing
+ *   the agent said is being replaced)
  * - anything else → replace, and count a rewrite (compaction / clear-chat)
  */
 function mergeEntries(
@@ -493,6 +600,18 @@ function mergeEntries(
       legacyKeys: identity.legacyKeys,
     };
   }
+  if (existing.origin === 'ui-projection' && origin === 'agent-history') {
+    if (next.length === 0) return null;
+    return {
+      ...existing,
+      version: CONVERSATION_RECORD_VERSION,
+      origin,
+      entries: next,
+      projectionPrefix: [...(existing.projectionPrefix ?? []), ...projectedChat(existing)],
+      updatedAt: times.now,
+      legacyKeys: identity.legacyKeys,
+    };
+  }
   const prior = existing.entries;
   if (next.length === prior.length && isPrefix(prior, next)) return null;
   const appended = next.length > prior.length && isPrefix(prior, next);
@@ -505,6 +624,31 @@ function mergeEntries(
     rewrites: appended ? existing.rewrites : (existing.rewrites ?? 0) + 1,
     legacyKeys: identity.legacyKeys,
   };
+}
+
+/** A record with no conversation yet — the base a marker-only write starts from. */
+function emptyRecord(identity: ConversationIdentity, now: number): WorkUnitConversationRecord {
+  return {
+    key: identity.key,
+    version: CONVERSATION_RECORD_VERSION,
+    workUnitId: identity.workUnitId,
+    workspaceId: identity.workspaceId,
+    folder: identity.folder,
+    origin: 'agent-history',
+    entries: [],
+    createdAt: now,
+    updatedAt: now,
+    legacyKeys: identity.legacyKeys,
+  };
+}
+
+/** The verbatim chat rows a `ui-projection` record was built from. */
+function projectedChat(record: WorkUnitConversationRecord): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const entry of record.entries) {
+    if (entry.kind !== 'tool-call' && entry.chat) out.push(entry.chat);
+  }
+  return out;
 }
 
 /** `true` when `prior` is an entry-for-entry prefix of `next`. */

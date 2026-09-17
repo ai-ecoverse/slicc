@@ -2,7 +2,7 @@ import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { isRootSummary, modelForUnit } from '../../work-unit/client/presentation.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
-import { chatSessionIdFor, thinkingFor } from '../../work-unit/record.js';
+import { thinkingFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
@@ -156,10 +156,15 @@ export async function hydratePersistedConeSession(deps: {
   if (shouldSkipSessionHydration(deps.pendingUrlContext, deps.win)) return;
   const folder = rootFolderForContext(deps.pendingUrlContext);
   if (folder === null) return;
-  const { SessionStore } = await import('../../scoops/chat-session-store.js');
-  const store = new SessionStore();
-  await store.init();
-  const session = await store.load(chatSessionIdFor({ folder }));
+  // Derived from the cone's canonical record (#2365) — the chat store is no
+  // longer written, so it would only ever answer with the pre-cut transcript.
+  const [{ CanonicalSessionReader }, { WorkUnitConversationStore }] = await Promise.all([
+    import('../../work-unit/conversation/sessions.js'),
+    import('../../work-unit/conversation/store.js'),
+  ]);
+  const session = await new CanonicalSessionReader(
+    new WorkUnitConversationStore()
+  ).loadRootChatSession(folder);
   if (session && session.messages.length > 0 && !deps.hasSelection()) {
     deps.loadMessages(session.messages);
     deps.onHydrated();

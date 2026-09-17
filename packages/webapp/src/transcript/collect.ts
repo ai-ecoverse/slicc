@@ -160,7 +160,9 @@ function assembleResult(
  *
  * Polls every 50 ms while any scoop is processing, then loads persisted
  * sessions (fallback for live) and UI chat sessions (for attachments and
- * chatMessagesByConversation) concurrently. After loading, verifies that the
+ * chatMessagesByConversation) concurrently. Both are derived from the
+ * canonical conversation records by the wiring (`CanonicalSessionReader`,
+ * #2365); the legacy stores are never read here. After loading, verifies that the
  * scoop membership and processing states did not change during the async I/O.
  * If they changed, retries the whole cycle. Throws `transfer-aborted` if the
  * signal fires.

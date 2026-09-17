@@ -22,6 +22,8 @@
 
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
+import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 
 const log = createLogger('welcome-detection');
@@ -29,11 +31,11 @@ const log = createLogger('welcome-detection');
 const WELCOMED_MARKER_PATH = '/shared/.welcomed';
 
 /**
- * IndexedDB layer that holds the chat-panel's persisted conversations.
- * Mirrors `scoops/chat-session-store.ts` literally — DB name + store + the
- * session key the chat panel uses. We avoid importing the UI `SessionStore`
- * so this module stays inside the scoops layer (which `main.ts` imports from
- * both CLI and extension boot paths) without pulling in chat-panel
+ * The frozen legacy chat store (`browser-coding-agent`). Since #2365 nothing
+ * writes it, so it only answers for a welcome that fired before the cut; the
+ * canonical conversation record ({@link loadConeChatMessages}) answers for
+ * everything after. Mirrors `scoops/chat-session-store.ts` literally — DB
+ * name + store + session key — so this module does not pull in chat-panel
  * internals.
  *
  * **Primary cone only, deliberately (#2272).** Welcome is a first-run flow
@@ -104,7 +106,7 @@ function openChatDb(): Promise<IDBDatabase> {
   );
 }
 
-async function loadConeChatSession(): Promise<PersistedChatSession | null> {
+async function loadLegacyConeChatSession(): Promise<PersistedChatSession | null> {
   const db = await openChatDb();
   try {
     return await new Promise<PersistedChatSession | null>((resolve, reject) => {
@@ -116,6 +118,37 @@ async function loadConeChatSession(): Promise<PersistedChatSession | null> {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Every persisted message of the primary cone: its canonical record's
+ * projection, plus the frozen legacy row. Each half fails on its own — a
+ * broken legacy database must not hide a welcome the canonical record holds.
+ */
+async function loadConeChatMessages(): Promise<PersistedChatMessage[]> {
+  const [canonical, legacy] = await Promise.all([
+    loadCanonicalConeChatMessages().catch((err) => {
+      log.warn('Failed to read the cone conversation record', { error: errorText(err) });
+      return [];
+    }),
+    loadLegacyConeChatSession().catch((err) => {
+      log.warn('Failed to read the legacy cone chat session', { error: errorText(err) });
+      return null;
+    }),
+  ]);
+  const legacyMessages = Array.isArray(legacy?.messages) ? legacy.messages : [];
+  return [...canonical, ...legacyMessages];
+}
+
+async function loadCanonicalConeChatMessages(): Promise<PersistedChatMessage[]> {
+  const session = await new CanonicalSessionReader(
+    new WorkUnitConversationStore()
+  ).loadRootChatSession(PRIMARY_CONE_FOLDER);
+  return session?.messages ?? [];
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export interface WelcomeDetection {
@@ -134,9 +167,8 @@ export interface WelcomeDetection {
  */
 export async function hasWelcomeLickInHistory(): Promise<boolean> {
   try {
-    const session = await loadConeChatSession();
-    if (!session || !Array.isArray(session.messages)) return false;
-    return session.messages.some((msg) => messageMentionsWelcomeLick(msg));
+    const messages = await loadConeChatMessages();
+    return messages.some((msg) => messageMentionsWelcomeLick(msg));
   } catch (err) {
     log.warn('Failed to scan cone chat session for welcome lick', {
       error: err instanceof Error ? err.message : String(err),
@@ -243,9 +275,8 @@ function messageMentionsFinalLick(msg: PersistedChatMessage): boolean {
  */
 export async function hasOnboardingFinalLickInHistory(): Promise<boolean> {
   try {
-    const session = await loadConeChatSession();
-    if (!session || !Array.isArray(session.messages)) return false;
-    return session.messages.some((msg) => messageMentionsFinalLick(msg));
+    const messages = await loadConeChatMessages();
+    return messages.some((msg) => messageMentionsFinalLick(msg));
   } catch (err) {
     log.warn('Failed to scan cone chat session for final lick', {
       error: err instanceof Error ? err.message : String(err),

@@ -7,14 +7,19 @@
  * parent. There is one spine (`record.entries`) and four views of it.
  *
  * Every derivation is total: an empty or unreadable record derives to
- * nothing, which is the signal callers use to fall back to the legacy
- * stores (`session-persistence.ts`, `kernel/facade.ts`). A derivation never
- * throws on a record it does not understand.
+ * nothing, and a derivation never throws on a record it does not understand.
+ * Since #2365 there is no legacy store to fall back to — nothing means
+ * "this unit has no conversation".
  */
 
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatMessage, CompactionMarkerState } from '../../scoops/chat-types.js';
-import type { ConversationEntry, ConversationMarker, WorkUnitConversationRecord } from './types.js';
+import type {
+  ConversationAttachmentOverlay,
+  ConversationEntry,
+  ConversationMarker,
+  WorkUnitConversationRecord,
+} from './types.js';
 import { isReadableRecord } from './types.js';
 
 /**
@@ -33,8 +38,8 @@ const RESTORABLE_STATES: ReadonlySet<CompactionMarkerState> = new Set<Compaction
  *
  * Empty for a `ui-projection` record BY DESIGN — a rendered transcript
  * cannot be turned back into a faithful Pi conversation, and feeding the
- * model a reconstruction would be worse than restoring from the legacy
- * store, which is exactly what an empty answer makes the caller do.
+ * model a reconstruction would be worse than starting it fresh. The same
+ * goes for a record's {@link WorkUnitConversationRecord.projectionPrefix}.
  */
 export function toAgentMessages(record: WorkUnitConversationRecord | null): AgentMessage[] {
   if (!isReadableRecord(record) || record === null) return [];
@@ -56,6 +61,11 @@ export function toAgentMessages(record: WorkUnitConversationRecord | null): Agen
  * pi-ai types out of every caller's eager closure.
  *
  * For a `ui-projection` record the stored chat messages ARE the projection.
+ * A record that was migrated that way and then continued by a live agent
+ * renders its preserved `projectionPrefix` ahead of the derived history.
+ *
+ * The attachment lists Pi history does not keep are put back on their user
+ * rows ({@link applyAttachmentOverlays}).
  *
  * Either way the record's {@link ConversationMarker}s are folded back in
  * ({@link interleaveMarkers}) — they are transcript rows no message list can
@@ -74,10 +84,41 @@ export async function toChatMessages(
     }
     return interleaveMarkers(out, record.markers);
   }
+  const prefix = record.projectionPrefix ?? [];
   const messages = toAgentMessages(record);
-  if (messages.length === 0) return [];
+  if (messages.length === 0) return interleaveMarkers([...prefix], record.markers);
   const { agentMessagesToChatMessages } = await import('../../scoops/agent-message-to-chat.js');
-  return interleaveMarkers(agentMessagesToChatMessages(messages, options), record.markers);
+  const derived = applyAttachmentOverlays(
+    agentMessagesToChatMessages(messages, options),
+    record.attachments
+  );
+  return interleaveMarkers([...prefix, ...derived], record.markers);
+}
+
+/**
+ * Put each sent message's attachment list back on its derived user row.
+ *
+ * A row matches an overlay whose `body` is its content — the body is exactly
+ * what the row was derived from. Identical bodies pair up in send order, and
+ * an overlay whose message was compacted away matches nothing. A row that
+ * already carries attachments is left alone. Pure; no overlays returns the
+ * input array itself.
+ */
+export function applyAttachmentOverlays(
+  rows: ChatMessage[],
+  overlays: readonly ConversationAttachmentOverlay[] | undefined
+): ChatMessage[] {
+  if (!overlays?.length) return rows;
+  const pending = [...overlays].sort((a, b) => a.timestamp - b.timestamp);
+  const used = new Set<number>();
+  return rows.map((row) => {
+    if (row.role !== 'user' || row.attachments?.length) return row;
+    const body = row.content.trim();
+    const at = pending.findIndex((o, i) => !used.has(i) && o.body.trim() === body);
+    if (at < 0) return row;
+    used.add(at);
+    return { ...row, attachments: pending[at].attachments };
+  });
 }
 
 /**
@@ -87,11 +128,11 @@ export async function toChatMessages(
  * end when there is none — the position a compaction seam belongs in, since
  * the round is recorded after the summary message it produced.
  *
- * Only a SETTLED seam is restored ({@link RESTORABLE_STATES}). A `discarded`
- * round must not be announced by a reload, and neither must an in-flight one:
- * the phase stream does not replay, so a `summarizing` marker left behind by a
- * tab that reloaded mid-round has nothing left to settle it and would breathe
- * "compacting history…" forever.
+ * Error cards are always restored; a compaction seam only when SETTLED
+ * ({@link RESTORABLE_STATES}). A `discarded` round must not be announced by a
+ * reload, and neither must an in-flight one: the phase stream does not replay,
+ * so a `summarizing` marker left behind by a tab that reloaded mid-round has
+ * nothing left to settle it and would breathe "compacting history…" forever.
  *
  * Pure and total: no markers returns the input array itself.
  */
@@ -99,7 +140,9 @@ export function interleaveMarkers(
   messages: ChatMessage[],
   markers: readonly ConversationMarker[] | undefined
 ): ChatMessage[] {
-  const live = (markers ?? []).filter((m) => RESTORABLE_STATES.has(m.compaction.state));
+  const live = (markers ?? []).filter(
+    (m) => m.kind !== 'compaction' || RESTORABLE_STATES.has(m.compaction.state)
+  );
   if (live.length === 0) return messages;
   const sorted = [...live].sort((a, b) => a.timestamp - b.timestamp);
   const out: ChatMessage[] = [];
@@ -135,8 +178,17 @@ function messageTime(message: ChatMessage): number {
   return Number.NEGATIVE_INFINITY;
 }
 
-/** A marker as the row the chat view renders (`messageEls` keys on `compaction`). */
+/** A marker as the row the chat view renders (`messageEls` keys on `compaction` / `error`). */
 function markerRow(marker: ConversationMarker): ChatMessage {
+  if (marker.kind === 'error') {
+    return {
+      id: marker.id,
+      role: 'assistant',
+      content: marker.text,
+      timestamp: marker.timestamp,
+      error: true,
+    };
+  }
   return {
     id: marker.id,
     role: 'assistant',
@@ -154,6 +206,10 @@ function markerRow(marker: ConversationMarker): ChatMessage {
 export function toTranscriptText(record: WorkUnitConversationRecord | null): string {
   if (!isReadableRecord(record) || record === null) return '';
   const lines: string[] = [];
+  for (const message of record.projectionPrefix ?? []) {
+    const text = typeof message.content === 'string' ? message.content.trim() : '';
+    if (text.length > 0) lines.push(`${message.role}: ${text}`);
+  }
   for (const entry of record.entries) {
     const label = transcriptLabel(entry);
     if (!label) continue;
@@ -183,7 +239,8 @@ export function toChildResultSummary(record: WorkUnitConversationRecord | null):
 /** How many messages (not entries) a record represents — tool calls excluded. */
 export function conversationLength(record: WorkUnitConversationRecord | null): number {
   if (!isReadableRecord(record) || record === null) return 0;
-  return record.entries.filter((e) => e.kind !== 'tool-call').length;
+  const prefix = record.projectionPrefix?.length ?? 0;
+  return prefix + record.entries.filter((e) => e.kind !== 'tool-call').length;
 }
 
 function transcriptLabel(entry: ConversationEntry): string | null {

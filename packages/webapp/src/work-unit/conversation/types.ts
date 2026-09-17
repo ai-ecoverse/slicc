@@ -27,15 +27,31 @@
  */
 
 import type { LickChannel } from '../../base/lick-channels.js';
+import type { MessageAttachment } from '../../core/attachments.js';
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatCompactionMarker, ChatMessage } from '../../scoops/chat-types.js';
 
 /**
- * Schema version of a persisted record. Bumping it makes every older record
- * eligible for re-migration (`migration.ts`); readers of an unknown FUTURE
- * version fall back to the legacy stores rather than guessing.
+ * Highest record schema this build reads and writes. A reader treats an
+ * unknown FUTURE version as unreadable rather than guessing.
+ *
+ * - `1` — entries plus compaction markers (#2275).
+ * - `2` — may also carry `error` markers or a `projectionPrefix` (#2365).
+ *   A v1 build would crash on the first (`marker.compaction` is undefined)
+ *   and silently drop the second, so a record carrying either is stamped
+ *   `2` and a v1 build declines it. Every other record stays `1`
+ *   ({@link recordSchemaVersion}) so a rollback still reads it.
  */
-export const CONVERSATION_RECORD_VERSION = 1;
+export const CONVERSATION_RECORD_VERSION = 2;
+
+/** The schema version a record's actual content requires. */
+export function recordSchemaVersion(
+  record: Pick<WorkUnitConversationRecord, 'markers' | 'projectionPrefix'>
+): number {
+  const hasErrorMarker = record.markers?.some((m) => m.kind === 'error') ?? false;
+  const hasPrefix = (record.projectionPrefix?.length ?? 0) > 0;
+  return hasErrorMarker || hasPrefix ? 2 : 1;
+}
 
 /**
  * The six shapes a settled conversation is made of. `tool-call` is the one
@@ -131,13 +147,52 @@ export interface ToolResultConversationEntry extends MessageEntryBase {
  * anchor to. Recorded when the round SETTLES, so the marker sorts after the
  * summary message compaction just wrote and lands exactly on the seam.
  */
-export interface ConversationMarker {
+export interface CompactionConversationMarker {
   /** Stable across the round's phases: the opening phase mints it. */
   id: string;
   kind: 'compaction';
   /** Epoch ms — the only anchor; see the interface doc. */
   timestamp: number;
   compaction: ChatCompactionMarker;
+}
+
+/**
+ * A cone-error card (#3003). Something the conversation SHOWED, never
+ * something the model said: it must not become an entry (Pi would read its
+ * own failure as a prior turn), and an entry replace must not erase it. That
+ * is exactly a marker's contract, so since #2365 — when the chat store stopped
+ * being written — this is the card's only durable copy.
+ */
+export interface ErrorConversationMarker {
+  id: string;
+  kind: 'error';
+  timestamp: number;
+  /** The card's text, verbatim. */
+  text: string;
+}
+
+export type ConversationMarker = CompactionConversationMarker | ErrorConversationMarker;
+
+/**
+ * The attachments a user message was SENT with (#2365). Pi history keeps the
+ * prompt text and image blocks but not the attachment list — the chips the
+ * panel renders and the files transcript export copies — and the chat store
+ * that used to hold it is frozen. Kept outside the entries (like markers) so
+ * a compaction rewrite does not erase it; an overlay whose message was
+ * summarized away simply matches nothing.
+ */
+export interface ConversationAttachmentOverlay {
+  /** The channel message id the attachments arrived on. */
+  id: string;
+  /** Epoch ms the message was sent — orders duplicate bodies. */
+  timestamp: number;
+  /**
+   * The message body exactly as it was handed to Pi
+   * (`formatPromptWithAttachments`) — what the derived user row's `content`
+   * is, and therefore the match key.
+   */
+  body: string;
+  attachments: MessageAttachment[];
 }
 
 export type ConversationEntry =
@@ -162,7 +217,7 @@ export type ConversationEntry =
  */
 export type ConversationOrigin = 'agent-history' | 'ui-projection';
 
-/** The legacy keys a record supersedes — kept so a rollback can find them. */
+/** The legacy keys a record superseded — kept for correlation with the frozen legacy stores. */
 export interface LegacyConversationKeys {
   /** `agent-sessions` key: the unit's jid. */
   agentSessionId: string;
@@ -190,6 +245,17 @@ export interface WorkUnitConversationRecord {
    * then exactly what it was.
    */
   markers?: ConversationMarker[];
+  /**
+   * The rendered transcript of a `ui-projection` record that has since been
+   * continued by a live agent (#2365). The first Pi sync after such a
+   * migration replaces `entries` with real Pi history; the rows it replaced
+   * were the only copy of the earlier conversation once `browser-coding-agent`
+   * stopped being written, so they are kept here and rendered ahead of the
+   * derived history. Never shown to Pi.
+   */
+  projectionPrefix?: ChatMessage[];
+  /** Attachment lists of sent user messages ({@link ConversationAttachmentOverlay}). */
+  attachments?: ConversationAttachmentOverlay[];
   createdAt: number;
   updatedAt: number;
   /** Which legacy store the record was first built from, if migrated. */

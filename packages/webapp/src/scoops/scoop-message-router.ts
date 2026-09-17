@@ -15,6 +15,7 @@ import { createLogger } from '../base/logger.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import type { SessionStore } from '../core/session.js';
 import type { TurnGuestGate } from '../sudo/types.js';
+import type { ConversationAttachmentOverlay } from '../work-unit/conversation/types.js';
 import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
 import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
@@ -68,6 +69,13 @@ export interface ScoopMessageRouterDeps {
   ): Promise<void>;
   /** Notify the UI about a new incoming message (delegation / external lick chip). */
   notifyIncomingMessage(scoopJid: string, message: ChannelMessage): void;
+  /**
+   * Durably record the attachment lists of the messages about to be sent
+   * (#2365) — Pi history keeps none of them. `body` is the exact text each
+   * message contributes to the prompt. Fire-and-forget; optional so a router
+   * without a conversation store still sends.
+   */
+  recordSentAttachments?(jid: string, overlays: ConversationAttachmentOverlay[]): void;
   /** Surface a routing / queue-processing error on the orchestrator's error channel. */
   onError(jid: string, error: string): void;
   /** Report or clear sustained lick backpressure without using the error channel. */
@@ -550,6 +558,7 @@ export class ScoopMessageRouter {
 
     this.clearBusyDeferral(jid);
 
+    const overlays: ConversationAttachmentOverlay[] = [];
     const formatted = eligibleMessages
       .map((m) => {
         const date = new Date(m.timestamp);
@@ -560,9 +569,19 @@ export class ScoopMessageRouter {
           minute: '2-digit',
           hour12: true,
         });
-        return `[${time}] ${m.senderName}: ${formatPromptWithAttachments(m.content, m.attachments)}`;
+        const body = formatPromptWithAttachments(m.content, m.attachments);
+        if (m.attachments?.length) {
+          overlays.push({
+            id: m.id,
+            timestamp: date.getTime(),
+            body,
+            attachments: [...m.attachments],
+          });
+        }
+        return `[${time}] ${m.senderName}: ${body}`;
       })
       .join('\n');
+    if (overlays.length > 0) this.deps.recordSentAttachments?.(jid, overlays);
     const images = eligibleMessages.flatMap((m) => imageContentFromAttachments(m.attachments));
 
     this.messageQueues.set(jid, []);

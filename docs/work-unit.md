@@ -192,6 +192,7 @@ a **derivation**, never a parallel write.
 | `key.ts`       | identity — `<workspaceId>::<workUnitId>`, workspace root × jid                                                                        |
 | `entries.ts`   | ingest from Pi messages (live path) and from a chat transcript (migration only)                                                       |
 | `derive.ts`    | `toAgentMessages` (Pi), `toChatMessages` (UI), `toTranscriptText` (tray / archives), `toChildResultSummary`, `interleaveMarkers`      |
+| `sessions.ts`  | `CanonicalSessionReader` — the legacy session shapes, derived (transcript export, Freezer, welcome detection, page hydration)         |
 | `store.ts`     | the `slicc-work-units` IndexedDB store + the migration cursor                                                                         |
 | `migration.ts` | the versioned, resumable pass over the legacy stores                                                                                  |
 
@@ -219,11 +220,10 @@ so a `discarded` round deletes it); `toChatMessages` folds them back by
 `timestamp` alone, because no entry survives a rewrite to anchor to. The
 rendering side is unchanged: the row is a `ChatMessage` carrying `compaction`,
 and `messageEls` keys on that field. Other out-of-band `ChatMessage` fields
-that also do not live in Pi history must take the same reseed hop:
-`toBufferedChatMessages` projects them explicitly, and a rebuild from agent
-state must not overwrite a settled UI-store value — `lickId`/`lickState` on
-sudo-request cards (#3004) overlay from `browser-coding-agent` so a confirmed
-or dismissed glyph cannot revert to pending. Behind `memory-v2`, a scoop's
+that also do not live in Pi history must survive the rebuild too:
+`toBufferedChatMessages` projects them explicitly, and `lickId`/`lickState` on
+sudo-request cards (#3004) overlay from the orchestrator's channel DB so a
+confirmed or dismissed glyph cannot revert to pending. Behind `memory-v2`, a scoop's
 pre-compaction archive lives under `/scoops/<folder>/sessions/<jid>/` (not cone
 `/sessions`); the marker's `transcriptPath` still points at that sandbox
 file. The JID segment isolates drop-then-recreate lifetimes that reuse the
@@ -231,14 +231,31 @@ same folder. Scoop archives are never enrichment-renamed — the live path is
 stable for that registration; a pointer into a deleted scoop is acceptable
 only after `drop_scoop`.
 
-**Error cards are ordinary assistant-role rows, not markers.** A cone-error
-card (`ChatMessage.error` → `<slicc-error-card>`) is something the conversation
-showed, not something that happened TO it. The kernel appends it to the
-message buffer (`Bridge.recordErrorCard`) so it rides persist + replay, and a
-Pi-history rebuild folds the persisted `error: true` rows back in — Pi never
-held them, and they must not become a `ConversationEntry` (the model would see
-its own failure as a prior turn). `toBufferedChatMessages` projects `error`
-explicitly, the same way it projects `compaction`.
+**Error cards are `error` markers.** A cone-error card (`ChatMessage.error` →
+`<slicc-error-card>`) is something the conversation showed, never something
+the model said: it must not become a `ConversationEntry` (the model would see
+its own failure as a prior turn), and an entry replace must not erase it —
+exactly a marker's contract. `Bridge.recordErrorCard` appends the row to the
+message buffer and writes `{ kind: 'error', text }` onto the record. Unlike a
+seam, the card may CREATE the record (`putMarker(…, { createWith })`): a turn
+that fails before Pi holds a message never checkpoints, so there would be
+nothing to retry against. A write that still fails is held in
+`pendingMarkers` and retried on `onResponseDone` and on the `ready` status a
+failed turn settles to. `toChatMessages` folds the card back as an
+`error: true` assistant row, always — the SETTLED rule below is about
+compaction rounds. `toBufferedChatMessages` projects `error` explicitly, the
+same way it projects `compaction`.
+
+**Sent attachments are an overlay, too.** Pi history keeps a message's text
+and image blocks but not its attachment list — the chips the panel renders and
+the files transcript export copies — and the chat store that held it is frozen.
+`ScoopMessageRouter` records each attached message as `record.attachments`
+(`putAttachments`, creating the record if needed) keyed by the exact body it
+handed Pi (`formatPromptWithAttachments`); `toChatMessages` puts the list back
+on the user row with that content (`applyAttachmentOverlays`), pairing
+identical bodies in send order. Like markers, overlays sit outside the entries:
+a compaction does not erase them, and one whose message was summarized away
+matches nothing.
 
 **Only a SETTLED round is durable.** The kernel writes nothing on the opening
 phase and `interleaveMarkers` restores `summarized` / `fallback` only. The
@@ -270,56 +287,66 @@ read-modify-write over the whole record.
 history and the UI projection. A record built from `browser-coding-agent`
 (`origin: 'ui-projection'`) — a unit whose Pi history was lost — derives to
 the UI projection and to **no Pi history at all**, deliberately: replaying a
-reconstruction of a rendered transcript to the model is worse than restoring
-from the legacy store, and an empty derivation is exactly what makes that
-fallback happen.
+reconstruction of a rendered transcript to the model is worse than starting
+it fresh. Since the chat store is no longer written, such a record is the
+ONLY copy of that transcript, so it is never replaced away: the first Pi sync
+on it becomes `agent-history` and keeps the rendered rows as
+`record.projectionPrefix`, which `toChatMessages` and `toTranscriptText` put
+ahead of the derived history and `toAgentMessages` never returns.
 
 **Clearing goes through the same owner.** "New chat" / `clear-chat` calls
 `ScoopContext.clearSession()` → `SessionPersistence.clear()`, which cancels
-any pending checkpoint and deletes BOTH representations. Deleting only the
-legacy session would leave the canonical record standing, and since a restore
-prefers the record, the next reload would resurrect the conversation the user
-just cleared.
+any pending checkpoint and deletes the canonical record. The unit's frozen
+legacy rows (`agent-sessions` there, `browser-coding-agent` in
+`Bridge.handleClearChat` and on drop) are deleted too — the only thing that
+still touches those stores — so a later migration pass (a schema bump re-arms
+it) cannot import the conversation the user just cleared.
 
 **A write never overwrites a record it did not understand.** `store.read()`
 distinguishes `absent` / `malformed` / `incompatible` / `error`, and only the
 first two may be written over. A record from a NEWER schema (a rollback, where
 that build's history may live in a shape this one cannot express) and a read
 that merely FAILED are both left exactly where they are — the lossy `load()`
-that answers `null` for all four is for READERS, whose `null` means "fall back
-to the legacy store".
+that answers `null` for all four is for READERS, whose `null` means "no
+conversation to show".
 
-#### The read-old/write-new window, and how to roll back
+#### The cut ([#2365](https://github.com/ai-ecoverse/slicc/issues/2365))
 
-This is not a cutover. While the window is open:
+The read-old/write-new window #2275 opened is closed. The canonical record is
+the only store a conversation is written to or read from:
 
-- **Every write goes to both.** `SessionPersistence.persistNow` writes the
-  canonical record AND `agent-sessions`; the bridge still writes
-  `browser-coding-agent`.
-- **Every read prefers the canonical record and falls back on absence.** The
-  kill switch is DATA, not a flag: no record, an unreadable one, a record from
-  a newer schema, a `ui-projection` record, or an IndexedDB that will not open
-  — each derives to nothing, and nothing means "use the legacy store". A unit
-  that was never migrated behaves exactly as it did before #2275.
-- **The migration deletes nothing.** It reads the legacy stores and writes the
-  canonical one. `agent-sessions` and `browser-coding-agent` are left
-  byte-for-byte as they were.
+- **One write.** `SessionPersistence.persistNow` writes the canonical record
+  and nothing else; the bridge no longer writes `browser-coding-agent`
+  (`persistScoop` is gone). The panel buffer is a live cache, hydrated at boot
+  from the record (`Bridge.hydrateBuffersFromRecords`) so a turn after a
+  reload extends the restored transcript instead of starting a new one.
+- **One read.** A restore, a replay (`request-scoop-messages`), the tray's
+  `request-scoop-chat-messages`, transcript export, the Freezer, welcome
+  detection and the page's pre-replay hydration all derive from the record
+  (`toAgentMessages` / `toChatMessages`, via `CanonicalSessionReader` where a
+  legacy session shape is expected). No record means no conversation — there
+  is no fallback, because the legacy stores stopped at the cut and would show
+  a conversation missing every turn since.
+- **The legacy databases stay on disk**, untouched except for the per-unit
+  deletes on clear/drop above. The migration is their only reader; deleting
+  them is a separate, later decision (#2006 is why).
 
-**Rollback** is therefore complete and cheap, in two forms:
+**Record schema v2.** `error` markers and `projectionPrefix` are shapes a
+#2275-era build cannot read (it would crash on the first). `store.save` stamps
+each record with the lowest schema that expresses it (`recordSchemaVersion`):
+a record carrying either is `2`, which an older build declines; every other
+record stays `1` and remains readable after a rollback. The migration cursor
+has its own `CONVERSATION_MIGRATION_VERSION`, so the bump does not re-run the
+frozen legacy import.
 
-1. _Reverting the code_ — the legacy stores hold every conversation up to the
-   moment of the revert, because they were written on every turn.
-2. _Clearing the canonical database_ (`WorkUnitConversationStore.clearAll()`,
-   or deleting `slicc-work-units` in devtools) — every read falls back, and
-   the next boot re-runs the migration from the untouched legacy data.
-
-The follow-up that deletes the legacy writes is what closes this window; it
-must not land until the canonical store has been dogfooded through at least
-one migration + rollback cycle.
+**Rollback is no longer free.** Reverting to a pre-cut build restores the
+legacy stores as they were at the cut — every turn since exists only in
+`slicc-work-units`. `WorkUnitConversationStore.clearAll()` likewise re-runs
+the migration from that frozen state: it is a reset, not a recovery.
 
 #### Migration behaviour
 
-- **Versioned.** `CONVERSATION_RECORD_VERSION` is part of the cursor; bumping
+- **Versioned.** `CONVERSATION_MIGRATION_VERSION` is part of the cursor; bumping
   the schema re-runs the pass over every unit.
 - **Resumable.** The cursor is persisted after every unit, so a boot that dies
   mid-pass — a poisoned record, a killed tab, the #2007 ready-timeout —
@@ -327,10 +354,13 @@ one migration + rollback cycle.
 - **One unit cannot break the boot.** A legacy read that throws, or a payload
   whose `messages` is not a list (the #2006 lesson: a half-written record is a
   repair job, not a delete), is recorded in the cursor's `skipped` list with
-  its reason and left in place. That unit keeps reading the legacy stores.
+  its reason and left in place, for a later build to repair.
 - **The cursor advances past a skipped unit** on purpose: retrying an
-  unreadable record every boot would re-spend the boot budget that made it
-  unreadable. A schema bump is the sanctioned retry.
+  unreadable legacy record every boot would re-spend the boot budget that made
+  it unreadable. A schema bump is the sanctioned retry. The exception is a
+  unit whose CANONICAL read failed: that is usually transient, and since the
+  cut nothing else would ever import its history, so the pass stays
+  not-`done` and the unit is retried on the next boot.
 - **It heartbeats.** The pass runs at boot BEFORE any context spawns, so it
   fires `onBootProgress` after every unit — a profile with many large
   histories would otherwise sit silent through the page's kernel-ready
@@ -339,15 +369,12 @@ one migration + rollback cycle.
   before the pass runs; the pass coerces a missing edge to `null` anyway, so a
   legacy primary cone can never be keyed as a child under `/scoops/`.
 
-#### What this PR did NOT make dead
+#### The replay chain, after the cut
 
-The repair chain in `Bridge.handleRequestScoopMessages` stays. The canonical
-record is inserted as a new step — the only one that answers for a unit whose
-context has not spawned — but the buffer, the live-agent translation and the
-legacy UI-store fallback are still the UI's sources until the client protocol
-consolidates them in
-[#2274](https://github.com/ai-ecoverse/slicc/issues/2274). Removing them now
-would be removing paths this PR has not yet replaced.
+`Bridge.handleRequestScoopMessages` answers from two sources: the live buffer,
+then the canonical record. The live-agent translation and the legacy UI-store
+fallback the #2275 window kept are gone (#2365) — the record is what live
+agent state was restored from, and the UI store is no longer written.
 
 ### Explicit workspace isolation modes (#2277)
 

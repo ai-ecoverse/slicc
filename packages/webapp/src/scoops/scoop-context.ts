@@ -55,11 +55,11 @@ import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headles
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { TurnGuestGate } from '../sudo/types.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
-import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
+import { conversationIdentityFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { tmpDirFor, toDescriptor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { chatSessionIdFor, processOwnerKindFor } from '../work-unit/record.js';
+import { processOwnerKindFor } from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
 import { handleAgentEnd } from './scoop-context/agent-end-dispatch.js';
 import { type AgentEventSink, routeAgentEvent } from './scoop-context/agent-event-router.js';
@@ -225,27 +225,15 @@ export class ScoopContext {
 
     this.sessions = new SessionPersistence({
       store: sessionStore ?? null,
-      // The canonical conversation record (#2275). Absent — no store wired,
-      // or a float that persists nothing — leaves the legacy `agent-sessions`
-      // path exactly as it was.
+      // The canonical conversation record (#2275) — since #2365 the only
+      // store a conversation is written to or restored from. Absent (no store
+      // wired), the unit persists nothing.
       canonical: conversationStore
-        ? {
-            store: conversationStore,
-            identity: {
-              key: conversationKeyFor(scoop),
-              workUnitId: scoop.jid,
-              workspaceId: workspaceIdFor(scoop),
-              folder: scoop.folder,
-              legacyKeys: {
-                agentSessionId: scoop.jid,
-                chatSessionId: chatSessionIdFor(scoop),
-              },
-            },
-          }
+        ? { store: conversationStore, identity: conversationIdentityFor(scoop) }
         : null,
-      // Internal persistence key — stable across days/restarts so saved
-      // conversations can be restored by `SessionStore.load`. The outgoing
-      // Adobe `X-Session-Id` is computed separately in `init()`.
+      // The unit's key in the frozen legacy `agent-sessions` store, which a
+      // clear still deletes from. The outgoing Adobe `X-Session-Id` is
+      // computed separately in `init()`.
       sessionId: scoop.jid,
       folder: scoop.folder,
       getMessages: () => this.agent?.state?.messages,

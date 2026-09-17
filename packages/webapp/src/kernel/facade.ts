@@ -60,7 +60,6 @@ import type {
   PanelToOffscreenMessage,
   ScoopCreatedMsg,
   ScoopListMsg,
-  ScoopMessagesReplacedMsg,
   ScoopModelSelection,
   ScoopStatusMsg,
   SessionBudgetWindow,
@@ -215,7 +214,11 @@ export class Bridge implements KernelFacade {
   private readonly scoopPresentation = new ScoopPresentation();
   /** Post-transport agent-event translation and fan-out. */
   private readonly agentEventStream = new AgentEventStream();
-  /** Shared UI session store — writes to browser-coding-agent IndexedDB */
+  /**
+   * The frozen legacy `browser-coding-agent` store (#2365). Never written and
+   * never read: a unit's row is only DELETED when the user clears or drops
+   * that unit, so a later migration pass cannot import it back.
+   */
   private sessionStore: SessionStore | null = null;
   /**
    * When set, the offscreen is acting as a tray follower: user messages
@@ -319,9 +322,8 @@ export class Bridge implements KernelFacade {
           bridge.currentMessageId.delete(scoopJid);
         }
 
-        bridge.persistScoop(scoopJid);
         // The turn is over, so the session checkpoint has had its chance to
-        // create the canonical record a seam from earlier in this turn could
+        // create the canonical record a marker from earlier in this turn could
         // not be written to yet.
         void bridge.flushPendingMarkers(scoopJid);
 
@@ -337,7 +339,6 @@ export class Bridge implements KernelFacade {
         const buf = bridge.getBuffer(targetJid);
         const msgId = `msg-${uid()}`;
         buf.push({ id: msgId, role: 'assistant', content: text, timestamp: Date.now() });
-        bridge.persistScoop(targetJid);
 
         // Emit agent events so the panel renders the message in real-time
         bridge.emit({
@@ -358,6 +359,9 @@ export class Bridge implements KernelFacade {
 
         if (status === 'ready') {
           bridge.currentMessageId.delete(scoopJid);
+          // A turn that failed may never reach `onResponseDone`; its error
+          // card waits for the record the turn's checkpoint created.
+          void bridge.flushPendingMarkers(scoopJid);
         }
 
         bridge.emit({
@@ -394,10 +398,10 @@ export class Bridge implements KernelFacade {
       },
 
       onError: (scoopJid, error) => {
-        // Persist before the panel-facing emit: `#handleError` only appends
-        // in-memory, and a reload reseeds from Pi history which never held
-        // this row. The buffer + UI store is the durability path (#3003).
-        bridge.recordErrorCard(scoopJid, error);
+        // Record before the panel-facing emit: `#handleError` only appends
+        // in-memory, and Pi history never holds this row. The canonical
+        // record's error marker is the durability path (#3003, #2365).
+        void bridge.recordErrorCard(scoopJid, error);
         bridge.emit({
           type: 'error',
           scoopJid,
@@ -531,8 +535,6 @@ export class Bridge implements KernelFacade {
       }
     }
 
-    this.persistScoop(scoopJid);
-
     this.emit({
       type: 'agent-event',
       scoopJid,
@@ -544,7 +546,7 @@ export class Bridge implements KernelFacade {
     });
   }
 
-  /** Buffer + persist + echo an incoming channel message to the panel. */
+  /** Buffer + echo an incoming channel message to the panel. */
   private bufferIncomingMessage(scoopJid: string, message: ChannelMessage): void {
     const chatMsg: BufferedChatMessage = {
       id: message.id,
@@ -561,7 +563,6 @@ export class Bridge implements KernelFacade {
       lickState: message.lickState,
     };
     this.getBuffer(scoopJid).push(chatMsg);
-    this.persistScoop(scoopJid);
     this.notifyPanelIncomingMessage(scoopJid, message);
   }
 
@@ -580,11 +581,9 @@ export class Bridge implements KernelFacade {
     this.currentMessageId.delete(scoop.jid);
     this.agentEventStream.clear(scoop.jid);
     this.scoopPresentation.clearStatus(scoop.jid);
-    // Drop the persisted UI session too — `persistScoop` writes
-    // `session-<folder>` for every scoop with buffered messages, so
-    // dead ephemeral scoops otherwise pile up in the
-    // `browser-coding-agent` store. The cone never unregisters, but
-    // guard anyway: its session must survive.
+    // Drop the unit's frozen legacy UI row too (#2365), so a later
+    // migration pass cannot import a dead scoop's pre-cut transcript. The
+    // cone never unregisters, but guard anyway: its session must survive.
     if (scoop.parentJid !== null && this.sessionStore) {
       this.sessionStore.delete(chatSessionIdFor(scoop)).catch((err) => {
         console.warn(
@@ -631,9 +630,9 @@ export class Bridge implements KernelFacade {
   /**
    * Apply an in-place message-state update (currently a settled actionable
    * lick): flip the buffered row's `lickState` so a panel reload's snapshot
-   * reflects it, re-persist, and emit `message-updated` so the open panel can
-   * re-render just that card. Mirrors `bufferIncomingMessage`'s buffer + persist
-   * + echo shape, but mutates an existing row instead of appending.
+   * reflects it, and emit `message-updated` so the open panel can re-render
+   * just that card. The durable copy is the channel DB the decision was
+   * written to (`overlayPersistedLickDecisionsOn` reads it back).
    */
   private applyMessageUpdate(
     scoopJid: string,
@@ -643,10 +642,7 @@ export class Bridge implements KernelFacade {
     const entry = buf?.find(
       (m) => (update.lickId && m.lickId === update.lickId) || m.id === update.messageId
     );
-    if (entry) {
-      entry.lickState = update.lickState;
-      this.persistScoop(scoopJid);
-    }
+    if (entry) entry.lickState = update.lickState;
     this.emit({
       type: 'message-updated',
       scoopJid,
@@ -746,7 +742,7 @@ export class Bridge implements KernelFacade {
    * Public wrapper over the `@internal getBuffer(jid)` that casts the
    * structurally-compatible `BufferedChatMessage[]` to `ChatMessage[]`.
    * Used by leader-tray code to read chat state without reaching for
-   * `@internal` helpers. Same cast pattern as `persistScoop` (this file).
+   * `@internal` helpers.
    */
   getMessagesForJid(jid: string): ChatMessage[] {
     return this.getBuffer(jid) as unknown as ChatMessage[];
@@ -757,7 +753,7 @@ export class Bridge implements KernelFacade {
    * `targetScoop` by name/folder/`${folder}-scoop`, then tries the configured
    * sprinkle route, the unit that RAISED the lick (`origin.unitJid`, resolved
    * to its root owner), and finally the default root. Builds a
-   * `ChannelMessage`, appends a buffered lick entry, persists, and dispatches
+   * `ChannelMessage`, appends a buffered lick entry, and dispatches
    * via `orchestrator.handleMessage`.
    *
    * Extracted from the `sprinkle-lick` envelope handler so leader-side
@@ -854,7 +850,6 @@ export class Bridge implements KernelFacade {
       source: 'lick',
       channel: 'sprinkle',
     });
-    this.persistScoop(target.jid);
     await this.orchestrator.handleMessage(channelMsg);
   }
 
@@ -876,8 +871,9 @@ export class Bridge implements KernelFacade {
 
   /**
    * Replace the local cone scoop's chat history with `messages` (typically
-   * from a leader snapshot), persist them to IndexedDB so panel reloads
-   * see them, and notify the panel to update its open chat.
+   * from a leader snapshot) and notify the panel to update its open chat.
+   * Nothing is persisted: the conversation is the LEADER's, and a follower
+   * reload gets it back from the leader's next snapshot.
    */
   applyFollowerSnapshot(messages: ChatMessage[]): void {
     if (!this.orchestrator) return;
@@ -894,14 +890,6 @@ export class Bridge implements KernelFacade {
     this.messageBuffers.set(cone.jid, buf);
     this.currentMessageId.delete(cone.jid);
     this.agentEventStream.clear(cone.jid);
-    if (this.sessionStore) {
-      const sessionId = chatSessionIdFor(cone);
-      this.sessionStore.saveMessages(sessionId, messages).catch((err) => {
-        log.error('applyFollowerSnapshot persist failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
     this.emit({
       type: 'scoop-messages-replaced',
       scoopJid: cone.jid,
@@ -992,62 +980,12 @@ export class Bridge implements KernelFacade {
   }
 
   /**
-   * Translate a scoop's restored canonical `AgentMessage[]` into the
-   * buffered chat shape. Returns `null` when there is no context or no
-   * agent messages yet. Lazy-imports the translator so it doesn't pull
-   * pi-ai types into the bridge's hot path until needed. Shared by
-   * {@link handleRequestScoopMessages} and {@link seedBuffersFromAgentState}.
-   */
-  private async buildBufferFromAgentMessages(
-    scoop: RegisteredScoop
-  ): Promise<BufferedChatMessage[] | null> {
-    const context = this.orchestrator?.getScoopContext(scoop.jid);
-    if (!context) return null;
-    const agentMessages = context.getAgentMessages();
-    if (agentMessages.length === 0) return null;
-    const { agentMessagesToChatMessages } = await import('../scoops/agent-message-to-chat.js');
-    const chatMessages = agentMessagesToChatMessages(agentMessages, {
-      source: sourceLabelFor(scoop),
-    });
-    // Pi's history holds no compaction rows — it cannot, they are bookkeeping
-    // about it — so the canonical record's markers are folded back in here.
-    // Without this a rebuild from live agent state (every boot seed) would be
-    // the transcript MINUS its seams, and persist that over the UI store.
-    const { interleaveMarkers } = await import('../work-unit/conversation/derive.js');
-    return this.overlayPersistedLickDecisionsOn(
-      scoop,
-      await this.withPersistedErrorCards(
-        scoop,
-        toBufferedChatMessages(
-          interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
-        )
-      )
-    );
-  }
-
-  /**
-   * A unit's stored {@link ConversationMarker}s, or `undefined` when there is
-   * no canonical store, no record, or nothing annotated. Never throws — the
-   * store's reads already answer instead of failing, and a missing marker
-   * costs a seam, not a transcript.
-   */
-  private async loadConversationMarkers(
-    scoop: RegisteredScoop
-  ): Promise<ConversationMarker[] | undefined> {
-    const store = this.orchestrator?.getConversationStore?.();
-    if (!store) return undefined;
-    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
-    const record = await store.load(conversationKeyFor(scoop));
-    return record?.markers;
-  }
-
-  /**
    * Translate a unit's canonical conversation record (#2275) into the
    * buffered chat shape, or `null` when it has none. The derivation runs the
    * SAME `agentMessagesToChatMessages` translator the live path uses, so a
-   * rebuild from the record and a rebuild from live agent state produce the
-   * same transcript — which is what makes the record's projection
-   * deterministic rather than a fourth opinion.
+   * rebuild from the record and the live buffer render the same transcript,
+   * and it folds back the record's markers (compaction seams, error cards)
+   * that Pi history never holds. Since #2365 this is the only rebuild.
    */
   private async buildBufferFromCanonicalRecord(
     scoop: RegisteredScoop
@@ -1064,19 +1002,13 @@ export class Bridge implements KernelFacade {
     const { toChatMessages } = await import('../work-unit/conversation/derive.js');
     const chatMessages = await toChatMessages(record, { source: sourceLabelFor(scoop) });
     if (chatMessages.length === 0) return null;
-    return this.overlayPersistedLickDecisionsOn(
-      scoop,
-      await this.withPersistedErrorCards(scoop, toBufferedChatMessages(chatMessages))
-    );
+    return this.overlayPersistedLickDecisionsOn(scoop, toBufferedChatMessages(chatMessages));
   }
 
   /**
-   * Fold `lickId`/`lickState` onto a Pi-history rebuild. The UI store is the
-   * live snapshot; the orchestrator channel-message DB is the durable write
-   * `persistLickDecision` awaits. `applyMessageUpdate` persists the UI store
-   * fire-and-forget, so a reload that races that write still recovers the
-   * settled glyph from the channel DB. Failures here cost the glyph, not the
-   * transcript.
+   * Fold `lickId`/`lickState` onto a Pi-history rebuild, from the
+   * orchestrator channel-message DB — the durable write `persistLickDecision`
+   * awaits. Failures here cost the glyph, not the transcript.
    */
   private async overlayPersistedLickDecisionsOn(
     scoop: RegisteredScoop,
@@ -1084,14 +1016,6 @@ export class Bridge implements KernelFacade {
   ): Promise<BufferedChatMessage[]> {
     if (!buf.some((m) => m.channel === 'sudo-request' || m.lickId || m.lickState)) return buf;
     const stored: PersistedLickDecision[] = [];
-    if (this.sessionStore) {
-      try {
-        const session = await this.sessionStore.load(chatSessionIdFor(scoop));
-        if (session?.messages) stored.push(...session.messages);
-      } catch {
-        // glyph only
-      }
-    }
     try {
       const channel = await this.orchestrator?.getMessagesForScoop?.(scoop.jid);
       if (channel) {
@@ -1112,56 +1036,23 @@ export class Bridge implements KernelFacade {
   }
 
   /**
-   * Seed each registered scoop's chat buffer from its agent's restored
-   * canonical history at boot, BEFORE any post-boot turn can run
-   * `persistScoop`. The bridge's `messageBuffers` otherwise start empty
-   * on a fresh boot, so the first agent turn after a reload would
-   * persist only the new messages and overwrite the full conversation
-   * in the `browser-coding-agent` UI store — the "only the last few
-   * messages after a reboot" truncation. Non-destructive: only seeds
-   * scoops whose buffer is still empty, and AWAITS the persist of the
-   * seeded buffer so the `browser-coding-agent` store is repaired before
-   * `createKernelHost` signals `kernel-worker-ready` — otherwise a panel
-   * that mounts and reads the store on the next tick could still see the
-   * truncated snapshot.
+   * Hydrate each registered scoop's empty chat buffer from its canonical
+   * record at boot — see `KernelFacade.hydrateBuffersFromRecords`.
+   * Nothing is written: the record is already the durable copy.
    */
-  async seedBuffersFromAgentState(): Promise<void> {
+  async hydrateBuffersFromRecords(): Promise<void> {
     if (!this.orchestrator) return;
     for (const scoop of this.orchestrator.getScoops()) {
       const existing = this.messageBuffers.get(scoop.jid);
       if (existing && existing.length > 0) continue;
-      const buf = await this.buildBufferFromAgentMessages(scoop);
+      const buf = await this.buildBufferFromCanonicalRecord(scoop);
       if (!buf) continue;
       this.messageBuffers.set(scoop.jid, buf);
       this.currentMessageId.delete(scoop.jid);
       this.agentEventStream.clear(scoop.jid);
-      await this.persistScoopAwait(scoop.jid);
     }
   }
 
-  /**
-   * Rebuild the panel's chat history for a scoop from the live agent
-   * state. Replies via `scoop-messages-replaced`. Used after a panel
-   * remount (HMR or full reload) to override the panel's own
-   * `browser-coding-agent` IDB snapshot, which may have been
-   * truncated by save races during the remount.
-   *
-   * Resolution order:
-   *   1. In-flight `messageBuffers` (current session, possibly with
-   *      a streaming tail).
-   *   2. Translate the scoop's `AgentMessage[]` into the chat shape.
-   *   3. Derive the projection from the canonical work-unit conversation
-   *      record (#2275) — the only source that answers for a unit with no
-   *      live context yet (restored but not spawned, or spawning).
-   *   4. Fall back to whatever the UI `sessionStore` has on disk.
-   *
-   * Steps 1-2 and 4 are the pre-#2275 repair chain and stay until the UI
-   * path is consolidated in #2274: this PR adds a deterministic source, it
-   * does not yet make any of the existing ones dead.
-   *
-   * A scoop with no history anywhere still gets an EMPTY replace — see the
-   * tail of the method for why silence is not an option.
-   */
   /**
    * The orchestrator's pending queue for a scoop, in delivery order, or
    * `undefined` when this float cannot answer authoritatively (#2354).
@@ -1178,6 +1069,23 @@ export class Bridge implements KernelFacade {
     return this.orchestrator.getQueuedMessageIds(scoopJid);
   }
 
+  /**
+   * Replay a scoop's chat history to the panel (`scoop-messages-replaced`),
+   * after a panel remount or a scoop switch.
+   *
+   * Resolution order:
+   *   1. In-flight `messageBuffers` (current session, possibly with a
+   *      streaming tail).
+   *   2. The canonical work-unit conversation record (#2275), derived. Every
+   *      settled turn is there, so this is also what a fresh kernel replays.
+   *
+   * The pre-#2365 repair chain (rebuilding from live agent state, then from
+   * the `browser-coding-agent` snapshot) is gone: the record IS what live
+   * agent state was restored from, and the chat store is no longer written.
+   *
+   * A scoop with no history still gets an EMPTY replace — see the tail of
+   * the method for why silence is not an option.
+   */
   private async handleRequestScoopMessages(scoopJid: string): Promise<void> {
     // A cone whose create is still in flight has no transcript yet through any
     // source; answering now would replace the thread with an empty one (#2840).
@@ -1197,81 +1105,26 @@ export class Bridge implements KernelFacade {
       return;
     }
 
-    // Translate from the agent's canonical conversation.
-    const buf = await this.buildBufferFromAgentMessages(scoop);
-    if (buf) {
-      // Hydrate the buffer so subsequent agent events extend the
-      // restored history instead of starting from empty (which would
-      // silently overwrite the UI store via persistScoop). Clear
-      // both buffer and fan-out message pointers for the same reason: a
-      // stale id pointing at a (now non-existent) buffer entry would
-      // have `getOrCreateAssistantMsg` write into the rehydrated buffer
-      // under an unrelated id.
-      this.messageBuffers.set(scoopJid, buf);
-      this.currentMessageId.delete(scoopJid);
-      this.agentEventStream.clear(scoopJid);
-      // Persist the rebuilt buffer back to the UI session store so
-      // a subsequent panel reload (without further agent activity)
-      // sees the canonical history instead of whatever truncated
-      // snapshot the panel last wrote during the remount race.
-      this.persistScoop(scoopJid);
-      this.emit({
-        type: 'scoop-messages-replaced',
-        scoopJid,
-        messages: buf,
-        queuedIds: this.queuedIdsFor(scoopJid),
-      });
-      return;
-    }
-
-    // Derive from the canonical conversation record. Unlike step 2 this
-    // needs no live `ScoopContext`, so it answers for a unit whose context
-    // has not been spawned (or failed to). Hydrating the buffer here has the
-    // same reason as everywhere else in this method: a later agent event
-    // must extend the restored history, not overwrite it.
+    // Derive from the canonical conversation record. Hydrating the buffer is
+    // what makes a later agent event EXTEND the restored history; clearing the
+    // fan-out pointers keeps a stale message id from writing into it under an
+    // unrelated row.
     const derived = await this.buildBufferFromCanonicalRecord(scoop);
     if (derived) {
       this.messageBuffers.set(scoopJid, derived);
       this.currentMessageId.delete(scoopJid);
       this.agentEventStream.clear(scoopJid);
-      this.persistScoop(scoopJid);
-      this.emit({ type: 'scoop-messages-replaced', scoopJid, messages: derived });
+      this.emit({
+        type: 'scoop-messages-replaced',
+        scoopJid,
+        messages: derived,
+        queuedIds: this.queuedIdsFor(scoopJid),
+      });
       return;
     }
 
-    // Last resort: load from the UI session store. Hydrate the buffer
-    // (and clear `currentMessageId`) here too — without this, a later
-    // agent event would call `getOrCreateAssistantMsg` against an
-    // empty buffer and `persistScoop` would overwrite IDB with only
-    // the new entries, reintroducing the truncation race this
-    // handler exists to prevent.
-    if (this.sessionStore) {
-      const sessionId = chatSessionIdFor(scoop);
-      try {
-        const session = await this.sessionStore.load(sessionId);
-        const messages = session?.messages ?? [];
-        if (messages.length > 0) {
-          this.messageBuffers.set(scoopJid, messages as unknown as BufferedChatMessage[]);
-          this.currentMessageId.delete(scoopJid);
-          this.agentEventStream.clear(scoopJid);
-          this.emit({
-            type: 'scoop-messages-replaced',
-            scoopJid,
-            messages: messages as unknown as BufferedChatMessage[],
-            queuedIds: this.queuedIdsFor(scoopJid),
-          });
-          return;
-        }
-      } catch (err) {
-        log.error('sessionStore load failed', {
-          sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
     // Every source came back empty (a brand-new scoop, a cone whose history
-    // was just cleared, or an unreadable session store). Emit the empty
+    // was just cleared, or an unreadable canonical store). Emit the empty
     // replace anyway: `scoop-messages-replaced` is the ONLY thing that drives
     // the panel's `loadMessages`, so staying silent leaves the PREVIOUSLY
     // selected scoop's thread rendered underneath the new scoop's label and
@@ -1554,7 +1407,8 @@ export class Bridge implements KernelFacade {
   /**
    * Side-effect-free chat-messages fetch. Returns the full ChatMessage[]
    * without mutating message buffers or emitting scoop-messages-replaced.
-   * Used by the tray leader to serve a follower's scoop-select request.
+   * Used by the tray leader to serve a follower's scoop-select request:
+   * the live buffer, else the canonical record's derivation (#2365).
    */
   private async handleRequestScoopChatMessages(requestId: string, scoopJid: string): Promise<void> {
     const empty = (): void => {
@@ -1576,42 +1430,24 @@ export class Bridge implements KernelFacade {
       return;
     }
 
-    const buf = await this.buildBufferFromAgentMessages(scoop);
-    if (buf && buf.length > 0) {
-      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: buf });
+    const derived = await this.buildBufferFromCanonicalRecord(scoop);
+    if (derived) {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: derived });
       return;
-    }
-
-    if (this.sessionStore) {
-      const sessionId = chatSessionIdFor(scoop);
-      try {
-        const session = await this.sessionStore.load(sessionId);
-        const messages = session?.messages ?? [];
-        this.emit({
-          type: 'scoop-chat-messages',
-          requestId,
-          scoopJid,
-          messages: messages as unknown as ScoopMessagesReplacedMsg['messages'],
-        });
-        return;
-      } catch {
-        // fall through to empty
-      }
     }
 
     empty();
   }
 
   /**
-   * Record one SETTLED compaction round durably: as a marker on the unit's
-   * canonical record, and as a row in the unit's message buffer + UI store.
+   * Record one SETTLED compaction round: as a marker on the unit's canonical
+   * record, and as a row in the unit's message buffer.
    *
    * Both writes are needed and neither is redundant. The buffer is what the
-   * panel replays from for the rest of this session (and what `persistScoop`
-   * writes to `browser-coding-agent`); the canonical marker is what survives
-   * the compaction ITSELF — `syncAgentMessages` replaces the record's entries
-   * wholesale on the next turn, and every boot re-seeds the buffer from Pi's
-   * history, which never held the row (#2843).
+   * panel replays from for the rest of this session; the canonical marker is
+   * what survives the compaction ITSELF — `syncAgentMessages` replaces the
+   * record's entries wholesale on the next turn, and Pi's history never held
+   * the row (#2843).
    *
    * An OPENING phase is deliberately not written anywhere durable. The panel
    * renders the in-flight row live from the same tracker's verdict, and the
@@ -1646,7 +1482,6 @@ export class Bridge implements KernelFacade {
         });
       }
     }
-    this.persistScoop(scoopJid);
     const store = this.orchestrator?.getConversationStore?.();
     if (!store) return;
     const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
@@ -1711,85 +1546,35 @@ export class Bridge implements KernelFacade {
   }
 
   /**
-   * Append a cone-error card to the unit's message buffer and persist it.
+   * Append a cone-error card to the unit's message buffer and record it as an
+   * `error` marker on the canonical record (#3003, #2365).
    *
-   * Unlike a compaction marker, this is an ordinary assistant-role row: it
-   * can ride the existing buffer + `browser-coding-agent` persist path, and
-   * it must never become a Pi `ConversationEntry` (the model would see its
-   * own failure as a prior turn). Boot reseed rebuilds from Pi history, so
-   * {@link withPersistedErrorCards} folds these rows back in from the UI
-   * store — the same store this write just updated (#3003).
+   * The row must never become a Pi `ConversationEntry` — the model would see
+   * its own failure as a prior turn — and an entry replace must not erase it,
+   * which is exactly a marker's contract. `toChatMessages` folds it back in
+   * on every rebuild. Unlike a seam, the card may CREATE the record: a turn
+   * that fails before Pi holds a message (a missing API key) never
+   * checkpoints, so there would be nothing to retry against. A write that
+   * still fails (unreadable store) holds the marker for the end-of-turn retry.
    */
-  private recordErrorCard(scoopJid: string, error: string): void {
+  private async recordErrorCard(scoopJid: string, error: string): Promise<void> {
+    const id = uid();
+    const timestamp = Date.now();
     this.getBuffer(scoopJid).push({
-      id: uid(),
+      id,
       role: 'assistant',
       content: error,
-      timestamp: Date.now(),
+      timestamp,
       error: true,
     });
-    this.persistScoop(scoopJid);
-  }
-
-  /**
-   * Fold cone-error cards out of the UI store back into a Pi-history rebuild.
-   *
-   * `seedBuffersFromAgentState` / a remount rebuild from agent messages,
-   * which never held an `error` row, then persist that over the UI store.
-   * Without this fold the card `recordErrorCard` just wrote would be
-   * overwritten by the transcript minus its errors. Compaction seams are
-   * restored separately via `record.markers` + `interleaveMarkers`.
-   *
-   * Missing / unread store is a no-op — a missing card costs the retry
-   * affordance, not the transcript.
-   */
-  private async withPersistedErrorCards(
-    scoop: RegisteredScoop,
-    rebuilt: BufferedChatMessage[]
-  ): Promise<BufferedChatMessage[]> {
-    if (!this.sessionStore) return rebuilt;
-    try {
-      const session = await this.sessionStore.load(chatSessionIdFor(scoop));
-      return foldPersistedErrorCards(rebuilt, session?.messages);
-    } catch {
-      return rebuilt;
-    }
-  }
-
-  /**
-   * Persist a scoop's message buffer to the shared UI session store.
-   * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
-   *
-   * Public so leader-tray adapters can call it directly — same
-   * buffer-persistence semantics as the standalone leader.
-   */
-  persistScoop(jid: string): void {
-    void this.persistScoopAwait(jid);
-  }
-
-  /**
-   * Awaitable variant of {@link persistScoop}. Callers that must KNOW the
-   * UI store has been written before proceeding — e.g. boot-time
-   * {@link seedBuffersFromAgentState}, which runs inside `createKernelHost`
-   * before `kernel-worker-ready` is signaled so the panel never mounts
-   * against a stale/truncated `browser-coding-agent` snapshot — await this
-   * instead. Errors are still swallowed so a failed write can't break boot.
-   */
-  private async persistScoopAwait(jid: string): Promise<void> {
-    if (!this.sessionStore || !this.orchestrator) return;
-    const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
-    if (!scoop) return;
-    const sessionId = chatSessionIdFor(scoop);
-    const buf = this.messageBuffers.get(jid);
-    if (!buf || buf.length === 0) return;
-    try {
-      // BufferedChatMessage is structurally compatible with ChatMessage
-      await this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]);
-    } catch (err) {
-      log.error('persistScoop failed', {
-        sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    const store = this.orchestrator?.getConversationStore?.();
+    const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
+    if (!store || !scoop) return;
+    const { conversationIdentityFor } = await import('../work-unit/conversation/key.js');
+    const identity = conversationIdentityFor(scoop);
+    const marker: ConversationMarker = { id, kind: 'error', timestamp, text: error };
+    if (!(await store.putMarker(identity.key, marker, { createWith: identity }))) {
+      this.holdPendingMarker(scoopJid, marker);
     }
   }
 
@@ -2163,11 +1948,9 @@ export class Bridge implements KernelFacade {
 
   /**
    * Drop a queued message from the orchestrator AND from the bridge's
-   * per-scoop chat buffer (and its persisted UI session) so a subsequent
-   * `request-scoop-messages` — panel reload, HMR, scoop switch back —
-   * cannot resurrect the dismissed prompt from `messageBuffers` or the
-   * session store. No-op safe when the buffer or entry is absent;
-   * `persistScoop` is fire-and-forget like every other bridge writeback.
+   * per-scoop chat buffer so a subsequent `request-scoop-messages` — panel
+   * reload, HMR, scoop switch back — cannot resurrect the dismissed prompt
+   * from `messageBuffers`. No-op safe when the buffer or entry is absent.
    */
   private handleDeleteQueuedMessage(scoopJid: string, messageId: string): void {
     if (!this.orchestrator) return;
@@ -2179,7 +1962,6 @@ export class Bridge implements KernelFacade {
     const next = buf.filter((m) => m.id !== messageId);
     if (next.length === buf.length) return;
     this.messageBuffers.set(scoopJid, next);
-    this.persistScoop(scoopJid);
   }
 
   /**
@@ -2198,7 +1980,6 @@ export class Bridge implements KernelFacade {
       attachments: msg.attachments,
       timestamp: Date.now(),
     });
-    this.persistScoop(msg.scoopJid);
     if (this.followerSync) {
       // Only a steering send carries the options argument, so the ordinary
       // forward stays a three-argument call.
@@ -2507,14 +2288,14 @@ function formatTranscript(messages: ReadonlyArray<{ role: string; content: strin
 
 /**
  * Project rendered `ChatMessage`s onto the bridge's buffered shape. Shared by
- * the live-agent rebuild and the canonical-record derivation (#2275) so both
+ * the canonical-record derivation (#2275) and the follower snapshot so both
  * hand the panel identically-shaped rows — the field list is explicit on
  * purpose, so a new `ChatMessage` field is a compile-time decision here
  * rather than silently riding into the buffer.
  *
- * `lickId`/`lickState` (#3004) and `error` (#3003) are out-of-band (not in
- * Pi history). Dropping them here lets `persistScoopAwait` clobber a settled
- * sudo-request glyph or a cone-error card.
+ * `lickId`/`lickState` (#3004), `error` (#3003) and `compaction` are
+ * out-of-band (not in Pi history). Dropping them here would lose a settled
+ * sudo-request glyph, a cone-error card or a compaction seam on replay.
  */
 function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedChatMessage[] {
   return chatMessages.map((m) => ({
@@ -2542,54 +2323,7 @@ function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedC
   }));
 }
 
-/**
- * Re-insert `error: true` rows a Pi-history rebuild cannot reconstruct.
- * Dedupes by id so a row already in `rebuilt` (same-session buffer) is not
- * doubled, and orders extras by timestamp so a card that landed between
- * two turns stays between them after a reload.
- */
-function foldPersistedErrorCards(
-  rebuilt: BufferedChatMessage[],
-  persisted: readonly ChatMessage[] | undefined
-): BufferedChatMessage[] {
-  if (!persisted || persisted.length === 0) return rebuilt;
-  const extras = persisted.filter((m) => m.error === true);
-  if (extras.length === 0) return rebuilt;
-  const seen = new Set(rebuilt.map((m) => m.id));
-  const fresh = extras.filter((m) => !seen.has(m.id));
-  if (fresh.length === 0) return rebuilt;
-  return interleaveBufferedByTimestamp(rebuilt, toBufferedChatMessages(fresh));
-}
-
-function interleaveBufferedByTimestamp(
-  base: BufferedChatMessage[],
-  extra: BufferedChatMessage[]
-): BufferedChatMessage[] {
-  const sorted = [...extra].sort((a, b) => bufferedTime(a) - bufferedTime(b));
-  const out: BufferedChatMessage[] = [];
-  let next = 0;
-  for (const message of base) {
-    const at = bufferedTime(message);
-    while (next < sorted.length && bufferedTime(sorted[next]) <= at) {
-      out.push(sorted[next++]);
-    }
-    out.push(message);
-  }
-  while (next < sorted.length) out.push(sorted[next++]);
-  return out;
-}
-
-function bufferedTime(message: { timestamp: number }): number {
-  const raw: unknown = message.timestamp;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-  if (typeof raw === 'string') {
-    const parsed = Date.parse(raw);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return Number.NEGATIVE_INFINITY;
-}
-
-/** Subset of a UI-store row the reseed overlay copies lick decisions from. */
+/** Subset of a channel-DB row the replay overlay copies lick decisions from. */
 interface PersistedLickDecision {
   id: string;
   content: string;
@@ -2641,10 +2375,9 @@ function rememberLickDecision(
 }
 
 /**
- * Copy persisted `lickId`/`lickState` onto a Pi-history rebuild so
- * `persistScoopAwait` cannot replace a settled sudo-request glyph with the
- * pending default. Store values win; a settled state is never replaced by
- * pending/absent.
+ * Copy persisted `lickId`/`lickState` onto a Pi-history rebuild so a replay
+ * cannot show a settled sudo-request glyph as the pending default. Store
+ * values win; a settled state is never replaced by pending/absent.
  */
 function overlayPersistedLickDecisions(
   rebuilt: BufferedChatMessage[],

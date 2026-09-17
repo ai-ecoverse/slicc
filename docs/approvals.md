@@ -667,8 +667,8 @@ and the card flips in place — a green check (`confirmed`) for `lick_confirm` o
 a red cross (`dismissed`, rendered muted) for `lick_dismiss` — so the resolved
 verdict survives reload. Pi history does not carry `lickState`; the kernel
 projects `lickId`/`lickState` through `toBufferedChatMessages` and folds the
-UI-store value back on boot reseed so `persistScoopAwait` cannot clobber a
-settled glyph with the pending default (#3004). The design-time fixture
+channel-DB value back when it rebuilds a transcript from the canonical record,
+so a reload cannot show a settled glyph as the pending default (#3004). The design-time fixture
 (`?ui-fixture=1`) carries one sample per state (`pending` / `confirmed` /
 `dismissed`) for styling.
 
