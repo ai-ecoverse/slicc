@@ -1110,6 +1110,7 @@ jobs:
       # Runs after the main worker so the TRAY_HUB DO (referenced via
       # script_name) is up to date.
       - name: Deploy staging preview worker
+        id: deploy_preview
         if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy.outcome == 'success'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
@@ -1119,6 +1120,28 @@ jobs:
           workingDirectory: packages/cloudflare-worker
           environment: staging
           command: deploy --env staging --config wrangler-preview.jsonc
+
+      # Live (leader-relayed) preview round-trip through BOTH staging workers:
+      # a scripted leader serves a 16 MiB file (the tray DO must survive it), a
+      # 25 MiB + 1 file (clean 413), and exhausts the per-tray quota (#2852,
+      # #3213). Still inside the mutation queue, so no other deploy can reset
+      # the DO mid-test.
+      - name: Smoke test staging live preview
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy_preview.outcome == 'success'
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          for attempt in 1 2 3; do
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed-live-preview.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Live preview smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Live preview smoke attempt ${attempt} failed; waiting for propagation..."
+            sleep 15
+          done
 
       - name: Release staging mutation queue
         if: always()

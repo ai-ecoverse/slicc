@@ -196,4 +196,38 @@ describe('cachedPreviewFetch', () => {
     expect(fetchFromDO).toHaveBeenCalledTimes(2);
     expect(await second.text()).toBe('<p>v2</p>');
   });
+
+  it('answers 503 instead of throwing when the tray DO call throws', async () => {
+    installFakeCaches();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchFromDO = vi.fn(() =>
+      Promise.reject(new Error('Durable Object reset because its code was updated.'))
+    );
+    for (const allowLive of [false, true]) {
+      const res = await cachedPreviewFetch({
+        request: makeRequest(),
+        allowLive,
+        cacheVersion: 1,
+        fetchFromDO,
+      });
+      expect(res.status).toBe(503);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(await res.text()).toBe('Preview temporarily unavailable');
+    }
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it('still returns the body when the cache put rejects', async () => {
+    const cache = installFakeCaches();
+    cache.put = () => Promise.reject(new Error('object too large'));
+    const res = await cachedPreviewFetch({
+      request: makeRequest(),
+      allowLive: false,
+      cacheVersion: 1,
+      fetchFromDO: () => Promise.resolve(makeDoResponse('<p>big</p>')),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('<p>big</p>');
+  });
 });

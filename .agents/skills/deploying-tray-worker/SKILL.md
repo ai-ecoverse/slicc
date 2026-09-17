@@ -37,6 +37,10 @@ npx wrangler r2 bucket lifecycle list slicc-asset-archive-staging
 
 # Run deployed worker smoke tests.
 WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts
+# Live-preview round trip (needs BOTH hub and preview worker deployed): a
+# scripted leader serves 16 MiB (tray DO must survive), 25 MiB + 1 (clean 413),
+# and exhausts the 10-preview quota. CI runs it after the staging preview deploy.
+WORKER_BASE_URL=https://... npm test -- tests/deployed-live-preview.test.ts
 ```
 
 Use this skill as the operational runbook for `packages/cloudflare-worker/`. See
