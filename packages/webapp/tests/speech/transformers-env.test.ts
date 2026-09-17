@@ -27,6 +27,7 @@ interface FakeEnv {
   localModelPath?: string;
   remoteHost?: string;
   remotePathTemplate?: string;
+  useBrowserCache?: boolean;
 }
 
 function makeEnv(): FakeEnv {
@@ -98,6 +99,8 @@ describe('configureTransformersEnv', () => {
     expect(env.allowRemoteModels).toBe(true);
     expect(env.remoteHost).toBe(env.localModelPath);
     expect(env.remotePathTemplate).toBe('{model}/');
+    // 4.3+ would otherwise CacheStorage-copy every VFS-served weight.
+    expect(env.useBrowserCache).toBe(false);
     // The probe URL transformers builds for a model file must fall under the
     // localModelPath prefix so `extractVfsPathFromPreviewUrl` recognizes it.
     const probeUrl = `${env.remoteHost}onnx-community/whisper-tiny/tokenizer_config.json`;

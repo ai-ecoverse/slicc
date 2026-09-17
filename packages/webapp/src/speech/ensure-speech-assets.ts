@@ -39,11 +39,16 @@ import {
 } from '../shell/supplemental-commands/hf-download.js';
 import { ESPEAK_DIST_VFS_PATH, ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE } from './espeak-phonemizer.js';
 import { KOKORO_MODEL_ID, WHISPER_MODEL_ID } from './model-ids.js';
+import { ORT_WEB_VERSION } from './ort-version.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from './transformers-env.js';
 
 const log = createLogger('speech:ensure-assets');
 
 const ORT_PACKAGE = 'onnxruntime-web';
+/** Manifest for the staged ort package — used to restage when the pin moves. */
+const ORT_PACKAGE_JSON_VFS = '/workspace/node_modules/onnxruntime-web/package.json';
+/** Exact spec so VFS wasm matches the transformers.js-bundled ort glue. */
+const ORT_INSTALL_SPEC = `${ORT_PACKAGE}@${ORT_WEB_VERSION}`;
 /** Multilingual espeak-ng wasm — phonemizes the non-English on-device voices
  *  (es/fr/it/hi/pt). Staged like ort; not bundled (~17 MB). */
 const ESPEAK_PACKAGE = 'espeak-ng';
@@ -110,7 +115,30 @@ const ORT_REQUIRED_DIST_FILES: ReadonlyArray<string> = ORT_WASM_DIST_FILES.filte
   (f) => !/\.(asyncify|jspi)\./.test(f)
 );
 
-/** Stage the ort wasm runtime if any REQUIRED dist file is missing. */
+/** Version recorded in the staged ort package.json, or null if missing/unreadable. */
+async function stagedOrtVersion(fs: VirtualFS): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(ORT_PACKAGE_JSON_VFS, { encoding: 'utf-8' });
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const parsed: unknown = JSON.parse(text);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'version' in parsed &&
+      typeof parsed.version === 'string'
+    ) {
+      return parsed.version;
+    }
+  } catch {
+    /* missing or unreadable — treat as unpinned */
+  }
+  return null;
+}
+
+/** Stage the ort wasm runtime if any REQUIRED dist file is missing, or if the
+ *  staged package is not the transformers.js-pinned ort-web version. A JS/wasm
+ *  mismatch (e.g. leftover 1.26 binaries under 4.3.0's 1.31 glue) fails kokoro
+ *  with `RuntimeError: null function` / `no available backend found`. */
 async function ensureOrtStaged(
   deps: EnsureSpeechAssetsDeps,
   onProgress?: SpeechAssetProgressFn
@@ -118,12 +146,13 @@ async function ensureOrtStaged(
   const present = await Promise.all(
     ORT_REQUIRED_DIST_FILES.map((f) => deps.fs.exists(`${ORT_DIST_VFS_PATH}${f}`))
   );
-  if (present.every(Boolean)) {
+  const version = await stagedOrtVersion(deps.fs);
+  if (present.every(Boolean) && version === ORT_WEB_VERSION) {
     onProgress?.({ asset: ORT_PACKAGE, phase: 'present' });
     return false;
   }
   onProgress?.({ asset: ORT_PACKAGE, phase: 'staging' });
-  const { errors } = await installPackages([ORT_PACKAGE], {
+  const { errors } = await installPackages([ORT_INSTALL_SPEC], {
     fs: deps.fs,
     fetch: deps.fetch,
     cwd: WORKSPACE_CWD,

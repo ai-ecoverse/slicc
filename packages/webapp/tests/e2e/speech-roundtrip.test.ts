@@ -21,6 +21,7 @@
  * it when the `speech` path filter matches).
  */
 
+import { ORT_WEB_VERSION } from '../../src/speech/ort-version.js';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 import { type ExecResult, execInTerminal, openTerminal } from './two-instance-helpers.js';
@@ -295,9 +296,14 @@ test.describe('say -o WAV output (real kokoro)', () => {
       const exported = await exec(page, `export HF_ENDPOINT=${JSON.stringify(hfEndpoint)}`);
       expect(exported.exitCode, `export HF_ENDPOINT stderr: ${exported.stderr}`).toBe(0);
     }
+    // Only packages the speech engines read from VFS. `kokoro-js` and
+    // `@huggingface/transformers` are Vite-bundled; `ipk add kokoro-js`
+    // also extracts its nested transformers 3.x + onnxruntime-web 1.22
+    // (~370 MB) on top of the pinned 1.31 runtime, which blows Chromium
+    // OPFS quota before the 92 MB quantized ONNX can land.
     const pkgs = await exec(
       page,
-      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
+      `cd /workspace && ipk add onnxruntime-web@${ORT_WEB_VERSION} espeak-ng`
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
     // The 92 MB `model_quantized.onnx` write intermittently trips one of two
@@ -318,7 +324,8 @@ test.describe('say -o WAV output (real kokoro)', () => {
     const KOKORO_DL_CMD =
       'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
       'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx';
-    const TRANSIENT_WRITE_FAILURE = /Cannot set property message|EINVAL/;
+    const TRANSIENT_WRITE_FAILURE = /Cannot set property message|Failed to write data to data pipe/;
+    const QUOTA_FAILURE = /storage quota|QuotaExceededError/;
     // Clear the half-written weights before any retry. The failed write leaves
     // a truncated `model_quantized.onnx` behind, and downloading over it
     // yields a file whose size does not match its metadata — the model then
@@ -346,7 +353,11 @@ test.describe('say -o WAV output (real kokoro)', () => {
       await clearPartialWeights();
       kokoroDl = await exec(page, KOKORO_DL_CMD);
     }
-    expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
+    expect(
+      kokoroDl.exitCode,
+      `hf kokoro stderr: ${kokoroDl.stderr}` +
+        (QUOTA_FAILURE.test(kokoroDl.stderr) ? `\n${await storageReport(page)}` : '')
+    ).toBe(0);
 
     // 2. `say --warmup` is fire-and-forget on the page; the kokoro load
     //    inside `stageThenLoadKokoro` catches the (expected, whisper-
