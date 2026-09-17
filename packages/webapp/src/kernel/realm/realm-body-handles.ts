@@ -5,16 +5,12 @@
  * `realm-done` before the next continuation runs (silent exit 0 — #3227,
  * leftover of #2862).
  *
- * Two layers, restored when the realm finishes (in-process tests share an
- * isolate with vitest):
- * 1. Sync-bufferable Request/Response bodies (string, typed array,
- *    URLSearchParams) get the same microtask readers as fetch reconstruction.
- * 2. Remaining native stream I/O (Body mixin, Blob/File, ReadableStream
- *    `pipeTo`/`cancel`, default/BYOB `read`/`cancel`) is counted as a drain
- *    handle until the promise settles.
+ * Prototype methods are wrapped and restored when the realm finishes
+ * (in-process tests share an isolate with vitest). Constructors are left
+ * alone so `instanceof Request` / `req.clone()` keep platform identity.
+ * Fetch reconstruction still attaches microtask readers in
+ * `realm-fetch-response.ts`.
  */
-
-import { attachBufferedBodyReaders } from './realm-fetch-response.js';
 
 const BODY_METHODS = ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text'] as const;
 const BLOB_METHODS = ['arrayBuffer', 'bytes', 'text'] as const;
@@ -37,25 +33,9 @@ export interface BodyReadHandleTracker {
   waitForProgress(): Promise<void>;
 }
 
-export function trySyncBodyBytes(body: BodyInit | null | undefined): Uint8Array | undefined {
-  if (body == null) return new Uint8Array();
-  if (typeof body === 'string') return new TextEncoder().encode(body);
-  if (body instanceof Uint8Array) return body.slice();
-  if (body instanceof ArrayBuffer) return new Uint8Array(body.slice(0));
-  if (ArrayBuffer.isView(body)) {
-    return new Uint8Array(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
-  }
-  if (typeof URLSearchParams === 'function' && body instanceof URLSearchParams) {
-    return new TextEncoder().encode(body.toString());
-  }
-  return undefined;
-}
-
 export function createBodyReadHandleTracker(
   g: typeof globalThis = globalThis
 ): BodyReadHandleTracker {
-  const NativeRequest = g.Request;
-  const NativeResponse = g.Response;
   const savedMethods: SavedStreamMethod[] = [];
   const progressWaiters = new Set<() => void>();
   let pending = 0;
@@ -104,41 +84,18 @@ export function createBodyReadHandleTracker(
     install() {
       if (installed) return;
       installed = true;
-      wrapNamedMethods(asMethodCtor(NativeRequest), BODY_METHODS);
-      wrapNamedMethods(asMethodCtor(NativeResponse), BODY_METHODS);
+      wrapNamedMethods(asMethodCtor(g.Request), BODY_METHODS);
+      wrapNamedMethods(asMethodCtor(g.Response), BODY_METHODS);
       wrapNamedMethods(asMethodCtor(g.Blob), BLOB_METHODS);
       wrapNamedMethods(asMethodCtor(g.File), BLOB_METHODS);
       wrapNamedMethods(asMethodCtor(g.ReadableStream), STREAM_METHODS);
       wrapNamedMethods(asMethodCtor(readableStreamReaderCtor(g, 'default')), READER_METHODS);
       wrapNamedMethods(asMethodCtor(readableStreamReaderCtor(g, 'byob')), READER_METHODS);
-      if (NativeResponse) {
-        g.Response = class Response extends NativeResponse {
-          constructor(body?: BodyInit | null, init?: ResponseInit) {
-            super(body, init);
-            const bytes = trySyncBodyBytes(body);
-            if (bytes) attachBufferedBodyReaders(this, bytes);
-          }
-        };
-      }
-      if (NativeRequest) {
-        g.Request = class Request extends NativeRequest {
-          constructor(input: RequestInfo | URL, init?: RequestInit) {
-            super(input, init);
-            const copiedExisting =
-              input instanceof NativeRequest && !(init && Object.hasOwn(init, 'body'));
-            if (copiedExisting) return;
-            const bytes = trySyncBodyBytes(init?.body ?? null);
-            if (bytes) attachBufferedBodyReaders(this, bytes);
-          }
-        };
-      }
     },
 
     restore() {
       if (!installed) return;
       installed = false;
-      g.Request = NativeRequest;
-      g.Response = NativeResponse;
       for (const { proto, name, descriptor } of savedMethods) {
         Object.defineProperty(proto, name, descriptor);
       }

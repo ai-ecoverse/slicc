@@ -426,9 +426,9 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
 /**
  * Install the WASM compile bridge, timer-handle wrappers, and WHATWG stream
- * I/O handles (Body mixin, Blob, ReadableStream), run the entry, drain
- * Node-like handles, then post `realm-done`. Wrappers are always restored so
- * the in-process test factory cannot leak them into vitest.
+ * I/O prototype wraps (Body mixin, Blob, ReadableStream), run the entry,
+ * drain Node-like handles, then post `realm-done`. Wrappers are always
+ * restored so the in-process test factory cannot leak them into vitest.
  *
  * The WASM compile bridge is an internal global rather than an AsyncFunction
  * param (parity-pinned): callers feature-detect with `typeof`. The returned

@@ -4,40 +4,8 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  createBodyReadHandleTracker,
-  trySyncBodyBytes,
-} from '../../../src/kernel/realm/realm-body-handles.js';
+import { createBodyReadHandleTracker } from '../../../src/kernel/realm/realm-body-handles.js';
 import { attachBufferedBodyReaders } from '../../../src/kernel/realm/realm-fetch-response.js';
-
-describe('trySyncBodyBytes', () => {
-  it('encodes strings and empty bodies', () => {
-    expect(new TextDecoder().decode(trySyncBodyBytes('hello'))).toBe('hello');
-    expect(trySyncBodyBytes(null)?.byteLength).toBe(0);
-    expect(trySyncBodyBytes(undefined)?.byteLength).toBe(0);
-  });
-
-  it('copies typed arrays and ArrayBuffers', () => {
-    const view = new Uint8Array([1, 2, 3]);
-    expect(Array.from(trySyncBodyBytes(view) ?? [])).toEqual([1, 2, 3]);
-    expect(Array.from(trySyncBodyBytes(view.buffer) ?? [])).toEqual([1, 2, 3]);
-    expect(trySyncBodyBytes(view)).not.toBe(view);
-    const u16 = new Uint16Array([0x0102]);
-    expect(trySyncBodyBytes(u16)?.byteLength).toBe(2);
-  });
-
-  it('encodes URLSearchParams and leaves streams unconverted', () => {
-    const params = trySyncBodyBytes(new URLSearchParams({ a: '1' }));
-    expect(new TextDecoder().decode(params)).toBe('a=1');
-    const stream = new ReadableStream({
-      start(c) {
-        c.enqueue(new TextEncoder().encode('x'));
-        c.close();
-      },
-    });
-    expect(trySyncBodyBytes(stream)).toBeUndefined();
-  });
-});
 
 describe('createBodyReadHandleTracker', () => {
   const trackers: ReturnType<typeof createBodyReadHandleTracker>[] = [];
@@ -125,11 +93,11 @@ describe('createBodyReadHandleTracker', () => {
     expect(bodyReads.pendingCount).toBe(0);
   });
 
-  it('does not count a sync-bufferable constructed Response as a handle', async () => {
+  it('counts a constructed Response.text() until it settles', async () => {
     const { g, bodyReads } = installed();
-    const res = new (g.Response as unknown as typeof Response)('hello');
-    expect(bodyReads.pendingCount).toBe(0);
-    await expect(res.text()).resolves.toBe('hello');
+    const pending = new (g.Response as unknown as typeof Response)('hello').text();
+    expect(bodyReads.pendingCount).toBe(1);
+    await expect(pending).resolves.toBe('from-native');
     expect(bodyReads.pendingCount).toBe(0);
   });
 
@@ -148,21 +116,21 @@ describe('createBodyReadHandleTracker', () => {
     expect(bodyReads.pendingCount).toBe(0);
   });
 
-  it('restore puts the original constructors back', () => {
+  it('restore puts original prototype methods back', () => {
     const { g, bodyReads } = installed();
-    const wrapped = g.Response;
+    const wrappedText = g.Response.prototype.text;
     bodyReads.restore();
-    expect(g.Response).not.toBe(wrapped);
+    expect(g.Response.prototype.text).not.toBe(wrappedText);
   });
 
   it('install and restore are idempotent', () => {
     const { g, bodyReads } = installed();
-    const wrapped = g.Response;
+    const wrappedText = g.Response.prototype.text;
     bodyReads.install();
-    expect(g.Response).toBe(wrapped);
+    expect(g.Response.prototype.text).toBe(wrappedText);
     bodyReads.restore();
     bodyReads.restore();
-    expect(g.Response).not.toBe(wrapped);
+    expect(g.Response.prototype.text).not.toBe(wrappedText);
   });
 
   it('waitForProgress resolves immediately when nothing is pending', async () => {

@@ -1864,10 +1864,10 @@ Fire-and-forget `.then()`, unawaited `main()`, nested `setTimeout`, and
 `await fetch(…).json()` / `.text()` therefore print before the command
 exits. Fetch response bodies are already buffered on the host; `json()`
 / `text()` resolve from those bytes so the continuation after a body
-read is not a native stream turn the drain cannot see. Constructed
-`Request`/`Response` bodies use the same microtask readers when the body
-is a string, typed array, or `URLSearchParams`; other stream I/O (`Blob`
-/ `File` reads, `FormData`, `ReadableStream` `read`/`pipeTo`,
+read is not a native stream turn the drain cannot see. Request/Response
+constructors are left as the platform's, so `instanceof Request` and
+`req.clone()` keep working. Native stream I/O (`Request`/`Response`/
+`Blob`/`File` body reads, `FormData`, `ReadableStream` `read`/`pipeTo`,
 `body.getReader()`) keeps the realm alive until the native read settles,
 so a second stream read cannot silently exit 0 (#3227). An uncleared
 `setInterval` or hung I/O hangs until the shell job is SIGKILL'd, the

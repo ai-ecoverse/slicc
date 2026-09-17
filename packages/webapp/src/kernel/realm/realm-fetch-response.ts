@@ -71,18 +71,22 @@ type BufferedBodyHost = Request | Response;
 /**
  * Shadow native body readers with Promise.resolve-from-bytes implementations
  * so `await res.json()` is a microtask, not a stream macrotask the drain
- * cannot see. Idempotent: constructed Request/Response wrappers call this
- * too, and fetch reconstruction must not reset `bodyUsed` (#2862, #3227).
+ * cannot see. Idempotent so a second attach does not reset `bodyUsed`.
+ * Consuming a shadowed reader also disturbs the native stream so
+ * `bodyUsed` / `clone()` / `bytes()` stay on the Fetch one-consumption
+ * contract (#2862, #3227).
  */
 export function attachBufferedBodyReaders(body: BufferedBodyHost, bytes: Uint8Array): void {
   if (BUFFERED_BODY in body) return;
   Object.defineProperty(body, BUFFERED_BODY, { value: true, configurable: true });
+  const nativeBodyUsed = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(body), 'bodyUsed');
   let used = false;
   const consume = (): Uint8Array => {
     if (used) {
       throw new TypeError('Failed to read response body: body already used');
     }
     used = true;
+    disturbNativeBody(body);
     return bytes;
   };
   const text = async (): Promise<string> => new TextDecoder().decode(consume());
@@ -90,6 +94,14 @@ export function attachBufferedBodyReaders(body: BufferedBodyHost, bytes: Uint8Ar
     copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength) as ArrayBuffer;
   const arrayBuffer = async (): Promise<ArrayBuffer> => toArrayBuffer(consume());
   Object.defineProperties(body, {
+    bodyUsed: {
+      configurable: true,
+      enumerable: false,
+      get(): boolean {
+        if (used) return true;
+        return nativeBodyUsed?.get ? Boolean(nativeBodyUsed.get.call(body)) : false;
+      },
+    },
     text: { value: text, configurable: true },
     json: {
       value: async (): Promise<unknown> => JSON.parse(await text()) as unknown,
@@ -100,5 +112,15 @@ export function attachBufferedBodyReaders(body: BufferedBodyHost, bytes: Uint8Ar
       value: async (): Promise<Blob> => new Blob([toArrayBuffer(consume())]),
       configurable: true,
     },
+    bytes: { value: async (): Promise<Uint8Array> => consume(), configurable: true },
   });
+}
+
+function disturbNativeBody(body: BufferedBodyHost): void {
+  try {
+    const stream = body.body;
+    if (stream && !stream.locked) stream.getReader();
+  } catch {
+    // Already locked, or this runtime has no body stream.
+  }
 }

@@ -464,6 +464,20 @@ describe('realm constructed Request/Response body continuation (#3227)', () => {
     expect(done.stdout).toContain('DONE');
   });
 
+  it('lets fetch(req.clone()) keep the cloned Request URL and headers', async () => {
+    const code = withDone([
+      'const req = new Request("https://example.test/headers", { headers: { "X-Test": "1" } });',
+      'const r = await fetch(req.clone());',
+      'console.log("url:" + (r.url.includes("example.test") ? "ok" : r.url) + "/");',
+      'console.log("status:" + r.status + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('url:ok/');
+    expect(done.stdout).toContain('status:200/');
+    expect(done.stdout).toContain('DONE');
+  });
+
   it('lets a Request copied from another Request keep the original body', async () => {
     const code = withDone([
       'const a = new Request("https://example.test/", { method: "POST", body: "copied" });',
