@@ -1,6 +1,6 @@
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TabHandle } from '../../../src/cdp/tab-handle.js';
+import type { TabPage } from '../../../src/cdp/tab-handle.js';
 import type { PageInfo } from '../../../src/cdp/types.js';
 import {
   BridgedTabComputerBackend,
@@ -39,13 +39,13 @@ function makeTab() {
     }),
     screenshot: vi.fn(async () => JPEG_B64),
   };
-  return { tab: tab as unknown as TabHandle, raw: tab, sent };
+  return { tab: tab as unknown as TabPage, raw: tab, sent };
 }
 
-function makeBrowser(pages: PageInfo[], tab: TabHandle) {
+function makeBrowser(pages: PageInfo[], tab: TabPage) {
   return {
     listAllTargets: vi.fn(async () => pages),
-    withTab: vi.fn(async (_id: string, fn: (t: TabHandle) => Promise<unknown>) => fn(tab)),
+    withTab: vi.fn(async (_id: string, fn: (t: TabPage) => Promise<unknown>) => fn(tab)),
   };
 }
 

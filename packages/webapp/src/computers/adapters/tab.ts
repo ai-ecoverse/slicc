@@ -13,7 +13,7 @@ import type {
 } from '@slicc/shared-ts';
 import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
-import type { TabHandle } from '../../cdp/tab-handle.js';
+import type { TabPage } from '../../cdp/tab-handle.js';
 import type { PageInfo } from '../../cdp/types.js';
 import type { PanelRpcClient } from '../../kernel/panel-rpc.js';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../backend.js';
@@ -185,7 +185,7 @@ export class BridgedTabComputerBackend implements ComputerBackend {
   }
 }
 
-export async function dispatchTabEvent(tab: TabHandle, event: ComputerInputEvent): Promise<void> {
+export async function dispatchTabEvent(tab: TabPage, event: ComputerInputEvent): Promise<void> {
   switch (event.type) {
     case 'mousemove':
       await tab.send('Input.dispatchMouseEvent', {
@@ -226,7 +226,7 @@ export async function dispatchTabEvent(tab: TabHandle, event: ComputerInputEvent
 }
 
 async function dispatchButton(
-  tab: TabHandle,
+  tab: TabPage,
   event: Extract<ComputerInputEvent, { type: 'button' }>
 ): Promise<void> {
   await tab.send('Input.dispatchMouseEvent', {
@@ -239,7 +239,7 @@ async function dispatchButton(
 }
 
 async function dispatchClick(
-  tab: TabHandle,
+  tab: TabPage,
   event: Extract<ComputerInputEvent, { type: 'click' }>
 ): Promise<void> {
   const x = event.x ?? 0;
@@ -265,13 +265,19 @@ async function dispatchClick(
 }
 
 async function dispatchKey(
-  tab: TabHandle,
+  tab: TabPage,
   event: Extract<ComputerInputEvent, { type: 'key' }>
 ): Promise<void> {
   const parsed = parseKeysym(event.keysym);
   if (!parsed) throw new Error(`unknown keysym '${event.keysym}'`);
   for (const payload of toCdpKeyEvents(parsed, event.down)) {
-    await tab.send('Input.dispatchKeyEvent', payload);
+    await tab.send('Input.dispatchKeyEvent', {
+      type: payload.type,
+      key: payload.key,
+      code: payload.code,
+      modifiers: payload.modifiers,
+      ...(payload.text !== undefined ? { text: payload.text } : {}),
+    });
   }
 }
 
