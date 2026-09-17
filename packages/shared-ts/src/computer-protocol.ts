@@ -70,6 +70,7 @@ export type ComputerInputEvent =
       y?: number;
     }
   | { type: 'scroll'; dx: number; dy: number; x?: number; y?: number }
+  | { type: 'drag'; x1: number; y1: number; x2: number; y2: number }
   | { type: 'key'; keysym: string; down?: boolean }
   | { type: 'text'; text: string }
   | { type: 'wait'; ms: number };

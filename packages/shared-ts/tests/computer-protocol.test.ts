@@ -43,12 +43,13 @@ describe('computer-protocol shapes', () => {
       { type: 'button', button: 1, down: true, x: 4, y: 5 },
       { type: 'click', button: 3, count: 2, holdMs: 400, x: 8, y: 9 },
       { type: 'scroll', dx: 0, dy: -40, x: 10, y: 10 },
+      { type: 'drag', x1: 10, y1: 20, x2: 200, y2: 80 },
       { type: 'key', keysym: 'ctrl+alt+Delete' },
       { type: 'key', keysym: 'KEYCODE_BACK', down: false },
       { type: 'text', text: 'ls -la\n' },
       { type: 'wait', ms: 500 },
     ];
-    expect(events).toHaveLength(9);
+    expect(events).toHaveLength(10);
   });
 
   it('accepts a JPEG frame', () => {
