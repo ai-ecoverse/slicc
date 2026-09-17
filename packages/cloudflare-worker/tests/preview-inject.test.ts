@@ -290,6 +290,17 @@ describe('preview-inject', () => {
     }
   });
 
+  it('never serves /__slicc/* routes for a non-bridged preview', async () => {
+    const { env, previewHost } = await fakeEnv({ bridge: false });
+    const res = await handleWorkerRequest(
+      new Request(`https://${previewHost}/__slicc/preview-bridge.js`),
+      env
+    );
+    // Falls through to the leader relay (this fake leader answers html).
+    expect(res.headers.get('content-type') ?? '').not.toMatch(/javascript/);
+    expect(await res.text()).not.toContain('slicc.emit');
+  });
+
   it('does not inject for non-bridged previews', async () => {
     const { env, previewHost } = await fakeEnv({ bridge: false });
 

@@ -1,88 +1,62 @@
 import { describe, expect, it } from 'vitest';
-import { handleBridgeRoute } from '../src/preview-bridge-routes.js';
-import type { DurableObjectIdLike, DurableObjectNamespaceLike } from '../src/shared.js';
+import { handleBridgeRoute } from '../src/preview-handler.js';
 
-interface FakeEnv {
-  TRAY_HUB: DurableObjectNamespaceLike;
-  stubCalls: string[];
-}
-
-function fakeEnv(): FakeEnv {
-  const stubCalls: string[] = [];
-  const fakeStub = {
-    fetch: async (input: Request | string | URL) => {
-      const url =
-        typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString();
-      stubCalls.push(url);
+function fakeStub() {
+  const calls: Request[] = [];
+  return {
+    calls,
+    fetch: async (request: Request) => {
+      calls.push(request);
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     },
   };
-
-  return {
-    TRAY_HUB: {
-      idFromName: (name: string): DurableObjectIdLike => ({
-        toString: () => name,
-      }),
-      get: () => fakeStub,
-    },
-    stubCalls,
-  };
 }
 
-describe('preview-bridge-routes', () => {
-  const token = 'tray.secret';
+const origin = 'https://tok--sec.sliccy.now';
+const token = 'tray.secret';
 
-  it('serves the bootstrap JS same-origin', async () => {
-    const res = await handleBridgeRoute(
-      new Request('https://tok--sec.sliccy.now/__slicc/preview-bridge.js'),
-      new URL('https://tok--sec.sliccy.now/__slicc/preview-bridge.js'),
-      fakeEnv(),
-      token,
-      true
-    );
+describe('handleBridgeRoute', () => {
+  it('serves the bootstrap JS same-origin without touching the DO', async () => {
+    const stub = fakeStub();
+    const url = new URL(`${origin}/__slicc/preview-bridge.js`);
+    const res = await handleBridgeRoute(new Request(url), url, stub, token);
     expect(res).not.toBeNull();
     expect(res!.headers.get('content-type')).toMatch(/javascript/);
     expect(await res!.text()).toContain('__slicc');
+    expect(stub.calls).toHaveLength(0);
   });
 
-  it('forwards /__slicc/emit POST to the DO', async () => {
-    const env = fakeEnv();
+  it('forwards /__slicc/emit POST to the DO with the preview token', async () => {
+    const stub = fakeStub();
+    const url = new URL(`${origin}/__slicc/emit`);
     const res = await handleBridgeRoute(
-      new Request('https://tok--sec.sliccy.now/__slicc/emit', {
-        method: 'POST',
-        body: '{"name":"x"}',
-      }),
-      new URL('https://tok--sec.sliccy.now/__slicc/emit'),
-      env,
-      token,
-      true
+      new Request(url, { method: 'POST', body: '{"name":"x"}' }),
+      url,
+      stub,
+      token
     );
     expect(res!.status).toBeLessThan(500);
-    expect(env.stubCalls.some((u) => u.includes('/internal/preview/emit'))).toBe(true);
+    expect(stub.calls.map((r) => new URL(r.url).pathname)).toEqual(['/internal/preview/emit']);
+    await expect(stub.calls[0]!.json()).resolves.toEqual({
+      previewToken: token,
+      body: '{"name":"x"}',
+    });
   });
 
-  it('does NOT serve /__slicc/* for a non-bridged preview (falls through)', async () => {
-    const env = fakeEnv();
-    const res = await handleBridgeRoute(
-      new Request('https://tok--sec.sliccy.now/__slicc/preview-bridge.js'),
-      new URL('https://tok--sec.sliccy.now/__slicc/preview-bridge.js'),
-      env,
-      token,
-      false
-    );
-    // Non-bridged previews never leak the bootstrap and never build the DO stub.
-    expect(res).toBeNull();
-    expect(env.stubCalls).toHaveLength(0);
+  it('forwards the bridge WebSocket upgrade to the DO unchanged', async () => {
+    const stub = fakeStub();
+    const url = new URL(`${origin}/__slicc/bridge`);
+    const request = new Request(url, { headers: { upgrade: 'websocket' } });
+    await handleBridgeRoute(request, url, stub, token);
+    expect(stub.calls).toEqual([request]);
   });
 
-  it('returns null for a normal preview path', async () => {
-    const res = await handleBridgeRoute(
-      new Request('https://tok--sec.sliccy.now/index.html'),
-      new URL('https://tok--sec.sliccy.now/index.html'),
-      fakeEnv(),
-      token,
-      true
-    );
-    expect(res).toBeNull();
+  it('returns null for a normal preview path and a non-upgrade bridge GET', async () => {
+    const stub = fakeStub();
+    for (const path of ['/index.html', '/__slicc/bridge']) {
+      const url = new URL(`${origin}${path}`);
+      expect(await handleBridgeRoute(new Request(url), url, stub, token)).toBeNull();
+    }
+    expect(stub.calls).toHaveLength(0);
   });
 });
