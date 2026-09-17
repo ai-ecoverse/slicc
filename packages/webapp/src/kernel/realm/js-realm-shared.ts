@@ -30,6 +30,7 @@ import {
   createNodeUtil,
 } from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
+import type { BodyReadHandleTracker } from './realm-body-handles.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
 import { reconstructFetchResponse } from './realm-fetch-response.js';
@@ -424,8 +425,9 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 }
 
 /**
- * Install the WASM compile bridge and timer-handle wrappers, run the entry,
- * drain Node-like handles, then post `realm-done`. Timer wrappers are always
+ * Install the WASM compile bridge, timer-handle wrappers, and WHATWG stream
+ * I/O prototype wraps (Body mixin, Blob, ReadableStream), run the entry,
+ * drain Node-like handles, then post `realm-done`. Wrappers are always
  * restored so the in-process test factory cannot leak them into vitest.
  *
  * The WASM compile bridge is an internal global rather than an AsyncFunction
@@ -461,7 +463,13 @@ async function finishJsRealm(opts: {
       throw err;
     },
   });
+  // Loaded on first realm run, not at kernel-worker boot — the in-process
+  // factory is an eager import of this file, so a static import here would
+  // grow the worker first-load graph (#3227 bundle-size).
+  const { createBodyReadHandleTracker } = await import('./realm-body-handles.js');
+  const bodyReads = createBodyReadHandleTracker(globalThis);
   timers.install();
+  bodyReads.install();
   try {
     const exitCode = await runEntryThenDrain({
       entryCode: opts.entryCode,
@@ -481,6 +489,7 @@ async function finishJsRealm(opts: {
       syncFs: opts.syncFs,
       proc: opts.proc,
       timers,
+      bodyReads,
     });
     delete g.__slicc_compileWasm;
     opts.rpc.dispose();
@@ -493,14 +502,15 @@ async function finishJsRealm(opts: {
   } finally {
     timers.clearPending();
     timers.restore();
+    bodyReads.restore();
   }
 }
 
 /**
- * Run the entry, flush sync-fs, then drain ref'd handles (RPC + timers)
- * unless `process.exit()` already skipped them. A mere `process.exitCode`
- * assignment does not skip the drain — Node waits for handles, then exits
- * with that status (#3155).
+ * Run the entry, flush sync-fs, then drain ref'd handles (RPC + timers +
+ * WHATWG stream I/O) unless `process.exit()` already skipped them. A mere
+ * `process.exitCode` assignment does not skip the drain — Node waits for
+ * handles, then exits with that status (#3155).
  */
 async function runEntryThenDrain(opts: {
   entryCode: string;
@@ -511,6 +521,7 @@ async function runEntryThenDrain(opts: {
   syncFs: SyncFsCache;
   proc: ReturnType<typeof createProcessShim>;
   timers: TimerHandleTracker;
+  bodyReads: BodyReadHandleTracker;
 }): Promise<number> {
   const exitCode = await runUserCode(
     opts.entryCode,
@@ -523,7 +534,7 @@ async function runEntryThenDrain(opts: {
     opts.timers.clearPending();
     return opts.proc.getExitCode();
   }
-  await drainEventLoop(opts.rpc, opts.timers, opts.proc);
+  await drainEventLoop(opts.rpc, opts.timers, opts.bodyReads, opts.proc);
   if (opts.proc.getDidCallProcessExit()) {
     opts.timers.clearPending();
   }
@@ -579,11 +590,14 @@ async function flushSyncFsCache(
 /**
  * Keep the realm alive the way Node keeps a process alive: while there are
  * ref'd handles. I/O is `rpc.pendingCount` (fs/exec/fetch). Timers are the
- * wrapped `setTimeout` / `setInterval` set. A pending Promise with no handle
- * does not count — `new Promise(() => {})` must not hang teardown.
+ * wrapped `setTimeout` / `setInterval` set. Native WHATWG stream I/O
+ * (Request/Response/Blob body methods, ReadableStream `pipeTo`/`read`)
+ * that is still a stream turn counts via `bodyReads.pendingCount` (#3227).
+ * A pending Promise with no handle does not count —
+ * `new Promise(() => {})` must not hang teardown.
  *
- * Sleeps on RPC/timer progress instead of spinning `setTimeout(0)`. A
- * never-settling RPC or uncleared `setInterval` hangs until the host
+ * Sleeps on RPC/timer/stream-I/O progress instead of spinning `setTimeout(0)`.
+ * A never-settling RPC or uncleared `setInterval` hangs until the host
  * SIGKILLs the realm worker, the same way hung I/O hangs real Node.
  * `process.exit()` from a delayed callback stops the drain.
  *
@@ -596,15 +610,20 @@ async function flushSyncFsCache(
 async function drainEventLoop(
   rpc: RealmRpcClient,
   timers: TimerHandleTracker,
+  bodyReads: BodyReadHandleTracker,
   proc: ReturnType<typeof createProcessShim>
 ): Promise<void> {
   // One macrotask hop so microtasks queued in the user body (and a single
   // setTimeout(0) already registered) run before we inspect handles.
   await timers.tick();
-  while (!proc.getDidCallProcessExit() && (rpc.pendingCount > 0 || timers.pendingCount > 0)) {
+  while (
+    !proc.getDidCallProcessExit() &&
+    (rpc.pendingCount > 0 || timers.pendingCount > 0 || bodyReads.pendingCount > 0)
+  ) {
     const waits: Promise<void>[] = [];
     if (rpc.pendingCount > 0) waits.push(rpc.waitForProgress());
     if (timers.pendingCount > 0) waits.push(timers.waitForProgress());
+    if (bodyReads.pendingCount > 0) waits.push(bodyReads.waitForProgress());
     if (waits.length === 0) break;
     await Promise.race(waits);
     if (!proc.getDidCallProcessExit()) await timers.tick();

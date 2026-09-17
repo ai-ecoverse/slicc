@@ -19,7 +19,6 @@
 import type { CommandContext } from 'just-bash';
 import { ProcessManager, type ProcessOwner } from '../kernel/process-manager.js';
 import { createDefaultRealmFactory } from '../kernel/realm/realm-factory.js';
-import { createInProcessJsRealmFactory } from '../kernel/realm/realm-inprocess.js';
 import type { RealmFactory } from '../kernel/realm/realm-runner.js';
 import { runInRealm } from '../kernel/realm/realm-runner.js';
 import { isSyncFsBridgeEnabled } from '../kernel/realm/sync-fs-enabled.js';
@@ -94,7 +93,7 @@ export async function executeJsCode(
   pmConfig?: JshProcessConfig,
   options: JshExecutorOptions & { filename?: string } = {}
 ): Promise<JshResult> {
-  const realmFactory = options.realmFactory ?? pickDefaultRealmFactory();
+  const realmFactory = options.realmFactory ?? (await pickDefaultRealmFactory());
   // PM resolution:
   //   1. Caller-supplied (AlmostBashShellHeadless threads it for .jsh scripts).
   //   2. globalThis.__slicc_pm (kernel host publishes this so `node -e`,
@@ -145,14 +144,16 @@ export async function executeJsCode(
  * factory in via `AlmostBashShellOptions`; this fallback is for ad-hoc
  * callers that didn't.
  */
-function pickDefaultRealmFactory(): RealmFactory {
+async function pickDefaultRealmFactory(): Promise<RealmFactory> {
   // Real `Worker` available (standalone or extension offscreen
   // for Python) → DedicatedWorker realm. DOM available with
   // chrome.runtime → iframe realm. Otherwise (vitest in node) →
-  // in-process realm with no hard-kill.
+  // in-process realm with no hard-kill. Dynamic import keeps
+  // js-realm-shared off the kernel-worker first-load graph.
   if (typeof Worker !== 'undefined' || typeof document !== 'undefined') {
     return createDefaultRealmFactory();
   }
+  const { createInProcessJsRealmFactory } = await import('../kernel/realm/realm-inprocess.js');
   return createInProcessJsRealmFactory();
 }
 

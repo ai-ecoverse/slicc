@@ -416,3 +416,270 @@ describe('realm fetch body continuation (#2862)', () => {
     ).toBe(true);
   });
 });
+
+/**
+ * #3227 — leftover of #2862: a later body read on a *constructed*
+ * Request/Response must not silently tear the realm down (exit 0, no
+ * rejection). Fetch bodies were already reconstructed as microtasks;
+ * constructed objects still used native stream turns the drain could
+ * not see. Each case uses the issue's `go().then(DONE, REJ)` shape.
+ */
+function withDone(lines: string[]): string {
+  return [
+    'async function go() {',
+    ...lines.map((line) => `  ${line}`),
+    '  return 1;',
+    '}',
+    'go().then(() => console.log("DONE"), (e) => console.log("REJ " + e.message));',
+  ].join('\n');
+}
+
+const STREAM_BODY = [
+  'function stream(s) {',
+  '  return new ReadableStream({',
+  '    start(c) { c.enqueue(new TextEncoder().encode(s)); c.close(); }',
+  '  });',
+  '}',
+].join('\n');
+
+describe('realm constructed Request/Response body continuation (#3227)', () => {
+  it('lets the first constructed Response body read print', async () => {
+    const code = withDone(['console.log("ctor:" + (await new Response("xyz").text()));']);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('ctor:xyz');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later constructed Response bodies print after the first', async () => {
+    const code = withDone([
+      'console.log("1:" + (await new Response("first").text()) + "/");',
+      'console.log("2:" + (await new Response("second").text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).toBe('');
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets fetch(req.clone()) keep the cloned Request URL and headers', async () => {
+    const code = withDone([
+      'const req = new Request("https://example.test/headers", { headers: { "X-Test": "1" } });',
+      'const r = await fetch(req.clone());',
+      'console.log("url:" + (r.url.includes("example.test") ? "ok" : r.url) + "/");',
+      'console.log("status:" + r.status + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('url:ok/');
+    expect(done.stdout).toContain('status:200/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets a Request copied from another Request keep the original body', async () => {
+    const code = withDone([
+      'const a = new Request("https://example.test/", { method: "POST", body: "copied" });',
+      'const b = new Request(a);',
+      'console.log("copy:" + (await b.text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('copy:copied/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later constructed Request bodies print after the first', async () => {
+    const code = withDone([
+      'const a = new Request("https://example.test/", { method: "POST", body: "a" });',
+      'console.log("1:" + (await a.text()) + "/");',
+      'const b = new Request("https://example.test/", { method: "POST", body: "b" });',
+      'console.log("2:" + (await b.text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:a/');
+    expect(done.stdout).toContain('2:b/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets Response.text() then Response.json() both print', async () => {
+    const code = withDone([
+      'console.log("1:" + (await new Response("x").text()) + "/");',
+      'console.log("2:" + JSON.stringify(await new Response("{\\"n\\":1}").json()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:x/');
+    expect(done.stdout).toContain('2:{"n":1}/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets arrayBuffer() twice on constructed Responses print', async () => {
+    const code = withDone([
+      'console.log("1:" + (await new Response("1").arrayBuffer()).byteLength + "/");',
+      'console.log("2:" + (await new Response("22").arrayBuffer()).byteLength + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:1/');
+    expect(done.stdout).toContain('2:2/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets a constructed Request body then a constructed Response body print', async () => {
+    const code = withDone([
+      'const req = new Request("https://example.test/", { method: "POST", body: "req-body" });',
+      'console.log((await req.text()) + "/");',
+      'console.log((await new Response("res-body").text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('req-body/');
+    expect(done.stdout).toContain('res-body/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets a fetch body then a constructed body print', async () => {
+    const code = withDone([
+      'const r = await fetch("https://example.test/status/200");',
+      'console.log("fetch:" + (await r.text()).length + "/");',
+      'console.log("ctor:" + (await new Response("xyz").text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('fetch:');
+    expect(done.stdout).toContain('ctor:xyz/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets three sequential fetch bodies print (still fixed by #2862)', async () => {
+    const code = withDone([
+      'for (const i of [1, 2, 3]) {',
+      '  const r = await fetch("https://example.test/headers");',
+      '  const t = await r.text();',
+      '  console.log(i + ":" + t.length + "/");',
+      '}',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:');
+    expect(done.stdout).toContain('2:');
+    expect(done.stdout).toContain('3:');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets a constructed body then a fetch body print', async () => {
+    const code = withDone([
+      'console.log("ctor:" + (await new Response("xyz").text()) + "/");',
+      'const r = await fetch("https://example.test/status/200");',
+      'console.log("fetch:" + (await r.text()).length + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('ctor:xyz/');
+    expect(done.stdout).toContain('fetch:');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets a constructed body print after plain awaits', async () => {
+    const code = withDone([
+      'await Promise.resolve();',
+      'await Promise.resolve(1);',
+      'console.log("ctor:" + (await new Response("ok").text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('ctor:ok/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets a constructed body print after a bare fetch whose body is unread', async () => {
+    const code = withDone([
+      'const r = await fetch("https://example.test/status/200");',
+      'console.log("status:" + r.status + "/");',
+      'console.log("ctor:" + (await new Response("ok").text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('status:200/');
+    expect(done.stdout).toContain('ctor:ok/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later stream-bodied Responses print (native stream turns)', async () => {
+    const code = [
+      STREAM_BODY,
+      withDone([
+        'console.log("1:" + (await new Response(stream("first")).text()) + "/");',
+        'console.log("2:" + (await new Response(stream("second")).text()) + "/");',
+      ]),
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later Blob.text() reads print after the first', async () => {
+    const code = withDone([
+      'console.log("1:" + (await new Blob(["first"]).text()) + "/");',
+      'console.log("2:" + (await new Blob(["second"]).text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later ReadableStream reader.read() calls print after the first', async () => {
+    const code = [
+      STREAM_BODY,
+      withDone([
+        'async function read(s) {',
+        '  const { value } = await s.getReader().read();',
+        '  return new TextDecoder().decode(value);',
+        '}',
+        'console.log("1:" + (await read(stream("first"))) + "/");',
+        'console.log("2:" + (await read(stream("second"))) + "/");',
+      ]),
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later Response.body.getReader() reads print after a prior body read', async () => {
+    const code = [
+      STREAM_BODY,
+      withDone([
+        'console.log("1:" + (await new Response("first").text()) + "/");',
+        'const { value } = await new Response(stream("second")).body.getReader().read();',
+        'console.log("2:" + new TextDecoder().decode(value) + "/");',
+      ]),
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('rejects a second read on the same constructed body instead of exiting 0', async () => {
+    const code = withDone([
+      'const r = new Response("x");',
+      'console.log("1:" + (await r.text()) + "/");',
+      'await r.text();',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:x/');
+    expect(done.stdout).toContain('REJ ');
+    expect(done.stdout).not.toContain('DONE');
+  });
+});

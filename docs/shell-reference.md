@@ -1858,14 +1858,20 @@ no handle (`new Promise(() => {})`) does **not** keep it alive.
 not: the realm drains, then exits with `n` (#3155).
 
 SLICC matches that: `.jsh` / `node` wrap the entry in `AsyncFunction` (so
-top-level `await` works), then drain outstanding RPC (fs/exec/fetch) and
-user timers before `realm-done`. Fire-and-forget `.then()`, unawaited
-`main()`, nested `setTimeout`, and `await fetch(…).json()` / `.text()`
-therefore print before the command exits. Fetch response bodies are
-already buffered on the host; `json()` / `text()` resolve from those
-bytes so the continuation after a body read is not a native stream turn
-the drain cannot see. An uncleared `setInterval` or hung I/O hangs until
-the shell job is SIGKILL'd, the same way hung I/O hangs real Node.
+top-level `await` works), then drain outstanding RPC (fs/exec/fetch),
+user timers, and in-flight WHATWG stream I/O before `realm-done`.
+Fire-and-forget `.then()`, unawaited `main()`, nested `setTimeout`, and
+`await fetch(…).json()` / `.text()` therefore print before the command
+exits. Fetch response bodies are already buffered on the host; `json()`
+/ `text()` resolve from those bytes so the continuation after a body
+read is not a native stream turn the drain cannot see. Request/Response
+constructors are left as the platform's, so `instanceof Request` and
+`req.clone()` keep working. Native stream I/O (`Request`/`Response`/
+`Blob`/`File` body reads, `FormData`, `ReadableStream` `read`/`pipeTo`,
+`body.getReader()`) keeps the realm alive until the native read settles,
+so a second stream read cannot silently exit 0 (#3227). An uncleared
+`setInterval` or hung I/O hangs until the shell job is SIGKILL'd, the
+same way hung I/O hangs real Node.
 
 ### Globals API
 

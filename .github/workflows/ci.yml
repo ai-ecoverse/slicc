@@ -479,6 +479,12 @@ jobs:
           #     the same IN_NODE detection pattern. The worker is a Web Worker
           #     context where IN_NODE is false; the Node branches are dead code at
           #     load time. Manually verified — see Phase 2 work.
+          #   - js-realm-worker / realm-inprocess / js-realm-shared: the JS realm
+          #     engine (DedicatedWorker entry and the in-process fallback). The
+          #     fallback is a lazy chunk so it stays off kernel-worker first-load;
+          #     it is the same runJsRealm graph with the same IN_NODE-gated Node
+          #     shims (fileURLToPath, path, crypto). Production never loads it
+          #     when Worker is available.
           #   - py-realm-worker: hosts Pyodide, so by definition pulls the same
           #     IN_NODE-gated dead branches as pyodide-* itself.
           #   - transformers.web: @huggingface/transformers (the speech stack's
@@ -486,7 +492,7 @@ jobs:
           #     compat branches (fileURLToPath etc.); in the browser its
           #     IS_NODE_ENV detection keeps them dead at load time.
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|py-realm-worker|transformers\.web' || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|js-realm-shared|realm-inprocess|py-realm-worker|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in browser bundle:"
             for f in $MATCHES; do
@@ -802,7 +808,7 @@ jobs:
           # Exclude pyodide files which legitimately contain Node references.
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
           # Same exclusions as the webapp scan (see comment there).
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|py-realm-worker|transformers\.web' || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|js-realm-shared|realm-inprocess|py-realm-worker|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in extension bundle:"
             for f in $MATCHES; do
