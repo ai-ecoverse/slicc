@@ -6,6 +6,7 @@ export * from './bridge-protocol.js';
 export * from './byte-range.js';
 export * from './cdp-frame-unmask.js';
 export * from './cdp-target-info.js';
+export * from './computer-protocol.js';
 export * from './content-type.js';
 export * from './discovery-link.js';
 export * from './electron-overlay-route.js';
