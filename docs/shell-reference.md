@@ -1916,7 +1916,10 @@ workspace roots prepended (`/scoops/<folder>/workspace/{skills,bin}`).
 
 `script-catalog.ts` is the shared lookup layer used by `AlmostBashShell`, `which`, and browser-script matching, with one cache per distinct root set. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; a mount only disables caching for root sets it overlaps, because external edits inside File System Access mounts are not observable through the watcher.
 
-**Execution**: Via `jsh-executor.ts` (dual-mode):
+**Execution**: Via `jsh-executor.ts` (dual-mode). A leading `#!` shebang line
+is stripped before compile (blank first line kept so error line numbers
+still match the file); `jsh`, `jshd`, and PATH-discovered `.jsh` scripts
+all share that path.
 
 - CLI: `AsyncFunction` constructor with Node-like globals
 - Extension: Sandbox iframe (CSP-compliant), VFS via postMessage

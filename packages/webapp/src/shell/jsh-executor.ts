@@ -24,6 +24,7 @@ import { runInRealm } from '../kernel/realm/realm-runner.js';
 import { isSyncFsBridgeEnabled } from '../kernel/realm/sync-fs-enabled.js';
 import { stdinAsLatin1 } from './just-bash-compat.js';
 import { resolveProviderEnvSeed } from './provider-env-seed.js';
+import { stripShebang } from './strip-shebang.js';
 
 export interface JshResult {
   stdout: string;
@@ -104,7 +105,7 @@ export async function executeJshFile(
  * 1 on uncaught throw, or 137 on SIGKILL).
  */
 export async function executeJsCode(
-  code: string,
+  rawCode: string,
   argv: string[],
   ctx: CommandContext,
   pmConfig?: JshProcessConfig,
@@ -120,6 +121,7 @@ export async function executeJsCode(
   const pm = pmConfig?.processManager ?? lookupGlobalPm() ?? lazyEphemeralPm();
   const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
   const filename = options.filename ?? argv[1] ?? '<eval>';
+  const code = stripShebang(rawCode, { keepLine: true });
   // Selected-provider API key under its SDK env name (see provider-env-seed.ts).
   // Cone/system only: a sandboxed scoop's model traffic goes through the
   // capability-gated bridge and must never see the raw credential. `jshd`
