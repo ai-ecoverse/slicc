@@ -222,6 +222,7 @@ Dream over {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions, budget {{BUDGET_CHARS}},
     expect(DEFAULT_MEMORY_MD).toContain('Consolidating (every pass)');
     expect(options.prompt).toContain('Consolidating (every pass)');
     expect(options.allowedCommands).toContain('uname');
+    expect(options.allowedCommands).toContain('rg');
     expect(options.prompt).toContain('**Consolidation pass**');
     expect(options.prompt).not.toContain('{{BUDGET_CHARS}}');
     expect(options.prompt).not.toContain('{{TASK}}');

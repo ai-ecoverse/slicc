@@ -45,6 +45,7 @@ const BASE_ALLOWED_COMMANDS = [
   'od',
   'printf',
   'readlink',
+  'rg',
   'sed',
   'sort',
   'stat',
@@ -333,7 +334,7 @@ Curate {{MEMORY_PATH}}.`;
   // list still escalated `awk`, `sort` and `echo` to the cone, which killed the
   // run. Missing commands do not fail — they raise a sudo request — so the base
   // set must cover them from code, independent of the on-disk frontmatter.
-  it.each(['awk', 'cp', 'echo', 'printf', 'sort', 'uname'])(
+  it.each(['awk', 'cp', 'echo', 'printf', 'rg', 'sort', 'uname'])(
     'grants %s from the base set even when frontmatter omits it',
     async (command) => {
       const spawn = successSpawn();
@@ -412,6 +413,7 @@ Curate {{MEMORY_PATH}}.`;
       .filter(Boolean);
     expect(seededCommands?.length).toBeGreaterThan(0);
     expect(seededCommands).toContain('uname');
+    expect(seededCommands).toContain('rg');
     const spawn = successSpawn();
     await runAgenticMemoryPass({
       spawn,

@@ -111,6 +111,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'od',
   'printf',
   'readlink',
+  // Recursive, .gitignore-aware search — MEMORY.md says this is what the
+  // pass actually uses over find|xargs grep. Without it a stale seeded
+  // document still escalates every rg.
+  'rg',
   'sed',
   'sort',
   'stat',
