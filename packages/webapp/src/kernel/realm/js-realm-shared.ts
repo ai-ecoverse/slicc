@@ -79,6 +79,14 @@ import {
   type SyncSabTransport,
 } from './sync-sab-bridge.js';
 
+const OUTPUT_TAIL_MAX = 64 * 1024;
+
+function appendOutputTail(current: string, chunk: string): string {
+  if (!chunk) return current;
+  const next = current + chunk;
+  return next.length <= OUTPUT_TAIL_MAX ? next : next.slice(next.length - OUTPUT_TAIL_MAX);
+}
+
 /**
  * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
  * Falls back to an empty cache when the host doesn't support the snapshot op
@@ -290,19 +298,27 @@ function createDeviceBridges(rpc: RealmRpcClient): {
  * module throws `Cannot find module 'x' (run: ipk install x)` immediately.
  */
 export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
-  const writeStream = (stream: 'stdout' | 'stderr', chunks: string[], value: unknown): void => {
+  const captureOutput = init.captureOutput !== false;
+  const output = { stdout: '', stderr: '' };
+  const writeStream = (stream: 'stdout' | 'stderr', value: unknown): void => {
     const chunk = typeof value === 'string' ? value : String(value);
-    chunks.push(chunk);
+    if (stream === 'stdout') {
+      output.stdout = captureOutput
+        ? output.stdout + chunk
+        : appendOutputTail(output.stdout, chunk);
+    } else {
+      output.stderr = captureOutput
+        ? output.stderr + chunk
+        : appendOutputTail(output.stderr, chunk);
+    }
     // Stream immediately so a later SIGKILL still has this output (#3136).
     port.postMessage({ type: 'realm-output', stream, chunk } satisfies RealmOutputMsg);
   };
   const writeStdout = (value: unknown): void => {
-    writeStream('stdout', stdoutChunks, value);
+    writeStream('stdout', value);
   };
   const writeStderr = (value: unknown): void => {
-    writeStream('stderr', stderrChunks, value);
+    writeStream('stderr', value);
   };
 
   const nodeConsole = createNodeConsole(writeStdout, writeStderr);
@@ -418,8 +434,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     writeStderr,
     rpc,
     syncFs,
-    stdoutChunks,
-    stderrChunks,
+    output,
     port,
   });
 }
@@ -447,8 +462,7 @@ async function finishJsRealm(opts: {
   writeStderr: (value: unknown) => void;
   rpc: RealmRpcClient;
   syncFs: SyncFsCache;
-  stdoutChunks: string[];
-  stderrChunks: string[];
+  output: { stdout: string; stderr: string };
   port: RealmPortLike;
 }): Promise<void> {
   const g = globalThis as GlobalWithWasmCompile;
@@ -495,8 +509,8 @@ async function finishJsRealm(opts: {
     opts.rpc.dispose();
     opts.port.postMessage({
       type: 'realm-done',
-      stdout: opts.stdoutChunks.join(''),
-      stderr: opts.stderrChunks.join(''),
+      stdout: opts.output.stdout,
+      stderr: opts.output.stderr,
       exitCode,
     } satisfies RealmDoneMsg);
   } finally {
@@ -589,12 +603,12 @@ async function flushSyncFsCache(
 
 /**
  * Keep the realm alive the way Node keeps a process alive: while there are
- * ref'd handles. I/O is `rpc.pendingCount` (fs/exec/fetch). Timers are the
- * wrapped `setTimeout` / `setInterval` set. Native WHATWG stream I/O
- * (Request/Response/Blob body methods, ReadableStream `pipeTo`/`read`)
- * that is still a stream turn counts via `bodyReads.pendingCount` (#3227).
- * A pending Promise with no handle does not count —
- * `new Promise(() => {})` must not hang teardown.
+ * ref'd handles. I/O is `rpc.pendingCount` (fs/exec/fetch plus active
+ * `onEvent` host-event subscriptions). Timers are the wrapped `setTimeout`
+ * / `setInterval` set. Native WHATWG stream I/O (Request/Response/Blob body
+ * methods, ReadableStream `pipeTo`/`read`) that is still a stream turn
+ * counts via `bodyReads.pendingCount` (#3227). A pending Promise with no
+ * handle does not count — `new Promise(() => {})` must not hang teardown.
  *
  * Sleeps on RPC/timer/stream-I/O progress instead of spinning `setTimeout(0)`.
  * A never-settling RPC or uncleared `setInterval` hangs until the host

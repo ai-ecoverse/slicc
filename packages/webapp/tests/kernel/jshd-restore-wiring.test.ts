@@ -1,7 +1,7 @@
 /**
- * Pins the fire-and-forget jshd restore hook in createKernelHost so a
- * refactor cannot drop it from the boot sequence or hoist the supervisor
- * into the eager worker graph.
+ * Pins the awaited jshd restore hook in createKernelHost so a refactor
+ * cannot drop it from the boot sequence, run it before mounts, or hoist
+ * the supervisor into the eager worker graph.
  */
 
 import { readFileSync } from 'node:fs';
@@ -14,12 +14,15 @@ const hostPath = join(here, '..', '..', 'src', 'kernel', 'host.ts');
 const source = readFileSync(hostPath, 'utf8');
 
 describe('jshd boot restore wiring', () => {
-  it('schedules restore after mount recovery and before cone bootstrap', () => {
-    const mount = source.indexOf('scheduleMountRecovery(sharedFs');
-    const restore = source.indexOf('scheduleJshdRestore(sharedFs');
+  it('awaits mount recovery, then jshd restore, then cone bootstrap', () => {
+    const step = source.indexOf('await restoreMountsThenJshd(sharedFs');
+    const mount = source.indexOf('await recoverPersistedMounts(sharedFs');
+    const restore = source.indexOf('await restoreJshdUnits(sharedFs');
     const cone = source.indexOf('await bootstrapCone(');
+    expect(step).toBeGreaterThan(0);
     expect(mount).toBeGreaterThan(0);
     expect(restore).toBeGreaterThan(mount);
+    expect(cone).toBeGreaterThan(step);
     expect(cone).toBeGreaterThan(restore);
   });
 

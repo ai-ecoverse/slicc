@@ -66,6 +66,12 @@ export interface RealmInitMsg {
    */
   syncSab?: SharedArrayBuffer;
   /**
+   * When false, the realm keeps only a bounded diagnostic tail of stdout
+   * and stderr instead of retaining every chunk until exit. Host-side
+   * `runInRealm({ captureOutput: false })` matches this. Default true.
+   */
+  captureOutput?: boolean;
+  /**
    * Optional initial stdin (string). Consumed by both realms:
    *   • Python — surfaced as `sys.stdin`.
    *   • JS — surfaced as `process.stdin.read()` / `for await ... of

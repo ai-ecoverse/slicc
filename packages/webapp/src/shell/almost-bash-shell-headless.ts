@@ -1176,6 +1176,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const onSettled = () => this.scriptRun?.stepDone();
     const teeOutput = (env: ReadonlyMap<string, string> | undefined, result: ExecResult) =>
       this.teeCommandOutput(env, result);
+    const outputTees = this.outputTees;
     return {
       ...wrapped,
       async execute(args, ctx) {
@@ -1183,11 +1184,18 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         // `wrapCommandForProgress` skips (`echo`, …). Counted on COMPLETION so
         // the script bar advances when a step finishes, not when it starts.
         // O(1) when no script unit is active.
+        const teeId = ctx.env?.get(OUTPUT_TEE_ENV);
+        const tee = teeId ? outputTees.get(teeId) : undefined;
+        if (tee) {
+          (ctx as CommandContext & { writeStdout?: (chunk: string) => void }).writeStdout = tee;
+        }
         try {
           const result = await wrapped.execute(args, ctx);
           // Incremental tee for the agent bash tool (#2415): emit each
           // command's output as it settles so a later timeout kill still has
-          // the pre-kill payload on disk.
+          // the pre-kill payload on disk. Commands that already streamed via
+          // `writeStdout` (e.g. `jshd logs -f`) return empty stdout so this
+          // is a no-op.
           teeOutput(ctx.env, result);
           return result;
         } finally {

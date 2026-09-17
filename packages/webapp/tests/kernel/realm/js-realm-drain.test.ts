@@ -97,6 +97,21 @@ async function handleFakeHostMessage(
     });
     return;
   }
+  if (req.channel === 'hid' && req.op === 'list') {
+    host.postMessage({
+      type: 'realm-rpc-res',
+      id: req.id,
+      result: [{ handle: 'hid1', vendorId: 1, productId: 2, opened: false }],
+    });
+    return;
+  }
+  if (
+    req.channel === 'hid' &&
+    (req.op === 'subscribeInputReports' || req.op === 'unsubscribeInputReports')
+  ) {
+    host.postMessage({ type: 'realm-rpc-res', id: req.id, result: undefined });
+    return;
+  }
   if (req.channel === 'fetch' && req.op === 'request') {
     const url = String(req.args[0] ?? '');
     if (opts.delayMs && opts.delayMs > 0) {
@@ -314,6 +329,37 @@ describe('realm event-loop drain before teardown', () => {
     const done = await runRealm('process.exitCode = 4; throw new Error("boom");');
     expect(done.exitCode).toBe(1);
     expect(done.stderr).toContain('boom');
+  });
+
+  it('keeps an event-only HID subscription alive until unsubscribe', async () => {
+    const code = [
+      '(async () => {',
+      "  const hid = require('sliccy:hid');",
+      '  const devices = await hid.list();',
+      '  const cb = () => {};',
+      "  devices[0].addEventListener('inputreport', cb);",
+      "  setTimeout(() => devices[0].removeEventListener('inputreport', cb), 40);",
+      '})();',
+    ].join('\n');
+    const start = Date.now();
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(35);
+  });
+
+  it('does not exit while a host-event subscription remains', async () => {
+    const code = [
+      '(async () => {',
+      "  const hid = require('sliccy:hid');",
+      '  const devices = await hid.list();',
+      "  devices[0].addEventListener('inputreport', () => {});",
+      '})();',
+      'setTimeout(() => process.exit(0), 80);',
+    ].join('\n');
+    const start = Date.now();
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(70);
   });
 
   it('flushes sync-fs mutations made from a delayed callback', async () => {

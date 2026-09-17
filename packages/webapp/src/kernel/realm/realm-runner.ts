@@ -51,6 +51,14 @@ import type {
 } from './realm-types.js';
 import { isSyncSabSupported, SAB_DEFAULT_WINDOW_BYTES, SAB_HEADER_BYTES } from './sync-sab-wire.js';
 
+const OUTPUT_TAIL_MAX = 64 * 1024;
+
+function appendOutputTail(current: string, chunk: string): string {
+  if (!chunk) return current;
+  const next = current + chunk;
+  return next.length <= OUTPUT_TAIL_MAX ? next : next.slice(next.length - OUTPUT_TAIL_MAX);
+}
+
 // ---------------------------------------------------------------------------
 // Realm abstraction
 // ---------------------------------------------------------------------------
@@ -183,6 +191,12 @@ export interface RunInRealmOptions {
    * `jshd` unit logs incrementally the way detached bash jobs do.
    */
   onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
+  /**
+   * When false, host-side capture keeps only a bounded diagnostic tail
+   * instead of concatenating every chunk. Pair with `onOutput` so the
+   * durable log still receives the full stream. Default true.
+   */
+  captureOutput?: boolean;
 }
 
 export interface RealmResult {
@@ -220,6 +234,8 @@ interface LiveRealmCapture {
   stderr: string;
   /** Latest write/delete per path — appends replace, so the buffer stays O(paths). */
   pendingByPath: Map<string, PendingFsOp>;
+  /** When false, stdout/stderr stay a bounded diagnostic tail. */
+  captureOutput: boolean;
 }
 
 function dropPendingPaths(capture: LiveRealmCapture, paths: readonly string[]): void {
@@ -234,8 +250,15 @@ function ingestLiveRealmMessage(
 ): 'done' | 'error' | 'live' {
   if (data.type === 'realm-output') {
     const msg = data as RealmOutputMsg;
-    if (msg.stream === 'stdout') capture.stdout += msg.chunk;
-    else capture.stderr += msg.chunk;
+    if (msg.stream === 'stdout') {
+      capture.stdout = capture.captureOutput
+        ? capture.stdout + msg.chunk
+        : appendOutputTail(capture.stdout, msg.chunk);
+    } else {
+      capture.stderr = capture.captureOutput
+        ? capture.stderr + msg.chunk
+        : appendOutputTail(capture.stderr, msg.chunk);
+    }
     onOutput?.(msg.chunk, msg.stream);
     return 'live';
   }
@@ -303,6 +326,7 @@ function buildRealmInitMsg(
     mountPoints: opts.mountPoints,
     ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
     ...(syncSab ? { syncSab } : {}),
+    ...(opts.captureOutput === false ? { captureOutput: false } : {}),
   };
 }
 
@@ -347,7 +371,12 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
   // (`syncFsBridgeEnabled`) is not required to mint its token. Everywhere
   // else the SW transport (when confirmed) or the snapshot remains.
   const syncSab = realm.isolatedThread ? allocateSyncSab(opts.syncSabBytes) : undefined;
-  const capture: LiveRealmCapture = { stdout: '', stderr: '', pendingByPath: new Map() };
+  const capture: LiveRealmCapture = {
+    stdout: '',
+    stderr: '',
+    pendingByPath: new Map(),
+    captureOutput: opts.captureOutput !== false,
+  };
   const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
     ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
     pm: opts.pm,

@@ -1196,4 +1196,18 @@ describe('realm RPC: client lifecycle', () => {
     client.dispose();
     await expect(client.call('vfs', 'readFile', ['/x'])).rejects.toThrow(/disposed/);
   });
+
+  it('counts event subscriptions as pending handles and wakes waitForProgress on unsubscribe', async () => {
+    const { realm } = makePortPair();
+    const client = new RealmRpcClient(realm);
+    expect(client.pendingCount).toBe(0);
+    const off = client.onEvent('hid-input-report', () => undefined);
+    expect(client.eventSubscriptionCount).toBe(1);
+    expect(client.pendingCount).toBe(1);
+    const woke = client.waitForProgress();
+    off();
+    await woke;
+    expect(client.pendingCount).toBe(0);
+    client.dispose();
+  });
 });

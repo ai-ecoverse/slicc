@@ -20,7 +20,7 @@ interface Process {
   readonly argv: readonly string[];
   readonly cwd: string;
   readonly env: Record<string, string>;
-  readonly owner: ProcessOwner; // { kind: 'cone' | 'scoop' | 'system', scoopJid? }
+  readonly owner: ProcessOwner; // { kind: 'cone' | 'scoop' | 'system' | 'jshd', scoopJid? }
   readonly abort: AbortController; // cooperative cancel
   readonly gate: Gate; // pause/resume
   readonly startedAt: number;
@@ -58,7 +58,7 @@ Consequences worth knowing: `get(pid)` and `wait(pid)` on a reaped pid behave ex
 | `shell`      | `TerminalSessionHost.handleExec()` (panel terminal) | `[command-line]`                        |
 | `shell`      | `ScoopContext.spawnBashJob()` (agent `bash` tool)   | `['bash', '-c', command]`               |
 | `jsh`        | `executeJshFile` / `executeJsCode` (via realm)      | `['node', scriptPath, …args]`           |
-| `jsh`        | `jshd start` (owner `system`, job id `jshd:<name>`) | `['node', scriptPath, …args]`           |
+| `jsh`        | `jshd start` (owner `jshd`, job id `jshd:<name>`)   | `['node', scriptPath, …args]`           |
 | `py`         | `python` / `python3` shell command (via realm)      | `['python3', …]`                        |
 
 The principal-arg extraction for tools (`extractToolArg` in `tool-adapter.ts`) tries an ordered list of known param names — `command` (bash), `file_path` / `path` (file ops), `pattern`, `url`, `key`, `name`, `query`, `message` — then falls back to the first non-empty string value. The `ps` formatter shell-quotes args with whitespace; a typical row reads `bash 'bash -c "date && sleep 8 && date"'`.
@@ -169,15 +169,15 @@ Every `bash` tool call registers a `kind:'shell'` job (`ScoopContext.spawnBashJo
 
 ## jshd units
 
-`jshd` is a pm2-style supervisor for long-running `.jsh` scripts (dev servers, watchers, skill-side daemons). Each unit is one realm worker plus one `ProcessManager` process (`kind: 'jsh'`, owner `{ kind: 'system' }`). `ps` lists it; `kill <pid>` stops it.
+`jshd` is a pm2-style supervisor for long-running `.jsh` scripts (dev servers, watchers, skill-side daemons). Each unit is one realm worker plus one `ProcessManager` process (`kind: 'jsh'`, owner `{ kind: 'jshd' }`). Provider credentials are not injected. `ps` lists it; `kill <pid>` stops it.
 
 Unit records live in `/workspace/.jshd/<name>.json` (argv, cwd, env, restart policy, enabled, createdAt). Logs are tee'd incrementally to `/workspace/.jshd/log/<name>.log`, the same idea as detached bash-job output.
 
 **Restart vs stop.** `kill <pid>` and `jshd stop` mean stop: they do not restart. Only the restart policy (`always` / `on-failure` / `no`, default `always`) relaunches a unit that exited on its own. Backoff is exponential (1s … 30s). Eight failures inside 60s mark the unit `errored` and emit a `jshd` lick.
 
-**Keep-alive** is the realm's existing handle semantics: a pending timer or host-event subscription keeps the worker up; a script that returns with nothing pending exits and is subject to the restart policy.
+**Keep-alive** is the realm's existing handle semantics: a pending timer or host-event subscription (`RealmRpcClient.onEvent`) keeps the worker up; a script that returns with nothing pending exits and is subject to the restart policy.
 
-**Boot restore.** After mount recovery is scheduled (kernel-host step 9), a fire-and-forget step relaunches every `enabled` unit before cone bootstrap. It is never on the boot critical path (no awaited VFS reads).
+**Boot restore.** Kernel-host step 9 awaits mount recovery, then awaits jshd restore, then bootstraps the cone. `createKernelHost` does not return (and the first turn cannot start) until enabled units have been relaunched. Restored units get a kernel-owned headless-shell context (canonical `PATH` / `HOME` plus a real `exec` bridge) with the persisted unit env overlaid.
 
 **Job table.** Live units are also recorded in `kernel/job-table.ts` (`id: jshd:<name>`) so a future `jobs` / `fg` / `bg` (#2846) can list them next to detached bash jobs.
 

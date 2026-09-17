@@ -195,11 +195,11 @@ describe('executeJshFile', () => {
     }
   });
 
-  it('never seeds the provider env into scoop-owned realms', async () => {
+  it('never seeds the provider env into scoop-owned or jshd-owned realms', async () => {
     const { ProcessManager } = await import('../../src/kernel/process-manager.js');
     registerProviderEnvSeeder(() => ({ AI_GATEWAY_API_KEY: 'vck_seeded' }));
     try {
-      const run = (kind: 'cone' | 'scoop' | 'system') =>
+      const run = (kind: 'cone' | 'scoop' | 'system' | 'jshd') =>
         executeJshFile(
           '/workspace/seed.jsh',
           [],
@@ -209,6 +209,7 @@ describe('executeJshFile', () => {
           { processManager: new ProcessManager(), owner: { kind } }
         );
       expect((await run('scoop')).stdout.trim()).toBe('undefined');
+      expect((await run('jshd')).stdout.trim()).toBe('undefined');
       expect((await run('cone')).stdout.trim()).toBe('vck_seeded');
       expect((await run('system')).stdout.trim()).toBe('vck_seeded');
     } finally {

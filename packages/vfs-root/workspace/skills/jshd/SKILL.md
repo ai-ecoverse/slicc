@@ -29,6 +29,8 @@ Records: `/workspace/.jshd/<name>.json`. Logs: `/workspace/.jshd/log/<name>.log`
 
 `ps` shows the unit as `kind: jsh`. Restart policy (`always` / `on-failure` / `no`) applies only to a natural exit. A crash-loop (8 failures in 60s) marks the unit `errored` and licks the cone.
 
-Keep-alive is the realm: pending timers or host-event subscriptions keep the worker up. A script that returns with nothing pending exits.
+Keep-alive is the realm: pending timers or host-event subscriptions (`hid`/`usb` event listeners) keep the worker up. A script that returns with nothing pending exits.
+
+`--enable`d units are relaunched after mounts restore and before the cone's first turn. Restored units keep canonical `PATH` and can still `exec` child commands.
 
 On the thin Chrome extension, `start` still runs as best effort; `ls` reports the unit is not durable (no DedicatedWorker).

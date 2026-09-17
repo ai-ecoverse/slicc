@@ -188,11 +188,19 @@ async function handleLogs(
     return fail(`-n must be a non-negative integer`);
   }
   const body = await readUnitLog(ctx.fs, name);
-  const text = tail === undefined ? body : lastLines(body, tail);
-  if (!follow) return ok(text.endsWith('\n') || text.length === 0 ? text : `${text}\n`);
+  const displayed = tail === undefined ? body : lastLines(body, tail);
+  if (!follow) {
+    return ok(displayed.endsWith('\n') || displayed.length === 0 ? displayed : `${displayed}\n`);
+  }
   const signal = abortSignalOf(ctx);
-  if (!signal) return ok(text.endsWith('\n') || text.length === 0 ? text : `${text}\n`);
-  return followLogs(ctx, name, text, signal);
+  const sink = liveOutputSinkOf(ctx);
+  if (!signal) {
+    sink?.(displayed);
+    return sink
+      ? ok('')
+      : ok(displayed.endsWith('\n') || displayed.length === 0 ? displayed : `${displayed}\n`);
+  }
+  return followLogs({ ctx, name, displayed, seen: body.length, signal, sink });
 }
 
 async function handleEnable(
@@ -225,6 +233,8 @@ async function enableOnDisk(
 }
 
 function supervisorOf(ctx: CommandContext, options: JshdRunOptions): JshdSupervisor | null {
+  const existing = getJshdSupervisor();
+  if (existing) return existing;
   const pm = options.processManager ?? lookupGlobalPm();
   if (!pm) return null;
   const lick = lookupLickManager();
@@ -302,14 +312,18 @@ function lastLines(text: string, n: number): string {
   return `${parts.slice(-n).join('\n')}${text.endsWith('\n') ? '\n' : ''}`;
 }
 
-async function followLogs(
-  ctx: CommandContext,
-  name: string,
-  initial: string,
-  signal: AbortSignal
-): Promise<CmdResult> {
-  let seen = initial.length;
-  const chunks = [initial];
+async function followLogs(opts: {
+  ctx: CommandContext;
+  name: string;
+  displayed: string;
+  seen: number;
+  signal: AbortSignal;
+  sink?: (chunk: string) => void;
+}): Promise<CmdResult> {
+  const { ctx, name, displayed, signal, sink } = opts;
+  let seen = opts.seen;
+  const chunks: string[] = sink ? [] : [displayed];
+  sink?.(displayed);
   while (!signal.aborted) {
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 200);
@@ -325,10 +339,13 @@ async function followLogs(
     if (signal.aborted) break;
     const body = await readUnitLog(ctx.fs, name);
     if (body.length > seen) {
-      chunks.push(body.slice(seen));
+      const chunk = body.slice(seen);
       seen = body.length;
+      if (sink) sink(chunk);
+      else chunks.push(chunk);
     }
   }
+  if (sink) return ok('');
   const text = chunks.join('');
   return ok(text.endsWith('\n') || text.length === 0 ? text : `${text}\n`);
 }
@@ -336,6 +353,11 @@ async function followLogs(
 function abortSignalOf(ctx: CommandContext): AbortSignal | undefined {
   const extra = ctx as CommandContext & { signal?: AbortSignal };
   return extra.signal;
+}
+
+function liveOutputSinkOf(ctx: CommandContext): ((chunk: string) => void) | undefined {
+  const extra = ctx as CommandContext & { writeStdout?: (chunk: string) => void };
+  return typeof extra.writeStdout === 'function' ? extra.writeStdout.bind(extra) : undefined;
 }
 
 function lookupGlobalPm(): ProcessManager | null {

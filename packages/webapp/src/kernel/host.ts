@@ -33,9 +33,10 @@
  *     onboarding flow) supply `lickEventHandler`.
  *  8. `globalThis.__slicc_lickManager = lickManager`.
  *  9. `recoverMounts` against the shared FS, emitting a `session-reload`
- *     lick if any mount needs user re-consent. Fire-and-forget.
- *  9b. Restore enabled `jshd` units (fire-and-forget, after mount restore
- *      is scheduled, before cone bootstrap). Never on the boot critical path.
+ *     lick if any mount needs user re-consent. Awaited before jshd restore.
+ *  9b. Restore enabled `jshd` units after mounts are back, before cone
+ *      bootstrap. Held on the first-turn readiness boundary so relaunched
+ *      units are live before the cone's first turn.
  *  10. Cone bootstrap (skippable via `skipConeBootstrap`).
  *  11. Upgrade detection.
  *  12. `BshWatchdog` start.
@@ -919,76 +920,85 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
 }
 
 /**
- * Step 9: restore persisted mounts (fire-and-forget). MUST run AFTER
- * `setEventHandler` so the `session-reload` lick this may emit routes through
- * the installed handler. The caller gates on `sharedFs` being present.
+ * Step 9: restore persisted mounts. MUST run AFTER `setEventHandler` so the
+ * `session-reload` lick this may emit routes through the installed handler.
+ * The caller gates on `sharedFs` being present and awaits this before jshd
+ * restore so units that read mounted paths see them.
  */
 /**
- * Step 9b: relaunch every enabled jshd unit (fire-and-forget). Scheduled
- * after mount recovery so units that read mounted paths have a chance to
- * see them, and before cone bootstrap so restore starts before the first
- * turn. The body is lazily imported so the supervisor stays out of the
- * worker's eager first-load graph.
+ * Step 9b: relaunch every enabled jshd unit. Awaited after mount recovery
+ * and before cone bootstrap so restore finishes before the first turn.
+ * The body is lazily imported so the supervisor stays out of the worker's
+ * eager first-load graph.
  */
-function scheduleJshdRestore(
+async function restoreMountsThenJshd(
+  sharedFs: VirtualFS,
+  processManager: ProcessManager,
+  lickManager: LickManager,
+  log: KernelHostLogger,
+  progress: (stage: string) => void
+): Promise<void> {
+  await recoverPersistedMounts(sharedFs, lickManager, log);
+  progress('mounts-restored');
+  await restoreJshdUnits(sharedFs, processManager, lickManager, log);
+  progress('jshd-restored');
+}
+
+async function restoreJshdUnits(
   sharedFs: VirtualFS,
   processManager: ProcessManager,
   lickManager: LickManager,
   log: KernelHostLogger
-): void {
-  void (async () => {
-    try {
-      const { restoreEnabledJshdUnits } = await import(
-        '../shell/supplemental-commands/jshd/restore.js'
-      );
-      await restoreEnabledJshdUnits({ fs: sharedFs, processManager, lickManager });
-    } catch (err) {
-      log.warn('jshd restore failed', err);
-    }
-  })();
+): Promise<void> {
+  try {
+    const { restoreEnabledJshdUnits } = await import(
+      '../shell/supplemental-commands/jshd/restore.js'
+    );
+    await restoreEnabledJshdUnits({ fs: sharedFs, processManager, lickManager });
+  } catch (err) {
+    log.warn('jshd restore failed', err);
+  }
 }
 
-function scheduleMountRecovery(
+async function recoverPersistedMounts(
   sharedFs: VirtualFS,
   lickManager: LickManager,
   log: KernelHostLogger
-): void {
-  void (async () => {
-    try {
-      const { getAllMountEntries, removeMountEntry } = await import('../fs/mount-table-store.js');
-      const { recoverMounts } = await import('../fs/mount-recovery.js');
-      // Config-owned host mounts first (mount table via /api/hostfs): fully
-      // automatic, no picker, no permission prompt, never persisted to IDB.
-      const { hostShadowedEntries, mountConfiguredHostMounts, withoutHostMountedTargets } =
-        await import('../fs/auto-mount-table.js');
-      const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
-      // Stale persisted rows at a now-config-owned target would only EEXIST.
-      const allEntries = await getAllMountEntries();
-      const entries = withoutHostMountedTargets(allEntries, hostMounted);
-      // Purge the shadowed rows for good, not just for this boot — see
-      // `hostShadowedEntries`. Best-effort per row; a failed delete just
-      // re-shadows next boot.
-      for (const stale of hostShadowedEntries(allEntries, hostMounted)) {
-        void removeMountEntry(stale.targetPath).catch((err) => {
-          log.warn('failed to purge host-owned mount row', {
-            path: stale.targetPath,
-            error: err instanceof Error ? err.message : String(err),
-          });
+): Promise<void> {
+  try {
+    const { getAllMountEntries, removeMountEntry } = await import('../fs/mount-table-store.js');
+    const { recoverMounts } = await import('../fs/mount-recovery.js');
+    // Config-owned host mounts first (mount table via /api/hostfs): fully
+    // automatic, no picker, no permission prompt, never persisted to IDB.
+    const { hostShadowedEntries, mountConfiguredHostMounts, withoutHostMountedTargets } =
+      await import('../fs/auto-mount-table.js');
+    const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
+    // Stale persisted rows at a now-config-owned target would only EEXIST.
+    const allEntries = await getAllMountEntries();
+    const entries = withoutHostMountedTargets(allEntries, hostMounted);
+    // Purge the shadowed rows for good, not just for this boot — see
+    // `hostShadowedEntries`. Best-effort per row; a failed delete just
+    // re-shadows next boot.
+    for (const stale of hostShadowedEntries(allEntries, hostMounted)) {
+      void removeMountEntry(stale.targetPath).catch((err) => {
+        log.warn('failed to purge host-owned mount row', {
+          path: stale.targetPath,
+          error: err instanceof Error ? err.message : String(err),
         });
-      }
-      if (entries.length === 0) return;
-      const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
-      if (needsRecovery.length === 0) return;
-      lickManager.emitEvent({
-        type: 'session-reload',
-        targetScoop: undefined,
-        timestamp: new Date().toISOString(),
-        body: { reason: 'mount-recovery', mounts: needsRecovery },
       });
-    } catch (err) {
-      log.warn('mount recovery failed', err);
     }
-  })();
+    if (entries.length === 0) return;
+    const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
+    if (needsRecovery.length === 0) return;
+    lickManager.emitEvent({
+      type: 'session-reload',
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: { reason: 'mount-recovery', mounts: needsRecovery },
+    });
+  } catch (err) {
+    log.warn('mount recovery failed', err);
+  }
 }
 
 /**
@@ -1269,12 +1279,11 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     config.appPageUrl
   );
 
-  // 9. Restore persisted mounts. MUST run AFTER setEventHandler so the
-  //    `session-reload` lick we may emit below routes through the
-  //    handler installed above.
+  // 9. Restore persisted mounts then jshd units. MUST run AFTER
+  //    setEventHandler so the `session-reload` lick routes through the
+  //    installed handler. Both complete before first-turn readiness.
   if (sharedFs) {
-    scheduleMountRecovery(sharedFs, lickManager, log);
-    scheduleJshdRestore(sharedFs, processManager, lickManager, log);
+    await restoreMountsThenJshd(sharedFs, processManager, lickManager, log, progress);
   }
 
   // 10. Cone bootstrap.

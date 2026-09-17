@@ -64,6 +64,13 @@ export interface JshExecutorOptions {
    * `/workspace/.jshd/log/<name>.log`.
    */
   onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
+  /**
+   * When false, the realm and host keep only a bounded diagnostic tail
+   * instead of concatenating every chunk. `jshd` uses this so a chatty
+   * daemon cannot grow unbounded host/realm strings; the durable log
+   * still receives every chunk via `onOutput`.
+   */
+  captureOutput?: boolean;
 }
 
 /**
@@ -115,9 +122,12 @@ export async function executeJsCode(
   const filename = options.filename ?? argv[1] ?? '<eval>';
   // Selected-provider API key under its SDK env name (see provider-env-seed.ts).
   // Cone/system only: a sandboxed scoop's model traffic goes through the
-  // capability-gated bridge and must never see the raw credential. Spread
-  // first so an explicit shell assignment (`FOO=bar node …`) wins.
-  const providerEnv = owner.kind === 'scoop' ? {} : await resolveProviderEnvSeed();
+  // capability-gated bridge and must never see the raw credential. `jshd`
+  // units are a durable background principal — they also must not receive
+  // raw provider secrets. Spread first so an explicit shell assignment
+  // (`FOO=bar node …`) wins.
+  const providerEnv =
+    owner.kind === 'scoop' || owner.kind === 'jshd' ? {} : await resolveProviderEnvSeed();
 
   const result = await runInRealm({
     pm,
@@ -142,6 +152,7 @@ export async function executeJsCode(
     syncFsBridgeEnabled: isSyncFsBridgeEnabled(),
     ...(options.onSpawn ? { onSpawn: (proc) => options.onSpawn?.(proc.pid) } : {}),
     ...(options.onOutput ? { onOutput: options.onOutput } : {}),
+    ...(options.captureOutput === false ? { captureOutput: false } : {}),
   });
   return result;
 }

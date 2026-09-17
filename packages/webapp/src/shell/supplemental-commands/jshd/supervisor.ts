@@ -53,18 +53,16 @@ interface LiveUnit {
   spawnResolve: ((pid: number) => void) | null;
   spawnReject: ((err: Error) => void) | null;
   loop: Promise<void> | null;
+  backoffAbort: AbortController | null;
 }
 
 export class JshdSupervisor {
   private readonly units = new Map<string, LiveUnit>();
-  private deps: JshdSupervisorDeps;
+  private readonly logQueues = new Map<string, Promise<void>>();
+  private readonly deps: JshdSupervisorDeps;
 
   constructor(deps: JshdSupervisorDeps) {
     this.deps = deps;
-  }
-
-  setDeps(deps: Partial<JshdSupervisorDeps>): void {
-    this.deps = { ...this.deps, ...deps };
   }
 
   isDurable(): boolean {
@@ -103,11 +101,13 @@ export class JshdSupervisor {
     const unit = this.units.get(name);
     if (!unit) return false;
     unit.stopRequested = true;
+    unit.backoffAbort?.abort();
     if (unit.pid !== null) this.deps.processManager.signal(unit.pid, 'SIGTERM');
     if (unit.loop) await unit.loop.catch(() => undefined);
     unit.state = 'stopped';
     unit.pid = null;
     this.syncJob(unit);
+    await this.flushLogs(name);
     return true;
   }
 
@@ -122,6 +122,7 @@ export class JshdSupervisor {
     await this.stop(name);
     this.units.delete(name);
     kernelJobTable.remove(jobId(name));
+    await this.flushLogs(name);
     const { deleteUnitRecord } = await import('./store.js');
     await deleteUnitRecord(this.deps.fs, name);
     return true;
@@ -140,6 +141,7 @@ export class JshdSupervisor {
   dispose(): void {
     for (const unit of this.units.values()) {
       unit.stopRequested = true;
+      unit.backoffAbort?.abort();
       if (unit.pid !== null) this.deps.processManager.signal(unit.pid, 'SIGKILL');
     }
     this.units.clear();
@@ -158,6 +160,7 @@ export class JshdSupervisor {
       spawnResolve: null,
       spawnReject: null,
       loop: null,
+      backoffAbort: null,
     };
   }
 
@@ -183,8 +186,13 @@ export class JshdSupervisor {
           this.emitCrashLoop(unit);
           return;
         }
-        unit.restarts += 1;
         await this.backoff(unit);
+        if (unit.stopRequested) {
+          unit.state = 'stopped';
+          this.syncJob(unit);
+          return;
+        }
+        unit.restarts += 1;
       }
       unit.state = 'stopped';
       this.syncJob(unit);
@@ -208,6 +216,7 @@ export class JshdSupervisor {
     const ctx = this.deps.buildContext(unit.record);
     const result = await executeJshFile(scriptPath, args, ctx, this.pmConfig(), {
       ...(this.deps.realmFactory ? { realmFactory: this.deps.realmFactory } : {}),
+      captureOutput: false,
       onSpawn: (pid) => {
         unit.pid = pid;
         unit.state = 'running';
@@ -216,8 +225,8 @@ export class JshdSupervisor {
         unit.spawnResolve = null;
         unit.spawnReject = null;
       },
-      onOutput: (chunk, stream) => {
-        void this.tee(unit.record.name, stream === 'stderr' ? chunk : chunk);
+      onOutput: (chunk) => {
+        void this.enqueueLog(unit.record.name, chunk);
       },
     });
     if (unit.pid === null) {
@@ -245,13 +254,19 @@ export class JshdSupervisor {
   }
 
   private async backoff(unit: LiveUnit): Promise<void> {
+    // `restarts` is the count of already-completed restarts, so the first
+    // wait is 1s (2^0), not 2s.
     const exp = Math.min(unit.restarts, 8);
     const ms = Math.min(BACKOFF_MAX_MS, BACKOFF_INITIAL_MS * 2 ** exp);
     const sleep = this.deps.sleep ?? defaultSleep;
+    const controller = new AbortController();
+    unit.backoffAbort = controller;
     try {
-      await sleep(ms);
+      await sleep(ms, controller.signal);
     } catch {
       unit.stopRequested = true;
+    } finally {
+      unit.backoffAbort = null;
     }
   }
 
@@ -269,6 +284,20 @@ export class JshdSupervisor {
     });
   }
 
+  private enqueueLog(name: string, chunk: string): Promise<void> {
+    const prev = this.logQueues.get(name) ?? Promise.resolve();
+    const next = prev.then(() => this.tee(name, chunk)).catch(() => undefined);
+    this.logQueues.set(name, next);
+    return next;
+  }
+
+  private async flushLogs(name: string): Promise<void> {
+    const pending = this.logQueues.get(name);
+    if (!pending) return;
+    await pending.catch(() => undefined);
+    this.logQueues.delete(name);
+  }
+
   private async tee(name: string, chunk: string): Promise<void> {
     try {
       await appendUnitLog(this.deps.fs, name, chunk);
@@ -283,7 +312,7 @@ export class JshdSupervisor {
   private pmConfig() {
     return {
       processManager: this.deps.processManager,
-      owner: { kind: 'system' as const },
+      owner: { kind: 'jshd' as const },
     };
   }
 
@@ -325,18 +354,44 @@ function jobId(name: string): string {
   return `jshd:${name}`;
 }
 
-export function defaultSleep(ms: number): Promise<void> {
+export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function abortError(): Error {
+  const err = new Error('aborted');
+  err.name = 'AbortError';
+  return err;
 }
 
 let singleton: JshdSupervisor | null = null;
 
-export function getJshdSupervisor(deps: JshdSupervisorDeps): JshdSupervisor {
+/**
+ * Return the kernel-owned supervisor, constructing it from `deps` only
+ * on the first call. Later callers cannot replace FS / `buildContext`.
+ */
+export function getJshdSupervisor(deps?: JshdSupervisorDeps): JshdSupervisor | null {
+  if (singleton) return singleton;
+  if (!deps) return null;
+  singleton = new JshdSupervisor(deps);
+  return singleton;
+}
+
+/** Construct the supervisor from kernel-owned deps if it does not exist yet. */
+export function installJshdSupervisor(deps: JshdSupervisorDeps): JshdSupervisor {
   if (!singleton) singleton = new JshdSupervisor(deps);
-  else singleton.setDeps(deps);
   return singleton;
 }
 

@@ -137,8 +137,8 @@ export class Gate {
 }
 
 export interface ProcessOwner {
-  /** 'cone' | 'scoop' | 'system' — drives the `ps` `SCOOP` column. */
-  kind: 'cone' | 'scoop' | 'system';
+  /** Drives the `ps` `SCOOP` column. `jshd` is a durable background unit. */
+  kind: 'cone' | 'scoop' | 'system' | 'jshd';
   /** Scoop JID when `kind === 'scoop'` (or the cone's JID when 'cone'). */
   scoopJid?: string;
 }
