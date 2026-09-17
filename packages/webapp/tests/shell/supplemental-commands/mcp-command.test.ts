@@ -595,6 +595,16 @@ describe('coerceArgsBySchema — object JSON, arrays, unknown flags (#3217)', ()
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe('unknown flag: --tags.0');
   });
+
+  it('rejects prototype-polluting dotted flags', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--params.__proto__.polluted', 'yes'],
+      schema
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('unknown flag: --params.__proto__.polluted');
+    expect(Object.hasOwn(Object.prototype, 'polluted')).toBe(false);
+  });
 });
 
 describe('renderToolResult', () => {

@@ -729,7 +729,7 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
   const s = asSchemaObject(schema);
   const properties = s.properties ?? {};
   const required = new Set(Array.isArray(s.required) ? s.required : []);
-  const out: McpToolArguments = {};
+  const out: McpToolArguments = emptyArgObject();
 
   let i = 0;
   while (i < args.length) {
@@ -739,7 +739,7 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
   }
 
   for (const r of required) {
-    if (!(r in out)) {
+    if (!Object.hasOwn(out, r)) {
       return { ok: false, error: `missing required flag --${r}` };
     }
   }
@@ -808,7 +808,7 @@ function resolveToolFlag(
     return { ok: false, error: `unknown flag: --${key}` };
   }
   const parts = rest.split('.');
-  if (parts.some((p) => p.length === 0)) {
+  if (isUnsafeObjectKey(rootKey) || parts.some((p) => p.length === 0 || isUnsafeObjectKey(p))) {
     return { ok: false, error: `unknown flag: --${key}` };
   }
   return { ok: true, rootKey, dottedPath: parts, meta: properties[rootKey] ?? {} };
@@ -874,18 +874,21 @@ function setDotted(
   path: string[],
   value: McpArgValue
 ): CoerceErr | { ok: true } {
-  const existing = out[rootKey];
+  if (isUnsafeObjectKey(rootKey) || path.some((p) => p.length === 0 || isUnsafeObjectKey(p))) {
+    return { ok: false, error: `unknown flag: --${rootKey}.${path.join('.')}` };
+  }
+  const existing = Object.hasOwn(out, rootKey) ? out[rootKey] : undefined;
   if (existing === undefined) {
-    out[rootKey] = {};
+    out[rootKey] = emptyArgObject();
   } else if (!isPlainObject(existing)) {
     return { ok: false, error: `--${rootKey}: cannot nest into a ${typeof existing} value` };
   }
   let cursor = out[rootKey] as McpArgObject;
   for (let i = 0; i < path.length - 1; i++) {
     const seg = path[i];
-    const next = cursor[seg];
+    const next = Object.hasOwn(cursor, seg) ? cursor[seg] : undefined;
     if (next === undefined) {
-      cursor[seg] = {};
+      cursor[seg] = emptyArgObject();
     } else if (!isPlainObject(next)) {
       return {
         ok: false,
@@ -898,8 +901,21 @@ function setDotted(
   return { ok: true };
 }
 
+function emptyArgObject(): McpArgObject {
+  return Object.create(null) as McpArgObject;
+}
+
+function isUnsafeObjectKey(key: string): boolean {
+  return key === '__proto__' || key === 'prototype' || key === 'constructor';
+}
+
 function isPlainObject(value: unknown): value is McpArgObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    value !== Object.prototype
+  );
 }
 
 /** Split `--key=value` or `--key` into key + optional inline value. */
