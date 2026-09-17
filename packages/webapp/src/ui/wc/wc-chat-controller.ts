@@ -242,8 +242,14 @@ export class WcChatController {
   #currentStreamId: string | null = null;
   /** The assistant message the ACTIVE turn streamed (reset on each rise). */
   #turnAssistantId: string | null = null;
+  /**
+   * rAF-batched delta buffer. It records its OWNER: a background tab parks
+   * rAF, so a frame one message scheduled can still be queued while the next
+   * message streams — and must not flush that text into the wrong bubble.
+   */
   #pendingDelta = '';
-  #flushScheduled = false;
+  #pendingDeltaId: string | null = null;
+  #flushFrame: number | null = null;
   #processing = false;
   /**
    * The busy turn's current phase, mirrored onto the send button. Reset to
@@ -667,8 +673,7 @@ export class WcChatController {
     const streamingTail = [...this.#messages].reverse().find((m) => m.isStreaming);
     this.#currentStreamId = streamingTail?.id ?? null;
     if (streamingTail) this.#turnAssistantId = streamingTail.id;
-    this.#pendingDelta = '';
-    this.#flushScheduled = false;
+    this.#dropPendingDelta();
     this.#els.clear();
 
     const children: HTMLElement[] = [];
@@ -1090,20 +1095,28 @@ export class WcChatController {
 
   #handleContentDelta(messageId: string, text: string): void {
     if (!this.#findMessage(messageId)) return;
+    // Text another message still owns goes home before this one buffers.
+    if (this.#pendingDeltaId !== messageId) this.#flushDelta();
+    this.#pendingDeltaId = messageId;
     this.#pendingDelta += text;
-    if (this.#flushScheduled) return;
-    this.#flushScheduled = true;
-    requestAnimationFrame(() => this.#flushDelta(messageId));
+    this.#flushFrame ??= requestAnimationFrame(() => this.#flushDelta());
   }
 
-  #flushDelta(messageId: string): void {
-    this.#flushScheduled = false;
-    if (!this.#pendingDelta) return;
-    const message = this.#findMessage(messageId);
+  #flushDelta(): void {
+    const messageId = this.#pendingDeltaId;
+    const text = this.#pendingDelta;
+    this.#dropPendingDelta();
+    const message = text && messageId ? this.#findMessage(messageId) : undefined;
     if (!message) return;
-    message.content += this.#pendingDelta;
-    this.#pendingDelta = '';
+    message.content += text;
     this.#rerenderMessage(message);
+  }
+
+  #dropPendingDelta(): void {
+    if (this.#flushFrame !== null) cancelAnimationFrame(this.#flushFrame);
+    this.#flushFrame = null;
+    this.#pendingDelta = '';
+    this.#pendingDeltaId = null;
   }
 
   #handleContentDone(
@@ -1115,11 +1128,10 @@ export class WcChatController {
     if (!message) return;
     if (model) message.model = model;
     if (usage) message.usage = usage;
-    if (this.#pendingDelta && this.#currentStreamId === messageId) {
+    if (this.#pendingDeltaId === messageId) {
       message.content += this.#pendingDelta;
+      this.#dropPendingDelta();
     }
-    this.#pendingDelta = '';
-    this.#flushScheduled = false;
     message.isStreaming = false;
     this.#rerenderMessage(message);
   }

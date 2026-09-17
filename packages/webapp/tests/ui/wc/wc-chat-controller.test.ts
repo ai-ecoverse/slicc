@@ -252,6 +252,42 @@ describe('WcChatController', () => {
     expect(thread.querySelector('slicc-agent-message')?.textContent).toContain('tail text');
   });
 
+  it('never flushes a later message’s deltas into an earlier bubble via a stale frame', () => {
+    // A background tab parks rAF callbacks. The frame message 1 scheduled is
+    // still queued when message 2 starts streaming after the tool call; when
+    // the tab wakes, that stale callback must not claim message 2's buffer —
+    // the live cone split a ```shtml dip across two bubbles that way.
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((cb) => frames.push(cb));
+    try {
+      agent.emit({ type: 'message_start', messageId: 'm1' });
+      agent.emit({ type: 'content_delta', messageId: 'm1', text: 'Checking it:' });
+      agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls' });
+      agent.emit({ type: 'content_done', messageId: 'm1' });
+      agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
+
+      agent.emit({ type: 'message_start', messageId: 'm2' });
+      agent.emit({ type: 'content_delta', messageId: 'm2', text: 'Done.\n\n```shtml\n<div>' });
+      // Tab becomes visible mid-stream: every parked frame runs, oldest first.
+      for (const cb of frames.splice(0)) cb(0);
+      agent.emit({ type: 'content_delta', messageId: 'm2', text: 'card</div>\n```\n\nTail.' });
+      agent.emit({ type: 'content_done', messageId: 'm2' });
+      agent.emit({ type: 'turn_end', messageId: 'm2' });
+      for (const cb of frames.splice(0)) cb(0);
+
+      const byId = new Map(controller.getMessages().map((m) => [m.id, m.content]));
+      expect(byId.get('m1')).toBe('Checking it:');
+      expect(byId.get('m2')).toBe('Done.\n\n```shtml\n<div>card</div>\n```\n\nTail.');
+      const bubbles = thread.querySelectorAll('slicc-agent-message');
+      expect(bubbles[0]?.textContent).not.toContain('Done.');
+      expect(bubbles[1]?.textContent).not.toContain('```');
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
   it('renders tool calls as action rows and resolves their results', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls -la' });
