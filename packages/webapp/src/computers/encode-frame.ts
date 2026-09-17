@@ -48,6 +48,40 @@ export function jpegSize(bytes: Uint8Array): { width: number; height: number } |
   return null;
 }
 
+/** Peek PNG IHDR dimensions. */
+export function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 24) return null;
+  if (bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) {
+    return null;
+  }
+  const width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
+  const height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+  if (width > 0 && height > 0) return { width, height };
+  return null;
+}
+
+/** Nearest-neighbor downscale used when the encoder has no canvas. */
+export function fitRgbaFrame(frame: RgbaFrame, maxWidth?: number): RgbaFrame {
+  if (!maxWidth || frame.width <= maxWidth || frame.width <= 0) return frame;
+  const scale = maxWidth / frame.width;
+  const width = Math.max(1, Math.round(frame.width * scale));
+  const height = Math.max(1, Math.round(frame.height * scale));
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const srcY = Math.min(frame.height - 1, Math.round(y / scale));
+    for (let x = 0; x < width; x++) {
+      const srcX = Math.min(frame.width - 1, Math.round(x / scale));
+      const si = (srcY * frame.width + srcX) * 4;
+      const di = (y * width + x) * 4;
+      data[di] = frame.data[si];
+      data[di + 1] = frame.data[si + 1];
+      data[di + 2] = frame.data[si + 2];
+      data[di + 3] = frame.data[si + 3];
+    }
+  }
+  return { data, width, height };
+}
+
 export async function encodeRgbaFrame(
   frame: RgbaFrame,
   mime: FrameMime,

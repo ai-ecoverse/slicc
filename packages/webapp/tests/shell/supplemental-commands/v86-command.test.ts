@@ -269,6 +269,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
       id: 'v86:vm0',
       kind: 'v86',
       title: 'vm0',
+      state: 'live',
     });
 
     expect(await getComputerRegistry()!.unregister('v86:vm0')).toBe(true);
@@ -598,6 +599,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(served.exitCode).toBe(0);
     expect(served.stdout).toContain('/tmp/v86-serve-vm0');
     expect(served.stdout).toContain('serve /tmp/v86-serve-vm0');
+    expect(served.stdout).toContain('prefer: computer watch -c v86:vm0');
     expect(written.has('/tmp/v86-serve-vm0/index.html')).toBe(true);
     // Text-mode guest: the pump writes screen.txt + state.json.
     expect(written.has('/tmp/v86-serve-vm0/screen.txt')).toBe(true);

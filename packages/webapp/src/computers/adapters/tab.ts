@@ -17,8 +17,9 @@ import type { TabPage } from '../../cdp/tab-handle.js';
 import type { PageInfo } from '../../cdp/types.js';
 import type { PanelRpcClient } from '../../kernel/panel-rpc.js';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../backend.js';
-import { bytesFromBase64, jpegSize } from '../encode-frame.js';
+import { base64FromBytes, bytesFromBase64, jpegSize, pngSize } from '../encode-frame.js';
 import { parseKeysym, toCdpKeyEvents } from '../keys.js';
+import { createPointer, resolvePointer } from '../pointer.js';
 
 export function tabComputerId(targetId: string): string {
   return `tab:${targetId}`;
@@ -52,6 +53,7 @@ export class LocalTabComputerBackend implements ComputerBackend {
   private title: string;
   private url: string;
   private size: { width: number; height: number } | null = null;
+  private readonly pointer = createPointer();
 
   constructor(
     private readonly browser: BrowserAPI,
@@ -78,25 +80,15 @@ export class LocalTabComputerBackend implements ComputerBackend {
     await this.refreshInfo();
     refuseSliccAppTab({ url: this.url, title: this.title });
     return this.browser.withTab(this.targetId, async (tab) => {
-      const format = opts.format === 'png' ? 'png' : 'jpeg';
-      const base64 = await tab.screenshot({
-        format,
-        quality: format === 'jpeg' ? 70 : undefined,
-        maxWidth: opts.maxWidth,
-        foregroundFallback: false,
-      });
-      const bytes = bytesFromBase64(base64);
-      const jpeg = jpegSize(bytes);
-      const width = jpeg?.width ?? this.size?.width ?? 0;
-      const height = jpeg?.height ?? this.size?.height ?? 0;
-      if (width > 0 && height > 0) this.size = { width, height };
+      const captured = await captureTabFrame(tab, opts);
+      if (captured.native) this.size = captured.native;
       this.seq += 1;
       return {
         seq: this.seq,
-        mime: format === 'png' ? 'image/png' : 'image/jpeg',
-        width,
-        height,
-        bytes,
+        mime: captured.mime,
+        width: captured.width,
+        height: captured.height,
+        bytes: captured.bytes,
       };
     });
   }
@@ -105,7 +97,7 @@ export class LocalTabComputerBackend implements ComputerBackend {
     await this.refreshInfo();
     refuseSliccAppTab({ url: this.url, title: this.title });
     await this.browser.withTab(this.targetId, async (tab) => {
-      for (const event of events) await dispatchTabEvent(tab, event);
+      for (const event of events) await dispatchTabEvent(tab, event, this.pointer);
     });
   }
 
@@ -126,8 +118,42 @@ export interface TabShotResult {
   base64: string;
   width: number;
   height: number;
+  nativeWidth?: number;
+  nativeHeight?: number;
   title: string;
   url: string;
+}
+
+interface CapturedTabFrame {
+  mime: 'image/png' | 'image/jpeg';
+  bytes: Uint8Array;
+  width: number;
+  height: number;
+  native: { width: number; height: number } | null;
+}
+
+async function captureTabFrame(
+  tab: TabPage,
+  opts: ComputerScreenshotOpts
+): Promise<CapturedTabFrame> {
+  const nativeB64 = await tab.screenshot({ format: 'png' });
+  const nativeBytes = bytesFromBase64(nativeB64);
+  const native = pngSize(nativeBytes) ?? jpegSize(nativeBytes);
+  let shotBytes = nativeBytes;
+  if (opts.maxWidth && native && native.width > opts.maxWidth) {
+    shotBytes = bytesFromBase64(await tab.screenshot({ format: 'png', maxWidth: opts.maxWidth }));
+  } else if (opts.format !== 'png') {
+    shotBytes = bytesFromBase64(await tab.screenshot({ format: 'jpeg', quality: 70 }));
+  }
+  const encoded = pngSize(shotBytes) ?? jpegSize(shotBytes) ?? native ?? { width: 0, height: 0 };
+  const jpeg = jpegSize(shotBytes);
+  return {
+    mime: jpeg ? 'image/jpeg' : 'image/png',
+    bytes: shotBytes,
+    width: encoded.width,
+    height: encoded.height,
+    native,
+  };
 }
 
 export class BridgedTabComputerBackend implements ComputerBackend {
@@ -135,6 +161,7 @@ export class BridgedTabComputerBackend implements ComputerBackend {
   private title: string;
   private url: string;
   private size: { width: number; height: number } | null = null;
+  private readonly pointer = createPointer();
 
   constructor(
     private readonly rpc: PanelRpcClient,
@@ -165,7 +192,11 @@ export class BridgedTabComputerBackend implements ComputerBackend {
     });
     this.title = result.title;
     this.url = result.url;
-    this.size = { width: result.width, height: result.height };
+    if (result.nativeWidth && result.nativeHeight) {
+      this.size = { width: result.nativeWidth, height: result.nativeHeight };
+    } else {
+      this.size = { width: result.width, height: result.height };
+    }
     this.seq += 1;
     return {
       seq: this.seq,
@@ -185,30 +216,41 @@ export class BridgedTabComputerBackend implements ComputerBackend {
   }
 }
 
-export async function dispatchTabEvent(tab: TabPage, event: ComputerInputEvent): Promise<void> {
+export async function dispatchTabEvent(
+  tab: TabPage,
+  event: ComputerInputEvent,
+  pointer = createPointer()
+): Promise<void> {
   switch (event.type) {
-    case 'mousemove':
+    case 'mousemove': {
+      const p = resolvePointer(pointer, event);
       await tab.send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
-        x: event.x,
-        y: event.y,
+        x: p.x,
+        y: p.y,
       });
       return;
+    }
     case 'button':
-      await dispatchButton(tab, event);
+      await dispatchButton(tab, event, pointer);
       return;
     case 'click':
-      await dispatchClick(tab, event);
+      await dispatchClick(tab, event, pointer);
       return;
-    case 'scroll':
+    case 'drag':
+      await dispatchDrag(tab, event, pointer);
+      return;
+    case 'scroll': {
+      const p = resolvePointer(pointer, event);
       await tab.send('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
-        x: event.x ?? 0,
-        y: event.y ?? 0,
+        x: p.x,
+        y: p.y,
         deltaX: event.dx,
         deltaY: event.dy,
       });
       return;
+    }
     case 'key':
       await dispatchKey(tab, event);
       return;
@@ -227,12 +269,14 @@ export async function dispatchTabEvent(tab: TabPage, event: ComputerInputEvent):
 
 async function dispatchButton(
   tab: TabPage,
-  event: Extract<ComputerInputEvent, { type: 'button' }>
+  event: Extract<ComputerInputEvent, { type: 'button' }>,
+  pointer: ReturnType<typeof createPointer>
 ): Promise<void> {
+  const p = resolvePointer(pointer, event);
   await tab.send('Input.dispatchMouseEvent', {
     type: event.down ? 'mousePressed' : 'mouseReleased',
-    x: event.x ?? 0,
-    y: event.y ?? 0,
+    x: p.x,
+    y: p.y,
     button: BUTTON_NAME[event.button],
     clickCount: 1,
   });
@@ -240,28 +284,47 @@ async function dispatchButton(
 
 async function dispatchClick(
   tab: TabPage,
-  event: Extract<ComputerInputEvent, { type: 'click' }>
+  event: Extract<ComputerInputEvent, { type: 'click' }>,
+  pointer: ReturnType<typeof createPointer>
 ): Promise<void> {
-  const x = event.x ?? 0;
-  const y = event.y ?? 0;
+  const p = resolvePointer(pointer, event);
   const count = Math.max(1, event.count);
   for (let i = 1; i <= count; i++) {
     await tab.send('Input.dispatchMouseEvent', {
       type: 'mousePressed',
-      x,
-      y,
+      x: p.x,
+      y: p.y,
       button: BUTTON_NAME[event.button],
       clickCount: i,
     });
     if (event.holdMs && event.holdMs > 0) await delay(event.holdMs);
     await tab.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
-      x,
-      y,
+      x: p.x,
+      y: p.y,
       button: BUTTON_NAME[event.button],
       clickCount: i,
     });
   }
+}
+
+async function dispatchDrag(
+  tab: TabPage,
+  event: Extract<ComputerInputEvent, { type: 'drag' }>,
+  pointer: ReturnType<typeof createPointer>
+): Promise<void> {
+  await dispatchTabEvent(tab, { type: 'mousemove', x: event.x1, y: event.y1 }, pointer);
+  await dispatchTabEvent(
+    tab,
+    { type: 'button', button: 1, down: true, x: event.x1, y: event.y1 },
+    pointer
+  );
+  await dispatchTabEvent(tab, { type: 'mousemove', x: event.x2, y: event.y2 }, pointer);
+  await dispatchTabEvent(
+    tab,
+    { type: 'button', button: 1, down: false, x: event.x2, y: event.y2 },
+    pointer
+  );
 }
 
 async function dispatchKey(
@@ -289,20 +352,18 @@ export async function screenshotTab(
   const info = (await lookupTarget(browser, targetId)) ?? { title: targetId, url: '' };
   refuseSliccAppTab(info);
   return browser.withTab(targetId, async (tab) => {
-    const format = opts.format === 'png' ? 'png' : 'jpeg';
-    const base64 = await tab.screenshot({
-      format,
-      quality: format === 'jpeg' ? 70 : undefined,
+    const captured = await captureTabFrame(tab, {
+      format: opts.format === 'png' ? 'png' : 'jpeg',
       maxWidth: opts.maxWidth,
-      foregroundFallback: false,
     });
-    const bytes = bytesFromBase64(base64);
-    const jpeg = jpegSize(bytes);
     return {
-      mime: format === 'png' ? 'image/png' : 'image/jpeg',
-      base64,
-      width: jpeg?.width ?? 0,
-      height: jpeg?.height ?? 0,
+      mime: captured.mime,
+      base64: base64FromBytes(captured.bytes),
+      width: captured.width,
+      height: captured.height,
+      ...(captured.native
+        ? { nativeWidth: captured.native.width, nativeHeight: captured.native.height }
+        : {}),
       title: info.title,
       url: info.url,
     };
@@ -316,8 +377,9 @@ export async function inputTab(
 ): Promise<void> {
   const info = (await lookupTarget(browser, targetId)) ?? { title: targetId, url: '' };
   refuseSliccAppTab(info);
+  const pointer = createPointer();
   await browser.withTab(targetId, async (tab) => {
-    for (const event of events) await dispatchTabEvent(tab, event);
+    for (const event of events) await dispatchTabEvent(tab, event, pointer);
   });
 }
 

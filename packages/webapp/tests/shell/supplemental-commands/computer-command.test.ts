@@ -1,7 +1,7 @@
 import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ComputerBackend } from '../../../src/computers/backend.js';
+import type { ComputerBackend, ComputerScreenshotOpts } from '../../../src/computers/backend.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
 import {
   ComputerRegistry,
@@ -40,13 +40,15 @@ class FakeBackend implements ComputerBackend {
     };
   }
 
-  async screenshot(): Promise<ComputerFrame> {
+  async screenshot(opts: ComputerScreenshotOpts = { format: 'jpeg' }): Promise<ComputerFrame> {
     this.shots += 1;
+    const max = opts.maxWidth ?? 768;
+    const scale = 1000 > max ? max / 1000 : 1;
     return {
       seq: this.shots,
       mime: 'image/jpeg',
-      width: 1000,
-      height: 500,
+      width: Math.round(1000 * scale),
+      height: Math.round(500 * scale),
       bytes: MINIMAL_JPEG,
     };
   }
@@ -252,6 +254,86 @@ describe('computer command', () => {
     expect(added.exitCode).toBe(1);
     expect(added.stderr).toContain('refusing SLICC app tab');
     expect(browser.withTab).not.toHaveBeenCalled();
+  });
+
+  it('watch and --stop drive kernel start/stop control', async () => {
+    const backend = new FakeBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const watched: Array<{ id: string; fps: number }> = [];
+    const unwatched: string[] = [];
+    const cmd = createComputerCommand({
+      registry,
+      watch: (id, fps) => {
+        watched.push({ id, fps });
+      },
+      unwatch: (id) => {
+        unwatched.push(id);
+      },
+    });
+    const { ctx } = makeCtx();
+    const start = await cmd.execute(['watch', '--fps', '4'], ctx);
+    expect(start.exitCode).toBe(0);
+    expect(start.stdout).toContain('watching fake at 4 fps');
+    expect(watched).toEqual([{ id: 'fake', fps: 4 }]);
+    const stop = await cmd.execute(['watch', '--stop'], ctx);
+    expect(stop.stdout).toContain('unwatched fake');
+    expect(unwatched).toEqual(['fake']);
+  });
+
+  it('rejects input the descriptor forbids', async () => {
+    const backend = new FakeBackend('locked');
+    backend.describe = () => ({
+      ...new FakeBackend('locked').describe(),
+      capabilities: {
+        screenshot: true,
+        text: false,
+        frames: 'none',
+        keyboard: false,
+        mouse: 'none',
+        scroll: false,
+        exec: false,
+        inputAllowed: false,
+      },
+    });
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(1);
+    expect(typed.stderr).toContain('input is not allowed');
+    expect(backend.events).toEqual([]);
+  });
+
+  it('emits a wire drag for touch backends and takes a fresh post-action frame', async () => {
+    const backend = new FakeBackend('phone');
+    backend.describe = () => ({
+      ...new FakeBackend('phone').describe(),
+      capabilities: {
+        screenshot: true,
+        text: false,
+        frames: 'push',
+        keyboard: true,
+        mouse: 'touch',
+        scroll: true,
+        exec: false,
+        inputAllowed: true,
+      },
+    });
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx, written } = makeCtx();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.stdout).toContain('1000x500 → 768x384');
+    const before = [...written.keys()];
+    const drag = await cmd.execute(['--native', 'drag', '10', '10', '40', '40'], ctx);
+    expect(drag.exitCode).toBe(0);
+    expect(backend.events).toEqual([{ type: 'drag', x1: 10, y1: 10, x2: 40, y2: 40 }]);
+    expect(backend.shots).toBeGreaterThan(1);
+    const after = [...written.keys()].filter((p) => !before.includes(p));
+    expect(after.some((p) => p.endsWith('.jpg'))).toBe(true);
   });
 });
 

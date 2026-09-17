@@ -43,5 +43,12 @@ describe('computer keys', () => {
       holdMs: 400,
     });
     expect(toTouchAction({ type: 'mousemove', x: 0, y: 0 })).toEqual({ kind: 'noop' });
+    expect(toTouchAction({ type: 'drag', x1: 1, y1: 2, x2: 8, y2: 9 })).toEqual({
+      kind: 'swipe',
+      x1: 1,
+      y1: 2,
+      x2: 8,
+      y2: 9,
+    });
   });
 });

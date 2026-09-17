@@ -50,6 +50,26 @@ export function scaleFromNative(native: ComputerSize, maxWidth: number): ScaleMa
   };
 }
 
+/**
+ * Derive lastShot from the descriptor's native size and the bytes that
+ * were actually encoded. Adapters must resize; this must not invent a
+ * scale the JPEG does not have.
+ */
+export function scaleFromEncoded(native: ComputerSize, encoded: ComputerSize): ScaleMapping {
+  const nativeWidth = native.width > 0 ? native.width : encoded.width;
+  const nativeHeight = native.height > 0 ? native.height : encoded.height;
+  const shotWidth = encoded.width;
+  const shotHeight = encoded.height;
+  const scale = nativeWidth > 0 ? shotWidth / nativeWidth : 1;
+  return {
+    nativeWidth,
+    nativeHeight,
+    shotWidth,
+    shotHeight,
+    scale: scale > 0 ? scale : 1,
+  };
+}
+
 export function formatScaleLine(mapping: ScaleMapping): string {
   const s =
     mapping.scale === 1 ? '1' : mapping.scale.toFixed(2).replace(/0+$/u, '').replace(/\.$/u, '');

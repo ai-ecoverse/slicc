@@ -114,6 +114,19 @@ describe('dispatchTabEvent', () => {
       /unknown keysym/
     );
   });
+
+  it('reuses the last pointer when click/scroll omit coordinates', async () => {
+    const { tab, sent } = makeTab();
+    const pointer = { x: 0, y: 0 };
+    await dispatchTabEvent(tab, { type: 'mousemove', x: 100, y: 80 }, pointer);
+    await dispatchTabEvent(tab, { type: 'click', button: 1, count: 1 }, pointer);
+    const click = sent.find(
+      (s) =>
+        s.method === 'Input.dispatchMouseEvent' &&
+        (s.params as { type?: string }).type === 'mousePressed'
+    );
+    expect(click?.params).toMatchObject({ x: 100, y: 80 });
+  });
 });
 
 describe('LocalTabComputerBackend', () => {
@@ -129,9 +142,8 @@ describe('LocalTabComputerBackend', () => {
     });
     const shot = await backend.screenshot({ format: 'jpeg' });
     expect(shot).toMatchObject({ mime: 'image/jpeg', width: 1, height: 1, seq: 1 });
-    expect(raw.screenshot).toHaveBeenCalledWith(
-      expect.objectContaining({ format: 'jpeg', foregroundFallback: false })
-    );
+    expect(raw.screenshot).toHaveBeenCalledWith(expect.objectContaining({ format: 'png' }));
+    expect(raw.screenshot.mock.calls[0][0]).not.toHaveProperty('foregroundFallback', false);
     await backend.input([{ type: 'text', text: 'x' }]);
     await backend.close();
     expect(browser.withTab).toHaveBeenCalledTimes(2);

@@ -14,6 +14,8 @@ import {
 } from '../../../computers/adapters/tab.js';
 import type { ComputerBackend } from '../../../computers/backend.js';
 import { frozenFrameLine, writeFrozenFrame } from '../../../computers/frames.js';
+import { getComputersHost } from '../../../computers/host.js';
+import { unsupportedInputReason } from '../../../computers/input-guard.js';
 import {
   type ComputerRegistry,
   getComputerRegistry,
@@ -23,7 +25,7 @@ import {
   formatScaleLine,
   mapPoint,
   parseSizeSpec,
-  scaleFromNative,
+  scaleFromEncoded,
   toLastShot,
 } from '../../../computers/scale.js';
 import type { BrowserAPI } from '../../../kernel/browser-api.js';
@@ -137,7 +139,7 @@ async function runVerb(
     case 'text':
       return verbText(globals, ctx, registry);
     case 'watch':
-      return verbWatch(call.args, globals, ctx, registry);
+      return verbWatch(call.args, globals, ctx, registry, deps);
     case 'exec':
       return verbExec(call.args, globals, ctx, registry);
     default:
@@ -240,7 +242,8 @@ async function verbScreenshot(
   if ('exitCode' in target) return target;
   const maxWidth = parseSizeSpec(flagValue(args, ['--size']));
   const frame = await target.backend.screenshot({ format: 'jpeg', maxWidth });
-  const mapping = scaleFromNative({ width: frame.width, height: frame.height }, maxWidth);
+  const native = target.backend.describe().size ?? { width: frame.width, height: frame.height };
+  const mapping = scaleFromEncoded(native, { width: frame.width, height: frame.height });
   registry.rememberShot(target.id, toLastShot(mapping, Date.now()), frame);
   const seq = frame.seq > 0 ? frame.seq : registry.nextSeq(target.id);
   const path = await writeFrozenFrame({
@@ -283,15 +286,32 @@ async function verbWatch(
   args: string[],
   globals: { computer: string | undefined },
   ctx: CommandContext,
-  registry: ComputerRegistry
+  registry: ComputerRegistry,
+  deps: ComputerCommandDeps
 ): Promise<CmdResult> {
   const target = requireTarget(registry, globals.computer, ctx);
   if ('exitCode' in target) return target;
+  const host = resolveWatchControl(deps);
+  if (!host) return fail('watch: computers host is not running');
   if (hasFlag(args, '--stop')) {
-    return ok(`watch stop is a page-side control (computer-unwatch ${target.id})\n`);
+    host.unwatch(target.id);
+    return ok(`unwatched ${target.id}\n`);
   }
   const fps = parseIntFlag(args, '--fps') ?? 2;
-  return ok(`watching ${target.id} at ${fps} fps — page subscribers receive computer-frame\n`);
+  const maxWidth = parseSizeSpec(flagValue(args, ['--size']));
+  host.watch(target.id, fps, maxWidth);
+  return ok(`watching ${target.id} at ${fps} fps\n`);
+}
+
+function resolveWatchControl(deps: ComputerCommandDeps): {
+  watch: (id: string, fps: number, maxWidth: number) => void;
+  unwatch: (id: string) => void;
+} | null {
+  if (deps.watch) {
+    return { watch: deps.watch, unwatch: deps.unwatch ?? (() => undefined) };
+  }
+  const host = getComputersHost();
+  return host ? { watch: host.watch, unwatch: host.unwatch } : null;
 }
 
 async function verbExec(
@@ -319,22 +339,61 @@ async function verbInput(
   const target = requireTarget(registry, globals.computer, ctx);
   if ('exitCode' in target) return target;
   const events = buildEvents(call, globals.native, target.descriptor);
+  const blocked = unsupportedInputReason(target.descriptor.capabilities, events);
+  if (blocked) return fail(`${call.verb}: ${blocked}`);
   await target.backend.input(events);
-  const last = registry.lastFrame(target.id);
-  const shot = last
-    ? last
-    : await target.backend.screenshot({ format: 'jpeg', maxWidth: 768 }).catch(() => null);
-  if (!shot) return ok('');
-  const seq = shot.seq > 0 ? shot.seq : registry.nextSeq(target.id);
+  return writePostActionFrame(target, ctx, registry);
+}
+
+const POST_ACTION_TIMEOUT_MS = 5_000;
+
+async function writePostActionFrame(
+  target: { id: string; backend: ComputerBackend; descriptor: ComputerDescriptor },
+  ctx: CommandContext,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const maxWidth = target.descriptor.lastShot?.width ?? 768;
+  let frame;
+  try {
+    frame = await raceTimeout(
+      target.backend.screenshot({ format: 'jpeg', maxWidth }),
+      POST_ACTION_TIMEOUT_MS
+    );
+  } catch (err) {
+    return fail(
+      `screenshot failed after input: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const native = target.backend.describe().size ?? { width: frame.width, height: frame.height };
+  const mapping = scaleFromEncoded(native, { width: frame.width, height: frame.height });
+  const seq = registry.nextSeq(target.id);
+  const stamped = { ...frame, seq };
+  registry.rememberShot(target.id, toLastShot(mapping, Date.now()), stamped);
   const path = await writeFrozenFrame({
     fs: ctx.fs,
     cwd: ctx.cwd,
     env: ctx.env,
     name: fileName(target.descriptor),
     seq,
-    frame: shot,
+    frame: stamped,
   });
   return ok(`${frozenFrameLine(path)}\n`);
+}
+
+function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timed out')), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 type PointMap = (x: number, y: number) => { x: number; y: number };
@@ -353,7 +412,7 @@ function buildEvents(
     case 'mouseup':
       return eventsClickFamily(call.verb, call.args, map);
     case 'drag':
-      return eventsDrag(call.args, map);
+      return eventsDrag(call.args, map, descriptor.capabilities.mouse);
     case 'scroll':
       return eventsScroll(call.args, map);
     case 'key':
@@ -404,13 +463,20 @@ function eventsClickFamily(
   ];
 }
 
-function eventsDrag(args: string[], map: PointMap): ComputerInputEvent[] {
+function eventsDrag(
+  args: string[],
+  map: PointMap,
+  mouse: ComputerDescriptor['capabilities']['mouse']
+): ComputerInputEvent[] {
   const nums = positionals(args).map(Number);
   if (nums.length < 4 || nums.some((n) => !Number.isFinite(n))) {
     throw new Error('drag: requires <x1> <y1> <x2> <y2>');
   }
   const from = map(nums[0], nums[1]);
   const to = map(nums[2], nums[3]);
+  if (mouse === 'touch') {
+    return [{ type: 'drag', x1: from.x, y1: from.y, x2: to.x, y2: to.y }];
+  }
   return [
     { type: 'mousemove', x: from.x, y: from.y },
     { type: 'button', button: 1, down: true, x: from.x, y: from.y },

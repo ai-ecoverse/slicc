@@ -5,6 +5,7 @@ import {
   parseSizeSpec,
   roundTrip,
   SIZE_PRESETS,
+  scaleFromEncoded,
   scaleFromNative,
   toLastShot,
 } from '../../src/computers/scale.js';
@@ -24,6 +25,17 @@ describe('computer scale', () => {
     expect(mapping.shotHeight).toBe(432);
     expect(mapping.scale).toBeCloseTo(768 / 1920);
     expect(formatScaleLine(mapping)).toBe('1920x1080 → 768x432 (scale 0.4)');
+  });
+
+  it('derives scale from actual native and encoded dimensions', () => {
+    const mapping = scaleFromEncoded({ width: 1000, height: 500 }, { width: 768, height: 384 });
+    expect(mapping.nativeWidth).toBe(1000);
+    expect(mapping.shotWidth).toBe(768);
+    expect(mapping.scale).toBeCloseTo(0.768);
+    expect(formatScaleLine(mapping)).toBe('1000x500 → 768x384 (scale 0.77)');
+    const honest = scaleFromEncoded({ width: 1000, height: 500 }, { width: 1000, height: 500 });
+    expect(honest.scale).toBe(1);
+    expect(formatScaleLine(honest)).toBe('1000x500 → 1000x500 (scale 1)');
   });
 
   it('maps screenshot-space points back unless --native', () => {

@@ -707,11 +707,6 @@ async function v86Start(
   }
 
   registerVm(record);
-  void import('../../computers/adapters/v86.js')
-    .then(({ registerV86Computer }) => registerV86Computer(record))
-    .catch(() => {
-      /* registry optional until computers host starts */
-    });
   try {
     // The constructor kicks off async wasm init; `run()` dereferences
     // internals (`this.v86`, screen adapter) that only exist once the
@@ -731,6 +726,17 @@ async function v86Start(
     await teardownVm(record, pm);
     return fail(`boot failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  record.onScreenChange = () => {
+    void import('../../computers/registry.js').then(({ getComputerRegistry }) => {
+      getComputerRegistry()?.refresh(`v86:${record.name}`);
+    });
+  };
+  void import('../../computers/adapters/v86.js')
+    .then(({ registerV86Computer }) => registerV86Computer(record))
+    .catch(() => {
+      /* registry optional until computers host starts */
+    });
 
   const pidNote = record.pid !== null ? ` (pid ${record.pid})` : '';
   return ok(
@@ -1009,6 +1015,7 @@ async function v86Serve(args: readonly string[], ctx: CommandContext): Promise<C
   return ok(
     `serving '${name}' screen at ${dir} (${fps} fps).\n` +
       `Mint an iframe-able URL with: serve ${dir}\n` +
+      `prefer: computer watch -c v86:${name}\n` +
       `Stop with: v86 serve -n ${name} --stop\n`
   );
 }

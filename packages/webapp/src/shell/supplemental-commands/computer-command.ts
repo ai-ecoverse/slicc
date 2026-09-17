@@ -15,6 +15,8 @@ export interface ComputerCommandDeps {
   processManager?: ProcessManager;
   browser?: BrowserAPI;
   panelRpc?: PanelRpcClient;
+  watch?: (id: string, fps: number, maxWidth: number) => void;
+  unwatch?: (id: string) => void;
 }
 
 export function createComputerCommand(deps: ComputerCommandDeps = {}): Command {

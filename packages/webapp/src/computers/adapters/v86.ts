@@ -17,6 +17,7 @@ import {
   type VmRecord,
 } from '../../shell/supplemental-commands/v86-vm.js';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../backend.js';
+import { fitRgbaFrame } from '../encode-frame.js';
 import { jpegFromRgba } from '../frames.js';
 import { chordToScancodes } from '../keys.js';
 import { type ComputerRegistry, getComputerRegistry } from '../registry.js';
@@ -60,20 +61,21 @@ export class V86ComputerBackend implements ComputerBackend {
     };
   }
 
-  async screenshot(_opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
+  async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
     const frame = captureFrame(this.record);
     if (!frame) {
       throw new Error(
         `no graphical frame for '${this.record.name}' — the guest is in text mode; use \`computer text\``
       );
     }
-    const bytes = await jpegFromRgba(frame);
+    const fitted = fitRgbaFrame(frame, opts.maxWidth);
+    const bytes = await jpegFromRgba(fitted);
     this.seq += 1;
     return {
       seq: this.seq,
       mime: 'image/jpeg',
-      width: frame.width,
-      height: frame.height,
+      width: fitted.width,
+      height: fitted.height,
       bytes,
     };
   }
@@ -103,6 +105,9 @@ export class V86ComputerBackend implements ComputerBackend {
         return;
       case 'scroll':
         await this.applyScroll(event);
+        return;
+      case 'drag':
+        await this.applyDrag(event);
         return;
       case 'key':
         this.applyKey(event);
@@ -156,6 +161,13 @@ export class V86ComputerBackend implements ComputerBackend {
   private async applyScroll(event: Extract<ComputerInputEvent, { type: 'scroll' }>): Promise<void> {
     await this.maybeMoveTo(event.x, event.y);
     this.record.emulator.bus.send('mouse-wheel', [event.dx, -event.dy]);
+  }
+
+  private async applyDrag(event: Extract<ComputerInputEvent, { type: 'drag' }>): Promise<void> {
+    this.applyMousemove({ type: 'mousemove', x: event.x1, y: event.y1 });
+    this.sendButtons(1, true);
+    this.applyMousemove({ type: 'mousemove', x: event.x2, y: event.y2 });
+    this.sendButtons(1, false);
   }
 
   private applyKey(event: Extract<ComputerInputEvent, { type: 'key' }>): void {

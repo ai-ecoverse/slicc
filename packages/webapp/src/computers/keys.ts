@@ -6,6 +6,8 @@
  * `UPPERCASE_NATIVE` tokens (`KEYCODE_BACK`) pass through for Android / cliclick.
  */
 
+import type { ComputerInputEvent } from '@slicc/shared-ts';
+
 export interface KeyModifiers {
   ctrl: boolean;
   alt: boolean;
@@ -362,14 +364,15 @@ export type TouchAction =
  * Touch mapping: click → tap, `--hold` → long press, drag/scroll → swipe,
  * mousemove is a no-op.
  */
-export function toTouchAction(
-  event:
-    | { type: 'click'; x?: number; y?: number; holdMs?: number }
-    | { type: 'scroll'; dx: number; dy: number; x?: number; y?: number }
-    | { type: 'mousemove'; x: number; y: number }
-    | { type: 'drag'; x1: number; y1: number; x2: number; y2: number }
-): TouchAction {
-  if (event.type === 'mousemove') return { kind: 'noop' };
+export function toTouchAction(event: ComputerInputEvent): TouchAction {
+  if (
+    event.type === 'mousemove' ||
+    event.type === 'wait' ||
+    event.type === 'key' ||
+    event.type === 'text'
+  ) {
+    return { kind: 'noop' };
+  }
   if (event.type === 'click') {
     const x = event.x ?? 0;
     const y = event.y ?? 0;
@@ -378,6 +381,11 @@ export function toTouchAction(
   }
   if (event.type === 'drag') {
     return { kind: 'swipe', x1: event.x1, y1: event.y1, x2: event.x2, y2: event.y2 };
+  }
+  if (event.type === 'button') {
+    const x = event.x ?? 0;
+    const y = event.y ?? 0;
+    return event.down ? { kind: 'tap', x, y } : { kind: 'noop' };
   }
   const x = event.x ?? 0;
   const y = event.y ?? 0;

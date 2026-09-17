@@ -111,6 +111,9 @@ describe('V86ComputerBackend', () => {
     expect(shot).toMatchObject({ mime: 'image/jpeg', width: 2, height: 2, seq: 1 });
     expect(shot.bytes.length).toBeGreaterThan(0);
     expect(shot.bytes[0]).toBe(MINIMAL_JPEG[0]);
+    const scaled = await backend.screenshot({ format: 'jpeg', maxWidth: 1 });
+    expect(scaled.width).toBe(1);
+    expect(scaled.height).toBe(1);
   });
 
   it('maps relative/absolute mouse, click, and inverted scroll onto the bus', async () => {
