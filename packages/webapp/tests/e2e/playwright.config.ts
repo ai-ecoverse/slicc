@@ -2,8 +2,14 @@
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { MQ_ONLY_SPEC_BASENAMES } from './mq-only-specs.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+/** When CI sets `SLICC_E2E_PR=1`, drop the merge-queue-only long tail so the
+ *  PR job fills spare capacity under `webapp` / `node-matrix` without owning
+ *  the required `ci` signal. See `mq-only-specs.mjs`. */
+const prSuite = process.env['SLICC_E2E_PR'] === '1';
 
 function resolvePort(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -86,6 +92,7 @@ function resolveFixturePath(value: string): string {
 
 export default defineConfig({
   testDir: '.',
+  testIgnore: prSuite ? MQ_ONLY_SPEC_BASENAMES.map((name) => `**/${name}`) : [],
   webServer: [
     {
       // Keep the agent-driven CDP target outside Playwright's test-worker

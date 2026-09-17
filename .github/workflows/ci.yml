@@ -524,11 +524,12 @@ jobs:
   # readiness probe and `run_worker_first` invariants live in the worker).
   # Before the split, a node-server- or worker-only change never ran the E2E.
   #
-  # Pull requests run the reference fake-LLM scenario: it boots the production
-  # topology, completes three agent turns, and drives CDP, but avoids putting the
-  # suite's long tail on the required `ci` signal. The merge queue runs every
-  # spec before landing. This keeps PR feedback bounded by the ~8-minute webapp
-  # coverage job while preserving the full end-to-end gate at merge time.
+  # Pull requests run every E2E spec except the merge-queue-only long tail
+  # listed in `packages/webapp/tests/e2e/mq-only-specs.mjs` (multiple-cones*,
+  # compaction-robustness, roving-tray-webhook, sprinkle-details, speech).
+  # That fills the ~6 minutes of spare capacity under the ~8-minute webapp /
+  # node-matrix critical path without letting e2e own the required `ci`
+  # signal. The merge queue still runs every spec before landing.
   #
   # The real-Kokoro speech round-trip (`say -o` WAV validation) rides the full
   # merge-queue suite: on `speech`-filter changes the run sets
@@ -614,14 +615,15 @@ jobs:
           for i in $(seq 1 50); do [ -f .cache/hf-mirror.ready ] && break; sleep 0.2; done
           test -f .cache/hf-mirror.ready || { cat .cache/hf-mirror.log; exit 1; }
           echo "HF_ENDPOINT=http://127.0.0.1:8791" >> "$GITHUB_ENV"
-      - name: PR E2E smoke test
+      - name: PR E2E suite
         if: github.event_name == 'pull_request'
-        # The reference scenario is the smallest test that crosses every core
-        # seam: real WC composer + kernel worker + fake model + bash tool + CDP.
-        # Its three deterministic turns retain a useful integration signal
-        # without making PRs wait for the 16-minute long tail (#3146).
-        run: npm run test:e2e -- packages/webapp/tests/e2e/reference-scenario.test.ts
+        # Runs the medium suite (reference scenario, compaction-idle, preview,
+        # sidecar, transcript export, …). `SLICC_E2E_PR=1` makes Playwright
+        # ignore the MQ-only basenames in mq-only-specs.mjs so the long tail
+        # stays off the PR critical path (#3146 headroom fill).
+        run: npm run test:e2e
         env:
+          SLICC_E2E_PR: '1'
           WRANGLER_LOG: debug
           NODE_OPTIONS: '--max-old-space-size=6144'
       - name: Full E2E suite
