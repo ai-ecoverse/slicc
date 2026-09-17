@@ -128,7 +128,6 @@ describe('wc-computers wiring', () => {
       tabs: ReturnType<typeof mergeOverlayTabs>;
     };
     document.body.append(overlay);
-    overlay.setAttribute('open', '');
     overlay.tabs = mergeOverlayTabs([]);
     bindComputerOverlay(overlay, log);
 
@@ -141,6 +140,28 @@ describe('wc-computers wiring', () => {
 
     preview?.dispatchEvent(new CustomEvent('slicc-image-preview-close', { bubbles: true }));
     expect(sent[1]).toEqual({ type: 'computer-unwatch', id: 'jsh:fake' });
+    expect(store.isWatching('jsh:fake')).toBe(false);
+  });
+
+  it('watches registered computers while the overlay is open', async () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id: string; fps?: number; maxWidth?: number }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    installWcComputers({ log });
+    const overlay = document.createElement('slicc-tab-overlay') as HTMLElement & {
+      tabs: ReturnType<typeof mergeOverlayTabs>;
+    };
+    document.body.append(overlay);
+    bindComputerOverlay(overlay, log);
+    expect(sent).toEqual([]);
+    overlay.setAttribute('open', '');
+    await vi.waitFor(() =>
+      expect(sent).toEqual([{ type: 'computer-watch', id: 'jsh:fake', fps: 2, maxWidth: 480 }])
+    );
+    expect(store.isWatching('jsh:fake')).toBe(true);
+    overlay.removeAttribute('open');
+    await vi.waitFor(() => expect(sent[1]).toEqual({ type: 'computer-unwatch', id: 'jsh:fake' }));
     expect(store.isWatching('jsh:fake')).toBe(false);
   });
 
@@ -191,6 +212,30 @@ describe('wc-computers wiring', () => {
 
     first.remove();
     second.remove();
+    expect(store.isWatching('jsh:fake')).toBe(false);
+  });
+
+  it('keeps a frozen still until a pushed frame arrives, then shows LIVE', async () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id: string }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    installWcComputers({ log });
+
+    const el = document.createElement('slicc-bash-renderer-computer');
+    el.command = 'computer -c jsh:fake screenshot';
+    el.toolCallId = 'call-1';
+    el.output = 'screen: /tmp/a.jpg';
+    document.body.append(el);
+    await vi.waitFor(() => expect(el.frameMode).toBe('frozen'));
+    expect(sent).toEqual([{ type: 'computer-watch', id: 'jsh:fake', fps: 2, maxWidth: 480 }]);
+    expect(store.isWatching('jsh:fake')).toBe(true);
+
+    applyFrame('jsh:fake');
+    await vi.waitFor(() => expect(el.frameMode).toBe('live'));
+    expect(el.frameSrc?.startsWith('data:image/jpeg;base64,')).toBe(true);
+
+    el.remove();
     expect(store.isWatching('jsh:fake')).toBe(false);
   });
 

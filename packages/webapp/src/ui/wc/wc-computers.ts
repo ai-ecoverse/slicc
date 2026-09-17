@@ -51,6 +51,7 @@ interface ComputersRuntime {
   deps: WcComputersDeps;
   bound: Map<SliccBashRendererComputer, BoundComputerRow>;
   overlayUnsubs: Array<() => void>;
+  overlayWatchIds: Set<string>;
   lightboxId: string | null;
   lightboxWatched: boolean;
   lightboxOrigin: HTMLElement | null;
@@ -138,6 +139,7 @@ function ensureRuntime(deps?: Partial<WcComputersDeps>): ComputersRuntime {
     deps: { log: deps?.log ?? silentLog, openFs: deps?.openFs },
     bound: new Map(),
     overlayUnsubs: [],
+    overlayWatchIds: new Set(),
     lightboxId: null,
     lightboxWatched: false,
     lightboxOrigin: null,
@@ -159,6 +161,7 @@ function onRowBind(event: Event): void {
   const toolCallId = detail.toolCallId || el.toolCallId;
   const row: BoundComputerRow = { el, toolCallId, computerId, watching: false };
   ensureRuntime().bound.set(el, row);
+  el.addEventListener('computer-row-unbind', onRowUnbind);
   if (computerId && toolCallId) getComputersStore().recordInvocation(computerId, toolCallId);
   refreshAllRows();
 }
@@ -168,8 +171,10 @@ function onRowUnbind(event: Event): void {
   const rt = runtime;
   if (!rt) return;
   const row = rt.bound.get(el);
+  if (!row) return;
   rt.bound.delete(el);
-  if (row?.watching && row.computerId) {
+  el.removeEventListener('computer-row-unbind', onRowUnbind);
+  if (row.watching && row.computerId) {
     try {
       getComputersStore().unwatch(row.computerId);
     } catch (err) {
@@ -198,16 +203,20 @@ function refreshRow(row: BoundComputerRow): void {
   const computer = row.computerId ? store.get(row.computerId) : null;
   const hint = parseFrozenFrameHint(row.el.output ?? '');
   const liveFrame = row.computerId ? store.lastFrame(row.computerId) : null;
+  const newest = row.computerId ? store.newestInvocation(row.computerId) : null;
+  const shouldWatch =
+    Boolean(row.computerId) && computer?.state === 'live' && newest === row.toolCallId;
   const mode = decideComputerFrameMode({
     computerLive: computer?.state === 'live',
-    newestToolCallId: row.computerId ? store.newestInvocation(row.computerId) : null,
+    newestToolCallId: newest,
     toolCallId: row.toolCallId,
     hasFrame: Boolean(hint || liveFrame),
+    hasPushedFrame: Boolean(liveFrame),
   });
   row.el.frameMode = mode;
-  syncRowWatch(row, mode === 'live');
-  if (mode === 'live') {
-    row.el.frameSrc = liveFrame ? frameToDataUrl(liveFrame) : row.el.frameSrc;
+  syncRowWatch(row, shouldWatch);
+  if (mode === 'live' && liveFrame) {
+    row.el.frameSrc = frameToDataUrl(liveFrame);
     return;
   }
   if (mode === 'frozen') void applyFrozenFrame(row, hint, liveFrame);
@@ -268,9 +277,7 @@ function onStoreFrame(id: string, frame: ComputerFrame): void {
     if (preview.isOpen) preview.setSrc(src);
     else preview.open(src, rt.lightboxOrigin ?? preview);
   }
-  for (const row of rt.bound.values()) {
-    if (row.computerId === id && row.el.frameMode === 'live') row.el.frameSrc = src;
-  }
+  refreshAllRows();
 }
 
 function ensurePreview(): SliccImagePreview {
@@ -325,9 +332,54 @@ function overlayCardOrigin(overlay: OverlayLike, tabId: string): HTMLElement {
     overlay) as HTMLElement;
 }
 
+function dropOverlayWatches(): void {
+  const rt = runtime;
+  if (!rt) return;
+  const store = getComputersStore();
+  for (const id of [...rt.overlayWatchIds]) {
+    try {
+      store.unwatch(id);
+    } catch {
+      /* store may already be reset in tests */
+    }
+    rt.overlayWatchIds.delete(id);
+  }
+}
+
 function remeshOverlay(overlay: OverlayLike): void {
+  syncOverlayWatches(overlay);
   if (!overlay.hasAttribute('open')) return;
   overlay.tabs = mergeOverlayTabs(overlay.tabs);
+}
+
+/**
+ * Overlay cards only get thumbnails from `store.lastFrame`, and that map
+ * fills from `computer-frame` pushes. Watch every registered computer
+ * while the overlay is open so the kernel pump actually runs.
+ */
+function syncOverlayWatches(overlay: OverlayLike): void {
+  const rt = ensureRuntime();
+  const store = getComputersStore();
+  const want = overlay.hasAttribute('open') ? store.list().map((c) => c.id) : [];
+  const wantSet = new Set(want);
+  for (const id of [...rt.overlayWatchIds]) {
+    if (wantSet.has(id)) continue;
+    try {
+      store.unwatch(id);
+    } catch (err) {
+      rt.deps.log.warn('WC computers: overlay unwatch failed', err);
+    }
+    rt.overlayWatchIds.delete(id);
+  }
+  for (const id of want) {
+    if (rt.overlayWatchIds.has(id)) continue;
+    try {
+      store.watch(id, ROW_FPS, ROW_MAX_WIDTH);
+      rt.overlayWatchIds.add(id);
+    } catch (err) {
+      rt.deps.log.warn('WC computers: overlay watch failed', err);
+    }
+  }
 }
 
 /**
@@ -377,14 +429,22 @@ export function bindComputerOverlay(overlay: OverlayLike, log?: BootStageLogger)
   overlay.addEventListener('tab-activate', onActivate);
   overlay.addEventListener('tab-peek', onActivate);
   overlay.addEventListener('computer-softkey', onSoftKey);
+  const onClose = (): void => remeshOverlay(overlay);
+  overlay.addEventListener('overlay-close', onClose);
+  const mo = new MutationObserver(() => remeshOverlay(overlay));
+  mo.observe(overlay, { attributes: true, attributeFilter: ['open'] });
   const offList = store.onList(() => remeshOverlay(overlay));
   const offFrame = store.onFrame(() => remeshOverlay(overlay));
+  remeshOverlay(overlay);
   return () => {
     overlay.removeEventListener('tab-activate', onActivate);
     overlay.removeEventListener('tab-peek', onActivate);
     overlay.removeEventListener('computer-softkey', onSoftKey);
+    overlay.removeEventListener('overlay-close', onClose);
+    mo.disconnect();
     offList();
     offFrame();
+    dropOverlayWatches();
   };
 }
 
@@ -395,6 +455,7 @@ export function disposeWcComputers(): void {
   document.removeEventListener('computer-row-unbind', onRowUnbind);
   document.removeEventListener('computer-frame-click', onRowFrameClick);
   for (const off of rt.overlayUnsubs) off();
+  dropOverlayWatches();
   for (const row of rt.bound.values()) {
     if (row.watching && row.computerId) {
       try {
