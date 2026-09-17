@@ -329,6 +329,7 @@ export class OffscreenClient implements KernelClientFacade {
     this.callbacks = callbacks;
     this.transport = transport ?? createPanelChromeRuntimeTransport<PanelToOffscreenMessage>();
     this.setupMessageListener();
+    getComputersStore().setSender((msg) => this.send(msg));
   }
 
   /**
