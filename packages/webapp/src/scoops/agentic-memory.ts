@@ -111,6 +111,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'od',
   'printf',
   'readlink',
+  // Recursive, .gitignore-aware search — MEMORY.md says this is what the
+  // pass actually uses over find|xargs grep. Without it a stale seeded
+  // document still escalates every rg.
+  'rg',
   'sed',
   'sort',
   'stat',
@@ -118,6 +122,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'touch',
   'tr',
   'uniq',
+  // `uname -r` is the running SLICC version. MEMORY.md asks the pass to pin
+  // runtime claims to it; without this grant the unattended pass infers a
+  // version from (possibly stale) memory prose instead.
+  'uname',
   // Read-only skill discovery for the pitfalls it finds. Installing is not
   // reachable: `writablePaths` grants the memory file alone, so a write into
   // `/workspace/skills/` matches no grant and escalates instead of landing.
