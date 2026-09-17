@@ -6,8 +6,12 @@ import {
   validateConeConfig,
 } from '@slicc/cloud-core/cone-config';
 
-// Import the existing ADOBE_TOKEN_DOMAINS constant (will export it from cloud-sessions-do)
-import { ADOBE_TOKEN_DOMAINS } from './cloud-sessions-do.js';
+/**
+ * Domain the synthesized Adobe default IMS token is scoped to. Lives in this
+ * shared-layer module (rather than the `cloud-sessions-do` route) so the bundle
+ * builder does not import up the stack; the route imports it back down.
+ */
+export const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev';
 
 const AUTH_OPTIONAL_PROVIDERS = new Set<string>(['local']);
 
