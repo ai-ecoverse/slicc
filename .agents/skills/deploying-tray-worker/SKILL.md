@@ -39,7 +39,8 @@ npx wrangler r2 bucket lifecycle list slicc-asset-archive-staging
 WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts
 # Live-preview round trip (needs BOTH hub and preview worker deployed): a
 # scripted leader serves 16 MiB (tray DO must survive), 25 MiB + 1 (clean 413),
-# and exhausts the 10-preview quota. CI runs it after the staging preview deploy.
+# fills the 10-snapshot quota (live mints still succeed; pending uploads are
+# listed). CI runs it after the staging preview deploy.
 WORKER_BASE_URL=https://... npm test -- tests/deployed-live-preview.test.ts
 ```
 
@@ -348,10 +349,10 @@ recover concurrency on the next authorization; expired keys collapse into one
 unresolved-write flag. Legacy string leases migrate once on first use.
 Body reads, R2 puts, authorization, commit and release have 30-second deadlines.
 Expiry/revoke retains a non-serving cleanup tombstone and repeats prefix sweeps for
-at most 24 hours, without consuming active preview slots. Unfinished transfers
+at most 24 hours, without consuming snapshot slots. Unfinished transfers
 intentionally retain their non-serving locator-recovery ledger until the same transfer
 is retried, independently of this operational cleanup horizon. That ledger cannot serve
-content, accept uploads, or consume active preview slots. Timeout is NOT cancellation:
+content, accept uploads, or consume snapshot slots. Timeout is NOT cancellation:
 the mandatory independent 90-day R2 lifecycle on `previews/` catches arbitrarily late
 writes after local cleanup ends. Do not shorten this below the maximum 30-day pending
 window plus 30-day finalized retention. Run the lifecycle deployment gate before

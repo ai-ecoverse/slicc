@@ -1389,14 +1389,16 @@ preview's mode and expiry; `serve --stop` immediately revokes and deletes either
 - **25 MiB per file, both modes.** A live preview answers `413 preview file exceeds 25 MiB
 limit: <path>` for a larger file (the leader refuses before sending it). `--ttl` rejects it
   before anything is uploaded: `serve: preview file exceeds 25 MiB limit: <path>`.
-- **10 previews per tray.** Live previews, `--ttl` snapshots, and snapshots still uploading
-  share one pool, and the pool moves with the tray across roves. When it is full, minting fails
-  with `serve: Preview mint failed: Preview limit reached (N of 10 in use; …)`; list with
-  `serve --list` and free a slot with `serve --stop <token>`. A snapshot that is still
-  uploading holds a slot but is not listed.
-- **Previews outlive the session.** A live preview has no expiry: it stays minted (and serving
-  whenever the leader is connected) until `serve --stop`. A `--ttl` snapshot lasts until its
-  TTL expires. Stop previews you no longer need.
+- **10 `--ttl` snapshots per tray; live previews have no quota.** Snapshots hold R2 storage
+  for up to 30 days, so they are counted, including snapshots whose upload is still in
+  progress. When the quota is full, minting fails with
+  `serve: Preview mint failed: Snapshot limit reached (N of 10 --ttl snapshots in use, …)`;
+  `serve --list` shows every snapshot (MODE `persistent`, or `uploading` while the upload
+  runs) and `serve --stop <token>` frees a slot. The quota moves with the tray across roves.
+- **Live previews expire with the leader.** A live preview is served from the leader's VFS, so
+  once the leader has been disconnected for 5 minutes the worker deletes it (the grace covers
+  page reloads and network blips); its URL then answers 404. A `--ttl` snapshot lasts until its
+  TTL expires, whether or not the leader is connected. `serve --stop` removes either sooner.
 - **Tokens.** `serve` prints `Preview token: <trayId>.<secret>` after the URL, and
   `serve --list` shows the same value in its `TOKEN` column. `--stop` also accepts the preview
   URL (or its host) and derives the token from it.
@@ -1407,7 +1409,7 @@ limit: <path>` for a larger file (the leader refuses before sending it). `--ttl`
 - `--no-bridge` — Force read-only. Wins over `--bridge` and Cherry-follower default.
 - `--max-tabs <N>` — Cap concurrent bridged tabs per preview (default 20). DO rejects bridge upgrades when cap reached; the over-cap tab still loads as a normal (non-driveable) preview and the leader is not told it exists.
 - `--quiet` — Suppress the preview's first-visit announcement. Webhook licks the page emits still flow.
-- `--stop <token-or-url>` — Revoke the preview and free its quota slot: closes bridge sockets, rejects new connections, deletes the auto-provisioned webhook. Accepts the printed token, the `serve --list` token, or the preview URL.
+- `--stop <token-or-url>` — Revoke the preview (for a snapshot, this frees its quota slot): closes bridge sockets, rejects new connections, deletes the auto-provisioned webhook. Accepts the printed token, the `serve --list` token, or the preview URL.
 
 ### Diagnostics
 

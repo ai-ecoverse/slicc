@@ -1,5 +1,6 @@
 /**
- * Post-deploy smoke for the live (leader-relayed) preview path (#2852, #3213).
+ * Post-deploy smoke for the live (leader-relayed) preview path and the preview
+ * quota (#2852, #3213).
  *
  * Runs against staging after BOTH the hub and the preview worker deployed,
  * with a scripted leader that serves generated files. Before the chunk-wise
@@ -131,13 +132,14 @@ describeIfConfigured('deployed live preview (staging)', () => {
       }
       leader.socket.close();
     });
-    const mint = async () => {
+    const mint = async (extra: { ttlMs?: number } = {}) => {
       const res = await api('/preview', {
         method: 'POST',
         body: JSON.stringify({
           servedRoot: '/smoke',
           entryPath: '/smoke/index.html',
           allowLive: false,
+          ...extra,
         }),
       });
       const body = (await res.json()) as {
@@ -151,7 +153,7 @@ describeIfConfigured('deployed live preview (staging)', () => {
       if (body.previewToken) minted.push(body.previewToken);
       return { status: res.status, body };
     };
-    return { leader, mint };
+    return { leader, mint, api };
   }
 
   afterAll(async () => {
@@ -190,19 +192,31 @@ describeIfConfigured('deployed live preview (staging)', () => {
     expect(leader.closedWith()).toBeNull();
   }, 180_000);
 
-  it('reports active/limit when the per-tray preview quota is exhausted', async () => {
-    const { mint } = await setup();
+  it('limits only --ttl snapshots, lists uploads in progress, and leaves live previews free', async () => {
+    const { mint, api } = await setup();
+    // Snapshots are minted but never uploaded, so they stay `pending` and
+    // write nothing to R2; afterAll stops them.
     let refused: Awaited<ReturnType<typeof mint>> | undefined;
     for (let i = 0; i < 20 && !refused; i++) {
-      const attempt = await mint();
+      const attempt = await mint({ ttlMs: 10 * 60_000 });
       if (attempt.status !== 200) refused = attempt;
     }
     expect(refused?.status).toBe(429);
     expect(refused?.body).toMatchObject({
-      error: 'Preview limit reached',
+      error: 'Snapshot limit reached',
       code: 'PREVIEW_LIMIT',
       active: 10,
       limit: 10,
     });
+
+    for (let i = 0; i < 3; i++) expect((await mint()).status).toBe(200);
+
+    const listed = (await (await api('/previews')).json()) as {
+      previews: Array<{ mode?: string; state?: string }>;
+    };
+    expect(
+      listed.previews.filter((p) => p.mode === 'persistent' && p.state === 'pending')
+    ).toHaveLength(10);
+    expect(listed.previews.filter((p) => p.mode === 'live')).toHaveLength(3);
   }, 60_000);
 });

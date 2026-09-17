@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
@@ -732,5 +732,96 @@ describe('preview HTTP handler', () => {
     expect(rec.bridge).toBe(true);
     expect(rec.maxTabs).toBe(5);
     expect(rec.webhookId).toBe('wh1');
+  });
+});
+
+describe('live previews expire with the leader connection', () => {
+  async function reclaim(
+    env: ReturnType<typeof createTestHarness>['env'],
+    controllerUrl: string,
+    leaderKey: string
+  ): Promise<FakeWebSocket> {
+    const attach = await handleWorkerRequest(
+      new Request(controllerUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-2', leaderKey }),
+      }),
+      env
+    );
+    expect(attach.status).toBe(200);
+    const { websocket } = (await attach.json()) as { websocket: { url: string } };
+    const res = await handleWorkerRequest(
+      new Request(websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    return (res as unknown as { webSocket: FakeWebSocket }).webSocket;
+  }
+
+  async function setup() {
+    const { env, namespace } = createTestHarness();
+    const created = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string } };
+    };
+    const controllerUrl = session.capabilities.controller.url;
+    const attach = await handleWorkerRequest(
+      new Request(controllerUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env
+    );
+    const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
+    const socketRes = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    const socket = (socketRes as unknown as { webSocket: FakeWebSocket }).webSocket;
+    const controllerToken = new URL(controllerUrl).pathname.split('/').pop() ?? '';
+    const { previewToken } = await mintPreviewViaWorker(env, session.trayId, controllerToken);
+    const stub = namespace.get(namespace.idFromName(session.trayId));
+    return { env, stub, socket, controllerUrl, leaderKey: leader.leaderKey, previewToken };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps live previews across a short reconnect', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    t.socket.close();
+    vi.setSystemTime(Date.parse('2026-09-17T10:04:00Z'));
+    const socket = await reclaim(t.env, t.controllerUrl, t.leaderKey);
+    expect(socket.received.some((m) => m.includes('"preview.revoked"'))).toBe(false);
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).not.toBeNull();
+  });
+
+  it('drops them after a long outage and tells the returning leader', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    t.socket.close();
+    vi.setSystemTime(Date.parse('2026-09-17T10:06:00Z'));
+    const socket = await reclaim(t.env, t.controllerUrl, t.leaderKey);
+    expect(socket.received.map((m) => JSON.parse(m))).toContainEqual({
+      type: 'preview.revoked',
+      previewToken: t.previewToken,
+    });
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
+    expect(await asPreview(t.stub).listPreviews()).toEqual([]);
+  });
+
+  it('stops serving them to visitors during the outage', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    t.socket.close();
+    vi.setSystemTime(Date.parse('2026-09-17T10:05:01Z'));
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
   });
 });

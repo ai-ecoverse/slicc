@@ -126,16 +126,7 @@ export interface StandalonePanelRpcHandlerOptions {
    * session's trayId/controllerToken and calls the worker HTTP API.
    * Throws when no active leader.
    */
-  listPreviews?: () => Promise<{
-    previews: Array<{
-      previewToken: string;
-      url: string;
-      servedRoot: string;
-      entryPath: string;
-      allowLive: boolean;
-      createdAt: string;
-    }>;
-  }>;
+  listPreviews?: () => Promise<PanelRpcResults['tray-list-previews']>;
   /** Read preview lifecycle records held by the page-side leader. */
   getPreviewLifecycleRecords?: (previewToken?: string) => PanelRpcResults['tray-preview-logs'];
   /** Clear lifecycle records and re-arm the matching announcement latch. */

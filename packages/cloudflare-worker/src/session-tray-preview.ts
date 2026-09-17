@@ -6,11 +6,13 @@
  */
 
 import {
+  LIVE_PREVIEW_ORPHAN_MS,
+  MAX_LIVE_PREVIEWS_PER_TRAY,
   MAX_PREVIEW_FILE_BYTES,
   MAX_PREVIEW_FILES,
   MAX_PREVIEW_TOTAL_BYTES,
   MAX_PREVIEW_TTL_MS,
-  MAX_PREVIEWS_PER_TRAY,
+  MAX_SNAPSHOTS_PER_TRAY,
   normalizePreviewArchivePath,
   PREVIEW_ARCHIVE_PREFIX,
 } from './persistent-preview-storage.js';
@@ -172,6 +174,7 @@ export class PreviewAssembler {
 
 interface TrayState {
   controllerToken: string;
+  leader?: { connected: boolean; disconnectedAt?: string } | null;
   previews?: Record<string, PreviewRecord>;
   trayId: string;
   expiredAt?: string;
@@ -192,6 +195,8 @@ export interface PreviewDeps {
   archiveAvailable(): boolean;
   deleteArchivePrefix(prefix: string): Promise<void>;
   scheduleExpiry(timestamp: number | null): Promise<void>;
+  /** Close bridge sockets of live previews that expired with their leader. */
+  onLivePreviewsExpired?(tokens: string[]): void;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -619,6 +624,28 @@ async function scheduleNextPersistentExpiry(deps: PreviewDeps): Promise<void> {
   await deps.scheduleExpiry(expiries.length > 0 ? Math.min(...expiries) : null);
 }
 
+/**
+ * Drop live previews once the leader has been disconnected for longer than
+ * {@link LIVE_PREVIEW_ORPHAN_MS}. Pass `disconnectedAt` explicitly when the
+ * caller is about to clear it (leader reclaim). Returns the dropped tokens.
+ */
+export async function expireOrphanedLivePreviews(
+  deps: PreviewDeps,
+  disconnectedAt = deps.getTray()?.leader?.disconnectedAt
+): Promise<string[]> {
+  const tray = deps.getTray();
+  if (!tray?.previews || tray.previewTransfer || !disconnectedAt) return [];
+  if (deps.now() - Date.parse(disconnectedAt) < LIVE_PREVIEW_ORPHAN_MS) return [];
+  const expired = Object.keys(tray.previews).filter(
+    (token) => !isPersistent(tray.previews![token]!)
+  );
+  if (expired.length === 0) return [];
+  for (const token of expired) delete tray.previews[token];
+  await deps.persistTray();
+  deps.onLivePreviewsExpired?.(expired);
+  return expired;
+}
+
 export async function expirePersistentPreviews(deps: PreviewDeps): Promise<void> {
   await deps.loadTray();
   const tray = deps.getTray();
@@ -670,6 +697,39 @@ function validatedEntryRelativePath(servedRoot: string, entryPath: string): stri
   const relativePath = normalizePreviewArchivePath(relativeCandidate);
   if (!relativePath) throw routeError('invalid preview entry path');
   return relativePath;
+}
+
+function capacityError(message: string, code: string, active: number, limit: number): Error {
+  return Object.assign(new Error(message), { code, status: 429, details: { active, limit } });
+}
+
+/**
+ * Only `--ttl` snapshots have a quota (they hold R2 bytes for up to 30 days);
+ * uploads in progress count, cleanup tombstones do not. Live previews are
+ * bounded only to keep the tray record small.
+ */
+function assertPreviewCapacity(records: PreviewRecord[], persistent: boolean): void {
+  if (persistent) {
+    const snapshots = records.filter((r) => isPersistent(r) && r.state !== 'cleanup').length;
+    if (snapshots >= MAX_SNAPSHOTS_PER_TRAY) {
+      throw capacityError(
+        'Snapshot limit reached',
+        'PREVIEW_LIMIT',
+        snapshots,
+        MAX_SNAPSHOTS_PER_TRAY
+      );
+    }
+    return;
+  }
+  const live = records.filter((r) => !isPersistent(r)).length;
+  if (live >= MAX_LIVE_PREVIEWS_PER_TRAY) {
+    throw capacityError(
+      'Too many live previews',
+      'LIVE_PREVIEW_LIMIT',
+      live,
+      MAX_LIVE_PREVIEWS_PER_TRAY
+    );
+  }
 }
 
 export async function mintPreview(
@@ -751,18 +811,8 @@ export async function mintPreview(
 
   tray.previews ??= {};
   await expirePersistentPreviews(deps);
-  // Every non-tombstone record counts: live previews, `--ttl` snapshots, and
-  // snapshots whose upload has not been finalized yet.
-  const active = Object.values(tray.previews).filter(
-    (preview) => preview.state !== 'cleanup'
-  ).length;
-  if (active >= MAX_PREVIEWS_PER_TRAY) {
-    throw Object.assign(new Error('Preview limit reached'), {
-      code: 'PREVIEW_LIMIT',
-      status: 429,
-      details: { active, limit: MAX_PREVIEWS_PER_TRAY },
-    });
-  }
+  await expireOrphanedLivePreviews(deps);
+  assertPreviewCapacity(Object.values(tray.previews), persistent);
   tray.previews[previewToken] = record;
   await deps.persistTray();
   if (persistent) await scheduleNextPersistentExpiry(deps);
@@ -893,6 +943,7 @@ export async function resolvePreview(
   await deps.loadTray();
   const tray = deps.getTray();
   if (!tray) return null;
+  await expireOrphanedLivePreviews(deps);
   const record = tray.previews?.[previewToken];
   if (tray.previewTransfer) return null;
   if (Object.values(tray.previewImports ?? {}).some((receipt) => !receipt.activated)) return null;
@@ -932,9 +983,11 @@ export async function listPreviews(deps: PreviewDeps): Promise<PreviewRecord[]> 
   const tray = deps.getTray();
   if (!tray) return [];
   await expirePersistentPreviews(deps);
-  return Object.values(tray.previews ?? {}).filter(
-    (record) =>
-      isReady(record) && (isPersistent(record) || (!tray.expiredAt && record.mode !== 'persistent'))
+  await expireOrphanedLivePreviews(deps);
+  // Snapshots still uploading are listed (they hold a quota slot and can be
+  // stopped); cleanup tombstones are not.
+  return Object.values(tray.previews ?? {}).filter((record) =>
+    isPersistent(record) ? record.state !== 'cleanup' : isReady(record) && !tray.expiredAt
   );
 }
 

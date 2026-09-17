@@ -53,6 +53,7 @@ import { BootstrapCoordinator, type BootstrapDeps } from './session-tray-bootstr
 import { BRIDGE_WS_TAG, type BridgeDeps, BridgeRelay } from './session-tray-bridge.js';
 import {
   dispatchPreviewRoute,
+  expireOrphanedLivePreviews,
   expirePersistentPreviews,
   failAllPendingPreviews,
   handlePreviewPurge,
@@ -179,6 +180,8 @@ export class SessionTrayDurableObject {
   // when the matching `preview.response` arrives (single chunk today, future-
   // proof for chunked binary).
   private readonly pendingPreviews = new Map<string, PreviewAssembler>();
+  // Live previews dropped by a reclaim, announced once the leader WS opens.
+  private readonly expiredLivePreviewNotices: string[] = [];
   private previewMutation: Promise<unknown> = Promise.resolve();
 
   // Extracted concerns. Each holds only its own state; anything durable lives
@@ -1079,6 +1082,11 @@ export class SessionTrayDurableObject {
         );
       }
       role = 'leader';
+      // A reclaim after a long outage must not revive live previews: they
+      // were served from this leader's VFS and expired with its connection.
+      this.expiredLivePreviewNotices.push(
+        ...(await expireOrphanedLivePreviews(this.previewDeps(), tray.leader.disconnectedAt))
+      );
       tray.leader.controllerId = controllerId;
       tray.leader.lastSeenAt = nowIso;
       tray.leader.disconnectedAt = undefined;
@@ -1168,6 +1176,12 @@ export class SessionTrayDurableObject {
     // Rehydrate the leader's per-preview announcement metadata even when no
     // visitor sockets are currently live.
     this.replayPreviewStatesToLeader(server);
+
+    // Let the leader drop previews that expired while it was away. Best
+    // effort: the notices live in memory between attach and this socket.
+    for (const previewToken of this.expiredLivePreviewNotices.splice(0)) {
+      server.send(JSON.stringify({ type: 'preview.revoked', previewToken }));
+    }
 
     // Replay live bridge connections so a (re)connected leader repopulates its
     // in-memory bridge registry. A leader page reload wipes that map while the
@@ -1623,6 +1637,9 @@ export class SessionTrayDurableObject {
         } else {
           await this.state.storage.setAlarm?.(timestamp);
         }
+      },
+      onLivePreviewsExpired: (tokens) => {
+        for (const token of tokens) this.bridge.closeSocketsForPreview(token);
       },
     };
   }

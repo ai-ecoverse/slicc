@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_PREVIEWS_PER_TRAY } from '../src/persistent-preview-storage.js';
+import {
+  LIVE_PREVIEW_ORPHAN_MS,
+  MAX_LIVE_PREVIEWS_PER_TRAY,
+  MAX_SNAPSHOTS_PER_TRAY,
+} from '../src/persistent-preview-storage.js';
 import {
   dispatchPreviewRoute,
+  expireOrphanedLivePreviews,
+  listPreviews,
   PREVIEW_FILE_TOO_LARGE,
   PreviewAssembler,
   type PreviewDeps,
   type PreviewResponseChunk,
+  resolvePreview,
 } from '../src/session-tray-preview.js';
 import type { PreviewRecord } from '../src/shared.js';
 
@@ -132,26 +139,48 @@ describe('PreviewAssembler', () => {
   });
 });
 
-function fakeDeps(): PreviewDeps & { previews: Record<string, PreviewRecord> } {
-  const tray = {
+interface FakeDeps extends PreviewDeps {
+  previews: Record<string, PreviewRecord>;
+  tray: {
+    trayId: string;
+    controllerToken: string;
+    previews: Record<string, PreviewRecord>;
+    leader: { connected: boolean; disconnectedAt?: string } | null;
+    previewTransfer?: { phase: 'pending' | 'forwarded' | 'complete' };
+  };
+  clock: { now: number };
+  expiredCalls: string[][];
+}
+
+function fakeDeps(): FakeDeps {
+  const tray: FakeDeps['tray'] = {
     trayId: '11111111-1111-4111-8111-111111111111',
     controllerToken: 'ctl',
-    previews: {} as Record<string, PreviewRecord>,
+    previews: {},
+    leader: { connected: true },
   };
+  const clock = { now: 0 };
+  const expiredCalls: string[][] = [];
   return {
+    tray,
+    clock,
+    expiredCalls,
     previews: tray.previews,
     loadTray: async () => {},
     getTray: () => tray,
     persistTray: async () => {},
-    isoNow: () => new Date(0).toISOString(),
+    isoNow: () => new Date(clock.now).toISOString(),
     hasLiveLeader: () => true,
     sendToLeader: () => true,
     matchesToken: (a, b) => a === b,
     pendingPreviews: new Map(),
-    now: () => 0,
+    now: () => clock.now,
     archiveAvailable: () => true,
     deleteArchivePrefix: async () => {},
     scheduleExpiry: async () => {},
+    onLivePreviewsExpired: (tokens) => {
+      expiredCalls.push(tokens);
+    },
   };
 }
 
@@ -179,29 +208,50 @@ async function mint(deps: PreviewDeps, extra: { ttlMs?: number } = {}): Promise<
   return res;
 }
 
+async function mintToken(deps: PreviewDeps, extra: { ttlMs?: number } = {}): Promise<string> {
+  const res = await mint(deps, extra);
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { previewToken: string }).previewToken;
+}
+
 describe('preview quota', () => {
-  it('counts pending --ttl snapshots and reports active/limit on the 429', async () => {
+  it('limits --ttl snapshots (uploads in progress included) and reports active/limit', async () => {
     const deps = fakeDeps();
-    expect((await mint(deps, { ttlMs: 60_000 })).status).toBe(200);
-    for (let i = 1; i < MAX_PREVIEWS_PER_TRAY; i++) {
-      expect((await mint(deps)).status).toBe(200);
-    }
-    const refused = await mint(deps);
+    for (let i = 0; i < MAX_SNAPSHOTS_PER_TRAY; i++) await mintToken(deps, { ttlMs: 60_000 });
+    const refused = await mint(deps, { ttlMs: 60_000 });
     expect(refused.status).toBe(429);
     await expect(refused.json()).resolves.toEqual({
-      error: 'Preview limit reached',
+      error: 'Snapshot limit reached',
       code: 'PREVIEW_LIMIT',
-      active: MAX_PREVIEWS_PER_TRAY,
-      limit: MAX_PREVIEWS_PER_TRAY,
+      active: MAX_SNAPSHOTS_PER_TRAY,
+      limit: MAX_SNAPSHOTS_PER_TRAY,
+    });
+  });
+
+  it('does not count live previews against the snapshot quota, nor snapshots against live', async () => {
+    const deps = fakeDeps();
+    for (let i = 0; i < 25; i++) await mintToken(deps);
+    for (let i = 0; i < MAX_SNAPSHOTS_PER_TRAY; i++) await mintToken(deps, { ttlMs: 60_000 });
+    expect((await mint(deps)).status).toBe(200);
+  });
+
+  it('bounds live previews only to protect the tray record', async () => {
+    const deps = fakeDeps();
+    for (let i = 0; i < MAX_LIVE_PREVIEWS_PER_TRAY; i++) await mintToken(deps);
+    const refused = await mint(deps);
+    expect(refused.status).toBe(429);
+    await expect(refused.json()).resolves.toMatchObject({
+      code: 'LIVE_PREVIEW_LIMIT',
+      active: MAX_LIVE_PREVIEWS_PER_TRAY,
+      limit: MAX_LIVE_PREVIEWS_PER_TRAY,
     });
   });
 
   it('does not count cleanup tombstones', async () => {
     const deps = fakeDeps();
-    for (let i = 0; i < MAX_PREVIEWS_PER_TRAY; i++) await mint(deps);
-    const first = Object.values(deps.previews)[0]!;
-    first.state = 'cleanup';
-    expect((await mint(deps)).status).toBe(200);
+    for (let i = 0; i < MAX_SNAPSHOTS_PER_TRAY; i++) await mintToken(deps, { ttlMs: 60_000 });
+    Object.values(deps.previews)[0]!.state = 'cleanup';
+    expect((await mint(deps, { ttlMs: 60_000 })).status).toBe(200);
   });
 
   it('keeps the plain 403 body for other mint failures', async () => {
@@ -210,5 +260,65 @@ describe('preview quota', () => {
     const res = await mint(deps);
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({ error: 'Invalid controller capability' });
+  });
+});
+
+describe('listPreviews', () => {
+  it('lists snapshots that are still uploading, but not cleanup tombstones', async () => {
+    const deps = fakeDeps();
+    const live = await mintToken(deps);
+    const uploading = await mintToken(deps, { ttlMs: 60_000 });
+    const tombstone = await mintToken(deps, { ttlMs: 60_000 });
+    deps.previews[tombstone]!.state = 'cleanup';
+    const listed = await listPreviews(deps);
+    expect(listed.map((r) => [r.previewToken, r.mode, r.state])).toEqual([
+      [live, 'live', 'ready'],
+      [uploading, 'persistent', 'pending'],
+    ]);
+  });
+});
+
+describe('live preview expiry', () => {
+  it('drops live previews once the leader has been gone past the grace period', async () => {
+    const deps = fakeDeps();
+    const live = await mintToken(deps);
+    const snapshot = await mintToken(deps, { ttlMs: 7 * 86_400_000 });
+    deps.tray.leader = { connected: false, disconnectedAt: new Date(0).toISOString() };
+
+    deps.clock.now = LIVE_PREVIEW_ORPHAN_MS - 1;
+    expect(await resolvePreview(live, deps)).not.toBeNull();
+    expect(deps.expiredCalls).toEqual([]);
+
+    deps.clock.now = LIVE_PREVIEW_ORPHAN_MS;
+    expect(await resolvePreview(live, deps)).toBeNull();
+    expect(deps.previews[live]).toBeUndefined();
+    expect(deps.previews[snapshot]).toBeDefined();
+    expect(deps.expiredCalls).toEqual([[live]]);
+  });
+
+  it('never expires while the leader is connected', async () => {
+    const deps = fakeDeps();
+    const live = await mintToken(deps);
+    deps.clock.now = 30 * 86_400_000;
+    expect((await listPreviews(deps)).map((r) => r.previewToken)).toEqual([live]);
+  });
+
+  it('uses the disconnect time handed in by a reclaim', async () => {
+    const deps = fakeDeps();
+    const live = await mintToken(deps);
+    deps.clock.now = LIVE_PREVIEW_ORPHAN_MS + 1;
+    await expect(expireOrphanedLivePreviews(deps, new Date(0).toISOString())).resolves.toEqual([
+      live,
+    ]);
+    await expect(expireOrphanedLivePreviews(deps, new Date(0).toISOString())).resolves.toEqual([]);
+  });
+
+  it('leaves records alone while a preview transfer is in flight', async () => {
+    const deps = fakeDeps();
+    const live = await mintToken(deps);
+    deps.tray.previewTransfer = { phase: 'pending' };
+    deps.clock.now = LIVE_PREVIEW_ORPHAN_MS * 2;
+    await expect(expireOrphanedLivePreviews(deps, new Date(0).toISOString())).resolves.toEqual([]);
+    expect(deps.previews[live]).toBeDefined();
   });
 });
