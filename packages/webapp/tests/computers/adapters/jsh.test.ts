@@ -2,6 +2,7 @@ import type { ComputerDescriptor, ComputerInputEvent } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import { JshComputerBackend } from '../../../src/computers/adapters/jsh.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
+import { ComputerRegistry } from '../../../src/computers/registry.js';
 
 const DESCRIPTOR: ComputerDescriptor = {
   id: 'jsh:demo',
@@ -87,5 +88,33 @@ describe('JshComputerBackend', () => {
     });
     expect(await backend.screenshot({ format: 'jpeg' })).toMatchObject({ seq: 99 });
     await backend.close();
+  });
+
+  it('close() and unregister finish even when unsubscribe never replies', async () => {
+    const call = vi.fn(async (op: string) => {
+      if (op === 'unsubscribe') return new Promise(() => {});
+      return { ok: true };
+    });
+    const backend = new JshComputerBackend(
+      { ...DESCRIPTOR, capabilities: { ...DESCRIPTOR.capabilities, frames: 'push' } },
+      call
+    );
+    backend.subscribe!(4, () => {});
+    await vi.waitFor(() => {
+      expect(call.mock.calls.map((c) => c[0])).toContain('subscribe');
+    });
+    const registry = new ComputerRegistry(null);
+    const desc = registry.register(backend);
+    let changed = 0;
+    registry.onChange(() => {
+      changed += 1;
+    });
+    const outcome = await Promise.race([
+      registry.unregister(desc.id).then(() => 'unregistered' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 200)),
+    ]);
+    expect(outcome).toBe('unregistered');
+    expect(registry.get(desc.id)).toBeNull();
+    expect(changed).toBeGreaterThan(0);
   });
 });

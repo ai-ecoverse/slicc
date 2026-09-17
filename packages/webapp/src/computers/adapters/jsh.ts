@@ -101,8 +101,8 @@ export class JshComputerBackend implements ComputerBackend {
     this.waiters.clear();
     if (!this.subscribed) return;
     this.subscribed = false;
-    await this.call('unsubscribe', []).catch(() => {
-      /* realm already gone */
+    void this.call('unsubscribe', []).catch(() => {
+      /* realm already gone — do not await, or unregister hangs before emitChange */
     });
   }
 
