@@ -16,6 +16,10 @@
  *   - `GET  /__requests` — test-only; the `messages` array of each recent
  *     `/v1/chat/completions` request, oldest first, so a scenario can assert
  *     on what the agent sent.
+ *   - `GET  /__state` — test-only; `{ cursor, requestCount, held }`, where
+ *     `held` is true while a turn's `holdAfterContentChunks` gate is closed.
+ *   - `POST /__release` — test-only; opens that gate so the held stream
+ *     finishes. 409 when nothing is held.
  *   - `POST /__reset` — test-only control endpoint that rewinds the
  *     turn cursor + request counter (same effect as
  *     {@link FakeLlmServer.reset}). Lets a Playwright retry replay the
@@ -35,6 +39,13 @@ import type { AssistantTurn, Fixture, UserMessageMatcher } from './types.js';
 
 export type { AssistantTurn, Fixture, ToolCallFixture, UserMessageMatcher } from './types.js';
 
+export interface FakeLlmState {
+  cursor: number;
+  requestCount: number;
+  /** A `holdAfterContentChunks` stream is parked awaiting `/__release`. */
+  held: boolean;
+}
+
 export interface FakeLlmServer {
   /** e.g. `http://127.0.0.1:54321` (no trailing slash). */
   readonly url: string;
@@ -45,7 +56,7 @@ export interface FakeLlmServer {
   /** Reset the turn cursor and request counter; fixture is preserved. */
   reset(): void;
   setFixture(fixture: Fixture): void;
-  getState(): { cursor: number; requestCount: number };
+  getState(): FakeLlmState;
 }
 
 export interface StartOptions {
@@ -79,6 +90,7 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
   let lastUsedTurnIndex = -1;
   /** Bounded ring of the message arrays this server was sent, oldest first. */
   const recordedRequests: unknown[][] = [];
+  const hold = createStreamHold();
 
   const server = createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
@@ -124,6 +136,7 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
       writeJson(res, 200, { object: 'fake_llm.requests', requests: recordedRequests });
       return;
     }
+    if (handleHoldControl(method, pathIs, res, hold, getState)) return;
     if (method === 'POST' && pathIs('/__fixture')) {
       await handleFixtureSwap(req, res);
       return;
@@ -200,11 +213,14 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
     }
     cursor = picked.nextCursor;
     lastUsedTurnIndex = picked.index;
-    if (stream) await writeSseStream(res, fixture.model, picked.turn);
+    if (stream) await writeSseStream(res, fixture.model, picked.turn, hold.park);
     else writeJson(res, 200, buildNonStreamResponse(fixture.model, picked.turn));
   }
 
+  const getState = (): FakeLlmState => ({ cursor, requestCount, held: hold.held });
+
   function resetState(): void {
+    hold.release();
     cursor = 0;
     requestCount = 0;
     lastUsedTurnIndex = -1;
@@ -255,8 +271,50 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
       fixture = validateFixture(next);
       resetState();
     },
-    getState: () => ({ cursor, requestCount }),
+    getState,
   };
+}
+
+/** The `holdAfterContentChunks` gate; one parked stream at a time. */
+function createStreamHold() {
+  let release: (() => void) | null = null;
+  return {
+    get held(): boolean {
+      return release !== null;
+    },
+    park: (): Promise<void> =>
+      new Promise((resolve) => {
+        release = () => {
+          release = null;
+          resolve();
+        };
+      }),
+    /** False when nothing was parked. Resets call it too, so a failed
+     *  attempt never strands its stream. */
+    release(): boolean {
+      if (!release) return false;
+      release();
+      return true;
+    },
+  };
+}
+
+/** `GET /__state` and `POST /__release`; false when the route is neither. */
+function handleHoldControl(
+  method: string,
+  pathIs: (p: string) => boolean,
+  res: ServerResponse,
+  hold: ReturnType<typeof createStreamHold>,
+  getState: () => FakeLlmState
+): boolean {
+  if (method === 'GET' && pathIs('/__state')) {
+    writeJson(res, 200, { object: 'fake_llm.state', ...getState() });
+    return true;
+  }
+  if (method !== 'POST' || !pathIs('/__release')) return false;
+  if (hold.release()) writeJson(res, 200, { object: 'fake_llm.release' });
+  else writeJson(res, 409, { error: { message: 'no held stream', type: 'not_held' } });
+  return true;
 }
 
 function validateFixture(fx: Fixture): Fixture {
@@ -338,7 +396,12 @@ function closeServer(server: Server): Promise<void> {
 
 // ── SSE writers ────────────────────────────────────────────────────
 
-function writeSseStream(res: ServerResponse, model: string, turn: AssistantTurn): Promise<void> {
+async function writeSseStream(
+  res: ServerResponse,
+  model: string,
+  turn: AssistantTurn,
+  holdGate: () => Promise<void>
+): Promise<void> {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -360,7 +423,9 @@ function writeSseStream(res: ServerResponse, model: string, turn: AssistantTurn)
 
   send({ role: 'assistant' }, null);
 
-  for (const piece of chunkContent(turn.content ?? '', turn.contentChunkSize ?? 16)) {
+  const pieces = chunkContent(turn.content ?? '', turn.contentChunkSize ?? 16);
+  for (const [i, piece] of pieces.entries()) {
+    if (i === turn.holdAfterContentChunks) await holdGate();
     send({ content: piece }, null);
   }
 
@@ -392,7 +457,6 @@ function writeSseStream(res: ServerResponse, model: string, turn: AssistantTurn)
   send({}, finish);
   res.write('data: [DONE]\n\n');
   res.end();
-  return Promise.resolve();
 }
 
 function chunkContent(text: string, size: number): string[] {
