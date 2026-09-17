@@ -1,3 +1,10 @@
+/**
+ * Realm `sliccy:computer` bridge. Uses the same `attachRealmHost` RPC
+ * path as a DedicatedWorker jshd unit (`js-realm-worker` → `runJsRealm`).
+ * A Playwright fake-LLM look-click-look against a live tab is not in
+ * this suite; `computer-command.test.ts` covers look-click-look on the
+ * shell, and `jsh.test.ts` covers cached-frame timeouts.
+ */
 import type { ComputerCapabilities, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
@@ -122,5 +129,43 @@ describe('realm computer bridge', () => {
     await vi.waitFor(() => {
       expect(getComputerRegistry()?.get('jsh:leak')).toBeNull();
     });
+  });
+
+  it('pushes subscribe frames over computer.frame and caches them for screenshot', async () => {
+    const shots = vi.fn(async () => FRAME);
+    let stopCount = 0;
+    const { computer, dispose } = setup();
+    const unreg = computer.register({
+      id: 'jsh:push',
+      capabilities: { ...CAPABILITIES, frames: 'push' },
+      screenshot: shots,
+      input: async () => {},
+      subscribe(_fps, onFrame) {
+        onFrame({ ...FRAME, seq: 3 });
+        return () => {
+          stopCount += 1;
+        };
+      },
+    });
+    await vi.waitFor(() => {
+      expect(getComputerRegistry()?.get('jsh:push')).toBeTruthy();
+    });
+    const backend = getComputerRegistry()!.getEntry('jsh:push')!.backend;
+    const seen: number[] = [];
+    const stop = backend.subscribe?.(2, (frame) => {
+      seen.push(frame.seq);
+    });
+    await vi.waitFor(() => {
+      expect(seen).toEqual([3]);
+    });
+    expect(await backend.screenshot({ format: 'jpeg' })).toMatchObject({ seq: 3 });
+    expect(shots).not.toHaveBeenCalled();
+    stop?.();
+    unreg();
+    await vi.waitFor(() => {
+      expect(stopCount).toBeGreaterThan(0);
+      expect(getComputerRegistry()?.get('jsh:push')).toBeNull();
+    });
+    await dispose();
   });
 });

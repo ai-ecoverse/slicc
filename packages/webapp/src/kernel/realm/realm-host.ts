@@ -12,7 +12,7 @@
  * gated API call. Pinned in `realm-rpc.test.ts`.
  */
 
-import type { ComputerDescriptor } from '@slicc/shared-ts';
+import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
@@ -215,6 +215,7 @@ export function attachRealmHost(
     pushEvent,
     pending: new Map(),
     registered: [],
+    backends: new Map(),
     requestSeq: 0,
     pid: opts.ppid ?? null,
   };
@@ -1721,6 +1722,7 @@ interface ComputerDispatchCtx {
   pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
   pending: Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void }>;
   registered: string[];
+  backends: Map<string, { pushFrame: (frame: ComputerFrame) => void }>;
   requestSeq: number;
   pid: number | null;
 }
@@ -1731,6 +1733,7 @@ interface ComputerReply {
 
 function disposeComputerCtx(computerCtx: ComputerDispatchCtx): void {
   const ids = computerCtx.registered.splice(0);
+  computerCtx.backends.clear();
   if (ids.length > 0) {
     void import('../../computers/registry.js').then(({ getComputerRegistry }) => {
       const registry = getComputerRegistry();
@@ -1770,10 +1773,12 @@ async function dispatchComputer(
       const registry = getComputerRegistry() ?? installComputerRegistry(null);
       registry.register(backend, { pid: computerCtx.pid });
       computerCtx.registered.push(descriptor.id);
+      computerCtx.backends.set(descriptor.id, backend);
       return { id: descriptor.id };
     }
     case 'unregister': {
       const id = String(args[0] ?? '');
+      computerCtx.backends.delete(id);
       const { getComputerRegistry } = await import('../../computers/registry.js');
       await getComputerRegistry()?.unregister(id);
       computerCtx.registered = computerCtx.registered.filter((x) => x !== id);
@@ -1788,6 +1793,12 @@ async function dispatchComputer(
       const err = (result as ComputerReply | undefined)?.error;
       if (err) slot.reject(new Error(err));
       else slot.resolve(result);
+      return { ok: true };
+    }
+    case 'frame': {
+      const id = String(args[0] ?? '');
+      const frame = args[1] as ComputerFrame;
+      computerCtx.backends.get(id)?.pushFrame(frame);
       return { ok: true };
     }
     default:

@@ -75,4 +75,4 @@ computer click 1 --at 100,80 type hello
 
 ## jsh-hosted backend
 
-A durable `.jsh` can register a computer with `require('sliccy:computer').register(...)`. `register()` subscribes to host `computer-call` events, which keeps `jshd` alive. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
+A durable `.jsh` can register a computer with `require('sliccy:computer').register(...)`. `register()` subscribes to host `computer-call` events, which keeps `jshd` alive. Optional `handlers.subscribe(fps, onFrame)` is the `computer watch` push path. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.

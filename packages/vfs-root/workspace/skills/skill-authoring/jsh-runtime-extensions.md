@@ -32,7 +32,7 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 | `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                                                                                                                                                                      |
 | `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                                                                              |
 | `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                                                                                                                                                                  |
-| `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend. Screenshot/input round-trip over host `computer-call` events (keep-alive via `onEvent`).                                                                                                                                                                                                                                                                               |
+| `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend. Screenshot/input/subscribe round-trip over host `computer-call` events (keep-alive via `onEvent`); frames return via `computer.frame`.                                                                                                                                                                                                                                 |
 | `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                                                                                                                                                                  |
 | `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                                                                                                                                                                                                                                        |
 | `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                                                                                                                                                                                                                       |
@@ -488,9 +488,9 @@ computer.register({
   capabilities: {
     screenshot: true,
     text: true,
-    frames: 'poll',
+    frames: 'push',
     keyboard: true,
-    mouse: 'none',
+    mouse: 'absolute',
     scroll: false,
     exec: false,
     inputAllowed: true,
@@ -498,16 +498,23 @@ computer.register({
   async screenshot() {
     return { seq: 1, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG };
   },
+  subscribe(fps, onFrame) {
+    const timer = setInterval(
+      () => onFrame({ seq: 1, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG }),
+      1000 / fps
+    );
+    return () => clearInterval(timer);
+  },
   async text() {
     return '(empty)';
   },
   async input(events) {
-    /* mousemove / button / click / scroll / key / text / wait */
+    /* mousemove / button / click / scroll / key / text / wait / drag */
   },
 });
 ```
 
-Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
+Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh`. The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
 
 ## Reaching these from sprinkles & dips
 

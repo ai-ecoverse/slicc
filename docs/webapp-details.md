@@ -16,7 +16,7 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - Path: `packages/webapp/src/computers/`. Unranked in the layer stack (shell/kernel/cdp may import it; `computers` → `ui` is a back-edge — the store lives in `ui/`).
 - Protocol types: `@slicc/shared-ts` (`computer-protocol.ts`). Deep reference: `docs/computer-protocol.md`.
 - `registry.ts` / `host.ts` — kernel registry (`ProcessKind 'computer'`) and `computers` / `computer-frame` / `computer-watch` pump. Lazy-loaded from `kernel-worker.ts`.
-- Adapters: `v86.ts` (adopt VM pid; `close()` detaches only), `tab.ts` (Local vs Bridged; refuses SLICC app tabs), `jsh.ts` (`sliccy:computer` via `kernel/realm/realm-computer-bridge.ts`).
+- Adapters: `v86.ts` (adopt VM pid; `close()` detaches only), `tab.ts` (Local vs Bridged; refuses SLICC app tabs), `jsh.ts` (`sliccy:computer` via `kernel/realm/realm-computer-bridge.ts`, including `subscribe`/`frame`/`unsubscribe`).
 - Shell: `shell/supplemental-commands/computer/` (xdotool + Anthropic aliases). Frozen frames: `$TMPDIR/computer/<name>/<seq>.jpg`.
 
 ## Orchestrator

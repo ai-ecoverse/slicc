@@ -1,13 +1,17 @@
 #!/usr/bin/env jsh
 /**
- * Durable jsh-hosted computer. `register()` subscribes to host
- * `computer-call` events, which keeps this unit alive the same way
- * `sliccy:hid` inputreport listeners do.
+ * Durable jsh-hosted computer with a push frame stream. `register()`
+ * subscribes to host `computer-call` events, which keeps this unit
+ * alive the same way `sliccy:hid` inputreport listeners do.
+ * `handlers.subscribe` is the `computer watch` path; `screenshot`
+ * still works as a poll fallback.
  *
  *   jshd start -n fake-computer --enable --restart always \
  *     /workspace/skills/jshd/examples/fake-computer.jsh
  *   computer ls
  *   computer screenshot -c jsh:fake
+ *   computer watch -c jsh:fake
+ *   computer click 1 --at 0,0 -c jsh:fake
  *   computer type -c jsh:fake hello
  */
 const computer = require('sliccy:computer');
@@ -19,6 +23,11 @@ const JPEG = Uint8Array.of(
 let seq = 0;
 let last = '';
 
+function nextFrame() {
+  seq += 1;
+  return { seq, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG };
+}
+
 computer.register({
   id: 'jsh:fake',
   title: 'fake',
@@ -26,16 +35,21 @@ computer.register({
   capabilities: {
     screenshot: true,
     text: true,
-    frames: 'poll',
+    frames: 'push',
     keyboard: true,
-    mouse: 'none',
+    mouse: 'absolute',
     scroll: false,
     exec: false,
     inputAllowed: true,
   },
   async screenshot() {
-    seq += 1;
-    return { seq, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG };
+    return nextFrame();
+  },
+  subscribe(fps, onFrame) {
+    onFrame(nextFrame());
+    const ms = Math.max(50, Math.round(1000 / Math.max(1, fps)));
+    const timer = setInterval(() => onFrame(nextFrame()), ms);
+    return () => clearInterval(timer);
   },
   async text() {
     return last || '(empty)';
@@ -44,6 +58,7 @@ computer.register({
     for (const event of events) {
       if (event.type === 'text') last += event.text;
       if (event.type === 'key') last += `[${event.keysym}]`;
+      if (event.type === 'click') last += `[click ${event.x},${event.y}]`;
     }
   },
 });

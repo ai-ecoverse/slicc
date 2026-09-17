@@ -2,6 +2,10 @@
  * jsh-hosted computer backend. The realm owns screenshot/input; the
  * kernel registry holds this proxy and round-trips over `computer-call`
  * events so `sliccy:computer.register` keeps the realm alive via `onEvent`.
+ *
+ * Push backends (`subscribe`) cache the last frame. `screenshot` returns
+ * that cache while a stream is live and only waits out a timeout when no
+ * frame has arrived yet.
  */
 
 import type {
@@ -12,16 +16,29 @@ import type {
 } from '@slicc/shared-ts';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../backend.js';
 
+export const JSH_FRAME_TIMEOUT_MS = 5_000;
+
 export type JshComputerCall = (
-  op: 'screenshot' | 'text' | 'input' | 'exec',
+  op: 'screenshot' | 'text' | 'input' | 'exec' | 'subscribe' | 'unsubscribe',
   args: unknown[]
 ) => Promise<unknown>;
 
 export class JshComputerBackend implements ComputerBackend {
+  readonly subscribe?: (fps: number, onFrame: (frame: ComputerFrame) => void) => () => void;
+  private lastFrame: ComputerFrame | null = null;
+  private readonly sinks = new Set<(frame: ComputerFrame) => void>();
+  private readonly waiters = new Set<(frame: ComputerFrame) => void>();
+  private subscribed = false;
+
   constructor(
     private descriptor: ComputerDescriptor,
-    private readonly call: JshComputerCall
-  ) {}
+    private readonly call: JshComputerCall,
+    private readonly frameTimeoutMs = JSH_FRAME_TIMEOUT_MS
+  ) {
+    if (descriptor.capabilities.frames === 'push') {
+      this.subscribe = (fps, onFrame) => this.bindSubscribe(fps, onFrame);
+    }
+  }
 
   describe(): ComputerDescriptor {
     return this.descriptor;
@@ -31,9 +48,39 @@ export class JshComputerBackend implements ComputerBackend {
     this.descriptor = { ...this.descriptor, ...partial };
   }
 
+  pushFrame(frame: ComputerFrame): void {
+    this.lastFrame = frame;
+    for (const sink of [...this.sinks]) sink(frame);
+    for (const waiter of [...this.waiters]) waiter(frame);
+    this.waiters.clear();
+  }
+
+  private bindSubscribe(fps: number, onFrame: (frame: ComputerFrame) => void): () => void {
+    this.sinks.add(onFrame);
+    if (this.lastFrame) onFrame(this.lastFrame);
+    if (!this.subscribed) {
+      this.subscribed = true;
+      void this.call('subscribe', [fps]).catch(() => {
+        this.subscribed = false;
+      });
+    }
+    return () => {
+      this.sinks.delete(onFrame);
+      if (this.sinks.size === 0 && this.subscribed) {
+        this.subscribed = false;
+        void this.call('unsubscribe', []).catch(() => {
+          /* realm already gone */
+        });
+      }
+    };
+  }
+
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
-    const result = (await this.call('screenshot', [opts])) as ComputerFrame;
-    return result;
+    if (this.subscribed) {
+      if (this.lastFrame) return this.lastFrame;
+      return this.waitForCachedFrame();
+    }
+    return (await this.call('screenshot', [opts])) as ComputerFrame;
   }
 
   async text(): Promise<string | null> {
@@ -50,6 +97,27 @@ export class JshComputerBackend implements ComputerBackend {
   }
 
   async close(): Promise<void> {
-    // Realm unregister drops the subscription; the script may still be running.
+    this.sinks.clear();
+    this.waiters.clear();
+    if (!this.subscribed) return;
+    this.subscribed = false;
+    await this.call('unsubscribe', []).catch(() => {
+      /* realm already gone */
+    });
+  }
+
+  private waitForCachedFrame(): Promise<ComputerFrame> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waiters.delete(onFrame);
+        reject(new Error('computer frame timed out'));
+      }, this.frameTimeoutMs);
+      const onFrame = (frame: ComputerFrame): void => {
+        clearTimeout(timer);
+        this.waiters.delete(onFrame);
+        resolve(frame);
+      };
+      this.waiters.add(onFrame);
+    });
   }
 }

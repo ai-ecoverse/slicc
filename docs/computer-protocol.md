@@ -12,7 +12,7 @@ Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` 
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ComputerDescriptor`   | `id`, `kind`, `title`, `size`, `state`, `capabilities`, optional `pid` / `softKeys` / `lastShot`                                                              |
 | `ComputerCapabilities` | `screenshot`, `text`, `frames` (`push` / `poll` / `none`), `keyboard`, `mouse` (`absolute` / `relative` / `touch` / `none`), `scroll`, `exec`, `inputAllowed` |
-| `ComputerInputEvent`   | `mousemove`, `button`, `click`, `scroll`, `key`, `text`, `wait`. Drag is synthesized as mousemove + button                                                    |
+| `ComputerInputEvent`   | `mousemove`, `button`, `click`, `scroll`, `key`, `text`, `wait`, `drag`. Mouse backends expand drag; touch backends send `{ type: 'drag' }`                   |
 | `ComputerFrame`        | `seq`, `mime` (`image/jpeg` or `image/png`), `width`, `height`, `bytes`                                                                                       |
 | `ComputerLastShot`     | screenshot-space size + scale of the last frame the model saw                                                                                                 |
 
@@ -41,14 +41,14 @@ The kernel worker lazy-loads `startComputersHost` so computers stay out of the f
 
 ## Adapters (phase 1)
 
-| Kind  | Module                                                                | Notes                                                                                                                                                                                            |
-| ----- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `v86` | `computers/adapters/v86.ts`                                           | Relative mouse, Y inverted to guest origin. `v86 start` registers `v86:<name>` by adopting the VM pid. `close()` detaches only; JPEG mime even when the VGA buffer was RGBA                      |
-| `tab` | `computers/adapters/tab.ts`                                           | Absolute mouse. Injected `browser` without `panelRpc` → Local (CLI page handlers); both present → Bridged (kernel worker). Refuses `isSliccAppUrl` at add, screenshot, and input                 |
-| `jsh` | `computers/adapters/jsh.ts` + `kernel/realm/realm-computer-bridge.ts` | Realm `require('sliccy:computer').register(handlers)` subscribes to `computer-call` (keep-alive via `onEvent`) and answers over the `computer` RPC channel (`register` / `unregister` / `reply`) |
+| Kind  | Module                                                                | Notes                                                                                                                                                                                                                                                                                                                          |
+| ----- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `v86` | `computers/adapters/v86.ts`                                           | Relative mouse, Y inverted to guest origin. `v86 start` registers `v86:<name>` by adopting the VM pid. `close()` detaches only; JPEG mime even when the VGA buffer was RGBA                                                                                                                                                    |
+| `tab` | `computers/adapters/tab.ts`                                           | Absolute mouse. Injected `browser` without `panelRpc` → Local (CLI page handlers); both present → Bridged (kernel worker). Refuses `isSliccAppUrl` at add, screenshot, and input                                                                                                                                               |
+| `jsh` | `computers/adapters/jsh.ts` + `kernel/realm/realm-computer-bridge.ts` | Realm `require('sliccy:computer').register(handlers)` subscribes to `computer-call` (keep-alive via `onEvent`) and answers over the `computer` RPC channel (`register` / `unregister` / `reply` / `frame`). Optional `handlers.subscribe(fps, onFrame)` is the push path; the host caches frames and times out a silent stream |
 
 ## Shell
 
 `computer` (`packages/webapp/src/shell/supplemental-commands/computer/`) is xdotool plus Anthropic aliases. Target: `-c` → `$COMPUTER` → last `computer use` → the only registered computer. `switch (verb)` in `run.ts` so subcommand-help source scan finds cases.
 
-`v86 type|key|mouse|screenshot|text` remain as thin aliases; prefer `computer <verb> -c v86:<name>`.
+`v86 type|key|mouse|screenshot|text` are thin aliases of `computer` (`v86:<name>`); prefer `computer <verb> -c v86:<name>`. Each poke still prints `screen: <path>`.

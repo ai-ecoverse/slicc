@@ -53,4 +53,39 @@ describe('JshComputerBackend', () => {
     expect(await backend.text()).toBeNull();
     await backend.close();
   });
+
+  it('caches subscribe frames and times out a silent stream', async () => {
+    const call = vi.fn(async (op: string) => {
+      if (op === 'screenshot') {
+        return { seq: 99, mime: 'image/jpeg', width: 8, height: 8, bytes: MINIMAL_JPEG };
+      }
+      return { ok: true };
+    });
+    const backend = new JshComputerBackend(
+      { ...DESCRIPTOR, capabilities: { ...DESCRIPTOR.capabilities, frames: 'push' } },
+      call,
+      20
+    );
+    const seen: number[] = [];
+    const stop = backend.subscribe!(4, (frame) => {
+      seen.push(frame.seq);
+    });
+    await vi.waitFor(() => {
+      expect(call.mock.calls.map((c) => c[0])).toContain('subscribe');
+    });
+    expect(call.mock.calls.map((c) => c[0])).not.toContain('screenshot');
+    await expect(backend.screenshot({ format: 'jpeg' })).rejects.toThrow(/timed out/);
+
+    backend.pushFrame({ seq: 7, mime: 'image/jpeg', width: 8, height: 8, bytes: MINIMAL_JPEG });
+    expect(seen).toEqual([7]);
+    expect(await backend.screenshot({ format: 'jpeg' })).toMatchObject({ seq: 7 });
+    expect(call.mock.calls.map((c) => c[0])).not.toContain('screenshot');
+
+    stop();
+    await vi.waitFor(() => {
+      expect(call.mock.calls.map((c) => c[0])).toContain('unsubscribe');
+    });
+    expect(await backend.screenshot({ format: 'jpeg' })).toMatchObject({ seq: 99 });
+    await backend.close();
+  });
 });
