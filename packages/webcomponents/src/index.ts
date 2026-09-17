@@ -66,9 +66,21 @@ export {
   type SpeechSession,
   type SpeechSessionOptions,
 } from './composer/speech.js';
+export {
+  type ComputerFrameMode,
+  type ComputerFrameModeInput,
+  type ComputerOutputRenderer,
+  decideComputerFrameMode,
+  SliccBashRendererComputer,
+  setComputerOutputRenderer,
+} from './computer/slicc-bash-renderer-computer.js';
 export { SliccDock } from './dock/slicc-dock.js';
 export { SliccDockItem } from './dock/slicc-dock-item.js';
-export { SliccTabOverlay } from './dock/slicc-tab-overlay.js';
+export {
+  SliccTabOverlay,
+  type TabDescriptor,
+  type TabSoftKey,
+} from './dock/slicc-tab-overlay.js';
 export { SliccFreezer } from './freezer/slicc-freezer.js';
 export { SliccFreezerCard } from './freezer/slicc-freezer-card.js';
 export { SliccFreezerNew } from './freezer/slicc-freezer-new.js';

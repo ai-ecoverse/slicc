@@ -132,6 +132,22 @@ string[])` marks leaves as pinned (runtime-only — never serialized by
   14px radius, elevated shadow, 12px margin, `overflow: hidden`); the reserved
   `chat` leaf renders flat/full-bleed over the shader.
 
+## Tab overlay + computer cards
+
+`<slicc-tab-overlay>` (`src/dock/slicc-tab-overlay.ts`) is the dock-globe
+full-screen card grid. `TabDescriptor.kind` is `'tab'` (default) or
+`'computer'`. Computer cards paint a kind badge, an optional live dot, and
+`softKeys` buttons that emit `computer-softkey` (they do not activate the
+card). Activating a computer is a host concern — the overlay still fires
+`tab-activate`. The page host (`ui/wc/wc-computers.ts`) merges computers
+after browser tabs and opens `<slicc-image-preview>` live via `setSrc()`.
+
+`<slicc-bash-renderer-computer>` (`src/computer/`) is the bash-row body for
+the `computer` program: `$ command`, text output (ANSI painted by the host
+through `setComputerOutputRenderer`), and one live/frozen/none frame.
+`decideComputerFrameMode` is the newest-call rule. The host element keeps
+class `wcmsg-bash` so the action-row progress chrome still matches.
+
 ## File tree + Quick Look (Pierre libraries)
 
 Extended reference for the summary in the package guide. Two components delegate

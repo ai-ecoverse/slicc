@@ -88,6 +88,18 @@ export class SliccImagePreview extends HTMLElement {
   }
 
   /**
+   * Swap the image source while the lightbox is open, without re-running the
+   * FLIP open animation. Used for live computer frames. Updates the reflected
+   * `src` even when closed so a subsequent `open()` can pick it up. No-op when
+   * `src` is unchanged.
+   */
+  setSrc(src: string): void {
+    if (this.src === src) return;
+    this.src = src;
+    if (this.#img) this.#img.src = src;
+  }
+
+  /**
    * Open the lightbox showing `src`, FLIP-zooming from `originEl`'s on-screen
    * rect (when supplied) up to a centred, viewport-fitted preview. Dismisses any
    * other open preview first. Without an `originEl` the image still animates from

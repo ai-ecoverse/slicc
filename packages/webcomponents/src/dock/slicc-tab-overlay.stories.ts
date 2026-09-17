@@ -115,6 +115,37 @@ export const Empty: Story = {
   render: () => overlay([]),
 };
 
+/**
+ * Browser tabs followed by a live computer card (kind badge, live dot, soft keys)
+ * and a disconnected computer with the monitor placeholder.
+ */
+export const TabsAndComputers: Story = {
+  render: () =>
+    overlay([
+      ...FEW,
+      {
+        id: 'computer:jsh:fake',
+        kind: 'computer',
+        live: true,
+        title: 'fake',
+        url: 'jsh · live',
+        screenshot: shot('jsh:fake', '#22c55e'),
+        softKeys: [
+          { label: 'Home', keysym: 'Home' },
+          { label: 'Back', keysym: 'Escape' },
+        ],
+      },
+      {
+        id: 'computer:v86:vm0',
+        kind: 'computer',
+        live: false,
+        title: 'vm0',
+        url: 'v86 · gone',
+        softKeys: [{ label: 'Ctrl+Alt+Del', keysym: 'ctrl+alt+Delete' }],
+      },
+    ]),
+};
+
 /** Mixed cards — some with screenshots, some falling back to the globe placeholder. */
 export const Placeholders: Story = {
   render: () =>

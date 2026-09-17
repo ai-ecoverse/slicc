@@ -464,6 +464,85 @@ describe('slicc-tab-overlay', () => {
     expect(reasons).toEqual([]);
   });
 
+  describe('computer cards', () => {
+    const COMPUTER: TabDescriptor = {
+      id: 'computer:jsh:fake',
+      title: 'fake',
+      url: 'jsh · live',
+      kind: 'computer',
+      live: true,
+      screenshot: 'data:image/png;base64,AAAA',
+      softKeys: [
+        { label: 'Home', keysym: 'Home' },
+        { label: 'Back', keysym: 'Escape' },
+      ],
+    };
+
+    it('renders a kind badge and live dot after the browser tabs', () => {
+      const el = mount((o) => {
+        o.tabs = [...TABS, COMPUTER];
+      });
+      const all = cards(el);
+      expect(all).toHaveLength(4);
+      expect(all[3].getAttribute('data-kind')).toBe('computer');
+      const badge = all[3].querySelector('.kind');
+      expect(badge?.textContent).toBe('computer');
+      expect(badge?.classList.contains('live')).toBe(true);
+      expect(badge?.querySelector('.dot')).toBeTruthy();
+      expect(all[0].querySelector('.kind')).toBeNull();
+    });
+
+    it('omits the live dot when the computer is not live', () => {
+      const el = mount((o) => {
+        o.tabs = [{ ...COMPUTER, live: false, screenshot: undefined }];
+      });
+      const card = cards(el)[0];
+      expect(card.querySelector('.kind.live')).toBeNull();
+      expect(card.querySelector('.kind .dot')).toBeNull();
+      expect(card.querySelector('.shot.ph svg')).toBeInstanceOf(SVGSVGElement);
+    });
+
+    it('renders soft-key buttons that dispatch computer-softkey without activating', () => {
+      const el = mount((o) => {
+        o.tabs = [COMPUTER];
+      });
+      const activations: string[] = [];
+      const keys: Array<{ id: string; keysym: string; label: string }> = [];
+      el.addEventListener('tab-activate', (e) =>
+        activations.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.addEventListener('computer-softkey', (e) =>
+        keys.push((e as CustomEvent<{ id: string; keysym: string; label: string }>).detail)
+      );
+      const home = cards(el)[0].querySelector<HTMLButtonElement>('.softkey');
+      expect(home?.textContent).toBe('Home');
+      home?.click();
+      expect(activations).toEqual([]);
+      expect(keys).toEqual([{ id: 'computer:jsh:fake', keysym: 'Home', label: 'Home' }]);
+    });
+
+    it('does not render a close button on computer cards', () => {
+      const el = mount((o) => {
+        o.tabs = [TABS[0], COMPUTER];
+      });
+      const [tab, computer] = cards(el);
+      expect(tab.querySelector('.x')).toBeTruthy();
+      expect(computer.querySelector('.x')).toBeNull();
+    });
+
+    it('copies kind, live, and softKeys through the tabs getter', () => {
+      const el = mount((o) => {
+        o.tabs = [COMPUTER];
+      });
+      const copy = el.tabs[0];
+      expect(copy.kind).toBe('computer');
+      expect(copy.live).toBe(true);
+      expect(copy.softKeys).toEqual(COMPUTER.softKeys);
+      copy.softKeys![0].label = 'mutated';
+      expect(el.tabs[0].softKeys![0].label).toBe('Home');
+    });
+  });
+
   it('lays the scrim out fixed and full-viewport (real Chromium)', () => {
     const el = mount((o) => o.show());
     const overlay = el.shadowRoot?.querySelector('.overlay') as HTMLElement;

@@ -96,6 +96,55 @@ export const Open: Story = {
   render: ({ startOpen }) => thumbnailDemo(startOpen !== false),
 };
 
+const LIVE_A = `data:image/svg+xml;utf8,${encodeURIComponent(
+  SAMPLE_SVG.replace('sliccy', 'frame 1').replace('#f59e0b', '#22c55e')
+)}`;
+const LIVE_B = `data:image/svg+xml;utf8,${encodeURIComponent(
+  SAMPLE_SVG.replace('sliccy', 'frame 2').replace('#ec4899', '#3b82f6')
+)}`;
+
+/**
+ * Live mode: `setSrc()` swaps frames while the lightbox stays open (computer watch).
+ */
+export const LiveSwap: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'padding:40px;font-family:var(--ui,system-ui,sans-serif);color:var(--ink);';
+
+    const caption = document.createElement('p');
+    caption.textContent =
+      'The lightbox is open; frames swap via setSrc() every 800ms without re-FLIP.';
+    caption.style.cssText = 'margin:0 0 16px;font-size:13px;color:var(--txt-2,#737373);';
+    wrap.appendChild(caption);
+
+    const thumb = document.createElement('img');
+    thumb.src = LIVE_A;
+    thumb.alt = 'Live origin';
+    thumb.style.cssText =
+      'width:96px;height:60px;object-fit:cover;border-radius:6px;' +
+      'border:1px solid var(--line,#e5e5e5);display:block;';
+    wrap.appendChild(thumb);
+
+    const preview = document.createElement('slicc-image-preview') as SliccImagePreview;
+    wrap.appendChild(preview);
+
+    let tick = 0;
+    requestAnimationFrame(() => {
+      preview.open(LIVE_A, thumb);
+      const timer = window.setInterval(() => {
+        if (!preview.isOpen) {
+          window.clearInterval(timer);
+          return;
+        }
+        tick += 1;
+        preview.setSrc(tick % 2 === 0 ? LIVE_A : LIVE_B);
+      }, 800);
+    });
+    return wrap;
+  },
+};
+
 /** The static `SliccImagePreview.show(src, originEl)` helper, mirroring `showImagePreview`. */
 export const StaticHelper: Story = {
   args: {},

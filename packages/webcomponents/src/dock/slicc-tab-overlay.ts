@@ -7,6 +7,14 @@ import { iconEl } from '../internal/icons.js';
  * dock's `Browser · CDP` launcher: clicking the dock globe opens this full-screen
  * grid of the live CDP tabs, each with its screenshot + title.
  */
+/** A one-shot key the overlay can fire without opening the card. */
+export interface TabSoftKey {
+  /** Button label shown on the card. */
+  label: string;
+  /** xdotool-style keysym the host sends as `computer-softkey`. */
+  keysym: string;
+}
+
 export interface TabDescriptor {
   /** Stable tab id — echoed in `tab-activate` / `tab-close` event details. */
   id: string;
@@ -18,6 +26,15 @@ export interface TabDescriptor {
   screenshot?: string;
   /** Whether this tab is the currently foregrounded one (gets the `--ctx` ring). */
   active?: boolean;
+  /**
+   * Card kind. Defaults to `'tab'` so existing callers stay unchanged.
+   * `'computer'` cards get a kind badge, an optional live dot, and soft keys.
+   */
+  kind?: 'tab' | 'computer';
+  /** When true, a live dot paints next to the kind badge. */
+  live?: boolean;
+  /** Soft-key buttons rendered on computer cards; omitted for ordinary tabs. */
+  softKeys?: TabSoftKey[];
 }
 
 /** Why the overlay closed — forwarded on `overlay-close`. */
@@ -130,6 +147,36 @@ const STYLE = `
 }
 .x:hover { background: var(--ghost); color: var(--ink); }
 .x svg { display: block; }
+.kind {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 7px;
+  border-radius: 6px;
+  font: 600 10px/1 var(--ui);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--ink); background: var(--canvas);
+  border: 1px solid var(--line);
+}
+.kind .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--txt-3); flex: 0 0 auto;
+}
+.kind.live .dot { background: var(--green, #22c55e); }
+.softkeys {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 0 10px 9px;
+}
+.softkey {
+  font: 600 10px/1 var(--ui);
+  color: var(--ink); background: var(--ghost);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 7px; cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.softkey:hover {
+  background: var(--canvas);
+  border-color: color-mix(in srgb, var(--ctx) 40%, var(--line));
+}
 .empty {
   flex: 1; display: grid; place-items: center; text-align: center;
   color: rgba(255,255,255,.7); font-family: var(--ui); font-size: 14px;
@@ -326,10 +373,12 @@ export class SliccTabOverlay extends HTMLElement {
 
   /** The open tabs shown as cards. Returns a defensive copy. */
   get tabs(): TabDescriptor[] {
-    return this.#tabs.map((t) => ({ ...t }));
+    return this.#tabs.map((t) => ({ ...t, softKeys: t.softKeys?.map((k) => ({ ...k })) }));
   }
   set tabs(value: TabDescriptor[]) {
-    this.#tabs = Array.isArray(value) ? value.map((t) => ({ ...t })) : [];
+    this.#tabs = Array.isArray(value)
+      ? value.map((t) => ({ ...t, softKeys: t.softKeys?.map((k) => ({ ...k })) }))
+      : [];
     if (this.isConnected) this.#render();
     // The list the user was already reaching for: a digit pressed before the
     // refresh landed acts now, on the tabs it was asking about.
@@ -385,19 +434,73 @@ export class SliccTabOverlay extends HTMLElement {
     return btn;
   }
 
+  /** Kind badge + optional live dot, only for computer cards. */
+  #kindBadge(tab: TabDescriptor): HTMLElement | null {
+    if (tab.kind !== 'computer') return null;
+    const live = tab.live === true;
+    return h(
+      'span',
+      {
+        class: live ? 'kind live' : 'kind',
+        part: 'kind',
+        'data-kind': 'computer',
+        'aria-label': live ? 'computer · live' : 'computer',
+      },
+      live ? h('span', { class: 'dot', part: 'live-dot' }) : null,
+      'computer'
+    );
+  }
+
+  /** Soft-key row; clicks stay on the button so they do not activate the card. */
+  #softKeysEl(tab: TabDescriptor): HTMLElement | null {
+    if (tab.kind !== 'computer' || !tab.softKeys?.length) return null;
+    const row = h('div', { class: 'softkeys', part: 'softkeys' });
+    for (const key of tab.softKeys) {
+      const btn = h(
+        'button',
+        {
+          class: 'softkey',
+          type: 'button',
+          part: 'softkey',
+          'data-keysym': key.keysym,
+        },
+        key.label
+      ) as HTMLButtonElement;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.dispatchEvent(
+          new CustomEvent<{ id: string; keysym: string; label: string }>('computer-softkey', {
+            detail: { id: tab.id, keysym: key.keysym, label: key.label },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      });
+      row.appendChild(btn);
+    }
+    return row;
+  }
+
   /** Build one tab card (composed via `h()` — attribute values are DOM-escaped). */
   #cardEl(tab: TabDescriptor, index: number): HTMLElement {
     const title = tab.title ?? tab.id;
+    const isComputer = tab.kind === 'computer';
     const shot = tab.screenshot
       ? h('img', { class: 'shot', part: 'shot', src: tab.screenshot, alt: title, loading: 'lazy' })
-      : h('div', { class: 'shot ph', part: 'shot' }, iconEl('globe', { size: 28 }));
+      : h(
+          'div',
+          { class: 'shot ph', part: 'shot' },
+          iconEl(isComputer ? 'monitor' : 'globe', { size: 28 })
+        );
 
-    const close = h(
-      'button',
-      { class: 'x', part: 'card-close', type: 'button', 'aria-label': `Close ${title}` },
-      iconEl('x', { size: 14 })
-    ) as HTMLButtonElement;
-    close.addEventListener('click', (e) => {
+    const close = isComputer
+      ? null
+      : (h(
+          'button',
+          { class: 'x', part: 'card-close', type: 'button', 'aria-label': `Close ${title}` },
+          iconEl('x', { size: 14 })
+        ) as HTMLButtonElement);
+    close?.addEventListener('click', (e) => {
       e.stopPropagation();
       this.#emit('tab-close', tab.id);
     });
@@ -417,6 +520,7 @@ export class SliccTabOverlay extends HTMLElement {
         role: 'button',
         tabindex: '0',
         'data-tab-id': tab.id,
+        'data-kind': isComputer ? 'computer' : 'tab',
         'aria-label': title,
         'aria-current': tab.active ? 'true' : false,
       },
@@ -424,8 +528,10 @@ export class SliccTabOverlay extends HTMLElement {
       // past the eighth the number is only worth showing for the end of the
       // list. Nothing is drawn for the unreachable middle.
       numberBadge(index, this.#tabs.length),
+      this.#kindBadge(tab),
       shot,
-      h('div', { class: 'meta' }, label, close)
+      h('div', { class: 'meta' }, label, close),
+      this.#softKeysEl(tab)
     );
     card.addEventListener('click', () => this.#activate(tab.id));
     card.addEventListener('keydown', (e) => {
@@ -512,7 +618,9 @@ declare global {
   }
   interface HTMLElementEventMap {
     'tab-activate': CustomEvent<{ id: string }>;
+    'tab-peek': CustomEvent<{ id: string }>;
     'tab-close': CustomEvent<{ id: string }>;
+    'computer-softkey': CustomEvent<{ id: string; keysym: string; label: string }>;
     'overlay-close': CustomEvent<{ reason: TabOverlayCloseReason }>;
   }
 }
