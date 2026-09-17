@@ -17,9 +17,15 @@ import type { TabPage } from '../../cdp/tab-handle.js';
 import type { PageInfo } from '../../cdp/types.js';
 import type { PanelRpcClient } from '../../kernel/panel-rpc.js';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../backend.js';
-import { base64FromBytes, bytesFromBase64, jpegSize, pngSize } from '../encode-frame.js';
+import {
+  base64FromBytes,
+  bytesFromBase64,
+  jpegSize,
+  pngBytesToJpeg,
+  pngSize,
+} from '../encode-frame.js';
 import { parseKeysym, toCdpKeyEvents } from '../keys.js';
-import { createPointer, resolvePointer } from '../pointer.js';
+import { applyPointerToEvents, createPointer, resolvePointer } from '../pointer.js';
 
 export function tabComputerId(targetId: string): string {
   return `tab:${targetId}`;
@@ -146,6 +152,9 @@ async function captureTabFrame(
     shotBytes = bytesFromBase64(await tab.screenshot({ format: 'jpeg', quality: 70 }));
   }
   const encoded = pngSize(shotBytes) ?? jpegSize(shotBytes) ?? native ?? { width: 0, height: 0 };
+  if (opts.format !== 'png' && !jpegSize(shotBytes)) {
+    shotBytes = await pngBytesToJpeg(shotBytes);
+  }
   const jpeg = jpegSize(shotBytes);
   return {
     mime: jpeg ? 'image/jpeg' : 'image/png',
@@ -208,7 +217,8 @@ export class BridgedTabComputerBackend implements ComputerBackend {
   }
 
   async input(events: ComputerInputEvent[]): Promise<void> {
-    await this.rpc.call('computer-tab-input', { targetId: this.targetId, events });
+    const filled = applyPointerToEvents(this.pointer, events);
+    await this.rpc.call('computer-tab-input', { targetId: this.targetId, events: filled });
   }
 
   async close(): Promise<void> {

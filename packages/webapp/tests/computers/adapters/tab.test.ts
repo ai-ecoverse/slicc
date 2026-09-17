@@ -12,7 +12,7 @@ import {
   screenshotTab,
   tabComputerId,
 } from '../../../src/computers/adapters/tab.js';
-import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
+import { bytesFromBase64, jpegSize, MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
 import {
   ComputerRegistry,
   resetComputerRegistryForTests,
@@ -188,6 +188,17 @@ describe('BridgedTabComputerBackend', () => {
       events: [{ type: 'click', button: 1, count: 1, x: 1, y: 2 }],
     });
   });
+
+  it('fills omitted click coordinates from the previous mousemove', async () => {
+    const call = vi.fn(async () => ({ ok: true as const }));
+    const backend = new BridgedTabComputerBackend({ call } as never, 'T1', EXAMPLE);
+    await backend.input([{ type: 'mousemove', x: 100, y: 80 }]);
+    await backend.input([{ type: 'click', button: 1, count: 1 }]);
+    expect(call).toHaveBeenLastCalledWith('computer-tab-input', {
+      targetId: 'T1',
+      events: [{ type: 'click', button: 1, count: 1, x: 100, y: 80 }],
+    });
+  });
 });
 
 describe('page-side screenshotTab / inputTab', () => {
@@ -198,6 +209,39 @@ describe('page-side screenshotTab / inputTab', () => {
     expect(shot).toMatchObject({ mime: 'image/jpeg', url: EXAMPLE.url, width: 1, height: 1 });
     await inputTab(browser as never, 'T1', [{ type: 'button', button: 3, down: true, x: 1, y: 1 }]);
     expect(sent.some((s) => s.method === 'Input.dispatchMouseEvent')).toBe(true);
+  });
+
+  it('returns JPEG bytes when jpeg is requested on the downscale path', async () => {
+    function pngHeader(width: number, height: number): Uint8Array {
+      const bytes = new Uint8Array(24);
+      bytes[0] = 0x89;
+      bytes[1] = 0x50;
+      bytes[2] = 0x4e;
+      bytes[3] = 0x47;
+      bytes[16] = (width >>> 24) & 255;
+      bytes[17] = (width >>> 16) & 255;
+      bytes[18] = (width >>> 8) & 255;
+      bytes[19] = width & 255;
+      bytes[20] = (height >>> 24) & 255;
+      bytes[21] = (height >>> 16) & 255;
+      bytes[22] = (height >>> 8) & 255;
+      bytes[23] = height & 255;
+      return bytes;
+    }
+    const tab = {
+      send: vi.fn(async () => ({})),
+      screenshot: vi.fn(async (opts: { format?: string; maxWidth?: number } = {}) => {
+        const width = opts.maxWidth ?? 800;
+        return uint8ToBase64(pngHeader(width, Math.round((width * 400) / 800)));
+      }),
+    };
+    const browser = makeBrowser([EXAMPLE], tab as never);
+    const shot = await screenshotTab(browser as never, 'T1', { format: 'jpeg', maxWidth: 256 });
+    expect(shot.mime).toBe('image/jpeg');
+    expect(shot.width).toBe(256);
+    expect(shot.nativeWidth).toBe(800);
+    expect(jpegSize(bytesFromBase64(shot.base64))).not.toBeNull();
+    expect(tab.screenshot.mock.calls.some((c) => c[0]?.format === 'jpeg')).toBe(false);
   });
 
   it('refuses SLICC app tabs before touching CDP', async () => {

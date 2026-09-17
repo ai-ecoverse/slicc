@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { jpegSize, MINIMAL_JPEG } from '../../src/computers/encode-frame.js';
+import { jpegSize, MINIMAL_JPEG, pngBytesToJpeg } from '../../src/computers/encode-frame.js';
 import { frozenFrameLine, frozenFramePath, writeFrozenFrame } from '../../src/computers/frames.js';
 
 describe('encode-frame', () => {
   it('reads SOF0 width/height from a JPEG', () => {
     expect(jpegSize(MINIMAL_JPEG)).toEqual({ width: 1, height: 1 });
+  });
+
+  it('transcodes PNG payloads to JPEG when OffscreenCanvas is missing', async () => {
+    const png = new Uint8Array(24);
+    png[0] = 0x89;
+    png[1] = 0x50;
+    png[2] = 0x4e;
+    png[3] = 0x47;
+    png[19] = 8;
+    png[23] = 4;
+    const jpeg = await pngBytesToJpeg(png);
+    expect(jpegSize(jpeg)).toEqual({ width: 1, height: 1 });
+    expect(jpeg[0]).toBe(0xff);
+    expect(jpeg[1]).toBe(0xd8);
   });
 });
 

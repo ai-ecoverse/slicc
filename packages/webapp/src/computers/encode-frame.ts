@@ -82,6 +82,26 @@ export function fitRgbaFrame(frame: RgbaFrame, maxWidth?: number): RgbaFrame {
   return { data, width, height };
 }
 
+/**
+ * Re-encode PNG bytes as JPEG. Node tests (no OffscreenCanvas) return a
+ * 1×1 JPEG stub; callers keep the PNG dimensions on the frame object.
+ */
+export async function pngBytesToJpeg(bytes: Uint8Array, quality = 0.7): Promise<Uint8Array> {
+  if (jpegSize(bytes)) return bytes;
+  if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
+    return MINIMAL_JPEG.slice();
+  }
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+  const bitmap = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const canvasCtx = canvas.getContext('2d');
+  if (!canvasCtx) throw new Error('could not acquire 2d canvas context');
+  canvasCtx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const out = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+  return new Uint8Array(await out.arrayBuffer());
+}
+
 export async function encodeRgbaFrame(
   frame: RgbaFrame,
   mime: FrameMime,
