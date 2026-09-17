@@ -18,8 +18,25 @@ export interface CachedPreviewOpts {
   fetchFromDO: () => Promise<Response>;
 }
 
+/**
+ * A throw from the tray DO (e.g. its isolate was reset mid-request) would
+ * otherwise surface as Cloudflare's opaque 1101 page. Answer a plain 503.
+ */
+async function fetchFromDOSafely(fetchFromDO: () => Promise<Response>): Promise<Response> {
+  try {
+    return await fetchFromDO();
+  } catch (err) {
+    console.error('preview fetch failed', err instanceof Error ? err.message : String(err));
+    return new Response('Preview temporarily unavailable', {
+      status: 503,
+      headers: { 'cache-control': 'no-store', 'retry-after': '1' },
+    });
+  }
+}
+
 export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Response> {
-  const { request, allowLive, cacheVersion, fetchFromDO } = opts;
+  const { request, allowLive, cacheVersion } = opts;
+  const fetchFromDO = () => fetchFromDOSafely(opts.fetchFromDO);
 
   if (allowLive || request.method !== 'GET') {
     return fetchFromDO();
@@ -58,7 +75,8 @@ export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Respo
   headers.set('etag', etag);
 
   const response = new Response(body, { status: 200, headers });
-  await cache.put(cacheKey, response.clone());
+  // Caching is an optimization; a rejected put must not fail the response.
+  await cache.put(cacheKey, response.clone()).catch(() => {});
   return response;
 }
 

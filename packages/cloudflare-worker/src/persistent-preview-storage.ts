@@ -5,6 +5,8 @@ export const MAX_PREVIEW_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_PREVIEW_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_PREVIEW_FILES = 1_000;
 export const MAX_PREVIEW_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Per-tray preview quota; live previews and `--ttl` snapshots share it. */
+export const MAX_PREVIEWS_PER_TRAY = 10;
 
 export function normalizePreviewArchivePath(value: string): string | null {
   const normalized = value.replaceAll('\\', '/');

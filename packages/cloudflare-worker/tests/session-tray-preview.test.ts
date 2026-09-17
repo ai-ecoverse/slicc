@@ -436,6 +436,46 @@ describe('preview HTTP handler', () => {
     expect(await res.text()).toBe('<h1>hello</h1>');
   });
 
+  it('serves a multi-chunk binary file byte-for-byte', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+    const bytes = new Uint8Array(200_003);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31) & 0xff;
+    const b64 = Buffer.from(bytes).toString('base64');
+    const pieces: string[] = [];
+    for (let i = 0; i < b64.length; i += 65_536) pieces.push(b64.slice(i, i + 65_536));
+
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as { type: string; reqId?: string };
+      if (msg.type !== 'preview.request' || !msg.reqId) return;
+      pieces.forEach((content, chunkIndex) => {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: true,
+            mime: 'video/mp4',
+            chunkIndex,
+            totalChunks: pieces.length,
+            content,
+            encoding: 'base64',
+          })
+        );
+      });
+    });
+
+    const fileUrl = new URL(url);
+    fileUrl.pathname = '/clip.mp4';
+    const res = await handleWorkerRequest(new Request(fileUrl.toString()), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(Buffer.from(await res.arrayBuffer()).equals(Buffer.from(bytes))).toBe(true);
+  });
+
   it('preview fetch succeeds after DO hibernation (leader socket is recovered)', async () => {
     const { env, namespace } = createTestHarness();
     const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(

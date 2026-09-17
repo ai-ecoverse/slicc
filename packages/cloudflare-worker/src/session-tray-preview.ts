@@ -10,6 +10,7 @@ import {
   MAX_PREVIEW_FILES,
   MAX_PREVIEW_TOTAL_BYTES,
   MAX_PREVIEW_TTL_MS,
+  MAX_PREVIEWS_PER_TRAY,
   normalizePreviewArchivePath,
   PREVIEW_ARCHIVE_PREFIX,
 } from './persistent-preview-storage.js';
@@ -38,52 +39,130 @@ export interface PreviewResponseChunk {
 }
 
 export type AssemblerResult =
-  | { ok: true; mime: string; encoding: 'utf-8' | 'base64'; content: string }
+  | { ok: true; mime: string; body: Uint8Array | string }
   | { ok: false; status: number; reason?: string };
+
+export const PREVIEW_FILE_TOO_LARGE = 'preview file exceeds 25 MiB limit';
 
 // ────────────────────────────────────────────────────────────────────────
 // PreviewAssembler — reassembles chunked preview.response messages
 // ────────────────────────────────────────────────────────────────────────
 
+/** Decode one base64 chunk straight to bytes (no per-character JS array). */
+function decodeBase64Chunk(content: string): Uint8Array {
+  const binary = atob(content);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * UTF-8 byte length of a text chunk without allocating the encoded bytes.
+ * A surrogate pair split across two chunks counts as 3 + 3 instead of 4,
+ * which only errs toward the cap.
+ */
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit < 0x80) bytes += 1;
+    else if (unit < 0x800) bytes += 2;
+    else if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
+ * Binary chunks are decoded as they arrive and joined once into a single
+ * buffer. The previous join-then-`Uint8Array.from(atob(...), fn)` path held
+ * several whole-file copies plus a per-character array, which reset the DO
+ * isolate for files around 10 MiB (#2852). The leader slices base64 on
+ * 4-character boundaries, so every chunk decodes independently.
+ */
 export class PreviewAssembler {
-  private readonly chunks = new Map<number, string>();
+  private readonly chunks = new Map<number, Uint8Array | string>();
+  private size = 0;
+  private settled = false;
   private resolveFn!: (result: AssemblerResult) => void;
   readonly done: Promise<AssemblerResult>;
 
-  constructor() {
+  constructor(private readonly maxBytes = MAX_PREVIEW_FILE_BYTES) {
     this.done = new Promise<AssemblerResult>((r) => {
       this.resolveFn = r;
     });
   }
 
   push(chunk: PreviewResponseChunk): void {
+    if (this.settled) return;
     if (!chunk.ok) {
-      this.resolveFn({
-        ok: false,
-        status: chunk.status ?? 500,
-        reason: chunk.reason,
-      });
+      this.settle({ ok: false, status: chunk.status ?? 500, reason: chunk.reason });
       return;
     }
-    const total = chunk.totalChunks ?? 1;
     const idx = chunk.chunkIndex ?? 0;
-    this.chunks.set(idx, chunk.content ?? '');
+    if (this.chunks.has(idx)) return;
+    let piece: Uint8Array | string;
+    try {
+      piece =
+        chunk.encoding === 'base64'
+          ? decodeBase64Chunk(chunk.content ?? '')
+          : (chunk.content ?? '');
+    } catch {
+      this.settle({ ok: false, status: 502, reason: 'invalid preview response chunk' });
+      return;
+    }
+    this.size += typeof piece === 'string' ? utf8ByteLength(piece) : piece.length;
+    if (this.size > this.maxBytes) {
+      this.settle({ ok: false, status: 413, reason: PREVIEW_FILE_TOO_LARGE });
+      return;
+    }
+    this.chunks.set(idx, piece);
+    const total = chunk.totalChunks ?? 1;
     if (this.chunks.size === total) {
-      let assembled = '';
-      for (let i = 0; i < total; i++) {
-        assembled += this.chunks.get(i) ?? '';
-      }
-      this.resolveFn({
+      this.settle({
         ok: true,
         mime: chunk.mime ?? 'application/octet-stream',
-        encoding: chunk.encoding ?? 'utf-8',
-        content: assembled,
+        body: chunk.encoding === 'base64' ? this.joinBytes(total) : this.joinText(total),
       });
     }
   }
 
   fail(status: number, reason?: string): void {
-    this.resolveFn({ ok: false, status, reason });
+    this.settle({ ok: false, status, reason });
+  }
+
+  private settle(result: AssemblerResult): void {
+    this.settled = true;
+    this.chunks.clear();
+    this.resolveFn(result);
+  }
+
+  private joinBytes(total: number): Uint8Array {
+    const out = new Uint8Array(this.size);
+    let offset = 0;
+    for (let i = 0; i < total; i++) {
+      const piece = this.chunks.get(i);
+      if (piece instanceof Uint8Array) {
+        out.set(piece, offset);
+        offset += piece.length;
+      }
+      this.chunks.delete(i);
+    }
+    return out;
+  }
+
+  private joinText(total: number): string {
+    const parts: string[] = [];
+    for (let i = 0; i < total; i++) {
+      const piece = this.chunks.get(i);
+      parts.push(typeof piece === 'string' ? piece : '');
+    }
+    return parts.join('');
   }
 }
 
@@ -225,9 +304,19 @@ async function handlePreviewMint(request: Request, deps: PreviewDeps): Promise<R
     const result = await mintPreview(body, deps);
     return jsonResponse(result, 200);
   } catch (err) {
-    const status = (err as { status?: number }).status ?? 403;
-    const code = (err as { code?: string }).code;
-    return jsonResponse({ error: (err as Error).message, ...(code ? { code } : {}) }, status);
+    const {
+      status = 403,
+      code,
+      details,
+    } = err as {
+      status?: number;
+      code?: string;
+      details?: { active: number; limit: number };
+    };
+    return jsonResponse(
+      { error: (err as Error).message, ...(code ? { code } : {}), ...details },
+      status
+    );
   }
 }
 
@@ -326,11 +415,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
         status: result.status,
       });
     }
-    const responseBody =
-      result.encoding === 'base64'
-        ? Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0))
-        : result.content;
-    return new Response(responseBody, {
+    return new Response(result.body, {
       status: 200,
       headers: {
         'content-type': result.mime,
@@ -467,7 +552,6 @@ async function handlePreviewFinalize(request: Request, deps: PreviewDeps): Promi
 // CRUD operations
 // ────────────────────────────────────────────────────────────────────────
 
-const MAX_PREVIEWS_PER_TRAY = 10;
 const PREVIEW_CLEANUP_RETRY_MS = 60_000;
 export const PREVIEW_UPLOAD_LEASE_MS = 120_000;
 export const PREVIEW_CLEANUP_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -667,13 +751,16 @@ export async function mintPreview(
 
   tray.previews ??= {};
   await expirePersistentPreviews(deps);
-  if (
-    Object.values(tray.previews).filter((preview) => preview.state !== 'cleanup').length >=
-    MAX_PREVIEWS_PER_TRAY
-  ) {
+  // Every non-tombstone record counts: live previews, `--ttl` snapshots, and
+  // snapshots whose upload has not been finalized yet.
+  const active = Object.values(tray.previews).filter(
+    (preview) => preview.state !== 'cleanup'
+  ).length;
+  if (active >= MAX_PREVIEWS_PER_TRAY) {
     throw Object.assign(new Error('Preview limit reached'), {
       code: 'PREVIEW_LIMIT',
       status: 429,
+      details: { active, limit: MAX_PREVIEWS_PER_TRAY },
     });
   }
   tray.previews[previewToken] = record;
