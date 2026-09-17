@@ -48,7 +48,7 @@ export async function handlePreviewRequest(
       reqId,
       ok: false,
       status: 413,
-      reason: `preview file exceeds 25 MiB limit: ${servedRelativePath(vfsPath, servedRoot)}`,
+      reason: `preview file exceeds ${PREVIEW_MAX_FILE_BYTES / 1024 / 1024} MiB limit: ${servedRelativePath(vfsPath, servedRoot)}`,
     });
     return;
   }

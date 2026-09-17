@@ -88,6 +88,16 @@ describe('mintPreviewViaWorker', () => {
     ).rejects.toThrow(
       'Preview mint failed: Preview limit reached (10 of 10 in use; live previews and --ttl snapshots both count, and neither ends with the session). List them with "serve --list" and free one with "serve --stop <token>".'
     );
+    await expect(
+      mintPreviewViaWorker(
+        args,
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ code: 'PREVIEW_LIMIT' }), { status: 429 })
+          )
+      )
+    ).rejects.toThrow(/^Preview mint failed: Preview limit reached \(limit 10 per tray;/);
     // Older workers omit the counts.
     await expect(
       mintPreviewViaWorker(args, vi.fn().mockResolvedValue(limitResponse({})))

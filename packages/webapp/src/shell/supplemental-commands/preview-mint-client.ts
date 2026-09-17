@@ -61,7 +61,7 @@ function previewLimitMessage(body: WorkerErrorBody): string {
       ? `${body.active} of ${body.limit} in use`
       : `limit ${PREVIEW_MAX_PER_TRAY} per tray`;
   return (
-    `${body.error} (${usage}; live previews and --ttl snapshots both count, and neither ends with the session). ` +
+    `${body.error ?? 'Preview limit reached'} (${usage}; live previews and --ttl snapshots both count, and neither ends with the session). ` +
     'List them with "serve --list" and free one with "serve --stop <token>".'
   );
 }
