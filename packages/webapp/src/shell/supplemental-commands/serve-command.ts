@@ -77,8 +77,9 @@ function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  --project    Obsolete; ignored. Root-absolute paths work natively\n' +
       '               under unified preview.\n\n' +
       'Limits and lifetime:\n' +
-      '  - Each file may be at most 25 MiB. Larger files answer HTTP 413 on a live\n' +
-      '    preview and are refused before upload with --ttl. --ttl snapshots are\n' +
+      '  - Live previews honour HTTP Range in windows of up to 8 MiB, so media of\n' +
+      '    any size plays and seeks; a plain (non-range) GET of a file over 25 MiB\n' +
+      '    answers HTTP 413. --ttl refuses files over 25 MiB before upload and is\n' +
       '    also capped at 1,000 files and 50 MiB in total.\n' +
       `  - A tray holds at most ${PREVIEW_MAX_SNAPSHOTS_PER_TRAY} --ttl snapshots, counting snapshots still\n` +
       '    uploading (listed as "uploading"). Live previews have no quota. Both\n' +

@@ -1,4 +1,9 @@
-import { PREVIEW_MAX_FILE_BYTES } from '@slicc/shared-ts';
+import {
+  type ByteRange,
+  PREVIEW_MAX_FILE_BYTES,
+  PREVIEW_MAX_RANGE_BYTES,
+  parseByteRange,
+} from '@slicc/shared-ts';
 import { isPathWithinServedRoot } from './preview-security.js';
 import { uint8ToBase64 } from './tray-fs-handler.js';
 
@@ -10,10 +15,14 @@ export interface PreviewRequestMessage {
   servedRoot: string;
   vfsPath: string;
   asText: boolean;
+  /** Raw visitor `Range` header; see `WorkerPreviewRequest.range`. */
+  range?: string;
 }
 
 interface MinimalVfs {
   readFile(path: string, options?: { encoding?: 'utf-8' | 'binary' }): Promise<string | Uint8Array>;
+  /** Half-open `[start, end)`, as `VirtualFS.readFileRange`. */
+  readFileRange(path: string, start: number, end: number): Promise<Uint8Array>;
   stat(path: string): Promise<{ type: 'file' | 'directory' | 'symlink'; size?: number }>;
 }
 
@@ -40,8 +49,19 @@ export async function handlePreviewRequest(
   }
   const { vfsPath, size } = resolved;
 
+  const range = size === undefined ? null : parseByteRange(msg.range, size);
+  if (range === 'unsatisfiable') {
+    ws.send({ type: 'preview.response', reqId, ok: false, status: 416, size });
+    return;
+  }
+  if (range && size !== undefined) {
+    await sendRange(msg, ws, vfs, vfsPath, clampRange(range), size);
+    return;
+  }
+
   // Refuse before reading: the worker relay buffers the whole file and caps it
-  // at the same limit, so sending more only burns the socket (#2852).
+  // at the same limit, so sending more only burns the socket (#2852). Ranged
+  // requests above took their own bounded path, so large media still plays.
   if (size !== undefined && size > PREVIEW_MAX_FILE_BYTES) {
     ws.send({
       type: 'preview.response',
@@ -49,6 +69,7 @@ export async function handlePreviewRequest(
       ok: false,
       status: 413,
       reason: `preview file exceeds ${PREVIEW_MAX_FILE_BYTES / 1024 / 1024} MiB limit: ${servedRelativePath(vfsPath, servedRoot)}`,
+      size,
     });
     return;
   }
@@ -65,33 +86,106 @@ export async function handlePreviewRequest(
       encoding = 'base64';
     }
   } catch (e: unknown) {
-    const code = (e as { code?: string })?.code;
-    if (code === 'ENOENT') {
-      ws.send({ type: 'preview.response', reqId, ok: false, status: 404 });
-    } else {
-      ws.send({
-        type: 'preview.response',
-        reqId,
-        ok: false,
-        status: 500,
-        reason: String((e as Error)?.message ?? e),
-      });
-    }
+    sendReadError(reqId, ws, e);
     return;
   }
 
-  const mime = mimeForPath(vfsPath);
-  const chunks = chunkBy(content, CHUNK_THRESHOLD);
+  sendChunks(ws, {
+    reqId,
+    mime: mimeForPath(vfsPath),
+    content,
+    encoding,
+    meta: { status: 200, ...(size !== undefined ? { size } : {}) },
+  });
+}
+
+/**
+ * A server may answer a range with fewer bytes than were asked; media
+ * elements request the next window. Clamping keeps every 206 within what the
+ * worker relay buffers, whatever the file size.
+ */
+function clampRange(range: ByteRange): ByteRange {
+  return {
+    start: range.start,
+    end: Math.min(range.end, range.start + PREVIEW_MAX_RANGE_BYTES - 1),
+  };
+}
+
+/**
+ * Read and send one window. Always base64: a window can split a multi-byte
+ * character, which utf-8 transport cannot carry.
+ */
+async function sendRange(
+  msg: PreviewRequestMessage,
+  ws: MinimalLeaderSocket,
+  vfs: MinimalVfs,
+  vfsPath: string,
+  range: ByteRange,
+  size: number
+): Promise<void> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await vfs.readFileRange(vfsPath, range.start, range.end + 1);
+  } catch (e: unknown) {
+    sendReadError(msg.reqId, ws, e);
+    return;
+  }
+  // The file may have shrunk between stat and read; describe what was read.
+  if (bytes.byteLength === 0) {
+    ws.send({ type: 'preview.response', reqId: msg.reqId, ok: false, status: 416, size });
+    return;
+  }
+  const sent = { start: range.start, end: range.start + bytes.byteLength - 1 };
+  sendChunks(ws, {
+    reqId: msg.reqId,
+    mime: mimeForPath(vfsPath),
+    content: uint8ToBase64(bytes),
+    encoding: 'base64',
+    meta: { status: 206, size, range: sent },
+  });
+}
+
+function sendReadError(reqId: string, ws: MinimalLeaderSocket, e: unknown): void {
+  const code = (e as { code?: string })?.code;
+  if (code === 'ENOENT') {
+    ws.send({ type: 'preview.response', reqId, ok: false, status: 404 });
+    return;
+  }
+  ws.send({
+    type: 'preview.response',
+    reqId,
+    ok: false,
+    status: 500,
+    reason: String((e as Error)?.message ?? e),
+  });
+}
+
+/**
+ * Range metadata rides on every chunk, so the worker can read it from
+ * whichever chunk completes the set.
+ */
+function sendChunks(
+  ws: MinimalLeaderSocket,
+  body: {
+    reqId: string;
+    mime: string;
+    content: string;
+    encoding: 'utf-8' | 'base64';
+    meta: { status: 200 | 206; size?: number; range?: ByteRange };
+  }
+): void {
+  const chunks = chunkBy(body.content, CHUNK_THRESHOLD);
   for (let i = 0; i < chunks.length; i++) {
     ws.send({
       type: 'preview.response',
-      reqId,
+      reqId: body.reqId,
       ok: true,
-      mime,
+      mime: body.mime,
       chunkIndex: i,
       totalChunks: chunks.length,
       content: chunks[i],
-      encoding,
+      encoding: body.encoding,
+      ...body.meta,
     });
   }
 }

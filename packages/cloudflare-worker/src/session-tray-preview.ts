@@ -5,6 +5,7 @@
  * `this`, so the durable object class keeps thin delegation wrappers.
  */
 
+import { parseByteRange } from '@slicc/shared-ts';
 import {
   LIVE_PREVIEW_ORPHAN_MS,
   MAX_LIVE_PREVIEWS_PER_TRAY,
@@ -38,11 +39,22 @@ export interface PreviewResponseChunk {
   totalChunks?: number;
   content?: string;
   reason?: string;
+  /** Full entity size; on ok chunks and on a 416. */
+  size?: number;
+  /** 206 window (inclusive), repeated on every chunk. */
+  range?: { start: number; end: number };
+}
+
+/** Range metadata as the leader reported it; all absent from an old leader. */
+interface PreviewRangeMeta {
+  status?: number;
+  size?: number;
+  range?: { start: number; end: number };
 }
 
 export type AssemblerResult =
-  | { ok: true; mime: string; body: Uint8Array | string }
-  | { ok: false; status: number; reason?: string };
+  | ({ ok: true; mime: string; body: Uint8Array | string } & PreviewRangeMeta)
+  | { ok: false; status: number; reason?: string; size?: number };
 
 export const PREVIEW_FILE_TOO_LARGE = 'preview file exceeds 25 MiB limit';
 
@@ -103,7 +115,12 @@ export class PreviewAssembler {
   push(chunk: PreviewResponseChunk): void {
     if (this.settled) return;
     if (!chunk.ok) {
-      this.settle({ ok: false, status: chunk.status ?? 500, reason: chunk.reason });
+      this.settle({
+        ok: false,
+        status: chunk.status ?? 500,
+        reason: chunk.reason,
+        size: chunk.size,
+      });
       return;
     }
     const idx = chunk.chunkIndex ?? 0;
@@ -130,6 +147,9 @@ export class PreviewAssembler {
         ok: true,
         mime: chunk.mime ?? 'application/octet-stream',
         body: chunk.encoding === 'base64' ? this.joinBytes(total) : this.joinText(total),
+        status: chunk.status,
+        size: chunk.size,
+        range: chunk.range,
       });
     }
   }
@@ -380,6 +400,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
     servedRoot: string;
     vfsPath: string;
     asText: boolean;
+    range?: string;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -402,6 +423,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
       servedRoot: body.servedRoot,
       vfsPath: body.vfsPath,
       asText: body.asText,
+      ...(body.range ? { range: body.range } : {}),
     });
     if (!sent) {
       return new Response('Bad gateway: leader disconnected', {
@@ -415,27 +437,79 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
       );
     });
     const result = await Promise.race([assembler.done, timeoutPromise]);
-    if (!result.ok) {
-      return new Response(result.reason ?? 'error', {
-        status: result.status,
-      });
-    }
-    return new Response(result.body, {
-      status: 200,
-      headers: {
-        'content-type': result.mime,
-        'cache-control': 'no-store',
-        // ponytail: served pages may need arbitrary third-party resources
-        // (CDN scripts/fonts/APIs); frame-ancestors stays 'none' — that's
-        // about framing THIS preview elsewhere, unrelated to what it loads.
-        'content-security-policy':
-          "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'none'",
-      },
-    });
+    return previewFetchResponse(result, body.range);
   } finally {
     if (timer) clearTimeout(timer);
     deps.pendingPreviews.delete(body.reqId);
   }
+}
+
+const LIVE_PREVIEW_HEADERS = {
+  'cache-control': 'no-store',
+  // ponytail: served pages may need arbitrary third-party resources
+  // (CDN scripts/fonts/APIs); frame-ancestors stays 'none' — that's
+  // about framing THIS preview elsewhere, unrelated to what it loads.
+  'content-security-policy':
+    "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'none'",
+  'accept-ranges': 'bytes',
+};
+
+function unsatisfiableResponse(size: number | undefined): Response {
+  const headers: Record<string, string> = { ...LIVE_PREVIEW_HEADERS };
+  if (size !== undefined) headers['content-range'] = `bytes */${size}`;
+  return new Response(null, { status: 416, headers });
+}
+
+function partialResponse(
+  body: Uint8Array,
+  mime: string,
+  range: { start: number; end: number },
+  size: number
+): Response {
+  return new Response(body, {
+    status: 206,
+    headers: {
+      ...LIVE_PREVIEW_HEADERS,
+      'content-type': mime,
+      'content-range': `bytes ${range.start}-${range.end}/${size}`,
+    },
+  });
+}
+
+/**
+ * Turn the assembled leader reply into the visitor's response. A leader with
+ * range support reports `status`/`size`/`range`; one without sends the whole
+ * file, so a requested range is cut here instead (that body is already within
+ * the assembler cap).
+ */
+function previewFetchResponse(result: AssemblerResult, requestedRange?: string): Response {
+  if (!result.ok) {
+    if (result.status === 416) return unsatisfiableResponse(result.size);
+    return new Response(result.reason ?? 'error', {
+      status: result.status,
+      headers: { 'accept-ranges': 'bytes' },
+    });
+  }
+  if (result.status === 206 && result.range && result.size !== undefined) {
+    return partialResponse(asBytes(result.body), result.mime, result.range, result.size);
+  }
+  if (result.status === undefined && requestedRange) {
+    const bytes = asBytes(result.body);
+    const range = parseByteRange(requestedRange, bytes.byteLength);
+    if (range === 'unsatisfiable') return unsatisfiableResponse(bytes.byteLength);
+    if (range) {
+      const window = bytes.subarray(range.start, range.end + 1);
+      return partialResponse(window, result.mime, range, bytes.byteLength);
+    }
+  }
+  return new Response(result.body, {
+    status: 200,
+    headers: { ...LIVE_PREVIEW_HEADERS, 'content-type': result.mime },
+  });
+}
+
+function asBytes(body: Uint8Array | string): Uint8Array {
+  return typeof body === 'string' ? new TextEncoder().encode(body) : body;
 }
 
 async function handlePreviewEmit(request: Request, deps: PreviewDeps): Promise<Response> {

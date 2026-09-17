@@ -89,7 +89,8 @@ describe('serve command (unified preview)', () => {
   it('documents the size limit, snapshot quota, live expiry and token in --help', async () => {
     const result = await createServeCommand().execute(['--help'], {} as never);
     expect(result.stdout).toContain('Limits and lifetime:');
-    expect(result.stdout).toContain('at most 25 MiB');
+    expect(result.stdout).toContain('Range in windows of up to 8 MiB');
+    expect(result.stdout).toContain('file over 25 MiB');
     expect(result.stdout).toContain('HTTP 413');
     expect(result.stdout).toContain('at most 10 --ttl snapshots');
     expect(result.stdout).toContain('Live previews have no quota');

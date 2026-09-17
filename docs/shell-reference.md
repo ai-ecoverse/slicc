@@ -1387,9 +1387,11 @@ preview's mode and expiry; `serve --stop` immediately revokes and deletes either
 
 ### Limits and lifetime
 
-- **25 MiB per file, both modes.** A live preview answers `413 preview file exceeds 25 MiB
-limit: <path>` for a larger file (the leader refuses before sending it). `--ttl` rejects it
-  before anything is uploaded: `serve: preview file exceeds 25 MiB limit: <path>`.
+- **25 MiB per full file.** A plain (non-range) request for a live-preview file over 25 MiB
+  answers `413 preview file exceeds 25 MiB limit: <path>` (the leader refuses before sending it);
+  ranged requests for such files are served in windows (see _Byte ranges_). `--ttl` uploads
+  are capped at 25 MiB per file, rejected before anything is uploaded:
+  `serve: preview file exceeds 25 MiB limit: <path>`.
 - **10 `--ttl` snapshots per tray; live previews have no quota.** Snapshots hold R2 storage
   for up to 30 days, so they are counted, including snapshots whose upload is still in
   progress. When the quota is full, minting fails with
@@ -1403,6 +1405,13 @@ limit: <path>` for a larger file (the leader refuses before sending it). `--ttl`
 - **Tokens.** `serve` prints `Preview token: <trayId>.<secret>` after the URL, and
   `serve --list` shows the same value in its `TOKEN` column. `--stop` also accepts the preview
   URL (or its host) and derives the token from it.
+- **Byte ranges.** Live previews and `--ttl` snapshots both honour `Range: bytes=…` (206
+  with `Content-Range`, 416 for a range past the end, `Accept-Ranges: bytes` always). On a
+  live preview each ranged response carries at most 8 MiB, so `<video>`/`<audio>` play and seek
+  media larger than 25 MiB without splitting it; a plain (non-range) GET of such a file still
+  answers 413. Live previews ignore `Range` when `If-Range` is sent (they have no stable
+  validator) and serve the whole file; snapshots keep the range only when `If-Range` matches
+  the ETag.
 
 ### Flags
 

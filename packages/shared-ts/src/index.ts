@@ -3,6 +3,7 @@
 export * from './agent-wire-types.js';
 export * from './base64.js';
 export * from './bridge-protocol.js';
+export * from './byte-range.js';
 export * from './cdp-frame-unmask.js';
 export * from './cdp-target-info.js';
 export * from './content-type.js';

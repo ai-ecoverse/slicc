@@ -84,6 +84,14 @@ export function buildPreviewUrl(
 export const PREVIEW_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 /**
+ * Largest window one ranged live-preview response carries. The leader clamps
+ * each `206` to this many bytes (a server may return less than was asked;
+ * media elements simply request the next window), so files above
+ * `PREVIEW_MAX_FILE_BYTES` still play and seek through the relay.
+ */
+export const PREVIEW_MAX_RANGE_BYTES = 8 * 1024 * 1024;
+
+/**
  * `--ttl` snapshots one tray may hold, counting snapshots still uploading.
  * Live previews have no quota. Mirrors the worker's `MAX_SNAPSHOTS_PER_TRAY`.
  */

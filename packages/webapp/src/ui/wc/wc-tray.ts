@@ -967,6 +967,14 @@ export function createLeaderOptionsFactory(
         const fs = await deps.openFs();
         return fs.readFile(path, options);
       },
+      // Ranged live-preview reads (#2852). A client without the windowed
+      // read falls back to read-and-slice.
+      async readFileRange(path: string, start: number, end: number) {
+        const fs = await deps.openFs();
+        if (fs.readFileRange) return fs.readFileRange(path, start, end);
+        const whole = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+        return new Uint8Array(whole.subarray(start, Math.min(end, whole.byteLength)));
+      },
       async readDir(path: string) {
         const fs = await deps.openFs();
         return fs.readDir(path);

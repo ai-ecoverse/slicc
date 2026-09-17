@@ -230,4 +230,59 @@ describe('cachedPreviewFetch', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('<p>big</p>');
   });
+
+  it('bypasses the cache for a ranged request and forwards the Range', async () => {
+    const cache = installFakeCaches();
+    const put = vi.spyOn(cache, 'put');
+    const match = vi.spyOn(cache, 'match');
+    const fetchFromDO = vi.fn((_range: string | undefined) =>
+      Promise.resolve(new Response('hi', { status: 206 }))
+    );
+    const res = await cachedPreviewFetch({
+      request: makeRequest(undefined, { range: 'bytes=0-1' }),
+      allowLive: false,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(res.status).toBe(206);
+    expect(fetchFromDO).toHaveBeenCalledWith('bytes=0-1');
+    expect(match).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('forwards Range on a live preview too', async () => {
+    const fetchFromDO = vi.fn((_range: string | undefined) => Promise.resolve(makeDoResponse()));
+    await cachedPreviewFetch({
+      request: makeRequest(undefined, { range: 'bytes=-5' }),
+      allowLive: true,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(fetchFromDO).toHaveBeenCalledWith('bytes=-5');
+  });
+
+  it('drops the Range when If-Range is present and serves from the normal path', async () => {
+    installFakeCaches();
+    const fetchFromDO = vi.fn((_range: string | undefined) => Promise.resolve(makeDoResponse()));
+    const res = await cachedPreviewFetch({
+      request: makeRequest(undefined, { range: 'bytes=0-1', 'if-range': '"abc"' }),
+      allowLive: false,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(res.status).toBe(200);
+    expect(fetchFromDO).toHaveBeenCalledWith(undefined);
+    expect(res.headers.get('etag')).toBeTruthy();
+  });
+
+  it('forwards no Range for a plain request', async () => {
+    const fetchFromDO = vi.fn((_range: string | undefined) => Promise.resolve(makeDoResponse()));
+    await cachedPreviewFetch({
+      request: makeRequest(),
+      allowLive: true,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(fetchFromDO).toHaveBeenCalledWith(undefined);
+  });
 });

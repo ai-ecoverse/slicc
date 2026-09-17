@@ -182,7 +182,8 @@ const WORKER_SHARED_FILES = new Set([
 /** Layer of a `packages/cloudflare-worker/src`-relative path. */
 export function cloudflareWorkerLayerOf(relPath) {
   const srcRel = toSourcePath(relPath);
-  if (srcRel === 'index.ts') return 'entry';
+  // `preview-worker.ts` is the `main` of `wrangler-preview.jsonc`.
+  if (srcRel === 'index.ts' || srcRel === 'preview-worker.ts') return 'entry';
   if (WORKER_SHARED_FILES.has(srcRel) || srcRel.startsWith('auth/')) return 'shared';
   // `session-tray-*.ts` are DO internals; `session-tray.ts` itself is the route.
   if (srcRel.startsWith('session-tray-')) return 'shared';
