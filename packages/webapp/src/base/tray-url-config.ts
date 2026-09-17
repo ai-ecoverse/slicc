@@ -11,7 +11,9 @@
  * `scoops/tray-runtime-config.ts` re-exports every symbol here under its
  * established name and keeps the half that genuinely needs a higher layer
  * (`resolveTrayRuntimeConfig` / `fetchRuntimeConfig`, which reach for
- * `shell/proxied-fetch.js` and `kernel/messages.js`).
+ * `shell/proxied-fetch.js`). The `?slicc=leader` query pair lives in
+ * `base/leader-runtime-query.ts` so scoops does not value-import
+ * `kernel/messages.ts` (#3231).
  *
  * The canonical `normalizeTrayWorkerBaseUrl` / `parseTrayJoinUrl`
  * implementations live in `@slicc/shared-ts` (`tray-url-shared.ts`), shared

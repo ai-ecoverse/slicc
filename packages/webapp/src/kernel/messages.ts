@@ -956,8 +956,10 @@ export const DETACHED_RUNTIME_QUERY_NAME = 'detached';
 export { LEADER_EXT_ID_QUERY_NAME } from '@slicc/shared-ts';
 
 /** URL query name/value marking the pinned hosted leader tab the thin extension opens. */
-export const LEADER_RUNTIME_QUERY_NAME = 'slicc';
-export const LEADER_RUNTIME_QUERY_VALUE = 'leader';
+export {
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../base/leader-runtime-query.js';
 
 export interface DetachedPopoutRequestMsg {
   type: 'detached-popout-request';

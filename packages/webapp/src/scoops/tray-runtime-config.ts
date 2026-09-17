@@ -13,13 +13,16 @@ import {
   TRAY_WORKER_QUERY_PARAM,
 } from '@slicc/shared-ts';
 import {
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../base/leader-runtime-query.js';
+import {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
   type TrayJoinConfig,
   type TrayUrlConfig,
 } from '../base/tray-url-config.js';
-import { LEADER_RUNTIME_QUERY_NAME, LEADER_RUNTIME_QUERY_VALUE } from '../kernel/messages.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 
 /**

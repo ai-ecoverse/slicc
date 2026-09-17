@@ -592,7 +592,10 @@ documented per-package layer stack. The original webapp stack is
 (e.g. `cdp/` → `scoops/`, or any layer → `ui/`). Unranked webapp
 directories (`kernel/`, `providers/`, `speech/`, …) rank just below
 `ui/`: they may import ranked layers but not `ui/`, and are never a
-back-edge target.
+back-edge target — except a `scoops/` **value** import of `kernel/`
+(#3231). Top-level `import type { … }` clauses still erase and are
+allowed. Ranking `kernel/` itself is not cheap: `cdp/`, `shell/`, and
+`core/` already value-import it.
 
 The same script also ratchets the other TypeScript applications (#3149),
 each with its own layer order and baseline file:

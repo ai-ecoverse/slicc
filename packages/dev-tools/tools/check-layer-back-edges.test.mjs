@@ -88,6 +88,47 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     expect(findLayerBackEdges('cdp/panel-rpc-tray-provider.ts', source)).toEqual([]);
   });
 
+  it('flags a scoops/ VALUE import of kernel/ even though kernel/ is unranked (#3231)', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/tray-runtime-config.ts',
+        "import { LEADER_RUNTIME_QUERY_NAME } from '../kernel/messages.js';"
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../kernel/messages.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
+  it('allows a scoops/ top-level import type { … } clause of kernel/', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/orchestrator.ts',
+        "import type { LocalVfsClient } from '../kernel/local-vfs-client.js';"
+      )
+    ).toEqual([]);
+  });
+
+  it('flags a scoops/ mixed { type X, Y } clause of kernel/ (value import)', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/orchestrator.ts',
+        "import { type ProcessManager, spawn } from '../kernel/process-manager.js';"
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../kernel/process-manager.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
   it('covers dynamic import and require forms, and ignores comments', () => {
     const source = [
       "// import { a } from '../ui/a.js';",
