@@ -977,7 +977,7 @@ starts with a fresh turn cursor and fixture.
 In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs a medium
 suite on pull requests (`SLICC_E2E_PR=1`) and the full suite on
 `merge_group`. The PR gate ignores the merge-queue-only basenames in
-`packages/webapp/tests/e2e/mq-only-specs.mjs` (multiple-cones*,
+`packages/webapp/tests/e2e/mq-only-specs.ts` (multiple-cones*,
 compaction-robustness, roving-tray-webhook, sprinkle-details, speech) so it
 fills spare capacity under `webapp` / `node-matrix` without owning the
 required `ci` signal; new medium specs join PRs by default. It triggers on changes to any runtime the harness drives or bundles —

@@ -45,7 +45,7 @@ describe('CI critical-path routing', () => {
   const worker = jobBody('cloudflare-worker', 'cloud-core');
 
   it('runs the medium E2E suite on pull requests and the full suite after', async () => {
-    const { MQ_ONLY_SPEC_BASENAMES } = await import('../../webapp/tests/e2e/mq-only-specs.mjs');
+    const { MQ_ONLY_SPEC_BASENAMES } = await import('../../webapp/tests/e2e/mq-only-specs.ts');
     expect(MQ_ONLY_SPEC_BASENAMES.length).toBeGreaterThan(0);
     expect(MQ_ONLY_SPEC_BASENAMES).toEqual(
       expect.arrayContaining([
@@ -71,7 +71,7 @@ describe('CI critical-path routing', () => {
     expect(full).not.toContain('SLICC_E2E_PR');
 
     const playwrightConfig = readFileSync('packages/webapp/tests/e2e/playwright.config.ts', 'utf8');
-    expect(playwrightConfig).toContain("from './mq-only-specs.mjs'");
+    expect(playwrightConfig).toContain("from './mq-only-specs'");
     expect(playwrightConfig).toContain("process.env['SLICC_E2E_PR'] === '1'");
     expect(playwrightConfig).toContain('MQ_ONLY_SPEC_BASENAMES');
   });

@@ -13,7 +13,7 @@
  * `playwright.config.ts` and the assertions in
  * `packages/dev-tools/tools/ci-critical-path.test.mjs`.
  */
-export const MQ_ONLY_SPEC_BASENAMES = Object.freeze([
+export const MQ_ONLY_SPEC_BASENAMES: readonly string[] = Object.freeze([
   // Leader/follower cone lifecycle — ~3.4 minutes combined in CI.
   'multiple-cones.test.ts',
   'multiple-cones-follower.test.ts',
