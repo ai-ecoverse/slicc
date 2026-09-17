@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clampVideoDurationMs,
   describeDisplayCaptureError,
-} from '../../../src/shell/supplemental-commands/screencapture-media.js';
+} from '../../../src/shell/supplemental-commands/screencapture-media-shared.js';
 
 describe('screencapture-media helpers', () => {
   it('clamps video duration to 100ms–60s with a 5s default', () => {

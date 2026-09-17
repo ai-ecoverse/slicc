@@ -1,80 +1,38 @@
 /**
- * Page-realm display capture helpers for `screencapture`.
+ * Page-realm display capture for `screencapture`.
  *
  * Still frames go through a canvas; video clips go through MediaRecorder.
  * Both paths always stop every track in `finally` so a cancelled picker or
  * a short clip does not leave the browser's display-capture slot held
  * (see issue #3233).
+ *
+ * Pure helpers live in `screencapture-media-shared.ts` so the kernel worker
+ * can import types/clamps without hoisting this DOM module into its eager
+ * first-load graph. Callers that need capture must dynamic-import this file.
  */
 
-export type DisplayCaptureMode = 'image' | 'video';
+import {
+  clampVideoDurationMs,
+  type DisplayCaptureRequest,
+  type DisplayCaptureResult,
+  type DisplayStillRequest,
+  type DisplayVideoRequest,
+  describeDisplayCaptureError,
+  MIN_VIDEO_DURATION_MS,
+} from './screencapture-media-shared.js';
 
-export interface DisplayStillRequest {
-  mode: 'image';
-  mimeType: string;
-  quality: number;
-}
-
-export interface DisplayVideoRequest {
-  mode: 'video';
-  /** Preferred MediaRecorder mime (usually `video/webm`). */
-  mimeType: string;
-  durationMs: number;
-  /** Request an audio track from getDisplayMedia when the browser allows it. */
-  audio?: boolean;
-}
-
-export type DisplayCaptureRequest = DisplayStillRequest | DisplayVideoRequest;
-
-export interface DisplayCaptureResult {
-  bytes: Uint8Array;
-  mimeType: string;
-  width: number;
-  height: number;
-  durationMs?: number;
-}
-
-const DEFAULT_VIDEO_DURATION_MS = 5_000;
-const MAX_VIDEO_DURATION_MS = 60_000;
-const MIN_VIDEO_DURATION_MS = 100;
-
-/** Clamp a video duration to the supported range (default 5s, max 60s). */
-export function clampVideoDurationMs(ms: number | undefined): number {
-  const raw = ms ?? DEFAULT_VIDEO_DURATION_MS;
-  return Math.max(MIN_VIDEO_DURATION_MS, Math.min(raw, MAX_VIDEO_DURATION_MS));
-}
-
-/**
- * Map a getDisplayMedia / MediaRecorder failure into an actionable message.
- * Chrome's bare `InvalidStateError: Invalid state` is especially opaque after
- * another tab's display capture left the slot wedged (#3233).
- */
-export function describeDisplayCaptureError(err: unknown): string {
-  const name = err instanceof DOMException ? err.name : undefined;
-  const message = err instanceof Error ? err.message : String(err);
-  if (
-    name === 'InvalidStateError' ||
-    /^Invalid state$/i.test(message.trim()) ||
-    /InvalidStateError/i.test(message)
-  ) {
-    return (
-      'display capture unavailable (Invalid state): another tab or page may ' +
-      'still hold a screen-share session, or this page is not focused/visible. ' +
-      'Stop other getDisplayMedia captures, focus the SLICC window, and retry; ' +
-      'if it stays wedged, reload the session'
-    );
-  }
-  if (name === 'NotAllowedError' || /Permission denied|NotAllowedError/i.test(message)) {
-    return 'user cancelled or permission denied';
-  }
-  if (name === 'NotFoundError') {
-    return 'no screen, window, or tab was available to capture';
-  }
-  if (name === 'NotReadableError' || name === 'AbortError') {
-    return message || name;
-  }
-  return message;
-}
+export type {
+  DisplayCaptureMode,
+  DisplayCaptureRequest,
+  DisplayCaptureResult,
+  DisplayStillRequest,
+  DisplayVideoRequest,
+} from './screencapture-media-shared.js';
+export {
+  clampVideoDurationMs,
+  describeDisplayCaptureError,
+  MIN_VIDEO_DURATION_MS,
+} from './screencapture-media-shared.js';
 
 /**
  * Capture a still frame or a timed video clip via `getDisplayMedia`.
