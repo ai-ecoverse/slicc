@@ -54,6 +54,10 @@ export interface AssistantTurn {
    *  string. Defaults to 24. The leading chunk always carries the
    *  id/name with empty arguments to mirror real OpenAI streaming. */
   toolArgumentsChunkSize?: number;
+  /** Test-only gate: after this many `content` chunks the stream stops
+   *  writing until `POST /__release`. Lets a scenario act while the UI is
+   *  provably mid-message (e.g. wake a parked rAF queue). */
+  holdAfterContentChunks?: number;
 }
 
 export interface Fixture {
