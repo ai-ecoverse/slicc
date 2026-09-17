@@ -319,6 +319,39 @@ describe('migrateConversations', () => {
     expect(state?.skipped[0]?.reason).toContain('IndexedDB unavailable');
   });
 
+  it('retries a unit whose canonical record could not be read on the next boot (#2365)', async () => {
+    // With the legacy stores frozen, this pass is the only way the unit's
+    // pre-cut history ever reaches the canonical record.
+    const cone = rootRecord();
+    const scoop = childRecord(cone.jid);
+    legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });
+    legacy.agent.set(scoop.jid, { messages: legacyAgentMessages() });
+    const realRead = store.read.bind(store);
+    const read = vi
+      .spyOn(store, 'read')
+      .mockImplementation(async (key) =>
+        key === conversationKeyFor(cone)
+          ? { status: 'error', reason: 'IndexedDB unavailable' }
+          : realRead(key)
+      );
+
+    const first = await migrateConversations(depsFor(store, [cone, scoop], legacy));
+    const cursor = await store.getMigrationState(CONVERSATION_MIGRATION_ID);
+    expect(first).toMatchObject({ migrated: 1, skipped: 1 });
+    expect(cursor?.done).toBe(false);
+    expect(cursor?.completedKeys).toEqual([conversationKeyFor(scoop)]);
+
+    read.mockRestore();
+    const second = await migrateConversations(depsFor(store, [cone, scoop], legacy));
+
+    expect(second).toMatchObject({ migrated: 1, alreadyDone: 1, skipped: 0 });
+    expect(await store.load(conversationKeyFor(cone))).not.toBeNull();
+    const done = await store.getMigrationState(CONVERSATION_MIGRATION_ID);
+    expect(done?.done).toBe(true);
+    // One entry per unit, however many boots it took.
+    expect(done?.skipped).toHaveLength(1);
+  });
+
   it('leaves a record it already migrated alone', async () => {
     const cone = rootRecord();
     legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });

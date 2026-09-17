@@ -1,12 +1,13 @@
 /**
- * Durable cone-error cards (#3003).
+ * Durable cone-error cards (#3003, #2365).
  *
  * `#handleError` appends an `error: true` row to the page chat controller
- * only. Pi history never held it, and `toBufferedChatMessages` used to strip
- * `error` even if the row reached the kernel. These tests pin the writes that
- * make the card survive a reload: the message buffer, the
- * `browser-coding-agent` store, and the rebuild that folds a persisted card
- * back in next to the compaction seam (#2992).
+ * only, and Pi history never holds it. Since #2365 the card's durable copy is
+ * an `error` marker on the canonical conversation record — never an entry
+ * (the model would read its own failure as a prior turn), never the frozen
+ * `browser-coding-agent` store. These tests pin that write, the retry for a
+ * record that does not exist yet, and the rebuild that folds the card back in
+ * next to the compaction seam (#2992).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,23 +31,18 @@ const sentMessages: unknown[] = [];
   },
 };
 
-const { mockSessionStore, sessions, saved } = vi.hoisted(() => {
-  const sessions = new Map<string, ChatMessage[]>();
+const { mockSessionStore, saved } = vi.hoisted(() => {
+  // The frozen legacy UI store: recorded only so the tests can prove it is
+  // never written or read.
   const saved: Array<{ sessionId: string; messages: ChatMessage[] }> = [];
   return {
-    sessions,
     saved,
     mockSessionStore: vi.fn(function (this: Record<string, unknown>) {
       this.init = vi.fn().mockResolvedValue(undefined);
       this.saveMessages = vi.fn(async (sessionId: string, messages: ChatMessage[]) => {
-        const copy = structuredClone(messages);
-        sessions.set(sessionId, copy);
-        saved.push({ sessionId, messages: copy });
+        saved.push({ sessionId, messages: structuredClone(messages) });
       });
-      this.load = vi.fn(async (sessionId: string) => {
-        const messages = sessions.get(sessionId);
-        return messages ? { id: sessionId, messages, createdAt: 0, updatedAt: 0 } : null;
-      });
+      this.load = vi.fn().mockResolvedValue(null);
       this.delete = vi.fn().mockResolvedValue(undefined);
     }),
   };
@@ -66,21 +62,47 @@ const CONE = {
   addedAt: '2026-01-04T10:00:00.000Z',
 };
 
-function makeConversationStore(markers: ConversationMarker[] = []) {
+/**
+ * In-memory canonical store: Pi history plus markers. `exists: false` models
+ * a unit whose first checkpoint has not landed — `putMarker` declines, as the
+ * real store does for an absent record.
+ */
+function makeConversationStore(getMessages: () => unknown[]) {
+  const state = { exists: true, markers: [] as ConversationMarker[] };
   return {
-    markers,
-    load: vi.fn(async () => ({ markers })),
+    state,
+    load: vi.fn(async () =>
+      state.exists
+        ? {
+            key: '/workspace::cone_1',
+            version: 1,
+            workUnitId: 'cone_1',
+            workspaceId: '/workspace',
+            folder: 'cone',
+            origin: 'agent-history',
+            entries: getMessages().map((message, seq) => ({
+              id: `e${seq}`,
+              seq,
+              kind: (message as { role: string }).role === 'assistant' ? 'assistant' : 'user',
+              timestamp: 0,
+              text: '',
+              message,
+            })),
+            markers: state.markers,
+            createdAt: 1,
+            updatedAt: 1,
+            legacyKeys: { agentSessionId: 'cone_1', chatSessionId: 'session-cone' },
+          }
+        : null
+    ),
     putMarker: vi.fn(async (_key: string, marker: ConversationMarker) => {
-      const at = markers.findIndex((m) => m.id === marker.id);
-      if (at >= 0) markers[at] = marker;
-      else markers.push(marker);
+      if (!state.exists) return false;
+      const at = state.markers.findIndex((m) => m.id === marker.id);
+      if (at >= 0) state.markers[at] = marker;
+      else state.markers.push(marker);
       return true;
     }),
-    deleteMarker: vi.fn(async (_key: string, id: string) => {
-      const at = markers.findIndex((m) => m.id === id);
-      if (at >= 0) markers.splice(at, 1);
-      return at >= 0;
-    }),
+    deleteMarker: vi.fn(async () => false),
   };
 }
 
@@ -90,19 +112,25 @@ describe('kernel error-card persistence', () => {
   let conversationStore: ReturnType<typeof makeConversationStore>;
   let agentMessages: unknown[];
 
-  const persisted = () => saved[saved.length - 1]?.messages ?? [];
+  const buffered = (b: unknown = bridge) =>
+    (b as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer('cone_1');
 
-  const rebuild = () =>
-    (
-      bridge as unknown as {
-        buildBufferFromAgentMessages: (scoop: unknown) => Promise<ChatMessage[] | null>;
-      }
-    ).buildBufferFromAgentMessages(CONE);
+  /** A fresh kernel over the same durable state — what a reload boots into. */
+  async function reload(): Promise<InstanceType<typeof Bridge>> {
+    const next = new Bridge();
+    await next.bind({
+      getScoops: () => [CONE],
+      getScoopContext: () => undefined,
+      getConversationStore: () => conversationStore,
+      getQueuedMessageIds: () => [],
+    } as never);
+    await next.hydrateBuffersFromRecords();
+    return next;
+  }
 
   beforeEach(async () => {
     sentMessages.length = 0;
     saved.length = 0;
-    sessions.clear();
     vi.clearAllMocks();
     agentMessages = [
       { role: 'user', content: [{ type: 'text', text: 'ship it' }], timestamp: 1000 },
@@ -113,106 +141,100 @@ describe('kernel error-card persistence', () => {
         model: 'claude-opus-4-6',
       },
     ];
-    conversationStore = makeConversationStore();
+    conversationStore = makeConversationStore(() => agentMessages);
 
     bridge = new Bridge();
     await bridge.bind({
       getScoops: () => [CONE],
-      getScoopContext: () => ({ getAgentMessages: () => agentMessages }),
+      getScoopContext: () => undefined,
       getConversationStore: () => conversationStore,
       getQueuedMessageIds: () => [],
     } as never);
     callbacks = Bridge.createCallbacks(bridge);
   });
 
-  it('appends an error card to the buffer and the UI store', async () => {
+  it('appends an error card to the buffer and records an error marker', async () => {
     callbacks.onError?.('cone_1', 'rate limited');
-    await vi.waitFor(() => expect(persisted().some((m) => m.error === true)).toBe(true));
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
 
-    const card = persisted().find((m) => m.error);
-    expect(card).toMatchObject({
+    expect(buffered().at(-1)).toMatchObject({
       role: 'assistant',
       content: 'rate limited',
       error: true,
     });
-    const buf = (bridge as unknown as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer(
-      'cone_1'
-    );
-    expect(buf.at(-1)).toMatchObject({ content: 'rate limited', error: true });
+    expect(conversationStore.state.markers).toEqual([
+      expect.objectContaining({ kind: 'error', text: 'rate limited', id: buffered().at(-1)?.id }),
+    ]);
+    expect(saved).toEqual([]);
   });
 
-  it('keeps error: true across persist/reseed from Pi history', async () => {
+  it('keeps error: true across a reload', async () => {
     callbacks.onError?.('cone_1', 'provider exploded');
-    await vi.waitFor(() => expect(persisted().some((m) => m.error === true)).toBe(true));
-    const cardId = persisted().find((m) => m.error)?.id;
-    expect(cardId).toBeTruthy();
+    await vi.waitFor(() => expect(conversationStore.state.markers).toHaveLength(1));
+    const cardId = buffered().at(-1)?.id;
 
-    // Full reload: buffers start empty, seed rebuilds from Pi (no error row)
-    // and would overwrite the UI store without the fold.
-    (bridge as unknown as { messageBuffers: Map<string, unknown> }).messageBuffers.clear();
-    await bridge.seedBuffersFromAgentState();
+    const reloaded = await reload();
 
-    const buf = (bridge as unknown as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer(
-      'cone_1'
-    );
-    const card = buf.find((m) => m.error === true);
-    expect(card).toMatchObject({
+    expect(buffered(reloaded).find((m) => m.error === true)).toMatchObject({
       id: cardId,
       role: 'assistant',
       content: 'provider exploded',
       error: true,
     });
-    expect(persisted().find((m) => m.id === cardId)?.error).toBe(true);
   });
 
-  it('keeps the compaction seam when an error card is folded back in', async () => {
-    conversationStore.markers.push({
+  it('keeps the compaction seam next to a restored error card', async () => {
+    conversationStore.state.markers.push({
       id: 'compaction-cone_1-stored',
       kind: 'compaction',
       timestamp: 1500,
       compaction: { trigger: 'threshold', state: 'summarized' },
     });
     callbacks.onError?.('cone_1', 'rate limited');
-    await vi.waitFor(() => expect(persisted().some((m) => m.error === true)).toBe(true));
+    await vi.waitFor(() => expect(conversationStore.state.markers).toHaveLength(2));
 
-    (bridge as unknown as { messageBuffers: Map<string, unknown> }).messageBuffers.clear();
-    const rebuilt = (await rebuild()) as ChatMessage[];
+    const rows = buffered(await reload());
 
-    expect(rebuilt.map((m) => (m.compaction ? 'seam' : m.error ? 'error' : m.role))).toEqual([
+    expect(rows.map((m) => (m.compaction ? 'seam' : m.error ? 'error' : m.role))).toEqual([
       'user',
       'seam',
       'assistant',
       'error',
     ]);
-    expect(rebuilt.find((m) => m.error)?.error).toBe(true);
-    expect(rebuilt.find((m) => m.compaction)?.compaction).toMatchObject({ state: 'summarized' });
+    expect(rows.find((m) => m.compaction)?.compaction).toMatchObject({ state: 'summarized' });
   });
 
-  it('places a persisted error card on the timestamp seam', async () => {
-    sessions.set('session-cone', [
-      {
-        id: 'err-mid',
-        role: 'assistant',
-        content: 'boom',
-        timestamp: 1500,
-        error: true,
-      },
-    ]);
+  it('places a stored error card on its timestamp seam, exactly once', async () => {
+    conversationStore.state.markers.push({
+      id: 'err-mid',
+      kind: 'error',
+      timestamp: 1500,
+      text: 'boom',
+    });
 
-    const rebuilt = (await rebuild()) as ChatMessage[];
-    expect(rebuilt.map((m) => (m.error ? 'error' : m.role))).toEqual([
-      'user',
-      'error',
-      'assistant',
-    ]);
+    const rows = buffered(await reload());
+
+    expect(rows.map((m) => (m.error ? 'error' : m.role))).toEqual(['user', 'error', 'assistant']);
+    expect(rows.find((m) => m.error)).toMatchObject({ id: 'err-mid', content: 'boom' });
   });
 
-  it('folds a persisted error card in once', async () => {
-    callbacks.onError?.('cone_1', 'rate limited');
-    await vi.waitFor(() => expect(persisted().some((m) => m.error === true)).toBe(true));
+  it('holds the card until the turn creates the record, then writes it', async () => {
+    // A unit whose very first turn fails before its checkpoint has landed:
+    // the marker has nothing to annotate yet.
+    conversationStore.state.exists = false;
+    callbacks.onError?.('cone_1', 'bad api key');
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
+    expect(conversationStore.state.markers).toEqual([]);
 
-    const rebuilt = (await rebuild()) as ChatMessage[];
-    expect(rebuilt.filter((m) => m.error === true)).toHaveLength(1);
+    conversationStore.state.exists = true;
+    // A failed turn settles to `ready` without necessarily reaching
+    // `onResponseDone`; either is enough to retry.
+    callbacks.onStatusChange?.('cone_1', 'ready');
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(2));
+
+    expect(conversationStore.state.markers).toEqual([
+      expect.objectContaining({ kind: 'error', text: 'bad api key' }),
+    ]);
   });
 
   it('keeps error: true through a follower snapshot projection', () => {
@@ -228,10 +250,7 @@ describe('kernel error-card persistence', () => {
       },
     ]);
 
-    const buf = (bridge as unknown as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer(
-      'cone_1'
-    );
-    expect(buf.find((m) => m.id === 'err-snap')).toMatchObject({
+    expect(buffered().find((m) => m.id === 'err-snap')).toMatchObject({
       role: 'assistant',
       content: 'rate limited',
       error: true,
@@ -241,5 +260,6 @@ describe('kernel error-card persistence', () => {
       (m) => (m as { payload?: { type?: string } }).payload?.type === 'scoop-messages-replaced'
     ) as { payload: { messages: ChatMessage[] } } | undefined;
     expect(replaced?.payload.messages.find((m) => m.id === 'err-snap')?.error).toBe(true);
+    expect(saved).toEqual([]);
   });
 });

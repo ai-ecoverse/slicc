@@ -86,6 +86,34 @@ function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promis
   (ctx as any).status = 'ready';
 }
 
+/** Spy standing in for the canonical `WorkUnitConversationStore` (#2365). */
+function canonicalSpy() {
+  return {
+    load: vi.fn().mockResolvedValue(null),
+    syncAgentMessages: vi.fn().mockResolvedValue(null),
+    delete: vi.fn().mockResolvedValue(undefined),
+  };
+}
+type CanonicalSpy = ReturnType<typeof canonicalSpy>;
+
+function contextWithCanonical(
+  callbacks: ScoopContextCallbacks,
+  conversationStore: CanonicalSpy,
+  legacyStore?: unknown
+): ScoopContext {
+  return new ScoopContext(
+    testScoop,
+    callbacks,
+    {} as any,
+    legacyStore as any,
+    undefined,
+    'cone_1',
+    undefined,
+    undefined,
+    conversationStore as any
+  );
+}
+
 describe('ScoopContext session persistence', () => {
   let ctx: ScoopContext;
   let callbacks: ScoopContextCallbacks;
@@ -94,40 +122,51 @@ describe('ScoopContext session persistence', () => {
     callbacks = createMockCallbacks();
   });
 
-  it('accepts a sessionStore parameter', () => {
-    const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
-    expect((ctx as any).sessions.store).toBe(mockStore);
-    // Internal persistence key is the scoop's JID — stable across days so
-    // `SessionStore.load` can restore saved conversations.
+  it('keys the canonical record by workspace and jid, the legacy row by jid', () => {
+    const conversationStore = canonicalSpy();
+    ctx = contextWithCanonical(callbacks, conversationStore);
+    expect((ctx as any).sessions.deps.canonical.identity.key).toBe(
+      `/scoops/${testScoop.folder}/workspace::${testScoop.jid}`
+    );
+    // The frozen `agent-sessions` key a clear still deletes (#2365).
     expect((ctx as any).sessions.sessionId).toBe(testScoop.jid);
   });
 
-  it('works without sessionStore (backwards compatible)', () => {
-    ctx = new ScoopContext(testScoop, callbacks, {} as any);
-    expect((ctx as any).sessions.store).toBeNull();
+  it('persists nothing without a canonical store', () => {
+    const legacy = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, legacy, undefined, 'cone_1');
+    injectMockAgent(ctx, async () => {});
+
+    (ctx as any).handleAgentEvent({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }],
+    });
+
+    expect((ctx as any).sessions.deps.canonical).toBeNull();
+    expect(legacy.save).not.toHaveBeenCalled();
   });
 
-  it('saves session on agent_end with messages', () => {
-    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
+  it('saves the canonical record on agent_end, and never the legacy store', () => {
+    const conversationStore = canonicalSpy();
+    const legacy = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
+    ctx = contextWithCanonical(callbacks, conversationStore, legacy);
     injectMockAgent(ctx, async () => {});
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
     handler({ type: 'agent_end', messages });
 
-    expect(mockStore.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: testScoop.jid,
-        messages,
-      })
+    expect(conversationStore.syncAgentMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ workUnitId: testScoop.jid }),
+      messages,
+      expect.objectContaining({ createdAt: expect.any(Number) })
     );
+    expect(legacy.save).not.toHaveBeenCalled();
   });
 
   it('persists full agent state, not just current turn event.messages', () => {
-    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    const conversationStore = canonicalSpy();
+    ctx = contextWithCanonical(callbacks, conversationStore);
 
     // Set up a mock agent whose state.messages has the full accumulated history
     const fullHistory = [
@@ -155,15 +194,15 @@ describe('ScoopContext session persistence', () => {
     handler({ type: 'agent_end', messages: currentTurnOnly });
 
     // Should save the full history from agent.state.messages, not the 2-message event
-    const savedSession = mockStore.save.mock.calls[0][0];
-    expect(savedSession.messages).toBe(fullHistory);
-    expect(savedSession.messages).toHaveLength(4);
+    const saved = conversationStore.syncAgentMessages.mock.calls[0][1];
+    expect(saved).toBe(fullHistory);
+    expect(saved).toHaveLength(4);
   });
 
   it('preserves original createdAt across saves', () => {
     const originalCreatedAt = 1000000;
-    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    const conversationStore = canonicalSpy();
+    ctx = contextWithCanonical(callbacks, conversationStore);
     injectMockAgent(ctx, async () => {});
 
     // Simulate having restored a session with a known createdAt
@@ -175,14 +214,14 @@ describe('ScoopContext session persistence', () => {
       messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }],
     });
 
-    const savedSession = mockStore.save.mock.calls[0][0];
-    expect(savedSession.createdAt).toBe(originalCreatedAt);
-    expect(savedSession.updatedAt).toBeGreaterThan(originalCreatedAt);
+    expect(conversationStore.syncAgentMessages.mock.calls[0][2]).toEqual({
+      createdAt: originalCreatedAt,
+    });
   });
 
   it('uses current time for createdAt on first save (no prior session)', () => {
-    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    const conversationStore = canonicalSpy();
+    ctx = contextWithCanonical(callbacks, conversationStore);
     injectMockAgent(ctx, async () => {});
 
     const before = Date.now();
@@ -193,9 +232,9 @@ describe('ScoopContext session persistence', () => {
     });
     const after = Date.now();
 
-    const savedSession = mockStore.save.mock.calls[0][0];
-    expect(savedSession.createdAt).toBeGreaterThanOrEqual(before);
-    expect(savedSession.createdAt).toBeLessThanOrEqual(after);
+    const { createdAt } = conversationStore.syncAgentMessages.mock.calls[0][2];
+    expect(createdAt).toBeGreaterThanOrEqual(before);
+    expect(createdAt).toBeLessThanOrEqual(after);
   });
 
   it('does not save session on agent_end with empty messages', () => {
@@ -2084,13 +2123,13 @@ describe('ScoopContext stale-asset error handling', () => {
 describe('ScoopContext mid-turn checkpointing (#1987)', () => {
   let ctx: ScoopContext;
   let callbacks: ScoopContextCallbacks;
-  let mockStore: { load: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
+  let mockStore: CanonicalSpy;
 
   beforeEach(() => {
     vi.useFakeTimers();
     callbacks = createMockCallbacks();
-    mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) };
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore as any, undefined, 'cone_1');
+    mockStore = canonicalSpy();
+    ctx = contextWithCanonical(callbacks, mockStore);
     injectMockAgent(ctx, async () => {});
     (ctx as any).agent.state.messages = [
       { role: 'user', content: 'hello', timestamp: 1 },
@@ -2109,10 +2148,10 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
       message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
     });
     // Debounced — nothing yet.
-    expect(mockStore.save).not.toHaveBeenCalled();
+    expect(mockStore.syncAgentMessages).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1_000);
-    expect(mockStore.save).toHaveBeenCalledTimes(1);
-    expect(mockStore.save.mock.calls[0][0].messages).toHaveLength(2);
+    expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
+    expect(mockStore.syncAgentMessages.mock.calls[0][1]).toHaveLength(2);
   });
 
   it('a burst of completed messages coalesces into one write', () => {
@@ -2124,7 +2163,7 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
       });
     }
     vi.advanceTimersByTime(1_000);
-    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
   });
 
   it('an errored turn flushes immediately in cleanup, canceling the pending debounce', () => {
@@ -2133,7 +2172,7 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
     });
-    expect(mockStore.save).not.toHaveBeenCalled();
+    expect(mockStore.syncAgentMessages).not.toHaveBeenCalled();
 
     const abortController = new AbortController();
     (ctx as any).cleanupPromptState(
@@ -2143,23 +2182,23 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
       abortController.signal
     );
     // Immediate — the failure path must not wait out the debounce.
-    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
     // And the canceled debounce timer must not double-write later.
     vi.advanceTimersByTime(5_000);
-    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
   });
 
   it('an aborted turn flushes in cleanup too', () => {
     const abortController = new AbortController();
     abortController.abort();
     (ctx as any).cleanupPromptState(abortController, null, null, abortController.signal);
-    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
   });
 
   it('a clean turn end does not flush from cleanup (agent_end owns it)', () => {
     const abortController = new AbortController();
     (ctx as any).cleanupPromptState(abortController, null, null, abortController.signal);
-    expect(mockStore.save).not.toHaveBeenCalled();
+    expect(mockStore.syncAgentMessages).not.toHaveBeenCalled();
   });
 
   it('dispose flushes a pending checkpoint before tearing the agent down', () => {
@@ -2168,9 +2207,9 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
     });
-    expect(mockStore.save).not.toHaveBeenCalled();
+    expect(mockStore.syncAgentMessages).not.toHaveBeenCalled();
     ctx.dispose();
-    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
   });
 });
 

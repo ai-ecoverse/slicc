@@ -4,7 +4,8 @@
  *
  * Flow (all best-effort, never throws past the caller):
  *   1. Load `session-<folder>` for the cone being frozen (`opts.cone`,
- *      defaulting to the primary cone) from the UI SessionStore.
+ *      defaulting to the primary cone) — derived from the cone's canonical
+ *      conversation record since #2365 (`CanonicalSessionReader`).
  *   2. If the session is short (< MIN_MESSAGES_TO_FREEZE), skip everything
  *      and return null — nothing meaningful to extract or archive.
  *   3. Generate a title and icon, falling back to a heuristic title.
@@ -39,7 +40,6 @@ import {
   curatorReceiptPath,
   runAgenticMemoryPass,
 } from '../scoops/agentic-memory.js';
-import type { SessionStore } from '../scoops/chat-session-store.js';
 import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
@@ -134,8 +134,17 @@ export interface FreezerConeRef {
   jid?: string;
 }
 
+/**
+ * Where a freeze reads the cone's transcript from, keyed `session-<folder>`.
+ * Production passes a `CanonicalSessionReader`; the shape is the legacy chat
+ * store's `load`, which is all the freezer ever used.
+ */
+export interface ConeSessionSource {
+  load(sessionId: string): Promise<Session | null>;
+}
+
 export interface FreezeConeSessionOptions {
-  sessionStore: SessionStore;
+  sessionStore: ConeSessionSource;
   /**
    * Writable VFS handle. Under `slicc_opfs_vfs === 'opfs'` AND on the
    * OPFS-leader tab, callers pass a `RemoteWritableVfsClient` so
@@ -681,7 +690,10 @@ function coneMemoryPathFor(folder: string): string {
   return workspaceFor({ parentJid: null, folder }).memoryPath;
 }
 
-async function loadSessionSafely(store: SessionStore, folder: string): Promise<Session | null> {
+async function loadSessionSafely(
+  store: ConeSessionSource,
+  folder: string
+): Promise<Session | null> {
   const sessionId = chatSessionIdFor({ folder });
   try {
     return await store.load(sessionId);

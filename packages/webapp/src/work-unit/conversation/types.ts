@@ -131,7 +131,7 @@ export interface ToolResultConversationEntry extends MessageEntryBase {
  * anchor to. Recorded when the round SETTLES, so the marker sorts after the
  * summary message compaction just wrote and lands exactly on the seam.
  */
-export interface ConversationMarker {
+export interface CompactionConversationMarker {
   /** Stable across the round's phases: the opening phase mints it. */
   id: string;
   kind: 'compaction';
@@ -139,6 +139,23 @@ export interface ConversationMarker {
   timestamp: number;
   compaction: ChatCompactionMarker;
 }
+
+/**
+ * A cone-error card (#3003). Something the conversation SHOWED, never
+ * something the model said: it must not become an entry (Pi would read its
+ * own failure as a prior turn), and an entry replace must not erase it. That
+ * is exactly a marker's contract, so since #2365 — when the chat store stopped
+ * being written — this is the card's only durable copy.
+ */
+export interface ErrorConversationMarker {
+  id: string;
+  kind: 'error';
+  timestamp: number;
+  /** The card's text, verbatim. */
+  text: string;
+}
+
+export type ConversationMarker = CompactionConversationMarker | ErrorConversationMarker;
 
 export type ConversationEntry =
   | UserConversationEntry
@@ -162,7 +179,7 @@ export type ConversationEntry =
  */
 export type ConversationOrigin = 'agent-history' | 'ui-projection';
 
-/** The legacy keys a record supersedes — kept so a rollback can find them. */
+/** The legacy keys a record superseded — kept for correlation with the frozen legacy stores. */
 export interface LegacyConversationKeys {
   /** `agent-sessions` key: the unit's jid. */
   agentSessionId: string;
@@ -190,6 +207,15 @@ export interface WorkUnitConversationRecord {
    * then exactly what it was.
    */
   markers?: ConversationMarker[];
+  /**
+   * The rendered transcript of a `ui-projection` record that has since been
+   * continued by a live agent (#2365). The first Pi sync after such a
+   * migration replaces `entries` with real Pi history; the rows it replaced
+   * were the only copy of the earlier conversation once `browser-coding-agent`
+   * stopped being written, so they are kept here and rendered ahead of the
+   * derived history. Never shown to Pi.
+   */
+  projectionPrefix?: ChatMessage[];
   createdAt: number;
   updatedAt: number;
   /** Which legacy store the record was first built from, if migrated. */

@@ -9,10 +9,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import type { AgentMessage } from '../../../src/core/index.js';
+import { entriesFromChatMessages } from '../../../src/work-unit/conversation/entries.js';
 import type { ConversationIdentity } from '../../../src/work-unit/conversation/store.js';
 import { WorkUnitConversationStore } from '../../../src/work-unit/conversation/store.js';
-import type { ConversationMarker } from '../../../src/work-unit/conversation/types.js';
-import { legacyAgentMessages } from './fixtures.js';
+import type { CompactionConversationMarker } from '../../../src/work-unit/conversation/types.js';
+import { CONVERSATION_RECORD_VERSION } from '../../../src/work-unit/conversation/types.js';
+import { legacyAgentMessages, legacyChatMessages } from './fixtures.js';
 
 let dbCounter = 0;
 
@@ -234,7 +236,9 @@ describe('WorkUnitConversationStore', () => {
   });
 
   describe('markers', () => {
-    const marker = (over: Partial<ConversationMarker> = {}): ConversationMarker => ({
+    const marker = (
+      over: Partial<CompactionConversationMarker> = {}
+    ): CompactionConversationMarker => ({
       id: 'compaction-cone_1-abc',
       kind: 'compaction',
       timestamp: 5000,
@@ -251,7 +255,9 @@ describe('WorkUnitConversationStore', () => {
           marker({ compaction: { trigger: 'idle', state: 'summarized' } })
         )
       ).toBe(true);
-      const markers = (await store.load(identity.key))?.markers;
+      const markers = (await store.load(identity.key))?.markers as
+        | CompactionConversationMarker[]
+        | undefined;
       expect(markers).toHaveLength(1);
       expect(markers?.[0].compaction.state).toBe('summarized');
     });
@@ -363,5 +369,104 @@ describe('WorkUnitConversationStore', () => {
       workspaceId: '/cones/missing/workspace',
     });
     expect(await store.listKeys()).toEqual([]);
+  });
+});
+
+describe('WorkUnitConversationStore after the #2365 cut', () => {
+  let store: WorkUnitConversationStore;
+
+  beforeEach(() => {
+    store = newStore();
+  });
+
+  async function saveUiProjection(): Promise<void> {
+    await store.save({
+      ...identity,
+      version: CONVERSATION_RECORD_VERSION,
+      origin: 'ui-projection',
+      entries: entriesFromChatMessages(legacyChatMessages()),
+      createdAt: 7,
+      updatedAt: 7,
+      migratedFrom: 'browser-coding-agent',
+    });
+  }
+
+  it('keeps a ui-projection transcript as the prefix when a live agent continues it', async () => {
+    // The chat store is no longer written, so the migrated rows are the only
+    // copy of that conversation: the first Pi sync must not replace them away.
+    await saveUiProjection();
+
+    const record = await store.syncAgentMessages(identity, legacyAgentMessages());
+
+    expect(record?.origin).toBe('agent-history');
+    expect(record?.projectionPrefix).toEqual(legacyChatMessages());
+    expect(record?.entries.every((e) => e.kind === 'tool-call' || e.message)).toBe(true);
+    expect(record?.rewrites).toBeUndefined();
+    expect(record?.createdAt).toBe(7);
+  });
+
+  it('carries the prefix through later appends and rewrites', async () => {
+    await saveUiProjection();
+    const messages = legacyAgentMessages();
+    await store.syncAgentMessages(identity, messages.slice(0, 2));
+    await store.syncAgentMessages(identity, messages);
+    const compacted = await store.syncAgentMessages(identity, messages.slice(2));
+
+    expect(compacted?.rewrites).toBe(1);
+    expect(compacted?.projectionPrefix).toEqual(legacyChatMessages());
+  });
+
+  it('leaves a ui-projection record alone when there is no Pi history to add', async () => {
+    await saveUiProjection();
+    expect((await store.syncAgentMessages(identity, []))?.origin).toBe('ui-projection');
+  });
+
+  it('lists every readable record', async () => {
+    await store.syncAgentMessages(identity, legacyAgentMessages());
+    await store.save({
+      ...identity,
+      key: '/workspace::cone_future',
+      workUnitId: 'cone_future',
+      version: CONVERSATION_RECORD_VERSION + 1,
+      origin: 'agent-history',
+      entries: [],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    expect((await store.loadAll()).map((r) => r.workUnitId)).toEqual(['cone_1']);
+  });
+
+  it('finds the newest record in a workspace, and only that workspace', async () => {
+    const other = {
+      ...identity,
+      key: '/cones/cone-two/workspace::cone_2',
+      workUnitId: 'cone_2',
+      workspaceId: '/cones/cone-two/workspace',
+      folder: 'cone-two',
+    };
+    await store.syncAgentMessages(identity, legacyAgentMessages(), { now: 1 });
+    await store.syncAgentMessages(
+      { ...identity, key: '/workspace::cone_new', workUnitId: 'cone_new' },
+      legacyAgentMessages().slice(0, 1),
+      { now: 2 }
+    );
+    await store.syncAgentMessages(other, legacyAgentMessages(), { now: 3 });
+
+    expect((await store.loadLatestInWorkspace('/workspace'))?.workUnitId).toBe('cone_new');
+    expect((await store.loadLatestInWorkspace('/cones/cone-two/workspace'))?.workUnitId).toBe(
+      'cone_2'
+    );
+    // A prefix of another workspace's root is not that workspace.
+    expect(await store.loadLatestInWorkspace('/cones/cone')).toBeNull();
+  });
+
+  it('answers empty rather than throwing when the database will not open', async () => {
+    const broken = newStore();
+    vi.spyOn(broken as unknown as { getDb: () => Promise<never> }, 'getDb').mockRejectedValue(
+      new Error('IndexedDB unavailable')
+    );
+    expect(await broken.loadAll()).toEqual([]);
+    expect(await broken.loadLatestInWorkspace('/workspace')).toBeNull();
   });
 });

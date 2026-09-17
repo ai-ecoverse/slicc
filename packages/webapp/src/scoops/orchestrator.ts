@@ -42,6 +42,7 @@ import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { migrateConversations } from '../work-unit/conversation/migration.js';
+import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
 import {
   type ConversationIdentity,
   WorkUnitConversationStore,
@@ -682,7 +683,8 @@ export class Orchestrator implements ConeApprovalRouter {
    * Run (or resume) the migration of the legacy conversation stores into the
    * canonical work-unit store (#2275). Reads `agent-sessions` through the
    * live `SessionStore` and `browser-coding-agent` through a lazily created
-   * UI store — the same two stores every reader falls back to.
+   * UI store. Since #2365 this pass is the ONLY reader of either: both are
+   * frozen at the cut and nothing writes them.
    */
   private async migrateConversations(onBootProgress?: (stage: string) => void): Promise<void> {
     const store = this.conversationStore;
@@ -703,9 +705,10 @@ export class Orchestrator implements ConeApprovalRouter {
         onProgress: onBootProgress,
       });
     } catch (err) {
-      // A migration that cannot run at all must not stop the boot: the legacy
-      // stores are untouched and every read falls back to them.
-      log.warn('Canonical conversation migration failed; staying on the legacy stores', {
+      // A migration that cannot run at all must not stop the boot. The legacy
+      // stores are untouched and the cursor is not `done`, so the next boot
+      // runs the pass again.
+      log.warn('Canonical conversation migration failed; it will retry on the next boot', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -1627,27 +1630,24 @@ export class Orchestrator implements ConeApprovalRouter {
   /**
    * Build a `DefaultTranscriptExportService` wired to the orchestrator's live
    * state. Called once at the end of `init()` so `sharedFs` and
-   * `sessionStore` are already initialised.
+   * `conversationStore` are already initialised.
    *
-   * Uses a lazy `UiSessionStore` for `loadUiChatSessions` — the
-   * `browser-coding-agent` IDB is accessible from dedicated workers (same
-   * origin as the page). The VirtualFS is cast to both read and write
-   * client interfaces it already structurally satisfies.
+   * Both persisted views are DERIVED from the canonical conversation records
+   * (#2365); the legacy stores are not read. The VirtualFS is cast to both
+   * read and write client interfaces it already structurally satisfies.
    */
   private buildWorkerExportService(): DefaultTranscriptExportService {
-    const uiSessionStore = new UiSessionStore();
+    const sessions = this.conversationStore
+      ? new CanonicalSessionReader(this.conversationStore)
+      : null;
     const fs = this.sharedFs!;
     return new DefaultTranscriptExportService({
       collection: {
         listScoops: () => this.getScoops(),
         isProcessing: (jid) => this.isProcessing(jid),
         getAgentMessages: (jid) => this.getScoopContext(jid)?.getAgentMessages() ?? null,
-        loadPersistedSessions: () => this.sessionStore?.loadAll() ?? Promise.resolve([]),
-        loadUiChatSessions: async () => {
-          const ids = await uiSessionStore.list();
-          const sessions = await Promise.all(ids.map((id) => uiSessionStore.load(id)));
-          return sessions.filter((s): s is NonNullable<typeof s> => s !== null);
-        },
+        loadPersistedSessions: async () => (await sessions?.loadAgentSessions()) ?? [],
+        loadUiChatSessions: async () => (await sessions?.loadChatSessions()) ?? [],
         wait: (ms) => new Promise((res) => setTimeout(res, ms)),
       },
       knownSecrets: getStrictKnownSecretRedactor(),

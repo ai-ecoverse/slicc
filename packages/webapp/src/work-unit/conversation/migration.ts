@@ -5,14 +5,12 @@
  * The rules this pass is built around, in order of importance:
  *
  * 1. **Nothing is ever deleted.** The legacy stores are left byte-for-byte
- *    as they were. This is a read-old/write-new window, not a cutover: for
- *    as long as it is open, every turn still writes `agent-sessions` and
- *    `browser-coding-agent`, so clearing the canonical database is a
- *    complete rollback (`WorkUnitConversationStore.clearAll`).
+ *    as they were. Since #2365 nothing writes them either, so this pass is
+ *    their only reader and imports a conversation as it stood at the cut.
  * 2. **One unit cannot break the boot.** Every unit is migrated inside its
  *    own try/catch; a legacy record that will not read is recorded in
  *    `skipped` with its reason and left in place for a later build to
- *    repair. The unit simply keeps reading the legacy stores.
+ *    repair.
  * 3. **It resumes.** The cursor is persisted after every unit, so a boot
  *    that dies mid-pass — a poisoned record, a killed tab, the #2006
  *    ready-timeout — continues where it stopped instead of starting over.
@@ -37,6 +35,14 @@ import type { WorkUnitConversationRecord } from './types.js';
 import { CONVERSATION_RECORD_VERSION } from './types.js';
 
 const log = createLogger('work-unit-conversation');
+
+/**
+ * The canonical store could not say whether a record exists. Unlike a
+ * poisoned LEGACY record this is usually transient, and since #2365 nothing
+ * else would ever import the unit's pre-cut history — so the unit is retried
+ * on the next boot instead of being passed over.
+ */
+class CanonicalUnreadableError extends Error {}
 
 /** Cursor id. One pass, versioned by the record schema. */
 export const CONVERSATION_MIGRATION_ID = 'conversations';
@@ -97,6 +103,7 @@ export async function migrateConversations(
   }
 
   const completed = new Set(state.completedKeys);
+  let retryNextBoot = false;
   for (const raw of deps.units) {
     // A record saved before the ownership edge (#1666) carries no
     // `parentJid` at all, and `isRootUnit` is deliberately a strict
@@ -118,15 +125,22 @@ export async function migrateConversations(
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       summary.skipped++;
-      state.skipped.push({ key, reason });
-      log.warn('Skipping a unit whose legacy conversation could not be read', {
+      state.skipped = [...state.skipped.filter((s) => s.key !== key), { key, reason }];
+      log.warn('Skipping a unit whose conversation could not be migrated', {
         key,
         folder: unit.folder,
         error: reason,
       });
+      if (err instanceof CanonicalUnreadableError) {
+        retryNextBoot = true;
+        state.updatedAt = now();
+        await deps.store.putMigrationState(state);
+        deps.onProgress?.(`conversation-migrated:${unit.jid}`);
+        continue;
+      }
     }
-    // The cursor advances for a skipped unit too: retrying an unreadable
-    // record on every boot would re-spend the boot budget that made it
+    // The cursor advances for a unit whose LEGACY data is unreadable:
+    // retrying it on every boot would re-spend the boot budget that made it
     // unreadable. A schema bump re-runs the whole pass, which is the
     // sanctioned retry.
     completed.add(key);
@@ -136,7 +150,7 @@ export async function migrateConversations(
     deps.onProgress?.(`conversation-migrated:${unit.jid}`);
   }
 
-  state.done = true;
+  state.done = !retryNextBoot;
   state.updatedAt = now();
   await deps.store.putMigrationState(state);
   log.info('Canonical conversation migration complete', { ...summary });
@@ -154,7 +168,7 @@ async function migrateUnit(
   if (current.status === 'incompatible') {
     // A rollback: this profile has already been through a NEWER build, whose
     // record may hold history in a representation we cannot express. Leave it
-    // alone and let this build read the (still untouched) legacy stores.
+    // alone — this build shows nothing for the unit rather than overwrite it.
     log.info('Leaving a newer-schema conversation record untouched', {
       key,
       version: current.version,
@@ -163,8 +177,8 @@ async function migrateUnit(
   }
   if (current.status === 'error') {
     // The canonical read failed, so we cannot know whether a good record is
-    // sitting there. Refuse to write; it is recorded as skipped.
-    throw new Error(`canonical record unreadable: ${current.reason}`);
+    // sitting there. Refuse to write; it is recorded as skipped and retried.
+    throw new CanonicalUnreadableError(`canonical record unreadable: ${current.reason}`);
   }
   // `absent` or `malformed` — both are safe to write: the legacy stores are
   // the source of truth here, and a broken record is a repair, not a loss.
@@ -180,8 +194,8 @@ async function migrateUnit(
   const agentSession = await deps.loadAgentSession(unit.jid);
   if (agentSession && !Array.isArray(agentSession.messages)) {
     // A half-written / truncated legacy record. Refusing it here means the
-    // unit is recorded as skipped and keeps reading the legacy store, where
-    // a later build can still repair it — the #2006 rule: never wipe.
+    // unit is recorded as skipped and the record is left in place, where a
+    // later build can still repair it — the #2006 rule: never wipe.
     throw new Error('agent-sessions record has no message list');
   }
   if (agentSession && agentSession.messages.length > 0) {
@@ -217,8 +231,8 @@ async function migrateUnit(
   }
 
   // A unit with no conversation anywhere (a scoop registered but never fed).
-  // No empty record is written: absence is what makes the legacy fallback
-  // fire, and a placeholder would claim a conversation exists.
+  // No empty record is written: a placeholder would claim a conversation
+  // exists, and the unit's first turn creates the real one.
   return 'empty';
 }
 

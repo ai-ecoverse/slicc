@@ -9,11 +9,14 @@
  * | `conversations` | `key`     | one {@link WorkUnitConversationRecord}   |
  * | `migrations`    | `id`      | one {@link ConversationMigrationState}   |
  *
+ * This is the ONLY place a conversation is written (#2365). The legacy
+ * stores (`agent-sessions`, `browser-coding-agent`) are left on disk, frozen
+ * at the cut, and read by nothing but the one-time migration.
+ *
  * **Reads never throw.** A record this build cannot parse, a database that
  * will not open, a browser with IndexedDB disabled — every one of them
- * answers `null` from {@link WorkUnitConversationStore.load}, and `null`
- * means "fall back to the legacy stores". That is the kill switch: user
- * history is never gated on this database working.
+ * answers `null` from {@link WorkUnitConversationStore.load}, which readers
+ * treat as "no conversation".
  *
  * Writers do NOT use that lossy read. {@link ConversationReadResult}
  * distinguishes the four ways a read can decline, because two of them must
@@ -45,6 +48,7 @@
 
 import type { AgentMessage } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
+import type { ChatMessage } from '../../scoops/chat-types.js';
 import { entriesFromAgentMessages } from './entries.js';
 import type {
   ConversationEntry,
@@ -129,7 +133,7 @@ export class WorkUnitConversationStore {
   /**
    * Read one record, or `null` when there is none, when it is unreadable, or
    * when the database itself is unavailable. Callers treat all three the
-   * same: fall back to the legacy stores.
+   * same: no conversation to show.
    */
   async load(key: string): Promise<WorkUnitConversationRecord | null> {
     const result = await this.read(key);
@@ -150,7 +154,7 @@ export class WorkUnitConversationStore {
       if (!record) return { status: 'absent' };
       if (!isReadableRecord(record)) {
         // A record from a NEWER build. Leave it exactly where it is — the
-        // other build still needs it — and let this one use the legacy path.
+        // other build still needs it — and never write over it here.
         log.warn('Ignoring conversation record from a newer schema', {
           key,
           version: record.version,
@@ -244,6 +248,52 @@ export class WorkUnitConversationStore {
     }
   }
 
+  /**
+   * Every readable record, for whole-workspace readers (transcript export).
+   * An unreadable database answers an empty list, like every other read.
+   */
+  async loadAll(): Promise<WorkUnitConversationRecord[]> {
+    try {
+      const db = await this.getDb();
+      const records = await request<WorkUnitConversationRecord[]>(
+        db.transaction(CONVERSATIONS_STORE, 'readonly').objectStore(CONVERSATIONS_STORE).getAll()
+      );
+      return records.filter((r) => isReadableRecord(r) && Array.isArray(r.entries));
+    } catch (err) {
+      log.warn('Conversation record listing failed', { error: errorText(err) });
+      return [];
+    }
+  }
+
+  /**
+   * The newest readable record stored under `workspaceId` — how a page-side
+   * reader that only knows a folder (the Freezer, the pre-replay hydration)
+   * finds a unit's conversation without the registry. A folder names exactly
+   * one live unit, so several matches only happen when a dropped unit's
+   * record outlived it; the most recently written one is the live one.
+   */
+  async loadLatestInWorkspace(workspaceId: string): Promise<WorkUnitConversationRecord | null> {
+    try {
+      const prefix = `${workspaceId}::`;
+      const db = await this.getDb();
+      const records = await request<WorkUnitConversationRecord[]>(
+        db
+          .transaction(CONVERSATIONS_STORE, 'readonly')
+          .objectStore(CONVERSATIONS_STORE)
+          .getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`))
+      );
+      let latest: WorkUnitConversationRecord | null = null;
+      for (const record of records) {
+        if (!isReadableRecord(record) || !Array.isArray(record.entries)) continue;
+        if (!latest || record.updatedAt > latest.updatedAt) latest = record;
+      }
+      return latest;
+    } catch (err) {
+      log.warn('Conversation workspace lookup failed', { workspaceId, error: errorText(err) });
+      return null;
+    }
+  }
+
   /** Every canonical key currently stored. */
   async listKeys(): Promise<string[]> {
     try {
@@ -264,9 +314,10 @@ export class WorkUnitConversationStore {
   /**
    * Bring a unit's record in line with Pi's current message list.
    *
-   * Returns the stored record, or `null` when the write could not happen —
-   * a failed canonical write is never fatal, because the legacy store is
-   * still being written on the same turn (the read-old/write-new window).
+   * Returns the stored record, or `null` when the write could not happen.
+   * A failed write is logged, never thrown: the turn goes on, and the next
+   * checkpoint re-ingests the full message list, so a transient failure
+   * costs nothing once the database answers again.
    */
   async syncAgentMessages(
     identity: ConversationIdentity,
@@ -289,7 +340,7 @@ export class WorkUnitConversationStore {
       if (current.status === 'incompatible' || current.status === 'error') {
         // Never write over a newer build's record, and never write over one
         // we merely failed to read — either could destroy history that only
-        // exists there. The legacy store is still written on this same turn.
+        // exists there.
         return null;
       }
       const existing = current.status === 'ok' ? current.record : null;
@@ -428,10 +479,10 @@ export class WorkUnitConversationStore {
   }
 
   /**
-   * Drop every canonical record and cursor. This is the documented ROLLBACK:
-   * the legacy stores are written on every turn for as long as the
-   * read-old/write-new window is open, so a cleared canonical store costs
-   * nothing but the next migration pass. It never touches a legacy store.
+   * Drop every canonical record and cursor. Since #2365 this is NOT a
+   * rollback: the legacy stores stopped being written at the cut, so the
+   * migration pass this re-arms can only bring back history up to that
+   * point. It never touches a legacy store.
    */
   async clearAll(): Promise<void> {
     const db = await this.getDb();
@@ -469,6 +520,9 @@ export class WorkUnitConversationStore {
  *
  * - identical → `null` (nothing to write; the common case mid-turn)
  * - the stored entries are a prefix of the new ones → append the tail
+ * - a `ui-projection` record meeting real Pi history → keep its rendered rows
+ *   as `projectionPrefix` and start the Pi history (not a rewrite: nothing
+ *   the agent said is being replaced)
  * - anything else → replace, and count a rewrite (compaction / clear-chat)
  */
 function mergeEntries(
@@ -493,6 +547,18 @@ function mergeEntries(
       legacyKeys: identity.legacyKeys,
     };
   }
+  if (existing.origin === 'ui-projection' && origin === 'agent-history') {
+    if (next.length === 0) return null;
+    return {
+      ...existing,
+      version: CONVERSATION_RECORD_VERSION,
+      origin,
+      entries: next,
+      projectionPrefix: [...(existing.projectionPrefix ?? []), ...projectedChat(existing)],
+      updatedAt: times.now,
+      legacyKeys: identity.legacyKeys,
+    };
+  }
   const prior = existing.entries;
   if (next.length === prior.length && isPrefix(prior, next)) return null;
   const appended = next.length > prior.length && isPrefix(prior, next);
@@ -505,6 +571,15 @@ function mergeEntries(
     rewrites: appended ? existing.rewrites : (existing.rewrites ?? 0) + 1,
     legacyKeys: identity.legacyKeys,
   };
+}
+
+/** The verbatim chat rows a `ui-projection` record was built from. */
+function projectedChat(record: WorkUnitConversationRecord): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const entry of record.entries) {
+    if (entry.kind !== 'tool-call' && entry.chat) out.push(entry.chat);
+  }
+  return out;
 }
 
 /** `true` when `prior` is an entry-for-entry prefix of `next`. */

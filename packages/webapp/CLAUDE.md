@@ -53,10 +53,10 @@ Invariants a reviewer must catch; mechanism in the linked docs.
 - **Cone and scoop are roles over one `WorkUnit`** — see `docs/work-unit.md` (canonical for the
   record/marker model): `RegisteredScoop.parentJid` required, `null` is THE root test
   (`isRootUnit`), no role field. The CONVERSATION is the one canonical append-only record
-  (history/UI/transcripts DERIVE) — never break its rules (canonical-read fallback, markers ≠
-  entries, SETTLED-only persistence, error cards are assistant rows). **Users never talk to a
-  scoop**: a selected scoop is READ-ONLY (`isReadOnlyUnit`); asks go to the OWNING cone. Layout
-  from `workspaceFor` ALONE (never `/workspace`); memory per cone. Privileged-float
+  (history/UI/transcripts DERIVE; legacy stores frozen, never written) — never break its rules
+  (markers ≠ entries, SETTLED-only persistence, error cards are `error` markers). **Users never
+  talk to a scoop**: a selected scoop is READ-ONLY (`isReadOnlyUnit`); asks go to the OWNING cone.
+  Layout from `workspaceFor` ALONE (never `/workspace`); memory per cone. Privileged-float
   detection via `CapabilityBroker`, not `isExtensionRealm`, in scoops.
 - **Frozen-session recovery** (`docs/work-unit.md`) uses the **bounded** legacy enrichment call,
   never the unbounded curator. Save / Skip memory / Erase clear the SELECTED cone's chat + non-mount

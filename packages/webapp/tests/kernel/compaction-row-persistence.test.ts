@@ -3,9 +3,10 @@
  *
  * A compaction marker exists nowhere in Pi's history — it is bookkeeping
  * ABOUT that history — so the kernel is what has to write it down. These
- * tests pin the three writes that make a seam survive a reload: the message
- * buffer, the `browser-coding-agent` store, and the canonical record's
- * `markers`, plus the rebuild that folds a stored marker back in.
+ * tests pin the two writes that make a seam survive a reload: the message
+ * buffer and the canonical record's `markers` (since #2365 the frozen
+ * `browser-coding-agent` store is never written), plus the rebuild that folds
+ * a stored marker back in.
  *
  * They also pin WHEN: only a round that settled is written down, under an id
  * the wire carries, and a marker the record could not take yet is retried at
@@ -35,6 +36,8 @@ const sentMessages: unknown[] = [];
 };
 
 const { mockSessionStore, saved } = vi.hoisted(() => {
+  // The frozen legacy UI store: recorded only so the tests can prove it is
+  // never written.
   const saved: Array<{ sessionId: string; messages: ChatMessage[] }> = [];
   return {
     saved,
@@ -62,11 +65,33 @@ const CONE = {
   addedAt: '2026-01-04T10:00:00.000Z',
 };
 
-/** In-memory stand-in for the canonical store's marker surface. */
-function makeConversationStore(markers: ConversationMarker[] = []) {
+/** In-memory stand-in for the canonical store: Pi history plus markers. */
+function makeConversationStore(
+  getMessages: () => unknown[] = () => [],
+  markers: ConversationMarker[] = []
+) {
   return {
     markers,
-    load: vi.fn(async () => ({ markers })),
+    load: vi.fn(async () => ({
+      key: '/workspace::cone_1',
+      version: 1,
+      workUnitId: 'cone_1',
+      workspaceId: '/workspace',
+      folder: 'cone',
+      origin: 'agent-history',
+      entries: getMessages().map((message, seq) => ({
+        id: `e${seq}`,
+        seq,
+        kind: (message as { role: string }).role === 'assistant' ? 'assistant' : 'user',
+        timestamp: 0,
+        text: '',
+        message,
+      })),
+      markers,
+      createdAt: 1,
+      updatedAt: 1,
+      legacyKeys: { agentSessionId: 'cone_1', chatSessionId: 'session-cone' },
+    })),
     putMarker: vi.fn(async (_key: string, marker: ConversationMarker) => {
       const at = markers.findIndex((m) => m.id === marker.id);
       if (at >= 0) markers[at] = marker;
@@ -97,8 +122,9 @@ describe('kernel compaction-row persistence', () => {
       } as CompactionStateDetail
     );
 
-  /** The rows the UI store was last written with. */
-  const persisted = () => saved[saved.length - 1]?.messages ?? [];
+  /** The rows the panel replays from. */
+  const buffered = (b: unknown = bridge) =>
+    (b as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer('cone_1');
 
   beforeEach(async () => {
     sentMessages.length = 0;
@@ -113,7 +139,7 @@ describe('kernel compaction-row persistence', () => {
         model: 'claude-opus-4-6',
       },
     ];
-    conversationStore = makeConversationStore();
+    conversationStore = makeConversationStore(() => agentMessages);
 
     bridge = new Bridge();
     await bridge.bind({
@@ -133,7 +159,7 @@ describe('kernel compaction-row persistence', () => {
     await vi.waitFor(() => expect(sentMessages.length).toBeGreaterThan(0));
 
     expect(conversationStore.putMarker).not.toHaveBeenCalled();
-    expect(persisted().filter((m) => m.compaction)).toEqual([]);
+    expect(saved).toEqual([]);
   });
 
   it('records the round once it settles, as a marker and a row', async () => {
@@ -151,9 +177,10 @@ describe('kernel compaction-row persistence', () => {
         },
       }),
     ]);
-    // The same row is in the buffer the panel replays from, and in the UI
-    // store a reload reads.
-    const rows = persisted().filter((m) => m.compaction);
+    // The same row is in the buffer the panel replays from; the frozen UI
+    // store is not written (#2365).
+    expect(saved).toEqual([]);
+    const rows = buffered().filter((m) => m.compaction);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       role: 'assistant',
@@ -183,9 +210,8 @@ describe('kernel compaction-row persistence', () => {
   });
 
   it('retracts a round that kept nothing, from the record AND the buffer', async () => {
-    // A real conversation under the seam: `persistScoop` refuses to write an
-    // EMPTY buffer (its truncation guard), so a transcript that is nothing
-    // but the retracted row could not show the write either way.
+    // A real conversation under the seam, so the retraction is visibly a
+    // splice rather than an emptied buffer.
     callbacks.onResponse?.('cone_1', 'shipped', false);
     phase('summarizing', { roundId: 'idle-1' });
     phase('idle', { roundId: 'idle-1' });
@@ -194,7 +220,8 @@ describe('kernel compaction-row persistence', () => {
     await vi.waitFor(() => expect(conversationStore.deleteMarker).toHaveBeenCalled());
 
     expect(conversationStore.markers).toEqual([]);
-    expect(persisted().filter((m) => m.compaction)).toEqual([]);
+    expect(buffered().filter((m) => m.compaction)).toEqual([]);
+    expect(buffered().map((m) => m.content)).toEqual(['shipped']);
   });
 
   it('writes nothing for a phase that is not a row', async () => {
@@ -244,7 +271,7 @@ describe('kernel compaction-row persistence', () => {
     expect(conversationStore.markers).toEqual([]);
   });
 
-  it('folds a stored marker back into a rebuild from live agent state', async () => {
+  it('folds a stored marker back into a rebuild from the canonical record', async () => {
     conversationStore.markers.push({
       id: 'compaction-cone_1-stored',
       kind: 'compaction',
@@ -254,14 +281,13 @@ describe('kernel compaction-row persistence', () => {
 
     const rebuilt = (await (
       bridge as unknown as {
-        buildBufferFromAgentMessages: (scoop: unknown) => Promise<ChatMessage[] | null>;
+        buildBufferFromCanonicalRecord: (scoop: unknown) => Promise<ChatMessage[] | null>;
       }
-    ).buildBufferFromAgentMessages(CONE)) as ChatMessage[];
+    ).buildBufferFromCanonicalRecord(CONE)) as ChatMessage[];
 
     // On the seam: after the message that preceded the round, before the one
-    // that followed it. Without this, every boot re-seeds the buffer from Pi's
-    // history — which never held the row — and persists the transcript minus
-    // its seams over the UI store.
+    // that followed it. Pi's history never held the row, so without the fold
+    // every boot would hydrate the transcript minus its seams.
     expect(rebuilt.map((m) => (m.compaction ? 'seam' : m.role))).toEqual([
       'user',
       'seam',
@@ -280,10 +306,10 @@ describe('kernel compaction-row persistence', () => {
 
     plainCallbacks.onCompactionStateChange?.('cone_1', 'summarizing', { trigger: 'threshold' });
     plainCallbacks.onCompactionStateChange?.('cone_1', 'idle', { trigger: 'threshold' });
-    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(buffered(plain).length).toBeGreaterThan(0));
 
-    // The row still reaches the UI store — only the canonical annotation is
+    // The row still reaches the buffer — only the canonical annotation is
     // skipped, and nothing throws.
-    expect(persisted().at(-1)?.compaction).toMatchObject({ state: 'summarized' });
+    expect(buffered(plain).at(-1)?.compaction).toMatchObject({ state: 'summarized' });
   });
 });

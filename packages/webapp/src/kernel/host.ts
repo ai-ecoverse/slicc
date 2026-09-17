@@ -556,13 +556,12 @@ async function bootOrchestrator(
   //    keep the ready watchdog alive (#2007).
   await orchestrator.init(config.onBootProgress);
 
-  // 4b. Seed the bridge's chat buffers from each scoop's restored
-  // canonical conversation, BEFORE `kernel-worker-ready` is signaled and
-  // therefore before the panel selects a scoop or a post-boot turn runs
-  // `persistScoop`. Without this the buffers start empty and the first
-  // turn after a reload overwrites the full history in the
-  // `browser-coding-agent` UI store with only the new messages.
-  await bridge.seedBuffersFromAgentState();
+  // 4b. Hydrate the bridge's chat buffers from each scoop's canonical
+  // conversation record, BEFORE `kernel-worker-ready` is signaled and
+  // therefore before the panel selects a scoop or a post-boot turn runs.
+  // Without this the buffers start empty, and a replay after the first
+  // post-reload turn would show only that turn.
+  await bridge.hydrateBuffersFromRecords();
 
   // 5 (caller): publish agent bridge for the `agent` shell command.
   const sharedFs = orchestrator.getSharedFS();

@@ -225,9 +225,9 @@ export class ScoopContext {
 
     this.sessions = new SessionPersistence({
       store: sessionStore ?? null,
-      // The canonical conversation record (#2275). Absent — no store wired,
-      // or a float that persists nothing — leaves the legacy `agent-sessions`
-      // path exactly as it was.
+      // The canonical conversation record (#2275) — since #2365 the only
+      // store a conversation is written to or restored from. Absent (no store
+      // wired), the unit persists nothing.
       canonical: conversationStore
         ? {
             store: conversationStore,
@@ -243,9 +243,9 @@ export class ScoopContext {
             },
           }
         : null,
-      // Internal persistence key — stable across days/restarts so saved
-      // conversations can be restored by `SessionStore.load`. The outgoing
-      // Adobe `X-Session-Id` is computed separately in `init()`.
+      // The unit's key in the frozen legacy `agent-sessions` store, which a
+      // clear still deletes from. The outgoing Adobe `X-Session-Id` is
+      // computed separately in `init()`.
       sessionId: scoop.jid,
       folder: scoop.folder,
       getMessages: () => this.agent?.state?.messages,

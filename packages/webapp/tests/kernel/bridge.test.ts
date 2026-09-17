@@ -4,7 +4,7 @@
  * Verifies:
  * - createCallbacks() - text accumulation, tool tracking, message source attribution
  * - buildStateSnapshot() - scoop mapping, cone identification
- * - persistScoop() - correct session ID mapping, fire-and-forget error handling
+ * - the frozen legacy UI store is never written (#2365)
  * - getBuffer/getOrCreateAssistantMsg - buffer isolation, source attribution
  */
 
@@ -68,6 +68,41 @@ vi.mock('../../src/tools/tool-ui.js', () => ({
 
 const { Bridge } = await import('../../src/kernel/facade.js');
 const { SessionStore } = await import('../../src/scoops/chat-session-store.js');
+
+/**
+ * A canonical conversation record (#2275) whose entries carry `messages` as
+ * Pi history — what every replay derives from since #2365.
+ */
+function canonicalRecord(
+  unit: { jid: string; folder: string; parentJid: string | null },
+  messages: Array<{ role: string; content: unknown; timestamp?: number }>
+) {
+  const workspaceId =
+    unit.parentJid !== null
+      ? `/scoops/${unit.folder}/workspace`
+      : unit.folder === 'cone'
+        ? '/workspace'
+        : `/cones/${unit.folder}/workspace`;
+  return {
+    key: `${workspaceId}::${unit.jid}`,
+    version: 1,
+    workUnitId: unit.jid,
+    workspaceId,
+    folder: unit.folder,
+    origin: 'agent-history' as const,
+    entries: messages.map((message, seq) => ({
+      id: `e${seq}`,
+      seq,
+      kind: message.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+      timestamp: message.timestamp ?? 0,
+      text: '',
+      message,
+    })),
+    createdAt: 1,
+    updatedAt: 1,
+    legacyKeys: { agentSessionId: unit.jid, chatSessionId: `session-${unit.folder}` },
+  };
+}
 
 describe('Bridge createCallbacks', () => {
   let bridge: InstanceType<typeof Bridge>;
@@ -149,7 +184,7 @@ describe('Bridge createCallbacks', () => {
     expect(emitted.payload.text).toBe('Hello');
   });
 
-  it('onResponseDone marks message not streaming and persists', () => {
+  it('onResponseDone marks message not streaming and never writes the UI store', () => {
     (bridge as any).orchestrator = mockOrchestrator;
     const scoopJid = 'cone_1';
     const mockStore = new SessionStore();
@@ -161,7 +196,7 @@ describe('Bridge createCallbacks', () => {
     const buf = (bridge as any).getBuffer(scoopJid);
     const msg = buf[0];
     expect(msg.isStreaming).toBe(false);
-    expect(mockStore.saveMessages).toHaveBeenCalled();
+    expect(mockStore.saveMessages).not.toHaveBeenCalled();
   });
 
   it('onResponseDone clears currentMessageId', () => {
@@ -274,7 +309,7 @@ describe('Bridge createCallbacks', () => {
     expect(bufferedMsg.channel).toBe('web');
   });
 
-  it('onIncomingMessage persists the scoop', () => {
+  it('onIncomingMessage buffers the message without writing the UI store', () => {
     (bridge as any).orchestrator = mockOrchestrator;
     const mockStore = new SessionStore();
     (bridge as any).sessionStore = mockStore;
@@ -291,7 +326,8 @@ describe('Bridge createCallbacks', () => {
 
     callbacks.onIncomingMessage(scoopJid, msg);
 
-    expect(mockStore.saveMessages).toHaveBeenCalled();
+    expect((bridge as any).getBuffer(scoopJid).map((m: { id: string }) => m.id)).toEqual(['msg-3']);
+    expect(mockStore.saveMessages).not.toHaveBeenCalled();
   });
 
   it('onStatusChange updates status and emits event', () => {
@@ -331,7 +367,7 @@ describe('Bridge createCallbacks', () => {
     });
   });
 
-  it('onSendMessage buffers, persists, and emits text_delta + response_done', () => {
+  it('onSendMessage buffers and emits text_delta + response_done', () => {
     (bridge as any).orchestrator = mockOrchestrator;
     const mockStore = new SessionStore();
     (bridge as any).sessionStore = mockStore;
@@ -345,8 +381,8 @@ describe('Bridge createCallbacks', () => {
     expect(buf[0].role).toBe('assistant');
     expect(buf[0].content).toBe('Hello from scoop!');
 
-    // Should persist
-    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', expect.anything());
+    // The legacy UI store is frozen (#2365)
+    expect(mockStore.saveMessages).not.toHaveBeenCalled();
 
     // Should emit text_delta then response_done
     const events = sentMessages.map((m: any) => m.payload);
@@ -604,105 +640,6 @@ describe('Bridge getBuffer/getOrCreateAssistantMsg', () => {
 
     const buf = (bridge as any).getBuffer('cone_1');
     expect(buf.length).toBe(2);
-  });
-});
-
-describe('Bridge persistScoop', () => {
-  let bridge: InstanceType<typeof Bridge>;
-  let mockOrchestrator: any;
-  let mockStore: any;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    bridge = new Bridge();
-
-    mockOrchestrator = {
-      getScoops: vi.fn(() => [
-        {
-          jid: 'cone_1',
-          name: 'Cone',
-          folder: 'cone',
-          isCone: true,
-          parentJid: null,
-          assistantLabel: 'sliccy',
-        },
-        {
-          jid: 'scoop_test',
-          name: 'Test',
-          folder: 'test-scoop',
-          isCone: false,
-          parentJid: 'cone_1',
-          assistantLabel: 'test-scoop',
-        },
-      ]),
-    };
-
-    mockStore = new SessionStore();
-    (bridge as any).orchestrator = mockOrchestrator;
-    (bridge as any).sessionStore = mockStore;
-  });
-
-  it('maps cone to session-cone', () => {
-    const buf = (bridge as any).getBuffer('cone_1');
-    buf.push({ id: 'msg-1', role: 'user', content: 'test', timestamp: Date.now() });
-
-    (bridge as any).persistScoop('cone_1');
-
-    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', expect.anything());
-  });
-
-  it('maps scoop to session-{folder}', () => {
-    const buf = (bridge as any).getBuffer('scoop_test');
-    buf.push({ id: 'msg-1', role: 'user', content: 'test', timestamp: Date.now() });
-
-    (bridge as any).persistScoop('scoop_test');
-
-    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-test-scoop', expect.anything());
-  });
-
-  it('early returns when no sessionStore', () => {
-    (bridge as any).sessionStore = null;
-    const buf = (bridge as any).getBuffer('cone_1');
-    buf.push({ id: 'msg-1', role: 'user', content: 'test', timestamp: Date.now() });
-
-    (bridge as any).persistScoop('cone_1');
-
-    // No assertion needed; should just not crash
-    expect(true).toBe(true);
-  });
-
-  it('early returns when scoop not found', () => {
-    (bridge as any).persistScoop('unknown_scoop');
-
-    expect(mockStore.saveMessages).not.toHaveBeenCalled();
-  });
-
-  it('early returns when buffer is empty', () => {
-    (bridge as any).persistScoop('cone_1');
-
-    expect(mockStore.saveMessages).not.toHaveBeenCalled();
-  });
-
-  it('swallows saveMessages errors (fire-and-forget)', () => {
-    mockStore.saveMessages.mockRejectedValue(new Error('DB full'));
-
-    const buf = (bridge as any).getBuffer('cone_1');
-    buf.push({ id: 'msg-1', role: 'user', content: 'test', timestamp: Date.now() });
-
-    // Should not throw
-    expect(() => {
-      (bridge as any).persistScoop('cone_1');
-    }).not.toThrow();
-  });
-
-  it('passes buffer as messages to sessionStore', () => {
-    const buf = (bridge as any).getBuffer('cone_1');
-    buf.push({ id: 'msg-1', role: 'user', content: 'hello', timestamp: 100 });
-    buf.push({ id: 'msg-2', role: 'assistant', content: 'world', timestamp: 200 });
-
-    (bridge as any).persistScoop('cone_1');
-
-    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', buf);
   });
 });
 
@@ -1472,7 +1409,7 @@ describe('Bridge follower mode', () => {
     expect(mockOrchestrator.handleMessage).toHaveBeenCalled();
   });
 
-  it('applyFollowerSnapshot replaces cone buffer, persists, emits scoop-messages-replaced', () => {
+  it('applyFollowerSnapshot replaces cone buffer and emits scoop-messages-replaced without persisting', () => {
     // Pre-populate with stale local content to verify replacement.
     const buf = (bridge as any).getBuffer('cone_1');
     buf.push({ id: 'old', role: 'user', content: 'stale', timestamp: 1 });
@@ -1493,7 +1430,9 @@ describe('Bridge follower mode', () => {
     expect(after[0].id).toBe('a');
     expect(after[1].toolCalls?.[0]?.name).toBe('bash');
 
-    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', expect.any(Array));
+    // The leader owns this conversation; a follower reload gets it back from
+    // the leader's next snapshot, not from a local store (#2365).
+    expect(mockStore.saveMessages).not.toHaveBeenCalled();
 
     const replaced = sentMessages.find(
       (m: any) => m.payload?.type === 'scoop-messages-replaced'
@@ -2406,12 +2345,16 @@ describe('Bridge request-scoop-chat-messages', () => {
     expect(replacedReply).toBeUndefined();
   });
 
-  it('falls back to sessionStore when no buffer or agent messages exist', async () => {
-    (bridge as any).sessionStore = {
-      load: vi.fn().mockResolvedValue({
-        messages: [{ id: 's1', role: 'user', content: 'from store', timestamp: 50 }],
-      }),
-    };
+  it('derives from the canonical record when there is no buffer', async () => {
+    const uiLoad = vi.fn();
+    (bridge as any).sessionStore = { load: uiLoad };
+    (bridge as any).orchestrator.getConversationStore = () => ({
+      load: vi.fn(async () =>
+        canonicalRecord({ jid: 'cone_1', folder: 'cone', parentJid: null }, [
+          { role: 'user', content: [{ type: 'text', text: 'from the record' }], timestamp: 50 },
+        ])
+      ),
+    });
 
     await (bridge as any).handlePanelMessage({
       type: 'request-scoop-chat-messages',
@@ -2422,7 +2365,9 @@ describe('Bridge request-scoop-chat-messages', () => {
     const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-chat-messages') as any;
     expect(reply.payload.requestId).toBe('cm-test-4');
     expect(reply.payload.messages).toHaveLength(1);
-    expect(reply.payload.messages[0].content).toBe('from store');
+    expect(reply.payload.messages[0].content).toBe('from the record');
+    // The frozen legacy UI store is never a transcript source (#2365).
+    expect(uiLoad).not.toHaveBeenCalled();
   });
 
   it('returns empty when sessionStore throws', async () => {
@@ -2721,13 +2666,12 @@ describe('Bridge handlePanelMessage dispatch', () => {
       (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === 'cone_2'
     ) as any;
     expect(replaced?.payload.messages.map((m: any) => m.content)).toEqual(['restore me']);
-    // The record is still the transcript source. The UI store is consulted
-    // only to fold persisted cone-error cards back in (#3003); an empty
-    // load leaves the derived messages untouched.
-    expect(uiLoad).toHaveBeenCalledWith('session-cone-two');
+    // Error cards now ride the record as markers, so the frozen UI store is
+    // not read at all (#2365).
+    expect(uiLoad).not.toHaveBeenCalled();
   });
 
-  it('request-scoop-messages falls back to the legacy UI store when there is no canonical record', async () => {
+  it('request-scoop-messages never falls back to the legacy UI store (#2365)', async () => {
     mockOrchestrator.getScoops.mockReturnValue([
       { jid: 'cone_2', name: 'Two', folder: 'cone-two', parentJid: null, addedAt: '2' },
     ]);
@@ -2743,9 +2687,10 @@ describe('Bridge handlePanelMessage dispatch', () => {
     const replaced = sentMessages.find(
       (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === 'cone_2'
     ) as any;
-    expect(replaced?.payload.messages.map((m: any) => m.content)).toEqual([
-      'from the legacy store',
-    ]);
+    // Frozen at the cut: showing it would present a conversation that stopped
+    // before every turn since.
+    expect(replaced?.payload.messages).toEqual([]);
+    expect((bridge as any).sessionStore.load).not.toHaveBeenCalled();
   });
 
   it('request-scoop-messages replies with an empty list when a unit has no history anywhere', async () => {
@@ -2969,7 +2914,6 @@ describe('Bridge handlePanelMessage dispatch', () => {
     buf.push({ id: 'msg-keep', role: 'user', content: 'keep me', timestamp: 1 });
     buf.push({ id: 'msg-drop', role: 'user', content: 'drop me', timestamp: 2 });
     buf.push({ id: 'msg-also-keep', role: 'user', content: 'also keep', timestamp: 3 });
-    const persistSpy = vi.spyOn(bridge as any, 'persistScoop');
     await (bridge as any).handlePanelMessage({
       type: 'delete-queued-message',
       scoopJid: 'cone_1',
@@ -2977,13 +2921,12 @@ describe('Bridge handlePanelMessage dispatch', () => {
     });
     const after = (bridge as any).messageBuffers.get('cone_1');
     expect(after.map((m: any) => m.id)).toEqual(['msg-keep', 'msg-also-keep']);
-    // Re-persists so the UI session store mirrors the eviction; a later
-    // session-store-backed rehydration cannot resurrect the dropped entry.
-    expect(persistSpy).toHaveBeenCalledWith('cone_1');
+    // A queued prompt never reached Pi history, so the canonical record has
+    // nothing to evict; the buffer is the only place it lived.
+    expect((bridge as any).sessionStore.saveMessages).not.toHaveBeenCalled();
   });
 
   it('delete-queued-message is a no-op when the buffer is absent or missing the id', async () => {
-    const persistSpy = vi.spyOn(bridge as any, 'persistScoop');
     // Buffer absent: orchestrator delete still fires, no buffer mutation.
     await (bridge as any).handlePanelMessage({
       type: 'delete-queued-message',
@@ -2991,8 +2934,7 @@ describe('Bridge handlePanelMessage dispatch', () => {
       messageId: 'ghost',
     });
     expect((bridge as any).messageBuffers.has('scoop_a')).toBe(false);
-    expect(persistSpy).not.toHaveBeenCalled();
-    // Buffer present but no matching entry: no mutation, no re-persist.
+    // Buffer present but no matching entry: no mutation.
     const buf = (bridge as any).getBuffer('cone_1');
     buf.push({ id: 'msg-keep', role: 'user', content: 'keep me', timestamp: 1 });
     await (bridge as any).handlePanelMessage({
@@ -3003,7 +2945,6 @@ describe('Bridge handlePanelMessage dispatch', () => {
     expect((bridge as any).messageBuffers.get('cone_1').map((m: any) => m.id)).toEqual([
       'msg-keep',
     ]);
-    expect(persistSpy).not.toHaveBeenCalled();
   });
 
   it('local-storage-set writes through to globalThis.localStorage', async () => {
@@ -3293,24 +3234,44 @@ describe('Bridge handleRequestScoopMessages', () => {
     );
   });
 
-  it('loads from sessionStore when no buffer and no agent messages', async () => {
+  it('derives from the canonical record when there is no buffer, and hydrates the buffer', async () => {
     const store = (bridge as any).sessionStore;
-    store.load = vi.fn().mockResolvedValue({
-      messages: [{ id: 'm1', role: 'user', content: 'previous', timestamp: 50 }],
+    mockOrchestrator.getConversationStore = () => ({
+      load: vi.fn(async () =>
+        canonicalRecord({ jid: 'cone_1', folder: 'cone', parentJid: null }, [
+          { role: 'user', content: [{ type: 'text', text: 'previous' }], timestamp: 50 },
+        ])
+      ),
     });
     await (bridge as any).handlePanelMessage({
       type: 'request-scoop-messages',
       scoopJid: 'cone_1',
     });
     const replaced = sentMessages.find((m: any) => m.payload?.type === 'scoop-messages-replaced') as
-      | { payload: { messages: Array<{ id: string }> } }
+      | { payload: { messages: Array<{ content: string }> } }
       | undefined;
-    expect(store.load).toHaveBeenCalledWith('session-cone');
-    expect(replaced?.payload.messages).toHaveLength(1);
-    expect(replaced?.payload.messages[0].id).toBe('m1');
+    expect(replaced?.payload.messages.map((m) => m.content)).toEqual(['previous']);
+    // A later agent event extends the restored history instead of replacing it.
+    expect((bridge as any).messageBuffers.get('cone_1')).toHaveLength(1);
+    expect(store.load).not.toHaveBeenCalled();
   });
 
-  it('swallows sessionStore.load errors but still clears the thread', async () => {
+  it('clears the thread when the canonical store cannot be read', async () => {
+    mockOrchestrator.getConversationStore = () => ({
+      load: vi.fn(async () => null),
+    });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    const replaced = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as Array<{ payload: { messages: unknown[] } }>;
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0].payload.messages).toEqual([]);
+  });
+
+  it('clears the thread even when the frozen UI store would throw', async () => {
     const store = (bridge as any).sessionStore;
     store.load = vi.fn().mockRejectedValue(new Error('idb closed'));
     await expect(
@@ -3388,22 +3349,36 @@ describe('Bridge handleRequestScoopMessages', () => {
     expect(replaced[0].payload.messages.map((m) => m.id)).toEqual(['a1']);
     expect(replaced[1].payload.scoopJid).toBe('scoop_fresh');
     expect(replaced[1].payload.messages).toEqual([]);
-    expect(store.load).toHaveBeenCalledWith('session-fresh-scoop');
+    expect(store.load).not.toHaveBeenCalled();
   });
 });
 
-describe('Bridge seedBuffersFromAgentState', () => {
+describe('Bridge hydrateBuffersFromRecords', () => {
   let bridge: InstanceType<typeof Bridge>;
 
   const coneScoop = {
     jid: 'cone_1',
     name: 'Cone',
     folder: 'cone',
-    isCone: true,
     parentJid: null,
     assistantLabel: 'sliccy',
   };
-  const makeContext = (messages: any[]) => ({ getAgentMessages: vi.fn(() => messages) });
+  /** An orchestrator whose canonical store holds `messages` for the cone. */
+  const makeOrchestrator = (messages: any[], extra: Record<string, unknown> = {}) => {
+    const load = vi.fn(async () =>
+      messages.length > 0 ? canonicalRecord(coneScoop, messages) : null
+    );
+    return {
+      load,
+      orchestrator: {
+        getScoops: vi.fn(() => [coneScoop]),
+        getScoopContext: vi.fn(() => undefined),
+        getConversationStore: vi.fn(() => ({ load })),
+        getQueuedMessageIds: vi.fn(() => []),
+        ...extra,
+      } as any,
+    };
+  };
   const restoredHistory = [
     { role: 'user', content: [{ type: 'text', text: 'first question' }], timestamp: 1 },
     {
@@ -3424,63 +3399,71 @@ describe('Bridge seedBuffersFromAgentState', () => {
     bridge = new Bridge();
   });
 
-  it('seeds an empty buffer from the restored agent messages and persists it', async () => {
-    const context = makeContext(restoredHistory);
-    await bridge.bind({
-      getScoops: vi.fn(() => [coneScoop]),
-      getScoopContext: vi.fn(() => context),
-    } as any);
+  it('hydrates an empty buffer from the canonical record and writes nothing', async () => {
+    const { orchestrator } = makeOrchestrator(restoredHistory);
+    await bridge.bind(orchestrator);
     const store = (bridge as any).sessionStore;
 
-    await bridge.seedBuffersFromAgentState();
+    await bridge.hydrateBuffersFromRecords();
 
     const buf = (bridge as any).getBuffer('cone_1');
     expect(buf).toHaveLength(2);
     expect(buf[0]).toMatchObject({ role: 'user', content: 'first question' });
     expect(buf[1]).toMatchObject({ role: 'assistant', content: 'first answer' });
-    // Repairs the UI store immediately (the truncation fix).
-    expect(store.saveMessages).toHaveBeenCalledWith('session-cone', expect.any(Array));
-    const persisted = store.saveMessages.mock.calls[0][1];
-    expect(persisted).toHaveLength(2);
+    // The record is already the durable copy; the frozen UI store is untouched.
+    expect(store.saveMessages).not.toHaveBeenCalled();
+    expect(store.load).not.toHaveBeenCalled();
+  });
+
+  it('a turn after hydration extends the restored history in the replay', async () => {
+    // The reason hydration exists: without it the first post-reload turn
+    // starts an empty buffer, and every later replay shows only that turn.
+    const { orchestrator } = makeOrchestrator(restoredHistory);
+    await bridge.bind(orchestrator);
+    await bridge.hydrateBuffersFromRecords();
+
+    const callbacks = Bridge.createCallbacks(bridge);
+    callbacks.onResponse('cone_1', 'second answer', false);
+    callbacks.onResponseDone('cone_1');
+    await (bridge as any).handleRequestScoopMessages('cone_1');
+
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any;
+    expect(replaced.payload.messages.map((m: any) => m.content)).toEqual([
+      'first question',
+      'first answer',
+      'second answer',
+    ]);
   });
 
   it('does not overwrite a buffer that already has live messages', async () => {
-    const context = makeContext(restoredHistory);
-    await bridge.bind({
-      getScoops: vi.fn(() => [coneScoop]),
-      getScoopContext: vi.fn(() => context),
-    } as any);
-    const store = (bridge as any).sessionStore;
+    const { orchestrator, load } = makeOrchestrator(restoredHistory);
+    await bridge.bind(orchestrator);
     const buf = (bridge as any).getBuffer('cone_1');
     buf.push({ id: 'live-1', role: 'user', content: 'live', timestamp: 100 });
 
-    await bridge.seedBuffersFromAgentState();
+    await bridge.hydrateBuffersFromRecords();
 
     const after = (bridge as any).getBuffer('cone_1');
     expect(after).toHaveLength(1);
     expect(after[0].id).toBe('live-1');
-    // Skipped before even reading the context — no clobber, no persist.
-    expect(context.getAgentMessages).not.toHaveBeenCalled();
-    expect(store.saveMessages).not.toHaveBeenCalled();
+    // Skipped before even reading the record — no clobber.
+    expect(load).not.toHaveBeenCalled();
   });
 
-  it('skips scoops with no restored agent messages (no buffer, no persist)', async () => {
-    const context = makeContext([]);
-    await bridge.bind({
-      getScoops: vi.fn(() => [coneScoop]),
-      getScoopContext: vi.fn(() => context),
-    } as any);
-    const store = (bridge as any).sessionStore;
+  it('skips units with no record (no buffer)', async () => {
+    const { orchestrator } = makeOrchestrator([]);
+    await bridge.bind(orchestrator);
 
-    await bridge.seedBuffersFromAgentState();
+    await bridge.hydrateBuffersFromRecords();
 
     expect((bridge as any).messageBuffers.get('cone_1')).toBeUndefined();
-    expect(store.saveMessages).not.toHaveBeenCalled();
   });
 
   it('is a no-op when the orchestrator is not bound', async () => {
     const fresh = new Bridge();
-    await expect(fresh.seedBuffersFromAgentState()).resolves.toBeUndefined();
+    await expect(fresh.hydrateBuffersFromRecords()).resolves.toBeUndefined();
   });
 
   const sudoBody = '[@test-scoop sudo-request]\nLick ID: lick-1\nKind: command\nDetail: git push';
@@ -3500,59 +3483,47 @@ describe('Bridge seedBuffersFromAgentState', () => {
       stopReason: 'stop',
     },
   ];
+  /** The durable lick decision `persistLickDecision` wrote to the channel DB. */
+  const channelDecision = (lickState: 'pending' | 'confirmed' | 'dismissed') => ({
+    id: 'sudo-request-lick-1',
+    chatJid: 'cone_1',
+    senderId: 'test-scoop',
+    senderName: 'test-scoop',
+    content: sudoBody,
+    timestamp: '2026-09-10T00:00:00.000Z',
+    fromAssistant: false,
+    channel: 'sudo-request',
+    lickId: 'lick-1',
+    lickState,
+  });
 
   it.each(['confirmed', 'dismissed'] as const)(
-    'reseed keeps a %s sudo-request glyph instead of reverting to pending (#3004)',
+    'hydration keeps a %s sudo-request glyph instead of reverting to pending (#3004)',
     async (lickState) => {
-      const context = makeContext(sudoHistory);
-      await bridge.bind({
-        getScoops: vi.fn(() => [coneScoop]),
-        getScoopContext: vi.fn(() => context),
-      } as any);
-      const store = (bridge as any).sessionStore;
-      store.load.mockResolvedValue({
-        id: 'session-cone',
-        messages: [
-          {
-            id: 'sudo-request-lick-1',
-            role: 'user',
-            content: sudoBody,
-            timestamp: 10,
-            source: 'lick',
-            channel: 'sudo-request',
-            lickId: 'lick-1',
-            lickState,
-          },
-        ],
+      const { orchestrator } = makeOrchestrator(sudoHistory, {
+        getMessagesForScoop: vi.fn(async () => [channelDecision(lickState)]),
       });
+      await bridge.bind(orchestrator);
 
-      await bridge.seedBuffersFromAgentState();
+      await bridge.hydrateBuffersFromRecords();
 
-      const buf = (bridge as any).getBuffer('cone_1');
-      const card = buf.find((m: { lickId?: string }) => m.lickId === 'lick-1');
+      const card = (bridge as any)
+        .getBuffer('cone_1')
+        .find((m: { lickId?: string }) => m.lickId === 'lick-1');
       expect(card).toMatchObject({
         id: 'sudo-request-lick-1',
         channel: 'sudo-request',
         lickId: 'lick-1',
         lickState,
       });
-      expect(card.lickState).not.toBe('pending');
-      const persisted = store.saveMessages.mock.calls[0][1];
-      expect(persisted.find((m: { lickId?: string }) => m.lickId === 'lick-1')).toMatchObject({
-        lickId: 'lick-1',
-        lickState,
-      });
     }
   );
 
-  it('reseed does not invent a settled glyph when the store has none', async () => {
-    const context = makeContext(sudoHistory);
-    await bridge.bind({
-      getScoops: vi.fn(() => [coneScoop]),
-      getScoopContext: vi.fn(() => context),
-    } as any);
+  it('hydration does not invent a settled glyph when the channel DB has none', async () => {
+    const { orchestrator } = makeOrchestrator(sudoHistory);
+    await bridge.bind(orchestrator);
 
-    await bridge.seedBuffersFromAgentState();
+    await bridge.hydrateBuffersFromRecords();
 
     const buf = (bridge as any).getBuffer('cone_1');
     const card = buf.find((m: { channel?: string }) => m.channel === 'sudo-request');
@@ -3560,56 +3531,27 @@ describe('Bridge seedBuffersFromAgentState', () => {
     expect(card.lickState).toBeUndefined();
   });
 
-  it('reseed recovers a settled glyph from the channel-message DB when the UI store is stale', async () => {
-    const context = makeContext(sudoHistory);
-    await bridge.bind({
-      getScoops: vi.fn(() => [coneScoop]),
-      getScoopContext: vi.fn(() => context),
-      getMessagesForScoop: vi.fn(async () => [
-        {
-          id: 'sudo-request-lick-1',
-          chatJid: 'cone_1',
-          senderId: 'test-scoop',
-          senderName: 'test-scoop',
-          content: sudoBody,
-          timestamp: '2026-09-10T00:00:00.000Z',
-          fromAssistant: false,
-          channel: 'sudo-request',
-          lickId: 'lick-1',
-          lickState: 'confirmed',
-        },
-      ]),
-    } as any);
+  it('hydration reads the settled glyph from the channel DB, never the frozen UI store', async () => {
+    const { orchestrator } = makeOrchestrator(sudoHistory, {
+      getMessagesForScoop: vi.fn(async () => [channelDecision('confirmed')]),
+    });
+    await bridge.bind(orchestrator);
     const store = (bridge as any).sessionStore;
     store.load.mockResolvedValue({
       id: 'session-cone',
-      messages: [
-        {
-          id: 'sudo-request-lick-1',
-          role: 'user',
-          content: sudoBody,
-          timestamp: 10,
-          source: 'lick',
-          channel: 'sudo-request',
-          lickId: 'lick-1',
-          lickState: 'pending',
-        },
-      ],
+      messages: [{ ...channelDecision('pending'), role: 'user', timestamp: 10 }],
     });
 
-    await bridge.seedBuffersFromAgentState();
+    await bridge.hydrateBuffersFromRecords();
 
     const card = (bridge as any)
       .getBuffer('cone_1')
       .find((m: { lickId?: string }) => m.lickId === 'lick-1');
     expect(card.lickState).toBe('confirmed');
-    const persisted = store.saveMessages.mock.calls[0][1];
-    expect(persisted.find((m: { lickId?: string }) => m.lickId === 'lick-1')?.lickState).toBe(
-      'confirmed'
-    );
+    expect(store.load).not.toHaveBeenCalled();
   });
 
-  it('reseed does not stamp a settled lick onto a later row that quotes the lick id', async () => {
+  it('hydration does not stamp a settled lick onto a later row that quotes the lick id', async () => {
     const echoHistory = [
       ...sudoHistory,
       {
@@ -3623,29 +3565,12 @@ describe('Bridge seedBuffersFromAgentState', () => {
         timestamp: 12,
       },
     ];
-    const context = makeContext(echoHistory);
-    await bridge.bind({
-      getScoops: vi.fn(() => [coneScoop]),
-      getScoopContext: vi.fn(() => context),
-    } as any);
-    const store = (bridge as any).sessionStore;
-    store.load.mockResolvedValue({
-      id: 'session-cone',
-      messages: [
-        {
-          id: 'sudo-request-lick-1',
-          role: 'user',
-          content: sudoBody,
-          timestamp: 10,
-          source: 'lick',
-          channel: 'sudo-request',
-          lickId: 'lick-1',
-          lickState: 'confirmed',
-        },
-      ],
+    const { orchestrator } = makeOrchestrator(echoHistory, {
+      getMessagesForScoop: vi.fn(async () => [channelDecision('confirmed')]),
     });
+    await bridge.bind(orchestrator);
 
-    await bridge.seedBuffersFromAgentState();
+    await bridge.hydrateBuffersFromRecords();
 
     const buf = (bridge as any).getBuffer('cone_1');
     const cards = buf.filter((m: { lickId?: string }) => m.lickId === 'lick-1');

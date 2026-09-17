@@ -122,16 +122,14 @@ export interface KernelFacade {
   getConeJid(): string | null;
 
   /**
-   * Seed each registered scoop's chat buffer from its agent's restored
-   * canonical `AgentMessage[]`, immediately after `orchestrator.init()`
-   * and BEFORE any post-boot turn can `persistScoop`. The bridge's
-   * `messageBuffers` otherwise start empty on boot, so the first turn
-   * after a reload would persist only the new messages and overwrite the
-   * full conversation in the `browser-coding-agent` UI store — the
-   * "only the last few messages after a reboot" truncation. Idempotent
-   * and non-destructive: only seeds scoops whose buffer is still empty.
+   * Hydrate each registered scoop's chat buffer from its canonical
+   * conversation record, immediately after `orchestrator.init()` and BEFORE
+   * any post-boot turn runs. The buffers otherwise start empty on boot, so the
+   * first turn after a reload would append to nothing and every later replay
+   * (`request-scoop-messages` answers from a non-empty buffer) would show only
+   * the new messages. Read-only and idempotent: only fills empty buffers.
    */
-  seedBuffersFromAgentState(): Promise<void>;
+  hydrateBuffersFromRecords(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
