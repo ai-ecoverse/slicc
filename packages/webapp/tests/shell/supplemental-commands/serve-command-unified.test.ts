@@ -86,14 +86,14 @@ describe('serve command (unified preview)', () => {
     expect(result.stdout).toContain('--list');
   });
 
-  it('documents the size limit, preview quota, persistence and token in --help', async () => {
+  it('documents the size limit, snapshot quota, live expiry and token in --help', async () => {
     const result = await createServeCommand().execute(['--help'], {} as never);
     expect(result.stdout).toContain('Limits and lifetime:');
     expect(result.stdout).toContain('at most 25 MiB');
     expect(result.stdout).toContain('HTTP 413');
-    expect(result.stdout).toContain('at most 10 previews');
-    expect(result.stdout).toContain('--ttl snapshots, and');
-    expect(result.stdout).toContain('Previews do not end with the session');
+    expect(result.stdout).toContain('at most 10 --ttl snapshots');
+    expect(result.stdout).toContain('Live previews have no quota');
+    expect(result.stdout).toContain('disconnected for 5 minutes');
     expect(result.stdout).toContain('`--stop` also accepts the preview URL');
   });
 
@@ -109,7 +109,7 @@ describe('serve command (unified preview)', () => {
     });
     const result = await createServeCommand().execute(['/workspace/app'], ctx as never);
     expect(result.stdout).toContain(
-      'Preview token: tray.tok (kept until `serve --stop`; counts toward the 10-preview tray quota)'
+      'Preview token: tray.tok (expires 5 min after the leader disconnects; revoke sooner with serve --stop)'
     );
   });
 
@@ -410,6 +410,43 @@ describe('serve command (unified preview)', () => {
     expect(result.stdout).toContain('Preview revoked: tok-abc');
   });
 
+  it('--list labels live previews, snapshots, and snapshots still uploading', async () => {
+    const base = { url: 'u', servedRoot: '/r', entryPath: '/r/i.html', allowLive: false };
+    setPreviewOp(async () => ({
+      previews: [
+        {
+          ...base,
+          previewToken: 'a',
+          createdAt: 'c1',
+          mode: 'live' as const,
+          state: 'ready' as const,
+        },
+        {
+          ...base,
+          previewToken: 'b',
+          createdAt: 'c2',
+          mode: 'persistent' as const,
+          state: 'pending' as const,
+          expiresAt: 'e2',
+        },
+        {
+          ...base,
+          previewToken: 'c',
+          createdAt: 'c3',
+          mode: 'persistent' as const,
+          state: 'ready' as const,
+          expiresAt: 'e3',
+        },
+        { ...base, previewToken: 'd', createdAt: 'c4' },
+      ],
+    }));
+    const result = await createServeCommand().execute(['--list'], {} as never);
+    expect(result.stdout).toContain('  a  live  -  u  /r  c1');
+    expect(result.stdout).toContain('  b  uploading  e2  u  /r  c2');
+    expect(result.stdout).toContain('  c  persistent  e3  u  /r  c3');
+    expect(result.stdout).toContain('  d  live  -  u  /r  c4');
+  });
+
   it('--stop accepts the preview URL printed at mint time', async () => {
     const stop = vi.fn(async () => ({ revoked: true }));
     setPreviewOp(stop);
@@ -680,7 +717,9 @@ describe('serve command (unified preview)', () => {
         ],
       })
     );
-    expect(result.stdout).toContain('(kept until its --ttl expires;');
+    expect(result.stdout).toContain(
+      '(kept until its --ttl expires; counts toward the 10-snapshot tray quota; revoke sooner with serve --stop)'
+    );
   });
 
   it('gives persistent preview uploads a ten-minute panel-RPC timeout', async () => {

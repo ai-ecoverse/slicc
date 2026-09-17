@@ -84,11 +84,16 @@ export function buildPreviewUrl(
 export const PREVIEW_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 /**
- * Previews one tray may hold at once. Live previews, `--ttl` snapshots, and
- * snapshots still uploading all count. Mirrors the worker's
- * `MAX_PREVIEWS_PER_TRAY`.
+ * `--ttl` snapshots one tray may hold, counting snapshots still uploading.
+ * Live previews have no quota. Mirrors the worker's `MAX_SNAPSHOTS_PER_TRAY`.
  */
-export const PREVIEW_MAX_PER_TRAY = 10;
+export const PREVIEW_MAX_SNAPSHOTS_PER_TRAY = 10;
+
+/**
+ * How long a live preview survives a lost leader connection before the worker
+ * deletes it. Mirrors the worker's `LIVE_PREVIEW_ORPHAN_MS`.
+ */
+export const PREVIEW_LIVE_ORPHAN_MINUTES = 5;
 
 const PREVIEW_LABEL_RE = /^([0-9a-f]{32})--(?:[0-9a-f]{8}-)?([0-9a-f]+)$/i;
 

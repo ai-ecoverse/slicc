@@ -9,7 +9,10 @@
  * retrying a lost response must not resurrect a preview. R2 keys and expiry move
  * unchanged; only the current owner runs archive cleanup.
  */
-import { MAX_PREVIEWS_PER_TRAY } from './persistent-preview-storage.js';
+import {
+  MAX_LIVE_PREVIEWS_PER_TRAY,
+  MAX_SNAPSHOTS_PER_TRAY,
+} from './persistent-preview-storage.js';
 import {
   type DurableObjectNamespaceLike,
   jsonResponse,
@@ -317,10 +320,12 @@ export class PreviewContinuity {
     // Internal import follows source-side target confirmation + durable freeze.
     // Expiry between those steps must not strand the frozen source. Import does
     // not revive the target's controller/leader session.
-    const activeCount = [...Object.values(tray.previews ?? {}), ...body.records].filter(
-      (record) => record.state !== 'cleanup'
+    const combined = [...Object.values(tray.previews ?? {}), ...body.records];
+    const snapshots = combined.filter(
+      (record) => record.mode === 'persistent' && record.state !== 'cleanup'
     ).length;
-    if (activeCount > MAX_PREVIEWS_PER_TRAY) return conflict();
+    const live = combined.filter((record) => record.mode !== 'persistent').length;
+    if (snapshots > MAX_SNAPSHOTS_PER_TRAY || live > MAX_LIVE_PREVIEWS_PER_TRAY) return conflict();
     for (const record of body.records) {
       if (
         !parseCapabilityToken(record.previewToken) ||

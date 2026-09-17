@@ -5,8 +5,18 @@ export const MAX_PREVIEW_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_PREVIEW_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_PREVIEW_FILES = 1_000;
 export const MAX_PREVIEW_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/** Per-tray preview quota; live previews and `--ttl` snapshots share it. */
-export const MAX_PREVIEWS_PER_TRAY = 10;
+/** `--ttl` snapshots one tray may hold, counting snapshots still uploading. */
+export const MAX_SNAPSHOTS_PER_TRAY = 10;
+/**
+ * Not a user quota: live previews cost no storage and expire with the leader
+ * connection. This only bounds the single persisted tray record.
+ */
+export const MAX_LIVE_PREVIEWS_PER_TRAY = 200;
+/**
+ * Live previews are served from the leader's VFS, so they die with the leader
+ * connection. The grace rides out socket blips and page reloads.
+ */
+export const LIVE_PREVIEW_ORPHAN_MS = 5 * 60 * 1000;
 
 export function normalizePreviewArchivePath(value: string): string | null {
   const normalized = value.replaceAll('\\', '/');
