@@ -22,19 +22,22 @@ export const MERGE_QUEUE_COUNT_QUERY = `query($owner: String!, $name: String!, $
 }`;
 
 /**
- * Trusted PRs and every non-PR event may touch staging. On `merge_group` only
- * the queue leader (position 1) mutates the shared staging Worker — followers
- * still run dry-run + unit tests, but skip turnstyle + deploy + smoke so five
- * candidates do not serialize on `staging-mutation-queue`.
+ * Trusted PRs and every non-PR event may touch staging. Fork PRs and
+ * Dependabot-triggered runs skip mutation: they do not receive repository
+ * Cloudflare secrets. On `merge_group` only the queue leader (position 1)
+ * mutates the shared staging Worker — followers still run dry-run + unit
+ * tests, but skip turnstyle + deploy + smoke so five candidates do not
+ * serialize on `staging-mutation-queue`.
  *
- * @param {{ eventName: string, isForkPr?: boolean, isQueueLeader?: boolean }} opts
+ * @param {{ eventName: string, isForkPr?: boolean, isDependabot?: boolean, isQueueLeader?: boolean }} opts
  */
 export function shouldMutateCloudflareStaging({
   eventName,
   isForkPr = false,
+  isDependabot = false,
   isQueueLeader = true,
 }) {
-  const trusted = eventName !== 'pull_request' || !isForkPr;
+  const trusted = eventName !== 'pull_request' || (!isForkPr && !isDependabot);
   if (!trusted) return false;
   if (eventName === 'merge_group') return isQueueLeader === true;
   return true;

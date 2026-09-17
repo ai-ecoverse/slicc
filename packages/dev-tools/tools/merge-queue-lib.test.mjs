@@ -29,6 +29,17 @@ describe('shouldMutateCloudflareStaging', () => {
     ).toBe(false);
   });
 
+  it('skips Dependabot-triggered pull requests', () => {
+    expect(
+      shouldMutateCloudflareStaging({
+        eventName: 'pull_request',
+        isForkPr: false,
+        isDependabot: true,
+        isQueueLeader: true,
+      })
+    ).toBe(false);
+  });
+
   it('runs only for the merge_group queue leader', () => {
     expect(
       shouldMutateCloudflareStaging({
