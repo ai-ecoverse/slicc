@@ -9,6 +9,8 @@
  * dependency on `@slicc/cloudflare-worker`, and the contract is small.
  */
 
+import { PREVIEW_MAX_PER_TRAY } from '@slicc/shared-ts';
+
 export interface MintArgs {
   workerBaseUrl: string;
   trayId: string;
@@ -45,9 +47,29 @@ export interface PreviewListItem {
   expiresAt?: string;
 }
 
+interface WorkerErrorBody {
+  error?: string;
+  code?: string;
+  active?: number;
+  limit?: number;
+}
+
+/** Name the remedy: the quota is otherwise only discovered by hitting it (#3213). */
+function previewLimitMessage(body: WorkerErrorBody): string {
+  const usage =
+    typeof body.active === 'number' && typeof body.limit === 'number'
+      ? `${body.active} of ${body.limit} in use`
+      : `limit ${PREVIEW_MAX_PER_TRAY} per tray`;
+  return (
+    `${body.error} (${usage}; live previews and --ttl snapshots both count, and neither ends with the session). ` +
+    'List them with "serve --list" and free one with "serve --stop <token>".'
+  );
+}
+
 async function workerError(prefix: string, response: Response): Promise<Error> {
   try {
-    const body = (await response.clone().json()) as { error?: string };
+    const body = (await response.clone().json()) as WorkerErrorBody;
+    if (body.code === 'PREVIEW_LIMIT') return new Error(`${prefix}: ${previewLimitMessage(body)}`);
     if (body.error) return new Error(`${prefix}: ${body.error}`);
   } catch {
     // Fall through to the status-only error.

@@ -1,3 +1,4 @@
+import { PREVIEW_MAX_FILE_BYTES } from '@slicc/shared-ts';
 import { isPathWithinServedRoot } from './preview-security.js';
 import { uint8ToBase64 } from './tray-fs-handler.js';
 
@@ -13,7 +14,7 @@ export interface PreviewRequestMessage {
 
 interface MinimalVfs {
   readFile(path: string, options?: { encoding?: 'utf-8' | 'binary' }): Promise<string | Uint8Array>;
-  stat(path: string): Promise<{ type: 'file' | 'directory' | 'symlink' }>;
+  stat(path: string): Promise<{ type: 'file' | 'directory' | 'symlink'; size?: number }>;
 }
 
 interface MinimalLeaderSocket {
@@ -26,24 +27,30 @@ export async function handlePreviewRequest(
   vfs: MinimalVfs
 ): Promise<void> {
   const { reqId, servedRoot, asText } = msg;
-  let vfsPath = msg.vfsPath;
 
-  if (!isPathWithinServedRoot(vfsPath, servedRoot)) {
+  if (!isPathWithinServedRoot(msg.vfsPath, servedRoot)) {
     ws.send({ type: 'preview.response', reqId, ok: false, status: 403 });
     return;
   }
 
-  try {
-    const st = await vfs.stat(vfsPath);
-    if (st.type === 'directory') {
-      vfsPath = vfsPath.replace(/\/?$/, '/') + 'index.html';
-      if (!isPathWithinServedRoot(vfsPath, servedRoot)) {
-        ws.send({ type: 'preview.response', reqId, ok: false, status: 403 });
-        return;
-      }
-    }
-  } catch {
-    // ENOENT here is fine — fall through to readFile, which will surface the 404 below.
+  const resolved = await statServedFile(msg.vfsPath, servedRoot, vfs);
+  if (resolved === 'forbidden') {
+    ws.send({ type: 'preview.response', reqId, ok: false, status: 403 });
+    return;
+  }
+  const { vfsPath, size } = resolved;
+
+  // Refuse before reading: the worker relay buffers the whole file and caps it
+  // at the same limit, so sending more only burns the socket (#2852).
+  if (size !== undefined && size > PREVIEW_MAX_FILE_BYTES) {
+    ws.send({
+      type: 'preview.response',
+      reqId,
+      ok: false,
+      status: 413,
+      reason: `preview file exceeds 25 MiB limit: ${servedRelativePath(vfsPath, servedRoot)}`,
+    });
+    return;
   }
 
   let content: string;
@@ -87,6 +94,30 @@ export async function handlePreviewRequest(
       encoding,
     });
   }
+}
+
+/** Map a directory to its index.html and read the file size when the entry exists. */
+async function statServedFile(
+  vfsPath: string,
+  servedRoot: string,
+  vfs: MinimalVfs
+): Promise<{ vfsPath: string; size?: number } | 'forbidden'> {
+  try {
+    const st = await vfs.stat(vfsPath);
+    if (st.type !== 'directory') return { vfsPath, size: st.size };
+    const indexPath = vfsPath.replace(/\/?$/, '/') + 'index.html';
+    if (!isPathWithinServedRoot(indexPath, servedRoot)) return 'forbidden';
+    const indexStat = await vfs.stat(indexPath).catch(() => null);
+    return { vfsPath: indexPath, size: indexStat?.size };
+  } catch {
+    // ENOENT here is fine — readFile surfaces the 404.
+    return { vfsPath };
+  }
+}
+
+function servedRelativePath(vfsPath: string, servedRoot: string): string {
+  const root = servedRoot.replace(/\/$/, '');
+  return vfsPath.startsWith(`${root}/`) ? vfsPath.slice(root.length + 1) : vfsPath;
 }
 
 function chunkBy(content: string, size: number): string[] {

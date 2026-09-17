@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPreviewUrl, previewBaseHost } from '../src/preview-url.js';
+import { buildPreviewUrl, previewBaseHost, previewTokenFromUrl } from '../src/preview-url.js';
 
 describe('previewBaseHost', () => {
   it('preserves isolated local harness ports without matching lookalike hosts', () => {
@@ -108,5 +108,31 @@ describe('buildPreviewUrl', () => {
     ).toBe(
       'https://abcd1234000000000000000000000001--00000000-ff00112233445566778899aa.sliccy.now/'
     );
+  });
+});
+
+describe('previewTokenFromUrl', () => {
+  const trayId = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  const token = `${trayId}.00112233445566778899aabbccddeeff00112233`;
+
+  it('inverts buildPreviewUrl with and without a user hash', () => {
+    for (const userHash of [undefined, 'deadbeef']) {
+      for (const base of ['https://www.sliccy.ai', 'http://localhost:8787']) {
+        const url = buildPreviewUrl(base, token, '/nested/index.html', userHash);
+        expect(previewTokenFromUrl(url)).toBe(token);
+      }
+    }
+  });
+
+  it('accepts a bare preview host', () => {
+    const host = new URL(buildPreviewUrl('https://www.sliccy.ai', token)).host;
+    expect(previewTokenFromUrl(host)).toBe(token);
+  });
+
+  it('returns null for anything that is not a preview URL', () => {
+    expect(previewTokenFromUrl(token)).toBeNull();
+    expect(previewTokenFromUrl('https://www.sliccy.ai/')).toBeNull();
+    expect(previewTokenFromUrl('not a url at all')).toBeNull();
+    expect(previewTokenFromUrl('https://0a1b2c3d--beef.sliccy.now/')).toBeNull();
   });
 });

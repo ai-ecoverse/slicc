@@ -76,3 +76,44 @@ export function buildPreviewUrl(
   const scheme = base.startsWith('localhost') ? 'http' : 'https';
   return `${scheme}://${label}.${base}${p}`;
 }
+
+/**
+ * Per-file ceiling for `serve` previews, live relay and `--ttl` snapshots
+ * alike. Mirrors the worker's `MAX_PREVIEW_FILE_BYTES`.
+ */
+export const PREVIEW_MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Previews one tray may hold at once. Live previews, `--ttl` snapshots, and
+ * snapshots still uploading all count. Mirrors the worker's
+ * `MAX_PREVIEWS_PER_TRAY`.
+ */
+export const PREVIEW_MAX_PER_TRAY = 10;
+
+const PREVIEW_LABEL_RE = /^([0-9a-f]{32})--(?:[0-9a-f]{8}-)?([0-9a-f]+)$/i;
+
+/**
+ * Recover the capability token (`<trayId>.<secret>`) from a preview URL or
+ * host, so `serve --stop` accepts what `serve` printed. The inverse of
+ * {@link buildPreviewUrl}'s label encoding; the user hash is not part of the
+ * token. Returns null for anything that is not a preview URL or host.
+ */
+export function previewTokenFromUrl(input: string): string | null {
+  let host: string;
+  try {
+    host = new URL(input.includes('://') ? input : `https://${input}`).hostname;
+  } catch {
+    return null;
+  }
+  const match = PREVIEW_LABEL_RE.exec(host.split('.')[0] ?? '');
+  if (!match || !host.includes('.')) return null;
+  const compact = match[1]!.toLowerCase();
+  const trayId = [
+    compact.slice(0, 8),
+    compact.slice(8, 12),
+    compact.slice(12, 16),
+    compact.slice(16, 20),
+    compact.slice(20),
+  ].join('-');
+  return `${trayId}.${match[2]!.toLowerCase()}`;
+}

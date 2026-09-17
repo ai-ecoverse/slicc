@@ -1,3 +1,4 @@
+import { PREVIEW_MAX_PER_TRAY, previewTokenFromUrl } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
@@ -63,14 +64,25 @@ function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  --no-bridge  Force the live bridge OFF even when followers are Cherry-attached.\n' +
       '  --max-tabs   Cap concurrent bridge tab connections (default 20; with --bridge).\n' +
       '  --quiet      Suppress the single first-visit preview announcement.\n' +
-      '  --stop <t>   Revoke a previously-minted preview token (closes bridge sockets,\n' +
-      '               deletes the auto-provisioned webhook).\n' +
+      '  --stop <t>   Revoke a preview by token or URL and free its quota slot\n' +
+      '               (closes bridge sockets, deletes the auto-provisioned webhook).\n' +
       '  --list       List active previews on this tray.\n' +
       '  --logs [t]   Show recent connects/disconnects without emitting a lick.\n' +
       '  --lines <n>  Limit --logs output to the newest n matching records.\n' +
       '  --truncate [t]  Clear lifecycle records and re-arm the announcement latch.\n' +
       '  --project    Obsolete; ignored. Root-absolute paths work natively\n' +
-      '               under unified preview.\n',
+      '               under unified preview.\n\n' +
+      'Limits and lifetime:\n' +
+      '  - Each file may be at most 25 MiB. Larger files answer HTTP 413 on a live\n' +
+      '    preview and are refused before upload with --ttl. --ttl snapshots are\n' +
+      '    also capped at 1,000 files and 50 MiB in total.\n' +
+      `  - A tray holds at most ${PREVIEW_MAX_PER_TRAY} previews. Live previews, --ttl snapshots, and\n` +
+      '    snapshots still uploading all count; the quota moves with the tray.\n' +
+      '  - Previews do not end with the session. A live preview lasts until\n' +
+      '    `serve --stop` (it only serves while the leader is connected); a --ttl\n' +
+      '    snapshot lasts until its TTL expires. Free a slot with `serve --stop`.\n' +
+      '  - <token> is the "Preview token" printed at mint time or the TOKEN column\n' +
+      '    of `serve --list`; `--stop` also accepts the preview URL.\n',
     stderr: '',
     exitCode: 0,
   };
@@ -306,7 +318,9 @@ function isValidationError(v: ServeValidation | ServeResult): v is ServeResult {
   return 'exitCode' in v;
 }
 
-async function stopPreview(token: string): Promise<ServeResult> {
+async function stopPreview(tokenOrUrl: string): Promise<ServeResult> {
+  // `serve` prints the URL first; its host label is a re-encoding of the token.
+  const token = previewTokenFromUrl(tokenOrUrl) ?? tokenOrUrl;
   let result: { revoked?: boolean; webhookId?: string };
   const inRealm = getPreviewOp();
   if (inRealm) {
@@ -641,8 +655,13 @@ async function executeMint(
 
   const followerLabel = `${result.pushed} follower${result.pushed === 1 ? '' : 's'}`;
   const targetIdSuffix = targetId ? ` (targetId: ${targetId})` : '';
+  const lifetime =
+    parsed.ttlMs === undefined ? 'kept until `serve --stop`' : 'kept until its --ttl expires';
+  const tokenLine = result.previewToken
+    ? `Preview token: ${result.previewToken} (${lifetime}; counts toward the ${PREVIEW_MAX_PER_TRAY}-preview tray quota)\n`
+    : '';
   return {
-    stdout: `Preview URL: ${result.url}${targetIdSuffix}\nPushed to ${followerLabel}\n`,
+    stdout: `Preview URL: ${result.url}${targetIdSuffix}\n${tokenLine}Pushed to ${followerLabel}\n`,
     stderr: deprecationNotice,
     exitCode: 0,
   };
