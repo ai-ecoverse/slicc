@@ -25,6 +25,18 @@ type PluginHooks = {
 const EMITTED_REF =
   't===void 0&&(t=new URL(`/assets/ort-wasm-simd-threaded.asyncify-DMmc6YqF.wasm`,import.meta.url))';
 
+describe('ORT_WEB_VERSION', () => {
+  it('matches the onnxruntime-web pin of @huggingface/transformers', () => {
+    const pkg = JSON.parse(
+      readFileSync(
+        join(process.cwd(), 'node_modules/@huggingface/transformers/package.json'),
+        'utf8'
+      )
+    ) as { dependencies?: { 'onnxruntime-web'?: string } };
+    expect(ORT_WEB_VERSION).toBe(pkg.dependencies?.['onnxruntime-web']);
+  });
+});
+
 describe('ORT_WASM_ASSET_RE', () => {
   it('matches emitted, content-hashed ort wasm filenames (any variant)', () => {
     expect(ORT_WASM_ASSET_RE.test('assets/ort-wasm-simd-threaded.asyncify-DMmc6YqF.wasm')).toBe(

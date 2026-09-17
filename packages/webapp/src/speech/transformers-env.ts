@@ -164,6 +164,8 @@ export const ORT_WASM_DIST_FILES: ReadonlyArray<string> = [
   'ort-wasm-simd-threaded.wasm',
   'ort-wasm-simd-threaded.asyncify.mjs',
   'ort-wasm-simd-threaded.asyncify.wasm',
+  'ort-wasm-simd-threaded.jspi.mjs',
+  'ort-wasm-simd-threaded.jspi.wasm',
 ];
 
 /** One-shot ENOENT marker carried on errors raised by `readVfsBytes` so the

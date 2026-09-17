@@ -11,6 +11,7 @@ import {
   ESPEAK_GLUE_FILE,
   ESPEAK_WASM_FILE,
 } from '../../src/speech/espeak-phonemizer.js';
+import { ORT_WEB_VERSION } from '../../src/speech/ort-version.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from '../../src/speech/transformers-env.js';
 
 /** just-bash does not re-export SecureFetchOptions from its root entry. */
@@ -27,11 +28,15 @@ function bytes(s: string): Uint8Array {
 }
 
 /** Pre-stage every ort dist file so the network install fast-path is skipped. */
-async function stageOrt(fs: VirtualFS): Promise<void> {
+async function stageOrt(fs: VirtualFS, version: string = ORT_WEB_VERSION): Promise<void> {
   for (const f of ORT_WASM_DIST_FILES) {
     await fs.mkdir(ORT_DIST_VFS_PATH, { recursive: true });
     await fs.writeFile(`${ORT_DIST_VFS_PATH}${f}`, bytes('wasm'));
   }
+  await fs.writeFile(
+    '/workspace/node_modules/onnxruntime-web/package.json',
+    bytes(JSON.stringify({ name: 'onnxruntime-web', version }))
+  );
 }
 
 /** Pre-stage the espeak-ng dist files so its install fast-path is skipped. */
@@ -168,9 +173,13 @@ describe('ensureSpeechAssetsStaged', () => {
     await stageEspeak(fs);
     await fs.mkdir(ORT_DIST_VFS_PATH, { recursive: true });
     for (const f of ORT_WASM_DIST_FILES) {
-      if (/\.asyncify\./.test(f)) continue;
+      if (/\.(asyncify|jspi)\./.test(f)) continue;
       await fs.writeFile(`${ORT_DIST_VFS_PATH}${f}`, bytes('wasm'));
     }
+    await fs.writeFile(
+      '/workspace/node_modules/onnxruntime-web/package.json',
+      bytes(JSON.stringify({ name: 'onnxruntime-web', version: ORT_WEB_VERSION }))
+    );
     let registryHits = 0;
     const fetch = (async (url: string) => {
       if (url.includes('registry.npmjs.org')) {
@@ -182,5 +191,17 @@ describe('ensureSpeechAssetsStaged', () => {
     const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
     expect(result.ortStaged).toBe(false);
     expect(registryHits).toBe(0);
+  });
+
+  it('reinstalls ort when staged package.json version does not match ORT_WEB_VERSION', async () => {
+    const fs = await newFs();
+    await stageEspeak(fs);
+    await stageOrt(fs, '1.26.0-dev.stale');
+    const failing: SecureFetch = (async (url: string): Promise<FetchResult> => {
+      throw new TypeError(`Failed to fetch ${url}`);
+    }) as unknown as SecureFetch;
+    await expect(ensureSpeechAssetsStaged({ fs, fetch: failing, repos: [REPO] })).rejects.toThrow(
+      /failed to stage onnxruntime-web/
+    );
   });
 });

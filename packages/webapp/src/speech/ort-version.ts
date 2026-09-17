@@ -7,4 +7,4 @@
  * (`whisper-engine.ts`) and the build-side dead-asset strip
  * (`vite-plugins/strip-ort-wasm-asset.ts`).
  */
-export const ORT_WEB_VERSION = '1.26.0-dev.20260416-b7804b056c';
+export const ORT_WEB_VERSION = '1.31.0-dev.20260914-8d85527a0';

@@ -21,6 +21,7 @@
  * it when the `speech` path filter matches).
  */
 
+import { ORT_WEB_VERSION } from '../../src/speech/ort-version.js';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 import { type ExecResult, execInTerminal, openTerminal } from './two-instance-helpers.js';
@@ -297,7 +298,7 @@ test.describe('say -o WAV output (real kokoro)', () => {
     }
     const pkgs = await exec(
       page,
-      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
+      `cd /workspace && ipk add @huggingface/transformers onnxruntime-web@${ORT_WEB_VERSION} kokoro-js espeak-ng`
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
     // The 92 MB `model_quantized.onnx` write intermittently trips one of two
