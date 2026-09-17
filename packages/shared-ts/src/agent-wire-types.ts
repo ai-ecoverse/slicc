@@ -266,6 +266,7 @@ export interface LickEvent {
     | 'cherry'
     | 'workflow'
     | 'bash'
+    | 'jshd'
     | 'sudo-request'
     | 'preview'
     | 'discovery';
@@ -360,6 +361,12 @@ export interface LickEvent {
    * correlate the completion with what it saw in `ps` while the job was live.
    */
   bashJobPid?: number;
+  /**
+   * Crash-loop (or other supervisor) report for a `jshd` unit. The unit
+   * name is the handle `jshd status` / `jshd logs` accept.
+   */
+  jshdName?: string;
+  jshdRestarts?: number;
   /** Durable output file: a workflow run's result JSON, or a bash job's output. */
   resultPath?: string;
   preview?: string;

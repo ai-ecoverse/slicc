@@ -18,6 +18,9 @@ SLICC's automation primitives turn external or VFS-internal events into **licks*
 | `webhook`  | Inbound HTTP request         | Callbacks from external services  |
 | `crontask` | Cron schedule                | Recurring background work         |
 | `fswatch`  | VFS create / modify / delete | React to authored content changes |
+| `jshd`     | Long-running `.jsh` process  | Daemons, watchers, skill backends |
+
+`jshd` is a process supervisor, not a lick producer (except a crash-loop report). Prefer it over a detached `bash` job when the script must survive reload. See the `jshd` skill.
 
 All three take `--scoop <target>`, which names **a unit, not a species**: a scoop name, a cone name, or a folder (`cone-<slug>`, `<name>-scoop`). Omit it and events come back to whichever unit you are — the cone you are in, or the scoop itself if you are one. A target naming no live unit is **refused at create time** (exit 1, listing the valid targets) — create the scoop first, then register the webhook / cron task / watcher against it. Events are never re-routed when a target disappears; stable-home webhook deliveries remain queued as described below.
 

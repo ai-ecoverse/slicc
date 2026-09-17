@@ -36,7 +36,7 @@
  */
 
 import type { CommandContext } from 'just-bash';
-import type { ProcessKind, ProcessManager, ProcessOwner } from '../process-manager.js';
+import type { Process, ProcessKind, ProcessManager, ProcessOwner } from '../process-manager.js';
 import { attachRealmHost, type RealmHostHandle } from './realm-host.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
@@ -172,6 +172,17 @@ export interface RunInRealmOptions {
    * `SAB_DEFAULT_WINDOW_BYTES`. Tests shrink it to exercise chunking.
    */
   syncSabBytes?: number;
+  /**
+   * Called once the process record exists, before the realm starts.
+   * `jshd` uses this so `start` can print a pid without waiting for the
+   * script to exit.
+   */
+  onSpawn?: (proc: Process) => void;
+  /**
+   * Live stdout/stderr chunks as the realm writes them. Used to tee
+   * `jshd` unit logs incrementally the way detached bash jobs do.
+   */
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
 }
 
 export interface RealmResult {
@@ -218,12 +229,14 @@ function dropPendingPaths(capture: LiveRealmCapture, paths: readonly string[]): 
 /** Apply fire-and-forget live posts. Returns whether the message settles the run. */
 function ingestLiveRealmMessage(
   data: { type?: string },
-  capture: LiveRealmCapture
+  capture: LiveRealmCapture,
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void
 ): 'done' | 'error' | 'live' {
   if (data.type === 'realm-output') {
     const msg = data as RealmOutputMsg;
     if (msg.stream === 'stdout') capture.stdout += msg.chunk;
     else capture.stderr += msg.chunk;
+    onOutput?.(msg.chunk, msg.stream);
     return 'live';
   }
   if (data.type === 'realm-fs-write') {
@@ -308,6 +321,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     owner: opts.owner,
     ppid: opts.ppid,
   });
+  opts.onSpawn?.(proc);
 
   let realm: Realm;
   try {
@@ -403,7 +417,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
 
     messageHandler = (event: MessageEvent): void => {
       const data = event.data as { type?: string };
-      const kind = ingestLiveRealmMessage(data, capture);
+      const kind = ingestLiveRealmMessage(data, capture, opts.onOutput);
       if (kind === 'done') {
         const done = event.data as RealmDoneMsg;
         settleDone(

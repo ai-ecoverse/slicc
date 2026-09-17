@@ -101,6 +101,7 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'gelatiere', source: 'gelatiere/run.ts', verbs: 'source' },
   { command: 'memory', source: 'memory/run.ts', verbs: 'source' },
   { command: 'crontask', source: 'crontask-command.ts', verbs: 'source' },
+  { command: 'jshd', source: 'jshd/run.ts', verbs: 'source' },
   { command: 'diskutil', source: 'df-command.ts', verbs: 'source' },
   { command: 'esptool', source: 'esptool-command.ts', verbs: 'source' },
   { command: 'hid', source: 'hid-command.ts', verbs: 'source' },

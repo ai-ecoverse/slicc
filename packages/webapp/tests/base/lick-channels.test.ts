@@ -44,6 +44,11 @@ describe('isLickChannel', () => {
     expect(LICK_CHANNELS.has('sudo-request')).toBe(true);
   });
 
+  it('recognizes jshd crash-loop reports as licks', () => {
+    expect(isLickChannel('jshd')).toBe(true);
+    expect(LICK_CHANNELS.has('jshd')).toBe(true);
+  });
+
   it('rejects non-lick channels and nullish input', () => {
     expect(isLickChannel('web')).toBe(false);
     expect(isLickChannel('not-a-channel')).toBe(false);

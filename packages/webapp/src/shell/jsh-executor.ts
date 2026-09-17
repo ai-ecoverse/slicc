@@ -54,6 +54,16 @@ export interface JshExecutorOptions {
    * succeed.
    */
   realmFactory?: RealmFactory;
+  /**
+   * Called once the `kind:'jsh'` process record exists, before user
+   * code runs. `jshd start` uses this to return a pid immediately.
+   */
+  onSpawn?: (pid: number) => void;
+  /**
+   * Live stdout/stderr as the realm writes it. `jshd` tees this into
+   * `/workspace/.jshd/log/<name>.log`.
+   */
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
 }
 
 /**
@@ -130,6 +140,8 @@ export async function executeJsCode(
     // confirmed a controlling SW at boot (see sync-fs-enabled.ts). Off in the
     // in-process test factory → bounded snapshot, never a deadlocking sync XHR.
     syncFsBridgeEnabled: isSyncFsBridgeEnabled(),
+    ...(options.onSpawn ? { onSpawn: (proc) => options.onSpawn?.(proc.pid) } : {}),
+    ...(options.onOutput ? { onOutput: options.onOutput } : {}),
   });
   return result;
 }

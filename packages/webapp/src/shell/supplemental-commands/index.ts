@@ -40,6 +40,7 @@ import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
 import { createIpkCommand } from './ipk-command.js';
 import { createIpxCommand } from './ipx-command.js';
+import { createJshdCommand } from './jshd-command.js';
 import { createKillCommand } from './kill-command.js';
 import { createLayoutCommand } from './layout-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
@@ -330,6 +331,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPsCommand({ processManager: options.processManager }),
     createUptimeCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createJshdCommand({
+      processManager: options.processManager,
+      scriptCatalog: options.scriptCatalog,
+    }),
     // bash builtins `help` advertises that just-bash never implemented — they
     // answered 127 until #2816. See bash-builtins-command.ts.
     ...createBashBuiltinCommands(),

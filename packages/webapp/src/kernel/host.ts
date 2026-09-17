@@ -34,6 +34,8 @@
  *  8. `globalThis.__slicc_lickManager = lickManager`.
  *  9. `recoverMounts` against the shared FS, emitting a `session-reload`
  *     lick if any mount needs user re-consent. Fire-and-forget.
+ *  9b. Restore enabled `jshd` units (fire-and-forget, after mount restore
+ *      is scheduled, before cone bootstrap). Never on the boot critical path.
  *  10. Cone bootstrap (skippable via `skipConeBootstrap`).
  *  11. Upgrade detection.
  *  12. `BshWatchdog` start.
@@ -301,6 +303,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return event.workflowName ?? event.workflowRunId ?? 'workflow';
     case 'bash':
       return event.bashJobId ?? 'bash';
+    case 'jshd':
+      return event.jshdName ?? 'jshd';
     case 'preview':
       return event.previewOrigin ?? 'preview';
     case 'discovery':
@@ -333,6 +337,8 @@ function resolveLickEventId(event: LickEvent): string | undefined {
       return `workflow-${event.workflowRunId ?? 'unknown'}`;
     case 'bash':
       return `bash-${event.bashJobId ?? 'unknown'}`;
+    case 'jshd':
+      return `jshd-${event.jshdName ?? 'unknown'}`;
     case 'preview':
       return event.previewConnId ?? `preview-${event.timestamp}`;
     case 'discovery':
@@ -917,6 +923,31 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
  * `setEventHandler` so the `session-reload` lick this may emit routes through
  * the installed handler. The caller gates on `sharedFs` being present.
  */
+/**
+ * Step 9b: relaunch every enabled jshd unit (fire-and-forget). Scheduled
+ * after mount recovery so units that read mounted paths have a chance to
+ * see them, and before cone bootstrap so restore starts before the first
+ * turn. The body is lazily imported so the supervisor stays out of the
+ * worker's eager first-load graph.
+ */
+function scheduleJshdRestore(
+  sharedFs: VirtualFS,
+  processManager: ProcessManager,
+  lickManager: LickManager,
+  log: KernelHostLogger
+): void {
+  void (async () => {
+    try {
+      const { restoreEnabledJshdUnits } = await import(
+        '../shell/supplemental-commands/jshd/restore.js'
+      );
+      await restoreEnabledJshdUnits({ fs: sharedFs, processManager, lickManager });
+    } catch (err) {
+      log.warn('jshd restore failed', err);
+    }
+  })();
+}
+
 function scheduleMountRecovery(
   sharedFs: VirtualFS,
   lickManager: LickManager,
@@ -1243,6 +1274,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //    handler installed above.
   if (sharedFs) {
     scheduleMountRecovery(sharedFs, lickManager, log);
+    scheduleJshdRestore(sharedFs, processManager, lickManager, log);
   }
 
   // 10. Cone bootstrap.

@@ -58,6 +58,7 @@ Consequences worth knowing: `get(pid)` and `wait(pid)` on a reaped pid behave ex
 | `shell`      | `TerminalSessionHost.handleExec()` (panel terminal) | `[command-line]`                        |
 | `shell`      | `ScoopContext.spawnBashJob()` (agent `bash` tool)   | `['bash', '-c', command]`               |
 | `jsh`        | `executeJshFile` / `executeJsCode` (via realm)      | `['node', scriptPath, …args]`           |
+| `jsh`        | `jshd start` (owner `system`, job id `jshd:<name>`) | `['node', scriptPath, …args]`           |
 | `py`         | `python` / `python3` shell command (via realm)      | `['python3', …]`                        |
 
 The principal-arg extraction for tools (`extractToolArg` in `tool-adapter.ts`) tries an ordered list of known param names — `command` (bash), `file_path` / `path` (file ops), `pattern`, `url`, `key`, `name`, `query`, `message` — then falls back to the first non-empty string value. The `ps` formatter shell-quotes args with whitespace; a typical row reads `bash 'bash -c "date && sleep 8 && date"'`.
@@ -165,6 +166,22 @@ Every `bash` tool call registers a `kind:'shell'` job (`ScoopContext.spawnBashJo
 **Per-run parentage under concurrency.** Detaching makes several runs share one `AlmostBashShell`, so the single `activeShellPid` field is no longer sufficient: a detached run that spawns its realm child late would otherwise attach it to whichever run started most recently. just-bash passes each command context the `signal` its exec was started with, so the shell keeps a `WeakMap<AbortSignal, number>` (`jobPidByRunSignal`) and `buildJshProcessConfig(runSignal)` prefers it, falling back to `activeShellPid` (panel terminal) and then `getCurrentShellPid` (turn pid). Pinned by `tests/scoops/scoop-realm-parenting.test.ts`.
 
 **What is still not preemptible.** just-bash builtins (`grep`, `sed`, `jq`, …) execute in the kernel worker itself, so there is no worker to terminate: a SIGKILL on the job aborts cooperatively and just-bash observes it only at its next statement boundary. A single CPU-bound builtin blocks the worker's event loop, which also means the detach and timeout timers cannot fire while it runs. Closing that gap would mean hosting just-bash in a realm as well, which the ~108 kernel-resident supplemental commands (CDP, sudo brokers, secrets, orchestrator) currently rule out.
+
+## jshd units
+
+`jshd` is a pm2-style supervisor for long-running `.jsh` scripts (dev servers, watchers, skill-side daemons). Each unit is one realm worker plus one `ProcessManager` process (`kind: 'jsh'`, owner `{ kind: 'system' }`). `ps` lists it; `kill <pid>` stops it.
+
+Unit records live in `/workspace/.jshd/<name>.json` (argv, cwd, env, restart policy, enabled, createdAt). Logs are tee'd incrementally to `/workspace/.jshd/log/<name>.log`, the same idea as detached bash-job output.
+
+**Restart vs stop.** `kill <pid>` and `jshd stop` mean stop: they do not restart. Only the restart policy (`always` / `on-failure` / `no`, default `always`) relaunches a unit that exited on its own. Backoff is exponential (1s … 30s). Eight failures inside 60s mark the unit `errored` and emit a `jshd` lick.
+
+**Keep-alive** is the realm's existing handle semantics: a pending timer or host-event subscription keeps the worker up; a script that returns with nothing pending exits and is subject to the restart policy.
+
+**Boot restore.** After mount recovery is scheduled (kernel-host step 9), a fire-and-forget step relaunches every `enabled` unit before cone bootstrap. It is never on the boot critical path (no awaited VFS reads).
+
+**Job table.** Live units are also recorded in `kernel/job-table.ts` (`id: jshd:<name>`) so a future `jobs` / `fg` / `bg` (#2846) can list them next to detached bash jobs.
+
+**Floats.** Real wherever `Worker` exists (standalone, Electron, cloud leader). The thin extension runs JS realms as per-task sandbox iframes, so `jshd start` is best effort there and `jshd ls` reports the unit is not durable.
 
 ## Synchronous filesystem bridge
 
