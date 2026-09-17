@@ -44,17 +44,36 @@ describe('CI critical-path routing', () => {
   const e2e = jobBody('e2e', 'node-server');
   const worker = jobBody('cloudflare-worker', 'cloud-core');
 
-  it('runs one representative E2E scenario on pull requests and the full suite after', () => {
-    const smoke = stepBody(e2e, 'PR E2E smoke test');
-    expect(smoke).toContain("if: github.event_name == 'pull_request'");
-    expect(smoke).toContain(
-      'npm run test:e2e -- packages/webapp/tests/e2e/reference-scenario.test.ts'
+  it('runs the medium E2E suite on pull requests and the full suite after', async () => {
+    const { MQ_ONLY_SPEC_BASENAMES } = await import('../../webapp/tests/e2e/mq-only-specs.ts');
+    expect(MQ_ONLY_SPEC_BASENAMES.length).toBeGreaterThan(0);
+    expect(MQ_ONLY_SPEC_BASENAMES).toEqual(
+      expect.arrayContaining([
+        'multiple-cones.test.ts',
+        'multiple-cones-follower.test.ts',
+        'multiple-cones-licks.test.ts',
+        'compaction-robustness.test.ts',
+        'roving-tray-webhook.test.ts',
+        'sprinkle-details.test.ts',
+        'speech-roundtrip.test.ts',
+      ])
     );
+
+    const prSuite = stepBody(e2e, 'PR E2E suite');
+    expect(prSuite).toContain("if: github.event_name == 'pull_request'");
+    expect(prSuite).toMatch(/run: npm run test:e2e\s/);
+    expect(prSuite).toContain("SLICC_E2E_PR: '1'");
+    expect(prSuite).not.toContain('reference-scenario.test.ts');
 
     const full = stepBody(e2e, 'Full E2E suite');
     expect(full).toContain("if: github.event_name != 'pull_request'");
     expect(full).toMatch(/run: npm run test:e2e\s/);
-    expect(full).not.toContain('reference-scenario.test.ts');
+    expect(full).not.toContain('SLICC_E2E_PR');
+
+    const playwrightConfig = readFileSync('packages/webapp/tests/e2e/playwright.config.ts', 'utf8');
+    expect(playwrightConfig).toContain("from './mq-only-specs'");
+    expect(playwrightConfig).toContain("process.env['SLICC_E2E_PR'] === '1'");
+    expect(playwrightConfig).toContain('MQ_ONLY_SPEC_BASENAMES');
   });
 
   it('tracks the costly checks with dedicated, reviewable path filters', () => {

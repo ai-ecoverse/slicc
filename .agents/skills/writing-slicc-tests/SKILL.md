@@ -974,18 +974,20 @@ collide on the port and on the proxy's outbound target. The fake-LLM
 webServer entry also sets `reuseExistingServer: false` so each run
 starts with a fresh turn cursor and fixture.
 
-In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs the
-reference scenario as the pull-request smoke gate feeding the required
-`ci` summary check. The same job runs the full suite on `merge_group`, so
-the long-tail scenarios remain enforced before landing without delaying
-the first PR signal. It triggers on changes to any runtime the harness drives or bundles —
+In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs a medium
+suite on pull requests (`SLICC_E2E_PR=1`) and the full suite on
+`merge_group`. The PR gate ignores the merge-queue-only basenames in
+`packages/webapp/tests/e2e/mq-only-specs.ts` (multiple-cones*,
+compaction-robustness, roving-tray-webhook, sprinkle-details, speech) so it
+fills spare capacity under `webapp` / `node-matrix` without owning the
+required `ci` signal; new medium specs join PRs by default. It triggers on changes to any runtime the harness drives or bundles —
 `webapp`, `vfs-root`, `assets`, `shared-ts`, `spoon`, `webcomponents`,
 `cloud-core`, `node-server`, `cloudflare-worker` — plus dependency manifests,
 patches, relevant TS/Vitest config, and the CI workflow. The workflow records
 that scope in a dedicated `e2e` paths-filter output; keep it narrower than
 `root-config` so a coverage-floor-only change does not start a browser run.
-The multi-cone leg (`multiple-cones*.test.ts`, #2313) rides the same job with
-no extra gating: it exercises the `multiple-cones` flag end to end — cone
+The multi-cone leg (`multiple-cones*.test.ts`, #2313) rides the merge-queue
+job with no extra gating: it exercises the `multiple-cones` flag end to end — cone
 create / switch / drop, the rail's session actions and their freezer outcomes,
 lick addressing across cones, and the leader + follower pair above.
 Playwright retries twice in CI (`retries` in the config); locally it
