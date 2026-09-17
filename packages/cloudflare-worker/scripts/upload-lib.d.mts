@@ -41,11 +41,15 @@ export interface RunBulkUploadsOptions {
   exec: Exec;
   concurrency?: number;
   retries?: number;
+  chunkSize?: number;
   sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
+  log?: (message: string) => void;
 }
 
 export interface BulkUploadResult {
   groups: number;
+  chunks: number;
   invocations: number;
   retries: number;
 }
@@ -55,6 +59,14 @@ export declare function runBulkUploads(
   opts: RunBulkUploadsOptions
 ): Promise<BulkUploadResult>;
 
+export declare const MANIFEST_CHUNK_SIZE: number;
+
 export declare const RETRY_BASE_DELAY_MS: number;
+
+export declare const RETRY_MAX_DELAY_MS: number;
+
+export declare function retryConcurrency(concurrency: number, attempt: number): number;
+
+export declare function chunkEntries<T>(entries: T[], size?: number): T[][];
 
 export declare function retryDelayMs(attempt: number, random?: () => number): number;

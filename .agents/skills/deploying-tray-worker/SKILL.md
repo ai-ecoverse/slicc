@@ -112,11 +112,22 @@ set is unchanged; do not add those changes to the costly upload signal just to o
 fallback coverage.
 
 The uploader validates the complete hash invariant first, groups files by MIME type, and
-runs one `wrangler r2 bulk put` process per content type. This preserves per-object MIME
-metadata while avoiding hundreds of Wrangler startup/auth handshakes. Bulk concurrency
-defaults to `20` (`--concurrency <n>` to override); Wrangler enforces an internal safety
-cap of 1,100 requests per five minutes. A failed content-type manifest gets up to five
-attempts with jittered exponential backoff, and temporary manifests are always removed.
+splits each group into manifests of at most 100 objects, run one `wrangler r2 bulk put`
+at a time. This preserves per-object MIME metadata while avoiding hundreds of Wrangler
+startup/auth handshakes. Bulk concurrency defaults to `20` (`--concurrency <n>` to
+override); Wrangler enforces an internal safety cap of 1,100 requests per five minutes.
+
+`bulk put` aborts a whole manifest on the first failed object and does not say which
+objects landed, so the chunking IS the selective retry: a 429 re-sends only the failed
+chunk. That chunk gets up to eight attempts with exponential backoff (2s doubling, capped
+at 60s, equal jitter — at least half of each step is always waited) and its concurrency
+halves on every retry. The staging job waits out that backoff while still holding the
+`staging-mutation-queue` turn, so the next queued run cannot start into the same
+exhausted budget — the 2026-09-17 failures were four serialized runs uploading ~700
+objects each within three minutes, each releasing the queue seconds after its first 429. Temporary manifests are always removed.
+
+Runs Dependabot triggers skip every Cloudflare step (`RUN_CLOUDFLARE_STAGING`), like fork
+PRs: they receive only Dependabot secrets, so the API token is empty there.
 
 The limit is account-wide, so the other R2 uploaders share it and carry the same
 backoff: `packages/dev-tools/tools/storybook-screenshots-upload.mjs` (bucket

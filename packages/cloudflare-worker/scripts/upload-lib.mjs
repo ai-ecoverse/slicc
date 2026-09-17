@@ -90,8 +90,24 @@ export async function totalFileBytes(files, dir, stat = fs.stat) {
   return sizes.reduce((sum, size) => sum + size, 0);
 }
 
+/**
+ * Most objects one Wrangler invocation puts. `wrangler r2 bulk put` aborts the
+ * whole manifest on the first failed object and reports nothing about the
+ * ones that succeeded, so a 429 on a 684-object manifest re-sent all 684 on
+ * every retry — burning the account's request budget faster than a backoff
+ * could restore it. A failed chunk re-sends at most this many.
+ */
+export const MANIFEST_CHUNK_SIZE = 100;
+
 /** Base delay for the exponential retry backoff, in milliseconds. */
-export const RETRY_BASE_DELAY_MS = 500;
+export const RETRY_BASE_DELAY_MS = 2_000;
+
+/**
+ * Longest single backoff. R2's API budget is counted per five minutes
+ * (Wrangler caps itself at 1,100 requests per window, account-wide), so the
+ * retry schedule has to be able to wait a real fraction of that window out.
+ */
+export const RETRY_MAX_DELAY_MS = 60_000;
 
 const defaultSleep = (ms) =>
   new Promise((resolve) => {
@@ -99,26 +115,60 @@ const defaultSleep = (ms) =>
   });
 
 /**
- * Delay before retry `attempt`: exponential (500ms, 1s, 2s, 4s, …) with full
- * jitter so concurrent account activity does not retry in lockstep.
+ * Delay before retry `attempt`: exponential (2s, 4s, 8s, … capped at 60s)
+ * with equal jitter — half the step is always waited, so a rate-limited
+ * upload cannot retry immediately, and the other half is random so
+ * concurrent account activity does not retry in lockstep.
  */
 export function retryDelayMs(attempt, random = Math.random) {
-  return Math.round(random() * RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  const step = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  return Math.round(step / 2 + random() * (step / 2));
 }
 
 /**
- * Upload all files through one Wrangler process per content type. Groups run
- * sequentially so the requested R2 concurrency is the account pressure, not
- * that value multiplied by the number of MIME types.
+ * Concurrency for retry `attempt`: halved on every retry, never below 1. A
+ * 429 means the account is over budget; hitting it with the same fan-out
+ * again only spends the recovering budget faster.
+ */
+export function retryConcurrency(concurrency, attempt) {
+  return Math.max(1, Math.floor(Math.max(concurrency, 1) / 2 ** (attempt - 1)));
+}
+
+/** Split `entries` into manifests of at most `size` objects, in order. */
+export function chunkEntries(entries, size = MANIFEST_CHUNK_SIZE) {
+  const chunkSize = Math.max(1, Math.floor(size));
+  const chunks = [];
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    chunks.push(entries.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+/**
+ * Upload all files through Wrangler, one bounded manifest at a time. Each
+ * content type is split into {@link MANIFEST_CHUNK_SIZE} chunks and chunks run
+ * sequentially, so the requested R2 concurrency is the account pressure, and
+ * a failure retries only the chunk that failed — the chunks already written
+ * are never re-sent.
  */
 export async function runBulkUploads(
   files,
-  { bucket, dir, exec, concurrency = 20, retries = 1, sleep = defaultSleep }
+  {
+    bucket,
+    dir,
+    exec,
+    concurrency = 20,
+    retries = 1,
+    chunkSize = MANIFEST_CHUNK_SIZE,
+    sleep = defaultSleep,
+    random = Math.random,
+    log = () => {},
+  }
 ) {
   // Validate the complete set before creating manifests or uploading anything.
   const groups = buildManifestGroups(files, dir);
   if (groups.length === 0) {
-    return { groups: 0, invocations: 0, retries: 0 };
+    return { groups: 0, chunks: 0, invocations: 0, retries: 0 };
   }
 
   const manifestDir = await fs.mkdtemp(join(tmpdir(), 'slicc-r2-bulk-'));
@@ -126,15 +176,17 @@ export async function runBulkUploads(
     // Materialize every manifest before the first remote mutation. A local I/O
     // failure therefore cannot leave an avoidably partial archive refresh.
     const manifests = [];
-    for (const [index, group] of groups.entries()) {
-      const manifestPath = join(manifestDir, `manifest-${index + 1}.json`);
-      await fs.writeFile(manifestPath, `${JSON.stringify(group.entries)}\n`, 'utf8');
-      manifests.push({ ...group, manifestPath });
+    for (const group of groups) {
+      for (const entries of chunkEntries(group.entries, chunkSize)) {
+        const manifestPath = join(manifestDir, `manifest-${manifests.length + 1}.json`);
+        await fs.writeFile(manifestPath, `${JSON.stringify(entries)}\n`, 'utf8');
+        manifests.push({ contentType: group.contentType, entries, manifestPath });
+      }
     }
 
     let invocations = 0;
     let retryCount = 0;
-    for (const manifest of manifests) {
+    for (const [index, manifest] of manifests.entries()) {
       const attempts = await uploadManifestWithRetry({
         bucket,
         manifest,
@@ -142,18 +194,34 @@ export async function runBulkUploads(
         concurrency,
         retries,
         sleep,
+        random,
+        log: (message) => log(`chunk ${index + 1}/${manifests.length}: ${message}`),
       });
       invocations += attempts;
       retryCount += attempts - 1;
     }
 
-    return { groups: groups.length, invocations, retries: retryCount };
+    return {
+      groups: groups.length,
+      chunks: manifests.length,
+      invocations,
+      retries: retryCount,
+    };
   } finally {
     await fs.rm(manifestDir, { recursive: true, force: true });
   }
 }
 
-async function uploadManifestWithRetry({ bucket, manifest, exec, concurrency, retries, sleep }) {
+async function uploadManifestWithRetry({
+  bucket,
+  manifest,
+  exec,
+  concurrency,
+  retries,
+  sleep,
+  random,
+  log,
+}) {
   let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -163,17 +231,28 @@ async function uploadManifestWithRetry({ bucket, manifest, exec, concurrency, re
           bucket,
           manifest.manifestPath,
           manifest.contentType,
-          Math.max(concurrency, 1)
+          retryConcurrency(concurrency, attempt)
         )
       );
       return attempt;
     } catch (err) {
       lastError = err;
       if (attempt < retries) {
-        await sleep(retryDelayMs(attempt));
+        const delay = retryDelayMs(attempt, random);
+        log(
+          `attempt ${attempt}/${retries} failed (${errorSummary(err)}); ` +
+            `retrying ${manifest.entries.length} objects in ${(delay / 1000).toFixed(1)}s ` +
+            `with concurrency ${retryConcurrency(concurrency, attempt + 1)}`
+        );
+        await sleep(delay);
       }
     }
   }
 
   throw lastError;
+}
+
+function errorSummary(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split('\n')[0].slice(0, 160);
 }

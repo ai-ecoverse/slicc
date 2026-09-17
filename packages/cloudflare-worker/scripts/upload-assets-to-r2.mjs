@@ -94,14 +94,18 @@ async function main() {
       dir: assetDir,
       exec: createExec(),
       concurrency,
-      // A failed bulk process retries its idempotent content-type manifest.
-      // Every successful re-put intentionally refreshes last-modified for GC.
-      retries: 5,
+      // A failed chunk retries only itself; every re-put is idempotent and
+      // intentionally refreshes last-modified for GC. Eight attempts with the
+      // capped backoff wait out a meaningful part of R2's five-minute API
+      // window while this job still holds the staging mutation queue, so the
+      // next queued run does not start into the same exhausted budget.
+      retries: 8,
+      log: (message) => console.warn(`R2 upload ${message}`),
     });
 
     const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(
-      `R2 bulk upload complete: ${files.length} files in ${result.groups} content-type batches, ${result.invocations} Wrangler invocations (${result.retries} retries), ${elapsedSeconds}s`
+      `R2 bulk upload complete: ${files.length} files in ${result.groups} content types / ${result.chunks} chunks, ${result.invocations} Wrangler invocations (${result.retries} retries), ${elapsedSeconds}s`
     );
   } catch (err) {
     console.error('Upload failed:', err.message);

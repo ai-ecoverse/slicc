@@ -122,8 +122,10 @@ describe('CI critical-path routing', () => {
       "run-name: 'staging-mutation-queue · Worker staging · PR #${{ github.event.pull_request.number }}'"
     );
     expect(header).not.toContain('\n    if:');
+    // Forks and Dependabot-triggered runs get no repository secrets, so both
+    // skip every Cloudflare step instead of failing its credential check.
     expect(header).toContain(
-      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}"
+      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}"
     );
     expect(header).not.toContain('worker-staging-e2b-slicc-staging');
     expect(workerStagingWorkflow).not.toContain('worker-staging-e2b-slicc-staging');

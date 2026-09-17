@@ -4,7 +4,11 @@ import {
   assertAllHashed,
   buildBulkPutArgs,
   buildManifestGroups,
+  chunkEntries,
+  MANIFEST_CHUNK_SIZE,
   RETRY_BASE_DELAY_MS,
+  RETRY_MAX_DELAY_MS,
+  retryConcurrency,
   retryDelayMs,
   runBulkUploads,
   totalFileBytes,
@@ -140,7 +144,7 @@ describe('runBulkUploads', () => {
       concurrency: 7,
     });
 
-    expect(result).toEqual({ groups: 3, invocations: 3, retries: 0 });
+    expect(result).toEqual({ groups: 3, chunks: 3, invocations: 3, retries: 0 });
     expect(execMock).toHaveBeenCalledTimes(3);
     for (const { argv } of calls) {
       expect(argv.slice(0, 5)).toEqual(['wrangler', 'r2', 'bulk', 'put', 'test-bucket']);
@@ -207,7 +211,7 @@ describe('runBulkUploads', () => {
       sleep,
     });
 
-    expect(result).toEqual({ groups: 1, invocations: 3, retries: 2 });
+    expect(result).toEqual({ groups: 1, chunks: 1, invocations: 3, retries: 2 });
     expect(execMock).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(2);
   });
@@ -249,7 +253,7 @@ describe('runBulkUploads', () => {
     const execMock = vi.fn();
     await expect(
       runBulkUploads([], { bucket: 'test-bucket', dir: '/assets', exec: execMock })
-    ).resolves.toEqual({ groups: 0, invocations: 0, retries: 0 });
+    ).resolves.toEqual({ groups: 0, chunks: 0, invocations: 0, retries: 0 });
     expect(execMock).not.toHaveBeenCalled();
   });
 
@@ -267,7 +271,10 @@ describe('runBulkUploads', () => {
     ).rejects.toThrow('429: Too Many Requests');
 
     expect(execMock).toHaveBeenCalledTimes(2);
-    expect(Date.now() - start).toBeLessThan(RETRY_BASE_DELAY_MS * 4);
+    // One real wait: at least half of the first step, at most the full step.
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(RETRY_BASE_DELAY_MS / 2 - 50);
+    expect(elapsed).toBeLessThan(RETRY_BASE_DELAY_MS * 2);
   });
 
   it('does not sleep when the first attempt succeeds', async () => {
@@ -285,14 +292,128 @@ describe('runBulkUploads', () => {
 
 describe('retryDelayMs', () => {
   it('grows exponentially from the base delay', () => {
-    const noJitter = () => 1;
-    expect(retryDelayMs(1, noJitter)).toBe(RETRY_BASE_DELAY_MS);
-    expect(retryDelayMs(2, noJitter)).toBe(RETRY_BASE_DELAY_MS * 2);
-    expect(retryDelayMs(3, noJitter)).toBe(RETRY_BASE_DELAY_MS * 4);
+    const top = () => 1;
+    expect(retryDelayMs(1, top)).toBe(RETRY_BASE_DELAY_MS);
+    expect(retryDelayMs(2, top)).toBe(RETRY_BASE_DELAY_MS * 2);
+    expect(retryDelayMs(3, top)).toBe(RETRY_BASE_DELAY_MS * 4);
   });
 
-  it('applies full jitter so concurrent retries do not fire in lockstep', () => {
-    expect(retryDelayMs(3, () => 0)).toBe(0);
-    expect(retryDelayMs(3, () => 0.5)).toBe(RETRY_BASE_DELAY_MS * 2);
+  it('always waits at least half the step, so a 429 is never retried at once', () => {
+    expect(retryDelayMs(1, () => 0)).toBe(RETRY_BASE_DELAY_MS / 2);
+    expect(retryDelayMs(3, () => 0)).toBe(RETRY_BASE_DELAY_MS * 2);
+    expect(retryDelayMs(3, () => 0.5)).toBe(RETRY_BASE_DELAY_MS * 3);
+  });
+
+  it('caps a single wait so the schedule stays inside the job budget', () => {
+    expect(retryDelayMs(20, () => 1)).toBe(RETRY_MAX_DELAY_MS);
+    expect(retryDelayMs(20, () => 0)).toBe(RETRY_MAX_DELAY_MS / 2);
+  });
+
+  it('spans a real part of the five-minute API window across eight attempts', () => {
+    let floor = 0;
+    for (let attempt = 1; attempt < 8; attempt++) floor += retryDelayMs(attempt, () => 0);
+    expect(floor).toBeGreaterThanOrEqual(90_000);
+  });
+});
+
+describe('retryConcurrency', () => {
+  it('halves on every retry and never drops below one', () => {
+    expect([1, 2, 3, 4, 5, 6].map((attempt) => retryConcurrency(20, attempt))).toEqual([
+      20, 10, 5, 2, 1, 1,
+    ]);
+    expect(retryConcurrency(0, 1)).toBe(1);
+  });
+});
+
+describe('chunkEntries', () => {
+  it('splits in order into bounded chunks', () => {
+    expect(chunkEntries([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunkEntries([], 2)).toEqual([]);
+    expect(chunkEntries([1, 2], 0)).toEqual([[1], [2]]);
+  });
+});
+
+describe('runBulkUploads chunked retry', () => {
+  const files = (n: number) =>
+    Array.from({ length: n }, (_, i) => `chunk-${String(i).padStart(8, '0')}.js`);
+
+  it('splits a large content type into bounded manifests', async () => {
+    const sizes: number[] = [];
+    const result = await runBulkUploads(files(MANIFEST_CHUNK_SIZE * 2 + 5), {
+      bucket: 'test-bucket',
+      dir: '/assets',
+      exec: vi.fn(async (argv: string[]) => {
+        sizes.push((await readManifest(argv)).length);
+      }),
+    });
+
+    expect(sizes).toEqual([MANIFEST_CHUNK_SIZE, MANIFEST_CHUNK_SIZE, 5]);
+    expect(result).toEqual({ groups: 1, chunks: 3, invocations: 3, retries: 0 });
+  });
+
+  it('retries only the chunk that failed, with backoff and halved concurrency', async () => {
+    const sent: Array<{ keys: string[]; concurrency: string }> = [];
+    let failures = 2;
+    const exec = vi.fn(async (argv: string[]) => {
+      const manifest = await readManifest(argv);
+      sent.push({
+        keys: manifest.map((entry) => entry.key),
+        concurrency: optionValue(argv, '--concurrency'),
+      });
+      // The second chunk hits the rate limit twice.
+      if (manifest[0].key.endsWith('00000003.js') && failures-- > 0) {
+        throw new Error('429: Too Many Requests');
+      }
+    });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const log = vi.fn();
+
+    const result = await runBulkUploads(files(7), {
+      bucket: 'test-bucket',
+      dir: '/assets',
+      exec,
+      concurrency: 8,
+      retries: 5,
+      chunkSize: 3,
+      sleep,
+      random: () => 0,
+      log,
+    });
+
+    expect(result).toEqual({ groups: 1, chunks: 3, invocations: 5, retries: 2 });
+    expect(sent.map((call) => call.keys[0])).toEqual([
+      'assets/chunk-00000000.js',
+      'assets/chunk-00000003.js',
+      'assets/chunk-00000003.js',
+      'assets/chunk-00000003.js',
+      'assets/chunk-00000006.js',
+    ]);
+    // The retried chunk only ever re-sends its own three objects.
+    expect(sent.slice(1, 4).every((call) => call.keys.length === 3)).toBe(true);
+    expect(sent.map((call) => call.concurrency)).toEqual(['8', '8', '4', '2', '8']);
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([
+      RETRY_BASE_DELAY_MS / 2,
+      RETRY_BASE_DELAY_MS,
+    ]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('chunk 2/3: attempt 1/5 failed'));
+  });
+
+  it('stops at the failed chunk and never starts the next one', async () => {
+    const exec = vi.fn(async (argv: string[]) => {
+      const manifest = await readManifest(argv);
+      if (manifest[0].key.endsWith('00000002.js')) throw new Error('429: Too Many Requests');
+    });
+
+    await expect(
+      runBulkUploads(files(6), {
+        bucket: 'test-bucket',
+        dir: '/assets',
+        exec,
+        retries: 2,
+        chunkSize: 2,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      })
+    ).rejects.toThrow('429');
+    expect(exec).toHaveBeenCalledTimes(3);
   });
 });
