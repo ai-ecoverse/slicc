@@ -16,8 +16,12 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Push / workflow_dispatch cancel superseded publishes on the same ref.
+  # Schedule catch-up must NOT share that group: cancel-in-progress would
+  # kill a 30m+ publish at :15/:45 and could loop forever. Catch-up runs in
+  # an isolated group and never cancels in-flight work.
+  group: release-${{ github.ref }}-${{ github.event_name == 'schedule' && 'catchup' || 'main' }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   analyze:

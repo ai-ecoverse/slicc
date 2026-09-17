@@ -123,7 +123,7 @@ describe('CI critical-path routing', () => {
     );
     expect(header).not.toContain('\n    if:');
     expect(header).toContain(
-      "RUN_CLOUDFLARE_STAGING: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}"
+      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}"
     );
     expect(header).not.toContain('worker-staging-e2b-slicc-staging');
     expect(workerStagingWorkflow).not.toContain('worker-staging-e2b-slicc-staging');
