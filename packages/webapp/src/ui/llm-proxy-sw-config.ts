@@ -441,10 +441,11 @@ export function isPassthroughDestination(destination: string): boolean {
  *  - a same-origin `allow-same-origin` srcdoc sprinkle/dip iframe — a `window`
  *    client but a NESTED browsing context (`frameType === 'nested'`);
  *  - a same-origin **`auxiliary`** window (`window.open`'d). This USED to be
- *    allowed, but a sprinkle iframe is rendered with `allow-popups` in the
- *    cherry/nested float (`sprinkle-renderer.ts` adds it only when
- *    `isNestedInAnotherFrame()`), so there agent/attacker-authored sprinkle
- *    content could `window.open` a same-origin scriptable auxiliary window, post
+ *    allowed, but a full-document sprinkle iframe is rendered with
+ *    `allow-popups` (`sprinkle-renderer.ts`; originally cherry/nested only,
+ *    now in every float so sprinkles can open sized popup windows), so
+ *    agent/attacker-authored sprinkle content can `window.open` a same-origin
+ *    scriptable auxiliary window, post
  *    an attacker-chosen nonce (passing an `auxiliary` gate), and — because the SW
  *    fans every request out to ALL registered channels — receive every realm's
  *    capability token on its own channel. More generally, ANY nested/auxiliary

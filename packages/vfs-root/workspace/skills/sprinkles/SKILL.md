@@ -18,7 +18,7 @@ allowed-tools: bash, read_file, write_file, edit
 ## Two rendering modes
 
 - **Fragment mode** (default): plain HTML fragments injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.sprinkle-*` classes. Scripts get a `slicc` bridge object automatically.
-- **Full-document mode**: complete HTML documents (starting with `<!DOCTYPE html>` or `<html>`) render inside sandboxed iframes. Use this for complex layouts with custom CSS, sidebars, split panes, modals, or canvas/SVG visualizations. The bridge script is auto-injected — `window.slicc` and `window.bridge` are available. The parent page's S2 theme tokens are injected automatically.
+- **Full-document mode**: complete HTML documents (starting with `<!DOCTYPE html>` or `<html>`) render inside sandboxed iframes. Use this for complex layouts with custom CSS, sidebars, split panes, modals, or canvas/SVG visualizations. The bridge script is auto-injected — `window.slicc` and `window.bridge` are available. The parent page's S2 theme tokens are injected automatically. The iframe sandbox grants `allow-popups`, so a real click handler can `window.open(url, name, 'popup=yes,width=1280,height=800')` and get a sized window handle back (a sized popup is the only way to open a fixed-size, dpr-preserving capture window); it does NOT grant top navigation, so the sprinkle cannot replace the host page.
 
 Pick full-document mode when you need custom CSS beyond `.sprinkle-*` classes, complex layouts (sidebar + main, split panes, tabs), or interactive canvas/SVG.
 
