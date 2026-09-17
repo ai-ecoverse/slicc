@@ -74,7 +74,7 @@ Usage:
   v86 mouse [-n name] move <dx> <dy>      Move pointer (relative)
   v86 mouse [-n name] click [left|right|middle] [--double]
   v86 mouse [-n name] --to <x>,<y>        Best-effort absolute positioning
-  v86 screenshot [-n name] [<file.png>]   VGA output -> PNG (default $TMPDIR/v86-<name>.png)
+  v86 screenshot [-n name] [<file>]       Frozen JPEG ($TMPDIR/computer/<name>/<seq>.jpg)
   v86 text [-n name]                      Dump text-mode screen as plain text
   v86 serve [-n name] [--fps <1-10>]      Stream the screen into $TMPDIR/v86-serve-<name>/
   v86 serve [-n name] --stop              (viewer index.html + live frames; mint an
@@ -449,15 +449,15 @@ export function createV86Command(deps: V86CommandDeps = {}): Command {
         case 'ls':
           return v86Ls();
         case 'type':
-          return v86Type(subArgs);
+          return await v86Type(subArgs, ctx);
         case 'key':
-          return await v86Key(subArgs);
+          return await v86Key(subArgs, ctx);
         case 'mouse':
-          return v86Mouse(subArgs);
+          return await v86Mouse(subArgs, ctx);
         case 'screenshot':
           return await v86Screenshot(subArgs, ctx);
         case 'text':
-          return v86Text(subArgs);
+          return await v86Text(subArgs, ctx);
         case 'serve':
           return await v86Serve(subArgs, ctx);
         case 'serial':
@@ -785,113 +785,116 @@ function v86Ls(): CmdResult {
   return ok(`${lines.join('\n')}\n`);
 }
 
-function computerHint(verb: string, name: string): string {
-  return `prefer: computer ${verb} -c ${name}\n`;
+function computerHint(verb: string, id: string): string {
+  return `prefer: computer ${verb} -c ${id}\n`;
 }
 
-function v86Type(args: readonly string[]): CmdResult {
-  const { name, rest } = extractVmName(args);
+/**
+ * Drive the registered `v86:<name>` computer. Type/key/mouse/screenshot/text
+ * are aliases so agents that still say `v86 type` get frozen JPEG frames.
+ */
+async function viaComputer(
+  ctx: CommandContext,
+  name: string,
+  computerArgs: string[],
+  hintVerb: string
+): Promise<CmdResult> {
   const record = requireVm(name);
   if (isCmdResult(record)) return record;
-  if (rest.length === 0) return fail('type: no text supplied');
-  // Interpret the usual escapes so agents can send Enter as '\n'.
-  const text = rest.join(' ').replace(/\\n/gu, '\n').replace(/\\t/gu, '\t');
-  record.emulator.keyboard_send_text(text);
-  return ok(computerHint('type', name));
+  const [{ runComputer }, { getComputerRegistry, installComputerRegistry }, v86Adapter] =
+    await Promise.all([
+      import('./computer/run.js'),
+      import('../../computers/registry.js'),
+      import('../../computers/adapters/v86.js'),
+    ]);
+  const id = v86Adapter.v86ComputerId(name);
+  const registry = getComputerRegistry() ?? installComputerRegistry(null);
+  if (!registry.get(id)) v86Adapter.registerV86Computer(record, registry);
+  const result = await runComputer(['-c', id, ...computerArgs], ctx, { registry });
+  return withComputerHint(result, hintVerb, id);
 }
 
-async function v86Key(args: readonly string[]): Promise<CmdResult> {
-  const { name, rest } = extractVmName(args);
-  const record = requireVm(name);
-  if (isCmdResult(record)) return record;
-  if (rest.length === 0) return fail('key: no chord supplied');
-  const { chordToScancodes } = await import('../../computers/keys.js');
-  const sequences: number[][] = [];
-  for (const chord of rest) {
-    const codes = chordToScancodes(chord);
-    if (!codes) return fail(`key: unknown chord '${chord}'`);
-    sequences.push(codes);
+function withComputerHint(result: CmdResult, verb: string, id: string): CmdResult {
+  const hint = computerHint(verb, id);
+  if (result.exitCode === 0) {
+    return ok(`${result.stdout}${hint}`);
   }
-  for (const codes of sequences) record.emulator.keyboard_send_scancodes(codes);
-  return ok(computerHint('key', name));
+  // Input already reached the guest; text-mode VMs have no VGA frame.
+  if (result.stderr.includes('screenshot failed after input')) {
+    return ok(`${result.stderr}${hint}`);
+  }
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr.replace(/^computer: /u, 'v86: '),
+    exitCode: result.exitCode,
+  };
+}
+
+async function v86Type(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
+  const { name, rest } = extractVmName(args);
+  if (rest.length === 0) {
+    const missing = requireVm(name);
+    return isCmdResult(missing) ? missing : fail('type: no text supplied');
+  }
+  return viaComputer(ctx, name, ['type', '--', ...rest], 'type');
+}
+
+async function v86Key(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
+  const { name, rest } = extractVmName(args);
+  if (rest.length === 0) {
+    const missing = requireVm(name);
+    return isCmdResult(missing) ? missing : fail('key: no chord supplied');
+  }
+  return viaComputer(ctx, name, ['key', ...rest], 'key');
 }
 
 const MOUSE_BUTTONS = ['left', 'middle', 'right'] as const;
 
-function sendClick(record: VmRecord, button: 'left' | 'middle' | 'right'): void {
-  const state = [button === 'left', button === 'middle', button === 'right'];
-  record.emulator.bus.send('mouse-click', state);
-  record.emulator.bus.send('mouse-click', [false, false, false]);
-}
-
-function v86Mouse(args: readonly string[]): CmdResult {
+async function v86Mouse(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
   const { name, rest } = extractVmName(args);
   const record = requireVm(name);
   if (isCmdResult(record)) return record;
 
-  // `--to x,y` best-effort absolute positioning: re-home to the
-  // top-left corner with a huge relative sweep, then move to x,y.
   const toIdx = rest.indexOf('--to');
   if (toIdx !== -1) {
     const spec = rest[toIdx + 1];
     const match = spec ? /^(\d+),(\d+)$/u.exec(spec) : null;
     if (!match) return fail('mouse: --to requires <x>,<y>');
-    const [x, y] = [Number(match[1]), Number(match[2])];
-    record.emulator.bus.send('mouse-delta', [-16384, 16384]);
-    record.emulator.bus.send('mouse-delta', [x, -y]);
-    return ok(computerHint('mousemove', name));
+    return viaComputer(ctx, name, ['--native', 'mousemove', match[1], match[2]], 'mousemove');
   }
 
   const action = rest[0];
   if (action === 'move') {
-    const dx = Number.parseInt(rest[1] ?? '', 10);
-    const dy = Number.parseInt(rest[2] ?? '', 10);
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+    const dx = rest[1];
+    const dy = rest[2];
+    if (
+      dx === undefined ||
+      dy === undefined ||
+      !Number.isFinite(Number(dx)) ||
+      !Number.isFinite(Number(dy))
+    ) {
       return fail('mouse: move requires <dx> <dy>');
     }
-    // Screen y grows downward; PS/2 y grows upward.
-    record.emulator.bus.send('mouse-delta', [dx, -dy]);
-    return ok(computerHint('mousemove', name));
+    return viaComputer(ctx, name, ['--native', 'mousemove', dx, dy, '--relative'], 'mousemove');
   }
   if (action === 'click') {
     const button = (rest[1] ?? 'left') as (typeof MOUSE_BUTTONS)[number];
     if (!MOUSE_BUTTONS.includes(button)) return fail(`mouse: unknown button '${rest[1]}'`);
-    sendClick(record, button);
-    if (rest.includes('--double')) sendClick(record, button);
-    return ok(computerHint('click', name));
+    const clickArgs = ['click', button];
+    if (rest.includes('--double')) clickArgs.push('--repeat', '2');
+    return viaComputer(ctx, name, clickArgs, 'click');
   }
   return fail('mouse: expected move <dx> <dy>, click [button], or --to <x>,<y>');
 }
 
 async function v86Screenshot(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
   const { name, rest } = extractVmName(args);
-  const record = requireVm(name);
-  if (isCmdResult(record)) return record;
-  const frame = captureFrame(record);
-  if (!frame) {
-    return fail(
-      `no graphical frame for '${name}' — the guest is in text mode; use \`v86 text -n ${name}\``
-    );
-  }
-  const outPath = ctx.fs.resolvePath(ctx.cwd, rest[0] ?? `${scratchDir(ctx.env)}/v86-${name}.png`);
-  const png = await encodeFramePng(frame);
-  await ctx.fs.writeFile(outPath, png);
-  return ok(`${outPath} (${frame.width}x${frame.height})\n${computerHint('screenshot', name)}`);
+  return viaComputer(ctx, name, ['screenshot', ...rest], 'screenshot');
 }
 
-function v86Text(args: readonly string[]): CmdResult {
+async function v86Text(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
   const { name } = extractVmName(args);
-  const record = requireVm(name);
-  if (isCmdResult(record)) return record;
-  const dump = dumpTextScreen(record);
-  if (dump === null) {
-    return fail(
-      record.screen.mode === 'graphical'
-        ? `'${name}' is in graphical mode — use \`v86 screenshot -n ${name}\``
-        : `text screen unavailable for '${name}'`
-    );
-  }
-  return ok(`${dump}\n${computerHint('text', name)}`);
+  return viaComputer(ctx, name, ['text'], 'text');
 }
 
 /** Serve pump rates (frames/second) — VFS writes are not free. */

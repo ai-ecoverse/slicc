@@ -139,6 +139,27 @@ describe('computer command', () => {
     expect(result.stdout).toContain('screen: ');
   });
 
+  it('look-click-look writes a fresh frozen frame after each poke', async () => {
+    const backend = new FakeBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx, written } = makeCtx();
+    const look = await cmd.execute(['screenshot'], ctx);
+    expect(look.exitCode).toBe(0);
+    expect(look.stdout).toMatch(/screen: .*\/1\.jpg/);
+    const click = await cmd.execute(['--native', 'click', '1', '--at', '10,20'], ctx);
+    expect(click.exitCode).toBe(0);
+    expect(backend.events).toEqual([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
+    expect(click.stdout).toMatch(/screen: .*\/2\.jpg/);
+    const look2 = await cmd.execute(['screenshot'], ctx);
+    expect(look2.exitCode).toBe(0);
+    expect(look2.stdout).toMatch(/screen: .*\/3\.jpg/);
+    expect(backend.shots).toBe(3);
+    const jpgs = [...written.keys()].filter((p) => p.endsWith('.jpg'));
+    expect(jpgs).toHaveLength(3);
+  });
+
   it('maps Anthropic left_click coords and --native opt-out', async () => {
     const backend = new FakeBackend();
     const registry = new ComputerRegistry(null);

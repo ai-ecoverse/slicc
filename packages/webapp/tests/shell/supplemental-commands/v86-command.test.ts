@@ -241,6 +241,17 @@ async function startVm(emulator: FakeEmulator, extraArgs: string[] = []) {
   return cmd.execute(['start', '-cdrom', 'alpine.iso', ...extraArgs], ctx);
 }
 
+function paintGraphical(name = 'vm0'): void {
+  const vm = getVm(name);
+  if (!vm) throw new Error(`paintGraphical: no VM named ${name}`);
+  vm.screen = {
+    mode: 'graphical',
+    width: 2,
+    height: 2,
+    frame: { data: new Uint8ClampedArray(16), width: 2, height: 2 },
+  };
+}
+
 describe('v86 command lifecycle (mocked engine)', () => {
   it('boots a VM, registers it, and reports it in ls', async () => {
     const emulator = makeFakeEmulator();
@@ -448,17 +459,24 @@ describe('v86 command lifecycle (mocked engine)', () => {
   it('types text, sends key chords, and drives the mouse', async () => {
     const emulator = makeFakeEmulator();
     await startVm(emulator);
+    paintGraphical();
     const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
     const { ctx } = makeCtx();
 
     const typed = await cmd.execute(['type', 'root\\n'], ctx);
     expect(typed.exitCode).toBe(0);
     expect(emulator.keyboard_send_text).toHaveBeenCalledWith('root\n');
-    expect(typed.stdout).toContain('prefer: computer type');
+    expect(typed.stdout).toContain('screen: ');
+    expect(typed.stdout).toContain('prefer: computer type -c v86:vm0');
 
     const keyed = await cmd.execute(['key', 'ctrl-c'], ctx);
     expect(emulator.keyboard_send_scancodes).toHaveBeenCalledWith([0x1d, 0x2e, 0xae, 0x9d]);
+    expect(keyed.stdout).toContain('screen: ');
     expect(keyed.stdout).toContain('prefer: computer key');
+
+    const to = await cmd.execute(['mouse', '--to', '8,4'], ctx);
+    expect(emulator.busSends).toContainEqual(['mouse-delta', [8, -4]]);
+    expect(to.stdout).toContain('prefer: computer mousemove');
 
     const moved = await cmd.execute(['mouse', 'move', '10', '5'], ctx);
     expect(emulator.busSends).toContainEqual(['mouse-delta', [10, -5]]);
@@ -490,6 +508,19 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(emulator.serial0_send).toHaveBeenCalledWith('root\n');
   });
 
+  it('screenshots through computer as a frozen JPEG', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    paintGraphical();
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx, written } = makeCtx();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(shot.stdout).toContain('screen: ');
+    expect(shot.stdout).toContain('prefer: computer screenshot -c v86:vm0');
+    expect([...written.keys()].some((p) => p.endsWith('.jpg'))).toBe(true);
+  });
+
   it('saves and restores state through the VFS', async () => {
     const emulator = makeFakeEmulator();
     await startVm(emulator);
@@ -512,7 +543,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const cmd = createV86Command();
     const help = await cmd.execute(['--help'], makeCtx().ctx);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain('$TMPDIR/v86-<name>.png');
+    expect(help.stdout).toContain('$TMPDIR/computer/<name>/<seq>.jpg');
     expect(help.stdout).toContain('$TMPDIR/v86-serve-<name>/');
     expect(help.stdout).not.toMatch(/\/tmp\/v86/);
   });
@@ -544,6 +575,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
   it('`type --help` prints help; `type -- --help` types the literal flag', async () => {
     const emulator = makeFakeEmulator();
     await startVm(emulator);
+    paintGraphical();
     const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
     const { ctx } = makeCtx();
 
@@ -555,6 +587,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const typed = await cmd.execute(['type', '--', '--help'], ctx);
     expect(typed.exitCode).toBe(0);
     expect(emulator.keyboard_send_text).toHaveBeenCalledWith('--help');
+    expect(typed.stdout).toContain('screen: ');
   });
 
   it('stops and unregisters a VM', async () => {
