@@ -1254,26 +1254,50 @@ describe('WcChatController render/dispose lifecycle hooks', () => {
     expect(rendered).toHaveLength(2);
   });
 
-  it('defers rendered until a streaming message finalizes', () => {
+  it('fires rendered for every streaming render, without disposing', async () => {
     const { agent, rendered, disposed } = makeTracked();
     agent.emit({ type: 'message_start', messageId: 'm1' });
-    expect(rendered).toEqual([]);
-    agent.emit({ type: 'content_delta', messageId: 'm1', text: 'x' });
-    expect(rendered).toEqual([]);
-    agent.emit({ type: 'content_done', messageId: 'm1' });
     expect(rendered).toEqual(['m1']);
-    // The final render replaced the streaming elements — disposal first.
-    expect(disposed).toEqual(['m1']);
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: 'x' });
+    await nextFrame();
+    expect(rendered).toEqual(['m1', 'm1']);
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(rendered).toEqual(['m1', 'm1', 'm1']);
+    // A re-render hands dips to the new elements — nothing is disposed.
+    expect(disposed).toEqual([]);
   });
 
-  it('re-fires rendered (after disposed) for post-stream tool results', () => {
+  it('re-fires rendered for post-stream tool results', () => {
     const { agent, rendered, disposed } = makeTracked();
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'content_done', messageId: 'm1' });
     agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls' });
     agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
-    expect(rendered).toEqual(['m1', 'm1', 'm1']);
-    expect(disposed).toEqual(['m1', 'm1', 'm1']);
+    expect(rendered).toEqual(['m1', 'm1', 'm1', 'm1']);
+    expect(disposed).toEqual([]);
+  });
+
+  it('runs rendered while the previous render is still in the thread', () => {
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const seen: Array<{ bubbles: number; streaming: boolean }> = [];
+    new WcChatController({
+      thread,
+      agent,
+      onMessageRendered: (message) =>
+        seen.push({
+          bubbles: thread.querySelectorAll('slicc-agent-message').length,
+          streaming: message.isStreaming === true,
+        }),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(seen).toEqual([
+      { bubbles: 1, streaming: true },
+      { bubbles: 2, streaming: false },
+    ]);
+    expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
   });
 
   it('disposes everything on loadMessages and renders the new history', () => {

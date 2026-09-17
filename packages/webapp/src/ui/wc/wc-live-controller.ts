@@ -144,27 +144,37 @@ export function createWcController(
       }
     },
     onMessageRendered: (message, els) => {
+      const previous = dipInstances.get(message.id);
       const messageHost = els[0];
-      if (!messageHost) return;
+      if (!messageHost) {
+        if (previous) disposeDips(previous);
+        dipInstances.delete(message.id);
+        return;
+      }
       // Before hydration on purpose: a float that replaces a dip wants the
       // replacement instead of the live one, not on top of it.
       host.onMessageRendered?.(messageHost);
       // Captured AT RENDER, not read at click time: the dip belongs to the
       // transcript it was rendered into, and a lick must not follow a later
-      // selection into a cone that never wrote the card.
+      // selection into a cone that never wrote the card. A dip carried over
+      // from an earlier render keeps the handler it was mounted with.
       const originUnitId = addressedUnitId() ?? undefined;
       dipInstances.set(
         message.id,
-        hydrateDips(messageHost, (action, data) => {
-          const event: LickEvent = {
-            type: 'sprinkle',
-            sprinkleName: 'inline',
-            timestamp: new Date().toISOString(),
-            body: { action, data },
-          };
-          if (welcome?.intercept?.(event)) return;
-          host.sendSprinkleLick('inline', { action, data }, undefined, originUnitId);
-        })
+        hydrateDips(
+          messageHost,
+          (action, data) => {
+            const event: LickEvent = {
+              type: 'sprinkle',
+              sprinkleName: 'inline',
+              timestamp: new Date().toISOString(),
+              body: { action, data },
+            };
+            if (welcome?.intercept?.(event)) return;
+            host.sendSprinkleLick('inline', { action, data }, undefined, originUnitId);
+          },
+          { previous, streaming: message.isStreaming === true }
+        )
       );
     },
     onQueuedChange: (items) => refs.queuedStack.setMessages(items),
