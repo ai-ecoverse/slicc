@@ -246,6 +246,17 @@ failed turn settles to. `toChatMessages` folds the card back as an
 compaction rounds. `toBufferedChatMessages` projects `error` explicitly, the
 same way it projects `compaction`.
 
+**Sent attachments are an overlay, too.** Pi history keeps a message's text
+and image blocks but not its attachment list — the chips the panel renders and
+the files transcript export copies — and the chat store that held it is frozen.
+`ScoopMessageRouter` records each attached message as `record.attachments`
+(`putAttachments`, creating the record if needed) keyed by the exact body it
+handed Pi (`formatPromptWithAttachments`); `toChatMessages` puts the list back
+on the user row with that content (`applyAttachmentOverlays`), pairing
+identical bodies in send order. Like markers, overlays sit outside the entries:
+a compaction does not erase them, and one whose message was summarized away
+matches nothing.
+
 **Only a SETTLED round is durable.** The kernel writes nothing on the opening
 phase and `interleaveMarkers` restores `summarized` / `fallback` only. The
 compaction phase stream does not replay, so a `summarizing` marker left behind

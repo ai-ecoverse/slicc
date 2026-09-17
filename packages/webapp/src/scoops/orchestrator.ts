@@ -41,12 +41,14 @@ import { DefaultTranscriptExportService } from '../transcript/export-service.js'
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
+import { conversationIdentityFor } from '../work-unit/conversation/key.js';
 import { migrateConversations } from '../work-unit/conversation/migration.js';
 import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
 import {
   type ConversationIdentity,
   WorkUnitConversationStore,
 } from '../work-unit/conversation/store.js';
+import type { ConversationAttachmentOverlay } from '../work-unit/conversation/types.js';
 import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
@@ -351,6 +353,7 @@ export class Orchestrator implements ConeApprovalRouter {
     sendPrompt: (jid, text, senderId, senderName, images, options) =>
       this.sendPrompt(jid, text, senderId, senderName, images ?? [], options),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
+    recordSentAttachments: (jid, overlays) => this.recordSentAttachments(jid, overlays),
     onError: (jid, error) => this.callbacks.onError(jid, error),
     onLickBackpressure: (jid, info) => this.callbacks.onLickBackpressure?.(jid, info),
     getSessionStore: () => this.sessionStore,
@@ -712,6 +715,24 @@ export class Orchestrator implements ConeApprovalRouter {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Write sent messages' attachment lists onto the unit's canonical record
+   * (#2365) — the only durable copy since the chat store stopped being
+   * written. Never fatal: a failure costs the chips and exported files, not
+   * the conversation.
+   */
+  private recordSentAttachments(jid: string, overlays: ConversationAttachmentOverlay[]): void {
+    const store = this.conversationStore;
+    const scoop = this.scoops.get(jid);
+    if (!store || !scoop) return;
+    store.putAttachments(conversationIdentityFor(scoop), overlays).catch((err) => {
+      log.warn('Failed to record sent attachments', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   /**

@@ -96,43 +96,56 @@ function decode(bytes: Uint8Array): string {
  * Must be called after the turn reaches idle (`data-processing` cleared) so the
  * session-cone record exists and the shell is no longer writing to it.
  */
+/** The scenario's opening prompt — also the body the attachment overlay matches. */
+const USER_PROMPT = 'run the export scenario';
+
 async function seedBinaryAttachment(
   page: import('@playwright/test').Page,
   b64: string
 ): Promise<void> {
+  // The cone's conversation lives in the canonical work-unit record (#2365);
+  // a sent message's attachment list is an overlay on it, matched back to the
+  // user row by the exact body Pi received. The first user message of this
+  // scenario was sent without attachments, so its body is its text.
   await page.evaluate(
-    async (args: { b64: string }) => {
+    async (args: { b64: string; body: string }) => {
       await new Promise<void>((resolve, reject) => {
-        const req = indexedDB.open('browser-coding-agent', 1);
+        const req = indexedDB.open('slicc-work-units', 1);
         req.onsuccess = () => {
           const db = req.result;
-          const tx = db.transaction('sessions', 'readwrite');
-          const store = tx.objectStore('sessions');
-          const getReq = store.get('session-cone');
+          const tx = db.transaction('conversations', 'readwrite');
+          const store = tx.objectStore('conversations');
+          const getReq = store.getAll();
           getReq.onsuccess = () => {
-            const session = getReq.result as
-              | { id: string; messages: Array<{ role: string; attachments?: unknown[] }> }
-              | undefined;
-            if (!session?.messages?.length) {
-              // Session not yet written — resolve silently; attachment will be absent.
+            const records = getReq.result as Array<{
+              workspaceId: string;
+              attachments?: unknown[];
+            }>;
+            const cone = records.find((r) => r.workspaceId === '/workspace');
+            if (!cone) {
+              // Record not yet written — resolve silently; attachment will be absent.
               resolve();
               return;
             }
-            const firstUserMsg = session.messages.find((m) => m.role === 'user');
-            if (!firstUserMsg) {
-              resolve();
-              return;
-            }
-            if (!firstUserMsg.attachments) firstUserMsg.attachments = [];
-            firstUserMsg.attachments.push({
-              id: 'e2e-binary-fixture',
-              name: 'fixture.bin',
-              mimeType: 'application/octet-stream',
-              size: 8,
-              kind: 'file',
-              data: args.b64,
-            });
-            const putReq = store.put(session);
+            cone.attachments = [
+              ...(cone.attachments ?? []),
+              {
+                id: 'e2e-binary-fixture-message',
+                timestamp: 0,
+                body: args.body,
+                attachments: [
+                  {
+                    id: 'e2e-binary-fixture',
+                    name: 'fixture.bin',
+                    mimeType: 'application/octet-stream',
+                    size: 8,
+                    kind: 'file',
+                    data: args.b64,
+                  },
+                ],
+              },
+            ];
+            const putReq = store.put(cone);
             putReq.onsuccess = () => resolve();
             putReq.onerror = () => reject(putReq.error);
           };
@@ -141,7 +154,7 @@ async function seedBinaryAttachment(
         req.onerror = () => reject(req.error);
       });
     },
-    { b64 }
+    { b64, body: USER_PROMPT }
   );
 }
 
@@ -196,7 +209,7 @@ test.describe('transcript export — local ZIP download', () => {
     // The fake-LLM server serves the scoop's LLM call from a turn matched on
     // "verify-export-scoop". The fixture uses onOverflow:'repeat-last' so any
     // ordering between the scoop and cone continuation is safe.
-    await submitUserMessage(page, 'run the export scenario');
+    await submitUserMessage(page, USER_PROMPT);
     // Synchronize on the response, not on the transient processing rising edge
     // (a missed rise poll on the slow shared CI runner flakes). First prove the
     // turn produced its final assistant text, then wait for the level-triggered
@@ -217,10 +230,10 @@ test.describe('transcript export — local ZIP download', () => {
       { timeout: 30_000 }
     );
 
-    // ── 3. Seed binary attachment into the cone UI session ─────────────────
-    // Injected after the turn so session-cone is already written by the WC
-    // shell's chat controller. The export service's Phase-2 attachment walk
-    // reads kind='file' attachments with data set and copies bytes unchanged.
+    // ── 3. Seed a binary attachment onto the cone's first user message ─────
+    // Injected after the turn so the cone's canonical record is already
+    // written. The export service's Phase-2 attachment walk reads
+    // kind='file' attachments with data set and copies bytes unchanged.
     const binaryB64 = Buffer.from(BINARY_FIXTURE_BYTES).toString('base64');
     await seedBinaryAttachment(page, binaryB64);
 

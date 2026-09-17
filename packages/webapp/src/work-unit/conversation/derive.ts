@@ -14,7 +14,12 @@
 
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatMessage, CompactionMarkerState } from '../../scoops/chat-types.js';
-import type { ConversationEntry, ConversationMarker, WorkUnitConversationRecord } from './types.js';
+import type {
+  ConversationAttachmentOverlay,
+  ConversationEntry,
+  ConversationMarker,
+  WorkUnitConversationRecord,
+} from './types.js';
 import { isReadableRecord } from './types.js';
 
 /**
@@ -59,6 +64,9 @@ export function toAgentMessages(record: WorkUnitConversationRecord | null): Agen
  * A record that was migrated that way and then continued by a live agent
  * renders its preserved `projectionPrefix` ahead of the derived history.
  *
+ * The attachment lists Pi history does not keep are put back on their user
+ * rows ({@link applyAttachmentOverlays}).
+ *
  * Either way the record's {@link ConversationMarker}s are folded back in
  * ({@link interleaveMarkers}) — they are transcript rows no message list can
  * carry, so this is the only place they can rejoin the thread.
@@ -80,10 +88,37 @@ export async function toChatMessages(
   const messages = toAgentMessages(record);
   if (messages.length === 0) return interleaveMarkers([...prefix], record.markers);
   const { agentMessagesToChatMessages } = await import('../../scoops/agent-message-to-chat.js');
-  return interleaveMarkers(
-    [...prefix, ...agentMessagesToChatMessages(messages, options)],
-    record.markers
+  const derived = applyAttachmentOverlays(
+    agentMessagesToChatMessages(messages, options),
+    record.attachments
   );
+  return interleaveMarkers([...prefix, ...derived], record.markers);
+}
+
+/**
+ * Put each sent message's attachment list back on its derived user row.
+ *
+ * A row matches an overlay whose `body` is its content — the body is exactly
+ * what the row was derived from. Identical bodies pair up in send order, and
+ * an overlay whose message was compacted away matches nothing. A row that
+ * already carries attachments is left alone. Pure; no overlays returns the
+ * input array itself.
+ */
+export function applyAttachmentOverlays(
+  rows: ChatMessage[],
+  overlays: readonly ConversationAttachmentOverlay[] | undefined
+): ChatMessage[] {
+  if (!overlays?.length) return rows;
+  const pending = [...overlays].sort((a, b) => a.timestamp - b.timestamp);
+  const used = new Set<number>();
+  return rows.map((row) => {
+    if (row.role !== 'user' || row.attachments?.length) return row;
+    const body = row.content.trim();
+    const at = pending.findIndex((o, i) => !used.has(i) && o.body.trim() === body);
+    if (at < 0) return row;
+    used.add(at);
+    return { ...row, attachments: pending[at].attachments };
+  });
 }
 
 /**

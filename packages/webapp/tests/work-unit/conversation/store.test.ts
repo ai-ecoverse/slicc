@@ -551,4 +551,43 @@ describe('WorkUnitConversationStore after the #2365 cut', () => {
       );
     });
   });
+
+  describe('attachment overlays', () => {
+    const overlay = (id: string, timestamp: number) => ({
+      id,
+      timestamp,
+      body: `body ${id}`,
+      attachments: [
+        { id: `att-${id}`, name: 'a.txt', mimeType: 'text/plain', size: 1, kind: 'text' as const },
+      ],
+    });
+
+    it('creates the record when the first message carries an attachment', async () => {
+      expect(await store.putAttachments(identity, [overlay('m1', 1)])).toBe(true);
+      const record = await store.load(identity.key);
+      expect(record).toMatchObject({ entries: [], attachments: [overlay('m1', 1)] });
+      // Older builds ignore the field harmlessly, so it does not force v2.
+      expect(record?.version).toBe(1);
+    });
+
+    it('upserts by message id and survives the checkpoint and a compaction rewrite', async () => {
+      await store.putAttachments(identity, [overlay('m2', 2), overlay('m1', 1)]);
+      await store.putAttachments(identity, [{ ...overlay('m1', 1), body: 'resent' }]);
+      const messages = legacyAgentMessages();
+      await store.syncAgentMessages(identity, messages);
+      await store.syncAgentMessages(identity, messages.slice(2));
+
+      const record = await store.load(identity.key);
+      expect(record?.rewrites).toBe(1);
+      expect(record?.attachments?.map((o) => [o.id, o.body])).toEqual([
+        ['m1', 'resent'],
+        ['m2', 'body m2'],
+      ]);
+    });
+
+    it('writes nothing for an empty list', async () => {
+      expect(await store.putAttachments(identity, [])).toBe(false);
+      expect(await store.load(identity.key)).toBeNull();
+    });
+  });
 });

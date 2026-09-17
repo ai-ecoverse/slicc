@@ -27,6 +27,7 @@
  */
 
 import type { LickChannel } from '../../base/lick-channels.js';
+import type { MessageAttachment } from '../../core/attachments.js';
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatCompactionMarker, ChatMessage } from '../../scoops/chat-types.js';
 
@@ -172,6 +173,28 @@ export interface ErrorConversationMarker {
 
 export type ConversationMarker = CompactionConversationMarker | ErrorConversationMarker;
 
+/**
+ * The attachments a user message was SENT with (#2365). Pi history keeps the
+ * prompt text and image blocks but not the attachment list — the chips the
+ * panel renders and the files transcript export copies — and the chat store
+ * that used to hold it is frozen. Kept outside the entries (like markers) so
+ * a compaction rewrite does not erase it; an overlay whose message was
+ * summarized away simply matches nothing.
+ */
+export interface ConversationAttachmentOverlay {
+  /** The channel message id the attachments arrived on. */
+  id: string;
+  /** Epoch ms the message was sent — orders duplicate bodies. */
+  timestamp: number;
+  /**
+   * The message body exactly as it was handed to Pi
+   * (`formatPromptWithAttachments`) — what the derived user row's `content`
+   * is, and therefore the match key.
+   */
+  body: string;
+  attachments: MessageAttachment[];
+}
+
 export type ConversationEntry =
   | UserConversationEntry
   | ExternalEventConversationEntry
@@ -231,6 +254,8 @@ export interface WorkUnitConversationRecord {
    * derived history. Never shown to Pi.
    */
   projectionPrefix?: ChatMessage[];
+  /** Attachment lists of sent user messages ({@link ConversationAttachmentOverlay}). */
+  attachments?: ConversationAttachmentOverlay[];
   createdAt: number;
   updatedAt: number;
   /** Which legacy store the record was first built from, if migrated. */

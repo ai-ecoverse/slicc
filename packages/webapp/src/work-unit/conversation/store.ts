@@ -51,6 +51,7 @@ import { createLogger } from '../../core/index.js';
 import type { ChatMessage } from '../../scoops/chat-types.js';
 import { entriesFromAgentMessages } from './entries.js';
 import type {
+  ConversationAttachmentOverlay,
   ConversationEntry,
   ConversationMarker,
   ConversationOrigin,
@@ -73,6 +74,12 @@ const MIGRATIONS_STORE = 'migrations';
  * seams a user can still scroll to are the recent ones.
  */
 const MAX_MARKERS = 64;
+
+/**
+ * How many {@link ConversationAttachmentOverlay}s one record keeps, oldest
+ * first out — the rows a user can still scroll to are the recent ones.
+ */
+const MAX_ATTACHMENT_OVERLAYS = 256;
 
 /** Resumable cursor of a versioned migration into the canonical store. */
 export interface ConversationMigrationState {
@@ -398,6 +405,26 @@ export class WorkUnitConversationStore {
       kept.sort((a, b) => a.timestamp - b.timestamp);
       return { ...record, markers: kept.slice(-MAX_MARKERS) };
     });
+  }
+
+  /**
+   * Record the attachment lists of user messages as they are sent (#2365).
+   * Creates the record when needed: the first message of a conversation can
+   * carry an attachment, and it is recorded before the turn checkpoints.
+   * Upserts by message id. `false` when the record could not be written.
+   */
+  async putAttachments(
+    identity: ConversationIdentity,
+    overlays: readonly ConversationAttachmentOverlay[]
+  ): Promise<boolean> {
+    if (overlays.length === 0) return false;
+    const ids = new Set(overlays.map((o) => o.id));
+    return this.withRecord(identity.key, identity, (record) => ({
+      ...record,
+      attachments: [...(record.attachments ?? []).filter((o) => !ids.has(o.id)), ...overlays]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-MAX_ATTACHMENT_OVERLAYS),
+    }));
   }
 
   /**
