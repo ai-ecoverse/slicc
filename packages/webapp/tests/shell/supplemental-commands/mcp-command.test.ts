@@ -417,6 +417,196 @@ describe('coerceArgsBySchema', () => {
   });
 });
 
+describe('coerceArgsBySchema — object JSON, arrays, unknown flags (#3217)', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      selected_api: { type: 'string' },
+      action: { type: 'string' },
+      params: { type: 'object' },
+      tags: { type: 'array', items: { type: 'string' } },
+      items: { type: 'array', items: { type: 'object' } },
+      count: { type: 'integer' },
+    },
+    required: ['selected_api', 'action'],
+  };
+
+  it('parses a type:object flag value as JSON', () => {
+    const r = coerceArgsBySchema(
+      [
+        '--selected_api',
+        'SlackCLIAPI',
+        '--action',
+        '_zap_raw_request',
+        '--params',
+        '{"url":"https://slack.com/api/auth.test","method":"GET"}',
+      ],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({
+        selected_api: 'SlackCLIAPI',
+        action: '_zap_raw_request',
+        params: { url: 'https://slack.com/api/auth.test', method: 'GET' },
+      });
+    }
+  });
+
+  it('parses object JSON in --flag=value form', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api=Slack', '--action=read', '--params={"url":"https://example.test"}'],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.params).toEqual({ url: 'https://example.test' });
+  });
+
+  it('rejects a non-JSON string for a type:object flag', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--params', 'not-json'],
+      schema
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('expected object JSON');
+  });
+
+  it('rejects JSON that is not an object for a type:object flag', () => {
+    const asArray = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--params', '["x"]'],
+      schema
+    );
+    expect(asArray.ok).toBe(false);
+    if (!asArray.ok) expect(asArray.error).toContain('expected object JSON');
+
+    const asString = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--params', '"just-a-string"'],
+      schema
+    );
+    expect(asString.ok).toBe(false);
+
+    const asNull = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--params', 'null'],
+      schema
+    );
+    expect(asNull.ok).toBe(false);
+  });
+
+  it('parses array-of-object flags as JSON objects', () => {
+    const r = coerceArgsBySchema(
+      [
+        '--selected_api',
+        'S',
+        '--action',
+        'a',
+        '--items',
+        '{"id":1}',
+        '--items',
+        '{"id":2,"name":"b"}',
+      ],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.items).toEqual([{ id: 1 }, { id: 2, name: 'b' }]);
+  });
+
+  it('still coerces scalars and string arrays', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--count', '3', '--tags', 'one', '--tags', 'two'],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.count).toBe(3);
+      expect(r.value.tags).toEqual(['one', 'two']);
+    }
+  });
+
+  it('rejects an unknown flag instead of dropping it', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--totally_bogus_flag_xyz', '123'],
+      schema
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('unknown flag: --totally_bogus_flag_xyz');
+  });
+
+  it('rejects an unknown flag with no value', () => {
+    const r = coerceArgsBySchema(['--selected_api', 'S', '--action', 'a', '--nope'], schema);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('unknown flag: --nope');
+  });
+
+  it('sets nested object fields from dotted flags', () => {
+    const r = coerceArgsBySchema(
+      [
+        '--selected_api',
+        'SlackCLIAPI',
+        '--action',
+        '_zap_raw_request',
+        '--params.url',
+        'https://slack.com/api/auth.test',
+        '--params.fail_on_errors',
+        'true',
+      ],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.params).toEqual({
+        url: 'https://slack.com/api/auth.test',
+        fail_on_errors: 'true',
+      });
+    }
+  });
+
+  it('supports dotted flags in --flag=value form', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api=S', '--action=a', '--params.url=https://example.test'],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.params).toEqual({ url: 'https://example.test' });
+  });
+
+  it('merges dotted flags into a JSON object payload', () => {
+    const r = coerceArgsBySchema(
+      [
+        '--selected_api',
+        'S',
+        '--action',
+        'a',
+        '--params',
+        '{"url":"https://example.test"}',
+        '--params.method',
+        'GET',
+      ],
+      schema
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.params).toEqual({ url: 'https://example.test', method: 'GET' });
+  });
+
+  it('rejects a dotted flag whose root is not an object property', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--tags.0', 'nope'],
+      schema
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('unknown flag: --tags.0');
+  });
+
+  it('rejects prototype-polluting dotted flags', () => {
+    const r = coerceArgsBySchema(
+      ['--selected_api', 'S', '--action', 'a', '--params.__proto__.polluted', 'yes'],
+      schema
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('unknown flag: --params.__proto__.polluted');
+    expect(Object.hasOwn(Object.prototype, 'polluted')).toBe(false);
+  });
+});
+
 describe('renderToolResult', () => {
   it('joins text content', () => {
     const r = renderToolResult({ content: [{ type: 'text', text: 'hello' }] });
@@ -921,6 +1111,79 @@ describe('mcp invoke / delete / refresh', () => {
     expect(r.stdout).toBe('pong: hi\n');
     const callBody = calls.find((c) => c.body?.method === 'tools/call')?.body;
     expect(callBody?.params).toEqual({ name: 'echo', arguments: { msg: 'hi' } });
+  });
+
+  it('invoke sends parsed object JSON as a record, not a string', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [
+        {
+          name: 'execute_zapier_read_action',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              selected_api: { type: 'string' },
+              action: { type: 'string' },
+              params: { type: 'object' },
+            },
+            required: ['selected_api', 'action'],
+          },
+        },
+      ],
+    });
+    const { fetch, calls } = makeMockMcpFetch({
+      toolResults: {
+        execute_zapier_read_action: { content: [{ type: 'text', text: 'ok' }] },
+      },
+    });
+    const r = await runCmd(
+      [
+        'invoke',
+        'demo',
+        'execute_zapier_read_action',
+        '--selected_api',
+        'SlackCLIAPI',
+        '--action',
+        '_zap_raw_request',
+        '--params',
+        '{"url":"https://slack.com/api/auth.test","method":"GET"}',
+      ],
+      { fetchImpl: fetch }
+    );
+    expect(r.exitCode).toBe(0);
+    const callBody = calls.find((c) => c.body?.method === 'tools/call')?.body as
+      | { params?: { arguments?: unknown } }
+      | undefined;
+    expect(callBody?.params?.arguments).toEqual({
+      selected_api: 'SlackCLIAPI',
+      action: '_zap_raw_request',
+      params: { url: 'https://slack.com/api/auth.test', method: 'GET' },
+    });
+  });
+
+  it('invoke rejects an unknown tool flag without calling the server', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {
+            type: 'object',
+            properties: { msg: { type: 'string' } },
+            required: ['msg'],
+          },
+        },
+      ],
+    });
+    const { fetch, calls } = makeMockMcpFetch({
+      toolResults: { echo: { content: [{ type: 'text', text: 'should not run' }] } },
+    });
+    const r = await runCmd(['invoke', 'demo', 'echo', '--msg', 'hi', '--totally_bogus', '1'], {
+      fetchImpl: fetch,
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown flag: --totally_bogus');
+    expect(calls.some((c) => c.body?.method === 'tools/call')).toBe(false);
   });
 
   it('invoke unknown tool errors out', async () => {
@@ -1615,6 +1878,8 @@ describe('mcp invoke --timeout flag (integration)', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('--timeout <seconds>');
     expect(r.stdout).toContain('default 60s');
+    expect(r.stdout).toContain('type: object');
+    expect(r.stdout).toContain('Unknown `--flags` exit non-zero');
   });
 
   it('strips --timeout from args so it never reaches the tool-args parser', async () => {
