@@ -298,6 +298,16 @@ const RELATIVE_IMPORT_RE =
 const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
 
 /**
+ * Absolute index of the `from` keyword in a TYPE_ONLY_NAMED_CLAUSE_RE match.
+ * Anchors on `from` followed by a quote so a specifier like `buffer-from.ts`
+ * cannot steal the offset (#3237 P2).
+ */
+function typeOnlyFromKeywordIndex(match) {
+  const kw = /\bfrom\s*['"]/.exec(match[0]);
+  return kw ? match.index + kw.index : -1;
+}
+
+/**
  * Find every import in `source` that points UP the stack from `importerRel`
  * (a scan-root-relative path). Returns `[{ line, specifier, from, to }]`;
  * comments are ignored. `stack` defaults to the webapp stack so existing
@@ -308,7 +318,8 @@ const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?
  *
  * On the webapp stack, a scoops/ value import of kernel/ is a back-edge even
  * though kernel/ is unranked (#3231). Top-level `import type { … } from`
- * clauses still erase and are allowed.
+ * clauses still erase and are allowed. Quoted specifiers and static
+ * template-literal `import(\`…\`)` are both scanned (#3237 P2).
  */
 export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const fromLayer = stack.layerOf(importerRel);
@@ -320,12 +331,12 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const typeOnlyFromIndices = new Set();
   if (stack.id === 'webapp' && fromLayer === 'scoops') {
     for (const tm of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
-      const fromOffset = tm[0].lastIndexOf('from');
-      typeOnlyFromIndices.add(tm.index + fromOffset);
+      const idx = typeOnlyFromKeywordIndex(tm);
+      if (idx >= 0) typeOnlyFromIndices.add(idx);
     }
   }
-  for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
-    const specifier = m[1];
+
+  const consider = (specifier, matchIndex) => {
     const queryAt = specifier.indexOf('?');
     const target = resolve(
       '/',
@@ -338,16 +349,31 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
       stack.id === 'webapp' &&
       fromLayer === 'scoops' &&
       toLayer === 'kernel' &&
-      !typeOnlyFromIndices.has(m.index);
-    if (toRank === undefined && !scoopsKernelValue) continue;
+      !typeOnlyFromIndices.has(matchIndex);
+    if (toRank === undefined && !scoopsKernelValue) return;
     const up = scoopsKernelValue || (toRank !== undefined && toRank > fromRank);
     const sideways =
       isolated.has(fromLayer) &&
       fromLayer === toLayer &&
       stripJsTsExt(target) !== stripJsTsExt(importerRel);
-    if (!up && !sideways) continue;
-    const line = stripped.slice(0, m.index).split('\n').length;
+    if (!up && !sideways) return;
+    const line = stripped.slice(0, matchIndex).split('\n').length;
     hits.push({ line, specifier, from: fromLayer, to: toLayer });
+  };
+
+  for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
+    consider(m[1], m.index);
+  }
+  for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
+    const raw = m[1];
+    if (raw.includes('$')) {
+      if (stack.id === 'webapp' && fromLayer === 'scoops' && /(?:^|\/)kernel(?:\/|$)/.test(raw)) {
+        const line = stripped.slice(0, m.index).split('\n').length;
+        hits.push({ line, specifier: raw, from: 'scoops', to: 'kernel' });
+      }
+      continue;
+    }
+    consider(raw, m.index);
   }
   return hits;
 }
@@ -526,10 +552,8 @@ function findWebappEscapes(scanRoot, importerRel, source, options = {}) {
   const typeOnlyFromIndices = new Map();
   if (allowTypeOnlyKernelMessages) {
     for (const m of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
-      const fromOffset = m[0].lastIndexOf('from');
-      const fromIndex = m.index + fromOffset;
       const list = typeOnlyFromIndices.get(m[1]) ?? [];
-      list.push(fromIndex);
+      list.push(typeOnlyFromKeywordIndex(m));
       typeOnlyFromIndices.set(m[1], list);
     }
   }
