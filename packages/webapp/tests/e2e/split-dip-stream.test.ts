@@ -105,30 +105,41 @@ async function bootLeader(page: Page): Promise<void> {
   });
 }
 
-/** The newest bubble's dip: tagged on first sight, then re-checked for identity. */
-async function probeLastDip(page: Page, token?: string) {
-  return page.evaluate((tag) => {
-    const bubble = Array.from(
-      document.querySelectorAll('slicc-chat-thread slicc-agent-message')
-    ).at(-1);
-    const iframes = Array.from(
-      bubble?.querySelectorAll<HTMLIFrameElement>('.msg__dip iframe') ?? []
-    );
-    const iframe = iframes[0] as (HTMLIFrameElement & { __probe?: string }) | undefined;
-    const win = iframe?.contentWindow as (Window & { __probe?: string }) | null | undefined;
-    if (tag && iframe && win && !iframe.__probe) {
-      iframe.__probe = tag;
-      win.__probe = tag;
-    }
-    return {
-      streaming: bubble?.hasAttribute('streaming') ?? false,
-      iframes: iframes.length,
-      pending: bubble?.querySelectorAll('.msg__dip-pending').length ?? 0,
-      elementProbe: iframe?.__probe ?? null,
-      windowProbe: win?.__probe ?? null,
-      card: win?.document.getElementById('early-card')?.textContent ?? null,
-    };
-  }, token);
+/** Opening prose of the `pour a dip early` fixture turn. */
+const EARLY_LEAD = 'Here it is.';
+
+/**
+ * The dip in the bubble that streams `EARLY_LEAD`: tagged on first sight, then
+ * re-checked for identity. Found by its text, not as the newest bubble: until
+ * the first delta reaches the page, the newest bubble is the welcome message,
+ * which carries a dip of its own.
+ */
+async function probeEarlyDip(page: Page, token?: string) {
+  return page.evaluate(
+    ({ tag, lead }) => {
+      const bubble = Array.from(
+        document.querySelectorAll('slicc-chat-thread slicc-agent-message')
+      ).find((el) => el.querySelector('.body')?.textContent?.startsWith(lead));
+      const iframes = Array.from(
+        bubble?.querySelectorAll<HTMLIFrameElement>('.msg__dip iframe') ?? []
+      );
+      const iframe = iframes[0] as (HTMLIFrameElement & { __probe?: string }) | undefined;
+      const win = iframe?.contentWindow as (Window & { __probe?: string }) | null | undefined;
+      if (tag && iframe && win && !iframe.__probe) {
+        iframe.__probe = tag;
+        win.__probe = tag;
+      }
+      return {
+        streaming: bubble?.hasAttribute('streaming') ?? false,
+        iframes: iframes.length,
+        pending: bubble?.querySelectorAll('.msg__dip-pending').length ?? 0,
+        elementProbe: iframe?.__probe ?? null,
+        windowProbe: win?.__probe ?? null,
+        card: win?.document.getElementById('early-card')?.textContent ?? null,
+      };
+    },
+    { tag: token, lead: EARLY_LEAD }
+  );
 }
 
 test.describe('dip streamed after a tool call', () => {
@@ -191,13 +202,13 @@ test.describe('dip streamed after a tool call', () => {
     // The fence has closed; the prose after it is still held back.
     await waitForFakeLlmHold();
     await expect
-      .poll(async () => (await probeLastDip(page, 'early')).iframes, { timeout: 15_000 })
+      .poll(async () => (await probeEarlyDip(page, 'early')).iframes, { timeout: 15_000 })
       .toBe(1);
-    const early = await probeLastDip(page);
+    const early = await probeEarlyDip(page);
     expect(early.streaming).toBe(true);
     expect(early.pending).toBe(0);
     expect(early.elementProbe).toBe('early');
-    await expect.poll(async () => (await probeLastDip(page)).card).toBe('EARLY CARD');
+    await expect.poll(async () => (await probeEarlyDip(page)).card).toBe('EARLY CARD');
 
     await releaseFakeLlmHold();
     await expect(page.locator('slicc-chat-thread')).toContainText('Still typing after the dip.', {
@@ -207,7 +218,7 @@ test.describe('dip streamed after a tool call', () => {
 
     // Same element, same document: the final render carried the dip over
     // instead of reloading it.
-    const settled = await probeLastDip(page);
+    const settled = await probeEarlyDip(page);
     expect(settled).toMatchObject({
       streaming: false,
       iframes: 1,
