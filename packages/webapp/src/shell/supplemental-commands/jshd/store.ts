@@ -1,4 +1,5 @@
 import {
+  isValidUnitName,
   JSHD_DIR,
   JSHD_LOG_DIR,
   type JshdRestartPolicy,
@@ -31,22 +32,29 @@ export async function ensureJshdDirs(fs: JshdFs): Promise<void> {
 }
 
 export async function writeUnitRecord(fs: JshdFs, record: JshdUnitRecord): Promise<void> {
+  if (!isValidUnitName(record.name)) {
+    throw new Error(`invalid unit name '${record.name}' (use letters, digits, '.', '_' or '-')`);
+  }
   await ensureJshdDirs(fs);
   await fs.writeFile(unitRecordPath(record.name), `${JSON.stringify(record, null, 2)}\n`);
 }
 
 export async function readUnitRecord(fs: JshdFs, name: string): Promise<JshdUnitRecord | null> {
+  if (!isValidUnitName(name)) return null;
   const path = unitRecordPath(name);
   if (!(await fs.exists(path))) return null;
   try {
     const parsed: unknown = JSON.parse(asText(await fs.readFile(path)));
-    return parseUnitRecord(parsed);
+    const record = parseUnitRecord(parsed);
+    if (!record || record.name !== name) return null;
+    return record;
   } catch {
     return null;
   }
 }
 
 export async function deleteUnitRecord(fs: JshdFs, name: string): Promise<void> {
+  if (!isValidUnitName(name)) return;
   const path = unitRecordPath(name);
   if (await fs.exists(path)) await fs.rm?.(path);
   const logPath = unitLogPath(name);
@@ -59,7 +67,9 @@ export async function listUnitRecords(fs: JshdFs): Promise<JshdUnitRecord[]> {
   const records: JshdUnitRecord[] = [];
   for (const file of names) {
     if (!file.endsWith('.json')) continue;
-    const record = await readUnitRecord(fs, file.slice(0, -'.json'.length));
+    const stem = file.slice(0, -'.json'.length);
+    if (!isValidUnitName(stem)) continue;
+    const record = await readUnitRecord(fs, stem);
     if (record) records.push(record);
   }
   records.sort((a, b) => a.name.localeCompare(b.name));
@@ -67,7 +77,7 @@ export async function listUnitRecords(fs: JshdFs): Promise<JshdUnitRecord[]> {
 }
 
 export async function appendUnitLog(fs: JshdFs, name: string, chunk: string): Promise<void> {
-  if (!chunk) return;
+  if (!chunk || !isValidUnitName(name)) return;
   await ensureJshdDirs(fs);
   const path = unitLogPath(name);
   if (fs.appendFile) {
@@ -79,6 +89,7 @@ export async function appendUnitLog(fs: JshdFs, name: string, chunk: string): Pr
 }
 
 export async function readUnitLog(fs: JshdFs, name: string): Promise<string> {
+  if (!isValidUnitName(name)) return '';
   const path = unitLogPath(name);
   if (!(await fs.exists(path))) return '';
   return asText(await fs.readFile(path));
@@ -97,7 +108,9 @@ interface UnitRecordJson {
 function parseUnitRecord(value: unknown): JshdUnitRecord | null {
   if (typeof value !== 'object' || value === null) return null;
   const rec = value as UnitRecordJson;
-  if (typeof rec.name !== 'string' || !Array.isArray(rec.argv)) return null;
+  if (typeof rec.name !== 'string' || !isValidUnitName(rec.name) || !Array.isArray(rec.argv)) {
+    return null;
+  }
   if (typeof rec.cwd !== 'string' || typeof rec.createdAt !== 'string') return null;
   if (typeof rec.enabled !== 'boolean') return null;
   if (typeof rec.restart !== 'string' || !RESTART_POLICIES.has(rec.restart as JshdRestartPolicy)) {

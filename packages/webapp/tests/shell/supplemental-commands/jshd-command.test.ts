@@ -227,6 +227,19 @@ describe('jshd command', () => {
     expect(result.stderr).toContain('cannot find script');
   });
 
+  it('refuses start from a restricted scoop principal', async () => {
+    const pm = new ProcessManager();
+    const fs = Object.assign(createMockFs({ '/workspace/hello.jsh': ONESHOT }), {
+      canWrite: (path: string) => path.startsWith('/scoops/'),
+    });
+    const result = await command(pm).execute(
+      ['start', '-n', 'x', '/workspace/hello.jsh'],
+      ctxFor(fs)
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('restricted scoop');
+  });
+
   it('logs -f emits a live chunk before abort and does not duplicate the tail', async () => {
     const pm = new ProcessManager();
     const fs = createMockFs({ '/workspace/hello.jsh': ONESHOT });
@@ -335,6 +348,51 @@ describe('jshd supervisor restart policy', () => {
         body: expect.objectContaining({ reason: 'crash-loop' }),
       }),
     ]);
+  });
+
+  it('reserves the unit name before awaiting persistence', async () => {
+    const { JshdSupervisor } = await import(
+      '../../../src/shell/supplemental-commands/jshd/supervisor.js'
+    );
+    const pm = new ProcessManager();
+    const inner = createMockFs({ '/workspace/hello.jsh': ONESHOT });
+    let releaseWrite!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let persistCalls = 0;
+    const origWrite = inner.writeFile.bind(inner);
+    inner.writeFile = async (path, content) => {
+      if (String(path).endsWith('.json')) {
+        persistCalls += 1;
+        if (persistCalls === 1) await gate;
+      }
+      return origWrite(path, content);
+    };
+    const supervisor = new JshdSupervisor({
+      fs: inner,
+      processManager: pm,
+      isDurable: () => false,
+      realmFactory: inProcess,
+      buildContext: () => ctxFor(inner),
+    });
+    const rec = {
+      name: 'same',
+      argv: ['/workspace/hello.jsh'],
+      cwd: '/workspace',
+      env: {},
+      restart: 'no' as const,
+      enabled: false,
+      createdAt: new Date().toISOString(),
+    };
+    const first = supervisor.start(rec);
+    await vi.waitFor(() => {
+      expect(supervisor.status('same')?.state).toBe('starting');
+    });
+    await expect(supervisor.start(rec)).rejects.toThrow(/already starting/);
+    releaseWrite();
+    const result = await first;
+    expect(result.pid).toBeGreaterThan(0);
   });
 
   it('waits 1s on the first restart and aborts backoff on stop', async () => {

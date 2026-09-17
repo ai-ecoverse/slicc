@@ -85,9 +85,16 @@ export class JshdSupervisor {
     if (existing && (existing.state === 'running' || existing.state === 'starting')) {
       throw new Error(`unit '${record.name}' is already ${existing.state}`);
     }
-    await writeUnitRecord(this.deps.fs, record);
+    // Reserve the name before the first await so concurrent `start -n same`
+    // cannot both pass the existing-unit check and spawn untracked workers.
     const live = this.makeLive(record);
     this.units.set(record.name, live);
+    try {
+      await writeUnitRecord(this.deps.fs, record);
+    } catch (err) {
+      this.units.delete(record.name);
+      throw err;
+    }
     const spawned = new Promise<number>((resolve, reject) => {
       live.spawnResolve = resolve;
       live.spawnReject = reject;

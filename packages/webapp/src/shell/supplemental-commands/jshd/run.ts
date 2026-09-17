@@ -65,6 +65,8 @@ async function handleStart(
   ctx: CommandContext,
   options: JshdRunOptions
 ): Promise<CmdResult> {
+  const denied = denyRestrictedPrincipal(ctx);
+  if (denied) return denied;
   const parsed = parseStartArgs(args, { cwd: ctx.cwd, env: ctx.env });
   if (!parsed.ok) return fail(parsed.error);
   const resolved = await resolveUnitScript(parsed.record.argv[0], ctx, options.scriptCatalog);
@@ -150,6 +152,8 @@ async function handleNamed(
 ): Promise<CmdResult> {
   const name = args[0];
   if (!name) return fail('missing unit name');
+  const denied = denyRestrictedPrincipal(ctx);
+  if (denied) return denied;
   const supervisor = supervisorOf(ctx, options);
   if (!supervisor) return fail('kernel host has not booted yet — try again in a moment');
   if (verb === 'stop') {
@@ -211,6 +215,8 @@ async function handleEnable(
 ): Promise<CmdResult> {
   const name = args[0];
   if (!name) return fail('missing unit name');
+  const denied = denyRestrictedPrincipal(ctx);
+  if (denied) return denied;
   const supervisor = supervisorOf(ctx, options);
   const record = supervisor
     ? await supervisor.setEnabled(name, enabled)
@@ -251,6 +257,22 @@ function overlayContext(ctx: CommandContext, record: JshdUnitRecord): CommandCon
   const env = new Map(ctx.env);
   for (const [key, value] of Object.entries(record.env)) env.set(key, value);
   return { ...ctx, cwd: record.cwd, env };
+}
+
+/**
+ * Scoops see a RestrictedFS whose `canWrite('/workspace/.jshd')` is false.
+ * The kernel supervisor runs units on the cone's SudoFS, so a restricted
+ * caller must not start or mutate units that would inherit that principal.
+ */
+export function isRestrictedJshdPrincipal(fs: unknown): boolean {
+  if (typeof fs !== 'object' || fs === null) return false;
+  const canWrite = (fs as { canWrite?: unknown }).canWrite;
+  return typeof canWrite === 'function' && !canWrite.call(fs, '/workspace/.jshd');
+}
+
+function denyRestrictedPrincipal(ctx: CommandContext): CmdResult | null {
+  if (!isRestrictedJshdPrincipal(ctx.fs)) return null;
+  return fail('not available inside a restricted scoop');
 }
 
 function mergeLs(

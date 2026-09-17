@@ -15,9 +15,9 @@ const source = readFileSync(hostPath, 'utf8');
 
 describe('jshd boot restore wiring', () => {
   it('awaits mount recovery, then jshd restore, then cone bootstrap', () => {
-    const step = source.indexOf('await restoreMountsThenJshd(sharedFs');
+    const step = source.indexOf('await restoreMountsThenJshd(');
     const mount = source.indexOf('await recoverPersistedMounts(sharedFs');
-    const restore = source.indexOf('await restoreJshdUnits(sharedFs');
+    const restore = source.indexOf('await restoreJshdUnits(');
     const cone = source.indexOf('await bootstrapCone(');
     expect(step).toBeGreaterThan(0);
     expect(mount).toBeGreaterThan(0);
@@ -31,5 +31,10 @@ describe('jshd boot restore wiring', () => {
       /await import\(\s*['"]\.\.\/shell\/supplemental-commands\/jshd\/restore\.js['"]\s*\)/
     );
     expect(source).not.toMatch(/from ['"]\.\.\/shell\/supplemental-commands\/jshd\//);
+  });
+
+  it('threads the cone sudo principal into jshd restore', () => {
+    expect(source).toMatch(/orchestrator\.getSudoManager\(\)/);
+    expect(source).toMatch(/sudoManager\.getBroker\(\)/);
   });
 });

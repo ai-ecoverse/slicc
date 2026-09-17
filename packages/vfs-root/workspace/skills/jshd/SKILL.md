@@ -31,6 +31,6 @@ Records: `/workspace/.jshd/<name>.json`. Logs: `/workspace/.jshd/log/<name>.log`
 
 Keep-alive is the realm: pending timers or host-event subscriptions (`hid`/`usb` event listeners) keep the worker up. A script that returns with nothing pending exits.
 
-`--enable`d units are relaunched after mounts restore and before the cone's first turn. Restored units keep canonical `PATH` and can still `exec` child commands.
+`--enable`d units are relaunched after mounts restore and before the cone's first turn. Restored units keep canonical `PATH`, can still `exec` child commands, and run through the cone's `SudoFS` (writes to `/etc/sudoers` still require approval). Restricted scoop shells cannot `jshd start` (or stop/restart/rm/enable/disable) — units are cone-owned.
 
 On the thin Chrome extension, `start` still runs as best effort; `ls` reports the unit is not durable (no DedicatedWorker).

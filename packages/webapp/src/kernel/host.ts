@@ -932,15 +932,17 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
  * eager first-load graph.
  */
 async function restoreMountsThenJshd(
-  sharedFs: VirtualFS,
+  sharedFs: VirtualFS | null | undefined,
   processManager: ProcessManager,
   lickManager: LickManager,
   log: KernelHostLogger,
-  progress: (stage: string) => void
+  progress: (stage: string) => void,
+  orchestrator: OrchestratorType
 ): Promise<void> {
+  if (!sharedFs) return;
   await recoverPersistedMounts(sharedFs, lickManager, log);
   progress('mounts-restored');
-  await restoreJshdUnits(sharedFs, processManager, lickManager, log);
+  await restoreJshdUnits(sharedFs, processManager, lickManager, log, orchestrator);
   progress('jshd-restored');
 }
 
@@ -948,13 +950,22 @@ async function restoreJshdUnits(
   sharedFs: VirtualFS,
   processManager: ProcessManager,
   lickManager: LickManager,
-  log: KernelHostLogger
+  log: KernelHostLogger,
+  orchestrator: OrchestratorType
 ): Promise<void> {
   try {
     const { restoreEnabledJshdUnits } = await import(
       '../shell/supplemental-commands/jshd/restore.js'
     );
-    await restoreEnabledJshdUnits({ fs: sharedFs, processManager, lickManager });
+    const sudoManager = orchestrator.getSudoManager();
+    await restoreEnabledJshdUnits({
+      fs: sharedFs,
+      processManager,
+      lickManager,
+      ...(sudoManager
+        ? { sudo: { broker: sudoManager.getBroker(), getPolicy: () => sudoManager.getPolicy() } }
+        : {}),
+    });
   } catch (err) {
     log.warn('jshd restore failed', err);
   }
@@ -1282,9 +1293,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 9. Restore persisted mounts then jshd units. MUST run AFTER
   //    setEventHandler so the `session-reload` lick routes through the
   //    installed handler. Both complete before first-turn readiness.
-  if (sharedFs) {
-    await restoreMountsThenJshd(sharedFs, processManager, lickManager, log, progress);
-  }
+  await restoreMountsThenJshd(sharedFs, processManager, lickManager, log, progress, orchestrator);
 
   // 10. Cone bootstrap.
   if (!skipConeBootstrap) {

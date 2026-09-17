@@ -177,7 +177,7 @@ Unit records live in `/workspace/.jshd/<name>.json` (argv, cwd, env, restart pol
 
 **Keep-alive** is the realm's existing handle semantics: a pending timer or host-event subscription (`RealmRpcClient.onEvent`) keeps the worker up; a script that returns with nothing pending exits and is subject to the restart policy.
 
-**Boot restore.** Kernel-host step 9 awaits mount recovery, then awaits jshd restore, then bootstraps the cone. `createKernelHost` does not return (and the first turn cannot start) until enabled units have been relaunched. Restored units get a kernel-owned headless-shell context (canonical `PATH` / `HOME` plus a real `exec` bridge) with the persisted unit env overlaid.
+**Boot restore.** Kernel-host step 9 awaits mount recovery, then awaits jshd restore, then bootstraps the cone. `createKernelHost` does not return (and the first turn cannot start) until enabled units have been relaunched. Restored units get a kernel-owned headless-shell context (canonical `PATH` / `HOME` plus a real `exec` bridge) with the persisted unit env overlaid, wrapped in the cone's `SudoFS` so writes to `/etc/sudoers` still require approval. Restricted scoop shells cannot start or mutate units.
 
 **Job table.** Live units are also recorded in `kernel/job-table.ts` (`id: jshd:<name>`) so a future `jobs` / `fg` / `bg` (#2846) can list them next to detached bash jobs.
 

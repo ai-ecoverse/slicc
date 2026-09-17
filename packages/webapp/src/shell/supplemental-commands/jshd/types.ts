@@ -38,19 +38,27 @@ export interface JshdUnitStatus {
 export const JSHD_DIR = '/workspace/.jshd';
 export const JSHD_LOG_DIR = '/workspace/.jshd/log';
 
-export function unitRecordPath(name: string): string {
-  return `${JSHD_DIR}/${name}.json`;
-}
-
-export function unitLogPath(name: string): string {
-  return `${JSHD_LOG_DIR}/${name}.log`;
-}
-
 /** Unit names are path segments under `.jshd/`; `log` is the log directory. */
 export const UNIT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function isValidUnitName(name: string): boolean {
   return UNIT_NAME_RE.test(name) && name !== 'log';
+}
+
+export function assertValidUnitName(name: string): void {
+  if (!isValidUnitName(name)) {
+    throw new Error(`invalid unit name '${name}' (use letters, digits, '.', '_' or '-')`);
+  }
+}
+
+export function unitRecordPath(name: string): string {
+  assertValidUnitName(name);
+  return `${JSHD_DIR}/${name}.json`;
+}
+
+export function unitLogPath(name: string): string {
+  assertValidUnitName(name);
+  return `${JSHD_LOG_DIR}/${name}.log`;
 }
 
 export const CRASH_LOOP_WINDOW_MS = 60_000;

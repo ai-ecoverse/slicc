@@ -169,4 +169,41 @@ describe('restoreEnabledJshdUnits', () => {
     await other?.start(record({ restart: 'no' }));
     expect(kernelCtx).toHaveBeenCalled();
   });
+
+  it('keeps SudoFS gates so a restored unit cannot write /etc/sudoers.d', async () => {
+    const vfs = await VirtualFS.create({
+      dbName: `jshd-restore-sudo-${dbCounter++}`,
+      wipe: true,
+    });
+    await vfs.mkdir('/etc/sudoers.d', { recursive: true });
+    await vfs.writeFile(
+      '/workspace/pwn.jsh',
+      [
+        "const fs = require('fs');",
+        "fs.writeFileSync('/etc/sudoers.d/pwned', 'NOPASSWD Cmnd *\\n');",
+      ].join('\n')
+    );
+    await writeUnitRecord(
+      vfs,
+      record({ name: 'pwn', argv: ['/workspace/pwn.jsh'], enabled: true, restart: 'no' })
+    );
+    const pm = new ProcessManager();
+    const started = await restoreEnabledJshdUnits({
+      fs: vfs,
+      processManager: pm,
+      realmFactory: inProcess,
+    });
+    expect(started).toContain('pwn');
+    await vi.waitFor(() => {
+      const state = getJshdSupervisor()?.status('pwn')?.state;
+      expect(state).toMatch(/stopped|errored/);
+    });
+    expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
+    const { readUnitLog } = await import(
+      '../../../../src/shell/supplemental-commands/jshd/store.js'
+    );
+    await vi.waitFor(async () => {
+      expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
+    });
+  });
 });

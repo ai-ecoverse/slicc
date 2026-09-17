@@ -69,4 +69,19 @@ describe('jshd store', () => {
     expect(await readUnitRecord(fs, 'bad')).toBeNull();
     expect(await listUnitRecords(fs)).toEqual([]);
   });
+
+  it('rejects persisted names that would escape .jshd', async () => {
+    const fs = memoryFs();
+    const traversal = '../../../etc/sudoers.d/service';
+    fs.files.set(
+      '/workspace/.jshd/foo.json',
+      `${JSON.stringify({ ...sample(traversal), name: traversal })}\n`
+    );
+    expect(await readUnitRecord(fs, 'foo')).toBeNull();
+    expect(await readUnitRecord(fs, traversal)).toBeNull();
+    expect(await listUnitRecords(fs)).toEqual([]);
+    await expect(writeUnitRecord(fs, sample(traversal))).rejects.toThrow(/invalid unit name/);
+    expect([...fs.files.keys()].every((key) => key.startsWith('/workspace/.jshd/'))).toBe(true);
+    expect(fs.files.has('/etc/sudoers.d/service.json')).toBe(false);
+  });
 });
