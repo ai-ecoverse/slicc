@@ -1,28 +1,32 @@
 /**
- * Keep the JS realm alive across constructed `Request` / `Response` body
- * reads. Native Body mixin consumption is a ReadableStream turn, which is
- * not an RPC or timer handle; after any earlier body read the drain can
- * post `realm-done` before the next `await res.text()` continuation runs
- * (silent exit 0 — #3227, leftover of #2862).
+ * Keep the JS realm alive across WHATWG stream I/O. Native Body mixin,
+ * Blob, and ReadableStream consumption is a stream turn, which is not an
+ * RPC or timer handle; after any earlier read the drain can post
+ * `realm-done` before the next continuation runs (silent exit 0 — #3227,
+ * leftover of #2862).
  *
  * Two layers, restored when the realm finishes (in-process tests share an
  * isolate with vitest):
- * 1. Sync-bufferable bodies (string, typed array, URLSearchParams) get the
- *    same microtask readers as fetch reconstruction.
- * 2. Remaining native readers (`Blob`, `FormData`, `ReadableStream`, clone)
- *    are counted as drain handles until their promise settles.
+ * 1. Sync-bufferable Request/Response bodies (string, typed array,
+ *    URLSearchParams) get the same microtask readers as fetch reconstruction.
+ * 2. Remaining native stream I/O (Body mixin, Blob/File, ReadableStream
+ *    `pipeTo`/`cancel`, default/BYOB `read`/`cancel`) is counted as a drain
+ *    handle until the promise settles.
  */
 
 import { attachBufferedBodyReaders } from './realm-fetch-response.js';
 
-const BODY_METHOD_NAMES = ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text'] as const;
-type BodyMethodName = (typeof BODY_METHOD_NAMES)[number];
+const BODY_METHODS = ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text'] as const;
+const BLOB_METHODS = ['arrayBuffer', 'bytes', 'text'] as const;
+const STREAM_METHODS = ['cancel', 'pipeTo'] as const;
+const READER_METHODS = ['cancel', 'read'] as const;
 
-type BodyMethod = (...args: unknown[]) => unknown;
+type StreamMethod = (...args: unknown[]) => unknown;
+type MethodCtor = { prototype: object };
 
-interface SavedBodyMethod {
+interface SavedStreamMethod {
   proto: object;
-  name: BodyMethodName;
+  name: string;
   descriptor: PropertyDescriptor;
 }
 
@@ -52,7 +56,7 @@ export function createBodyReadHandleTracker(
 ): BodyReadHandleTracker {
   const NativeRequest = g.Request;
   const NativeResponse = g.Response;
-  const savedMethods: SavedBodyMethod[] = [];
+  const savedMethods: SavedStreamMethod[] = [];
   const progressWaiters = new Set<() => void>();
   let pending = 0;
   let installed = false;
@@ -75,17 +79,17 @@ export function createBodyReadHandleTracker(
     return result;
   };
 
-  const wrapPrototype = (ctor: typeof Request | typeof Response | undefined): void => {
+  const wrapNamedMethods = (ctor: MethodCtor | undefined, names: readonly string[]): void => {
     if (!ctor) return;
-    const proto = ctor.prototype as unknown as Record<BodyMethodName, BodyMethod>;
-    for (const name of BODY_METHOD_NAMES) {
+    const proto = ctor.prototype;
+    for (const name of names) {
       const descriptor = Object.getOwnPropertyDescriptor(proto, name);
       if (!descriptor || typeof descriptor.value !== 'function') continue;
       savedMethods.push({ proto, name, descriptor });
-      const orig = descriptor.value as BodyMethod;
+      const orig = descriptor.value as StreamMethod;
       Object.defineProperty(proto, name, {
         ...descriptor,
-        value: function wrappedBodyRead(this: unknown, ...args: unknown[]): unknown {
+        value: function wrappedStreamRead(this: unknown, ...args: unknown[]): unknown {
           return track(orig.apply(this, args));
         },
       });
@@ -100,8 +104,13 @@ export function createBodyReadHandleTracker(
     install() {
       if (installed) return;
       installed = true;
-      wrapPrototype(NativeRequest);
-      wrapPrototype(NativeResponse);
+      wrapNamedMethods(asMethodCtor(NativeRequest), BODY_METHODS);
+      wrapNamedMethods(asMethodCtor(NativeResponse), BODY_METHODS);
+      wrapNamedMethods(asMethodCtor(g.Blob), BLOB_METHODS);
+      wrapNamedMethods(asMethodCtor(g.File), BLOB_METHODS);
+      wrapNamedMethods(asMethodCtor(g.ReadableStream), STREAM_METHODS);
+      wrapNamedMethods(asMethodCtor(readableStreamReaderCtor(g, 'default')), READER_METHODS);
+      wrapNamedMethods(asMethodCtor(readableStreamReaderCtor(g, 'byob')), READER_METHODS);
       if (NativeResponse) {
         g.Response = class Response extends NativeResponse {
           constructor(body?: BodyInit | null, init?: ResponseInit) {
@@ -154,4 +163,16 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     'then' in value &&
     typeof (value as { then: unknown }).then === 'function'
   );
+}
+
+function asMethodCtor(value: unknown): MethodCtor | undefined {
+  return typeof value === 'function' ? (value as MethodCtor) : undefined;
+}
+
+function readableStreamReaderCtor(g: typeof globalThis, kind: 'default' | 'byob'): unknown {
+  const bag = g as typeof globalThis & {
+    ReadableStreamDefaultReader?: unknown;
+    ReadableStreamBYOBReader?: unknown;
+  };
+  return kind === 'byob' ? bag.ReadableStreamBYOBReader : bag.ReadableStreamDefaultReader;
 }

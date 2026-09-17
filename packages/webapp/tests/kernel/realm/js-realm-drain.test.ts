@@ -609,6 +609,53 @@ describe('realm constructed Request/Response body continuation (#3227)', () => {
     expect(done.stdout).toContain('DONE');
   });
 
+  it('lets later Blob.text() reads print after the first', async () => {
+    const code = withDone([
+      'console.log("1:" + (await new Blob(["first"]).text()) + "/");',
+      'console.log("2:" + (await new Blob(["second"]).text()) + "/");',
+    ]);
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later ReadableStream reader.read() calls print after the first', async () => {
+    const code = [
+      STREAM_BODY,
+      withDone([
+        'async function read(s) {',
+        '  const { value } = await s.getReader().read();',
+        '  return new TextDecoder().decode(value);',
+        '}',
+        'console.log("1:" + (await read(stream("first"))) + "/");',
+        'console.log("2:" + (await read(stream("second"))) + "/");',
+      ]),
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
+  it('lets later Response.body.getReader() reads print after a prior body read', async () => {
+    const code = [
+      STREAM_BODY,
+      withDone([
+        'console.log("1:" + (await new Response("first").text()) + "/");',
+        'const { value } = await new Response(stream("second")).body.getReader().read();',
+        'console.log("2:" + new TextDecoder().decode(value) + "/");',
+      ]),
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('1:first/');
+    expect(done.stdout).toContain('2:second/');
+    expect(done.stdout).toContain('DONE');
+  });
+
   it('rejects a second read on the same constructed body instead of exiting 0', async () => {
     const code = withDone([
       'const r = new Response("x");',

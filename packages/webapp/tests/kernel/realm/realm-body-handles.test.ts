@@ -79,9 +79,31 @@ describe('createBodyReadHandleTracker', () => {
         return undefined;
       }
     }
+    class FakeBlob {
+      text(): Promise<string> {
+        return delayedText();
+      }
+    }
+    class FakeReader {
+      read(): Promise<{ done: boolean; value: string }> {
+        return new Promise((resolve) => {
+          setTimeout(() => resolve({ done: false, value: 'chunk' }), 0);
+        });
+      }
+    }
+    class FakeStream {
+      pipeTo(): Promise<void> {
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(), 0);
+        });
+      }
+    }
     const g = {
       Request: FakeRequest,
       Response: FakeResponse,
+      Blob: FakeBlob,
+      ReadableStream: FakeStream,
+      ReadableStreamDefaultReader: FakeReader,
     } as unknown as typeof globalThis;
     const bodyReads = createBodyReadHandleTracker(g);
     bodyReads.install();
@@ -163,6 +185,36 @@ describe('createBodyReadHandleTracker', () => {
     trackers.push(bodyReads);
     expect(bodyReads.pendingCount).toBe(0);
     bodyReads.restore();
+  });
+
+  it('counts a Blob.text() until it settles', async () => {
+    const { g, bodyReads } = installed();
+    const pending = new (g.Blob as unknown as typeof Blob)().text();
+    expect(bodyReads.pendingCount).toBe(1);
+    await pending;
+    expect(bodyReads.pendingCount).toBe(0);
+  });
+
+  it('counts a ReadableStreamDefaultReader.read() until it settles', async () => {
+    const { g, bodyReads } = installed();
+    const Reader = (
+      g as typeof globalThis & {
+        ReadableStreamDefaultReader: new () => { read(): Promise<unknown> };
+      }
+    ).ReadableStreamDefaultReader;
+    const pending = new Reader().read();
+    expect(bodyReads.pendingCount).toBe(1);
+    await pending;
+    expect(bodyReads.pendingCount).toBe(0);
+  });
+
+  it('counts ReadableStream.pipeTo until it settles', async () => {
+    const { g, bodyReads } = installed();
+    const Stream = g.ReadableStream as unknown as new () => { pipeTo(): Promise<void> };
+    const pending = new Stream().pipeTo();
+    expect(bodyReads.pendingCount).toBe(1);
+    await pending;
+    expect(bodyReads.pendingCount).toBe(0);
   });
 });
 

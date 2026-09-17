@@ -425,10 +425,10 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 }
 
 /**
- * Install the WASM compile bridge, timer-handle wrappers, and Request/Response
- * body-read handles, run the entry, drain Node-like handles, then post
- * `realm-done`. Wrappers are always restored so the in-process test factory
- * cannot leak them into vitest.
+ * Install the WASM compile bridge, timer-handle wrappers, and WHATWG stream
+ * I/O handles (Body mixin, Blob, ReadableStream), run the entry, drain
+ * Node-like handles, then post `realm-done`. Wrappers are always restored so
+ * the in-process test factory cannot leak them into vitest.
  *
  * The WASM compile bridge is an internal global rather than an AsyncFunction
  * param (parity-pinned): callers feature-detect with `typeof`. The returned
@@ -504,9 +504,9 @@ async function finishJsRealm(opts: {
 
 /**
  * Run the entry, flush sync-fs, then drain ref'd handles (RPC + timers +
- * constructed Request/Response body reads) unless `process.exit()` already
- * skipped them. A mere `process.exitCode` assignment does not skip the
- * drain — Node waits for handles, then exits with that status (#3155).
+ * WHATWG stream I/O) unless `process.exit()` already skipped them. A mere
+ * `process.exitCode` assignment does not skip the drain — Node waits for
+ * handles, then exits with that status (#3155).
  */
 async function runEntryThenDrain(opts: {
   entryCode: string;
@@ -586,12 +586,13 @@ async function flushSyncFsCache(
 /**
  * Keep the realm alive the way Node keeps a process alive: while there are
  * ref'd handles. I/O is `rpc.pendingCount` (fs/exec/fetch). Timers are the
- * wrapped `setTimeout` / `setInterval` set. Native Request/Response body
- * reads that are still stream turns count via `bodyReads.pendingCount`
- * (#3227). A pending Promise with no handle does not count —
+ * wrapped `setTimeout` / `setInterval` set. Native WHATWG stream I/O
+ * (Request/Response/Blob body methods, ReadableStream `pipeTo`/`read`)
+ * that is still a stream turn counts via `bodyReads.pendingCount` (#3227).
+ * A pending Promise with no handle does not count —
  * `new Promise(() => {})` must not hang teardown.
  *
- * Sleeps on RPC/timer/body-read progress instead of spinning `setTimeout(0)`.
+ * Sleeps on RPC/timer/stream-I/O progress instead of spinning `setTimeout(0)`.
  * A never-settling RPC or uncleared `setInterval` hangs until the host
  * SIGKILLs the realm worker, the same way hung I/O hangs real Node.
  * `process.exit()` from a delayed callback stops the drain.

@@ -1859,19 +1859,19 @@ not: the realm drains, then exits with `n` (#3155).
 
 SLICC matches that: `.jsh` / `node` wrap the entry in `AsyncFunction` (so
 top-level `await` works), then drain outstanding RPC (fs/exec/fetch),
-user timers, and in-flight constructed `Request`/`Response` body reads
-before `realm-done`. Fire-and-forget `.then()`, unawaited `main()`,
-nested `setTimeout`, and `await fetch(…).json()` / `.text()` therefore
-print before the command exits. Fetch response bodies are already
-buffered on the host; `json()` / `text()` resolve from those bytes so
-the continuation after a body read is not a native stream turn the drain
-cannot see. Constructed `Request`/`Response` bodies use the same
-microtask readers when the body is a string, typed array, or
-`URLSearchParams`; other bodies (`Blob`, `FormData`, `ReadableStream`)
-keep the realm alive until the native read settles, so a second
-`await new Response(…).text()` cannot silently exit 0 (#3227). An
-uncleared `setInterval` or hung I/O hangs until the shell job is
-SIGKILL'd, the same way hung I/O hangs real Node.
+user timers, and in-flight WHATWG stream I/O before `realm-done`.
+Fire-and-forget `.then()`, unawaited `main()`, nested `setTimeout`, and
+`await fetch(…).json()` / `.text()` therefore print before the command
+exits. Fetch response bodies are already buffered on the host; `json()`
+/ `text()` resolve from those bytes so the continuation after a body
+read is not a native stream turn the drain cannot see. Constructed
+`Request`/`Response` bodies use the same microtask readers when the body
+is a string, typed array, or `URLSearchParams`; other stream I/O (`Blob`
+/ `File` reads, `FormData`, `ReadableStream` `read`/`pipeTo`,
+`body.getReader()`) keeps the realm alive until the native read settles,
+so a second stream read cannot silently exit 0 (#3227). An uncleared
+`setInterval` or hung I/O hangs until the shell job is SIGKILL'd, the
+same way hung I/O hangs real Node.
 
 ### Globals API
 
