@@ -37,7 +37,7 @@ function makeTab() {
       sent.push({ method, params });
       return {};
     }),
-    screenshot: vi.fn(async () => JPEG_B64),
+    screenshot: vi.fn(async (_opts: { format?: string; maxWidth?: number } = {}) => JPEG_B64),
   };
   return { tab: tab as unknown as TabPage, raw: tab, sent };
 }

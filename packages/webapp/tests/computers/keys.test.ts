@@ -35,8 +35,12 @@ describe('computer keys', () => {
   });
 
   it('maps click/hold/scroll onto touch actions', () => {
-    expect(toTouchAction({ type: 'click', x: 1, y: 2 })).toEqual({ kind: 'tap', x: 1, y: 2 });
-    expect(toTouchAction({ type: 'click', x: 1, y: 2, holdMs: 400 })).toEqual({
+    expect(toTouchAction({ type: 'click', button: 1, count: 1, x: 1, y: 2 })).toEqual({
+      kind: 'tap',
+      x: 1,
+      y: 2,
+    });
+    expect(toTouchAction({ type: 'click', button: 1, count: 1, x: 1, y: 2, holdMs: 400 })).toEqual({
       kind: 'long-press',
       x: 1,
       y: 2,

@@ -965,6 +965,8 @@ export interface PanelRpcResults {
     base64: string;
     width: number;
     height: number;
+    nativeWidth?: number;
+    nativeHeight?: number;
     title: string;
     url: string;
   };
