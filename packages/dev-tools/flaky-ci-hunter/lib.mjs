@@ -407,7 +407,7 @@ const EXCLUDED_WORKFLOWS = new Set([
   'worker staging deploy',
 ]);
 
-/** Job names that publish, release, or deploy. Matches CI's `release-gate` too. */
+/** Job names that publish, release, or deploy. Also matches historical CI `release-gate` runs. */
 const EXCLUDED_JOB_PATTERN = /release|publish|deploy/i;
 
 /**

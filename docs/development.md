@@ -32,8 +32,8 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 
 ### End-to-end flow
 
-1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
-2. A lightweight, read-only Linux preflight invokes semantic-release's commit analyzer directly. Pushes with no releasable commits stop before reserving the `macos-26` release runner.
+1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`. A half-hourly schedule also catches releases deferred while the merge queue was busy.
+2. A lightweight, read-only Linux preflight checks the default-branch merge queue. If the queue has any entries, the release exits without publishing (the merge queue must not wait on Release — the old `release-gate` poll burned GitHub App rate limits and dequeued green batches). When the queue is idle, the preflight invokes semantic-release's commit analyzer. Pushes with no releasable commits stop before reserving the `macos-26` release runner.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
 4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
 5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing. Worker and Chrome deploy scripts independently skip their release operations when their dependent sources did not change, and GitHub Release creation attaches the generated artifacts.
@@ -447,8 +447,10 @@ Nothing else is required for CI configuration:
 
 - `.github/workflows/ci.yml`
   - builds, validates, deploys, and smoke-tests the staging Worker on every non-fork pull request; fork PRs still run the local Worker gates because GitHub withholds deployment secrets
+  - on `merge_group`, only the queue leader (position 1) mutates staging (turnstyle + deploy + smoke); other candidates still dry-run and unit-test so parallel queue builds do not serialize on `staging-mutation-queue`
   - gates only the bulk R2 asset refresh (and archive recovery smoke) on `cloudflare-r2`, which tracks the webapp build graph and archive contract; Worker-only changes still deploy and smoke
   - runs the full Playwright suite on affected `merge_group` batches; the required `ci` summary waits for it before landing
+  - does **not** wait on an in-flight Release — Release defers while the merge queue is busy (`merge-queue-busy.mjs`)
   - retries staging deploys and the deployed smoke test to tolerate transient Worker propagation failures
   - publishes per-step Cloudflare timings in the run summary and `cloudflare-worker-phase-timing` JSON artifact
 - `.github/workflows/worker-staging.yml`
