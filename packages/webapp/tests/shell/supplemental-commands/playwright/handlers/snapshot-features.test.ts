@@ -309,7 +309,7 @@ describe('screenshot --type / --hires', () => {
 
   it('--hires captures the viewport as a clip scaled by the device pixel ratio', async () => {
     const { browser, screenshot } = makeBrowser({
-      evaluateResult: JSON.stringify({ dpr: 2, w: 1280, h: 800, sh: 4000 }),
+      evaluateResult: JSON.stringify({ dpr: 2, w: 1280, h: 800, sh: 4000, x: 0, y: 0 }),
     });
     const result = await screenshotHandler(
       createHandlerCtx({ browser, fs: okFs(), flags: { tab: TAB, hires: 'true' } })
@@ -320,9 +320,22 @@ describe('screenshot --type / --hires', () => {
     );
   });
 
+  it('--hires clips at the current scroll origin, not document (0,0) (#3232)', async () => {
+    const { browser, screenshot } = makeBrowser({
+      evaluateResult: JSON.stringify({ dpr: 2, w: 2400, h: 1428, sh: 2000, x: 0, y: 1286 }),
+    });
+    const result = await screenshotHandler(
+      createHandlerCtx({ browser, fs: okFs(), flags: { tab: TAB, hires: 'true' } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(screenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ clip: { x: 0, y: 1286, width: 2400, height: 1428, scale: 2 } })
+    );
+  });
+
   it('--hires with --fullPage scales the full scroll height', async () => {
     const { browser, screenshot } = makeBrowser({
-      evaluateResult: JSON.stringify({ dpr: 2, w: 1280, h: 800, sh: 4000 }),
+      evaluateResult: JSON.stringify({ dpr: 2, w: 1280, h: 800, sh: 4000, x: 0, y: 1286 }),
     });
     await screenshotHandler(
       createHandlerCtx({
@@ -332,7 +345,9 @@ describe('screenshot --type / --hires', () => {
       })
     );
     expect(screenshot).toHaveBeenCalledWith(
-      expect.objectContaining({ clip: expect.objectContaining({ height: 4000, scale: 2 }) })
+      expect.objectContaining({
+        clip: { x: 0, y: 0, width: 1280, height: 4000, scale: 2 },
+      })
     );
   });
 });

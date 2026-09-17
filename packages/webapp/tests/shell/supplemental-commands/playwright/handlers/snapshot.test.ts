@@ -248,6 +248,26 @@ describe('screenshotHandler', () => {
     );
     expect(r.stdout).toContain('Screenshot saved to /tmp/screenshot-');
     expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: false }));
+    // Default path leaves clip unset so Chrome captures the live viewport
+    // (including the current scroll). Synthesizing {x:0,y:0} is what made
+    // --max-width/--hires ignore scroll (#3232).
+    const defaultOpts = screenshot.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(defaultOpts[0]).not.toHaveProperty('clip');
+  });
+
+  it('forwards --max-width without synthesizing a document-origin clip', async () => {
+    const { browser, screenshot } = makeBrowser();
+    const r = await screenshotHandler(
+      createHandlerCtx({
+        browser,
+        flags: { tab: TAB, 'max-width': '555' },
+        fs: okFs(),
+      })
+    );
+    expect(r.exitCode).toBe(0);
+    expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ maxWidth: 555 }));
+    const maxWidthOpts = screenshot.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(maxWidthOpts[0]).not.toHaveProperty('clip');
   });
 
   it('defaults into the calling unit scratch dir, not the shared root (#2267)', async () => {

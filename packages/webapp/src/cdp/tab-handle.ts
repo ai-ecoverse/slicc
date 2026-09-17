@@ -362,19 +362,28 @@ export class TabHandle {
     } else {
       let vw = 1280;
       let vh = 800;
+      // CDP clip is document-origin. A viewport recapture must start at the
+      // current scroll, not {0,0} — that always rendered the top of the page
+      // while the default (no-clip) path correctly captured the live viewport
+      // (#3232).
+      let vx = 0;
+      let vy = 0;
       try {
         await this.send('Runtime.enable');
         const dim = await this.send('Runtime.evaluate', {
-          expression: 'JSON.stringify({w:window.innerWidth,h:window.innerHeight})',
+          expression:
+            'JSON.stringify({w:window.innerWidth,h:window.innerHeight,x:window.scrollX,y:window.scrollY})',
           returnByValue: true,
         });
         const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
         vw = v.w || 1280;
         vh = v.h || 800;
+        if (typeof v.x === 'number') vx = v.x;
+        if (typeof v.y === 'number') vy = v.y;
       } catch {
         /* use defaults */
       }
-      params['clip'] = { x: 0, y: 0, width: vw, height: vh, scale };
+      params['clip'] = { x: vx, y: vy, width: vw, height: vh, scale };
     }
     params['captureBeyondViewport'] = true;
 

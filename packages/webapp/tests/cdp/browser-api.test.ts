@@ -791,6 +791,62 @@ describe('BrowserAPI', () => {
       );
     });
 
+    it('maxWidth recapture clips at the current scroll origin (#3232)', async () => {
+      // Without a clip, the first capture is the live viewport (correct).
+      // The downscale recapture used to synthesize {x:0,y:0} and so always
+      // rendered the top of the page. Document-origin clip + current scroll
+      // is the viewport the default path already captured.
+      let capture = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Page.captureScreenshot') {
+          return { data: ++capture === 1 ? pngBase64(2560) : pngBase64(800) };
+        }
+        if (method === 'Runtime.evaluate') {
+          return { result: { value: JSON.stringify({ w: 1280, h: 800, x: 40, y: 1286 }) } };
+        }
+        return {};
+      });
+
+      await page.screenshot({ maxWidth: 800 });
+      const captures = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Page.captureScreenshot'
+      );
+      expect(captures).toHaveLength(2);
+      // applyMaxWidth mutates the same params object it sent on the first
+      // capture, so assert the recapture clip — that is the region Chrome
+      // actually encodes after the downscale.
+      expect(captures[1][1]).toEqual({
+        format: 'png',
+        captureBeyondViewport: true,
+        clip: { x: 40, y: 1286, width: 1280, height: 800, scale: 800 / 2560 },
+      });
+    });
+
+    it('maxWidth recapture clips at 0,0 when the tab is unscrolled', async () => {
+      let capture = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Page.captureScreenshot') {
+          return { data: ++capture === 1 ? pngBase64(2560) : pngBase64(800) };
+        }
+        if (method === 'Runtime.evaluate') {
+          return { result: { value: JSON.stringify({ w: 1280, h: 800, x: 0, y: 0 }) } };
+        }
+        return {};
+      });
+
+      await page.screenshot({ maxWidth: 800 });
+      const recapture = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Page.captureScreenshot'
+      )[1];
+      expect((recapture[1] as { clip: { x: number; y: number } }).clip).toEqual({
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 800,
+        scale: 800 / 2560,
+      });
+    });
+
     it('maxWidth composes with an existing clip scale instead of replacing it', async () => {
       // A 1280-CSS-px clip at scale 2 (--hires) encodes 2560 device px.
       // Fitting maxWidth=1280 must yield scale 1 (= 2 × 1280/2560), not 0.5 —
