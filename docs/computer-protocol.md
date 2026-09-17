@@ -4,7 +4,7 @@ Every screen the agent can look at and poke — a v86 guest, a browser tab, a js
 
 Agent loop: [`packages/vfs-root/workspace/skills/computer/SKILL.md`](../packages/vfs-root/workspace/skills/computer/SKILL.md). Shell surface: [`shell-reference.md`](./shell-reference.md) (`computer`).
 
-Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` adapters, and `sliccy:computer`. UI (#3246) and `screen` / `ssh` / `url` adapters (#3247) are later.
+Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` adapters, and `sliccy:computer`. UI (#3246) ships overlay cards, a live lightbox, bash-row frames, and additive tray wire (`computers.list` / `computer.frame` / `computer.watch` / `computer.unwatch`) — page wiring in `docs/webapp-details.md`, components in `docs/webcomponents-details.md`. `screen` / `ssh` / `url` adapters (#3247) are later.
 
 ## Types
 

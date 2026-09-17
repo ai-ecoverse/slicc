@@ -19,7 +19,9 @@ Per-subsystem paths + invariants: [`docs/webapp-details.md`](../../docs/webapp-d
 paths only here.
 
 - Kernel host — `src/kernel/` (also `docs/kernel/process-model.md`)
-- Computers — `src/computers/` (unranked; protocol + adapters in `docs/computer-protocol.md`)
+- Computers — `src/computers/` (unranked; protocol + adapters in `docs/computer-protocol.md`);
+  page store `ui/computers-store.ts`, overlay/lightbox/bash rows `ui/wc/wc-computers.ts`
+  (`docs/webapp-details.md`)
 - Orchestrator + tray — `src/scoops/`; WorkUnit runtime (cone/scoop as roles) — `src/work-unit/`
   (also `docs/work-unit.md`)
 - VirtualFS + mounts — `src/fs/` (also `docs/mounts.md`); Shell (`.jsh`/`.bsh`, MCP) — `src/shell/`
