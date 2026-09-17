@@ -26,6 +26,7 @@ import {
   readGelatiereSuggestions,
   recordGelatiereTrigger,
   recordPass,
+  suggestionsForCone,
   suggestionsSince,
   takeGelatiereSuggestion,
   takenSuggestions,
@@ -474,6 +475,46 @@ describe('coerceSuggestions', () => {
       'i1=upskill o/r --path skills/migration/ --all',
       'i2=upskill o/r --skill x --ref v1.2',
     ]);
+  });
+});
+
+describe('suggestion cones', () => {
+  it('keeps bare folder names, accepts a lone string, and drops junk', () => {
+    const [listed, single, junk, empty] = coerceSuggestions(
+      [
+        suggestion({ id: 'a', cones: ['cone-bakery', 'cone-bakery', '../etc', 'cone'] }),
+        { ...suggestion({ id: 'b' }), cones: 'cone-bakery' },
+        { ...suggestion({ id: 'c' }), cones: [42, 'has space'] },
+        suggestion({ id: 'd', cones: [] }),
+      ],
+      'now'
+    );
+    expect(listed.cones).toEqual(['cone-bakery', 'cone']);
+    expect(single.cones).toEqual(['cone-bakery']);
+    expect(junk).not.toHaveProperty('cones');
+    expect(empty).not.toHaveProperty('cones');
+  });
+
+  it('survives a store round-trip', async () => {
+    const vfs = fakeVfs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([suggestion({ cones: ['cone-bakery'] })]),
+    });
+    expect((await readGelatiereSuggestions(vfs))[0].cones).toEqual(['cone-bakery']);
+  });
+
+  it('routes addressed suggestions to their cones and the rest to the primary', () => {
+    const list = [
+      suggestion({ id: 'wide' }),
+      suggestion({ id: 'bakery', cones: ['cone-bakery'] }),
+      suggestion({ id: 'both', cones: ['cone', 'cone-bakery'] }),
+      suggestion({ id: 'orphan', cones: ['cone-retired'] }),
+    ];
+    const known = new Set(['cone', 'cone-bakery', 'cone-idle']);
+    const ids = (folder: string) =>
+      suggestionsForCone(list, folder, 'cone', known).map((s) => s.id);
+    expect(ids('cone')).toEqual(['wide', 'both', 'orphan']);
+    expect(ids('cone-bakery')).toEqual(['bakery', 'both']);
+    expect(ids('cone-idle')).toEqual([]);
   });
 });
 

@@ -1106,7 +1106,7 @@ command works regardless.
 gelatiere init                        # create the unit + its nightly crontask (idempotent)
 gelatiere run                         # ask the gelatiere for a pass now
 gelatiere suggest <file>              # fold a pass's candidates JSON into the store (the unit's own step)
-gelatiere deliver [--scoop <t>] [--force]   # lick every other cone with what is new
+gelatiere deliver [--scoop <t>] [--force]   # lick each cone with what is new and addressed to it
 gelatiere list [--all] [--json]       # open suggestions (--all adds dismissed)
 gelatiere dismiss <id>                # mark one answered
 gelatiere status                      # unit, nightly schedule, last pass / delivery, counts
@@ -1122,8 +1122,9 @@ gelatiere use-cases [--limit n] [--json]   # what SLICC is for: title, summary, 
   slugged, at most `maxSuggestions` from `/shared/GELATIERE.md` land per pass. Kinds are `skill`
   (needs a validated `upskill` command), `use-case` / `skill-idea` / `issue` (each needs a
   `prompt`) and `tip`; a candidate missing the field behind its card button is dropped.
-- `deliver` addresses every root cone except the gelatiere by folder, or one `--scoop <target>`;
-  nothing new since the last delivery → no lick unless `--force`.
+- `deliver` licks each root cone except the gelatiere (or one `--scoop <target>`) with only the
+  suggestions whose `cones` list names its folder; suggestions without `cones` go to the primary
+  cone. Nothing new addressed to a cone → no lick for it unless `--force`.
 - Store: `/shared/.gelatiere/suggestions.json` (every suggestion with `dismissedAt` when answered),
   `/shared/.gelatiere/state.json` (pass + delivery ledger). The suggestions sprinkle renders the open ones.
 - `use-cases` reads the site's `/use-cases/` pages for their title, summary and the skills each one
