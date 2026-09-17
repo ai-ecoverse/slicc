@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
-import { injectBridge } from '../src/preview-bridge-routes.js';
+import { injectBridge } from '../src/preview-handler.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
 import { makeEnv } from './helpers/fake-env.js';

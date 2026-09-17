@@ -209,6 +209,13 @@ export interface WorkerPreviewRequest {
   servedRoot: string;
   vfsPath: string;
   asText: boolean;
+  /**
+   * The visitor's raw `Range` header, forwarded verbatim because only the
+   * leader knows the file size. Absent when the visitor sent none (or sent
+   * `If-Range`, which the worker answers with the full body). A leader that
+   * predates this field ignores it and the worker slices the full body.
+   */
+  range?: string;
 }
 
 export interface WorkerPreviewRevoked {
@@ -322,15 +329,32 @@ export interface LeaderPreviewResponseOk {
   /** utf-8 text OR base64-encoded binary, per `encoding`. */
   content: string;
   encoding: 'utf-8' | 'base64';
+  /**
+   * Range metadata, repeated on EVERY chunk so the worker can read it from
+   * whichever chunk completes the set. `206` means the chunks carry only the
+   * inclusive `range` window (≤ `PREVIEW_MAX_RANGE_BYTES`, always base64);
+   * `200` or absent means the whole file. Leaders that predate range support
+   * send none of these fields.
+   */
+  status?: 200 | 206;
+  /** Full entity size in bytes (the whole file, not the window). */
+  size?: number;
+  /** Inclusive byte window carried by a `206`. */
+  range?: { start: number; end: number };
 }
 
 export interface LeaderPreviewResponseError {
   type: 'preview.response';
   reqId: string;
   ok: false;
-  /** 413: the file exceeds `PREVIEW_MAX_FILE_BYTES`; the leader never sends it. */
-  status: 404 | 403 | 413 | 500;
+  /**
+   * 413: an unranged request for a file above `PREVIEW_MAX_FILE_BYTES`; the
+   * leader never sends it. 416: the requested range lies outside the file.
+   */
+  status: 404 | 403 | 413 | 416 | 500;
   reason?: string;
+  /** Full entity size, so a 416 can name it in `Content-Range`. */
+  size?: number;
 }
 
 // ponytail: consumer wired (session-tray.ts), producer deferred — needs FsWatcher→page bridge

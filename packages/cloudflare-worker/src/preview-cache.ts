@@ -15,16 +15,20 @@ export interface CachedPreviewOpts {
   request: Request;
   allowLive: boolean;
   cacheVersion: number;
-  fetchFromDO: () => Promise<Response>;
+  /** Relay to the tray DO; `range` is the visitor's `Range` header to honour. */
+  fetchFromDO: (range: string | undefined) => Promise<Response>;
 }
 
 /**
  * A throw from the tray DO (e.g. its isolate was reset mid-request) would
  * otherwise surface as Cloudflare's opaque 1101 page. Answer a plain 503.
  */
-async function fetchFromDOSafely(fetchFromDO: () => Promise<Response>): Promise<Response> {
+async function fetchFromDOSafely(
+  fetchFromDO: CachedPreviewOpts['fetchFromDO'],
+  range: string | undefined
+): Promise<Response> {
   try {
-    return await fetchFromDO();
+    return await fetchFromDO(range);
   } catch (err) {
     console.error('preview fetch failed', err instanceof Error ? err.message : String(err));
     return new Response('Preview temporarily unavailable', {
@@ -34,11 +38,24 @@ async function fetchFromDOSafely(fetchFromDO: () => Promise<Response>): Promise<
   }
 }
 
+/**
+ * The `Range` a live preview should honour. Live bytes have no stable
+ * validator, so an `If-Range` can never be proven current: drop the range
+ * and serve the whole body, which RFC 9110 always permits.
+ */
+function effectiveRange(request: Request): string | undefined {
+  if (request.headers.has('if-range')) return undefined;
+  return request.headers.get('range') ?? undefined;
+}
+
 export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Response> {
   const { request, allowLive, cacheVersion } = opts;
-  const fetchFromDO = () => fetchFromDOSafely(opts.fetchFromDO);
+  const range = effectiveRange(request);
+  const fetchFromDO = () => fetchFromDOSafely(opts.fetchFromDO, range);
 
-  if (allowLive || request.method !== 'GET') {
+  // A ranged request never reads or fills the cache: a 206 is not cacheable
+  // here, and the cached 200 would ignore the range.
+  if (allowLive || request.method !== 'GET' || range !== undefined) {
     return fetchFromDO();
   }
 

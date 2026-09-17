@@ -1403,6 +1403,13 @@ limit: <path>` for a larger file (the leader refuses before sending it). `--ttl`
 - **Tokens.** `serve` prints `Preview token: <trayId>.<secret>` after the URL, and
   `serve --list` shows the same value in its `TOKEN` column. `--stop` also accepts the preview
   URL (or its host) and derives the token from it.
+- **Byte ranges.** Live previews and `--ttl` snapshots both honour `Range: bytes=…` (206
+  with `Content-Range`, 416 for a range past the end, `Accept-Ranges: bytes` always). On a
+  live preview each ranged response carries at most 8 MiB, so `<video>`/`<audio>` play and seek
+  media larger than 25 MiB without splitting it; a plain (non-range) GET of such a file still
+  answers 413. Live previews ignore `Range` when `If-Range` is sent (they have no stable
+  validator) and serve the whole file; snapshots keep the range only when `If-Range` matches
+  the ETag.
 
 ### Flags
 

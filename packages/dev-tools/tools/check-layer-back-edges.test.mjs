@@ -569,6 +569,8 @@ describe('check-layer-back-edges: per-package layerOf', () => {
     expect(cloudflareWorkerLayerOf('session-tray-bridge.ts')).toBe('shared');
     expect(cloudflareWorkerLayerOf('cloud/auth.ts')).toBe('shared');
     expect(cloudflareWorkerLayerOf('session-tray.ts')).toBe('routes');
+    expect(cloudflareWorkerLayerOf('preview-worker.ts')).toBe('entry');
+    expect(cloudflareWorkerLayerOf('preview-handler.ts')).toBe('routes');
     expect(cloudflareWorkerLayerOf('cloud/handlers.ts')).toBe('routes');
     expect(cloudflareWorkerLayerOf('preview-routes.js')).toBe('routes');
     expect(cloudflareWorkerLayerOf('preview-bridge-assets.ts')).toBe('shared');

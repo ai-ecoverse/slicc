@@ -1,3 +1,4 @@
+import { parseByteRange } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
@@ -842,5 +843,162 @@ describe('live previews expire with the leader connection', () => {
     t.socket.close();
     vi.setSystemTime(Date.parse('2026-09-17T10:05:01Z'));
     expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
+  });
+});
+
+describe('preview HTTP handler byte ranges', () => {
+  const MiB = 1024 * 1024;
+  const file = new Uint8Array(5000).map((_, i) => (i * 7) & 0xff);
+
+  interface SeenRequest {
+    type: string;
+    reqId?: string;
+    range?: string;
+  }
+
+  type Reply = (msg: SeenRequest) => Array<Record<string, unknown>>;
+
+  /** A leader that answers ranges the way `preview-request-handler.ts` does. */
+  const rangedLeader: Reply = (msg) => {
+    const range = parseByteRange(msg.range, file.byteLength);
+    if (range === 'unsatisfiable') {
+      return [{ ok: false, status: 416, size: file.byteLength }];
+    }
+    if (!range) {
+      return [
+        {
+          ok: true,
+          status: 200,
+          size: file.byteLength,
+          content: Buffer.from(file).toString('base64'),
+        },
+      ];
+    }
+    const end = Math.min(range.end, range.start + 8 * MiB - 1);
+    return [
+      {
+        ok: true,
+        status: 206,
+        size: file.byteLength,
+        range: { start: range.start, end },
+        content: Buffer.from(file.subarray(range.start, end + 1)).toString('base64'),
+      },
+    ];
+  };
+
+  /** A leader from before range support: always the whole file, no metadata. */
+  const oldLeader: Reply = () => [{ ok: true, content: Buffer.from(file).toString('base64') }];
+
+  async function serve(reply: Reply, headers: HeadersInit, path = '/clip.mp4') {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+    const seen: SeenRequest[] = [];
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as SeenRequest;
+      if (msg.type !== 'preview.request' || !msg.reqId) return;
+      seen.push(msg);
+      for (const part of reply(msg)) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            mime: 'video/mp4',
+            chunkIndex: 0,
+            totalChunks: 1,
+            encoding: 'base64',
+            ...part,
+          })
+        );
+      }
+    });
+    const fileUrl = new URL(url);
+    fileUrl.pathname = path;
+    const res = await handleWorkerRequest(new Request(fileUrl.toString(), { headers }), env);
+    return { res, seen };
+  }
+
+  it('forwards Range to the leader and answers 206 from its window', async () => {
+    const { res, seen } = await serve(rangedLeader, { range: 'bytes=1000-1999' });
+    expect(seen[0].range).toBe('bytes=1000-1999');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 1000-1999/5000');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(
+      Buffer.from(await res.arrayBuffer()).equals(Buffer.from(file.subarray(1000, 2000)))
+    ).toBe(true);
+  });
+
+  it('answers 416 with the entity size when the leader reports it', async () => {
+    const { res } = await serve(rangedLeader, { range: 'bytes=9000-' });
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe('bytes */5000');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+  });
+
+  it('advertises accept-ranges on a plain 200', async () => {
+    const { res, seen } = await serve(rangedLeader, {});
+    expect(seen[0]).not.toHaveProperty('range');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect((await res.arrayBuffer()).byteLength).toBe(5000);
+  });
+
+  it('drops the Range when If-Range is present and serves the whole body', async () => {
+    const { res, seen } = await serve(rangedLeader, {
+      range: 'bytes=0-9',
+      'if-range': '"anything"',
+    });
+    expect(seen[0]).not.toHaveProperty('range');
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(5000);
+  });
+
+  it('slices the full body of an old leader into a 206', async () => {
+    const { res } = await serve(oldLeader, { range: 'bytes=-100' });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 4900-4999/5000');
+    expect(Buffer.from(await res.arrayBuffer()).equals(Buffer.from(file.subarray(4900)))).toBe(
+      true
+    );
+  });
+
+  it('answers 416 for an old leader when the range misses the body', async () => {
+    const { res } = await serve(oldLeader, { range: 'bytes=5000-' });
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe('bytes */5000');
+  });
+
+  it('slices an old leader utf-8 body by bytes', async () => {
+    const text = 'héllo wörld';
+    const { res } = await serve(
+      () => [{ ok: true, encoding: 'utf-8', mime: 'text/plain', content: text }],
+      { range: 'bytes=0-1' },
+      '/note.txt'
+    );
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe(
+      `bytes 0-1/${new TextEncoder().encode(text).byteLength}`
+    );
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(Buffer.from('h\xc3', 'latin1'));
+  });
+
+  it('serves the old leader body whole for an unsupported Range', async () => {
+    const { res } = await serve(oldLeader, { range: 'bytes=0-1,5-6' });
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(5000);
+  });
+
+  it('passes other leader errors through with accept-ranges', async () => {
+    const { res } = await serve(() => [{ ok: false, status: 413, reason: 'too big' }], {
+      range: 'bytes=0-',
+    });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(await res.text()).toBe('too big');
   });
 });

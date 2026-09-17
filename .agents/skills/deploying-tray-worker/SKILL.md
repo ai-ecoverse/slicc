@@ -634,6 +634,7 @@ serve /workspace/test
 - **Cache**: reload within 5s — should be faster (CF cache hit)
 - **Staleness**: edit the file, wait 5s, reload — new content
 - **ETag**: `curl -I <url>`, copy `etag`, then `curl -H 'If-None-Match: "<etag>"' <url>` → 304
+- **Range**: `curl -s -D - -o /dev/null -r 0-99 <url>/<media>` → `206` + `content-range: bytes 0-99/<size>`
 
 ### Test `serve --bridge` locally without a deploy
 
