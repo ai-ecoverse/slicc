@@ -16,6 +16,7 @@ import {
   createPbpasteCommand,
 } from './clipboard-commands.js';
 import { createCmpCommand } from './cmp-command.js';
+import { createComputerCommand } from './computer-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { type CrontaskCommandOptions, createCrontaskCommand } from './crontask-command.js';
@@ -344,6 +345,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createHidCommand(),
     createSerialCommand(),
     createV86Command({ processManager: options.processManager }),
+    createComputerCommand({
+      processManager: options.processManager,
+      browser: options.browserAPI,
+    }),
     createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
     createSliccFsCleanupCommand(),

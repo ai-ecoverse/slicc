@@ -115,7 +115,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Network', ['curl', 'curlwright', 'wget', 'dig', 'websocat', 'html-to-markdown']],
   ['Version control', ['git']],
   ['Languages', ['node', 'jsh', 'python', 'python3', 'sqlite3']],
-  ['Virtualization', ['v86']],
+  ['Virtualization', ['v86', 'computer']],
   ['Build tools', ['tsc', 'tst', 'esbuild', 'biome']],
   ['Packages', ['ipk', 'hf', 'npm', 'i', 'ipx', 'npx']],
   ['Skills', ['skill', 'upskill']],

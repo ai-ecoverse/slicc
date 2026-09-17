@@ -102,6 +102,28 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'memory', source: 'memory/run.ts', verbs: 'source' },
   { command: 'crontask', source: 'crontask-command.ts', verbs: 'source' },
   { command: 'jshd', source: 'jshd/run.ts', verbs: 'source' },
+  {
+    command: 'computer',
+    source: 'computer/run.ts',
+    verbs: 'source',
+    extraVerbs: [
+      'click',
+      'mousemove',
+      'drag',
+      'scroll',
+      'key',
+      'keyup',
+      'type',
+      'wait',
+      'left_click',
+      'right_click',
+      'middle_click',
+      'double_click',
+      'triple_click',
+      'left_click_drag',
+      'mouse_move',
+    ],
+  },
   { command: 'diskutil', source: 'df-command.ts', verbs: 'source' },
   { command: 'esptool', source: 'esptool-command.ts', verbs: 'source' },
   { command: 'hid', source: 'hid-command.ts', verbs: 'source' },
@@ -135,6 +157,7 @@ const DISPATCHERS: readonly Dispatcher[] = [
  */
 const NOT_DISPATCHERS = new Map<string, string>([
   ['ipx-command.ts', "npx-like runner — `ipx <bin> --help` is the bin's help, not ours"],
+  ['computer/parse.ts', 'pure parser — verb dispatch lives in computer/run.ts'],
 ]);
 
 /** Read the balanced `{...}` block that starts at `open`. */
