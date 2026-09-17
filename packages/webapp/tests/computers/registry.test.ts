@@ -107,6 +107,35 @@ describe('ComputerRegistry', () => {
     expect(pm.get(desc.pid!)?.status).toMatch(/exited|killed/);
   });
 
+  it('replacing an id exits the owned pid and closes the previous backend', async () => {
+    const pm = new ProcessManager();
+    const registry = installComputerRegistry(pm);
+    const first = new FakeBackend('tab:T1');
+    const firstDesc = registry.register(first);
+    const firstPid = firstDesc.pid!;
+    expect(pm.get(firstPid)?.kind).toBe('computer');
+    const second = new FakeBackend('tab:T1');
+    const secondDesc = registry.register(second);
+    await vi.waitFor(() => {
+      expect(first.closed).toBe(true);
+    });
+    expect(pm.get(firstPid)?.status).toMatch(/exited|killed/);
+    expect(secondDesc.pid).not.toBe(firstPid);
+    expect(pm.get(secondDesc.pid!)?.kind).toBe('computer');
+    expect(registry.get('tab:T1')).toBe(second);
+  });
+
+  it('refresh re-emits the live descriptor without closing the backend', () => {
+    const registry = installComputerRegistry(null);
+    const backend = new FakeBackend('v86:vm0');
+    const seen: string[][] = [];
+    registry.onChange((list) => seen.push(list.map((c) => c.id)));
+    registry.register(backend);
+    expect(registry.refresh('v86:vm0')?.id).toBe('v86:vm0');
+    expect(backend.closed).toBe(false);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('use remembers lastUsedId', () => {
     const registry = installComputerRegistry(null);
     registry.register(new FakeBackend('a'));

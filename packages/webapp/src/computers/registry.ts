@@ -99,11 +99,7 @@ export class ComputerRegistry {
     const id = described.id;
     const existing = this.entries.get(id);
     if (existing) {
-      void existing.backend.close().catch(() => {
-        /* replaced */
-      });
-      this.detach(existing);
-      this.entries.delete(id);
+      void this.dropEntry(id, existing, { closeBackend: true, exitOwned: true });
     }
 
     let pid = options.pid ?? described.pid ?? null;
@@ -146,31 +142,43 @@ export class ComputerRegistry {
   async unregister(id: string): Promise<boolean> {
     const entry = this.entries.get(id);
     if (!entry) return false;
-    this.entries.delete(id);
-    if (this.usedId === id) this.usedId = null;
-    this.detach(entry);
-    try {
-      await entry.backend.close();
-    } catch {
-      // Best-effort — the adapter may already be gone.
-    }
-    if (entry.ownsPid && entry.pid != null && this.pm) this.pm.exit(entry.pid, 0);
+    await this.dropEntry(id, entry, { closeBackend: true, exitOwned: true });
     this.emitChange();
     return true;
+  }
+
+  /** Re-emit the live descriptor (boot/size changes) without replacing the backend. */
+  refresh(id: string): ComputerDescriptor | null {
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    this.emitChange();
+    return this.decorate(entry);
   }
 
   private async closeFromSignal(id: string): Promise<void> {
     const entry = this.entries.get(id);
     if (!entry) return;
+    await this.dropEntry(id, entry, { closeBackend: true, exitOwned: false });
+    this.emitChange();
+  }
+
+  private async dropEntry(
+    id: string,
+    entry: Entry,
+    opts: { closeBackend: boolean; exitOwned: boolean }
+  ): Promise<void> {
     this.entries.delete(id);
     if (this.usedId === id) this.usedId = null;
     this.detach(entry);
+    if (opts.exitOwned && entry.ownsPid && entry.pid != null && this.pm) {
+      this.pm.exit(entry.pid, 0);
+    }
+    if (!opts.closeBackend) return;
     try {
       await entry.backend.close();
     } catch {
-      /* already closing */
+      /* already gone */
     }
-    this.emitChange();
   }
 
   private detach(entry: Entry): void {
