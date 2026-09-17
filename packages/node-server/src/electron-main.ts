@@ -11,8 +11,10 @@ import {
   resolveHostedLeaderOrigin,
 } from './electron-controller.js';
 import {
+  buildElectronChildWindowOptions,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
+  ELECTRON_FLOAT_WINDOW_BOX,
   getElectronOverlayEntryDistPath,
   getElectronServeOrigin,
   parseElectronFloatFlags,
@@ -118,29 +120,50 @@ function configureElectronSession(): void {
   });
 }
 
+const FLOAT_WEB_PREFERENCES = {
+  partition: ELECTRON_PARTITION,
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+  allowRunningInsecureContent: true,
+} as const;
+
+/**
+ * Overlay reinjection plus renderer-opened child windows, applied to every
+ * float window and, recursively, to every window it opens.
+ *
+ * Child windows are ALLOWED, not denied-and-replaced: a `{ action: 'deny' }`
+ * handler makes `window.open()` return `null` in the renderer even when the
+ * main process spawns a lookalike, so a full-document sprinkle could never get
+ * a handle or a sized window (Codex P1 on #3250). With `allow`, Electron
+ * creates the child from the parsed `features` string (width/height) and the
+ * renderer gets the real `Window` back. The override only adds the float's
+ * web preferences and, for featureless `target="_blank"` links, the default
+ * float box.
+ */
+function wireFloatWindow(window: BrowserWindow): void {
+  wireOverlayReinjection(window);
+  window.webContents.setWindowOpenHandler(({ features }) => ({
+    action: 'allow',
+    overrideBrowserWindowOptions: {
+      ...buildElectronChildWindowOptions(features),
+      webPreferences: FLOAT_WEB_PREFERENCES,
+    },
+  }));
+  window.webContents.on('did-create-window', (child) => {
+    wireFloatWindow(child);
+  });
+}
+
 async function createFloatWindow(targetUrl: string): Promise<BrowserWindow> {
   const window = new BrowserWindow({
-    width: 1440,
-    height: 960,
-    minWidth: 1024,
-    minHeight: 720,
+    ...ELECTRON_FLOAT_WINDOW_BOX,
     autoHideMenuBar: true,
     title: 'slicc electron float',
-    webPreferences: {
-      partition: ELECTRON_PARTITION,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      allowRunningInsecureContent: true,
-    },
+    webPreferences: FLOAT_WEB_PREFERENCES,
   });
 
-  wireOverlayReinjection(window);
-
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    void createFloatWindow(url);
-    return { action: 'deny' };
-  });
+  wireFloatWindow(window);
 
   try {
     await window.loadURL(targetUrl);

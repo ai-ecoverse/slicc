@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildElectronAppLaunchSpec,
   buildElectronAppProcessMatchPatterns,
+  buildElectronChildWindowOptions,
   buildElectronOverlayBootstrapScript,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
@@ -13,6 +14,7 @@ import {
   DEFAULT_ELECTRON_SERVE_HOST,
   DEFAULT_ELECTRON_SERVE_PORT,
   DEFAULT_ELECTRON_TARGET_URL,
+  ELECTRON_FLOAT_WINDOW_BOX,
   findAvailablePort,
   getElectronAppDisplayName,
   getElectronAppPort,
@@ -28,9 +30,42 @@ import {
   selectBestOverlayTargets,
   shouldInjectElectronOverlayTarget,
   tryListenOnPort,
+  windowOpenFeaturesRequestSize,
 } from '../src/electron-runtime.js';
 
 describe('electron-runtime', () => {
+  describe('renderer-opened child windows', () => {
+    it('detects a requested size in a window.open features string', () => {
+      expect(windowOpenFeaturesRequestSize('popup=yes,width=1280,height=800')).toBe(true);
+      expect(windowOpenFeaturesRequestSize('height=800')).toBe(true);
+      expect(windowOpenFeaturesRequestSize(' innerWidth = 640 , innerHeight = 480 ')).toBe(true);
+      expect(windowOpenFeaturesRequestSize('')).toBe(false);
+      expect(windowOpenFeaturesRequestSize('noopener,noreferrer')).toBe(false);
+      expect(windowOpenFeaturesRequestSize('popup=yes')).toBe(false);
+    });
+
+    it('leaves a sized popup alone so the requested 1280×800 is honoured unclamped', () => {
+      // Handler options outrank the parsed features, so naming any size or
+      // min-size here would silently override the sprinkle's capture window.
+      expect(buildElectronChildWindowOptions('popup=yes,width=1280,height=800')).toEqual({
+        autoHideMenuBar: true,
+      });
+    });
+
+    it('gives a featureless target="_blank" window the default float box', () => {
+      expect(buildElectronChildWindowOptions('')).toEqual({
+        autoHideMenuBar: true,
+        ...ELECTRON_FLOAT_WINDOW_BOX,
+      });
+      expect(ELECTRON_FLOAT_WINDOW_BOX).toEqual({
+        width: 1440,
+        height: 960,
+        minWidth: 1024,
+        minHeight: 720,
+      });
+    });
+  });
+
   it('rejects missing executable files', () => {
     expect(isExecutableFile(join(tmpdir(), 'missing-slicc-executable'))).toBe(false);
   });

@@ -833,18 +833,28 @@ export class SprinkleRenderer {
     // results — do not re-attempt it as a drive-by "fix" for the console
     // warning; genuine isolation needs a dedicated sandbox origin (option C).
     //
-    // `allow-popups` only for cherry: a sprinkle's own srcdoc iframe sits one
-    // level deeper there (host page → cherry iframe → sprinkle iframe), and
-    // content that opens a link via `target="_blank"`/`window.open()` instead
-    // of the `slicc.open()` bridge hits Chromium's "Unsafe attempt to
-    // initiate navigation" block without it. Scoped to cherry only — it does
-    // NOT grant `allow-top-navigation`, so the sprinkle still can't replace
-    // the whole window/host page.
+    // `allow-popups` is granted unconditionally. It started out cherry-only
+    // (host page → cherry iframe → sprinkle iframe), where content that opens
+    // a link via `target="_blank"`/`window.open()` hit Chromium's "Unsafe
+    // attempt to initiate navigation" block. The same block applies
+    // un-nested: without the token, a full-document sprinkle's
+    // `window.open(url, name, 'popup=yes,width=…,height=…')` from a genuine
+    // click logs "Blocked opening '<url>' in a new window because the
+    // request was made in a sandboxed frame whose 'allow-popups' permission
+    // is not set" and returns nothing. A real `window.open` handle is the
+    // only way a sprinkle can open a SIZED window (e.g. a fixed-size,
+    // dpr-preserving capture target for screen recording): viewport-only
+    // resizes, `resizeTo()` on a normal tab, and `target="_blank"` anchors
+    // all fail to size the outer window or lose the handle.
+    //
+    // The popup is an auxiliary browsing context, not a top-level
+    // navigation: this still does NOT grant `allow-top-navigation` (or the
+    // `-by-user-activation` variant), so the sprinkle cannot replace the
+    // host page. The sync-fs nonce gate in `llm-proxy-sw-config.ts` already
+    // rejects `auxiliary` clients, so a popped-up same-origin window gains no
+    // realm capability tokens either.
     const nested = isNestedInAnotherFrame();
-    const sandboxTokens = nested
-      ? 'allow-scripts allow-same-origin allow-popups'
-      : 'allow-scripts allow-same-origin';
-    iframe.setAttribute('sandbox', sandboxTokens);
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups');
     iframe.style.cssText = fullDocIframeStyle(nested);
     // Pin to the host's current box *before* srcdoc so the browsing context
     // is not created at 0×0. First open (host still 0 mid-transition) skips

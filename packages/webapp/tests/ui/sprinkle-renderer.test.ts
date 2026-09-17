@@ -271,7 +271,7 @@ describe('full document rendering', () => {
 
     const iframe = container.querySelector('iframe');
     expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups');
     // Should NOT have a .sprinkle-content wrapper
     expect(container.querySelector('.sprinkle-content')).toBeNull();
   });
@@ -750,15 +750,51 @@ describe('full document rendering', () => {
     (globalThis as any).requestAnimationFrame = originalRaf;
   });
 
-  it('does not grant allow-popups when the page is top-level (standalone follower)', async () => {
+  it('grants allow-popups when the page is top-level too (Electron shell / standalone)', async () => {
+    // A full-document sprinkle's `window.open(url, name, 'popup=yes,width=…')`
+    // from a genuine click was blocked un-nested ("sandboxed frame whose
+    // 'allow-popups' permission is not set"); the token is no longer
+    // cherry-scoped.
     const bridge = makeBridge('full-doc');
     const renderer = new SprinkleRenderer(container, bridge);
     const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
     await renderer.render(html, 'full-doc');
 
     const iframe = container.querySelector('iframe') as HTMLIFrameElement;
-    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups');
   });
+
+  it.each([
+    ['top-level', false],
+    ['nested (cherry)', true],
+  ])(
+    'never grants allow-top-navigation and keeps allow-same-origin (%s)',
+    async (_label, nested) => {
+      // The security property `allow-popups` must not erode: a popup is a new
+      // browsing context, but the sprinkle still must not be able to replace
+      // the host page. `allow-same-origin` stays per #1717.
+      if (nested) (dom.window as any).self = {};
+      const originalRaf = (globalThis as any).requestAnimationFrame;
+      (globalThis as any).requestAnimationFrame = () => 0;
+      try {
+        const bridge = makeBridge('full-doc');
+        const renderer = new SprinkleRenderer(container, bridge);
+        const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+        await renderer.render(html, 'full-doc');
+
+        const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+        const tokens = (iframe.getAttribute('sandbox') ?? '').split(/\s+/);
+        expect(tokens).toContain('allow-popups');
+        expect(tokens).toContain('allow-same-origin');
+        expect(tokens).toContain('allow-scripts');
+        expect(tokens).not.toContain('allow-top-navigation');
+        expect(tokens).not.toContain('allow-top-navigation-by-user-activation');
+        expect(tokens).not.toContain('allow-popups-to-escape-sandbox');
+      } finally {
+        (globalThis as any).requestAnimationFrame = originalRaf;
+      }
+    }
+  );
 
   it('handles sprinkle-capture-screen message and posts response', async () => {
     const bridge = makeBridge('full-doc');
