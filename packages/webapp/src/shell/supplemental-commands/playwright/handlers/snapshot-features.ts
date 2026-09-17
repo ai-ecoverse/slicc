@@ -84,21 +84,34 @@ type ScreenshotClip = { x: number; y: number; width: number; height: number; sca
 /**
  * --hires: capture in device pixels by scaling an explicit clip by the
  * device pixel ratio (CDP's clip.scale), instead of the CSS-pixel default.
+ *
+ * CDP clip is document-origin CSS pixels. A viewport capture must start at
+ * the current scroll offset — `{x:0,y:0}` always renders the top of the
+ * page, which is why `--hires` used to ignore scroll (#3232). `--fullPage`
+ * still starts at the origin because it composes the whole document.
  */
 export async function hiresClip(
   page: TabHandle,
   clip: ScreenshotClip | undefined,
   fullPage: boolean
 ): Promise<ScreenshotClip> {
-  const dims = parsePageJson<{ dpr: number; w: number; h: number; sh: number }>(
+  const dims = parsePageJson<{
+    dpr: number;
+    w: number;
+    h: number;
+    sh: number;
+    x: number;
+    y: number;
+  }>(
     await page.evaluate(
-      `JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight, sh: document.documentElement.scrollHeight })`
+      `JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight, sh: document.documentElement.scrollHeight, x: window.scrollX, y: window.scrollY })`
     ),
     '--hires viewport dimensions'
   );
   const scale = dims.dpr || 1;
   if (clip) return { ...clip, scale };
-  return { x: 0, y: 0, width: dims.w, height: fullPage ? dims.sh : dims.h, scale };
+  if (fullPage) return { x: 0, y: 0, width: dims.w, height: dims.sh, scale };
+  return { x: dims.x ?? 0, y: dims.y ?? 0, width: dims.w, height: dims.h, scale };
 }
 
 /** Context lines shown around each find match. */

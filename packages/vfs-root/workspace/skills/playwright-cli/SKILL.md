@@ -177,6 +177,8 @@ playwright-cli screenshot --tab=<id> --type=jpeg                 # png (default)
 playwright-cli screenshot --tab=<id> --hires                     # Capture in device pixels (honors device pixel ratio)
 ```
 
+Viewport screenshots (default, `--max-width`, `--hires`) honor the tab's current scroll position. `--fullPage` captures from the document origin.
+
 An element screenshot (`screenshot e5`) returns **that element's crop or fails**
 (exit 1) — typically because the snapshot went stale after a navigation or
 layout change. Re-run `snapshot` and retry with a fresh ref; it never silently

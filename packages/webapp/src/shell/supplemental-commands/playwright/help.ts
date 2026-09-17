@@ -67,6 +67,8 @@ Commands:
                          downscales the image if wider than N pixels (png output only).
                          --type defaults to the --filename extension, else png. --hires
                          captures in device pixels (honors the device pixel ratio).
+                         Viewport captures (default, --max-width, --hires) honor the
+                         tab's current scroll; --fullPage starts at the document origin.
   eval <expression> --tab=<id> [--frame=<frameId>] [--filename=path|--output=path]
                          Evaluate JavaScript in tab or frame (accepts top-level await/return)
   dblclick <ref> [btn] --tab=<id> [--modifiers=Alt,Control,...] Double-click element by ref
