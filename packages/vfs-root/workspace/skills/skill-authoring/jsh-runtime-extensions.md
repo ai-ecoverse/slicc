@@ -484,7 +484,7 @@ const computer = require('sliccy:computer');
 computer.register({
   id: 'jsh:fake',
   title: 'fake',
-  size: { width: 1, height: 1 },
+  size: { width: 640, height: 400 },
   capabilities: {
     screenshot: true,
     text: true,
@@ -496,13 +496,12 @@ computer.register({
     inputAllowed: true,
   },
   async screenshot() {
-    return { seq: 1, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG };
+    return { seq: 1, mime: 'image/png', width: 640, height: 400, bytes };
   },
   subscribe(fps, onFrame) {
-    const timer = setInterval(
-      () => onFrame({ seq: 1, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG }),
-      1000 / fps
-    );
+    const timer = setInterval(() => {
+      void onFrame({ seq: 1, mime: 'image/png', width: 640, height: 400, bytes });
+    }, 1000 / fps);
     return () => clearInterval(timer);
   },
   async text() {
@@ -514,7 +513,7 @@ computer.register({
 });
 ```
 
-Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh`. The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
+Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh` (640×400 clock, frame counter, click marker; OffscreenCanvas JPEG or stored-deflate PNG). The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
 
 ## Reaching these from sprinkles & dips
 
