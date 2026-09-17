@@ -35,6 +35,8 @@ describe('screencapture command', () => {
     expect(result.stdout).toContain('screencapture');
     expect(result.stdout).toContain('--clipboard');
     expect(result.stdout).toContain('--view');
+    expect(result.stdout).toContain('--video');
+    expect(result.stdout).toContain('-V');
   });
 
   it('shows help with -h', async () => {
@@ -148,6 +150,73 @@ describe('screencapture command', () => {
     expect(result.stderr).toContain('Some other error');
   });
 
+  it('maps InvalidStateError to an actionable message (#3233)', async () => {
+    const err = new DOMException('Invalid state', 'InvalidStateError');
+    const mockGetDisplayMedia = vi.fn().mockRejectedValue(err);
+    (globalThis as any).window = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    (globalThis as any).document = {
+      createElement: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      hasFocus: () => true,
+      visibilityState: 'visible',
+    };
+    (globalThis as any).navigator = {
+      mediaDevices: { getDisplayMedia: mockGetDisplayMedia },
+    };
+
+    const cmd = createScreencaptureCommand();
+    const ctx = createMockCtx();
+    const result = await cmd.execute(['screenshot.png'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('display capture unavailable');
+    expect(result.stderr).toContain('reload the session');
+  });
+
+  it('rejects video to clipboard', async () => {
+    (globalThis as any).window = {};
+    (globalThis as any).document = {};
+    (globalThis as any).navigator = {
+      mediaDevices: { getDisplayMedia: vi.fn() },
+    };
+
+    const cmd = createScreencaptureCommand();
+    const result = await cmd.execute(['--video', '-c'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('clipboard');
+    expect((globalThis as any).navigator.mediaDevices.getDisplayMedia).not.toHaveBeenCalled();
+  });
+
+  it('rejects --video without a video extension', async () => {
+    (globalThis as any).window = {};
+    (globalThis as any).document = {};
+    (globalThis as any).navigator = {
+      mediaDevices: { getDisplayMedia: vi.fn() },
+    };
+
+    const cmd = createScreencaptureCommand();
+    const result = await cmd.execute(['--video', 'shot.png'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('.webm');
+  });
+
+  it('rejects -g without video mode', async () => {
+    (globalThis as any).window = {};
+    (globalThis as any).document = {};
+    (globalThis as any).navigator = {
+      mediaDevices: { getDisplayMedia: vi.fn() },
+    };
+
+    const cmd = createScreencaptureCommand();
+    const result = await cmd.execute(['-g', 'shot.png'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--audio');
+  });
+
   it('parses arguments correctly with -- separator', async () => {
     (globalThis as any).window = {};
     (globalThis as any).document = {};
@@ -189,8 +258,8 @@ describe('screencapture command', () => {
 
     beforeEach(() => {
       mockStream = {
-        getVideoTracks: () => [{ stop: vi.fn() }],
-        getTracks: () => [{ stop: vi.fn() }],
+        getVideoTracks: () => [{ stop: vi.fn(), addEventListener: vi.fn() }],
+        getTracks: () => [{ stop: vi.fn(), addEventListener: vi.fn() }],
       };
 
       mockVideo = {
@@ -218,13 +287,20 @@ describe('screencapture command', () => {
         }),
       };
 
-      (globalThis as any).window = {};
+      (globalThis as any).window = {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      };
       (globalThis as any).document = {
         createElement: vi.fn((tag: string) => {
           if (tag === 'video') return mockVideo;
           if (tag === 'canvas') return mockCanvas;
           return {};
         }),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        hasFocus: () => true,
+        visibilityState: 'visible',
       };
       (globalThis as any).navigator = {
         mediaDevices: {
@@ -364,6 +440,87 @@ describe('screencapture command', () => {
       await cmd.execute(['screenshot.webp'], ctx as any);
 
       expect(mockCanvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/webp', 0.92);
+    });
+
+    it('records video with --video -V and a .webm path', async () => {
+      class FakeMediaRecorder {
+        static isTypeSupported = () => true;
+        state = 'inactive';
+        ondataavailable: ((ev: { data: Blob }) => void) | null = null;
+        onstop: (() => void) | null = null;
+        constructor(
+          public stream: MediaStream,
+          public opts: { mimeType: string }
+        ) {}
+        start() {
+          this.state = 'recording';
+          queueMicrotask(() => {
+            this.ondataavailable?.({
+              data: new Blob(['fake-webm'], { type: 'video/webm' }),
+            });
+          });
+        }
+        stop() {
+          this.state = 'inactive';
+          queueMicrotask(() => this.onstop?.());
+        }
+      }
+      (globalThis as any).MediaRecorder = FakeMediaRecorder;
+      // Short duration so the test doesn't wait the default 5s.
+      vi.useFakeTimers();
+      try {
+        const cmd = createScreencaptureCommand();
+        const ctx = createMockCtx();
+        const promise = cmd.execute(['--video', '-V', '0.2', 'clip.webm'], ctx as any);
+        await vi.advanceTimersByTimeAsync(250);
+        const result = await promise;
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('video');
+        expect(result.stdout).toContain('clip.webm');
+        expect(ctx.fs.writeFile).toHaveBeenCalled();
+        expect((globalThis as any).navigator.mediaDevices.getDisplayMedia).toHaveBeenCalledWith({
+          video: true,
+          audio: false,
+        });
+      } finally {
+        vi.useRealTimers();
+        delete (globalThis as any).MediaRecorder;
+      }
+    });
+
+    it('treats a .webm path as video and honors attached -V5', async () => {
+      class FakeMediaRecorder {
+        static isTypeSupported = () => true;
+        state = 'inactive';
+        ondataavailable: ((ev: { data: Blob }) => void) | null = null;
+        onstop: (() => void) | null = null;
+        start() {
+          this.state = 'recording';
+          queueMicrotask(() => {
+            this.ondataavailable?.({
+              data: new Blob(['fake-webm'], { type: 'video/webm' }),
+            });
+          });
+        }
+        stop() {
+          this.state = 'inactive';
+          queueMicrotask(() => this.onstop?.());
+        }
+      }
+      (globalThis as any).MediaRecorder = FakeMediaRecorder;
+      vi.useFakeTimers();
+      try {
+        const cmd = createScreencaptureCommand();
+        const ctx = createMockCtx();
+        const promise = cmd.execute(['-V5', 'demo.webm'], ctx as any);
+        await vi.advanceTimersByTimeAsync(5100);
+        const result = await promise;
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('video');
+      } finally {
+        vi.useRealTimers();
+        delete (globalThis as any).MediaRecorder;
+      }
     });
   });
 });

@@ -947,10 +947,13 @@ appear.
 ### `screencapture` — screen sharing
 
 `screencapture` (`packages/webapp/src/shell/supplemental-commands/screencapture-command.ts`)
-calls `navigator.mediaDevices.getDisplayMedia()`. The browser raises a picker
-listing windows/screens; on macOS the first invocation also triggers a TCC
-prompt for screen recording. The command must run from a context that can host
-the dialog — same constraint as the mount picker.
+calls `navigator.mediaDevices.getDisplayMedia()`. Still captures grab one frame; `--video`
+(or a `.webm`/`.mp4`/`.mkv` output) records via `MediaRecorder` for `-V`/`--duration`
+seconds (default 5, max 60). The browser raises a picker listing windows/screens; on
+macOS the first invocation also triggers a TCC prompt for screen recording. The command
+must run from a context that can host the dialog — same constraint as the mount picker.
+If capture fails with `Invalid state`, another tab may still hold a display-capture
+session — stop that share, focus SLICC, and retry (or reload if it stays wedged).
 
 ### Microphone (voice input)
 

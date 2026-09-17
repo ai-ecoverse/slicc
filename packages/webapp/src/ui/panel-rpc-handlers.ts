@@ -429,18 +429,30 @@ function buildPageAudioHandlers() {
       title: document.title || '',
     }),
 
-    screencapture: async ({ mimeType, quality }) => {
-      const blob = await captureScreen(mimeType, quality);
-      const buffer = await blob.arrayBuffer();
-      // Recover dimensions for the agent's reference. Decoding to an
-      // <img> just to read its natural size is the cheapest path that
-      // works for every blob type the browser emits via toBlob().
-      const dims = await readBlobDimensions(blob);
+    screencapture: async ({ mimeType, quality, mode, durationMs, audio }) => {
+      const { captureDisplayMedia } = await import(
+        '../shell/supplemental-commands/screencapture-media.js'
+      );
+      const captured = await captureDisplayMedia(
+        mode === 'video'
+          ? {
+              mode: 'video',
+              mimeType,
+              durationMs: durationMs ?? 5_000,
+              audio: !!audio,
+            }
+          : { mode: 'image', mimeType, quality }
+      );
+      const buffer = captured.bytes.buffer.slice(
+        captured.bytes.byteOffset,
+        captured.bytes.byteOffset + captured.bytes.byteLength
+      ) as ArrayBuffer;
       return {
         bytes: buffer,
-        width: dims.width,
-        height: dims.height,
-        mimeType,
+        width: captured.width,
+        height: captured.height,
+        mimeType: captured.mimeType,
+        ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
       };
     },
 
@@ -1851,62 +1863,6 @@ function toVoiceInfo(v: SpeechSynthesisVoice): {
   // Web Speech voices never play on-device (Kokoro); only kokoro voice infos
   // carry an on-device flag.
   return { name: v.name, lang: v.lang, default: v.default, onDevice: false };
-}
-
-async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    throw new Error('screen capture is not supported in this browser');
-  }
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-  try {
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () =>
-        video
-          .play()
-          .then(() => resolve())
-          .catch(reject);
-      video.onerror = () => reject(new Error('Failed to load video stream'));
-    });
-    await new Promise<void>((r) => setTimeout(r, 100));
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get canvas context');
-    ctx.drawImage(video, 0, 0, width, height);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error('Failed to create image blob'))),
-        mimeType,
-        quality
-      );
-    });
-  } finally {
-    stream.getTracks().forEach((t) => {
-      t.stop();
-    });
-  }
-}
-
-async function readBlobDimensions(blob: Blob): Promise<{ width: number; height: number }> {
-  const url = URL.createObjectURL(blob);
-  try {
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('Failed to decode capture'));
-      img.src = url;
-    });
-    return { width: img.naturalWidth, height: img.naturalHeight };
-  } finally {
-    URL.revokeObjectURL(url);
-  }
 }
 
 async function reencodeAsPng(blob: Blob): Promise<Blob> {

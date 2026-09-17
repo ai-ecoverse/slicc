@@ -3,11 +3,41 @@ import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
+import {
+  captureDisplayMedia,
+  clampVideoDurationMs,
+  type DisplayCaptureRequest,
+  describeDisplayCaptureError,
+} from './screencapture-media.js';
 import { basename } from './shared.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
-const SCREENCAPTURE_BOOL_FLAGS = ['--clipboard', '-c', '--view', '-v'] as const;
+const SCREENCAPTURE_BOOL_FLAGS = [
+  '--clipboard',
+  '-c',
+  '--view',
+  '-v',
+  '--video',
+  '--audio',
+  '-g',
+] as const;
+
+const SCREENCAPTURE_VALUE_FLAGS = ['-V', '--duration'] as const;
+
+/** Expand macOS-style attached shorts (`-V10`) into `-V` + `10`. */
+function expandAttachedDurationFlags(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const arg of args) {
+    const m = /^-V(\d+(?:\.\d+)?)$/.exec(arg);
+    if (m) {
+      out.push('-V', m[1]!);
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
 
 type ScreencaptureResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -28,33 +58,95 @@ function checkScreencaptureEnv(
   return null;
 }
 
+function isVideoExtension(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  return ext === 'webm' || ext === 'mp4' || ext === 'mkv';
+}
+
+function getImageMimeTypeForExtension(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    case 'png':
+    default:
+      return 'image/png';
+  }
+}
+
+function getVideoMimeTypeForExtension(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  // Browsers almost always emit WebM from MediaRecorder; prefer an honest
+  // container. Callers that pass .mp4 still get video/webm bytes (see help).
+  if (ext === 'mp4' && typeof MediaRecorder !== 'undefined') {
+    if (MediaRecorder.isTypeSupported('video/mp4')) return 'video/mp4';
+  }
+  return 'video/webm';
+}
+
 async function captureScreenBytes(
   local: boolean,
   panelRpc: NonNullable<ReturnType<typeof getPanelRpcClient>>,
-  mimeType: string,
-  quality: number
-): Promise<{ bytes: Uint8Array } | { error: ScreencaptureResult }> {
+  request: DisplayCaptureRequest
+): Promise<
+  { bytes: Uint8Array; mimeType: string; durationMs?: number } | { error: ScreencaptureResult }
+> {
   try {
     if (isExtensionFloat()) {
-      const popup = await captureViaPopup({ kind: 'screen', mimeType, quality });
-      return { bytes: popup.bytes };
+      const popup = await captureViaPopup({
+        kind: 'screen',
+        mimeType: request.mimeType,
+        quality: request.mode === 'image' ? request.quality : 1,
+        mode: request.mode,
+        ...(request.mode === 'video'
+          ? {
+              durationMs: request.durationMs,
+              audio: !!request.audio,
+            }
+          : {}),
+      });
+      return {
+        bytes: popup.bytes,
+        mimeType: popup.mimeType,
+        ...(popup.durationMs !== undefined ? { durationMs: popup.durationMs } : {}),
+      };
     }
     if (local) {
-      const r = await captureLocally(mimeType, quality);
-      return { bytes: r.bytes };
+      const r = await captureDisplayMedia(request);
+      return {
+        bytes: r.bytes,
+        mimeType: r.mimeType,
+        ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      };
     }
     const r = await panelRpc.call(
       'screencapture',
-      { mimeType, quality },
-      { timeoutMs: 5 * 60_000 }
+      {
+        mimeType: request.mimeType,
+        quality: request.mode === 'image' ? request.quality : 1,
+        mode: request.mode,
+        ...(request.mode === 'video'
+          ? {
+              durationMs: request.durationMs,
+              audio: !!request.audio,
+            }
+          : {}),
+      },
+      {
+        // Video can run up to 60s plus picker time.
+        timeoutMs: request.mode === 'video' ? 5 * 60_000 + request.durationMs : 5 * 60_000,
+      }
     );
-    return { bytes: new Uint8Array(r.bytes) };
+    return {
+      bytes: new Uint8Array(r.bytes),
+      mimeType: r.mimeType,
+      ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+    };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes('Permission denied') || message.includes('NotAllowedError')) {
-      return { error: scFail('user cancelled or permission denied') };
-    }
-    return { error: scFail(message) };
+    return { error: scFail(describeDisplayCaptureError(err)) };
   }
 }
 
@@ -107,6 +199,8 @@ async function writeFileOutput(
   filename: string,
   mimeType: string,
   view: boolean,
+  video: boolean,
+  durationMs: number | undefined,
   ctx: Parameters<Command['execute']>[1]
 ): Promise<ScreencaptureResult> {
   const fullPath = ctx.fs.resolvePath(ctx.cwd, filename);
@@ -118,10 +212,18 @@ async function writeFileOutput(
   }
 
   const sizeKB = Math.round(bytes.length / 1024);
-  if (view) {
+  if (view && !video) {
     const base64 = uint8ToBase64(bytes);
     return {
       stdout: `${fullPath} (${sizeKB} KB)\n<img:data:${mimeType};base64,${base64}>`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  if (video) {
+    const secs = durationMs !== undefined ? ` (${Math.round(durationMs / 100) / 10}s)` : '';
+    return {
+      stdout: `captured ${sizeKB} KB${secs} video to ${basename(fullPath)}\n`,
       stderr: '',
       exitCode: 0,
     };
@@ -140,122 +242,165 @@ function screencaptureHelp(): ScreencaptureResult {
 Usage: screencapture [options] <output-file>
 
 Options:
-  -h, --help       Show this help message
-  -c, --clipboard  Copy to clipboard instead of saving to file
-  -v, --view       Return image inline so the agent can see it
+  -h, --help           Show this help message
+  -c, --clipboard      Copy a still image to the clipboard (not video)
+  -v, --view           Return a still image inline so the agent can see it
+  --video              Record a video clip (also implied by .webm/.mp4/.mkv)
+  -V, --duration <s>   Limit video length in seconds (default 5, max 60)
+  -g, --audio          Include system/tab audio when recording video
+
+Still output format follows the file extension (.png, .jpg, .jpeg, .webp).
+Video is recorded via MediaRecorder as WebM (use a .webm extension).
 
 The browser will prompt you to select a screen, window, or tab to capture.
-Output format is determined by file extension (.png, .jpg, .jpeg, .webp).
+Stop sharing in the browser chrome to end a video early.
 
 Examples:
-  screencapture screenshot.png       # Capture to file
-  screencapture -c                   # Capture to clipboard
-  screencapture -v capture.png       # Capture and return for agent vision
+  screencapture screenshot.png       # Capture still to file
+  screencapture -c                   # Capture still to clipboard
+  screencapture -v capture.png       # Capture still for agent vision
+  screencapture --video -V 10 clip.webm   # 10s screen recording
+  screencapture -V5 clip.webm        # .webm implies video; 5s limit
 `,
     stderr: '',
     exitCode: 0,
   };
 }
 
-function getMimeTypeForExtension(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    case 'webp':
-      return 'image/webp';
-    case 'png':
-    default:
-      return 'image/png';
-  }
+interface ScreencaptureOptions {
+  toClipboard: boolean;
+  view: boolean;
+  audio: boolean;
+  wantVideo: boolean;
+  filename: string;
+  durationMs?: number;
 }
 
-/**
- * Capture pixels via the DOM directly. Only callable from a context
- * that has `navigator.mediaDevices` and `document` (panel terminal,
- * extension offscreen). The kernel worker reaches the same code path
- * by going through the panel-RPC bridge instead.
- */
-async function captureLocally(
-  mimeType: string,
-  quality: number
-): Promise<{ bytes: Uint8Array; mimeType: string }> {
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-  try {
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () =>
-        video
-          .play()
-          .then(() => resolve())
-          .catch(reject);
-      video.onerror = () => reject(new Error('Failed to load video stream'));
-    });
-    await new Promise<void>((r) => setTimeout(r, 100));
+function parseScreencaptureOptions(
+  args: readonly string[]
+): ScreencaptureOptions | ScreencaptureResult {
+  const parsed = parseKnownFlags(expandAttachedDurationFlags(args), {
+    bool: SCREENCAPTURE_BOOL_FLAGS,
+    value: SCREENCAPTURE_VALUE_FLAGS,
+  });
+  if ('error' in parsed) return scFail(parsed.error);
 
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get canvas context');
-    ctx.drawImage(video, 0, 0, width, height);
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error('Failed to create image blob'))),
-        mimeType,
-        quality
-      );
-    });
-    return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType };
-  } finally {
-    stream.getTracks().forEach((t) => {
-      t.stop();
-    });
+  const toClipboard = parsed.bools.has('--clipboard') || parsed.bools.has('-c');
+  const view = parsed.bools.has('--view') || parsed.bools.has('-v');
+  const audio = parsed.bools.has('--audio') || parsed.bools.has('-g');
+  const outputFile = parsed.positionals[0];
+  const durationRaw = parsed.values.get('-V') ?? parsed.values.get('--duration');
+
+  if (!toClipboard && !outputFile) {
+    return scFail('output file required (or use -c for clipboard)');
   }
+
+  const filename = outputFile || 'screenshot.png';
+  const wantVideo =
+    parsed.bools.has('--video') || durationRaw !== undefined || isVideoExtension(filename);
+
+  const modeError = validateCaptureMode({ wantVideo, toClipboard, view, audio, filename });
+  if (modeError) return modeError;
+
+  const duration = resolveVideoDurationMs(wantVideo, durationRaw);
+  if ('error' in duration) return duration.error;
+
+  return {
+    toClipboard,
+    view,
+    audio,
+    wantVideo,
+    filename,
+    ...(duration.durationMs !== undefined ? { durationMs: duration.durationMs } : {}),
+  };
+}
+
+function validateCaptureMode(opts: {
+  wantVideo: boolean;
+  toClipboard: boolean;
+  view: boolean;
+  audio: boolean;
+  filename: string;
+}): ScreencaptureResult | null {
+  if (opts.wantVideo && opts.toClipboard) {
+    return scFail('video capture cannot go to the clipboard; save to a .webm file');
+  }
+  if (opts.wantVideo && opts.view) {
+    return scFail('video capture cannot use --view; save to a file and open it');
+  }
+  if (opts.audio && !opts.wantVideo) {
+    return scFail('-g/--audio requires video mode (--video or a .webm/.mp4 file)');
+  }
+  if (opts.wantVideo && !/\.(webm|mp4|mkv)$/i.test(opts.filename)) {
+    return scFail('video capture requires a .webm (preferred), .mp4, or .mkv output file');
+  }
+  return null;
+}
+
+function resolveVideoDurationMs(
+  wantVideo: boolean,
+  durationRaw: string | undefined
+): { durationMs?: number } | { error: ScreencaptureResult } {
+  if (durationRaw !== undefined) {
+    const secs = Number(durationRaw);
+    if (!Number.isFinite(secs) || secs <= 0) {
+      return {
+        error: scFail(`-V/--duration requires a positive number of seconds (got ${durationRaw})`),
+      };
+    }
+    return { durationMs: clampVideoDurationMs(secs * 1000) };
+  }
+  if (wantVideo) return { durationMs: clampVideoDurationMs(undefined) };
+  return {};
+}
+
+function buildCaptureRequest(opts: ScreencaptureOptions): DisplayCaptureRequest {
+  if (opts.wantVideo) {
+    return {
+      mode: 'video',
+      mimeType: getVideoMimeTypeForExtension(opts.filename),
+      durationMs: opts.durationMs ?? clampVideoDurationMs(undefined),
+      audio: opts.audio,
+    };
+  }
+  const mimeType = getImageMimeTypeForExtension(opts.filename);
+  return {
+    mode: 'image',
+    mimeType,
+    quality: mimeType === 'image/png' ? 1.0 : 0.92,
+  };
 }
 
 export function createScreencaptureCommand(): Command {
   return defineCommand('screencapture', async (args, ctx) => {
-    if (isHelpRequest(args)) {
+    if (isHelpRequest(args, { valueFlags: [...SCREENCAPTURE_VALUE_FLAGS] })) {
       return screencaptureHelp();
     }
 
-    const parsed = parseKnownFlags(args, { bool: SCREENCAPTURE_BOOL_FLAGS });
-    if ('error' in parsed) {
-      return scFail(parsed.error);
-    }
+    const opts = parseScreencaptureOptions(args);
+    if ('exitCode' in opts) return opts;
 
     const local = hasLocalDom();
     const panelRpc = getPanelRpcClient();
     const envError = checkScreencaptureEnv(local, panelRpc);
     if (envError) return envError;
 
-    const toClipboard = parsed.bools.has('--clipboard') || parsed.bools.has('-c');
-    const view = parsed.bools.has('--view') || parsed.bools.has('-v');
-    const outputFile = parsed.positionals[0];
-
-    if (!toClipboard && !outputFile) {
-      return scFail('output file required (or use -c for clipboard)');
-    }
-
-    const filename = outputFile || 'screenshot.png';
-    const mimeType = getMimeTypeForExtension(filename);
-    const quality = mimeType === 'image/png' ? 1.0 : 0.92;
-
-    const captured = await captureScreenBytes(local, panelRpc!, mimeType, quality);
+    const captured = await captureScreenBytes(local, panelRpc!, buildCaptureRequest(opts));
     if ('error' in captured) return captured.error;
 
-    if (toClipboard) {
-      return writeClipboardOutput(captured.bytes, mimeType, local, panelRpc!);
+    if (opts.toClipboard) {
+      return writeClipboardOutput(captured.bytes, captured.mimeType, local, panelRpc!);
     }
 
-    return writeFileOutput(captured.bytes, filename, mimeType, view, ctx);
+    return writeFileOutput(
+      captured.bytes,
+      opts.filename,
+      captured.mimeType,
+      opts.view,
+      opts.wantVideo,
+      captured.durationMs,
+      ctx
+    );
   });
 }
 

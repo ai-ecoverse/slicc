@@ -53,6 +53,17 @@ function bytesToBase64(bytes) {
 }
 
 function describeMediaError(err) {
+  if (
+    err?.name === 'InvalidStateError' ||
+    /^Invalid state$/i.test(String(err?.message || '').trim())
+  ) {
+    return (
+      'display capture unavailable (Invalid state): another tab or page may ' +
+      'still hold a screen-share session, or this page is not focused/visible. ' +
+      'Stop other getDisplayMedia captures, focus the SLICC window, and retry; ' +
+      'if it stays wedged, reload the session'
+    );
+  }
   if (err?.name) return `${err.name}: ${err.message || ''}`.trim();
   return err?.message ? err.message : String(err);
 }
@@ -126,10 +137,13 @@ if (!request) {
 // ---------- screen capture ----------
 
 function setupScreenButton() {
-  setStatus('Screen capture ready');
-  hint.textContent = 'Click below, then choose a screen, window, or tab to capture.';
+  const isVideo = request.mode === 'video';
+  setStatus(isVideo ? 'Screen recording ready' : 'Screen capture ready');
+  hint.textContent = isVideo
+    ? 'Click below, choose a screen/window/tab, then wait for the timed recording.'
+    : 'Click below, then choose a screen, window, or tab to capture.';
   action.style.display = 'inline-block';
-  action.textContent = 'Capture screen';
+  action.textContent = isVideo ? 'Record screen' : 'Capture screen';
   action.addEventListener('click', () => {
     action.disabled = true;
     runScreenCapture().catch(reportUnhandledCaptureError);
@@ -137,45 +151,120 @@ function setupScreenButton() {
 }
 
 async function runScreenCapture() {
+  const isVideo = request.mode === 'video';
   let stream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: isVideo && !!request.audio,
+    });
   } catch (err) {
     fail(describeMediaError(err));
     return;
   }
   try {
-    setStatus('Capturing…');
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await new Promise((res, rej) => {
-      video.onloadedmetadata = () => video.play().then(res).catch(rej);
-      video.onerror = () => rej(new Error('Failed to load screen stream'));
-    });
-    await new Promise((r) => setTimeout(r, 100));
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get canvas context');
-    ctx.drawImage(video, 0, 0, width, height);
-    const blob = await new Promise((res, rej) =>
-      canvas.toBlob(
-        (b) => (b ? res(b) : rej(new Error('Failed to create image blob'))),
-        request.mimeType,
-        request.quality
-      )
-    );
-    succeed(new Uint8Array(await blob.arrayBuffer()), request.mimeType, width, height);
+    if (isVideo) {
+      setStatus('Recording…');
+      const r = await recordScreenClip(stream, request);
+      succeed(r.bytes, r.mimeType, r.width, r.height, r.durationMs);
+    } else {
+      setStatus('Capturing…');
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      await new Promise((res, rej) => {
+        video.onloadedmetadata = () => video.play().then(res).catch(rej);
+        video.onerror = () => rej(new Error('Failed to load screen stream'));
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Failed to get canvas context');
+      ctx.drawImage(video, 0, 0, width, height);
+      const blob = await new Promise((res, rej) =>
+        canvas.toBlob(
+          (b) => (b ? res(b) : rej(new Error('Failed to create image blob'))),
+          request.mimeType,
+          request.quality
+        )
+      );
+      succeed(new Uint8Array(await blob.arrayBuffer()), request.mimeType, width, height);
+    }
   } catch (err) {
     fail(describeMediaError(err));
   } finally {
     for (const t of stream.getTracks()) t.stop();
   }
+}
+
+async function recordScreenClip(stream, req) {
+  if (typeof MediaRecorder === 'undefined') {
+    throw new Error('MediaRecorder is not supported in this browser');
+  }
+  const video = document.createElement('video');
+  video.srcObject = stream;
+  video.muted = true;
+  video.playsInline = true;
+  await new Promise((res, rej) => {
+    video.onloadedmetadata = () => video.play().then(res).catch(rej);
+    video.onerror = () => rej(new Error('Failed to load screen stream'));
+  });
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  const durationMs = Math.max(100, Math.min(req.durationMs || 5000, 60_000));
+  const preferred = req.mimeType || 'video/webm';
+  const mimeType = MediaRecorder.isTypeSupported(preferred)
+    ? preferred
+    : MediaRecorder.isTypeSupported('video/webm')
+      ? 'video/webm'
+      : preferred;
+  const recorder = new MediaRecorder(stream, { mimeType });
+  const chunks = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+  const stopped = new Promise((resolve) => {
+    recorder.onstop = () => resolve();
+  });
+  const trackEnded = new Promise((resolve) => {
+    const tracks = stream.getTracks();
+    let remaining = tracks.length;
+    if (remaining === 0) {
+      resolve();
+      return;
+    }
+    for (const t of tracks) {
+      t.addEventListener(
+        'ended',
+        () => {
+          remaining -= 1;
+          if (remaining <= 0) resolve();
+        },
+        { once: true }
+      );
+    }
+  });
+  recorder.start();
+  await Promise.race([new Promise((r) => setTimeout(r, durationMs)), trackEnded]);
+  if (recorder.state !== 'inactive') recorder.stop();
+  await stopped;
+  video.srcObject = null;
+  const blob = new Blob(chunks, { type: mimeType });
+  if (blob.size === 0) {
+    throw new Error('video capture produced no data (was sharing stopped immediately?)');
+  }
+  return {
+    bytes: new Uint8Array(await blob.arrayBuffer()),
+    mimeType: blob.type || mimeType,
+    width,
+    height,
+    durationMs,
+  };
 }
 
 // ---------- camera / mic capture ----------

@@ -44,6 +44,10 @@ export interface PopupScreenCaptureRequest {
   kind: 'screen';
   mimeType: string;
   quality: number;
+  /** Still frame (default) or timed MediaRecorder clip. */
+  mode?: 'image' | 'video';
+  durationMs?: number;
+  audio?: boolean;
 }
 
 export type PopupCaptureRequest = PopupCameraCaptureRequest | PopupScreenCaptureRequest;
