@@ -211,8 +211,8 @@ test.describe('multiple cones — leader + follower', () => {
     try {
       // Dispatch the real tab events in one task so all three snapshot requests
       // are in flight before the leader's asynchronous snapshot reads settle.
-      await follower.page.evaluate(() => {
-        const labels = ['reviewer', PRIMARY_CONE_LABEL, 'reviewer'];
+      await follower.page.evaluate((primaryLabel) => {
+        const labels = ['reviewer', primaryLabel, 'reviewer'];
         for (const label of labels) {
           const button = [
             ...document.querySelectorAll<HTMLButtonElement>('button[role="tab"]'),
@@ -220,7 +220,7 @@ test.describe('multiple cones — leader + follower', () => {
           if (!button) throw new Error(`cone tab not found: ${label}`);
           button.click();
         }
-      });
+      }, PRIMARY_CONE_LABEL);
       await expect.poll(() => activeTabLabel(follower.page), { timeout: 60_000 }).toBe('reviewer');
       await expect(follower.page.locator('slicc-chat-thread')).toContainText('REVIEWER-SNAPSHOT-', {
         timeout: 60_000,

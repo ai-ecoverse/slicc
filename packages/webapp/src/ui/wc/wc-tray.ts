@@ -148,6 +148,11 @@ export interface WcTrayHandle {
   getFollower(): PageFollowerTrayHandle | null;
   /** Notify the active leader that rendered scoop state changed. */
   scheduleScoopsListBroadcast(): void;
+  /**
+   * Mirror one unit's turn lifecycle to followers, named with that unit —
+   * not whichever cone the leader happens to be displaying.
+   */
+  broadcastUnitStatus(scoopJid: string, status: string): void;
   performTrayLeaveLocally(opts: {
     workerBaseUrl: string | null;
     requestId?: string;
@@ -1404,6 +1409,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     getLeader: () => state.leader,
     getFollower: () => state.follower,
     scheduleScoopsListBroadcast: () => state.leader?.scheduleScoopsListBroadcast(),
+    broadcastUnitStatus: (scoopJid, status) => state.leader?.sync.broadcastStatus(status, scoopJid),
     performTrayLeaveLocally,
   };
 }

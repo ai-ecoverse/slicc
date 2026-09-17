@@ -447,8 +447,8 @@ export class LeaderSyncManager {
     this.broadcast.broadcastUserMessage(text, messageId, attachments);
   }
 
-  broadcastStatus(status: string): void {
-    this.broadcast.broadcastStatus(status);
+  broadcastStatus(status: string, scoopJid?: string): void {
+    this.broadcast.broadcastStatus(status, scoopJid);
   }
 
   broadcastSnapshot(): void {

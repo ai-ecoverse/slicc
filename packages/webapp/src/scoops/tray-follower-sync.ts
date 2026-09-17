@@ -39,6 +39,7 @@ import {
   type RemoteTargetInfo,
   reassembleSnapshot,
   type ScoopSummary,
+  type SnapshotChunkBuffer,
   type SprinkleSummary,
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayExecChunkMessage,
@@ -79,8 +80,8 @@ export class FollowerSyncManager implements AgentHandle {
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
   private readonly sentMessageIds = new Set<string>();
   private targetEntries: TrayTargetEntry[] = [];
-  private snapshotChunkBuffer: { chunks: string[]; received: number; totalChunks: number } | null =
-    null;
+  /** Per-unit snapshot-chunk assembly. One global buffer mixed concurrent cones. */
+  private readonly snapshotChunkBuffers = new Map<string, SnapshotChunkBuffer>();
   /** Tray sync protocol version from the leader's `hello`; undefined until it arrives. */
   private leaderProtocolVersion?: number;
   /** True once the no-hello legacy-leader diagnosis has been logged. */
@@ -331,6 +332,7 @@ export class FollowerSyncManager implements AgentHandle {
     this.fsBridge.rejectPending(reason);
     this.remoteCdp.rejectPending();
     this.exportClient.rejectPending();
+    this.snapshotChunkBuffers.clear();
   }
 
   /** Advertise local browser targets to the leader. */
@@ -457,10 +459,10 @@ export class FollowerSyncManager implements AgentHandle {
     setFollowerLastPingTime(Date.now());
   }
 
-  /** A whole-thread replacement. Drops any half-assembled chunked snapshot. */
+  /** A whole-thread replacement. Drops any half-assembled chunked snapshot for that unit. */
   private handleSnapshot(messages: ChatMessage[], scoopJid: string): void {
     log.info('Snapshot received from leader', { messageCount: messages.length, scoopJid });
-    this.snapshotChunkBuffer = null;
+    this.snapshotChunkBuffers.delete(scoopJid);
     this.latestSnapshot = { messages, scoopJid };
     this.options.onSnapshot?.(messages, scoopJid);
   }
@@ -469,15 +471,14 @@ export class FollowerSyncManager implements AgentHandle {
   private handleSnapshotChunk(
     message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>
   ): void {
-    const assembled = reassembleSnapshot(this.snapshotChunkBuffer, message);
-    this.snapshotChunkBuffer = assembled.buffer;
-    if (!assembled.result) return;
+    const assembled = reassembleSnapshot(this.snapshotChunkBuffers, message);
+    if (!assembled) return;
     log.info('Chunked snapshot reassembled from leader', {
-      messageCount: assembled.result.messages.length,
-      scoopJid: assembled.result.scoopJid,
+      messageCount: assembled.messages.length,
+      scoopJid: assembled.scoopJid,
     });
-    this.latestSnapshot = assembled.result;
-    this.options.onSnapshot?.(assembled.result.messages, assembled.result.scoopJid);
+    this.latestSnapshot = assembled;
+    this.options.onSnapshot?.(assembled.messages, assembled.scoopJid);
   }
 
   /**
