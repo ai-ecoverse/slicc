@@ -4,7 +4,7 @@ This file is bundled into the agent VFS at `/workspace/skills/skill-authoring/js
 
 ## Runtime globals (Globals API)
 
-Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, agent, http, browser, USB / Serial / HID, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
+Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, agent, http, browser, USB / Serial / HID, computer, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
 
 ### Node-standard bare globals
 
@@ -32,6 +32,7 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 | `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                                                                                                                                                                      |
 | `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                                                                              |
 | `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                                                                                                                                                                  |
+| `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend. Screenshot/input round-trip over host `computer-call` events (keep-alive via `onEvent`).                                                                                                                                                                                                                                                                               |
 | `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                                                                                                                                                                  |
 | `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                                                                                                                                                                                                                                        |
 | `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                                                                                                                                                                                                                       |
@@ -473,6 +474,40 @@ await exec.spawn([
   `${process.env.TMPDIR ?? '/tmp'}/header.bin`,
 ]);
 ```
+
+### `sliccy:computer` — jsh-hosted computer backends
+
+`require('sliccy:computer').register(handlers)` registers a computer the `computer` shell command can screenshot and poke. `register()` subscribes to host `computer-call` events, which keeps a `jshd` unit alive the same way `sliccy:hid` inputreport listeners do. The disposer unregisters. Ids are typically `jsh:<name>`.
+
+```javascript
+const computer = require('sliccy:computer');
+computer.register({
+  id: 'jsh:fake',
+  title: 'fake',
+  size: { width: 1, height: 1 },
+  capabilities: {
+    screenshot: true,
+    text: true,
+    frames: 'poll',
+    keyboard: true,
+    mouse: 'none',
+    scroll: false,
+    exec: false,
+    inputAllowed: true,
+  },
+  async screenshot() {
+    return { seq: 1, mime: 'image/jpeg', width: 1, height: 1, bytes: JPEG };
+  },
+  async text() {
+    return '(empty)';
+  },
+  async input(events) {
+    /* mousemove / button / click / scroll / key / text / wait */
+  },
+});
+```
+
+Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
 
 ## Reaching these from sprinkles & dips
 

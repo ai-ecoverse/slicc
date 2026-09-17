@@ -11,6 +11,14 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - `facade.ts` holds a `request-scoop-messages` for a cone whose `cone-create` is still in flight (`conesBeingCreated`, #2840). `registerScoop` is what LISTS the new cone to the page, and the rail selects a cone the instant its real record lands, so the replay request routinely arrives before the brief has been buffered. Answering there is not a dropped request but a WRONG one: every source is legitimately empty and the panel wholesale-replaces the thread with nothing. The client's 5 s recovery only re-asks a genuinely unanswered snapshot (#2859), so an empty replace would stay empty — the gate is the only thing that waits. It opens on the brief being BUFFERED, never on the turn finishing — waiting for the model would leave the previous cone's transcript on screen for the length of the first turn.
 - Deep reference: `docs/kernel/process-model.md`.
 
+## Computers
+
+- Path: `packages/webapp/src/computers/`. Unranked in the layer stack (shell/kernel/cdp may import it; `computers` → `ui` is a back-edge — the store lives in `ui/`).
+- Protocol types: `@slicc/shared-ts` (`computer-protocol.ts`). Deep reference: `docs/computer-protocol.md`.
+- `registry.ts` / `host.ts` — kernel registry (`ProcessKind 'computer'`) and `computers` / `computer-frame` / `computer-watch` pump. Lazy-loaded from `kernel-worker.ts`.
+- Adapters: `v86.ts` (adopt VM pid; `close()` detaches only), `tab.ts` (Local vs Bridged; refuses SLICC app tabs), `jsh.ts` (`sliccy:computer` via `kernel/realm/realm-computer-bridge.ts`).
+- Shell: `shell/supplemental-commands/computer/` (xdotool + Anthropic aliases). Frozen frames: `$TMPDIR/computer/<name>/<seq>.jpg`.
+
 ## Orchestrator
 
 - Path: `packages/webapp/src/scoops/`

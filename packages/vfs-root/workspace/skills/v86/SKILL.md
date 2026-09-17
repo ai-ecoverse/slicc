@@ -3,7 +3,8 @@ name: v86
 description: |
   Use this when booting or driving an x86 virtual machine with SLICC's `v86`
   shell command. Covers the ipk prerequisite, BIOS setup, QEMU-flavored boot
-  flags, and the screenshot/text/type/mouse interaction loop for agents.
+  flags, and the look-then-act loop (`computer` after `v86 start` registers
+  `v86:<name>`; `v86 type|key|mouse|screenshot|text` remain as aliases).
 allowed-tools: bash
 ---
 
@@ -61,20 +62,26 @@ VMs run in the background as ProcessManager-tracked units — `ps` shows them an
 
 ## Interaction loop
 
-The VM is not an interactive foreground process. Drive it look-then-act:
+The VM is not an interactive foreground process. `v86 start` registers `v86:<name>` as a computer; prefer `computer` for look-then-act (screenshot-space coords, frozen JPEG frames, chainable xdotool verbs). See `/workspace/skills/computer/SKILL.md`.
 
 ```bash
-v86 text                        # text-mode screen as plain text (prefer this)
-v86 screenshot [out.png]        # VGA framebuffer -> PNG (graphical mode)
-v86 type "root\n"               # type on the keyboard ('\n' = Enter)
-v86 key ctrl-alt-del enter f2   # named key chords
-v86 mouse move 20 -5            # relative pointer move
-v86 mouse click right --double  # click; --to x,y is best-effort absolute
+computer use v86:vm0
+computer text                   # text-mode dump when the guest is in text mode
+computer screenshot             # VGA framebuffer -> JPEG (graphical mode)
+computer type "root\n"          # type on the keyboard ('\n' = Enter)
+computer key ctrl+alt+Delete enter f2
+computer mousemove 20 -5 --relative
+computer click 3                # 3 = right
+```
+
+`v86 type|key|mouse|screenshot|text` remain as thin aliases. `computer rm` unregisters the computer and does **not** power the guest off.
+
+```bash
 v86 serial --send "ls\n"        # write to the guest serial console
 v86 serial --tail 25            # read buffered serial output
 ```
 
-Prefer `v86 text` over `screenshot` whenever the guest is in text mode — it is cheaper and machine-readable. For `-nographic` guests use the `serial` subcommands.
+Prefer `computer text` / `v86 text` over `screenshot` whenever the guest is in text mode — it is cheaper and machine-readable. For `-nographic` guests use the `serial` subcommands.
 
 ## Live screen streaming (iframe-able)
 
