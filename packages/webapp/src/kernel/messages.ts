@@ -11,6 +11,7 @@
 import {
   type CDPPayload,
   type ComputerDescriptor,
+  type ComputerInputEvent,
   isExtensionMessage as isExtensionMessageEnvelope,
   type ToolProgressEvent,
   type WebhookDeliveryDisposition,
@@ -974,7 +975,16 @@ export interface ComputerUnwatchMsg {
   id: string;
 }
 
+/** Panel → worker: inject input events into a registered computer. */
+export interface ComputerInputMsg {
+  type: 'computer-input';
+  id: string;
+  events: ComputerInputEvent[];
+}
+
 export type ComputerWatchControlMsg = ComputerWatchMsg | ComputerUnwatchMsg;
+
+export type ComputerPageControlMsg = ComputerWatchControlMsg | ComputerInputMsg;
 
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
@@ -1072,6 +1082,7 @@ export type PanelToOffscreenMessage =
   // answered with an ENOSYS failure ack. Ignored by `Bridge`.
   | VfsWatchControlMsg
   | ComputerWatchControlMsg
+  | ComputerInputMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg;
 

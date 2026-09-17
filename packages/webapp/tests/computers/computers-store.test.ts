@@ -57,4 +57,35 @@ describe('computers-store', () => {
     expect(store.isWatching('tab:T1')).toBe(false);
     expect(sent[1]).toEqual({ type: 'computer-unwatch', id: 'tab:T1' });
   });
+
+  it('refcounts watch so a second subscriber does not unwatch the first', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    const sent: Array<{ type: string }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.watch('jsh:fake');
+    store.watch('jsh:fake');
+    expect(store.watchRefCount('jsh:fake')).toBe(2);
+    expect(sent.filter((m) => m.type === 'computer-watch')).toHaveLength(1);
+    store.unwatch('jsh:fake');
+    expect(store.isWatching('jsh:fake')).toBe(true);
+    expect(sent.filter((m) => m.type === 'computer-unwatch')).toHaveLength(0);
+    store.unwatch('jsh:fake');
+    expect(store.isWatching('jsh:fake')).toBe(false);
+    expect(sent.filter((m) => m.type === 'computer-unwatch')).toHaveLength(1);
+  });
+
+  it('records the newest invocation per computer and sends input events', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    const sent: Array<{ type: string }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.recordInvocation('jsh:fake', 'call-1');
+    store.recordInvocation('jsh:fake', 'call-2');
+    expect(store.newestInvocation('jsh:fake')).toBe('call-2');
+    store.input('jsh:fake', [{ type: 'key', keysym: 'Return' }]);
+    expect(sent).toEqual([
+      { type: 'computer-input', id: 'jsh:fake', events: [{ type: 'key', keysym: 'Return' }] },
+    ]);
+  });
 });

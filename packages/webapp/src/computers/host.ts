@@ -9,6 +9,7 @@
 
 import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
 import type {
+  ComputerInputMsg,
   ComputerUnwatchMsg,
   ComputerWatchMsg,
   ExtensionMessage,
@@ -132,6 +133,10 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
     const payload = envelope.payload as PanelToOffscreenMessage;
     if (payload.type === 'computer-watch') startWatch(payload as ComputerWatchMsg);
     else if (payload.type === 'computer-unwatch') stopWatch((payload as ComputerUnwatchMsg).id);
+    else if (payload.type === 'computer-input') {
+      const input = payload as ComputerInputMsg;
+      void registry.get(input.id)?.input(input.events);
+    }
   });
 
   send({ type: 'computers', computers: lastList });

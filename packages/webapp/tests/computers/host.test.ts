@@ -12,6 +12,7 @@ import type { ExtensionMessage, OffscreenToPanelMessage } from '../../src/kernel
 class FakeBackend implements ComputerBackend {
   shots = 0;
   hang: Promise<ComputerFrame> | null = null;
+  received: ComputerInputEvent[] = [];
 
   constructor(readonly id = 'fake') {}
 
@@ -48,7 +49,9 @@ class FakeBackend implements ComputerBackend {
     };
   }
 
-  async input(_events: ComputerInputEvent[]): Promise<void> {}
+  async input(events: ComputerInputEvent[]): Promise<void> {
+    this.received.push(...events);
+  }
 
   async close(): Promise<void> {}
 }
@@ -151,5 +154,18 @@ describe('computers host watch transport', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('forwards computer-input events to the registered backend', async () => {
+    const registry = installComputerRegistry(null);
+    const backend = new FakeBackend('box');
+    registry.register(backend);
+    const { transport, emit } = mockTransport();
+    const host = startComputersHost({ transport, processManager: null });
+    emit({ type: 'computer-input', id: 'box', events: [{ type: 'key', keysym: 'Return' }] });
+    await vi.waitFor(() => {
+      expect(backend.received).toEqual([{ type: 'key', keysym: 'Return' }]);
+    });
+    host.stop();
   });
 });

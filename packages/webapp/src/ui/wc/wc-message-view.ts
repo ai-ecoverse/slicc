@@ -698,11 +698,15 @@ function bashBody(call: ToolCall): HTMLElement {
     const custom = document.createElement(rendererTag) as HTMLElement & {
       command?: string;
       output?: string;
+      toolCallId?: string;
+      done?: boolean;
     };
     custom.setAttribute('slot', 'body');
     custom.setAttribute('command', command);
     custom.command = command;
     custom.output = call.result ?? '';
+    custom.toolCallId = call.id;
+    custom.done = call.result !== undefined;
     return custom;
   }
   const body = el('div', { slot: 'body', class: 'wcmsg-bash' });

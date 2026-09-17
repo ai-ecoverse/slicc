@@ -4,16 +4,19 @@
  * browser's pages plus any tray follower's (composite
  * `runtimeId:targetId` ids whose CDP traffic rides the federated channel,
  * i.e. the tray's WebRTC data channel) — each card with a live screenshot
- * thumbnail. Activating a local card attaches + foregrounds that tab;
+ * thumbnail, then every registered computer (store frames, no CDP attach).
+ * Activating a local card attaches + foregrounds that tab;
  * activating a follower's card pulls a state-carrying copy to the leader
- * (`teleportTabOneWay`) so it lands in front of THIS user. A card's ✕
- * closes it.
+ * (`teleportTabOneWay`) so it lands in front of THIS user; activating a
+ * computer card opens the live lightbox. A card's ✕ closes a browser tab.
  */
 
 import { isSliccAppUrl } from '@slicc/shared-ts';
+import type { TabDescriptor } from '@slicc/webcomponents';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
 import { teleportTabOneWay } from '../../scoops/tray-leader/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { bindComputerOverlay, mergeOverlayTabs, parseComputerOverlayId } from './wc-computers.js';
 import type { WcShellRefs } from './wc-shell.js';
 
 /**
@@ -27,13 +30,7 @@ const PEEK_MS = 5000;
 
 /** The overlay's structural surface (typed loosely — composed BY TAG). */
 interface TabOverlayLike extends HTMLElement {
-  tabs: Array<{
-    id: string;
-    title?: string;
-    url?: string;
-    screenshot?: string;
-    active?: boolean;
-  }>;
+  tabs: TabDescriptor[];
   show(): void;
   hide(): void;
 }
@@ -140,8 +137,9 @@ export interface WcBrowserHandle {
 export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
   const { refs, browser, log } = deps;
   const overlay = document.createElement('slicc-tab-overlay') as TabOverlayLike;
-  overlay.setAttribute('heading', 'Browser · open tabs');
+  overlay.setAttribute('heading', 'Browser · tabs & computers');
   document.body.append(overlay);
+  bindComputerOverlay(overlay, log);
 
   let refreshSeq = 0;
   /**
@@ -174,11 +172,13 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     // build that still advertises its shell.
     const selfOrigins = location?.origin ? [location.origin] : undefined;
     pages = pages.filter((p) => !isSliccAppUrl(p.url ?? '', { selfOrigins }));
-    overlay.tabs = pages.map((p) => ({
-      id: p.targetId,
-      title: p.title || p.url || p.targetId,
-      url: p.url,
-    }));
+    overlay.tabs = mergeOverlayTabs(
+      pages.map((p) => ({
+        id: p.targetId,
+        title: p.title || p.url || p.targetId,
+        url: p.url,
+      }))
+    );
     // Thumbnails land lazily, one tab at a time (each needs an attach; the
     // composite follower ids stream their capture over the WebRTC channel).
     for (const p of pages) {
@@ -264,13 +264,17 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
   };
 
   overlay.addEventListener('tab-activate', (event) => {
-    void activate((event as CustomEvent<{ id: string }>).detail.id);
+    const id = (event as CustomEvent<{ id: string }>).detail.id;
+    if (parseComputerOverlayId(id)) return;
+    void activate(id);
   });
 
   const peek = createPeek({ browser, log, activate, agentTarget: () => agentTarget });
 
   overlay.addEventListener('tab-peek', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail.id;
+    // Computers open the live lightbox (handled in `bindComputerOverlay`).
+    if (parseComputerOverlayId(id)) return;
     // A follower's tab is not somewhere this browser can go and come back
     // from — activating it pulls a COPY here (`teleportTabOneWay`), which is
     // not a visit at all. Let the ordinary path teleport it instead.
@@ -283,6 +287,7 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
 
   overlay.addEventListener('tab-close', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail.id;
+    if (parseComputerOverlayId(id)) return;
     void browser
       .closePage(id)
       .then(() => refresh())

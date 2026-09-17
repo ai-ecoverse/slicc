@@ -1190,6 +1190,9 @@ export function attachWcWorkbench(
     lastActivity: boot.wiring.lastActivity,
   });
   wireWcBrowserOverlay(boot, options, log);
+  void import('./wc-computers.js')
+    .then(({ installWcComputers }) => installWcComputers({ openFs: openReader, log }))
+    .catch((err) => log.error('WC computers wiring failed', err));
   wireWcPermissionsSurface(boot, client, options, log);
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar. `workbenchActivator` is
