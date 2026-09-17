@@ -30,7 +30,7 @@ import {
   createNodeUtil,
 } from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
-import { type BodyReadHandleTracker, createBodyReadHandleTracker } from './realm-body-handles.js';
+import type { BodyReadHandleTracker } from './realm-body-handles.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
 import { reconstructFetchResponse } from './realm-fetch-response.js';
@@ -463,6 +463,10 @@ async function finishJsRealm(opts: {
       throw err;
     },
   });
+  // Loaded on first realm run, not at kernel-worker boot — the in-process
+  // factory is an eager import of this file, so a static import here would
+  // grow the worker first-load graph (#3227 bundle-size).
+  const { createBodyReadHandleTracker } = await import('./realm-body-handles.js');
   const bodyReads = createBodyReadHandleTracker(globalThis);
   timers.install();
   bodyReads.install();
