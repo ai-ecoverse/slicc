@@ -21,7 +21,6 @@
  * Web Speech (see `KokoroVoiceInfo.onDevice` and `speak.ts`).
  */
 
-import type { Tensor } from '@huggingface/transformers';
 import type { KokoroTTS as KokoroTtsClass } from 'kokoro-js';
 import { createLogger } from '../base/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
@@ -351,10 +350,14 @@ async function synthesizeWithEspeak(
   phonemize: EspeakPhonemize
 ): Promise<KokoroAudioChunk> {
   const phonemes = await phonemizeForKokoro(text, espeakLang, phonemize);
+  // kokoro-js types Tensor from its nested transformers 3.x; workspace 4.3.0
+  // dropped Tensor.indexOf so the two shapes are not assignable. Runtime is
+  // Vite-deduped onto the workspace copy; take kokoro's parameter type.
+  type InputIds = Parameters<KokoroTtsClass['generate_from_ids']>[0];
   const tokenize = tts.tokenizer as unknown as (
     t: string,
     o: { truncation: boolean }
-  ) => { input_ids: Tensor };
+  ) => { input_ids: InputIds };
   const { input_ids } = tokenize(phonemes, { truncation: true });
   const audio = await tts.generate_from_ids(input_ids, {
     voice: voiceId as never,
