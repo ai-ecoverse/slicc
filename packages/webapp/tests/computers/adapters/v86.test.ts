@@ -127,11 +127,23 @@ describe('V86ComputerBackend', () => {
     ]);
     expect(emulator.busSends).toEqual([
       ['mouse-delta', [4, -2]],
-      ['mouse-delta', [6, -6]],
-      ['mouse-delta', [2, -1]],
+      ['mouse-delta', [-16384, 16384]],
+      ['mouse-delta', [10, -8]],
+      ['mouse-delta', [-16384, 16384]],
+      ['mouse-delta', [12, -9]],
       ['mouse-click', [false, false, true]],
       ['mouse-click', [false, false, false]],
       ['mouse-wheel', [1, -3]],
+    ]);
+  });
+
+  it('re-homes the PS/2 cursor before the first absolute screenshot-space move', async () => {
+    const { emulator, record } = makeRecord();
+    const backend = new V86ComputerBackend(record);
+    await backend.input([{ type: 'mousemove', x: 8, y: 4 }]);
+    expect(emulator.busSends).toEqual([
+      ['mouse-delta', [-16384, 16384]],
+      ['mouse-delta', [8, -4]],
     ]);
   });
 

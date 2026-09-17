@@ -133,9 +133,20 @@ export class V86ComputerBackend implements ComputerBackend {
       this.lastY += event.y;
       return;
     }
-    emu.bus.send('mouse-delta', [event.x - this.lastX, -(event.y - this.lastY)]);
+    // PS/2 is relative-only. Re-home to the top-left (same sweep as the
+    // old `v86 mouse --to`) so the first screenshot-space click after
+    // register — and any later guest clip — lands at the requested coords
+    // instead of `event - lastX` from a stale origin.
+    this.rehomePointer();
+    emu.bus.send('mouse-delta', [event.x, -event.y]);
     this.lastX = event.x;
     this.lastY = event.y;
+  }
+
+  private rehomePointer(): void {
+    this.record.emulator.bus.send('mouse-delta', [-16384, 16384]);
+    this.lastX = 0;
+    this.lastY = 0;
   }
 
   private async maybeMoveTo(x: number | undefined, y: number | undefined): Promise<void> {
