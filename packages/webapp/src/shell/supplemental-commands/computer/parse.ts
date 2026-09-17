@@ -80,6 +80,13 @@ export function canonicalizeVerb(token: string): ComputerVerb | null {
   return ALIAS_TO_VERB[token] ?? null;
 }
 
+/**
+ * Pull `-c/--computer`, `--json`, `--native` from anywhere before `--`.
+ * Shipped examples such as `computer screenshot -c tab:<id>` put the
+ * target after the verb; rest-taking verbs (`type`, `key`, `exec`) must
+ * not swallow those tokens as literal input. Verb-local flags (`--size`,
+ * `--at`, `--id`) stay in `rest`.
+ */
 export function parseGlobals(args: readonly string[]): ParsedGlobals {
   const rest: string[] = [];
   let computer: string | undefined;
@@ -102,10 +109,6 @@ export function parseGlobals(args: readonly string[]): ParsedGlobals {
     if (tok === '-c' || tok === '--computer') {
       computer = args[++i];
       continue;
-    }
-    if (rest.length === 0 && isComputerVerb(tok)) {
-      rest.push(...args.slice(i));
-      break;
     }
     rest.push(tok);
   }
@@ -235,13 +238,14 @@ function positionalCount(verb: ComputerVerb): number {
     case 'drag':
       return 4;
     case 'scroll':
-    case 'click':
       return 2;
+    case 'click':
+    case 'mousedown':
+    case 'mouseup':
+      return 3;
     case 'wait':
     case 'keydown':
     case 'keyup':
-    case 'mousedown':
-    case 'mouseup':
     case 'rm':
     case 'use':
       return 1;

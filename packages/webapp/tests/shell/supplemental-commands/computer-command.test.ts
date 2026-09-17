@@ -174,6 +174,43 @@ describe('computer command', () => {
     expect(backend.events[0]).toMatchObject({ type: 'click', button: 1, x: 10, y: 20 });
   });
 
+  it('parses click <button> <x> <y> without leaking the last coord as a verb', async () => {
+    const backend = new FakeBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const result = await cmd.execute(['--native', 'click', '1', '100', '200', 'type', 'hi'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toMatch(/unknown verb/);
+    expect(backend.events).toEqual([
+      { type: 'click', button: 1, count: 1, x: 100, y: 200 },
+      { type: 'text', text: 'hi' },
+    ]);
+    backend.events = [];
+    const down = await cmd.execute(['--native', 'mousedown', '100', '200'], ctx);
+    expect(down.exitCode).toBe(0);
+    expect(backend.events).toEqual([{ type: 'button', button: 1, down: true, x: 100, y: 200 }]);
+  });
+
+  it('honors -c after the verb so type does not eat the tokens', async () => {
+    const a = new FakeBackend('a');
+    const b = new FakeBackend('b');
+    const registry = new ComputerRegistry(null);
+    registry.register(a);
+    registry.register(b);
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const shot = await cmd.execute(['screenshot', '-c', 'b'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(b.shots).toBe(1);
+    expect(a.shots).toBe(0);
+    const typed = await cmd.execute(['type', '-c', 'a', 'hello'], ctx);
+    expect(typed.exitCode).toBe(0);
+    expect(a.events).toEqual([{ type: 'text', text: 'hello' }]);
+    expect(b.events).toEqual([]);
+  });
+
   it('resolves $COMPUTER and errors when none match', async () => {
     const registry = new ComputerRegistry(null);
     registry.register(new FakeBackend('a'));
@@ -372,5 +409,28 @@ describe('computer parse', () => {
     expect(call.args).toContain('1');
     expect(call.args).toContain('--repeat');
     expect(call.args).toContain('2');
+  });
+
+  it('extracts -c/--json/--native after the verb', () => {
+    const shot = parseGlobals(['screenshot', '-c', 'tab:T1']);
+    expect(shot.computer).toBe('tab:T1');
+    expect(shot.rest).toEqual(['screenshot']);
+    const typed = parseGlobals(['type', '-c', 'tab:T1', 'hello', '--json']);
+    expect(typed.computer).toBe('tab:T1');
+    expect(typed.json).toBe(true);
+    expect(typed.rest).toEqual(['type', 'hello']);
+    const escaped = parseGlobals(['type', '--', '-c', 'not-a-computer']);
+    expect(escaped.computer).toBeUndefined();
+    expect(escaped.rest).toEqual(['type', '--', '-c', 'not-a-computer']);
+  });
+
+  it('takes button plus two coords for click/mousedown/mouseup', () => {
+    const chained = chainVerbs(['click', '1', '100', '200', 'type', 'hi']);
+    expect(chained.map((c) => c.verb)).toEqual(['click', 'type']);
+    expect(chained[0].args).toEqual(['1', '100', '200']);
+    expect(chained[1].args).toEqual(['hi']);
+    expect(chainVerbs(['click', 'left', '100', '200'])[0].args).toEqual(['left', '100', '200']);
+    expect(chainVerbs(['mousedown', '100', '200'])[0].args).toEqual(['100', '200']);
+    expect(chainVerbs(['mouseup', '2', '50', '60'])[0].args).toEqual(['2', '50', '60']);
   });
 });
