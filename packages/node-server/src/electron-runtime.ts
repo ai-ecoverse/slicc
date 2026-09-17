@@ -313,6 +313,51 @@ export function buildElectronServerSpawnConfig(
   };
 }
 
+/** Default float window box; also applied to child windows opened without a size. */
+export const ELECTRON_FLOAT_WINDOW_BOX = {
+  width: 1440,
+  height: 960,
+  minWidth: 1024,
+  minHeight: 720,
+} as const;
+
+export interface ElectronChildWindowOptions {
+  autoHideMenuBar: true;
+  width?: number;
+  height?: number;
+  minWidth?: number;
+  minHeight?: number;
+}
+
+const WINDOW_OPEN_SIZE_FEATURES = new Set(['width', 'height', 'innerwidth', 'innerheight']);
+
+/**
+ * Does a `window.open()` features string ask for a window size? Electron parses
+ * `width`/`height` (and the `innerWidth`/`innerHeight` aliases) from the
+ * comma-separated `key=value` list into `BrowserWindowConstructorOptions`.
+ */
+export function windowOpenFeaturesRequestSize(features: string): boolean {
+  for (const entry of features.split(',')) {
+    const key = entry.split('=')[0]?.trim().toLowerCase();
+    if (key && WINDOW_OPEN_SIZE_FEATURES.has(key)) return true;
+  }
+  return false;
+}
+
+/**
+ * Options the Electron float's `setWindowOpenHandler` layers over a
+ * renderer-opened child window. Handler options OUTRANK the parsed features
+ * string, so this must not name a size when the opener asked for one:
+ * `window.open(url, name, 'popup=yes,width=1280,height=800')` (a sprinkle
+ * opening a fixed-size capture window) has to come out exactly 1280×800 with
+ * no min-size clamp. A featureless `target="_blank"` link keeps the full float
+ * box it always had.
+ */
+export function buildElectronChildWindowOptions(features: string): ElectronChildWindowOptions {
+  if (windowOpenFeaturesRequestSize(features)) return { autoHideMenuBar: true };
+  return { autoHideMenuBar: true, ...ELECTRON_FLOAT_WINDOW_BOX };
+}
+
 export function getElectronServeOrigin(servePort: number): string {
   return `http://${DEFAULT_ELECTRON_SERVE_HOST}:${servePort}`;
 }
