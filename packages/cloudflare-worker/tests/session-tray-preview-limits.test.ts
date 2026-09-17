@@ -88,6 +88,28 @@ describe('PreviewAssembler', () => {
     });
   });
 
+  it('caps utf-8 text by encoded bytes, not UTF-16 code units', async () => {
+    // 'é' is 1 code unit but 2 UTF-8 bytes; '😀' is 2 code units but 4 bytes.
+    const text = 'é'.repeat(30) + '😀'.repeat(5);
+    expect(new TextEncoder().encode(text).length).toBe(80);
+    const over = new PreviewAssembler(79);
+    over.push(chunk([text], 0, 'utf-8'));
+    await expect(over.done).resolves.toMatchObject({ ok: false, status: 413 });
+
+    const exact = new PreviewAssembler(80);
+    exact.push(chunk([text], 0, 'utf-8'));
+    await expect(exact.done).resolves.toMatchObject({ ok: true, body: text });
+  });
+
+  it('counts an unpaired surrogate as three bytes', async () => {
+    const assembler = new PreviewAssembler(3);
+    assembler.push(chunk(['\ud83d'], 0, 'utf-8'));
+    await expect(assembler.done).resolves.toMatchObject({ ok: true });
+    const tooSmall = new PreviewAssembler(2);
+    tooSmall.push(chunk(['\ud83dx'.slice(0, 1)], 0, 'utf-8'));
+    await expect(tooSmall.done).resolves.toMatchObject({ ok: false, status: 413 });
+  });
+
   it('accepts a body exactly at the cap', async () => {
     const pieces = base64Chunks(patternBytes(96), 64);
     const assembler = new PreviewAssembler(96);
