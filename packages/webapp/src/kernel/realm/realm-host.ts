@@ -12,9 +12,12 @@
  * gated API call. Pinned in `realm-rpc.test.ts`.
  */
 
+import type { ComputerDescriptor } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { JshComputerBackend } from '../../computers/adapters/jsh.js';
+import { getComputerRegistry, installComputerRegistry } from '../../computers/registry.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
@@ -210,11 +213,18 @@ export function attachRealmHost(
   // running host-side command.
   const execSpawns = new Map<number, { controller: AbortController; pid: number }>();
   const execCtx: ExecDispatchCtx = { spawns: execSpawns, opts };
+  const computerCtx: ComputerDispatchCtx = {
+    pushEvent,
+    pending: new Map(),
+    registered: [],
+    requestSeq: 0,
+    pid: opts.ppid ?? null,
+  };
   const handler = (event: MessageEvent): void => {
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx, opts, hidCtx, usbCtx, execCtx);
+    void respond(port, req, ctx, opts, hidCtx, usbCtx, execCtx, computerCtx);
   };
   port.addEventListener('message', handler);
   // The SAB responder shares this port: the realm's blocking requests are
@@ -255,6 +265,7 @@ export function attachRealmHost(
         }
       }
       hidSubscriptions.clear();
+      disposeComputerCtx(computerCtx);
       for (const unsub of usbClaimSubscriptions.values()) {
         try {
           void Promise.resolve(unsub()).catch(() => {});
@@ -282,10 +293,11 @@ async function respond(
   opts: RealmHostOptions,
   hidCtx: HidDispatchCtx,
   usbCtx: UsbDispatchCtx,
-  execCtx: ExecDispatchCtx
+  execCtx: ExecDispatchCtx,
+  computerCtx: ComputerDispatchCtx
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx, opts, hidCtx, usbCtx, execCtx);
+    const result = await dispatch(req, ctx, opts, hidCtx, usbCtx, execCtx, computerCtx);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
     // Body bytes need to be transferred so we don't structured-clone
     // potentially-large response bodies on every fetch.
@@ -304,7 +316,8 @@ async function dispatch(
   opts: RealmHostOptions,
   hidCtx: HidDispatchCtx,
   usbCtx: UsbDispatchCtx,
-  execCtx: ExecDispatchCtx
+  execCtx: ExecDispatchCtx,
+  computerCtx: ComputerDispatchCtx
 ): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
@@ -321,6 +334,8 @@ async function dispatch(
       return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
     case 'hid':
       return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
+    case 'computer':
+      return dispatchComputer(req.op, req.args, computerCtx);
     case 'module':
       return dispatchModule(req.op, req.args, ctx);
     case 'wasm':
@@ -1701,6 +1716,75 @@ async function dispatchSerial(
       return backend.setSignals(args[0] as string, args[1] as SerialOutputSignals);
     default:
       throw new Error(`realm-host: unknown serial op '${op}'`);
+  }
+}
+
+interface ComputerDispatchCtx {
+  pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+  pending: Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void }>;
+  registered: string[];
+  requestSeq: number;
+  pid: number | null;
+}
+
+interface ComputerReply {
+  error?: string;
+}
+
+function disposeComputerCtx(computerCtx: ComputerDispatchCtx): void {
+  for (const id of computerCtx.registered) {
+    void getComputerRegistry()?.unregister(id);
+  }
+  computerCtx.registered.length = 0;
+  for (const slot of computerCtx.pending.values()) {
+    slot.reject(new Error('realm disposed'));
+  }
+  computerCtx.pending.clear();
+}
+
+async function dispatchComputer(
+  op: string,
+  args: unknown[],
+  computerCtx: ComputerDispatchCtx
+): Promise<unknown> {
+  switch (op) {
+    case 'register': {
+      const descriptor = args[0] as ComputerDescriptor;
+      const backend = new JshComputerBackend(descriptor, (callOp, callArgs) => {
+        const requestId = `c${++computerCtx.requestSeq}`;
+        return new Promise((resolve, reject) => {
+          computerCtx.pending.set(requestId, { resolve, reject });
+          computerCtx.pushEvent({
+            type: 'realm-event',
+            channel: 'computer-call',
+            payload: { requestId, id: descriptor.id, op: callOp, args: callArgs },
+          });
+        });
+      });
+      const registry = getComputerRegistry() ?? installComputerRegistry(null);
+      registry.register(backend, { pid: computerCtx.pid });
+      computerCtx.registered.push(descriptor.id);
+      return { id: descriptor.id };
+    }
+    case 'unregister': {
+      const id = String(args[0] ?? '');
+      await getComputerRegistry()?.unregister(id);
+      computerCtx.registered = computerCtx.registered.filter((x) => x !== id);
+      return { ok: true };
+    }
+    case 'reply': {
+      const requestId = String(args[0] ?? '');
+      const result = args[1];
+      const slot = computerCtx.pending.get(requestId);
+      if (!slot) return { ok: false };
+      computerCtx.pending.delete(requestId);
+      const err = (result as ComputerReply | undefined)?.error;
+      if (err) slot.reject(new Error(err));
+      else slot.resolve(result);
+      return { ok: true };
+    }
+    default:
+      throw new Error(`realm-host: unknown computer op '${op}'`);
   }
 }
 
