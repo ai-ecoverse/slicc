@@ -1,0 +1,47 @@
+import { describe, expect, it } from 'vitest';
+import {
+  chordToScancodes,
+  parseKeysym,
+  toCdpKeyEvents,
+  toTouchAction,
+} from '../../src/computers/keys.js';
+
+describe('computer keys', () => {
+  it('parses xdotool chords and historical v86 names', () => {
+    expect(parseKeysym('Return')?.key).toBe('Enter');
+    expect(parseKeysym('enter')?.key).toBe('Enter');
+    expect(parseKeysym('ctrl+alt+Delete')?.modifiers).toEqual({
+      ctrl: true,
+      alt: true,
+      shift: false,
+      meta: false,
+    });
+    expect(parseKeysym('super+space')?.modifiers.meta).toBe(true);
+    expect(parseKeysym('F5')?.code).toBe('F5');
+    expect(parseKeysym('KEYCODE_BACK')?.native).toBe('KEYCODE_BACK');
+  });
+
+  it('emits PS/2 scancodes for ctrl-c and ctrl-alt-del', () => {
+    expect(chordToScancodes('ctrl-c')).toEqual([0x1d, 0x2e, 0xae, 0x9d]);
+    expect(chordToScancodes('ctrl+alt+Delete')).not.toBeNull();
+    expect(chordToScancodes('bogus-key')).toBeNull();
+  });
+
+  it('maps a keypress to CDP down/up events', () => {
+    const parsed = parseKeysym('a');
+    expect(parsed).not.toBeNull();
+    const events = toCdpKeyEvents(parsed!);
+    expect(events.map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+  });
+
+  it('maps click/hold/scroll onto touch actions', () => {
+    expect(toTouchAction({ type: 'click', x: 1, y: 2 })).toEqual({ kind: 'tap', x: 1, y: 2 });
+    expect(toTouchAction({ type: 'click', x: 1, y: 2, holdMs: 400 })).toEqual({
+      kind: 'long-press',
+      x: 1,
+      y: 2,
+      holdMs: 400,
+    });
+    expect(toTouchAction({ type: 'mousemove', x: 0, y: 0 })).toEqual({ kind: 'noop' });
+  });
+});
