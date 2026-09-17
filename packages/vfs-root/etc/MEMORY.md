@@ -28,6 +28,7 @@ allowedCommands:
   - tail
   - tr
   - uniq
+  - uname # `uname -r` prints the running SLICC version; pin runtime claims to it rather than to a version named in the (possibly stale) snapshot
   - upskill
   - wc
 timeoutSeconds: 1200
@@ -116,7 +117,7 @@ A pass never adds facts that are not in the session archive, the file or the wik
 Facts age. Write every entry so a later pass can tell whether it still holds:
 
 - Prefix entries with their actor: `human:` for what the user said, `process:` for what you inferred from tool output. Example: `- human: prefers rebase over merge (2026-09-11)`.
-- Version-pin claims that can rot: name the version, commit, or file the claim was verified against, e.g. `- process: coverage floor is 83% (coverage-thresholds.json @ 6.146.2)`. Never record a confidence score — what ages is the pin, not a probability.
+- Version-pin claims that can rot: name the version, commit, or file the claim was verified against, e.g. `- process: coverage floor is 83% (coverage-thresholds.json @ 6.146.2)`. Runtime version comes from `uname -r`, not from a version named in this file. Never record a confidence score — what ages is the pin, not a probability.
 - A claim with a known expiry carries `stale_after: YYYY-MM-DD`, an absolute date, never a duration. Past that date the claim counts as unverified.
 - **Supersede, never append.** When a session proves a stored claim wrong, rewrite the claim in place — a claim and its correction must never both stand as prose (see step 2 above for the `## Not true` form).
 

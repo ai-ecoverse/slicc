@@ -52,6 +52,7 @@ const BASE_ALLOWED_COMMANDS = [
   'touch',
   'tr',
   'uniq',
+  'uname',
   'upskill',
   'wc',
   'xxd',
@@ -252,6 +253,7 @@ Bound: {{TIMEOUT_MINUTES}} minutes. File: {{MEMORY_PATH}}.`;
     expect(prompt).toContain('`human:` for what the user said');
     expect(prompt).toContain('`process:` for what you inferred');
     expect(prompt).toContain('Version-pin claims that can rot');
+    expect(prompt).toContain('Runtime version comes from `uname -r`');
     expect(prompt).toContain('Never record a confidence score');
     expect(prompt).toContain('`stale_after: YYYY-MM-DD`, an absolute date, never a duration');
     expect(prompt).toContain('Supersede, never append.');
@@ -331,7 +333,7 @@ Curate {{MEMORY_PATH}}.`;
   // list still escalated `awk`, `sort` and `echo` to the cone, which killed the
   // run. Missing commands do not fail — they raise a sudo request — so the base
   // set must cover them from code, independent of the on-disk frontmatter.
-  it.each(['awk', 'cp', 'echo', 'printf', 'sort'])(
+  it.each(['awk', 'cp', 'echo', 'printf', 'sort', 'uname'])(
     'grants %s from the base set even when frontmatter omits it',
     async (command) => {
       const spawn = successSpawn();
@@ -399,12 +401,27 @@ Curate {{MEMORY_PATH}}.`;
   it('grants every command the seeded curator prompt is configured to use', async () => {
     const seeded = DEFAULT_MEMORY_MD.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
     const seededCommands = seeded
-      .match(/allowedCommands:\n((?:\s+-\s+\S+\n)+)/)?.[1]
+      .match(/allowedCommands:\n((?:\s+-\s+.+\n)+)/)?.[1]
       .split('\n')
-      .map((line) => line.replace(/^\s*-\s*/, '').trim())
+      .map((line) =>
+        line
+          .replace(/^\s*-\s*/, '')
+          .replace(/\s+#.*$/, '')
+          .trim()
+      )
       .filter(Boolean);
     expect(seededCommands?.length).toBeGreaterThan(0);
-    expect(BASE_ALLOWED_COMMANDS).toEqual(expect.arrayContaining(seededCommands ?? []));
+    expect(seededCommands).toContain('uname');
+    const spawn = successSpawn();
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(DEFAULT_MEMORY_MD),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+    expect(spawn.mock.calls[0][0].allowedCommands).toEqual(
+      expect.arrayContaining(seededCommands ?? [])
+    );
   });
 
   it.each([

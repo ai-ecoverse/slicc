@@ -200,6 +200,10 @@ Dream over {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions, budget {{BUDGET_CHARS}},
     expect(DEFAULT_MEMORY_MD).toContain('{{TASK}}');
     expect(DEFAULT_MEMORY_MD).toMatch(/^timeoutSeconds: \d+$/m);
     expect(DEFAULT_MEMORY_MD).toMatch(/^dreamTimeoutSeconds: \d+$/m);
+    // Runtime pins must come from `uname -r`, and the allow-list must grant it
+    // or the pass copies a stale version out of the snapshot (#3228).
+    expect(DEFAULT_MEMORY_MD).toMatch(/^\s+- uname\b/m);
+    expect(DEFAULT_MEMORY_MD).toContain('Runtime version comes from `uname -r`');
   });
 
   it('falls back to the bundled MEMORY.md when the VFS copy is unreadable', async () => {
@@ -217,6 +221,7 @@ Dream over {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions, budget {{BUDGET_CHARS}},
     // A distinctive line from the bundled document proves which instructions ran.
     expect(DEFAULT_MEMORY_MD).toContain('Consolidating (every pass)');
     expect(options.prompt).toContain('Consolidating (every pass)');
+    expect(options.allowedCommands).toContain('uname');
     expect(options.prompt).toContain('**Consolidation pass**');
     expect(options.prompt).not.toContain('{{BUDGET_CHARS}}');
     expect(options.prompt).not.toContain('{{TASK}}');

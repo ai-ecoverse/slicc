@@ -118,6 +118,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'touch',
   'tr',
   'uniq',
+  // `uname -r` is the running SLICC version. MEMORY.md asks the pass to pin
+  // runtime claims to it; without this grant the unattended pass infers a
+  // version from (possibly stale) memory prose instead.
+  'uname',
   // Read-only skill discovery for the pitfalls it finds. Installing is not
   // reachable: `writablePaths` grants the memory file alone, so a write into
   // `/workspace/skills/` matches no grant and escalates instead of landing.
