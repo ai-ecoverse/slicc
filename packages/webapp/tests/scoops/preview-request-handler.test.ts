@@ -156,3 +156,72 @@ describe('handlePreviewRequest', () => {
     expect(sent[0]).toMatchObject({ ok: true, content: 'inner', mime: 'text/html' });
   });
 });
+
+describe('handlePreviewRequest size pre-flight', () => {
+  function sizedVfs(entries: Record<string, { type: 'file' | 'directory'; size?: number }>) {
+    const readFile = vi.fn(async () => new Uint8Array(1));
+    return {
+      readFile,
+      async stat(path: string) {
+        const entry = entries[path];
+        if (!entry) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return entry;
+      },
+    };
+  }
+
+  const request = (vfsPath: string) => ({
+    type: 'preview.request' as const,
+    reqId: 'big',
+    servedRoot: '/workspace/media',
+    vfsPath,
+    asText: false,
+  });
+
+  it('refuses a file over 25 MiB with 413 and never reads it', async () => {
+    const { sent, ws } = recorder();
+    const vfs = sizedVfs({
+      '/workspace/media/clips/talk.mp4': { type: 'file', size: 25 * 1024 * 1024 + 1 },
+    });
+    await handlePreviewRequest(request('/workspace/media/clips/talk.mp4'), ws, vfs);
+    expect(sent).toEqual([
+      {
+        type: 'preview.response',
+        reqId: 'big',
+        ok: false,
+        status: 413,
+        reason: 'preview file exceeds 25 MiB limit: clips/talk.mp4',
+      },
+    ]);
+    expect(vfs.readFile).not.toHaveBeenCalled();
+  });
+
+  it('serves a file of exactly 25 MiB', async () => {
+    const { sent, ws } = recorder();
+    const vfs = sizedVfs({
+      '/workspace/media/ok.bin': { type: 'file', size: 25 * 1024 * 1024 },
+    });
+    await handlePreviewRequest(request('/workspace/media/ok.bin'), ws, vfs);
+    expect(vfs.readFile).toHaveBeenCalledOnce();
+    expect(sent[0]).toMatchObject({ ok: true, encoding: 'base64' });
+  });
+
+  it('applies the limit to a directory index.html', async () => {
+    const { sent, ws } = recorder();
+    const vfs = sizedVfs({
+      '/workspace/media/site': { type: 'directory' },
+      '/workspace/media/site/index.html': { type: 'file', size: 26 * 1024 * 1024 },
+    });
+    await handlePreviewRequest(request('/workspace/media/site'), ws, vfs);
+    expect(sent[0]).toMatchObject({ ok: false, status: 413 });
+    expect(vfs.readFile).not.toHaveBeenCalled();
+  });
+
+  it('falls through to a 404 when a directory has no index.html', async () => {
+    const { sent, ws } = recorder();
+    const vfs = sizedVfs({ '/workspace/media/empty': { type: 'directory' } });
+    vfs.readFile.mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    await handlePreviewRequest(request('/workspace/media/empty'), ws, vfs);
+    expect(sent).toEqual([{ type: 'preview.response', reqId: 'big', ok: false, status: 404 }]);
+  });
+});

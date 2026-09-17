@@ -328,7 +328,8 @@ export interface LeaderPreviewResponseError {
   type: 'preview.response';
   reqId: string;
   ok: false;
-  status: 404 | 403 | 500;
+  /** 413: the file exceeds `PREVIEW_MAX_FILE_BYTES`; the leader never sends it. */
+  status: 404 | 403 | 413 | 500;
   reason?: string;
 }
 

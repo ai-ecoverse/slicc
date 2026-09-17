@@ -63,6 +63,47 @@ describe('mintPreviewViaWorker', () => {
     ).rejects.toThrow(/403/);
   });
 
+  it('names the remedy when the per-tray preview quota is exhausted', async () => {
+    const limitResponse = (body: object) =>
+      new Response(
+        JSON.stringify({ error: 'Preview limit reached', code: 'PREVIEW_LIMIT', ...body }),
+        {
+          status: 429,
+          headers: { 'content-type': 'application/json' },
+        }
+      );
+    const args = {
+      workerBaseUrl: 'x',
+      trayId: 'y',
+      controllerToken: 'z',
+      servedRoot: '/a',
+      entryPath: '/a/i.html',
+      allowLive: false,
+    };
+    await expect(
+      mintPreviewViaWorker(
+        args,
+        vi.fn().mockResolvedValue(limitResponse({ active: 10, limit: 10 }))
+      )
+    ).rejects.toThrow(
+      'Preview mint failed: Preview limit reached (10 of 10 in use; live previews and --ttl snapshots both count, and neither ends with the session). List them with "serve --list" and free one with "serve --stop <token>".'
+    );
+    await expect(
+      mintPreviewViaWorker(
+        args,
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ code: 'PREVIEW_LIMIT' }), { status: 429 })
+          )
+      )
+    ).rejects.toThrow(/^Preview mint failed: Preview limit reached \(limit 10 per tray;/);
+    // Older workers omit the counts.
+    await expect(
+      mintPreviewViaWorker(args, vi.fn().mockResolvedValue(limitResponse({})))
+    ).rejects.toThrow(/Preview limit reached \(limit 10 per tray; .*"serve --stop <token>"\.$/);
+  });
+
   it('uploads snapshot bytes and finalizes a persistent preview', async () => {
     const fetchMock = vi
       .fn()
