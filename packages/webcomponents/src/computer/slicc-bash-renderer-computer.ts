@@ -5,8 +5,9 @@ import { h, sheet } from '../internal/dom.js';
  * How the frame area should render for one bash-row invocation.
  *
  * - `live`: this tool-call is the newest `computer` invocation for a live
- *   computer — the host streams frames into `frameSrc`.
- * - `frozen`: a still from `screen: <path>` / an `<img:>` marker.
+ *   computer AND a pushed `computer-frame` is on screen.
+ * - `frozen`: a still from `screen: <path>` / an `<img:>` marker, or a
+ *   pushed frame kept after the row is no longer live.
  * - `none`: no frame to show.
  */
 export type ComputerFrameMode = 'live' | 'frozen' | 'none';
@@ -16,15 +17,20 @@ export interface ComputerFrameModeInput {
   newestToolCallId: string | null;
   toolCallId: string;
   hasFrame: boolean;
+  /** True only when the store holds a kernel-pushed frame for this computer. */
+  hasPushedFrame: boolean;
 }
 
 /**
- * Newest-call rule: live only when this row is the newest invocation for a
- * computer that is currently `live`. A superseded or disconnected row freezes
- * (or shows nothing when there is no still).
+ * Newest-call rule: LIVE only when this row is the newest invocation for a
+ * live computer and a pushed frame is displayed. A frozen still (or no
+ * frame yet) must not show the live badge. A superseded or disconnected
+ * row freezes when it has any still.
  */
 export function decideComputerFrameMode(input: ComputerFrameModeInput): ComputerFrameMode {
-  if (input.computerLive && input.newestToolCallId === input.toolCallId) return 'live';
+  if (input.computerLive && input.newestToolCallId === input.toolCallId && input.hasPushedFrame) {
+    return 'live';
+  }
   if (input.hasFrame) return 'frozen';
   return 'none';
 }

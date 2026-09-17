@@ -16,15 +16,28 @@ function mount(setup?: (el: SliccBashRendererComputer) => void): SliccBashRender
 }
 
 describe('decideComputerFrameMode', () => {
-  it('is live only for the newest call on a live computer', () => {
+  it('is live only for the newest call on a live computer with a pushed frame', () => {
     expect(
       decideComputerFrameMode({
         computerLive: true,
         newestToolCallId: 'call-2',
         toolCallId: 'call-2',
         hasFrame: true,
+        hasPushedFrame: true,
       })
     ).toBe('live');
+  });
+
+  it('stays frozen when the newest live call has only a screen: still', () => {
+    expect(
+      decideComputerFrameMode({
+        computerLive: true,
+        newestToolCallId: 'call-2',
+        toolCallId: 'call-2',
+        hasFrame: true,
+        hasPushedFrame: false,
+      })
+    ).toBe('frozen');
   });
 
   it('freezes when a newer call supersedes this one', () => {
@@ -34,6 +47,7 @@ describe('decideComputerFrameMode', () => {
         newestToolCallId: 'call-2',
         toolCallId: 'call-1',
         hasFrame: true,
+        hasPushedFrame: true,
       })
     ).toBe('frozen');
   });
@@ -45,6 +59,7 @@ describe('decideComputerFrameMode', () => {
         newestToolCallId: 'call-1',
         toolCallId: 'call-1',
         hasFrame: true,
+        hasPushedFrame: false,
       })
     ).toBe('frozen');
   });
@@ -56,6 +71,7 @@ describe('decideComputerFrameMode', () => {
         newestToolCallId: 'call-1',
         toolCallId: 'call-1',
         hasFrame: false,
+        hasPushedFrame: false,
       })
     ).toBe('none');
   });
