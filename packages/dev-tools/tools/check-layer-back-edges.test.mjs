@@ -129,6 +129,63 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ]);
   });
 
+  it('allows a scoops/ import type clause whose specifier itself contains "from"', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/orchestrator.ts',
+        "import type { bufferFrom } from '../kernel/realm/helpers/buffer-from.js';"
+      )
+    ).toEqual([]);
+  });
+
+  it('flags a scoops/ VALUE import whose specifier itself contains "from"', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/orchestrator.ts',
+        "import { bufferFrom } from '../kernel/realm/helpers/buffer-from.js';"
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../kernel/realm/helpers/buffer-from.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
+  it('flags a scoops/ static template-literal import() of kernel/', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/tray-runtime-config.ts',
+        'const m = await import(`../kernel/messages.js`);'
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../kernel/messages.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
+  it('flags a scoops/ interpolated template-literal import() whose text names kernel/', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/orchestrator.ts',
+        'const m = await import(`../kernel/${name}.js`);'
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../kernel/${name}.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
   it('covers dynamic import and require forms, and ignores comments', () => {
     const source = [
       "// import { a } from '../ui/a.js';",
