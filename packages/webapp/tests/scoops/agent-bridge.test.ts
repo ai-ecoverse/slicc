@@ -2252,6 +2252,101 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
     expect(status.merge).toBeUndefined();
   });
 
+  // #3157: a run cut off at its bound has landed a whole, budget-checked
+  // draft (memory files change only through `memory_write`), so the draft
+  // is folded in as a truncated success instead of being discarded.
+  it('promotes a diverged draft when the run tripped its bound', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: {
+        [MERGE.basePath]: 'old memory\n',
+        [MERGE.draftPath]: 'compacted memory\n',
+        [MERGE.targetPath]: 'old memory\n',
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'sleepy-nougat',
+    });
+    scripts.set('agent_sleepy_nougat', (obs) =>
+      obs.onError?.('agent run terminated: wall-clock bound (900000 ms) exceeded')
+    );
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      successReceiptPath: '/sessions/.curated/a.md',
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalText).toBe(
+      'agent run terminated: wall-clock bound (900000 ms) exceeded — staged rewrite promoted'
+    );
+    expect(shared.files.get(MERGE.targetPath)).toBe('compacted memory\n');
+    expect(shared.files.has(MERGE.draftPath)).toBe(false);
+    expect(shared.files.has('/sessions/.curated/a.md')).toBe(true);
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({
+      status: 'ok',
+      exitCode: 0,
+      merge: { applied: true, conflicts: 0, promotedOnTrip: true },
+    });
+    // The ledger still says the run was cut off.
+    expect(status.reason).toContain('wall-clock bound');
+  });
+
+  it('leaves a tripped run failed when its draft never diverged', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: { [MERGE.basePath]: 'old\n', [MERGE.draftPath]: 'old\n', [MERGE.targetPath]: 'old\n' },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'idle-sorbet',
+    });
+    scripts.set('agent_idle_sorbet', (obs) =>
+      obs.onError?.('agent run terminated: turn bound (40) exceeded')
+    );
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(shared.files.get(MERGE.targetPath)).toBe('old\n');
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
+    expect(status.merge).toBeUndefined();
+  });
+
+  it('never promotes a draft on a failure that is not a bound trip', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: { [MERGE.basePath]: 'old\n', [MERGE.draftPath]: 'half-done\n' },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'grumpy-gelato',
+    });
+    scripts.set('agent_grumpy_gelato', (obs) => obs.onError?.('provider exploded'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(shared.files.has(MERGE.targetPath)).toBe(false);
+    // Staging survives for the post-mortem.
+    expect(shared.files.get(MERGE.draftPath)).toBe('half-done\n');
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status.merge).toBeUndefined();
+  });
+
   it('a merge failure downgrades the spawn to failure and skips the success receipt', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const shared = makeMockSharedFs({

@@ -283,6 +283,11 @@ docs under the workspace are not memory).
   re-measuring). The budget is read per call from `/sessions/index.json` via the ungated handle.
 - The runtime's own writers (the freezer's legacy append, the bridge's staged-draft merge, the
   `update_global_memory` callback) use the shared VFS directly and are not guarded.
+- **Trip promotion.** Because the staged draft can only change through `memory_write`, a pass cut
+  off at its wall-clock or turn bound (`isRunBoundTrip` in `agent-bridge.ts`) has its diverged
+  draft folded in as a truncated success: exit 0, `merge.promotedOnTrip: true`, and the bound
+  note kept under `reason` in `status.json`. A draft that never diverged, or any other failure
+  (provider error, abort), keeps the staging pair for a post-mortem and the live file untouched.
 
 ## Frozen Sessions ("New session" flow)
 

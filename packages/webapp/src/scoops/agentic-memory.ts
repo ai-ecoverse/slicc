@@ -281,8 +281,9 @@ function passTask(
       '"Mining the session archive" entirely. Your whole job is to make the existing memory ' +
       'better: consolidated, current, and inside its budget. If the file is missing or empty, ' +
       'reply with one line saying so and stop; never invent memories. The run is hard-stopped ' +
-      `after ${timeoutMinutes} minutes, so consolidate section by section, writing as you go — a ` +
-      'stopped run then keeps every section already written.'
+      `after ${timeoutMinutes} minutes; a run stopped at that bound lands whatever the memory ` +
+      'file holds at that moment (every memory_write leaves a whole, budget-checked file), so ' +
+      'consolidate section by section, writing as you go, and finish cleanly when you can.'
     );
   }
   return (
@@ -716,9 +717,10 @@ function buildSpawnOptions(
     successReceiptPath: curatorReceiptPath(sessionArchivePath),
     // On exit 0 the bridge folds the curator's base→draft rewrite onto the
     // live memory file with a three-way merge (worker realm, before the
-    // receipt) — concurrent live edits during the up-to-20-minute run merge
-    // instead of being clobbered by a whole-file rewrite, and a run killed
-    // mid-write never leaves a half-written live file.
+    // receipt) — concurrent live edits during the run merge instead of being
+    // clobbered by a whole-file rewrite. A run cut off at its bound has its
+    // diverged draft folded in too (#3157): `memory_write` is the only
+    // writer of the draft, so it is never half-written.
     mergeOnSuccess: {
       targetPath: workspace.memoryPath,
       basePath,
