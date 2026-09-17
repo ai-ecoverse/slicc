@@ -239,7 +239,7 @@ describe('POST /v1/chat/completions — streaming SSE', () => {
         .join('')
     );
     expect(joined).toEqual(['Hello there!', '', 'done']);
-    expect(server.getState()).toEqual({ cursor: 3, requestCount: 3 });
+    expect(server.getState()).toEqual({ cursor: 3, requestCount: 3, held: false });
   });
 });
 
@@ -388,7 +388,7 @@ describe('non-streaming + reset + setFixture', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(userTurnBody('a')),
     });
-    expect(server.getState()).toEqual({ cursor: 1, requestCount: 1 });
+    expect(server.getState()).toEqual({ cursor: 1, requestCount: 1, held: false });
 
     const reset = await fetch(`${server.url}/__reset`, { method: 'POST' });
     expect(reset.status).toBe(200);
@@ -398,7 +398,7 @@ describe('non-streaming + reset + setFixture', () => {
       cursor: 0,
       requestCount: 0,
     });
-    expect(server.getState()).toEqual({ cursor: 0, requestCount: 0 });
+    expect(server.getState()).toEqual({ cursor: 0, requestCount: 0, held: false });
 
     // After reset the next request replays turn[0] (a Playwright retry
     // resuming mid-fixture would otherwise hit `fixture_overflow`).
@@ -417,6 +417,59 @@ describe('non-streaming + reset + setFixture', () => {
     expect(content).toBe('first');
   });
 
+  it('holdAfterContentChunks parks the stream until POST /__release', async () => {
+    await start({
+      model: 'fake',
+      turns: [{ content: 'aabbcc', contentChunkSize: 2, holdAfterContentChunks: 1 }],
+    });
+    expect((await fetch(`${server.url}/__release`, { method: 'POST' })).status).toBe(409);
+
+    const res = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userTurnBody('a')),
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let head = '';
+    while (!head.includes('"content":"aa"')) {
+      const { value } = await reader.read();
+      head += decoder.decode(value, { stream: true });
+    }
+    const state = (await (await fetch(`${server.url}/__state`)).json()) as { held: boolean };
+    expect(state.held).toBe(true);
+    expect(head).not.toContain('"content":"bb"');
+
+    expect((await fetch(`${server.url}/__release`, { method: 'POST' })).status).toBe(200);
+    let tail = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      tail += decoder.decode(value, { stream: true });
+    }
+    expect(tail).toContain('"content":"bb"');
+    expect(tail).toContain('"content":"cc"');
+    expect(tail).toContain('[DONE]');
+    expect(server.getState().held).toBe(false);
+  });
+
+  it('POST /__reset releases a held stream', async () => {
+    await start({
+      model: 'fake',
+      turns: [{ content: 'xy', contentChunkSize: 1, holdAfterContentChunks: 0 }],
+    });
+    const pending = fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userTurnBody('a')),
+    });
+    const res = await pending;
+    await expect.poll(() => server.getState().held).toBe(true);
+    await fetch(`${server.url}/__reset`, { method: 'POST' });
+    const { done } = await readSse(res);
+    expect(done).toBe(true);
+  });
+
   it('reset() rewinds the cursor and setFixture() swaps the script', async () => {
     await start({
       model: 'fake',
@@ -430,7 +483,7 @@ describe('non-streaming + reset + setFixture', () => {
     expect(server.getState().cursor).toBe(1);
 
     server.reset();
-    expect(server.getState()).toEqual({ cursor: 0, requestCount: 0 });
+    expect(server.getState()).toEqual({ cursor: 0, requestCount: 0, held: false });
 
     server.setFixture({ model: 'fake-v2', turns: [{ content: 'reloaded' }] });
     const r = await fetch(`${server.url}/v1/chat/completions`, {

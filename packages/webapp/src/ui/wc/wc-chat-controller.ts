@@ -80,12 +80,13 @@ export interface WcChatControllerOptions {
    */
   onToolProgressChange?: (fraction: number | null) => void;
   /**
-   * Invoked when a message reaches a stable (non-streaming) render — the
-   * dip-hydration hook. Streaming re-renders don't fire it; a message that
-   * streams fires once, on its final render.
+   * Invoked after every render of a message — the dip-hydration hook. On a
+   * re-render the previous elements are still in the DOM, so a hook can move
+   * live content (a mounted dip) across instead of rebuilding it; they are
+   * removed right after. `message.isStreaming` says whether more is coming.
    */
   onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
-  /** Invoked before a message's rendered elements are replaced or removed. */
+  /** Invoked before a message's rendered elements are removed for good. */
   onMessageDisposed?: (messageId: string) => void;
   /**
    * Invoked when a turn completes (the processing flag falls — via the
@@ -242,8 +243,14 @@ export class WcChatController {
   #currentStreamId: string | null = null;
   /** The assistant message the ACTIVE turn streamed (reset on each rise). */
   #turnAssistantId: string | null = null;
+  /**
+   * rAF-batched delta buffer. It records its OWNER: a background tab parks
+   * rAF, so a frame one message scheduled can still be queued while the next
+   * message streams — and must not flush that text into the wrong bubble.
+   */
   #pendingDelta = '';
-  #flushScheduled = false;
+  #pendingDeltaId: string | null = null;
+  #flushFrame: number | null = null;
   #processing = false;
   /**
    * The busy turn's current phase, mirrored onto the send button. Reset to
@@ -667,8 +674,7 @@ export class WcChatController {
     const streamingTail = [...this.#messages].reverse().find((m) => m.isStreaming);
     this.#currentStreamId = streamingTail?.id ?? null;
     if (streamingTail) this.#turnAssistantId = streamingTail.id;
-    this.#pendingDelta = '';
-    this.#flushScheduled = false;
+    this.#dropPendingDelta();
     this.#els.clear();
 
     const children: HTMLElement[] = [];
@@ -695,9 +701,7 @@ export class WcChatController {
 
     this.#reflowToolClusters();
     for (const message of this.#messages) {
-      if (!message.isStreaming) {
-        this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
-      }
+      this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
     }
     this.#syncCopyRow();
     this.#scrollToBottom();
@@ -1090,20 +1094,28 @@ export class WcChatController {
 
   #handleContentDelta(messageId: string, text: string): void {
     if (!this.#findMessage(messageId)) return;
+    // Text another message still owns goes home before this one buffers.
+    if (this.#pendingDeltaId !== messageId) this.#flushDelta();
+    this.#pendingDeltaId = messageId;
     this.#pendingDelta += text;
-    if (this.#flushScheduled) return;
-    this.#flushScheduled = true;
-    requestAnimationFrame(() => this.#flushDelta(messageId));
+    this.#flushFrame ??= requestAnimationFrame(() => this.#flushDelta());
   }
 
-  #flushDelta(messageId: string): void {
-    this.#flushScheduled = false;
-    if (!this.#pendingDelta) return;
-    const message = this.#findMessage(messageId);
+  #flushDelta(): void {
+    const messageId = this.#pendingDeltaId;
+    const text = this.#pendingDelta;
+    this.#dropPendingDelta();
+    const message = text && messageId ? this.#findMessage(messageId) : undefined;
     if (!message) return;
-    message.content += this.#pendingDelta;
-    this.#pendingDelta = '';
+    message.content += text;
     this.#rerenderMessage(message);
+  }
+
+  #dropPendingDelta(): void {
+    if (this.#flushFrame !== null) cancelAnimationFrame(this.#flushFrame);
+    this.#flushFrame = null;
+    this.#pendingDelta = '';
+    this.#pendingDeltaId = null;
   }
 
   #handleContentDone(
@@ -1115,11 +1127,10 @@ export class WcChatController {
     if (!message) return;
     if (model) message.model = model;
     if (usage) message.usage = usage;
-    if (this.#pendingDelta && this.#currentStreamId === messageId) {
+    if (this.#pendingDeltaId === messageId) {
       message.content += this.#pendingDelta;
+      this.#dropPendingDelta();
     }
-    this.#pendingDelta = '';
-    this.#flushScheduled = false;
     message.isStreaming = false;
     this.#rerenderMessage(message);
   }
@@ -1540,7 +1551,7 @@ export class WcChatController {
     this.#els.set(message.id, els);
     this.#thread.append(...els);
     this.#reflowToolClusters();
-    if (!message.isStreaming) this.#onMessageRendered?.(message, els);
+    this.#onMessageRendered?.(message, els);
     // The user's own submission always lands in view; agent-driven appends
     // defer to the thread's polite follow (new-messages chip when scrolled).
     if (message.role === 'user') this.#scrollToBottom();
@@ -1554,7 +1565,6 @@ export class WcChatController {
     // before we swap THIS message's elements — otherwise the new
     // inline rows would coexist with stale clustered copies.
     this.#unwrapToolClusters();
-    this.#onMessageDisposed?.(message.id);
     const old = this.#els.get(message.id) ?? [];
     const next = this.#safeMessageEls(message);
     // Anchor on the old elements' real parent: `<slicc-chat-thread>`
@@ -1562,13 +1572,12 @@ export class WcChatController {
     // not direct children of the host element.
     const anchor = old[0] ?? null;
     const parent = anchor?.parentNode;
-    if (parent) {
-      for (const el of next) parent.insertBefore(el, anchor);
-      for (const el of old) el.remove();
-    } else {
-      this.#thread.append(...next);
-    }
+    if (parent) for (const el of next) parent.insertBefore(el, anchor);
+    else this.#thread.append(...next);
     this.#els.set(message.id, next);
+    // While BOTH renders are connected, so live dips can move across.
+    this.#onMessageRendered?.(message, next);
+    for (const el of old) el.remove();
     // Rows were rebuilt — put any in-flight progress bars back on them.
     for (const call of message.toolCalls ?? []) {
       if (call.id && this.#toolProgress.has(call.id)) this.#applyToolProgress(call.id);
@@ -1576,7 +1585,6 @@ export class WcChatController {
     this.#reflowToolClusters();
     // Reflow may have (re)built the clusters around those rows — repaint heads.
     this.#refreshClusterProgress();
-    if (!message.isStreaming) this.#onMessageRendered?.(message, next);
     this.#followThread();
   }
 

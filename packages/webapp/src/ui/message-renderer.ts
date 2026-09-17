@@ -12,18 +12,39 @@ import { Marked, type Tokens } from 'marked';
 import { resolveMessageMedia } from '../base/message-media.js';
 import { stripReplyLangMarker } from '../speech/dictation-priming.js';
 import { highlightCode } from './code-highlight.js';
+import { DIP_PENDING_PLACEHOLDER } from './dip-placeholder.js';
 
 // -- Marked instance with custom renderers --
+
+/** Marks a ```shtml block whose closing fence has not arrived yet. */
+const OPEN_DIP_CLASS = 'msg__dip-open';
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Whether a fenced code token's closing fence is still to come. Reads the
+ * token marked produced, so every fence form it accepts (backticks or
+ * tildes, any length ≥ 3; CRLF is normalized by the lexer) is judged the
+ * same way marked parsed it.
+ */
+function fenceIsOpen(raw: string): boolean {
+  const open = FENCE_OPEN_RE.exec(raw)?.[1];
+  if (!open) return false;
+  const lines = raw.replace(/\n+$/, '').split('\n');
+  if (lines.length < 2) return true;
+  const close = new RegExp(`^ {0,3}\\${open[0]}{${open.length},}[ \\t]*$`);
+  return !close.test(lines.at(-1) ?? '');
+}
 
 const marked = new Marked({
   gfm: true,
   breaks: true,
   async: false,
   renderer: {
-    code({ text, lang }: Tokens.Code): string {
+    code({ text, lang, raw }: Tokens.Code): string {
       const language = lang ?? '';
       const highlighted = highlightCode(text, language);
-      const langClass = language ? ` class="language-${escapeHtml(language)}"` : '';
+      const openDip = language === 'shtml' && fenceIsOpen(raw) ? ` ${OPEN_DIP_CLASS}` : '';
+      const langClass = language ? ` class="language-${escapeHtml(language)}${openDip}"` : '';
       return `<pre><code${langClass}>${highlighted}</code></pre>\n`;
     },
     link({ href, title, tokens }: Tokens.Link): string {
@@ -234,22 +255,11 @@ function forceNewTabLinks(html: string): string {
 
 const SURFACED_ERROR_PARAGRAPH_RE = /<p><strong>Error:<\/strong>\s*([\s\S]*?)<\/p>/g;
 
-// Match a fenced shtml code block as emitted by the marked renderer above.
-// Used to swap raw shtml in for a "pending" placeholder while streaming, so
-// users see a loading hint instead of the markup typing out — the closing
-// fence may not have arrived yet, but marked still wraps the partial content
-// in <pre><code class="language-shtml">…</code></pre>.
-const SHTML_CODE_BLOCK_RE = /<pre><code class="language-shtml">[\s\S]*?<\/code><\/pre>/g;
-
-// Mirrors the tool-call row layout (label on the left, pulsing status circle
-// pinned to the right) so the placeholder reads as another in-progress step
-// rather than a separate widget. Reuses the `tool-status-pulse` keyframe and
-// the same orange used by `.tool-call--running`.
-const DIP_PENDING_PLACEHOLDER =
-  '<div class="msg__dip-pending" role="status" aria-live="polite" aria-label="Pouring a dip">' +
-  '<span class="msg__dip-pending-label">Pouring a dip…</span>' +
-  '<span class="msg__dip-pending-status" aria-hidden="true"></span>' +
-  '</div>';
+// A ```shtml block the marked renderer above flagged as still open.
+const OPEN_SHTML_CODE_BLOCK_RE = new RegExp(
+  `<pre><code class="language-shtml ${OPEN_DIP_CLASS}">[\\s\\S]*?<\\/code><\\/pre>`,
+  'g'
+);
 
 function renderBaseMessageContent(content: string): string {
   const raw = marked.parse(content) as string;
@@ -265,14 +275,14 @@ function renderSurfacedErrorBlocks(html: string): string {
 }
 
 /**
- * While the assistant streams a fenced ```shtml block, replace the raw
- * markup with a placeholder card. Hydration into a real dip iframe still
- * happens later (after the stream ends) via `hydrateDips()`, which keys off
- * the `pre > code.language-shtml` shape — so this swap MUST be skipped on
- * the final render, otherwise the code blocks disappear before hydration.
+ * While the assistant streams a fenced ```shtml block, replace its raw
+ * markup with a placeholder card so users see a loading hint instead of the
+ * markup typing out. Only the still-open block is swapped: a block whose
+ * closing fence has arrived is complete, and keeps the
+ * `pre > code.language-shtml` shape `hydrateDips()` mounts from.
  */
-function replaceShtmlWithDipPlaceholder(html: string): string {
-  return html.replace(SHTML_CODE_BLOCK_RE, DIP_PENDING_PLACEHOLDER);
+function replaceOpenShtmlWithDipPlaceholder(html: string): string {
+  return html.replace(OPEN_SHTML_CODE_BLOCK_RE, DIP_PENDING_PLACEHOLDER);
 }
 
 /**
@@ -287,16 +297,16 @@ export function renderMessageContent(content: string): string {
 /**
  * Render assistant message content, upgrading surfaced runtime/provider errors
  * into dedicated error blocks rather than normal prose paragraphs. When
- * `isStreaming` is true, in-progress shtml fenced blocks are swapped for a
- * "pouring a dip" placeholder so users see a loading hint instead of the
- * raw HTML typing out. On the final render `isStreaming` must be false so
- * the shtml code blocks survive for `hydrateDips()` to mount as iframes.
+ * `isStreaming` is true, a shtml fenced block still waiting for its closing
+ * fence is swapped for a "pouring a dip" placeholder so users see a loading
+ * hint instead of the raw HTML typing out. Closed blocks stay code blocks for
+ * `hydrateDips()` to mount as iframes, mid-stream included.
  */
 export function renderAssistantMessageContent(content: string, isStreaming = false): string {
   // Drop the hidden <!--lang:xx--> reply-language marker (used only to pick a
   // TTS voice) so it never reaches the rendered bubble.
   let html = renderSurfacedErrorBlocks(renderBaseMessageContent(stripReplyLangMarker(content)));
-  if (isStreaming) html = replaceShtmlWithDipPlaceholder(html);
+  if (isStreaming) html = replaceOpenShtmlWithDipPlaceholder(html);
   return html;
 }
 
