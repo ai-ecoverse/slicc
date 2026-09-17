@@ -10,6 +10,7 @@
 
 import {
   type CDPPayload,
+  type ComputerDescriptor,
   isExtensionMessage as isExtensionMessageEnvelope,
   type ToolProgressEvent,
   type WebhookDeliveryDisposition,
@@ -939,6 +940,42 @@ export interface VfsWatchEventMsg {
 
 export type VfsWatchPushMsg = VfsWatchResultMsg | VfsWatchEventMsg;
 
+/** Worker → panel: full computer descriptor list on every registry change. */
+export interface ComputersListMsg {
+  type: 'computers';
+  computers: ComputerDescriptor[];
+}
+
+/**
+ * Worker → panel: one frame, bytes transferred, only while at least one
+ * page subscriber exists. `bytes` is the JPEG/PNG payload.
+ */
+export interface ComputerFrameMsg {
+  type: 'computer-frame';
+  id: string;
+  seq: number;
+  mime: 'image/png' | 'image/jpeg';
+  width: number;
+  height: number;
+  bytes: Uint8Array;
+}
+
+/** Panel → worker: subscribe to live frames for one computer. */
+export interface ComputerWatchMsg {
+  type: 'computer-watch';
+  id: string;
+  fps: number;
+  maxWidth: number;
+}
+
+/** Panel → worker: drop the live-frame subscription. */
+export interface ComputerUnwatchMsg {
+  type: 'computer-unwatch';
+  id: string;
+}
+
+export type ComputerWatchControlMsg = ComputerWatchMsg | ComputerUnwatchMsg;
+
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
 
@@ -1034,6 +1071,7 @@ export type PanelToOffscreenMessage =
   // `VfsRpcHost` when a watcher is wired; otherwise `vfs-watch` is
   // answered with an ENOSYS failure ack. Ignored by `Bridge`.
   | VfsWatchControlMsg
+  | ComputerWatchControlMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg;
 
@@ -1493,7 +1531,9 @@ export type OffscreenToPanelMessage =
   | VfsWriteResultMsg
   // VFS watch acks and pushed change batches emitted by the worker's
   // `VfsRpcHost`. Defined above as `VfsWatchPushMsg`.
-  | VfsWatchPushMsg;
+  | VfsWatchPushMsg
+  | ComputersListMsg
+  | ComputerFrameMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)

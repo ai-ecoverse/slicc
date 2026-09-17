@@ -32,6 +32,7 @@ import {
 import { createSliccyAgentModule } from './realm-agent-module.js';
 import type { BodyReadHandleTracker } from './realm-body-handles.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
+import { createComputerBridge, type RealmComputerApi } from './realm-computer-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
 import { reconstructFetchResponse } from './realm-fetch-response.js';
 import {
@@ -276,11 +277,13 @@ function createDeviceBridges(rpc: RealmRpcClient): {
   usbBridge: RealmUsbApi;
   serialBridge: RealmSerialApi;
   hidBridge: RealmHidApi;
+  computerBridge: RealmComputerApi;
 } {
   return {
     usbBridge: createUsbBridge(rpc),
     serialBridge: createSerialBridge(rpc),
     hidBridge: createHidBridge(rpc),
+    computerBridge: createComputerBridge(rpc),
   };
 }
 
@@ -353,7 +356,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   // `usb` / `serial` / `hid` mirror the underlying WebUSB / Web Serial /
   // WebHID APIs — see `createDeviceBridges` for the shared-dual-path note.
-  const { usbBridge, serialBridge, hidBridge } = createDeviceBridges(rpc);
+  const { usbBridge, serialBridge, hidBridge, computerBridge } = createDeviceBridges(rpc);
 
   // `http` is the standard API-client builder; see `http-global.ts`. It
   // wraps `realmFetch` so it inherits the kernel-side fetch-proxy + the
@@ -384,6 +387,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     usb: usbBridge,
     serial: serialBridge,
     hid: hidBridge,
+    computer: computerBridge,
     cli: cliApi,
     color: colorApi,
   });

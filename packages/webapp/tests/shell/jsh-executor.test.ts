@@ -154,6 +154,29 @@ describe('executeJshFile', () => {
     expect(result.stderr).toBe('');
   });
 
+  it('strips a leading shebang so the script compiles', async () => {
+    const ctx = createMockCtx({
+      '/workspace/hello.jsh': '#!/usr/bin/env jsh\nconsole.log("shebang ok");\n',
+    });
+    const result = await executeJshFile('/workspace/hello.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('shebang ok');
+    expect(result.stderr).not.toMatch(/SyntaxError|Unexpected/);
+  });
+
+  it('keeps shebang-stripped error line numbers aligned with the file', async () => {
+    const ctx = createMockCtx({
+      '/workspace/blank.jsh': '\nthrow new Error("boom");\n',
+      '/workspace/bang.jsh': '#!/usr/bin/env jsh\nthrow new Error("boom");\n',
+    });
+    const blank = await executeJshFile('/workspace/blank.jsh', [], ctx);
+    const bang = await executeJshFile('/workspace/bang.jsh', [], ctx);
+    expect(blank.exitCode).toBe(1);
+    expect(bang.exitCode).toBe(1);
+    const line = (stderr: string) => stderr.match(/:(\d+)(?::\d+)?/)?.[1];
+    expect(line(bang.stderr)).toBe(line(blank.stderr));
+  });
+
   it('sets process.argv correctly', async () => {
     const ctx = createMockCtx({
       '/workspace/args.jsh': 'console.log(JSON.stringify(process.argv));',

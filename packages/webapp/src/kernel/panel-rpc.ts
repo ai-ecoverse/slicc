@@ -40,6 +40,7 @@
 
 import type {
   CDPPayload,
+  ComputerInputEvent,
   FollowerBiscottoGate,
   OAuthExtraDomainsStore,
   SignAndForwardReply,
@@ -763,6 +764,14 @@ export type PanelRpcRequest =
         | { kind: 'panels' }
         | { kind: 'show'; panelId: string }
         | { kind: 'hide'; panelId: string };
+    }
+  | {
+      op: 'computer-tab-screenshot';
+      payload: { targetId: string; maxWidth?: number; format?: 'png' | 'jpeg' };
+    }
+  | {
+      op: 'computer-tab-input';
+      payload: { targetId: string; events: ComputerInputEvent[] };
     };
 
 export interface PanelRpcResults {
@@ -951,6 +960,17 @@ export interface PanelRpcResults {
   // only the page can enumerate saved layouts, the registry, or where a save
   // landed, so the worker prints what it's told rather than guessing.
   'layout-apply': { applied: boolean; output?: string; error?: string };
+  'computer-tab-screenshot': {
+    mime: 'image/png' | 'image/jpeg';
+    base64: string;
+    width: number;
+    height: number;
+    nativeWidth?: number;
+    nativeHeight?: number;
+    title: string;
+    url: string;
+  };
+  'computer-tab-input': { ok: true };
 }
 
 /**

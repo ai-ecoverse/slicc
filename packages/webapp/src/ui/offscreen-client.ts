@@ -63,6 +63,7 @@ import {
   setUnitThinking,
   thinkingFor,
 } from '../work-unit/record.js';
+import { getComputersStore } from './computers-store.js';
 
 /**
  * How long a webhook delivery waits for the worker's disposition before the
@@ -328,6 +329,7 @@ export class OffscreenClient implements KernelClientFacade {
     this.callbacks = callbacks;
     this.transport = transport ?? createPanelChromeRuntimeTransport<PanelToOffscreenMessage>();
     this.setupMessageListener();
+    getComputersStore().setSender((msg) => this.send(msg));
   }
 
   /**
@@ -933,6 +935,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleOffscreenMessage(msg: OffscreenToPanelMessage | StateSnapshotMsg): void {
+    if (this.applySurfacePush(msg)) return;
     switch (msg.type) {
       case 'offscreen-ready':
         if (this.ready) {
@@ -1087,10 +1090,23 @@ export class OffscreenClient implements KernelClientFacade {
       case 'forward-lick':
         this.forwardLickHandler?.(msg.event as unknown as LickEvent);
         break;
+    }
+  }
 
-      // Terminal session events route to subscribers registered via
-      // `onTerminalEvent`. Not chat-related, so they don't go through
-      // `emitToUI` / `agent-event` plumbing.
+  /**
+   * Terminal session events and computer list/frame pushes. Kept out of
+   * {@link handleOffscreenMessage} so that switch stays under the line cap.
+   */
+  private applySurfacePush(msg: OffscreenToPanelMessage | StateSnapshotMsg): boolean {
+    if (msg.type === 'computers') {
+      getComputersStore().applyList(msg);
+      return true;
+    }
+    if (msg.type === 'computer-frame') {
+      getComputersStore().applyFrame(msg);
+      return true;
+    }
+    switch (msg.type) {
       case 'terminal-status':
       case 'terminal-output':
       case 'terminal-media-preview':
@@ -1105,8 +1121,10 @@ export class OffscreenClient implements KernelClientFacade {
             });
           }
         }
-        break;
+        return true;
       }
+      default:
+        return false;
     }
   }
 

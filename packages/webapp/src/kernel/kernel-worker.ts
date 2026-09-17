@@ -311,6 +311,7 @@ let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
 let stopVfsRpcHost: (() => void) | null = null;
 let stopSpeechAssetsResponder: (() => void) | null = null;
+let stopComputersHost: (() => void) | null = null;
 let panelRpcClient: PanelRpcClient | null = null;
 
 /**
@@ -547,6 +548,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       stopTerminalHost = surfaces.stopTerminalHost;
       stopVfsRpcHost = surfaces.stopVfsRpcHost;
       stopSpeechAssetsResponder = surfaces.stopSpeechAssetsResponder;
+      stopComputersHost = surfaces.stopComputersHost;
     }
 
     // Signal readiness to the page over the kernel port.
@@ -588,6 +590,7 @@ interface SharedFsSurfaces {
   stopTerminalHost: () => void;
   stopVfsRpcHost: () => void;
   stopSpeechAssetsResponder: () => void;
+  stopComputersHost: () => void;
 }
 
 /**
@@ -643,10 +646,16 @@ async function startSharedFsSurfaces(deps: {
     logger: console,
   });
   const stopSpeechAssetsResponder = await startSpeechAssetsResponder(sharedFs, deps.instanceId);
+  const { startComputersHost } = await import('../computers/host.js');
+  const computersHost = startComputersHost({
+    transport: deps.transport,
+    processManager: deps.host.processManager,
+  });
   return {
     stopTerminalHost: handle.stop,
     stopVfsRpcHost: vfsHandle.stop,
     stopSpeechAssetsResponder,
+    stopComputersHost: computersHost.stop,
   };
 }
 
@@ -683,6 +692,8 @@ self.addEventListener('message', (event: MessageEvent) => {
   stopVfsRpcHost = null;
   stopSpeechAssetsResponder?.();
   stopSpeechAssetsResponder = null;
+  stopComputersHost?.();
+  stopComputersHost = null;
   panelRpcClient?.dispose();
   panelRpcClient = null;
   void host?.dispose();

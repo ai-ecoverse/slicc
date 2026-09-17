@@ -29,7 +29,9 @@ Records: `/workspace/.jshd/<name>.json`. Logs: `/workspace/.jshd/log/<name>.log`
 
 `ps` shows the unit as `kind: jsh`. Restart policy (`always` / `on-failure` / `no`) applies only to a natural exit. A crash-loop (8 failures in 60s) marks the unit `errored` and licks the cone.
 
-Keep-alive is the realm: pending timers or host-event subscriptions (`hid`/`usb` event listeners) keep the worker up. A script that returns with nothing pending exits.
+Keep-alive is the realm: pending timers or host-event subscriptions (`hid`/`usb` event listeners, `sliccy:computer.register`) keep the worker up. A script that returns with nothing pending exits.
+
+A durable computer backend is a `jshd` unit that calls `require('sliccy:computer').register(...)`. The `register()` subscription to host `computer-call` events is the keep-alive; `handlers.subscribe` is the `computer watch` push path. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
 
 `--enable`d units are relaunched after mounts restore and before the cone's first turn. Restored units keep canonical `PATH`, can still `exec` child commands, and run through the cone's `SudoFS` (writes to `/etc/sudoers` still require approval). Restricted scoop shells cannot `jshd start` (or stop/restart/rm/enable/disable) — units are cone-owned.
 

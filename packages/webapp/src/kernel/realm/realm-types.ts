@@ -213,6 +213,7 @@ export type RealmRpcChannel =
   | 'usb'
   | 'serial'
   | 'hid'
+  | 'computer'
   | 'module'
   | 'wasm';
 

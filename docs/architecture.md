@@ -867,6 +867,7 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 | I need to...                      | Modify                                                                                       |
 | --------------------------------- | -------------------------------------------------------------------------------------------- |
 | Add a bash command                | `packages/webapp/src/shell/supplemental-commands/<name>-command.ts` + register in `index.ts` |
+| Add a computer adapter            | `packages/webapp/src/computers/adapters/` + [computer-protocol.md](./computer-protocol.md)   |
 | Change terminal behavior (xterm)  | `packages/webapp/src/kernel/remote-terminal-view.ts`                                         |
 | Change binary handling            | `packages/webapp/src/shell/binary-cache.ts`                                                  |
 | Support new `.jsh` script globals | `packages/webapp/src/shell/jsh-executor.ts`                                                  |

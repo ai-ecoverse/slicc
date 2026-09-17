@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FsStat, IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { kernelJobTable } from '../../../src/kernel/job-table.js';
@@ -104,6 +107,13 @@ function ctxFor(fs: IFileSystem) {
 
 const ONESHOT = 'console.log("hello-jshd");';
 const DAEMON = 'console.log("up"); setInterval(() => {}, 60_000);';
+const FAKE_COMPUTER = readFileSync(
+  resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../../vfs-root/workspace/skills/jshd/examples/fake-computer.jsh'
+  ),
+  'utf8'
+);
 const inProcess = createInProcessJsRealmFactory();
 
 function command(pm: ProcessManager) {
@@ -155,6 +165,28 @@ describe('jshd command', () => {
       pm.list().some((proc) => proc.kind === 'jsh' && proc.argv.includes('/workspace/hello.jsh'))
     ).toBe(true);
     expect(pm.list().some((proc) => proc.owner.kind === 'jshd')).toBe(true);
+  });
+
+  it('starts the fake-computer example without crash-looping on its shebang', async () => {
+    expect(FAKE_COMPUTER.startsWith('#!/usr/bin/env jsh')).toBe(true);
+    const pm = new ProcessManager();
+    const script = '/workspace/skills/jshd/examples/fake-computer.jsh';
+    const fs = createMockFs({ [script]: FAKE_COMPUTER });
+    const cmd = command(pm);
+    const start = await cmd.execute(
+      ['start', '-n', 'fake-computer', '--enable', '--restart', 'always', script],
+      ctxFor(fs)
+    );
+    expect(start.exitCode).toBe(0);
+    expect(start.stderr).not.toMatch(/SyntaxError|Unexpected/);
+    await vi.waitFor(async () => {
+      const status = await cmd.execute(['status', 'fake-computer'], ctxFor(fs));
+      expect(status.stdout).toContain('state: running');
+    });
+    const status = await cmd.execute(['status', 'fake-computer'], ctxFor(fs));
+    expect(status.stdout).not.toContain('state: errored');
+    expect(status.stdout).toContain('restarts: 0');
+    await cmd.execute(['stop', 'fake-computer'], ctxFor(fs));
   });
 
   it('stop does not restart a running daemon, and kill of the pid does not either', async () => {

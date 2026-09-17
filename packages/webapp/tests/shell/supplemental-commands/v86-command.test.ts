@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  chordToScancodes,
+  getComputerRegistry,
+  installComputerRegistry,
+  resetComputerRegistryForTests,
+} from '../../../src/computers/registry.js';
+import {
   createV86Command,
   DEFAULT_VGA_MEMORY_MIB,
   extractVmName,
@@ -23,6 +27,7 @@ import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86
 
 afterEach(() => {
   resetVmRegistryForTests();
+  resetComputerRegistryForTests();
 });
 
 describe('parseStartArgs', () => {
@@ -137,32 +142,6 @@ describe('extractVmName', () => {
   });
 });
 
-describe('chordToScancodes', () => {
-  it('maps single named keys to press+release', () => {
-    expect(chordToScancodes('enter')).toEqual([0x1c, 0x9c]);
-    expect(chordToScancodes('esc')).toEqual([0x01, 0x81]);
-    expect(chordToScancodes('f12')).toEqual([0x58, 0xd8]);
-  });
-
-  it('wraps modifiers around the final key', () => {
-    // ctrl down, c down, c up, ctrl up
-    expect(chordToScancodes('ctrl-c')).toEqual([0x1d, 0x2e, 0xae, 0x9d]);
-    expect(chordToScancodes('alt-tab')).toEqual([0x38, 0x0f, 0x8f, 0xb8]);
-  });
-
-  it('handles extended-code keys and ctrl-alt-del', () => {
-    expect(chordToScancodes('delete')).toEqual([0xe0, 0x53, 0xe0, 0xd3]);
-    expect(chordToScancodes('ctrl-alt-del')).toEqual([
-      0x1d, 0x38, 0xe0, 0x53, 0xe0, 0xd3, 0xb8, 0x9d,
-    ]);
-  });
-
-  it('returns null for unknown chords', () => {
-    expect(chordToScancodes('bogus-key')).toBeNull();
-    expect(chordToScancodes('')).toBeNull();
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Lifecycle with a mocked emulator
 // ---------------------------------------------------------------------------
@@ -262,6 +241,17 @@ async function startVm(emulator: FakeEmulator, extraArgs: string[] = []) {
   return cmd.execute(['start', '-cdrom', 'alpine.iso', ...extraArgs], ctx);
 }
 
+function paintGraphical(name = 'vm0'): void {
+  const vm = getVm(name);
+  if (!vm) throw new Error(`paintGraphical: no VM named ${name}`);
+  vm.screen = {
+    mode: 'graphical',
+    width: 2,
+    height: 2,
+    frame: { data: new Uint8ClampedArray(16), width: 2, height: 2 },
+  };
+}
+
 describe('v86 command lifecycle (mocked engine)', () => {
   it('boots a VM, registers it, and reports it in ls', async () => {
     const emulator = makeFakeEmulator();
@@ -276,6 +266,28 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const ls = await cmd.execute(['ls'], makeCtx().ctx);
     expect(ls.stdout).toContain('vm0');
     expect(ls.stdout).toContain('running');
+  });
+
+  it('registers a v86 computer on start and drops it on stop without powering off via computer rm', async () => {
+    const emulator = makeFakeEmulator();
+    installComputerRegistry(null);
+    const result = await startVm(emulator);
+    expect(result.exitCode).toBe(0);
+    await vi.waitFor(() => {
+      expect(getComputerRegistry()?.get('v86:vm0')).toBeTruthy();
+    });
+    expect(getComputerRegistry()?.list()[0]).toMatchObject({
+      id: 'v86:vm0',
+      kind: 'v86',
+      title: 'vm0',
+      state: 'live',
+    });
+
+    expect(await getComputerRegistry()!.unregister('v86:vm0')).toBe(true);
+    expect(emulator.stop).not.toHaveBeenCalled();
+    expect(emulator.destroy).not.toHaveBeenCalled();
+    expect(getVm('vm0')).toBeDefined();
+    expect(emulator.is_running()).toBe(true);
   });
 
   it('waits for emulator-loaded before instrumenting and running (async engine init)', async () => {
@@ -447,22 +459,33 @@ describe('v86 command lifecycle (mocked engine)', () => {
   it('types text, sends key chords, and drives the mouse', async () => {
     const emulator = makeFakeEmulator();
     await startVm(emulator);
+    paintGraphical();
     const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
     const { ctx } = makeCtx();
 
     const typed = await cmd.execute(['type', 'root\\n'], ctx);
     expect(typed.exitCode).toBe(0);
     expect(emulator.keyboard_send_text).toHaveBeenCalledWith('root\n');
+    expect(typed.stdout).toContain('screen: ');
+    expect(typed.stdout).toContain('prefer: computer type -c v86:vm0');
 
-    await cmd.execute(['key', 'ctrl-c'], ctx);
+    const keyed = await cmd.execute(['key', 'ctrl-c'], ctx);
     expect(emulator.keyboard_send_scancodes).toHaveBeenCalledWith([0x1d, 0x2e, 0xae, 0x9d]);
+    expect(keyed.stdout).toContain('screen: ');
+    expect(keyed.stdout).toContain('prefer: computer key');
 
-    await cmd.execute(['mouse', 'move', '10', '5'], ctx);
+    const to = await cmd.execute(['mouse', '--to', '8,4'], ctx);
+    expect(emulator.busSends).toContainEqual(['mouse-delta', [8, -4]]);
+    expect(to.stdout).toContain('prefer: computer mousemove');
+
+    const moved = await cmd.execute(['mouse', 'move', '10', '5'], ctx);
     expect(emulator.busSends).toContainEqual(['mouse-delta', [10, -5]]);
+    expect(moved.stdout).toContain('prefer: computer mousemove');
 
-    await cmd.execute(['mouse', 'click', 'right'], ctx);
+    const clicked = await cmd.execute(['mouse', 'click', 'right'], ctx);
     expect(emulator.busSends).toContainEqual(['mouse-click', [false, false, true]]);
     expect(emulator.busSends).toContainEqual(['mouse-click', [false, false, false]]);
+    expect(clicked.stdout).toContain('prefer: computer click');
   });
 
   it('dumps the text screen and buffers serial output', async () => {
@@ -472,7 +495,9 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const { ctx } = makeCtx();
 
     const text = await cmd.execute(['text'], ctx);
-    expect(text.stdout).toBe('SLICC boot menu\nok\n');
+    expect(text.stdout).toContain('SLICC boot menu');
+    expect(text.stdout).toContain('ok');
+    expect(text.stdout).toContain('prefer: computer text');
 
     const serialListener = emulator.listeners.get('serial0-output-byte')!;
     for (const ch of 'login:') serialListener(ch.charCodeAt(0));
@@ -481,6 +506,19 @@ describe('v86 command lifecycle (mocked engine)', () => {
 
     await cmd.execute(['serial', '--send', 'root\\n'], ctx);
     expect(emulator.serial0_send).toHaveBeenCalledWith('root\n');
+  });
+
+  it('screenshots through computer as a frozen JPEG', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    paintGraphical();
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx, written } = makeCtx();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(shot.stdout).toContain('screen: ');
+    expect(shot.stdout).toContain('prefer: computer screenshot -c v86:vm0');
+    expect([...written.keys()].some((p) => p.endsWith('.jpg'))).toBe(true);
   });
 
   it('saves and restores state through the VFS', async () => {
@@ -505,7 +543,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const cmd = createV86Command();
     const help = await cmd.execute(['--help'], makeCtx().ctx);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain('$TMPDIR/v86-<name>.png');
+    expect(help.stdout).toContain('$TMPDIR/computer/<name>/<seq>.jpg');
     expect(help.stdout).toContain('$TMPDIR/v86-serve-<name>/');
     expect(help.stdout).not.toMatch(/\/tmp\/v86/);
   });
@@ -537,6 +575,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
   it('`type --help` prints help; `type -- --help` types the literal flag', async () => {
     const emulator = makeFakeEmulator();
     await startVm(emulator);
+    paintGraphical();
     const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
     const { ctx } = makeCtx();
 
@@ -548,6 +587,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const typed = await cmd.execute(['type', '--', '--help'], ctx);
     expect(typed.exitCode).toBe(0);
     expect(emulator.keyboard_send_text).toHaveBeenCalledWith('--help');
+    expect(typed.stdout).toContain('screen: ');
   });
 
   it('stops and unregisters a VM', async () => {
@@ -592,6 +632,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(served.exitCode).toBe(0);
     expect(served.stdout).toContain('/tmp/v86-serve-vm0');
     expect(served.stdout).toContain('serve /tmp/v86-serve-vm0');
+    expect(served.stdout).toContain('prefer: computer watch -c v86:vm0');
     expect(written.has('/tmp/v86-serve-vm0/index.html')).toBe(true);
     // Text-mode guest: the pump writes screen.txt + state.json.
     expect(written.has('/tmp/v86-serve-vm0/screen.txt')).toBe(true);
