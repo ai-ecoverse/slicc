@@ -33,10 +33,11 @@
  * too large to be one change — the baseline is reported as unmeasurable
  * rather than quietly wrong, which a CI `pull_request` run treats as a
  * failure (see `check-first-load-size.mjs`). Nested copies that exist only
- * in the dev tree are skipped: they cannot appear in `dist/ui`. Un-hoisted
- * nested production copies are realigned the same way as hoisted ones:
- * `materializeLinkedParents` splits the parent symlink so the nested
- * entry can be swapped without writing through the caller's install.
+ * in the dev tree, and DefinitelyTyped `@types/*` packages, are skipped:
+ * they cannot appear in `dist/ui`. Un-hoisted nested production copies are
+ * realigned the same way as hoisted ones: `materializeLinkedParents` splits
+ * the parent symlink so the nested entry can be swapped without writing
+ * through the caller's install.
  *
  * WORKSPACE packages are a different matter and must NOT be borrowed from
  * HEAD. npm links them into `node_modules/@scope/name` as RELATIVE symlinks
@@ -194,8 +195,32 @@ function ancestorPackageChanged(path, base, head) {
 }
 
 /**
+ * Registry name of a lock `packages` path (`node_modules/@scope/pkg` or a
+ * nested `.../node_modules/@scope/pkg`).
+ *
+ * @param {string} installName path with the leading `node_modules/` stripped
+ */
+function lockInstallRegistryName(installName) {
+  const nested = installName.lastIndexOf('/node_modules/');
+  return nested === -1 ? installName : installName.slice(nested + '/node_modules/'.length);
+}
+
+/**
+ * DefinitelyTyped packages are `.d.ts` only and cannot appear in `dist/ui`.
+ * Realigning them cannot hide an eager-graph regression, and `npm pack` of
+ * `@types/node` currently crashes the gate (ENOENT on the unpacked
+ * `package/` directory — PR #3195).
+ *
+ * @param {string} installName
+ */
+function isDefinitelyTypedPackage(installName) {
+  return lockInstallRegistryName(installName).startsWith('@types/');
+}
+
+/**
  * True when a nested copy is not an independent hole: its parent is already
- * being swapped, or it lives only in the dev tree (cannot appear in dist/ui).
+ * being swapped, it lives only in the dev tree, or it is `@types/*`
+ * (cannot appear in dist/ui).
  *
  * @param {string} path
  * @param {{dev?: boolean}} entry base lock entry
@@ -204,6 +229,7 @@ function ancestorPackageChanged(path, base, head) {
  */
 function nestedCopyIsCovered(path, entry, base, head) {
   if (ancestorPackageChanged(path, base, head)) return true;
+  if (isDefinitelyTypedPackage(path.slice('node_modules/'.length))) return true;
   const headEntry = head[path];
   return entry.dev === true && (headEntry == null || headEntry.dev === true);
 }
@@ -270,6 +296,11 @@ function registryName(path, entry) {
  * production nested bump — leaving it borrowed from HEAD would hide the
  * size of the newly-production package.
  *
+ * Hoisted and nested `@types/*` packages are skipped for the same reason:
+ * they are declaration files, so they cannot change the eager JS graphs.
+ * Renovate's `@types/node` 24.13.3 -> 24.13.4 bump (PR #3195) otherwise
+ * crashed the gate while `npm pack` realigning the base version.
+ *
  * @param {string} repoRoot
  * @param {string} tree base checkout
  * @returns {{ changed: Drift[], missing: Drift[], unrealignable: string[] } | null}
@@ -305,6 +336,8 @@ export function dependencyDrift(repoRoot, tree) {
     // A workspace package linked into node_modules carries the root version;
     // the worktree's own source is already the right baseline for it.
     if (workspaces.has(installName)) continue;
+    // `@types/*` cannot appear in dist/ui — see isDefinitelyTypedPackage.
+    if (isDefinitelyTypedPackage(installName)) continue;
     // An aliased install directory is not the registry name: npm records
     // `node_modules/undici8` with `name: "undici"`. Fetching `undici8` would
     // request a DIFFERENT package that may well exist on the registry, so
@@ -380,15 +413,25 @@ function installBaseVersion(tree, staging, { path, name, from }, log) {
     ['pack', spec, '--pack-destination', staging, '--silent', '--no-audit', '--no-fund'],
     { cwd: tree }
   );
-  const tarball = (packed ?? '').split('\n').pop()?.trim();
-  if (!tarball) {
+  const tarballName = (packed ?? '').split('\n').pop()?.trim();
+  if (!tarballName) {
+    log(`could not fetch ${spec} for the baseline (npm pack failed)`);
+    return false;
+  }
+  const tarball = existsSync(tarballName) ? tarballName : join(staging, tarballName);
+  if (!existsSync(tarball)) {
     log(`could not fetch ${spec} for the baseline (npm pack failed)`);
     return false;
   }
   const unpacked = join(staging, `unpacked-${path.replace(/[@/]/g, '_')}`);
   mkdirSync(unpacked, { recursive: true });
-  if (run('tar', ['-xzf', join(staging, tarball), '-C', unpacked], { cwd: tree }) === null) {
+  if (run('tar', ['-xzf', tarball, '-C', unpacked], { cwd: tree }) === null) {
     log(`could not unpack ${spec} for the baseline`);
+    return false;
+  }
+  const pkgDir = join(unpacked, 'package');
+  if (!existsSync(pkgDir)) {
+    log(`could not unpack ${spec} for the baseline (tarball had no package/ directory)`);
     return false;
   }
   const dest = join(tree, path);
@@ -400,7 +443,7 @@ function installBaseVersion(tree, staging, { path, name, from }, log) {
   // Now `dest` is the worktree's own symlink (or absent) — remove the LINK,
   // not its target, and drop the base version in its place.
   rmSync(dest, { force: true, recursive: true });
-  renameSync(join(unpacked, 'package'), dest);
+  renameSync(pkgDir, dest);
   return true;
 }
 
