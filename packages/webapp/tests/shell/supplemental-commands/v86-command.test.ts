@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getComputerRegistry,
+  installComputerRegistry,
+  resetComputerRegistryForTests,
+} from '../../../src/computers/registry.js';
+import {
   chordToScancodes,
   createV86Command,
   DEFAULT_VGA_MEMORY_MIB,
@@ -23,6 +28,7 @@ import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86
 
 afterEach(() => {
   resetVmRegistryForTests();
+  resetComputerRegistryForTests();
 });
 
 describe('parseStartArgs', () => {
@@ -278,6 +284,27 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(ls.stdout).toContain('running');
   });
 
+  it('registers a v86 computer on start and drops it on stop without powering off via computer rm', async () => {
+    const emulator = makeFakeEmulator();
+    installComputerRegistry(null);
+    const result = await startVm(emulator);
+    expect(result.exitCode).toBe(0);
+    await vi.waitFor(() => {
+      expect(getComputerRegistry()?.get('v86:vm0')).toBeTruthy();
+    });
+    expect(getComputerRegistry()?.list()[0]).toMatchObject({
+      id: 'v86:vm0',
+      kind: 'v86',
+      title: 'vm0',
+    });
+
+    expect(await getComputerRegistry()!.unregister('v86:vm0')).toBe(true);
+    expect(emulator.stop).not.toHaveBeenCalled();
+    expect(emulator.destroy).not.toHaveBeenCalled();
+    expect(getVm('vm0')).toBeDefined();
+    expect(emulator.is_running()).toBe(true);
+  });
+
   it('waits for emulator-loaded before instrumenting and running (async engine init)', async () => {
     const emulator = makeFakeEmulator();
     delete (emulator as { v86?: unknown }).v86;
@@ -453,16 +480,20 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const typed = await cmd.execute(['type', 'root\\n'], ctx);
     expect(typed.exitCode).toBe(0);
     expect(emulator.keyboard_send_text).toHaveBeenCalledWith('root\n');
+    expect(typed.stdout).toContain('prefer: computer type');
 
-    await cmd.execute(['key', 'ctrl-c'], ctx);
+    const keyed = await cmd.execute(['key', 'ctrl-c'], ctx);
     expect(emulator.keyboard_send_scancodes).toHaveBeenCalledWith([0x1d, 0x2e, 0xae, 0x9d]);
+    expect(keyed.stdout).toContain('prefer: computer key');
 
-    await cmd.execute(['mouse', 'move', '10', '5'], ctx);
+    const moved = await cmd.execute(['mouse', 'move', '10', '5'], ctx);
     expect(emulator.busSends).toContainEqual(['mouse-delta', [10, -5]]);
+    expect(moved.stdout).toContain('prefer: computer mousemove');
 
-    await cmd.execute(['mouse', 'click', 'right'], ctx);
+    const clicked = await cmd.execute(['mouse', 'click', 'right'], ctx);
     expect(emulator.busSends).toContainEqual(['mouse-click', [false, false, true]]);
     expect(emulator.busSends).toContainEqual(['mouse-click', [false, false, false]]);
+    expect(clicked.stdout).toContain('prefer: computer click');
   });
 
   it('dumps the text screen and buffers serial output', async () => {
@@ -472,7 +503,9 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const { ctx } = makeCtx();
 
     const text = await cmd.execute(['text'], ctx);
-    expect(text.stdout).toBe('SLICC boot menu\nok\n');
+    expect(text.stdout).toContain('SLICC boot menu');
+    expect(text.stdout).toContain('ok');
+    expect(text.stdout).toContain('prefer: computer text');
 
     const serialListener = emulator.listeners.get('serial0-output-byte')!;
     for (const ch of 'login:') serialListener(ch.charCodeAt(0));

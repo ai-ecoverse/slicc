@@ -21,6 +21,7 @@
 
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { chordToScancodes } from '../../computers/keys.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { scratchDir } from '../tmpdir-env.js';
@@ -49,6 +50,8 @@ import {
   type V86Emulator,
   type V86Module,
 } from './v86-wasm.js';
+
+export { chordToScancodes };
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -247,93 +250,6 @@ export function parseStartArgs(args: readonly string[]): StartParseResult {
     };
   }
   return { ok: true, parsed };
-}
-
-// ---------------------------------------------------------------------------
-// Key chords
-// ---------------------------------------------------------------------------
-
-/** PS/2 set-1 make codes for the named keys used in chords. */
-const KEY_CODES: Record<string, number[]> = {
-  enter: [0x1c],
-  tab: [0x0f],
-  esc: [0x01],
-  escape: [0x01],
-  space: [0x39],
-  backspace: [0x0e],
-  delete: [0xe0, 0x53],
-  up: [0xe0, 0x48],
-  down: [0xe0, 0x50],
-  left: [0xe0, 0x4b],
-  right: [0xe0, 0x4d],
-  home: [0xe0, 0x47],
-  end: [0xe0, 0x4f],
-  pageup: [0xe0, 0x49],
-  pagedown: [0xe0, 0x51],
-  insert: [0xe0, 0x52],
-  f1: [0x3b],
-  f2: [0x3c],
-  f3: [0x3d],
-  f4: [0x3e],
-  f5: [0x3f],
-  f6: [0x40],
-  f7: [0x41],
-  f8: [0x42],
-  f9: [0x43],
-  f10: [0x44],
-  f11: [0x57],
-  f12: [0x58],
-};
-
-const MODIFIER_CODES: Record<string, number[]> = {
-  ctrl: [0x1d],
-  alt: [0x38],
-  shift: [0x2a],
-};
-
-/** ASCII → set-1 make code for single-character chord components. */
-function charMakeCode(ch: string): number[] | null {
-  const row = '1234567890'.indexOf(ch);
-  if (row !== -1) return [row === 9 ? 0x0b : 0x02 + row];
-  const letters = 'qwertyuiopasdfghjklzxcvbnm';
-  const scan = [
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,
-    0x24, 0x25, 0x26, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32,
-  ];
-  const idx = letters.indexOf(ch.toLowerCase());
-  return idx === -1 ? null : [scan[idx]];
-}
-
-/**
- * Translate a chord like `ctrl-alt-del`, `alt-tab`, `ctrl-c`, or
- * `enter` into press+release scancode sequences. Exported for tests.
- */
-export function chordToScancodes(chord: string): number[] | null {
-  const parts = chord.toLowerCase().split(/[-+]/u).filter(Boolean);
-  if (parts.length === 0) return null;
-  const modifiers: number[][] = [];
-  const finals: number[][] = [];
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    const isLast = i === parts.length - 1;
-    if (!isLast && MODIFIER_CODES[part]) {
-      modifiers.push(MODIFIER_CODES[part]);
-      continue;
-    }
-    const named = KEY_CODES[part] ?? (part === 'del' ? KEY_CODES.delete : undefined);
-    const code = named ?? MODIFIER_CODES[part] ?? (part.length === 1 ? charMakeCode(part) : null);
-    if (!code) return null;
-    finals.push(code);
-  }
-  if (finals.length === 0) return null;
-  const press = (make: number[]) => make;
-  const release = (make: number[]) =>
-    make.length === 2 ? [make[0], make[1] | 0x80] : [make[0] | 0x80];
-  const codes: number[] = [];
-  for (const m of modifiers) codes.push(...press(m));
-  for (const f of finals) codes.push(...press(f), ...release(f));
-  for (const m of [...modifiers].reverse()) codes.push(...release(m));
-  return codes;
 }
 
 // ---------------------------------------------------------------------------
@@ -794,6 +710,11 @@ async function v86Start(
   }
 
   registerVm(record);
+  void import('../../computers/adapters/v86.js')
+    .then(({ registerV86Computer }) => registerV86Computer(record))
+    .catch(() => {
+      /* registry optional until computers host starts */
+    });
   try {
     // The constructor kicks off async wasm init; `run()` dereferences
     // internals (`this.v86`, screen adapter) that only exist once the
@@ -824,6 +745,11 @@ async function v86Start(
 async function teardownVm(record: VmRecord, pm: ProcessManager | null): Promise<void> {
   stopServe(record);
   unregisterVm(record.name);
+  void import('../../computers/adapters/v86.js')
+    .then(({ unregisterV86Computer }) => unregisterV86Computer(record.name))
+    .catch(() => {
+      /* already gone */
+    });
   try {
     if (record.emulator.is_running()) await record.emulator.stop();
   } catch {
@@ -856,6 +782,10 @@ function v86Ls(): CmdResult {
   return ok(`${lines.join('\n')}\n`);
 }
 
+function computerHint(verb: string, name: string): string {
+  return `prefer: computer ${verb} -c ${name}\n`;
+}
+
 function v86Type(args: readonly string[]): CmdResult {
   const { name, rest } = extractVmName(args);
   const record = requireVm(name);
@@ -864,7 +794,7 @@ function v86Type(args: readonly string[]): CmdResult {
   // Interpret the usual escapes so agents can send Enter as '\n'.
   const text = rest.join(' ').replace(/\\n/gu, '\n').replace(/\\t/gu, '\t');
   record.emulator.keyboard_send_text(text);
-  return ok();
+  return ok(computerHint('type', name));
 }
 
 function v86Key(args: readonly string[]): CmdResult {
@@ -879,7 +809,7 @@ function v86Key(args: readonly string[]): CmdResult {
     sequences.push(codes);
   }
   for (const codes of sequences) record.emulator.keyboard_send_scancodes(codes);
-  return ok();
+  return ok(computerHint('key', name));
 }
 
 const MOUSE_BUTTONS = ['left', 'middle', 'right'] as const;
@@ -905,7 +835,7 @@ function v86Mouse(args: readonly string[]): CmdResult {
     const [x, y] = [Number(match[1]), Number(match[2])];
     record.emulator.bus.send('mouse-delta', [-16384, 16384]);
     record.emulator.bus.send('mouse-delta', [x, -y]);
-    return ok();
+    return ok(computerHint('mousemove', name));
   }
 
   const action = rest[0];
@@ -917,14 +847,14 @@ function v86Mouse(args: readonly string[]): CmdResult {
     }
     // Screen y grows downward; PS/2 y grows upward.
     record.emulator.bus.send('mouse-delta', [dx, -dy]);
-    return ok();
+    return ok(computerHint('mousemove', name));
   }
   if (action === 'click') {
     const button = (rest[1] ?? 'left') as (typeof MOUSE_BUTTONS)[number];
     if (!MOUSE_BUTTONS.includes(button)) return fail(`mouse: unknown button '${rest[1]}'`);
     sendClick(record, button);
     if (rest.includes('--double')) sendClick(record, button);
-    return ok();
+    return ok(computerHint('click', name));
   }
   return fail('mouse: expected move <dx> <dy>, click [button], or --to <x>,<y>');
 }
@@ -942,7 +872,7 @@ async function v86Screenshot(args: readonly string[], ctx: CommandContext): Prom
   const outPath = ctx.fs.resolvePath(ctx.cwd, rest[0] ?? `${scratchDir(ctx.env)}/v86-${name}.png`);
   const png = await encodeFramePng(frame);
   await ctx.fs.writeFile(outPath, png);
-  return ok(`${outPath} (${frame.width}x${frame.height})\n`);
+  return ok(`${outPath} (${frame.width}x${frame.height})\n${computerHint('screenshot', name)}`);
 }
 
 function v86Text(args: readonly string[]): CmdResult {
@@ -957,7 +887,7 @@ function v86Text(args: readonly string[]): CmdResult {
         : `text screen unavailable for '${name}'`
     );
   }
-  return ok(`${dump}\n`);
+  return ok(`${dump}\n${computerHint('text', name)}`);
 }
 
 /** Serve pump rates (frames/second) — VFS writes are not free. */
