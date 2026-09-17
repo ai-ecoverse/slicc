@@ -64,11 +64,12 @@ const CONE = {
 
 /**
  * In-memory canonical store: Pi history plus markers. `exists: false` models
- * a unit whose first checkpoint has not landed — `putMarker` declines, as the
- * real store does for an absent record.
+ * a unit whose first checkpoint has not landed — `putMarker` declines unless
+ * asked to create, as the real store does. `writable: false` models a store
+ * that cannot be written at all.
  */
 function makeConversationStore(getMessages: () => unknown[]) {
-  const state = { exists: true, markers: [] as ConversationMarker[] };
+  const state = { exists: true, writable: true, markers: [] as ConversationMarker[] };
   return {
     state,
     load: vi.fn(async () =>
@@ -95,13 +96,19 @@ function makeConversationStore(getMessages: () => unknown[]) {
           }
         : null
     ),
-    putMarker: vi.fn(async (_key: string, marker: ConversationMarker) => {
-      if (!state.exists) return false;
-      const at = state.markers.findIndex((m) => m.id === marker.id);
-      if (at >= 0) state.markers[at] = marker;
-      else state.markers.push(marker);
-      return true;
-    }),
+    putMarker: vi.fn(
+      async (_key: string, marker: ConversationMarker, options: { createWith?: unknown } = {}) => {
+        if (!state.writable) return false;
+        if (!state.exists) {
+          if (!options.createWith) return false;
+          state.exists = true;
+        }
+        const at = state.markers.findIndex((m) => m.id === marker.id);
+        if (at >= 0) state.markers[at] = marker;
+        else state.markers.push(marker);
+        return true;
+      }
+    ),
     deleteMarker: vi.fn(async () => false),
   };
 }
@@ -218,22 +225,37 @@ describe('kernel error-card persistence', () => {
     expect(rows.find((m) => m.error)).toMatchObject({ id: 'err-mid', content: 'boom' });
   });
 
-  it('holds the card until the turn creates the record, then writes it', async () => {
-    // A unit whose very first turn fails before its checkpoint has landed:
-    // the marker has nothing to annotate yet.
+  it('creates the record for a card whose turn failed before any message existed', async () => {
+    // A missing API key: Pi never holds a message, so no checkpoint will ever
+    // create a record for a held card to land on.
     conversationStore.state.exists = false;
+    agentMessages = [];
     callbacks.onError?.('cone_1', 'bad api key');
+    await vi.waitFor(() => expect(conversationStore.state.markers).toHaveLength(1));
+
+    expect(conversationStore.putMarker).toHaveBeenCalledWith(
+      '/workspace::cone_1',
+      expect.objectContaining({ kind: 'error' }),
+      { createWith: expect.objectContaining({ key: '/workspace::cone_1', workUnitId: 'cone_1' }) }
+    );
+    const rows = buffered(await reload());
+    expect(rows).toEqual([expect.objectContaining({ content: 'bad api key', error: true })]);
+  });
+
+  it('holds a card the store cannot take and writes it when the turn settles', async () => {
+    conversationStore.state.writable = false;
+    callbacks.onError?.('cone_1', 'rate limited');
     await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
     expect(conversationStore.state.markers).toEqual([]);
 
-    conversationStore.state.exists = true;
+    conversationStore.state.writable = true;
     // A failed turn settles to `ready` without necessarily reaching
     // `onResponseDone`; either is enough to retry.
     callbacks.onStatusChange?.('cone_1', 'ready');
     await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(2));
 
     expect(conversationStore.state.markers).toEqual([
-      expect.objectContaining({ kind: 'error', text: 'bad api key' }),
+      expect.objectContaining({ kind: 'error', text: 'rate limited' }),
     ]);
   });
 

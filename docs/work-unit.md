@@ -236,12 +236,15 @@ only after `drop_scoop`.
 the model said: it must not become a `ConversationEntry` (the model would see
 its own failure as a prior turn), and an entry replace must not erase it —
 exactly a marker's contract. `Bridge.recordErrorCard` appends the row to the
-message buffer and writes `{ kind: 'error', text }` onto the record (held in
-`pendingMarkers` like a seam when the record does not exist yet, and retried
-on `onResponseDone` and on the `ready` status a failed turn settles to);
-`toChatMessages` folds it back as an `error: true` assistant row, always —
-the SETTLED rule below is about compaction rounds. `toBufferedChatMessages`
-projects `error` explicitly, the same way it projects `compaction`.
+message buffer and writes `{ kind: 'error', text }` onto the record. Unlike a
+seam, the card may CREATE the record (`putMarker(…, { createWith })`): a turn
+that fails before Pi holds a message never checkpoints, so there would be
+nothing to retry against. A write that still fails is held in
+`pendingMarkers` and retried on `onResponseDone` and on the `ready` status a
+failed turn settles to. `toChatMessages` folds the card back as an
+`error: true` assistant row, always — the SETTLED rule below is about
+compaction rounds. `toBufferedChatMessages` projects `error` explicitly, the
+same way it projects `compaction`.
 
 **Only a SETTLED round is durable.** The kernel writes nothing on the opening
 phase and `interleaveMarkers` restores `summarized` / `fallback` only. The
@@ -317,6 +320,14 @@ the only store a conversation is written to or read from:
   deletes on clear/drop above. The migration is their only reader; deleting
   them is a separate, later decision (#2006 is why).
 
+**Record schema v2.** `error` markers and `projectionPrefix` are shapes a
+#2275-era build cannot read (it would crash on the first). `store.save` stamps
+each record with the lowest schema that expresses it (`recordSchemaVersion`):
+a record carrying either is `2`, which an older build declines; every other
+record stays `1` and remains readable after a rollback. The migration cursor
+has its own `CONVERSATION_MIGRATION_VERSION`, so the bump does not re-run the
+frozen legacy import.
+
 **Rollback is no longer free.** Reverting to a pre-cut build restores the
 legacy stores as they were at the cut — every turn since exists only in
 `slicc-work-units`. `WorkUnitConversationStore.clearAll()` likewise re-runs
@@ -324,7 +335,7 @@ the migration from that frozen state: it is a reset, not a recovery.
 
 #### Migration behaviour
 
-- **Versioned.** `CONVERSATION_RECORD_VERSION` is part of the cursor; bumping
+- **Versioned.** `CONVERSATION_MIGRATION_VERSION` is part of the cursor; bumping
   the schema re-runs the pass over every unit.
 - **Resumable.** The cursor is persisted after every unit, so a boot that dies
   mid-pass — a poisoned record, a killed tab, the #2007 ready-timeout —

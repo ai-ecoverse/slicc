@@ -1552,9 +1552,10 @@ export class Bridge implements KernelFacade {
    * The row must never become a Pi `ConversationEntry` — the model would see
    * its own failure as a prior turn — and an entry replace must not erase it,
    * which is exactly a marker's contract. `toChatMessages` folds it back in
-   * on every rebuild. A record that does not exist yet (the unit's first turn
-   * failed before its checkpoint landed) holds the marker for the retry at
-   * the end of the turn, like a compaction seam.
+   * on every rebuild. Unlike a seam, the card may CREATE the record: a turn
+   * that fails before Pi holds a message (a missing API key) never
+   * checkpoints, so there would be nothing to retry against. A write that
+   * still fails (unreadable store) holds the marker for the end-of-turn retry.
    */
   private async recordErrorCard(scoopJid: string, error: string): Promise<void> {
     const id = uid();
@@ -1569,9 +1570,10 @@ export class Bridge implements KernelFacade {
     const store = this.orchestrator?.getConversationStore?.();
     const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
     if (!store || !scoop) return;
-    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const { conversationIdentityFor } = await import('../work-unit/conversation/key.js');
+    const identity = conversationIdentityFor(scoop);
     const marker: ConversationMarker = { id, kind: 'error', timestamp, text: error };
-    if (!(await store.putMarker(conversationKeyFor(scoop), marker))) {
+    if (!(await store.putMarker(identity.key, marker, { createWith: identity }))) {
       this.holdPendingMarker(scoopJid, marker);
     }
   }

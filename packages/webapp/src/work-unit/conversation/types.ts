@@ -31,11 +31,26 @@ import type { AgentMessage } from '../../core/index.js';
 import type { ChatCompactionMarker, ChatMessage } from '../../scoops/chat-types.js';
 
 /**
- * Schema version of a persisted record. Bumping it makes every older record
- * eligible for re-migration (`migration.ts`); readers of an unknown FUTURE
- * version fall back to the legacy stores rather than guessing.
+ * Highest record schema this build reads and writes. A reader treats an
+ * unknown FUTURE version as unreadable rather than guessing.
+ *
+ * - `1` — entries plus compaction markers (#2275).
+ * - `2` — may also carry `error` markers or a `projectionPrefix` (#2365).
+ *   A v1 build would crash on the first (`marker.compaction` is undefined)
+ *   and silently drop the second, so a record carrying either is stamped
+ *   `2` and a v1 build declines it. Every other record stays `1`
+ *   ({@link recordSchemaVersion}) so a rollback still reads it.
  */
-export const CONVERSATION_RECORD_VERSION = 1;
+export const CONVERSATION_RECORD_VERSION = 2;
+
+/** The schema version a record's actual content requires. */
+export function recordSchemaVersion(
+  record: Pick<WorkUnitConversationRecord, 'markers' | 'projectionPrefix'>
+): number {
+  const hasErrorMarker = record.markers?.some((m) => m.kind === 'error') ?? false;
+  const hasPrefix = (record.projectionPrefix?.length ?? 0) > 0;
+  return hasErrorMarker || hasPrefix ? 2 : 1;
+}
 
 /**
  * The six shapes a settled conversation is made of. `tool-call` is the one

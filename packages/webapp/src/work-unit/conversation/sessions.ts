@@ -43,14 +43,27 @@ export class CanonicalSessionReader {
 
   /** Every unit's Pi history — `TranscriptCollectionDeps.loadPersistedSessions`. */
   async loadAgentSessions(): Promise<SessionData[]> {
-    const records = await this.store.loadAll();
-    return records.map(agentSessionFromRecord);
+    return (await this.latestPerUnit()).map(agentSessionFromRecord);
   }
 
   /** Every unit's chat projection — `TranscriptCollectionDeps.loadUiChatSessions`. */
   async loadChatSessions(): Promise<Session[]> {
-    const records = await this.store.loadAll();
-    return Promise.all(records.map(chatSessionFromRecord));
+    return Promise.all((await this.latestPerUnit()).map(chatSessionFromRecord));
+  }
+
+  /**
+   * One record per unit. `rekey` (a promote) is save-then-delete, so a crash
+   * between the two leaves the unit under both its old and new key; the
+   * consumers key by unit, and whichever copy happened to come last in key
+   * order would win. The most recently written one is the live one.
+   */
+  private async latestPerUnit(): Promise<WorkUnitConversationRecord[]> {
+    const latest = new Map<string, WorkUnitConversationRecord>();
+    for (const record of await this.store.loadAll()) {
+      const seen = latest.get(record.workUnitId);
+      if (!seen || record.updatedAt > seen.updatedAt) latest.set(record.workUnitId, record);
+    }
+    return [...latest.values()];
   }
 
   /**

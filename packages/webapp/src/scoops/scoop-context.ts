@@ -55,11 +55,11 @@ import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headles
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { TurnGuestGate } from '../sudo/types.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
-import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
+import { conversationIdentityFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { tmpDirFor, toDescriptor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { chatSessionIdFor, processOwnerKindFor } from '../work-unit/record.js';
+import { processOwnerKindFor } from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
 import { handleAgentEnd } from './scoop-context/agent-end-dispatch.js';
 import { type AgentEventSink, routeAgentEvent } from './scoop-context/agent-event-router.js';
@@ -229,19 +229,7 @@ export class ScoopContext {
       // store a conversation is written to or restored from. Absent (no store
       // wired), the unit persists nothing.
       canonical: conversationStore
-        ? {
-            store: conversationStore,
-            identity: {
-              key: conversationKeyFor(scoop),
-              workUnitId: scoop.jid,
-              workspaceId: workspaceIdFor(scoop),
-              folder: scoop.folder,
-              legacyKeys: {
-                agentSessionId: scoop.jid,
-                chatSessionId: chatSessionIdFor(scoop),
-              },
-            },
-          }
+        ? { store: conversationStore, identity: conversationIdentityFor(scoop) }
         : null,
       // The unit's key in the frozen legacy `agent-sessions` store, which a
       // clear still deletes from. The outgoing Adobe `X-Session-Id` is

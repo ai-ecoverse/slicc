@@ -469,4 +469,86 @@ describe('WorkUnitConversationStore after the #2365 cut', () => {
     expect(await broken.loadAll()).toEqual([]);
     expect(await broken.loadLatestInWorkspace('/workspace')).toBeNull();
   });
+
+  describe('schema version stamping', () => {
+    const errorMarker = { id: 'err-1', kind: 'error' as const, timestamp: 5, text: 'boom' };
+
+    it('keeps an ordinary record at v1, so a pre-#2365 build still reads it', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      expect((await store.read(identity.key)).status).toBe('ok');
+      const raw = await store.load(identity.key);
+      expect(raw?.version).toBe(1);
+    });
+
+    it('stamps v2 on a record carrying an error marker, and v1 again once it is gone', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      await store.putMarker(identity.key, errorMarker);
+      expect((await store.load(identity.key))?.version).toBe(2);
+
+      await store.deleteMarker(identity.key, errorMarker.id);
+      expect((await store.load(identity.key))?.version).toBe(1);
+    });
+
+    it('stamps v2 on a record carrying a projection prefix', async () => {
+      await saveUiProjection();
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      expect((await store.load(identity.key))?.version).toBe(2);
+    });
+
+    it("never lowers a newer build's version", async () => {
+      await store.save({
+        ...identity,
+        version: CONVERSATION_RECORD_VERSION + 1,
+        origin: 'agent-history',
+        entries: [],
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      expect(await store.read(identity.key)).toEqual({
+        status: 'incompatible',
+        version: CONVERSATION_RECORD_VERSION + 1,
+      });
+    });
+  });
+
+  describe('marker-only records', () => {
+    const errorMarker = { id: 'err-1', kind: 'error' as const, timestamp: 5, text: 'bad key' };
+
+    it('creates the record for a marker when asked to', async () => {
+      // A turn that failed before Pi held a message never checkpoints.
+      expect(await store.putMarker(identity.key, errorMarker, { createWith: identity })).toBe(true);
+      const record = await store.load(identity.key);
+      expect(record).toMatchObject({
+        workUnitId: 'cone_1',
+        origin: 'agent-history',
+        entries: [],
+        markers: [errorMarker],
+      });
+
+      // The first real checkpoint then extends it instead of replacing it.
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      const after = await store.load(identity.key);
+      expect(after?.markers).toEqual([errorMarker]);
+      expect(after?.rewrites).toBeUndefined();
+    });
+
+    it('still declines an absent record without createWith', async () => {
+      expect(await store.putMarker(identity.key, errorMarker)).toBe(false);
+      expect(await store.load(identity.key)).toBeNull();
+    });
+
+    it("never creates over a newer build's record", async () => {
+      await store.save({
+        ...identity,
+        version: CONVERSATION_RECORD_VERSION + 1,
+        origin: 'agent-history',
+        entries: [],
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      expect(await store.putMarker(identity.key, errorMarker, { createWith: identity })).toBe(
+        false
+      );
+    });
+  });
 });

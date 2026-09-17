@@ -16,9 +16,11 @@ import { toAgentMessages, toChatMessages } from '../../../src/work-unit/conversa
 import { conversationKeyFor } from '../../../src/work-unit/conversation/key.js';
 import {
   CONVERSATION_MIGRATION_ID,
+  CONVERSATION_MIGRATION_VERSION,
   migrateConversations,
 } from '../../../src/work-unit/conversation/migration.js';
 import { WorkUnitConversationStore } from '../../../src/work-unit/conversation/store.js';
+import { CONVERSATION_RECORD_VERSION } from '../../../src/work-unit/conversation/types.js';
 import { childRecord, rootRecord } from '../fixtures.js';
 import {
   legacyAgentMessages,
@@ -264,6 +266,28 @@ describe('migrateConversations', () => {
     const summary = await migrateConversations(depsFor(store, [cone], legacy));
 
     expect(summary.migrated).toBe(1);
+  });
+
+  it('does not re-run for a record-schema bump (#2365 v2)', async () => {
+    // The legacy input is frozen; re-importing it would resurrect nothing new
+    // and could only reintroduce what a user cleared since.
+    const cone = rootRecord();
+    legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });
+    await store.putMigrationState({
+      id: CONVERSATION_MIGRATION_ID,
+      version: CONVERSATION_MIGRATION_VERSION,
+      completedKeys: [conversationKeyFor(cone)],
+      skipped: [],
+      done: true,
+      startedAt: 1,
+      updatedAt: 1,
+    });
+
+    const summary = await migrateConversations(depsFor(store, [cone], legacy));
+
+    expect(CONVERSATION_RECORD_VERSION).not.toBe(CONVERSATION_MIGRATION_VERSION);
+    expect(summary.migrated).toBe(0);
+    expect(await store.load(conversationKeyFor(cone))).toBeNull();
   });
 
   it('heartbeats after every unit so a long pass cannot trip the boot watchdog', async () => {

@@ -14,8 +14,8 @@
  * 3. **It resumes.** The cursor is persisted after every unit, so a boot
  *    that dies mid-pass — a poisoned record, a killed tab, the #2006
  *    ready-timeout — continues where it stopped instead of starting over.
- * 4. **It is versioned.** `CONVERSATION_RECORD_VERSION` is part of the
- *    cursor; bumping the record schema re-runs the pass over every unit.
+ * 4. **It is versioned.** {@link CONVERSATION_MIGRATION_VERSION} is part of
+ *    the cursor; bumping it re-runs the pass over every unit.
  *
  * Source precedence per unit: Pi history (`agent-sessions`, keyed by jid)
  * first, because it is the only faithful input for a Pi restore; the chat
@@ -27,9 +27,8 @@ import type { AgentMessage } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import type { ChatMessage } from '../../scoops/chat-types.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
-import { chatSessionIdFor } from '../record.js';
 import { entriesFromAgentMessages, entriesFromChatMessages } from './entries.js';
-import { conversationKeyFor, workspaceIdFor } from './key.js';
+import { conversationIdentityFor, conversationKeyFor } from './key.js';
 import type { ConversationMigrationState, WorkUnitConversationStore } from './store.js';
 import type { WorkUnitConversationRecord } from './types.js';
 import { CONVERSATION_RECORD_VERSION } from './types.js';
@@ -44,7 +43,14 @@ const log = createLogger('work-unit-conversation');
  */
 class CanonicalUnreadableError extends Error {}
 
-/** Cursor id. One pass, versioned by the record schema. */
+/**
+ * Version of the legacy import itself. Deliberately separate from
+ * `CONVERSATION_RECORD_VERSION`: a record schema bump that only ADDS shapes
+ * (#2365's v2) must not re-run an import whose legacy input is frozen.
+ */
+export const CONVERSATION_MIGRATION_VERSION = 1;
+
+/** Cursor id. One pass, versioned by {@link CONVERSATION_MIGRATION_VERSION}. */
 export const CONVERSATION_MIGRATION_ID = 'conversations';
 
 /** The unit fields the migration needs — a `RegisteredScoop` satisfies it. */
@@ -183,13 +189,7 @@ async function migrateUnit(
   // `absent` or `malformed` — both are safe to write: the legacy stores are
   // the source of truth here, and a broken record is a repair, not a loss.
 
-  const identity = {
-    key,
-    workUnitId: unit.jid,
-    workspaceId: workspaceIdFor(unit),
-    folder: unit.folder,
-    legacyKeys: { agentSessionId: unit.jid, chatSessionId: chatSessionIdFor(unit) },
-  };
+  const identity = conversationIdentityFor(unit);
 
   const agentSession = await deps.loadAgentSession(unit.jid);
   if (agentSession && !Array.isArray(agentSession.messages)) {
@@ -242,7 +242,7 @@ async function resumeState(
   now: number
 ): Promise<ConversationMigrationState> {
   const saved = await store.getMigrationState(CONVERSATION_MIGRATION_ID);
-  if (saved && saved.version === CONVERSATION_RECORD_VERSION) {
+  if (saved && saved.version === CONVERSATION_MIGRATION_VERSION) {
     return {
       ...saved,
       completedKeys: Array.isArray(saved.completedKeys) ? saved.completedKeys : [],
@@ -251,7 +251,7 @@ async function resumeState(
   }
   return {
     id: CONVERSATION_MIGRATION_ID,
-    version: CONVERSATION_RECORD_VERSION,
+    version: CONVERSATION_MIGRATION_VERSION,
     completedKeys: [],
     skipped: [],
     done: false,

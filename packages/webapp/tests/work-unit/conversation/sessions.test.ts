@@ -77,4 +77,17 @@ describe('CanonicalSessionReader', () => {
     expect((await reader.load('session-cone-research'))?.id).toBe('session-cone-research');
     expect(await reader.load('not-a-session-id')).toBeNull();
   });
+
+  it('reports a unit once when an interrupted rekey left it under two keys', async () => {
+    // `rekey` is save-then-delete; a crash in between leaves both copies.
+    const promoted = identityFor('scoop_1', 'worker', '/cones/worker/workspace');
+    await store.syncAgentMessages(promoted, legacyAgentMessages(), { now: Date.now() + 1_000 });
+
+    const agent = (await reader.loadAgentSessions()).filter((s) => s.id === 'scoop_1');
+    const chat = (await reader.loadChatSessions()).filter((s) => s.id === 'session-worker');
+    expect(agent).toHaveLength(1);
+    expect(chat).toHaveLength(1);
+    // The newer (promoted, continued) copy wins, not whichever sorts last.
+    expect(agent[0].messages).toEqual(legacyAgentMessages());
+  });
 });

@@ -57,7 +57,7 @@ import type {
   LegacyConversationKeys,
   WorkUnitConversationRecord,
 } from './types.js';
-import { CONVERSATION_RECORD_VERSION, isReadableRecord } from './types.js';
+import { CONVERSATION_RECORD_VERSION, isReadableRecord, recordSchemaVersion } from './types.js';
 
 const log = createLogger('work-unit-conversation');
 
@@ -77,7 +77,7 @@ const MAX_MARKERS = 64;
 /** Resumable cursor of a versioned migration into the canonical store. */
 export interface ConversationMigrationState {
   id: string;
-  /** Schema version this cursor was written for; a bump re-runs everything. */
+  /** Migration version this cursor was written for; a bump re-runs everything. */
   version: number;
   /** Canonical keys already migrated — the resume point after a crash. */
   completedKeys: string[];
@@ -172,12 +172,22 @@ export class WorkUnitConversationStore {
     }
   }
 
-  /** Write a record verbatim. Used by the migration and by the sync paths. */
-  async save(record: WorkUnitConversationRecord): Promise<void> {
+  /**
+   * Write a record. Used by the migration and by the sync paths. The stored
+   * `version` is the lowest schema that can express the record
+   * ({@link recordSchemaVersion}), so an older build keeps reading every
+   * record it can understand and declines the rest; a version above this
+   * build's is kept as given. Returns the record as stored.
+   */
+  async save(record: WorkUnitConversationRecord): Promise<WorkUnitConversationRecord> {
+    const version =
+      record.version > CONVERSATION_RECORD_VERSION ? record.version : recordSchemaVersion(record);
+    const stored = { ...record, version };
     const db = await this.getDb();
     const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
-    tx.objectStore(CONVERSATIONS_STORE).put(record);
+    tx.objectStore(CONVERSATIONS_STORE).put(stored);
     await transaction(tx);
+    return stored;
   }
 
   /**
@@ -349,8 +359,7 @@ export class WorkUnitConversationStore {
         now,
       });
       if (!record) return existing;
-      await this.save(record);
-      return record;
+      return await this.save(record);
     } catch (err) {
       log.warn('Conversation record write failed', {
         key: identity.key,
@@ -372,9 +381,18 @@ export class WorkUnitConversationStore {
    * cue to hold the marker and retry once history has been written
    * (`Bridge.flushPendingMarkers`), which is how a cone that compacts before
    * its first checkpoint still keeps its seam.
+   *
+   * `createWith` opts out of that for an absent record: the marker then
+   * starts a record of its own. An error card needs it — a turn that fails
+   * before Pi holds a single message never checkpoints, so a held card would
+   * never be written (#2365). A compaction seam never passes it.
    */
-  async putMarker(key: string, marker: ConversationMarker): Promise<boolean> {
-    return this.withRecord(key, (record) => {
+  async putMarker(
+    key: string,
+    marker: ConversationMarker,
+    options: { createWith?: ConversationIdentity } = {}
+  ): Promise<boolean> {
+    return this.withRecord(key, options.createWith, (record) => {
       const kept = (record.markers ?? []).filter((m) => m.id !== marker.id);
       kept.push(marker);
       kept.sort((a, b) => a.timestamp - b.timestamp);
@@ -387,7 +405,7 @@ export class WorkUnitConversationStore {
    * claiming it happened (#2843). A no-op when the marker is already gone.
    */
   async deleteMarker(key: string, markerId: string): Promise<boolean> {
-    return this.withRecord(key, (record) => {
+    return this.withRecord(key, undefined, (record) => {
       const kept = (record.markers ?? []).filter((m) => m.id !== markerId);
       if (kept.length === (record.markers?.length ?? 0)) return null;
       return { ...record, markers: kept };
@@ -400,22 +418,30 @@ export class WorkUnitConversationStore {
    */
   private withRecord(
     key: string,
+    createWith: ConversationIdentity | undefined,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
-    return this.serialize(key, () => this.mutateRecord(key, mutate));
+    return this.serialize(key, () => this.mutateRecord(key, createWith, mutate));
   }
 
   private async mutateRecord(
     key: string,
+    createWith: ConversationIdentity | undefined,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
     try {
       const current = await this.read(key);
-      // `absent` joins `incompatible` / `error` here rather than creating a
-      // record: an annotation with no conversation under it would derive to a
-      // transcript that is nothing but seams.
-      if (current.status !== 'ok') return false;
-      const next = mutate(current.record);
+      // `absent` joins `incompatible` / `error` here unless the caller asked
+      // to create: an annotation with no conversation under it would
+      // otherwise derive to a transcript that is nothing but seams.
+      const base =
+        current.status === 'ok'
+          ? current.record
+          : current.status === 'absent' && createWith
+            ? emptyRecord(createWith, Date.now())
+            : null;
+      if (!base) return false;
+      const next = mutate(base);
       if (!next) return false;
       await this.save({ ...next, updatedAt: Date.now() });
       return true;
@@ -569,6 +595,22 @@ function mergeEntries(
     entries: next,
     updatedAt: times.now,
     rewrites: appended ? existing.rewrites : (existing.rewrites ?? 0) + 1,
+    legacyKeys: identity.legacyKeys,
+  };
+}
+
+/** A record with no conversation yet — the base a marker-only write starts from. */
+function emptyRecord(identity: ConversationIdentity, now: number): WorkUnitConversationRecord {
+  return {
+    key: identity.key,
+    version: CONVERSATION_RECORD_VERSION,
+    workUnitId: identity.workUnitId,
+    workspaceId: identity.workspaceId,
+    folder: identity.folder,
+    origin: 'agent-history',
+    entries: [],
+    createdAt: now,
+    updatedAt: now,
     legacyKeys: identity.legacyKeys,
   };
 }
