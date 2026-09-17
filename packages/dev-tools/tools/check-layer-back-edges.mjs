@@ -21,7 +21,10 @@
  *
  * Directories not named in LAYER_RANK (kernel/, providers/, speech/, …) sit
  * outside the documented stack; they are scanned as importers only when a
- * ranked layer is the target, and are never a target themselves.
+ * ranked layer is the target, and are never a target themselves — except
+ * scoops/ value-importing kernel/ (#3231). Ranking kernel itself is not
+ * cheap: cdp/, shell/, and core/ already value-import it. A top-level
+ * `import type { … } from` clause still erases and is allowed.
  *
  * The same pass also catches the *cross-package* form of the same mistake: a
  * relative specifier that climbs out of packages/webapp/src into a sibling
@@ -98,7 +101,7 @@ export const LAYER_RANK = {
  * import from one of them is the same bundle-bloat back-edge the original
  * ui-only gate caught. They rank just under `ui/`: an import into `ui/` is a
  * back-edge, imports into every other layer are not, and they are never a
- * back-edge target themselves.
+ * back-edge target themselves — except scoops/ value-importing kernel/ (#3231).
  */
 const UNRANKED_IMPORTER_RANK = LAYER_RANK.ui - 0.5;
 
@@ -285,6 +288,15 @@ export function stackById(id) {
 const RELATIVE_IMPORT_RE =
   /(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)['"](\.\.?\/[^'"]+)['"]/g;
 
+// A full `import type { ... } from '<spec>'` clause. Deliberately does NOT
+// match a mixed `import { type X, Y }` clause (that carries a real value
+// import too), a type-only namespace/default import, or an `export type {
+// ... } from '<spec>'` re-export (still a live binding at the type level,
+// and not the narrow shape this repo grants) — the one exemption this repo
+// grants is narrow on purpose. Shared by the chrome-extension webapp-escape
+// pass and the scoops→kernel value-import check (#3231).
+const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
+
 /**
  * Find every import in `source` that points UP the stack from `importerRel`
  * (a scan-root-relative path). Returns `[{ line, specifier, from, to }]`;
@@ -293,6 +305,10 @@ const RELATIVE_IMPORT_RE =
  *
  * For stacks with `isolatedLayers`, an import between two different files in
  * the same isolated layer is also a back-edge (sideways route→route).
+ *
+ * On the webapp stack, a scoops/ value import of kernel/ is a back-edge even
+ * though kernel/ is unranked (#3231). Top-level `import type { … } from`
+ * clauses still erase and are allowed.
  */
 export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const fromLayer = stack.layerOf(importerRel);
@@ -301,6 +317,13 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   const hits = [];
   const stripped = stripComments(source);
   const isolated = stack.isolatedLayers;
+  const typeOnlyFromIndices = new Set();
+  if (stack.id === 'webapp' && fromLayer === 'scoops') {
+    for (const tm of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
+      const fromOffset = tm[0].lastIndexOf('from');
+      typeOnlyFromIndices.add(tm.index + fromOffset);
+    }
+  }
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
     const specifier = m[1];
     const queryAt = specifier.indexOf('?');
@@ -311,8 +334,13 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
     ).slice(1);
     const toLayer = stack.layerOf(target);
     const toRank = stack.layerRank[toLayer];
-    if (toRank === undefined) continue;
-    const up = toRank > fromRank;
+    const scoopsKernelValue =
+      stack.id === 'webapp' &&
+      fromLayer === 'scoops' &&
+      toLayer === 'kernel' &&
+      !typeOnlyFromIndices.has(m.index);
+    if (toRank === undefined && !scoopsKernelValue) continue;
+    const up = scoopsKernelValue || (toRank !== undefined && toRank > fromRank);
     const sideways =
       isolated.has(fromLayer) &&
       fromLayer === toLayer &&
@@ -428,14 +456,6 @@ const WEBCOMPONENTS_SCAN_DIRS = [
 // convention for a `.ts` source file) rather than resolving it to the
 // on-disk `.ts` filename — match that, not the disk extension.
 const ALLOWED_TYPE_ONLY_WEBAPP_TARGET = 'packages/webapp/src/kernel/messages.js';
-
-// A full `import type { ... } from '<spec>'` clause. Deliberately does NOT
-// match a mixed `import { type X, Y }` clause (that carries a real value
-// import too), a type-only namespace/default import, or an `export type {
-// ... } from '<spec>'` re-export (still a live binding at the type level,
-// and not the narrow shape this repo grants) — the one exemption this repo
-// grants is narrow on purpose.
-const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
 
 // A dynamic `import(...)`/`require(...)` call whose specifier is a template
 // literal (backtick) rather than a plain string — round-1 review, #2891:

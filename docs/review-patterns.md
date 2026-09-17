@@ -329,7 +329,10 @@ attention-promotion paths without rebuilding live panel state.
   - **webapp** `fs → shell/git → cdp → tools → core → scoops → ui` — a `ui/` import from any
     lower layer, but equally `cdp/` importing `scoops/` or `tools/` importing `core/`.
     Unranked directories (`providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`) sit
-    below `ui/`: they may import any ranked layer except `ui/`.
+    below `ui/`: they may import any ranked layer except `ui/`. A **value** import
+    from `scoops/` into `kernel/` is still a back-edge (#3231) — type-only named
+    clauses erase and are allowed; constants belong in `base/`, not
+    `kernel/messages.ts`.
   - **node-server** `transport → services → entry` — `cdp-proxy/`, `bridge-security.ts`,
     `http-keepalive.ts` and the other transport leaves must not import services or
     `index.ts` / `*-main.ts`.
@@ -424,6 +427,12 @@ type`, namespace). That one exemption exists because it compiles away
 - **Issue #1950** — the same shape one rung lower: `cdp/` importing `reassembleCDPResponse`
   and `TrayTargetEntry` from `scoops/`. Invisible to the original ui-only ratchet, which is
   why the gate now covers every rung of the stack.
+- **Issue #3231** — `scoops/tray-runtime-config.ts` value-imported two URL-query
+  string constants from the 1604-line `kernel/messages.ts`. Invisible to the
+  ranked-layer ratchet because `kernel/` is unranked. The constants moved to
+  `base/leader-runtime-query.ts`; the gate now flags scoops→kernel **value**
+  imports (type-only named clauses still allowed). Ranking `kernel/` itself
+  would grandfather `cdp/`/`shell/` value imports, so the check stays narrow.
 - **Issue #2537** — the largest single entry (7 back-edges): `shell/supplemental-commands/
 host-command.ts` reaching three rungs up into `scoops/` for the tray status readers,
   `joinTray`/`leaveTray`, and the join-URL parser. Notable for the trap in its first

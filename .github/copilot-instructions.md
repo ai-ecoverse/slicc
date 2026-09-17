@@ -54,7 +54,7 @@ interaction, not later focus; test shell-open, rail-open, and attention promotio
 
 ## 10. Layer import direction
 
-CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → shell/git → cdp → tools → core → scoops → ui` plus node-server/extension/worker. Flag up-stack and cross-package relative imports. chrome-extension/webcomponents→webapp is zero-tolerance except kernel-message types. Swift: SPM + `public`; widgets must not import WebRTC. Probes below `ui/` use `CapabilityBroker`.
+CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → shell/git → cdp → tools → core → scoops → ui` plus other TS apps. Flag up-stack, scoops→kernel values, and cross-package imports. chrome-extension/webcomponents→webapp is zero-tolerance except kernel-message types. Swift: SPM + `public`; widgets must not import WebRTC. Probes below `ui/` use `CapabilityBroker`.
 
 ## 11. Untyped string-keyed bags
 
