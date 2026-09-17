@@ -276,14 +276,32 @@ interface ScreencaptureOptions {
   durationMs?: number;
 }
 
+/**
+ * `parseKnownFlags` refuses to swallow a known boolean as a value flag's
+ * argument (`-V --audio` keeps `--audio` as a bool). That leaves `-V` present
+ * in argv with no entry in `values`, which would otherwise silently fall back
+ * to the default duration. Detect that case and fail closed.
+ */
+function durationFlagMissingValue(
+  expanded: readonly string[],
+  values: Map<string, string>
+): boolean {
+  if (values.has('-V') || values.has('--duration')) return false;
+  return expanded.some((a) => a === '-V' || a === '--duration');
+}
+
 function parseScreencaptureOptions(
   args: readonly string[]
 ): ScreencaptureOptions | ScreencaptureResult {
-  const parsed = parseKnownFlags(expandAttachedDurationFlags(args), {
+  const expanded = expandAttachedDurationFlags(args);
+  const parsed = parseKnownFlags(expanded, {
     bool: SCREENCAPTURE_BOOL_FLAGS,
     value: SCREENCAPTURE_VALUE_FLAGS,
   });
   if ('error' in parsed) return scFail(parsed.error);
+  if (durationFlagMissingValue(expanded, parsed.values)) {
+    return scFail('-V/--duration requires a value');
+  }
 
   const toClipboard = parsed.bools.has('--clipboard') || parsed.bools.has('-c');
   const view = parsed.bools.has('--view') || parsed.bools.has('-v');

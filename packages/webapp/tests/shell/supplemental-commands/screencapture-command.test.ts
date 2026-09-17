@@ -217,6 +217,20 @@ describe('screencapture command', () => {
     expect(result.stderr).toContain('--audio');
   });
 
+  it('rejects -V when the next token is another flag (not a duration)', async () => {
+    (globalThis as any).window = {};
+    (globalThis as any).document = {};
+    (globalThis as any).navigator = {
+      mediaDevices: { getDisplayMedia: vi.fn() },
+    };
+
+    const cmd = createScreencaptureCommand();
+    const result = await cmd.execute(['-V', '--audio', 'clip.webm'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('-V/--duration requires a value');
+    expect((globalThis as any).navigator.mediaDevices.getDisplayMedia).not.toHaveBeenCalled();
+  });
+
   it('parses arguments correctly with -- separator', async () => {
     (globalThis as any).window = {};
     (globalThis as any).document = {};
@@ -517,6 +531,56 @@ describe('screencapture command', () => {
         const result = await promise;
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain('video');
+      } finally {
+        vi.useRealTimers();
+        delete (globalThis as any).MediaRecorder;
+      }
+    });
+
+    it('reports elapsed duration when sharing stops before the timer', async () => {
+      const endedListeners = new Set<() => void>();
+      const track = {
+        stop: vi.fn(),
+        addEventListener: vi.fn((type: string, fn: () => void) => {
+          if (type === 'ended') endedListeners.add(fn);
+        }),
+      };
+      mockStream.getTracks = () => [track];
+      mockStream.getVideoTracks = () => [track];
+
+      class FakeMediaRecorder {
+        static isTypeSupported = () => true;
+        state = 'inactive';
+        ondataavailable: ((ev: { data: Blob }) => void) | null = null;
+        onstop: (() => void) | null = null;
+        start() {
+          this.state = 'recording';
+          queueMicrotask(() => {
+            this.ondataavailable?.({
+              data: new Blob(['fake-webm'], { type: 'video/webm' }),
+            });
+          });
+        }
+        stop() {
+          this.state = 'inactive';
+          queueMicrotask(() => this.onstop?.());
+        }
+      }
+      (globalThis as any).MediaRecorder = FakeMediaRecorder;
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const cmd = createScreencaptureCommand();
+        const ctx = createMockCtx();
+        // Request 60s; stop sharing after ~1.5s.
+        const promise = cmd.execute(['--video', '-V', '60', 'early.webm'], ctx as any);
+        await vi.advanceTimersByTimeAsync(1500);
+        for (const fn of endedListeners) fn();
+        await vi.advanceTimersByTimeAsync(10);
+        const result = await promise;
+        expect(result.exitCode).toBe(0);
+        // Must not claim the full 60s when the user stopped early.
+        expect(result.stdout).not.toMatch(/\(60s\)/);
+        expect(result.stdout).toMatch(/\(([12](\.\d)?|0\.\d)s\)/);
       } finally {
         vi.useRealTimers();
         delete (globalThis as any).MediaRecorder;

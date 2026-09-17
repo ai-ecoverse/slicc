@@ -192,10 +192,14 @@ async function recordDisplayVideo(
     }
   });
 
+  const startedAt = Date.now();
   recorder.start();
   await Promise.race([new Promise<void>((r) => setTimeout(r, durationMs)), trackEnded]);
   if (recorder.state !== 'inactive') recorder.stop();
   await stopped;
+  // Prefer wall-clock elapsed so Stop sharing before the timer reports the
+  // actual clip length instead of the requested limit.
+  const elapsedMs = Math.max(MIN_VIDEO_DURATION_MS, Date.now() - startedAt);
 
   video.srcObject = null;
   const blob = new Blob(chunks, { type: mimeType });
@@ -207,7 +211,7 @@ async function recordDisplayVideo(
     mimeType: blob.type || mimeType,
     width,
     height,
-    durationMs,
+    durationMs: Math.min(elapsedMs, durationMs),
   };
 }
 

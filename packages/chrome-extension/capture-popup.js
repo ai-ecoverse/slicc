@@ -249,10 +249,14 @@ async function recordScreenClip(stream, req) {
       );
     }
   });
+  const startedAt = Date.now();
   recorder.start();
   await Promise.race([new Promise((r) => setTimeout(r, durationMs)), trackEnded]);
   if (recorder.state !== 'inactive') recorder.stop();
   await stopped;
+  // Prefer wall-clock elapsed so Stop sharing before the timer reports the
+  // actual clip length instead of the requested limit.
+  const elapsedMs = Math.max(100, Date.now() - startedAt);
   video.srcObject = null;
   const blob = new Blob(chunks, { type: mimeType });
   if (blob.size === 0) {
@@ -263,7 +267,7 @@ async function recordScreenClip(stream, req) {
     mimeType: blob.type || mimeType,
     width,
     height,
-    durationMs,
+    durationMs: Math.min(elapsedMs, durationMs),
   };
 }
 
