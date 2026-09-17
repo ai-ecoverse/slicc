@@ -1,0 +1,16 @@
+{
+  "model": "fake-dipper",
+  "turns": [
+    {
+      "whenUserMessageMatches": "check the thread",
+      "content": "Confirming it is not stuck:",
+      "tool_calls": [{ "name": "bash", "arguments": { "command": "echo still-working" } }]
+    },
+    {
+      "content": "Launched.\n\n```shtml\n<div class=\"sprinkle-action-card\">SPLIT DIP CARD</div>\n```\n\nTail after the dip.",
+      "contentChunkSize": 16,
+      "holdAfterContentChunks": 2
+    }
+  ],
+  "onOverflow": "error"
+}
