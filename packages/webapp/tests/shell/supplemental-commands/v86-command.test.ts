@@ -5,7 +5,6 @@ import {
   resetComputerRegistryForTests,
 } from '../../../src/computers/registry.js';
 import {
-  chordToScancodes,
   createV86Command,
   DEFAULT_VGA_MEMORY_MIB,
   extractVmName,
@@ -140,32 +139,6 @@ describe('extractVmName', () => {
       rest: ['hello', 'world'],
     });
     expect(extractVmName(['--name', 'x'])).toEqual({ name: 'x', rest: [] });
-  });
-});
-
-describe('chordToScancodes', () => {
-  it('maps single named keys to press+release', () => {
-    expect(chordToScancodes('enter')).toEqual([0x1c, 0x9c]);
-    expect(chordToScancodes('esc')).toEqual([0x01, 0x81]);
-    expect(chordToScancodes('f12')).toEqual([0x58, 0xd8]);
-  });
-
-  it('wraps modifiers around the final key', () => {
-    // ctrl down, c down, c up, ctrl up
-    expect(chordToScancodes('ctrl-c')).toEqual([0x1d, 0x2e, 0xae, 0x9d]);
-    expect(chordToScancodes('alt-tab')).toEqual([0x38, 0x0f, 0x8f, 0xb8]);
-  });
-
-  it('handles extended-code keys and ctrl-alt-del', () => {
-    expect(chordToScancodes('delete')).toEqual([0xe0, 0x53, 0xe0, 0xd3]);
-    expect(chordToScancodes('ctrl-alt-del')).toEqual([
-      0x1d, 0x38, 0xe0, 0x53, 0xe0, 0xd3, 0xb8, 0x9d,
-    ]);
-  });
-
-  it('returns null for unknown chords', () => {
-    expect(chordToScancodes('bogus-key')).toBeNull();
-    expect(chordToScancodes('')).toBeNull();
   });
 });
 

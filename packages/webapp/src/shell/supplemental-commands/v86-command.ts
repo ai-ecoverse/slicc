@@ -21,7 +21,6 @@
 
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { chordToScancodes } from '../../computers/keys.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { scratchDir } from '../tmpdir-env.js';
@@ -50,8 +49,6 @@ import {
   type V86Emulator,
   type V86Module,
 } from './v86-wasm.js';
-
-export { chordToScancodes };
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -454,7 +451,7 @@ export function createV86Command(deps: V86CommandDeps = {}): Command {
         case 'type':
           return v86Type(subArgs);
         case 'key':
-          return v86Key(subArgs);
+          return await v86Key(subArgs);
         case 'mouse':
           return v86Mouse(subArgs);
         case 'screenshot':
@@ -797,11 +794,12 @@ function v86Type(args: readonly string[]): CmdResult {
   return ok(computerHint('type', name));
 }
 
-function v86Key(args: readonly string[]): CmdResult {
+async function v86Key(args: readonly string[]): Promise<CmdResult> {
   const { name, rest } = extractVmName(args);
   const record = requireVm(name);
   if (isCmdResult(record)) return record;
   if (rest.length === 0) return fail('key: no chord supplied');
+  const { chordToScancodes } = await import('../../computers/keys.js');
   const sequences: number[][] = [];
   for (const chord of rest) {
     const codes = chordToScancodes(chord);

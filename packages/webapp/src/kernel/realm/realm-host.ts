@@ -16,8 +16,6 @@ import type { ComputerDescriptor } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
-import { JshComputerBackend } from '../../computers/adapters/jsh.js';
-import { getComputerRegistry, installComputerRegistry } from '../../computers/registry.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
@@ -1732,10 +1730,13 @@ interface ComputerReply {
 }
 
 function disposeComputerCtx(computerCtx: ComputerDispatchCtx): void {
-  for (const id of computerCtx.registered) {
-    void getComputerRegistry()?.unregister(id);
+  const ids = computerCtx.registered.splice(0);
+  if (ids.length > 0) {
+    void import('../../computers/registry.js').then(({ getComputerRegistry }) => {
+      const registry = getComputerRegistry();
+      for (const id of ids) void registry?.unregister(id);
+    });
   }
-  computerCtx.registered.length = 0;
   for (const slot of computerCtx.pending.values()) {
     slot.reject(new Error('realm disposed'));
   }
@@ -1750,6 +1751,11 @@ async function dispatchComputer(
   switch (op) {
     case 'register': {
       const descriptor = args[0] as ComputerDescriptor;
+      const [{ JshComputerBackend }, { getComputerRegistry, installComputerRegistry }] =
+        await Promise.all([
+          import('../../computers/adapters/jsh.js'),
+          import('../../computers/registry.js'),
+        ]);
       const backend = new JshComputerBackend(descriptor, (callOp, callArgs) => {
         const requestId = `c${++computerCtx.requestSeq}`;
         return new Promise((resolve, reject) => {
@@ -1768,6 +1774,7 @@ async function dispatchComputer(
     }
     case 'unregister': {
       const id = String(args[0] ?? '');
+      const { getComputerRegistry } = await import('../../computers/registry.js');
       await getComputerRegistry()?.unregister(id);
       computerCtx.registered = computerCtx.registered.filter((x) => x !== id);
       return { ok: true };
