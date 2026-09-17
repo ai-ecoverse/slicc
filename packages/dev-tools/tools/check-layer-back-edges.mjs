@@ -311,6 +311,22 @@ function typeOnlyFromKeywordIndex(match) {
 }
 
 /**
+ * True when a static `kernel` path segment comes after an interpolated
+ * segment. Replacing `${…}` with a normal filename then hides the case
+ * where the interpolation is `..` and walks into top-level `kernel/`
+ * (#3251 P2).
+ */
+function kernelSegmentFollowsInterpolation(raw) {
+  const parts = raw.split('?')[0].split('/');
+  let seenInterp = false;
+  for (const part of parts) {
+    if (part.includes('${')) seenInterp = true;
+    else if (part === 'kernel' && seenInterp) return true;
+  }
+  return false;
+}
+
+/**
  * Find every import in `source` that points UP the stack from `importerRel`
  * (a scan-root-relative path). Returns `[{ line, specifier, from, to }]`;
  * comments are ignored. `stack` defaults to the webapp stack so existing
@@ -368,6 +384,14 @@ export function findLayerBackEdges(importerRel, source, stack = WEBAPP_STACK) {
   for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
     const raw = m[1];
     if (raw.includes('${')) {
+      if (
+        stack.id === 'webapp' &&
+        fromLayer === 'scoops' &&
+        kernelSegmentFollowsInterpolation(raw)
+      ) {
+        consider(raw, m.index, 'kernel/__interp__.js');
+        continue;
+      }
       const staticish = raw.replace(/\$\{[^}]*\}/g, '__interp__');
       const queryAt = staticish.indexOf('?');
       const target = resolve(

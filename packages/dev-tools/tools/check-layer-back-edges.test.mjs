@@ -201,6 +201,22 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ).toEqual([]);
   });
 
+  it('flags a nested-scoop interpolation that can walk into top-level kernel/', () => {
+    expect(
+      findLayerBackEdges(
+        'scoops/sub/x.ts',
+        'const m = await import(`../${up}/kernel/messages.js`);'
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../${up}/kernel/messages.js',
+        from: 'scoops',
+        to: 'kernel',
+      },
+    ]);
+  });
+
   it('flags a static template-literal whose specifier contains $ but not ${', () => {
     expect(
       findLayerBackEdges('core/session.ts', 'const m = await import(`../ui/price$.js`);')
