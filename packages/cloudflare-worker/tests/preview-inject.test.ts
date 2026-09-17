@@ -279,7 +279,23 @@ describe('preview-inject', () => {
         new Request(`https://${previewHost}/index.html`, { headers: { range: 'bytes=0-9' } }),
         env
       );
-      expect(ranges).toEqual([bridge ? undefined : 'bytes=0-9']);
+      // Directory URLs resolve to index.html leader-side, so they count as pages.
+      for (const path of ['/docs/', '/docs', '/']) {
+        await handleWorkerRequest(
+          new Request(`https://${previewHost}${path}`, { headers: { range: 'bytes=0-9' } }),
+          env
+        );
+      }
+      // A non-HTML asset keeps its range on bridged previews too.
+      await handleWorkerRequest(
+        new Request(`https://${previewHost}/clip.mp4`, { headers: { range: 'bytes=0-9' } }),
+        env
+      );
+      expect(ranges).toEqual(
+        bridge
+          ? [undefined, undefined, undefined, undefined, 'bytes=0-9']
+          : ['bytes=0-9', 'bytes=0-9', 'bytes=0-9', 'bytes=0-9', 'bytes=0-9']
+      );
       if (bridge) {
         expect(res.status).toBe(200);
         expect(await res.text()).toContain('/__slicc/preview-bridge.js');

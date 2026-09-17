@@ -101,7 +101,9 @@ function fetchLivePreview(
   // A bridged page gets a script injected into its body, so byte offsets of
   // the stored file no longer describe what the visitor receives: serve such
   // pages whole (always a valid answer to a Range request).
-  const honourRange = !(record.bridge && /\.html?$/i.test(vfsPath));
+  // Directory URLs resolve to index.html leader-side, so only a path with a
+  // non-HTML file extension is known not to be an injected page.
+  const honourRange = !record.bridge || /\.(?!html?$)[^./]+$/i.test(vfsPath);
 
   return cachedPreviewFetch({
     request,
