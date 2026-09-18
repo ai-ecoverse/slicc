@@ -16,11 +16,17 @@ const MINUTE_MS = 60 * 1000;
 const NOW_MS = 2_000_000_000_000;
 
 describe('ScoopCostTracker', () => {
-  function createMockScoop(jid: string, label: string, isCone = false): RegisteredScoop {
+  function createMockScoop(
+    jid: string,
+    label: string,
+    isCone = false,
+    modelId?: string
+  ): RegisteredScoop {
     return {
       jid,
       assistantLabel: label,
       isCone,
+      model: modelId ? { provider: 'bedrock-camp', id: modelId } : undefined,
       tab: { id: `tab-${jid}`, type: 'scoop' as const, label },
     } as unknown as RegisteredScoop;
   }
@@ -114,22 +120,87 @@ describe('ScoopCostTracker', () => {
     ]);
   });
 
-  it('sorts all models in a scoop by cost while preserving the compatibility model', () => {
-    const scoop = createMockScoop('multi', 'Multi-model Scoop');
-    scoopsMap.set('multi', scoop);
+  it('reports the model in use now and collapses alias spellings of one model', () => {
+    const scoop = createMockScoop('cone', 'sliccy', true, 'global.anthropic.claude-opus-5');
+    scoopsMap.set('cone', scoop);
     contextsMap.set(
-      'multi',
+      'cone',
       createMockContext([
-        createAssistantMessage('model-frequent', 100, 50, 0, 0, 0.01),
-        createAssistantMessage('model-frequent', 100, 50, 0, 0, 0.01),
-        createAssistantMessage('model-expensive', 100, 50, 0, 0, 0.1),
+        createAssistantMessage('presto', 100, 50, 0, 0, 0.2, 0, 0, 0, NOW_MS - 3),
+        createAssistantMessage('presto', 100, 50, 0, 0, 0.2, 0, 0, 0, NOW_MS - 2),
+        createAssistantMessage('claude-opus-5', 100, 50, 0, 0, 0.05, 0, 0, 0, NOW_MS - 1),
+        createAssistantMessage(
+          'global.anthropic.claude-opus-5',
+          100,
+          50,
+          0,
+          0,
+          0.05,
+          0,
+          0,
+          0,
+          NOW_MS
+        ),
       ])
     );
 
     const [cost] = tracker.getSessionCosts();
 
-    expect(cost.model).toBe('model-frequent');
+    // Most turns were presto. The pin is the model in use now, and the two
+    // opus spellings are one model, reported under the pin's spelling.
+    expect(cost.model).toBe('global.anthropic.claude-opus-5');
+    expect(cost.models).toEqual(['presto', 'global.anthropic.claude-opus-5']);
+  });
+
+  it('uses the latest turn when the unit has no pinned model', () => {
+    const scoop = createMockScoop('multi', 'Multi-model Scoop');
+    scoopsMap.set('multi', scoop);
+    contextsMap.set(
+      'multi',
+      createMockContext([
+        createAssistantMessage('model-frequent', 100, 50, 0, 0, 0.01, 0, 0, 0, NOW_MS - 2),
+        createAssistantMessage('model-frequent', 100, 50, 0, 0, 0.01, 0, 0, 0, NOW_MS - 1),
+        createAssistantMessage('model-expensive', 100, 50, 0, 0, 0.1, 0, 0, 0, NOW_MS),
+      ])
+    );
+
+    const [cost] = tracker.getSessionCosts();
+
+    expect(cost.model).toBe('model-expensive');
     expect(cost.models).toEqual(['model-expensive', 'model-frequent']);
+  });
+
+  it('collapses a dated Bedrock id with its bare alias', () => {
+    const scoop = createMockScoop(
+      'haiku',
+      'loose-ends',
+      false,
+      'anthropic.claude-haiku-4-5-20251001-v1:0'
+    );
+    scoopsMap.set('haiku', scoop);
+    contextsMap.set(
+      'haiku',
+      createMockContext([
+        createAssistantMessage('claude-haiku-4-5', 100, 50, 0, 0, 0.01, 0, 0, 0, NOW_MS - 1),
+        createAssistantMessage(
+          'anthropic.claude-haiku-4-5-20251001-v1:0',
+          100,
+          50,
+          0,
+          0,
+          0.02,
+          0,
+          0,
+          0,
+          NOW_MS
+        ),
+      ])
+    );
+
+    const [cost] = tracker.getSessionCosts();
+
+    expect(cost.model).toBe('anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(cost.models).toEqual(['anthropic.claude-haiku-4-5-20251001-v1:0']);
   });
 
   describe('burn rate', () => {
@@ -308,6 +379,26 @@ describe('ScoopCostTracker', () => {
     expect(result[1].cost).toBeCloseTo(0.015, 4);
     expect(result[2].model).toBe('model-cheap');
     expect(result[2].cost).toBeCloseTo(0.0015, 4);
+  });
+
+  it('merges bare and qualified spellings of one model and leaves unrelated ids apart', () => {
+    addLiveMessages('opus', [
+      createAssistantMessage('claude-opus-5', 100, 50, 0, 0, 0.01),
+      createAssistantMessage('global.anthropic.claude-opus-5', 200, 50, 0, 0, 0.02),
+      createAssistantMessage('claude-haiku-4-5', 10, 5, 0, 0, 0.001),
+      createAssistantMessage('anthropic.claude-haiku-4-5-20251001-v1:0', 10, 5, 0, 0, 0.001),
+      createAssistantMessage('grok-4.6', 10, 5, 0, 0, 0.003),
+      createAssistantMessage('grok-4.5', 10, 5, 0, 0, 0.004),
+    ]);
+
+    const result = tracker.getModelCosts();
+    const byModel = new Map(result.map((row) => [row.model, row]));
+
+    expect(byModel.get('claude-opus-5')).toMatchObject({ input: 300, turns: 2 });
+    expect(byModel.get('claude-haiku-4-5')).toMatchObject({ input: 20, turns: 2 });
+    expect(byModel.get('grok-4.6')).toMatchObject({ turns: 1 });
+    expect(byModel.get('grok-4.5')).toMatchObject({ turns: 1 });
+    expect(byModel.has('global.anthropic.claude-opus-5')).toBe(false);
   });
 
   it('returns empty array when no usage exists', () => {

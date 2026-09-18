@@ -81,6 +81,42 @@ export function parseClaudeVersion(modelId: string, modelName?: string): ClaudeV
   return null;
 }
 
+/**
+ * One identity for model ids that name the same Claude version.
+ *
+ * A bare pi-ai alias and a Bedrock region- or version-qualified spelling
+ * are the same model: `claude-opus-5` and `global.anthropic.claude-opus-5`,
+ * `claude-haiku-4-5` and `anthropic.claude-haiku-4-5-20251001-v1:0`. The
+ * key is the bare alias (`claude-<family>-<major>`, minor omitted when 0).
+ * Non-Claude ids, including ones pi-ai no longer advertises, are themselves
+ * — this does not guess that `grok-4.6` is `grok-4.5`.
+ */
+export function canonicalModelId(modelId: string): string {
+  const version = parseClaudeVersion(modelId);
+  if (!version) return modelId;
+  const base = `claude-${version.family}-${version.major}`;
+  return version.minor === 0 ? base : `${base}-${version.minor}`;
+}
+
+/**
+ * Spelling to report for ids that share one {@link canonicalModelId}.
+ *
+ * `preferred` wins when it names this model — the id the unit is pinned to
+ * now, which may be a spelling no turn has written yet. Otherwise the bare
+ * alias wins when one of the recorded spellings is that alias; else the
+ * shortest recorded spelling, so a qualified id is kept when it is the only
+ * one we actually saw.
+ */
+export function representativeModelId(ids: readonly string[], preferred?: string): string {
+  if (ids.length === 0) return preferred ?? '';
+  const key = canonicalModelId(ids[0] ?? '');
+  if (preferred && canonicalModelId(preferred) === key) return preferred;
+  if (ids.includes(key)) return key;
+  return ids.reduce((best, id) =>
+    id.length < best.length || (id.length === best.length && id < best) ? id : best
+  );
+}
+
 /** Compare two `{major, minor}` tuples; returns -1/0/1. */
 function compareVersion(
   a: { major: number; minor: number },

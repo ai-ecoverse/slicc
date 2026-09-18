@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { canonicalModelId, representativeModelId } from '../../providers/claude-model-version.js';
 import {
   formatBudgetPercent,
   formatBudgetResets,
@@ -17,8 +18,18 @@ export type SessionCostScope = 'live' | 'all';
 export interface ScoopCostData {
   name: string;
   type: 'cone' | 'scoop';
+  /**
+   * The model this unit is running now: its pinned id when the record has
+   * one, otherwise the model on the latest assistant turn. Not the model
+   * with the most turns.
+   */
   model: string;
-  /** All models used by this session, sorted by cost descending. */
+  /**
+   * Distinct models this session used, sorted by cost descending. A bare
+   * Claude alias and a region- or version-qualified spelling of the same
+   * model are one entry; the entry for the model in use now keeps that
+   * model's current spelling.
+   */
   models: string[];
   /** Whether the session is live, was dropped, or was loaded from the frozen-session index. */
   source: 'live' | 'dropped' | 'frozen';
@@ -77,9 +88,23 @@ function finiteNumber(value: unknown): number {
 /** Map a frozen-session index entry into the shared cost-command row shape. */
 export function frozenSessionToCostData(entry: FrozenSessionIndexEntry): ScoopCostData {
   const frozenModels = Array.isArray(entry.models) ? entry.models : [];
-  const models = frozenModels
-    .map((item) => (typeof item?.model === 'string' ? item.model : ''))
-    .filter(Boolean);
+  const buckets = new Map<string, { ids: string[]; cost: number }>();
+  for (const item of frozenModels) {
+    const model = typeof item?.model === 'string' ? item.model : '';
+    if (!model) continue;
+    const key = canonicalModelId(model);
+    const bucket = buckets.get(key);
+    const cost = finiteNumber(item?.cost);
+    if (!bucket) {
+      buckets.set(key, { ids: [model], cost });
+      continue;
+    }
+    if (!bucket.ids.includes(model)) bucket.ids.push(model);
+    bucket.cost += cost;
+  }
+  const models = [...buckets.values()]
+    .sort((a, b) => b.cost - a.cost || (a.ids[0] ?? '').localeCompare(b.ids[0] ?? ''))
+    .map((bucket) => representativeModelId(bucket.ids));
   const costAvailable = Number.isFinite(entry.cost?.total);
 
   return {
@@ -126,6 +151,12 @@ Options:
   --all        Include dropped scoops and frozen sessions
   --json       Output as JSON (for programmatic use)
   -h, --help   Show this help message
+
+The Model column is the model that unit is running now (its pinned id, or
+the latest turn when it has no pin) — not the model with the most turns.
+In JSON, \`model\` is that id and \`models\` lists each distinct model once:
+a bare alias and a region- or version-qualified id of the same model are
+one entry, and the entry for the model in use now keeps the current spelling.
 
 JSON shape: { "budget": <window|null>, "scoops": [ ... ] }
 `;
