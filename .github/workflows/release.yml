@@ -430,7 +430,13 @@ jobs:
           # testflight-distribute.mjs prepends them to its static onboarding
           # copy; see composeWhatsNew().
           SLICC_TF_WHATS_NEW: ${{ needs.analyze.outputs.tf_whats_new }}
-        run: npx semantic-release
+        # A merge during prepare (TestFlight can take most of this job) makes
+        # @semantic-release/git's HEAD:main push fail with "fetch first".
+        # Rebasing would tag commits the analyzer never saw. Exit 0 instead:
+        # the push that moved main, or the schedule catch-up, publishes.
+        # A failed push here used to open "Release pipeline is red" after the
+        # product had already shipped on the newer run (run 35366834171).
+        run: node packages/dev-tools/tools/release-publish.mjs
 
       - name: Alert on red release
         if: failure()
