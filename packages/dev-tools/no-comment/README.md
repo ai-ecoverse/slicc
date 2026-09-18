@@ -33,4 +33,5 @@ it fails if comments or developer docs come back.
 
 Pushes to `main` run `.github/workflows/no-comment-mirror.yml`, which strips
 the new tree, formats it (`biome format`, `prettier`), and commits it onto
-`no-comment` with a `No-Comment-Of: <sha>` trailer.
+`no-comment` with a `No-Comment-Of: <sha>` trailer. The push sets `HUSKY=0`
+so the human pre-push gates do not reject the derived branch.

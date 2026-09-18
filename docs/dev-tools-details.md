@@ -38,7 +38,9 @@ On every push to `main` the workflow:
    suppressions after comments around them are stripped)
 4. Commits the stripped tree onto `no-comment` with a `No-Comment-Of: <sha>`
    trailer, skipping the push when the stripped tree is unchanged (a
-   comment-only `main` commit)
+   comment-only `main` commit). The push step sets `HUSKY=0`, and
+   `.husky/pre-push` only enforces linear history / lint on feature
+   branches (not `main` or `no-comment`).
 
 The stripper removes source comments (TS/JS, CSS, Swift, Go, shell, YAML, HTML,
 JSONC) and deletes developer docs (`CLAUDE.md`, `AGENTS.md`, `docs/*.md`,
