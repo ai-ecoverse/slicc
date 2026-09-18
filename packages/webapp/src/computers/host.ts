@@ -9,6 +9,7 @@
 
 import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
 import type {
+  ComputerInputMsg,
   ComputerUnwatchMsg,
   ComputerWatchMsg,
   ExtensionMessage,
@@ -18,6 +19,8 @@ import type {
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { KernelTransport } from '../kernel/transport.js';
 import type { ComputerBackend } from './backend.js';
+import { fitComputerFrame } from './encode-frame.js';
+import { coerceComputerFrameBytes } from './frame-bytes.js';
 import { installComputerRegistry } from './registry.js';
 
 export const COMPUTER_POLL_TIMEOUT_MS = 8_000;
@@ -39,6 +42,7 @@ interface Watcher {
   fps: number;
   maxWidth: number;
   generation: number;
+  lastSentSeq: number;
   unsub: (() => void) | null;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: boolean;
@@ -68,18 +72,31 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
   const offChange = registry.onChange(pushList);
 
   const pushFrame = (id: string, frame: ComputerFrame, generation: number): void => {
+    void emitFittedFrame(id, frame, generation);
+  };
+
+  const emitFittedFrame = async (
+    id: string,
+    frame: ComputerFrame,
+    generation: number
+  ): Promise<void> => {
     const watcher = watchers.get(id);
     if (!watcher || watcher.generation !== generation) return;
-    const copy = frame.bytes.slice();
+    const fitted = await fitComputerFrame(frame, watcher.maxWidth);
+    if (watcher.generation !== generation) return;
+    if (fitted.seq <= watcher.lastSentSeq) return;
+    watcher.lastSentSeq = fitted.seq;
+    const copy = coerceComputerFrameBytes(fitted.bytes);
     send(
       {
         type: 'computer-frame',
         id,
-        seq: frame.seq,
-        mime: frame.mime,
-        width: frame.width,
-        height: frame.height,
+        seq: fitted.seq,
+        mime: fitted.mime,
+        width: fitted.width,
+        height: fitted.height,
         bytes: copy,
+        ...(fitted.overCap ? { overCap: true } : {}),
       },
       [copy.buffer]
     );
@@ -105,14 +122,17 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
       fps,
       maxWidth,
       generation: 1,
+      lastSentSeq: Number.NEGATIVE_INFINITY,
       unsub: null,
       timer: null,
       inFlight: false,
     };
     watchers.set(msg.id, watcher);
     if (backend.subscribe) {
-      watcher.unsub = backend.subscribe(fps, (frame) =>
-        pushFrame(msg.id, frame, watcher.generation)
+      watcher.unsub = backend.subscribe(
+        fps,
+        (frame) => pushFrame(msg.id, frame, watcher.generation),
+        maxWidth
       );
       return;
     }
@@ -132,6 +152,10 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
     const payload = envelope.payload as PanelToOffscreenMessage;
     if (payload.type === 'computer-watch') startWatch(payload as ComputerWatchMsg);
     else if (payload.type === 'computer-unwatch') stopWatch((payload as ComputerUnwatchMsg).id);
+    else if (payload.type === 'computer-input') {
+      const input = payload as ComputerInputMsg;
+      void registry.get(input.id)?.input(input.events);
+    }
   });
 
   send({ type: 'computers', computers: lastList });

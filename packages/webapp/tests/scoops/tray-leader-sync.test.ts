@@ -2270,6 +2270,53 @@ describe('LeaderSyncManager', () => {
       expect(listMessages).toHaveLength(0);
     });
 
+    it('sends computers.list on addFollower when computers is provided', () => {
+      const computers = [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh' as const,
+          title: 'fake',
+          size: { width: 8, height: 8 },
+          state: 'live' as const,
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll' as const,
+            keyboard: true,
+            mouse: 'absolute' as const,
+            scroll: true,
+            exec: false,
+            inputAllowed: true,
+          },
+          pid: null,
+        },
+      ];
+      const { manager } = createManager({
+        computers: {
+          list: () => computers,
+          onList: () => () => {},
+          onFrame: () => () => {},
+          lastFrame: () => null,
+          watch: vi.fn(() => 1),
+          unwatch: vi.fn(),
+        },
+      });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      const listMessages = channel.parseSent().filter((m) => m.type === 'computers.list');
+      expect(listMessages).toHaveLength(1);
+      if (listMessages[0].type === 'computers.list') {
+        expect(listMessages[0].computers).toEqual(computers);
+      }
+    });
+
+    it('omits computers.list when computers is not provided', () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      expect(channel.parseSent().filter((m) => m.type === 'computers.list')).toHaveLength(0);
+    });
+
     it('broadcastSprinklesList sends the current list to every follower', () => {
       const sprinkles = makeSprinkles();
       const { manager } = createManager({ getSprinkles: () => sprinkles });

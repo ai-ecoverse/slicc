@@ -26,8 +26,9 @@ export interface ComputerBackend {
    * Optional push source. The registry polls `screenshot` at `fps` when
    * absent. Push sources may be sparse: consumers keep the last frame and
    * stall only on a real timeout; `screenshot` returns that last frame
-   * while a stream is live.
+   * while a stream is live. `maxWidth` is a hint; the host still
+   * downscales frames that arrive wider than the watch cap.
    */
-  subscribe?(fps: number, onFrame: (frame: ComputerFrame) => void): () => void;
+  subscribe?(fps: number, onFrame: (frame: ComputerFrame) => void, maxWidth?: number): () => void;
   close(): Promise<void>;
 }

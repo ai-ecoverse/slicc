@@ -200,6 +200,27 @@ describe('slicc-image-preview', () => {
     expect(img.src).toBe(SRC2);
   });
 
+  it('setSrc swaps the image while open without replacing the overlay', async () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    el.open(SRC, origin);
+    await waitVisible(el);
+    const overlay = el.shadowRoot?.querySelector('.overlay');
+    el.setSrc(SRC2);
+    expect(el.isOpen).toBe(true);
+    expect(el.getAttribute('src')).toBe(SRC2);
+    expect(el.shadowRoot?.querySelector('.overlay')).toBe(overlay);
+    expect((el.shadowRoot?.querySelector('.image') as HTMLImageElement).src).toBe(SRC2);
+  });
+
+  it('setSrc updates the reflected src when the lightbox is closed', () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    el.setSrc(SRC);
+    expect(el.isOpen).toBe(false);
+    expect(el.getAttribute('src')).toBe(SRC);
+  });
+
   it('falls back to the host element as origin when none is supplied', () => {
     const el = document.createElement('slicc-image-preview') as SliccImagePreview;
     document.body.appendChild(el);

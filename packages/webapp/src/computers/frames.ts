@@ -8,6 +8,7 @@ import { scratchDir, type TmpDirEnv } from '../shell/tmpdir-env.js';
 import { encodeRgbaFrame, type RgbaFrame } from './encode-frame.js';
 
 export const FROZEN_FRAME_PREFIX = 'screen: ';
+export const COMPUTER_TARGET_PREFIX = 'target: ';
 
 export interface FrozenFrameFs {
   mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
@@ -30,6 +31,10 @@ export function frozenFramePath(tmp: string, name: string, seq: number): string 
 
 export function frozenFrameLine(path: string): string {
   return `${FROZEN_FRAME_PREFIX}${path}`;
+}
+
+export function computerTargetLine(id: string): string {
+  return `${COMPUTER_TARGET_PREFIX}${id}`;
 }
 
 export async function writeFrozenFrame(opts: WriteFrozenFrameOpts): Promise<string> {

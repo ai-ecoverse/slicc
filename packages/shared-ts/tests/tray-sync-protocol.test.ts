@@ -10,7 +10,10 @@ import {
   isCherryHostEventMessage,
   isCherrySliccEventMessage,
   reassembleCDPResponse,
+  reassembleComputerFrame,
   sendCDPResponse,
+  sendComputerFrame,
+  TRAY_SEND_HIGH_WATER_BYTES,
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
 } from '../src/tray-sync-protocol.js';
@@ -378,6 +381,94 @@ describe('tray-sync-protocol', () => {
       });
       expect(result?.error).toContain('Failed to reassemble CDP response');
       expect(buffers.size).toBe(0);
+    });
+  });
+
+  describe('sendComputerFrame', () => {
+    it('sends a small frame as a single computer.frame', () => {
+      const sent: TraySyncMessage[] = [];
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
+      sendComputerFrame(channel, {
+        id: 'jsh:fake',
+        seq: 1,
+        mime: 'image/jpeg',
+        width: 8,
+        height: 8,
+        data: 'QUJD',
+      });
+      expect(sent).toEqual([
+        {
+          type: 'computer.frame',
+          id: 'jsh:fake',
+          seq: 1,
+          mime: 'image/jpeg',
+          width: 8,
+          height: 8,
+          data: 'QUJD',
+        },
+      ]);
+    });
+
+    it('chunks an oversize frame and reassembles it', () => {
+      const sent: TraySyncMessage[] = [];
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
+      const data = 'x'.repeat(CDP_CHUNK_THRESHOLD + 10);
+      sendComputerFrame(channel, {
+        id: 'jsh:fake',
+        seq: 2,
+        mime: 'image/png',
+        width: 16,
+        height: 16,
+        data,
+      });
+      expect(sent.length).toBeGreaterThan(1);
+      expect(sent.every((m) => m.type === 'computer.frame')).toBe(true);
+      const buffers = new Map();
+      let assembled: ReturnType<typeof reassembleComputerFrame> = null;
+      for (const msg of sent) {
+        if (msg.type !== 'computer.frame') continue;
+        assembled = reassembleComputerFrame(buffers, msg);
+      }
+      expect(assembled).toEqual({
+        type: 'computer.frame',
+        id: 'jsh:fake',
+        seq: 2,
+        mime: 'image/png',
+        width: 16,
+        height: 16,
+        data,
+      });
+    });
+
+    it('refuses to semantic-chunk a frame when the channel is past high-water', () => {
+      const sent: TraySyncMessage[] = [];
+      const channel = {
+        bufferedAmount: TRAY_SEND_HIGH_WATER_BYTES,
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
+      const ok = sendComputerFrame(channel, {
+        id: 'jsh:fake',
+        seq: 3,
+        mime: 'image/jpeg',
+        width: 16,
+        height: 16,
+        data: 'x'.repeat(CDP_CHUNK_THRESHOLD + 10),
+      });
+      expect(ok).toBe(false);
+      expect(sent).toEqual([]);
     });
   });
 });

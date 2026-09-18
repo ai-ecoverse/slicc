@@ -132,13 +132,18 @@ export function base64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
  * the call stack on inputs larger than ~64 KiB.
  */
 export function uint8ToBase64(bytes: Uint8Array): string {
+  // Compact first: `Buffer.from(view.buffer)`-style callers and the
+  // chunked `btoa` path both mis-encode a view with `byteOffset !== 0`
+  // if they ever see the backing buffer instead of the slice.
+  const compact =
+    bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
   const B = nodeBuffer();
   if (B) {
-    return B.from(bytes).toString('base64');
+    return B.from(compact).toString('base64');
   }
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i += CHUNK_SIZE) {
-    const slice = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.byteLength));
+  for (let i = 0; i < compact.byteLength; i += CHUNK_SIZE) {
+    const slice = compact.subarray(i, Math.min(i + CHUNK_SIZE, compact.byteLength));
     binary += String.fromCharCode.apply(null, slice as unknown as number[]);
   }
   return btoa(binary);

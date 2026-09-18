@@ -56,7 +56,7 @@ describe('JshComputerBackend', () => {
   });
 
   it('caches subscribe frames and times out a silent stream', async () => {
-    const call = vi.fn(async (op: string) => {
+    const call = vi.fn(async (op: string, _args?: unknown[]) => {
       if (op === 'screenshot') {
         return { seq: 99, mime: 'image/jpeg', width: 8, height: 8, bytes: MINIMAL_JPEG };
       }
@@ -68,12 +68,17 @@ describe('JshComputerBackend', () => {
       20
     );
     const seen: number[] = [];
-    const stop = backend.subscribe!(4, (frame) => {
-      seen.push(frame.seq);
-    });
+    const stop = backend.subscribe!(
+      4,
+      (frame) => {
+        seen.push(frame.seq);
+      },
+      480
+    );
     await vi.waitFor(() => {
       expect(call.mock.calls.map((c) => c[0])).toContain('subscribe');
     });
+    expect(call.mock.calls.find((c) => c[0] === 'subscribe')?.[1]).toEqual([4, 480]);
     expect(call.mock.calls.map((c) => c[0])).not.toContain('screenshot');
     await expect(backend.screenshot({ format: 'jpeg' })).rejects.toThrow(/timed out/);
 

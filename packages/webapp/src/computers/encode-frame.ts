@@ -5,6 +5,8 @@
  * stub encoder when OffscreenCanvas is missing.
  */
 
+import type { ComputerFrame } from '@slicc/shared-ts';
+
 export interface RgbaFrame {
   data: Uint8ClampedArray;
   width: number;
@@ -139,4 +141,65 @@ export function base64FromBytes(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
+}
+
+/**
+ * Cap an encoded computer frame at `maxWidth`. Production resamples via
+ * createImageBitmap + OffscreenCanvas + convertToBlob. If those APIs are
+ * missing, the original pixels pass through and `overCap` is set — never
+ * rewrite JPEG/PNG headers to claim a smaller size.
+ */
+export async function fitComputerFrame(
+  frame: ComputerFrame,
+  maxWidth: number,
+  resample: (
+    frame: ComputerFrame,
+    width: number,
+    height: number
+  ) => Promise<Uint8Array | null> = resampleEncodedFrame
+): Promise<ComputerFrame> {
+  if (!maxWidth || frame.width <= maxWidth) {
+    if (!frame.overCap) return frame;
+    return {
+      seq: frame.seq,
+      mime: frame.mime,
+      width: frame.width,
+      height: frame.height,
+      bytes: frame.bytes,
+    };
+  }
+  const scale = maxWidth / frame.width;
+  const width = Math.max(1, Math.round(frame.width * scale));
+  const height = Math.max(1, Math.round(frame.height * scale));
+  const resampled = await resample(frame, width, height);
+  if (resampled) {
+    return { seq: frame.seq, mime: 'image/jpeg', width, height, bytes: resampled };
+  }
+  return { ...frame, overCap: true };
+}
+
+async function resampleEncodedFrame(
+  frame: ComputerFrame,
+  width: number,
+  height: number
+): Promise<Uint8Array | null> {
+  if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
+    return null;
+  }
+  try {
+    const blob = new Blob([new Uint8Array(frame.bytes)], { type: frame.mime });
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(width, height);
+    const canvasCtx = canvas.getContext('2d');
+    if (!canvasCtx) {
+      bitmap.close();
+      return null;
+    }
+    canvasCtx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const out = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+    return new Uint8Array(await out.arrayBuffer());
+  } catch {
+    return null;
+  }
 }

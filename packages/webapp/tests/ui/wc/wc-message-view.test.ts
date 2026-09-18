@@ -636,6 +636,28 @@ describe('tool presentation', () => {
     expect(custom.output).toBe('On branch main');
   });
 
+  it('passes toolCallId and done onto slicc-bash-renderer-computer', () => {
+    const [, doneRow] = messageEls(
+      call('bash', { command: 'computer -c jsh:fake screenshot' }, 'screen: /tmp/x.jpg')
+    );
+    const done = doneRow.querySelector('slicc-bash-renderer-computer') as HTMLElement & {
+      toolCallId?: string;
+      done?: boolean;
+    };
+    expect(done).toBeTruthy();
+    expect(done.toolCallId).toBe('t1');
+    expect(done.done).toBe(true);
+    expect(done.getAttribute('tool-call-id')).toBe('t1');
+    expect(done.hasAttribute('done')).toBe(true);
+
+    const [, pendingRow] = messageEls(call('bash', { command: 'computer watch -c jsh:fake' }));
+    const pending = pendingRow.querySelector('slicc-bash-renderer-computer') as HTMLElement & {
+      done?: boolean;
+    };
+    expect(pending.done).toBe(false);
+    expect(pending.hasAttribute('done')).toBe(false);
+  });
+
   // Chained bash commands: the row icon is driven by the most semantically
   // meaningful segment (the "real work"), not a low-signal preamble like a
   // `cd`/`echo`/`export`. See issue #1035.

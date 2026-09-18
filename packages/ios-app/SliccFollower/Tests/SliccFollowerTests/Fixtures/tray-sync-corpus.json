@@ -1,7 +1,7 @@
 {
   "traySyncProtocolVersion": 8,
-  "leaderVariantCount": 42,
-  "followerVariantCount": 37,
+  "leaderVariantCount": 44,
+  "followerVariantCount": 39,
   "agentEventVariantCount": 13,
   "leaderToFollower": [
     {
@@ -74,6 +74,49 @@
         "detail": {
           "url": "https://example.com"
         }
+      }
+    },
+    {
+      "type": "computer.frame",
+      "ios": "unknown",
+      "message": {
+        "type": "computer.frame",
+        "id": "jsh:fake",
+        "seq": 1,
+        "mime": "image/jpeg",
+        "width": 8,
+        "height": 8,
+        "data": "QUJD"
+      }
+    },
+    {
+      "type": "computers.list",
+      "ios": "unknown",
+      "message": {
+        "type": "computers.list",
+        "computers": [
+          {
+            "id": "jsh:fake",
+            "kind": "jsh",
+            "title": "fake",
+            "size": {
+              "width": 8,
+              "height": 8
+            },
+            "state": "live",
+            "capabilities": {
+              "screenshot": true,
+              "text": false,
+              "frames": "poll",
+              "keyboard": true,
+              "mouse": "absolute",
+              "scroll": true,
+              "exec": false,
+              "inputAllowed": true
+            },
+            "pid": null
+          }
+        ]
       }
     },
     {
@@ -597,6 +640,24 @@
         "detail": {
           "fields": 2
         }
+      }
+    },
+    {
+      "type": "computer.unwatch",
+      "ios": "undecodable",
+      "message": {
+        "type": "computer.unwatch",
+        "id": "jsh:fake"
+      }
+    },
+    {
+      "type": "computer.watch",
+      "ios": "undecodable",
+      "message": {
+        "type": "computer.watch",
+        "id": "jsh:fake",
+        "fps": 2,
+        "maxWidth": 480
       }
     },
     {

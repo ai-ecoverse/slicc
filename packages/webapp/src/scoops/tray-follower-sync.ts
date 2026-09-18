@@ -587,6 +587,12 @@ export class FollowerSyncManager implements AgentHandle {
       case 'scoops.list':
         this.handleScoopsList(message.scoops, message.activeScoopJid);
         break;
+      // Wire-only this phase (#3246): no follower computer UI yet. Older
+      // followers that lack these cases already drop them via
+      // `unhandledProtocolMessage`.
+      case 'computers.list':
+      case 'computer.frame':
+        break;
       case 'models.list':
         this.options.onModelsList?.(message.models);
         break;

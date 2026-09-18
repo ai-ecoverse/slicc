@@ -2,13 +2,13 @@
  * Typed sync protocol for tray WebRTC data channels — canonical wire format.
  *
  * Leader → Follower: chat snapshots (single + chunked), streamed agent events,
- *   user-message echoes, scoop list, model catalog + selection state,
+ *   user-message echoes, scoop list, computer roster + frames, model catalog + selection state,
  *   sprinkle list / content / updates,
  *   federated CDP (request + response + event), federated tab.open and its
  *   reply pair, federated FS (request + response), liveness (ping/pong/status/error).
  *
  * Follower → Leader: user input, abort, snapshot/scoop selection requests,
- *   model catalog requests + model/thinking selection, sprinkle refresh +
+ *   computer watch/unwatch, model catalog requests + model/thinking selection, sprinkle refresh +
  *   content fetch + lick, target advertisement, federated
  *   CDP (request + response + event), federated tab.open and its reply pair,
  *   federated FS (request + response), ping/pong.
@@ -40,6 +40,7 @@
  */
 
 import type { AgentEvent, ChatMessage, LickEvent, MessageAttachment } from './agent-wire-types.js';
+import type { ComputerDescriptor, ComputerFrameMime } from './computer-protocol.js';
 import type { TranscriptExportErrorCode } from './transcript-export.js';
 
 /**
@@ -411,6 +412,28 @@ export type LeaderToFollowerMessage =
   | { type: 'error'; error: string }
   | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }
   /**
+   * Additive computer roster, sent alongside `scoops.list`. Older followers
+   * drop it (`unhandledProtocolMessage` / iOS `.unknown`).
+   */
+  | { type: 'computers.list'; computers: ComputerDescriptor[] }
+  /**
+   * One live JPEG/PNG frame. Small payloads carry `data` (base64); oversize
+   * frames use the same optional CDP-style `chunkData` / `chunkIndex` /
+   * `totalChunks` fields. Leaders cap the tray stream at 2 fps / 480 px.
+   */
+  | {
+      type: 'computer.frame';
+      id: string;
+      seq: number;
+      mime: ComputerFrameMime;
+      width: number;
+      height: number;
+      data?: string;
+      chunkData?: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+    }
+  /**
    * Compact catalog rows normally remain below the 64 KiB CDP chunk threshold.
    * A bespoke semantic chunk variant is unnecessary: the generic
    * `TrayChunkFrame` layer frames and reassembles any oversize message.
@@ -523,6 +546,8 @@ export type FollowerToLeaderMessage =
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
   | { type: 'request_snapshot'; scoopJid?: string }
   | { type: 'scoops.select'; scoopJid: string }
+  | { type: 'computer.watch'; id: string; fps?: number; maxWidth?: number }
+  | { type: 'computer.unwatch'; id: string }
   | { type: 'models.request' }
   | {
       type: 'model.select';
@@ -1046,6 +1071,12 @@ const CDP_CHUNK_SIZE = 32 * 1024; // 32 KB
 /** Extract the CDP response message type from a union. */
 type CDPResponseMessage = Extract<TraySyncMessage, { type: 'cdp.response' }>;
 
+/** Cap on live computer frames crossing the tray channel (issue #3246). */
+export const COMPUTER_TRAY_MAX_FPS = 2;
+export const COMPUTER_TRAY_MAX_WIDTH = 480;
+
+export type ComputerFrameMessage = Extract<LeaderToFollowerMessage, { type: 'computer.frame' }>;
+
 /**
  * Send a CDP response, automatically chunking if the serialized result exceeds CDP_CHUNK_THRESHOLD.
  * Returns true if all chunks were sent successfully, false if any send failed.
@@ -1147,4 +1178,89 @@ export function reassembleCDPResponse(
   }
 
   return null; // Still waiting for more chunks
+}
+
+/**
+ * Send a computer.frame, chunking the base64 `data` the same way CDP
+ * responses chunk their JSON when the payload exceeds CDP_CHUNK_THRESHOLD.
+ */
+export function sendComputerFrame(
+  channel: { send(message: TraySyncMessage): boolean; bufferedAmount?: number },
+  frame: {
+    id: string;
+    seq: number;
+    mime: ComputerFrameMime;
+    width: number;
+    height: number;
+    data: string;
+  }
+): boolean {
+  if (frame.data.length <= CDP_CHUNK_THRESHOLD) {
+    return channel.send({ type: 'computer.frame', ...frame });
+  }
+  const queued = channel.bufferedAmount;
+  if (typeof queued === 'number' && queued >= TRAY_SEND_HIGH_WATER_BYTES) {
+    return false;
+  }
+  const totalChunks = Math.ceil(frame.data.length / CDP_CHUNK_SIZE);
+  let allSent = true;
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkData = frame.data.slice(i * CDP_CHUNK_SIZE, (i + 1) * CDP_CHUNK_SIZE);
+    const ok = channel.send({
+      type: 'computer.frame',
+      id: frame.id,
+      seq: frame.seq,
+      mime: frame.mime,
+      width: frame.width,
+      height: frame.height,
+      chunkData,
+      chunkIndex: i,
+      totalChunks,
+    });
+    if (!ok) {
+      allSent = false;
+      break;
+    }
+  }
+  return allSent;
+}
+
+/**
+ * Reassemble chunked computer.frame payloads. Returns the message with `data`
+ * filled in when all chunks have arrived, or null while waiting.
+ */
+export function reassembleComputerFrame(
+  buffers: Map<string, { chunks: string[]; received: number; totalChunks: number }>,
+  message: ComputerFrameMessage
+): ComputerFrameMessage | null {
+  if (message.chunkIndex === undefined || message.totalChunks === undefined) {
+    return message;
+  }
+  const key = `${message.id}:${message.seq}`;
+  let buffer = buffers.get(key);
+  if (!buffer) {
+    buffer = {
+      chunks: new Array(message.totalChunks),
+      received: 0,
+      totalChunks: message.totalChunks,
+    };
+    buffers.set(key, buffer);
+  }
+  if (!buffer.chunks[message.chunkIndex] && message.chunkData !== undefined) {
+    buffer.chunks[message.chunkIndex] = message.chunkData;
+    buffer.received++;
+  }
+  if (buffer.received >= buffer.totalChunks) {
+    buffers.delete(key);
+    return {
+      type: 'computer.frame',
+      id: message.id,
+      seq: message.seq,
+      mime: message.mime,
+      width: message.width,
+      height: message.height,
+      data: buffer.chunks.join(''),
+    };
+  }
+  return null;
 }

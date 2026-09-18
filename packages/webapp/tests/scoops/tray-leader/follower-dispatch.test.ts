@@ -50,6 +50,7 @@ function createCollaborators(): FollowerDispatchCollaborators {
     biscottoReview: { submit: vi.fn() },
     tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
     oauthPopupDelegation: { handlePopupResponse: vi.fn() },
+    computersRouter: { handleWatch: vi.fn(), handleUnwatch: vi.fn() },
   };
 }
 
@@ -195,6 +196,19 @@ describe('FollowerDispatch', () => {
     });
     expect(onFollowerThinkingSet).toHaveBeenCalledWith('selected-scoop', 'xhigh', 'max');
     expect(c.broadcast.broadcastModelState).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispatches computer.watch and computer.unwatch', () => {
+    const { collaborators: c, dispatch } = createHarness();
+    dispatch.dispatch('follower', {
+      type: 'computer.watch',
+      id: 'jsh:fake',
+      fps: 2,
+      maxWidth: 480,
+    });
+    expect(c.computersRouter?.handleWatch).toHaveBeenCalledWith('follower', 'jsh:fake', 2, 480);
+    dispatch.dispatch('follower', { type: 'computer.unwatch', id: 'jsh:fake' });
+    expect(c.computersRouter?.handleUnwatch).toHaveBeenCalledWith('follower', 'jsh:fake');
   });
 
   it('rejects an invalid model id without throwing or broadcasting state', () => {

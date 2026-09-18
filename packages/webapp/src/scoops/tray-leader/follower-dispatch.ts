@@ -10,6 +10,7 @@ import type { BiscottoReview } from './biscotto-review.js';
 import type { BroadcastManager } from './broadcast.js';
 import type { CDPRouter } from './cdp-router.js';
 import type { CherryRouter } from './cherry-router.js';
+import type { ComputersRouter } from './computers-router.js';
 import type { LeaderSyncContext } from './context.js';
 import { labelForFollower } from './follower-registry.js';
 import type { FsRouter } from './fs-router.js';
@@ -47,6 +48,7 @@ export interface FollowerDispatchCollaborators {
   >;
   sudoDelegation: Pick<SudoDelegation, 'handleResponse' | 'handleFollowerReady'>;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
+  computersRouter?: Pick<ComputersRouter, 'handleWatch' | 'handleUnwatch'>;
   requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
   /** Holds a guest's message until its seat's approver says yes. */
   biscottoReview: Pick<BiscottoReview, 'submit'>;
@@ -95,6 +97,10 @@ export class FollowerDispatch {
         break;
       case 'scoops.select':
         this.handleScoopSelection(bootstrapId, message.scoopJid);
+        break;
+      case 'computer.watch':
+      case 'computer.unwatch':
+        this.routeComputerWatch(bootstrapId, message);
         break;
       case 'models.request':
         broadcast.sendModelCatalogToFollower(bootstrapId);
@@ -200,10 +206,8 @@ export class FollowerDispatch {
         cherryRouter.routeCherryHostEvent(bootstrapId, message);
         break;
       case 'ping':
-        this.handlePing(bootstrapId);
-        break;
       case 'pong':
-        this.handlePong(bootstrapId);
+        this.routeKeepalive(bootstrapId, message.type);
         break;
       case 'hello':
         this.handleFollowerHello(bootstrapId, message);
@@ -216,6 +220,27 @@ export class FollowerDispatch {
         });
       }
     }
+  }
+
+  private routeComputerWatch(
+    bootstrapId: string,
+    message: Extract<FollowerToLeaderMessage, { type: 'computer.watch' | 'computer.unwatch' }>
+  ): void {
+    if (message.type === 'computer.watch') {
+      this.collaborators.computersRouter?.handleWatch(
+        bootstrapId,
+        message.id,
+        message.fps,
+        message.maxWidth
+      );
+      return;
+    }
+    this.collaborators.computersRouter?.handleUnwatch(bootstrapId, message.id);
+  }
+
+  private routeKeepalive(bootstrapId: string, type: 'ping' | 'pong'): void {
+    if (type === 'ping') this.handlePing(bootstrapId);
+    else this.handlePong(bootstrapId);
   }
 
   private noteLegacyPeer(bootstrapId: string, message: FollowerToLeaderMessage): void {

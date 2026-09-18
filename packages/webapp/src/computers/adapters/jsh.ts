@@ -24,7 +24,11 @@ export type JshComputerCall = (
 ) => Promise<unknown>;
 
 export class JshComputerBackend implements ComputerBackend {
-  readonly subscribe?: (fps: number, onFrame: (frame: ComputerFrame) => void) => () => void;
+  readonly subscribe?: (
+    fps: number,
+    onFrame: (frame: ComputerFrame) => void,
+    maxWidth?: number
+  ) => () => void;
   private lastFrame: ComputerFrame | null = null;
   private readonly sinks = new Set<(frame: ComputerFrame) => void>();
   private readonly waiters = new Set<(frame: ComputerFrame) => void>();
@@ -36,7 +40,7 @@ export class JshComputerBackend implements ComputerBackend {
     private readonly frameTimeoutMs = JSH_FRAME_TIMEOUT_MS
   ) {
     if (descriptor.capabilities.frames === 'push') {
-      this.subscribe = (fps, onFrame) => this.bindSubscribe(fps, onFrame);
+      this.subscribe = (fps, onFrame, maxWidth) => this.bindSubscribe(fps, onFrame, maxWidth);
     }
   }
 
@@ -55,12 +59,16 @@ export class JshComputerBackend implements ComputerBackend {
     this.waiters.clear();
   }
 
-  private bindSubscribe(fps: number, onFrame: (frame: ComputerFrame) => void): () => void {
+  private bindSubscribe(
+    fps: number,
+    onFrame: (frame: ComputerFrame) => void,
+    maxWidth?: number
+  ): () => void {
     this.sinks.add(onFrame);
     if (this.lastFrame) onFrame(this.lastFrame);
     if (!this.subscribed) {
       this.subscribed = true;
-      void this.call('subscribe', [fps]).catch(() => {
+      void this.call('subscribe', maxWidth ? [fps, maxWidth] : [fps]).catch(() => {
         this.subscribed = false;
       });
     }

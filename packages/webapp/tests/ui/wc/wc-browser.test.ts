@@ -5,7 +5,7 @@
  * activate/close tabs through the BrowserAPI.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -13,6 +13,7 @@ installWcDomStubs();
 import '@slicc/webcomponents';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import { teleportTabOneWay } from '../../../src/scoops/tray-leader/tab-teleport.js';
+import { getComputersStore, resetComputersStoreForTests } from '../../../src/ui/computers-store.js';
 import { wireWcBrowser } from '../../../src/ui/wc/wc-browser.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
@@ -98,6 +99,10 @@ function makeRefs(): WcShellRefs {
 type OverlayEl = HTMLElement & { tabs: Array<{ id: string; screenshot?: string }> };
 
 describe('wireWcBrowser', () => {
+  beforeEach(() => {
+    resetComputersStoreForTests();
+  });
+
   // Regression (#1706): the shell's dock handler skips the workbench pane only
   // for surfaces an overlay has claimed. Claiming here — rather than the shell
   // hardcoding 'browser' — is what keeps the pane fallback alive on floats that
@@ -462,5 +467,95 @@ describe('peek and the agent attachment', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('appends computer cards after browser tabs without CDP attach', async () => {
+    const store = getComputersStore();
+    store.setSender(() => undefined);
+    store.applyList({
+      type: 'computers',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: { width: 8, height: 8 },
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll',
+            keyboard: true,
+            mouse: 'absolute',
+            scroll: true,
+            exec: false,
+            inputAllowed: true,
+          },
+          pid: null,
+          softKeys: [{ label: 'Enter', keysym: 'Return' }],
+        },
+      ],
+    });
+    const refs = makeRefs();
+    const browser = makeFakeBrowser();
+    const { overlay, refresh } = wireWcBrowser({
+      refs,
+      browser: browser as unknown as BrowserAPI,
+      log,
+    });
+    await refresh();
+    const tabs = (overlay as OverlayEl & { tabs: Array<{ id: string; kind?: string }> }).tabs;
+    expect(tabs.map((t) => t.id)).toEqual(['local-1', 'follower-9:tab-2', 'computer:jsh:fake']);
+    expect(tabs[2]?.kind).toBe('computer');
+    expect(overlay.getAttribute('heading')).toBe('Browser · tabs & computers');
+    expect(browser.withTab).not.toHaveBeenCalledWith('jsh:fake', expect.anything());
+    expect(browser.withTab).not.toHaveBeenCalledWith('computer:jsh:fake', expect.anything());
+  });
+
+  it('keeps computer cards when the CDP tab list fails', async () => {
+    const store = getComputersStore();
+    store.setSender(() => undefined);
+    store.applyList({
+      type: 'computers',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: { width: 8, height: 8 },
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll',
+            keyboard: true,
+            mouse: 'absolute',
+            scroll: true,
+            exec: false,
+            inputAllowed: true,
+          },
+          pid: null,
+        },
+      ],
+    });
+    const refs = makeRefs();
+    const browser = makeFakeBrowser();
+    browser.listAllTargets = vi.fn(async () => {
+      throw new Error('cdp gone');
+    });
+    const { overlay, refresh } = wireWcBrowser({
+      refs,
+      browser: browser as unknown as BrowserAPI,
+      log,
+    });
+    await refresh();
+    const tabs = (overlay as OverlayEl & { tabs: Array<{ id: string; kind?: string }> }).tabs;
+    expect(tabs.map((t) => t.id)).toEqual(['computer:jsh:fake']);
+    expect(tabs[0]?.kind).toBe('computer');
+    expect(overlay.hasAttribute('open')).toBe(true);
+    expect(log.error).toHaveBeenCalledWith(
+      'WC browser overlay: listing tabs failed',
+      expect.anything()
+    );
   });
 });
