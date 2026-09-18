@@ -1395,14 +1395,27 @@ function nativeFrameBufferBytes(buffers: Map<string, ComputerNativeFrameBuffer>)
   return total;
 }
 
+export type ComputerNativeReassemblyLimits = {
+  maxChunkCount: number;
+  maxPending: number;
+  maxBytes: number;
+};
+
+export const DEFAULT_NATIVE_FRAME_REASSEMBLY_LIMITS: ComputerNativeReassemblyLimits = {
+  maxChunkCount: TRAY_MAX_CHUNK_COUNT,
+  maxPending: TRAY_MAX_PENDING_REASSEMBLIES,
+  maxBytes: TRAY_MAX_REASSEMBLY_BYTES,
+};
+
 function evictNativeFrameOverflow(
   buffers: Map<string, ComputerNativeFrameBuffer>,
-  extraBytes: number
+  extraBytes: number,
+  limits: ComputerNativeReassemblyLimits
 ): void {
   while (
     buffers.size > 0 &&
-    (buffers.size >= TRAY_MAX_PENDING_REASSEMBLIES ||
-      nativeFrameBufferBytes(buffers) + extraBytes > TRAY_MAX_REASSEMBLY_BYTES)
+    (buffers.size >= limits.maxPending ||
+      nativeFrameBufferBytes(buffers) + extraBytes > limits.maxBytes)
   ) {
     const oldest = buffers.keys().next();
     if (oldest.done) return;
@@ -1418,7 +1431,8 @@ function evictNativeFrameOverflow(
  */
 export function reassembleComputerNativeFrame(
   buffers: Map<string, ComputerNativeFrameBuffer>,
-  message: ComputerNativeFrameMessage
+  message: ComputerNativeFrameMessage,
+  limits: ComputerNativeReassemblyLimits = DEFAULT_NATIVE_FRAME_REASSEMBLY_LIMITS
 ): ComputerNativeFrameMessage | null {
   if (message.chunkIndex === undefined || message.totalChunks === undefined) {
     return message;
@@ -1427,7 +1441,7 @@ export function reassembleComputerNativeFrame(
   if (
     !Number.isInteger(totalChunks) ||
     totalChunks <= 0 ||
-    totalChunks > TRAY_MAX_CHUNK_COUNT ||
+    totalChunks > limits.maxChunkCount ||
     !Number.isInteger(chunkIndex) ||
     chunkIndex < 0 ||
     chunkIndex >= totalChunks
@@ -1442,10 +1456,10 @@ export function reassembleComputerNativeFrame(
   }
   const extra = chunkData?.length ?? 0;
   if (!buffer) {
-    evictNativeFrameOverflow(buffers, extra);
+    evictNativeFrameOverflow(buffers, extra, limits);
     if (
-      buffers.size >= TRAY_MAX_PENDING_REASSEMBLIES ||
-      nativeFrameBufferBytes(buffers) + extra > TRAY_MAX_REASSEMBLY_BYTES
+      buffers.size >= limits.maxPending ||
+      nativeFrameBufferBytes(buffers) + extra > limits.maxBytes
     ) {
       return null;
     }
@@ -1458,12 +1472,9 @@ export function reassembleComputerNativeFrame(
     buffers.set(key, buffer);
   }
   if (!buffer.chunks[chunkIndex] && chunkData !== undefined) {
-    if (nativeFrameBufferBytes(buffers) + extra > TRAY_MAX_REASSEMBLY_BYTES) {
-      evictNativeFrameOverflow(buffers, extra);
-      if (
-        !buffers.has(key) ||
-        nativeFrameBufferBytes(buffers) + extra > TRAY_MAX_REASSEMBLY_BYTES
-      ) {
+    if (nativeFrameBufferBytes(buffers) + extra > limits.maxBytes) {
+      evictNativeFrameOverflow(buffers, extra, limits);
+      if (!buffers.has(key) || nativeFrameBufferBytes(buffers) + extra > limits.maxBytes) {
         buffers.delete(key);
         return null;
       }
