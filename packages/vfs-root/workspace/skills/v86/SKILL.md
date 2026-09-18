@@ -83,15 +83,15 @@ v86 serial --tail 25            # read buffered serial output
 
 Prefer `computer text` / `v86 text` over `screenshot` whenever the guest is in text mode — it is cheaper and machine-readable. For `-nographic` guests use the `serial` subcommands.
 
-## Live screen streaming (iframe-able)
+## Live screen
 
-`v86 serve` pumps the screen into `$TMPDIR/v86-serve-<name>/` — a self-refreshing `index.html` viewer plus live `frame.png`/`screen.txt` + `state.json`. Mint an iframe-able preview URL from it with the regular `serve` command so a human (or sprinkle) can watch the VM:
+`v86 serve` is retired. Watch a running guest with `computer watch`:
 
 ```bash
-v86 serve -n arch --fps 4          # start the pump (1-10 fps, default 2)
-serve "$TMPDIR/v86-serve-arch"          # mint a worker-hosted URL to iframe
-v86 serve -n arch --stop           # stop the pump (directory stays)
+computer watch -c v86:arch
 ```
+
+Live frames go to the Browser overlay, the lightbox, and `computer` bash rows. `v86 serve` still exits 0 and prints that pointer so old scripts do not fail.
 
 ## SVGA / high-res video modes
 

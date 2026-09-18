@@ -23,13 +23,10 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
-import { scratchDir } from '../tmpdir-env.js';
 import { GLOBAL_IPK_ADD } from './shared.js';
 import { isHelpRequest, stripOptionTerminator, subcommandHelpText } from './subcommand-help.js';
 import {
-  captureFrame,
   DEFAULT_MEMORY_MIB,
-  dumpTextScreen,
   getVm,
   instrumentVm,
   listVms,
@@ -76,9 +73,7 @@ Usage:
   v86 mouse [-n name] --to <x>,<y>        Best-effort absolute positioning
   v86 screenshot [-n name] [<file>]       Frozen JPEG ($TMPDIR/computer/<name>/<seq>.jpg)
   v86 text [-n name]                      Dump text-mode screen as plain text
-  v86 serve [-n name] [--fps <1-10>]      Stream the screen into $TMPDIR/v86-serve-<name>/
-  v86 serve [-n name] --stop              (viewer index.html + live frames; mint an
-                                          iframe-able URL with \`serve <that dir>\`)
+  v86 serve [-n name]                     Retired — prints \`computer watch -c v86:<name>\`
   v86 serial [-n name] --send <text>      Write to the guest serial console
   v86 serial [-n name] [--tail <lines>]   Read buffered serial output
   v86 state [-n name] save|load <file>    Save / restore full VM state
@@ -314,31 +309,6 @@ function isCmdResult(value: VmRecord | CmdResult): value is CmdResult {
   return 'exitCode' in value;
 }
 
-/**
- * Encode an RGBA frame to PNG via OffscreenCanvas (available in the
- * kernel worker on all supported floats).
- */
-async function encodeFramePng(frame: {
-  data: Uint8ClampedArray;
-  width: number;
-  height: number;
-}): Promise<Uint8Array> {
-  if (typeof OffscreenCanvas === 'undefined') {
-    throw new Error('screenshot requires OffscreenCanvas, unavailable in this runtime');
-  }
-  const canvas = new OffscreenCanvas(frame.width, frame.height);
-  const canvasCtx = canvas.getContext('2d');
-  if (!canvasCtx) throw new Error('could not acquire 2d canvas context');
-  // The cast sidesteps the `SharedArrayBuffer | ArrayBuffer` union the
-  // view's backing buffer carries under newer `lib.dom.d.ts` — same
-  // pattern as `compileWasmModule` in `wasm-compiler.ts`; captureFrame
-  // returns a fresh copy backed by a plain ArrayBuffer.
-  const pixels = frame.data as unknown as ImageDataArray;
-  canvasCtx.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
-  const blob = await canvas.convertToBlob({ type: 'image/png' });
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
 async function readVfsImage(
   ctx: CommandContext,
   path: string,
@@ -436,8 +406,8 @@ export function createV86Command(deps: V86CommandDeps = {}): Command {
 
     const sub = args[0];
     // Help before the handler: `stop --help` used to power the VM off,
-    // `serve --help` to start the frame pump, `type --help` to type the
-    // flag into the guest. `v86 type -- --help` still types it literally.
+    // `type --help` to type the flag into the guest. `v86 type -- --help`
+    // still types it literally.
     if (isHelpRequest(args.slice(1), { valueFlags: V86_VALUE_FLAGS })) {
       return ok(subcommandHelpText('v86', sub, HELP, { prefix: 'v86' }));
     }
@@ -459,7 +429,7 @@ export function createV86Command(deps: V86CommandDeps = {}): Command {
         case 'text':
           return await v86Text(subArgs, ctx);
         case 'serve':
-          return await v86Serve(subArgs, ctx);
+          return v86Serve(subArgs);
         case 'serial':
           return v86Serial(subArgs);
         case 'state':
@@ -897,129 +867,17 @@ async function v86Text(args: readonly string[], ctx: CommandContext): Promise<Cm
   return viaComputer(ctx, name, ['text'], 'text');
 }
 
-/** Serve pump rates (frames/second) — VFS writes are not free. */
-const SERVE_DEFAULT_FPS = 2;
-const SERVE_MAX_FPS = 10;
-
 /**
- * Static viewer page dropped into the serve directory. Polls
- * `state.json` at the pump rate and swaps in `frame.png` (graphical
- * mode) or `screen.txt` (text mode). Self-contained so `serve <dir>`
- * can host it for an iframe.
+ * `v86 serve` used to pump frames into `$TMPDIR/v86-serve-<name>/`.
+ * Live viewing is `computer watch`; this verb stays so old scripts
+ * exit 0 with a pointer instead of `unknown subcommand`.
  */
-function serveViewerHtml(name: string, fps: number): string {
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>v86 — ${name}</title><style>
-  html,body{margin:0;height:100%;background:#111;color:#ddd;font-family:monospace}
-  body{display:flex;align-items:center;justify-content:center}
-  img{max-width:100%;max-height:100%;image-rendering:pixelated}
-  pre{margin:0;padding:8px;font-size:14px;line-height:1.15;white-space:pre}
-  .off{opacity:.4}
-</style></head><body>
-<img id="fb" alt="v86 screen" hidden><pre id="txt" hidden></pre>
-<script>
-const fb = document.getElementById('fb'), txt = document.getElementById('txt');
-let seq = -1;
-async function tick() {
-  try {
-    const s = await (await fetch('state.json?t=' + Date.now(), {cache:'no-store'})).json();
-    if (s.seq !== seq) {
-      seq = s.seq;
-      if (s.mode === 'graphical') {
-        fb.src = 'frame.png?t=' + seq; fb.hidden = false; txt.hidden = true;
-      } else {
-        txt.textContent = await (await fetch('screen.txt?t=' + seq, {cache:'no-store'})).text();
-        txt.hidden = false; fb.hidden = true;
-      }
-    }
-    fb.classList.remove('off'); txt.classList.remove('off');
-  } catch {
-    fb.classList.add('off'); txt.classList.add('off');
-  }
-  setTimeout(tick, ${Math.round(1000 / fps)});
-}
-tick();
-</script></body></html>
-`;
-}
-
-/** One serve-pump tick: snapshot the screen into the serve directory. */
-async function pumpServeFrame(
-  record: VmRecord,
-  ctx: CommandContext,
-  dir: string,
-  seq: number
-): Promise<void> {
-  let mode: 'text' | 'graphical' = 'text';
-  const frame = record.screen.mode === 'graphical' ? captureFrame(record) : null;
-  if (frame) {
-    await ctx.fs.writeFile(`${dir}/frame.png`, await encodeFramePng(frame));
-    mode = 'graphical';
-  } else {
-    const dump = dumpTextScreen(record);
-    await ctx.fs.writeFile(`${dir}/screen.txt`, dump ?? '(no screen output yet)');
-  }
-  const state = { name: record.name, mode, seq, ts: Date.now() };
-  await ctx.fs.writeFile(`${dir}/state.json`, JSON.stringify(state));
-}
-
-/**
- * `v86 serve` — stream the VM screen into a VFS directory as a static
- * viewer (index.html + frame.png/screen.txt + state.json) refreshed by
- * a kernel-worker interval. Pair with the `serve` command to mint a
- * worker-hosted URL a sprinkle can iframe.
- */
-async function v86Serve(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
-  const { name, rest } = extractVmName(args);
-  const record = requireVm(name);
-  if (isCmdResult(record)) return record;
-
-  if (rest.includes('--stop')) {
-    if (!record.serve) return fail(`serve: no screen serve running for '${name}'`);
-    const dir = record.serve.dir;
-    stopServe(record);
-    return ok(`screen serve for '${name}' stopped (${dir} left in place)\n`);
-  }
-  if (record.serve) {
-    return fail(`serve: already serving '${name}' at ${record.serve.dir} — --stop first`);
-  }
-
-  let fps = SERVE_DEFAULT_FPS;
-  const fpsIdx = rest.indexOf('--fps');
-  if (fpsIdx !== -1) {
-    fps = Number.parseInt(rest[fpsIdx + 1] ?? '', 10);
-    if (!Number.isFinite(fps) || fps < 1 || fps > SERVE_MAX_FPS) {
-      return fail(`serve: --fps requires 1-${SERVE_MAX_FPS}`);
-    }
-  }
-
-  const dir = `${scratchDir(ctx.env)}/v86-serve-${name}`;
-  await ctx.fs.mkdir(dir, { recursive: true });
-  await ctx.fs.writeFile(`${dir}/index.html`, serveViewerHtml(name, fps));
-
-  let seq = 0;
-  let busy = false;
-  const timer = setInterval(
-    () => {
-      // Skip a tick rather than queueing when encoding falls behind.
-      if (busy) return;
-      busy = true;
-      pumpServeFrame(record, ctx, dir, seq++)
-        .catch(() => {})
-        .finally(() => {
-          busy = false;
-        });
-    },
-    Math.round(1000 / fps)
-  );
-  record.serve = { dir, fps, timer };
-  await pumpServeFrame(record, ctx, dir, seq++).catch(() => {});
-
+function v86Serve(args: readonly string[]): CmdResult {
+  const { name } = extractVmName(args);
   return ok(
-    `serving '${name}' screen at ${dir} (${fps} fps).\n` +
-      `Mint an iframe-able URL with: serve ${dir}\n` +
-      `prefer: computer watch -c v86:${name}\n` +
-      `Stop with: v86 serve -n ${name} --stop\n`
+    `v86 serve is retired.\n` +
+      `Use: computer watch -c v86:${name}\n` +
+      `Live frames go to the overlay, lightbox, and bash rows.\n`
   );
 }
 
