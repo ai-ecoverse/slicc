@@ -1059,10 +1059,13 @@
         "error",
         "type"
       ],
-      "dropped": [],
+      "dropped": [
+        "endTurn"
+      ],
       "event": {
         "type": "error",
-        "error": "boom"
+        "error": "boom",
+        "endTurn": false
       }
     },
     {
