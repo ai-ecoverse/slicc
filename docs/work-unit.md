@@ -239,9 +239,14 @@ exactly a marker's contract. `Bridge.recordErrorCard` appends the row to the
 message buffer and writes `{ kind: 'error', text }` onto the record. Unlike a
 seam, the card may CREATE the record (`putMarker(…, { createWith })`): a turn
 that fails before Pi holds a message never checkpoints, so there would be
-nothing to retry against. A write that still fails is held in
-`pendingMarkers` and retried on `onResponseDone` and on the `ready` status a
-failed turn settles to. `toChatMessages` folds the card back as an
+nothing to retry against. The marker enters `pendingMarkers` synchronously,
+before the first IndexedDB await: terminal failures move straight to `error`,
+so waiting until a failed write returns would miss the status callback that
+drives its retry (#3263). `onResponseDone`, `ready`, and terminal `error` all
+flush the stable marker id; `putMarker` upserts that id, so overlapping or
+repeated flushes still leave exactly one card. Failed writes and retries log
+marker/unit identifiers and the failure class, never the provider error text.
+`toChatMessages` folds the card back as an
 `error: true` assistant row, always — the SETTLED rule below is about
 compaction rounds. `toBufferedChatMessages` projects `error` explicitly, the
 same way it projects `compaction`.

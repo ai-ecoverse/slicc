@@ -84,10 +84,11 @@ const log = createLogger('kernel-bridge');
 const FIRST_BUDGET_PROBE_MS = 2_500;
 
 /**
- * How many settled compaction markers wait for a canonical record to exist
+ * How many conversation markers wait for a canonical write to succeed
  * (`pendingMarkers`). A young conversation compacts once or twice before its
- * first checkpoint; anything beyond that is a record that will never accept a
- * write, and holding more would be hoarding.
+ * first checkpoint, while an error marker may briefly wait for a failed write
+ * to retry at terminal status. Anything beyond that is a record that will not
+ * accept a write, and holding more would be hoarding.
  */
 const MAX_PENDING_MARKERS = 4;
 
@@ -201,13 +202,13 @@ export class Bridge implements KernelFacade {
     (scoopJid) => `compaction-${scoopJid}-${uid()}`
   );
   /**
-   * Settled markers whose canonical record did not exist yet, per scoop.
+   * Markers waiting for their canonical write, per scoop.
    *
    * A cone can compact before its conversation is first checkpointed — one
-   * oversized opening prompt is enough — and a marker has nothing to annotate
-   * until then, so `putMarker` declines. Holding it here and retrying when the
-   * turn ends means the seam lands on the record the history sync just
-   * created, instead of being lost until the next compaction (#2843).
+   * oversized opening prompt is enough — and an error-card write can fail at
+   * the same time its turn synchronously enters terminal `error`. Holding a
+   * stable marker id before either write starts lets every end-of-turn signal
+   * retry it idempotently (#2843, #3263).
    */
   private readonly pendingMarkers = new Map<string, ConversationMarker[]>();
   /** Panel-facing scoop state and projection. */
@@ -359,8 +360,8 @@ export class Bridge implements KernelFacade {
 
         if (status === 'ready') {
           bridge.currentMessageId.delete(scoopJid);
-          // A turn that failed may never reach `onResponseDone`; its error
-          // card waits for the record the turn's checkpoint created.
+        }
+        if (status === 'ready' || status === 'error') {
           void bridge.flushPendingMarkers(scoopJid);
         }
 
@@ -1525,9 +1526,13 @@ export class Bridge implements KernelFacade {
   }
 
   /**
-   * Retry the markers whose record did not exist when their round settled.
-   * Called at the end of a turn, by which point the session checkpoint has
-   * created the conversation the seam belongs to.
+   * Retry markers whose canonical write has not succeeded yet.
+   *
+   * A terminal failure reaches `error`, not `ready`, and its marker write can
+   * still be resolving when the synchronous status callback calls this.
+   * Error markers enter the pending set before their first await, so the
+   * flush races safely with that write under the store's keyed serialization
+   * and stable-id upsert (#3263).
    */
   private async flushPendingMarkers(scoopJid: string): Promise<void> {
     const held = this.pendingMarkers.get(scoopJid);
@@ -1535,14 +1540,43 @@ export class Bridge implements KernelFacade {
     const store = this.orchestrator?.getConversationStore?.();
     const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
     if (!store || !scoop) return;
-    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const { conversationIdentityFor, conversationKeyFor } = await import(
+      '../work-unit/conversation/key.js'
+    );
     const key = conversationKeyFor(scoop);
-    const stuck: ConversationMarker[] = [];
     for (const marker of held) {
-      if (!(await store.putMarker(key, marker))) stuck.push(marker);
+      let written = false;
+      try {
+        // Error cards are allowed to start a marker-only record. Preserve
+        // that contract on retries too: if the first create transaction
+        // failed, retrying as a plain annotation would decline forever.
+        written = await store.putMarker(
+          key,
+          marker,
+          marker.kind === 'error' ? { createWith: conversationIdentityFor(scoop) } : undefined
+        );
+      } catch (err) {
+        log.warn('Conversation marker retry threw', {
+          scoopJid,
+          folder: scoop.folder,
+          markerId: marker.id,
+          kind: marker.kind,
+          errorName: err instanceof Error ? err.name : 'unknown',
+        });
+      }
+      if (written) {
+        // Remove only this successful id. Another marker may have joined the
+        // live pending set while this snapshot was awaiting IndexedDB.
+        this.dropPendingMarker(scoopJid, marker.id);
+      } else {
+        log.warn('Conversation marker retry deferred', {
+          scoopJid,
+          folder: scoop.folder,
+          markerId: marker.id,
+          kind: marker.kind,
+        });
+      }
     }
-    if (stuck.length === 0) this.pendingMarkers.delete(scoopJid);
-    else this.pendingMarkers.set(scoopJid, stuck);
   }
 
   /**
@@ -1567,14 +1601,46 @@ export class Bridge implements KernelFacade {
       timestamp,
       error: true,
     });
+    const marker: ConversationMarker = { id, kind: 'error', timestamp, text: error };
+    // Queue synchronously, before the dynamic import / IndexedDB awaits. The
+    // lifecycle reports terminal `error` immediately after `onError`; without
+    // this ordering its flush runs before a failed first write can be held.
+    this.holdPendingMarker(scoopJid, marker);
     const store = this.orchestrator?.getConversationStore?.();
     const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
-    if (!store || !scoop) return;
+    if (!store || !scoop) {
+      log.warn('Error marker is waiting for a canonical target', {
+        scoopJid,
+        markerId: marker.id,
+        hasStore: Boolean(store),
+        hasScoop: Boolean(scoop),
+      });
+      return;
+    }
     const { conversationIdentityFor } = await import('../work-unit/conversation/key.js');
     const identity = conversationIdentityFor(scoop);
-    const marker: ConversationMarker = { id, kind: 'error', timestamp, text: error };
-    if (!(await store.putMarker(identity.key, marker, { createWith: identity }))) {
-      this.holdPendingMarker(scoopJid, marker);
+    let written = false;
+    try {
+      written = await store.putMarker(identity.key, marker, { createWith: identity });
+    } catch (err) {
+      log.warn('Error marker write threw; queued for retry', {
+        scoopJid,
+        folder: scoop.folder,
+        markerId: marker.id,
+        errorName: err instanceof Error ? err.name : 'unknown',
+      });
+    }
+    if (written) {
+      this.dropPendingMarker(scoopJid, marker.id);
+    } else {
+      // Do not log the marker text: provider failures may contain sensitive
+      // request details. The identifiers and outcome are enough to correlate
+      // this with the store's IndexedDB warning.
+      log.warn('Error marker write deferred', {
+        scoopJid,
+        folder: scoop.folder,
+        markerId: marker.id,
+      });
     }
   }
 
