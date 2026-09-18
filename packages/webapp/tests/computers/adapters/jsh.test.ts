@@ -56,7 +56,7 @@ describe('JshComputerBackend', () => {
   });
 
   it('caches subscribe frames and times out a silent stream', async () => {
-    const call = vi.fn(async (op: string) => {
+    const call = vi.fn(async (op: string, _args?: unknown[]) => {
       if (op === 'screenshot') {
         return { seq: 99, mime: 'image/jpeg', width: 8, height: 8, bytes: MINIMAL_JPEG };
       }
