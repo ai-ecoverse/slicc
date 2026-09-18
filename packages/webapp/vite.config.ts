@@ -289,6 +289,11 @@ const PROD_IIFE_DEFAULTS = {
 async function buildProductionRuntimeAssets(): Promise<void> {
   // Keep this config focused on production build artifacts; node-server owns dev serving.
   // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
+  //
+  // Hooked from `writeBundle` (not `closeBundle`): Vite 8 / Rolldown invokes
+  // `closeBundle` from `finally` even when the bundle never wrote — and again
+  // without the original error — so reading `.vite/manifest.json` there masks
+  // real failures behind ENOENT. `writeBundle` runs only after output is on disk.
   const esbuild = await import('esbuild');
   const { copyFileSync } = await import('fs');
   await esbuild.build({
@@ -397,7 +402,11 @@ function buildWebappRuntimeAssetsPlugin() {
         iifeBundleMiddleware({ label: 'lucide-icons', entry: lucideIconsEntry })
       );
     },
-    closeBundle: buildProductionRuntimeAssets,
+    // Vite 8.2 / Rolldown invokes closeBundle from `finally` even when the
+    // bundle never wrote (and again without the original error). Reading
+    // `.vite/manifest.json` there masks the real failure behind ENOENT.
+    // `writeBundle` runs only after output is on disk.
+    writeBundle: buildProductionRuntimeAssets,
   };
 }
 

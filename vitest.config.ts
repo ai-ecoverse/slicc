@@ -114,6 +114,13 @@ export default defineConfig({
             // that CJS entry imports Node crypto. Force the browser-safe ESM
             // entry instead.
             'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
+            // @cantoo/pdf-lib ≥2.11 ships an ESM build whose standard-font
+            // modules bare-import `*.compressed.json` without `with { type:
+            // 'json' }`. Node's native ESM loader rejects that under Vitest;
+            // the CJS build `require()`s the same JSON and loads cleanly.
+            // Production Vite still resolves the ESM entry and transforms
+            // JSON imports itself — this alias is test-only.
+            '@cantoo/pdf-lib': resolve(workspaceRoot, 'node_modules/@cantoo/pdf-lib/cjs/index.js'),
             'node:zlib': resolve(webappDir, 'src/shims/empty.ts'),
             'node:module': resolve(webappDir, 'src/shims/empty.ts'),
             stream: resolve(webappDir, 'src/shims/stream.ts'),
