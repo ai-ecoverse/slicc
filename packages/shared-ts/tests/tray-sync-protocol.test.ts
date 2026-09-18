@@ -13,6 +13,7 @@ import {
   reassembleComputerFrame,
   sendCDPResponse,
   sendComputerFrame,
+  TRAY_SEND_HIGH_WATER_BYTES,
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
 } from '../src/tray-sync-protocol.js';
@@ -447,6 +448,27 @@ describe('tray-sync-protocol', () => {
         height: 16,
         data,
       });
+    });
+
+    it('refuses to semantic-chunk a frame when the channel is past high-water', () => {
+      const sent: TraySyncMessage[] = [];
+      const channel = {
+        bufferedAmount: TRAY_SEND_HIGH_WATER_BYTES,
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
+      const ok = sendComputerFrame(channel, {
+        id: 'jsh:fake',
+        seq: 3,
+        mime: 'image/jpeg',
+        width: 16,
+        height: 16,
+        data: 'x'.repeat(CDP_CHUNK_THRESHOLD + 10),
+      });
+      expect(ok).toBe(false);
+      expect(sent).toEqual([]);
     });
   });
 });

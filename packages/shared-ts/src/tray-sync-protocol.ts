@@ -1185,7 +1185,7 @@ export function reassembleCDPResponse(
  * responses chunk their JSON when the payload exceeds CDP_CHUNK_THRESHOLD.
  */
 export function sendComputerFrame(
-  channel: { send(message: TraySyncMessage): boolean },
+  channel: { send(message: TraySyncMessage): boolean; bufferedAmount?: number },
   frame: {
     id: string;
     seq: number;
@@ -1197,6 +1197,10 @@ export function sendComputerFrame(
 ): boolean {
   if (frame.data.length <= CDP_CHUNK_THRESHOLD) {
     return channel.send({ type: 'computer.frame', ...frame });
+  }
+  const queued = channel.bufferedAmount;
+  if (typeof queued === 'number' && queued >= TRAY_SEND_HIGH_WATER_BYTES) {
+    return false;
   }
   const totalChunks = Math.ceil(frame.data.length / CDP_CHUNK_SIZE);
   let allSent = true;
