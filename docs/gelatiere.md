@@ -33,6 +33,27 @@ an explicit allow-list (`GELATIERE_BASE_ALLOWED_COMMANDS` plus whatever `GELATIE
 `allowedCommands` block adds), read roots (`/sessions/`, `/shared/`, `/workspace/`, `/home/`,
 `/cones/`) and one write grant (`/shared/.gelatiere/`) beyond its sandbox and `/tmp/`.
 
+### Its model follows the leading cone
+
+Ordinary scoops copy their creator's model once and keep that frozen choice. The Gelatiere is the
+system-owned exception: it has no model picker of its own and always mirrors the canonical leading
+cone — `leadingRootOf(roster)`, meaning the primary `cone` while it exists, otherwise the oldest
+surviving root. The model is persisted on the Gelatiere record so the roster and followers report
+what it will actually use, but the inheritance remains live:
+
+- registration uses the leading cone rather than roster insertion order;
+- boot and `gelatiere init` repair a stale stored record and re-resolve a live context;
+- changing the leading cone's model hot-synchronizes the Gelatiere, while changing another cone
+  does nothing;
+- removing the primary cone immediately retargets it to the replacement leader; and
+- every prompt ingress synchronizes again before the turn, covering cron, session-end and manual
+  licks even if an earlier persistence attempt failed.
+
+The global `selected-model` setting is never a Gelatiere fallback. If the leading cone record has no
+model yet, the Gelatiere carries no model or credential and the pass is refused until the cone has
+one. This keeps an unattended system pass from silently using a provider the user did not choose
+for the current leader.
+
 ### The allow-list is user-editable
 
 `GELATIERE.md` carries an `allowedCommands` block, the gelatiere's half of what `MEMORY.md` gives
@@ -80,7 +101,8 @@ edit by the user is not.
 | `packages/vfs-root/shared/GELATIERE.md`                                | User-editable pass instructions + config block (`intervalHours`, `nightly`, `maxSuggestions`, `allowedCommands`), seeded to `/shared/GELATIERE.md` when absent; the unit `cat`s it per pass                                       |
 | `packages/webapp/src/base/instruction-frontmatter.ts`                  | The strict YAML subset `MEMORY.md` and `GELATIERE.md` share                                                                                                                                                                       |
 | `packages/webapp/src/base/gelatiere-store.ts`                          | The deterministic half: config (incl. the base allow-list and its additive merge), suggestion store (id-keyed merge, dismissal ledger), pass/delivery ledger, lick body. `base/` so shell and ui can both use it                  |
-| `packages/webapp/src/scoops/gelatiere-unit.ts`                         | The unit: charter, allow-list and path grants, `ensureGelatiereUnit`, the `GelatiereSeam` the host publishes on `globalThis.__slicc_gelatiere`, `bootGelatiere`                                                                   |
+| `packages/webapp/src/scoops/gelatiere-unit.ts`                         | The unit: charter, allow-list and path grants, leading-model ensure, `GelatiereSeam`, `bootGelatiere`                                                                                                                             |
+| `packages/webapp/src/scoops/scoop-lifecycle-manager.ts`                | Live leading-model synchronization on registration, prompt ingress, model changes and root removal; ordinary scoop inheritance stays frozen                                                                                       |
 | `packages/webapp/src/kernel/host.ts` (`publishGelatiere`)              | Publishes the seam after the lick manager; under the flag boots the unit + nightly crontask (fire-and-forget, store module loaded lazily)                                                                                         |
 | `packages/webapp/src/shell/supplemental-commands/gelatiere-command.ts` | `gelatiere init / run / suggest / deliver / list / dismiss / status`                                                                                                                                                              |
 | `packages/webapp/src/ui/new-session.ts` (`onSessionSettled`)           | Fired once per freeze after the archive is durable and any background pass (curator or enrichment) is done                                                                                                                        |
@@ -99,7 +121,8 @@ edit by the user is not.
    newest of `lastPassAt` / `lastTriggeredAt` is older than `intervalHours`) or `run` (from
    `gelatiere run`), or a direct message. The page stamps `lastTriggeredAt` the moment it sends
    the lick — the interval gate must hold even when the pass legitimately suggests nothing and
-   never reaches `gelatiere suggest`.
+   never reaches `gelatiere suggest`. Before the prompt starts, the lifecycle manager repairs the
+   persisted model from the current leading cone and re-resolves the live agent.
 2. Its charter says: `cat /shared/GELATIERE.md` and follow it. The file walks it through the
    profile, the cones' memory files, the session index and the newest archives (never `cat` an
    archive), `upskill list`, its own `/shared/.gelatiere/notes.md`, the previous suggestions, then the
@@ -231,6 +254,8 @@ in the transcript as proof the leader finished onboarding, retracting a stale ha
   unit never needs the roster.
 - **A scoop, shown in the strip.** Hiding it would mean a third role; showing it read-only costs one
   tab and lets the user read every pass transcript without being able to derail it.
+- **A live system inheritance, not a second picker.** The Gelatiere follows the current leading
+  cone before every pass; ordinary user-created scoops retain their creation-time model copies.
 - **The seam, not an import.** `shell/` may not import `scoops/`; the host publishes
   `__slicc_gelatiere` exactly as it publishes `__slicc_agent`.
 

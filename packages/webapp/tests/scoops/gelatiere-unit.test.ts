@@ -49,6 +49,7 @@ function fakeOrchestrator(initial: RegisteredScoop[]) {
       if (index >= 0) scoops.splice(index, 1, scoop);
     }),
     reinitLiveUnit: vi.fn(async () => {}),
+    syncGelatiereModel: vi.fn(async () => false),
     getScoopTabState: vi.fn(() => tab),
   };
   let tab: { status: 'initializing' | 'ready' | 'processing' | 'error' } | undefined;
@@ -162,6 +163,27 @@ describe('gelatiere unit', () => {
       allowList: 'unchanged',
     });
     expect(orchestrator.registerScoop).toHaveBeenCalledTimes(1);
+    expect(orchestrator.syncGelatiereModel).toHaveBeenCalledOnce();
+  });
+
+  it('inherits from the canonical primary cone even when an older extra cone is first', async () => {
+    const orchestrator = fakeOrchestrator([
+      root('cone-research', {
+        addedAt: '2026-08-01T00:00:00.000Z',
+        model: { provider: 'openai', id: 'gpt-5' },
+      }),
+      root('cone', {
+        addedAt: '2026-09-01T00:00:00.000Z',
+        model: { provider: 'adobe', id: 'claude-opus-4-8' },
+      }),
+    ]);
+
+    await ensureGelatiereUnit(orchestrator);
+
+    expect(orchestrator.scoops.find(isGelatiereUnit)?.model).toEqual({
+      provider: 'adobe',
+      id: 'claude-opus-4-8',
+    });
   });
 
   it("applies GELATIERE.md's allow-list at creation and to an existing unit", async () => {

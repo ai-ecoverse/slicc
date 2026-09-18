@@ -10,19 +10,21 @@ import {
   estimateContextFill,
   getModelApiKey,
   missingApiKeyMessage,
+  resolveScoopModel,
 } from '../../src/scoops/scoop-context/model-resolution.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 const selectedProvider = vi.fn(() => 'adobe');
 const perProviderKey = vi.fn((provider: string) => `key-for-${provider}`);
 let currentModel: unknown = { id: 'm', provider: 'adobe', contextWindow: 1000 };
+const resolveCurrentModel = vi.fn(() => currentModel);
 
 vi.mock('../../src/providers/account-store.js', () => ({
   getApiKey: () => 'selected-key',
   getApiKeyForProvider: (p: string) => perProviderKey(p),
   getSelectedProvider: () => selectedProvider(),
   modelRunsOnProvider: () => true,
-  resolveCurrentModel: () => currentModel,
+  resolveCurrentModel: () => resolveCurrentModel(),
   resolveModelById: () => currentModel,
 }));
 
@@ -39,6 +41,16 @@ function unit(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop {
   } as RegisteredScoop;
 }
 
+function gelatiere(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop {
+  return unit({
+    jid: 'scoop_gelatiere',
+    name: 'gelatiere',
+    folder: 'gelatiere',
+    parentJid: 'system:gelatiere',
+    ...overrides,
+  });
+}
+
 function assistant(input: number, cacheRead: number, output: number): AgentMessage {
   return {
     role: 'assistant',
@@ -52,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   selectedProvider.mockReturnValue('adobe');
   perProviderKey.mockImplementation((p: string) => `key-for-${p}`);
+  resolveCurrentModel.mockClear();
 });
 
 describe('getModelApiKey', () => {
@@ -63,6 +76,17 @@ describe('getModelApiKey', () => {
 
   it('falls back to the selected provider credential when nothing is pinned', () => {
     expect(getModelApiKey(unit())).toBe('selected-key');
+  });
+
+  it('never gives an unpinned Gelatiere the globally selected credential', () => {
+    expect(getModelApiKey(gelatiere())).toBeNull();
+  });
+});
+
+describe('resolveScoopModel', () => {
+  it('never falls back to global selected-model for Gelatiere', () => {
+    expect(() => resolveScoopModel(gelatiere())).toThrow('no leading-cone model');
+    expect(resolveCurrentModel).not.toHaveBeenCalled();
   });
 });
 
@@ -112,5 +136,12 @@ describe('missingApiKeyMessage', () => {
       throw new Error('no localStorage');
     });
     expect(missingApiKeyMessage(unit())).toBe('No API key configured. Open Settings to add one.');
+  });
+
+  it('explains a missing leading-cone model for Gelatiere without naming global selection', () => {
+    expect(missingApiKeyMessage(gelatiere())).toBe(
+      'The gelatiere cannot run until the leading cone has a model.'
+    );
+    expect(selectedProvider).not.toHaveBeenCalled();
   });
 });

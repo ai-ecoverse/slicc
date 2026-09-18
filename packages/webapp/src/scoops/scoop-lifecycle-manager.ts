@@ -20,6 +20,7 @@
  */
 
 import type { ToolProgressEvent } from '@slicc/shared-ts';
+import { isGelatiereUnit } from '../base/gelatiere-constants.js';
 import { createLogger } from '../base/logger.js';
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import type { SessionStore } from '../core/session.js';
@@ -43,6 +44,7 @@ import {
   rootsOf,
 } from '../work-unit/policy.js';
 import {
+  leadingRootOf,
   modelFor,
   modelIdFor,
   normalizeScoopRecord,
@@ -249,6 +251,8 @@ export interface ScoopLifecycleDeps {
 export class ScoopLifecycleManager {
   /** One owning runtime per scoop jid (#1666). */
   private units: Map<string, LiveWorkUnit> = new Map();
+  /** Serialize model repairs so an older root/model snapshot can never win a later one. */
+  private gelatiereModelSync: Promise<void> = Promise.resolve();
 
   constructor(private deps: ScoopLifecycleDeps) {}
 
@@ -616,6 +620,17 @@ export class ScoopLifecycleManager {
     images: ImageContent[] = [],
     options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
+    const record = this.deps.getScoops().get(jid);
+    if (record && isGelatiereUnit(record)) {
+      // Every ingress path (cron, session-settled, manual run, direct message)
+      // ends here. Re-read the canonical leader immediately before the turn,
+      // even when the persisted record was already correct, so a live context
+      // can never run on a stale resolved provider catalogue entry.
+      await this.syncGelatiereModel();
+      if (!modelFor(record)) {
+        throw new Error('The gelatiere cannot run until the leading cone has a model');
+      }
+    }
     let context = this.getContext(jid);
 
     if (!context) {
@@ -659,6 +674,7 @@ export class ScoopLifecycleManager {
    */
   async register(scoop: RegisteredScoop): Promise<void> {
     const scoops = this.deps.getScoops();
+    const previousLeadingJid = leadingRootOf(scoops.values())?.jid;
     normalizeScoopRecord(scoop);
     this.inheritModel(scoop);
     // Claim the folder and the registry slot synchronously, BEFORE the first
@@ -729,6 +745,16 @@ export class ScoopLifecycleManager {
       });
       throw err;
     }
+    if (leadingRootOf(scoops.values())?.jid !== previousLeadingJid) {
+      await this.syncGelatiereModel().catch((err) => {
+        // Registration is already durable. Keep it successful and rely on
+        // the mandatory pre-run repair if the companion write is unavailable.
+        log.warn('Failed to follow the new leading cone after registration', {
+          jid: scoop.jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   /**
@@ -745,6 +771,15 @@ export class ScoopLifecycleManager {
    * `config.modelId` pin — is left alone.
    */
   private inheritModel(scoop: RegisteredScoop): void {
+    if (isGelatiereUnit(scoop)) {
+      // The system-owned gelatiere is the ONE child with live inheritance.
+      // Never let the generic missing-parent path reach globalSeedModel(): its
+      // synthetic owner is deliberately absent, and the leading cone record
+      // is the only authority for this model.
+      const leading = leadingRootOf(this.deps.getScoops().values());
+      setUnitModel(scoop, leading ? modelFor(leading) : undefined);
+      return;
+    }
     if (modelIdFor(scoop)) return;
     const parent = scoop.parentJid ? this.deps.getScoops().get(scoop.parentJid) : undefined;
     const model = (parent ? modelFor(parent) : undefined) ?? globalSeedModel();
@@ -759,6 +794,7 @@ export class ScoopLifecycleManager {
    */
   async unregister(jid: string): Promise<void> {
     const scoops = this.deps.getScoops();
+    const wasLeadingRoot = leadingRootOf(scoops.values())?.jid === jid;
     // Cascade deepest-first so a lick-blocked grandchild aborts before the
     // supervisor is removed.
     for (const child of childrenOf(scoops.values(), jid)) {
@@ -845,6 +881,17 @@ export class ScoopLifecycleManager {
         });
       }
     }
+    if (wasLeadingRoot) {
+      await this.syncGelatiereModel().catch((err) => {
+        // The root is already durably gone. Keep the drop successful and let
+        // the mandatory pre-run sync retry the gelatiere write before it can
+        // spend another token.
+        log.warn('Failed to follow the replacement leading cone after root removal', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   /**
@@ -858,6 +905,13 @@ export class ScoopLifecycleManager {
   async setModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) return false;
+    if (isGelatiereUnit(scoop)) {
+      // There is intentionally no independent gelatiere picker. Refuse a
+      // direct pin and restore the leading cone's value instead.
+      await this.syncGelatiereModel();
+      return false;
+    }
+    const changesLeadingModel = leadingRootOf(this.deps.getScoops().values())?.jid === jid;
     const previous = scoop.model;
     setUnitModel(scoop, model);
     this.getContext(jid)?.updateModel();
@@ -875,7 +929,69 @@ export class ScoopLifecycleManager {
       });
       return false;
     }
+    if (changesLeadingModel) {
+      await this.syncGelatiereModel().catch((err) => {
+        // The cone's own acknowledged choice is already durable. A failed
+        // companion write must not lie that it was rejected; before any
+        // gelatiere turn, sendPrompt retries this synchronization and blocks
+        // the run if persistence is still unavailable.
+        log.warn('Failed to synchronize gelatiere after leading model change', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
     return true;
+  }
+
+  /**
+   * Persist the leading cone's model on the system-owned gelatiere and
+   * re-resolve its live context. Ordinary scoops never come through here:
+   * their creation-time copy remains frozen.
+   */
+  syncGelatiereModel(): Promise<boolean> {
+    const run = this.gelatiereModelSync.then(() => this.applyGelatiereModel());
+    this.gelatiereModelSync = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async applyGelatiereModel(): Promise<boolean> {
+    const scoops = this.deps.getScoops();
+    const gelatiere = [...scoops.values()].find(isGelatiereUnit);
+    if (!gelatiere) return false;
+
+    const leading = leadingRootOf(scoops.values());
+    const desired = leading ? modelFor(leading) : undefined;
+    const current = modelFor(gelatiere);
+    const unchanged = desired
+      ? current?.provider === desired.provider && current.id === desired.id
+      : modelIdFor(gelatiere) === undefined;
+
+    if (!unchanged) {
+      const previousModel = gelatiere.model ? { ...gelatiere.model } : undefined;
+      const previousConfig = gelatiere.config ? { ...gelatiere.config } : undefined;
+      setUnitModel(gelatiere, desired);
+      try {
+        await this.deps.db.saveScoop(gelatiere);
+      } catch (err) {
+        gelatiere.model = previousModel;
+        gelatiere.config = previousConfig;
+        throw err;
+      }
+      log.info('Gelatiere model synchronized with leading cone', {
+        jid: gelatiere.jid,
+        leadingJid: leading?.jid,
+        model: desired ? `${desired.provider}:${desired.id}` : undefined,
+      });
+    }
+
+    // This is intentionally also done for an unchanged record: provider
+    // metadata/accounts may have moved since the context resolved the pin.
+    if (desired) this.getContext(gelatiere.jid)?.updateModel();
+    return !unchanged;
   }
 
   /**

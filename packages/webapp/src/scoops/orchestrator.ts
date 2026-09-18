@@ -10,6 +10,7 @@
  */
 
 import type { ToolProgressEvent } from '@slicc/shared-ts';
+import { isGelatiereUnit } from '../base/gelatiere-constants.js';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
@@ -774,28 +775,37 @@ export class Orchestrator implements ConeApprovalRouter {
    * next boot retries.
    */
   private async backfillModels(): Promise<void> {
-    const pending = [...this.scoops.values()].filter((scoop) => !modelIdFor(scoop));
-    if (pending.length === 0) return;
-    const seed = globalSeedModel();
-    // Roots first, so a scoop whose root was itself backfilled inherits the
-    // value that root just received rather than falling through to the seed.
-    const ordered = [...pending].sort(
-      (a, b) => Number(a.parentJid !== null) - Number(b.parentJid !== null)
+    // Gelatiere is excluded from generic child migration: its synthetic owner
+    // is absent, so that path would incorrectly fall through to the global
+    // selected-model seed. Its live leading-cone inheritance is repaired by
+    // the dedicated synchronization below, including when it already carries
+    // a stale model.
+    const pending = [...this.scoops.values()].filter(
+      (scoop) => !modelIdFor(scoop) && !isGelatiereUnit(scoop)
     );
-    for (const scoop of ordered) {
-      const parent = scoop.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
-      const model = (parent ? modelFor(parent) : undefined) ?? seed;
-      if (!model) continue;
-      setUnitModel(scoop, model);
-      try {
-        await db.saveScoop(scoop);
-      } catch (err) {
-        log.warn('Failed to persist backfilled model; will retry next boot', {
-          jid: scoop.jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    if (pending.length > 0) {
+      const seed = globalSeedModel();
+      // Roots first, so a scoop whose root was itself backfilled inherits the
+      // value that root just received rather than falling through to the seed.
+      const ordered = [...pending].sort(
+        (a, b) => Number(a.parentJid !== null) - Number(b.parentJid !== null)
+      );
+      for (const scoop of ordered) {
+        const parent = scoop.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
+        const model = (parent ? modelFor(parent) : undefined) ?? seed;
+        if (!model) continue;
+        setUnitModel(scoop, model);
+        try {
+          await db.saveScoop(scoop);
+        } catch (err) {
+          log.warn('Failed to persist backfilled model; will retry next boot', {
+            jid: scoop.jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
+    await this.lifecycle.syncGelatiereModel();
   }
 
   /**
@@ -1294,6 +1304,17 @@ export class Orchestrator implements ConeApprovalRouter {
   async persistScoop(scoop: RegisteredScoop): Promise<void> {
     this.scoops.set(scoop.jid, scoop);
     await db.saveScoop(scoop);
+    if (scoop.parentJid === null) {
+      await this.lifecycle.syncGelatiereModel().catch((err) => {
+        // The ownership mutation is already durable. Do not make its caller
+        // roll back memory while IndexedDB keeps the new leader; pre-run sync
+        // will retry before Gelatiere can spend another token.
+        log.warn('Failed to follow a persisted root leadership change', {
+          jid: scoop.jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   /**
@@ -1535,6 +1556,11 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   setScoopModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
     return this.lifecycle.setModel(jid, model);
+  }
+
+  /** Repair/re-resolve the system gelatiere against the canonical leading cone. */
+  syncGelatiereModel(): Promise<boolean> {
+    return this.lifecycle.syncGelatiereModel();
   }
 
   /**
