@@ -19,16 +19,17 @@ export interface ScoopCostData {
   name: string;
   type: 'cone' | 'scoop';
   /**
-   * The model this unit is running now: its pinned id when the record has
-   * one, otherwise the model on the latest assistant turn. Not the model
-   * with the most turns.
+   * The model this unit is running now: its provider-qualified pin, or the
+   * latest assistant turn when it has no pin. A provider-less legacy pin
+   * yields to that turn when they name different models. Not the model with
+   * the most turns.
    */
   model: string;
   /**
    * Distinct models this session used, sorted by cost descending. A bare
    * Claude alias and a region- or version-qualified spelling of the same
-   * model are one entry; the entry for the model in use now keeps that
-   * model's current spelling.
+   * model are one entry; a suffixed variant such as `-fast` is not. The
+   * entry for the model in use now keeps that model's current spelling.
    */
   models: string[];
   /** Whether the session is live, was dropped, or was loaded from the frozen-session index. */
@@ -152,11 +153,13 @@ Options:
   --json       Output as JSON (for programmatic use)
   -h, --help   Show this help message
 
-The Model column is the model that unit is running now (its pinned id, or
-the latest turn when it has no pin) — not the model with the most turns.
+The Model column is the model that unit is running now (its provider-qualified
+pin, or the latest turn when it has no pin; a provider-less legacy pin yields
+to that turn when they differ) — not the model with the most turns.
 In JSON, \`model\` is that id and \`models\` lists each distinct model once:
 a bare alias and a region- or version-qualified id of the same model are
-one entry, and the entry for the model in use now keeps the current spelling.
+one entry (a suffixed variant such as \`-fast\` is not), and the entry for
+the model in use now keeps the current spelling.
 
 JSON shape: { "budget": <window|null>, "scoops": [ ... ] }
 `;

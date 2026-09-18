@@ -82,6 +82,21 @@ export function parseClaudeVersion(modelId: string, modelName?: string): ClaudeV
 }
 
 /**
+ * Bare alias, OpenRouter `anthropic/` id, or Bedrock id (optional region
+ * prefix, optional dated `-YYYYMMDD-vN:M` suffix) of one Claude model.
+ * Anchored so a speed variant such as `anthropic/claude-opus-5-fast` does
+ * not collapse into `claude-opus-5`. `parseClaudeVersion` is the wrong tool
+ * here: it matches a family/version substring anywhere, which is what the
+ * capability predicates need and what would merge those variants.
+ */
+const SAME_CLAUDE_MODEL_RE = new RegExp(
+  `^(?:(?:us|eu|global|apac|au|jp)\\.)?(?:anthropic[./])?` +
+    `claude-(${CLAUDE_FAMILIES.join('|')})-(\\d{1,2})(?:-(\\d{1,2}))?` +
+    `(?:-\\d{8}-v\\d+(?::\\d+)?)?$`,
+  'i'
+);
+
+/**
  * One identity for model ids that name the same Claude version.
  *
  * A bare pi-ai alias and a Bedrock region- or version-qualified spelling
@@ -89,13 +104,17 @@ export function parseClaudeVersion(modelId: string, modelName?: string): ClaudeV
  * `claude-haiku-4-5` and `anthropic.claude-haiku-4-5-20251001-v1:0`. The
  * key is the bare alias (`claude-<family>-<major>`, minor omitted when 0).
  * Non-Claude ids, including ones pi-ai no longer advertises, are themselves
- * — this does not guess that `grok-4.6` is `grok-4.5`.
+ * — this does not guess that `grok-4.6` is `grok-4.5`. A suffixed variant
+ * (`-fast`) is a different model and stays as written.
  */
 export function canonicalModelId(modelId: string): string {
-  const version = parseClaudeVersion(modelId);
-  if (!version) return modelId;
-  const base = `claude-${version.family}-${version.major}`;
-  return version.minor === 0 ? base : `${base}-${version.minor}`;
+  const match = SAME_CLAUDE_MODEL_RE.exec(modelId);
+  if (!match) return modelId;
+  const family = (match[1] ?? '').toLowerCase();
+  const major = match[2] ?? '';
+  const minor = match[3];
+  const base = `claude-${family}-${major}`;
+  return minor === undefined || minor === '0' ? base : `${base}-${minor}`;
 }
 
 /**

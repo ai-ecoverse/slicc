@@ -15,7 +15,7 @@ import type { AssistantMessage } from '../core/types.js';
 import { canonicalModelId, representativeModelId } from '../providers/claude-model-version.js';
 import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.js';
 import { isRootUnit } from '../work-unit/policy.js';
-import { modelIdFor } from '../work-unit/record.js';
+import { modelIdFor, modelProviderFor } from '../work-unit/record.js';
 import type { ScoopContext } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
@@ -91,15 +91,38 @@ export interface CostScopeOptions {
  * Build cost data for a single scoop from its context's assistant messages.
  * Returns `null` when the scoop has no usage yet (no assistant turns).
  *
- * `model` is the model in use now — the unit's pinned id, or the latest
- * assistant turn when the record has no pin — not the model with the most
- * turns. `models` lists each distinct model once: a bare Claude alias and a
- * Bedrock region- or version-qualified spelling of that same model collapse,
- * and the entry for the model in use now keeps the current spelling.
+ * `model` is the model in use now — a provider-qualified pin, or the latest
+ * assistant turn when the record has no pin. A provider-less legacy pin is
+ * used only when it names the same model as that latest turn; otherwise the
+ * turn wins, because `resolveModelForInit` may already have fallen off a
+ * stale pre-#2195 id. Not the model with the most turns. `models` lists each
+ * distinct model once: a bare Claude alias and a Bedrock region- or
+ * version-qualified spelling of that same model collapse, and the entry for
+ * the model in use now keeps the current spelling. A suffixed variant
+ * (`-fast`) stays its own entry.
  *
  * Active time is rounded up to 15-minute intervals so a long-idle scoop with
  * a handful of turns doesn't read as "zero minutes" in the `cost` table.
  */
+/**
+ * Id to report as "in use now".
+ *
+ * A provider-qualified pin is the model the unit was told to run, including
+ * a switch that has not written a turn yet. A provider-less legacy pin
+ * (`config.modelId` with no provider, pre-#2195) may be an id the selected
+ * provider no longer serves; init then runs the resolved model, which the
+ * latest assistant turn records. When that turn names a different model,
+ * the turn is what is actually in use.
+ */
+function modelInUseNow(scoop: RegisteredScoop, latestModel: string): string {
+  const pinned = modelIdFor(scoop);
+  if (!pinned) return latestModel;
+  if (!modelProviderFor(scoop) && canonicalModelId(latestModel) !== canonicalModelId(pinned)) {
+    return latestModel;
+  }
+  return pinned;
+}
+
 export function buildScoopCost(
   scoop: RegisteredScoop,
   context: ScoopContext,
@@ -135,8 +158,7 @@ export function buildScoopCost(
   const latest = assistantMsgs.reduce((best, msg) =>
     msg.timestamp >= best.timestamp ? msg : best
   );
-  const pinned = modelIdFor(scoop);
-  const currentRaw = pinned && pinned.length > 0 ? pinned : latest.model;
+  const currentRaw = modelInUseNow(scoop, latest.model);
   const reported = reportModelSpellings(buckets, currentRaw);
 
   const timestamps = assistantMsgs.map((m) => m.timestamp).sort((a, b) => a - b);

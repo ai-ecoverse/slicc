@@ -203,6 +203,68 @@ describe('ScoopCostTracker', () => {
     expect(cost.models).toEqual(['anthropic.claude-haiku-4-5-20251001-v1:0']);
   });
 
+  it('does not treat a speed variant as the same model', () => {
+    const scoop = createMockScoop('fast', 'Fast');
+    scoopsMap.set('fast', scoop);
+    contextsMap.set(
+      'fast',
+      createMockContext([
+        createAssistantMessage('claude-opus-5', 100, 50, 0, 0, 0.05),
+        createAssistantMessage('anthropic/claude-opus-5-fast', 100, 50, 0, 0, 0.08),
+      ])
+    );
+
+    const [cost] = tracker.getSessionCosts();
+
+    expect(cost.models).toEqual(['anthropic/claude-opus-5-fast', 'claude-opus-5']);
+  });
+
+  it('reports the latest turn when a provider-less legacy pin is a different model', () => {
+    const scoop = createMockScoop('legacy', 'Legacy');
+    scoop.config = { modelId: 'gpt-4.1' };
+    scoopsMap.set('legacy', scoop);
+    contextsMap.set(
+      'legacy',
+      createMockContext([
+        createAssistantMessage('presto', 100, 50, 0, 0, 0.2, 0, 0, 0, NOW_MS - 2),
+        createAssistantMessage('presto', 100, 50, 0, 0, 0.2, 0, 0, 0, NOW_MS - 1),
+        createAssistantMessage('claude-opus-5', 100, 50, 0, 0, 0.05, 0, 0, 0, NOW_MS),
+      ])
+    );
+
+    const [cost] = tracker.getSessionCosts();
+
+    expect(cost.model).toBe('claude-opus-5');
+  });
+
+  it('keeps a provider-less pin when it is the same model as the latest turn', () => {
+    const scoop = createMockScoop('legacy-same', 'Legacy same');
+    scoop.config = { modelId: 'claude-opus-5' };
+    scoopsMap.set('legacy-same', scoop);
+    contextsMap.set(
+      'legacy-same',
+      createMockContext([
+        createAssistantMessage(
+          'global.anthropic.claude-opus-5',
+          100,
+          50,
+          0,
+          0,
+          0.05,
+          0,
+          0,
+          0,
+          NOW_MS
+        ),
+      ])
+    );
+
+    const [cost] = tracker.getSessionCosts();
+
+    expect(cost.model).toBe('claude-opus-5');
+    expect(cost.models).toEqual(['claude-opus-5']);
+  });
+
   describe('burn rate', () => {
     it('exports the configured windows, floor, and weights', () => {
       expect(BURN_RATE_RECENT_WINDOW_MS).toBe(15 * MINUTE_MS);
@@ -389,6 +451,7 @@ describe('ScoopCostTracker', () => {
       createAssistantMessage('anthropic.claude-haiku-4-5-20251001-v1:0', 10, 5, 0, 0, 0.001),
       createAssistantMessage('grok-4.6', 10, 5, 0, 0, 0.003),
       createAssistantMessage('grok-4.5', 10, 5, 0, 0, 0.004),
+      createAssistantMessage('anthropic/claude-opus-5-fast', 10, 5, 0, 0, 0.005),
     ]);
 
     const result = tracker.getModelCosts();
@@ -398,6 +461,7 @@ describe('ScoopCostTracker', () => {
     expect(byModel.get('claude-haiku-4-5')).toMatchObject({ input: 20, turns: 2 });
     expect(byModel.get('grok-4.6')).toMatchObject({ turns: 1 });
     expect(byModel.get('grok-4.5')).toMatchObject({ turns: 1 });
+    expect(byModel.get('anthropic/claude-opus-5-fast')).toMatchObject({ turns: 1 });
     expect(byModel.has('global.anthropic.claude-opus-5')).toBe(false);
   });
 

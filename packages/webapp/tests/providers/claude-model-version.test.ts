@@ -216,8 +216,12 @@ describe('canonicalModelId', () => {
     ['anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5'],
     ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5'],
     ['claude-opus-4-6', 'claude-opus-4-6'],
+    ['anthropic/claude-opus-5', 'claude-opus-5'],
+    ['claude-sonnet-5-0', 'claude-sonnet-5'],
     ['presto', 'presto'],
     ['grok-4.6', 'grok-4.6'],
+    ['anthropic/claude-opus-5-fast', 'anthropic/claude-opus-5-fast'],
+    ['claude-opus-5-fast', 'claude-opus-5-fast'],
   ])('maps %s to %s', (id, expected) => {
     expect(canonicalModelId(id)).toBe(expected);
   });
