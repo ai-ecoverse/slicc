@@ -274,10 +274,13 @@ jobs:
 
       - name: Detect stacked pull request
         id: stacked
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.base_ref }}" != "main" ]; then
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "main" ]; then
             echo "stacked=true" >> "$GITHUB_OUTPUT"
-            echo "Stacked PR (base: ${{ github.base_ref }}); skipping ios-app-tests"
+            echo "Stacked PR (base: $BASE_REF); skipping ios-app-tests"
           else
             echo "stacked=false" >> "$GITHUB_OUTPUT"
           fi

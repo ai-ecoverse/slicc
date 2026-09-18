@@ -183,9 +183,14 @@ describe('CI critical-path routing', () => {
     expect(workflow).not.toMatch(/pull_request:\n {4}branches: \[main\]/);
     expect(workflow).toContain('is-stacked: ${{ steps.stacked.outputs.stacked }}');
     expect(workflow).toContain('id: stacked');
-    expect(workflow).toContain(
-      'if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.base_ref }}" != "main" ]; then'
+    const stacked = stepBody(jobBody('changes', 'lint'), 'Detect stacked pull request');
+    expect(stacked).toContain('EVENT_NAME: ${{ github.event_name }}');
+    expect(stacked).toContain('BASE_REF: ${{ github.base_ref }}');
+    expect(stacked).toContain(
+      'if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "main" ]; then'
     );
+    expect(stacked).not.toContain('${{ github.event_name }}"');
+    expect(stacked).not.toContain('${{ github.base_ref }}"');
 
     const iosTests = jobBody('ios-app-tests', 'global-install');
     expect(iosTests).toContain("needs.changes.outputs.is-stacked != 'true'");
