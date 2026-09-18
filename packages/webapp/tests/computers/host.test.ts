@@ -9,6 +9,26 @@ import {
 } from '../../src/computers/registry.js';
 import type { ExtensionMessage, OffscreenToPanelMessage } from '../../src/kernel/messages.js';
 
+const { fitGates } = vi.hoisted(() => ({
+  fitGates: new Map<number, Promise<void>>(),
+}));
+
+vi.mock('../../src/computers/encode-frame.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/computers/encode-frame.js')>();
+  return {
+    ...actual,
+    async fitComputerFrame(
+      frame: ComputerFrame,
+      maxWidth: number,
+      resample?: Parameters<typeof actual.fitComputerFrame>[2]
+    ) {
+      const gate = fitGates.get(frame.seq);
+      if (gate) await gate;
+      return actual.fitComputerFrame(frame, maxWidth, resample);
+    },
+  };
+});
+
 class FakeBackend implements ComputerBackend {
   shots = 0;
   hang: Promise<ComputerFrame> | null = null;
@@ -114,8 +134,12 @@ class FakePushBackend implements ComputerBackend {
   }
 
   emitWide(): void {
+    this.emitSeq(1);
+  }
+
+  emitSeq(seq: number): void {
     this.sink?.({
-      seq: 1,
+      seq,
       mime: 'image/jpeg',
       width: 640,
       height: 400,
@@ -163,6 +187,7 @@ function mockTransport() {
 
 afterEach(() => {
   resetComputerRegistryForTests();
+  fitGates.clear();
 });
 
 describe('computers host watch transport', () => {
@@ -210,6 +235,32 @@ describe('computers host watch transport', () => {
     if (frame && frame.type === 'computer-frame') {
       expect(jpegSize(frame.bytes)).toEqual({ width: 640, height: 400 });
     }
+    host.stop();
+  });
+
+  it('discards a resample that finishes after a newer seq has already been sent', async () => {
+    const registry = installComputerRegistry(null);
+    const backend = new FakePushBackend('wide');
+    registry.register(backend);
+    const { transport, sent } = mockTransport();
+    let releaseSlow!: () => void;
+    fitGates.set(
+      1,
+      new Promise<void>((resolve) => {
+        releaseSlow = resolve;
+      })
+    );
+    const host = startComputersHost({ transport, processManager: null });
+    host.watch('wide', 2, 480);
+    backend.emitSeq(1);
+    backend.emitSeq(2);
+    await vi.waitFor(() => {
+      expect(sent.filter((m) => m.type === 'computer-frame').map((m) => m.seq)).toEqual([2]);
+    });
+    releaseSlow();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent.filter((m) => m.type === 'computer-frame').map((m) => m.seq)).toEqual([2]);
     host.stop();
   });
 

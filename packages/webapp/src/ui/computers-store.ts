@@ -146,6 +146,8 @@ class ComputersStore {
   }
 
   applyFrame(msg: ComputerFrameMsg): void {
+    const prev = this.frames.get(msg.id);
+    if (prev && prev.seq > msg.seq) return;
     const frame: ComputerFrame = {
       seq: msg.seq,
       mime: msg.mime,

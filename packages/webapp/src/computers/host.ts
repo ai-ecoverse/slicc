@@ -42,6 +42,7 @@ interface Watcher {
   fps: number;
   maxWidth: number;
   generation: number;
+  lastSentSeq: number;
   unsub: (() => void) | null;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: boolean;
@@ -83,6 +84,8 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
     if (!watcher || watcher.generation !== generation) return;
     const fitted = await fitComputerFrame(frame, watcher.maxWidth);
     if (watcher.generation !== generation) return;
+    if (fitted.seq <= watcher.lastSentSeq) return;
+    watcher.lastSentSeq = fitted.seq;
     const copy = coerceComputerFrameBytes(fitted.bytes);
     send(
       {
@@ -119,6 +122,7 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
       fps,
       maxWidth,
       generation: 1,
+      lastSentSeq: Number.NEGATIVE_INFINITY,
       unsub: null,
       timer: null,
       inFlight: false,

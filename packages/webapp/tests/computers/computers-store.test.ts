@@ -206,4 +206,29 @@ describe('computers-store', () => {
     });
     expect(store.lastFrame('jsh:fake')).toBeNull();
   });
+
+  it('ignores an older seq so a late resample cannot regress the preview', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    store.applyFrame({
+      type: 'computer-frame',
+      id: 'jsh:fake',
+      seq: 4,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      bytes: new Uint8Array([4]),
+    });
+    store.applyFrame({
+      type: 'computer-frame',
+      id: 'jsh:fake',
+      seq: 3,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      bytes: new Uint8Array([3]),
+    });
+    expect(store.lastFrame('jsh:fake')?.seq).toBe(4);
+    expect(store.lastFrame('jsh:fake')?.bytes).toEqual(new Uint8Array([4]));
+  });
 });
