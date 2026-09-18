@@ -351,6 +351,23 @@ jobs:
             "${{ github.event.pull_request.base.sha }}" \
             "${{ github.event.pull_request.head.sha }}"
 
+  # Fails when the change adds a dependency with a known high/critical advisory
+  # (GitHub Advisory Database). Dependabot/Renovate fix already-merged deps;
+  # this stops new ones. Runs in merge_group too — explicit base/head refs make
+  # the comparison work outside pull_request — so the required `ci` gate
+  # covers the merge-queue candidate, not just the PR head.
+  dependency-review:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          base-ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          head-ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+
   # Lightweight test matrix that re-runs the TypeScript test suites across
   # tested Node majors (currently 24, 25, and 26). The package engines
   # field is `>=22.13.0`, so any one-version pin in the heavier per-package
@@ -2368,6 +2385,7 @@ jobs:
         changes,
         lint,
         linear-history,
+        dependency-review,
         typecheck,
         node-matrix-tests,
         webapp,
