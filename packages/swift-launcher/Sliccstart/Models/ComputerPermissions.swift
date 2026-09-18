@@ -34,7 +34,8 @@ enum ComputerPermissionError: Error, Equatable {
     case screenRecording
     case accessibility
 
-    /// Exact strings the leader surfaces on `computer.native.error`.
+    /// Exact strings the leader surfaces on `computer.native.error` (capture)
+    /// and `computer.native.input.result` (input).
     var message: String {
         switch self {
         case .screenRecording:

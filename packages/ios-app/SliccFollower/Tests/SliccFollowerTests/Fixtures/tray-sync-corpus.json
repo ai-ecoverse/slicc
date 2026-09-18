@@ -1,7 +1,7 @@
 {
   "traySyncProtocolVersion": 8,
   "leaderVariantCount": 47,
-  "followerVariantCount": 42,
+  "followerVariantCount": 43,
   "agentEventVariantCount": 13,
   "leaderToFollower": [
     {
@@ -714,6 +714,15 @@
         "nativeWidth": 1440,
         "nativeHeight": 900,
         "data": "QUJD"
+      }
+    },
+    {
+      "type": "computer.native.input.result",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.input.result",
+        "requestId": "in-1",
+        "error": "Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again."
       }
     },
     {

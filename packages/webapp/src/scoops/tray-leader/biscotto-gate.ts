@@ -85,6 +85,7 @@ export const BISCOTTO_ALLOWED: Record<FollowerToLeaderMessage['type'], boolean> 
   'computer.input': false,
   'computer.native.frame': false,
   'computer.native.error': false,
+  'computer.native.input.result': false,
   'model.select': false,
   'models.request': false,
   'thinking.set': false,

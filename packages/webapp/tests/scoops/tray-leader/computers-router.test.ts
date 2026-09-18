@@ -294,10 +294,10 @@ describe('ComputersRouter', () => {
     await expect(router.captureNative('mac', { timeoutMs: 20 })).rejects.toThrow('timed out');
   });
 
-  it('sends computer.native.input and unwatch to a computer follower', () => {
+  it('sends computer.native.input and unwatch to a computer follower', async () => {
     const { router, addFollower, sent } = createHarness();
     addFollower('mac', 'full', { computer: true });
-    router.inputNative('mac', [{ type: 'key', keysym: 'Return' }]);
+    const pending = router.inputNative('mac', [{ type: 'key', keysym: 'Return' }]);
     router.unwatchNative('mac');
     expect(sent.get('mac')).toEqual([
       expect.objectContaining({
@@ -306,5 +306,48 @@ describe('ComputersRouter', () => {
       }),
       { type: 'computer.native.unwatch' },
     ]);
+    const input = sent.get('mac')?.find((m) => m.type === 'computer.native.input');
+    if (input?.type !== 'computer.native.input') throw new Error('missing native input');
+    router.handleNative('mac', {
+      type: 'computer.native.input.result',
+      requestId: input.requestId,
+    });
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('rejects inputNative when the follower reports Accessibility denial', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.inputNative('mac', [{ type: 'key', keysym: 'Return' }], {
+      timeoutMs: 5_000,
+    });
+    const input = sent.get('mac')?.find((m) => m.type === 'computer.native.input');
+    if (input?.type !== 'computer.native.input') throw new Error('missing native input');
+    router.handleNative('mac', {
+      type: 'computer.native.input.result',
+      requestId: input.requestId,
+      error:
+        'Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again.',
+    });
+    await expect(pending).rejects.toThrow(/Accessibility is not allowed/);
+    await expect(pending).rejects.toThrow(/System Settings/);
+  });
+
+  it('rejects inputNative when computer.native.error matches the request', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.inputNative(
+      'mac',
+      [{ type: 'click', button: 1, count: 1, x: 1, y: 1 }],
+      { timeoutMs: 5_000 }
+    );
+    const input = sent.get('mac')?.find((m) => m.type === 'computer.native.input');
+    if (input?.type !== 'computer.native.input') throw new Error('missing native input');
+    router.handleNative('mac', {
+      type: 'computer.native.error',
+      requestId: input.requestId,
+      error: 'Accessibility is not allowed. Grant it in System Settings.',
+    });
+    await expect(pending).rejects.toThrow(/Accessibility is not allowed/);
   });
 });

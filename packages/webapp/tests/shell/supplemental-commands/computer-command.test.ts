@@ -741,6 +741,47 @@ describe('computer parse', () => {
     expect(input).toHaveBeenCalled();
   });
 
+  it('surfaces Accessibility denial from native input through the shell verb', async () => {
+    const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
+    const input = vi.fn(async () => {
+      throw new Error(
+        'Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again.'
+      );
+    });
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => ({
+          bytes: MINIMAL_JPEG,
+          mime: 'image/jpeg' as const,
+          width: 1,
+          height: 1,
+          nativeWidth: 1,
+          nativeHeight: 1,
+        }),
+        input,
+        unwatch: vi.fn(),
+      }),
+      sudoBroker: { requestApproval },
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--allow-input'], ctx);
+    expect(added.exitCode).toBe(0);
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(1);
+    expect(typed.stderr).toContain('Accessibility is not allowed');
+    expect(typed.stderr).toContain('System Settings');
+  });
+
   it('add ssh --sim refuses a computer-only follower', async () => {
     const cmd = createComputerCommand({
       registry: new ComputerRegistry(null),

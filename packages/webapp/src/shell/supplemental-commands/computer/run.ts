@@ -747,7 +747,11 @@ async function verbInput(
   const events = buildEvents(call, globals.native, target.descriptor);
   const blocked = unsupportedInputReason(target.descriptor.capabilities, events);
   if (blocked) return fail(`${call.verb}: ${blocked}`);
-  await target.backend.input(events);
+  try {
+    await target.backend.input(events);
+  } catch (err) {
+    return fail(`${call.verb}: ${err instanceof Error ? err.message : String(err)}`);
+  }
   return writePostActionFrame(target, ctx, registry);
 }
 

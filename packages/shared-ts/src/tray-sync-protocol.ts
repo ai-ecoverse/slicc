@@ -606,6 +606,12 @@ export type FollowerToLeaderMessage =
       totalChunks?: number;
     }
   | { type: 'computer.native.error'; requestId: string; error: string }
+  /**
+   * Ack for `computer.native.input`. Always sent. `error` is the
+   * Accessibility-denial text (or another injector failure); omitted on
+   * success so the leader can unblock the shell verb.
+   */
+  | { type: 'computer.native.input.result'; requestId: string; error?: string }
   | { type: 'models.request' }
   | {
       type: 'model.select';

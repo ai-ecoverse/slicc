@@ -200,7 +200,7 @@ function createComputerNativeBridge(getLeader: StandalonePanelRpcDeps['getLeader
       return { ok: true as const, ...frame };
     }
     if (payload.action === 'input') {
-      sync.inputNativeComputer(payload.runtimeId, payload.events ?? []);
+      await sync.inputNativeComputer(payload.runtimeId, payload.events ?? []);
       return { ok: true as const };
     }
     sync.unwatchNativeComputer(payload.runtimeId);

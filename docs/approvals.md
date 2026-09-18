@@ -963,7 +963,7 @@ session — stop that share, focus SLICC, and retry (or reload if it stays wedge
 
 ### Native macOS capture (`computer add ssh`)
 
-When a Swift-launcher follower advertises `capabilities.computer`, `computer add ssh` prefers ScreenCaptureKit JPEG frames and CGEvent input over `screencapture`/`cliclick` shell-out. Those TCC prompts are **lazy on first use** (`ComputerPermissions.swift`): Screen Recording for capture, Accessibility for input. A denial returns a System Settings error on `computer.native.error`. `--allow-input` is still the sudo hop above; native capture does not skip it. Fallback remains the probe + tray-exec path when the follower has no `computer` capability (Linux, old launcher, iOS).
+When a Swift-launcher follower advertises `capabilities.computer`, `computer add ssh` prefers ScreenCaptureKit JPEG frames and CGEvent input over `screencapture`/`cliclick` shell-out. Those TCC prompts are **lazy on first use** (`ComputerPermissions.swift`): Screen Recording for capture, Accessibility for input. A capture denial returns a System Settings error on `computer.native.error`. An input denial returns the same Accessibility text on `computer.native.input.result` (and `computer.native.error`) so the leader can fail the shell verb. `--allow-input` is still the sudo hop above; native capture does not skip it. Fallback remains the probe + tray-exec path when the follower has no `computer` capability (Linux, old launcher, iOS).
 
 ### Microphone (voice input)
 

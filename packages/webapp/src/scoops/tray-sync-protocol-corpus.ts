@@ -706,6 +706,15 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
         'Screen Recording is denied. Enable it in System Settings → Privacy & Security → Screen Recording.',
     },
   },
+  'computer.native.input.result': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.input.result',
+      requestId: 'in-1',
+      error:
+        'Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again.',
+    },
+  },
   'models.request': { ios: 'decoded', message: { type: 'models.request' } },
   'model.select': {
     ios: 'decoded',

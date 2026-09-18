@@ -250,6 +250,15 @@ describe('FollowerDispatch', () => {
       'follower',
       expect.objectContaining({ type: 'computer.native.error', requestId: 'cap-1' })
     );
+    dispatch.dispatch('follower', {
+      type: 'computer.native.input.result',
+      requestId: 'in-1',
+      error: 'Accessibility is not allowed',
+    });
+    expect(c.computersRouter?.handleNative).toHaveBeenCalledWith(
+      'follower',
+      expect.objectContaining({ type: 'computer.native.input.result', requestId: 'in-1' })
+    );
   });
 
   it('rejects an invalid model id without throwing or broadcasting state', () => {

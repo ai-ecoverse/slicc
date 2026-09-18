@@ -215,15 +215,18 @@ final class ComputerTrayFollower: NSObject {
             try permissions.ensureAccessibility()
         } catch let error as ComputerPermissionError {
             _ = send(.computerNativeError(requestId: requestId, error: error.message))
+            _ = send(.computerNativeInputResult(requestId: requestId, error: error.message))
             return
         } catch {
-            _ = send(
-                .computerNativeError(requestId: requestId, error: String(describing: error)))
+            let text = String(describing: error)
+            _ = send(.computerNativeError(requestId: requestId, error: text))
+            _ = send(.computerNativeInputResult(requestId: requestId, error: text))
             return
         }
         var injector = ComputerInputInjector(
             sink: eventSink, encodedSize: encodedSize, nativeSize: nativeSize)
         injector.apply(events)
+        _ = send(.computerNativeInputResult(requestId: requestId, error: nil))
     }
 }
 

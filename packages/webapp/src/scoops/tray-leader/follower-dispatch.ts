@@ -76,7 +76,6 @@ export class FollowerDispatch {
       this.collaborators;
     const { transcriptExport, cherryRouter, tabTeleportRouter, oauthPopupDelegation } =
       this.collaborators;
-
     switch (message.type) {
       case 'user_message':
         this.handleFollowerUserMessage(bootstrapId, message);
@@ -107,6 +106,7 @@ export class FollowerDispatch {
       case 'computer.input':
       case 'computer.native.frame':
       case 'computer.native.error':
+      case 'computer.native.input.result':
         this.routeComputerFollowerMessage(bootstrapId, message);
         break;
       case 'models.request':
@@ -234,7 +234,8 @@ export class FollowerDispatch {
           | 'computer.unwatch'
           | 'computer.input'
           | 'computer.native.frame'
-          | 'computer.native.error';
+          | 'computer.native.error'
+          | 'computer.native.input.result';
       }
     >
   ): void {
@@ -255,6 +256,7 @@ export class FollowerDispatch {
         return;
       case 'computer.native.frame':
       case 'computer.native.error':
+      case 'computer.native.input.result':
         this.collaborators.computersRouter?.handleNative?.(bootstrapId, message);
     }
   }

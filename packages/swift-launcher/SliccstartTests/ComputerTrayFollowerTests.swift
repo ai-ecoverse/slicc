@@ -146,6 +146,16 @@ final class ComputerTrayFollowerTests: XCTestCase {
                     events: [.click(button: 1, count: 1, holdMs: nil, x: 10, y: 20)])))
         await settle()
         XCTAssertTrue(sink.actions.isEmpty)
+        let results = sent.compactMap { data -> (String, String?)? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.input.result",
+                let requestId = obj["requestId"] as? String
+            else { return nil }
+            return (requestId, obj["error"] as? String)
+        }
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].0, "in-1")
+        XCTAssertEqual(results[0].1, ComputerPermissionError.accessibilityMessage)
         let errors = sent.compactMap { data -> String? in
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 obj["type"] as? String == "computer.native.error"
@@ -180,6 +190,40 @@ final class ComputerTrayFollowerTests: XCTestCase {
                 .mouseButton(.left, down: true, at: CGPoint(x: 200, y: 100)),
                 .mouseButton(.left, down: false, at: CGPoint(x: 200, y: 100)),
             ])
+    }
+
+    func testGrantedInputAcknowledgesResult() async throws {
+        let sink = RecordingEventSink()
+        let capturer = StubCapturer(
+            image: ComputerTestImages.solid(width: 400, height: 200),
+            native: CGSize(width: 800, height: 400))
+        let (follower, _, _) = makeFollower(capturer: capturer, sink: sink)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 400, watch: false)))
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-ok",
+                    events: [.click(button: 1, count: 1, holdMs: nil, x: 10, y: 20)])))
+        await settle()
+        let results = sent.compactMap { data -> (String, String?)? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.input.result",
+                let requestId = obj["requestId"] as? String
+            else { return nil }
+            return (requestId, obj["error"] as? String)
+        }
+        XCTAssertEqual(results, [("in-ok", nil)])
     }
 
     func testUnwatchStopsTheCapturer() async throws {

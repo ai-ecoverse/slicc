@@ -39,6 +39,18 @@ export interface TrayComputersSource {
 
 const TRAY_FRAME_MIN_INTERVAL_MS = 1000 / COMPUTER_TRAY_MAX_FPS;
 
+type NativeFanoutMessage = Extract<
+  FollowerToLeaderMessage,
+  { type: 'computer.native.frame' | 'computer.native.error' }
+>;
+
+type NativeWireMessage = Extract<
+  FollowerToLeaderMessage,
+  {
+    type: 'computer.native.frame' | 'computer.native.error' | 'computer.native.input.result';
+  }
+>;
+
 /**
  * Fans `computers.list` / `computer.frame` to full-trust followers and answers
  * `computer.watch` / `computer.unwatch` / `computer.input`. Caps the tray
@@ -54,13 +66,7 @@ export class ComputersRouter {
   /** Last successful frame send per follower+computer, for the 2 fps cap. */
   private readonly lastSentAt = new Map<string, number>();
   private readonly nativeListeners = new Set<
-    (
-      bootstrapId: string,
-      message: Extract<
-        FollowerToLeaderMessage,
-        { type: 'computer.native.frame' | 'computer.native.error' }
-      >
-    ) => void
+    (bootstrapId: string, message: NativeFanoutMessage) => void
   >();
   private readonly nativeChunks = new Map<
     string,
@@ -70,6 +76,14 @@ export class ComputersRouter {
     string,
     {
       resolve: (frame: NativeComputerCaptureResult) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private readonly pendingInput = new Map<
+    string,
+    {
+      resolve: () => void;
       reject: (err: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -202,15 +216,31 @@ export class ComputersRouter {
     });
   }
 
-  inputNative(runtimeId: string, events: ComputerInputEvent[]): void {
+  async inputNative(
+    runtimeId: string,
+    events: ComputerInputEvent[],
+    opts: { timeoutMs?: number } = {}
+  ): Promise<void> {
     const follower = this.requireComputerFollower(runtimeId);
     const requestId = `nin-${crypto.randomUUID()}`;
-    const sent = follower.sync.send({
-      type: 'computer.native.input',
-      requestId,
-      events,
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingInput.delete(requestId);
+        reject(new Error(`computer.native.input timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingInput.set(requestId, { resolve, reject, timer });
+      const sent = follower.sync.send({
+        type: 'computer.native.input',
+        requestId,
+        events,
+      });
+      if (!sent) {
+        this.pendingInput.delete(requestId);
+        clearTimeout(timer);
+        reject(new Error(`Failed to send computer.native.input to '${runtimeId}'`));
+      }
     });
-    if (!sent) throw new Error(`Failed to send computer.native.input to '${runtimeId}'`);
   }
 
   unwatchNative(runtimeId: string): void {
@@ -218,15 +248,16 @@ export class ComputersRouter {
     follower.sync.send({ type: 'computer.native.unwatch' });
   }
 
-  handleNative(
-    bootstrapId: string,
-    message: Extract<
-      FollowerToLeaderMessage,
-      { type: 'computer.native.frame' | 'computer.native.error' }
-    >
-  ): void {
+  handleNative(bootstrapId: string, message: NativeWireMessage): void {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower || follower.trust === 'biscotto') return;
+    if (message.type === 'computer.native.input.result') {
+      this.settleNativeInput(message.requestId, message.error);
+      return;
+    }
+    if (message.type === 'computer.native.error') {
+      this.settleNativeInput(message.requestId, message.error);
+    }
     this.settleNative(message);
     this.nativeListeners.forEach((listener) => {
       try {
@@ -240,15 +271,7 @@ export class ComputersRouter {
     });
   }
 
-  onNative(
-    listener: (
-      bootstrapId: string,
-      message: Extract<
-        FollowerToLeaderMessage,
-        { type: 'computer.native.frame' | 'computer.native.error' }
-      >
-    ) => void
-  ): () => void {
+  onNative(listener: (bootstrapId: string, message: NativeFanoutMessage) => void): () => void {
     this.nativeListeners.add(listener);
     return () => {
       this.nativeListeners.delete(listener);
@@ -316,12 +339,16 @@ export class ComputersRouter {
     return resolved.follower;
   }
 
-  private settleNative(
-    message: Extract<
-      FollowerToLeaderMessage,
-      { type: 'computer.native.frame' | 'computer.native.error' }
-    >
-  ): void {
+  private settleNativeInput(requestId: string, error?: string): void {
+    const pending = this.pendingInput.get(requestId);
+    if (!pending) return;
+    this.pendingInput.delete(requestId);
+    clearTimeout(pending.timer);
+    if (error) pending.reject(new Error(error));
+    else pending.resolve();
+  }
+
+  private settleNative(message: NativeFanoutMessage): void {
     if (message.type === 'computer.native.error') {
       const pending = this.pendingNative.get(message.requestId);
       if (!pending) return;

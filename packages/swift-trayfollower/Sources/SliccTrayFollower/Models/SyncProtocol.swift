@@ -1131,6 +1131,9 @@ public enum FollowerToLeaderMessage: Codable {
         nativeWidth: Double, nativeHeight: Double, data: String?, chunkData: String?,
         chunkIndex: Int?, totalChunks: Int?)
     case computerNativeError(requestId: String, error: String)
+    /// Ack for `computer.native.input`. `error` is the Accessibility-denial
+    /// text (or another injector failure); nil on success.
+    case computerNativeInputResult(requestId: String, error: String?)
     case modelsRequest
     /// Change the model of ONE cone (#2310): `scoopJid` is the unit this
     /// follower has selected (a scoop resolves to the cone that owns it).
@@ -1261,6 +1264,10 @@ public enum FollowerToLeaderMessage: Codable {
             self = .computerNativeError(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 error: try container.decode(String.self, forKey: .error))
+        case "computer.native.input.result":
+            self = .computerNativeInputResult(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                error: try container.decodeIfPresent(String.self, forKey: .error))
         case "models.request":
             self = .modelsRequest
         case "model.select":
@@ -1440,6 +1447,10 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode("computer.native.error", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(error, forKey: .error)
+        case .computerNativeInputResult(let requestId, let error):
+            try container.encode("computer.native.input.result", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encodeIfPresent(error, forKey: .error)
         case .modelsRequest:
             try container.encode("models.request", forKey: .type)
         case .modelSelect(let modelId, let scoopJid):

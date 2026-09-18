@@ -540,8 +540,8 @@ export class LeaderSyncManager {
     return this.computersRouter.captureNative(runtimeId, opts);
   }
 
-  inputNativeComputer(runtimeId: string, events: ComputerInputEvent[]): void {
-    this.computersRouter.inputNative(runtimeId, events);
+  inputNativeComputer(runtimeId: string, events: ComputerInputEvent[]): Promise<void> {
+    return this.computersRouter.inputNative(runtimeId, events);
   }
 
   unwatchNativeComputer(runtimeId: string): void {
