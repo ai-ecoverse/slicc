@@ -513,7 +513,7 @@ computer.register({
 });
 ```
 
-Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame, maxWidth)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh` (640×400 clock, frame counter, click marker; OffscreenCanvas JPEG or stored-deflate PNG). The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
+Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame, maxWidth)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh` (640×400 clock, frame counter, click marker; Home/Back/Menu soft keys move the marker or cycle the background; OffscreenCanvas JPEG or stored-deflate PNG). The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
 
 ## Reaching these from sprinkles & dips
 

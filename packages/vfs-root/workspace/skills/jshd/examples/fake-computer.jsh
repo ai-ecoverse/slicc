@@ -7,8 +7,9 @@
  * still works as a poll fallback.
  *
  * Frames are 640×400: background, clock, frame counter, and a marker
- * at the last pointer so clicks are visible. OffscreenCanvas JPEG when
- * the realm has it; otherwise a stored-deflate PNG.
+ * at the last pointer so clicks are visible. Overlay soft keys Home /
+ * Back / Menu move the marker or cycle the background. OffscreenCanvas
+ * JPEG when the realm has it; otherwise a stored-deflate PNG.
  *
  *   jshd start -n fake-computer --enable --restart always \
  *     /workspace/skills/jshd/examples/fake-computer.jsh
@@ -41,12 +42,46 @@ const FONT = {
   ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
 };
 
+const THEMES = [
+  { bg: [26, 31, 46], bar: [18, 21, 31] },
+  { bg: [72, 24, 48], bar: [48, 16, 32] },
+  { bg: [16, 48, 40], bar: [10, 32, 28] },
+];
+const HOME_X = 320;
+const HOME_Y = 200;
+const BACK_X = 48;
+const BACK_Y = 352;
+
 let seq = 0;
 let last = '';
 let lastX = 0;
 let lastY = 0;
 let hasPointer = false;
+let themeIndex = 0;
 let busy = false;
+
+function rgbCss(rgb) {
+  return 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
+}
+
+function applySoftKey(keysym) {
+  if (keysym === 'Home') {
+    lastX = HOME_X;
+    lastY = HOME_Y;
+    hasPointer = true;
+    themeIndex = 0;
+    return;
+  }
+  if (keysym === 'Escape' || keysym === 'Back') {
+    lastX = BACK_X;
+    lastY = BACK_Y;
+    hasPointer = true;
+    return;
+  }
+  if (keysym === 'Menu') {
+    themeIndex = (themeIndex + 1) % THEMES.length;
+  }
+}
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n | 0));
@@ -57,9 +92,10 @@ function clockString() {
 }
 
 function paintCanvas(ctx) {
-  ctx.fillStyle = '#1a1f2e';
+  const theme = THEMES[themeIndex];
+  ctx.fillStyle = rgbCss(theme.bg);
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
-  ctx.fillStyle = '#12151f';
+  ctx.fillStyle = rgbCss(theme.bar);
   ctx.fillRect(0, 0, WIDTH, 40);
   ctx.fillStyle = '#c8d0e0';
   ctx.font = '16px ui-monospace, monospace';
@@ -124,8 +160,9 @@ function drawString(rgb, x, y, text, scale, r, g, b) {
 }
 
 function paintRgb(rgb) {
-  fillRect(rgb, 0, 0, WIDTH, HEIGHT, 26, 31, 46);
-  fillRect(rgb, 0, 0, WIDTH, 40, 18, 21, 31);
+  const theme = THEMES[themeIndex];
+  fillRect(rgb, 0, 0, WIDTH, HEIGHT, theme.bg[0], theme.bg[1], theme.bg[2]);
+  fillRect(rgb, 0, 0, WIDTH, 40, theme.bar[0], theme.bar[1], theme.bar[2]);
   drawString(rgb, 12, 12, clockString(), 2, 200, 208, 224);
   drawString(rgb, 12, 52, '#' + String(seq), 3, 154, 209, 126);
   if (!hasPointer) return;
@@ -269,6 +306,11 @@ computer.register({
     exec: false,
     inputAllowed: true,
   },
+  softKeys: [
+    { label: 'Home', keysym: 'Home' },
+    { label: 'Back', keysym: 'Escape' },
+    { label: 'Menu', keysym: 'Menu' },
+  ],
   async screenshot() {
     return nextFrame();
   },
@@ -294,7 +336,10 @@ computer.register({
   async input(events) {
     for (const event of events) {
       if (event.type === 'text') last += event.text;
-      if (event.type === 'key') last += `[${event.keysym}]`;
+      if (event.type === 'key') {
+        last += `[${event.keysym}]`;
+        applySoftKey(event.keysym);
+      }
       if (event.type === 'click') {
         rememberPointer(event);
         last += `[click ${event.x},${event.y}]`;

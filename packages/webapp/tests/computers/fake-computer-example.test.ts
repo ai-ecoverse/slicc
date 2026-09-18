@@ -26,6 +26,7 @@ interface FakeComputerHandlers {
     bytes: Uint8Array;
   }>;
   input: (events: unknown[]) => Promise<void>;
+  softKeys?: Array<{ label: string; keysym: string }>;
 }
 
 function loadExample(): FakeComputerHandlers {
@@ -77,6 +78,11 @@ function inflateIdat(bytes: Uint8Array): Uint8Array {
   return inflate(zlib);
 }
 
+function sampleRgb(raw: Uint8Array, x: number, y: number): [number, number, number] {
+  const i = y * (1 + 640 * 3) + 1 + x * 3;
+  return [raw[i]!, raw[i + 1]!, raw[i + 2]!];
+}
+
 describe('fake-computer.jsh example', () => {
   it('emits a decodable 640×400 frame', async () => {
     const handlers = loadExample();
@@ -107,5 +113,31 @@ describe('fake-computer.jsh example', () => {
     const y = 100;
     const i = y * (1 + 640 * 3) + 1 + x * 3;
     expect([raw[i], raw[i + 1], raw[i + 2]]).toEqual([245, 197, 24]);
+  });
+
+  it('declares Home/Back/Menu soft keys that move the marker or change the background', async () => {
+    const handlers = loadExample();
+    expect(handlers.softKeys).toEqual([
+      { label: 'Home', keysym: 'Home' },
+      { label: 'Back', keysym: 'Escape' },
+      { label: 'Menu', keysym: 'Menu' },
+    ]);
+
+    await handlers.input([{ type: 'key', keysym: 'Home' }]);
+    const home = await handlers.screenshot();
+    if (home.mime !== 'image/png') return;
+    const homeRaw = inflateIdat(home.bytes);
+    expect(sampleRgb(homeRaw, 320, 200)).toEqual([245, 197, 24]);
+    expect(sampleRgb(homeRaw, 400, 80)).toEqual([26, 31, 46]);
+
+    await handlers.input([{ type: 'key', keysym: 'Menu' }]);
+    const menu = await handlers.screenshot();
+    const menuRaw = inflateIdat(menu.bytes);
+    expect(sampleRgb(menuRaw, 400, 80)).toEqual([72, 24, 48]);
+
+    await handlers.input([{ type: 'key', keysym: 'Escape' }]);
+    const back = await handlers.screenshot();
+    const backRaw = inflateIdat(back.bytes);
+    expect(sampleRgb(backRaw, 48, 352)).toEqual([245, 197, 24]);
   });
 });
