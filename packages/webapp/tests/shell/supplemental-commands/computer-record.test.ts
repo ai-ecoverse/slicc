@@ -105,6 +105,8 @@ describe('collectPolledFrames', () => {
       screenshot: async () => jpegFrame(1),
     });
     expect(collected.frameCount).toBe(COMPUTER_RECORD_MAX_FRAMES);
+    expect(collected.truncated).toBe(false);
+    expect(collected.durationMs).toBe(60_000);
   });
 
   it('stops at the aggregate JPEG byte cap', async () => {
@@ -118,6 +120,32 @@ describe('collectPolledFrames', () => {
     });
     expect(collected.frameCount).toBe(2);
     expect(collected.byteLength).toBe(chunk.byteLength * 2);
+    expect(collected.truncated).toBe(true);
+    expect(collected.durationMs).toBe(Math.round((2 / COMPUTER_RECORD_MAX_FPS) * 1000));
+  });
+
+  it('does not append a still that would exceed the byte cap', async () => {
+    const small = new Uint8Array(8);
+    const huge = new Uint8Array(COMPUTER_RECORD_MAX_BYTES);
+    let shots = 0;
+    const streamed: number[] = [];
+    const collected = await collectPolledFrames({
+      durationMs: 60_000,
+      fps: 10,
+      now: () => 0,
+      sleep: async () => undefined,
+      screenshot: async () => {
+        shots += 1;
+        return jpegFrame(shots, shots === 1 ? small : huge);
+      },
+      onFrame: (bytes) => {
+        streamed.push(bytes.byteLength);
+      },
+    });
+    expect(shots).toBe(2);
+    expect(streamed).toEqual([small.byteLength]);
+    expect(collected.frameCount).toBe(1);
+    expect(collected.truncated).toBe(true);
   });
 
   it('yields between polls so the event loop can run', async () => {
@@ -174,9 +202,8 @@ describe('encodeFramesWithFfmpeg', () => {
       ctx: ctx as never,
     });
     expect(result.mime).toBe('video/webm');
-    expect(written.get('/tmp/computer-record-frames.mjpeg')?.byteLength).toBe(
-      MINIMAL_JPEG.byteLength * 2
-    );
+    const mjpeg = [...written.entries()].find(([path]) => path.endsWith('.mjpeg'));
+    expect(mjpeg?.[1]?.byteLength).toBe(MINIMAL_JPEG.byteLength * 2);
     expect(mockRunFfmpeg).toHaveBeenCalledOnce();
   });
 
@@ -229,6 +256,9 @@ describe('recordPolledClip', () => {
           next.set(data, prev.byteLength);
           written.set(path, next);
         },
+        rm: async (path: string) => {
+          written.delete(path);
+        },
       },
     };
     let encodeFrames: Uint8Array[] | undefined;
@@ -251,7 +281,66 @@ describe('recordPolledClip', () => {
       },
     });
     expect(encodeFrames).toEqual([]);
-    expect(written.get('/tmp/computer-record-frames.mjpeg')?.byteLength).toBeGreaterThan(0);
     expect(clip.mime).toBe('video/webm');
+    expect(clip.durationMs).toBe(1000);
+    expect(clip.truncated).toBeUndefined();
+  });
+
+  it('starts each recording from a fresh MJPEG scratch file', async () => {
+    const written = new Map<string, Uint8Array>();
+    const ctx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      fs: {
+        resolvePath: (_base: string, path: string) => path,
+        mkdir: async () => undefined,
+        writeFile: async (path: string, data: Uint8Array) => {
+          written.set(path, Uint8Array.from(data));
+        },
+        readFile: async (path: string) => written.get(path) ?? new Uint8Array(0),
+        appendFile: async (path: string, data: Uint8Array) => {
+          const prev = written.get(path) ?? new Uint8Array(0);
+          const next = new Uint8Array(prev.byteLength + data.byteLength);
+          next.set(prev, 0);
+          next.set(data, prev.byteLength);
+          written.set(path, next);
+        },
+        rm: async (path: string) => {
+          written.delete(path);
+        },
+      },
+    };
+    const seen: Array<{ path: string; bytes: number }> = [];
+    const run = async (shots: number) => {
+      let n = 0;
+      let t = 0;
+      await recordPolledClip({
+        durationMs: shots * 250,
+        fps: 4,
+        dest: `/clip-${shots}.webm`,
+        ctx: ctx as never,
+        now: () => t,
+        sleep: async (ms) => {
+          t += ms;
+        },
+        screenshot: async () => jpegFrame(++n),
+        encode: async (args) => {
+          const raw: unknown = await args.ctx.fs.readFile(args.sourcePath as string, {
+            encoding: 'binary',
+          });
+          seen.push({
+            path: args.sourcePath as string,
+            bytes: raw instanceof Uint8Array ? raw.byteLength : 0,
+          });
+          return { mime: 'video/webm' };
+        },
+      });
+    };
+    await run(4);
+    await run(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.path).not.toBe(seen[1]?.path);
+    expect(seen[0]?.bytes).toBe(MINIMAL_JPEG.byteLength * 4);
+    expect(seen[1]?.bytes).toBe(MINIMAL_JPEG.byteLength);
   });
 });

@@ -24,6 +24,7 @@ export interface RecordedClip {
   width: number;
   height: number;
   durationMs: number;
+  truncated?: boolean;
 }
 
 export interface CollectPolledFramesOpts {
@@ -101,9 +102,14 @@ async function appendBytes(
 }
 
 /** Grab JPEG stills at `fps` until `durationMs` elapses. Always ≥1 frame. */
-export async function collectPolledFrames(
-  opts: CollectPolledFramesOpts
-): Promise<{ width: number; height: number; frameCount: number; byteLength: number }> {
+export async function collectPolledFrames(opts: CollectPolledFramesOpts): Promise<{
+  width: number;
+  height: number;
+  frameCount: number;
+  byteLength: number;
+  durationMs: number;
+  truncated: boolean;
+}> {
   const fps = clampRecordFps(opts.fps);
   const interval = Math.max(1, Math.round(1000 / fps));
   const now = opts.now ?? Date.now;
@@ -113,23 +119,52 @@ export async function collectPolledFrames(
   let height = 0;
   let frameCount = 0;
   let byteLength = 0;
+  let truncated = false;
   for (;;) {
     const frame = await opts.screenshot();
+    const nextBytes = byteLength + frame.bytes.byteLength;
+    if (
+      frameCount > 0 &&
+      (frameCount >= COMPUTER_RECORD_MAX_FRAMES || nextBytes > COMPUTER_RECORD_MAX_BYTES)
+    ) {
+      truncated = true;
+      break;
+    }
     width = frame.width;
     height = frame.height;
     await opts.onFrame?.(frame.bytes);
     frameCount += 1;
-    byteLength += frame.bytes.byteLength;
-    if (
-      frameCount >= COMPUTER_RECORD_MAX_FRAMES ||
-      byteLength >= COMPUTER_RECORD_MAX_BYTES ||
-      now() + interval >= end
-    ) {
+    byteLength = nextBytes;
+    const hitCap =
+      frameCount >= COMPUTER_RECORD_MAX_FRAMES || byteLength >= COMPUTER_RECORD_MAX_BYTES;
+    const hitTime = now() + interval >= end;
+    if (hitCap || hitTime) {
+      truncated = hitCap && Math.round((frameCount / fps) * 1000) < opts.durationMs;
       break;
     }
     await sleep(interval);
   }
-  return { width, height, frameCount, byteLength };
+  return {
+    width,
+    height,
+    frameCount,
+    byteLength,
+    durationMs: truncated ? Math.round((frameCount / fps) * 1000) : opts.durationMs,
+    truncated,
+  };
+}
+
+function uniqueMjpegPath(ctx: CommandContext): string {
+  const dir = scratchDir(ctx.env).replace(/\/$/u, '');
+  const id = crypto.randomUUID();
+  return ctx.fs.resolvePath(ctx.cwd, `${dir}/computer-record-${id}.mjpeg`);
+}
+
+async function removeScratch(fs: CommandContext['fs'], path: string): Promise<void> {
+  const anyFs = fs as { rm?: (p: string, o?: { force?: boolean }) => Promise<void> };
+  if (typeof anyFs.rm === 'function') {
+    await anyFs.rm(path, { force: true }).catch(() => undefined);
+  }
 }
 
 function wasmEngineEnv(env: CommandContext['env']): Map<string, string> {
@@ -143,43 +178,47 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
   mime: string;
 }> {
   const { runFfmpeg } = await import('../ffmpeg/run.js');
-  const tmp = `${scratchDir(args.ctx.env).replace(/\/$/u, '')}/computer-record-frames.mjpeg`;
-  const tempPath = args.sourcePath ?? args.ctx.fs.resolvePath(args.ctx.cwd, tmp);
-  if (!args.sourcePath) {
+  const createdScratch = !args.sourcePath;
+  const tempPath = args.sourcePath ?? uniqueMjpegPath(args.ctx);
+  if (createdScratch) {
     await args.ctx.fs.mkdir(tempPath.slice(0, tempPath.lastIndexOf('/')), { recursive: true });
     await args.ctx.fs.writeFile(tempPath, concatFrameBytes(args.frames));
   }
-  const result = await runFfmpeg(
-    [
-      '-y',
-      '-hide_banner',
-      '-nostdin',
-      '-f',
-      'image2pipe',
-      '-c:v',
-      'mjpeg',
-      '-framerate',
-      String(args.fps),
-      '-i',
-      tempPath,
-      '-an',
-      '-vf',
-      'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-      '-c:v',
-      'libvpx',
-      '-b:v',
-      '1M',
-      '-pix_fmt',
-      'yuv420p',
-      args.dest,
-    ],
-    { ...args.ctx, env: wasmEngineEnv(args.ctx.env) } as Parameters<typeof runFfmpeg>[1]
-  );
-  if (result.exitCode !== 0) {
-    const detail = result.stderr.trim() || 'ffmpeg failed';
-    throw new Error(detail);
+  try {
+    const result = await runFfmpeg(
+      [
+        '-y',
+        '-hide_banner',
+        '-nostdin',
+        '-f',
+        'image2pipe',
+        '-c:v',
+        'mjpeg',
+        '-framerate',
+        String(args.fps),
+        '-i',
+        tempPath,
+        '-an',
+        '-vf',
+        'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-c:v',
+        'libvpx',
+        '-b:v',
+        '1M',
+        '-pix_fmt',
+        'yuv420p',
+        args.dest,
+      ],
+      { ...args.ctx, env: wasmEngineEnv(args.ctx.env) } as Parameters<typeof runFfmpeg>[1]
+    );
+    if (result.exitCode !== 0) {
+      const detail = result.stderr.trim() || 'ffmpeg failed';
+      throw new Error(detail);
+    }
+    return { mime: 'video/webm' };
+  } finally {
+    if (createdScratch) await removeScratch(args.ctx.fs, tempPath);
   }
-  return { mime: 'video/webm' };
 }
 
 async function readClipBytes(ctx: CommandContext, dest: string): Promise<Uint8Array<ArrayBuffer>> {
@@ -199,39 +238,44 @@ export async function recordPolledClip(opts: {
   sleep?: (ms: number) => Promise<void>;
 }): Promise<RecordedClip> {
   const fps = clampRecordFps(opts.fps);
-  const tmp = `${scratchDir(opts.ctx.env).replace(/\/$/u, '')}/computer-record-frames.mjpeg`;
-  const sourcePath = opts.ctx.fs.resolvePath(opts.ctx.cwd, tmp);
+  const sourcePath = uniqueMjpegPath(opts.ctx);
   await opts.ctx.fs.mkdir(sourcePath.slice(0, sourcePath.lastIndexOf('/')), { recursive: true });
-  const collected = await collectPolledFrames({
-    screenshot: opts.screenshot,
-    durationMs: opts.durationMs,
-    fps,
-    now: opts.now,
-    sleep: opts.sleep,
-    onFrame: (bytes) => appendBytes(opts.ctx.fs, sourcePath, bytes),
-  });
-  const encode = opts.encode ?? encodeFramesWithFfmpeg;
-  const { mime } = await encode({
-    frames: [],
-    sourcePath,
-    fps,
-    dest: opts.dest,
-    width: collected.width,
-    height: collected.height,
-    durationMs: opts.durationMs,
-    ctx: opts.ctx,
-  });
-  let bytes = new Uint8Array(0);
+  await opts.ctx.fs.writeFile(sourcePath, new Uint8Array(0));
   try {
-    bytes = await readClipBytes(opts.ctx, opts.dest);
-  } catch {
-    /* encoder may have written dest on a fs that tests do not read back */
+    const collected = await collectPolledFrames({
+      screenshot: opts.screenshot,
+      durationMs: opts.durationMs,
+      fps,
+      now: opts.now,
+      sleep: opts.sleep,
+      onFrame: (bytes) => appendBytes(opts.ctx.fs, sourcePath, bytes),
+    });
+    const encode = opts.encode ?? encodeFramesWithFfmpeg;
+    const { mime } = await encode({
+      frames: [],
+      sourcePath,
+      fps,
+      dest: opts.dest,
+      width: collected.width,
+      height: collected.height,
+      durationMs: collected.durationMs,
+      ctx: opts.ctx,
+    });
+    let bytes = new Uint8Array(0);
+    try {
+      bytes = await readClipBytes(opts.ctx, opts.dest);
+    } catch {
+      /* encoder may have written dest on a fs that tests do not read back */
+    }
+    return {
+      bytes,
+      mime,
+      width: collected.width,
+      height: collected.height,
+      durationMs: collected.durationMs,
+      ...(collected.truncated ? { truncated: true } : {}),
+    };
+  } finally {
+    await removeScratch(opts.ctx.fs, sourcePath);
   }
-  return {
-    bytes,
-    mime,
-    width: collected.width,
-    height: collected.height,
-    durationMs: opts.durationMs,
-  };
 }

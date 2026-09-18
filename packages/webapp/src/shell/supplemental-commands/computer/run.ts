@@ -677,6 +677,7 @@ async function verbRecord(
     width: number;
     height: number;
     durationMs?: number;
+    truncated?: boolean;
   };
   try {
     clip = hasRecordClip(target.backend)
@@ -689,10 +690,17 @@ async function verbRecord(
   const elapsed = clip.durationMs ?? durationMs;
   if (globals.json) {
     return ok(
-      `${JSON.stringify({ id: target.id, path: dest, durationMs: elapsed, mime: clip.mime })}\n`
+      `${JSON.stringify({
+        id: target.id,
+        path: dest,
+        durationMs: elapsed,
+        mime: clip.mime,
+        ...(clip.truncated ? { truncated: true } : {}),
+      })}\n`
     );
   }
-  return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height} → ${dest}\n`);
+  const note = clip.truncated ? ' (truncated)' : '';
+  return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height}${note} → ${dest}\n`);
 }
 
 async function recordWorkerHostedClip(
