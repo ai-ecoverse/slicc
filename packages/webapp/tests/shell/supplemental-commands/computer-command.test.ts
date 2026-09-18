@@ -116,11 +116,28 @@ describe('computer command', () => {
     const { ctx, written } = makeCtx();
     const ls = await cmd.execute(['ls'], ctx);
     expect(ls.stdout).toContain('box');
+    expect(ls.stdout).not.toContain('target:');
     const shot = await cmd.execute(['screenshot', '--size', 'medium'], ctx);
     expect(shot.exitCode).toBe(0);
+    expect(shot.stdout).toMatch(/^target: box\n/);
     expect(shot.stdout).toContain('1000x500 → 768x384');
     expect(shot.stdout).toContain('screen: ');
     expect([...written.keys()].some((p) => p.endsWith('.jpg'))).toBe(true);
+  });
+
+  it('stamps target: after resolving, but not on ls/use or --json', async () => {
+    const backend = new FakeBackend('box');
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const used = await cmd.execute(['use', 'box'], ctx);
+    expect(used.stdout).toBe('using box\n');
+    expect(used.stdout).not.toContain('target:');
+    const json = await cmd.execute(['screenshot', '--json'], ctx);
+    expect(json.exitCode).toBe(0);
+    expect(json.stdout).not.toContain('target:');
+    expect(JSON.parse(json.stdout)).toMatchObject({ id: 'box' });
   });
 
   it('chains click + type and writes a frozen frame after input', async () => {
@@ -203,6 +220,7 @@ describe('computer command', () => {
     const { ctx } = makeCtx();
     const shot = await cmd.execute(['screenshot', '-c', 'b'], ctx);
     expect(shot.exitCode).toBe(0);
+    expect(shot.stdout).toMatch(/^target: b\n/);
     expect(b.shots).toBe(1);
     expect(a.shots).toBe(0);
     const typed = await cmd.execute(['type', '-c', 'a', 'hello'], ctx);
@@ -218,6 +236,7 @@ describe('computer command', () => {
     const cmd = createComputerCommand({ registry });
     const { ctx } = makeCtx(new Map([['COMPUTER', 'b']]));
     const info = await cmd.execute(['info'], ctx);
+    expect(info.stdout).toMatch(/^target: b\n/);
     expect(info.stdout).toContain('id: b');
     const miss = await cmd.execute(['-c', 'nope', 'info'], ctx);
     expect(miss.exitCode).toBe(1);

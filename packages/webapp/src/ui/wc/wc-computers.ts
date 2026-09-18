@@ -25,6 +25,7 @@ import { getComputersStore } from '../computers-store.js';
 
 export const COMPUTER_OVERLAY_PREFIX = 'computer:';
 export const FROZEN_SCREEN_PREFIX = 'screen: ';
+export const COMPUTER_TARGET_PREFIX = 'target: ';
 
 const LIGHTBOX_FPS = 4;
 const LIGHTBOX_MAX_WIDTH = 768;
@@ -89,6 +90,26 @@ export function parseComputerIdFromCommand(command: string): string | null {
     if (tokens[i] === '-c' || tokens[i] === '--computer') return tokens[i + 1] ?? null;
   }
   return null;
+}
+
+/** Pull `target: <id>` that the shell stamps after resolving $COMPUTER / use / sole. */
+export function parseComputerIdFromOutput(output: string): string | null {
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(COMPUTER_TARGET_PREFIX)) continue;
+    const id = trimmed.slice(COMPUTER_TARGET_PREFIX.length).trim();
+    if (id) return id;
+  }
+  return null;
+}
+
+export function resolveRendererComputerId(
+  command: string,
+  output: string,
+  explicit?: string | null
+): string | null {
+  if (explicit) return explicit;
+  return parseComputerIdFromCommand(command) ?? parseComputerIdFromOutput(output);
 }
 
 /** Frozen still from `screen: <path>` or a well-formed `<img:>` marker. */
@@ -168,9 +189,19 @@ function paintOutput(target: HTMLElement, text: string): void {
 
 function onRowBind(event: Event): void {
   const el = event.target as SliccBashRendererComputer;
-  const detail = (event as CustomEvent<{ toolCallId: string; command: string; output: string }>)
-    .detail;
-  const computerId = parseComputerIdFromCommand(detail.command ?? el.command ?? '');
+  const detail = (
+    event as CustomEvent<{
+      toolCallId: string;
+      command: string;
+      output: string;
+      computerId?: string;
+    }>
+  ).detail;
+  const computerId = resolveRendererComputerId(
+    detail.command ?? el.command ?? '',
+    detail.output ?? el.output ?? '',
+    detail.computerId ?? el.computerId
+  );
   const toolCallId = detail.toolCallId || el.toolCallId;
   const row: BoundComputerRow = {
     el,
@@ -182,8 +213,22 @@ function onRowBind(event: Event): void {
   };
   ensureRuntime().bound.set(el, row);
   el.addEventListener('computer-row-unbind', onRowUnbind);
+  if (computerId) el.computerId = computerId;
   if (computerId && toolCallId) getComputersStore().recordInvocation(computerId, toolCallId);
   refreshAllRows();
+}
+
+function resolveBoundComputerId(row: BoundComputerRow): void {
+  if (row.computerId) return;
+  const resolved = resolveRendererComputerId(
+    row.el.command ?? '',
+    row.el.output ?? '',
+    row.el.computerId
+  );
+  if (!resolved) return;
+  row.computerId = resolved;
+  row.el.computerId = resolved;
+  if (row.toolCallId) getComputersStore().recordInvocation(resolved, row.toolCallId);
 }
 
 function onRowUnbind(event: Event): void {
@@ -208,8 +253,8 @@ function onRowFrameClick(event: Event): void {
   const el = event.target as SliccBashRendererComputer;
   const row = runtime?.bound.get(el);
   const src = (event as CustomEvent<{ src: string }>).detail?.src;
-  if (!row?.computerId || !src) return;
-  openComputerLightbox(row.computerId, src, el);
+  if (!src) return;
+  openComputerLightbox(row?.computerId ?? null, src, el);
 }
 
 function refreshAllRows(): void {
@@ -219,6 +264,7 @@ function refreshAllRows(): void {
 }
 
 function refreshRow(row: BoundComputerRow): void {
+  resolveBoundComputerId(row);
   const store = getComputersStore();
   const computer = row.computerId ? store.get(row.computerId) : null;
   const hint = parseFrozenFrameHint(row.el.output ?? '');
@@ -323,20 +369,26 @@ function ensurePreview(): SliccImagePreview {
   return host;
 }
 
-function openComputerLightbox(computerId: string, src: string, origin: HTMLElement): void {
+function openComputerLightbox(computerId: string | null, src: string, origin: HTMLElement): void {
   const rt = ensureRuntime();
   const store = getComputersStore();
-  if (rt.lightboxId && rt.lightboxId !== computerId && rt.lightboxWatchToken !== null) {
+  if (computerId) {
+    if (rt.lightboxId && rt.lightboxId !== computerId && rt.lightboxWatchToken !== null) {
+      store.unwatch(rt.lightboxId, rt.lightboxWatchToken);
+      rt.lightboxWatchToken = null;
+    }
+    if (rt.lightboxId !== computerId || rt.lightboxWatchToken === null) {
+      rt.lightboxWatchToken = store.watch(computerId, LIGHTBOX_FPS, LIGHTBOX_MAX_WIDTH);
+      rt.lightboxId = computerId;
+    }
+  } else if (rt.lightboxWatchToken !== null && rt.lightboxId) {
     store.unwatch(rt.lightboxId, rt.lightboxWatchToken);
     rt.lightboxWatchToken = null;
-  }
-  if (rt.lightboxId !== computerId || rt.lightboxWatchToken === null) {
-    rt.lightboxWatchToken = store.watch(computerId, LIGHTBOX_FPS, LIGHTBOX_MAX_WIDTH);
-    rt.lightboxId = computerId;
+    rt.lightboxId = null;
   }
   rt.lightboxOrigin = origin;
   const preview = ensurePreview();
-  const live = store.lastFrame(computerId);
+  const live = computerId ? store.lastFrame(computerId) : null;
   const nextSrc = live ? frameToDataUrl(live) : src;
   if (!nextSrc) return;
   if (preview.isOpen) preview.setSrc(nextSrc);

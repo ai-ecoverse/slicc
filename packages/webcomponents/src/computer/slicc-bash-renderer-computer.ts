@@ -83,19 +83,21 @@ const SHEET = sheet(STYLE);
  *
  * @attr command - the bash command line
  * @attr tool-call-id - the originating tool call
+ * @attr computer-id - resolved target (`target: <id>` / `-c`)
  * @attr done - reflected when the tool result has arrived
  * @attr live - reflected when the frame is the live stream
  * @fires computer-frame-click - `{ src }` when the frame is clicked
- * @fires computer-row-bind - `{ toolCallId, command, output, done }` on connect
+ * @fires computer-row-bind - `{ toolCallId, command, output, done, computerId }` on connect
  * @fires computer-row-unbind - `{ toolCallId }` on disconnect
  */
 export class SliccBashRendererComputer extends HTMLElement {
-  static readonly observedAttributes = ['command', 'tool-call-id', 'done', 'live'];
+  static readonly observedAttributes = ['command', 'tool-call-id', 'computer-id', 'done', 'live'];
 
   readonly #root: ShadowRoot;
   #command = '';
   #output = '';
   #toolCallId = '';
+  #computerId = '';
   #done = false;
   #live = false;
   #frameSrc: string | null = null;
@@ -124,6 +126,7 @@ export class SliccBashRendererComputer extends HTMLElement {
   attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
     if (name === 'command') this.#command = value ?? '';
     else if (name === 'tool-call-id') this.#toolCallId = value ?? '';
+    else if (name === 'computer-id') this.#computerId = value ?? '';
     else if (name === 'done') this.#done = value !== null;
     else if (name === 'live') this.#live = value !== null;
     if (this.isConnected) this.#render();
@@ -152,6 +155,15 @@ export class SliccBashRendererComputer extends HTMLElement {
     this.#toolCallId = value;
     if (value) this.setAttribute('tool-call-id', value);
     else this.removeAttribute('tool-call-id');
+  }
+
+  get computerId(): string {
+    return this.#computerId;
+  }
+  set computerId(value: string) {
+    this.#computerId = value ?? '';
+    if (this.#computerId) this.setAttribute('computer-id', this.#computerId);
+    else this.removeAttribute('computer-id');
   }
 
   get done(): boolean {
@@ -195,6 +207,7 @@ export class SliccBashRendererComputer extends HTMLElement {
           command: this.#command,
           output: this.#output,
           done: this.#done,
+          computerId: this.#computerId,
         },
         bubbles: true,
         composed: true,
@@ -267,12 +280,14 @@ declare global {
       command: string;
       output: string;
       done: boolean;
+      computerId: string;
     }>;
     'computer-row-unbind': CustomEvent<{
       toolCallId: string;
       command: string;
       output: string;
       done: boolean;
+      computerId: string;
     }>;
   }
 }

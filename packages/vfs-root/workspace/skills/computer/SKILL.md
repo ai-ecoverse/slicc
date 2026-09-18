@@ -24,7 +24,7 @@ Resolution order: `-c` / `--computer`, else `$COMPUTER`, else last `computer use
 
 ## Look then act
 
-Every poke writes a frozen JPEG and prints `screen: <path>`. Read that frame (or `computer screenshot`) before the next click.
+Every poke writes a frozen JPEG and prints `target: <id>` then `screen: <path>`. The `target:` line is the resolved computer (`-c`, `$COMPUTER`, last `use`, or the only registered one) so a later `computer screenshot` without `-c` still binds the bash-row UI. Read that frame (or `computer screenshot`) before the next click.
 
 ```bash
 computer screenshot                 # JPEG; prints WxH → wxh (scale s)

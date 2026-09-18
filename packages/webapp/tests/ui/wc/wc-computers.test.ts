@@ -20,7 +20,9 @@ import {
   installWcComputers,
   mergeOverlayTabs,
   parseComputerIdFromCommand,
+  parseComputerIdFromOutput,
   parseFrozenFrameHint,
+  resolveRendererComputerId,
 } from '../../../src/ui/wc/wc-computers.js';
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -66,7 +68,13 @@ describe('wc-computers helpers', () => {
   it('parses -c / --computer and frozen screen / img hints', () => {
     expect(parseComputerIdFromCommand('computer -c jsh:fake screenshot')).toBe('jsh:fake');
     expect(parseComputerIdFromCommand('computer --computer tab:T1 key Return')).toBe('tab:T1');
+    expect(parseComputerIdFromCommand('computer screenshot')).toBeNull();
     expect(parseComputerIdFromCommand('ls')).toBeNull();
+    expect(parseComputerIdFromOutput('target: jsh:fake\nscreen: /tmp/x.jpg')).toBe('jsh:fake');
+    expect(resolveRendererComputerId('computer screenshot', 'target: v86:vm0\nok')).toBe('v86:vm0');
+    expect(resolveRendererComputerId('computer -c tab:T1 screenshot', 'target: ignored')).toBe(
+      'tab:T1'
+    );
     expect(parseFrozenFrameHint('ok\nscreen: /tmp/computer/fake/1.jpg\n')).toEqual({
       kind: 'path',
       path: '/tmp/computer/fake/1.jpg',
@@ -356,6 +364,53 @@ describe('wc-computers wiring', () => {
     expect(el.frameSrc?.startsWith('data:image/jpeg;base64,')).toBe(true);
 
     el.remove();
+    expect(store.isWatching('jsh:fake')).toBe(false);
+  });
+
+  it('watches a live row whose command has no -c when stdout stamps target:', async () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id: string }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    installWcComputers({ log });
+
+    const el = document.createElement('slicc-bash-renderer-computer');
+    el.command = 'computer screenshot';
+    el.toolCallId = 'call-1';
+    el.output = 'target: jsh:fake\nscreen: /tmp/a.jpg';
+    document.body.append(el);
+    await vi.waitFor(() => expect(el.computerId).toBe('jsh:fake'));
+    expect(sent).toEqual([{ type: 'computer-watch', id: 'jsh:fake', fps: 2, maxWidth: 480 }]);
+    expect(store.isWatching('jsh:fake')).toBe(true);
+
+    applyFrame('jsh:fake');
+    await vi.waitFor(() => expect(el.frameMode).toBe('live'));
+    el.remove();
+    expect(store.isWatching('jsh:fake')).toBe(false);
+  });
+
+  it('opens a static frozen preview without watching when no target is available', async () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id: string }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    installWcComputers({ log });
+
+    const src = 'data:image/jpeg;base64,QUJD';
+    const el = document.createElement('slicc-bash-renderer-computer');
+    el.command = 'cat /tmp/shot.jpg';
+    el.toolCallId = 'call-static';
+    el.output = `<img:${src}>`;
+    document.body.append(el);
+    await vi.waitFor(() => expect(el.frameMode).toBe('frozen'));
+    expect(store.isWatching('jsh:fake')).toBe(false);
+
+    el.dispatchEvent(
+      new CustomEvent('computer-frame-click', { detail: { src }, bubbles: true, composed: true })
+    );
+    const preview = document.querySelector('slicc-image-preview');
+    expect(preview?.hasAttribute('open')).toBe(true);
+    expect(sent).toEqual([]);
     expect(store.isWatching('jsh:fake')).toBe(false);
   });
 

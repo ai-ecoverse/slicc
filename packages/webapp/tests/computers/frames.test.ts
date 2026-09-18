@@ -5,7 +5,12 @@ import {
   MINIMAL_JPEG,
   pngBytesToJpeg,
 } from '../../src/computers/encode-frame.js';
-import { frozenFrameLine, frozenFramePath, writeFrozenFrame } from '../../src/computers/frames.js';
+import {
+  computerTargetLine,
+  frozenFrameLine,
+  frozenFramePath,
+  writeFrozenFrame,
+} from '../../src/computers/frames.js';
 
 describe('encode-frame', () => {
   it('reads SOF0 width/height from a JPEG', () => {
@@ -137,5 +142,9 @@ describe('frozen frames', () => {
     expect(written.get(path)).toBe(MINIMAL_JPEG);
     expect(frozenFrameLine(path)).toBe('screen: /tmp/cone/computer/vm0/3.jpg');
     expect(frozenFramePath('/tmp/cone', 'vm0', 3)).toBe('/tmp/cone/computer/vm0/3.jpg');
+  });
+
+  it('formats the shell target: stamp', () => {
+    expect(computerTargetLine('jsh:fake')).toBe('target: jsh:fake');
   });
 });

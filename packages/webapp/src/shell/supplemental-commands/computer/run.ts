@@ -13,7 +13,11 @@ import {
   resolveTabPage,
 } from '../../../computers/adapters/tab.js';
 import type { ComputerBackend } from '../../../computers/backend.js';
-import { frozenFrameLine, writeFrozenFrame } from '../../../computers/frames.js';
+import {
+  computerTargetLine,
+  frozenFrameLine,
+  writeFrozenFrame,
+} from '../../../computers/frames.js';
 import { getComputersHost } from '../../../computers/host.js';
 import { unsupportedInputReason } from '../../../computers/input-guard.js';
 import {
@@ -112,7 +116,8 @@ export async function runComputer(
     }
   }
   const text = chunks.filter(Boolean).join('\n');
-  return ok(text ? `${text}\n` : '');
+  const stamped = stampTargetLine(text, calls, registry, globals.computer, ctx, globals.json);
+  return ok(stamped ? `${stamped}\n` : '');
 }
 
 async function runVerb(
@@ -552,6 +557,25 @@ function twoCoords(pos: string[], skip: number): { x: number; y: number } | unde
 
 function xy(p: { x: number; y: number } | undefined): { x?: number; y?: number } {
   return p ? { x: p.x, y: p.y } : {};
+}
+
+const NO_TARGET_STAMP = new Set(['ls', 'add', 'rm', 'use']);
+
+function stampTargetLine(
+  text: string,
+  calls: VerbCall[],
+  registry: ComputerRegistry,
+  query: string | undefined,
+  ctx: CommandContext,
+  json: boolean
+): string {
+  if (json) return text;
+  if (!calls.some((c) => !NO_TARGET_STAMP.has(c.verb))) return text;
+  const resolved = resolveComputerId(registry, query, envMap(ctx));
+  if ('error' in resolved) return text;
+  const line = computerTargetLine(resolved.id);
+  if (text.split('\n').some((l) => l.trim() === line)) return text;
+  return text ? `${line}\n${text}` : line;
 }
 
 function requireTarget(

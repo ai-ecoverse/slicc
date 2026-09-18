@@ -26,7 +26,7 @@ Input coordinates are in the space of `lastShot` unless `--native`. `computer sc
 
 Presets (`packages/webapp/src/computers/scale.ts`): `low` 256, `medium` 768 (default), `high` 1536. A bare number is a max width.
 
-Every poke writes a frozen JPEG to `$TMPDIR/computer/<name>/<seq>.jpg` and prints `screen: <path>`.
+Every poke writes a frozen JPEG to `$TMPDIR/computer/<name>/<seq>.jpg` and prints `screen: <path>`. Successful look/act verbs also prepend `target: <id>` (the resolved computer) so bash-row UI can watch without `-c` on the command line. `ls` / `add` / `rm` / `use` and `--json` omit the stamp.
 
 ## Registry and host
 
@@ -51,4 +51,4 @@ The kernel worker lazy-loads `startComputersHost` so computers stay out of the f
 
 `computer` (`packages/webapp/src/shell/supplemental-commands/computer/`) is xdotool plus Anthropic aliases. Target: `-c` → `$COMPUTER` → last `computer use` → the only registered computer. `switch (verb)` in `run.ts` so subcommand-help source scan finds cases.
 
-`v86 type|key|mouse|screenshot|text` are thin aliases of `computer` (`v86:<name>`); prefer `computer <verb> -c v86:<name>`. Each poke still prints `screen: <path>`.
+`v86 type|key|mouse|screenshot|text` are thin aliases of `computer` (`v86:<name>`); prefer `computer <verb> -c v86:<name>`. Each poke still prints `target: <id>` then `screen: <path>`.

@@ -207,6 +207,9 @@ describe('slicc-bash-renderer-computer', () => {
     );
     document.body.appendChild(el);
     expect(binds).toEqual(['tc-9']);
+    expect(el.computerId).toBe('');
+    el.computerId = 'jsh:fake';
+    expect(el.getAttribute('computer-id')).toBe('jsh:fake');
     el.remove();
     expect(unbinds).toEqual(['tc-9']);
   });
