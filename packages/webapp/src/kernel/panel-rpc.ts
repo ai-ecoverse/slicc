@@ -88,12 +88,18 @@ export type PanelRpcRequest =
       payload: {
         mimeType: string;
         quality: number;
-        /** Still frame (default) or timed MediaRecorder clip. */
-        mode?: 'image' | 'video';
-        /** Video length in ms (clamped server-side; default 5s, max 60s). */
+        /** Still, timed clip, or persistent session (start/frame/stop/record). */
+        mode?: 'image' | 'video' | 'session';
+        /** Video / session-record length in ms (clamped; default 5s, max 60s). */
         durationMs?: number;
         /** Request an audio track from getDisplayMedia when recording video. */
         audio?: boolean;
+        /** Session verb; required when `mode` is `session`. */
+        session?: 'start' | 'frame' | 'stop' | 'record';
+        /** Session handle from `session: 'start'`. */
+        handle?: string;
+        /** Downscale hint for `session: 'frame'`. */
+        maxWidth?: number;
       };
     }
   | {
@@ -782,6 +788,8 @@ export interface PanelRpcResults {
     height: number;
     mimeType: string;
     durationMs?: number;
+    /** Live session handle from `session: 'start'`. */
+    handle?: string;
   };
   'speak-text': { done: true };
   'list-voices': {

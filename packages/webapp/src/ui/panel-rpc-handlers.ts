@@ -412,6 +412,53 @@ function buildProxiedFetchHandler() {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
+async function handleScreencaptureRpc(payload: {
+  mimeType: string;
+  quality: number;
+  mode?: 'image' | 'video' | 'session';
+  durationMs?: number;
+  audio?: boolean;
+  session?: 'start' | 'frame' | 'stop' | 'record';
+  handle?: string;
+  maxWidth?: number;
+}): Promise<{
+  bytes: ArrayBuffer;
+  width: number;
+  height: number;
+  mimeType: string;
+  durationMs?: number;
+  handle?: string;
+}> {
+  const { captureDisplayMedia, sessionCaptureRequest } = await import(
+    '../shell/supplemental-commands/screencapture-media.js'
+  );
+  const { mimeType, quality, mode, durationMs, audio, session, handle, maxWidth } = payload;
+  const captured = await captureDisplayMedia(
+    mode === 'session'
+      ? sessionCaptureRequest({ session, handle, mimeType, quality, durationMs, maxWidth })
+      : mode === 'video'
+        ? {
+            mode: 'video',
+            mimeType,
+            durationMs: durationMs ?? 5_000,
+            audio: !!audio,
+          }
+        : { mode: 'image', mimeType, quality }
+  );
+  const buffer = captured.bytes.buffer.slice(
+    captured.bytes.byteOffset,
+    captured.bytes.byteOffset + captured.bytes.byteLength
+  ) as ArrayBuffer;
+  return {
+    bytes: buffer,
+    width: captured.width,
+    height: captured.height,
+    mimeType: captured.mimeType,
+    ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
+    ...(captured.handle !== undefined ? { handle: captured.handle } : {}),
+  };
+}
+
 /** Page identity, screen/speech/audio output. */
 function buildPageAudioHandlers() {
   return {
@@ -421,32 +468,7 @@ function buildPageAudioHandlers() {
       title: document.title || '',
     }),
 
-    screencapture: async ({ mimeType, quality, mode, durationMs, audio }) => {
-      const { captureDisplayMedia } = await import(
-        '../shell/supplemental-commands/screencapture-media.js'
-      );
-      const captured = await captureDisplayMedia(
-        mode === 'video'
-          ? {
-              mode: 'video',
-              mimeType,
-              durationMs: durationMs ?? 5_000,
-              audio: !!audio,
-            }
-          : { mode: 'image', mimeType, quality }
-      );
-      const buffer = captured.bytes.buffer.slice(
-        captured.bytes.byteOffset,
-        captured.bytes.byteOffset + captured.bytes.byteLength
-      ) as ArrayBuffer;
-      return {
-        bytes: buffer,
-        width: captured.width,
-        height: captured.height,
-        mimeType: captured.mimeType,
-        ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
-      };
-    },
+    screencapture: (payload) => handleScreencaptureRpc(payload),
 
     // Routed through the kokoro-aware speak helper: the on-device voice runs
     // once its chained download is ready (or when `voice` names a kokoro
