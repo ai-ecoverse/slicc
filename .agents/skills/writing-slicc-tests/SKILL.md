@@ -154,13 +154,13 @@ Test tool execution with filesystem integration:
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { VirtualFS } from '../fs/index.js';
-import { AlmostBashShell } from '../shell/index.js';
+import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import { createBashTool } from './bash-tool.js';
 import type { ToolDefinition } from '../core/types.js';
 
 describe('Bash Tool', () => {
   let fs: VirtualFS;
-  let shell: AlmostBashShell;
+  let shell: AlmostBashShellHeadless;
   let bash: ToolDefinition;
   let dbCounter = 0;
 
@@ -169,7 +169,7 @@ describe('Bash Tool', () => {
       dbName: `test-bash-tool-${dbCounter++}`,
       wipe: true,
     });
-    shell = new AlmostBashShell({ fs });
+    shell = new AlmostBashShellHeadless({ fs });
     bash = createBashTool(shell);
   });
 
@@ -698,7 +698,7 @@ describe('Bash tool integration', () => {
     // Test that bash tool talks correctly to VirtualFS
     // This requires both components together
     const fs = await VirtualFS.create({ dbName: 'test', wipe: true });
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const bash = createBashTool(shell);
 
     await bash.execute({ command: 'echo hello > /file.txt' });

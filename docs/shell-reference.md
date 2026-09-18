@@ -1269,7 +1269,7 @@ Suggests skills for each open browser tab. For every tab `upskill tabs` lists:
 
 Bridges local directories and remote object storage into the VirtualFS so that file tools (`read_file`, `write_file`, `edit`, `bash`) operate on remote content the same way they do on browser-local files. Three peer backends share a `MountBackend` interface: a local FS Access backend (uses the `showDirectoryPicker()` flow), an S3 / S3-compatible backend (AWS, Cloudflare R2, MinIO via custom endpoints), and a DA backend (Adobe da.live, authenticated via the existing Adobe IMS provider).
 
-Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/mount-commands.ts` is the dispatcher, registered via the `MountCommands` class consumed by `almost-bash-shell.ts`. Backends are under `packages/webapp/src/fs/mount/`.
+Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/mount-commands.ts` is the dispatcher, registered via the `MountCommands` class consumed by `almost-bash-shell-headless.ts`. Backends are under `packages/webapp/src/fs/mount/`.
 
 ### Subcommands
 

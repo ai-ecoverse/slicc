@@ -109,7 +109,7 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 | -------------- | ------------------ | ---------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `navigate`     | Page load          | `document.referrer`                                                          | `cli` / `extension` / `electron` | `telemetry.ts:initTelemetry()`                                                                                                                                 |
 | `formsubmit`   | User chat message  | scoop name (`'cone'` for cone scoops)                                        | model id                         | `chat-panel.ts:ChatPanel.sendMessage()` — fires only on effective sends (after the empty-and-no-attachments guard, and never while `attachmentReadInProgress`) |
-| `fill`         | Shell command      | command name                                                                 | (omitted)                        | `almost-bash-shell.ts` (panel terminal in extension; both modes in CLI)                                                                                        |
+| `fill`         | Shell command      | command name                                                                 | (omitted)                        | `almost-bash-shell-headless.ts` (panel terminal in extension; both modes in CLI)                                                                               |
 | `viewblock`    | Sprinkle displayed | sprinkle name                                                                | (omitted)                        | `sprinkle-manager.ts:open()`                                                                                                                                   |
 | `viewmedia`    | Image rendered     | context (`'chat'`)                                                           | (omitted)                        | `chat-panel.ts` — `MutationObserver` on `messagesEl`                                                                                                           |
 | `error`        | JS error / failure | error type (`'js'` / `'error-card'` / `'llm'` / `'tool'` / `'scoop:<name>'`) | sanitized, coerced error message | `telemetry.ts:trackError()` (all modes) / helix listeners for real `Error`s (CLI/Electron)                                                                     |
@@ -142,7 +142,7 @@ These work out of the box in CLI/Electron with no custom code. They do NOT fire 
 
 ### Mode-specific shell-command coverage
 
-`fill` beacons fire from `almost-bash-shell.ts:679`.
+`fill` beacons fire from `almost-bash-shell-headless.ts:1029` (via the dependency-inverted `telemetry-hook.ts` sink → `telemetry.ts:trackShellCommand()`).
 
 - **CLI / Electron:** every shell command produces a beacon from the single page realm.
 - **Extension:** the hosted leader tab is the single page realm; both user-typed terminal commands and agent-initiated bash calls (from the kernel-worker `AlmostBashShellHeadless`, including `agent` scoop delegations from the cone) emit `fill` beacons that share `referer: 'https://www.sliccy.ai/?slicc=leader'` (or the localhost dev variant).
