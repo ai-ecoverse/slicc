@@ -33,8 +33,10 @@ export interface AgentEventSink {
   /**
    * A completed message or tool result exists — durable-worthy the moment it
    * does, since that is exactly what an abnormal turn death loses (#1987).
+   * `immediate` for a user message: the request a reload recovery repeats
+   * must not wait out the debounce.
    */
-  checkpoint(): void;
+  checkpoint(immediate: boolean): void;
   assistantMessageEnd(message: AssistantMessage): void;
   /** `turn_start`; the run-bound ceiling is enforced here (#1972). */
   turnStart(): void;
@@ -69,7 +71,7 @@ export function routeAgentEvent(
 
     case 'tool_execution_end': {
       routeToolResult(event, sink);
-      sink.checkpoint();
+      sink.checkpoint(false);
       break;
     }
 
@@ -77,7 +79,7 @@ export function routeAgentEvent(
       if (event.message.role === 'assistant') {
         sink.assistantMessageEnd(event.message as AssistantMessage);
       }
-      sink.checkpoint();
+      sink.checkpoint(event.message.role === 'user');
       break;
     }
 

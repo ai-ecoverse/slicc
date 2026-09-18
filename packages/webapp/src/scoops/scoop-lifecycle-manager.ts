@@ -55,6 +55,7 @@ import {
 import { includeMountsForMode, parseWorkspaceMode } from '../work-unit/workspace-mode.js';
 import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { globalSeedModel } from './model-seed.js';
+import type { TurnJournal } from './scoop-context/turn-journal.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type {
@@ -171,6 +172,11 @@ export interface ScoopLifecycleDeps {
    * production always injects via `createKernelHost`.
    */
   getCapabilityBroker?(): CapabilityBroker | null;
+  /**
+   * In-flight turn journal for reload recovery, threaded into every new
+   * `ScoopContext`. Optional: a manager built without one journals nothing.
+   */
+  getTurnJournal?(): TurnJournal | null;
   /** Top-level orchestrator-callback surface. */
   callbacks: ScoopLifecycleCallbacks;
   /** Idle-timer ops — armed on every `ready` transition for non-cone scoops, cleared on destroy. */
@@ -463,7 +469,8 @@ export class ScoopLifecycleManager {
       this.deps.getProcessManager() ?? undefined,
       this.deps.getSudoManager(),
       this.deps.getConversationStore(),
-      this.deps.getCapabilityBroker?.() ?? undefined
+      this.deps.getCapabilityBroker?.() ?? undefined,
+      this.deps.getTurnJournal?.() ?? undefined
     );
 
     unit.attachContext(context, contextId);
@@ -665,6 +672,24 @@ export class ScoopLifecycleManager {
     log.debug('Prompt sent to scoop', { jid, textLength: text.length, imageCount: images.length });
 
     await context.prompt(text, images, options);
+  }
+
+  /**
+   * Resume a turn a page reload cut off (`interrupted-work-recovery.ts`):
+   * re-issue the model request from the unit's restored history. Mirrors
+   * {@link sendPrompt}'s status bookkeeping so the UI sees an ordinary turn.
+   */
+  async resumeTurn(jid: string, resumeCount: number, guestGates: TurnGuestGate[]): Promise<void> {
+    const context = this.getContext(jid);
+    const unit = this.units.get(jid);
+    if (!context || !unit || context.isBusy) return;
+    this.deps.idleTimers.clear(jid);
+    this.deps.completionService.clearResponse(jid);
+    if (unit.tab && unit.transition('processing')) {
+      this.deps.callbacks.onStatusChange(jid, 'processing');
+      this.dispatch(jid, 'onStatusChange', 'processing');
+    }
+    await context.resumeTurn(resumeCount, guestGates);
   }
 
   /**

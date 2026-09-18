@@ -1,0 +1,30 @@
+{
+  "model": "fake-coder-reload",
+  "turns": [
+    {
+      "whenUserMessageMatches": "RELOAD-LLM-PROMPT",
+      "content": "RELOAD-PARTIAL-CHUNK streamed before the reload; the rest of this answer is held until the page is gone.",
+      "contentChunkSize": 24,
+      "holdAfterContentChunks": 1
+    },
+    {
+      "whenUserMessageMatches": "RELOAD-LLM-PROMPT",
+      "content": "RELOAD-RESUMED-ANSWER: the lost request was repeated after the reload."
+    },
+    {
+      "whenUserMessageMatches": "RELOAD-TOOL-PROMPT",
+      "content": "Running a slow command.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": { "command": "sleep 300; echo SLOW-TOOL-FINISHED" }
+        }
+      ]
+    },
+    {
+      "whenUserMessageMatches": "tool-call-interrupted",
+      "content": "RELOAD-TOOL-ACKNOWLEDGED: the sleep was cut off, so I will check before re-running it."
+    }
+  ],
+  "onOverflow": "error"
+}

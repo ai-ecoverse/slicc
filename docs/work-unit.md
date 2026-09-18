@@ -381,6 +381,47 @@ then the canonical record. The live-agent translation and the legacy UI-store
 fallback the #2275 window kept are gone (#2365) — the record is what live
 agent state was restored from, and the UI store is no longer written.
 
+### Reload recovery — the in-flight turn journal
+
+A page reload kills the kernel worker mid-turn. The conversation record only
+holds SETTLED messages, so on its own it cannot say whether a turn was cut
+off, or where. A second, tiny store can:
+
+| Piece                                  | Owns                                                                                                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scoops/scoop-context/turn-journal.ts` | `slicc-turn-journal` IndexedDB: one record per unit, written at turn start, updated per tool start/end, deleted when the turn settles or disposes |
+| `scoops/interrupted-work-recovery.ts`  | reads the boot snapshot against the restored history and decides (lazy-imported)                                                                  |
+| `Orchestrator.recoverInterruptedWork`  | snapshots the journal in `init()` BEFORE any unit can start a turn; consumed once                                                                 |
+| `kernel/host.ts` step 10b              | runs recovery after cone bootstrap, emitting licks through the `LickManager`                                                                      |
+
+A record that survives into the next boot is proof of an interrupted turn:
+
+- **Model request lost** (history ends in a `user` message or a tool result):
+  nothing irreversible happened, so the unit **repeats the request** —
+  `ScoopContext.resumeTurn` runs `agent.continue()` from the restored history,
+  under the guest gates the turn was journaled with. At most
+  `MAX_AUTO_RESUMES` (2) in a row; past that the unit gets an error notice.
+- **Tool calls lost** (started, no result — in the history, or only in the
+  journal when the issuing message never persisted): tool calls can have side
+  effects, so they are **never re-run**. Each gets an error `toolResult`
+  ("Interrupted: …"), and the unit receives a `session-reload` lick with
+  `body.reason: 'tool-call-interrupted'` naming the calls, so the agent checks
+  the world and decides. A guest-gated turn gets an error notice instead — a
+  lick turn runs with the owner's authority.
+- **Nothing lost** (the turn finished; only the final delete never landed):
+  the record is cleared.
+
+Two persistence changes make the classification sound: a `user` message is
+flushed immediately (not after the 1 s checkpoint debounce), and the history
+is flushed at every `tool_execution_start`, so the issuing assistant message
+is durable before the tool can have effects. A deliberate stop, error, abort,
+or `dispose()` clears the record — only a dead page leaves one behind.
+
+Tests: `tests/scoops/interrupted-work-recovery.test.ts`,
+`tests/scoops/scoop-context/turn-journal.test.ts`,
+`tests/scoops/scoop-context.reload-recovery.test.ts`, and the fake-LLM e2e
+`tests/e2e/reload-recovery.test.ts` (reload mid-stream and mid-`sleep`).
+
 ### Explicit workspace isolation modes (#2277)
 
 Child creation names a sharing policy instead of relying on the `/scoops/`
