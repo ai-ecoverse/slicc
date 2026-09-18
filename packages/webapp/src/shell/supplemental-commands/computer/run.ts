@@ -55,6 +55,11 @@ import {
   positionals,
   type VerbCall,
 } from './parse.js';
+import {
+  COMPUTER_RECORD_DEFAULT_FPS,
+  COMPUTER_RECORD_MAX_WIDTH,
+  recordPolledClip,
+} from './record.js';
 import { runScreenShareApproval } from './screen-approval.js';
 import { resolveComputerId } from './target.js';
 
@@ -300,7 +305,7 @@ async function runVerb(
     case 'watch':
       return verbWatch(call.args, globals, ctx, registry, deps);
     case 'record':
-      return verbRecord(call.args, globals, ctx, registry);
+      return verbRecord(call.args, globals, ctx, registry, deps);
     case 'exec':
       return verbExec(call.args, globals, ctx, registry);
     default:
@@ -645,25 +650,38 @@ async function verbRecord(
   args: string[],
   globals: { computer: string | undefined; json: boolean },
   ctx: CommandContext,
-  registry: ComputerRegistry
+  registry: ComputerRegistry,
+  deps: ComputerCommandDeps
 ): Promise<CmdResult> {
   const target = requireTarget(registry, globals.computer, ctx);
   if ('exitCode' in target) return target;
-  const kind = target.descriptor.kind;
-  if (kind !== 'screen' || !hasRecordClip(target.backend)) {
-    return fail(`record: not supported for '${kind}' yet (phase 4)`);
-  }
   let seconds: number;
+  let fps: number;
   try {
     seconds = durationSeconds(args);
+    fps = parseIntFlag(args, '--fps') ?? COMPUTER_RECORD_DEFAULT_FPS;
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err));
   }
+  if (fps <= 0) return fail('--fps requires a positive number');
   const durationMs = clampVideoDurationMs(seconds * 1000);
-  const clip = await target.backend.recordClip(durationMs);
   const file = positionals(args)[0] ?? 'clip.webm';
   const dest = ctx.fs.resolvePath(ctx.cwd, file);
-  await ctx.fs.writeFile(dest, clip.bytes);
+  let clip: {
+    bytes: Uint8Array;
+    mime: string;
+    width: number;
+    height: number;
+    durationMs?: number;
+  };
+  try {
+    clip = hasRecordClip(target.backend)
+      ? await target.backend.recordClip(durationMs)
+      : await recordWorkerHostedClip(target.backend, durationMs, fps, dest, ctx, deps);
+  } catch (err) {
+    return fail(`record: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (clip.bytes.byteLength > 0) await ctx.fs.writeFile(dest, clip.bytes);
   const elapsed = clip.durationMs ?? durationMs;
   if (globals.json) {
     return ok(
@@ -671,6 +689,24 @@ async function verbRecord(
     );
   }
   return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height} → ${dest}\n`);
+}
+
+async function recordWorkerHostedClip(
+  backend: ComputerBackend,
+  durationMs: number,
+  fps: number,
+  dest: string,
+  ctx: CommandContext,
+  deps: ComputerCommandDeps
+) {
+  return recordPolledClip({
+    screenshot: () => backend.screenshot({ format: 'jpeg', maxWidth: COMPUTER_RECORD_MAX_WIDTH }),
+    durationMs,
+    fps,
+    dest,
+    ctx,
+    encode: deps.encodeRecordedFrames,
+  });
 }
 
 function resolveWatchControl(deps: ComputerCommandDeps): {

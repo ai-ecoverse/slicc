@@ -55,3 +55,5 @@ The kernel worker lazy-loads `startComputersHost` so computers stay out of the f
 `computer` (`packages/webapp/src/shell/supplemental-commands/computer/`) is xdotool plus Anthropic aliases. Target: `-c` → `$COMPUTER` → last `computer use` → the only registered computer. `switch (verb)` in `run.ts` so subcommand-help source scan finds cases.
 
 `v86 type|key|mouse|screenshot|text` are thin aliases of `computer` (`v86:<name>`); prefer `computer <verb> -c v86:<name>`. Each poke still prints `target: <id>` then `screen: <path>`.
+
+`computer record [-V SEC] [--fps N] [file]` writes a clip (default `clip.webm`, max 60s). `screen` uses the live session `recordClip` path. Other kinds poll JPEG stills (max width 768, default 2 fps) and pipe them through in-repo ffmpeg wasm (`-f image2pipe -c:v mjpeg`).

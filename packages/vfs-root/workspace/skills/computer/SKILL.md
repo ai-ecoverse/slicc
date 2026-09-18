@@ -60,6 +60,7 @@ computer use v86:arch
 computer screenshot
 computer type "uname -a\n"
 computer key Return
+computer record -V 5 guest.webm
 ```
 
 `computer rm` unregisters `v86:<name>` and does **not** power the guest off. `v86 stop` / `kill <pid>` still does.
@@ -86,7 +87,7 @@ computer rm screen:screen1           # stops the getDisplayMedia tracks
 
 `computer add screen` needs a real user gesture (`getDisplayMedia`). Type it in the panel terminal, or run it from a cone tool call so an approval card can open the picker. `computer ls` marks a live share with `[display slot]`. Input (keyboard/mouse) is not supported. Screen share cannot come back after `jshd --enable` restore — there is no gesture at boot.
 
-`computer record` is screen-only in this phase; other kinds fail with a phase-4 message.
+`computer record` writes a clip to a VFS path (default `clip.webm`, max 60s). `screen` uses the live session recorder; v86/tab/url/jsh/ssh poll JPEG stills and pipe them through in-repo ffmpeg wasm (`-f image2pipe`). Default `--fps` is 2.
 
 ## Follower desktop (`ssh`)
 

@@ -4,7 +4,7 @@
  */
 
 import type { ComputerInputEvent } from '@slicc/shared-ts';
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ComputerRegistry } from '../../computers/registry.js';
 import type { BrowserAPI } from '../../kernel/browser-api.js';
@@ -41,6 +41,19 @@ export interface ComputerCommandDeps {
     unwatch(): void;
     input(events: ComputerInputEvent[]): Promise<void> | void;
   };
+  /**
+   * Injected in tests so `computer record` does not boot `@ffmpeg/core`.
+   * Production concatenates JPEG stills and runs `ffmpeg -f image2pipe`.
+   */
+  encodeRecordedFrames?: (args: {
+    frames: Uint8Array[];
+    fps: number;
+    dest: string;
+    width: number;
+    height: number;
+    durationMs: number;
+    ctx: CommandContext;
+  }) => Promise<{ mime: string }>;
   /** Injected in tests; production lazy-wraps `createProxiedFetch`. */
   urlFetch?: (
     url: string,

@@ -96,6 +96,7 @@ describe('computer command', () => {
     expect(help.stdout).toContain('left_click');
     expect(help.stdout).toContain('add ssh');
     expect(help.stdout).toContain('add url');
+    expect(help.stdout).toContain('image2pipe');
   });
 
   it('answers click --help without dispatching input', async () => {
@@ -395,7 +396,7 @@ describe('computer command', () => {
     expect(added.stderr).toContain('needs a user gesture');
   });
 
-  it('record writes a clip for screen and refuses other kinds', async () => {
+  it('record writes a clip for screen and encodes worker-hosted kinds via ffmpeg', async () => {
     const webm = Uint8Array.of(1, 2, 3);
     class ScreenBackend extends FakeBackend {
       constructor() {
@@ -440,10 +441,20 @@ describe('computer command', () => {
 
     const other = new ComputerRegistry(null);
     other.register(new FakeBackend());
-    const otherCmd = createComputerCommand({ registry: other });
-    const refused = await otherCmd.execute(['record'], makeCtx().ctx);
-    expect(refused.exitCode).toBe(1);
-    expect(refused.stderr).toContain("not supported for 'jsh' yet (phase 4)");
+    const encoded = Uint8Array.of(9, 9, 9);
+    const otherCmd = createComputerCommand({
+      registry: other,
+      encodeRecordedFrames: async ({ frames, dest, ctx: encodeCtx }) => {
+        expect(frames.length).toBeGreaterThan(0);
+        await encodeCtx.fs.writeFile(dest, encoded);
+        return { mime: 'video/webm' };
+      },
+    });
+    const polled = makeCtx();
+    const worker = await otherCmd.execute(['record', '-V', '0.1', 'jsh.webm'], polled.ctx);
+    expect(worker.exitCode).toBe(0);
+    expect(worker.stdout).toContain('recorded 100ms');
+    expect(polled.written.get('/jsh.webm')).toEqual(encoded);
   });
 
   it('watch and --stop drive kernel start/stop control', async () => {

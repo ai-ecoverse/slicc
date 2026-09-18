@@ -28,8 +28,9 @@ Look:
                              JPEG; prints WxH → wxh (scale s) and a frozen frame
   text                       text-mode dump when the backend supports it
   watch [--fps N] [--stop]   live frames to the page (phase 2 UI)
-  record [-V|--duration SEC] [file]
-                             timed clip from a live screen session (other kinds: phase 4)
+  record [-V|--duration SEC] [--fps N] [file]
+                             timed clip (screen: live session; other kinds:
+                             JPEG stills through ffmpeg -f image2pipe, max 60s)
 
 Poke (xdotool; every verb ends with a frozen-frame line):
   mousemove <x> <y> [--relative]
