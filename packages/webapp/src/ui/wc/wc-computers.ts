@@ -90,15 +90,26 @@ export function parseComputerIdFromCommand(command: string): string | null {
 }
 
 /** Frozen still from `screen: <path>` or a well-formed `<img:>` marker. */
-export function parseFrozenFrameHint(output: string): FrozenFrameHint | null {
+export function parseFrozenScreenPath(output: string): string | null {
   for (const line of output.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith(FROZEN_SCREEN_PREFIX)) continue;
     const path = trimmed.slice(FROZEN_SCREEN_PREFIX.length).trim();
-    if (path) return { kind: 'path', path };
+    if (path) return path;
   }
+  return null;
+}
+
+export function parseFrozenImgSrc(output: string): string | null {
   const image = classifyImageMarkers(output).find((m) => m.kind === 'image' && m.parsed);
-  return image?.parsed ? { kind: 'data', src: image.parsed.dataUrl } : null;
+  return image?.parsed?.dataUrl ?? null;
+}
+
+export function parseFrozenFrameHint(output: string): FrozenFrameHint | null {
+  const path = parseFrozenScreenPath(output);
+  if (path) return { kind: 'path', path };
+  const src = parseFrozenImgSrc(output);
+  return src ? { kind: 'data', src } : null;
 }
 
 export { frameToDataUrl } from '../computer-frame-url.js';
@@ -210,7 +221,7 @@ function refreshRow(row: BoundComputerRow): void {
     computerLive: computer?.state === 'live',
     newestToolCallId: newest,
     toolCallId: row.toolCallId,
-    hasFrame: Boolean(hint || liveFrame),
+    hasFrame: Boolean(hint),
     hasPushedFrame: Boolean(liveFrame),
   });
   row.el.frameMode = mode;
@@ -219,7 +230,7 @@ function refreshRow(row: BoundComputerRow): void {
     row.el.frameSrc = frameToDataUrl(liveFrame);
     return;
   }
-  if (mode === 'frozen') void applyFrozenFrame(row, hint, liveFrame);
+  if (mode === 'frozen') void applyFrozenFrame(row, row.el.output ?? '');
   else row.el.frameSrc = null;
 }
 
@@ -234,23 +245,16 @@ function syncRowWatch(row: BoundComputerRow, shouldWatch: boolean): void {
   }
 }
 
-async function applyFrozenFrame(
-  row: BoundComputerRow,
-  hint: FrozenFrameHint | null,
-  liveFrame: ComputerFrame | null
-): Promise<void> {
-  if (hint?.kind === 'data') {
-    row.el.frameSrc = hint.src;
-    return;
-  }
-  if (hint?.kind === 'path') {
-    const src = await readFrozenPath(hint.path);
+async function applyFrozenFrame(row: BoundComputerRow, output: string): Promise<void> {
+  const path = parseFrozenScreenPath(output);
+  if (path) {
+    const src = await readFrozenPath(path);
     if (src) {
       row.el.frameSrc = src;
       return;
     }
   }
-  row.el.frameSrc = liveFrame ? frameToDataUrl(liveFrame) : null;
+  row.el.frameSrc = parseFrozenImgSrc(output);
 }
 
 async function readFrozenPath(path: string): Promise<string | null> {

@@ -11,6 +11,7 @@ installWcDomStubs();
 import '@slicc/webcomponents';
 import type { ComputerDescriptor } from '@slicc/shared-ts';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
+import { DECODABLE_PNG } from '../../../src/computers/frame-bytes.js';
 import { getComputersStore, resetComputersStoreForTests } from '../../../src/ui/computers-store.js';
 import {
   bindComputerOverlay,
@@ -242,6 +243,58 @@ describe('wc-computers wiring', () => {
     first.remove();
     second.remove();
     expect(store.isWatching('jsh:fake')).toBe(false);
+  });
+
+  it('frozen rows use their own screen: file, then img:, never the live frame', async () => {
+    const store = getComputersStore();
+    store.setSender(() => undefined);
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    applyFrame('jsh:fake');
+    const files = new Map<string, Uint8Array>([['/tmp/own.jpg', DECODABLE_PNG]]);
+    installWcComputers({
+      log,
+      openFs: async () => ({
+        readFile: async (path: string) => {
+          const bytes = files.get(path);
+          if (!bytes) throw new Error(`ENOENT ${path}`);
+          return bytes;
+        },
+      }),
+    });
+
+    const missingOnly = document.createElement('slicc-bash-renderer-computer');
+    missingOnly.command = 'computer -c jsh:fake screenshot';
+    missingOnly.toolCallId = 'call-0';
+    missingOnly.output = 'screen: /tmp/missing.jpg';
+    document.body.append(missingOnly);
+
+    const missingThenImg = document.createElement('slicc-bash-renderer-computer');
+    missingThenImg.command = 'computer -c jsh:fake screenshot';
+    missingThenImg.toolCallId = 'call-1';
+    missingThenImg.output = 'screen: /tmp/missing.jpg\n<img:data:image/jpeg;base64,QUJD>';
+    document.body.append(missingThenImg);
+
+    const ownFile = document.createElement('slicc-bash-renderer-computer');
+    ownFile.command = 'computer -c jsh:fake screenshot';
+    ownFile.toolCallId = 'call-2';
+    ownFile.output = 'screen: /tmp/own.jpg';
+    document.body.append(ownFile);
+
+    const live = document.createElement('slicc-bash-renderer-computer');
+    live.command = 'computer -c jsh:fake screenshot';
+    live.toolCallId = 'call-3';
+    live.output = 'screen: /tmp/b.jpg';
+    document.body.append(live);
+    await vi.waitFor(() => expect(live.frameMode).toBe('live'));
+    await vi.waitFor(() => expect(ownFile.frameMode).toBe('frozen'));
+    await vi.waitFor(() =>
+      expect(ownFile.frameSrc?.startsWith('data:image/png;base64,')).toBe(true)
+    );
+    expect(ownFile.frameSrc).not.toBe(live.frameSrc);
+    await vi.waitFor(() => expect(missingThenImg.frameMode).toBe('frozen'));
+    await vi.waitFor(() => expect(missingThenImg.frameSrc).toBe('data:image/jpeg;base64,QUJD'));
+    await vi.waitFor(() => expect(missingOnly.frameMode).toBe('frozen'));
+    await vi.waitFor(() => expect(missingOnly.frameSrc).toBeNull());
   });
 
   it('keeps a frozen still until a pushed frame arrives, then shows LIVE', async () => {
