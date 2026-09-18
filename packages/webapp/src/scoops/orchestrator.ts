@@ -805,7 +805,16 @@ export class Orchestrator implements ConeApprovalRouter {
         }
       }
     }
-    await this.lifecycle.syncGelatiereModel();
+    try {
+      await this.lifecycle.syncGelatiereModel();
+    } catch (err) {
+      // Same posture as ordinary backfill writes: a transient IndexedDB
+      // failure must not abort Orchestrator.init() and strand every cone.
+      // Pre-run sync retries before Gelatiere can spend another token.
+      log.warn('Failed to repair gelatiere model on boot; will retry next boot', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

@@ -217,4 +217,38 @@ describe('Orchestrator model backfill on restore (#2310)', () => {
     expect(o.getScoop('cone_1')?.model).toBeUndefined();
     expect((await getAllScoops()).cone_1.model).toBeUndefined();
   });
+
+  it('keeps boot available when Gelatiere repair cannot persist', async () => {
+    await saveScoop(record({ model: { provider: 'adobe', id: 'claude-opus-4-8' } }));
+    await saveScoop(
+      record({
+        jid: 'scoop_gelatiere',
+        name: 'gelatiere',
+        folder: 'gelatiere',
+        parentJid: GELATIERE_OWNER_JID,
+        model: { provider: 'stale-provider', id: 'stale-model' },
+      })
+    );
+    const db = await import('../../src/scoops/db.js');
+    const realSave = db.saveScoop.bind(db);
+    const saveSpy = vi.spyOn(db, 'saveScoop').mockImplementation(async (scoop, ...rest) => {
+      if (scoop.jid === 'scoop_gelatiere') throw new Error('quota exceeded');
+      return realSave(scoop, ...rest);
+    });
+
+    try {
+      const o = await boot();
+      expect(o.getScoop('cone_1')?.model).toEqual({
+        provider: 'adobe',
+        id: 'claude-opus-4-8',
+      });
+      // In-memory repair rolled back with the failed write; next boot / pre-run retries.
+      expect(o.getScoop('scoop_gelatiere')?.model).toEqual({
+        provider: 'stale-provider',
+        id: 'stale-model',
+      });
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
 });
