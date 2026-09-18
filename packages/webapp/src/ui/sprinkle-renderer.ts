@@ -709,6 +709,9 @@ export class SprinkleRenderer {
     browser: {
       findTab: function(q) { return _jshCall('browser', ['findTab', q]); },
       ensureTab: function(url, options) { return _jshCall('browser', ['ensureTab', url, options || {}]); },
+      openWindow: function(url, options) { return _jshCall('browser', ['openWindow', url, options || {}]); },
+      windowBounds: function(tab) { return _jshCall('browser', ['windowBounds', tab]); },
+      setWindowBounds: function(tab, bounds) { return _jshCall('browser', ['setWindowBounds', tab, bounds]); },
       eval: function(tab, code) { return _jshCall('browser', ['eval', tab, code]); },
       evalAsync: function(tab, code) { return _jshCall('browser', ['evalAsync', tab, code]); },
       cookie: function(tab, name) { return _jshCall('browser', ['cookie', tab, name]); },

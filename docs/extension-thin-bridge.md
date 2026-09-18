@@ -61,6 +61,20 @@ reference counts keep that session and its debugger attachment alive until the
 last matching detach. Port disconnect and target close remain authoritative:
 they release the tab immediately regardless of its outstanding count.
 
+### Window management (`sliccy:browser` openWindow / bounds)
+
+`chrome.debugger` is tab-scoped and cannot run Browser-domain CDP methods.
+`bridge-sw.ts` therefore shims:
+
+- `Target.createTarget` with `newWindow: true` → `chrome.windows.create`
+  (sized + decorated window; `decorated: false` maps to `type: 'popup'`)
+- `Browser.getWindowForTarget` / `getWindowBounds` / `setWindowBounds` →
+  `chrome.tabs.get` + `chrome.windows.get` / `update`
+
+Without `newWindow`, `Target.createTarget` still opens a tab via
+`chrome.tabs.create` (existing behavior). Standalone Swift/Node floats pass the
+same CDP methods through to Chrome unchanged.
+
 Debugger ownership is explicit and symmetric across service-worker consumers.
 The first consumer to perform the underlying `chrome.debugger.attach` owns its
 matching detach. The other consumer may borrow the attachment, but releasing

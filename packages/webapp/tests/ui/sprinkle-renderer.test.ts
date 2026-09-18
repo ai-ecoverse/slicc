@@ -40,6 +40,9 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     browser: {
       findTab: vi.fn(),
       ensureTab: vi.fn(),
+      openWindow: vi.fn(),
+      windowBounds: vi.fn(),
+      setWindowBounds: vi.fn(),
       eval: vi.fn(),
       evalAsync: vi.fn(),
       cookie: vi.fn(),

@@ -630,6 +630,12 @@ export class SprinkleFollowerController {
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
         ensureTab: () =>
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
+        openWindow: () =>
+          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
+        windowBounds: () =>
+          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
+        setWindowBounds: () =>
+          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
         eval: () =>
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
         evalAsync: () =>

@@ -64,6 +64,49 @@ interface BridgeTargetGetTargetsResult extends CDPPayload {
   targetInfos: TargetInfo[];
 }
 
+/** Frame geometry returned by Browser.getWindowBounds / chrome.windows.get. */
+interface BridgeWindowBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  windowState: string;
+}
+
+/** Result of Browser.getWindowForTarget. */
+interface BridgeGetWindowForTargetResult extends CDPPayload {
+  windowId: number;
+  bounds: BridgeWindowBounds;
+}
+
+/** Result of Browser.getWindowBounds. */
+interface BridgeGetWindowBoundsResult extends CDPPayload {
+  bounds: BridgeWindowBounds;
+}
+
+/** Options for opening a sized window via chrome.windows.create. */
+export interface BridgeCreateWindowOptions {
+  url: string;
+  type: 'normal' | 'popup';
+  focused: boolean;
+  width?: number;
+  height?: number;
+  left?: number;
+  top?: number;
+  state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+}
+
+/** Achieved chrome.windows geometry after create/update/get. */
+export interface BridgeChromeWindowInfo {
+  windowId: number;
+  tabId: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  state: string;
+}
+
 function readTargetIdParam(params: CDPPayload, label = 'targetId'): string {
   const targetId = params[label];
   if (typeof targetId !== 'string') {
@@ -132,8 +175,28 @@ export interface BridgeSwDeps {
   queryActiveTabId: () => Promise<number | undefined>;
   /** chrome.tabs.get(). */
   getTab: (tabId: number) => Promise<ChromeTab | undefined>;
-  /** chrome.tabs.create — used by Target.createTarget. */
+  /** chrome.tabs.create — used by Target.createTarget (tab-in-existing-window). */
   createTab: (url: string) => Promise<number>;
+  /**
+   * chrome.windows.create — used by Target.createTarget when `newWindow` is
+   * true (sized/decorated window; issue #3271). Returns the new window id and
+   * the first tab id so the CDP targetId stays a tab id string.
+   */
+  createWindow: (opts: BridgeCreateWindowOptions) => Promise<BridgeChromeWindowInfo>;
+  /** chrome.windows.get — used by Browser.getWindowBounds. */
+  getWindow: (windowId: number) => Promise<BridgeChromeWindowInfo>;
+  /** chrome.windows.update — used by Browser.setWindowBounds. */
+  updateWindow: (
+    windowId: number,
+    props: {
+      left?: number;
+      top?: number;
+      width?: number;
+      height?: number;
+      state?: string;
+      focused?: boolean;
+    }
+  ) => Promise<BridgeChromeWindowInfo>;
   /** chrome.tabs.remove — used by Target.closeTarget. */
   removeTab: (tabId: number) => Promise<void>;
   /** Select a tab and focus its window — used for Page.bringToFront, which over
@@ -383,6 +446,52 @@ export async function writeStoredLeaderTabIdToSession(tabId: number): Promise<vo
   }
 }
 
+/** Drop undefined keys so chrome.windows.create/update see a sparse options bag. */
+export function pickDefinedWindowFields<T extends object>(
+  fields: T
+): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  const out = {} as { [K in keyof T]?: Exclude<T[K], undefined> };
+  for (const key of Object.keys(fields) as Array<keyof T>) {
+    const value = fields[key];
+    if (value !== undefined) {
+      out[key] = value as Exclude<(typeof fields)[typeof key], undefined>;
+    }
+  }
+  return out;
+}
+
+/** Normalize a chrome.windows.Window (create/get/update) into BridgeChromeWindowInfo. */
+export function chromeWindowInfoFromChrome(
+  win: {
+    id?: number;
+    left?: number;
+    top?: number;
+    width?: number;
+    height?: number;
+    state?: string;
+    tabs?: Array<{ id?: number }>;
+  },
+  label: string,
+  tabIdFallback?: number
+): BridgeChromeWindowInfo {
+  if (typeof win.id !== 'number') {
+    throw new Error(`${label} did not return a window id`);
+  }
+  const tabId = win.tabs?.[0]?.id;
+  if (tabIdFallback === undefined && typeof tabId !== 'number') {
+    throw new Error(`${label} did not return windowId/tabId`);
+  }
+  return {
+    windowId: win.id,
+    tabId: typeof tabId === 'number' ? tabId : (tabIdFallback as number),
+    left: win.left ?? 0,
+    top: win.top ?? 0,
+    width: win.width ?? 0,
+    height: win.height ?? 0,
+    state: win.state ?? 'normal',
+  };
+}
+
 /**
  * Default deps wired against the real chrome.* APIs. Provided as a factory
  * so the SW can override `attachDebugger` / `detachDebugger` etc. to share
@@ -433,6 +542,39 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
     createTab: async (url) => {
       const tab = await chrome.tabs.create({ url, active: false });
       return tab.id;
+    },
+    createWindow: async (opts) => {
+      const created = await chrome.windows.create({
+        url: opts.url,
+        type: opts.type,
+        focused: opts.focused,
+        ...pickDefinedWindowFields({
+          width: opts.width,
+          height: opts.height,
+          left: opts.left,
+          top: opts.top,
+          state: opts.state,
+        }),
+      });
+      return chromeWindowInfoFromChrome(created, 'chrome.windows.create');
+    },
+    getWindow: async (windowId) => {
+      const win = await chrome.windows.get(windowId, { populate: true });
+      return chromeWindowInfoFromChrome(win, `chrome.windows.get(${windowId})`, -1);
+    },
+    updateWindow: async (windowId, props) => {
+      const updated = await chrome.windows.update(
+        windowId,
+        pickDefinedWindowFields({
+          left: props.left,
+          top: props.top,
+          width: props.width,
+          height: props.height,
+          state: props.state,
+          focused: props.focused,
+        })
+      );
+      return chromeWindowInfoFromChrome(updated, `chrome.windows.update(${windowId})`, -1);
     },
     removeTab: (tabId) => chrome.tabs.remove(tabId),
     activateTab: async (tabId) => {
@@ -679,13 +821,20 @@ async function dispatchCdpCommand(
 ): Promise<CDPPayload> {
   const { method, params, sessionId } = req;
 
-  // Per-port `Target.*` shims map to chrome.tabs operations, so the leader
-  // sees a real CDP-like target surface without us hard-coding tab ids.
+  // Per-port `Target.*` shims map to chrome.tabs / chrome.windows operations,
+  // so the leader sees a real CDP-like target surface without us hard-coding
+  // tab ids. Browser.* window-bounds commands are also shimmed: chrome.debugger
+  // is tab-scoped and cannot run Browser-domain methods.
   if (method === 'Target.getTargets') return cdpGetTargets(state, deps);
   if (method === 'Target.attachToTarget') return cdpAttachToTarget(params ?? {}, state, deps);
   if (method === 'Target.detachFromTarget') return cdpDetachFromTarget(params ?? {}, state, deps);
   if (method === 'Target.createTarget') return cdpCreateTarget(params ?? {}, deps);
   if (method === 'Target.closeTarget') return cdpCloseTarget(params ?? {}, state, deps);
+  if (method === 'Browser.getWindowForTarget') {
+    return cdpGetWindowForTarget(params ?? {}, deps);
+  }
+  if (method === 'Browser.getWindowBounds') return cdpGetWindowBounds(params ?? {}, deps);
+  if (method === 'Browser.setWindowBounds') return cdpSetWindowBounds(params ?? {}, deps);
 
   // Generic pass-through. sessionId MUST resolve to a tab we attached on
   // behalf of THIS port; cross-port sessionId reuse is a bug.
@@ -779,8 +928,132 @@ async function cdpCreateTarget(
   deps: BridgeSwDeps
 ): Promise<BridgeTargetCreateResult> {
   const url = readCreateTargetUrl(params);
-  const tabId = await deps.createTab(url);
-  return { targetId: String(tabId) };
+  // `newWindow: true` → chrome.windows.create so sized+decorated windows match
+  // standalone CDP (issue #3271). chrome.debugger cannot run Browser.*.
+  if (params['newWindow'] !== true) {
+    const tabId = await deps.createTab(url);
+    return { targetId: String(tabId) };
+  }
+  const state = readOptionalWindowState(params['windowState']);
+  const opts: BridgeCreateWindowOptions = {
+    url,
+    type: params['decorated'] === false ? 'popup' : 'normal',
+    focused: params['background'] !== true,
+  };
+  if (state && state !== 'normal') {
+    opts.state = state;
+  } else {
+    copyNumericFields(params as CdpBoundsBag, opts, GEOMETRY_KEYS);
+    if (state) opts.state = state;
+  }
+  const created = await deps.createWindow(opts);
+  return { targetId: String(created.tabId) };
+}
+
+async function cdpGetWindowForTarget(
+  params: CDPPayload,
+  deps: BridgeSwDeps
+): Promise<BridgeGetWindowForTargetResult> {
+  const targetId = readTargetIdParam(params);
+  const tabId = parseInt(targetId, 10);
+  if (!Number.isFinite(tabId) || tabId <= 0) {
+    throw new Error(`Invalid targetId: ${targetId}`);
+  }
+  const tab = await deps.getTab(tabId);
+  if (!tab || typeof tab.windowId !== 'number') {
+    throw new Error(`No window for targetId: ${targetId}`);
+  }
+  const win = await deps.getWindow(tab.windowId);
+  return {
+    windowId: win.windowId,
+    bounds: chromeWindowToCdpBounds(win),
+  };
+}
+
+async function cdpGetWindowBounds(
+  params: CDPPayload,
+  deps: BridgeSwDeps
+): Promise<BridgeGetWindowBoundsResult> {
+  const windowId = params['windowId'];
+  if (typeof windowId !== 'number') {
+    throw new Error(`Invalid windowId: ${String(windowId)}`);
+  }
+  const win = await deps.getWindow(windowId);
+  return { bounds: chromeWindowToCdpBounds(win) };
+}
+
+async function cdpSetWindowBounds(params: CDPPayload, deps: BridgeSwDeps): Promise<CDPPayload> {
+  const windowId = params['windowId'];
+  if (typeof windowId !== 'number') {
+    throw new Error(`Invalid windowId: ${String(windowId)}`);
+  }
+  const rawBounds = readCdpBoundsFields(params['bounds']);
+  const state = readOptionalWindowState(rawBounds['windowState'] ?? rawBounds['state']);
+  const props: BridgeWindowUpdateProps = {};
+  if (state && state !== 'normal') {
+    props.state = state;
+  } else {
+    copyNumericFields(rawBounds, props, GEOMETRY_KEYS);
+    if (state) props.state = state;
+  }
+  await deps.updateWindow(windowId, props);
+  return {};
+}
+
+const GEOMETRY_KEYS = ['left', 'top', 'width', 'height'] as const;
+const WINDOW_STATES = new Set(['normal', 'minimized', 'maximized', 'fullscreen']);
+
+interface BridgeWindowUpdateProps {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  state?: string;
+}
+
+/** Loose CDP bounds bag before numeric/state narrowing. */
+interface CdpBoundsBag {
+  left?: unknown;
+  top?: unknown;
+  width?: unknown;
+  height?: unknown;
+  windowState?: unknown;
+  state?: unknown;
+}
+
+/** Copy finite number fields from a loose CDP/chrome bag onto a typed target. */
+function copyNumericFields(
+  source: CdpBoundsBag,
+  target: { [K in (typeof GEOMETRY_KEYS)[number]]?: number },
+  keys: readonly (typeof GEOMETRY_KEYS)[number][]
+): void {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'number') target[key] = value;
+  }
+}
+
+function readCdpBoundsFields(value: unknown): CdpBoundsBag {
+  return value !== null && typeof value === 'object' ? (value as CdpBoundsBag) : {};
+}
+
+function chromeWindowToCdpBounds(win: BridgeChromeWindowInfo): BridgeWindowBounds {
+  return {
+    left: win.left,
+    top: win.top,
+    width: win.width,
+    height: win.height,
+    windowState: win.state || 'normal',
+  };
+}
+
+function readOptionalWindowState(
+  value: unknown
+): 'normal' | 'minimized' | 'maximized' | 'fullscreen' | undefined {
+  if (typeof value === 'string' && WINDOW_STATES.has(value)) {
+    return value as 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+  }
+  return undefined;
 }
 
 async function cdpCloseTarget(
