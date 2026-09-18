@@ -223,7 +223,9 @@ final class ComputerTrayFollowerTests: XCTestCase {
             else { return nil }
             return (requestId, obj["error"] as? String)
         }
-        XCTAssertEqual(results, [("in-ok", nil)])
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].0, "in-ok")
+        XCTAssertNil(results[0].1)
     }
 
     func testUnwatchStopsTheCapturer() async throws {
