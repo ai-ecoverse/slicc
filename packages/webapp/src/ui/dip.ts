@@ -51,6 +51,10 @@ import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
 const isExtension = isExtensionRealm();
 
+void import('../shell/supplemental-commands/computer/screen-share-approval-live.js').then((m) => {
+  m.listenScreenShareApprovalChannel();
+});
+
 /** Response body posted back to a dip iframe (`id` is appended by respond helpers). */
 interface DipIframeResponseBody {
   type: string;
@@ -1762,13 +1766,20 @@ async function runScreensharePicker(
     return;
   }
   const grant = result.grant as Extract<PermissionGrant, { kind: 'screenshare' }>;
-  const { adoptDisplayStream } = await import(
+  const { adoptDisplayStream, displaySessions } = await import(
     '../shell/supplemental-commands/screencapture-media.js'
   );
   try {
     const adopted = await adoptDisplayStream(grant.stream);
     if (!adopted.handle) {
       onLick(action, { error: 'screen share produced no handle' });
+      return;
+    }
+    const { keepAdoptedScreenShare } = await import(
+      '../shell/supplemental-commands/computer/screen-share-approval-live.js'
+    );
+    if (!keepAdoptedScreenShare(adopted.handle, (handle) => displaySessions.stop(handle))) {
+      onLick(action, { cancelled: true });
       return;
     }
     onLick(action, { granted: true, handle: adopted.handle });

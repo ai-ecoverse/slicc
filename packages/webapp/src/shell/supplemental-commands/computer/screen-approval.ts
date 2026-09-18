@@ -8,9 +8,10 @@
 
 import { getToolExecutionContext } from '../../../base/tool-execution-context.js';
 import { showToolUI, toolUIRegistry } from '../../tool-ui.js';
+import { beginScreenShareApproval, endScreenShareApproval } from './screen-share-approval-live.js';
 
 /** Two minutes — enough for a slow picker, short enough to fail loud. */
-const APPROVAL_TIMEOUT_MS = 120_000;
+export const APPROVAL_TIMEOUT_MS = 120_000;
 
 const APPROVAL_TIMEOUT_SENTINEL = Symbol('screen-share-approval-timeout');
 
@@ -57,52 +58,56 @@ export async function runScreenShareApproval(): Promise<{ handle: string }> {
   }
   const uiRequestId = toolUIRegistry.generateId();
   let timedOut = false;
-
-  const rawUiPromise = showToolUI(
-    {
-      id: uiRequestId,
-      html: buildScreenShareApprovalHtml(),
-      onAction: async (action, data) => {
-        if (action !== 'approve') return { denied: true };
-        const d = data as ScreenShareActionData | undefined;
-        if (d?.cancelled) return { cancelled: true };
-        if (d?.error) return { error: String(d.error) };
-        if (d?.granted && typeof d.handle === 'string') {
-          return { approved: true, handle: d.handle };
-        }
-        return { error: 'screen share returned an unexpected response' };
+  beginScreenShareApproval(uiRequestId);
+  try {
+    const rawUiPromise = showToolUI(
+      {
+        id: uiRequestId,
+        html: buildScreenShareApprovalHtml(),
+        onAction: async (action, data) => {
+          if (action !== 'approve') return { denied: true };
+          const d = data as ScreenShareActionData | undefined;
+          if (d?.cancelled) return { cancelled: true };
+          if (d?.error) return { error: String(d.error) };
+          if (d?.granted && typeof d.handle === 'string') {
+            return { approved: true, handle: d.handle };
+          }
+          return { error: 'screen share returned an unexpected response' };
+        },
       },
-    },
-    toolContext.onUpdate
-  );
-
-  const safeUiPromise = rawUiPromise.catch((err: unknown) => {
-    if (timedOut) return APPROVAL_TIMEOUT_SENTINEL;
-    throw err;
-  });
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<typeof APPROVAL_TIMEOUT_SENTINEL>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      toolUIRegistry.cancel(uiRequestId, 'screen share: timed out');
-      resolve(APPROVAL_TIMEOUT_SENTINEL);
-    }, APPROVAL_TIMEOUT_MS);
-  });
-
-  const result = await Promise.race([safeUiPromise, timeoutPromise]);
-  if (timeoutHandle) clearTimeout(timeoutHandle);
-
-  if (result === APPROVAL_TIMEOUT_SENTINEL) {
-    throw new Error(
-      `add screen: timed out after ${Math.round(APPROVAL_TIMEOUT_MS / 1000)}s waiting for user approval`
+      toolContext.onUpdate
     );
-  }
 
-  const res = result as ScreenShareApprovalResponse;
-  if (res.denied) throw new Error('add screen: denied by user');
-  if (res.cancelled) throw new Error('add screen: cancelled');
-  if (res.error) throw new Error(`add screen: ${res.error}`);
-  if (!res.approved || !res.handle) throw new Error('add screen: no display selected');
-  return { handle: res.handle };
+    const safeUiPromise = rawUiPromise.catch((err: unknown) => {
+      if (timedOut) return APPROVAL_TIMEOUT_SENTINEL;
+      throw err;
+    });
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<typeof APPROVAL_TIMEOUT_SENTINEL>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        toolUIRegistry.cancel(uiRequestId, 'screen share: timed out');
+        resolve(APPROVAL_TIMEOUT_SENTINEL);
+      }, APPROVAL_TIMEOUT_MS);
+    });
+
+    const result = await Promise.race([safeUiPromise, timeoutPromise]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+
+    if (result === APPROVAL_TIMEOUT_SENTINEL) {
+      throw new Error(
+        `add screen: timed out after ${Math.round(APPROVAL_TIMEOUT_MS / 1000)}s waiting for user approval`
+      );
+    }
+
+    const res = result as ScreenShareApprovalResponse;
+    if (res.denied) throw new Error('add screen: denied by user');
+    if (res.cancelled) throw new Error('add screen: cancelled');
+    if (res.error) throw new Error(`add screen: ${res.error}`);
+    if (!res.approved || !res.handle) throw new Error('add screen: no display selected');
+    return { handle: res.handle };
+  } finally {
+    endScreenShareApproval(uiRequestId);
+  }
 }

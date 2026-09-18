@@ -9,6 +9,7 @@ import {
   UrlComputerBackend,
   type UrlComputerFetch,
   urlComputerId,
+  wrapUrlComputerFetch,
 } from '../../../src/computers/adapters/url.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
 import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
@@ -153,7 +154,13 @@ describe('url probe and backend', () => {
 
   it('keeps native 1920×1080 after a 768-wide encode so lastShot remaps', async () => {
     const jpeg = jpegWithSize(1920, 1080);
-    const fetchImpl = mockFetch({ screenshot: { status: 200, body: jpeg } });
+    const fetchImpl = mockFetch({
+      computer: {
+        status: 200,
+        body: encodeJson({ ...LIVE, size: { width: 1920, height: 1080 } }),
+      },
+      screenshot: { status: 200, body: jpeg },
+    });
     const desc = await probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710');
     const backend = new UrlComputerBackend(fetchImpl, 'http://127.0.0.1:5710', desc);
     const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 768 });
@@ -166,6 +173,46 @@ describe('url probe and backend', () => {
     });
     expect(mapping.scale).toBeCloseTo(768 / 1920);
     expect(mapPoint(384, 216, toLastShot(mapping, 1), false)).toEqual({ x: 960, y: 540 });
+  });
+
+  it('does not ask the server to downscale and ignores returned image size as native', async () => {
+    const jpeg = jpegWithSize(768, 432);
+    const urls: string[] = [];
+    const inner = mockFetch({
+      computer: {
+        status: 200,
+        body: encodeJson({ ...LIVE, size: { width: 1920, height: 1080 } }),
+      },
+      screenshot: { status: 200, body: jpeg },
+    });
+    const fetchImpl: UrlComputerFetch = async (url, init) => {
+      urls.push(url);
+      return inner(url, init);
+    };
+    const desc = await probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710');
+    const backend = new UrlComputerBackend(fetchImpl, 'http://127.0.0.1:5710', desc);
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    expect(urls.some((u) => u.includes('/computer/screenshot') && u.includes('maxWidth'))).toBe(
+      false
+    );
+    expect(frame.width).toBe(768);
+    expect(backend.describe().size).toEqual({ width: 1920, height: 1080 });
+    const mapping = scaleFromEncoded(backend.describe().size!, {
+      width: frame.width,
+      height: frame.height,
+    });
+    expect(mapPoint(384, 216, toLastShot(mapping, 1), false)).toEqual({ x: 960, y: 540 });
+  });
+
+  it('forwards abort signals through wrapUrlComputerFetch', async () => {
+    const seen: Array<AbortSignal | undefined> = [];
+    const wrapped = wrapUrlComputerFetch(async (_url, init) => {
+      seen.push(init?.signal);
+      return { status: 200, headers: {}, body: new Uint8Array() };
+    });
+    const ac = new AbortController();
+    await wrapped('http://127.0.0.1:5710/computer', { method: 'GET', signal: ac.signal });
+    expect(seen).toEqual([ac.signal]);
   });
 
   it('treats text 404 as unsupported and refuses input when the remote says so', async () => {

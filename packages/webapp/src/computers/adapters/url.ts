@@ -30,6 +30,38 @@ export type UrlComputerFetch = (
   body: Uint8Array;
 }>;
 
+/** Subset of `SecureFetch` the production URL adapter actually uses. */
+export type UrlSecureFetch = (
+  url: string,
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  }
+) => Promise<{
+  status: number;
+  headers: Headers | Record<string, string>;
+  body: Uint8Array;
+}>;
+
+/**
+ * Adapt `createProxiedFetch` (or any SecureFetch-shaped client) so URL-computer
+ * calls keep `init.signal`. The previous wrapper dropped it, so the 8s timeout
+ * could not cancel a stalled production fetch.
+ */
+export function wrapUrlComputerFetch(sf: UrlSecureFetch): UrlComputerFetch {
+  return async (url, init) => {
+    const res = await sf(url, {
+      method: init?.method,
+      headers: init?.headers,
+      body: typeof init?.body === 'string' ? init.body : undefined,
+      signal: init?.signal,
+    });
+    return { status: res.status, headers: res.headers, body: res.body };
+  };
+}
+
 /** Bound every URL-adapter HTTP call so probe/screenshot/text/input cannot hang. */
 export const URL_REQUEST_TIMEOUT_MS = 8_000;
 
@@ -209,7 +241,6 @@ export class UrlComputerBackend implements ComputerBackend {
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
     const params = new URLSearchParams();
     params.set('format', opts.format);
-    if (opts.maxWidth) params.set('maxWidth', String(opts.maxWidth));
     const res = await this.fetchImpl(`${this.base}/computer/screenshot?${params.toString()}`, {
       signal: urlComputerSignal(opts.signal),
     });
@@ -227,10 +258,12 @@ export class UrlComputerBackend implements ComputerBackend {
       bytes: res.body,
     };
     if (opts.maxWidth) frame = await fitComputerFrame(frame, opts.maxWidth);
-    this.descriptor = {
-      ...this.descriptor,
-      size: { width: sniffed.width, height: sniffed.height },
-    };
+    if (!this.descriptor.size) {
+      this.descriptor = {
+        ...this.descriptor,
+        size: { width: sniffed.width, height: sniffed.height },
+      };
+    }
     return frame;
   }
 

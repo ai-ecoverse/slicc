@@ -182,3 +182,6 @@ export function sessionCaptureRequest(
   }
   throw new Error('screencapture session requires action start|frame|stop|record');
 }
+
+/** Page → worker channel when a display-share session ends (Stop sharing / rm). */
+export const SCREENCAPTURE_SESSION_ENDED_CHANNEL = 'screencapture-session-ended';

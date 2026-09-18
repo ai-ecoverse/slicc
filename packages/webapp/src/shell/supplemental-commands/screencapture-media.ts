@@ -43,6 +43,7 @@ export {
   describeDisplayCaptureError,
   fitDisplaySize,
   MIN_VIDEO_DURATION_MS,
+  SCREENCAPTURE_SESSION_ENDED_CHANNEL,
   sessionCaptureRequest,
 } from './screencapture-media-shared.js';
 
@@ -58,6 +59,7 @@ interface LiveDisplaySession {
  */
 export class DisplaySessionStore {
   private readonly sessions = new Map<string, LiveDisplaySession>();
+  private readonly endedListeners = new Set<(handle: string) => void>();
   private nextId = 1;
   private unloadHooked = false;
 
@@ -91,7 +93,15 @@ export class DisplaySessionStore {
     this.sessions.delete(handle);
     session.video.srcObject = null;
     stopMediaStreamTracks(session.stream);
+    this.notifyEnded(handle);
     return true;
+  }
+
+  onEnded(listener: (handle: string) => void): () => void {
+    this.endedListeners.add(listener);
+    return () => {
+      this.endedListeners.delete(listener);
+    };
   }
 
   stopAll(): void {
@@ -104,6 +114,16 @@ export class DisplaySessionStore {
     window.addEventListener('pagehide', () => {
       this.stopAll();
     });
+  }
+
+  private notifyEnded(handle: string): void {
+    for (const listener of [...this.endedListeners]) {
+      try {
+        listener(handle);
+      } catch {
+        /* listener faults must not poison session teardown */
+      }
+    }
   }
 }
 

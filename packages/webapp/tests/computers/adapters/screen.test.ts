@@ -5,6 +5,7 @@ import {
 } from '../../../src/computers/adapters/screen.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
 import { PANEL_RPC_DEFAULT_TIMEOUT_MS } from '../../../src/kernel/panel-rpc.js';
+import { SCREENCAPTURE_SESSION_ENDED_CHANNEL } from '../../../src/shell/supplemental-commands/screencapture-media-shared.js';
 
 function jpegBuffer(): ArrayBuffer {
   const copy = new ArrayBuffer(MINIMAL_JPEG.byteLength);
@@ -121,5 +122,42 @@ describe('screen adapter', () => {
     });
     const backend = new BridgedScreenComputerBackend({ call } as never, 'screen1');
     await expect(backend.close()).resolves.toBeUndefined();
+  });
+
+  it('marks gone when the page reports the session ended', () => {
+    const handlers: Array<(payload: unknown) => void> = [];
+    const onGone = vi.fn();
+    const rpc = {
+      call: vi.fn(),
+      onEvent: (channel: string, handler: (payload: unknown) => void) => {
+        expect(channel).toBe(SCREENCAPTURE_SESSION_ENDED_CHANNEL);
+        handlers.push(handler);
+        return () => undefined;
+      },
+    };
+    const backend = new BridgedScreenComputerBackend(
+      rpc as never,
+      'screen1',
+      { title: 'Desk' },
+      onGone
+    );
+    expect(backend.describe().state).toBe('live');
+    handlers[0]?.({ handle: 'other' });
+    expect(backend.describe().state).toBe('live');
+    handlers[0]?.({ handle: 'screen1' });
+    expect(backend.describe().state).toBe('gone');
+    expect(onGone).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks gone when a screenshot finds no session', async () => {
+    const rpc = {
+      call: vi.fn(async () => {
+        throw new Error("no screen-share session 'screen1'");
+      }),
+      onEvent: () => () => undefined,
+    };
+    const backend = new BridgedScreenComputerBackend(rpc as never, 'screen1');
+    await expect(backend.screenshot({ format: 'jpeg' })).rejects.toThrow('no screen-share session');
+    expect(backend.describe().state).toBe('gone');
   });
 });

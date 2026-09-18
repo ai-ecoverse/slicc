@@ -10,10 +10,14 @@ import type {
   ComputerDescriptor,
   ComputerFrame,
   ComputerInputEvent,
+  ComputerState,
 } from '@slicc/shared-ts';
 import type { PanelRpcClient } from '../../kernel/panel-rpc.js';
 import { PANEL_RPC_DEFAULT_TIMEOUT_MS } from '../../kernel/panel-rpc.js';
-import { clampVideoDurationMs } from '../../shell/supplemental-commands/screencapture-media-shared.js';
+import {
+  clampVideoDurationMs,
+  SCREENCAPTURE_SESSION_ENDED_CHANNEL,
+} from '../../shell/supplemental-commands/screencapture-media-shared.js';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../backend.js';
 
 export function screenComputerId(handle: string): string {
@@ -47,21 +51,35 @@ function bytesFromRpc(bytes: ArrayBuffer): Uint8Array {
   return new Uint8Array(bytes);
 }
 
+function endedHandle(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const handle = Object.getOwnPropertyDescriptor(payload, 'handle')?.value;
+  return typeof handle === 'string' ? handle : null;
+}
+
 export class BridgedScreenComputerBackend implements ComputerBackend {
   private seq = 0;
   private title: string;
   private size: { width: number; height: number } | null;
+  private state: ComputerState = 'live';
+  private readonly offEnded: () => void;
 
   constructor(
     private readonly rpc: PanelRpcClient,
     readonly handle: string,
-    info: { title: string; width?: number; height?: number } = { title: handle }
+    info: { title: string; width?: number; height?: number } = { title: handle },
+    private readonly onGone?: () => void
   ) {
     this.title = info.title;
     this.size =
       info.width && info.height && info.width > 0 && info.height > 0
         ? { width: info.width, height: info.height }
         : null;
+    this.offEnded = rpc.onEvent
+      ? rpc.onEvent(SCREENCAPTURE_SESSION_ENDED_CHANNEL, (payload) => {
+          if (endedHandle(payload) === this.handle) this.markGone();
+        })
+      : () => undefined;
   }
 
   describe(): ComputerDescriptor {
@@ -70,22 +88,33 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
       kind: 'screen',
       title: this.title,
       size: this.size,
-      state: 'live',
+      state: this.state,
       capabilities: CAPABILITIES,
       pid: null,
     };
   }
 
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
-    const mimeType = opts.format === 'png' ? 'image/png' : 'image/jpeg';
-    const result = await this.rpc.call('screencapture', {
-      mimeType,
-      quality: 0.7,
-      mode: 'session',
-      session: 'frame',
-      handle: this.handle,
-      maxWidth: opts.maxWidth,
-    });
+    let result: {
+      bytes: ArrayBuffer;
+      width: number;
+      height: number;
+      mimeType: string;
+    };
+    try {
+      result = await this.rpc.call('screencapture', {
+        mimeType: opts.format === 'png' ? 'image/png' : 'image/jpeg',
+        quality: 0.7,
+        mode: 'session',
+        session: 'frame',
+        handle: this.handle,
+        maxWidth: opts.maxWidth,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('no screen-share session')) this.markGone();
+      throw err;
+    }
     if (result.width > 0 && result.height > 0) {
       this.size = { width: result.width, height: result.height };
     }
@@ -132,6 +161,7 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
   }
 
   async close(): Promise<void> {
+    this.offEnded();
     try {
       await this.rpc.call('screencapture', {
         mimeType: 'application/octet-stream',
@@ -143,5 +173,11 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
     } catch {
       /* page may already have ended the tracks */
     }
+  }
+
+  private markGone(): void {
+    if (this.state === 'gone') return;
+    this.state = 'gone';
+    this.onGone?.();
   }
 }

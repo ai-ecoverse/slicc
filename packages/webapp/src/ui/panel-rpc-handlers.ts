@@ -283,6 +283,7 @@ export function createStandalonePanelRpcHandlers(
   // to the page-side `inputreport` unsubscribe so the matching
   // `hid-unsubscribe-input-reports` op (or a re-subscribe) tears it down.
   const hidSubscriptions = new Map<string, () => void>();
+  ensureScreenSessionEndedRelay(options.emitEvent);
 
   return {
     ...buildPageAudioHandlers(),
@@ -1417,6 +1418,8 @@ function usbRegistry() {
 
 let usbClaimRelay: (() => void) | null = null;
 let usbClaimEmit: ((channel: string, payload: unknown) => void) | undefined;
+let screenEndedRelay: (() => void) | null = null;
+let screenEndedEmit: ((channel: string, payload: unknown) => void) | undefined;
 
 /**
  * One page-side subscription so worker-side shell/realm consumers hear
@@ -1431,6 +1434,24 @@ function ensureUsbClaimEventRelay(emitEvent?: (channel: string, payload: unknown
     if (usbClaimRelay) return;
     usbClaimRelay = m.addClaimListener(usbRegistry(), (event) => {
       usbClaimEmit?.('usb-claim-event', event);
+    });
+  });
+}
+
+/**
+ * Fan page-side display-share track ends (browser Stop sharing) to the
+ * worker so `screen:` computers can mark `gone`. Rebinding `emitEvent`
+ * does not stack listeners on the session store.
+ */
+function ensureScreenSessionEndedRelay(
+  emitEvent?: (channel: string, payload: unknown) => void
+): void {
+  screenEndedEmit = emitEvent;
+  if (screenEndedRelay || !emitEvent) return;
+  void import('../shell/supplemental-commands/screencapture-media.js').then((m) => {
+    if (screenEndedRelay) return;
+    screenEndedRelay = m.displaySessions.onEnded((handle) => {
+      screenEndedEmit?.(m.SCREENCAPTURE_SESSION_ENDED_CHANNEL, { handle });
     });
   });
 }

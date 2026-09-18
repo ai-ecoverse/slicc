@@ -136,6 +136,28 @@ describe('DisplaySessionStore', () => {
     expect(track.stopped).toBe(true);
   });
 
+  it('notifies onEnded when the user stops sharing', () => {
+    const store = new DisplaySessionStore();
+    const ended: string[] = [];
+    store.onEnded((handle) => {
+      ended.push(handle);
+    });
+    let onTrackEnded: (() => void) | undefined;
+    const track = {
+      stopped: false,
+      stop() {
+        this.stopped = true;
+      },
+      addEventListener(_type: string, cb: () => void) {
+        onTrackEnded = cb;
+      },
+    };
+    const stream = { getTracks: () => [track] } as unknown as MediaStream;
+    const handle = store.add(stream, { srcObject: stream } as unknown as HTMLVideoElement);
+    onTrackEnded?.();
+    expect(ended).toEqual([handle]);
+  });
+
   it('stopAll ends every live session', () => {
     const store = new DisplaySessionStore();
     const tracks: Array<{ stopped: boolean; stop(): void; addEventListener(): void }> = [];

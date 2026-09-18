@@ -250,15 +250,9 @@ async function resolveUrlFetch(
 ): Promise<NonNullable<ComputerCommandDeps['urlFetch']>> {
   if (deps.urlFetch) return deps.urlFetch;
   const { createProxiedFetch } = await import('../../proxied-fetch.js');
+  const { wrapUrlComputerFetch } = await import('../../../computers/adapters/url.js');
   const sf = createProxiedFetch();
-  return async (url, init) => {
-    const res = await sf(url, {
-      method: init?.method,
-      headers: init?.headers,
-      body: typeof init?.body === 'string' ? init.body : undefined,
-    });
-    return { status: res.status, headers: res.headers, body: res.body };
-  };
+  return wrapUrlComputerFetch((url, init) => sf(url, init as Parameters<typeof sf>[1]));
 }
 
 async function verbAddUrl(
@@ -409,10 +403,19 @@ async function verbAddScreen(
   }
   const rpc = lookupRpc(deps);
   if (!rpc) return fail('add screen: no panel RPC in this float');
-  const { BridgedScreenComputerBackend } = await import('../../../computers/adapters/screen.js');
-  const backend = new BridgedScreenComputerBackend(rpc, handle, {
-    title: name ?? 'Display',
-  });
+  const { BridgedScreenComputerBackend, screenComputerId } = await import(
+    '../../../computers/adapters/screen.js'
+  );
+  const backend = new BridgedScreenComputerBackend(
+    rpc,
+    handle,
+    {
+      title: name ?? 'Display',
+    },
+    () => {
+      registry.refresh(screenComputerId(handle));
+    }
+  );
   const desc = registry.register(backend);
   registry.use(desc.id);
   void ctx;
