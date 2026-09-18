@@ -165,6 +165,35 @@ describe('wc-computers wiring', () => {
     expect(store.isWatching('jsh:fake')).toBe(false);
   });
 
+  it('upgrades overlay 2 fps/480 to lightbox 4 fps/768 without dropping the overlay watch', async () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id: string; fps?: number; maxWidth?: number }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    applyFrame('jsh:fake');
+    installWcComputers({ log });
+    const overlay = document.createElement('slicc-tab-overlay') as HTMLElement & {
+      tabs: ReturnType<typeof mergeOverlayTabs>;
+    };
+    document.body.append(overlay);
+    bindComputerOverlay(overlay, log);
+    overlay.setAttribute('open', '');
+    await vi.waitFor(() =>
+      expect(sent).toEqual([{ type: 'computer-watch', id: 'jsh:fake', fps: 2, maxWidth: 480 }])
+    );
+
+    overlay.dispatchEvent(
+      new CustomEvent('tab-activate', { detail: { id: computerOverlayId('jsh:fake') } })
+    );
+    expect(sent[1]).toEqual({ type: 'computer-watch', id: 'jsh:fake', fps: 4, maxWidth: 768 });
+    expect(store.watchRefCount('jsh:fake')).toBe(2);
+
+    overlay.removeAttribute('open');
+    await vi.waitFor(() => expect(store.watchRefCount('jsh:fake')).toBe(1));
+    expect(sent.filter((m) => m.type === 'computer-unwatch')).toHaveLength(0);
+    expect(store.isWatching('jsh:fake')).toBe(true);
+  });
+
   it('softkeys dispatch computer-input via the store', () => {
     const store = getComputersStore();
     const sent: Array<{ type: string }> = [];

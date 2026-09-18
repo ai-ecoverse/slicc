@@ -3,7 +3,9 @@
  *
  * Overlay cards, the live lightbox, and bash-row renderers subscribe here.
  * Watch is refcounted so overlay, a live bash row, and the lightbox can
- * share one kernel subscription without unwatching each other.
+ * share one kernel subscription without unwatching each other. Each
+ * subscriber keeps its own fps/maxWidth; the kernel is sent the max of
+ * the live set and is re-sent when that max changes.
  */
 
 import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
@@ -22,6 +24,12 @@ export type ComputersStoreSender = (msg: ComputerPageControlMsg) => void;
 const DEFAULT_WATCH_FPS = 2;
 const DEFAULT_WATCH_MAX_WIDTH = 768;
 
+interface WatchSubscription {
+  token: number;
+  fps: number;
+  maxWidth: number;
+}
+
 class ComputersStore {
   private computers: ComputerDescriptor[] = [];
   private readonly frames = new Map<string, ComputerFrame>();
@@ -29,7 +37,9 @@ class ComputersStore {
   private readonly frameListeners = new Set<ComputerFrameListener>();
   private readonly invocationListeners = new Set<ComputerInvocationListener>();
   private sender: ComputersStoreSender | null = null;
-  private readonly watchRefs = new Map<string, number>();
+  private readonly watchSubs = new Map<string, WatchSubscription[]>();
+  private readonly kernelWatch = new Map<string, { fps: number; maxWidth: number }>();
+  private nextWatchToken = 1;
   /** Newest `computer` bash-row tool-call id per computer. */
   private readonly invocations = new Map<string, string>();
 
@@ -65,30 +75,48 @@ class ComputersStore {
   }
 
   isWatching(id: string): boolean {
-    return (this.watchRefs.get(id) ?? 0) > 0;
+    return (this.watchSubs.get(id)?.length ?? 0) > 0;
   }
 
   watchRefCount(id: string): number {
-    return this.watchRefs.get(id) ?? 0;
+    return this.watchSubs.get(id)?.length ?? 0;
   }
 
-  watch(id: string, fps = DEFAULT_WATCH_FPS, maxWidth = DEFAULT_WATCH_MAX_WIDTH): void {
+  watch(id: string, fps = DEFAULT_WATCH_FPS, maxWidth = DEFAULT_WATCH_MAX_WIDTH): number {
     if (!this.sender) throw new Error('computers store has no kernel sender');
-    const n = (this.watchRefs.get(id) ?? 0) + 1;
-    this.watchRefs.set(id, n);
-    if (n === 1) this.sender({ type: 'computer-watch', id, fps, maxWidth });
+    const token = this.nextWatchToken++;
+    const subs = this.watchSubs.get(id) ?? [];
+    subs.push({ token, fps, maxWidth });
+    this.watchSubs.set(id, subs);
+    this.syncKernelWatch(id);
+    return token;
   }
 
-  unwatch(id: string): void {
+  unwatch(id: string, token?: number): void {
     if (!this.sender) throw new Error('computers store has no kernel sender');
-    const n = (this.watchRefs.get(id) ?? 0) - 1;
-    if (n > 0) {
-      this.watchRefs.set(id, n);
+    const subs = this.watchSubs.get(id);
+    if (!subs?.length) return;
+    const index = token === undefined ? subs.length - 1 : subs.findIndex((s) => s.token === token);
+    if (index < 0) return;
+    subs.splice(index, 1);
+    if (subs.length === 0) {
+      this.watchSubs.delete(id);
+      this.kernelWatch.delete(id);
+      this.sender({ type: 'computer-unwatch', id });
       return;
     }
-    if (n < 0) return;
-    this.watchRefs.delete(id);
-    this.sender({ type: 'computer-unwatch', id });
+    this.syncKernelWatch(id);
+  }
+
+  private syncKernelWatch(id: string): void {
+    const subs = this.watchSubs.get(id);
+    if (!subs?.length || !this.sender) return;
+    const fps = Math.max(...subs.map((s) => s.fps));
+    const maxWidth = Math.max(...subs.map((s) => s.maxWidth));
+    const prev = this.kernelWatch.get(id);
+    if (prev && prev.fps === fps && prev.maxWidth === maxWidth) return;
+    this.kernelWatch.set(id, { fps, maxWidth });
+    this.sender({ type: 'computer-watch', id, fps, maxWidth });
   }
 
   input(id: string, events: ComputerInputEvent[]): void {

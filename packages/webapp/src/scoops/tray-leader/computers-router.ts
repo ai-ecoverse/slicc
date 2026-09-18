@@ -18,8 +18,8 @@ export interface TrayComputersSource {
   onList(listener: (computers: ComputerDescriptor[]) => void): () => void;
   onFrame(listener: (id: string, frame: ComputerFrame) => void): () => void;
   lastFrame(id: string): ComputerFrame | null;
-  watch(id: string, fps?: number, maxWidth?: number): void;
-  unwatch(id: string): void;
+  watch(id: string, fps?: number, maxWidth?: number): number;
+  unwatch(id: string, token?: number): void;
 }
 
 const TRAY_FRAME_MIN_INTERVAL_MS = 1000 / COMPUTER_TRAY_MAX_FPS;
@@ -34,6 +34,8 @@ export class ComputersRouter {
   private readonly watches = new Map<string, Set<string>>();
   /** Followers currently watching a given computer (drives store.watch). */
   private readonly storeWatchRefs = new Map<string, number>();
+  /** Token from the single store.watch shared by all tray followers. */
+  private readonly storeWatchTokens = new Map<string, number>();
   /** Last successful frame send per follower+computer, for the 2 fps cap. */
   private readonly lastSentAt = new Map<string, number>();
   private unsubList: (() => void) | null = null;
@@ -76,7 +78,10 @@ export class ComputersRouter {
     this.storeWatchRefs.set(id, n);
     if (n === 1) {
       try {
-        src.watch(id, COMPUTER_TRAY_MAX_FPS, COMPUTER_TRAY_MAX_WIDTH);
+        this.storeWatchTokens.set(
+          id,
+          src.watch(id, COMPUTER_TRAY_MAX_FPS, COMPUTER_TRAY_MAX_WIDTH)
+        );
       } catch (err) {
         this.context.log.warn('computer.watch failed', {
           bootstrapId,
@@ -101,10 +106,12 @@ export class ComputersRouter {
       return;
     }
     this.storeWatchRefs.delete(id);
+    const token = this.storeWatchTokens.get(id);
+    this.storeWatchTokens.delete(id);
     const src = this.source();
     if (!src) return;
     try {
-      src.unwatch(id);
+      src.unwatch(id, token);
     } catch (err) {
       this.context.log.warn('computer.unwatch failed', {
         bootstrapId,

@@ -2297,7 +2297,7 @@ describe('LeaderSyncManager', () => {
           onList: () => () => {},
           onFrame: () => () => {},
           lastFrame: () => null,
-          watch: vi.fn(),
+          watch: vi.fn(() => 1),
           unwatch: vi.fn(),
         },
       });

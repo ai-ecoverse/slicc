@@ -42,7 +42,7 @@ interface BoundComputerRow {
   el: SliccBashRendererComputer;
   toolCallId: string;
   computerId: string | null;
-  watching: boolean;
+  watchToken: number | null;
 }
 
 interface OverlayLike extends HTMLElement {
@@ -53,9 +53,9 @@ interface ComputersRuntime {
   deps: WcComputersDeps;
   bound: Map<SliccBashRendererComputer, BoundComputerRow>;
   overlayUnsubs: Array<() => void>;
-  overlayWatchIds: Set<string>;
+  overlayWatchIds: Map<string, number>;
   lightboxId: string | null;
-  lightboxWatched: boolean;
+  lightboxWatchToken: number | null;
   lightboxOrigin: HTMLElement | null;
   preview: SliccImagePreview | null;
   installed: boolean;
@@ -139,9 +139,9 @@ function ensureRuntime(deps?: Partial<WcComputersDeps>): ComputersRuntime {
     deps: { log: deps?.log ?? silentLog, openFs: deps?.openFs },
     bound: new Map(),
     overlayUnsubs: [],
-    overlayWatchIds: new Set(),
+    overlayWatchIds: new Map(),
     lightboxId: null,
-    lightboxWatched: false,
+    lightboxWatchToken: null,
     lightboxOrigin: null,
     preview: null,
     installed: false,
@@ -159,7 +159,7 @@ function onRowBind(event: Event): void {
     .detail;
   const computerId = parseComputerIdFromCommand(detail.command ?? el.command ?? '');
   const toolCallId = detail.toolCallId || el.toolCallId;
-  const row: BoundComputerRow = { el, toolCallId, computerId, watching: false };
+  const row: BoundComputerRow = { el, toolCallId, computerId, watchToken: null };
   ensureRuntime().bound.set(el, row);
   el.addEventListener('computer-row-unbind', onRowUnbind);
   if (computerId && toolCallId) getComputersStore().recordInvocation(computerId, toolCallId);
@@ -174,9 +174,9 @@ function onRowUnbind(event: Event): void {
   if (!row) return;
   rt.bound.delete(el);
   el.removeEventListener('computer-row-unbind', onRowUnbind);
-  if (row.watching && row.computerId) {
+  if (row.watchToken !== null && row.computerId) {
     try {
-      getComputersStore().unwatch(row.computerId);
+      getComputersStore().unwatch(row.computerId, row.watchToken);
     } catch (err) {
       rt.deps.log.warn('WC computers: unwatch on row unbind failed', err);
     }
@@ -226,12 +226,11 @@ function refreshRow(row: BoundComputerRow): void {
 function syncRowWatch(row: BoundComputerRow, shouldWatch: boolean): void {
   if (!row.computerId) return;
   const store = getComputersStore();
-  if (shouldWatch && !row.watching) {
-    store.watch(row.computerId, ROW_FPS, ROW_MAX_WIDTH);
-    row.watching = true;
-  } else if (!shouldWatch && row.watching) {
-    store.unwatch(row.computerId);
-    row.watching = false;
+  if (shouldWatch && row.watchToken === null) {
+    row.watchToken = store.watch(row.computerId, ROW_FPS, ROW_MAX_WIDTH);
+  } else if (!shouldWatch && row.watchToken !== null) {
+    store.unwatch(row.computerId, row.watchToken);
+    row.watchToken = null;
   }
 }
 
@@ -294,13 +293,12 @@ function ensurePreview(): SliccImagePreview {
 function openComputerLightbox(computerId: string, src: string, origin: HTMLElement): void {
   const rt = ensureRuntime();
   const store = getComputersStore();
-  if (rt.lightboxId && rt.lightboxId !== computerId && rt.lightboxWatched) {
-    store.unwatch(rt.lightboxId);
-    rt.lightboxWatched = false;
+  if (rt.lightboxId && rt.lightboxId !== computerId && rt.lightboxWatchToken !== null) {
+    store.unwatch(rt.lightboxId, rt.lightboxWatchToken);
+    rt.lightboxWatchToken = null;
   }
-  if (rt.lightboxId !== computerId) {
-    store.watch(computerId, LIGHTBOX_FPS, LIGHTBOX_MAX_WIDTH);
-    rt.lightboxWatched = true;
+  if (rt.lightboxId !== computerId || rt.lightboxWatchToken === null) {
+    rt.lightboxWatchToken = store.watch(computerId, LIGHTBOX_FPS, LIGHTBOX_MAX_WIDTH);
     rt.lightboxId = computerId;
   }
   rt.lightboxOrigin = origin;
@@ -315,13 +313,13 @@ function openComputerLightbox(computerId: string, src: string, origin: HTMLEleme
 function closeComputerLightbox(): void {
   const rt = runtime;
   if (!rt?.lightboxId) return;
-  if (rt.lightboxWatched) {
+  if (rt.lightboxWatchToken !== null) {
     try {
-      getComputersStore().unwatch(rt.lightboxId);
+      getComputersStore().unwatch(rt.lightboxId, rt.lightboxWatchToken);
     } catch (err) {
       rt.deps.log.warn('WC computers: lightbox unwatch failed', err);
     }
-    rt.lightboxWatched = false;
+    rt.lightboxWatchToken = null;
   }
   rt.lightboxId = null;
   rt.lightboxOrigin = null;
@@ -336,9 +334,9 @@ function dropOverlayWatches(): void {
   const rt = runtime;
   if (!rt) return;
   const store = getComputersStore();
-  for (const id of [...rt.overlayWatchIds]) {
+  for (const [id, token] of [...rt.overlayWatchIds]) {
     try {
-      store.unwatch(id);
+      store.unwatch(id, token);
     } catch {
       /* store may already be reset in tests */
     }
@@ -362,10 +360,10 @@ function syncOverlayWatches(overlay: OverlayLike): void {
   const store = getComputersStore();
   const want = overlay.hasAttribute('open') ? store.list().map((c) => c.id) : [];
   const wantSet = new Set(want);
-  for (const id of [...rt.overlayWatchIds]) {
+  for (const [id, token] of [...rt.overlayWatchIds]) {
     if (wantSet.has(id)) continue;
     try {
-      store.unwatch(id);
+      store.unwatch(id, token);
     } catch (err) {
       rt.deps.log.warn('WC computers: overlay unwatch failed', err);
     }
@@ -374,8 +372,7 @@ function syncOverlayWatches(overlay: OverlayLike): void {
   for (const id of want) {
     if (rt.overlayWatchIds.has(id)) continue;
     try {
-      store.watch(id, ROW_FPS, ROW_MAX_WIDTH);
-      rt.overlayWatchIds.add(id);
+      rt.overlayWatchIds.set(id, store.watch(id, ROW_FPS, ROW_MAX_WIDTH));
     } catch (err) {
       rt.deps.log.warn('WC computers: overlay watch failed', err);
     }
@@ -457,17 +454,17 @@ export function disposeWcComputers(): void {
   for (const off of rt.overlayUnsubs) off();
   dropOverlayWatches();
   for (const row of rt.bound.values()) {
-    if (row.watching && row.computerId) {
+    if (row.watchToken !== null && row.computerId) {
       try {
-        getComputersStore().unwatch(row.computerId);
+        getComputersStore().unwatch(row.computerId, row.watchToken);
       } catch {
         /* store may already be reset in tests */
       }
     }
   }
-  if (rt.lightboxWatched && rt.lightboxId) {
+  if (rt.lightboxWatchToken !== null && rt.lightboxId) {
     try {
-      getComputersStore().unwatch(rt.lightboxId);
+      getComputersStore().unwatch(rt.lightboxId, rt.lightboxWatchToken);
     } catch {
       /* ignore */
     }

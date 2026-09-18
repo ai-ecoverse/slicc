@@ -285,7 +285,7 @@ function buildSyncManager(
       onFrame: (listener) => getComputersStore().onFrame(listener),
       lastFrame: (id) => getComputersStore().lastFrame(id),
       watch: (id, fps, maxWidth) => getComputersStore().watch(id, fps, maxWidth),
-      unwatch: (id) => getComputersStore().unwatch(id),
+      unwatch: (id, token) => getComputersStore().unwatch(id, token),
     },
     getModelCatalog: options.getModelCatalog,
     getModelSelectionState: options.getModelSelectionState,

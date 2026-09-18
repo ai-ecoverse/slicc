@@ -99,6 +99,34 @@ describe('computers-store', () => {
     expect(sent.filter((m) => m.type === 'computer-unwatch')).toHaveLength(1);
   });
 
+  it('resends computer-watch when a later subscriber raises fps or maxWidth', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id?: string; fps?: number; maxWidth?: number }> = [];
+    store.setSender((msg) => sent.push(msg));
+    const overlay = store.watch('jsh:fake', 2, 480);
+    expect(sent).toEqual([{ type: 'computer-watch', id: 'jsh:fake', fps: 2, maxWidth: 480 }]);
+    const lightbox = store.watch('jsh:fake', 4, 768);
+    expect(sent[1]).toEqual({ type: 'computer-watch', id: 'jsh:fake', fps: 4, maxWidth: 768 });
+    store.watch('jsh:fake', 1, 320);
+    expect(sent.filter((m) => m.type === 'computer-watch')).toHaveLength(2);
+    store.unwatch('jsh:fake', overlay);
+    expect(sent.filter((m) => m.type === 'computer-unwatch')).toHaveLength(0);
+    expect(sent.filter((m) => m.type === 'computer-watch')).toHaveLength(2);
+    store.unwatch('jsh:fake', lightbox);
+    expect(sent.at(-1)).toEqual({ type: 'computer-watch', id: 'jsh:fake', fps: 1, maxWidth: 320 });
+  });
+
+  it('takes fps and maxWidth independently from the live subscriber set', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    const sent: Array<{ type: string; fps?: number; maxWidth?: number }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.watch('jsh:fake', 2, 768);
+    store.watch('jsh:fake', 4, 480);
+    expect(sent[1]).toEqual({ type: 'computer-watch', id: 'jsh:fake', fps: 4, maxWidth: 768 });
+  });
+
   it('records the newest invocation per computer and sends input events', () => {
     resetComputersStoreForTests();
     const store = getComputersStore();

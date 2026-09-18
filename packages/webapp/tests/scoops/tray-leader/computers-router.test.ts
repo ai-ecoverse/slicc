@@ -74,6 +74,7 @@ function createSource(initial: ComputerDescriptor[] = []): {
       lastFrame: (id) => frames.get(id) ?? null,
       watch: (id) => {
         watched.push(id);
+        return watched.length;
       },
       unwatch: (id) => {
         unwatched.push(id);
