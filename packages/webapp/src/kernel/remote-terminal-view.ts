@@ -864,7 +864,7 @@ export class RemoteTerminalView {
         return;
       }
       const grant = result.grant as Extract<PermissionGrant, { kind: 'screenshare' }>;
-      const { adoptDisplayStream } = await import(
+      const { adoptDisplayStream, displaySessions } = await import(
         '../shell/supplemental-commands/screencapture-media.js'
       );
       const adopted = await adoptDisplayStream(grant.stream);
@@ -872,8 +872,14 @@ export class RemoteTerminalView {
         this.terminal?.writeln('computer: screen share produced no handle');
         return;
       }
-      const nameFlag = name ? ` -n ${name}` : '';
-      await this.client.exec(`computer add screen --__resolved ${adopted.handle}${nameFlag}`);
+      await finishAdoptedScreenRegistration(
+        (cmd) => this.client.exec(cmd),
+        (handle) => {
+          displaySessions.stop(handle);
+        },
+        adopted.handle,
+        name
+      );
     } finally {
       this.isExecuting = false;
     }
@@ -1031,12 +1037,93 @@ export function localMountIdbKey(target: string): string {
 }
 
 /**
+ * Quote-aware argv split for panel-typed lines. Quoted `-n` names must
+ * stay one token so reconstruction can pass them through `computer add
+ * screen --__resolved` without re-splitting on whitespace.
+ */
+export function tokenizeCommandLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (const ch of line.trim()) {
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+      continue;
+    }
+    if (quote === '"' && ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur.length > 0) {
+        out.push(cur);
+        cur = '';
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+function shellQuoteArg(arg: string): string {
+  if (arg === '') return "''";
+  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(arg)) return arg;
+  if (arg.includes('"') && !arg.includes("'")) return `'${arg}'`;
+  return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** Rebuild `computer add screen --__resolved` from parsed argv, quoting `-n`. */
+export function buildComputerAddScreenResolvedCommand(handle: string, name?: string): string {
+  const args = ['computer', 'add', 'screen', '--__resolved', handle];
+  if (name !== undefined) args.push('-n', name);
+  return args.map(shellQuoteArg).join(' ');
+}
+
+/**
+ * After adopting a display stream, register it with the worker. Any throw
+ * or nonzero `computer add screen` result must stop the session so the
+ * display slot is not left alive but unreachable.
+ */
+export async function finishAdoptedScreenRegistration(
+  exec: (command: string) => Promise<TerminalExecResult>,
+  stop: (handle: string) => void,
+  handle: string,
+  name?: string
+): Promise<TerminalExecResult> {
+  try {
+    const result = await exec(buildComputerAddScreenResolvedCommand(handle, name));
+    if (result.exitCode !== 0) stop(handle);
+    return result;
+  } catch (err) {
+    stop(handle);
+    throw err;
+  }
+}
+
+/**
  * Parse a typed command line and return a match when it is a
  * gesture-requiring `computer add screen` (no `--__resolved` handle and
  * no help flag). Returns `null` for anything else so the worker handles it.
  */
 export function parseComputerAddScreenCommand(line: string): { name?: string } | null {
-  const tokens = line.trim().split(/\s+/);
+  const tokens = tokenizeCommandLine(line);
   if (tokens[0] !== 'computer' || tokens[1] !== 'add' || tokens[2] !== 'screen') return null;
   if (tokens.includes('--__resolved') || tokens.includes('--help') || tokens.includes('-h')) {
     return null;

@@ -12,6 +12,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  buildComputerAddScreenResolvedCommand,
+  finishAdoptedScreenRegistration,
   localMountIdbKey,
   parseComputerAddScreenCommand,
   parseLocalMountTarget,
@@ -102,6 +104,75 @@ describe('parseComputerAddScreenCommand', () => {
     expect(parseComputerAddScreenCommand('computer add screen --__resolved screen1')).toBeNull();
     expect(parseComputerAddScreenCommand('computer add screen --help')).toBeNull();
     expect(parseComputerAddScreenCommand('computer add tab T1')).toBeNull();
+  });
+
+  it('keeps quoted -n names as a single token', () => {
+    expect(parseComputerAddScreenCommand('computer add screen -n "My Desk"')).toEqual({
+      name: 'My Desk',
+    });
+    expect(parseComputerAddScreenCommand("computer add screen --name 'Conference Room'")).toEqual({
+      name: 'Conference Room',
+    });
+  });
+});
+
+describe('buildComputerAddScreenResolvedCommand', () => {
+  it('quotes names that contain whitespace instead of re-splitting', () => {
+    expect(buildComputerAddScreenResolvedCommand('screen1', 'My Desk')).toBe(
+      'computer add screen --__resolved screen1 -n "My Desk"'
+    );
+    expect(parseComputerAddScreenCommand('computer add screen -n "My Desk"')).toEqual({
+      name: 'My Desk',
+    });
+  });
+});
+
+describe('finishAdoptedScreenRegistration', () => {
+  it('leaves the adopted session running when registration succeeds', async () => {
+    const stopped: string[] = [];
+    const seen: string[] = [];
+    const result = await finishAdoptedScreenRegistration(
+      async (command) => {
+        seen.push(command);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+      (handle) => {
+        stopped.push(handle);
+      },
+      'screen1',
+      'My Desk'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(stopped).toEqual([]);
+    expect(seen).toEqual(['computer add screen --__resolved screen1 -n "My Desk"']);
+  });
+
+  it('stops the adopted session on a nonzero registration result', async () => {
+    const stopped: string[] = [];
+    await finishAdoptedScreenRegistration(
+      async () => ({ stdout: '', stderr: 'closed', exitCode: 1 }),
+      (handle) => {
+        stopped.push(handle);
+      },
+      'screen2'
+    );
+    expect(stopped).toEqual(['screen2']);
+  });
+
+  it('stops the adopted session when registration throws', async () => {
+    const stopped: string[] = [];
+    await expect(
+      finishAdoptedScreenRegistration(
+        async () => {
+          throw new Error('exec failed');
+        },
+        (handle) => {
+          stopped.push(handle);
+        },
+        'screen3'
+      )
+    ).rejects.toThrow('exec failed');
+    expect(stopped).toEqual(['screen3']);
   });
 });
 
