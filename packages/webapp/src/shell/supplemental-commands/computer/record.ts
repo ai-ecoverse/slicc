@@ -95,9 +95,6 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
   const tempPath = args.ctx.fs.resolvePath(args.ctx.cwd, tmp);
   await args.ctx.fs.mkdir(tempPath.slice(0, tempPath.lastIndexOf('/')), { recursive: true });
   await args.ctx.fs.writeFile(tempPath, concatFrameBytes(args.frames));
-  if (!args.ctx.limits) {
-    throw new Error('computer record: ffmpeg encode needs a shell runtime context');
-  }
   const result = await runFfmpeg(
     [
       '-y',
@@ -122,7 +119,7 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
       'yuv420p',
       args.dest,
     ],
-    { ...args.ctx, env: wasmEngineEnv(args.ctx.env), limits: args.ctx.limits }
+    { ...args.ctx, env: wasmEngineEnv(args.ctx.env) } as Parameters<typeof runFfmpeg>[1]
   );
   if (result.exitCode !== 0) {
     const detail = result.stderr.trim() || 'ffmpeg failed';
