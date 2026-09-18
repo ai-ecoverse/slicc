@@ -27,6 +27,11 @@ Stacked runs never mutate staging. The deploy lives in `ci.yml`'s
 `cloudflare-worker` job (`RUN_CLOUDFLARE_STAGING`), not only in
 `worker-staging.yml`.
 
+CI measures a stacked PR's first-load delta against its own base
+(`origin/<base>`). Locally on a stack, pass `--baseline=origin/<parent>` to
+`check-first-load-size.mjs` — the workspace `size` script does not forward
+extra args.
+
 The aggregate must not be named `ci` on a stacked commit. Documented GitHub
 behaviour is that a required check skipped by `if:` still satisfies branch
 protection

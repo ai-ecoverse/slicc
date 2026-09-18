@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { resolveBaselineRef } from './check-first-load-size.mjs';
 import {
   dependencyDrift,
   discoverWorkspacePackages,
@@ -25,6 +26,70 @@ import {
 } from './first-load-baseline.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+describe('resolveBaselineRef', () => {
+  it.each([
+    {
+      name: 'main-based PR',
+      args: [],
+      env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'main' },
+      ref: 'origin/main',
+    },
+    {
+      name: 'stacked PR',
+      args: [],
+      env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'feat/parent' },
+      ref: 'origin/feat/parent',
+    },
+    {
+      name: 'merge_group',
+      args: [],
+      env: { GITHUB_EVENT_NAME: 'merge_group', GITHUB_BASE_REF: '' },
+      ref: 'origin/main',
+    },
+    {
+      name: 'push',
+      args: [],
+      env: { GITHUB_EVENT_NAME: 'push' },
+      ref: 'origin/main',
+    },
+    {
+      name: 'local (no env)',
+      args: [],
+      env: {},
+      ref: 'origin/main',
+    },
+    {
+      name: 'explicit flag wins over env',
+      args: ['--baseline=origin/other'],
+      env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'feat/parent' },
+      ref: 'origin/other',
+    },
+    {
+      name: '--baseline=none',
+      args: ['--baseline=none'],
+      env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'feat/parent' },
+      ref: 'none',
+    },
+    {
+      name: 'leading hyphen is origin-prefixed, not a git option',
+      args: [],
+      env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: '-x' },
+      ref: 'origin/-x',
+    },
+  ])('$name', ({ args, env, ref }) => {
+    expect(resolveBaselineRef({ args, env })).toBe(ref);
+  });
+
+  it.each([
+    { name: 'empty', env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: '' } },
+    { name: 'missing', env: { GITHUB_EVENT_NAME: 'pull_request' } },
+    { name: 'dot-dot', env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: '../x' } },
+    { name: 'space', env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'a b' } },
+  ])('fails a pull_request run with a $name base name', ({ env }) => {
+    expect(() => resolveBaselineRef({ args: [], env })).toThrow(/GITHUB_BASE_REF/);
+  });
+});
 
 describe('resolveMergeBase', () => {
   it('resolves HEAD against itself to HEAD', () => {

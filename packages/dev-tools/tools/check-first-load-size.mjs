@@ -43,7 +43,8 @@
  * Usage:
  *   node check-first-load-size.mjs [options]
  *     --baseline=<ref>  compare against the merge-base with <ref>
- *                       (default: origin/main; `--baseline=none` disables)
+ *                       (default: origin/main, or origin/<base> on a
+ *                       pull_request; `--baseline=none` disables)
  *     --json            print measured bytes as JSON and exit 0, no gating
  *
  * `GITHUB_EVENT_NAME=merge_group` forces ceilings-only, as above.
@@ -51,7 +52,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { measureMergeBase } from './first-load-baseline.mjs';
 import {
   bytesToKb,
@@ -66,18 +67,36 @@ const limitsPath = resolve(repoRoot, 'packages/webapp/first-load-budget.json');
 const PAGE_ENTRY_KEY = 'packages/webapp/index.html';
 const WORKER_ENTRY_PREFIX = 'kernel-worker-';
 
-const args = process.argv.slice(2);
-const jsonOnly = args.includes('--json');
-const baselineRef = (
-  args.find((a) => a.startsWith('--baseline=')) ?? '--baseline=origin/main'
-).slice('--baseline='.length);
-// A merge-queue batch is not "a change" — see the header. Ceilings only.
-const isMergeGroup = process.env.GITHUB_EVENT_NAME === 'merge_group';
-const isCiPullRequest = process.env.GITHUB_EVENT_NAME === 'pull_request';
-const MERGE_GROUP_NOTE =
-  'merge_group: a queue batch is cumulative (every PR up to its position), so the per-change ' +
-  'delta does not apply here — the absolute ceilings are the queue-stage check. The per-change ' +
-  'delta is enforced on the pull_request run, which fails outright if it cannot measure.';
+/** Conservative branch-name check for `GITHUB_BASE_REF`. `..` is rejected separately. */
+const BASE_REF_NAME = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Resolve the first-load comparison ref.
+ *
+ * An explicit `--baseline=<ref>` always wins (including `none`). On a
+ * `pull_request` with no flag, use `origin/${GITHUB_BASE_REF}` so a stacked
+ * child is measured against its parent, not `main`. A missing or hostile
+ * base name fails — a PR run must not silently fall back to `origin/main`.
+ * Every other event (local, push, merge_group) keeps `origin/main`.
+ *
+ * @param {{ args?: string[], env?: NodeJS.ProcessEnv | Record<string, string | undefined> }} opts
+ * @returns {string}
+ */
+export function resolveBaselineRef({ args = [], env = {} } = {}) {
+  const flagged = args.find((a) => typeof a === 'string' && a.startsWith('--baseline='));
+  if (flagged !== undefined) return flagged.slice('--baseline='.length);
+
+  if (env.GITHUB_EVENT_NAME === 'pull_request') {
+    const name = String(env.GITHUB_BASE_REF ?? '');
+    if (!name || name.includes('..') || !BASE_REF_NAME.test(name)) {
+      throw new Error(
+        `GITHUB_BASE_REF must be a safe branch name so the per-change delta can be measured; got ${JSON.stringify(name)}`
+      );
+    }
+    return `origin/${name}`;
+  }
+  return 'origin/main';
+}
 
 function fail(message) {
   console.error(`check-first-load-size: ${message}`);
@@ -126,71 +145,91 @@ function report(label, files, baseDir) {
   for (const { f, kb } of rows.slice(0, 8)) console.log(`    ${String(kb).padStart(6)} kB  ${f}`);
 }
 
-let head;
-try {
-  head = measureUiDir(resolve(repoRoot, 'dist/ui'));
-} catch (err) {
-  fail(err.message);
-}
+const MERGE_GROUP_NOTE =
+  'merge_group: a queue batch is cumulative (every PR up to its position), so the per-change ' +
+  'delta does not apply here — the absolute ceilings are the queue-stage check. The per-change ' +
+  'delta is enforced on the pull_request run, which fails outright if it cannot measure.';
 
-if (jsonOnly) {
-  console.log(JSON.stringify({ page: head.page, worker: head.worker }));
-  process.exit(0);
-}
+function main(argv = process.argv.slice(2), env = process.env) {
+  const jsonOnly = argv.includes('--json');
+  let baselineRef;
+  try {
+    baselineRef = resolveBaselineRef({ args: argv, env });
+  } catch (err) {
+    fail(err.message);
+  }
+  // A merge-queue batch is not "a change" — see the header. Ceilings only.
+  const isMergeGroup = env.GITHUB_EVENT_NAME === 'merge_group';
+  const isCiPullRequest = env.GITHUB_EVENT_NAME === 'pull_request';
 
-const limits = JSON.parse(readFileSync(limitsPath, 'utf8'));
+  let head;
+  try {
+    head = measureUiDir(resolve(repoRoot, 'dist/ui'));
+  } catch (err) {
+    fail(err.message);
+  }
 
-let baseline = null;
-if (baselineRef !== 'none' && !isMergeGroup) {
-  console.log(`Measuring the merge-base with ${baselineRef} for comparison…`);
-  baseline = measureMergeBase({
-    repoRoot,
-    ref: baselineRef,
-    measure: (uiDir) => {
-      const m = measureUiDir(uiDir);
-      return { page: m.page, worker: m.worker };
-    },
-    log: (m) => console.log(`  baseline: ${m}`),
+  if (jsonOnly) {
+    console.log(JSON.stringify({ page: head.page, worker: head.worker }));
+    process.exit(0);
+  }
+
+  const limits = JSON.parse(readFileSync(limitsPath, 'utf8'));
+
+  let baseline = null;
+  if (baselineRef !== 'none' && !isMergeGroup) {
+    console.log(`Measuring the merge-base with ${baselineRef} for comparison…`);
+    baseline = measureMergeBase({
+      repoRoot,
+      ref: baselineRef,
+      measure: (uiDir) => {
+        const m = measureUiDir(uiDir);
+        return { page: m.page, worker: m.worker };
+      },
+      log: (m) => console.log(`  baseline: ${m}`),
+    });
+  }
+
+  // In CI on a pull request the baseline is not optional: degrading to
+  // ceilings-only there would let the change reach the merge queue, which
+  // deliberately does not re-check the delta, with its growth never measured.
+  if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest) {
+    fail(
+      `could not measure the merge-base with "${baselineRef}", so the per-change delta could ` +
+        `not be checked. The merge queue does not re-check it, so this cannot be waved through. ` +
+        `See the baseline log above; re-run if it was transient.`
+    );
+  }
+
+  const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null, {
+    baselineNote: isMergeGroup ? MERGE_GROUP_NOTE : undefined,
   });
-}
 
-// In CI on a pull request the baseline is not optional: degrading to
-// ceilings-only there would let the change reach the merge queue, which
-// deliberately does not re-check the delta, with its growth never measured.
-if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest) {
-  fail(
-    `could not measure the merge-base with "${baselineRef}", so the per-change delta could ` +
-      `not be checked. The merge queue does not re-check it, so this cannot be waved through. ` +
-      `See the baseline log above; re-run if it was transient.`
+  console.log(
+    `First-load eager payload${baseline ? ` (vs merge-base ${baseline.sha.slice(0, 8)})` : ''}:`
+  );
+  for (const row of rows) {
+    const delta =
+      row.deltaKb === null
+        ? 'baseline n/a'
+        : `${row.deltaKb >= 0 ? '+' : ''}${row.deltaKb.toFixed(1)} kB vs base`;
+    const ceiling = row.ceiling === null ? 'no ceiling' : `${row.headroomKb} kB under ceiling`;
+    console.log(`  ${row.graph.padEnd(6)} ${String(row.kb).padStart(5)} kB — ${delta}, ${ceiling}`);
+  }
+  report('page graph', head.files.page, head.dirs.page);
+  report('worker graph', head.files.worker, head.dirs.worker);
+
+  for (const note of notes) console.log(`  note: ${note}`);
+  if (failures.length > 0) {
+    for (const failure of failures) console.error(`  FAIL: ${failure}`);
+    process.exit(1);
+  }
+  const allowance = isMergeGroup
+    ? 'ceilings only on a queue batch'
+    : `allowance ${limits.maxDeltaKb} kB per change`;
+  console.log(
+    `First-load OK (${allowance}; total ${bytesToKb(head.page + head.worker)} kB across both graphs).`
   );
 }
 
-const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null, {
-  baselineNote: isMergeGroup ? MERGE_GROUP_NOTE : undefined,
-});
-
-console.log(
-  `First-load eager payload${baseline ? ` (vs merge-base ${baseline.sha.slice(0, 8)})` : ''}:`
-);
-for (const row of rows) {
-  const delta =
-    row.deltaKb === null
-      ? 'baseline n/a'
-      : `${row.deltaKb >= 0 ? '+' : ''}${row.deltaKb.toFixed(1)} kB vs base`;
-  const ceiling = row.ceiling === null ? 'no ceiling' : `${row.headroomKb} kB under ceiling`;
-  console.log(`  ${row.graph.padEnd(6)} ${String(row.kb).padStart(5)} kB — ${delta}, ${ceiling}`);
-}
-report('page graph', head.files.page, head.dirs.page);
-report('worker graph', head.files.worker, head.dirs.worker);
-
-for (const note of notes) console.log(`  note: ${note}`);
-if (failures.length > 0) {
-  for (const failure of failures) console.error(`  FAIL: ${failure}`);
-  process.exit(1);
-}
-const allowance = isMergeGroup
-  ? 'ceilings only on a queue batch'
-  : `allowance ${limits.maxDeltaKb} kB per change`;
-console.log(
-  `First-load OK (${allowance}; total ${bytesToKb(head.page + head.worker)} kB across both graphs).`
-);
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();

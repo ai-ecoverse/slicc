@@ -350,6 +350,11 @@ What runs on a stack:
   secrets, and smoke. `worker-staging.yml`, `ios-screenshots.yml`, and
   `storybook-screenshots.yml` stay `branches: [main]`.
 
+CI measures a stacked PR's first-load delta against its own base
+(`origin/<base>`). Locally on a stack, pass `--baseline=origin/<parent>` to
+`check-first-load-size.mjs` — the workspace `size` script does not forward
+extra args.
+
 The aggregate job reports as **`ci-stack`**, not `ci`. The ruleset on `main`
 requires exactly one context, `ci`. Documented GitHub behaviour is that a
 required check skipped by `if:` still satisfies branch protection
