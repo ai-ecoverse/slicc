@@ -24,6 +24,7 @@ final class ComputerTrayFollower: NSObject {
     private var connector: TrayFollowerConnecting?
     private var startTask: Task<Void, Never>?
     private var lastSync: Task<Void, Never>?
+    private var lastCapture: Task<Void, Never>?
     private var sendData: ((Data) -> Bool)?
     private var reassembler = TrayChunkReassembler()
     private var capturer: ComputerCapturing?
@@ -71,6 +72,8 @@ final class ComputerTrayFollower: NSObject {
     func _testing_settle() async {
         await lastSync?.value
         await lastInput?.value
+        await lastCapture?.value
+        await lastCapture?.value
     }
 
     func stop() {
@@ -133,7 +136,7 @@ final class ComputerTrayFollower: NSObject {
         case .ping:
             _ = send(.pong)
         case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch):
-            Task { await handleCapture(requestId: requestId, fps: fps, maxWidth: maxWidth, watch: watch) }
+            lastCapture = Task { await handleCapture(requestId: requestId, fps: fps, maxWidth: maxWidth, watch: watch) }
         case .computerNativeUnwatch:
             capturer?.stop()
             capturer = nil
@@ -150,12 +153,10 @@ final class ComputerTrayFollower: NSObject {
     {
         do {
             try permissions.ensureScreenRecording()
-        } catch let error as ComputerPermissionError {
-            _ = send(.computerNativeError(requestId: requestId, error: error.message))
-            return
         } catch {
             _ = send(
-                .computerNativeError(requestId: requestId, error: String(describing: error)))
+                .computerNativeError(
+                    requestId: requestId, error: ComputerCaptureFailure.message(for: error)))
             return
         }
         capturer?.stop()
@@ -165,20 +166,24 @@ final class ComputerTrayFollower: NSObject {
         let fpsValue = fps ?? 2
         let width = maxWidth.map { Int($0.rounded()) }
         lastMaxWidth = width
+        let watching = watch ?? false
         do {
             try await capturer.start(
-                fps: fpsValue, maxWidth: width, watch: watch ?? false
-            ) { [weak self] image, native in
-                self?.emitFrame(requestId: requestId, image: image, native: native)
-            }
-        } catch let error as ComputerPermissionError {
-            _ = send(.computerNativeError(requestId: requestId, error: error.message))
-        } catch let error as ComputerCaptureError {
-            _ = send(.computerNativeError(requestId: requestId, error: error.message))
+                fps: fpsValue, maxWidth: width, watch: watching,
+                onFrame: { [weak self] image, native in
+                    self?.emitFrame(requestId: requestId, image: image, native: native)
+                },
+                onEnded: { [weak self] in
+                    guard watching, let self else { return }
+                    self.lastCapture = Task { @MainActor in
+                        await self.handleCapture(
+                            requestId: requestId, fps: fps, maxWidth: maxWidth, watch: true)
+                    }
+                })
         } catch {
             _ = send(
                 .computerNativeError(
-                    requestId: requestId, error: String(describing: error)))
+                    requestId: requestId, error: ComputerCaptureFailure.message(for: error)))
         }
     }
 
@@ -213,12 +218,8 @@ final class ComputerTrayFollower: NSObject {
     private func handleInput(requestId: String, events: [ComputerInputEvent]) async {
         do {
             try permissions.ensureAccessibility()
-        } catch let error as ComputerPermissionError {
-            _ = send(.computerNativeError(requestId: requestId, error: error.message))
-            _ = send(.computerNativeInputResult(requestId: requestId, error: error.message))
-            return
         } catch {
-            let text = String(describing: error)
+            let text = ComputerCaptureFailure.message(for: error)
             _ = send(.computerNativeError(requestId: requestId, error: text))
             _ = send(.computerNativeInputResult(requestId: requestId, error: text))
             return

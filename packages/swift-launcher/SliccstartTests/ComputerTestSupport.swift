@@ -35,6 +35,9 @@ final class StubCapturer: ComputerCapturing {
     private(set) var lastMaxWidth: Int?
     private(set) var lastWatch: Bool?
     var startError: Error?
+    var holdFrame = false
+    var endsRemaining = 0
+    private var pendingFrame: (() -> Void)?
 
     init(image: CGImage = ComputerTestImages.solid(width: 64, height: 48), native: CGSize? = nil) {
         self.image = image
@@ -45,15 +48,27 @@ final class StubCapturer: ComputerCapturing {
         fps: Double,
         maxWidth: Int?,
         watch: Bool,
-        onFrame: @escaping (CGImage, CGSize) -> Void
+        onFrame: @escaping (CGImage, CGSize) -> Void,
+        onEnded: (() -> Void)?
     ) async throws {
         started += 1
         lastFps = fps
         lastMaxWidth = maxWidth
         lastWatch = watch
         if let startError { throw startError }
-        onFrame(image, native)
+        if holdFrame {
+            pendingFrame = { [image, native] in onFrame(image, native) }
+        } else {
+            onFrame(image, native)
+        }
+        if endsRemaining > 0 {
+            endsRemaining -= 1
+            let ended = onEnded
+            Task { @MainActor in ended?() }
+        }
     }
+
+    func emitHeldFrame() { pendingFrame?() }
 
     func stop() { stopped += 1 }
 }

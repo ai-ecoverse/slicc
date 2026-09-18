@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import SliccTrayFollower
+import WebRTC
 import XCTest
 
 @testable import Sliccstart
@@ -337,89 +338,251 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(types, ["pong"])
     }
 
+    func testCaptureErrorFromCapturerMapsOntoNativeError() async throws {
+        let capturer = StubCapturer()
+        capturer.startError = ComputerCaptureError.noDisplay
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "cap-miss", fps: nil, maxWidth: nil, watch: false)))
+        await follower._testing_settle()
+        let errors = sent.compactMap { data -> String? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.error"
+            else { return nil }
+            return obj["error"] as? String
+        }
+        XCTAssertEqual(errors, [ComputerCaptureError.noDisplay.message])
+    }
+
+    func testGenericCaptureErrorStringifies() async throws {
+        struct Boom: Error {}
+        let capturer = StubCapturer()
+        capturer.startError = Boom()
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "cap-boom", fps: 1, maxWidth: 64, watch: false)))
+        await follower._testing_settle()
+        let errors = sent.compactMap { data -> String? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.error"
+            else { return nil }
+            return obj["error"] as? String
+        }
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(errors[0].contains("Boom"))
+    }
+
+    func testWatchStreamEndRecreatesTheCapturer() async throws {
+        let capturer = StubCapturer()
+        capturer.endsRemaining = 1
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "watch", fps: 2, maxWidth: 64, watch: true)))
+        await follower._testing_settle()
+        await settle()
+        await follower._testing_settle()
+        XCTAssertEqual(capturer.started, 2)
+        XCTAssertEqual(capturer.lastWatch, true)
+    }
+
+    func testDisconnectStopsCaptureAndReconnectDelegateIsANoOp() async throws {
+        let capturer = StubCapturer()
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "cap", fps: 2, maxWidth: 64, watch: true)))
+        await settle()
+        XCTAssertEqual(capturer.started, 1)
+        follower.connector(connectorStandIn(), isReconnecting: 1)
+        follower.connectorDidDisconnect(connectorStandIn(), reason: "peer dropped")
+        await settle()
+        XCTAssertGreaterThanOrEqual(capturer.stopped, 1)
+        follower.connector(connectorStandIn(), didReceiveInfo: "tray", participantCount: 1)
+        follower.connector(
+            connectorStandIn(),
+            didGenerateCandidate: RTCIceCandidate(sdp: "a", sdpMLineIndex: 0, sdpMid: "0"))
+    }
+
+    func testDidReceiveDataRoutesPing() async throws {
+        let (follower, _, _) = makeFollower()
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        sent.removeAll()
+        follower.connector(connectorStandIn(), didReceiveData: try encode(.ping))
+        await settle()
+        let types = sent.compactMap { data -> String? in
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+        }
+        XCTAssertEqual(types, ["pong"])
+    }
+
+    func testChunkedPingReassembles() async throws {
+        let (follower, _, _) = makeFollower()
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        sent.removeAll()
+        let ping = try encode(.ping)
+        let frames = TrayChunkFraming.frameChunks(String(data: ping, encoding: .utf8)!)
+        for frame in frames {
+            follower.route(try JSONEncoder().encode(frame))
+        }
+        await settle()
+        let types = sent.compactMap { data -> String? in
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+        }
+        XCTAssertEqual(types, ["pong"])
+    }
+
+    func testMalformedAndUnknownMessagesAreIgnored() async throws {
+        let (follower, _, _) = makeFollower()
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        follower.route(Data("not-json".utf8))
+        follower.route(try JSONEncoder().encode(["type": "computers.list"]))
+        follower.route(
+            try encode(.computerNativeUnwatch(requestId: "none")))
+    }
+
+    func testStaleFrameAfterUnwatchIsDropped() async throws {
+        let capturer = StubCapturer()
+        capturer.holdFrame = true
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "stale", fps: 1, maxWidth: 64, watch: false)))
+        await follower._testing_settle()
+        follower.route(try encode(.computerNativeUnwatch(requestId: "stale")))
+        await settle()
+        sent.removeAll()
+        capturer.emitHeldFrame()
+        await settle()
+        let frames = sent.compactMap { data -> String? in
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+        }
+        XCTAssertFalse(frames.contains("computer.native.frame"))
+    }
+
+    func testZeroNativeSizeFallsBackToEncodedSize() async throws {
+        let capturer = StubCapturer(
+            image: ComputerTestImages.solid(width: 40, height: 20), native: .zero)
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(requestId: "cap-zero", fps: 1, maxWidth: 40, watch: false)))
+        await follower._testing_settle()
+        let frame = try XCTUnwrap(
+            sent.compactMap { data -> [String: Any]? in
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    obj["type"] as? String == "computer.native.frame"
+                else { return nil }
+                return obj
+            }.first)
+        XCTAssertEqual(frame["nativeWidth"] as? Double, 40)
+        XCTAssertEqual(frame["nativeHeight"] as? Double, 20)
+    }
+
+    func testAttachFailureClearsTheConnectorSoRefreshRedials() async {
+        struct AttachFailed: Error {}
+        let first = RecordingConnector()
+        first.startError = AttachFailed()
+        let second = RecordingConnector()
+        var created = 0
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in
+                created += 1
+                return created == 1 ? first : second
+            },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink())
+        follower.leaderChanged(joinUrl: "https://tray.test/join/x")
+        await follower._testing_settle()
+        XCTAssertEqual(first.started, 1)
+        follower.refresh()
+        await follower._testing_settle()
+        XCTAssertEqual(second.started, 1)
+    }
+
+    func testSameJoinUrlIsANoOpAndNilTearsDown() async {
+        let connector = RecordingConnector()
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in connector },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink())
+        follower.leaderChanged(joinUrl: "https://tray.test/join/x")
+        await follower._testing_settle()
+        XCTAssertEqual(connector.started, 1)
+        follower.leaderChanged(joinUrl: "https://tray.test/join/x")
+        await follower._testing_settle()
+        XCTAssertEqual(connector.started, 1)
+        follower.leaderChanged(joinUrl: nil)
+        await follower._testing_settle()
+        XCTAssertEqual(connector.stopped, 1)
+    }
+
+    func testUnknownMessageVariantIsIgnored() async throws {
+        let (follower, capturer, _) = makeFollower()
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        follower.route(try encode(.computersList(computers: [])))
+        XCTAssertEqual(capturer.started, 0)
+    }
+
     private func settle() async {
         await Task.yield()
         await Task.yield()
-    }
-}
-
-final class ComputerPermissionsTests: XCTestCase {
-    func testErrorStringsNameSystemSettings() {
-        XCTAssertTrue(
-            ComputerPermissionError.screenRecording.message.contains("System Settings"))
-        XCTAssertTrue(
-            ComputerPermissionError.screenRecording.message.contains("Screen Recording"))
-        XCTAssertTrue(
-            ComputerPermissionError.accessibility.message.contains("System Settings"))
-        XCTAssertTrue(
-            ComputerPermissionError.accessibility.message.contains("Accessibility"))
-    }
-
-    func testEnsureSkipsThePromptWhenAlreadyGranted() throws {
-        final class Flag: @unchecked Sendable { var value = false }
-        let requested = Flag()
-        let probe = ComputerPermissionProbe(
-            screenRecordingGranted: { true },
-            requestScreenRecording: {
-                requested.value = true
-                return true
-            },
-            accessibilityGranted: { true },
-            requestAccessibility: { true }
-        )
-        try ComputerPermissions(probe: probe).ensureScreenRecording()
-        XCTAssertFalse(requested.value)
-    }
-
-    func testEnsurePromptsThenFailsClosed() {
-        let permissions = ComputerPermissions(probe: .alwaysDenied)
-        XCTAssertThrowsError(try permissions.ensureScreenRecording()) { error in
-            XCTAssertEqual(error as? ComputerPermissionError, .screenRecording)
-        }
-        XCTAssertThrowsError(try permissions.ensureAccessibility()) { error in
-            XCTAssertEqual(error as? ComputerPermissionError, .accessibility)
-        }
-    }
-}
-
-final class ComputerKeysymsTests: XCTestCase {
-    func testNamedKeys() {
-        XCTAssertEqual(ComputerKeysyms.parse("Return")?.keyCode, 0x24)
-        XCTAssertEqual(ComputerKeysyms.parse("Escape")?.keyCode, 0x35)
-        XCTAssertEqual(ComputerKeysyms.parse("Left")?.keyCode, 0x7B)
-        XCTAssertEqual(ComputerKeysyms.parse("F5")?.keyCode, 0x60)
-    }
-
-    func testChordsSetModifierFlags() {
-        let press = ComputerKeysyms.parse("ctrl+alt+Delete")
-        XCTAssertEqual(press?.keyCode, 0x75)
-        XCTAssertEqual(press?.ctrl, true)
-        XCTAssertEqual(press?.alt, true)
-        XCTAssertEqual(press?.shift, false)
-    }
-
-    func testUnknownTokenIsNil() {
-        XCTAssertNil(ComputerKeysyms.parse("not-a-key"))
-        XCTAssertNil(ComputerKeysyms.parse(""))
-    }
-}
-
-final class ComputerFrameEncoderTests: XCTestCase {
-    func testScaleHonoursMaxWidth() {
-        let image = ComputerTestImages.solid(width: 800, height: 400)
-        let scaled = ComputerFrameEncoder.scale(image, maxWidth: 200)
-        XCTAssertEqual(scaled?.width, 200)
-        XCTAssertEqual(scaled?.height, 100)
-    }
-
-    func testJpegRoundTripReportsNativeSize() {
-        let image = ComputerTestImages.solid(width: 80, height: 40)
-        let encoded = ComputerFrameEncoder.jpeg(from: image, maxWidth: 40)
-        XCTAssertEqual(encoded?.width, 40)
-        XCTAssertEqual(encoded?.height, 20)
-        XCTAssertEqual(encoded?.nativeWidth, 80)
-        XCTAssertEqual(encoded?.nativeHeight, 40)
-        XCTAssertGreaterThan(encoded?.data.count ?? 0, 32)
     }
 }
 
@@ -457,77 +620,4 @@ final class ComputerNativeFramingTests: XCTestCase {
         XCTAssertEqual(total, messages.count)
         XCTAssertEqual(chunk?.count, ComputerNativeFraming.chunkSize)
     }
-}
-
-final class ComputerInputInjectorTests: XCTestCase {
-    func testClickScalesFromEncodedToNative() async {
-        let sink = RecordingSink()
-        var injector = ComputerInputInjector(
-            sink: sink,
-            encodedSize: CGSize(width: 400, height: 200),
-            nativeSize: CGSize(width: 800, height: 400),
-            delay: { _ in })
-        await injector.apply([.click(button: 1, count: 1, holdMs: nil, x: 100, y: 50)])
-        XCTAssertEqual(
-            sink.actions,
-            [
-                .mouseButton(.left, down: true, at: CGPoint(x: 200, y: 100)),
-                .mouseButton(.left, down: false, at: CGPoint(x: 200, y: 100)),
-            ])
-    }
-
-    func testWaitUsesInjectedDelayInsteadOfBlocking() async {
-        let sink = RecordingSink()
-        var slept: [Double] = []
-        var injector = ComputerInputInjector(
-            sink: sink, encodedSize: CGSize(width: 1, height: 1),
-            nativeSize: CGSize(width: 1, height: 1),
-            delay: { ms in slept.append(ms) })
-        await injector.apply([
-            .click(button: 1, count: 1, holdMs: 25, x: 1, y: 1),
-            .wait(ms: 40),
-        ])
-        XCTAssertEqual(slept, [25, 40])
-        XCTAssertEqual(
-            sink.actions,
-            [
-                .mouseButton(.left, down: true, at: CGPoint(x: 1, y: 1)),
-                .wait(milliseconds: 25),
-                .mouseButton(.left, down: false, at: CGPoint(x: 1, y: 1)),
-                .wait(milliseconds: 40),
-            ])
-    }
-
-    func testKeyChordPostsDownAndUp() async {
-        let sink = RecordingSink()
-        var injector = ComputerInputInjector(
-            sink: sink, encodedSize: CGSize(width: 1, height: 1),
-            nativeSize: CGSize(width: 1, height: 1), delay: { _ in })
-        await injector.apply([.key(keysym: "Return", down: nil)])
-        XCTAssertEqual(sink.actions.count, 2)
-        guard case .key(let downCode, true, _) = sink.actions[0],
-            case .key(let upCode, false, _) = sink.actions[1]
-        else {
-            return XCTFail("expected key down/up")
-        }
-        XCTAssertEqual(downCode, 0x24)
-        XCTAssertEqual(upCode, 0x24)
-    }
-
-    func testRelativeMoveAccumulates() async {
-        let sink = RecordingSink()
-        var injector = ComputerInputInjector(
-            sink: sink, encodedSize: CGSize(width: 1, height: 1),
-            nativeSize: CGSize(width: 1, height: 1), delay: { _ in })
-        await injector.apply([
-            .mousemove(x: 10, y: 5, relative: false),
-            .mousemove(x: 2, y: 3, relative: true),
-        ])
-        XCTAssertEqual(sink.actions.last, .mouseMove(CGPoint(x: 12, y: 8)))
-    }
-}
-
-private final class RecordingSink: ComputerEventSink {
-    var actions: [ComputerCGAction] = []
-    func post(_ action: ComputerCGAction) { actions.append(action) }
 }

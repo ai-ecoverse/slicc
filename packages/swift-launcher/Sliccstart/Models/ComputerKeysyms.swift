@@ -14,17 +14,17 @@ struct ComputerKeyPress: Equatable {
 enum ComputerKeysyms {
     /// HIToolbox virtual-key codes (US ANSI). Named keys first, then a–z / 0–9.
     static func parse(_ keysym: String) -> ComputerKeyPress? {
-        let tokens = keysym.split(whereSeparator: { $0 == "+" || $0 == "-" }).map {
-            $0.trimmingCharacters(in: .whitespaces).lowercased()
+        let rawTokens = keysym.split(whereSeparator: { $0 == "+" || $0 == "-" }).map {
+            $0.trimmingCharacters(in: .whitespaces)
         }.filter { !$0.isEmpty }
-        guard let last = tokens.last else { return nil }
+        guard let rawLast = rawTokens.last else { return nil }
 
         var shift = false
         var ctrl = false
         var alt = false
         var meta = false
-        for token in tokens.dropLast() {
-            switch token {
+        for token in rawTokens.dropLast() {
+            switch token.lowercased() {
             case "shift": shift = true
             case "ctrl", "control": ctrl = true
             case "alt", "option": alt = true
@@ -33,6 +33,7 @@ enum ComputerKeysyms {
             }
         }
 
+        let last = rawLast.lowercased()
         if let named = namedCodes[last] {
             return ComputerKeyPress(
                 keyCode: named, unicode: nil, shift: shift, ctrl: ctrl, alt: alt, meta: meta)
@@ -50,7 +51,22 @@ enum ComputerKeysyms {
             return ComputerKeyPress(
                 keyCode: nil, unicode: last, shift: shift, ctrl: ctrl, alt: alt, meta: meta)
         }
+        if isNativeToken(rawLast) {
+            return ComputerKeyPress(
+                keyCode: nil, unicode: rawLast, shift: shift, ctrl: ctrl, alt: alt, meta: meta)
+        }
         return nil
+    }
+
+    /// `KEYCODE_BACK`-shaped tokens pass through for Android / cliclick.
+    static func isNativeToken(_ token: String) -> Bool {
+        let scalars = token.unicodeScalars
+        guard scalars.count >= 2, let first = scalars.first, ("A"..."Z").contains(first) else {
+            return false
+        }
+        return scalars.allSatisfy {
+            ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_"
+        }
     }
 
     // ANSI / ISO virtual key codes — same numbers HIToolbox publishes.
