@@ -19,6 +19,29 @@ export function refreshFeatureFlagsForPage(
   });
 }
 
+export const FEATURE_FLAGS_REFRESH_INTERVAL_MS = 30 * 60_000;
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+export function scheduleFeatureFlagsRefresh(
+  float: FeatureFlagFloat,
+  options: FeatureFlagsBootOptions,
+  intervalMs: number = FEATURE_FLAGS_REFRESH_INTERVAL_MS
+): () => void {
+  stopFeatureFlagsRefresh();
+  refreshTimer = setInterval(() => {
+    void refreshFeatureFlagsForPage(float, options);
+  }, intervalMs);
+  return stopFeatureFlagsRefresh;
+}
+
+export function stopFeatureFlagsRefresh(): void {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
 export function resolveFeatureFlagsWorkerBaseUrl(options: FeatureFlagsBootOptions): string {
   const stored = readStoredWorkerBaseUrl(options.storage);
   const env = normalizeTrayWorkerBaseUrl(options.envBaseUrl ?? null);

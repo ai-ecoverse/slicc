@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+
+
 func releasesStub(t *testing.T, tag string) *httptest.Server {
 	t.Helper()
 	type asset struct {
@@ -36,7 +38,7 @@ func releasesStub(t *testing.T, tag string) *httptest.Server {
 }
 
 func TestRunUpdateDispatch(t *testing.T) {
-
+	
 	if got := run([]string{"update", "--bogus"}); got != 2 {
 		t.Fatalf("run(update --bogus) = %d, want 2", got)
 	}
@@ -49,13 +51,16 @@ func TestUpdateCheckReportsOnDevBuild(t *testing.T) {
 	server := releasesStub(t, "v99.0.0")
 	t.Setenv("SLICC_UPDATE_API_BASE", server.URL)
 
+	
+	
 	if got := run([]string{"update", "--check"}); got != 0 {
 		t.Fatalf("run(update --check) = %d, want 0", got)
 	}
 }
 
 func TestUpdateRefusesToReplaceDevBuild(t *testing.T) {
-
+	
+	
 	server := releasesStub(t, "v99.0.0")
 	t.Setenv("SLICC_UPDATE_API_BASE", server.URL)
 

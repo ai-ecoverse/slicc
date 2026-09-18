@@ -1,8 +1,36 @@
 import AppIntents
 import SwiftUI
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 extension View {
 
+    
+    
+    
+    
+    
     @ViewBuilder
     func sliccEntityAnnotation<Entity: AppEntity>(
         _ entityType: Entity.Type,

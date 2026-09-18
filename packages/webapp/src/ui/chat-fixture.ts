@@ -134,8 +134,8 @@ function buildToolCallStatuses(): ChatMessage[] {
   };
   const toolCallError: ToolCall = {
     id: 'fx-tc-err',
-    name: 'edit_file',
-    input: { path: '/workspace/missing.ts', old_str: 'x', new_str: 'y' },
+    name: 'edit',
+    input: { path: '/workspace/missing.ts', edits: [{ oldText: 'x', newText: 'y' }] },
     result: 'ENOENT: no such file or directory, open "/workspace/missing.ts"',
     isError: true,
   };

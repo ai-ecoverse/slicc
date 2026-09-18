@@ -1,16 +1,43 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 private let formComponentAllowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
 )
+
+
+
 
 private func decodeFormComponent(_ raw: String) -> String? {
     raw.replacingOccurrences(of: "+", with: "%20").removingPercentEncoding
 }
 
+
+
 private func encodeFormComponent(_ value: String) -> String {
     value.addingPercentEncoding(withAllowedCharacters: formComponentAllowed) ?? value
 }
+
+
 
 func unmaskFormBody(text body: String, hostname: String, injector: SecretInjector) -> String {
     if body.isEmpty || injector.isEmpty { return body }
@@ -29,7 +56,10 @@ func unmaskFormBody(text body: String, hostname: String, injector: SecretInjecto
         if rawValue.isEmpty { return field }
 
         guard let decoded = decodeFormComponent(rawValue) else {
-
+            
+            
+            
+            
             let replaced = injector.injectBody(text: rawValue, hostname: hostname)
             if replaced == rawValue { return field }
             changed = true

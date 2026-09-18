@@ -3,6 +3,11 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
+
 final class ToolUIPlaceholderTests: XCTestCase {
 
     private func title(_ html: String) -> String {
@@ -19,10 +24,14 @@ final class ToolUIPlaceholderTests: XCTestCase {
               </div>
             </div>
             """
-
+        
+        
         XCTAssertEqual(title(html), "Allow npm publish?")
     }
 
+    
+    
+    
     func testMetaPathNeverReachesTheTitle() {
         let html = """
             <div class="sprinkle-action-card__header">
@@ -41,6 +50,8 @@ final class ToolUIPlaceholderTests: XCTestCase {
         XCTAssertEqual(title(""), ToolUIPlaceholder.fallbackTitle)
     }
 
+    
+    
     func testFallsBackWhenTheHeaderStripsToNothing() {
         let html = """
             <div class="sprinkle-action-card__header">
@@ -51,6 +62,8 @@ final class ToolUIPlaceholderTests: XCTestCase {
         XCTAssertEqual(title(html), ToolUIPlaceholder.fallbackTitle)
     }
 
+    
+    
     func testHandlesNestedElementsOfTheSameTag() {
         let html = """
             <div class="sprinkle-action-card__header">

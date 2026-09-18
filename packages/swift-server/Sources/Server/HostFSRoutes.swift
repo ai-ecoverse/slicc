@@ -3,19 +3,55 @@ import HTTPTypes
 import Hummingbird
 import NIOCore
 
-enum HostFSRoutes {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+enum HostFSRoutes {
+    
     static let maxBodyBytes = 100 * 1024 * 1024
 
+    
+    
     static let stableMaxBodyBytes = 1024 * 1024
 
     struct MountRoot: Sendable, Equatable {
-
+        
         let path: String
-
+        
         let root: String
     }
 
+    
+    
+    
     static func resolveRoots(
         mounts: [ServerConfig.MountMapping],
         warn: (String) -> Void = { print($0) }
@@ -39,6 +75,10 @@ enum HostFSRoutes {
         case code(String, HTTPResponse.Status, String)
     }
 
+    
+    
+    
+    
     static func resolveWithinRoot(root: String, relPath: String) throws -> String {
         let cleaned = relPath.drop(while: { $0 == "/" })
         let target = URL(fileURLWithPath: root).appendingPathComponent(String(cleaned))
@@ -65,16 +105,32 @@ enum HostFSRoutes {
         return target
     }
 
+    
+
+    
+    
     static var rangeHeader: HTTPField.Name { HTTPField.Name("Range")! }
     static var contentRangeHeader: HTTPField.Name { HTTPField.Name("Content-Range")! }
     static var acceptRangesHeader: HTTPField.Name { HTTPField.Name("Accept-Ranges")! }
 
+    
+    
+    
     enum ByteRange: Equatable {
         case whole
         case window(start: Int, end: Int)
         case unsatisfiable
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static func parseByteRange(_ header: String?, size: Int) -> ByteRange {
         guard let header else { return .whole }
         let trimmed = header.trimmingCharacters(in: .whitespaces)
@@ -89,18 +145,19 @@ enum HostFSRoutes {
         if size == 0 { return .unsatisfiable }
 
         if rawStart.isEmpty {
-
+            
             guard let suffix = Int(rawEnd), suffix > 0 else { return .unsatisfiable }
             return .window(start: max(0, size - suffix), end: size - 1)
         }
         guard let start = Int(rawStart), start < size else { return .unsatisfiable }
-
+        
         let end = rawEnd.isEmpty ? size - 1 : min(Int(rawEnd) ?? (size - 1), size - 1)
         guard end >= start else { return .unsatisfiable }
         return .window(start: start, end: end)
     }
 
-    private static func readWindow(path: String, start: Int, length: Int) throws -> Data {
+    
+    static func readWindow(path: String, start: Int, length: Int) throws -> Data {
         try wrapErrno {
             let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
             defer { try? handle.close() }
@@ -109,12 +166,15 @@ enum HostFSRoutes {
         }
     }
 
+    
+
     static var etagHeader: HTTPField.Name { HTTPField.Name("ETag")! }
     static var lastModifiedHeader: HTTPField.Name { HTTPField.Name("Last-Modified")! }
     static var ifNoneMatchHeader: HTTPField.Name { HTTPField.Name("If-None-Match")! }
     static var ifModifiedSinceHeader: HTTPField.Name { HTTPField.Name("If-Modified-Since")! }
     static var ifRangeHeader: HTTPField.Name { HTTPField.Name("If-Range")! }
 
+    
     static let httpDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -123,10 +183,20 @@ enum HostFSRoutes {
         return formatter
     }()
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     struct CacheValidator: Equatable {
         let etag: String
         let lastModified: String
-
+        
         let mtimeSeconds: Int
     }
 
@@ -134,7 +204,8 @@ enum HostFSRoutes {
         var info = stat()
         let ino = stat(path, &info) == 0 ? UInt64(info.st_ino) : 0
         let mtimeSeconds = Int((mtimeMs / 1000).rounded(.down))
-
+        
+        
         let mtimeMicros = UInt64(max(0, (mtimeMs * 1000).rounded(.down)))
         return CacheValidator(
             etag: "\"\(String(size, radix: 16))-\(String(mtimeMicros, radix: 16))"
@@ -144,10 +215,17 @@ enum HostFSRoutes {
             mtimeSeconds: mtimeSeconds)
     }
 
+    
     private static func stripWeak(_ tag: String) -> String {
         tag.hasPrefix("W/") ? String(tag.dropFirst(2)) : tag
     }
 
+    
+    
+    
+    
+    
+    
     static func isNotModified(_ headers: HTTPFields, _ validator: CacheValidator) -> Bool {
         if let ifNoneMatch = headers[ifNoneMatchHeader] {
             let trimmed = ifNoneMatch.trimmingCharacters(in: .whitespaces)
@@ -157,11 +235,16 @@ enum HostFSRoutes {
             }
         }
         guard let ifModifiedSince = headers[ifModifiedSinceHeader] else { return false }
-
+        
         guard let since = httpDateFormatter.date(from: ifModifiedSince) else { return false }
         return Double(validator.mtimeSeconds) <= since.timeIntervalSince1970
     }
 
+    
+    
+    
+    
+    
     static func ifRangeAllowsRange(_ headers: HTTPFields, _ validator: CacheValidator) -> Bool {
         guard let ifRange = headers[ifRangeHeader] else { return true }
         let value = ifRange.trimmingCharacters(in: .whitespaces)
@@ -170,12 +253,27 @@ enum HostFSRoutes {
         return Double(validator.mtimeSeconds) == asDate.timeIntervalSince1970
     }
 
+    
+
+    
     static let streamChunkBytes = 1024 * 1024
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private static func streamedFileBody(path: String, start: Int, length: Int) throws
         -> ResponseBody
     {
-
+        
+        
         let handle = try wrapErrno {
             try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         }
@@ -195,6 +293,13 @@ enum HostFSRoutes {
         }
     }
 
+    
+
+    
+    
+    
+    
+    
     struct StableRequestBody {
         let op: String
         let mount: String
@@ -210,7 +315,7 @@ enum HostFSRoutes {
             self.mount = object["mount"] as? String ?? ""
             self.path = object["path"] as? String ?? ""
             self.to = object["to"] as? String
-
+            
             if let flag = object["recursive"] as? Bool {
                 self.recursive = flag
             } else if let flag = object["recursive"] as? String {
@@ -233,8 +338,14 @@ enum HostFSRoutes {
             return try resolveWithinRoot(root: entry.root, relPath: rel)
         }
 
+        
+        
+        
+        
         router.post("/api/hostfs") { request, _ in
-
+            
+            
+            
             let buffer: ByteBuffer
             do {
                 buffer = try await request.body.collect(upTo: stableMaxBodyBytes)
@@ -311,6 +422,10 @@ enum HostFSRoutes {
         }
     }
 
+    
+    
+    
+    
     private static func dispatchStable(
         _ body: StableRequestBody, path: String, entry: MountRoot, roots: [MountRoot]
     ) throws -> Response {
@@ -331,17 +446,33 @@ enum HostFSRoutes {
         }
     }
 
+    
+
     private static func listResponse(_ dir: String) throws -> Response {
         let names = try wrapErrno { try FileManager.default.contentsOfDirectory(atPath: dir) }
         let entries: [LickSystem.JSONValue] = names.map { name in
             let full = dir + "/" + name
             var isDirectory: ObjCBool = false
-
+            
+            
+            
+            
             let resolves = FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory)
             if resolves && isDirectory.boolValue {
                 return .object(["name": .string(name), "kind": .string("directory")])
             }
-
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
             guard resolves,
                 let attrs = try? FileManager.default.attributesOfItem(atPath: full),
                 let size = (attrs[.size] as? NSNumber)?.doubleValue,
@@ -374,6 +505,9 @@ enum HostFSRoutes {
         return try jsonBody(.object(payload))
     }
 
+    
+    
+    
     private static func readResponse(_ path: String, _ requestHeaders: HTTPFields) throws
         -> Response
     {
@@ -383,13 +517,14 @@ enum HostFSRoutes {
         }
         let size = Int(rawSize)
         let validator = cacheValidator(path: path, size: size, mtimeMs: mtimeMs)
-
+        
+        
         var headers = HTTPFields()
         headers[acceptRangesHeader] = "bytes"
         headers[etagHeader] = validator.etag
         headers[lastModifiedHeader] = validator.lastModified
         if isNotModified(requestHeaders, validator) {
-
+            
             return Response(status: .notModified, headers: headers)
         }
         let validatorHeaders: [(HTTPField.Name, String)] = [
@@ -405,7 +540,10 @@ enum HostFSRoutes {
                 "EINVAL", .rangeNotSatisfiable, "range not satisfiable for a \(size) byte file",
                 extra: validatorHeaders + [(contentRangeHeader, "bytes */\(size)")])
         case .window(let start, let end):
-
+            
+            
+            
+            
             headers[.contentType] = "application/octet-stream"
             headers[contentRangeHeader] = "bytes \(start)-\(end)/\(size)"
             return Response(
@@ -432,7 +570,22 @@ enum HostFSRoutes {
         return try jsonBody(.object(["ok": .bool(true)]))
     }
 
+    
+    
+    
+    
+    
+    private static func pathsDesignateSameFile(_ a: String, _ b: String) -> Bool {
+        var fromInfo = stat()
+        var toInfo = stat()
+        guard lstat(a, &fromInfo) == 0, lstat(b, &toInfo) == 0 else { return false }
+        return fromInfo.st_dev == toInfo.st_dev && fromInfo.st_ino == toInfo.st_ino
+    }
+
     private static func renameResponse(from: String, to: String) throws -> Response {
+        if pathsDesignateSameFile(from, to) {
+            return try jsonBody(.object(["ok": .bool(true), "noop": .bool(true)]))
+        }
         try wrapErrno { try FileManager.default.moveItem(atPath: from, toPath: to) }
         return try jsonBody(.object(["ok": .bool(true)]))
     }
@@ -457,6 +610,28 @@ enum HostFSRoutes {
         return try jsonBody(.object(["ok": .bool(true)]))
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private static func statIdentity(_ path: String) -> [String: LickSystem.JSONValue] {
         var info = stat()
         guard stat(path, &info) == 0 else { return [:] }
@@ -469,6 +644,7 @@ enum HostFSRoutes {
         return [
             "ctime": .number(ctimeMs),
             "ino": .number(Double(info.st_ino)),
+            "dev": .number(Double(info.st_dev)),
             "uid": .number(Double(info.st_uid)),
             "gid": .number(Double(info.st_gid)),
             "mode": .number(Double(info.st_mode)),
@@ -482,12 +658,14 @@ enum HostFSRoutes {
         }
         let attrs = try wrapErrno { try FileManager.default.attributesOfItem(atPath: path) }
         let size = (attrs[.size] as? NSNumber)?.doubleValue ?? 0
-
+        
+        
         let mtime = (attrs[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0
         return (isDirectory.boolValue, size, mtime)
     }
 
-    private static func wrapErrno<T>(_ body: () throws -> T) throws -> T {
+    
+    static func wrapErrno<T>(_ body: () throws -> T) throws -> T {
         do {
             return try body()
         } catch let failure as FsFailure {
@@ -512,7 +690,7 @@ enum HostFSRoutes {
             case .some(EEXIST):
                 throw FsFailure.code("EEXIST", .conflict, ns.localizedDescription)
             default:
-
+                
                 if ns.domain == NSCocoaErrorDomain
                     && (ns.code == NSFileReadNoSuchFileError || ns.code == NSFileNoSuchFileError)
                 {
@@ -531,6 +709,8 @@ enum HostFSRoutes {
         }
     }
 
+    
+    
     private static func fsError(
         _ code: String, _ status: HTTPResponse.Status, _ message: String,
         extra: [(HTTPField.Name, String)] = []

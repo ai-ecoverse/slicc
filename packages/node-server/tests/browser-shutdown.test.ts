@@ -1,6 +1,9 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type WebSocket from 'ws';
+import { WebSocketServer } from 'ws';
 
 vi.mock('../src/chrome-launch.js', () => ({
   probeCdpAlive: vi.fn(),
@@ -62,5 +65,66 @@ describe('closeLaunchedBrowserGracefully', () => {
       12345
     );
     expect(probeCdpAlive).not.toHaveBeenCalled();
+  });
+
+  it('sends Browser.close through the advertised CDP WebSocket', async () => {
+    const server = createServer();
+    const wss = new WebSocketServer({ server });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const received = new Promise<string>((resolve) => {
+      wss.once('connection', (socket) =>
+        socket.once('message', (data) => resolve(data.toString()))
+      );
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}` }))
+        )
+    );
+    vi.mocked(probeCdpAlive).mockResolvedValue(false);
+
+    try {
+      await closeLaunchedBrowserGracefully(
+        { launchedBrowserProcess: fakeLauncherProcess(), launchedBrowserLabel: 'Chrome' },
+        12345
+      );
+      expect(JSON.parse(await received)).toEqual({ id: 1, method: 'Browser.close' });
+    } finally {
+      wss.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('falls back to polling when the CDP socket send throws', async () => {
+    const socket = {
+      on: vi.fn((event: string, listener: () => void) => {
+        if (event === 'open') queueMicrotask(listener);
+        return socket;
+      }),
+      send: vi.fn(() => {
+        throw new Error('socket closed');
+      }),
+      close: vi.fn(),
+    };
+    vi.mocked(probeCdpAlive).mockResolvedValue(false);
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ webSocketDebuggerUrl: 'ws://fake' })));
+
+    const closing = closeLaunchedBrowserGracefully(
+      { launchedBrowserProcess: fakeLauncherProcess(), launchedBrowserLabel: 'Chrome' },
+      12345,
+      {
+        fetchImpl,
+        createWebSocket: () => socket as unknown as WebSocket,
+      }
+    );
+    await closing;
+    expect(socket.send).toHaveBeenCalledOnce();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 });

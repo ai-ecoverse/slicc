@@ -175,6 +175,7 @@ function formatStart(ts: number): string {
 function formatScoop(proc: Process): string {
   if (proc.owner.kind === 'cone') return 'cone';
   if (proc.owner.kind === 'system') return 'system';
+  if (proc.owner.kind === 'jshd') return 'jshd';
 
   return proc.owner.scoopJid?.slice(0, 10) ?? 'scoop';
 }

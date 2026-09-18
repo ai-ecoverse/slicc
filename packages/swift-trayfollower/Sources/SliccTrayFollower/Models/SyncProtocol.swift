@@ -1,30 +1,55 @@
 import Foundation
 
+
+
 public enum NewSessionAction: String, Codable {
     case save, skip, erase
 }
 
+
+
+
+
+
+
+
+
+
 public let traySyncProtocolVersion = 8
+
+
+
 
 public enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)
     case contentDone(messageId: String, model: String?, usage: ChatMessageUsage?)
-
+    
+    
+    
+    
     case toolUseStart(
         messageId: String, toolName: String, toolInput: AnyCodable?, toolCallId: String? = nil)
-
+    
     case toolResult(
         messageId: String, toolName: String, result: String, isError: Bool?,
         toolCallId: String? = nil)
-
+    
+    
     case toolProgress(
         messageId: String, toolName: String, progress: ToolProgressEvent,
         toolCallId: String? = nil)
     case toolUI(messageId: String, toolName: String, requestId: String, html: String)
     case toolUIDone(messageId: String, requestId: String)
     case turnEnd(messageId: String)
-
+    
+    
+    
+    
+    
+    
+    
+    
     case compactionNotice(messageId: String, marker: ChatCompactionMarker)
     case error(error: String)
     case screenshot(base64: String, url: String?)
@@ -168,32 +193,56 @@ public enum AgentEvent: Codable {
     }
 }
 
+
+
+
 public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let jid: String
     public let name: String
     public let folder: String
-
+    
+    
+    
+    
+    
+    
+    
+    
     public let isCone: Bool?
-
+    
+    
+    
     public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
-
+    
+    
+    
+    
     public let state: String?
-
+    
+    
+    
     public let activity: String?
-
+    
     public let fill: Double?
-
+    
+    
+    
+    
     public let model: ScoopSummaryModel?
 
     public var id: String { jid }
 
+    
+    
     public init(
         jid: String,
         name: String,
         folder: String,
-
+        
+        
+        
         isCone: Bool?,
         assistantLabel: String,
         trigger: String? = nil,
@@ -217,10 +266,12 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     }
 }
 
+
+
 public struct ScoopSummaryModel: Codable, Hashable {
-
+    
     public let provider: String
-
+    
     public let id: String
 
     public init(provider: String, id: String) {
@@ -229,13 +280,16 @@ public struct ScoopSummaryModel: Codable, Hashable {
     }
 }
 
+
 public struct SprinkleSummary: Codable, Identifiable, Hashable {
     public let name: String
     public let title: String
     public let path: String
     public let open: Bool
     public let autoOpen: Bool
-
+    
+    
+    
     public let icon: String?
 
     public var id: String { name }
@@ -257,9 +311,16 @@ public struct SprinkleSummary: Codable, Identifiable, Hashable {
     }
 }
 
+
+
+
+
+
 public enum TrayThinkingLevel: String, Codable, CaseIterable {
     case off, minimal, low, medium, high, xhigh
 }
+
+
 
 public struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
     public let providerName: String
@@ -276,6 +337,7 @@ public struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
         self.reasoning = reasoning
     }
 }
+
 
 public struct TrayModelSelectionState: Codable, Equatable {
     public let activeModelId: String
@@ -296,6 +358,11 @@ public struct TrayModelSelectionState: Codable, Equatable {
     }
 }
 
+
+
+
+
+
 public struct CherryCapabilities: Codable, Hashable {
     public let navigate: Bool
     public let network: Bool
@@ -307,6 +374,7 @@ public struct CherryCapabilities: Codable, Hashable {
         self.screenshot = screenshot
     }
 }
+
 
 public struct RemoteTargetInfo: Codable, Hashable {
     public let targetId: String
@@ -330,6 +398,10 @@ public struct RemoteTargetInfo: Codable, Hashable {
     }
 }
 
+
+
+
+
 public struct CDPTargetSummary: Identifiable, Hashable {
     public let id: String
     public var title: String
@@ -342,6 +414,7 @@ public struct CDPTargetSummary: Identifiable, Hashable {
     }
 }
 
+
 public struct TrayTargetEntry: Codable, Hashable {
     public let targetId: String
     public let localTargetId: String
@@ -349,9 +422,10 @@ public struct TrayTargetEntry: Codable, Hashable {
     public let title: String
     public let url: String
     public let isLocal: Bool
-
+    
     public var kind: String?
-
+    
+    
     public var capabilities: CherryCapabilities?
 
     public init(
@@ -375,6 +449,20 @@ public struct TrayTargetEntry: Codable, Hashable {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public struct TrayChunkFrame: Codable {
     public static let typeTag = "__chunk"
 
@@ -394,44 +482,91 @@ public struct TrayChunkFrame: Codable {
         self.chunkData = chunkData
     }
 
+    
+    
+    
     var hasValidIndices: Bool {
         totalChunks > 0 && chunkIndex >= 0 && chunkIndex < totalChunks
     }
 }
 
-public struct TraySyncCapabilities: Codable, Equatable {
 
+
+
+
+public struct TraySyncCapabilities: Codable, Equatable {
+    
+    
     public let exec: Bool
 
+    
+    
     public let browser: Bool?
 
+    
+    
+    
     public let oauthPopup: Bool?
 
+    
+    
     public let sudoApproval: Bool?
 
+    
+    
+    
+    
     public let biometric: Bool?
+
+    
+    
+    
+    public let computer: Bool?
 
     public init(
         exec: Bool,
         browser: Bool? = nil,
         oauthPopup: Bool? = nil,
         sudoApproval: Bool? = nil,
-        biometric: Bool? = nil
+        biometric: Bool? = nil,
+        computer: Bool? = nil
     ) {
         self.exec = exec
         self.browser = browser
         self.oauthPopup = oauthPopup
         self.sudoApproval = sudoApproval
         self.biometric = biometric
+        self.computer = computer
     }
 }
 
+
+
+
 public let trayFollowerCapabilities = makeTrayFollowerCapabilities(deviceOwnerAuth: false)
+
+
+
+
 
 public func makeTrayFollowerCapabilities(deviceOwnerAuth: Bool) -> TraySyncCapabilities {
     TraySyncCapabilities(
         exec: true, browser: true, sudoApproval: true, biometric: deviceOwnerAuth ? true : nil)
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 public enum LeaderToFollowerMessage: Codable {
     case snapshot(messages: [ChatMessage], scoopJid: String)
@@ -442,6 +577,18 @@ public enum LeaderToFollowerMessage: Codable {
     case status(scoopStatus: String, scoopJid: String? = nil)
     case error(error: String)
     case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
+    
+    case computersList(computers: [ComputerDescriptor])
+    
+    
+    case computerFrame(
+        id: String, seq: Int, mime: String, width: Double, height: Double, data: String?,
+        chunkData: String?, chunkIndex: Int?, totalChunks: Int?)
+    
+    
+    case computerNativeCapture(requestId: String, fps: Double?, maxWidth: Double?, watch: Bool?)
+    case computerNativeUnwatch(requestId: String?)
+    case computerNativeInput(requestId: String, events: [ComputerInputEvent])
     case modelsList(models: [TrayModelCatalogEntry])
     case modelState(state: TrayModelSelectionState)
     case sprinklesList(sprinkles: [SprinkleSummary])
@@ -454,14 +601,16 @@ public enum LeaderToFollowerMessage: Codable {
         error: String?)
     case sprinkleUpdate(sprinkleName: String, data: AnyCodable?)
     case sprinkleReloaded(sprinkleName: String)
-
+    
     case cdpRequest(
         requestId: String,
         localTargetId: String,
         method: String,
         params: AnyCodable?,
         sessionId: String?)
-
+    
+    
+    
     case cdpResponse(
         requestId: String,
         result: AnyCodable?,
@@ -473,28 +622,44 @@ public enum LeaderToFollowerMessage: Codable {
     case tabOpen(requestId: String, url: String)
     case previewOpen(requestId: String, url: String)
     case cherrySliccEvent(targetId: String, name: String, detail: AnyCodable?)
-
+    
+    
+    
     case fsRequest(requestId: String, request: TrayFsRequest)
-
+    
     case fsResponse(requestId: String, response: TrayFsResponse)
     case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?, stdin: String?)
     case execChunk(requestId: String, stream: String, data: String)
     case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
     case execSignal(requestId: String, signal: String)
-
+    
+    
+    
     case themeApply(themeJson: String?)
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     case sudoApproveRequest(
         requestId: String,
         kind: String,
         detail: String,
         requester: String?,
         suggestedPattern: String?,
+        reason: String?,
         scoopName: String?,
         expiresAt: Double)
-
+    
     case sudoApproveCancel(requestId: String)
-
+    
+    
+    
     case hello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping
@@ -512,7 +677,9 @@ public enum LeaderToFollowerMessage: Codable {
         case request, response
         case capabilities, motd
         case command, cwd, env, stream, exitCode, signal, stdin
-        case kind, requester, suggestedPattern, scoopName, expiresAt
+        case kind, requester, suggestedPattern, reason, scoopName, expiresAt
+        case computers, id, seq, mime, width, height, fps, maxWidth, watch, events
+        case nativeWidth, nativeHeight
     }
 
     public init(from decoder: Decoder) throws {
@@ -555,6 +722,34 @@ public enum LeaderToFollowerMessage: Codable {
                 scoops: (try? container.decode([ScoopSummary].self, forKey: .scoops)) ?? [],
                 activeScoopJid: (try? container.decode(String.self, forKey: .activeScoopJid)) ?? ""
             )
+        case "computers.list":
+            self = .computersList(
+                computers: (try? container.decode([ComputerDescriptor].self, forKey: .computers)) ?? []
+            )
+        case "computer.frame":
+            self = .computerFrame(
+                id: try container.decode(String.self, forKey: .id),
+                seq: try container.decode(Int.self, forKey: .seq),
+                mime: try container.decode(String.self, forKey: .mime),
+                width: try container.decode(Double.self, forKey: .width),
+                height: try container.decode(Double.self, forKey: .height),
+                data: try container.decodeIfPresent(String.self, forKey: .data),
+                chunkData: try container.decodeIfPresent(String.self, forKey: .chunkData),
+                chunkIndex: try container.decodeIfPresent(Int.self, forKey: .chunkIndex),
+                totalChunks: try container.decodeIfPresent(Int.self, forKey: .totalChunks))
+        case "computer.native.capture":
+            self = .computerNativeCapture(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                fps: try container.decodeIfPresent(Double.self, forKey: .fps),
+                maxWidth: try container.decodeIfPresent(Double.self, forKey: .maxWidth),
+                watch: try container.decodeIfPresent(Bool.self, forKey: .watch))
+        case "computer.native.unwatch":
+            self = .computerNativeUnwatch(
+                requestId: try container.decodeIfPresent(String.self, forKey: .requestId))
+        case "computer.native.input":
+            self = .computerNativeInput(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                events: (try? container.decode([ComputerInputEvent].self, forKey: .events)) ?? [])
         case "models.list":
             self = .modelsList(
                 models: try container.decode([TrayModelCatalogEntry].self, forKey: .models))
@@ -621,7 +816,8 @@ public enum LeaderToFollowerMessage: Codable {
         case "theme.apply":
             self = .themeApply(
                 themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
-
+        
+        
         case "transcript.export.pending",
             "transcript.export.denied",
             "transcript.export.start",
@@ -637,6 +833,7 @@ public enum LeaderToFollowerMessage: Codable {
                 requester: try container.decodeIfPresent(String.self, forKey: .requester),
                 suggestedPattern: try container.decodeIfPresent(
                     String.self, forKey: .suggestedPattern),
+                reason: try container.decodeIfPresent(String.self, forKey: .reason),
                 scoopName: try container.decodeIfPresent(String.self, forKey: .scoopName),
                 expiresAt: try container.decode(Double.self, forKey: .expiresAt))
         case "sudo.approve.cancel":
@@ -732,6 +929,35 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encode("scoops.list", forKey: .type)
             try container.encode(scoops, forKey: .scoops)
             try container.encode(activeScoopJid, forKey: .activeScoopJid)
+        case .computersList(let computers):
+            try container.encode("computers.list", forKey: .type)
+            try container.encode(computers, forKey: .computers)
+        case .computerFrame(
+            let id, let seq, let mime, let width, let height, let data, let chunkData,
+            let chunkIndex, let totalChunks):
+            try container.encode("computer.frame", forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encode(seq, forKey: .seq)
+            try container.encode(mime, forKey: .mime)
+            try container.encode(width, forKey: .width)
+            try container.encode(height, forKey: .height)
+            try container.encodeIfPresent(data, forKey: .data)
+            try container.encodeIfPresent(chunkData, forKey: .chunkData)
+            try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
+            try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
+        case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch):
+            try container.encode("computer.native.capture", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encodeIfPresent(fps, forKey: .fps)
+            try container.encodeIfPresent(maxWidth, forKey: .maxWidth)
+            try container.encodeIfPresent(watch, forKey: .watch)
+        case .computerNativeUnwatch(let requestId):
+            try container.encode("computer.native.unwatch", forKey: .type)
+            try container.encodeIfPresent(requestId, forKey: .requestId)
+        case .computerNativeInput(let requestId, let events):
+            try container.encode("computer.native.input", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(events, forKey: .events)
         case .modelsList(let models):
             try container.encode("models.list", forKey: .type)
             try container.encode(models, forKey: .models)
@@ -796,13 +1022,14 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
         case .sudoApproveRequest(
             let requestId, let kind, let detail, let requester, let suggestedPattern,
-            let scoopName, let expiresAt):
+            let reason, let scoopName, let expiresAt):
             try container.encode("sudo.approve.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(kind, forKey: .kind)
             try container.encode(detail, forKey: .detail)
             try container.encodeIfPresent(requester, forKey: .requester)
             try container.encodeIfPresent(suggestedPattern, forKey: .suggestedPattern)
+            try container.encodeIfPresent(reason, forKey: .reason)
             try container.encodeIfPresent(scoopName, forKey: .scoopName)
             try container.encode(expiresAt, forKey: .expiresAt)
         case .sudoApproveCancel(let requestId):
@@ -864,27 +1091,65 @@ public enum LeaderToFollowerMessage: Codable {
     }
 }
 
-public enum FollowerToLeaderMessage: Codable {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+public enum FollowerToLeaderMessage: Codable {
+    
+    
+    
+    
+    
     case userMessage(
         text: String, messageId: String, steer: Bool = false,
         attachments: [MessageAttachment]? = nil)
-
+    
+    
     case newSession(action: NewSessionAction)
     case abort
     case requestSnapshot(scoopJid: String?)
     case scoopsSelect(scoopJid: String)
+    case computerWatch(id: String, fps: Double?, maxWidth: Double?)
+    case computerUnwatch(id: String)
+    
+    case computerInput(id: String, events: [ComputerInputEvent])
+    
+    case computerNativeFrame(
+        requestId: String, seq: Int, mime: String, width: Double, height: Double,
+        nativeWidth: Double, nativeHeight: Double, data: String?, chunkData: String?,
+        chunkIndex: Int?, totalChunks: Int?)
+    case computerNativeError(requestId: String, error: String)
+    
+    
+    case computerNativeInputResult(requestId: String, error: String?)
     case modelsRequest
-
+    
+    
+    
     case modelSelect(modelId: String, scoopJid: String?)
     case thinkingSet(
         scoopJid: String, thinkingLevel: TrayThinkingLevel, effortOverride: String?)
     case sprinklesRefresh
     case sprinkleFetch(requestId: String, sprinkleName: String)
     case sprinkleLick(sprinkleName: String, body: AnyCodable?, targetScoop: String?)
-
+    
     case targetsAdvertise(targets: [RemoteTargetInfo], runtimeId: String)
-
+    
+    
+    
+    
     case cdpRequest(
         requestId: String,
         targetRuntimeId: String,
@@ -902,24 +1167,35 @@ public enum FollowerToLeaderMessage: Codable {
     case cdpEvent(method: String, params: AnyCodable, sessionId: String?)
     case tabOpened(requestId: String, targetId: String)
     case tabOpenError(requestId: String, error: String)
-
+    
+    
+    
+    
+    
     case tabTeleportRequest(requestId: String, targetId: String)
-
+    
+    
     case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
-
+    
     case fsResponse(requestId: String, response: TrayFsResponse)
     case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?, stdin: String?)
     case execChunk(requestId: String, stream: String, data: String)
     case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
     case execSignal(requestId: String, signal: String)
-
+    
+    
+    
+    
+    
     case lick(event: LickEvent)
-
+    
+    
+    
     case sudoApproveResponse(
         requestId: String, decision: String, pattern: String?, attestation: String?)
-
+    
     case pushRegister(platform: String, token: String, environment: String)
-
+    
     case hello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping
@@ -936,6 +1212,7 @@ public enum FollowerToLeaderMessage: Codable {
         case targetRuntimeId, localTargetId, request, response
         case command, cwd, env, stream, data, exitCode, signal, stdin
         case decision, pattern, attestation, platform, token, environment
+        case id, fps, maxWidth, events, seq, mime, width, height, nativeWidth, nativeHeight
     }
 
     public init(from decoder: Decoder) throws {
@@ -959,6 +1236,38 @@ public enum FollowerToLeaderMessage: Codable {
                 scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
         case "scoops.select":
             self = .scoopsSelect(scoopJid: try container.decode(String.self, forKey: .scoopJid))
+        case "computer.watch":
+            self = .computerWatch(
+                id: try container.decode(String.self, forKey: .id),
+                fps: try container.decodeIfPresent(Double.self, forKey: .fps),
+                maxWidth: try container.decodeIfPresent(Double.self, forKey: .maxWidth))
+        case "computer.unwatch":
+            self = .computerUnwatch(id: try container.decode(String.self, forKey: .id))
+        case "computer.input":
+            self = .computerInput(
+                id: try container.decode(String.self, forKey: .id),
+                events: (try? container.decode([ComputerInputEvent].self, forKey: .events)) ?? [])
+        case "computer.native.frame":
+            self = .computerNativeFrame(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                seq: try container.decode(Int.self, forKey: .seq),
+                mime: try container.decode(String.self, forKey: .mime),
+                width: try container.decode(Double.self, forKey: .width),
+                height: try container.decode(Double.self, forKey: .height),
+                nativeWidth: try container.decode(Double.self, forKey: .nativeWidth),
+                nativeHeight: try container.decode(Double.self, forKey: .nativeHeight),
+                data: try container.decodeIfPresent(String.self, forKey: .data),
+                chunkData: try container.decodeIfPresent(String.self, forKey: .chunkData),
+                chunkIndex: try container.decodeIfPresent(Int.self, forKey: .chunkIndex),
+                totalChunks: try container.decodeIfPresent(Int.self, forKey: .totalChunks))
+        case "computer.native.error":
+            self = .computerNativeError(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                error: try container.decode(String.self, forKey: .error))
+        case "computer.native.input.result":
+            self = .computerNativeInputResult(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                error: try container.decodeIfPresent(String.self, forKey: .error))
         case "models.request":
             self = .modelsRequest
         case "model.select":
@@ -1091,7 +1400,7 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode("user_message", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
-
+            
             if steer { try container.encode(true, forKey: .steer) }
             if let attachments, !attachments.isEmpty {
                 try container.encode(attachments, forKey: .attachments)
@@ -1107,6 +1416,41 @@ public enum FollowerToLeaderMessage: Codable {
         case .scoopsSelect(let scoopJid):
             try container.encode("scoops.select", forKey: .type)
             try container.encode(scoopJid, forKey: .scoopJid)
+        case .computerWatch(let id, let fps, let maxWidth):
+            try container.encode("computer.watch", forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encodeIfPresent(fps, forKey: .fps)
+            try container.encodeIfPresent(maxWidth, forKey: .maxWidth)
+        case .computerUnwatch(let id):
+            try container.encode("computer.unwatch", forKey: .type)
+            try container.encode(id, forKey: .id)
+        case .computerInput(let id, let events):
+            try container.encode("computer.input", forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encode(events, forKey: .events)
+        case .computerNativeFrame(
+            let requestId, let seq, let mime, let width, let height, let nativeWidth,
+            let nativeHeight, let data, let chunkData, let chunkIndex, let totalChunks):
+            try container.encode("computer.native.frame", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(seq, forKey: .seq)
+            try container.encode(mime, forKey: .mime)
+            try container.encode(width, forKey: .width)
+            try container.encode(height, forKey: .height)
+            try container.encode(nativeWidth, forKey: .nativeWidth)
+            try container.encode(nativeHeight, forKey: .nativeHeight)
+            try container.encodeIfPresent(data, forKey: .data)
+            try container.encodeIfPresent(chunkData, forKey: .chunkData)
+            try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
+            try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
+        case .computerNativeError(let requestId, let error):
+            try container.encode("computer.native.error", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(error, forKey: .error)
+        case .computerNativeInputResult(let requestId, let error):
+            try container.encode("computer.native.input.result", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encodeIfPresent(error, forKey: .error)
         case .modelsRequest:
             try container.encode("models.request", forKey: .type)
         case .modelSelect(let modelId, let scoopJid):

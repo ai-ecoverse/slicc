@@ -20,11 +20,17 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
+
+
+
+
+
 var (
 	binOnce sync.Once
 	binPath string
 	binErr  error
 )
+
 
 func sliccBinary(t *testing.T) string {
 	t.Helper()
@@ -48,6 +54,10 @@ func sliccBinary(t *testing.T) string {
 	}
 	return binPath
 }
+
+
+
+
 
 func TestCLIFollowRunsLeaderCommand(t *testing.T) {
 	bin := sliccBinary(t)
@@ -118,6 +128,9 @@ func TestCLIFollowRunsLeaderCommand(t *testing.T) {
 	}
 }
 
+
+
+
 func TestCLIExecRunsOnLeader(t *testing.T) {
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
@@ -160,6 +173,13 @@ func TestCLIExecRunsOnLeader(t *testing.T) {
 		t.Fatalf("exec stdout = %q, want to contain EXEC-E2E-OK; stderr:\n%s", stdout.String(), stderr.String())
 	}
 }
+
+
+
+
+
+
+
 
 func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	bin := sliccBinary(t)
@@ -237,6 +257,11 @@ func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	}
 }
 
+
+
+
+
+
 func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
@@ -269,6 +294,128 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 		t.Fatalf("prompt stdout = %q, want to contain PROMPT-E2E-OK", stdout.String())
 	}
 }
+
+
+
+
+func promptLeader(t *testing.T, frames []any) *bridgedLeader {
+	t.Helper()
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var env protocol.Envelope
+		if json.Unmarshal(msg.Data, &env) != nil || env.Type != "user_message" {
+			return
+		}
+		go func() {
+			for _, f := range frames {
+				if d, ok := f.(time.Duration); ok {
+					time.Sleep(d)
+					continue
+				}
+				_ = sendJSON(leader.dc, f)
+			}
+		}()
+	})
+	return leader
+}
+
+func statusFrame(s string) protocol.Status {
+	return protocol.Status{Type: protocol.TypeStatus, ScoopStatus: s}
+}
+
+func agentFrame(eventType, id, text string) protocol.AgentEventEnvelope {
+	return protocol.AgentEventEnvelope{
+		Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+		Event: protocol.AgentEvent{Type: eventType, MessageID: id, Text: text, Error: text},
+	}
+}
+
+func runPrompt(t *testing.T, bin, joinURL string, settle time.Duration) (string, string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, joinURL, "prompt", "hi there")
+	cmd.Env = append(os.Environ(), "SLICC_PROMPT_SETTLE="+settle.String())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+
+
+
+
+
+func TestCLIPromptWaitsThroughToolPhase(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		agentFrame(protocol.AgentToolUseStart, "m1", "bash"),
+		statusFrame("ready"),
+		900 * time.Millisecond, 
+		agentFrame(protocol.AgentToolResult, "m1", "ok"),
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m2", "AFTER-TOOL-OK"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-TOOL-OK") {
+		t.Fatalf("prompt stdout = %q, want the post-tool reply", stdout)
+	}
+}
+
+
+
+func TestCLIPromptWaitsForResumedTurn(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m1", "FIRST-"),
+		statusFrame("ready"),
+		100 * time.Millisecond,
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m2", "SECOND"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 400*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "FIRST-SECOND") {
+		t.Fatalf("prompt stdout = %q, want both messages", stdout)
+	}
+}
+
+
+
+
+func TestCLIPromptErrorAfterReady(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		statusFrame("ready"),
+		50 * time.Millisecond,
+		agentFrame(protocol.AgentError, "", "Not signed in to Provider"),
+	})
+	_, stderr, err := runPrompt(t, bin, leader.joinURL, 400*time.Millisecond)
+	if err == nil {
+		t.Fatalf("prompt CLI exited 0; want exit 1 with the error; stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "Not signed in to Provider") {
+		t.Fatalf("stderr = %q, want the agent error", stderr)
+	}
+}
+
+
+
+
+
+
 
 func TestCLIFollowEvalPersistsState(t *testing.T) {
 	bin := sliccBinary(t)
@@ -315,7 +462,7 @@ func TestCLIFollowEvalPersistsState(t *testing.T) {
 			}
 			switch r.RequestID {
 			case "eval-1":
-
+				
 				_ = sendJSON(leader.dc, protocol.ExecRequest{
 					Type: protocol.TypeExecRequest, RequestID: "eval-2", Command: echoCmd,
 				})

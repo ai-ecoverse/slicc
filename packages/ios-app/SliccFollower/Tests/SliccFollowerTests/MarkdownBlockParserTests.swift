@@ -2,7 +2,13 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
 final class MarkdownBlockParserTests: XCTestCase {
+
+    
 
     func testParsesPipeTableWithAlignments() {
         let blocks = MarkdownBlockParser.parse(
@@ -85,6 +91,8 @@ final class MarkdownBlockParserTests: XCTestCase {
         XCTAssertEqual(text, "After the table.")
     }
 
+    
+
     func testBulletListItemsCarryDepthAndMarker() {
         let blocks = MarkdownBlockParser.parse(
             """
@@ -136,6 +144,8 @@ final class MarkdownBlockParserTests: XCTestCase {
         XCTAssertEqual(text, "-not a bullet")
     }
 
+    
+
     func testThematicBreakVariants() {
         for line in ["---", "***", "___", "- - -", "  ----"] {
             XCTAssertTrue(MarkdownBlockParser.isThematicBreak(line), "\(line) is a rule")
@@ -156,6 +166,8 @@ final class MarkdownBlockParserTests: XCTestCase {
             return XCTFail("delimiter rows carry pipes and belong to the table, got \(blocks)")
         }
     }
+
+    
 
     func testHeadingsCodeAndQuotesSurviveTheRewrite() {
         let blocks = MarkdownBlockParser.parse(

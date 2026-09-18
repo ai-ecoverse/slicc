@@ -5,8 +5,14 @@ import XCTest
 
 @testable import slicc_server
 
-extension XCTestCase {
 
+
+
+
+
+extension XCTestCase {
+    
+    
     func waitUntil(
         _ description: String,
         timeoutMilliseconds: Int = 2_000,
@@ -129,15 +135,24 @@ final class ChromeConnectorHarness: @unchecked Sendable {
         await callback?(.text(text))
     }
 
+    func emitBinary(_ bytes: [UInt8]) async {
+        let callback = self.messageCallbackSnapshot()
+        await callback?(.binary(ByteBuffer(bytes: bytes)))
+    }
+
     func emitEvent(_ event: ChromeSocketEvent) async {
         let callback = self.eventCallbackSnapshot()
         await callback?(event)
     }
 
+    
+    
     func failNextConnects(_ count: Int) {
         self.state.queueConnectFailures(count)
     }
 
+    
+    
     func holdConnectsUntilReleased() {
         self.state.setHoldConnects(true)
     }
@@ -150,6 +165,7 @@ final class ChromeConnectorHarness: @unchecked Sendable {
         self.state.connectCountSnapshot()
     }
 
+    
     func connectAttemptCountSnapshot() -> Int {
         self.state.connectAttemptCountSnapshot()
     }
@@ -213,6 +229,7 @@ final class HarnessState: @unchecked Sendable {
         self.lock.unlock()
     }
 
+    
     func consumeQueuedFailure() -> Bool {
         self.lock.lock()
         defer { self.lock.unlock() }
@@ -344,6 +361,8 @@ actor AsyncGate {
         }
     }
 }
+
+
 
 actor StepGate {
     private var permits = 0

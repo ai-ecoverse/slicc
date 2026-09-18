@@ -3,7 +3,11 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
 final class TranscriptShortActionTests: XCTestCase {
+
+    
 
     private static let pngBase64 =
         "iVBORw0KGgoAAAANSUhEUgAAAPAAAACgCAIAAAC9uXYyAAAB9UlEQVR42u3dMQ2AMABE0fqoAwZWtGACb11QUBO1gQIMwNrk0pd8"
@@ -25,6 +29,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(payload.name, "payload.png")
     }
 
+    
+    
     func testMagicOutranksDeclaredType() {
         let payload = Base64Payload.identify(Self.pngBase64, declaredMime: "application/pdf")
         XCTAssertEqual(payload?.mime, "image/png")
@@ -37,6 +43,7 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(payload?.source, .declared)
     }
 
+    
     func testOctetStreamIsNotADeclaration() {
         let data = Data("plain words here".utf8).base64EncodedString()
         let payload = Base64Payload.identify(data, declaredMime: "application/octet-stream")
@@ -44,6 +51,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(payload?.source, .content)
     }
 
+    
+    
     func testUnrecognisableBytesAreNotAPayload() {
         let noise = Data((0..<200).map { UInt8(($0 * 37) % 251) })
         XCTAssertNil(Base64Payload.identify(noise.base64EncodedString()))
@@ -53,6 +62,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertNil(Base64Payload.identify(""))
     }
 
+    
+    
     func testRIFFContainerResolvesByItsInnerTag() {
         func riff(_ tag: String) -> String {
             var bytes = Array("RIFF".utf8) + [0x24, 0x00, 0x00, 0x00] + Array(tag.utf8)
@@ -63,6 +74,9 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(Base64Payload.identify(riff("WAVE"))?.mime, "audio/wav")
     }
 
+    
+    
+    
     func testOggResolvesItsCodecToAudioOrVideo() {
         func ogg(_ codec: String) -> String {
             var bytes = Array("OggS".utf8) + Array(repeating: UInt8(0), count: 24)
@@ -73,6 +87,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(Base64Payload.identify(ogg("vorbis"))?.mime, "audio/ogg")
     }
 
+    
+    
     func testBinaryFamiliesAreNeverSniffedAsText() {
         let zip = Data([0x50, 0x4B, 0x03, 0x04] + Array(repeating: UInt8(0x41), count: 128))
         XCTAssertEqual(Base64Payload.identify(zip.base64EncodedString())?.mime, "application/zip")
@@ -80,15 +96,19 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertTrue(MagicBytes.looksLikeText(Data()))
     }
 
+    
+    
     func testTruncatedUTF8AtTheWindowEdgeIsStillText() {
         var bytes = Data(repeating: 0x41, count: MagicBytes.textSniffWindow - 1)
-        bytes.append(contentsOf: [0xE2, 0x9C, 0x93])
+        bytes.append(contentsOf: [0xE2, 0x9C, 0x93])  
         XCTAssertTrue(MagicBytes.looksLikeText(bytes))
     }
 
     func testChipLabelIsTheShortType() {
         XCTAssertEqual(Base64Payload.identify(Self.pngBase64)?.shortLabel, "PNG")
     }
+
+    
 
     func testParagraphElidesConfirmedPayloadAndTrimsItsWhitespace() {
         let markdown = """
@@ -104,7 +124,8 @@ final class TranscriptShortActionTests: XCTestCase {
             case .payload(let payload) = plan.segments[1],
             case .text(let tail) = plan.segments[2]
         else { return XCTFail("unexpected segments: \(plan.segments)") }
-
+        
+        
         XCTAssertEqual(String(head.characters), "Here is the icon I generated:")
         XCTAssertEqual(String(tail.characters), "And that is all.")
         XCTAssertEqual(payload.mime, "image/png")
@@ -115,6 +136,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(plan.segments.count, 1)
         guard case .text = plan.segments[0] else { return XCTFail("expected a text segment") }
     }
+
+    
 
     private func links(_ attributed: AttributedString) -> [TranscriptLink] {
         attributed.runs.compactMap { $0.link.flatMap(TranscriptLink.decode) }
@@ -142,6 +165,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(links(annotated), [.file(path: "/workspace/notes.md", line: 12)])
     }
 
+    
+    
     func testExistingMarkdownLinkIsNotOverwritten() {
         let annotated = TranscriptInline.annotate(
             TranscriptInline.parse("see [main.ts](https://example.com/x) here"),
@@ -150,6 +175,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(destinations, ["https://example.com/x"])
     }
 
+    
+    
     func testAnnotationSurvivesMultiByteCharacters() {
         let annotated = TranscriptInline.annotate(
             TranscriptInline.parse("🍦🍨 shipped — call +1 (415) 555-0134"))
@@ -159,11 +186,16 @@ final class TranscriptShortActionTests: XCTestCase {
             linked.map { String(annotated[$0.range].characters) }, "+1 (415) 555-0134")
     }
 
+    
+    
+    
     func testOversizeInlineCodeIsNotLinked() {
         let huge = String(repeating: "x", count: TranscriptLink.maximumCodeLength + 1)
         let annotated = TranscriptInline.annotate(TranscriptInline.parse("`\(huge)`"))
         XCTAssertTrue(links(annotated).isEmpty)
     }
+
+    
 
     func testLinkRoundTrip() {
         let cases: [TranscriptLink] = [
@@ -171,7 +203,8 @@ final class TranscriptShortActionTests: XCTestCase {
             .file(path: "/workspace/notes.md", line: nil),
             .phone("+1 (415) 555-0134"),
             .code("echo \"hi & bye\" | grep ?"),
-
+            
+            
             .code("git log --grep='#42' -- 'a b/c%d+e'"),
             .code("printf '🍦 100%% done\\n'"),
         ]
@@ -187,11 +220,15 @@ final class TranscriptShortActionTests: XCTestCase {
         }
     }
 
+    
+    
     func testPhoneDefaultsToMessages() {
         XCTAssertEqual(
             TranscriptLink.phone("+1 (415) 555-0134").systemURL?.absoluteString,
             "sms:+14155550134")
     }
+
+    
 
     func testHarvestsQualifiedPathsFromToolInput() {
         let input = AnyCodable([
@@ -208,15 +245,23 @@ final class TranscriptShortActionTests: XCTestCase {
             ["/workspace/docs/plan.md", "/workspace/docs/rfc.md"])
     }
 
+    
+    
+    
+    
     func testStopsAtTwoContainersDeep() {
         let input = AnyCodable(["edits": [["path": "/workspace/docs/plan.md"]]])
         XCTAssertEqual(ToolCallPathHints.hints(from: input), [])
     }
 
+    
+    
     func testDropsBareNamesAndURLs() {
         let input = AnyCodable(["note": "read foo.md", "docs": "https://example.com/app.js"])
         XCTAssertEqual(ToolCallPathHints.hints(from: input), [])
     }
+
+    
 
     private func resolver(
         _ probe: @escaping @Sendable (String) async -> Bool
@@ -238,6 +283,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(seen, ["/workspace/notes.md", "/workspace/missing.md"])
     }
 
+    
+    
     func testBareNameResolvesThroughAToolCallHint() async {
         let resolver = resolver { $0 == "/home/lars/foo.md" }
         resolver.absorb(toolInput: AnyCodable(["command": "echo hi > /home/lars/foo.md"]))
@@ -251,6 +298,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
+    
+    
     func testSuffixMatchRespectsSegmentBoundaries() {
         XCTAssertTrue(
             FileMentionResolver.matchesSuffix("/packages/webapp/src/main.ts", "webapp/src/main.ts"))
@@ -264,6 +313,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(FileMentionResolver.normalize("~/.config/app.toml"), ".config/app.toml")
     }
 
+    
+    
     func testVerdictsAreCachedIncludingMisses() async {
         let asked = Counter()
         let resolver = resolver { path in
@@ -276,6 +327,7 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    
     func testResetDropsHintsAndVerdicts() async {
         let resolver = resolver { $0 == "/home/lars/foo.md" }
         resolver.absorb(toolInput: AnyCodable(["command": "cat /home/lars/foo.md"]))
@@ -302,6 +354,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
+    
+
     func testInlineCacheReturnsTheSamePlanForTheSameInput() {
         let markdown = "run `npm test` in packages/webapp/src/main.ts"
         let first = TranscriptInlineCache.shared.paragraph(markdown: markdown, files: [:])
@@ -309,6 +363,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertEqual(String(first.attributed.characters), String(second.attributed.characters))
     }
 
+    
+    
     func testResolvingAMentionChangesTheCacheKey() {
         let markdown = "open notes.md"
         let inert = TranscriptInlineCache.shared.paragraph(markdown: markdown, files: [:])
@@ -322,6 +378,11 @@ final class TranscriptShortActionTests: XCTestCase {
                 markdown: markdown, files: ["notes.md": "/workspace/notes.md"]))
     }
 
+    
+
+    
+    
+    
     @MainActor
     func testDisconnectedFollowerNeverConfirmsAMention() async {
         let appState = AppState()
@@ -329,6 +390,8 @@ final class TranscriptShortActionTests: XCTestCase {
         XCTAssertFalse(exists)
     }
 
+    
+    
     @MainActor
     func testProbeSwallowsALeaderFailure() async {
         let appState = AppState()
@@ -336,6 +399,8 @@ final class TranscriptShortActionTests: XCTestCase {
         let exists = await appState.transcriptFileExists("/workspace/notes.md")
         XCTAssertFalse(exists)
     }
+
+    
 
     private actor Counter {
         private(set) var values: [String] = []

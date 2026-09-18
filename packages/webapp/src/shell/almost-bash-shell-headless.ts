@@ -23,6 +23,7 @@ import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js'
 import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
+import { filesystemExecutionLimits } from './filesystem-budgets.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
@@ -42,8 +43,10 @@ import {
 import { createProxiedFetch } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
-import { enforceCommandSudo } from './sudo/command-guard.js';
+import { commandSudoSubject, enforceCommandSudo } from './sudo/command-guard.js';
+import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
+import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
@@ -85,6 +88,12 @@ export interface HeadlessShellOptions {
   sudo?: ShellSudoConfig;
 
   scrubProgressLabel?: (text: string) => Promise<string>;
+
+  executionLimitProfile?: NonNullable<
+    ConstructorParameters<typeof Bash>[0]
+  >['executionLimitProfile'];
+
+  executionLimits?: NonNullable<ConstructorParameters<typeof Bash>[0]>['executionLimits'];
 }
 
 export interface ShellSudoConfig {
@@ -171,34 +180,16 @@ function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined
 }
 
 function stripRunPid(env: Record<string, string>): Record<string, string> {
-  if (!(RUN_PID_ENV in env) && !(OUTPUT_TEE_ENV in env)) return { ...env };
-  const { [RUN_PID_ENV]: _runPid, [OUTPUT_TEE_ENV]: _tee, ...rest } = env;
+  if (!(RUN_PID_ENV in env) && !(OUTPUT_TEE_ENV in env) && !(SUDO_REASON_ENV in env)) {
+    return { ...env };
+  }
+  const {
+    [RUN_PID_ENV]: _runPid,
+    [OUTPUT_TEE_ENV]: _tee,
+    [SUDO_REASON_ENV]: _reason,
+    ...rest
+  } = env;
   return rest;
-}
-
-function nestedBashExecOptions(
-  opts:
-    | {
-        cwd?: string;
-        env?: Record<string, string>;
-        args?: string[];
-        replaceEnv?: boolean;
-      }
-    | undefined,
-  fallbackEnv: Record<string, string>,
-  fallbackCwd: string
-): {
-  env: Record<string, string>;
-  cwd: string;
-  replaceEnv?: boolean;
-  args?: string[];
-} {
-  return {
-    env: opts?.env ?? fallbackEnv,
-    cwd: opts?.cwd ?? fallbackCwd,
-    ...(opts?.env !== undefined ? { replaceEnv: opts.replaceEnv ?? true } : {}),
-    ...(opts?.args !== undefined ? { args: opts.args } : {}),
-  };
 }
 
 export class AlmostBashShellHeadless implements HeadlessShellLike {
@@ -409,7 +400,14 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       sleep: makeSleepWithProgress(this.progress, {
         isAborted: () => this.activeRunSignal?.aborted ?? false,
       }),
+      executionLimitProfile: options.executionLimitProfile,
+      executionLimits: filesystemExecutionLimits(
+        options.isScoop?.() ?? false,
+        options.executionLimits
+      ),
     });
+
+    this.bash.registerTransformPlugin(sayStdioPlugin);
 
     if (this.allowedCommands !== null) {
       const bashInternals = this.bash as unknown as { commands: Map<string, unknown> };
@@ -522,7 +520,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         env: new Map(Object.entries(this.lastEnv)),
         stdin: EMPTY_BYTES,
         exec: (cmd, opts) =>
-          this.bash.exec(cmd, nestedBashExecOptions(opts, this.lastEnv, this.cwd)),
+          this.bash.exec(cmd, {
+            env: opts?.env ?? this.lastEnv,
+            cwd: opts?.cwd ?? this.cwd,
+            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
+          }),
       },
       this.buildJshProcessConfig()
     );
@@ -615,10 +617,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
     await this.waitForInitialJshSync(signal);
 
+    const sudoReason = extractLeadingCommentReason(command);
     const taggedEnv: Record<string, string> = {
       ...this.lastEnv,
       ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
       ...(outputTeeId === undefined ? {} : { [OUTPUT_TEE_ENV]: outputTeeId }),
+      ...(sudoReason ? { [SUDO_REASON_ENV]: sudoReason } : {}),
     };
     const execOptions: BashExecOptionsWithSignal = {
       env: taggedEnv,
@@ -670,6 +674,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       }
     }
 
+    if (result.exitCode !== 0 && result.stderr.includes('Permission denied')) {
+      const { withShebangExecHint } = await import('./shebang-exec-hint.js');
+      return withShebangExecHint(result, this.cwd, this.vfsAdapter);
+    }
     return result;
   }
 
@@ -687,9 +695,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const onSettled = () => this.scriptRun?.stepDone();
     const teeOutput = (env: ReadonlyMap<string, string> | undefined, result: ExecResult) =>
       this.teeCommandOutput(env, result);
+    const outputTees = this.outputTees;
     return {
       ...wrapped,
       async execute(args, ctx) {
+        const teeId = ctx.env?.get(OUTPUT_TEE_ENV);
+        const tee = teeId ? outputTees.get(teeId) : undefined;
+        if (tee) {
+          (ctx as CommandContext & { writeStdout?: (chunk: string) => void }).writeStdout = tee;
+        }
         try {
           const result = await wrapped.execute(args, ctx);
 
@@ -743,23 +757,27 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private wrapCommandForSudo(command: Command): Command {
     if (!this.isTransparentGatingEnabled()) return command;
-    const guard = (args: string[]) => this.gateCommandDispatch(command.name, args);
+    const guard = (args: string[], reason?: string) =>
+      this.gateCommandDispatch(command.name, args, reason);
     return {
-      name: command.name,
-      trusted: command.trusted,
+      ...command,
       async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
-        const denial = await guard(args);
+        const denial = await guard(args, ctx.env?.get(SUDO_REASON_ENV));
         if (denial) return denial;
         return command.execute(args, ctx);
       },
     };
   }
 
-  private async gateCommandDispatch(name: string, args: string[]): Promise<ExecResult | null> {
+  private async gateCommandDispatch(
+    name: string,
+    args: string[],
+    reason?: string
+  ): Promise<ExecResult | null> {
     const sudo = this.options.sudo;
     if (!sudo) return null;
 
-    const subject = `${name} ${args.join(' ')}`.trim();
+    const subject = commandSudoSubject(name, args);
 
     if (this.consumeSudoBypass(subject)) {
       return null;
@@ -776,6 +794,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         this.pendingCommandGrants.push(pattern);
       },
       defaultDisposition: sudo.defaultDisposition,
+      ...(reason ? { reason } : {}),
     });
     if (result.allowed) return null;
 
@@ -882,7 +901,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       const execFn: typeof ctx.exec =
         ctx.exec ??
         ((cmd, opts) =>
-          this.bash.exec(cmd, nestedBashExecOptions(opts, Object.fromEntries(ctx.env), ctx.cwd)));
+          this.bash.exec(cmd, {
+            env: opts?.env ?? Object.fromEntries(ctx.env),
+            cwd: opts?.cwd ?? ctx.cwd,
+            args: opts?.args,
+            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
+          }));
 
       const jshMap = await catalog.getJshCommands(this.currentScanRoots());
       const jshPath = jshMap.get(cmdName);
@@ -1026,7 +1050,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         env: new Map(Object.entries(this.lastEnv)),
         stdin: EMPTY_BYTES,
         exec: (cmd, opts) =>
-          this.bash.exec(cmd, nestedBashExecOptions(opts, this.lastEnv, this.cwd)),
+          this.bash.exec(cmd, {
+            env: opts?.env ?? this.lastEnv,
+            cwd: opts?.cwd ?? this.cwd,
+            ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
+          }),
       },
       this.buildJshProcessConfig(runPid)
     );

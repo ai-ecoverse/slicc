@@ -4,9 +4,20 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
+
+
+
 @MainActor
 final class SettingsViewRenderTests: XCTestCase {
 
+    
+    
+    
     private static let touchedDefaults = [
         StartupPreference.enabledKey,
         terminalFollowCommandKey,
@@ -34,11 +45,22 @@ final class SettingsViewRenderTests: XCTestCase {
         super.tearDown()
     }
 
+    
+
     func testSettingsRendersAllFourTabs() {
         let view = SettingsView(fileProviderCoordinator: FileProviderCoordinator())
         XCTAssertFalse(ViewHosting.digest(of: view, width: 640, height: 460).isEmpty)
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
     func testMountsTabBuildsEmptyAndPopulated() {
         XCTAssertFalse(
             ViewHosting.digest(of: MountsSettingsView(), width: 640, height: 400).isEmpty
@@ -54,6 +76,11 @@ final class SettingsViewRenderTests: XCTestCase {
         )
     }
 
+    
+    
+    
+    
+    
     func testMountRowRulesTheTableDisplays() {
         XCTAssertTrue(MountTablePreference.isValidTarget("/mnt/code", among: ["/mnt/code"]))
         XCTAssertFalse(MountTablePreference.isValidTarget("not-absolute", among: ["not-absolute"]))
@@ -65,7 +92,8 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testMountsTabRendersARowWithoutCrashingOnAnEmptyFolder() {
-
+        
+        
         XCTAssertFalse(
             ViewHosting.digest(
                 of: MountsSettingsView(rows: [
@@ -78,8 +106,12 @@ final class SettingsViewRenderTests: XCTestCase {
         )
     }
 
-    func testStartupTabRevealsTheDefaultBrowserSectionOnlyWithAutoLaunchOn() {
+    
 
+    func testStartupTabRevealsTheDefaultBrowserSectionOnlyWithAutoLaunchOn() {
+        
+        
+        
         UserDefaults.standard.set(false, forKey: StartupPreference.enabledKey)
         let off = ViewHosting.digest(
             of: StartupSettingsView(fileProviderCoordinator: FileProviderCoordinator()),
@@ -96,7 +128,9 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testStartupTabReflectsTheFinderIntegrationToggle() {
-
+        
+        
+        
         let coordinator = { (enabled: Bool) -> FileProviderCoordinator in
             let suite = UserDefaults(suiteName: "sliccstart.tests.finder.\(enabled)")!
             suite.set(enabled, forKey: FileProviderCoordinator.enabledKey)
@@ -110,6 +144,9 @@ final class SettingsViewRenderTests: XCTestCase {
         let off = coordinator(false)
         let on = coordinator(true)
 
+        
+        
+        
         XCTAssertTrue(
             FileProviderCoordinator(
                 defaults: UserDefaults(suiteName: "sliccstart.tests.finder.unset")!
@@ -118,6 +155,9 @@ final class SettingsViewRenderTests: XCTestCase {
         XCTAssertFalse(off.isEnabled)
         XCTAssertTrue(on.isEnabled)
 
+        
+        
+        
         XCTAssertFalse(
             ViewHosting.digest(
                 of: StartupSettingsView(fileProviderCoordinator: off),
@@ -134,12 +174,15 @@ final class SettingsViewRenderTests: XCTestCase {
         )
     }
 
+    
+
     func testTerminalsTabPreviewFollowsTheTemplate() {
         UserDefaults.standard.set(FollowCommandTemplate.defaultTemplate, forKey: terminalFollowCommandKey)
         let standard = ViewHosting.digest(of: TerminalsSettingsView(), width: 640, height: 440)
         UserDefaults.standard.set("{slicc} {joinUrl} follow --custom {shell}", forKey: terminalFollowCommandKey)
         let custom = ViewHosting.digest(of: TerminalsSettingsView(), width: 640, height: 440)
-
+        
+        
         XCTAssertNotEqual(standard, custom)
     }
 
@@ -160,19 +203,24 @@ final class SettingsViewRenderTests: XCTestCase {
         XCTAssertNotEqual(notSuppressed, suppressed)
     }
 
+    
+
     private func secret(_ name: String, domains: [String] = ["example.com"]) -> Secret {
         Secret(name: name, value: "value-for-\(name)", domains: domains)
     }
 
     func testSecretsTabStaysLockedUntilUnlocked() {
-
+        
+        
         let locked = SecretsSettingsView(secrets: [secret("REAL_TOKEN")], unlocked: false)
         let unlocked = SecretsSettingsView(secrets: [secret("REAL_TOKEN")], unlocked: true)
         ViewHosting.assertRendersDifferently(locked, unlocked, width: 640, height: 440)
     }
 
     func testSecretsTabRendersAPopulatedUnlockedTable() {
-
+        
+        
+        
         XCTAssertFalse(
             ViewHosting.digest(
                 of: SecretsSettingsView(
@@ -186,6 +234,8 @@ final class SettingsViewRenderTests: XCTestCase {
         )
     }
 
+    
+
     private func editor(
         draft: SecretDraft,
         existing: Set<String> = [],
@@ -195,7 +245,10 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testEditorDistinguishesCreatingFromEditing() {
-
+        
+        
+        
+        
         let blank = Secret(name: "", value: "", domains: [])
         ViewHosting.assertRendersDifferently(
             editor(draft: .creating),
@@ -207,7 +260,10 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testEditorSurfacesEachValidationFailure() {
-
+        
+        
+        
+        
         func message(
             name: String = "TOKEN",
             value: String = "secret",
@@ -250,7 +306,8 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testRenamingAnExistingSecretOntoItselfIsNotACollision() {
-
+        
+        
         let stored = secret("GITHUB_TOKEN")
         XCTAssertNil(
             SecretEditorSheet.validationMessage(
@@ -261,7 +318,7 @@ final class SettingsViewRenderTests: XCTestCase {
                 existingNames: ["GITHUB_TOKEN", "OTHER"]
             )
         )
-
+        
         XCTAssertEqual(
             SecretEditorSheet.validationMessage(
                 name: "OTHER",
@@ -275,7 +332,8 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testTheEditorShowsAValidationMessageWhenThereIsOne() {
-
+        
+        
         let incomplete = Secret(name: "TOKEN", value: "", domains: ["api.example.com"])
         let complete = Secret(name: "TOKEN", value: "v", domains: ["api.example.com"])
         ViewHosting.assertRendersDifferently(
@@ -288,7 +346,11 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testEditorRendersASecretWithNoHostnamesAsOneEmptyRow() {
-
+        
+        
+        
+        
+        
         let noDomains = editor(draft: .editing(secret("TOKEN", domains: [])))
         let oneBlankDomain = editor(draft: .editing(secret("TOKEN", domains: [""])))
         XCTAssertEqual(
@@ -310,8 +372,12 @@ final class SettingsViewRenderTests: XCTestCase {
         XCTAssertNotEqual(SecretDraft.creating.id, SecretDraft.editing(secret("A")).id)
     }
 
-    func testSetupProgressOffersRetryOnlyOnFailure() {
+    
 
+    func testSetupProgressOffersRetryOnlyOnFailure() {
+        
+        
+        
         let row = { (error: String?) in
             SetupProgressView(
                 message: "Installing…",

@@ -11,12 +11,18 @@ set -e
 
 
 
+
+
+
+
 DEFAULT_BRANCH="main"
+DERIVED_BRANCH="no-comment"
 export BASE_REF="origin/$DEFAULT_BRANCH"
 if ! git rev-parse --verify --quiet "$BASE_REF" >/dev/null 2>&1; then
 
   export BASE_REF="$DEFAULT_BRANCH"
 fi
+
 
 
 
@@ -30,12 +36,10 @@ while read -r local_ref local_oid remote_ref remote_oid; do
   esac
 
 
-  if [ "$remote_ref" = "refs/heads/$DEFAULT_BRANCH" ]; then
-    continue
-  fi
-
   case "$remote_ref" in
+    "refs/heads/$DEFAULT_BRANCH" | "refs/heads/$DERIVED_BRANCH") continue ;;
     refs/heads/*) pushing_feature=true ;;
+    *) continue ;;
   esac
   pushed_oid="$local_oid"
   if ! bash packages/dev-tools/tools/check-linear-history.sh "$BASE_REF" "$local_oid"; then

@@ -4,16 +4,30 @@ import { Marked, type Tokens } from 'marked';
 import { resolveMessageMedia } from '../base/message-media.js';
 import { stripReplyLangMarker } from '../speech/dictation-priming.js';
 import { highlightCode } from './code-highlight.js';
+import { DIP_PENDING_PLACEHOLDER } from './dip-placeholder.js';
+
+const OPEN_DIP_CLASS = 'msg__dip-open';
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+
+function fenceIsOpen(raw: string): boolean {
+  const open = FENCE_OPEN_RE.exec(raw)?.[1];
+  if (!open) return false;
+  const lines = raw.replace(/\n+$/, '').split('\n');
+  if (lines.length < 2) return true;
+  const close = new RegExp(`^ {0,3}\\${open[0]}{${open.length},}[ \\t]*$`);
+  return !close.test(lines.at(-1) ?? '');
+}
 
 const marked = new Marked({
   gfm: true,
   breaks: true,
   async: false,
   renderer: {
-    code({ text, lang }: Tokens.Code): string {
+    code({ text, lang, raw }: Tokens.Code): string {
       const language = lang ?? '';
       const highlighted = highlightCode(text, language);
-      const langClass = language ? ` class="language-${escapeHtml(language)}"` : '';
+      const openDip = language === 'shtml' && fenceIsOpen(raw) ? ` ${OPEN_DIP_CLASS}` : '';
+      const langClass = language ? ` class="language-${escapeHtml(language)}${openDip}"` : '';
       return `<pre><code${langClass}>${highlighted}</code></pre>\n`;
     },
     link({ href, title, tokens }: Tokens.Link): string {
@@ -165,13 +179,10 @@ function forceNewTabLinks(html: string): string {
 
 const SURFACED_ERROR_PARAGRAPH_RE = /<p><strong>Error:<\/strong>\s*([\s\S]*?)<\/p>/g;
 
-const SHTML_CODE_BLOCK_RE = /<pre><code class="language-shtml">[\s\S]*?<\/code><\/pre>/g;
-
-const DIP_PENDING_PLACEHOLDER =
-  '<div class="msg__dip-pending" role="status" aria-live="polite" aria-label="Pouring a dip">' +
-  '<span class="msg__dip-pending-label">Pouring a dip…</span>' +
-  '<span class="msg__dip-pending-status" aria-hidden="true"></span>' +
-  '</div>';
+const OPEN_SHTML_CODE_BLOCK_RE = new RegExp(
+  `<pre><code class="language-shtml ${OPEN_DIP_CLASS}">[\\s\\S]*?<\\/code><\\/pre>`,
+  'g'
+);
 
 function renderBaseMessageContent(content: string): string {
   const raw = marked.parse(content) as string;
@@ -186,8 +197,8 @@ function renderSurfacedErrorBlocks(html: string): string {
   );
 }
 
-function replaceShtmlWithDipPlaceholder(html: string): string {
-  return html.replace(SHTML_CODE_BLOCK_RE, DIP_PENDING_PLACEHOLDER);
+function replaceOpenShtmlWithDipPlaceholder(html: string): string {
+  return html.replace(OPEN_SHTML_CODE_BLOCK_RE, DIP_PENDING_PLACEHOLDER);
 }
 
 export function renderMessageContent(content: string): string {
@@ -196,7 +207,7 @@ export function renderMessageContent(content: string): string {
 
 export function renderAssistantMessageContent(content: string, isStreaming = false): string {
   let html = renderSurfacedErrorBlocks(renderBaseMessageContent(stripReplyLangMarker(content)));
-  if (isStreaming) html = replaceShtmlWithDipPlaceholder(html);
+  if (isStreaming) html = replaceOpenShtmlWithDipPlaceholder(html);
   return html;
 }
 

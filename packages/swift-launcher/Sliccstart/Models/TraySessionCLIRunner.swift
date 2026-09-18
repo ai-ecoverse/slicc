@@ -6,6 +6,10 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "TraySessionCLI")
 
+
+
+
+
 enum TraySessionCLIRunner {
     static func run(_ request: TraySessionCLI.Request) -> Int32 {
         let sessions = TraySessionSyncStore().sessions
@@ -26,6 +30,8 @@ enum TraySessionCLIRunner {
         }
     }
 
+    
+    
     private static func authorizeReveal() -> Bool {
         let caller = callerIdentity()
         let key = TraySessionCLI.consentKey(
@@ -77,6 +83,8 @@ enum TraySessionCLIRunner {
         return TraySessionCLI.promptResult(forButtonIndex: alert.runModal().rawValue)
     }
 
+    
+
     private struct CallerIdentity {
         let pid: Int32
         let name: String?
@@ -97,7 +105,8 @@ enum TraySessionCLIRunner {
     }
 
     private static func executablePath(forPid pid: pid_t) -> String? {
-
+        
+        
         let maxSize = 4 * 1024
         var buffer = [CChar](repeating: 0, count: maxSize)
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
@@ -126,6 +135,8 @@ enum TraySessionCLIRunner {
         return info[kSecCodeInfoIdentifier as String] as? String
     }
 
+    
+    
     private static func guiSessionAvailable() -> Bool {
         CGSessionCopyCurrentDictionary() != nil
     }

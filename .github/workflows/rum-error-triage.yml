@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       since_days:
-        description: 'Look-back window in days'
+        description: 'Look-back window in days (blank = catch up from the last successful run)'
         required: false
-        default: '1'
+        default: ''
       dry_run:
         description: 'Query + dedup only; do not open issues'
         type: boolean
@@ -52,9 +52,48 @@ jobs:
           gh label create rum-fix-ready --color 0E8A16 --description "Phase 1: fix is small/clear/low-risk — phase 2 should open a draft PR" --force
           gh label create rum-fix-pr-open --color 1D76DB --description "Phase 2: a draft fix PR is open for this issue" --force
 
+      - name: Resolve the query window
+        id: window
+        if: github.event.inputs.since_days == ''
+        uses: adobe-rnd/resolve-window@v1
+        with:
+          workflow: rum-error-triage.yml
+          branch: main
+          exclude-run-id: ${{ github.run_id }}
+
+          overlap-seconds: '3600'
+
+          wide-window-hours: '25'
+
+          initial-window: '1d'
+
+      - name: Clamp the window to the scan ceiling
+        id: clamp
+        if: steps.window.outcome == 'success'
+        env:
+          FROM: ${{ steps.window.outputs.from }}
+          MAX_DAYS: '7'
+        run: |
+          set -euo pipefail
+          from_epoch=$(date -u -d "$FROM" +%s)
+          now_epoch=$(date -u +%s)
+          floor_epoch=$(( now_epoch - MAX_DAYS * 86400 ))
+          gap_hours=$(( (now_epoch - from_epoch) / 3600 ))
+
+          if [ "$from_epoch" -ge "$floor_epoch" ]; then
+            echo "since=$FROM" >> "$GITHUB_OUTPUT"
+            echo "window starts $FROM (${gap_hours}h back), within the ${MAX_DAYS}-day ceiling"
+            exit 0
+          fi
+
+          clamped=$(date -u -d "@$floor_epoch" +%Y-%m-%dT%H:%M:%SZ)
+          echo "since=$clamped" >> "$GITHUB_OUTPUT"
+          echo "::warning::Catch-up window of ${gap_hours}h exceeds the ${MAX_DAYS}-day scan ceiling. Querying from $clamped instead of $FROM; RUM errors between those two times will not be triaged by this run."
+
       - name: Query RUM and select new error candidates
         id: query
         env:
+          SINCE_TIMESTAMP: ${{ steps.clamp.outputs.since }}
           SINCE_DAYS: ${{ github.event.inputs.since_days || '1' }}
           GH_TOKEN: ${{ github.token }}
         run: node packages/dev-tools/rum-error-triage/triage-rum-errors.mjs

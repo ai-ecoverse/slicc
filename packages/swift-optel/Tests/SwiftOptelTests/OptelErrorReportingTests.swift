@@ -30,7 +30,7 @@ final class OptelErrorReportingTests: XCTestCase {
 
     func testErrorMappingForPlainSwiftErrorUsesBridgedDomain() {
         let mapping = OptelErrorMapping.from(error: SampleError.missingField)
-
+        
         XCTAssertTrue(
             mapping.source.contains("SampleError"),
             "expected source to mention the type name, got \(mapping.source)"
@@ -86,7 +86,7 @@ final class OptelErrorReportingTests: XCTestCase {
         XCTAssertFalse(OptelUncaughtExceptionHook.isInstalled)
         OptelUncaughtExceptionHook.installIfNeeded()
         XCTAssertTrue(OptelUncaughtExceptionHook.isInstalled)
-
+        
         OptelUncaughtExceptionHook.installIfNeeded()
         XCTAssertTrue(OptelUncaughtExceptionHook.isInstalled)
     }

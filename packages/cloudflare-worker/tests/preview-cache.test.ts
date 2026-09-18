@@ -195,4 +195,93 @@ describe('cachedPreviewFetch', () => {
     expect(fetchFromDO).toHaveBeenCalledTimes(2);
     expect(await second.text()).toBe('<p>v2</p>');
   });
+
+  it('answers 503 instead of throwing when the tray DO call throws', async () => {
+    installFakeCaches();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchFromDO = vi.fn(() =>
+      Promise.reject(new Error('Durable Object reset because its code was updated.'))
+    );
+    for (const allowLive of [false, true]) {
+      const res = await cachedPreviewFetch({
+        request: makeRequest(),
+        allowLive,
+        cacheVersion: 1,
+        fetchFromDO,
+      });
+      expect(res.status).toBe(503);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(await res.text()).toBe('Preview temporarily unavailable');
+    }
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it('still returns the body when the cache put rejects', async () => {
+    const cache = installFakeCaches();
+    cache.put = () => Promise.reject(new Error('object too large'));
+    const res = await cachedPreviewFetch({
+      request: makeRequest(),
+      allowLive: false,
+      cacheVersion: 1,
+      fetchFromDO: () => Promise.resolve(makeDoResponse('<p>big</p>')),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('<p>big</p>');
+  });
+
+  it('bypasses the cache for a ranged request and forwards the Range', async () => {
+    const cache = installFakeCaches();
+    const put = vi.spyOn(cache, 'put');
+    const match = vi.spyOn(cache, 'match');
+    const fetchFromDO = vi.fn((_range: string | undefined) =>
+      Promise.resolve(new Response('hi', { status: 206 }))
+    );
+    const res = await cachedPreviewFetch({
+      request: makeRequest(undefined, { range: 'bytes=0-1' }),
+      allowLive: false,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(res.status).toBe(206);
+    expect(fetchFromDO).toHaveBeenCalledWith('bytes=0-1');
+    expect(match).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('forwards Range on a live preview too', async () => {
+    const fetchFromDO = vi.fn((_range: string | undefined) => Promise.resolve(makeDoResponse()));
+    await cachedPreviewFetch({
+      request: makeRequest(undefined, { range: 'bytes=-5' }),
+      allowLive: true,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(fetchFromDO).toHaveBeenCalledWith('bytes=-5');
+  });
+
+  it('drops the Range when If-Range is present and serves from the normal path', async () => {
+    installFakeCaches();
+    const fetchFromDO = vi.fn((_range: string | undefined) => Promise.resolve(makeDoResponse()));
+    const res = await cachedPreviewFetch({
+      request: makeRequest(undefined, { range: 'bytes=0-1', 'if-range': '"abc"' }),
+      allowLive: false,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(res.status).toBe(200);
+    expect(fetchFromDO).toHaveBeenCalledWith(undefined);
+    expect(res.headers.get('etag')).toBeTruthy();
+  });
+
+  it('forwards no Range for a plain request', async () => {
+    const fetchFromDO = vi.fn((_range: string | undefined) => Promise.resolve(makeDoResponse()));
+    await cachedPreviewFetch({
+      request: makeRequest(),
+      allowLive: true,
+      cacheVersion: 1,
+      fetchFromDO,
+    });
+    expect(fetchFromDO).toHaveBeenCalledWith(undefined);
+  });
 });

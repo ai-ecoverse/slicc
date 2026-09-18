@@ -1,8 +1,26 @@
 import Foundation
 import SwiftUI
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 enum TranscriptInline {
 
+    
+    
+    
     static func parse(_ markdown: String) -> AttributedString {
         (try? AttributedString(
             markdown: markdown,
@@ -10,6 +28,8 @@ enum TranscriptInline {
             ?? AttributedString(markdown)
     }
 
+    
+    
     static func fileQueries(in markdown: String) -> [String] {
         var seen = Set<String>()
         return FileMentions.scan(markdown).compactMap { candidate in
@@ -17,6 +37,12 @@ enum TranscriptInline {
         }
     }
 
+    
+    
+    
+    
+    
+    
     static func annotate(_ attributed: AttributedString, files: [String: String] = [:])
         -> AttributedString
     {
@@ -35,17 +61,27 @@ enum TranscriptInline {
             spans.append((candidate.range, .phone(candidate.number)))
         }
 
+        
+        
+        
         for (range, link) in spans.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) {
             guard let url = link.url,
                 let target = attributedRange(in: output, offset: range.lowerBound, length: range.count)
             else { continue }
-
+            
+            
             guard !output[target].runs.contains(where: { $0.link != nil }) else { continue }
             output[target].link = url
         }
         return output
     }
 
+    
+    
+    
+    
+    
+    
     private static func annotateCode(_ attributed: inout AttributedString) {
         for run in attributed.runs {
             guard let intent = run.inlinePresentationIntent, intent.contains(.code) else { continue }
@@ -56,10 +92,14 @@ enum TranscriptInline {
         }
     }
 
+    
+    
+    
     static func attributedRange(in attributed: AttributedString, offset: Int, length: Int)
         -> Range<AttributedString.Index>?
     {
-
+        
+        
         guard offset >= 0, length > 0, offset + length <= attributed.characters.count else {
             return nil
         }
@@ -69,6 +109,20 @@ enum TranscriptInline {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct TranscriptParagraph {
     enum Segment {
         case text(AttributedString)
@@ -77,6 +131,8 @@ struct TranscriptParagraph {
 
     let segments: [Segment]
 
+    
+    
     let attributed: AttributedString
 
     static func build(markdown: String, files: [String: String]) -> TranscriptParagraph {
@@ -118,11 +174,22 @@ struct TranscriptParagraph {
         return TranscriptParagraph(segments: segments, attributed: attributed)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private static func appendText(_ value: AttributedString, to segments: inout [Segment]) {
         guard let trimmed = trimming(value) else { return }
         segments.append(.text(trimmed))
     }
 
+    
+    
     static func trimming(_ value: AttributedString) -> AttributedString? {
         let characters = value.characters
         var start = characters.startIndex
@@ -138,9 +205,22 @@ struct TranscriptParagraph {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
 final class TranscriptInlineCache: @unchecked Sendable {
     static let shared = TranscriptInlineCache()
 
+    
+    
     private let store = NSCache<NSString, Box>()
 
     private final class Box {
@@ -158,6 +238,9 @@ final class TranscriptInlineCache: @unchecked Sendable {
         return value
     }
 
+    
+    
+    
     func clear() { store.removeAllObjects() }
 
     static func cacheKey(markdown: String, files: [String: String]) -> NSString {

@@ -27,9 +27,9 @@ replaced with random characters; it defaults to tmp.XXXXXXXXXX. Without
 -p/-t/--tmpdir a bare TEMPLATE is relative to the current directory, while the
 default template is placed in $TMPDIR (or /tmp).
 
-What you get back is a UNIQUE name, not a private one. This VFS tracks no
-permission bits, so the usual 0600/0700 modes cannot be applied and the /tmp
-tree is readable by every unit. Do not put secrets in a mktemp file.
+What you get back is a UNIQUE name, not a private one. Local VFS entries
+store 0600/0700 modes, but access follows SLICC path policy and /tmp is
+readable by every unit. Do not put secrets in a shared mktemp file.
 
   -d, --directory        create a directory, not a file
   -u, --dry-run          do not create anything, merely print a name
@@ -299,6 +299,10 @@ function isErrno(error: unknown, code: string): boolean {
   return message.startsWith(`${code}:`);
 }
 
+function isModeUnsupported(error: unknown): boolean {
+  return isErrno(error, 'EOPNOTSUPP') || isErrno(error, 'ENOTSUP') || isErrno(error, 'ENOSYS');
+}
+
 async function pathIsTaken(fs: IFileSystem, path: string): Promise<boolean> {
   try {
     await fs.lstat(path);
@@ -320,6 +324,8 @@ async function createExclusive(fs: IFileSystem, path: string, directory: boolean
   try {
     await fs.chmod(path, directory ? DIR_MODE : FILE_MODE);
   } catch (error) {
+    if (isModeUnsupported(error)) return;
+
     await fs.rm(path, { recursive: directory, force: true }).catch(() => {});
     throw error;
   }

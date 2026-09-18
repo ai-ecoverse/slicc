@@ -4,39 +4,71 @@ import UIKit
 import WebKit
 import os
 
+
+
+
+
+
+
+
+
 @MainActor
 final class CDPBridge {
 
+    
+
     private let logger = Logger(subsystem: "com.slicc.follower", category: "CDPBridge")
 
+    
+
+    
     let runtimeId: String
 
+    
+
+    
     private let send: (FollowerToLeaderMessage) -> Void
 
+    
+    
+    
     var onTargetsChanged: (() -> Void)?
 
+    
+    
     var onHandoffDetected: ((_ pageURL: String, _ match: HandoffMatch, _ title: String?) -> Void)?
 
+    
+
     private var targets: [String: CDPTarget] = [:]
-
+    
     private var targetOrder: [String] = []
-
+    
     private var nextContextId: Int = 1
-
+    
     private var nextTargetSuffix: Int = 1
+
+    
 
     init(runtimeId: String, send: @escaping (FollowerToLeaderMessage) -> Void) {
         self.runtimeId = runtimeId
         self.send = send
     }
 
+    
+    
+    
     func attach(to window: UIWindow) {}
 
+    
     func reportHandoff(pageURL: String, match: HandoffMatch, title: String?) {
         logger.info("Handoff \(match.verb.rawValue) advertised by a hosted page")
         onHandoffDetected?(pageURL, match, title)
     }
 
+    
+
+    
     func reset() {
         for target in targets.values {
             target.webView.removeFromSuperview()
@@ -47,21 +79,26 @@ final class CDPBridge {
         notifyTargetsChanged()
     }
 
+    
     func advertiseTargets() {
         let advertised = orderedTargets().map { $0.remoteInfo() }
         send(.targetsAdvertise(targets: advertised, runtimeId: runtimeId))
     }
 
+    
     func currentTargets() -> [CDPTargetSummary] {
         orderedTargets().map {
             CDPTargetSummary(id: $0.targetId, title: $0.currentTitle, url: $0.currentURL)
         }
     }
 
+    
     func webView(for targetId: String) -> WKWebView? {
         targets[targetId]?.webView
     }
 
+    
+    
     func notifyTargetsChanged() {
         onTargetsChanged?()
     }
@@ -70,6 +107,9 @@ final class CDPBridge {
         targetOrder.compactMap { targets[$0] }
     }
 
+    
+
+    
     func handleRequest(
         requestId: String,
         localTargetId: String,
@@ -79,9 +119,9 @@ final class CDPBridge {
     ) {
         let paramsDict = (params?.value as? [String: Any]) ?? [:]
         logger.info("CDP request: \(method) target=\(localTargetId) reqId=\(requestId, privacy: .public)")
-
+        
         let target = targets[localTargetId]
-
+        
         do {
             let domain = method.split(separator: ".").first.map(String.init) ?? ""
             switch domain {
@@ -106,7 +146,8 @@ final class CDPBridge {
                 handleNetworkDomain(
                     target: target, method: method, params: paramsDict, requestId: requestId)
             case "Log", "Performance", "Security":
-
+                
+                
                 respond(requestId: requestId, result: [:])
             default:
                 respondNotImplemented(requestId: requestId, method: method)
@@ -120,6 +161,9 @@ final class CDPBridge {
         }
     }
 
+    
+    
+    
     func openTab(url: String) -> String {
         let id = mintTargetId()
         let webView = makeWebView()
@@ -133,12 +177,18 @@ final class CDPBridge {
         return id
     }
 
+    
+    
     func navigate(targetId: String, to url: String) {
         guard let target = targets[targetId] else { return }
         _ = target.navigate(to: url)
         notifyTargetsChanged()
     }
 
+    
+    
+    
+    
     @discardableResult
     func handleTabOpen(requestId: String, url: String) -> String? {
         guard let parsed = URL(string: url), parsed.scheme != nil else {
@@ -150,6 +200,8 @@ final class CDPBridge {
         send(.tabOpened(requestId: requestId, targetId: id))
         return id
     }
+
+    
 
     private func handleTargetDomain(
         method: String, params: [String: Any], requestId: String
@@ -212,7 +264,7 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
 
         case "Target.activateTarget":
-
+            
             respond(requestId: requestId, result: [:])
 
         default:
@@ -242,7 +294,7 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
 
         case "Page.bringToFront":
-
+            
             respond(requestId: requestId, result: [:])
 
         case "Page.captureScreenshot":
@@ -271,7 +323,7 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
 
         case "Page.handleJavaScriptDialog":
-
+            
             respond(requestId: requestId, result: [:])
 
         case "Page.getFrameTree":
@@ -324,7 +376,8 @@ final class CDPBridge {
             }
 
         case "Runtime.callFunctionOn":
-
+            
+            
             let fn = (params["functionDeclaration"] as? String) ?? ""
             let args = (params["arguments"] as? [[String: Any]]) ?? []
             let argExprs = args.map { arg -> String in
@@ -368,7 +421,7 @@ final class CDPBridge {
             target.domEnabled = false
             respond(requestId: requestId, result: [:])
         case "DOM.getDocument":
-
+            
             respond(
                 requestId: requestId,
                 result: [
@@ -393,7 +446,8 @@ final class CDPBridge {
                 }
             }
         case "DOM.resolveNode":
-
+            
+            
             respond(
                 requestId: requestId,
                 result: [
@@ -412,7 +466,7 @@ final class CDPBridge {
             let type = (params["type"] as? String) ?? ""
             let x = (params["x"] as? Double) ?? 0
             let y = (params["y"] as? Double) ?? 0
-
+            
             let evt: String
             switch type {
             case "mousePressed": evt = "mousedown"
@@ -520,13 +574,20 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
         case "Emulation.setDeviceMetricsOverride",
             "Emulation.clearDeviceMetricsOverride":
-
+            
             respond(requestId: requestId, result: [:])
         default:
             respondNotImplemented(requestId: requestId, method: method)
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
     private func handleNetworkDomain(
         target: CDPTarget?, method: String, params: [String: Any], requestId: String
     ) {
@@ -535,7 +596,10 @@ final class CDPBridge {
         case "Network.enable", "Network.disable":
             respond(requestId: requestId, result: [:])
         case "Network.getCookies", "Network.getAllCookies":
-
+            
+            
+            
+            
             var urls = (params["urls"] as? [String]) ?? []
             if urls.isEmpty, let current = target?.currentURL, URL(string: current)?.host != nil {
                 urls = [current]
@@ -557,7 +621,11 @@ final class CDPBridge {
             if unmappable > 0 {
                 logger.warning("Network.setCookies: \(unmappable) cookie(s) could not be mapped")
             }
-
+            
+            
+            
+            
+            
             let downgraded = raw.filter { ($0["httpOnly"] as? Bool) == true }.count
             if downgraded > 0 {
                 logger.warning(
@@ -567,7 +635,8 @@ final class CDPBridge {
                 respond(requestId: requestId, result: ["success": raw.isEmpty])
                 return
             }
-
+            
+            
             let group = DispatchGroup()
             for cookie in cookies {
                 group.enter()
@@ -577,7 +646,8 @@ final class CDPBridge {
                 self.respond(requestId: requestId, result: ["success": true])
             }
         case "Network.deleteCookies":
-
+            
+            
             guard let name = params["name"] as? String, !name.isEmpty else {
                 respondError(requestId: requestId, error: "Network.deleteCookies requires `name`")
                 return
@@ -617,9 +687,12 @@ final class CDPBridge {
         }
     }
 
+    
+
+    
     func respond(requestId: String, result: [String: Any]) {
         let codable = AnyCodable(result)
-
+        
         let data = (try? JSONSerialization.data(withJSONObject: result)) ?? Data()
         if data.count <= 64 * 1024 {
             send(
@@ -628,7 +701,7 @@ final class CDPBridge {
                     chunkData: nil, chunkIndex: nil, totalChunks: nil))
             return
         }
-
+        
         guard let json = String(data: data, encoding: .utf8) else {
             send(
                 .cdpResponse(
@@ -671,6 +744,8 @@ final class CDPBridge {
     func emitEvent(method: String, params: [String: Any], sessionId: String?) {
         send(.cdpEvent(method: method, params: AnyCodable(params), sessionId: sessionId))
     }
+
+    
 
     private func mintTargetId() -> String {
         let id = "wk-\(runtimeId)-\(nextTargetSuffix)"

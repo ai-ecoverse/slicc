@@ -69,6 +69,12 @@ import { runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
 import { registerCloudStatusEndpoint } from './cloud-status.js';
 import {
+  ComputerDemoState,
+  createComputerDemoFrameServer,
+  handleComputerDemoUpgrade,
+  registerComputerDemoRoutes,
+} from './computer-demo.js';
+import {
   ElectronAppAlreadyRunningError,
   ElectronOverlayInjector,
   launchElectronApp,
@@ -599,7 +605,8 @@ function attachCdpUpgradeRouting(
   server: HttpServer,
   wss: WebSocketServer,
   lickWss: WebSocketServer,
-  bridgeToken: string | null
+  bridgeToken: string | null,
+  computerDemoWss: WebSocketServer | null = null
 ): void {
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
@@ -623,6 +630,8 @@ function attachCdpUpgradeRouting(
       lickWss.handleUpgrade(request, socket, head, (ws) => {
         lickWss.emit('connection', ws, request);
       });
+    } else if (computerDemoWss) {
+      handleComputerDemoUpgrade(pathname, request, socket, head, computerDemoWss);
     }
   });
 }
@@ -1177,12 +1186,16 @@ async function main() {
 
   registerSudoApproveEndpoint(app);
 
+  const computerDemo = RUNTIME_FLAGS.computerDemo ? new ComputerDemoState() : null;
+  if (computerDemo) registerComputerDemoRoutes(app, computerDemo);
+
   registerFetchProxyRoute(app, { secretProxy });
 
   const server = createBridgeServer(app);
 
   const wss = createCdpWebSocketServer(state.bridgeToken);
-  attachCdpUpgradeRouting(server, wss, lickWss, state.bridgeToken);
+  const computerDemoWss = computerDemo ? createComputerDemoFrameServer(computerDemo) : null;
+  attachCdpUpgradeRouting(server, wss, lickWss, state.bridgeToken, computerDemoWss);
   const cdpCtx: CdpProxyContext = {
     wss,
     secretProxy,

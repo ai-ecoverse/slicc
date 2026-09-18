@@ -1,8 +1,16 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { bytesAsStdout } from '../just-bash-compat.js';
+import { type StdioTtyHints, stdoutIsTty } from './stdio-tty.js';
 
-type CommandResult = { stdout: string; stderr: string; exitCode: number };
+type CommandResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  stdoutKind?: 'text' | 'bytes';
+  stdoutEncoding?: 'binary';
+};
 
 interface SayBridge {
   local: boolean;
@@ -23,7 +31,9 @@ function sayHelp(): CommandResult {
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
       '  -l lang    Language tag (required, BCP 47, e.g. en-US, es-ES, fr-FR)\n' +
       '  -o file    Write 16-bit mono WAV to <file> instead of playing it out\n' +
-      '             loud (kokoro-only, English-only; --out is an alias)\n' +
+      '             loud (kokoro-only, English-only; --out is an alias).\n' +
+      '             `-o -` writes the same bytes to stdout; a non-TTY stdout\n' +
+      '             without -o does too. Web Speech cannot produce bytes.\n' +
       '  --list     List voices with an engine marker ([kokoro] = on-device,\n' +
       '             [web speech] otherwise); kokoro voices lead when ready\n' +
       '  --status   Show the on-device voice state (downloading/ready + ETA)\n' +
@@ -117,6 +127,10 @@ const VALUE_FLAG_HINTS: Record<string, string> = {
   '--out': 'an output file path',
 };
 
+function isFlagValue(arg: string | undefined): arg is string {
+  return arg != null && (!arg.startsWith('-') || arg === '-');
+}
+
 function applySayValueFlag(parsed: SayArgs, flag: string, value: string): string | null {
   switch (flag) {
     case '-v':
@@ -149,7 +163,8 @@ function parseSayArgs(args: string[]): SayArgs | CommandResult {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg in VALUE_FLAG_HINTS) {
-      const value = i + 1 < args.length && !args[i + 1].startsWith('-') ? args[++i] : null;
+      const next = i + 1 < args.length ? args[i + 1] : undefined;
+      const value = isFlagValue(next) ? args[++i] : null;
       if (value == null) return fail(`${arg} requires ${VALUE_FLAG_HINTS[arg]}`);
       const error = applySayValueFlag(parsed, arg, value);
       if (error) return fail(error);
@@ -311,15 +326,29 @@ interface SayWriteCtx {
   };
 }
 
+async function synthesizeWav(
+  bridge: SayBridge,
+  req: { text: string; lang: string; voice?: string; rate: number }
+): Promise<{ bytes: Uint8Array } | CommandResult> {
+  return bridge.local ? synthesizeWavLocal(req) : synthesizeWavViaRpc(bridge, req);
+}
+
+async function runSayToStdout(
+  bridge: SayBridge,
+  req: { text: string; lang: string; voice?: string; rate: number }
+): Promise<CommandResult> {
+  const result = await synthesizeWav(bridge, req);
+  if ('exitCode' in result) return result;
+  return { ...bytesAsStdout(result.bytes), stderr: '', exitCode: 0 };
+}
+
 async function runSayToFile(
   bridge: SayBridge,
   ctx: SayWriteCtx,
   outFile: string,
   req: { text: string; lang: string; voice?: string; rate: number }
 ): Promise<CommandResult> {
-  const result = bridge.local
-    ? await synthesizeWavLocal(req)
-    : await synthesizeWavViaRpc(bridge, req);
+  const result = await synthesizeWav(bridge, req);
   if ('exitCode' in result) return result;
   const outPath = ctx.fs.resolvePath(ctx.cwd, outFile);
   try {
@@ -329,6 +358,29 @@ async function runSayToFile(
   }
   const sizeKB = Math.max(1, Math.round(result.bytes.byteLength / 1024));
   return { stdout: `wrote ${sizeKB} KB to ${outPath}\n`, stderr: '', exitCode: 0 };
+}
+
+async function runSpeakOrWrite(
+  bridge: SayBridge,
+  ctx: SayWriteCtx & StdioTtyHints,
+  parsed: Omit<SayArgs, 'lang'> & { lang: string }
+): Promise<CommandResult> {
+  let resolvedVoice: string | undefined;
+  if (parsed.voiceName) {
+    const { resolved, error } = await resolveVoiceName(bridge, parsed.voiceName);
+    if (error) return error;
+    resolvedVoice = resolved;
+  }
+  const req = {
+    text: parsed.text,
+    lang: parsed.lang,
+    voice: resolvedVoice,
+    rate: parsed.rate,
+  };
+  const toStdout = parsed.outFile === '-' || (!parsed.outFile && !stdoutIsTty(ctx));
+  if (toStdout) return runSayToStdout(bridge, req);
+  if (parsed.outFile) return runSayToFile(bridge, ctx, parsed.outFile, req);
+  return bridge.local ? speakLocal(req) : speakViaRpc(bridge, req);
 }
 
 export function createSayCommand(): Command {
@@ -352,16 +404,9 @@ export function createSayCommand(): Command {
     if ('exitCode' in parsed) return parsed;
     if (!parsed.text) return sayHelp();
     if (!parsed.lang) return fail('-l language tag is required');
-
-    let resolvedVoice: string | undefined;
-    if (parsed.voiceName) {
-      const { resolved, error } = await resolveVoiceName(bridge, parsed.voiceName);
-      if (error) return error;
-      resolvedVoice = resolved;
-    }
-
-    const req = { text: parsed.text, lang: parsed.lang, voice: resolvedVoice, rate: parsed.rate };
-    if (parsed.outFile) return runSayToFile(bridge, ctx as SayWriteCtx, parsed.outFile, req);
-    return bridge.local ? speakLocal(req) : speakViaRpc(bridge, req);
+    return runSpeakOrWrite(bridge, ctx as SayWriteCtx & StdioTtyHints, {
+      ...parsed,
+      lang: parsed.lang,
+    });
   });
 }

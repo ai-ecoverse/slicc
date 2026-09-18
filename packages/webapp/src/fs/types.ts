@@ -5,6 +5,7 @@ export type Encoding = 'utf-8' | 'binary';
 export type EntryType = 'file' | 'directory' | 'symlink';
 
 export interface Stats {
+  identity?: string;
   type: EntryType;
   size: number;
 
@@ -18,6 +19,8 @@ export interface Stats {
 
   ino?: number;
 
+  dev?: number;
+
   uid?: number;
 
   gid?: number;
@@ -26,12 +29,14 @@ export interface Stats {
 }
 
 export interface DirEntryStats {
+  identity?: string;
   size?: number;
 
   mtime?: number;
 
   ctime?: number;
   ino?: number;
+  dev?: number;
   uid?: number;
   gid?: number;
 
@@ -52,6 +57,8 @@ export function statsFromDirEntry(entry: DirEntry): Stats | undefined {
     mtime: entry.mtime,
     ctime: entry.ctime ?? entry.mtime,
     ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.identity !== undefined ? { identity: entry.identity } : {}),
+    ...(entry.dev !== undefined ? { dev: entry.dev } : {}),
     ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
     ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
     ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
@@ -95,6 +102,7 @@ export type FsErrorCode =
   | 'EFBIG'
   | 'EBADF'
   | 'ENOSYS'
+  | 'EOPNOTSUPP'
   | 'EIO';
 
 export interface FsStatsLike {
@@ -104,6 +112,8 @@ export interface FsStatsLike {
   ctimeMs: number;
 
   ino?: number;
+
+  dev?: number;
 
   uid?: number;
 

@@ -85,12 +85,12 @@ export class BroadcastManager {
     });
   }
 
-  broadcastStatus(status: string): void {
+  broadcastStatus(status: string, scoopJid?: string): void {
     if (this.context.followers.followers.size === 0) return;
     this.broadcast({
       type: 'status',
       scoopStatus: status,
-      scoopJid: this.context.options.getScoopJid(),
+      scoopJid: scoopJid ?? this.context.options.getScoopJid(),
     });
   }
 

@@ -3,6 +3,7 @@ import {
   type FeatureFlagValues,
   initFeatureFlags,
   type UntrustedFlagValues,
+  updateCentralFlagValues,
 } from './feature-flags.js';
 
 export const FEATURE_FLAGS_REMOTE_STORAGE_KEY = 'slicc_feature_flags_remote';
@@ -16,12 +17,26 @@ export function featureFlagsRemoteCacheKey(float: FeatureFlagFloat): string {
   return `${FEATURE_FLAGS_REMOTE_STORAGE_KEY}:${float}`;
 }
 
+let adoptedFloat: FeatureFlagFloat | null = null;
+
 export function initFeatureFlagsFromRemoteCache(
   float: FeatureFlagFloat,
   storage?: FeatureFlagsRemoteStorage | null
 ): void {
   const resolvedStorage = resolveFeatureFlagsRemoteStorage(storage);
+  adoptedFloat = float;
   initFeatureFlags(float, readCachedFlags(resolvedStorage, float) ?? {});
+}
+
+export function readoptFeatureFlagsFromCache(
+  key?: string,
+  storage?: FeatureFlagsRemoteStorage | null
+): boolean {
+  if (!adoptedFloat) return false;
+  if (key !== undefined && key !== featureFlagsRemoteCacheKey(adoptedFloat)) return false;
+  const resolvedStorage = resolveFeatureFlagsRemoteStorage(storage);
+  updateCentralFlagValues(adoptedFloat, readCachedFlags(resolvedStorage, adoptedFloat) ?? {});
+  return true;
 }
 
 export function writeFeatureFlagsRemoteCache(

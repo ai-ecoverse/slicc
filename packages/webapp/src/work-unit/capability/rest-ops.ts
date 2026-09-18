@@ -332,6 +332,8 @@ async function restRequestApproval(
       suggestedPattern,
 
       ...(request.requester ? { requester: request.requester } : {}),
+
+      ...(request.reason ? { reason: request.reason } : {}),
       ...(request.approver ? { approver: request.approver } : {}),
     },
 

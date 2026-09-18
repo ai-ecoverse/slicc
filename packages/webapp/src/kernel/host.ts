@@ -145,6 +145,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return event.workflowName ?? event.workflowRunId ?? 'workflow';
     case 'bash':
       return event.bashJobId ?? 'bash';
+    case 'jshd':
+      return event.jshdName ?? 'jshd';
     case 'preview':
       return event.previewOrigin ?? 'preview';
     case 'discovery':
@@ -172,6 +174,8 @@ function resolveLickEventId(event: LickEvent): string | undefined {
       return `workflow-${event.workflowRunId ?? 'unknown'}`;
     case 'bash':
       return `bash-${event.bashJobId ?? 'unknown'}`;
+    case 'jshd':
+      return `jshd-${event.jshdName ?? 'unknown'}`;
     case 'preview':
       return event.previewConnId ?? `preview-${event.timestamp}`;
     case 'discovery':
@@ -188,13 +192,13 @@ export function defaultLickEventHandler(event: LickEvent, ctx: LickRoutingContex
     });
     return;
   }
-  routeFormattedLickToCone(event, ctx);
+  void routeFormattedLickToCone(event, ctx);
 }
 
-function routeFormattedLickToCone(
+async function routeFormattedLickToCone(
   event: LickEvent,
   { orchestrator, log }: LickRoutingContext
-): void {
+): Promise<void> {
   const scoops = orchestrator.getScoops();
   const roots = rootsOf(scoops);
 
@@ -223,6 +227,21 @@ function routeFormattedLickToCone(
   }
 
   if (event.type === 'navigate') {
+    try {
+      const { shouldSkipNavigateUpskill } = await import('../scoops/upskill-lick-skip.js');
+      const getConeFs =
+        typeof orchestrator.getDefaultConeFs === 'function'
+          ? () => orchestrator.getDefaultConeFs()
+          : () => null;
+      if (await shouldSkipNavigateUpskill(event, getConeFs)) {
+        log.debug?.(
+          'dropping navigate·upskill lick; advertised skill already installed at that commit'
+        );
+        return;
+      }
+    } catch (err) {
+      log.warn('navigate·upskill skip check failed; raising card', err);
+    }
     event.lickId = orchestrator.registerNavigateLick(event);
   } else if (event.type === 'session-reload') {
     event.lickId = orchestrator.registerSessionReloadLick(event);
@@ -305,7 +324,7 @@ async function bootOrchestrator(
 
   await orchestrator.init(config.onBootProgress);
 
-  await bridge.seedBuffersFromAgentState();
+  await bridge.hydrateBuffersFromRecords();
 
   const sharedFs = orchestrator.getSharedFS();
   return { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs, capabilityBroker };
@@ -584,44 +603,82 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
   };
 }
 
-function scheduleMountRecovery(
+async function restoreMountsThenJshd(
+  sharedFs: VirtualFS | null | undefined,
+  processManager: ProcessManager,
+  lickManager: LickManager,
+  log: KernelHostLogger,
+  progress: (stage: string) => void,
+  orchestrator: OrchestratorType
+): Promise<void> {
+  if (!sharedFs) return;
+  await recoverPersistedMounts(sharedFs, lickManager, log);
+  progress('mounts-restored');
+  await restoreJshdUnits(sharedFs, processManager, lickManager, log, orchestrator);
+  progress('jshd-restored');
+}
+
+async function restoreJshdUnits(
+  sharedFs: VirtualFS,
+  processManager: ProcessManager,
+  lickManager: LickManager,
+  log: KernelHostLogger,
+  orchestrator: OrchestratorType
+): Promise<void> {
+  try {
+    const { restoreEnabledJshdUnits } = await import(
+      '../shell/supplemental-commands/jshd/restore.js'
+    );
+    const sudoManager = orchestrator.getSudoManager();
+    await restoreEnabledJshdUnits({
+      fs: sharedFs,
+      processManager,
+      lickManager,
+      ...(sudoManager
+        ? { sudo: { broker: sudoManager.getBroker(), getPolicy: () => sudoManager.getPolicy() } }
+        : {}),
+    });
+  } catch (err) {
+    log.warn('jshd restore failed', err);
+  }
+}
+
+async function recoverPersistedMounts(
   sharedFs: VirtualFS,
   lickManager: LickManager,
   log: KernelHostLogger
-): void {
-  void (async () => {
-    try {
-      const { getAllMountEntries, removeMountEntry } = await import('../fs/mount-table-store.js');
-      const { recoverMounts } = await import('../fs/mount-recovery.js');
+): Promise<void> {
+  try {
+    const { getAllMountEntries, removeMountEntry } = await import('../fs/mount-table-store.js');
+    const { recoverMounts } = await import('../fs/mount-recovery.js');
 
-      const { hostShadowedEntries, mountConfiguredHostMounts, withoutHostMountedTargets } =
-        await import('../fs/auto-mount-table.js');
-      const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
+    const { hostShadowedEntries, mountConfiguredHostMounts, withoutHostMountedTargets } =
+      await import('../fs/auto-mount-table.js');
+    const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
 
-      const allEntries = await getAllMountEntries();
-      const entries = withoutHostMountedTargets(allEntries, hostMounted);
+    const allEntries = await getAllMountEntries();
+    const entries = withoutHostMountedTargets(allEntries, hostMounted);
 
-      for (const stale of hostShadowedEntries(allEntries, hostMounted)) {
-        void removeMountEntry(stale.targetPath).catch((err) => {
-          log.warn('failed to purge host-owned mount row', {
-            path: stale.targetPath,
-            error: err instanceof Error ? err.message : String(err),
-          });
+    for (const stale of hostShadowedEntries(allEntries, hostMounted)) {
+      void removeMountEntry(stale.targetPath).catch((err) => {
+        log.warn('failed to purge host-owned mount row', {
+          path: stale.targetPath,
+          error: err instanceof Error ? err.message : String(err),
         });
-      }
-      if (entries.length === 0) return;
-      const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
-      if (needsRecovery.length === 0) return;
-      lickManager.emitEvent({
-        type: 'session-reload',
-        targetScoop: undefined,
-        timestamp: new Date().toISOString(),
-        body: { reason: 'mount-recovery', mounts: needsRecovery },
       });
-    } catch (err) {
-      log.warn('mount recovery failed', err);
     }
-  })();
+    if (entries.length === 0) return;
+    const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
+    if (needsRecovery.length === 0) return;
+    lickManager.emitEvent({
+      type: 'session-reload',
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: { reason: 'mount-recovery', mounts: needsRecovery },
+    });
+  } catch (err) {
+    log.warn('mount recovery failed', err);
+  }
 }
 
 export function publishLastSeenVersionReader(): void {
@@ -702,7 +759,7 @@ function publishGelatiere(
       }
       const { loadGelatiereConfig } = await import('../base/gelatiere-store.js');
       const config = await loadGelatiereConfig(sharedFs);
-      await unit.bootGelatiere(seam, config.nightly);
+      await unit.bootGelatiere(seam, config.nightly, config.allowedCommands);
     })
     .catch((err) => log.warn('gelatiere seam failed to publish', err));
 }
@@ -791,9 +848,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     config.appPageUrl
   );
 
-  if (sharedFs) {
-    scheduleMountRecovery(sharedFs, lickManager, log);
-  }
+  await restoreMountsThenJshd(sharedFs, processManager, lickManager, log, progress, orchestrator);
 
   if (!skipConeBootstrap) {
     await bootstrapCone(orchestrator);

@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as usbClaims from '../../src/kernel/usb-claim-broker.js';
 import {
   DeviceHandleRegistry,
   deviceToInfo,
+  type UsbClaimEvent,
   type UsbDevice,
+  usbSprinkleOwner,
 } from '../../src/kernel/usb-device-registry.js';
 import * as usbOps from '../../src/kernel/usb-operations.js';
 
@@ -231,5 +234,245 @@ describe('usb-operations', () => {
     const reg = new DeviceHandleRegistry();
     const handle = reg.register(fakeDevice());
     await expect(usbOps.usbTransferIn(reg, handle, 1, 5 * 1024 * 1024)).rejects.toThrow(/4 MiB/);
+  });
+});
+
+describe('usb-operations — two consumers on one handle', () => {
+  it('refuses a second claim and names the current holder', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    const sprinkle = usbSprinkleOwner('phone-view');
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: sprinkle });
+    await expect(usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell' })).rejects.toThrow(
+      /held by sprinkle:phone-view/
+    );
+    expect(device.claimInterface).toHaveBeenCalledOnce();
+  });
+
+  it('queues a second claim until the holder releases', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    let granted = false;
+    const waiting = usbOps
+      .usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true })
+      .then(() => {
+        granted = true;
+      });
+    await Promise.resolve();
+    expect(granted).toBe(false);
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await waiting;
+    expect(granted).toBe(true);
+    expect(device.claimInterface).toHaveBeenCalledTimes(2);
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+  });
+
+  it('refuses close/reset while another consumer holds a claim', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await expect(usbOps.usbClose(reg, handle, { owner: 'shell' })).rejects.toThrow(
+      /held by sprinkle:phone-view/
+    );
+    await expect(usbOps.usbReset(reg, handle, { owner: 'shell' })).rejects.toThrow(
+      /held by sprinkle:phone-view/
+    );
+    expect(device.close).not.toHaveBeenCalled();
+    expect(device.reset).not.toHaveBeenCalled();
+  });
+
+  it('force close displaces the holder and emits claim-lost plus disconnect', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    const events: UsbClaimEvent[] = [];
+    const off = usbClaims.addClaimListener(reg, (e) => events.push(e));
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await usbOps.usbClose(reg, handle, { owner: 'shell', force: true });
+    expect(device.close).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'claim-lost',
+        handle,
+        interfaceNumber: 0,
+        holder: 'sprinkle:phone-view',
+        displacedBy: 'shell',
+        reason: 'close',
+      }),
+      expect.objectContaining({
+        type: 'disconnect',
+        handle,
+        holder: 'sprinkle:phone-view',
+        displacedBy: 'shell',
+        reason: 'close',
+      }),
+    ]);
+    expect(usbClaims.listClaims(reg, handle)).toEqual([]);
+    off();
+  });
+
+  it('lets the sole holder close without force', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell' });
+    await usbOps.usbClose(reg, handle, { owner: 'shell' });
+    expect(device.close).toHaveBeenCalledOnce();
+    expect(usbClaims.listClaims(reg, handle)).toEqual([]);
+  });
+
+  it('allows two consumers to claim different interfaces', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await usbOps.usbClaimInterface(reg, handle, 1, { owner: 'shell' });
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('sprinkle:phone-view');
+    expect(usbClaims.claimOwner(reg, handle, 1)).toBe('shell');
+    await expect(usbOps.usbReset(reg, handle, { owner: 'shell' })).rejects.toThrow(
+      /interface 0 held by sprinkle:phone-view/
+    );
+  });
+
+  it('cancels a queued waiter so a later release does not grant it', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    const waiting = usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true });
+    await Promise.resolve();
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    await expect(waiting).rejects.toThrow(/cancelled/);
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBeUndefined();
+    expect(device.claimInterface).toHaveBeenCalledOnce();
+  });
+
+  it('cancels an in-flight grant so a timed-out waiter does not keep the interface', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    let finishSecond!: () => void;
+    let resolveStarted!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    device.claimInterface = vi.fn(async () => {
+      resolveStarted();
+      await new Promise<void>((resolve) => {
+        finishSecond = resolve;
+      });
+    });
+    const waiting = usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true });
+    await Promise.resolve();
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await secondStarted;
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+    expect(usbClaims.wasGrantCancelled(reg, handle, 0, 'shell')).toBe(true);
+    finishSecond();
+    await expect(waiting).rejects.toThrow(/cancelled/);
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBeUndefined();
+    expect(device.releaseInterface).toHaveBeenCalledTimes(2);
+  });
+
+  it('wakes the next waiter when a canceled in-flight claimInterface rejects', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    let finishSecond!: (err?: Error) => void;
+    let resolveStarted!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let inflight = 0;
+    device.claimInterface = vi.fn(async () => {
+      inflight++;
+      if (inflight !== 1) return;
+      resolveStarted();
+      await new Promise<void>((resolve, reject) => {
+        finishSecond = (err) => (err ? reject(err) : resolve());
+      });
+    });
+    const waitingA = usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true });
+    await Promise.resolve();
+    const waitingB = usbOps.usbClaimInterface(reg, handle, 0, {
+      owner: 'sprinkle:adb',
+      wait: true,
+    });
+    await Promise.resolve();
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await secondStarted;
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    finishSecond(new Error('device gone'));
+    await expect(waitingA).rejects.toThrow(/device gone/);
+    await waitingB;
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('sprinkle:adb');
+  });
+
+  it('keeps a canceled in-flight grant busy so a new caller cannot jump the wait queue', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    let finishSecond!: () => void;
+    let resolveStarted!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let inflight = 0;
+    device.claimInterface = vi.fn(async () => {
+      inflight++;
+      if (inflight !== 1) return;
+      resolveStarted();
+      await new Promise<void>((resolve) => {
+        finishSecond = resolve;
+      });
+    });
+    const waitingA = usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true });
+    await Promise.resolve();
+    const waitingB = usbOps.usbClaimInterface(reg, handle, 0, {
+      owner: 'sprinkle:adb',
+      wait: true,
+    });
+    await Promise.resolve();
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await secondStarted;
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+    await expect(usbOps.usbClaimInterface(reg, handle, 0, { owner: 'thief' })).rejects.toThrow(
+      /held by shell/
+    );
+    finishSecond();
+    await expect(waitingA).rejects.toThrow(/cancelled/);
+    await waitingB;
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('sprinkle:adb');
+  });
+
+  it('does not drop a live claim when cancel arrives after the grant completed', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell' });
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+    expect(device.releaseInterface).not.toHaveBeenCalled();
+  });
+
+  it('treats a same-owner re-claim as idempotent', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell' });
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell' });
+    expect(device.claimInterface).toHaveBeenCalledTimes(2);
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
   });
 });

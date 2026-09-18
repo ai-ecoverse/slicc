@@ -3,26 +3,49 @@ import CoreSpotlight
 import Foundation
 import SliccWidgetKit
 
+
+
+
+
+
+
+
+
+
+
+
 struct SliccConversationEntity: AppEntity, IndexedEntity {
     static let typeDisplayRepresentation = TypeDisplayRepresentation(
         name: "Sliccy Conversation")
 
     static let defaultQuery = SliccConversationQuery()
 
+    
+    
     let id: String
 
+    
+    
+    
     @Property(title: "Name", indexingKey: \.title)
     var name: String
 
+    
+    
+    
     @Property(title: "About", indexingKey: \.contentDescription)
     var detail: String?
 
+    
     @Property(title: "Model")
     var model: String?
 
+    
     @Property(title: "Status")
     var status: String
 
+    
+    
     @Property(title: "Is Cone")
     var isCone: Bool
 
@@ -44,8 +67,18 @@ struct SliccConversationEntity: AppEntity, IndexedEntity {
     }
 }
 
+
+
+
+
+
+
+
 enum SliccConversationProjection {
 
+    
+    
+    
     static let maximumResults = 25
 
     static func entity(from unit: WidgetUnit) -> SliccConversationEntity {
@@ -58,6 +91,10 @@ enum SliccConversationProjection {
             isCone: unit.role == .cone)
     }
 
+    
+    
+    
+    
     static func ranked(_ units: [WidgetUnit]) -> [WidgetUnit] {
         units.sorted { lhs, rhs in
             if lhs.isActive != rhs.isActive { return lhs.isActive }
@@ -69,6 +106,9 @@ enum SliccConversationProjection {
         }
     }
 
+    
+    
+    
     static func matching(_ needle: String, in units: [WidgetUnit]) -> [WidgetUnit] {
         let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return ranked(units) }
@@ -84,10 +124,21 @@ enum SliccConversationProjection {
     }
 }
 
+
+
+
+
+
+
+
 struct SliccConversationQuery: EntityQuery, EntityStringQuery {
 
+    
+    
     private let units: @Sendable () -> [WidgetUnit]
 
+    
+    
     init() {
         self.init(units: { WidgetHost.follower.store.read()?.units ?? [] })
     }
@@ -112,10 +163,16 @@ struct SliccConversationQuery: EntityQuery, EntityStringQuery {
     }
 }
 
+
+
+
+
+
 protocol SpotlightConversationIndex: Sendable {
     func deleteConversations() async throws
     func indexConversations(_ entities: [SliccConversationEntity]) async throws
 }
+
 
 struct SystemSpotlightIndex: SpotlightConversationIndex {
     func deleteConversations() async throws {
@@ -127,6 +184,28 @@ struct SystemSpotlightIndex: SpotlightConversationIndex {
         try await CSSearchableIndex.default().indexAppEntities(entities)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 actor SliccConversationIndexer {
 
@@ -140,6 +219,8 @@ actor SliccConversationIndexer {
         self.index = index
     }
 
+    
+    
     @discardableResult
     func donate(_ units: [WidgetUnit]) -> Task<Void, Never> {
         latestGeneration += 1
@@ -162,7 +243,8 @@ actor SliccConversationIndexer {
             guard !entities.isEmpty else { return }
             try await index.indexConversations(entities)
         } catch {
-
+            
+            
         }
     }
 }

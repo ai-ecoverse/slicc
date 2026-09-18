@@ -199,7 +199,14 @@ async function updateGitHubSkill(
   const upstreamPath = (provenance.path ?? '').replace(/^\/|\/$/g, '');
   const github = await createGitHubRequestContext(fetchFn);
 
-  const headSha = await resolveCommitSha(owner, repo, base.ref, github, true);
+  const headSha = await resolveCommitSha(
+    owner,
+    repo,
+    base.ref,
+    github,
+    true,
+    upstreamPath || undefined
+  );
   if (
     headSha &&
     provenance.sha === headSha &&

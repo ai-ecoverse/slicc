@@ -24,6 +24,9 @@ export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 
 export const FS_DENIED_MESSAGE = 'sudo: approval denied';
 
+export const FS_UNHONORED_SUDOERS_MESSAGE =
+  'sudo: refusing to write a sudoers file outside /etc — policy is read only from /etc/sudoers and /etc/sudoers.d/, so this file would never take effect';
+
 export function fsSudoMessage(decision: SudoDecision): string {
   return sudoRefusalMessage('sudo', decision);
 }
@@ -38,9 +41,9 @@ const READ_ASYNC = [
   'stat',
 ] as const;
 
-const CONTENT_WRITE_ASYNC = ['writeFile'] as const;
+const CONTENT_WRITE_ASYNC = ['writeFile', 'appendFile'] as const;
 
-const STRUCTURAL_WRITE_ASYNC = ['mkdir', 'rm'] as const;
+const STRUCTURAL_WRITE_ASYNC = ['mkdir', 'rm', 'chmod', 'utimes'] as const;
 
 export interface SudoFsDeps {
   broker: SudoBroker;
@@ -102,6 +105,11 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     const raw = matchPath(getPolicy(), op, normalized, { isContentWrite });
 
     const result = op === 'write' ? applyDefaultDisposition(raw, defaultDisposition) : raw;
+
+    if (result === 'deny') {
+      log.warn('Refusing write to an unhonoured sudoers path', { path: normalized });
+      throw new FsError('EACCES', FS_UNHONORED_SUDOERS_MESSAGE, normalized);
+    }
     if (result !== 'require-approval') return;
     const kind: SudoKind = op;
     const decision = await broker.requestApproval({ kind, detail: normalized });

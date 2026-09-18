@@ -18,6 +18,8 @@ final class OpenApprovalUITests: XCTestCase {
                 .matching(NSPredicate(format: "label CONTAINS %@", "never-display"))
                 .firstMatch.exists)
 
+        
+        
         app.buttons["open-approval-deny"].tap()
         XCTAssertTrue(
             app.buttons["open-approval-deny"].waitForNonExistence(timeout: 10))

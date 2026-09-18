@@ -3,6 +3,7 @@ import { createLogger } from '../../core/index.js';
 import { buildEnvFromMaskedEntries } from '../../core/secret-env.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
+import { createMemoryGuardedFs } from '../../fs/memory-guard-fs.js';
 import type { RestrictedFS } from '../../fs/restricted-fs.js';
 import { createSudoFs } from '../../fs/sudo-fs.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
@@ -48,6 +49,8 @@ export interface ShellAndSkills {
   shell: AlmostBashShellHeadless;
 
   gatedFs: VirtualFS;
+
+  memoryFs: VirtualFS;
   skills: Skill[];
 }
 
@@ -100,7 +103,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
     folder: scoop.folder,
     onSudoRequest: deps.onSudoRequest,
   });
-  const gatedFs = (
+  const memoryFs = (
     sudoWiring
       ? createSudoFs(fs, {
           broker: sudoWiring.broker,
@@ -111,6 +114,8 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
         })
       : fs
   ) as VirtualFS;
+
+  const gatedFs = createMemoryGuardedFs(memoryFs);
 
   const shellEnv = buildScoopShellEnv({
     isCone: unit.policy.filesystem.kind === 'full-workspace',
@@ -144,5 +149,5 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
   log.info('AlmostBashShell initialized', { folder: scoop.folder });
   const skills = await loadSkills(effectiveSkillsFs, SKILLS_LIBRARY_DIR);
-  return { shell, gatedFs, skills };
+  return { shell, gatedFs, memoryFs, skills };
 }

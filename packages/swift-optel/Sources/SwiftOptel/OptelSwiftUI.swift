@@ -2,9 +2,22 @@
     import Foundation
     import SwiftUI
 
+    
+
     @available(iOS 16.0, macOS 13.0, *)
     extension View {
-
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         public func optelAutoInstrument(
             appID: String,
             rate: String? = nil,
@@ -15,14 +28,21 @@
             )
         }
 
+        
+        
         public func optelView(_ name: String) -> some View {
             modifier(OptelViewModifier(name: name))
         }
 
+        
+        
+        
         public func optelTap(source: String) -> some View {
             modifier(OptelTapModifier(source: source))
         }
     }
+
+    
 
     @available(iOS 16.0, macOS 13.0, *)
     public struct OptelAutoInstrumentModifier: ViewModifier {
@@ -31,7 +51,10 @@
         let rate: String?
         let globalHooks: Bool
         @State private var configured = false
-
+        
+        
+        
+        
         @State private var wasBackgrounded = false
 
         public func body(content: Content) -> some View {
@@ -57,6 +80,9 @@
                 }
         }
 
+        
+        
+        
         static func nextState(
             forNewPhase newPhase: ScenePhase,
             wasBackgrounded: Bool
@@ -70,6 +96,13 @@
             return (false, wasBackgrounded)
         }
 
+        
+        
+        
+        
+        
+        
+        
         static func performInstall(
             appID: String,
             rate: String?,
@@ -87,24 +120,33 @@
     }
 
     #if os(macOS)
-
+        
+        
+        
+        
+        
         @available(macOS 13.0, *)
         public enum OptelMacAutoInstrument {
-
+            
             public static var isInstalled: Bool {
                 OptelClickMonitor.isInstalled && OptelWindowObserver.isInstalled
             }
 
+            
+            
+            
             public static func installIfNeeded() {
                 OptelClickMonitor.installIfNeeded()
                 OptelWindowObserver.installIfNeeded()
             }
 
+            
             public static func uninstall() {
                 OptelClickMonitor.uninstall()
                 OptelWindowObserver.uninstall()
             }
 
+            
             internal static func _testing_reset() {
                 OptelClickMonitor._testing_reset()
                 OptelWindowObserver._testing_reset()
@@ -134,12 +176,24 @@
                 })
         }
 
+        
+        
+        
         static func performTap(source: String) {
             OptelClickCoordinator.claimByRefined()
             Optel.sample(.click, source: source)
         }
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
     @available(iOS 16.0, macOS 13.0, *)
     public struct OptelButton<Label: View>: View {
         private let identifier: String?
@@ -174,6 +228,9 @@
                 }, label: labelBuilder)
         }
 
+        
+        
+        
         static func performTap(identifier: String?, label: String?, context: String?) {
             let derived = OptelSourceDeriver.source(
                 element: "button",
@@ -188,7 +245,8 @@
 
     @available(iOS 16.0, macOS 13.0, *)
     extension OptelButton where Label == Text {
-
+        
+        
         public init(
             _ title: String,
             identifier: String? = nil,

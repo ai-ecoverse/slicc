@@ -3,7 +3,11 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
 final class TraySessionCLITests: XCTestCase {
+
+    
 
     func testParseReturnsNilForNormalLaunch() {
         XCTAssertNil(TraySessionCLI.parse(["/Applications/Sliccstart.app/Contents/MacOS/Sliccstart"]))
@@ -23,6 +27,8 @@ final class TraySessionCLITests: XCTestCase {
     func testRevealFlagAloneWithoutListIsNotHeadless() {
         XCTAssertNil(TraySessionCLI.parse(["Sliccstart", "--reveal-urls"]))
     }
+
+    
 
     func testEncodeRedactsJoinURLByDefault() throws {
         let sessions = [makeSession(joinUrl: "https://slicc.test/join/a.secret")]
@@ -49,7 +55,7 @@ final class TraySessionCLITests: XCTestCase {
         let when = Date(timeIntervalSince1970: 1_700_000_000)
         let sessions = [makeSession(joinUrl: "https://slicc.test/join/a.secret", lastSeenAt: when)]
         let raw = String(data: try TraySessionCLI.encode(sessions, reveal: false), encoding: .utf8) ?? ""
-
+        
         XCTAssertTrue(raw.contains("2023-11-14T"), "expected ISO-8601 timestamp, got \(raw)")
     }
 
@@ -61,6 +67,8 @@ final class TraySessionCLITests: XCTestCase {
         XCTAssertNil(dto.joinUrl)
     }
 
+    
+
     func testStoredAlwaysDecisionsWinOverGUI() {
         XCTAssertEqual(TraySessionCLI.outcome(stored: .allow, guiAvailable: false), .allow)
         XCTAssertEqual(TraySessionCLI.outcome(stored: .deny, guiAvailable: true), .deny)
@@ -70,6 +78,8 @@ final class TraySessionCLITests: XCTestCase {
         XCTAssertEqual(TraySessionCLI.outcome(stored: nil, guiAvailable: true), .prompt)
         XCTAssertEqual(TraySessionCLI.outcome(stored: nil, guiAvailable: false), .deny)
     }
+
+    
 
     func testPromptResultMapping() {
         XCTAssertEqual(TraySessionCLI.promptResult(forButtonIndex: 1000), .denyOnce)
@@ -88,6 +98,8 @@ final class TraySessionCLITests: XCTestCase {
         XCTAssertEqual(TraySessionCLI.effect(of: .alwaysDeny).persist, .deny)
         XCTAssertFalse(TraySessionCLI.effect(of: .alwaysDeny).allow)
     }
+
+    
 
     func testConsentKeyPrefersSigningIdentifier() {
         XCTAssertEqual(
@@ -121,6 +133,8 @@ final class TraySessionCLITests: XCTestCase {
         XCTAssertFalse(TraySessionCLI.deniedMessage(guiAvailable: true).contains("SSH"))
     }
 
+    
+
     func testRevealConsentStoreRoundTrip() {
         let suite = "TraySessionCLITests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -134,6 +148,8 @@ final class TraySessionCLITests: XCTestCase {
         XCTAssertEqual(store.load(forConsentKey: "id:x"), .deny)
         XCTAssertNil(store.load(forConsentKey: "id:other"))
     }
+
+    
 
     private func decodeArray(_ data: Data) throws -> [[String: Any]] {
         let json = try JSONSerialization.jsonObject(with: data)

@@ -263,7 +263,7 @@ export interface UnifiedDiffOptions {
 }
 
 export function unifiedDiff(opts: UnifiedDiffOptions): string {
-  const { oldContent, newContent, oldName, newName, color = true, context = 3, absent } = opts;
+  const { oldContent, newContent, oldName, newName, color = false, context = 3, absent } = opts;
 
   if (oldContent === newContent) return '';
 
@@ -326,10 +326,14 @@ export interface DiffStatEntry {
   binary?: { oldSize: number; newSize: number };
 }
 
-export function formatDiffStatText(entries: readonly DiffStatEntry[]): string {
-  const RED = '\x1b[31m';
-  const GREEN = '\x1b[32m';
-  const RESET = '\x1b[0m';
+export function formatDiffStatText(
+  entries: readonly DiffStatEntry[],
+  opts?: { color?: boolean }
+): string {
+  const color = opts?.color === true;
+  const RED = color ? '\x1b[31m' : '';
+  const GREEN = color ? '\x1b[32m' : '';
+  const RESET = color ? '\x1b[0m' : '';
 
   let output = '';
   let totalInsertions = 0;

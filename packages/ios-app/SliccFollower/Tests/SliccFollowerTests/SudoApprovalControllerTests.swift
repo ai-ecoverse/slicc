@@ -3,6 +3,9 @@ import XCTest
 
 @testable import SliccTrayKit
 
+
+
+
 @MainActor
 final class SudoApprovalControllerTests: XCTestCase {
     private final class Wire {
@@ -84,7 +87,7 @@ final class SudoApprovalControllerTests: XCTestCase {
         prompt(controller, clock: clock)
         XCTAssertEqual(controller.pending.map(\.requestId), ["sudo-1"])
         XCTAssertEqual(recorder.arrived, ["sudo-1"])
-
+        
         prompt(controller, clock: clock)
         XCTAssertEqual(controller.pending.count, 1)
         XCTAssertEqual(recorder.arrived.count, 1)
@@ -180,7 +183,7 @@ final class SudoApprovalControllerTests: XCTestCase {
         XCTAssertTrue(controller.pending.isEmpty)
         XCTAssertTrue(wire.sent.isEmpty)
         XCTAssertEqual(recorder.withdrawn, ["sudo-1"])
-
+        
         controller.cancel(requestId: "nope")
         XCTAssertEqual(recorder.withdrawn, ["sudo-1"])
     }
@@ -211,7 +214,7 @@ final class SudoApprovalControllerTests: XCTestCase {
         controller.denyFromNotification(requestId: "sudo-1")
         XCTAssertTrue(gate.reasons.isEmpty)
         XCTAssertEqual(wire.responses.map(\.decision), ["deny"])
-
+        
         controller.denyFromNotification(requestId: "sudo-1")
         XCTAssertEqual(wire.responses.count, 1)
     }
@@ -249,11 +252,13 @@ final class SudoApprovalControllerTests: XCTestCase {
         let decoded = try JSONDecoder().decode(
             LeaderToFollowerMessage.self, from: Data(prompt.utf8))
         guard
-            case .sudoApproveRequest(let id, let kind, let detail, _, let pattern, let scoop, let exp) =
+            case .sudoApproveRequest(
+                let id, let kind, let detail, _, let pattern, let reason, let scoop, let exp) =
                 decoded
         else { return XCTFail("expected sudoApproveRequest, got \(decoded)") }
         XCTAssertEqual([id, kind, detail], ["p", "write", "/etc/sudoers"])
         XCTAssertNil(pattern)
+        XCTAssertNil(reason)
         XCTAssertNil(scoop)
         XCTAssertEqual(exp, 1_750_000_300_000)
     }

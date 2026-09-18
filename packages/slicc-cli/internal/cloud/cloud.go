@@ -1,3 +1,14 @@
+
+
+
+
+
+
+
+
+
+
+
 package cloud
 
 import (
@@ -10,7 +21,11 @@ import (
 	"time"
 )
 
+
 var ErrUnsupported = errors.New("iCloud tray sessions are only available on macOS")
+
+
+
 
 type Session struct {
 	ID         string    `json:"id"`
@@ -22,6 +37,7 @@ type Session struct {
 	JoinURL    string    `json:"joinUrl,omitempty"`
 }
 
+
 func ParseSessions(data []byte) ([]Session, error) {
 	var sessions []Session
 	if err := json.Unmarshal(data, &sessions); err != nil {
@@ -30,10 +46,17 @@ func ParseSessions(data []byte) ([]Session, error) {
 	return sessions, nil
 }
 
+
+
+
 type Selector struct {
 	Index    int
 	IDPrefix string
 }
+
+
+
+
 
 func ParseSelector(args []string) (Selector, []string, error) {
 	sel := Selector{}
@@ -63,7 +86,8 @@ func ParseSelector(args []string) (Selector, []string, error) {
 			sel.IDPrefix = strings.TrimPrefix(args[0], "--session=")
 			args = args[1:]
 		case args[0] == "--index" || args[0] == "--session":
-
+			
+			
 			return sel, nil, fmt.Errorf("missing value for %s", args[0])
 		default:
 			return sel, args, nil
@@ -71,6 +95,8 @@ func ParseSelector(args []string) (Selector, []string, error) {
 	}
 	return sel, args, nil
 }
+
+
 
 func Select(sessions []Session, sel Selector) (Session, error) {
 	if len(sessions) == 0 {
@@ -106,6 +132,8 @@ func Select(sessions []Session, sel Selector) (Session, error) {
 	return ordered[sel.Index], nil
 }
 
+
+
 func FormatTable(sessions []Session, now time.Time) string {
 	if len(sessions) == 0 {
 		return "No active tray sessions found in iCloud.\n"
@@ -133,6 +161,8 @@ func shortID(id string) string {
 	return id[:12]
 }
 
+
+
 func truncate(s string, width int) string {
 	runes := []rune(s)
 	if len(runes) <= width {
@@ -143,6 +173,7 @@ func truncate(s string, width int) string {
 	}
 	return string(runes[:width-1]) + "…"
 }
+
 
 func formatAge(d time.Duration) string {
 	switch {

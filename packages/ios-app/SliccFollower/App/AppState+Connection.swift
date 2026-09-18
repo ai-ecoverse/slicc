@@ -1,7 +1,20 @@
 import Foundation
 
+
+
+
+
+
+
+
 extension AppState {
 
+    
+    
+    
+    
+    
+    
     var rawConnectionHealth: ConnectionHealth {
         ConnectionHealth(
             state: connectionState,
@@ -9,11 +22,22 @@ extension AppState {
             reconnectAttempt: connectionState == .reconnecting ? reconnectAttempt : 0)
     }
 
+    
+    
     func ingestConnectionHealth() {
         guard !connectionIngestSuspended else { return }
         connectionSettler.ingest(rawConnectionHealth)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func updateConnection(_ mutate: () -> Void) {
         connectionIngestSuspended = true
         mutate()
@@ -22,7 +46,11 @@ extension AppState {
     }
 
     #if DEBUG
-
+        
+        
+        
+        
+        
         func settleConnectionImmediately() {
             connectionSettler.settleImmediately(rawConnectionHealth)
         }

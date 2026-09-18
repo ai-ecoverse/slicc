@@ -228,7 +228,7 @@ async function describeTypeScriptMiss(ipk: TypeScriptIpkContext): Promise<string
  * `new Function('module', 'exports', source)` wrapper, and returns
  * the captured `module.exports` as the `ts` API surface. No CDN
  * fallback — a missing package surfaces the canonical guidance error
- * which the calling command surfaces verbatim. Shared with `test` so a
+ * which the calling command surfaces verbatim. Shared with `tst` so a
  * single transpiler instance powers both `tsc` and `.ts` test files.
  */
 export async function getTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScriptModule> {

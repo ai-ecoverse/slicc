@@ -32,4 +32,23 @@ export function bytesToStdin(bytes: Uint8Array): ByteString {
   return chars.join('') as unknown as ByteString;
 }
 
+export function stdinAsBytes(b: ByteString): Uint8Array {
+  const latin1 = stdinAsLatin1(b);
+  const bytes = new Uint8Array(latin1.length);
+  for (let i = 0; i < latin1.length; i++) bytes[i] = latin1.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+export function bytesAsStdout(bytes: Uint8Array): {
+  stdout: string;
+  stdoutKind: 'bytes';
+  stdoutEncoding: 'binary';
+} {
+  return {
+    stdout: stdinAsLatin1(bytesToStdin(bytes)),
+    stdoutKind: 'bytes',
+    stdoutEncoding: 'binary',
+  };
+}
+
 export const EMPTY_BYTES: ByteString = '' as unknown as ByteString;

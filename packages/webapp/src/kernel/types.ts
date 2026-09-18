@@ -55,7 +55,7 @@ export interface KernelFacade {
 
   getConeJid(): string | null;
 
-  seedBuffersFromAgentState(): Promise<void>;
+  hydrateBuffersFromRecords(): Promise<void>;
 }
 
 export interface KernelClientCallbacks {

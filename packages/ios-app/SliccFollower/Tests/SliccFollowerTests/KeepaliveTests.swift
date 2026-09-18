@@ -3,8 +3,13 @@ import XCTest
 
 @testable import SliccFollower
 
-final class KeepaliveTests: XCTestCase {
 
+
+
+
+
+final class KeepaliveTests: XCTestCase {
+    
     private final class Recorder: @unchecked Sendable {
         private let lock = NSLock()
         private var counts: [String: Int] = [:]
@@ -22,6 +27,9 @@ final class KeepaliveTests: XCTestCase {
         }
     }
 
+    
+    
+    
     private func makeKeepalive(
         recorder: Recorder,
         transportOpen: Bool,
@@ -81,6 +89,7 @@ final class KeepaliveTests: XCTestCase {
         XCTAssertEqual(missed, 0)
     }
 
+    
     func testAnInboundPingAlsoClearsAStall() async {
         let recorder = Recorder()
         let keepalive = makeKeepalive(recorder: recorder, transportOpen: true)
@@ -105,6 +114,7 @@ final class KeepaliveTests: XCTestCase {
             "hardMaxMissed must still terminate a peer that never answers")
     }
 
+    
     func testAClosedTransportDiesAtMaxMissed() async {
         let recorder = Recorder()
         let keepalive = makeKeepalive(recorder: recorder, transportOpen: false)
@@ -129,6 +139,8 @@ final class KeepaliveTests: XCTestCase {
         XCTAssertEqual(recorder.count("dead"), 1)
     }
 
+    
+    
     func testEqualThresholdsLeaveNoStallWindow() async {
         let recorder = Recorder()
         let keepalive = makeKeepalive(
@@ -140,6 +152,8 @@ final class KeepaliveTests: XCTestCase {
         XCTAssertEqual(recorder.count("stalled"), 0)
     }
 
+    
+    
     func testStopSuppressesALateRecovery() async {
         let recorder = Recorder()
         let keepalive = makeKeepalive(recorder: recorder, transportOpen: true)
@@ -165,6 +179,7 @@ final class KeepaliveTests: XCTestCase {
     }
 }
 
+
 final class ReconnectBackoffTests: XCTestCase {
     func testDelaysGrowGeometricallyThenCap() {
         XCTAssertEqual(ReconnectBackoff.delay(forAttempt: 1), 1)
@@ -183,11 +198,15 @@ final class ReconnectBackoffTests: XCTestCase {
             ReconnectBackoff.maxDelay)
     }
 
+    
+    
     func testNonPositiveAttemptsFallBackToTheBaseDelay() {
         XCTAssertEqual(ReconnectBackoff.delay(forAttempt: 0), ReconnectBackoff.baseDelay)
         XCTAssertEqual(ReconnectBackoff.delay(forAttempt: -3), ReconnectBackoff.baseDelay)
     }
 
+    
+    
     func testTheTotalBudgetIsBounded() {
         let total = (1...ReconnectBackoff.maxAttempts)
             .map { ReconnectBackoff.delay(forAttempt: $0) }

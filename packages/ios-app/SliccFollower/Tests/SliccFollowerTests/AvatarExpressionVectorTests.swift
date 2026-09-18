@@ -2,8 +2,19 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
+
+
+
+
+
 final class AvatarExpressionVectorTests: XCTestCase {
     private let accuracy = 0.000_000_001
+
+    
 
     private struct Vectors: Decodable {
         let constants: Constants
@@ -147,6 +158,7 @@ final class AvatarExpressionVectorTests: XCTestCase {
         return try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url))
     }
 
+    
     private func sequence(_ values: [Double]) -> () -> Double {
         var index = 0
         return {
@@ -158,6 +170,8 @@ final class AvatarExpressionVectorTests: XCTestCase {
     private func drift(_ name: String) -> String {
         "\(name) diverged — regenerate with gen-expression-vectors.mjs and fix whichever side changed"
     }
+
+    
 
     func testSharedConstantsMatch() throws {
         let c = try loadVectors().constants
@@ -247,7 +261,7 @@ final class AvatarExpressionVectorTests: XCTestCase {
             XCTAssertEqual(
                 AvatarExpression.fillToPupilScale(vector.fill), vector.expected,
                 accuracy: accuracy, drift("fillToPupilScale(\(vector.fill))"))
-
+            
             XCTAssertEqual(
                 SliccAgentAvatarGeometry.fillScale(for: vector.fill), vector.expected,
                 accuracy: accuracy, drift("fillScale(for: \(vector.fill))"))
@@ -331,7 +345,7 @@ final class AvatarExpressionVectorTests: XCTestCase {
                 AvatarExpression.parseActivity(vector.raw)?.rawValue, vector.expected,
                 drift("parseActivity(\(vector.raw))"))
         }
-
+        
         XCTAssertNil(AvatarExpression.parseActivity(nil))
     }
 }

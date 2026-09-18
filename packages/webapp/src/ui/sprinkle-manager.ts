@@ -8,6 +8,7 @@ import { LEADER_RUNTIME_ID } from '../shell/sprinkle-instances.js';
 import type {
   SprinkleBroadcastResult,
   SprinkleManagerHandle,
+  SprinkleOpenOptions,
   SprinkleSendReport,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
@@ -26,6 +27,8 @@ export interface AddSprinkleOptions {
 
   background?: boolean;
 }
+
+type SprinkleManagerOpenOptions = AddSprinkleOptions & SprinkleOpenOptions;
 
 export interface SprinkleAddOptions extends AddSprinkleOptions {
   icon?: string;
@@ -133,6 +136,8 @@ export interface SprinkleManagerOptions {
   inlineSprinkles?: ReadonlySet<string>;
 
   execHandler?: SprinkleExecHandler;
+
+  resolveLickOriginUnitId?: (target: string) => string | undefined;
 }
 
 const WATCHER_ROOTS = SPRINKLE_ROOTS;
@@ -150,15 +155,19 @@ export class SprinkleManager implements SprinkleManagerHandle {
     {
       renderer: SprinkleRenderer;
       container: HTMLElement;
+      lickOriginUnitId?: string;
     }
   >();
 
   private attentionOnly = new Set<string>();
+
+  private rendererOperationTails = new Map<string, Promise<void>>();
   private inflightRefresh: Promise<void> | null = null;
   private lastRefreshAt = 0;
   private autoOpenBehavior: 'activate' | 'attention';
   private onSendToSprinkle?: SprinkleBroadcastHook;
   private onSprinkleReloaded?: (name: string) => void;
+  private readonly resolveLickOriginUnitId?: (target: string) => string | undefined;
 
   private registeredSprinkles = new Set<string>();
   private readonly inlineSprinkles: ReadonlySet<string>;
@@ -169,7 +178,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
 
   constructor(
     fs: VirtualFS,
-    lickHandler: (event: LickEvent) => void,
+    lickHandler: (event: LickEvent, originUnitId?: string) => void,
     callbacks: SprinkleManagerCallbacks,
     stopConeHandler: () => void,
     options: SprinkleManagerOptions = {}
@@ -270,6 +279,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
     this.onSendToSprinkle = options.onSendToSprinkle;
     this.onSprinkleReloaded = options.onSprinkleReloaded;
+    this.resolveLickOriginUnitId = options.resolveLickOriginUnitId;
     this.inlineSprinkles = options.inlineSprinkles ?? new Set();
   }
 
@@ -284,7 +294,22 @@ export class SprinkleManager implements SprinkleManagerHandle {
     this.onSprinkleReloaded = hook;
   }
 
-  async reload(name: string): Promise<void> {
+  private enqueueRendererOperation(name: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.rendererOperationTails.get(name) ?? Promise.resolve();
+    const current = previous.then(operation, operation);
+    this.rendererOperationTails.set(name, current);
+    return current.finally(() => {
+      if (this.rendererOperationTails.get(name) === current) {
+        this.rendererOperationTails.delete(name);
+      }
+    });
+  }
+
+  reload(name: string): Promise<void> {
+    return this.enqueueRendererOperation(name, () => this.reloadNow(name));
+  }
+
+  private async reloadNow(name: string): Promise<void> {
     const entry = this.openSprinkles.get(name);
     if (!entry) {
       log.info('Cannot reload closed sprinkle', { name });
@@ -312,7 +337,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
     entry.renderer?.dispose();
     this.bridge.removeSprinkle(name);
 
-    const api = this.bridge.createAPI(name);
+    const api = this.bridge.createAPI(name, () => entry.lickOriginUnitId);
     const renderer = new SprinkleRenderer(entry.container, api);
     await renderer.render(content, name);
 
@@ -589,7 +614,15 @@ export class SprinkleManager implements SprinkleManagerHandle {
     });
   }
 
-  async open(name: string, zone?: string, options: AddSprinkleOptions = {}): Promise<void> {
+  open(name: string, zone?: string, options: SprinkleManagerOpenOptions = {}): Promise<void> {
+    return this.enqueueRendererOperation(name, () => this.openNow(name, zone, options));
+  }
+
+  private async openNow(
+    name: string,
+    zone?: string,
+    options: SprinkleManagerOpenOptions = {}
+  ): Promise<void> {
     if (this.openSprinkles.has(name)) {
       log.info('Sprinkle already open', { name });
       return;
@@ -618,24 +651,29 @@ export class SprinkleManager implements SprinkleManagerHandle {
       'width: 100%; height: 100%; display: flex; flex-direction: column; overflow-y: auto;';
     container.dataset.sprinkle = name;
 
-    this.openSprinkles.set(name, { renderer: null!, container });
+    const lickOriginUnitId = options.lickOriginTarget
+      ? this.resolveLickOriginUnitId?.(options.lickOriginTarget)
+      : undefined;
+    const entry = { renderer: null!, container, lickOriginUnitId };
+    this.openSprinkles.set(name, entry);
     if (options.attention) this.attentionOnly.add(name);
     else this.attentionOnly.delete(name);
     this.callbacks.addSprinkle(name, sprinkle.title, container, zone, {
-      ...options,
+      attention: options.attention,
+      background: options.background,
       icon: sprinkle.icon,
     });
 
-    const api = this.bridge.createAPI(name);
+    const api = this.bridge.createAPI(name, () => entry.lickOriginUnitId);
     const renderer = new SprinkleRenderer(container, api);
     await renderer.render(content, name);
 
-    const entry = this.openSprinkles.get(name);
-    if (!entry) {
+    const openEntry = this.openSprinkles.get(name);
+    if (!openEntry) {
       renderer.dispose();
       return;
     }
-    entry.renderer = renderer;
+    openEntry.renderer = renderer;
     renderer.activateBridgeLifecycle();
     if (!this.openSprinkles.has(name)) return;
     this.persistOpenSprinkles();
@@ -652,14 +690,18 @@ export class SprinkleManager implements SprinkleManagerHandle {
     this.notifyChange();
   }
 
-  async activate(name: string, zone?: string): Promise<void> {
-    if (this.attentionOnly.has(name)) {
+  async activate(name: string, zone?: string, options: SprinkleOpenOptions = {}): Promise<void> {
+    const wasAttentionOnly = this.attentionOnly.has(name);
+    const entry = this.openSprinkles.get(name);
+    if (wasAttentionOnly && entry && options.lickOriginTarget) {
+      entry.lickOriginUnitId = this.resolveLickOriginUnitId?.(options.lickOriginTarget);
+    }
+    if (wasAttentionOnly) {
       this.markActivated(name);
     }
-    const entry = this.openSprinkles.get(name);
     if (!entry) {
       try {
-        await this.open(name, zone);
+        await this.open(name, zone, options);
       } catch (err) {
         log.warn('Failed to open sprinkle from rail-icon click', {
           name,
@@ -706,6 +748,10 @@ export class SprinkleManager implements SprinkleManagerHandle {
 
   opened(): string[] {
     return Array.from(this.openSprinkles.keys());
+  }
+
+  lickOriginUnitIdOf(name: string): string | undefined {
+    return this.openSprinkles.get(name)?.lickOriginUnitId;
   }
 
   setupWatcher(watcher: FsWatcher): void {

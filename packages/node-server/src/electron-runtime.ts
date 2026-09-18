@@ -45,7 +45,7 @@ export function hashString(str: string, max: number): number {
   return Math.abs(hash) % max;
 }
 
-async function tryListenOnPort(port: number, host: string): Promise<number> {
+export async function tryListenOnPort(port: number, host: string): Promise<number> {
   const { createServer } = await import('net');
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -58,11 +58,14 @@ async function tryListenOnPort(port: number, host: string): Promise<number> {
   });
 }
 
-async function isPortAvailable(port: number): Promise<boolean> {
+export async function isPortAvailable(
+  port: number,
+  listen: (port: number, host: string) => Promise<number> = tryListenOnPort
+): Promise<boolean> {
   try {
-    await tryListenOnPort(port, '127.0.0.1');
+    await listen(port, '127.0.0.1');
     try {
-      await tryListenOnPort(port, '::1');
+      await listen(port, '::1');
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
         return false;
@@ -74,25 +77,33 @@ async function isPortAvailable(port: number): Promise<boolean> {
   }
 }
 
-async function findAvailablePort(startPort: number, maxAttempts = 100): Promise<number> {
+export async function findAvailablePort(
+  startPort: number,
+  maxAttempts = 100,
+  available: (port: number) => Promise<boolean> = isPortAvailable
+): Promise<number> {
   for (let i = 0; i < maxAttempts; i++) {
     const port = startPort + i;
-    if (await isPortAvailable(port)) {
+    if (await available(port)) {
       return port;
     }
   }
   throw new Error(`Could not find available port starting from ${startPort}`);
 }
 
-export async function getElectronAppPort(appPath: string, basePort: number): Promise<number> {
+export async function getElectronAppPort(
+  appPath: string,
+  basePort: number,
+  available: (port: number) => Promise<boolean> = isPortAvailable
+): Promise<number> {
   const offset = hashString(appPath, PORT_HASH_RANGE);
   const preferredPort = basePort + offset;
 
-  if (await isPortAvailable(preferredPort)) {
+  if (await available(preferredPort)) {
     return preferredPort;
   }
 
-  return findAvailablePort(preferredPort + 1);
+  return findAvailablePort(preferredPort + 1, 100, available);
 }
 
 export async function getElectronAppPorts(
@@ -114,7 +125,7 @@ export function getElectronAppDisplayName(appPath: string): string {
   return fileName || trimmedPath;
 }
 
-function isExecutableFile(path: string): boolean {
+export function isExecutableFile(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
     return true;
@@ -260,6 +271,36 @@ export function buildElectronServerSpawnConfig(
       `--cdp-port=${options.cdpPort}`,
     ],
   };
+}
+
+export const ELECTRON_FLOAT_WINDOW_BOX = {
+  width: 1440,
+  height: 960,
+  minWidth: 1024,
+  minHeight: 720,
+} as const;
+
+export interface ElectronChildWindowOptions {
+  autoHideMenuBar: true;
+  width?: number;
+  height?: number;
+  minWidth?: number;
+  minHeight?: number;
+}
+
+const WINDOW_OPEN_SIZE_FEATURES = new Set(['width', 'height', 'innerwidth', 'innerheight']);
+
+export function windowOpenFeaturesRequestSize(features: string): boolean {
+  for (const entry of features.split(',')) {
+    const key = entry.split('=')[0]?.trim().toLowerCase();
+    if (key && WINDOW_OPEN_SIZE_FEATURES.has(key)) return true;
+  }
+  return false;
+}
+
+export function buildElectronChildWindowOptions(features: string): ElectronChildWindowOptions {
+  if (windowOpenFeaturesRequestSize(features)) return { autoHideMenuBar: true };
+  return { autoHideMenuBar: true, ...ELECTRON_FLOAT_WINDOW_BOX };
 }
 
 export function getElectronServeOrigin(servePort: number): string {

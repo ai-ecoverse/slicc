@@ -3,6 +3,8 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
 final class LickEventTests: XCTestCase {
 
     func testFollowerLickTypeRoundTrips() throws {
@@ -11,14 +13,15 @@ final class LickEventTests: XCTestCase {
     }
 
     func testNavigateLickRoundTrip() throws {
-        let body = try WireCodec.anyCodable(#"{"url":"https://x","verb":"handoff"}"#)
+        let body = try WireCodec.anyCodable(#"{"url":"https:
         let event = LickEvent(
             type: .navigate, timestamp: "2026-08-08T00:00:00.000Z", body: body, navigateUrl: "https://x")
         let decoded = try WireCodec.roundTrip(event)
         XCTAssertEqual(decoded.type, .navigate)
         XCTAssertEqual(decoded.timestamp, "2026-08-08T00:00:00.000Z")
         XCTAssertEqual(decoded.navigateUrl, "https://x")
-
+        
+        
         XCTAssertEqual(try WireCodec.canonical(decoded.body), try WireCodec.canonical(body))
     }
 
@@ -45,7 +48,7 @@ final class LickEventTests: XCTestCase {
     }
 
     func testDecodeFromBrowserFollowerShape() throws {
-        let json = #"{"type":"navigate","timestamp":"2026-08-08T00:00:00.000Z","navigateUrl":"https://x"}"#
+        let json = #"{"type":"navigate","timestamp":"2026-08-08T00:00:00.000Z","navigateUrl":"https:
         let decoded = try WireCodec.decode(LickEvent.self, from: json)
         XCTAssertEqual(decoded.type, .navigate)
         XCTAssertEqual(decoded.timestamp, "2026-08-08T00:00:00.000Z")

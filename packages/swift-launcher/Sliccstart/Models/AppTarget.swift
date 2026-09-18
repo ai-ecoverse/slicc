@@ -6,25 +6,29 @@ enum AppTargetType: String, Codable {
     case terminal
 }
 
+
 enum ElectronDebugSupport {
-    case supported
-    case disabled
-    case unknown
+    case supported  
+    case disabled  
+    case unknown  
 }
 
 struct AppTarget: Identifiable {
-    let id: String
-    let name: String
-    let path: String
-    let executablePath: String
+    let id: String  
+    let name: String  
+    let path: String  
+    let executablePath: String  
     let type: AppTargetType
     let icon: NSImage
     let debugSupport: ElectronDebugSupport
-    let isDebugBuild: Bool
-    let originalAppPath: String?
-
+    let isDebugBuild: Bool  
+    let originalAppPath: String?  
+    
+    
+    
+    
     // swiftlint:disable:next redundant_optional_initialization
-    var bundleId: String? = nil
+    var bundleId: String? = nil  
 
     static let knownChromiumBrowsers: [(bundleId: String, name: String)] = [
         ("com.google.Chrome", "Google Chrome"),
@@ -57,6 +61,8 @@ struct AppTarget: Identifiable {
         ("org.alacritty", "Alacritty"),
     ]
 
+    
+    
     static let knownElectronApps: [(bundleId: String, name: String)] = [
         ("com.microsoft.teams2", "Microsoft Teams"),
         ("com.microsoft.VSCode", "Visual Studio Code"),

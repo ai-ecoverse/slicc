@@ -5,6 +5,7 @@ import { delimiter, join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   cliAssetName,
+  defaultIsWritableDir,
   resolveInstallDir,
   resolveLatestCliAsset,
   runInstallCli,
@@ -57,6 +58,12 @@ describe('cliAssetName', () => {
 });
 
 describe('resolveInstallDir', () => {
+  it('checks actual directory writability for the default probe', () => {
+    const dir = makeInstallDir();
+    expect(defaultIsWritableDir(dir)).toBe(true);
+    expect(defaultIsWritableDir(join(dir, 'missing'))).toBe(false);
+  });
+
   const LOCAL_BIN = join('/home/me', '.local', 'bin');
 
   it('prefers ~/.local/bin when it is already on PATH', () => {

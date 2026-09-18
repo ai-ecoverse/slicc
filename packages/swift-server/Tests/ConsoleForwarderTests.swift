@@ -164,10 +164,35 @@ final class ConsoleForwarderTests: XCTestCase {
     }
 
     func testConsoleJSONValueStringValueSerializesObjectAndArray() {
-        let object = ConsoleJSONValue.object(["k": .string("v")])
+        let object = ConsoleJSONValue.object(["k": .string("v"), "enabled": .bool(true)])
         let array = ConsoleJSONValue.array([.number(1), .number(2)])
-        XCTAssertEqual(object.stringValue, "{\"k\":\"v\"}")
+        let serialized = object.stringValue
+        XCTAssertTrue(serialized.contains("\"k\":\"v\""))
+        XCTAssertTrue(serialized.contains("\"enabled\":true"))
         XCTAssertEqual(array.stringValue, "[1,2]")
+    }
+
+    func testForwardConsoleMessagesRejectsMalformedSocketURL() async {
+        let forwarder = ConsoleForwarder(output: { _ in })
+        do {
+            try await forwarder.forwardConsoleMessages(to: "http://[", runID: UUID())
+            XCTFail("expected invalid websocket URL")
+        } catch ConsoleForwarderError.invalidWebSocketURL(let value) {
+            XCTAssertEqual(value, "http://[")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testDefaultOutputClosureHandlesMissingTarget() async throws {
+        let forwarder = ConsoleForwarder(
+            pollAttempts: 1,
+            pollDelayNanoseconds: 0,
+            reconnectDelayNanoseconds: 0
+        )
+        await forwarder.start(cdpPort: 1, pageUrl: "5710")
+        try await Task.sleep(nanoseconds: 20_000_000)
+        await forwarder.stop()
     }
 
     private func decodeJSONValue(_ literal: String) throws -> ConsoleJSONValue {

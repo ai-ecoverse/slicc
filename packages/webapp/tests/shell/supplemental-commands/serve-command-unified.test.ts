@@ -83,6 +83,34 @@ describe('serve command (unified preview)', () => {
     expect(result.stdout).toContain('--list');
   });
 
+  it('documents the size limit, snapshot quota, live expiry and token in --help', async () => {
+    const result = await createServeCommand().execute(['--help'], {} as never);
+    expect(result.stdout).toContain('Limits and lifetime:');
+    expect(result.stdout).toContain('Range in windows of up to 8 MiB');
+    expect(result.stdout).toContain('file over 25 MiB');
+    expect(result.stdout).toContain('HTTP 413');
+    expect(result.stdout).toContain('at most 10 --ttl snapshots');
+    expect(result.stdout).toContain('Live previews have no quota');
+    expect(result.stdout).toContain('disconnected for 5 minutes');
+    expect(result.stdout).toContain('`--stop` also accepts the preview URL');
+  });
+
+  it('prints the preview token and its lifetime at mint time', async () => {
+    setPreviewMinter(async () => ({
+      url: 'https://abc123.sliccy.now/index.html',
+      pushed: 0,
+      previewToken: 'tray.tok',
+    }));
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/index.html'],
+    });
+    const result = await createServeCommand().execute(['/workspace/app'], ctx as never);
+    expect(result.stdout).toContain(
+      'Preview token: tray.tok (expires 5 min after the leader disconnects; revoke sooner with serve --stop)'
+    );
+  });
+
   it('mints via the in-realm minter when set and reports url + follower count', async () => {
     const minter = vi.fn().mockResolvedValue({
       url: 'https://abc123.sliccy.now/index.html',
@@ -376,6 +404,54 @@ describe('serve command (unified preview)', () => {
     expect(result.stdout).toContain('Preview revoked: tok-abc');
   });
 
+  it('--list labels live previews, snapshots, and snapshots still uploading', async () => {
+    const base = { url: 'u', servedRoot: '/r', entryPath: '/r/i.html', allowLive: false };
+    setPreviewOp(async () => ({
+      previews: [
+        {
+          ...base,
+          previewToken: 'a',
+          createdAt: 'c1',
+          mode: 'live' as const,
+          state: 'ready' as const,
+        },
+        {
+          ...base,
+          previewToken: 'b',
+          createdAt: 'c2',
+          mode: 'persistent' as const,
+          state: 'pending' as const,
+          expiresAt: 'e2',
+        },
+        {
+          ...base,
+          previewToken: 'c',
+          createdAt: 'c3',
+          mode: 'persistent' as const,
+          state: 'ready' as const,
+          expiresAt: 'e3',
+        },
+        { ...base, previewToken: 'd', createdAt: 'c4' },
+      ],
+    }));
+    const result = await createServeCommand().execute(['--list'], {} as never);
+    expect(result.stdout).toContain('  a  live  -  u  /r  c1');
+    expect(result.stdout).toContain('  b  uploading  e2  u  /r  c2');
+    expect(result.stdout).toContain('  c  persistent  e3  u  /r  c3');
+    expect(result.stdout).toContain('  d  live  -  u  /r  c4');
+  });
+
+  it('--stop accepts the preview URL printed at mint time', async () => {
+    const stop = vi.fn(async () => ({ revoked: true }));
+    setPreviewOp(stop);
+    const url =
+      'https://0a1b2c3d4e5f4a6b8c7d9e0f1a2b3c4d--deadbeef-00112233445566778899.sliccy.now/index.html';
+    const result = await createServeCommand().execute(['--stop', url], {} as never);
+    const token = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d.00112233445566778899';
+    expect(stop).toHaveBeenCalledWith({ type: 'stop', previewToken: token });
+    expect(result.stdout).toContain(`Preview revoked: ${token}`);
+  });
+
   it('--stop <token> reports error when in-realm op returns revoked:false', async () => {
     setPreviewOp(async () => ({ revoked: false }));
     const cmd = createServeCommand();
@@ -630,6 +706,9 @@ describe('serve command (unified preview)', () => {
           expect.objectContaining({ path: 'assets/logo.png', mime: 'image/png' }),
         ],
       })
+    );
+    expect(result.stdout).toContain(
+      '(kept until its --ttl expires; counts toward the 10-snapshot tray quota; revoke sooner with serve --stop)'
     );
   });
 

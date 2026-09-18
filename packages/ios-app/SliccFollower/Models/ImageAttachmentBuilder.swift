@@ -1,15 +1,29 @@
 import SliccTrayKit
 import UIKit
 
+
+
+
+
+
+
+
+
 enum ImageAttachmentBuilder {
-
+    
     static let inlineMaxEdge: CGFloat = 1568
-
+    
     static let maxImageBytes = 4 * 1024 * 1024
     static let jpegQuality: CGFloat = 0.85
-
+    
+    
+    
+    
     static let messageBase64Budget = 6 * 1024 * 1024
 
+    
+    
+    
     static func inlineAttachment(
         from image: UIImage, name: String, maxBytes: Int = maxImageBytes,
         base64BudgetRemaining: Int = messageBase64Budget
@@ -23,7 +37,8 @@ enum ImageAttachmentBuilder {
                 name: name,
                 reason: "The image is still over the size ceiling after downscaling.")
         }
-
+        
+        
         guard (jpeg.count * 4) / 3 <= base64BudgetRemaining else {
             return failed(
                 name: name,
@@ -39,6 +54,10 @@ enum ImageAttachmentBuilder {
         )
     }
 
+    
+    
+    
+    
     static func downscale(_ image: UIImage, maxEdgePixels: CGFloat) -> UIImage {
         let pixelWidth = image.size.width * image.scale
         let pixelHeight = image.size.height * image.scale

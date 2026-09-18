@@ -145,6 +145,29 @@ function truncatePreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
   };
 }
 
+function createComputerNativeBridge(getLeader: StandalonePanelRpcDeps['getLeader']) {
+  return async (
+    payload: Parameters<NonNullable<StandalonePanelRpcHandlerOptions['computerNative']>>[0]
+  ) => {
+    const sync = getLeader()?.currentLeaderSync;
+    if (!sync) throw new Error('computer native: no active leader tray');
+    if (payload.action === 'capture') {
+      const frame = await sync.captureNativeComputer(payload.runtimeId, {
+        fps: payload.fps,
+        maxWidth: payload.maxWidth,
+        watch: payload.watch,
+      });
+      return { ok: true as const, ...frame };
+    }
+    if (payload.action === 'input') {
+      await sync.inputNativeComputer(payload.runtimeId, payload.events ?? []);
+      return { ok: true as const };
+    }
+    sync.unwatchNativeComputer(payload.runtimeId);
+    return { ok: true as const };
+  };
+}
+
 function createRemoteExecBridge(getLeader: StandalonePanelRpcDeps['getLeader']) {
   const aborters = new Map<string, AbortController>();
   return {
@@ -240,6 +263,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
       execOnRemote: remoteExec.execOnRemote,
       signalRemoteExec: remoteExec.signalRemoteExec,
+      computerNative: createComputerNativeBridge(getLeader),
       sliccSidecar: createSidecarBridge(),
       ...biscottoHandlers(),
       rotateWebhook: async () => {

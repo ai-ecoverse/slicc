@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { makeEnv } from './helpers/fake-env.js';
@@ -110,5 +112,18 @@ describe('GET /api/flags', () => {
 
     expect(cache.keys.some((key) => key.endsWith('/api/flags?float=standalone'))).toBe(true);
     expect(cache.keys.some((key) => key.endsWith('/api/flags?float=cherry'))).toBe(true);
+  });
+});
+
+describe('graduated flags in wrangler.jsonc', () => {
+  const wrangler = readFileSync(
+    fileURLToPath(new URL('../wrangler.jsonc', import.meta.url).href),
+    'utf-8'
+  );
+  const values = [...wrangler.matchAll(/"compact-on-idle":\s*"([^"]*)"/g)].map((match) => match[1]);
+
+  it('pins compact-on-idle ON in every env (production + staging)', () => {
+    expect(values.length).toBeGreaterThanOrEqual(2);
+    for (const value of values) expect(value).toBe('on');
   });
 });

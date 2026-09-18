@@ -7,6 +7,9 @@ import XCTest
 
 @testable import slicc_server
 
+
+
+
 final class BoundedSecretStoreRoutesTests: XCTestCase {
     func testListReportsADiagnosisInsteadOfHangingOnAStalledStore() async throws {
         let fixture = StallingPersistedSecrets([Secret(name: "SAVED_TOKEN", value: "saved-value", domains: [])])
@@ -25,19 +28,22 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
                     let object = try self.decodeJSONObject(response.body)
                     XCTAssertEqual(object["errorCode"]?.stringValue, BoundedStoreCall.timeoutErrorCode)
                     let message = object["error"]?.stringValue ?? ""
-
+                    
+                    
                     XCTAssertTrue(message.contains("Keychain"), message)
                     XCTAssertTrue(message.contains("docs/secrets.md"), message)
-
+                    
                     XCTAssertFalse(message.isEmpty)
                 }
             }
-
+            
             XCTAssertLessThan(elapsed, .seconds(BoundedStoreCall.defaultTimeoutSeconds + 3))
             XCTAssertGreaterThan(elapsed, .seconds(BoundedStoreCall.defaultTimeoutSeconds - 1))
         }
     }
 
+    
+    
     func testSnapshotAndSessionRoutesStayFastWhileTheStoreIsStalled() async throws {
         let fixture = StallingPersistedSecrets()
         let sessionStore = SessionSecretStore()
@@ -65,6 +71,8 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
             }
             XCTAssertLessThan(maskedElapsed, .seconds(2))
 
+            
+            
             let sessionElapsed = try await clock.measure {
                 try await client.execute(uri: "/api/secrets/session", method: .get) { response in
                     XCTAssertEqual(response.status, .ok)
@@ -86,6 +94,8 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
         XCTAssertTrue(error is StoreProbeError)
     }
 
+    
+    
     func testTimedOutWriteReportsAnUnknownOutcomeRatherThanFailure() async throws {
         let fixture = StallingPersistedSecrets()
         let injector = SecretInjector(
@@ -114,6 +124,8 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
         }
     }
 
+    
+    
     func testLateCompletionIsReportedForAWriteThatCommitsAfterTheDeadline() async throws {
         let released = DispatchSemaphore(value: 0)
         let lateValue = LockedBox<Bool>(false)
@@ -137,6 +149,8 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
         XCTAssertTrue(lateValue.get(), "a late success must be reconcilable")
     }
 
+    
+    
     func testSessionMutationSurvivesAStalledReload() async throws {
         let fixture = StallingPersistedSecrets([
             Secret(name: "SAVED_TOKEN", value: "saved-fixture-value", domains: ["api.example"])
@@ -159,6 +173,9 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
             }
             XCTAssertLessThan(elapsed, .seconds(BoundedStoreCall.defaultTimeoutSeconds + 3))
 
+            
+            
+            
             try await client.execute(uri: "/api/secrets/masked", method: .get) { response in
                 XCTAssertEqual(response.status, .ok)
                 let text = String(buffer: response.body)
@@ -220,6 +237,7 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
 
 private enum StoreProbeError: Error { case boom }
 
+
 private final class LockedBox<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: T
@@ -239,8 +257,12 @@ private final class LockedBox<T>: @unchecked Sendable {
     }
 }
 
-private final class StallingPersistedSecrets: @unchecked Sendable {
 
+
+
+private final class StallingPersistedSecrets: @unchecked Sendable {
+    
+    
     private static let stallSeconds: TimeInterval = 10
 
     private let lock = NSLock()

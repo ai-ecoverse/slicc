@@ -8,6 +8,7 @@ import {
 } from './fake-llm-helpers.js';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { execInTerminal, readFreezerIndex } from './two-instance-helpers.js';
 
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`./fake-llm/fixtures/${name}.json`, import.meta.url), 'utf8'));
@@ -62,13 +63,24 @@ test.describe('compaction robustness', () => {
     await expect(marker).toHaveAttribute('trigger', 'threshold');
     await expect(marker).toHaveAttribute('state', 'summarized');
 
+    await expect(thread).toContainText('COMPACTION-TOOL-CONTINUATION');
     await expect(thread).toContainText('COMPACTION-DONE-ANSWER');
+    await expect(marker).toHaveCount(1);
 
     await expect(thread.locator('slicc-compaction-marker[state="fallback"]')).toHaveCount(0);
 
     await expect(
       page.locator('slicc-agent-message', { hasText: 'compacting history' })
     ).toHaveCount(0);
+
+    const liveArchive = (await readFreezerIndex(page)).find((entry) =>
+      entry.filename.startsWith('live-cone-')
+    );
+    expect(liveArchive).toBeDefined();
+    const archived = await execInTerminal(page, `cat /sessions/${liveArchive!.filename}`);
+    expect(archived.exitCode).toBe(0);
+    expect(archived.stdout).toContain('STORY-PART-one');
+    expect(archived.stdout).toContain('STORY-PART-two');
 
     for (const pass of [1, 2]) {
       await gotoLeader(page);
@@ -98,7 +110,9 @@ test.describe('compaction robustness', () => {
     await expect(marker).toHaveCount(1);
     await expect(marker).toHaveAttribute('state', 'fallback');
 
+    await expect(thread).toContainText('FALLBACK-TOOL-CONTINUATION');
     await expect(thread).toContainText('FALLBACK-DONE-ANSWER');
+    await expect(marker).toHaveCount(1);
 
     await expect(
       page.locator('slicc-agent-message', { hasText: 'older messages truncated' })

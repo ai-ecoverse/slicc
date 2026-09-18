@@ -5,6 +5,9 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
 @MainActor
 private final class StubConnector: WidgetTrayConnecting {
     weak var delegate: TrayFollowerConnectorDelegate?
@@ -22,11 +25,19 @@ private final class StubConnector: WidgetTrayConnecting {
 
 private struct StubError: Error {}
 
+
 private actor Installed {
     var value: Bool
     init(value: Bool) { self.value = value }
     func set(_ next: Bool) { value = next }
 }
+
+
+
+
+
+
+
 
 private actor Gate {
     private var answer: CheckedContinuation<Void, Never>?
@@ -102,6 +113,9 @@ final class WidgetTrayObserverTests: XCTestCase {
         return try! JSONEncoder().encode(message)
     }
 
+    
+    
+    
     func testNoWidgetMeansNoConnection() async {
         let observer = makeObserver(widgetInstalled: false)
         observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
@@ -119,11 +133,14 @@ final class WidgetTrayObserverTests: XCTestCase {
         XCTAssertEqual(connectors.count, 1)
         XCTAssertEqual(connectors.first?.started, 1)
 
+        
         observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
         await observer._testing_settle()
         XCTAssertEqual(connectors.count, 1)
     }
 
+    
+    
     func testLosingTheLeaderClearsTheSnapshot() async throws {
         let observer = makeObserver()
         observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
@@ -151,11 +168,17 @@ final class WidgetTrayObserverTests: XCTestCase {
         observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
         await observer._testing_settle()
 
+        
+        
         observer.refresh()
         await observer._testing_settle()
         XCTAssertEqual(connectors.count, 2)
     }
 
+    
+    
+    
+    
     func testRemovingTheWidgetDropsTheConnection() async {
         let installed = Installed(value: true)
         let observer = makeObserver(
@@ -182,6 +205,9 @@ final class WidgetTrayObserverTests: XCTestCase {
         XCTAssertEqual(connectors.first?.stopped, 0)
     }
 
+    
+    
+    
     func testAnInFlightQueryCannotAttachToAnAbandonedLeader() async {
         let gate = Gate()
         let observer = makeObserver(
@@ -190,9 +216,9 @@ final class WidgetTrayObserverTests: XCTestCase {
                 return true
             })
         observer.leaderChanged(joinUrl: "https://tray.test/join/old", label: "Old")
-
+        
         await gate.waitUntilEntered()
-
+        
         observer.leaderChanged(joinUrl: nil, label: nil)
         await gate.open()
         await observer._testing_settle()
@@ -200,6 +226,8 @@ final class WidgetTrayObserverTests: XCTestCase {
         XCTAssertTrue(connectors.isEmpty, "attached to a leader that had already been left")
         XCTAssertNil(store.read())
     }
+
+    
 
     func testScoopsListBecomesTheSnapshot() throws {
         let observer = makeObserver()
@@ -215,6 +243,7 @@ final class WidgetTrayObserverTests: XCTestCase {
         XCTAssertTrue(snapshot.units.first?.isActive ?? false)
     }
 
+    
     func testTheLabelFallsBackToTheHostAndNeverTheJoinUrl() throws {
         let observer = makeObserver()
         observer.leaderChanged(joinUrl: "https://tray.test/join/SECRET", label: nil)
@@ -246,6 +275,7 @@ final class WidgetTrayObserverTests: XCTestCase {
         XCTAssertEqual(last.unitId, "cone")
     }
 
+    
     func testAStreamingTurnIsNotThePreview() throws {
         let observer = makeObserver()
         observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
@@ -292,6 +322,7 @@ final class WidgetTrayObserverTests: XCTestCase {
     }
 }
 
+
 final class SliccstartWidgetUnitTests: XCTestCase {
     private func summary(
         isCone: Bool? = false, parentId: String? = "cone", state: String? = "working",
@@ -310,6 +341,9 @@ final class SliccstartWidgetUnitTests: XCTestCase {
             summary(isCone: false, parentId: nil).widgetUnit(isActive: false).role, .scoop)
     }
 
+    
+    
+    
     func testRoleResolvesFromTheEdgeWhenIsConeIsAbsent() throws {
         XCTAssertEqual(
             summary(isCone: nil, parentId: nil).widgetUnit(isActive: false).role, .cone)

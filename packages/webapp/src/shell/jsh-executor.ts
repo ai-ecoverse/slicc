@@ -1,12 +1,12 @@
 import type { CommandContext } from 'just-bash';
 import { ProcessManager, type ProcessOwner } from '../kernel/process-manager.js';
 import { createDefaultRealmFactory } from '../kernel/realm/realm-factory.js';
-import { createInProcessJsRealmFactory } from '../kernel/realm/realm-inprocess.js';
 import type { RealmFactory } from '../kernel/realm/realm-runner.js';
 import { runInRealm } from '../kernel/realm/realm-runner.js';
 import { isSyncFsBridgeEnabled } from '../kernel/realm/sync-fs-enabled.js';
 import { stdinAsLatin1 } from './just-bash-compat.js';
 import { resolveProviderEnvSeed } from './provider-env-seed.js';
+import { stripShebang } from './strip-shebang.js';
 
 export interface JshResult {
   stdout: string;
@@ -22,6 +22,12 @@ export interface JshProcessConfig {
 
 export interface JshExecutorOptions {
   realmFactory?: RealmFactory;
+
+  onSpawn?: (pid: number) => void;
+
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
+
+  captureOutput?: boolean;
 }
 
 export async function executeJshFile(
@@ -44,19 +50,21 @@ export async function executeJshFile(
 }
 
 export async function executeJsCode(
-  code: string,
+  rawCode: string,
   argv: string[],
   ctx: CommandContext,
   pmConfig?: JshProcessConfig,
   options: JshExecutorOptions & { filename?: string } = {}
 ): Promise<JshResult> {
-  const realmFactory = options.realmFactory ?? pickDefaultRealmFactory();
+  const realmFactory = options.realmFactory ?? (await pickDefaultRealmFactory());
 
   const pm = pmConfig?.processManager ?? lookupGlobalPm() ?? lazyEphemeralPm();
   const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
   const filename = options.filename ?? argv[1] ?? '<eval>';
+  const code = stripShebang(rawCode, { keepLine: true });
 
-  const providerEnv = owner.kind === 'scoop' ? {} : await resolveProviderEnvSeed();
+  const providerEnv =
+    owner.kind === 'scoop' || owner.kind === 'jshd' ? {} : await resolveProviderEnvSeed();
 
   const result = await runInRealm({
     pm,
@@ -74,14 +82,18 @@ export async function executeJsCode(
     ppid: pmConfig?.getParentPid?.(),
 
     syncFsBridgeEnabled: isSyncFsBridgeEnabled(),
+    ...(options.onSpawn ? { onSpawn: (proc) => options.onSpawn?.(proc.pid) } : {}),
+    ...(options.onOutput ? { onOutput: options.onOutput } : {}),
+    ...(options.captureOutput === false ? { captureOutput: false } : {}),
   });
   return result;
 }
 
-function pickDefaultRealmFactory(): RealmFactory {
+async function pickDefaultRealmFactory(): Promise<RealmFactory> {
   if (typeof Worker !== 'undefined' || typeof document !== 'undefined') {
     return createDefaultRealmFactory();
   }
+  const { createInProcessJsRealmFactory } = await import('../kernel/realm/realm-inprocess.js');
   return createInProcessJsRealmFactory();
 }
 

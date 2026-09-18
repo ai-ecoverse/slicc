@@ -77,7 +77,8 @@ func TestHTTPTransportSendPostsExpectedShape(t *testing.T) {
 }
 
 func TestHTTPTransportSendNeverBlocksCaller(t *testing.T) {
-
+	
+	
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-block
@@ -104,7 +105,8 @@ func TestHTTPTransportSendNeverBlocksCaller(t *testing.T) {
 func TestHTTPTransportSendSwallowsErrors(t *testing.T) {
 	transport := NewHTTPTransport(false)
 	var wg sync.WaitGroup
-
+	
+	
 	transport.Send(Event{Weight: 100, ID: "abc123456", Referer: "https://x/", Checkpoint: Enter}, "http://127.0.0.1:1", &wg)
 	waitWithTimeout(t, &wg, 2*time.Second)
 }

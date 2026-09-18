@@ -10,6 +10,7 @@ import type { BiscottoReview } from './biscotto-review.js';
 import type { BroadcastManager } from './broadcast.js';
 import type { CDPRouter } from './cdp-router.js';
 import type { CherryRouter } from './cherry-router.js';
+import type { ComputersRouter } from './computers-router.js';
 import type { LeaderSyncContext } from './context.js';
 import { labelForFollower } from './follower-registry.js';
 import type { FsRouter } from './fs-router.js';
@@ -47,6 +48,10 @@ export interface FollowerDispatchCollaborators {
   >;
   sudoDelegation: Pick<SudoDelegation, 'handleResponse' | 'handleFollowerReady'>;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
+  computersRouter?: Pick<
+    ComputersRouter,
+    'handleWatch' | 'handleUnwatch' | 'handleInput' | 'handleNative'
+  >;
   requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
 
   biscottoReview: Pick<BiscottoReview, 'submit'>;
@@ -66,10 +71,10 @@ export class FollowerDispatch {
   dispatch(bootstrapId: string, message: FollowerToLeaderMessage): void {
     if (!this.acceptFromPeer(bootstrapId, message)) return;
     this.noteLegacyPeer(bootstrapId, message);
-    const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter } = this.collaborators;
-    const { teleportPool, transcriptExport, cherryRouter, tabTeleportRouter } = this.collaborators;
-    const { oauthPopupDelegation } = this.collaborators;
-
+    const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter, teleportPool } =
+      this.collaborators;
+    const { transcriptExport, cherryRouter, tabTeleportRouter, oauthPopupDelegation } =
+      this.collaborators;
     switch (message.type) {
       case 'user_message':
         this.handleFollowerUserMessage(bootstrapId, message);
@@ -93,6 +98,14 @@ export class FollowerDispatch {
         break;
       case 'scoops.select':
         this.handleScoopSelection(bootstrapId, message.scoopJid);
+        break;
+      case 'computer.watch':
+      case 'computer.unwatch':
+      case 'computer.input':
+      case 'computer.native.frame':
+      case 'computer.native.error':
+      case 'computer.native.input.result':
+        this.routeComputerFollowerMessage(bootstrapId, message);
         break;
       case 'models.request':
         broadcast.sendModelCatalogToFollower(bootstrapId);
@@ -198,22 +211,65 @@ export class FollowerDispatch {
         cherryRouter.routeCherryHostEvent(bootstrapId, message);
         break;
       case 'ping':
-        this.handlePing(bootstrapId);
-        break;
       case 'pong':
-        this.handlePong(bootstrapId);
+        this.routeKeepalive(bootstrapId, message.type);
         break;
       case 'hello':
         this.handleFollowerHello(bootstrapId, message);
         break;
-      default: {
-        const unknown = unhandledProtocolMessage(message);
-        this.context.log.warn('Unknown follower message type — skewed follower?', {
-          bootstrapId,
-          type: unknown.type,
-        });
-      }
+      default:
+        this.warnUnknownFollowerMessage(bootstrapId, message);
     }
+  }
+
+  private routeComputerFollowerMessage(
+    bootstrapId: string,
+    message: Extract<
+      FollowerToLeaderMessage,
+      {
+        type:
+          | 'computer.watch'
+          | 'computer.unwatch'
+          | 'computer.input'
+          | 'computer.native.frame'
+          | 'computer.native.error'
+          | 'computer.native.input.result';
+      }
+    >
+  ): void {
+    switch (message.type) {
+      case 'computer.watch':
+        this.collaborators.computersRouter?.handleWatch(
+          bootstrapId,
+          message.id,
+          message.fps,
+          message.maxWidth
+        );
+        return;
+      case 'computer.unwatch':
+        this.collaborators.computersRouter?.handleUnwatch(bootstrapId, message.id);
+        return;
+      case 'computer.input':
+        this.collaborators.computersRouter?.handleInput?.(bootstrapId, message.id, message.events);
+        return;
+      case 'computer.native.frame':
+      case 'computer.native.error':
+      case 'computer.native.input.result':
+        this.collaborators.computersRouter?.handleNative?.(bootstrapId, message);
+    }
+  }
+
+  private warnUnknownFollowerMessage(bootstrapId: string, message: never): void {
+    const unknown = unhandledProtocolMessage(message);
+    this.context.log.warn('Unknown follower message type — skewed follower?', {
+      bootstrapId,
+      type: unknown.type,
+    });
+  }
+
+  private routeKeepalive(bootstrapId: string, type: 'ping' | 'pong'): void {
+    if (type === 'ping') this.handlePing(bootstrapId);
+    else this.handlePong(bootstrapId);
   }
 
   private noteLegacyPeer(bootstrapId: string, message: FollowerToLeaderMessage): void {

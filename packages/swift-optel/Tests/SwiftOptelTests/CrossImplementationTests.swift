@@ -2,20 +2,46 @@ import XCTest
 
 @testable import SwiftOptel
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 final class CrossImplementationTests: XCTestCase {
     private struct Vector {
         let name: String
         let event: RUMEvent
         let collectBaseURL: URL
         let expectedURL: String
-
+        
+        
         let expectedBody: String
     }
 
     private static let defaultBase = URL(string: "https://rum.hlx.page/")!
 
     private static let vectors: [Vector] = [
-
+        
         Vector(
             name: "top-default-weight",
             event: RUMEvent(
@@ -28,17 +54,17 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/100",
             expectedBody: """
-                {"weight":100,"id":"abc123def","referer":"https://com.example.app/",\
+                {"weight":100,"id":"abc123def","referer":"https:
                 "checkpoint":"top","t":0}
                 """
         ),
-
+        // `click` checkpoint with full pingData (source + target + value).
         Vector(
             name: "click-full-pingdata",
             event: RUMEvent(
                 weight: 100,
                 id: "abc123def",
-                referer: "https://com.example.app/home",
+                referer: "https:
                 checkpoint: .click,
                 t: 1234,
                 pingData: RUMPingData(
@@ -50,18 +76,18 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/100",
             expectedBody: """
-                {"weight":100,"id":"abc123def","referer":"https://com.example.app/home",\
+                {"weight":100,"id":"abc123def","referer":"https:
                 "checkpoint":"click","t":1234,"source":".button#submit",\
                 "target":"/api/checkout","value":42}
                 """
         ),
-
+        // `rate=on` → weight 1; URL path carries the weight verbatim.
         Vector(
             name: "rate-on-weight-1",
             event: RUMEvent(
                 weight: 1,
                 id: "000000001",
-                referer: "https://com.example.app/settings",
+                referer: "https:
                 checkpoint: .navigate,
                 t: 500,
                 pingData: RUMPingData(source: "SettingsView")
@@ -69,34 +95,34 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/1",
             expectedBody: """
-                {"weight":1,"id":"000000001","referer":"https://com.example.app/settings",\
+                {"weight":1,"id":"000000001","referer":"https:
                 "checkpoint":"navigate","t":500,"source":"SettingsView"}
                 """
         ),
-
+        // `rate=high` → weight 10.
         Vector(
             name: "rate-high-weight-10",
             event: RUMEvent(
                 weight: 10,
                 id: "deadbeef0",
-                referer: "https://com.example.app/",
+                referer: "https:
                 checkpoint: .enter,
                 t: 0
             ),
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/10",
             expectedBody: """
-                {"weight":10,"id":"deadbeef0","referer":"https://com.example.app/",\
+                {"weight":10,"id":"deadbeef0","referer":"https:
                 "checkpoint":"enter","t":0}
                 """
         ),
-
+        // `rate=low` → weight 1000.
         Vector(
             name: "rate-low-weight-1000",
             event: RUMEvent(
                 weight: 1000,
                 id: "feedface1",
-                referer: "https://com.example.app/error",
+                referer: "https:
                 checkpoint: .error,
                 t: 9999,
                 pingData: RUMPingData(
@@ -107,25 +133,27 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/1000",
             expectedBody: """
-                {"weight":1000,"id":"feedface1","referer":"https://com.example.app/error",\
+                {"weight":1000,"id":"feedface1","referer":"https:
                 "checkpoint":"error","t":9999,"source":"NSCocoaErrorDomain",\
                 "target":"File not found"}
                 """
         ),
-
+        // Custom `collectBaseURL` with a non-root path. Mirrors the JS
+        // `new URL('.rum/' + weight, collectBaseURL)` relative-resolution
+        // semantics: the trailing slash on the base preserves the path prefix.
         Vector(
             name: "custom-collector-base",
             event: RUMEvent(
                 weight: 100,
                 id: "cafebabe0",
-                referer: "https://com.example.app/",
+                referer: "https:
                 checkpoint: .top,
                 t: 0
             ),
             collectBaseURL: URL(string: "https://custom.example.com/path/")!,
             expectedURL: "https://custom.example.com/path/.rum/100",
             expectedBody: """
-                {"weight":100,"id":"cafebabe0","referer":"https://com.example.app/",\
+                {"weight":100,"id":"cafebabe0","referer":"https:
                 "checkpoint":"top","t":0}
                 """
         ),
@@ -188,7 +216,10 @@ final class CrossImplementationTests: XCTestCase {
     }
 
     func testRequestBodyParsesToSameObjectAsExpectedFixture() throws {
-
+        // What the transport puts on the wire must parse to the same JSON
+        // object as the helix-rum-js fixture. Compared as parsed objects so
+        // the assertion is independent of `JSONEncoder` key-ordering (which
+        // is implementation-defined across Swift toolchains).
         for v in Self.vectors {
             let request = try XCTUnwrap(
                 URLSessionOptelTransport.makeRequest(

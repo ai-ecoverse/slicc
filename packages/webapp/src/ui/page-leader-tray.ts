@@ -30,6 +30,7 @@ import type {
   SprinkleSummary,
 } from '../scoops/tray-sync-protocol.js';
 import { LeaderTrayPeerManager, type TrayPeerConnectionFactory } from '../scoops/tray-webrtc.js';
+import { getComputersStore } from './computers-store.js';
 import type { AgentEvent } from './types.js';
 
 const log = createLogger('page-leader-tray');
@@ -191,6 +192,14 @@ function buildSyncManager(
     getScoopJid: options.getScoopJid,
     getScoops: options.getScoops,
     getSprinkles: options.getSprinkles,
+    computers: {
+      list: () => getComputersStore().list(),
+      onList: (listener) => getComputersStore().onList(listener),
+      onFrame: (listener) => getComputersStore().onFrame(listener),
+      lastFrame: (id) => getComputersStore().lastFrame(id),
+      watch: (id, fps, maxWidth) => getComputersStore().watch(id, fps, maxWidth),
+      unwatch: (id, token) => getComputersStore().unwatch(id, token),
+    },
     getModelCatalog: options.getModelCatalog,
     getModelSelectionState: options.getModelSelectionState,
     onFollowerModelSelect: options.onFollowerModelSelect,

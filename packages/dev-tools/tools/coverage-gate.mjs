@@ -19,6 +19,12 @@ export function buildVitestArgs(pkg, floors, extraArgs = []) {
       args.push(`--coverage.exclude=${pattern}`);
     }
   }
+
+  if (Array.isArray(floors.coverageInclude)) {
+    for (const pattern of floors.coverageInclude) {
+      args.push(`--coverage.include=${pattern}`);
+    }
+  }
   return [...args, ...extraArgs];
 }
 

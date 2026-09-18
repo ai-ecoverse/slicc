@@ -14,8 +14,6 @@ const SCOPES = [
   `${BUNDLED_PREFIX}/workspace/skills/`,
   `${BUNDLED_PREFIX}/shared/sprinkles/`,
   `${BUNDLED_PREFIX}/shared/sounds/`,
-  `${BUNDLED_PREFIX}/shared/MEMORY.md`,
-  `${BUNDLED_PREFIX}/shared/DREAMING.md`,
   `${BUNDLED_PREFIX}/shared/GELATIERE.md`,
 
   `${BUNDLED_PREFIX}/shared/wiki/WIKI.md`,

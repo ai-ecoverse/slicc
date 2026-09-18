@@ -289,6 +289,113 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('openWindow / getWindowBounds / setWindowBounds', () => {
+    it('opens a sized window via Target.createTarget with newWindow:true', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        targetId: 'win-tab-1',
+      });
+
+      const targetId = await api.openWindow('https://example.com', {
+        width: 1280,
+        height: 800,
+        left: 40,
+        top: 60,
+      });
+
+      expect(targetId).toBe('win-tab-1');
+      expect(mockClient.send).toHaveBeenCalledWith('Target.createTarget', {
+        url: 'https://example.com',
+        newWindow: true,
+        background: false,
+        width: 1280,
+        height: 800,
+        left: 40,
+        top: 60,
+      });
+    });
+
+    it('rejects combining maximized state with geometry', async () => {
+      await expect(
+        api.openWindow('about:blank', { state: 'maximized', width: 800, height: 600 })
+      ).rejects.toThrow(/cannot be combined/);
+      expect(mockClient.send).not.toHaveBeenCalled();
+    });
+
+    it('reads window bounds and page dpr', async () => {
+      const send = mockClient.send as ReturnType<typeof vi.fn>;
+      send
+        .mockResolvedValueOnce({
+          windowId: 3,
+          bounds: { left: 1, top: 2, width: 1000, height: 700, windowState: 'normal' },
+        })
+
+        .mockResolvedValueOnce({ sessionId: 'sess-dpr' })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ result: { value: 2 } });
+
+      vi.spyOn(api, 'withTab').mockResolvedValueOnce(2 as never);
+
+      const bounds = await api.getWindowBounds('target-1');
+      expect(bounds).toEqual({
+        left: 1,
+        top: 2,
+        width: 1000,
+        height: 700,
+        state: 'normal',
+        dpr: 2,
+      });
+      expect(send).toHaveBeenCalledWith('Browser.getWindowForTarget', { targetId: 'target-1' });
+    });
+
+    it('setWindowBounds applies then reads back achieved bounds', async () => {
+      const send = mockClient.send as ReturnType<typeof vi.fn>;
+      send
+        .mockResolvedValueOnce({ windowId: 9, bounds: { windowState: 'normal' } })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({
+          bounds: { left: 0, top: 0, width: 1080, height: 809, windowState: 'normal' },
+        });
+      vi.spyOn(api, 'withTab').mockResolvedValueOnce(1 as never);
+
+      const achieved = await api.setWindowBounds('target-1', { width: 1080, height: 1080 });
+      expect(achieved).toEqual({
+        left: 0,
+        top: 0,
+        width: 1080,
+        height: 809,
+        state: 'normal',
+        dpr: 1,
+      });
+      expect(send).toHaveBeenCalledWith('Browser.setWindowBounds', {
+        windowId: 9,
+        bounds: { width: 1080, height: 1080 },
+      });
+      expect(send).toHaveBeenCalledWith('Browser.getWindowBounds', { windowId: 9 });
+    });
+
+    it('setWindowBounds restores maximized windows before applying geometry', async () => {
+      const send = mockClient.send as ReturnType<typeof vi.fn>;
+      send
+        .mockResolvedValueOnce({
+          windowId: 9,
+          bounds: { left: 0, top: 0, width: 1920, height: 1080, windowState: 'maximized' },
+        })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({
+          bounds: { left: 10, top: 20, width: 800, height: 600, windowState: 'normal' },
+        });
+      vi.spyOn(api, 'withTab').mockResolvedValueOnce(1 as never);
+
+      const achieved = await api.setWindowBounds('target-1', { width: 800, height: 600 });
+      expect(achieved).toMatchObject({ width: 800, height: 600, state: 'normal' });
+      expect(send.mock.calls.filter((c) => c[0] === 'Browser.setWindowBounds')).toEqual([
+        ['Browser.setWindowBounds', { windowId: 9, bounds: { windowState: 'normal' } }],
+        ['Browser.setWindowBounds', { windowId: 9, bounds: { width: 800, height: 600 } }],
+      ]);
+    });
+  });
+
   describe('listPages', () => {
     it('returns page targets', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -733,6 +840,56 @@ describe('BrowserAPI', () => {
         expect.anything(),
         expect.anything()
       );
+    });
+
+    it('maxWidth recapture clips at the current scroll origin (#3232)', async () => {
+      let capture = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Page.captureScreenshot') {
+          return { data: ++capture === 1 ? pngBase64(2560) : pngBase64(800) };
+        }
+        if (method === 'Runtime.evaluate') {
+          return { result: { value: JSON.stringify({ w: 1280, h: 800, x: 40, y: 1286 }) } };
+        }
+        return {};
+      });
+
+      await page.screenshot({ maxWidth: 800 });
+      const captures = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Page.captureScreenshot'
+      );
+      expect(captures).toHaveLength(2);
+
+      expect(captures[1][1]).toEqual({
+        format: 'png',
+        captureBeyondViewport: true,
+        clip: { x: 40, y: 1286, width: 1280, height: 800, scale: 800 / 2560 },
+      });
+    });
+
+    it('maxWidth recapture clips at 0,0 when the tab is unscrolled', async () => {
+      let capture = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Page.captureScreenshot') {
+          return { data: ++capture === 1 ? pngBase64(2560) : pngBase64(800) };
+        }
+        if (method === 'Runtime.evaluate') {
+          return { result: { value: JSON.stringify({ w: 1280, h: 800, x: 0, y: 0 }) } };
+        }
+        return {};
+      });
+
+      await page.screenshot({ maxWidth: 800 });
+      const recapture = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Page.captureScreenshot'
+      )[1];
+      expect((recapture[1] as { clip: { x: number; y: number } }).clip).toEqual({
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 800,
+        scale: 800 / 2560,
+      });
     });
 
     it('maxWidth composes with an existing clip scale instead of replacing it', async () => {

@@ -298,6 +298,7 @@ function stateLetter(status: Process['status']): string {
 function ownerLabel(proc: Process): string {
   if (proc.owner.kind === 'cone') return 'cone';
   if (proc.owner.kind === 'system') return 'system';
+  if (proc.owner.kind === 'jshd') return 'jshd';
   return proc.owner.scoopJid ? `scoop/${proc.owner.scoopJid}` : 'scoop';
 }
 

@@ -441,7 +441,14 @@ async function handleGitHubInstall(
   if (totalSkills > 1) {
     const zip = await fetchRepoZip(owner, repo, fetchFn, effectiveBranch);
     if (zip.status === 'ok') {
-      const sha = await resolveCommitSha(owner, repo, effectiveBranch, github);
+      const sha = await resolveCommitSha(
+        owner,
+        repo,
+        effectiveBranch,
+        github,
+        true,
+        effectiveSubPath
+      );
       const batch = await installGitHubBatchViaZip(
         skillsToInstall,
         owner,

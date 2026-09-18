@@ -32,9 +32,11 @@ import { BootstrapCoordinator, type BootstrapDeps } from './session-tray-bootstr
 import { BRIDGE_WS_TAG, type BridgeDeps, BridgeRelay } from './session-tray-bridge.js';
 import {
   dispatchPreviewRoute,
+  expireOrphanedLivePreviews,
   expirePersistentPreviews,
   failAllPendingPreviews,
   handlePreviewPurge,
+  leaderGoneSince,
   listPreviews as listPreviewsImpl,
   mintPreview as mintPreviewImpl,
   type PreviewAssembler,
@@ -136,6 +138,8 @@ export class SessionTrayDurableObject {
   private lastLeaderSeenPersistMs = 0;
 
   private readonly pendingPreviews = new Map<string, PreviewAssembler>();
+
+  private readonly expiredLivePreviewNotices: string[] = [];
   private previewMutation: Promise<unknown> = Promise.resolve();
 
   private readonly bootstrap: BootstrapCoordinator;
@@ -889,6 +893,10 @@ export class SessionTrayDurableObject {
         );
       }
       role = 'leader';
+
+      this.expiredLivePreviewNotices.push(
+        ...(await expireOrphanedLivePreviews(this.previewDeps(), leaderGoneSince(tray.leader)))
+      );
       tray.leader.controllerId = controllerId;
       tray.leader.lastSeenAt = nowIso;
       tray.leader.disconnectedAt = undefined;
@@ -973,6 +981,10 @@ export class SessionTrayDurableObject {
     );
 
     this.replayPreviewStatesToLeader(server);
+
+    for (const previewToken of this.expiredLivePreviewNotices.splice(0)) {
+      server.send(JSON.stringify({ type: 'preview.revoked', previewToken }));
+    }
 
     this.bridge.replayConnectionsToLeader(server);
 
@@ -1346,6 +1358,9 @@ export class SessionTrayDurableObject {
         } else {
           await this.state.storage.setAlarm?.(timestamp);
         }
+      },
+      onLivePreviewsExpired: (tokens) => {
+        for (const token of tokens) this.bridge.closeSocketsForPreview(token);
       },
     };
   }

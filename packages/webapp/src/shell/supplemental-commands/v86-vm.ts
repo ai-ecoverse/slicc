@@ -30,6 +30,8 @@ export interface VmRecord {
   serial: { buffer: string };
   screen: VmScreenState;
   serve: VmServeState | null;
+
+  onScreenChange?: () => void;
 }
 
 const registry = new Map<string, VmRecord>();
@@ -79,6 +81,7 @@ export function instrumentVm(record: VmRecord): void {
   adapter.set_mode = (isGraphical: boolean) => {
     record.screen.mode = isGraphical ? 'graphical' : 'text';
     origSetMode?.call(adapter, isGraphical);
+    record.onScreenChange?.();
   };
   const origSetSize = adapter.set_size_graphical;
   adapter.set_size_graphical = (w: number, h: number, vw: number, vh: number) => {
@@ -86,6 +89,7 @@ export function instrumentVm(record: VmRecord): void {
     record.screen.height = h;
     record.screen.frame = null;
     origSetSize?.call(adapter, w, h, vw, vh);
+    record.onScreenChange?.();
   };
   const origUpdate = adapter.update_buffer;
   adapter.update_buffer = (layers: V86ScreenLayer[]) => {

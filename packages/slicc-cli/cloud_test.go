@@ -13,12 +13,14 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/cloud"
 )
 
+
 func withCloudList(t *testing.T, fake func(bool) ([]cloud.Session, error)) {
 	t.Helper()
 	prev := cloudList
 	cloudList = fake
 	t.Cleanup(func() { cloudList = prev })
 }
+
 
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
@@ -117,7 +119,7 @@ func TestResolveCloudSessionListError(t *testing.T) {
 }
 
 func TestCmdCloudListErrorShortCircuits(t *testing.T) {
-
+	
 	withCloudList(t, func(bool) ([]cloud.Session, error) { return nil, cloud.ErrUnsupported })
 	if code := cmdCloud(context.Background(), "follow-cloud", nil); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
@@ -132,7 +134,7 @@ func TestCmdCloudBadSelector(t *testing.T) {
 
 func TestCmdCloudMissingJoinURL(t *testing.T) {
 	withCloudList(t, func(bool) ([]cloud.Session, error) {
-		return []cloud.Session{{ID: "x", LastSeenAt: time.Now()}}, nil
+		return []cloud.Session{{ID: "x", LastSeenAt: time.Now()}}, nil 
 	})
 	if code := cmdCloud(context.Background(), "prompt-cloud", []string{"hello"}); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)

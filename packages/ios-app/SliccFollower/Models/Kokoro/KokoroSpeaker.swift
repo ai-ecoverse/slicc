@@ -80,7 +80,9 @@ final class KokoroPCMPlayer: KokoroAudioPlaying {
             channel.update(from: baseAddress, count: samples.count)
         }
         node.stop()
-
+        
+        
+        
         try configureIfNeeded(format: format)
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
@@ -99,7 +101,8 @@ final class KokoroPCMPlayer: KokoroAudioPlaying {
         } catch {
             node.stop()
             engine.stop()
-
+            
+            
             configured = false
             releaseSession()
             throw error
@@ -139,6 +142,7 @@ final class KokoroPCMPlayer: KokoroAudioPlaying {
         }
     }
 }
+
 
 @MainActor
 final class KokoroSpeaker: SpeechSpeaking {
@@ -290,6 +294,9 @@ final class KokoroSpeaker: SpeechSpeaking {
         return managedModelDirectory
     }
 
+    
+    
+    
     private static func canonical(_ directory: URL) -> URL {
         directory.resolvingSymlinksInPath().standardizedFileURL
     }
@@ -311,6 +318,11 @@ final class KokoroSpeaker: SpeechSpeaking {
         return synthesizer
     }
 
+    
+    
+    
+    
+    
     private func startSynthesis(
         text: String, lang: String, modelDirectory: URL, request: UUID = UUID(),
         awaiting previousTask: Task<Void, Never>?
@@ -353,6 +365,8 @@ final class KokoroSpeaker: SpeechSpeaking {
         fallback.stop()
     }
 
+    
+    
     func hasVoice(for lang: String) -> Bool { true }
 
     static func route(language: String?, modelsPresent: Bool) -> Route {
@@ -415,6 +429,9 @@ final class KokoroSpeaker: SpeechSpeaking {
         player.stop()
     }
 
+    
+    
+    
     private func abandonActiveRequest() {
         synthesisTask?.cancel()
         timeoutTask?.cancel()
@@ -422,6 +439,7 @@ final class KokoroSpeaker: SpeechSpeaking {
         timeoutTask = nil
     }
 
+    
     private func finishRequest() {
         activeRequest = nil
         synthesisTask = nil

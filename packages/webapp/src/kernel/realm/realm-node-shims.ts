@@ -17,6 +17,50 @@ export class NodeExitError extends Error {
   }
 }
 
+export function numericExitCode(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function describeReceived(value: unknown): string {
+  if (typeof value === 'string') return `type string ('${value}')`;
+  if (typeof value === 'boolean') return `type boolean (${value})`;
+  if (typeof value === 'bigint') return `type bigint (${value}n)`;
+  if (Array.isArray(value)) return 'an instance of Array';
+  if (typeof value === 'object' && value !== null) return 'an instance of Object';
+  return `type ${typeof value}`;
+}
+
+function nodeErrInvalidArgType(value: unknown): TypeError {
+  const err = new TypeError(
+    `The "code" argument must be of type number. Received ${describeReceived(value)}`
+  ) as TypeError & { code: string };
+  err.code = 'ERR_INVALID_ARG_TYPE';
+  return err;
+}
+
+function nodeErrOutOfRange(value: unknown): RangeError {
+  const err = new RangeError(
+    `The value of "code" is out of range. It must be an integer. Received ${String(value)}`
+  ) as RangeError & { code: string };
+  err.code = 'ERR_OUT_OF_RANGE';
+  return err;
+}
+
+export function assignProcessExitCode(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') {
+    const n = Number(value);
+    if (value !== '' && Number.isInteger(n)) return n === 0 ? 0 : n;
+    throw nodeErrInvalidArgType(value);
+  }
+  if (typeof value === 'number') {
+    if (Number.isInteger(value)) return value === 0 ? 0 : value;
+    throw nodeErrOutOfRange(value);
+  }
+  throw nodeErrInvalidArgType(value);
+}
+
 function formatConsoleArg(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return String(value);
@@ -193,17 +237,12 @@ export interface RealmProcessShim {
   platform: string;
   arch: string;
   cwd: () => string;
-  exitCode: number;
   exit: (codeValue?: number) => never;
+
+  exitCode: number | undefined;
   stdin: StdinShim;
   stdout: RealmWritableShim;
   stderr: RealmWritableShim;
-}
-
-function coerceExitCode(value: unknown, fallback: number): number {
-  if (value === undefined) return fallback;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
 }
 
 export function createProcessShim(
@@ -218,10 +257,13 @@ export function createProcessShim(
 } {
   const noColor = !!init.env?.NO_COLOR;
   let didCallProcessExit = false;
-  let exitCode = 0;
+  let assignedExitCode: number | undefined;
+
+  let forcedExitCode: number | undefined;
   const recordExit = (code: number): void => {
     didCallProcessExit = true;
-    exitCode = code;
+    forcedExitCode = code;
+    assignedExitCode = code;
   };
 
   const stdinShim = createStdinShim(init.stdin ?? '', recordExit);
@@ -238,13 +280,19 @@ export function createProcessShim(
     arch: 'x64',
     cwd: () => init.cwd,
     get exitCode() {
-      return exitCode;
+      return assignedExitCode;
     },
-    set exitCode(value: number) {
-      exitCode = coerceExitCode(value, 0);
+    set exitCode(value: number | undefined) {
+      assignedExitCode = assignProcessExitCode(value);
     },
-    exit: (codeValue?: number) => {
-      const normalized = coerceExitCode(codeValue, exitCode);
+    exit: (...args: unknown[]) => {
+      if (args.length === 0) {
+        const normalized = numericExitCode(assignedExitCode);
+        recordExit(normalized);
+        throw new NodeExitError(normalized);
+      }
+      assignedExitCode = assignProcessExitCode(args[0]);
+      const normalized = numericExitCode(assignedExitCode);
       recordExit(normalized);
       throw new NodeExitError(normalized);
     },
@@ -255,7 +303,7 @@ export function createProcessShim(
   return {
     processShim,
     getDidCallProcessExit: () => didCallProcessExit,
-    getExitCode: () => exitCode,
+    getExitCode: () => numericExitCode(didCallProcessExit ? forcedExitCode : assignedExitCode),
 
     recordExit,
   };

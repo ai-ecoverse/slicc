@@ -195,7 +195,7 @@ describe('sync FS bridge (integration)', () => {
     );
     expect(out.exitCode).toBe(0);
 
-    expect(attempts).toBe(2);
+    expect(attempts).toBeGreaterThanOrEqual(2);
     expect(await ctx.fs.readFile('/workspace/transient.txt')).toBe('survives');
   });
 

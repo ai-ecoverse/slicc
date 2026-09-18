@@ -5,7 +5,12 @@
 
     @available(iOS 16.0, macOS 13.0, *)
     final class OptelSwiftUITests: XCTestCase {
+        
 
+        
+        
+        
+        
         func testEnterRefiresOnBackgroundInactiveActiveSequence() {
             var wasBackgrounded = false
             var enterFires = 0
@@ -26,7 +31,9 @@
         func testEnterDoesNotFireWithoutPriorBackground() {
             var wasBackgrounded = false
             var enterFires = 0
-
+            
+            
+            
             for phase in [ScenePhase.inactive, .active] {
                 let next = OptelAutoInstrumentModifier.nextState(
                     forNewPhase: phase,
@@ -41,7 +48,8 @@
         func testEnterFiresOncePerForegroundCycle() {
             var wasBackgrounded = false
             var enterFires = 0
-
+            
+            
             let sequence: [ScenePhase] = [
                 .background, .inactive, .active,
                 .active,
@@ -59,7 +67,8 @@
         }
 
         func testBackgroundSetsStickyFlagEvenAfterInactive() {
-
+            
+            
             var wasBackgrounded = false
             for phase in [ScenePhase.background, .inactive, .inactive, .inactive] {
                 let next = OptelAutoInstrumentModifier.nextState(
@@ -77,6 +86,8 @@
             XCTAssertTrue(final.shouldFireEnter)
             XCTAssertFalse(final.wasBackgrounded)
         }
+
+        
 
         func testPerformInstallWithGlobalHooksInstallsUncaughtExceptionHook() {
             OptelUncaughtExceptionHook._testing_reset()
@@ -125,7 +136,9 @@
             }
 
             func testPerformInstallIsIdempotentForMacHooks() {
-
+                
+                
+                
                 OptelMacAutoInstrument._testing_reset()
                 for _ in 0..<3 {
                     OptelAutoInstrumentModifier.performInstall(
@@ -146,16 +159,18 @@
                 XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
                 OptelMacAutoInstrument.installIfNeeded()
                 XCTAssertTrue(OptelMacAutoInstrument.isInstalled)
-
+                
                 OptelMacAutoInstrument.installIfNeeded()
                 XCTAssertTrue(OptelMacAutoInstrument.isInstalled)
                 OptelMacAutoInstrument.uninstall()
                 XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
-
+                
                 OptelMacAutoInstrument.uninstall()
                 XCTAssertFalse(OptelMacAutoInstrument.isInstalled)
             }
         #endif
+
+        
 
         private struct FixedRandomSource: RandomSource {
             let value: Double
@@ -177,7 +192,7 @@
         func testOptelTapPerformTapClaimsAndEmits() {
             OptelClickCoordinator._testing_reset()
             let transport = configureRecordingOptel()
-
+            
             let epoch = OptelClickCoordinator.beginMonitorEvent()
             OptelTapModifier.performTap(source: "panel view#detail")
             XCTAssertTrue(OptelClickCoordinator.wasClaimedByRefined(epoch: epoch))
@@ -198,18 +213,21 @@
             XCTAssertTrue(OptelClickCoordinator.wasClaimedByRefined(epoch: epoch))
             let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
             XCTAssertEqual(clicks.count, 1)
-
+            
             XCTAssertEqual(clicks.first?.event.pingData.source, "checkout button#submit")
         }
 
         #if os(macOS)
             func testRefinedTapAndMonitorTogetherProduceExactlyOneBeacon() {
-
+                
+                
+                
                 OptelClickCoordinator._testing_reset()
                 let transport = configureRecordingOptel()
                 let epoch = OptelClickCoordinator.beginMonitorEvent()
                 OptelTapModifier.performTap(source: "refined#go")
-
+                
+                
                 OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax#go", target: "Go")
                 let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
                 XCTAssertEqual(clicks.count, 1)
@@ -228,11 +246,12 @@
             }
 
             func testUnrefinedClickStillEmitsViaMonitor() {
-
+                
+                
                 OptelClickCoordinator._testing_reset()
                 let transport = configureRecordingOptel()
                 let epoch = OptelClickCoordinator.beginMonitorEvent()
-
+                
                 OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax#bare", target: "Bare")
                 let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
                 XCTAssertEqual(clicks.count, 1)

@@ -212,7 +212,7 @@ export const BASH_ICONS: Readonly<Record<string, string>> = {
   sqlite3: 'database',
   serve: 'server',
   tsc: 'braces',
-  test: 'flask-conical',
+  tst: 'flask-conical',
   biome: 'paintbrush',
   esbuild: 'zap',
   webhook: 'webhook',
@@ -241,6 +241,9 @@ export const BASH_ICONS: Readonly<Record<string, string>> = {
 export const TOOL_ICONS: Readonly<Record<string, string>> = {
   read_file: 'file-text',
   write_file: 'file-plus',
+  memory_write: 'brain',
+  edit: 'file-pen',
+
   edit_file: 'file-pen',
   send_message: 'message-circle',
   list_scoops: 'ice-cream-cone',
@@ -276,6 +279,9 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
       return path ? `Read ${basenameOf(path)}` : 'Read a file';
     case 'write_file':
       return path ? `Write ${basenameOf(path)}` : 'Write a file';
+    case 'memory_write':
+      return 'Update memory';
+    case 'edit':
     case 'edit_file':
       return path ? `Edit ${basenameOf(path)}` : 'Edit a file';
     case 'send_message':
@@ -581,11 +587,15 @@ function bashBody(call: ToolCall): HTMLElement {
     const custom = document.createElement(rendererTag) as HTMLElement & {
       command?: string;
       output?: string;
+      toolCallId?: string;
+      done?: boolean;
     };
     custom.setAttribute('slot', 'body');
     custom.setAttribute('command', command);
     custom.command = command;
     custom.output = call.result ?? '';
+    custom.toolCallId = call.id;
+    custom.done = call.result !== undefined;
     return custom;
   }
   const body = el('div', { slot: 'body', class: 'wcmsg-bash' });
@@ -600,6 +610,47 @@ function bashBody(call: ToolCall): HTMLElement {
   return body;
 }
 
+function appendEditPair(body: HTMLElement, oldText: string, newText: string): void {
+  const oldStr = el('div', { class: 'del' });
+  oldStr.textContent = cap(oldText);
+  const newStr = el('div', { class: 'add' });
+  newStr.textContent = cap(newText);
+  body.append(oldStr, newStr);
+}
+
+interface PiEditInputView {
+  edits?: unknown;
+}
+
+interface PiEditPairView {
+  oldText?: unknown;
+  newText?: unknown;
+}
+
+function appendEditBody(body: HTMLElement, call: ToolCall): void {
+  const editsShape = call.name === 'edit' || call.name === 'memory_write';
+  if (!editsShape || typeof call.input !== 'object' || call.input === null) {
+    appendEditPair(
+      body,
+      inputField(call.input, 'old_string'),
+      inputField(call.input, 'new_string')
+    );
+    return;
+  }
+
+  const edits = (call.input as PiEditInputView).edits;
+  if (!Array.isArray(edits)) return;
+  for (const pair of edits) {
+    if (typeof pair !== 'object' || pair === null) continue;
+    const fields = pair as PiEditPairView;
+    appendEditPair(
+      body,
+      typeof fields.oldText === 'string' ? fields.oldText : '',
+      typeof fields.newText === 'string' ? fields.newText : ''
+    );
+  }
+}
+
 function toolBody(call: ToolCall): HTMLElement | null {
   ensureWcmsgStyle();
   if (call.name === 'bash') return bashBody(call);
@@ -611,18 +662,20 @@ function toolBody(call: ToolCall): HTMLElement | null {
     header.textContent = path;
     body.append(header);
   }
-  if (call.name === 'write_file') {
+
+  const memoryEdits =
+    call.name === 'memory_write' &&
+    typeof call.input === 'object' &&
+    call.input !== null &&
+    'edits' in call.input;
+  if (call.name === 'write_file' || (call.name === 'memory_write' && !memoryEdits)) {
     const content = el('span', { class: 'add' });
     content.textContent = cap(inputField(call.input, 'content'));
     body.append(content);
     return body;
   }
-  if (call.name === 'edit_file') {
-    const oldStr = el('div', { class: 'del' });
-    oldStr.textContent = cap(inputField(call.input, 'old_string'));
-    const newStr = el('div', { class: 'add' });
-    newStr.textContent = cap(inputField(call.input, 'new_string'));
-    body.append(oldStr, newStr);
+  if (call.name === 'edit' || call.name === 'edit_file' || memoryEdits) {
+    appendEditBody(body, call);
     return body;
   }
   if (call.name === 'read_file') {

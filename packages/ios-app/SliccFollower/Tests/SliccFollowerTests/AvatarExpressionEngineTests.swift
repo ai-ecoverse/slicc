@@ -3,6 +3,13 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
+
+
+
+
+
 @MainActor
 final class AvatarExpressionEngineTests: XCTestCase {
     private var now: TimeInterval = 0
@@ -17,6 +24,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
             })
     }
 
+    
     private func run(
         _ engine: AvatarExpressionEngine, seconds: TimeInterval, step: TimeInterval = 1.0 / 60.0
     ) {
@@ -27,10 +35,13 @@ final class AvatarExpressionEngineTests: XCTestCase {
         }
     }
 
+    
+
     func testFirstConfigureAdoptsItsShapeInstantly() {
         let engine = makeEngine()
         engine.configure(activity: .working, frozen: false, reduceMotion: false, blink: false)
 
+        
         XCTAssertEqual(engine.snapshot.shape, 1)
     }
 
@@ -41,14 +52,18 @@ final class AvatarExpressionEngineTests: XCTestCase {
         XCTAssertEqual(engine.snapshot.shape, 0)
 
         engine.configure(activity: .working, frozen: false, reduceMotion: false, blink: false)
-
+        
+        
+        
         run(engine, seconds: 2.0 / 60.0)
         XCTAssertEqual(engine.snapshot.shape, 0, accuracy: 0.000_001)
         XCTAssertLessThan(engine.snapshot.blinkScale, 1)
 
+        
         run(engine, seconds: AvatarExpression.blinkApexSeconds)
         XCTAssertEqual(engine.snapshot.shape, 1)
 
+        
         run(engine, seconds: AvatarExpression.blinkOutSeconds + 0.05)
         XCTAssertEqual(engine.snapshot.blinkScale, 1, accuracy: 0.000_001)
     }
@@ -63,6 +78,8 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
         XCTAssertEqual(engine.snapshot.shape, 0)
     }
+
+    
 
     func testGlowerCutsATopLidAndReleasesIt() {
         let engine = makeEngine()
@@ -86,6 +103,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
         run(engine, seconds: 0.4)
         XCTAssertGreaterThan(engine.snapshot.lidBottom, 0.1)
 
+        
         engine.scrutinize()
         run(engine, seconds: 0.7)
         XCTAssertGreaterThan(engine.snapshot.lidBottom, 0.1)
@@ -100,7 +118,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
             activity: .awaiting, frozen: false, reduceMotion: false, blink: false,
             drowseDelay: 1)
         run(engine, seconds: 0.5)
-
+        
         XCTAssertEqual(engine.snapshot.lidTop, AvatarExpression.drowseStartLid, accuracy: 0.01)
 
         run(engine, seconds: 4)
@@ -109,13 +127,15 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
         engine.wake()
         run(engine, seconds: 1.0 / 60.0)
-
+        
         XCTAssertGreaterThan(engine.snapshot.pupilScale, 1)
 
         run(engine, seconds: 0.6)
         XCTAssertLessThan(engine.snapshot.lidTop, drowsing)
         XCTAssertEqual(engine.snapshot.pupilScale, 1, accuracy: 0.000_001)
     }
+
+    
 
     func testBrowsShowOnlyWhileThinkingAndRecockOnTheBlink() {
         let engine = makeEngine(randoms: [0.1, 0.5, 0.5, 0.5, 0.5])
@@ -127,15 +147,17 @@ final class AvatarExpressionEngineTests: XCTestCase {
         run(engine, seconds: 0.2)
         XCTAssertTrue(engine.snapshot.browsVisible)
         let opening = engine.snapshot.brows
-
+        
         XCTAssertNotEqual(
             opening.left.raise < 0, opening.right.raise < 0,
             "exactly one brow should be raised")
 
-        engine.wake()
+        engine.wake()  
         run(engine, seconds: AvatarExpression.blinkApexSeconds + 0.05)
         XCTAssertNotEqual(engine.snapshot.brows, opening)
     }
+
+    
 
     func testThinkingAndIdleMoveTheirOwnGazeWhileWorkingDoesNot() {
         let engine = makeEngine(randoms: [0.4, 0.9, 0.2])
@@ -145,6 +167,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
         run(engine, seconds: 0.3)
         XCTAssertNotEqual(engine.snapshot.leftPupilOffset, first)
 
+        
         engine.configure(activity: .working, frozen: false, reduceMotion: false, blink: false)
         run(engine, seconds: AvatarExpression.blinkApexSeconds + 0.1)
         let parked = engine.snapshot.leftPupilOffset
@@ -156,11 +179,13 @@ final class AvatarExpressionEngineTests: XCTestCase {
         let engine = makeEngine()
         engine.configure(activity: .idle, frozen: false, reduceMotion: false, blink: false)
         run(engine, seconds: 2)
-
+        
         let wandering = engine.snapshot.leftPupilOffset
         XCTAssertGreaterThan(
             (wandering.x * wandering.x + wandering.y * wandering.y).squareRoot(), 1)
 
+        
+        
         engine.configure(activity: .awaiting, frozen: false, reduceMotion: false, blink: false)
         run(engine, seconds: 2)
         XCTAssertEqual(engine.snapshot.leftPupilOffset.x, 0, accuracy: 0.01)
@@ -181,6 +206,8 @@ final class AvatarExpressionEngineTests: XCTestCase {
         }
     }
 
+    
+
     func testStaticFreezesEveryChannel() {
         let engine = makeEngine()
         engine.configure(activity: .working, frozen: false, reduceMotion: false, blink: false)
@@ -188,6 +215,8 @@ final class AvatarExpressionEngineTests: XCTestCase {
         let frozenShape = engine.snapshot.shape
         XCTAssertEqual(frozenShape, 1)
 
+        
+        
         engine.configure(activity: .thinking, frozen: true, reduceMotion: false, blink: true)
         engine.glower()
         run(engine, seconds: 2)
@@ -202,6 +231,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
         engine.configure(activity: .thinking, frozen: false, reduceMotion: true, blink: true)
         engine.configure(activity: .working, frozen: false, reduceMotion: true, blink: true)
 
+        
         XCTAssertEqual(engine.snapshot.shape, 1)
         XCTAssertEqual(engine.snapshot.blinkScale, 1)
 
@@ -212,6 +242,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
         XCTAssertEqual(engine.snapshot.pupilScale, 1)
         XCTAssertEqual(engine.snapshot.leftPupilOffset, .init(x: 0, y: 0))
 
+        
         engine.configure(activity: .thinking, frozen: false, reduceMotion: true, blink: true)
         XCTAssertEqual(engine.snapshot.brows, AvatarExpression.baseBrows)
     }
@@ -224,9 +255,11 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
         now += 10
         engine.advance(to: now)
-
+        
         XCTAssertEqual(engine.snapshot.lidTop, AvatarExpression.drowseEndLid, accuracy: 0.000_001)
     }
+
+    
 
     func testResetExpressionDropsTransientsAndRePrimesTheShape() {
         let engine = makeEngine()
@@ -244,13 +277,15 @@ final class AvatarExpressionEngineTests: XCTestCase {
         XCTAssertEqual(engine.snapshot.lidTop, 0)
         XCTAssertEqual(engine.snapshot.lidBottom, 0)
         XCTAssertEqual(engine.snapshot.brows, AvatarExpression.baseBrows)
-
+        
         XCTAssertEqual(engine.snapshot.shape, 0)
 
         run(engine, seconds: 0.5)
         XCTAssertLessThan(engine.snapshot.lidTop, 0.01)
         XCTAssertLessThan(engine.snapshot.lidBottom, 0.01)
     }
+
+    
 
     private func summary(_ state: String?, activity: String? = nil) -> ScoopSummary {
         .init(
@@ -260,21 +295,23 @@ final class AvatarExpressionEngineTests: XCTestCase {
     }
 
     func testWireAloneDrivesUnwatchedScoops() {
-
+        
+        
         XCTAssertEqual(summary("working", activity: "thinking").avatarActivity(), .thinking)
         XCTAssertEqual(summary("working", activity: "tool").avatarActivity(), .working)
         XCTAssertEqual(summary("idle", activity: "awaiting").avatarActivity(), .awaiting)
         XCTAssertEqual(summary("idle").avatarActivity(), .idle)
         XCTAssertEqual(summary(nil).avatarActivity(), .idle)
-
+        
         XCTAssertNil(summary("broken").avatarActivity())
         XCTAssertNil(summary("initializing").avatarActivity())
     }
 
     func testOlderLeaderAndUnknownRefinementFallBackToTheState() {
-
+        
+        
         XCTAssertEqual(summary("working").avatarActivity(), .thinking)
-
+        
         XCTAssertEqual(summary("working", activity: "daydreaming").avatarActivity(), .thinking)
         XCTAssertEqual(summary("idle", activity: "daydreaming").avatarActivity(), .idle)
         XCTAssertEqual(summary("future-state").avatarActivity(), .idle)
@@ -284,20 +321,25 @@ final class AvatarExpressionEngineTests: XCTestCase {
         let toolRunning = ScoopSummary.LocalExpressionSignals(toolRunning: true)
         let quiet = ScoopSummary.LocalExpressionSignals()
 
+        
+        
         XCTAssertEqual(
             summary("working", activity: "thinking").avatarActivity(local: toolRunning), .working)
-
+        
+        
         XCTAssertEqual(
             summary("working", activity: "tool").avatarActivity(local: quiet), .thinking)
 
+        
         XCTAssertEqual(summary("idle").avatarActivity(local: .init(awaitingUser: true)), .awaiting)
         XCTAssertEqual(summary("idle").avatarActivity(local: quiet), .idle)
-
+        
         XCTAssertEqual(summary("idle", activity: "awaiting").avatarActivity(local: quiet), .awaiting)
     }
 
     func testRefinementNeverChangesTheLegacyEyeTreatments() {
-
+        
+        
         for activity in [nil, "thinking", "tool", "awaiting", "daydreaming"] {
             let busy = summary("working", activity: activity).avatarGeometry()
             XCTAssertTrue(busy.blink)
@@ -316,7 +358,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
             type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 100, activity: .working)
 
         XCTAssertEqual(geometry.activity, .working)
-
+        
         XCTAssertEqual(
             geometry.expressionScale, geometry.eyeRadius / AvatarExpression.eyeRadius,
             accuracy: 0.000_001)
@@ -329,7 +371,7 @@ final class AvatarExpressionEngineTests: XCTestCase {
             geometry.pupilCornerRadius(shape: 1, radius: 10),
             10 * AvatarExpression.pupilMinFraction, accuracy: 0.000_001)
         XCTAssertEqual(geometry.lidInset(fraction: 0.5), geometry.eyeDiameter / 2)
-
+        
         XCTAssertEqual(
             geometry.chordHalfWidth(fraction: 0.5, shape: 0, edge: .top),
             geometry.eyeRadius, accuracy: 0.000_001)

@@ -10,6 +10,8 @@ interface FakeFsSeed {
   links?: string[];
 
   chmodFails?: boolean;
+
+  chmodUnsupported?: boolean;
 }
 
 function errno(code: string, syscall: string, path: string): Error {
@@ -55,6 +57,7 @@ function fakeFs(seed: FakeFsSeed = {}) {
     }) as unknown as IFileSystem['mkdir'],
     chmod: vi.fn(async (path: string, mode: number) => {
       if (seed.chmodFails) throw errno('EPERM', 'chmod', path);
+      if (seed.chmodUnsupported) throw errno('EOPNOTSUPP', 'chmod', path);
       modes.set(path, mode);
     }) as unknown as IFileSystem['chmod'],
     rm: vi.fn(async (path: string) => {
@@ -137,6 +140,13 @@ describe('mktemp command', () => {
       const result = await createMktempCommand().execute([], ctx);
       expect(result.exitCode).toBe(0);
       expect(harness.files.has(result.stdout.trim())).toBe(true);
+    });
+
+    it('keeps the unique name when a backend reports chmod is unsupported', async () => {
+      const { result, path, files, removed } = await run([], { seed: { chmodUnsupported: true } });
+      expect(result.exitCode).toBe(0);
+      expect(files.has(path)).toBe(true);
+      expect(removed).toEqual([]);
     });
 
     it('does not promise a mode the runtime cannot apply', async () => {

@@ -232,6 +232,64 @@ describe('FollowerSyncManager', () => {
       const snapshot = follower.getLatestSnapshot();
       expect(snapshot).toEqual({ messages, scoopJid: 'cone' });
     });
+
+    it('reassembles interleaved snapshot chunks from two cones without mixing them', () => {
+      const channel = new FakeChannel();
+      const onSnapshot = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onSnapshot });
+
+      const primary = {
+        messages: [
+          { id: 'p', role: 'assistant' as const, content: 'PRIMARY-SNAPSHOT', timestamp: 1 },
+        ],
+        scoopJid: 'primary',
+      };
+      const reviewer = {
+        messages: [
+          { id: 'r', role: 'assistant' as const, content: 'REVIEWER-SNAPSHOT', timestamp: 1 },
+        ],
+        scoopJid: 'reviewer',
+      };
+      const primaryJson = JSON.stringify(primary);
+      const reviewerJson = JSON.stringify(reviewer);
+      const midP = Math.ceil(primaryJson.length / 2);
+      const midR = Math.ceil(reviewerJson.length / 2);
+
+      channel.simulateLeaderMessage({
+        type: 'snapshot_chunk',
+        chunkData: primaryJson.slice(0, midP),
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'primary',
+      });
+      channel.simulateLeaderMessage({
+        type: 'snapshot_chunk',
+        chunkData: reviewerJson.slice(0, midR),
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'reviewer',
+      });
+      channel.simulateLeaderMessage({
+        type: 'snapshot_chunk',
+        chunkData: primaryJson.slice(midP),
+        chunkIndex: 1,
+        totalChunks: 2,
+        scoopJid: 'primary',
+      });
+      channel.simulateLeaderMessage({
+        type: 'snapshot_chunk',
+        chunkData: reviewerJson.slice(midR),
+        chunkIndex: 1,
+        totalChunks: 2,
+        scoopJid: 'reviewer',
+      });
+
+      expect(onSnapshot).toHaveBeenCalledTimes(2);
+      expect(onSnapshot).toHaveBeenNthCalledWith(1, primary.messages, 'primary');
+      expect(onSnapshot).toHaveBeenNthCalledWith(2, reviewer.messages, 'reviewer');
+      expect(follower.getLatestSnapshot()).toEqual(reviewer);
+      void follower;
+    });
   });
 
   describe('user_message_echo handling', () => {

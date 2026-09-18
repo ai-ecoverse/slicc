@@ -17,6 +17,8 @@ import {
   streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
+import { fetchCopilotUsage } from '../src/providers/github-copilot-usage.js';
+import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {
   DeviceCodePrompter,
   InterceptingOAuthLauncher,
@@ -761,6 +763,12 @@ const defaultDeviceCodePrompter: DeviceCodePrompter = ({ userCode, verificationU
   });
 };
 
+async function getBudgetUsage(): Promise<ProviderBudgetWindow | null> {
+  const account = getCopilotAccount();
+  if (!account?.refreshToken) return null;
+  return fetchCopilotUsage(account.refreshToken, fetch, { headers: COPILOT_EXCHANGE_HEADERS });
+}
+
 export const config: ProviderConfig = {
   id: PROVIDER_ID,
   name: 'GitHub Copilot',
@@ -778,6 +786,7 @@ export const config: ProviderConfig = {
   ],
 
   getModelIds: buildCopilotModelList,
+  getBudgetUsage,
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,

@@ -6,15 +6,11 @@ import {
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
-import { normalizePath } from '../fs/path-utils.js';
-import { isNoOpWriteDevicePath } from '../fs/virtual-device-paths.js';
+import { createEditTool } from './edit-tool.js';
 import type { ToolDefinition, ToolResult } from './types.js';
+import { verifyWriteLanded } from './write-verification.js';
 
 const log = createLogger('tool:fs');
-
-const VERIFY_FULL_READBACK_MAX_CHARS = 256 * 1024;
-
-const VERIFY_SAMPLE_CHARS = 4096;
 
 export interface ReadFileInput {
   path?: unknown;
@@ -27,51 +23,8 @@ export interface WriteFileInput {
   content?: unknown;
 }
 
-export interface EditFileInput {
-  path?: unknown;
-  old_string?: unknown;
-  new_string?: unknown;
-}
-
-export function createFileTools(fs: VirtualFS): ToolDefinition[] {
-  return [createReadFileTool(fs), createWriteFileTool(fs), createEditFileTool(fs)];
-}
-
-async function verifyWriteLanded(
-  fs: VirtualFS,
-  path: string,
-  content: string
-): Promise<string | null> {
-  if (isNoOpWriteDevicePath(normalizePath(path))) {
-    return null;
-  }
-  try {
-    const readBack = await fs.readTextFile(path);
-    if (content.length <= VERIFY_FULL_READBACK_MAX_CHARS) {
-      if (readBack !== content) {
-        return (
-          `Write did not land: ${path} content mismatch ` +
-          `(expected ${content.length} chars, got ${readBack.length})`
-        );
-      }
-      return null;
-    }
-
-    if (readBack.length !== content.length) {
-      return (
-        `Write did not land: ${path} content mismatch ` +
-        `(expected ${content.length} chars, got ${readBack.length})`
-      );
-    }
-    const n = VERIFY_SAMPLE_CHARS;
-    if (readBack.slice(0, n) !== content.slice(0, n) || readBack.slice(-n) !== content.slice(-n)) {
-      return `Write did not land: ${path} content mismatch (head/tail sample)`;
-    }
-    return null;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return `Write did not land: ${path} is not readable (${message})`;
-  }
+export function createFileTools(fs: VirtualFS, cwd = '/workspace'): ToolDefinition[] {
+  return [createReadFileTool(fs), createWriteFileTool(fs), createEditTool(fs, cwd)];
 }
 
 function createReadFileTool(fs: VirtualFS): ToolDefinition {
@@ -202,69 +155,6 @@ function createWriteFileTool(fs: VirtualFS): ToolDefinition {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error('Write failed', { path, error: message });
-        return { content: message, isError: true };
-      }
-    },
-  };
-}
-
-function createEditFileTool(fs: VirtualFS): ToolDefinition {
-  return {
-    name: 'edit_file',
-    description:
-      'Edit a file by replacing an exact string match. The old_string must appear exactly once in the file. Use this instead of write_file when making targeted changes to existing files.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Absolute path to the file to edit.',
-        },
-        old_string: {
-          type: 'string',
-          description: 'The exact string to find and replace. Must be unique in the file.',
-        },
-        new_string: {
-          type: 'string',
-          description: 'The replacement string.',
-        },
-      },
-      required: ['path', 'old_string', 'new_string'],
-    },
-    async execute(input: EditFileInput): Promise<ToolResult> {
-      const path = input.path as string;
-      const oldString = input.old_string as string;
-      const newString = input.new_string as string;
-      log.debug('Edit', { path, oldLength: oldString.length, newLength: newString.length });
-
-      try {
-        const content = await fs.readTextFile(path);
-
-        const occurrences = content.split(oldString).length - 1;
-        if (occurrences === 0) {
-          return {
-            content: `old_string not found in ${path}`,
-            isError: true,
-          };
-        }
-        if (occurrences > 1) {
-          return {
-            content: `old_string found ${occurrences} times in ${path}. It must be unique. Provide more context.`,
-            isError: true,
-          };
-        }
-
-        const newContent = content.replace(oldString, newString);
-        await fs.writeFile(path, newContent);
-        const durabilityError = await verifyWriteLanded(fs, path, newContent);
-        if (durabilityError) {
-          log.error('Edit durability check failed', { path, error: durabilityError });
-          return { content: durabilityError, isError: true };
-        }
-        return { content: `File edited: ${path}` };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('Edit failed', { path, error: message });
         return { content: message, isError: true };
       }
     },

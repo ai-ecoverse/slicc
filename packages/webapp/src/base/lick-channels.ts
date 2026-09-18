@@ -9,6 +9,7 @@ export type LickChannel =
   | 'upgrade'
   | 'workflow'
   | 'bash'
+  | 'jshd'
   | 'preview'
   | 'scoop-notify'
   | 'scoop-idle'
@@ -26,6 +27,7 @@ export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'upgrade',
   'workflow',
   'bash',
+  'jshd',
   'preview',
   'scoop-notify',
   'scoop-idle',

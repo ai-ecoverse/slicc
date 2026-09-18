@@ -34,13 +34,8 @@ function buildTrayJoinLaunchUrl(locationHref: string, joinUrl: string): string {
   return buildCanonicalTrayLaunchUrl(locationHref, parsedJoinUrl.joinUrl);
 }
 
-function buildTrayLeadLaunchUrl(locationHref: string, workerBaseUrl: string): string {
-  const normalizedBase = normalizeTrayWorkerBaseUrl(workerBaseUrl);
-  if (!normalizedBase) {
-    throw new Error(`Invalid tray worker base URL: ${workerBaseUrl}`);
-  }
-
-  return buildCanonicalTrayLaunchUrl(locationHref, normalizedBase);
+function buildTrayLeadLaunchUrl(locationHref: string, normalizedWorkerBaseUrl: string): string {
+  return buildCanonicalTrayLaunchUrl(locationHref, normalizedWorkerBaseUrl);
 }
 
 export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string {

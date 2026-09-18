@@ -36,4 +36,56 @@ final class HostFSWatchTests: XCTestCase {
             XCTFail("expected empty paths")
         }
     }
+
+    func testDebouncedNotesBroadcastOneInvalidationAndStopCancelsPendingWork() async throws {
+        let system = LickSystem()
+        let messages = HostWatchMessageBox()
+        await system.addClient(WebSocketClient { messages.add($0) })
+        let watch = HostFSWatch(lickSystem: system)
+
+        watch.noteForTesting(mount: "/mnt/project", root: "/tmp/root", absolutePath: "/tmp/root/a.txt")
+        watch.noteForTesting(mount: "/mnt/project", root: "/tmp/root", absolutePath: "/tmp/root/b.txt")
+        try await waitUntil("debounced hostfs invalidation") { !messages.snapshot().isEmpty }
+        let payload = try LickSystem.decode(try XCTUnwrap(messages.snapshot().first))
+        XCTAssertEqual(payload["mount"], .string("/mnt/project"))
+        guard case .array(let paths)? = payload["paths"] else { return XCTFail("missing paths") }
+        XCTAssertEqual(Set(paths.compactMap(\.stringValue)), Set(["a.txt", "b.txt"]))
+
+        watch.noteForTesting(mount: "/mnt/project", root: "/tmp/root", absolutePath: "/tmp/root/c.txt")
+        watch.stop()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(messages.snapshot().count, 1)
+        await system.shutdown()
+    }
+
+    func testLiveFileSystemEventBroadcastsAnInvalidation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slicc-hostfs-watch-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let system = LickSystem()
+        let messages = HostWatchMessageBox()
+        await system.addClient(WebSocketClient { messages.add($0) })
+        let watch = HostFSWatch(lickSystem: system)
+        watch.start(roots: [.init(path: "/mnt/live", root: root.path)])
+        defer { watch.stop() }
+
+        try Data("changed".utf8).write(to: root.appendingPathComponent("event.txt"))
+        try await waitUntil(
+            "live hostfs invalidation",
+            timeoutMilliseconds: 5_000
+        ) { !messages.snapshot().isEmpty }
+
+        let payload = try LickSystem.decode(try XCTUnwrap(messages.snapshot().last))
+        XCTAssertEqual(payload["mount"], .string("/mnt/live"))
+        await system.shutdown()
+    }
+}
+
+private final class HostWatchMessageBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func add(_ value: String) { lock.withLock { values.append(value) } }
+    func snapshot() -> [String] { lock.withLock { values } }
 }

@@ -1,7 +1,7 @@
 {
   "traySyncProtocolVersion": 8,
-  "leaderVariantCount": 42,
-  "followerVariantCount": 37,
+  "leaderVariantCount": 47,
+  "followerVariantCount": 43,
   "agentEventVariantCount": 13,
   "leaderToFollower": [
     {
@@ -74,6 +74,85 @@
         "detail": {
           "url": "https://example.com"
         }
+      }
+    },
+    {
+      "type": "computer.frame",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.frame",
+        "id": "jsh:fake",
+        "seq": 1,
+        "mime": "image/jpeg",
+        "width": 8,
+        "height": 8,
+        "data": "QUJD"
+      }
+    },
+    {
+      "type": "computer.native.capture",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.capture",
+        "requestId": "cap-1",
+        "fps": 4,
+        "maxWidth": 768,
+        "watch": true
+      }
+    },
+    {
+      "type": "computer.native.input",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.input",
+        "requestId": "in-1",
+        "events": [
+          {
+            "type": "click",
+            "button": 1,
+            "count": 1,
+            "x": 10,
+            "y": 20
+          }
+        ]
+      }
+    },
+    {
+      "type": "computer.native.unwatch",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.unwatch",
+        "requestId": "cap-1"
+      }
+    },
+    {
+      "type": "computers.list",
+      "ios": "decoded",
+      "message": {
+        "type": "computers.list",
+        "computers": [
+          {
+            "id": "jsh:fake",
+            "kind": "jsh",
+            "title": "fake",
+            "size": {
+              "width": 8,
+              "height": 8
+            },
+            "state": "live",
+            "capabilities": {
+              "screenshot": true,
+              "text": false,
+              "frames": "poll",
+              "keyboard": true,
+              "mouse": "absolute",
+              "scroll": true,
+              "exec": false,
+              "inputAllowed": true
+            },
+            "pid": null
+          }
+        ]
       }
     },
     {
@@ -600,6 +679,71 @@
       }
     },
     {
+      "type": "computer.input",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.input",
+        "id": "jsh:fake",
+        "events": [
+          {
+            "type": "key",
+            "keysym": "Home"
+          }
+        ]
+      }
+    },
+    {
+      "type": "computer.native.error",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.error",
+        "requestId": "cap-1",
+        "error": "Screen Recording is denied. Enable it in System Settings → Privacy & Security → Screen Recording."
+      }
+    },
+    {
+      "type": "computer.native.frame",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.frame",
+        "requestId": "cap-1",
+        "seq": 1,
+        "mime": "image/jpeg",
+        "width": 8,
+        "height": 8,
+        "nativeWidth": 1440,
+        "nativeHeight": 900,
+        "data": "QUJD"
+      }
+    },
+    {
+      "type": "computer.native.input.result",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.native.input.result",
+        "requestId": "in-1",
+        "error": "Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again."
+      }
+    },
+    {
+      "type": "computer.unwatch",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.unwatch",
+        "id": "jsh:fake"
+      }
+    },
+    {
+      "type": "computer.watch",
+      "ios": "decoded",
+      "message": {
+        "type": "computer.watch",
+        "id": "jsh:fake",
+        "fps": 2,
+        "maxWidth": 480
+      }
+    },
+    {
       "type": "exec.chunk",
       "ios": "decoded",
       "message": {
@@ -998,10 +1142,13 @@
         "error",
         "type"
       ],
-      "dropped": [],
+      "dropped": [
+        "endTurn"
+      ],
       "event": {
         "type": "error",
-        "error": "boom"
+        "error": "boom",
+        "endTurn": false
       }
     },
     {
@@ -1260,6 +1407,55 @@
           "trigger": "idle",
           "state": "summarized",
           "transcriptPath": "/sessions/live-cone-mtlor6sy-8egf.md"
+        }
+      }
+    },
+    {
+      "name": "ComputerDescriptor",
+      "ios": "mirrored",
+      "mirrored": [
+        "capabilities",
+        "id",
+        "kind",
+        "lastShot",
+        "pid",
+        "size",
+        "softKeys",
+        "state",
+        "title"
+      ],
+      "dropped": [],
+      "sample": {
+        "id": "jsh:fake",
+        "kind": "jsh",
+        "title": "fake",
+        "size": {
+          "width": 8,
+          "height": 8
+        },
+        "state": "live",
+        "capabilities": {
+          "screenshot": true,
+          "text": false,
+          "frames": "poll",
+          "keyboard": true,
+          "mouse": "absolute",
+          "scroll": true,
+          "exec": false,
+          "inputAllowed": true
+        },
+        "pid": 42,
+        "softKeys": [
+          {
+            "label": "Home",
+            "keysym": "Home"
+          }
+        ],
+        "lastShot": {
+          "width": 8,
+          "height": 8,
+          "scale": 1,
+          "at": 1
         }
       }
     },

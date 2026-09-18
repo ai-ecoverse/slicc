@@ -1,4 +1,5 @@
 import type {
+  ComputerInputEvent,
   FollowerBiscottoIdentity,
   FollowerTrust,
   LeaderToWorkerControlMessage,
@@ -34,6 +35,11 @@ import { BiscottoReview } from './tray-leader/biscotto-review.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
 import { CDPRouter } from './tray-leader/cdp-router.js';
 import { CherryRouter } from './tray-leader/cherry-router.js';
+import {
+  ComputersRouter,
+  type NativeComputerCaptureResult,
+  type TrayComputersSource,
+} from './tray-leader/computers-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
 import { FollowerDispatch } from './tray-leader/follower-dispatch.js';
 import {
@@ -87,6 +93,8 @@ export interface LeaderSyncManagerOptions {
   getScoops?: () => ScoopSummary[];
 
   getSprinkles?: () => SprinkleSummary[];
+
+  computers?: TrayComputersSource;
 
   getModelCatalog?: () => TrayModelCatalogEntry[];
 
@@ -195,6 +203,7 @@ export class LeaderSyncManager {
   private readonly tabRouter: TabRouter;
   private readonly previewBridge: PreviewBridgeManager;
   private readonly cherryRouter: CherryRouter;
+  private readonly computersRouter: ComputersRouter;
   private readonly teleportPool: TeleportPool;
   private readonly transcriptExport: TranscriptExportManager;
   private readonly followerDispatch: FollowerDispatch;
@@ -241,6 +250,8 @@ export class LeaderSyncManager {
       isCherryTarget,
     });
     this.cherryRouter = new CherryRouter(context);
+    this.computersRouter = new ComputersRouter(context);
+    this.computersRouter.start();
     this.tabTeleportRouter = new TabTeleportRouter(context, {
       getTargetEntries: () => this.teleportPool.getConnectedEntries(),
     });
@@ -273,6 +284,7 @@ export class LeaderSyncManager {
       teleportPool: this.teleportPool,
       transcriptExport: this.transcriptExport,
       cherryRouter: this.cherryRouter,
+      computersRouter: this.computersRouter,
       requesterTracker: this.requesterTracker,
       tabTeleportRouter: this.tabTeleportRouter,
       oauthPopupDelegation: this.oauthPopupDelegation,
@@ -290,8 +302,10 @@ export class LeaderSyncManager {
       },
     });
     this.followerRegistry.onFollowerRemoved({
-      afterRegistryCleanup: (bootstrapId) =>
-        this.requesterTracker.handleFollowerRemoved(bootstrapId),
+      afterRegistryCleanup: (bootstrapId) => {
+        this.requesterTracker.handleFollowerRemoved(bootstrapId);
+        this.computersRouter.removeFollower(bootstrapId);
+      },
     });
     Object.defineProperties(this, {
       activeExports: { get: () => this.transcriptExport.activeExports },
@@ -319,6 +333,7 @@ export class LeaderSyncManager {
     });
     void this.broadcast.sendSnapshotToFollower(bootstrapId);
     this.broadcast.sendScoopsListToFollower(bootstrapId);
+    this.computersRouter.sendListToFollower(bootstrapId);
     this.broadcast.sendModelCatalogToFollower(bootstrapId);
     this.broadcast.sendSprinklesListToFollower(bootstrapId);
 
@@ -340,8 +355,8 @@ export class LeaderSyncManager {
     this.broadcast.broadcastUserMessage(text, messageId, attachments);
   }
 
-  broadcastStatus(status: string): void {
-    this.broadcast.broadcastStatus(status);
+  broadcastStatus(status: string, scoopJid?: string): void {
+    this.broadcast.broadcastStatus(status, scoopJid);
   }
 
   broadcastSnapshot(): void {
@@ -404,8 +419,27 @@ export class LeaderSyncManager {
     return this.remoteExec.execOnRemote(runtimeId, command, opts);
   }
 
+  captureNativeComputer(
+    runtimeId: string,
+    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+  ): Promise<NativeComputerCaptureResult> {
+    return this.computersRouter.captureNative(runtimeId, opts);
+  }
+
+  inputNativeComputer(runtimeId: string, events: ComputerInputEvent[]): Promise<void> {
+    return this.computersRouter.inputNative(runtimeId, events);
+  }
+
+  unwatchNativeComputer(runtimeId: string): void {
+    this.computersRouter.unwatchNative(runtimeId);
+  }
+
   getExecCapableBootstrapIds(): Set<string> {
     return this.followerRegistry.getExecCapableBootstrapIds();
+  }
+
+  getComputerCapableBootstrapIds(): Set<string> {
+    return this.followerRegistry.getComputerCapableBootstrapIds();
   }
 
   getBrowserCapableBootstrapIds(): Set<string> {

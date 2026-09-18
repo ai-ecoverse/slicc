@@ -7,7 +7,7 @@ export interface TtyDeps {
   createRl?: () => Pick<ReadlineInterface, 'question' | 'close'>;
 }
 
-function defaultRl(): Pick<ReadlineInterface, 'question' | 'close'> {
+export function defaultRl(): Pick<ReadlineInterface, 'question' | 'close'> {
   return createInterface({ input: process.stdin, output: process.stdout });
 }
 
@@ -27,6 +27,8 @@ export function createTtyBackend(deps: TtyDeps = {}): SudoBackend {
       try {
         if (req.requester) out.write(`\nRequested by: ${req.requester}`);
         out.write(`\nSLICC sudo — approve ${req.kind}: ${req.detail}\n`);
+
+        if (req.reason?.trim()) out.write(`Reason given: ${req.reason.trim()}\n`);
         const choice = (await ask(rl, '[a]llow once / [d]eny / [A]lways (edit pattern): ')).trim();
         if (choice === 'a') return { decision: 'allow' };
         if (choice === 'A') {

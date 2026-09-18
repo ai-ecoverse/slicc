@@ -73,6 +73,7 @@ func binaryless(tag string) fakeRelease {
 	return fakeRelease{TagName: tag, Assets: []fakeAsset{{Name: "sliccy-1.0.0.tgz", BrowserDownloadURL: "x"}}}
 }
 
+
 func releasesServer(t *testing.T, pages map[int][]fakeRelease) (*httptest.Server, *int) {
 	t.Helper()
 	requests := 0
@@ -130,6 +131,7 @@ func fullBinarylessPage() []fakeRelease {
 	return page
 }
 
+
 func paginateReleases(all []fakeRelease, perPage int) map[int][]fakeRelease {
 	pages := map[int][]fakeRelease{}
 	for i := 0; i < len(all); i += perPage {
@@ -172,7 +174,9 @@ func TestLatestCLIReleaseStopsAtShortPage(t *testing.T) {
 }
 
 func TestLatestCLIReleaseFindsAssetPastOldThirtyPerPageCap(t *testing.T) {
-
+	
+	
+	
 	if releasesPerPage != 100 {
 		t.Fatalf("releasesPerPage = %d, want 100 (GITHUB_RELEASES_PER_PAGE)", releasesPerPage)
 	}
@@ -221,6 +225,7 @@ func TestLatestCLIReleaseAPIError(t *testing.T) {
 		t.Fatal("want error on non-200 API response")
 	}
 }
+
 
 func assetServer(t *testing.T, body string, status int) *httptest.Server {
 	t.Helper()
@@ -340,7 +345,7 @@ func TestApplyWindowsRollsBackParkedBinaryOnSwapFailure(t *testing.T) {
 
 	original := renameFile
 	renameFile = func(src, dst string) error {
-
+		
 		if strings.HasSuffix(src, ".new") {
 			return fmt.Errorf("simulated lock on %s", src)
 		}

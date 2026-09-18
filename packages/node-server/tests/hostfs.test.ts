@@ -1,31 +1,43 @@
+import { EventEmitter } from 'node:events';
 import express from 'express';
+import { existsSync } from 'fs';
 import {
   chmod,
+  link,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   stat,
   symlink,
+  truncate,
   utimes,
   writeFile,
 } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { shouldParseGlobalJson } from '../src/fetch-proxy-headers.js';
 import {
+  HOSTFS_MAX_BODY_BYTES,
   HOSTFS_STABLE_MAX_BODY_BYTES,
+  hostFsBodyErrorHandler,
   isHostFsStableBodyRequest,
   parseByteRange,
   registerHostFsRoutes,
   resolveHostMountRoots,
   resolveWithinRoot,
+  sameHostFileIdentity,
+  sendFsError,
+  streamFileBody,
+  toFsCodeError,
 } from '../src/hostfs.js';
 
 interface StatIdentity {
   ctime?: number;
   ino?: number;
+  dev?: number;
   uid?: number;
   gid?: number;
   mode?: number;
@@ -77,6 +89,68 @@ beforeAll(async () => {
     });
 });
 
+describe('hostfs error and stream helpers', () => {
+  it('maps unknown failures to EIO and destroys an already-started response', () => {
+    expect(toFsCodeError(new Error('boom'))).toEqual({ status: 500, code: 'EIO', message: 'boom' });
+    const destroy = vi.fn();
+    sendFsError({ headersSent: true, destroy } as never, new Error('late failure'));
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('passes unrelated body parser failures to the next middleware', () => {
+    const next = vi.fn();
+    hostFsBodyErrorHandler(
+      Object.assign(new Error('bad body'), { type: 'entity.parse.failed' }),
+      { path: '/api/elsewhere' } as never,
+      { headersSent: false } as never,
+      next
+    );
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('handles read-stream failures before and after response commitment', async () => {
+    function fixture() {
+      const stream = Object.assign(new EventEmitter(), {
+        pipe: vi.fn(),
+        destroy: vi.fn(),
+      });
+      const response = Object.assign(new EventEmitter(), {
+        status: vi.fn(),
+        setHeader: vi.fn(),
+        destroy: vi.fn(),
+      });
+      const createStream = vi.fn(() => stream) as unknown as typeof import('fs').createReadStream;
+      return { stream, response, createStream };
+    }
+
+    const early = fixture();
+    const rejected = streamFileBody(
+      early.response as never,
+      '/file',
+      200,
+      {},
+      undefined,
+      early.createStream
+    );
+    early.stream.emit('error', new Error('open failed'));
+    await expect(rejected).rejects.toThrow('open failed');
+
+    const late = fixture();
+    const resolved = streamFileBody(
+      late.response as never,
+      '/file',
+      200,
+      {},
+      undefined,
+      late.createStream
+    );
+    late.stream.emit('open');
+    late.stream.emit('error', new Error('read failed'));
+    await expect(resolved).resolves.toBeUndefined();
+    expect(late.response.destroy).toHaveBeenCalledOnce();
+  });
+});
+
 afterAll(async () => {
   await close();
 });
@@ -107,6 +181,7 @@ describe('hostfs routes', () => {
     const real = await stat(join(root, 'hello.txt'));
     expect(body.ctime).toBe(real.ctimeMs);
     expect(body.ino).toBe(Number(real.ino));
+    expect(body.dev).toBe(Number(real.dev));
     expect(body.uid).toBe(real.uid);
     expect(body.gid).toBe(real.gid);
 
@@ -130,6 +205,7 @@ describe('hostfs routes', () => {
     const hello = entries.find((e) => e.name === 'hello.txt');
     const real = await stat(join(root, 'hello.txt'));
     expect(hello?.ino).toBe(Number(real.ino));
+    expect(hello?.dev).toBe(Number(real.dev));
     expect(hello?.uid).toBe(real.uid);
     expect(hello?.gid).toBe(real.gid);
     expect(hello?.mode).toBe(real.mode);
@@ -167,6 +243,35 @@ describe('hostfs routes', () => {
     });
     expect(res.status).toBe(200);
     expect(await readFile(join(root, 'new/deep/file.txt'), 'utf8')).toBe('written from test');
+  });
+
+  it('refuses to overwrite a directory and validates per-op rename parameters', async () => {
+    const directory = await api('/api/hostfs/write?mount=%2Fmnt%2Fproj&path=sub', {
+      method: 'PUT',
+      body: 'nope',
+    });
+    expect(directory.status).toBe(409);
+    const rename = await api('/api/hostfs/rename?mount=%2Fmnt%2Fproj&path=hello.txt', {
+      method: 'POST',
+    });
+    expect(rename.status).toBe(400);
+  });
+
+  it('returns 413 for an unranged file above the whole-file cap', async () => {
+    const large = join(root, 'large.bin');
+    await writeFile(large, Buffer.alloc(0));
+    await truncate(large, HOSTFS_MAX_BODY_BYTES + 1);
+    const response = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=large.bin');
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: 'EFBIG' });
+  });
+
+  it('keeps dangling directory entries as name-only files', async () => {
+    const dangling = join(root, 'dangling-link');
+    await symlink(join(root, 'missing-target'), dangling);
+    const response = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    const body = (await response.json()) as { entries: Array<{ name: string; kind: string }> };
+    expect(body.entries).toContainEqual({ name: 'dangling-link', kind: 'file' });
   });
 
   it('mkdir, rename, and remove work and refuse the mount root', async () => {
@@ -237,6 +342,7 @@ describe('stable POST /api/hostfs endpoint', () => {
     const real = await stat(join(root, 'hello.txt'));
     expect(body.ctime).toBe(real.ctimeMs);
     expect(body.ino).toBe(Number(real.ino));
+    expect(body.dev).toBe(Number(real.dev));
     expect(body.uid).toBe(real.uid);
     expect(body.gid).toBe(real.gid);
     expect(body.mode).toBe(real.mode);
@@ -247,6 +353,7 @@ describe('stable POST /api/hostfs endpoint', () => {
     };
     const hello = entries.find((e) => e.name === 'hello.txt');
     expect(hello?.ino).toBe(Number(real.ino));
+    expect(hello?.dev).toBe(Number(real.dev));
     expect(hello?.mode).toBe(real.mode);
   });
 
@@ -590,6 +697,148 @@ describe('isHostFsStableBodyRequest', () => {
   });
 });
 
+describe('same-file rename (#3107)', () => {
+  const payload = 'same-inode-must-survive';
+  const umlautNfc = '\u00f6';
+  const umlautNfd = 'o\u0308';
+
+  async function listed(dir: string): Promise<string[]> {
+    return readdir(dir);
+  }
+
+  async function volumeCollapses(a: string, b: string): Promise<boolean> {
+    const dir = join(root, `probe-${Math.random().toString(36).slice(2, 8)}`);
+    await mkdir(dir);
+    await writeFile(join(dir, a), 'x');
+    const collapsed = existsSync(join(dir, b)) && (await listed(dir)).includes(a);
+    await writeFile(join(dir, 'cleanup'), '');
+    return collapsed;
+  }
+
+  it('sameHostFileIdentity matches on dev+ino, not on the path strings', async () => {
+    const file = join(root, 'identity.txt');
+    await writeFile(file, 'hi');
+    const a = await stat(file);
+    const b = await stat(file);
+    expect(sameHostFileIdentity(a, b)).toBe(true);
+    const other = join(root, 'hello.txt');
+    expect(sameHostFileIdentity(a, await stat(other))).toBe(false);
+  });
+
+  it('rename of two hard links to the same inode is a no-op (portable)', async () => {
+    const dir = join(root, 'hardlink-rename');
+    await mkdir(dir);
+    const from = join(dir, 'a.txt');
+    const to = join(dir, 'b.txt');
+    await writeFile(from, payload);
+    await link(from, to);
+    const before = await stat(from);
+    const hard = await stable({
+      op: 'rename',
+      mount: '/mnt/proj',
+      path: 'hardlink-rename/a.txt',
+      to: 'hardlink-rename/b.txt',
+    });
+    expect(hard.status).toBe(200);
+    expect(await hard.json()).toEqual({ ok: true, noop: true });
+    expect(await listed(dir)).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    expect(await readFile(from, 'utf8')).toBe(payload);
+    expect(await readFile(to, 'utf8')).toBe(payload);
+    expect((await stat(from)).ino).toBe(before.ino);
+    expect((await stat(from)).size).toBe(payload.length);
+  });
+
+  it('rename of two distinct symlinks to the same target is not a no-op', async () => {
+    const dir = join(root, 'symlink-rename');
+    await mkdir(dir);
+    const target = join(dir, 'target.txt');
+    await writeFile(target, payload);
+    await symlink(target, join(dir, 'a'));
+    await symlink(target, join(dir, 'b'));
+    const res = await stable({
+      op: 'rename',
+      mount: '/mnt/proj',
+      path: 'symlink-rename/a',
+      to: 'symlink-rename/b',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    const names = await listed(dir);
+    expect(names).toEqual(expect.arrayContaining(['target.txt', 'b']));
+    expect(names).not.toContain('a');
+  });
+
+  it('distinct names still rename', async () => {
+    const dir = join(root, 'distinct-rename');
+    await mkdir(dir);
+    await writeFile(join(dir, 'from.txt'), payload);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: 'distinct-rename/from.txt',
+          to: 'distinct-rename/to.txt',
+        })
+      ).status
+    ).toBe(200);
+    expect(await listed(dir)).toEqual(['to.txt']);
+    expect(await readFile(join(dir, 'to.txt'), 'utf8')).toBe(payload);
+  });
+
+  it('case-only rename is a no-op on an insensitive volume and a real rename on a sensitive one', async () => {
+    const collapsed = await volumeCollapses('Slicc.md', 'SLICC.md');
+    const dir = join(root, 'case-rename');
+    await mkdir(dir);
+    await writeFile(join(dir, 'Slicc.md'), payload);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: 'case-rename/Slicc.md',
+          to: 'case-rename/SLICC.md',
+        })
+      ).status
+    ).toBe(200);
+    const names = await listed(dir);
+    if (collapsed) {
+      expect(names).toEqual(['Slicc.md']);
+      expect(await readFile(join(dir, 'Slicc.md'), 'utf8')).toBe(payload);
+    } else {
+      expect(names).toEqual(['SLICC.md']);
+      expect(await readFile(join(dir, 'SLICC.md'), 'utf8')).toBe(payload);
+    }
+  });
+
+  it('NFD→NFC rename is a no-op on a normalization-insensitive volume', async () => {
+    const nfdName = `Groeger-Familie${umlautNfd}.md`;
+    const nfcName = `Groeger-Familie${umlautNfc}.md`;
+    const collapsed = await volumeCollapses(nfdName, nfcName);
+    const dir = join(root, 'nfc-rename');
+    await mkdir(dir);
+    await writeFile(join(dir, nfdName), payload);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: `nfc-rename/${nfdName}`,
+          to: `nfc-rename/${nfcName}`,
+        })
+      ).status
+    ).toBe(200);
+    const names = await listed(dir);
+    if (collapsed) {
+      expect(names).toEqual([nfdName]);
+      expect(await readFile(join(dir, nfdName), 'utf8')).toBe(payload);
+    } else {
+      expect(names).toEqual([nfcName]);
+      expect(await readFile(join(dir, nfcName), 'utf8')).toBe(payload);
+    }
+  });
+});
+
 describe('resolveWithinRoot', () => {
   it('resolves the root itself and nested paths', async () => {
     expect(await resolveWithinRoot(root, '')).toBe(root);
@@ -605,5 +854,18 @@ describe('resolveWithinRoot', () => {
     await expect(resolveWithinRoot(root, 'escape-link/new-file.txt')).rejects.toMatchObject({
       code: 'EACCES',
     });
+  });
+});
+
+describe('resolveHostMountRoots edge cases', () => {
+  it('skips files and missing roots using the default warning sink', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const roots = await resolveHostMountRoots([
+      { hostPath: join(root, 'hello.txt'), path: '/mnt/file' },
+      { hostPath: join(root, 'missing-root'), path: '/mnt/missing' },
+    ]);
+    expect(roots).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 });

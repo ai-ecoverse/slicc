@@ -24,7 +24,7 @@ export function cliAssetName(platform: string, arch: string): string | null {
   return `slicc-${os}-${goArch}${os === 'windows' ? '.exe' : ''}`;
 }
 
-function defaultIsWritableDir(dir: string): boolean {
+export function defaultIsWritableDir(dir: string): boolean {
   try {
     accessSync(dir, constants.W_OK);
     return true;

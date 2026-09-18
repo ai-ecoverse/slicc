@@ -1,10 +1,25 @@
 import Foundation
 import Logging
 
+
 struct PersistedTabSession: Codable, Equatable {
     var updatedAt: Date
     var urls: [String]
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 struct TabSessionStore: Sendable {
     static let maxRestoredTabs = 50
@@ -17,6 +32,10 @@ struct TabSessionStore: Sendable {
         self.logger = logger
     }
 
+    
+    
+    
+    
     static func defaultFileURL(userDataDir: String, homeDirectory: String = NSHomeDirectory()) -> URL {
         let profileDirName = URL(fileURLWithPath: userDataDir).lastPathComponent
         return URL(fileURLWithPath: homeDirectory, isDirectory: true)
@@ -53,6 +72,9 @@ struct TabSessionStore: Sendable {
         }
     }
 
+    
+    
+    
     static func sanitize(
         rawUrls: [String],
         hostedOrigins: [String],
@@ -78,6 +100,12 @@ struct TabSessionStore: Sendable {
         return kept
     }
 
+    
+    
+    
+    
+    
+    
     private static func isSliccPage(_ url: URL, origins: Set<String>) -> Bool {
         if let origin = normalizedOrigin(of: url.absoluteString), origins.contains(origin) {
             return true
@@ -89,6 +117,8 @@ struct TabSessionStore: Sendable {
         return queryNames.contains("bridge") || queryNames.contains("bridgetoken")
     }
 
+    
+    
     static func normalizedOrigin(of value: String) -> String? {
         guard let components = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
             let scheme = components.scheme?.lowercased(),

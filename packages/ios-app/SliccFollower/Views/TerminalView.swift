@@ -24,11 +24,21 @@ struct TerminalView: View {
         }
     }
 
+    
+    
+    
+    
     @ObservedObject private var model: TerminalViewModel
     let connectionAvailable: Bool
-
+    
+    
     let transportConnected: Bool
-
+    
+    
+    
+    
+    
+    
     let isActive: Bool
     let theme: SliccTheme?
 
@@ -79,6 +89,8 @@ struct TerminalView: View {
                         .accessibilityIdentifier("terminal-transcript")
                 }
 
+                
+                
                 if !connectionAvailable && isActive {
                     unavailablePlaceholder(Self.unavailableState(transportConnected: transportConnected))
                 }

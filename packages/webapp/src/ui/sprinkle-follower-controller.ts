@@ -57,6 +57,8 @@ function followerUsbApi(): SprinkleUsbApi {
     controlTransferOut: unsupported,
     transferIn: unsupported,
     transferOut: unsupported,
+    on: () => undefined,
+    off: () => undefined,
   } as SprinkleUsbApi;
 }
 
@@ -338,7 +340,8 @@ export class SprinkleFollowerController {
         const action = typeof event === 'string' ? event : event.action;
         const data = typeof event === 'string' ? undefined : event.data;
 
-        this.sync.sendSprinkleLick(sprinkleName, { action, data });
+        const target = typeof event === 'string' ? undefined : event.target;
+        this.sync.sendSprinkleLick(sprinkleName, { action, data }, target || undefined);
       },
       on: (event, callback) => {
         if (event !== 'update') return;
@@ -439,6 +442,12 @@ export class SprinkleFollowerController {
         findTab: () =>
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
         ensureTab: () =>
+          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
+        openWindow: () =>
+          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
+        windowBounds: () =>
+          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
+        setWindowBounds: () =>
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
         eval: () =>
           Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),

@@ -17,10 +17,10 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.5.20260906"),
+        .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.6.20260909"),
         .package(
             url: "https://github.com/huggingface/swift-huggingface",
-            .upToNextMinor(from: "0.10.0")),
+            .upToNextMinor(from: "0.10.1")),
         .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "152.0.0")),
         .package(path: "../swift-traysession"),
         .package(path: "../swift-trayfollower"),
@@ -30,9 +30,12 @@ let package = Package(
         .target(
             name: "SliccTrayKit",
             dependencies: [
-
+                
+                
+                
                 .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
-
+                
+                
                 .product(name: "SliccTrayVFS", package: "swift-traykit"),
             ],
             path: "SliccTrayKit"

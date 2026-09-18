@@ -1,5 +1,6 @@
 import type {
   CDPPayload,
+  ComputerInputEvent,
   FollowerBiscottoGate,
   OAuthExtraDomainsStore,
   SignAndForwardReply,
@@ -38,7 +39,22 @@ export type PanelRpcRequest =
   | { op: 'page-info'; payload?: undefined }
   | {
       op: 'screencapture';
-      payload: { mimeType: string; quality: number };
+      payload: {
+        mimeType: string;
+        quality: number;
+
+        mode?: 'image' | 'video' | 'session';
+
+        durationMs?: number;
+
+        audio?: boolean;
+
+        session?: 'start' | 'frame' | 'stop' | 'record';
+
+        handle?: string;
+
+        maxWidth?: number;
+      };
     }
   | {
       op: 'speak-text';
@@ -196,6 +212,17 @@ export type PanelRpcRequest =
       payload: { execToken: string };
     }
   | {
+      op: 'tray-computer-native';
+      payload: {
+        runtimeId: string;
+        action: 'capture' | 'unwatch' | 'input';
+        fps?: number;
+        maxWidth?: number;
+        watch?: boolean;
+        events?: ComputerInputEvent[];
+      };
+    }
+  | {
       op: 'slicc-attach';
       payload: { joinUrl: string; name?: string; connectTimeoutMs?: number };
     }
@@ -256,10 +283,21 @@ export type PanelRpcRequest =
   | { op: 'usb-request'; payload: { filters: UsbDeviceFilter[] } }
   | { op: 'usb-device-info'; payload: { handle: string } }
   | { op: 'usb-open'; payload: { handle: string } }
-  | { op: 'usb-close'; payload: { handle: string } }
+  | { op: 'usb-close'; payload: { handle: string; owner?: string; force?: boolean } }
   | { op: 'usb-select-configuration'; payload: { handle: string; configurationValue: number } }
-  | { op: 'usb-claim-interface'; payload: { handle: string; interfaceNumber: number } }
-  | { op: 'usb-release-interface'; payload: { handle: string; interfaceNumber: number } }
+  | {
+      op: 'usb-claim-interface';
+      payload: { handle: string; interfaceNumber: number; owner?: string; wait?: boolean };
+    }
+  | {
+      op: 'usb-release-interface';
+      payload: { handle: string; interfaceNumber: number; owner?: string };
+    }
+  | {
+      op: 'usb-cancel-claim-wait';
+      payload: { handle: string; interfaceNumber: number; owner?: string };
+    }
+  | { op: 'usb-drop-owner'; payload: { owner: string } }
   | {
       op: 'usb-control-transfer-in';
       payload: { handle: string; setup: UsbControlSetup; length: number };
@@ -273,7 +311,7 @@ export type PanelRpcRequest =
       op: 'usb-transfer-out';
       payload: { handle: string; endpointNumber: number; bytes: ArrayBuffer };
     }
-  | { op: 'usb-reset'; payload: { handle: string } }
+  | { op: 'usb-reset'; payload: { handle: string; owner?: string; force?: boolean } }
   | {
       op: 'usb-clear-halt';
       payload: { handle: string; direction: 'in' | 'out'; endpointNumber: number };
@@ -427,11 +465,27 @@ export type PanelRpcRequest =
         | { kind: 'panels' }
         | { kind: 'show'; panelId: string }
         | { kind: 'hide'; panelId: string };
+    }
+  | {
+      op: 'computer-tab-screenshot';
+      payload: { targetId: string; maxWidth?: number; format?: 'png' | 'jpeg' };
+    }
+  | {
+      op: 'computer-tab-input';
+      payload: { targetId: string; events: ComputerInputEvent[] };
     };
 
 export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
-  screencapture: { bytes: ArrayBuffer; width: number; height: number; mimeType: string };
+  screencapture: {
+    bytes: ArrayBuffer;
+    width: number;
+    height: number;
+    mimeType: string;
+    durationMs?: number;
+
+    handle?: string;
+  };
   'speak-text': { done: true };
   'list-voices': {
     voices: Array<{ name: string; lang: string; default: boolean; onDevice: boolean }>;
@@ -471,6 +525,7 @@ export interface PanelRpcResults {
       allowLive: boolean;
       createdAt: string;
       mode?: 'live' | 'persistent';
+      state?: 'pending' | 'ready' | 'cleanup';
       expiresAt?: string;
     }>;
   };
@@ -525,6 +580,15 @@ export interface PanelRpcResults {
   'tray-join': { joinUrl: string };
   'tray-exec': { stdout: string; stderr: string; exitCode: number; error?: string };
   'tray-exec-signal': { ok: true };
+  'tray-computer-native': {
+    ok: true;
+    jpeg?: string;
+    mime?: string;
+    width?: number;
+    height?: number;
+    nativeWidth?: number;
+    nativeHeight?: number;
+  };
   'slicc-attach': SidecarAttachmentInfo;
   'slicc-detach': { detached: boolean };
   'slicc-list': { attachments: SidecarAttachmentInfo[] };
@@ -542,6 +606,8 @@ export interface PanelRpcResults {
   'usb-select-configuration': { done: true };
   'usb-claim-interface': { done: true };
   'usb-release-interface': { done: true };
+  'usb-cancel-claim-wait': { done: true };
+  'usb-drop-owner': { done: true };
   'usb-control-transfer-in': { status: string; bytes: ArrayBuffer };
   'usb-control-transfer-out': { status: string; bytesWritten: number };
   'usb-transfer-in': { status: string; bytes: ArrayBuffer };
@@ -598,6 +664,17 @@ export interface PanelRpcResults {
   'theme-apply': { applied: string | null };
 
   'layout-apply': { applied: boolean; output?: string; error?: string };
+  'computer-tab-screenshot': {
+    mime: 'image/png' | 'image/jpeg';
+    base64: string;
+    width: number;
+    height: number;
+    nativeWidth?: number;
+    nativeHeight?: number;
+    title: string;
+    url: string;
+  };
+  'computer-tab-input': { ok: true };
 }
 
 export type PermissionRpcKind =
@@ -662,6 +739,8 @@ export interface HidInputReportEventPayload {
   reportId: number;
   bytes: ArrayBuffer;
 }
+
+export type { UsbClaimEvent as UsbClaimEventPayload } from './usb-device-registry.js';
 
 export type PanelRpcOp = PanelRpcRequest['op'];
 export type PanelRpcPayloadFor<O extends PanelRpcOp> = Extract<

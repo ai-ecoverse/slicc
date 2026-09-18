@@ -11,8 +11,10 @@ import {
   resolveHostedLeaderOrigin,
 } from './electron-controller.js';
 import {
+  buildElectronChildWindowOptions,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
+  ELECTRON_FLOAT_WINDOW_BOX,
   getElectronOverlayEntryDistPath,
   getElectronServeOrigin,
   parseElectronFloatFlags,
@@ -101,29 +103,37 @@ function configureElectronSession(): void {
   });
 }
 
+const FLOAT_WEB_PREFERENCES = {
+  partition: ELECTRON_PARTITION,
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+  allowRunningInsecureContent: true,
+} as const;
+
+function wireFloatWindow(window: BrowserWindow): void {
+  wireOverlayReinjection(window);
+  window.webContents.setWindowOpenHandler(({ features }) => ({
+    action: 'allow',
+    overrideBrowserWindowOptions: {
+      ...buildElectronChildWindowOptions(features),
+      webPreferences: FLOAT_WEB_PREFERENCES,
+    },
+  }));
+  window.webContents.on('did-create-window', (child) => {
+    wireFloatWindow(child);
+  });
+}
+
 async function createFloatWindow(targetUrl: string): Promise<BrowserWindow> {
   const window = new BrowserWindow({
-    width: 1440,
-    height: 960,
-    minWidth: 1024,
-    minHeight: 720,
+    ...ELECTRON_FLOAT_WINDOW_BOX,
     autoHideMenuBar: true,
     title: 'slicc electron float',
-    webPreferences: {
-      partition: ELECTRON_PARTITION,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      allowRunningInsecureContent: true,
-    },
+    webPreferences: FLOAT_WEB_PREFERENCES,
   });
 
-  wireOverlayReinjection(window);
-
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    void createFloatWindow(url);
-    return { action: 'deny' };
-  });
+  wireFloatWindow(window);
 
   try {
     await window.loadURL(targetUrl);

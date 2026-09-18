@@ -3,22 +3,29 @@ import {
   resolveNodePackageBaseUrl,
 } from '../../shell/supplemental-commands/shared.js';
 import { PYODIDE_RUNTIME_CDN } from './py-realm-shared.js';
-import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
 import type { RealmKind } from './realm-types.js';
 
-const inProcessJs = createInProcessJsRealmFactory();
-const inProcessPy = createInProcessPyRealmFactory();
+let inProcessJs: RealmFactory | undefined;
+let inProcessPy: RealmFactory | undefined;
 
 export function createDefaultRealmFactory(): RealmFactory {
   return async ({ kind, ctx }) => {
     if (kind === 'py') {
       if (typeof Worker !== 'undefined') return createPyWorkerRealm();
+      if (!inProcessPy) {
+        const { createInProcessPyRealmFactory } = await import('./realm-inprocess.js');
+        inProcessPy = createInProcessPyRealmFactory();
+      }
       return inProcessPy({ kind, ctx });
     }
 
     if (typeof Worker !== 'undefined') return createJsWorkerRealm();
+    if (!inProcessJs) {
+      const { createInProcessJsRealmFactory } = await import('./realm-inprocess.js');
+      inProcessJs = createInProcessJsRealmFactory();
+    }
     return inProcessJs({ kind, ctx });
   };
 }

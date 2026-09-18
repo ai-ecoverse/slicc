@@ -3,15 +3,17 @@ import XCTest
 
 @MainActor
 final class TraySessionSyncTests: XCTestCase {
+    
 
     func testSessionIdentityIsAnOpaqueHashOfJoinURL() {
         let joinUrl = "https://slicc.test/join/abc.secret"
         let session = makeSession(joinUrl: joinUrl)
-
+        
+        
         XCTAssertEqual(session.id, SyncedTraySession.identifier(forJoinUrl: joinUrl))
         XCTAssertNotEqual(session.id, joinUrl)
         XCTAssertFalse(session.id.contains("secret"))
-        XCTAssertEqual(session.id.count, 64)
+        XCTAssertEqual(session.id.count, 64)  
     }
 
     func testSessionCodableRoundTrip() throws {
@@ -27,6 +29,8 @@ final class TraySessionSyncTests: XCTestCase {
         XCTAssertFalse(session.isStale(ttl: 60, now: now.addingTimeInterval(59)))
         XCTAssertTrue(session.isStale(ttl: 60, now: now.addingTimeInterval(61)))
     }
+
+    
 
     func testPublishAddsLocalSession() {
         let store = makeStore(deviceName: "MacA")
@@ -115,7 +119,7 @@ final class TraySessionSyncTests: XCTestCase {
 
     func testSameHostNameDevicesStayDistinctByDeviceId() {
         let backend = InMemoryKeyValueBackend()
-
+        
         let deviceA = makeStore(deviceName: "MacBook Pro", deviceId: "uuid-a", backend: backend)
         deviceA.publish(joinUrl: "https://slicc.test/join/a.secret", label: "Chrome")
         let deviceB = makeStore(deviceName: "MacBook Pro", deviceId: "uuid-b", backend: backend)
@@ -125,6 +129,7 @@ final class TraySessionSyncTests: XCTestCase {
         XCTAssertEqual(deviceB.localSessions.map(\.label), ["Edge"])
         XCTAssertEqual(deviceB.remoteSessions.map(\.label), ["Chrome"])
 
+        
         deviceB.withdrawLocalSessions()
         deviceA.reload()
         XCTAssertEqual(deviceA.localSessions.map(\.label), ["Chrome"])
@@ -152,7 +157,7 @@ final class TraySessionSyncTests: XCTestCase {
 
     func testLegacyPayloadWithoutDeviceIdDecodes() throws {
         let legacy = """
-            {"id":"abc","joinUrl":"https://slicc.test/join/x.secret","label":"Chrome",\
+            {"id":"abc","joinUrl":"https:
             "deviceName":"MacA","createdAt":0,"lastSeenAt":0}
             """
         let decoded = try JSONDecoder().decode(SyncedTraySession.self, from: Data(legacy.utf8))
@@ -172,7 +177,7 @@ final class TraySessionSyncTests: XCTestCase {
 
     func testWithdrawUnknownJoinURLIsNoOp() {
         let store = makeStore(deviceName: "MacA")
-        store.publish(joinUrl: "https://slicc.test/join/a.secret", label: "Chrome")
+        store.publish(joinUrl: "https:
         store.withdraw(joinUrl: "https://slicc.test/join/does-not-exist.secret")
         XCTAssertEqual(store.sessions.count, 1)
     }
@@ -191,7 +196,7 @@ final class TraySessionSyncTests: XCTestCase {
         let suite = UserDefaults(suiteName: "SliccstartTest-\(UUID().uuidString)")!
         let first = TraySessionSyncStore.currentDeviceId(defaults: suite)
         XCTAssertFalse(first.isEmpty)
-
+        
         XCTAssertEqual(TraySessionSyncStore.currentDeviceId(defaults: suite), first)
     }
 
@@ -218,13 +223,16 @@ final class TraySessionSyncTests: XCTestCase {
         )
 
         NotificationCenter.default.post(name: ObservableTestBackend.changeName, object: nil)
-
+        
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         XCTAssertEqual(store?.remoteSessions.count, 1)
 
+        
         store = nil
         XCTAssertNil(store)
     }
+
+    
 
     private func makeStore(
         deviceName: String,
@@ -258,6 +266,9 @@ final class TraySessionSyncTests: XCTestCase {
         )
     }
 }
+
+
+
 
 private final class ObservableTestBackend: KeyValueSyncBackend {
     static let changeName = Notification.Name("SliccTraySessionTest.kvChanged")

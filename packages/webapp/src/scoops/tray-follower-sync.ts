@@ -29,6 +29,7 @@ import {
   type RemoteTargetInfo,
   reassembleSnapshot,
   type ScoopSummary,
+  type SnapshotChunkBuffer,
   type SprinkleSummary,
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayExecChunkMessage,
@@ -63,8 +64,8 @@ export class FollowerSyncManager implements AgentHandle {
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
   private readonly sentMessageIds = new Set<string>();
   private targetEntries: TrayTargetEntry[] = [];
-  private snapshotChunkBuffer: { chunks: string[]; received: number; totalChunks: number } | null =
-    null;
+
+  private readonly snapshotChunkBuffers = new Map<string, SnapshotChunkBuffer>();
 
   private leaderProtocolVersion?: number;
 
@@ -242,6 +243,7 @@ export class FollowerSyncManager implements AgentHandle {
     this.fsBridge.rejectPending(reason);
     this.remoteCdp.rejectPending();
     this.exportClient.rejectPending();
+    this.snapshotChunkBuffers.clear();
   }
 
   advertiseTargets(targets: RemoteTargetInfo[], runtimeId: string): void {
@@ -332,7 +334,7 @@ export class FollowerSyncManager implements AgentHandle {
 
   private handleSnapshot(messages: ChatMessage[], scoopJid: string): void {
     log.info('Snapshot received from leader', { messageCount: messages.length, scoopJid });
-    this.snapshotChunkBuffer = null;
+    this.snapshotChunkBuffers.delete(scoopJid);
     this.latestSnapshot = { messages, scoopJid };
     this.options.onSnapshot?.(messages, scoopJid);
   }
@@ -340,15 +342,14 @@ export class FollowerSyncManager implements AgentHandle {
   private handleSnapshotChunk(
     message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>
   ): void {
-    const assembled = reassembleSnapshot(this.snapshotChunkBuffer, message);
-    this.snapshotChunkBuffer = assembled.buffer;
-    if (!assembled.result) return;
+    const assembled = reassembleSnapshot(this.snapshotChunkBuffers, message);
+    if (!assembled) return;
     log.info('Chunked snapshot reassembled from leader', {
-      messageCount: assembled.result.messages.length,
-      scoopJid: assembled.result.scoopJid,
+      messageCount: assembled.messages.length,
+      scoopJid: assembled.scoopJid,
     });
-    this.latestSnapshot = assembled.result;
-    this.options.onSnapshot?.(assembled.result.messages, assembled.result.scoopJid);
+    this.latestSnapshot = assembled;
+    this.options.onSnapshot?.(assembled.messages, assembled.scoopJid);
   }
 
   private handleBiscottoMessageState(
@@ -448,6 +449,13 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       case 'scoops.list':
         this.handleScoopsList(message.scoops, message.activeScoopJid);
+        break;
+
+      case 'computers.list':
+      case 'computer.frame':
+      case 'computer.native.capture':
+      case 'computer.native.unwatch':
+      case 'computer.native.input':
         break;
       case 'models.list':
         this.options.onModelsList?.(message.models);

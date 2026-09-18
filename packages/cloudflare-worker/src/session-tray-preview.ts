@@ -1,8 +1,12 @@
+import { parseByteRange } from '@slicc/shared-ts';
 import {
+  LIVE_PREVIEW_ORPHAN_MS,
+  MAX_LIVE_PREVIEWS_PER_TRAY,
   MAX_PREVIEW_FILE_BYTES,
   MAX_PREVIEW_FILES,
   MAX_PREVIEW_TOTAL_BYTES,
   MAX_PREVIEW_TTL_MS,
+  MAX_SNAPSHOTS_PER_TRAY,
   normalizePreviewArchivePath,
   PREVIEW_ARCHIVE_PREFIX,
 } from './persistent-preview-storage.js';
@@ -19,56 +23,140 @@ export interface PreviewResponseChunk {
   totalChunks?: number;
   content?: string;
   reason?: string;
+
+  size?: number;
+
+  range?: { start: number; end: number };
+}
+
+interface PreviewRangeMeta {
+  status?: number;
+  size?: number;
+  range?: { start: number; end: number };
 }
 
 export type AssemblerResult =
-  | { ok: true; mime: string; encoding: 'utf-8' | 'base64'; content: string }
-  | { ok: false; status: number; reason?: string };
+  | ({ ok: true; mime: string; body: Uint8Array | string } & PreviewRangeMeta)
+  | { ok: false; status: number; reason?: string; size?: number };
+
+export const PREVIEW_FILE_TOO_LARGE = 'preview file exceeds 25 MiB limit';
+
+function decodeBase64Chunk(content: string): Uint8Array {
+  const binary = atob(content);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit < 0x80) bytes += 1;
+    else if (unit < 0x800) bytes += 2;
+    else if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 export class PreviewAssembler {
-  private readonly chunks = new Map<number, string>();
+  private readonly chunks = new Map<number, Uint8Array | string>();
+  private size = 0;
+  private settled = false;
   private resolveFn!: (result: AssemblerResult) => void;
   readonly done: Promise<AssemblerResult>;
 
-  constructor() {
+  constructor(private readonly maxBytes = MAX_PREVIEW_FILE_BYTES) {
     this.done = new Promise<AssemblerResult>((r) => {
       this.resolveFn = r;
     });
   }
 
   push(chunk: PreviewResponseChunk): void {
+    if (this.settled) return;
     if (!chunk.ok) {
-      this.resolveFn({
+      this.settle({
         ok: false,
         status: chunk.status ?? 500,
         reason: chunk.reason,
+        size: chunk.size,
       });
       return;
     }
-    const total = chunk.totalChunks ?? 1;
     const idx = chunk.chunkIndex ?? 0;
-    this.chunks.set(idx, chunk.content ?? '');
+    if (this.chunks.has(idx)) return;
+    let piece: Uint8Array | string;
+    try {
+      piece =
+        chunk.encoding === 'base64'
+          ? decodeBase64Chunk(chunk.content ?? '')
+          : (chunk.content ?? '');
+    } catch {
+      this.settle({ ok: false, status: 502, reason: 'invalid preview response chunk' });
+      return;
+    }
+    this.size += typeof piece === 'string' ? utf8ByteLength(piece) : piece.length;
+    if (this.size > this.maxBytes) {
+      this.settle({ ok: false, status: 413, reason: PREVIEW_FILE_TOO_LARGE });
+      return;
+    }
+    this.chunks.set(idx, piece);
+    const total = chunk.totalChunks ?? 1;
     if (this.chunks.size === total) {
-      let assembled = '';
-      for (let i = 0; i < total; i++) {
-        assembled += this.chunks.get(i) ?? '';
-      }
-      this.resolveFn({
+      this.settle({
         ok: true,
         mime: chunk.mime ?? 'application/octet-stream',
-        encoding: chunk.encoding ?? 'utf-8',
-        content: assembled,
+        body: chunk.encoding === 'base64' ? this.joinBytes(total) : this.joinText(total),
+        status: chunk.status,
+        size: chunk.size,
+        range: chunk.range,
       });
     }
   }
 
   fail(status: number, reason?: string): void {
-    this.resolveFn({ ok: false, status, reason });
+    this.settle({ ok: false, status, reason });
+  }
+
+  private settle(result: AssemblerResult): void {
+    this.settled = true;
+    this.chunks.clear();
+    this.resolveFn(result);
+  }
+
+  private joinBytes(total: number): Uint8Array {
+    const out = new Uint8Array(this.size);
+    let offset = 0;
+    for (let i = 0; i < total; i++) {
+      const piece = this.chunks.get(i);
+      if (piece instanceof Uint8Array) {
+        out.set(piece, offset);
+        offset += piece.length;
+      }
+      this.chunks.delete(i);
+    }
+    return out;
+  }
+
+  private joinText(total: number): string {
+    const parts: string[] = [];
+    for (let i = 0; i < total; i++) {
+      const piece = this.chunks.get(i);
+      parts.push(typeof piece === 'string' ? piece : '');
+    }
+    return parts.join('');
   }
 }
 
 interface TrayState {
   controllerToken: string;
+  leader?: { connected: boolean; disconnectedAt?: string; lastSeenAt?: string } | null;
   previews?: Record<string, PreviewRecord>;
   trayId: string;
   expiredAt?: string;
@@ -89,6 +177,8 @@ export interface PreviewDeps {
   archiveAvailable(): boolean;
   deleteArchivePrefix(prefix: string): Promise<void>;
   scheduleExpiry(timestamp: number | null): Promise<void>;
+
+  onLivePreviewsExpired?(tokens: string[]): void;
 }
 
 export function pushPreviewResponseChunk(
@@ -182,9 +272,19 @@ async function handlePreviewMint(request: Request, deps: PreviewDeps): Promise<R
     const result = await mintPreview(body, deps);
     return jsonResponse(result, 200);
   } catch (err) {
-    const status = (err as { status?: number }).status ?? 403;
-    const code = (err as { code?: string }).code;
-    return jsonResponse({ error: (err as Error).message, ...(code ? { code } : {}) }, status);
+    const {
+      status = 403,
+      code,
+      details,
+    } = err as {
+      status?: number;
+      code?: string;
+      details?: { active: number; limit: number };
+    };
+    return jsonResponse(
+      { error: (err as Error).message, ...(code ? { code } : {}), ...details },
+      status
+    );
   }
 }
 
@@ -243,6 +343,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
     servedRoot: string;
     vfsPath: string;
     asText: boolean;
+    range?: string;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -265,6 +366,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
       servedRoot: body.servedRoot,
       vfsPath: body.vfsPath,
       asText: body.asText,
+      ...(body.range ? { range: body.range } : {}),
     });
     if (!sent) {
       return new Response('Bad gateway: leader disconnected', {
@@ -278,29 +380,71 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
       );
     });
     const result = await Promise.race([assembler.done, timeoutPromise]);
-    if (!result.ok) {
-      return new Response(result.reason ?? 'error', {
-        status: result.status,
-      });
-    }
-    const responseBody =
-      result.encoding === 'base64'
-        ? Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0))
-        : result.content;
-    return new Response(responseBody, {
-      status: 200,
-      headers: {
-        'content-type': result.mime,
-        'cache-control': 'no-store',
-
-        'content-security-policy':
-          "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'none'",
-      },
-    });
+    return previewFetchResponse(result, body.range);
   } finally {
     if (timer) clearTimeout(timer);
     deps.pendingPreviews.delete(body.reqId);
   }
+}
+
+const LIVE_PREVIEW_HEADERS = {
+  'cache-control': 'no-store',
+
+  'content-security-policy':
+    "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'none'",
+  'accept-ranges': 'bytes',
+};
+
+function unsatisfiableResponse(size: number | undefined): Response {
+  const headers: Record<string, string> = { ...LIVE_PREVIEW_HEADERS };
+  if (size !== undefined) headers['content-range'] = `bytes */${size}`;
+  return new Response(null, { status: 416, headers });
+}
+
+function partialResponse(
+  body: Uint8Array,
+  mime: string,
+  range: { start: number; end: number },
+  size: number
+): Response {
+  return new Response(body, {
+    status: 206,
+    headers: {
+      ...LIVE_PREVIEW_HEADERS,
+      'content-type': mime,
+      'content-range': `bytes ${range.start}-${range.end}/${size}`,
+    },
+  });
+}
+
+function previewFetchResponse(result: AssemblerResult, requestedRange?: string): Response {
+  if (!result.ok) {
+    if (result.status === 416) return unsatisfiableResponse(result.size);
+    return new Response(result.reason ?? 'error', {
+      status: result.status,
+      headers: { 'accept-ranges': 'bytes' },
+    });
+  }
+  if (result.status === 206 && result.range && result.size !== undefined) {
+    return partialResponse(asBytes(result.body), result.mime, result.range, result.size);
+  }
+  if (result.status === undefined && requestedRange) {
+    const bytes = asBytes(result.body);
+    const range = parseByteRange(requestedRange, bytes.byteLength);
+    if (range === 'unsatisfiable') return unsatisfiableResponse(bytes.byteLength);
+    if (range) {
+      const window = bytes.subarray(range.start, range.end + 1);
+      return partialResponse(window, result.mime, range, bytes.byteLength);
+    }
+  }
+  return new Response(result.body, {
+    status: 200,
+    headers: { ...LIVE_PREVIEW_HEADERS, 'content-type': result.mime },
+  });
+}
+
+function asBytes(body: Uint8Array | string): Uint8Array {
+  return typeof body === 'string' ? new TextEncoder().encode(body) : body;
 }
 
 async function handlePreviewEmit(request: Request, deps: PreviewDeps): Promise<Response> {
@@ -413,7 +557,6 @@ async function handlePreviewFinalize(request: Request, deps: PreviewDeps): Promi
   }
 }
 
-const MAX_PREVIEWS_PER_TRAY = 10;
 const PREVIEW_CLEANUP_RETRY_MS = 60_000;
 export const PREVIEW_UPLOAD_LEASE_MS = 120_000;
 export const PREVIEW_CLEANUP_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -478,6 +621,29 @@ async function scheduleNextPersistentExpiry(deps: PreviewDeps): Promise<void> {
   await deps.scheduleExpiry(expiries.length > 0 ? Math.min(...expiries) : null);
 }
 
+export function leaderGoneSince(
+  leader: { disconnectedAt?: string; lastSeenAt?: string } | null | undefined
+): string | undefined {
+  return leader?.disconnectedAt ?? leader?.lastSeenAt;
+}
+
+export async function expireOrphanedLivePreviews(
+  deps: PreviewDeps,
+  goneSince = leaderGoneSince(deps.getTray()?.leader)
+): Promise<string[]> {
+  const tray = deps.getTray();
+  if (!tray?.previews || tray.previewTransfer || !goneSince) return [];
+  if (deps.now() - Date.parse(goneSince) < LIVE_PREVIEW_ORPHAN_MS) return [];
+  const expired = Object.keys(tray.previews).filter(
+    (token) => !isPersistent(tray.previews![token]!)
+  );
+  if (expired.length === 0) return [];
+  for (const token of expired) delete tray.previews[token];
+  await deps.persistTray();
+  deps.onLivePreviewsExpired?.(expired);
+  return expired;
+}
+
 export async function expirePersistentPreviews(deps: PreviewDeps): Promise<void> {
   await deps.loadTray();
   const tray = deps.getTray();
@@ -518,6 +684,34 @@ function validatedEntryRelativePath(servedRoot: string, entryPath: string): stri
   const relativePath = normalizePreviewArchivePath(relativeCandidate);
   if (!relativePath) throw routeError('invalid preview entry path');
   return relativePath;
+}
+
+function capacityError(message: string, code: string, active: number, limit: number): Error {
+  return Object.assign(new Error(message), { code, status: 429, details: { active, limit } });
+}
+
+function assertPreviewCapacity(records: PreviewRecord[], persistent: boolean): void {
+  if (persistent) {
+    const snapshots = records.filter((r) => isPersistent(r) && r.state !== 'cleanup').length;
+    if (snapshots >= MAX_SNAPSHOTS_PER_TRAY) {
+      throw capacityError(
+        'Snapshot limit reached',
+        'PREVIEW_LIMIT',
+        snapshots,
+        MAX_SNAPSHOTS_PER_TRAY
+      );
+    }
+    return;
+  }
+  const live = records.filter((r) => !isPersistent(r)).length;
+  if (live >= MAX_LIVE_PREVIEWS_PER_TRAY) {
+    throw capacityError(
+      'Too many live previews',
+      'LIVE_PREVIEW_LIMIT',
+      live,
+      MAX_LIVE_PREVIEWS_PER_TRAY
+    );
+  }
 }
 
 export async function mintPreview(
@@ -599,15 +793,8 @@ export async function mintPreview(
 
   tray.previews ??= {};
   await expirePersistentPreviews(deps);
-  if (
-    Object.values(tray.previews).filter((preview) => preview.state !== 'cleanup').length >=
-    MAX_PREVIEWS_PER_TRAY
-  ) {
-    throw Object.assign(new Error('Preview limit reached'), {
-      code: 'PREVIEW_LIMIT',
-      status: 429,
-    });
-  }
+  await expireOrphanedLivePreviews(deps);
+  assertPreviewCapacity(Object.values(tray.previews), persistent);
   tray.previews[previewToken] = record;
   await deps.persistTray();
   if (persistent) await scheduleNextPersistentExpiry(deps);
@@ -736,6 +923,7 @@ export async function resolvePreview(
   await deps.loadTray();
   const tray = deps.getTray();
   if (!tray) return null;
+  await expireOrphanedLivePreviews(deps);
   const record = tray.previews?.[previewToken];
   if (tray.previewTransfer) return null;
   if (Object.values(tray.previewImports ?? {}).some((receipt) => !receipt.activated)) return null;
@@ -775,9 +963,10 @@ export async function listPreviews(deps: PreviewDeps): Promise<PreviewRecord[]> 
   const tray = deps.getTray();
   if (!tray) return [];
   await expirePersistentPreviews(deps);
-  return Object.values(tray.previews ?? {}).filter(
-    (record) =>
-      isReady(record) && (isPersistent(record) || (!tray.expiredAt && record.mode !== 'persistent'))
+  await expireOrphanedLivePreviews(deps);
+
+  return Object.values(tray.previews ?? {}).filter((record) =>
+    isPersistent(record) ? record.state !== 'cleanup' : isReady(record) && !tray.expiredAt
   );
 }
 

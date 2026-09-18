@@ -1,14 +1,16 @@
 import type { AgentMessage } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
+import type { ChatMessage } from '../../scoops/chat-types.js';
 import { entriesFromAgentMessages } from './entries.js';
 import type {
+  ConversationAttachmentOverlay,
   ConversationEntry,
   ConversationMarker,
   ConversationOrigin,
   LegacyConversationKeys,
   WorkUnitConversationRecord,
 } from './types.js';
-import { CONVERSATION_RECORD_VERSION, isReadableRecord } from './types.js';
+import { CONVERSATION_RECORD_VERSION, isReadableRecord, recordSchemaVersion } from './types.js';
 
 const log = createLogger('work-unit-conversation');
 
@@ -18,6 +20,8 @@ const CONVERSATIONS_STORE = 'conversations';
 const MIGRATIONS_STORE = 'migrations';
 
 const MAX_MARKERS = 64;
+
+const MAX_ATTACHMENT_OVERLAYS = 256;
 
 export interface ConversationMigrationState {
   id: string;
@@ -87,22 +91,28 @@ export class WorkUnitConversationStore {
     }
   }
 
-  async save(record: WorkUnitConversationRecord): Promise<void> {
+  async save(record: WorkUnitConversationRecord): Promise<WorkUnitConversationRecord> {
+    const version =
+      record.version > CONVERSATION_RECORD_VERSION ? record.version : recordSchemaVersion(record);
+    const stored = { ...record, version };
     const db = await this.getDb();
     const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
-    tx.objectStore(CONVERSATIONS_STORE).put(record);
+    tx.objectStore(CONVERSATIONS_STORE).put(stored);
     await transaction(tx);
+    return stored;
   }
 
-  async delete(key: string): Promise<void> {
-    try {
-      const db = await this.getDb();
-      const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
-      tx.objectStore(CONVERSATIONS_STORE).delete(key);
-      await transaction(tx);
-    } catch (err) {
-      log.warn('Conversation record delete failed', { key, error: errorText(err) });
-    }
+  delete(key: string): Promise<void> {
+    return this.serialize(key, async () => {
+      try {
+        const db = await this.getDb();
+        const tx = db.transaction(CONVERSATIONS_STORE, 'readwrite');
+        tx.objectStore(CONVERSATIONS_STORE).delete(key);
+        await transaction(tx);
+      } catch (err) {
+        log.warn('Conversation record delete failed', { key, error: errorText(err) });
+      }
+    });
   }
 
   async rekey(fromKey: string, identity: ConversationIdentity): Promise<void> {
@@ -136,6 +146,41 @@ export class WorkUnitConversationStore {
         toKey: identity.key,
         error: errorText(err),
       });
+    }
+  }
+
+  async loadAll(): Promise<WorkUnitConversationRecord[]> {
+    try {
+      const db = await this.getDb();
+      const records = await request<WorkUnitConversationRecord[]>(
+        db.transaction(CONVERSATIONS_STORE, 'readonly').objectStore(CONVERSATIONS_STORE).getAll()
+      );
+      return records.filter((r) => isReadableRecord(r) && Array.isArray(r.entries));
+    } catch (err) {
+      log.warn('Conversation record listing failed', { error: errorText(err) });
+      return [];
+    }
+  }
+
+  async loadLatestInWorkspace(workspaceId: string): Promise<WorkUnitConversationRecord | null> {
+    try {
+      const prefix = `${workspaceId}::`;
+      const db = await this.getDb();
+      const records = await request<WorkUnitConversationRecord[]>(
+        db
+          .transaction(CONVERSATIONS_STORE, 'readonly')
+          .objectStore(CONVERSATIONS_STORE)
+          .getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`))
+      );
+      let latest: WorkUnitConversationRecord | null = null;
+      for (const record of records) {
+        if (!isReadableRecord(record) || !Array.isArray(record.entries)) continue;
+        if (!latest || record.updatedAt > latest.updatedAt) latest = record;
+      }
+      return latest;
+    } catch (err) {
+      log.warn('Conversation workspace lookup failed', { workspaceId, error: errorText(err) });
+      return null;
     }
   }
 
@@ -182,8 +227,7 @@ export class WorkUnitConversationStore {
         now,
       });
       if (!record) return existing;
-      await this.save(record);
-      return record;
+      return await this.save(record);
     } catch (err) {
       log.warn('Conversation record write failed', {
         key: identity.key,
@@ -193,8 +237,12 @@ export class WorkUnitConversationStore {
     }
   }
 
-  async putMarker(key: string, marker: ConversationMarker): Promise<boolean> {
-    return this.withRecord(key, (record) => {
+  async putMarker(
+    key: string,
+    marker: ConversationMarker,
+    options: { createWith?: ConversationIdentity } = {}
+  ): Promise<boolean> {
+    return this.withRecord(key, options.createWith, (record) => {
       const kept = (record.markers ?? []).filter((m) => m.id !== marker.id);
       kept.push(marker);
       kept.sort((a, b) => a.timestamp - b.timestamp);
@@ -202,8 +250,22 @@ export class WorkUnitConversationStore {
     });
   }
 
+  async putAttachments(
+    identity: ConversationIdentity,
+    overlays: readonly ConversationAttachmentOverlay[]
+  ): Promise<boolean> {
+    if (overlays.length === 0) return false;
+    const ids = new Set(overlays.map((o) => o.id));
+    return this.withRecord(identity.key, identity, (record) => ({
+      ...record,
+      attachments: [...(record.attachments ?? []).filter((o) => !ids.has(o.id)), ...overlays]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-MAX_ATTACHMENT_OVERLAYS),
+    }));
+  }
+
   async deleteMarker(key: string, markerId: string): Promise<boolean> {
-    return this.withRecord(key, (record) => {
+    return this.withRecord(key, undefined, (record) => {
       const kept = (record.markers ?? []).filter((m) => m.id !== markerId);
       if (kept.length === (record.markers?.length ?? 0)) return null;
       return { ...record, markers: kept };
@@ -212,20 +274,28 @@ export class WorkUnitConversationStore {
 
   private withRecord(
     key: string,
+    createWith: ConversationIdentity | undefined,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
-    return this.serialize(key, () => this.mutateRecord(key, mutate));
+    return this.serialize(key, () => this.mutateRecord(key, createWith, mutate));
   }
 
   private async mutateRecord(
     key: string,
+    createWith: ConversationIdentity | undefined,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
     try {
       const current = await this.read(key);
 
-      if (current.status !== 'ok') return false;
-      const next = mutate(current.record);
+      const base =
+        current.status === 'ok'
+          ? current.record
+          : current.status === 'absent' && createWith
+            ? emptyRecord(createWith, Date.now())
+            : null;
+      if (!base) return false;
+      const next = mutate(base);
       if (!next) return false;
       await this.save({ ...next, updatedAt: Date.now() });
       return true;
@@ -323,6 +393,18 @@ function mergeEntries(
       legacyKeys: identity.legacyKeys,
     };
   }
+  if (existing.origin === 'ui-projection' && origin === 'agent-history') {
+    if (next.length === 0) return null;
+    return {
+      ...existing,
+      version: CONVERSATION_RECORD_VERSION,
+      origin,
+      entries: next,
+      projectionPrefix: [...(existing.projectionPrefix ?? []), ...projectedChat(existing)],
+      updatedAt: times.now,
+      legacyKeys: identity.legacyKeys,
+    };
+  }
   const prior = existing.entries;
   if (next.length === prior.length && isPrefix(prior, next)) return null;
   const appended = next.length > prior.length && isPrefix(prior, next);
@@ -335,6 +417,29 @@ function mergeEntries(
     rewrites: appended ? existing.rewrites : (existing.rewrites ?? 0) + 1,
     legacyKeys: identity.legacyKeys,
   };
+}
+
+function emptyRecord(identity: ConversationIdentity, now: number): WorkUnitConversationRecord {
+  return {
+    key: identity.key,
+    version: CONVERSATION_RECORD_VERSION,
+    workUnitId: identity.workUnitId,
+    workspaceId: identity.workspaceId,
+    folder: identity.folder,
+    origin: 'agent-history',
+    entries: [],
+    createdAt: now,
+    updatedAt: now,
+    legacyKeys: identity.legacyKeys,
+  };
+}
+
+function projectedChat(record: WorkUnitConversationRecord): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const entry of record.entries) {
+    if (entry.kind !== 'tool-call' && entry.chat) out.push(entry.chat);
+  }
+  return out;
 }
 
 function isPrefix(

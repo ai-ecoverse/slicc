@@ -8,7 +8,7 @@ import XCTest
 @testable import slicc_server
 
 final class SecretAPIRoutesTests: XCTestCase {
-
+    
     private let prefix = "APITEST_\(UUID().uuidString.prefix(8))_"
 
     private func secretName(_ base: String) -> String { prefix + base }
@@ -39,13 +39,13 @@ final class SecretAPIRoutesTests: XCTestCase {
                     })
                     XCTAssertNotNil(entry, "Expected to find secret \(name) in list")
                     if case .object(let obj) = entry {
-
+                        
                         if case .array(let domains) = obj["domains"] {
                             XCTAssertEqual(domains, [.string("api.example.com")])
                         } else {
                             XCTFail("Expected domains array")
                         }
-
+                        
                         XCTAssertNil(obj["value"], "Secret value must never be returned")
                     }
                 }
@@ -53,6 +53,12 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    
+
+    
+    
+    
+    
     func testPostSecretWritesThroughToKeychainAndReloadsMasking() async throws {
         let name = secretName("SET_TOK")
         let value = "persisted-set-fixture-value"
@@ -85,6 +91,8 @@ final class SecretAPIRoutesTests: XCTestCase {
                 XCTAssertEqual(stored?.value, value)
                 XCTAssertEqual(stored?.domains, ["api.example.com"])
 
+                
+                
                 try await client.execute(uri: "/api/secrets/masked", method: .get) { response in
                     XCTAssertEqual(response.status, .ok)
                     let text = String(buffer: response.body)
@@ -100,6 +108,9 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    
+    
+    
     func testPostSecretRejectsBodyWithoutDomains() async throws {
         let name = secretName("SET_NO_DOMAINS")
         try await expectPostSecretRejected(
@@ -109,6 +120,9 @@ final class SecretAPIRoutesTests: XCTestCase {
         )
     }
 
+    
+    
+    
     func testPostSecretRejectsEmptyDomainsFailClosed() async throws {
         let name = secretName("SET_EMPTY_DOMAINS")
         let error = try await expectPostSecretRejected(
@@ -128,6 +142,8 @@ final class SecretAPIRoutesTests: XCTestCase {
         )
     }
 
+    
+    
     func testPostSecretRejectsNonArrayDomains() async throws {
         let name = secretName("SET_BAD_DOMAINS")
         try await expectPostSecretRejected(
@@ -137,6 +153,10 @@ final class SecretAPIRoutesTests: XCTestCase {
         )
     }
 
+    
+    
+    
+    
     func testPostSecretRejectsMultilineValue() async throws {
         let name = secretName("SET_PEM")
         let error = try await expectPostSecretRejected(
@@ -147,6 +167,9 @@ final class SecretAPIRoutesTests: XCTestCase {
         XCTAssertEqual(error, EnvFileFormat.multilineValueError(name))
     }
 
+    
+    
+    
     func testPostSecretMultilineOverwriteLeavesExistingValueIntact() async throws {
         let name = secretName("SET_PEM_OVERWRITE")
         try SecretStore.set(name: name, value: "still-valid-token", domains: ["a.com"])
@@ -185,6 +208,9 @@ final class SecretAPIRoutesTests: XCTestCase {
         try await expectPostSecretRejected(body: "not json", status: .badRequest, unwrittenName: nil)
     }
 
+    
+    
+    
     @discardableResult
     private func expectPostSecretRejected(
         body: String,
@@ -247,7 +273,7 @@ final class SecretAPIRoutesTests: XCTestCase {
                         XCTFail("Expected fromSession: false")
                     }
                 }
-
+                
                 XCTAssertNil(SecretStore.get(name: name))
             }
         }
@@ -270,6 +296,8 @@ final class SecretAPIRoutesTests: XCTestCase {
             }
         }
     }
+
+    
 
     func testOAuthUpdatePostHappyPath() async throws {
         let oauthStore = OAuthSecretStore()
@@ -298,7 +326,7 @@ final class SecretAPIRoutesTests: XCTestCase {
                     let obj = try self.decodeJSONObject(from: response.body)
                     XCTAssertEqual(obj["providerId"]?.stringValue, "github")
                     XCTAssertEqual(obj["name"]?.stringValue, "oauth.github.token")
-
+                    
                     if case .string(let masked) = obj["maskedValue"] ?? .null {
                         XCTAssertTrue(masked.hasPrefix("ghp_"))
                         XCTAssertEqual(masked.count, "ghp_realtoken".count)
@@ -330,7 +358,7 @@ final class SecretAPIRoutesTests: XCTestCase {
             )
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
-
+                
                 let body = #"{"providerId":"github","accessToken":"ghp_real"}"#
                 try await client.execute(
                     uri: "/api/secrets/oauth-update",
@@ -339,6 +367,39 @@ final class SecretAPIRoutesTests: XCTestCase {
                     body: ByteBuffer(string: body)
                 ) { response in
                     XCTAssertEqual(response.status, .badRequest)
+                }
+            }
+        }
+    }
+
+    func testOAuthUpdatePostRejectsEmptyRequiredValues() async throws {
+        let oauthStore = OAuthSecretStore()
+        let injector = SecretInjector(sessionId: "fixed-session-oauth-empty", oauthStore: oauthStore)
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                for body in [
+                    #"{"providerId":"","accessToken":"token","domains":["example.test"]}"#,
+                    #"{"providerId":"provider","accessToken":"","domains":["example.test"]}"#,
+                    #"{"providerId":"provider","accessToken":"token","domains":[]}"#,
+                ] {
+                    try await client.execute(
+                        uri: "/api/secrets/oauth-update",
+                        method: .post,
+                        headers: [.contentType: "application/json"],
+                        body: ByteBuffer(string: body)
+                    ) { response in
+                        XCTAssertEqual(response.status, .badRequest)
+                    }
                 }
             }
         }
@@ -430,6 +491,8 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    
+
     func testScrubReplacesRealValuesWithMasked() async throws {
         let injector = SecretInjector(secrets: [
             .init(
@@ -466,7 +529,10 @@ final class SecretAPIRoutesTests: XCTestCase {
     }
 
     func testScrubHandlesBodyLargerThanDefaultUploadLimit() async throws {
-
+        
+        
+        
+        
         let injector = SecretInjector(secrets: [
             .init(
                 name: "GH",
@@ -562,6 +628,8 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    
+
     private func makeConfig() -> ServerConfig {
         .init(
             serveOnly: false,
@@ -607,6 +675,8 @@ final class SecretAPIRoutesTests: XCTestCase {
             throw error
         }
     }
+
+    
 
     func testRedactExportReplacesRealValuesWithAnonymousMarkers() async throws {
         let injector = SecretInjector(secrets: [
@@ -661,13 +731,14 @@ final class SecretAPIRoutesTests: XCTestCase {
     }
 
     func testRedactExportRedactsShortSecretByRealValueOnly() async throws {
-
-        let shortVal = String(repeating: "z", count: 3)
+        
+        
+        let shortVal = String(repeating: "z", count: 3)  
         let injector = SecretInjector(secrets: [
             .init(
                 name: "SHORT_KEY",
                 realValue: shortVal,
-                maskedValue: shortVal,
+                maskedValue: shortVal,  
                 domains: [],
                 isMaskable: false
             )
@@ -708,8 +779,8 @@ final class SecretAPIRoutesTests: XCTestCase {
     }
 
     func testRedactExportShortSecretMarkerContinuesAfterMaskableMarker() async throws {
-
-        let shortVal = String(repeating: "q", count: 4)
+        
+        let shortVal = String(repeating: "q", count: 4)  
         let injector = SecretInjector(secrets: [
             .init(
                 name: "LONG_TOKEN",

@@ -1,4 +1,4 @@
-export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net';
+export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net' | 'computer';
 
 export type ProcessStatus = 'pending' | 'running' | 'exited' | 'killed';
 
@@ -49,7 +49,7 @@ export class Gate {
 }
 
 export interface ProcessOwner {
-  kind: 'cone' | 'scoop' | 'system';
+  kind: 'cone' | 'scoop' | 'system' | 'jshd';
 
   scoopJid?: string;
 }

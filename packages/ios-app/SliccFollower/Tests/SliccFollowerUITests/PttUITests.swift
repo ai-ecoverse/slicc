@@ -1,5 +1,8 @@
 import XCTest
 
+
+
+
 final class PttUITests: XCTestCase {
 
     override func setUp() {
@@ -20,6 +23,8 @@ final class PttUITests: XCTestCase {
         let surface = app.otherElements["ptt-surface"]
         XCTAssertTrue(surface.waitForExistence(timeout: 60))
 
+        
+        
         surface.press(forDuration: 1.5)
 
         XCTAssertTrue(
@@ -42,6 +47,8 @@ final class PttUITests: XCTestCase {
 
         surface.press(forDuration: 1.5)
 
+        
+        
         XCTAssertFalse(
             app.staticTexts["should never appear"].waitForExistence(timeout: 3),
             "a blocked microphone must never produce a message")
@@ -61,9 +68,14 @@ final class PttUITests: XCTestCase {
         let composer = app.textViews.firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 60))
 
+        
+        
+        
         composer.tap()
         composer.typeText("typed, not spoken")
 
+        
+        
         XCTAssertTrue((composer.value as? String)?.contains("typed, not spoken") == true)
         XCTAssertFalse(
             app.staticTexts["should never appear"].exists,

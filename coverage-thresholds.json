@@ -19,10 +19,10 @@
       ]
     },
     "node-server": {
-      "lines": 85,
-      "statements": 83,
-      "functions": 86,
-      "branches": 74,
+      "lines": 99,
+      "statements": 97,
+      "functions": 98,
+      "branches": 88,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -33,19 +33,7 @@
         "**/index.html",
         "**/shims/**",
         "packages/*/src/**/*.test.ts",
-        "packages/shared-ts/src/secret-env-schema.ts",
-        "packages/shared-ts/src/transcript-export.ts",
-        "packages/shared-ts/src/transcript-redaction.ts",
-        "packages/shared-ts/src/slicc-app-url.ts",
-        "packages/shared-ts/src/extension-bridge-protocol.ts",
-        "packages/shared-ts/src/cdp-target-info.ts",
-        "packages/shared-ts/src/proxy-headers.ts",
-        "packages/shared-ts/src/discovery-link.ts",
-        "packages/shared-ts/src/well-known-probe.ts",
-        "packages/shared-ts/src/handoff-link.ts",
-        "packages/shared-ts/src/link-header.ts",
-        "packages/shared-ts/src/iframe-repaint.ts",
-        "packages/shared-ts/src/leader-ext-id.ts",
+        "packages/shared-ts/**",
         "packages/node-server/src/electron-tray-follower.ts"
       ]
     },
@@ -137,13 +125,28 @@
       "statements": 99,
       "functions": 99,
       "branches": 98
+    },
+    "github-workflow": {
+      "lines": 99,
+      "statements": 98,
+      "functions": 98,
+      "branches": 91,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/*.test.mjs"
+      ],
+      "coverageInclude": ["packages/github-workflow/scripts/**"]
     }
   },
   "swift": {
     "swift-server": {
-      "lines": 68,
-      "functions": 67,
-      "regions": 65
+      "lines": 96,
+      "functions": 91,
+      "regions": 92
     },
     "swift-launcher": {
       "lines": 80,

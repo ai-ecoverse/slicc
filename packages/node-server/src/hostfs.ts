@@ -19,7 +19,7 @@ function errnoCode(err: unknown): string | null {
   return typeof code === 'string' ? code : null;
 }
 
-function toFsCodeError(err: unknown): FsCodeError {
+export function toFsCodeError(err: unknown): FsCodeError {
   const code = errnoCode(err) ?? 'EIO';
   const message = err instanceof Error ? err.message : String(err);
   switch (code) {
@@ -38,7 +38,7 @@ function toFsCodeError(err: unknown): FsCodeError {
   }
 }
 
-function sendFsError(res: Response, err: unknown): void {
+export function sendFsError(res: Response, err: unknown): void {
   if (res.headersSent) {
     res.destroy();
     return;
@@ -113,14 +113,15 @@ export function parseByteRange(header: string | undefined, size: number): Parsed
   return { kind: 'range', start, end };
 }
 
-async function streamFileBody(
+export async function streamFileBody(
   res: Response,
   target: string,
   status: number,
   headers: Record<string, string>,
-  window?: { start: number; end: number }
+  window?: { start: number; end: number },
+  createStream: typeof createReadStream = createReadStream
 ): Promise<void> {
-  const stream = createReadStream(target, window);
+  const stream = createStream(target, window);
   await new Promise<void>((resolveStream, rejectStream) => {
     let committed = false;
     stream.once('open', () => {
@@ -193,6 +194,7 @@ function ifRangeAllowsRange(req: Request, v: CacheValidator): boolean {
 function statIdentity(s: Stats): {
   ctime: number;
   ino: number;
+  dev: number;
   uid: number;
   gid: number;
   mode: number;
@@ -200,6 +202,7 @@ function statIdentity(s: Stats): {
   return {
     ctime: s.ctimeMs,
     ino: Number(s.ino),
+    dev: Number(s.dev),
     uid: s.uid,
     gid: s.gid,
     mode: s.mode,
@@ -212,6 +215,7 @@ function statPayload(s: Stats): {
   mtime: number;
   ctime: number;
   ino: number;
+  dev: number;
   uid: number;
   gid: number;
   mode: number;
@@ -264,7 +268,7 @@ export function isHostFsStableBodyRequest(req: { method?: string; url?: string }
   return path === HOSTFS_STABLE_PATH || path === `${HOSTFS_STABLE_PATH}/`;
 }
 
-const hostFsBodyErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
+export const hostFsBodyErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
   const type = (err as { type?: unknown } | null)?.type;
   if (typeof type !== 'string' || res.headersSent || !isHostFsPath(req.path)) {
     next(err);
@@ -389,7 +393,18 @@ async function mkdirOp(target: string): Promise<{ ok: true }> {
   return { ok: true };
 }
 
-async function renameOp(from: string, to: string): Promise<{ ok: true }> {
+export function sameHostFileIdentity(a: Stats, b: Stats): boolean {
+  return BigInt(a.dev) === BigInt(b.dev) && BigInt(a.ino) === BigInt(b.ino);
+}
+
+async function renameOp(from: string, to: string): Promise<{ ok: true; noop?: true }> {
+  try {
+    const fromStat = await lstat(from);
+    const toStat = await lstat(to);
+    if (sameHostFileIdentity(fromStat, toStat)) return { ok: true, noop: true };
+  } catch (err) {
+    if (errnoCode(err) !== 'ENOENT') throw err;
+  }
   await rename(from, to);
   return { ok: true };
 }

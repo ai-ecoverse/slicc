@@ -17,7 +17,7 @@ describe('File Tools', () => {
   let tools: ToolDefinition[];
   let readFile: ToolDefinition;
   let writeFile: ToolDefinition;
-  let editFile: ToolDefinition;
+  let edit: ToolDefinition;
   let dbCounter = 0;
 
   beforeEach(async () => {
@@ -28,12 +28,12 @@ describe('File Tools', () => {
     tools = createFileTools(fs);
     readFile = tools.find((t) => t.name === 'read_file')!;
     writeFile = tools.find((t) => t.name === 'write_file')!;
-    editFile = tools.find((t) => t.name === 'edit_file')!;
+    edit = tools.find((t) => t.name === 'edit')!;
   });
 
   it('creates three tools', () => {
     expect(tools).toHaveLength(3);
-    expect(tools.map((t) => t.name)).toEqual(['read_file', 'write_file', 'edit_file']);
+    expect(tools.map((t) => t.name)).toEqual(['read_file', 'write_file', 'edit']);
   });
 
   describe('write_file', () => {
@@ -287,43 +287,135 @@ describe('File Tools', () => {
     });
   });
 
-  describe('edit_file', () => {
+  describe('edit (Pi)', () => {
+    it("exposes Pi's path + edits contract", () => {
+      expect(edit.inputSchema.required).toEqual(['path', 'edits']);
+      expect(edit.inputSchema.properties).toHaveProperty('edits');
+      expect(edit.inputSchema.properties).not.toHaveProperty('old_string');
+    });
+
     it('replaces a unique string', async () => {
       await fs.writeFile('/edit.txt', 'Hello World');
-      const result = await editFile.execute({
+      const result = await edit.execute({
         path: '/edit.txt',
-        old_string: 'World',
-        new_string: 'VirtualFS',
+        edits: [{ oldText: 'World', newText: 'VirtualFS' }],
       });
       expect(result.isError).toBeFalsy();
+      expect(result.content).toBe('Successfully replaced 1 block(s) in /edit.txt.');
 
       const content = await fs.readTextFile('/edit.txt');
       expect(content).toBe('Hello VirtualFS');
     });
 
-    it('errors when old_string not found', async () => {
-      await fs.writeFile('/edit.txt', 'Hello');
-      const result = await editFile.execute({
+    it('treats replacement $-sequences literally instead of as String.replace tokens', async () => {
+      await fs.writeFile('/dollars.md', 'before TARGET after');
+
+      await edit.execute({
+        path: '/dollars.md',
+        edits: [{ oldText: 'TARGET', newText: 'write a Markdown note containing `$` safely' }],
+      });
+
+      expect(await fs.readTextFile('/dollars.md')).toBe(
+        'before write a Markdown note containing `$` safely after'
+      );
+    });
+
+    it('applies multiple disjoint edits against the original file', async () => {
+      await fs.writeFile('/multi.txt', 'alpha\nbeta\ngamma\n');
+
+      const result = await edit.execute({
+        path: '/multi.txt',
+        edits: [
+          { oldText: 'alpha', newText: 'one' },
+          { oldText: 'gamma', newText: 'three' },
+        ],
+      });
+
+      expect(result.content).toBe('Successfully replaced 2 block(s) in /multi.txt.');
+      expect(await fs.readTextFile('/multi.txt')).toBe('one\nbeta\nthree\n');
+    });
+
+    it("serializes concurrent edits to the same file through Pi's mutation queue", async () => {
+      await fs.writeFile('/concurrent.txt', 'alpha beta');
+
+      await Promise.all([
+        edit.execute({
+          path: '/concurrent.txt',
+          edits: [{ oldText: 'alpha', newText: 'one' }],
+        }),
+        edit.execute({
+          path: '/concurrent.txt',
+          edits: [{ oldText: 'beta', newText: 'two' }],
+        }),
+      ]);
+
+      expect(await fs.readTextFile('/concurrent.txt')).toBe('one two');
+    });
+
+    it('resolves relative paths from the work-unit cwd', async () => {
+      await fs.writeFile('/scoops/vanilla/workspace/note.txt', 'old');
+      const scopedEdit = createFileTools(fs, '/scoops/vanilla/workspace').find(
+        (tool) => tool.name === 'edit'
+      )!;
+
+      await scopedEdit.execute({
+        path: 'note.txt',
+        edits: [{ oldText: 'old', newText: 'new' }],
+      });
+
+      expect(await fs.readTextFile('/scoops/vanilla/workspace/note.txt')).toBe('new');
+    });
+
+    it('preserves a UTF-8 BOM and CRLF line endings', async () => {
+      await fs.writeFile('/windows.txt', '\uFEFFalpha\r\nbeta\r\n');
+
+      await edit.execute({
+        path: '/windows.txt',
+        edits: [{ oldText: 'beta', newText: 'gamma' }],
+      });
+
+      expect(await fs.readTextFile('/windows.txt')).toBe('\uFEFFalpha\r\ngamma\r\n');
+    });
+
+    it("forwards Pi's legacy camelCase argument preparation", () => {
+      expect(
+        edit.prepareArguments?.({ path: '/edit.txt', oldText: 'old', newText: 'new' })
+      ).toEqual({
         path: '/edit.txt',
-        old_string: 'Nope',
-        new_string: 'X',
+        edits: [{ oldText: 'old', newText: 'new' }],
       });
-      expect(result.isError).toBe(true);
-      expect(result.content).toContain('not found');
     });
 
-    it('errors when old_string is not unique', async () => {
+    it('throws when oldText is not found', async () => {
+      await fs.writeFile('/edit.txt', 'Hello');
+      await expect(
+        edit.execute({
+          path: '/edit.txt',
+          edits: [{ oldText: 'Nope', newText: 'X' }],
+        })
+      ).rejects.toThrow('Could not find the exact text');
+    });
+
+    it("maps a missing VFS path to Pi's stable file error code", async () => {
+      await expect(
+        edit.execute({
+          path: '/missing.txt',
+          edits: [{ oldText: 'old', newText: 'new' }],
+        })
+      ).rejects.toThrow('Error code: not_found');
+    });
+
+    it('throws when oldText is not unique', async () => {
       await fs.writeFile('/dup.txt', 'aaa bbb aaa');
-      const result = await editFile.execute({
-        path: '/dup.txt',
-        old_string: 'aaa',
-        new_string: 'xxx',
-      });
-      expect(result.isError).toBe(true);
-      expect(result.content).toContain('2 times');
+      await expect(
+        edit.execute({
+          path: '/dup.txt',
+          edits: [{ oldText: 'aaa', newText: 'xxx' }],
+        })
+      ).rejects.toThrow('Found 2 occurrences');
     });
 
-    it('returns isError when the edit write resolves but the file vanishes', async () => {
+    it('rejects when the edit write resolves but the file vanishes', async () => {
       await fs.writeFile('/edit-gone.txt', 'before');
       const realWrite = fs.writeFile.bind(fs);
       const realRm = fs.rm.bind(fs);
@@ -331,15 +423,12 @@ describe('File Tools', () => {
         await realWrite(path, content);
         await realRm(path);
       };
-      const result = await editFile.execute({
-        path: '/edit-gone.txt',
-        old_string: 'before',
-        new_string: 'after',
-      });
-      expect(result.isError).toBe(true);
-      expect(result.content).toMatch(/Write did not land/);
-      expect(result.content).toMatch(/not readable|ENOENT|no such file/i);
-      expect(result.content).not.toContain('File edited:');
+      await expect(
+        edit.execute({
+          path: '/edit-gone.txt',
+          edits: [{ oldText: 'before', newText: 'after' }],
+        })
+      ).rejects.toThrow('Could not edit file: /edit-gone.txt. Error code: unknown.');
     });
   });
 });

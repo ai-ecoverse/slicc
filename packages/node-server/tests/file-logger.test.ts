@@ -4,12 +4,13 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupOldLogs, FileLogger, generateLogFilename, stripAnsi } from '../src/file-logger.js';
 
 describe('stripAnsi', () => {
@@ -103,6 +104,17 @@ describe('cleanupOldLogs', () => {
     cleanupOldLogs(tmpDir, 1000);
     expect(existsSync(file)).toBe(false);
   });
+
+  it('continues when an individual log entry cannot be statted', () => {
+    symlinkSync(join(tmpDir, 'missing-target'), join(tmpDir, 'dangling.log'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    cleanupOldLogs(tmpDir);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to remove old log dangling.log'),
+      expect.anything()
+    );
+    error.mockRestore();
+  });
 });
 
 describe('FileLogger', () => {
@@ -146,6 +158,32 @@ describe('FileLogger', () => {
     expect(content).toContain('[INFO] server started');
     expect(content).toContain('"port":3000');
     expect(content).toContain('[ERROR] something broke');
+  });
+
+  it('falls back safely when structured log data is circular', () => {
+    logger = new FileLogger({ logDir: tmpDir, cleanup: false });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    logger.log('info', 'circular', circular as never);
+    logger.close();
+    expect(readFileSync(logger.logFile, 'utf8')).toContain('circular [object Object]');
+  });
+
+  it('disables logging when initialization fails', () => {
+    mkdirSync(tmpDir, { recursive: true });
+    const file = join(tmpDir, 'not-a-directory');
+    writeFileSync(file, 'x');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logger = new FileLogger({ logDir: file, cleanup: false });
+    expect(logger.logFile).toBe('');
+    expect(error).toHaveBeenCalledWith('[file-logger] File logging disabled for this session.');
+    error.mockRestore();
+  });
+
+  it('closes through its registered shutdown callback', () => {
+    logger = new FileLogger({ logDir: tmpDir, cleanup: false });
+    (logger as unknown as { onExit(): void }).onExit();
+    expect(readFileSync(logger.logFile, 'utf8')).toContain('SLICC CLI log ended');
   });
 
   it('filters by log level', () => {

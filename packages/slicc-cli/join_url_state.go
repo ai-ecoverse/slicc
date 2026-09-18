@@ -6,6 +6,10 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/tray"
 )
 
+
+
+
+
 type joinURLState struct {
 	url      string
 	advanced bool
@@ -27,7 +31,8 @@ func (s *joinURLState) onTrayJoinURLChanged(next string) {
 		return
 	}
 	if _, revisit := s.seen[next]; revisit {
-
+		
+		
 		s.url = next
 		s.advanced = false
 		return
@@ -36,6 +41,9 @@ func (s *joinURLState) onTrayJoinURLChanged(next string) {
 	s.url = next
 	s.advanced = true
 }
+
+
+
 
 func (s *joinURLState) recordReconnectFailure(failures int, err error) (int, bool) {
 	if s.advanced &&

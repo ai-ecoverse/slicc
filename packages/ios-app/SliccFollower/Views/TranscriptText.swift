@@ -1,19 +1,38 @@
 import SwiftUI
 import UIKit
 
+
+
+
+
+
 struct TranscriptTextStyle: Equatable {
     var fontSize: CGFloat = 15
     var weight: UIFont.Weight = .regular
     var italic = false
     var ink: UIColor = .label
-
+    
     var accent: UIColor = .tintColor
     var codeForeground: UIColor = .tintColor
     var codeBackground: UIColor = UIColor.label.withAlphaComponent(0.10)
     var codeFontSize: CGFloat = 14
-
+    
+    
+    
     var underlineLinks = false
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 enum TranscriptAttributedText {
 
@@ -46,7 +65,8 @@ enum TranscriptAttributedText {
 
         if let link = run.link {
             attributes[.link] = link
-
+            
+            
             if !isCode {
                 attributes[.foregroundColor] = style.accent
                 if style.underlineLinks {
@@ -75,8 +95,30 @@ enum TranscriptAttributedText {
     }
 }
 
-final class TranscriptTextView: UITextView {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+final class TranscriptTextView: UITextView {
+    
+    
+    
     override var accessibilityTraits: UIAccessibilityTraits {
         get { .staticText }
         set { super.accessibilityTraits = newValue }
@@ -92,6 +134,31 @@ final class TranscriptTextView: UITextView {
         set { super.accessibilityValue = newValue }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 struct TranscriptText: UIViewRepresentable {
     let attributed: AttributedString
@@ -110,10 +177,12 @@ struct TranscriptText: UIViewRepresentable {
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
-
+        
+        
+        
         view.linkTextAttributes = [:]
         view.adjustsFontForContentSizeCategory = false
-
+        
         view.isAccessibilityElement = true
         view.delegate = context.coordinator
         view.setContentCompressionResistancePriority(.required, for: .vertical)
@@ -126,7 +195,12 @@ struct TranscriptText: UIViewRepresentable {
         context.coordinator.update(
             actions: actions, openURL: openURL,
             openLinksInBuiltInBrowser: openLinksInBuiltInBrowser)
-
+        
+        
+        
+        
+        
+        
         guard let next = context.coordinator.attributedText(for: attributed, style: style) else {
             return
         }
@@ -143,12 +217,16 @@ struct TranscriptText: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    
+
     final class Coordinator: NSObject, UITextViewDelegate {
         private var actions = TranscriptActionHandlers()
         private var openURL: OpenURLAction?
         private var openLinksInBuiltInBrowser = true
         private var rendered: (attributed: AttributedString, style: TranscriptTextStyle)?
 
+        
+        
         func attributedText(for attributed: AttributedString, style: TranscriptTextStyle)
             -> NSAttributedString?
         {
@@ -168,6 +246,10 @@ struct TranscriptText: UIViewRepresentable {
             self.openLinksInBuiltInBrowser = openLinksInBuiltInBrowser
         }
 
+        
+        
+        
+        
         func textView(
             _ textView: UITextView, primaryActionFor textItem: UITextItem,
             defaultAction: UIAction
@@ -176,6 +258,12 @@ struct TranscriptText: UIViewRepresentable {
             return UIAction { [weak self] _ in self?.openURL?(url) }
         }
 
+        
+        
+        
+        
+        
+        
         func textView(
             _ textView: UITextView, menuConfigurationFor textItem: UITextItem,
             defaultMenu: UIMenu
@@ -224,7 +312,9 @@ struct TranscriptText: UIViewRepresentable {
             return [
                 open,
                 copy(url.absoluteString, titled: "Copy Link"),
-
+                
+                
+                
                 share(url.absoluteString, item: url),
             ]
         }

@@ -8,6 +8,7 @@ interface FakeEnv {
   localModelPath?: string;
   remoteHost?: string;
   remotePathTemplate?: string;
+  useBrowserCache?: boolean;
 }
 
 function makeEnv(): FakeEnv {
@@ -66,6 +67,8 @@ describe('configureTransformersEnv', () => {
     expect(env.allowRemoteModels).toBe(true);
     expect(env.remoteHost).toBe(env.localModelPath);
     expect(env.remotePathTemplate).toBe('{model}/');
+
+    expect(env.useBrowserCache).toBe(false);
 
     const probeUrl = `${env.remoteHost}onnx-community/whisper-tiny/tokenizer_config.json`;
     expect(probeUrl.startsWith(env.localModelPath as string)).toBe(true);

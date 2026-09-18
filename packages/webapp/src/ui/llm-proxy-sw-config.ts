@@ -1,9 +1,9 @@
-import type { FetchProxyRequestMsg } from '@slicc/shared-ts';
+import { type FetchProxyRequestMsg, LEADER_EXT_ID_QUERY_NAME } from '@slicc/shared-ts';
 import {
-  LEADER_EXT_ID_QUERY_NAME,
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
-} from '../kernel/messages.js';
+} from '../base/leader-runtime-query.js';
+
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 
 export const SW_BRIDGE_CONFIG_MESSAGE = 'slicc:bridge-config';

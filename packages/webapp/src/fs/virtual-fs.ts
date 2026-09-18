@@ -24,6 +24,7 @@ import {
 } from './mount-table-store.js';
 import { fileFromDirectoryHandle } from './native-file.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
+import { sameFileIdentity } from './same-file-identity.js';
 import {
   mergeSidecarEntries,
   type SidecarDirtyState,
@@ -31,6 +32,7 @@ import {
   stripSidecarSelfEntry,
 } from './sidecar-merge.js';
 import { makeOpfsProbe } from './sidecar-repair.js';
+import { inodeIdentity } from './stat-identity.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
   DirEntry,
@@ -68,11 +70,16 @@ export interface VirtualFsOptions {
   backend?: VfsBackend;
 
   onRepairProgress?: () => void;
+
+  opfsAsyncCache?: boolean;
 }
 
 interface FsPromisesLike {
   readFile(path: string, options?: unknown): Promise<unknown>;
   writeFile(path: string, data: unknown, options?: unknown): Promise<void>;
+  appendFile(path: string, data: unknown): Promise<void>;
+  chmod(path: string, mode: number): Promise<void>;
+  utimes(path: string, atime: Date, mtime: Date): Promise<void>;
   readdir(path: string): Promise<string[]>;
   mkdir(path: string, options?: unknown): Promise<unknown>;
   rmdir(path: string): Promise<void>;
@@ -103,6 +110,8 @@ function dirEntryFromMount(entry: MountDirEntry, withStats: boolean): DirEntry {
     ...(entry.lastModified !== undefined ? { mtime: entry.lastModified } : {}),
     ...(entry.ctime !== undefined ? { ctime: entry.ctime } : {}),
     ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.identity !== undefined ? { identity: entry.identity } : {}),
+    ...(entry.dev !== undefined ? { dev: entry.dev } : {}),
     ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
     ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
     ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
@@ -169,7 +178,8 @@ export class VirtualFS {
     wipe?: boolean,
     backend?: VfsBackend,
     opfsHandle?: FileSystemDirectoryHandle,
-    onRepairProgress?: () => void
+    onRepairProgress?: () => void,
+    opfsAsyncCache?: boolean
   ) {
     this.dbName = dbName;
 
@@ -181,7 +191,7 @@ export class VirtualFS {
     this.lfsSync = this.makeDeferredLfsSync();
     this._ready =
       this.backend === 'opfs'
-        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true)
+        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true, opfsAsyncCache)
         : VirtualFS.initMemoryBackend(this, dbName, wipe === true);
     this._ready.then(
       () => {
@@ -217,74 +227,70 @@ export class VirtualFS {
     }
   }
 
+  private static opfsInitChains = new Map<string, Promise<void>>();
+
   private static async initOpfsBackend(
     vfs: VirtualFS,
     providedHandle: FileSystemDirectoryHandle | undefined,
-    wipe: boolean
+    wipe: boolean,
+    asyncCache?: boolean
   ): Promise<void> {
+    const previous = VirtualFS.opfsInitChains.get(vfs.dbName) ?? Promise.resolve();
+    const pending = previous
+      .catch(() => {})
+      .then(() => VirtualFS.resolveOpfsBackend(vfs, providedHandle, wipe, asyncCache));
+    VirtualFS.opfsInitChains.set(vfs.dbName, pending);
+    try {
+      await pending;
+    } finally {
+      if (VirtualFS.opfsInitChains.get(vfs.dbName) === pending) {
+        VirtualFS.opfsInitChains.delete(vfs.dbName);
+      }
+    }
+  }
+
+  private static async resolveOpfsBackend(
+    vfs: VirtualFS,
+    providedHandle: FileSystemDirectoryHandle | undefined,
+    wipe: boolean,
+    asyncCache?: boolean
+  ): Promise<void> {
+    const shared = VirtualFS.opfsBackends.get(vfs.dbName);
+    if (shared && wipe) {
+      throw new FsError('EBUSY', 'Cannot wipe an OPFS backend with live holders', vfs.dbName);
+    }
+    if (shared && asyncCache !== undefined && shared.asyncCache !== asyncCache) {
+      throw new FsError(
+        'EBUSY',
+        'OPFS async cache setting conflicts with the live backend',
+        vfs.dbName
+      );
+    }
     const handle = providedHandle ?? (await VirtualFS.acquireOpfsHandle(vfs.dbName, wipe));
 
     await vfs.withWriteLock(() => VirtualFS.seedOpfsMetadataSidecarIfMissing(handle));
-    const [zenfs, { WebAccess }] = await Promise.all([import('@zenfs/core'), import('@zenfs/dom')]);
+    const zenfs = await import('@zenfs/core');
     await VirtualFS.ensureRootMount(zenfs);
     const mountPoint = `/__opfs__/${vfs.dbName}`;
     let entry = VirtualFS.opfsBackends.get(vfs.dbName);
-    if (entry && wipe) {
-      try {
-        zenfs.umount(mountPoint);
-      } catch {}
-      VirtualFS.opfsBackends.delete(vfs.dbName);
-      entry = undefined;
-    }
     if (!entry) {
-      const resolveBackend = (): Promise<unknown> =>
-        (
-          zenfs as unknown as {
-            resolveMountConfig: (opts: unknown) => Promise<unknown>;
-          }
-        ).resolveMountConfig({
-          backend: WebAccess,
-          handle,
-          metadata: '/.metadata.json',
-        });
-      const { resolveWithSidecarRepair, repairOpfsMetadataSidecar } = await import(
-        './sidecar-repair.js'
-      );
-
-      try {
-        const preboot = await vfs.withWriteLock(() =>
-          repairOpfsMetadataSidecar(handle, vfs.onRepairProgress)
-        );
-        if (preboot?.changed) {
-          console.warn('[virtual-fs] repaired metadata sidecar before mount (#2146)', {
-            dbName: vfs.dbName,
-            kindFixed: preboot.kindFixed,
-            sizesFixed: preboot.sizesFixed,
-            dropped: preboot.dropped,
-            inosReassigned: preboot.inosReassigned,
-            nlinksFixed: preboot.nlinksFixed,
-            selfEntryDropped: preboot.selfEntryDropped,
-          });
-        }
-      } catch {}
-      const backendFs = (await resolveWithSidecarRepair(
-        resolveBackend,
-
-        () => vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle, vfs.onRepairProgress)),
-        (summary) =>
-          console.warn('[virtual-fs] repaired poisoned metadata sidecar; retrying mount', {
-            dbName: vfs.dbName,
-            kindFixed: summary.kindFixed,
-            sizesFixed: summary.sizesFixed,
-            dropped: summary.dropped,
-            nlinksFixed: summary.nlinksFixed,
-            selfEntryDropped: summary.selfEntryDropped,
-          })
-      )) as { index?: { toJSON: () => unknown } };
+      const { resolveOpfsMount } = await import('./opfs-mount.js');
+      const backendFs = await resolveOpfsMount({
+        handle,
+        dbName: vfs.dbName,
+        asyncCache,
+        onRepairProgress: vfs.onRepairProgress,
+        withWriteLock: (operation) => vfs.withWriteLock(operation),
+      });
       try {
         (zenfs.mount as unknown as (p: string, fs: unknown) => void)(mountPoint, backendFs);
       } catch {}
-      entry = { backendFs, refs: 0, sidecarDirty: { paths: new Set(), prefixes: new Set() } };
+      entry = {
+        backendFs,
+        refs: 0,
+        asyncCache: asyncCache !== false,
+        sidecarDirty: { paths: new Set(), prefixes: new Set() },
+      };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
     entry.refs += 1;
@@ -337,6 +343,7 @@ export class VirtualFS {
     {
       backendFs: { index?: { toJSON: () => unknown } };
       refs: number;
+      asyncCache: boolean;
 
       sidecarDirty: SidecarDirtyState;
     }
@@ -377,6 +384,18 @@ export class VirtualFS {
         this._readyResolved
           ? raw().writeFile(pf(p), data, opts)
           : this._ready.then(() => raw().writeFile(pf(p), data, opts)),
+      appendFile: async (p, data) => {
+        if (!this._readyResolved) await this._ready;
+        await raw().appendFile(pf(p), data);
+      },
+      chmod: async (p, mode) => {
+        if (!this._readyResolved) await this._ready;
+        await raw().chmod(pf(p), mode);
+      },
+      utimes: async (p, atime, mtime) => {
+        if (!this._readyResolved) await this._ready;
+        await raw().utimes(pf(p), atime, mtime);
+      },
       readdir: (p) =>
         this._readyResolved ? raw().readdir(pf(p)) : this._ready.then(() => raw().readdir(pf(p))),
       mkdir: (p, opts) =>
@@ -522,8 +541,20 @@ export class VirtualFS {
     const dbName = options?.dbName ?? 'browser-fs';
     const wipe = options?.wipe === true;
     const backend: VfsBackend = options?.backend ?? resolveVfsBackendFromEnv();
-    const vfs = new VirtualFS(dbName, wipe, backend, undefined, options?.onRepairProgress);
-    await vfs._ready;
+    const vfs = new VirtualFS(
+      dbName,
+      wipe,
+      backend,
+      undefined,
+      options?.onRepairProgress,
+      options?.opfsAsyncCache
+    );
+    try {
+      await vfs._ready;
+    } catch (error) {
+      vfs.mountSyncChannel?.close();
+      throw error;
+    }
     if (wipe) {
       await clearMountEntries().catch(() => {});
     }
@@ -712,6 +743,10 @@ export class VirtualFS {
     return true;
   }
 
+  private localIdentity(ino?: number): string | undefined {
+    return inodeIdentity(`zenfs:${this.backend}:${this.dbName}`, ino);
+  }
+
   canWrite(_path: string): boolean {
     return true;
   }
@@ -788,7 +823,9 @@ export class VirtualFS {
                   size: s.size,
                   mtime: s.mtimeMs,
                   ctime: s.ctimeMs,
-                  ...(s.ino !== undefined ? { ino: s.ino } : {}),
+                  ...(s.ino !== undefined
+                    ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
+                    : {}),
                   ...(s.uid !== undefined ? { uid: s.uid } : {}),
                   ...(s.gid !== undefined ? { gid: s.gid } : {}),
                   mode: s.mode,
@@ -823,6 +860,9 @@ export class VirtualFS {
           mtime: s.mtimeMs,
           ctime: s.ctimeMs,
           ino: s.ino,
+          identity: this.localIdentity(s.ino),
+          dev: s.dev,
+          mode: s.mode,
         };
       } catch {
         return null;
@@ -844,6 +884,9 @@ export class VirtualFS {
           mtime: s.mtimeMs,
           ctime: s.ctimeMs,
           ino: s.ino,
+          identity: this.localIdentity(s.ino),
+          dev: s.dev,
+          mode: s.mode,
         };
       }
       let target: string;
@@ -878,6 +921,9 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
+          identity: this.localIdentity(s.ino),
+          dev: s.dev,
+          mode: s.mode,
         };
       }
       return {
@@ -886,6 +932,9 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        identity: this.localIdentity(s.ino),
+        dev: s.dev,
+        mode: s.mode,
       };
     } catch {
       return null;
@@ -1336,6 +1385,106 @@ export class VirtualFS {
     ]);
   }
 
+  async appendFile(path: string, content: FileContent): Promise<void> {
+    const normalized = normalizePath(path);
+    await this.withKindMismatchRetry(normalized, () =>
+      this.withWriteLock(async () => {
+        const mount = this.findMount(normalized);
+        if (mount) {
+          await this.appendMounted(normalized, content);
+          return;
+        }
+        let resolved = normalized;
+        let wasExisting = false;
+        try {
+          resolved = await this.resolveSymlinks(normalized);
+          const stat = await this.lfs.stat(resolved);
+          if (stat.isDirectory()) throw new FsError('EISDIR', 'is a directory', normalized);
+          wasExisting = true;
+        } catch (err) {
+          const error = convertError(err, normalized);
+          if (error.code !== 'ENOENT') throw error;
+        }
+        this.markSidecarDirty(resolved);
+        const { dir } = splitPath(resolved);
+        await this.mkdirRecursiveUnlocked(dir);
+        try {
+          await this.lfs.appendFile(resolved, content);
+        } catch (err) {
+          throw convertError(err, normalized);
+        }
+        this.watcher?.notify([
+          {
+            type: wasExisting ? 'modify' : 'create',
+            path: resolved,
+            entryType: 'file',
+          },
+        ]);
+      })
+    );
+  }
+
+  private async appendMounted(path: string, content: FileContent): Promise<void> {
+    let existing = new Uint8Array(0);
+    try {
+      const read = await this.readFileInner(path, { encoding: 'binary' });
+      existing = typeof read === 'string' ? new TextEncoder().encode(read) : new Uint8Array(read);
+    } catch (err) {
+      const error = convertError(err, path);
+      if (error.code !== 'ENOENT') throw error;
+    }
+    const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
+    const combined = new Uint8Array(existing.length + bytes.length);
+    combined.set(existing);
+    combined.set(bytes, existing.length);
+    await this.writeFileInner(path, combined);
+  }
+
+  async chmod(path: string, mode: number): Promise<void> {
+    if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
+      throw new FsError('EINVAL', 'invalid file mode', normalizePath(path));
+    }
+    await this.changeMetadata(path, (resolved) => this.lfs.chmod(resolved, mode));
+  }
+
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    if (!Number.isFinite(atime.getTime()) || !Number.isFinite(mtime.getTime())) {
+      throw new FsError('EINVAL', 'invalid file time', normalizePath(path));
+    }
+    await this.changeMetadata(path, (resolved) => this.lfs.utimes(resolved, atime, mtime));
+  }
+
+  private async changeMetadata(
+    path: string,
+    update: (resolved: string) => Promise<void>
+  ): Promise<void> {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) {
+      await this.stat(normalized);
+      throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
+    }
+    await this.withKindMismatchRetry(normalized, () =>
+      this.withWriteLock(async () => {
+        const resolved = await this.resolveSymlinks(normalized);
+        try {
+          const stat = await this.lfs.stat(resolved);
+          this.markSidecarDirty(resolved);
+          await update(resolved);
+          await this.writeOpfsMetadataSidecarUnlocked();
+          this.watcher?.notify([
+            {
+              type: 'modify',
+              path: resolved,
+              entryType: stat.isDirectory() ? 'directory' : 'file',
+            },
+          ]);
+        } catch (err) {
+          throw convertError(err, normalized);
+        }
+      })
+    );
+  }
+
   async readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
@@ -1409,7 +1558,9 @@ export class VirtualFS {
         size: s.size,
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
-        ...(s.ino !== undefined ? { ino: s.ino } : {}),
+        ...(s.ino !== undefined
+          ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
+          : {}),
         ...(s.uid !== undefined ? { uid: s.uid } : {}),
         ...(s.gid !== undefined ? { gid: s.gid } : {}),
         mode: s.mode,
@@ -1618,6 +1769,8 @@ export class VirtualFS {
           mtime: ms.mtime,
           ctime: ms.ctime ?? ms.mtime,
           ...(ms.ino !== undefined ? { ino: ms.ino } : {}),
+          ...(ms.identity !== undefined ? { identity: ms.identity } : {}),
+          ...(ms.dev !== undefined ? { dev: ms.dev } : {}),
           ...(ms.uid !== undefined ? { uid: ms.uid } : {}),
           ...(ms.gid !== undefined ? { gid: ms.gid } : {}),
           ...(ms.mode !== undefined ? { mode: ms.mode } : {}),
@@ -1636,6 +1789,8 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        dev: s.dev,
+        identity: this.localIdentity(s.ino),
         uid: s.uid,
         gid: s.gid,
         mode: s.mode,
@@ -1679,27 +1834,43 @@ export class VirtualFS {
   private async renameInner(oldPath: string, newPath: string): Promise<void> {
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
-    let entryType: EntryType | undefined;
+    if (normalizedOld === normalizedNew) return;
+    let oldStat: Stats | undefined;
     try {
-      entryType = (await this.lstat(normalizedOld)).type;
+      oldStat = await this.lstat(normalizedOld);
     } catch {}
+    const entryType = oldStat?.type;
 
     const oldMount = this.findMount(normalizedOld);
     if (oldMount?.backend.rename) {
       const newMount = this.findMount(normalizedNew);
       if (newMount && newMount.backend === oldMount.backend) {
+        let noop = false;
         try {
-          await oldMount.backend.rename(oldMount.relParts.join('/'), newMount.relParts.join('/'));
+          const result = await oldMount.backend.rename(
+            oldMount.relParts.join('/'),
+            newMount.relParts.join('/')
+          );
+          noop = result?.noop === true;
         } catch (err) {
           rebrandFsError(err, normalizedOld);
         }
-        this.watcher?.notify([
-          { type: 'delete', path: normalizedOld, entryType },
-          { type: 'create', path: normalizedNew, entryType },
-        ]);
-        this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+        if (!noop) {
+          this.watcher?.notify([
+            { type: 'delete', path: normalizedOld, entryType },
+            { type: 'create', path: normalizedNew, entryType },
+          ]);
+          this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+        }
         return;
       }
+    }
+
+    if (oldStat) {
+      try {
+        const newStat = await this.lstat(normalizedNew);
+        if (sameFileIdentity(oldStat, newStat)) return;
+      } catch {}
     }
     try {
       await this.withWriteLock(async () => {
@@ -1740,10 +1911,15 @@ export class VirtualFS {
   }
 
   async copyFile(src: string, dest: string): Promise<void> {
-    const stat = await this.stat(src);
-    if (stat.type === 'directory') {
+    const srcStat = await this.stat(src);
+    if (srcStat.type === 'directory') {
       throw new FsError('EISDIR', 'is a directory', src);
     }
+    try {
+      const destStat = await this.stat(dest);
+
+      if (sameFileIdentity(srcStat, destStat)) return;
+    } catch {}
     const content = await this.readFile(src, { encoding: 'binary' });
     await this.writeFile(dest, content);
   }
@@ -1822,6 +1998,8 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
+          dev: s.dev,
+          identity: this.localIdentity(s.ino),
           uid: s.uid,
           gid: s.gid,
           mode: s.mode,
@@ -1833,6 +2011,8 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        dev: s.dev,
+        identity: this.localIdentity(s.ino),
         uid: s.uid,
         gid: s.gid,
         mode: s.mode,

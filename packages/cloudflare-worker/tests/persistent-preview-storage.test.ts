@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deletePreviewArchivePrefix,
   MAX_PREVIEW_FILE_BYTES,
@@ -387,6 +387,127 @@ describe('persistent preview R2 serving', () => {
       bucket
     );
     expect(cached.status).toBe(304);
+  });
+
+  describe('byte ranges', () => {
+    const bytes = new Uint8Array(1000).map((_, i) => i % 256);
+    const record = {
+      servedRoot: '/site',
+      entryPath: '/site/index.html',
+      archivePrefix: 'previews/tray/snapshot/',
+      expiresAt: '2026-08-04T00:00:00.000Z',
+      uploadedFiles: {
+        'clip.mp4': {
+          key: 'previews/tray/snapshot/objects/clip',
+          size: bytes.byteLength,
+          mime: 'video/mp4',
+          etag: 'etag-clip',
+        },
+      },
+    } as unknown as PreviewRecord;
+    const url = new URL('https://preview.sliccy.now/clip.mp4');
+
+    function rangedBucket() {
+      const meta = {
+        size: bytes.byteLength,
+        etag: 'etag-clip',
+        httpEtag: '"etag-clip"',
+        writeHttpMetadata: (headers: Headers) => headers.set('content-type', 'video/mp4'),
+      };
+      return {
+        get: vi.fn(async (_key: string, options?: R2GetOptions) => {
+          const range = options?.range as { offset: number; length: number } | undefined;
+          const body = range ? bytes.slice(range.offset, range.offset + range.length) : bytes;
+          return { ...meta, body };
+        }),
+        head: vi.fn(async () => meta),
+      };
+    }
+
+    const serve = (headers: HeadersInit, bucket: ReturnType<typeof rangedBucket>, method = 'GET') =>
+      servePersistentPreview(
+        new Request(url, { headers, method }),
+        url,
+        record,
+        bucket as unknown as R2Bucket
+      );
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-08-03T00:00:00.000Z'));
+    });
+
+    it('answers a range with 206 and reads only that window from R2', async () => {
+      const bucket = rangedBucket();
+      const response = await serve({ range: 'bytes=100-199' }, bucket);
+      expect(response.status).toBe(206);
+      expect(response.headers.get('content-range')).toBe('bytes 100-199/1000');
+      expect(response.headers.get('content-length')).toBe('100');
+      expect(response.headers.get('accept-ranges')).toBe('bytes');
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes.slice(100, 200));
+      expect(bucket.get).toHaveBeenCalledWith('previews/tray/snapshot/objects/clip', {
+        range: { offset: 100, length: 100 },
+      });
+      expect(bucket.head).not.toHaveBeenCalled();
+    });
+
+    it('serves a suffix range', async () => {
+      const response = await serve({ range: 'bytes=-10' }, rangedBucket());
+      expect(response.status).toBe(206);
+      expect(response.headers.get('content-range')).toBe('bytes 990-999/1000');
+    });
+
+    it('answers 416 for a range past the end without reading R2', async () => {
+      const bucket = rangedBucket();
+      const response = await serve({ range: 'bytes=1000-' }, bucket);
+      expect(response.status).toBe(416);
+      expect(response.headers.get('content-range')).toBe('bytes */1000');
+      expect(response.headers.get('accept-ranges')).toBe('bytes');
+      expect(bucket.get).not.toHaveBeenCalled();
+    });
+
+    it('serves the full body with accept-ranges when no Range is sent', async () => {
+      const bucket = rangedBucket();
+      const response = await serve({}, bucket);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('accept-ranges')).toBe('bytes');
+      expect(response.headers.get('content-length')).toBe('1000');
+      expect(bucket.get).toHaveBeenCalledWith('previews/tray/snapshot/objects/clip', undefined);
+    });
+
+    it('honours If-Range only when it strongly matches the current ETag', async () => {
+      const matching = await serve(
+        { range: 'bytes=0-9', 'if-range': '"etag-clip"' },
+        rangedBucket()
+      );
+      expect(matching.status).toBe(206);
+
+      for (const ifRange of ['"stale"', 'W/"etag-clip"', 'Wed, 21 Oct 2015 07:28:00 GMT']) {
+        const response = await serve({ range: 'bytes=0-9', 'if-range': ifRange }, rangedBucket());
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-range')).toBeNull();
+        expect((await response.arrayBuffer()).byteLength).toBe(1000);
+      }
+
+      const stale = await serve({ range: 'bytes=5000-', 'if-range': '"stale"' }, rangedBucket());
+      expect(stale.status).toBe(200);
+    });
+
+    it('answers HEAD with range headers and no body', async () => {
+      const response = await serve({ range: 'bytes=0-9' }, rangedBucket(), 'HEAD');
+      expect(response.status).toBe(206);
+      expect(response.headers.get('content-range')).toBe('bytes 0-9/1000');
+      expect(response.headers.get('content-length')).toBe('10');
+      expect(response.body).toBeNull();
+    });
+
+    it('keeps If-None-Match revalidation ahead of the range', async () => {
+      const response = await serve(
+        { range: 'bytes=0-9', 'if-none-match': '"etag-clip"' },
+        rangedBucket()
+      );
+      expect(response.status).toBe(304);
+    });
   });
 
   it('deletes every object below an archive prefix', async () => {

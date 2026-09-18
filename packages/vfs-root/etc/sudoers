@@ -27,6 +27,10 @@
 # Precedence: a matching NOPASSWD grant wins (no prompt); otherwise any plain
 # match requires approval; no match means the action is never gated.
 #
+# Policy is read from here and /etc/sudoers.d/* only; a sudoers file inside a
+# sandbox it governs is refused, never honoured. A scoop's approved "Always"
+# grants land in /etc/sudoers.d/scoop-<folder>, written by the cone.
+#
 # Self-protection (ALWAYS on, not configurable): writes to /etc/sudoers and
 # anything under /etc/sudoers.d/ always require approval — a NOPASSWD rule can
 # never override this. Reads of these files are allowed (visudo-style).

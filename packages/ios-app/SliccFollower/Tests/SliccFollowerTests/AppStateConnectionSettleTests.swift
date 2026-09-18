@@ -3,9 +3,17 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
+
+
 @MainActor
 final class AppStateConnectionSettleTests: XCTestCase {
 
+    
+    
     func testTheSettledViewStartsAtTheRawLaunchState() {
         let state = AppState()
 
@@ -25,6 +33,8 @@ final class AppStateConnectionSettleTests: XCTestCase {
             ConnectionHealth(state: .reconnecting, isStalled: true, reconnectAttempt: 4))
     }
 
+    
+    
     func testReachingConnectedIsPublishedImmediately() {
         let state = AppState()
 
@@ -34,6 +44,8 @@ final class AppStateConnectionSettleTests: XCTestCase {
         XCTAssertTrue(state.settledConnection.isHealthy)
     }
 
+    
+    
     func testADropDoesNotReachTheSettledViewImmediately() {
         let state = AppState()
         state.connectionState = .connected
@@ -47,6 +59,8 @@ final class AppStateConnectionSettleTests: XCTestCase {
             "the chat surface must still read healthy inside the hold")
     }
 
+    
+    
     func testAStallDoesNotReachTheSettledViewImmediately() {
         let state = AppState()
         state.connectionState = .connected
@@ -57,6 +71,8 @@ final class AppStateConnectionSettleTests: XCTestCase {
         XCTAssertFalse(state.settledConnection.isStalled)
     }
 
+    
+    
     func testRecoveryIsPublishedImmediately() {
         let state = AppState()
         state.connectionState = .connected
@@ -69,6 +85,13 @@ final class AppStateConnectionSettleTests: XCTestCase {
         XCTAssertEqual(state.settledConnection, ConnectionHealth(state: .connected))
     }
 
+    
+
+    
+    
+    
+    
+    
     func testAStallThatBecomesADisconnectStaysTrouble() {
         let state = AppState()
         state.connectionState = .connected
@@ -84,6 +107,7 @@ final class AppStateConnectionSettleTests: XCTestCase {
             "A stall that became a disconnect must not read as a recovery")
     }
 
+    
     func testDisconnectingFromAStallStaysTrouble() {
         let state = AppState()
         state.connectionState = .connected
@@ -96,6 +120,8 @@ final class AppStateConnectionSettleTests: XCTestCase {
         XCTAssertFalse(state.settledConnection.isHealthy)
     }
 
+    
+    
     func testUpdateConnectionIngestsOnlyTheFinalReading() {
         let state = AppState()
         state.connectionState = .connected
@@ -112,6 +138,7 @@ final class AppStateConnectionSettleTests: XCTestCase {
             "trouble → trouble publishes at once; the healthy intermediate never existed")
     }
 
+    
     func testUpdateConnectionStillPublishesAGenuineRecovery() {
         let state = AppState()
         state.connectionState = .reconnecting
@@ -126,6 +153,7 @@ final class AppStateConnectionSettleTests: XCTestCase {
         XCTAssertEqual(state.settledConnection, ConnectionHealth(state: .connected))
     }
 
+    
     func testSettleImmediatelyPublishesTheRawState() {
         let state = AppState()
         state.connectionState = .connected

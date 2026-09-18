@@ -1,8 +1,19 @@
 import Foundation
 import SliccTrayKit
 
-enum ChatFixture {
 
+
+
+
+
+
+
+
+
+
+enum ChatFixture {
+    
+    
     private static let baseTimestamp: Double = {
         var components = DateComponents()
         components.year = 2024
@@ -13,13 +24,16 @@ enum ChatFixture {
         return date.timeIntervalSince1970 * 1000
     }()
 
+    
     private static func ts(_ minutes: Double) -> Double {
         return baseTimestamp + minutes * 60_000
     }
 
+    
     static func makeMessages() -> [ChatMessage] {
         var out: [ChatMessage] = []
 
+        
         out.append(
             ChatMessage(
                 id: "fx-user-1",
@@ -40,6 +54,7 @@ enum ChatFixture {
                 timestamp: ts(0.2)
             ))
 
+        
         out.append(
             ChatMessage(
                 id: "fx-user-2",
@@ -76,6 +91,7 @@ enum ChatFixture {
                 timestamp: ts(1.3)
             ))
 
+        
         out.append(
             ChatMessage(
                 id: "fx-assistant-sprinkle",
@@ -103,6 +119,7 @@ enum ChatFixture {
                 timestamp: ts(1.8)
             ))
 
+        
         out.append(
             ChatMessage(
                 id: "fx-assistant-sprinkle-bare",
@@ -121,6 +138,7 @@ enum ChatFixture {
                 timestamp: ts(1.95)
             ))
 
+        
         let toolRead = ToolCall(
             id: "fx-tc-read", name: "read_file",
             input: AnyCodable(["path": "/workspace/README.md"] as [String: Any]),
@@ -134,8 +152,12 @@ enum ChatFixture {
             isError: nil
         )
         let toolError = ToolCall(
-            id: "fx-tc-err", name: "edit_file",
-            input: AnyCodable(["path": "/workspace/missing.ts"] as [String: Any]),
+            id: "fx-tc-err", name: "edit",
+            input: AnyCodable(
+                [
+                    "path": "/workspace/missing.ts",
+                    "edits": [["oldText": "x", "newText": "y"]],
+                ] as [String: Any]),
             result: "ENOENT: no such file or directory, open \"/workspace/missing.ts\"",
             isError: true
         )
@@ -153,6 +175,7 @@ enum ChatFixture {
                 toolCalls: [toolRead, toolBash, toolError, toolRunning]
             ))
 
+        
         let toolList = ToolCall(
             id: "fx-tc-list", name: "list_scoops",
             input: nil,
@@ -173,6 +196,7 @@ enum ChatFixture {
                 toolCalls: [toolList, toolFeed]
             ))
 
+        
         out.append(
             ChatMessage(
                 id: "fx-delegation-1", role: .user,
@@ -189,6 +213,7 @@ enum ChatFixture {
                 source: "cone"
             ))
 
+        
         out.append(
             lick(
                 id: "fx-lick-webhook",
@@ -226,7 +251,7 @@ enum ChatFixture {
                 id: "fx-lick-navigate",
                 channel: "navigate",
                 header: "[Navigate Event: handoff]",
-
+                
                 json: ["url": "https://www.sliccy.ai/handoff?msg=demo"],
                 at: 14
             ))
@@ -239,6 +264,7 @@ enum ChatFixture {
                 at: 17
             ))
 
+        
         out.append(
             lick(
                 id: "fx-lick-collated",
@@ -270,6 +296,7 @@ enum ChatFixture {
                 state: .dismissed
             ))
 
+        
         out.append(
             ChatMessage(
                 id: "fx-user-attachments", role: .user,
@@ -294,7 +321,7 @@ enum ChatFixture {
                     ),
                 ]
             ))
-
+        
         out.append(
             ChatMessage(
                 id: "fx-user-attachment-only", role: .user,
@@ -316,6 +343,9 @@ enum ChatFixture {
                 error: true
             ))
 
+        
+        
+        
         out.append(
             ChatMessage(
                 id: "fx-assistant-progress", role: .assistant,
@@ -355,8 +385,12 @@ enum ChatFixture {
                 ]
             ))
 
+        
+        
+        
         out.append(contentsOf: compactionMarkers())
 
+        
         out.append(
             ChatMessage(
                 id: "fx-queued-1", role: .user,
@@ -382,6 +416,11 @@ enum ChatFixture {
         return out
     }
 
+    
+
+    
+    
+    
     private static func compactionMarkers() -> [ChatMessage] {
         let snapshot = "/sessions/live-cone-fixture-8egf.md"
         return [
@@ -394,13 +433,18 @@ enum ChatFixture {
                 timestamp: ts(18.2),
                 compaction: ChatCompactionMarker(
                     trigger: .threshold, state: .summarizing, transcriptPath: snapshot)),
-
+            
             ChatMessage(
                 id: "fx-compaction-fallback", role: .assistant, content: "", timestamp: ts(18.3),
                 compaction: ChatCompactionMarker(trigger: .overflow, state: .fallback)),
         ]
     }
 
+    
+
+    
+    
+    
     private static let progressRowId = "fx-assistant-progress:call-curl"
     private static let clusterRowIds = [
         "fx-assistant-progress-cluster:call-lint",
@@ -408,6 +452,9 @@ enum ChatFixture {
         "fx-assistant-progress-cluster:call-test",
     ]
 
+    
+    
+    
     static let toolProgress: [String: ToolProgressEvent] = [
         progressRowId: ToolProgressEvent(
             id: "curl-1", label: "curl …/big.tar.gz", fraction: 0.43, etaMs: 8_000,
@@ -419,6 +466,7 @@ enum ChatFixture {
             id: "vitest-1", label: "vitest run", phase: .start),
     ]
 
+    
     private static func lick(
         id: String,
         channel: String,
@@ -442,6 +490,14 @@ enum ChatFixture {
         )
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     static func makeShortActionMessages() -> [ChatMessage] {
         let write = ToolCall(
             id: "fx-actions:call-write",
@@ -484,6 +540,8 @@ enum ChatFixture {
         ]
     }
 
+    
+    
     private static let noisePNG =
         "iVBORw0KGgoAAAANSUhEUgAAAPAAAACgCAIAAAC9uXYyAAAB9UlEQVR42u3dMQ2AMABE0fqoAwZWtGACb11QUBO1gQIMwNrk0pd8"
         + "ATe8/cp1jrj2fsf1tCOuWre4CtBAAw000EADDTTQQAMNNNBAAw000EADDTTQQAMNNNBAAw000EADDTTQQAMNNNBAAw000EADDTTQ"
@@ -494,14 +552,20 @@ enum ChatFixture {
         + "QAMNNNAzQCeOloAW0BLQEtAS0BLQAloCWgJaAloCWkBLQEtAS0BLQAtoCWgJaAloAS0BLQEtAS0BLaAloCWgJaAloAW0BLQEtAS0"
         + "BLSAloCWgJaAlj57AcfNe/5HMj6nAAAAAElFTkSuQmCC"
 
+    
+    
     private static let encodedNote =
         "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZywgYW5kIHRoZW4ga2VlcHMgb24ganVtcGluZyB1bnRp"
         + "bCB0aGlzIHNlbnRlbmNlIGlzIGNvbWZvcnRhYmx5IGxvbmdlciB0aGFuIHRoZSBodW5kcmVkIGFuZCB0d2VudHkgZWlnaHQgY2hh"
         + "cmFjdGVyIGZsb29yLg=="
 
+    
+    
     private static let onePixelPNG =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
+    
+    
     static let toolUIHtml = """
         <div class="sprinkle-action-card">
           <div class="sprinkle-action-card__header">
@@ -513,6 +577,7 @@ enum ChatFixture {
         </div>
         """
 
+    
     private static func lickContent(header: String, json: Any) -> String {
         let bodyData =
             (try? JSONSerialization.data(

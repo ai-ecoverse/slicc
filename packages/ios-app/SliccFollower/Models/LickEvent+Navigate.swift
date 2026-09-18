@@ -2,14 +2,17 @@ import Foundation
 import SliccTrayKit
 
 extension LickEvent {
-
+    
+    
+    
     static func navigate(
         pageURL: String,
         match: HandoffMatch,
         title: String? = nil,
         timestamp: String = ISO8601DateFormatter().string(from: Date())
     ) -> LickEvent {
-
+        
+        
         var body: [String: Any] = [
             "url": pageURL,
             "verb": match.verb.rawValue,

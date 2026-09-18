@@ -195,10 +195,89 @@ describe('slicc-image-preview', () => {
     expect(img.src).toBe(SRC2);
   });
 
+  it('setSrc swaps the image while open without replacing the overlay', async () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    el.open(SRC, origin);
+    await waitVisible(el);
+    const overlay = el.shadowRoot?.querySelector('.overlay');
+    el.setSrc(SRC2);
+    expect(el.isOpen).toBe(true);
+    expect(el.getAttribute('src')).toBe(SRC2);
+    expect(el.shadowRoot?.querySelector('.overlay')).toBe(overlay);
+    expect((el.shadowRoot?.querySelector('.image') as HTMLImageElement).src).toBe(SRC2);
+  });
+
+  it('setSrc updates the reflected src when the lightbox is closed', () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    el.setSrc(SRC);
+    expect(el.isOpen).toBe(false);
+    expect(el.getAttribute('src')).toBe(SRC);
+  });
+
   it('falls back to the host element as origin when none is supplied', () => {
     const el = document.createElement('slicc-image-preview') as SliccImagePreview;
     document.body.appendChild(el);
     expect(() => el.open(SRC)).not.toThrow();
     expect(el.shadowRoot?.querySelector('.image')).toBeTruthy();
+  });
+
+  it('reflects the drive attribute and paints a driving chip', async () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    expect(el.drive).toBe(false);
+    el.drive = true;
+    expect(el.hasAttribute('drive')).toBe(true);
+    el.open(SRC, origin);
+    await waitVisible(el);
+    const chip = el.shadowRoot?.querySelector('.chip');
+    expect(chip?.getAttribute('part')).toBe('chip');
+    expect(chip?.textContent).toBe('driving');
+    el.drive = false;
+    expect(el.hasAttribute('drive')).toBe(false);
+  });
+
+  it('emits image clicks/scroll/keys in drive mode and still releases on Escape', async () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    el.drive = true;
+    const inputs: Array<{ kind: string; key?: string; button?: number; dy?: number }> = [];
+    el.addEventListener('slicc-image-preview-input', (e) => {
+      inputs.push((e as CustomEvent).detail);
+    });
+    el.open(SRC, origin);
+    await waitVisible(el);
+    const img = el.shadowRoot?.querySelector('.image') as HTMLImageElement;
+    const overlay = el.shadowRoot?.querySelector('.overlay') as HTMLElement;
+    img.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    img.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 40, cancelable: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    expect(inputs.map((d) => d.kind)).toEqual(['click', 'scroll', 'key']);
+    expect(inputs[0]?.button).toBe(1);
+    expect(inputs[1]?.dy).toBe(1);
+    expect(inputs[2]?.key).toBe('a');
+    expect(overlay.classList.contains('closing')).toBe(false);
+
+    img.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    img.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+    expect(inputs.map((d) => d.kind)).toEqual(['click', 'scroll', 'key', 'click', 'click']);
+    expect(inputs[3]?.button).toBe(2);
+    expect(inputs[4]?.button).toBe(3);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(overlay.classList.contains('closing')).toBe(true);
+    expect(inputs.some((d) => d.key === 'Escape')).toBe(false);
+  });
+
+  it('backdrop clicks still close in drive mode', async () => {
+    const el = document.createElement('slicc-image-preview') as SliccImagePreview;
+    document.body.appendChild(el);
+    el.drive = true;
+    el.open(SRC, origin);
+    await waitVisible(el);
+    const overlay = el.shadowRoot?.querySelector('.overlay') as HTMLElement;
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(overlay.classList.contains('closing')).toBe(true);
   });
 });

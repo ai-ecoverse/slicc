@@ -2,9 +2,37 @@ import QuickLook
 import SwiftUI
 import UIKit
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct QuickLookPreview: UIViewControllerRepresentable {
     let url: URL
 
+    
+    
+    
+    
+    
+    
     static func canPreview(_ url: URL) -> Bool {
         QLPreviewController.canPreview(url as QLPreviewItem)
     }

@@ -7,7 +7,7 @@ description: |
   reliably, native `/workspace/skills/` vs compatibility `.agents/` /
   `.claude/skills/` discovery, and when to ship companion files like `.jsh`
   scripts or `.bsh` browser hooks.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Skill authoring
@@ -41,7 +41,7 @@ description: |
   Use this when ...
   ... (1–3 sentences explaining trigger conditions, what's covered, and what's
   NOT covered if there's a sibling skill that handles related topics.)
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Title (matches `name`)
@@ -55,7 +55,7 @@ allowed-tools: bash, read_file, write_file, edit_file
 - **`description`** — the trigger string. The agent uses this to decide whether to load the skill. Get this right; everything else is secondary.
 - **`allowed-tools`** — comma-separated list of tools the skill needs. Without this, the agent may load the skill but find it can't execute the steps. Common values:
   - `bash` — almost every skill.
-  - `read_file, write_file, edit_file` — for skills that author files (sprinkles, config edits, three-way merges).
+  - `read_file, write_file, edit` — for skills that author files (sprinkles, config edits, three-way merges).
   - Omit only for purely informational skills.
 
 ### Writing a good description
@@ -93,6 +93,7 @@ Rules of thumb:
 `.jsh` files on the shell's `$PATH` search roots are auto-discovered as shell commands. **Full reference: `./jsh-runtime-extensions.md`.**
 
 - **Auto-discovery**: registered as callable commands by filename (without the extension), from the `$PATH` roots — `/workspace/skills`, `/workspace/.mcp/aliases`, `/workspace/bin`, `/shared/bin` by default. A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Earlier roots win basename collisions, so `/workspace/skills/` wins. For commands elsewhere, add their dir to the PATH: `echo 'export PATH="$PATH:/my/tools"' >> ~/.profile`.
+- **Direct execution**: run any script by path with `jsh /tmp/tool.jsh [args…]`. `jsh` is an alias for the Node shim, including `sliccy:` module resolution and argument passthrough; `process.argv[0]` remains `node` for Node compatibility.
 - **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
 - **Top-level `await`**: scripts are wrapped in `AsyncFunction`, so `await` at the top level works. Prefer it — errors surface instead of becoming unhandled rejections. Fire-and-forget `.then()`, unawaited `main()`, `setTimeout`, and `await fetch(…).json()` / `.text()` also keep the realm alive: like Node, the process stays up while I/O (fs/exec/fetch, including reading the response body) or timers are outstanding, and `process.exit()` skips the rest. A Promise with no handle (`new Promise(() => {})`) does **not** keep it alive. `node --check` / `-c` syntax-checks without executing (top-level `await` and ESM `import`/`export` are valid — the same entry transpile `node file.mjs` uses). `node --input-type=module` treats `-e` / stdin / `.js` as ESM.
 
@@ -100,13 +101,13 @@ Rules of thumb:
 
 Node-standard bare globals:
 
-| Global                     | Use for                                                                                                                                                                            |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`                  | `argv`, `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`; `stdin` is one-shot buffered (no streaming) — `read()`, events, or async iterator, drain once                |
-| `console`                  | `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw); `group*` indent; `time*`/`count*` labeled; `clear` no-op |
-| `fetch`                    | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                                                                |
-| `require(p)`               | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges and `require('fs')` for the VFS bridge (see below).                                               |
-| `__dirname` / `__filename` | CJS scope vars — the script's own directory and absolute path.                                                                                                                     |
+| Global                     | Use for                                                                                                                                                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`                  | `argv`, `env`, `cwd()`, `exit(code)`, `exitCode` (deferred status; honoured after the event-loop drain), `stdout.write`, `stderr.write`; `stdin` is one-shot buffered (no streaming) — `read()`, events, or async iterator, drain once |
+| `console`                  | `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw); `group*` indent; `time*`/`count*` labeled; `clear` no-op                                                     |
+| `fetch`                    | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                                                                                                                    |
+| `require(p)`               | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges and `require('fs')` for the VFS bridge (see below).                                                                                                   |
+| `__dirname` / `__filename` | CJS scope vars — the script's own directory and absolute path.                                                                                                                                                                         |
 
 Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtime-extensions.md`):
 
@@ -116,8 +117,9 @@ Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtim
 | `sliccy:agent`                                | Callable `agent(prompt, opts?)` → sub-scoop final text (parsed when `schema` set) + `.spawn(...)` → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
 | `sliccy:skill`                                | `dir` / `root` / `refs` / `assets` / `config()` / `token(providerId)` — skill-root `references/` and `assets/`, script-dir `.config`, provider tokens.                                                              |
 | `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` — standard API-client builder.                                                                                                                         |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)`.                                                                                                                |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)`.                                                               |
 | `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods. Chromium-only.                                                                                                                                                             |
+| `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend (screenshot/input over `computer-call`; keep-alive).                                                                                                             |
 | `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`.                                                                                                                                                  |
 | `sliccy:color`                                | ANSI helpers (`green`, `red`, `bold`, `dim`, …) auto-disabled on non-TTY / `NO_COLOR`.                                                                                                                              |
 | `sliccy:time`                                 | `parseDuration`, `ago`, `range`, `future`, `gmailDate`.                                                                                                                                                             |
@@ -126,19 +128,20 @@ Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtim
 
 VFS bridge:
 
-| `require('fs')` / `require('node:fs')` | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async. There is no bare `fs` global. |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `require('fs')` / `require('node:fs')` | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `appendFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async. There is no bare `fs` global. |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 
 #### Runtime extensions (live — prefer these over hand-rolled equivalents)
 
 Reach these via `require('sliccy:<name>')`. Full reference: `./jsh-runtime-extensions.md`. Use them instead of reimplementing the cross-skill patterns they replace.
 
 - **`process.argv.parseFlags()`** — returns `{ positional, flags, subcommand }`. Replaces the per-skill `--flag=val` / `--flag val` parsing loop.
-- **`require('sliccy:browser')`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
+- **`require('sliccy:browser')`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `openWindow(url, opts?)` (frame-sized window), `windowBounds(tab)`, `setWindowBounds(tab, bounds)` (returns achieved bounds), `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
 - **`browser.fetch(tab, url, opts)`** — page-context fetch (runs inside the tab's origin, so cookies + same-origin headers are automatic). Replaces the `eval-file` temp-file + double-JSON-unwrap dance.
 - **`browser.websocket.on(tab, …).filter({…}).forward({ sink })`** — declarative WebSocket observer with a closed sink set (`webhook` / `scoop` / `vfs` / `log`). **Required** for any new WS-watch use case; do not author page-context `WebSocket.prototype` patches in skill code.
 - **`require('sliccy:http').client({ baseUrl, token, headers, retry })`** — `get`/`post`/`put`/`delete` with merged headers, lazy token resolution, and Retry-After-aware backoff for `retry.on` statuses.
 - **`require('sliccy:skill')`** — `dir` / `root` / `refs` / `assets` / `config()` / `token(providerId)`: replace the per-skill `process.argv[1]` dirname math, ad-hoc `.config` JSON readers, and bespoke `oauth-token` shell-outs. `refs`/`assets` resolve from the skill root (parent of the `scripts/` path segment, including nested helpers).
+- **`require('sliccy:computer')`** — `register(handlers)` for a jsh-hosted computer backend. `register()` keeps a `jshd` unit alive via `computer-call` events. Drive it with the `computer` shell command.
 
 Ship a `.jsh` when the skill needs deterministic, parameterizable behavior the agent shouldn't have to re-derive each time (e.g. a `slicc-handoff` helper, a custom diff formatter, a domain-specific lint).
 

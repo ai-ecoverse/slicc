@@ -718,11 +718,14 @@ export interface ProbeCdpAliveOptions {
   timeoutMs?: number;
 
   expectedWebSocketPath?: string | null;
+
+  requestImpl?: typeof httpRequest;
 }
 
 export function probeCdpAlive(port: number, options: ProbeCdpAliveOptions = {}): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? 500;
   const expectedWebSocketPath = options.expectedWebSocketPath ?? null;
+  const requestImpl = options.requestImpl ?? httpRequest;
   return new Promise((resolve) => {
     let resolved = false;
     const settle = (alive: boolean) => {
@@ -738,7 +741,7 @@ export function probeCdpAlive(port: number, options: ProbeCdpAliveOptions = {}):
 
     let req;
     try {
-      req = httpRequest(
+      req = requestImpl(
         {
           host: '127.0.0.1',
           port,

@@ -89,19 +89,8 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return { ok: true, kind: 'void' };
       case 'rename': {
         const dest = fs.resolvePath(cwd, req.arg2 ?? '');
-        const maybe = fs as {
-          rename?: (a: string, b: string) => Promise<void>;
-          mv?: (a: string, b: string) => Promise<void>;
-        };
-        if (maybe.rename) {
-          await maybe.rename(resolved, dest);
-        } else if (maybe.mv) {
-          await maybe.mv(resolved, dest);
-        } else {
-          const content = await fs.readFileBuffer(resolved);
-          await fs.writeFile(dest, content);
-          await fs.rm(resolved, { recursive: true });
-        }
+        const { renameViaFs } = await import('./rename-via-fs.js');
+        await renameViaFs(fs, resolved, dest);
         return { ok: true, kind: 'void' };
       }
       default:

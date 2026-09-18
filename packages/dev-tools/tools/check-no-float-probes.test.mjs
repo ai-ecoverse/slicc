@@ -383,10 +383,7 @@ describe('check-no-float-probes: end-to-end over the real tree', () => {
     const aliases = scanAliasedProbeReExports();
     const secretTopologyFile = 'packages/webapp/src/core/secret-topology.ts';
     expect(aliases[secretTopologyFile]).toEqual([
-      expect.objectContaining({
-        from: 'resolveFloatTopology',
-        to: 'resolveSecretTopology',
-      }),
+      { line: 9, from: 'resolveFloatTopology', to: 'resolveSecretTopology' },
     ]);
     expect(discoveredAliasNames(aliases)).toContain('resolveSecretTopology');
   });

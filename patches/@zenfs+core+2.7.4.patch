@@ -1,0 +1,127 @@
+diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
+index 26aaf3a..c710d11 100644
+--- a/node_modules/@zenfs/core/dist/mixins/async.js
++++ b/node_modules/@zenfs/core/dist/mixins/async.js
+@@ -219,37 +219,62 @@ export function Async(FS) {
+         /** @internal @protected */
+         _crossCopySemaphore;
+         /** @internal */
+-        async crossCopy(path) {
+-            this.checkSync();
+-            const stats = await this.stat(path);
+-            if (!isDirectory(stats)) {
+-                const env_1 = { stack: [], error: void 0, hasError: false };
+-                try {
+-                    const _ = __addDisposableResource(env_1, (await this._crossCopySemaphore?.get()) || { [Symbol.dispose]() { } }, false);
+-                    this._sync.createFileSync(path, stats);
+-                    const buffer = new Uint8Array(stats.size);
+-                    await this.read(path, buffer, 0, stats.size);
+-                    this._sync.writeSync(path, buffer, 0);
+-                    this._sync.touchSync(path, stats);
++        // PATCH(slicc#3101): descendants share the first failure so queued
++        // payload reads stop before I/O and active reads drain before ready()
++        // rejects. Concurrency itself is owned by the upstream semaphore
++        // wired by @zenfs/dom 1.2.14 (zen-fs/core#318).
++        async crossCopy(path, preload = { failure: null }) {
++            try {
++                if (preload.failure)
++                    throw preload.failure.error;
++                this.checkSync();
++                const stats = await this.stat(path);
++                if (preload.failure)
++                    throw preload.failure.error;
++                if (!isDirectory(stats)) {
++                    const release = (await this._crossCopySemaphore?.get()) || { [Symbol.dispose]() { } };
++                    try {
++                        // A slot may have been handed off just before a peer failed.
++                        if (preload.failure)
++                            throw preload.failure.error;
++                        this._sync.createFileSync(path, stats);
++                        const buffer = new Uint8Array(stats.size);
++                        await this.read(path, buffer, 0, stats.size);
++                        this._sync.writeSync(path, buffer, 0);
++                        this._sync.touchSync(path, stats);
++                    }
++                    catch (error) {
++                        // Record failure before releasing the slot so the next
++                        // waiter observes it before starting backend work.
++                        preload.failure ??= { error };
++                        throw preload.failure.error;
++                    }
++                    finally {
++                        release[Symbol.dispose]();
++                    }
+                     return;
+                 }
+-                catch (e_1) {
+-                    env_1.error = e_1;
+-                    env_1.hasError = true;
++                if (path !== '/') {
++                    this._sync.mkdirSync(path, stats);
++                    this._sync.touchSync(path, stats);
+                 }
+-                finally {
+-                    __disposeResources(env_1);
++                const promises = [];
++                for (const file of await this.readdir(path)) {
++                    if (preload.failure)
++                        break;
++                    promises.push(this.crossCopy(join(path, file), preload));
+                 }
++                // Await every descendant so issued backend work drains. Waiters
++                // handed semaphore slots after a failure exit before allocation/I/O.
++                // Preserve the first error, not directory ordering.
++                await Promise.allSettled(promises);
++                if (preload.failure)
++                    throw preload.failure.error;
+             }
+-            if (path !== '/') {
+-                this._sync.mkdirSync(path, stats);
+-                this._sync.touchSync(path, stats);
+-            }
+-            const promises = [];
+-            for (const file of await this.readdir(path)) {
+-                promises.push(this.crossCopy(join(path, file)));
++            catch (error) {
++                preload.failure ??= { error };
++                throw preload.failure.error;
+             }
+-            await Promise.all(promises);
+         }
+         /**
+          * @internal
+diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
+index 989b33f..7fe24eb 100644
+--- a/node_modules/@zenfs/core/dist/vfs/vcache.js
++++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
+@@ -79,6 +79,30 @@ export class VCache {
+         let node = this.byIno.get(inode.ino);
+         if (node && node.inode.nlink === node.paths.size && !node.paths.has(path))
+             err(`vcache.ref: vnode for ${this.fs.label || this.fs.uuid}:${inode.ino} has an nlink of ${node.inode.nlink} but referenced by more paths [#314]`);
++        // PATCH(#2146, #2034): never coalesce DIFFERENT paths onto one vnode
++        // unless they are a genuine hardlink. Hardlinks share a real ino, a
++        // mode, AND carry nlink > 1; anything else with a matching ino is a
++        // poisoned index (ino-0 floods and duplicated ids both observed in
++        // the field). A shared vnode shares its inode object (stamping one
++        // file's size/mode onto the other on sync) and its data cache —
++        // which is why concurrent reads of two colliding paths returned the
++        // same bytes (#2034): the second open found the first file's vnode
++        // and its cached regions, while sequential reads evicted the vnode
++        // between calls and never collided.
++        // 2.7.4 (zen-fs/core#314) only logs the nlink/path mismatch above;
++        // it still returns the shared vnode, so the refuse-to-coalesce
++        // guard stays until upstream actually isolates non-hardlink paths.
++        if (node && !node.paths.has(path)
++            && (inode.ino === 0
++                || inode.nlink <= 1
++                || node.inode.nlink <= 1
++                || ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)) {
++            // The byIno slot may have been claimed by ANOTHER colliding path;
++            // a re-ref of an already-known path must still find its own vnode.
++            node = this.byPath.get(path);
++            if (node && ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)
++                node = undefined;
++        }
+         if (!node) {
+             node = new VNode(this.fs, path, inode);
+             this.byIno.set(inode.ino, node);

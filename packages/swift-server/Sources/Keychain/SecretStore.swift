@@ -1,16 +1,20 @@
 import Foundation
 import Security
 
+
 struct SecretEntry: Sendable, Equatable {
     let name: String
     let domains: [String]
 }
+
 
 struct Secret: Sendable, Equatable {
     let name: String
     let value: String
     let domains: [String]
 }
+
+
 
 struct SecretStoreAccess: Sendable {
     let loadAll: @Sendable () -> [Secret]
@@ -34,10 +38,14 @@ struct SecretStoreAccess: Sendable {
 
 enum SecretStoreError: Error, Sendable, Equatable, LocalizedError {
     case emptyDomains
-
+    
+    
+    
     case multilineValue(name: String)
     case keychainError(status: Int32)
 
+    
+    
     var errorDescription: String? {
         switch self {
         case .multilineValue(let name): return EnvFileFormat.multilineValueError(name)
@@ -46,22 +54,84 @@ enum SecretStoreError: Error, Sendable, Equatable, LocalizedError {
     }
 }
 
+
 private let keychainService = "ai.sliccy.slicc"
+
 
 private let keychainAccount = "__envfile__"
 
+
+
+
+
+
+
+
+
+
+
 enum SecretStore {
 
+    
     private static let lock = NSLock()
 
+    
+    
+    
     private static var nonInteractive: Bool {
         ProcessInfo.processInfo.environment["SLICC_KEYCHAIN_NONINTERACTIVE"] == "1"
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static var setUserInteractionAllowed: (Bool) -> Void = { allowed in
         SecKeychainSetUserInteractionAllowed(allowed)
     }
 
+    
+    
+    static var keychainRead: ([String: Any]) -> (OSStatus, AnyObject?) = { query in
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return (status, result)
+    }
+    static var keychainUpdate: ([String: Any], [String: Any]) -> OSStatus = { query, attributes in
+        SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    }
+    static var keychainAdd: ([String: Any]) -> OSStatus = { query in
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    static func resetKeychainOperations() {
+        keychainRead = { query in
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            return (status, result)
+        }
+        keychainUpdate = { query, attributes in
+            SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        }
+        keychainAdd = { query in SecItemAdd(query as CFDictionary, nil) }
+    }
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private static func withInteractionSuppressed<T>(_ body: () throws -> T) rethrows -> T {
         guard nonInteractive else { return try body() }
         setUserInteractionAllowed(false)
@@ -77,7 +147,9 @@ enum SecretStore {
         guard !domains.isEmpty else {
             throw SecretStoreError.emptyDomains
         }
-
+        
+        
+        
         guard EnvFileFormat.isSingleLineValue(value) else {
             throw SecretStoreError.multilineValue(name: name)
         }
@@ -101,10 +173,22 @@ enum SecretStore {
         readSecrets().map { SecretEntry(name: $0.name, domains: $0.domains) }
     }
 
+    
+    
+    
     static func all() -> [Secret] {
         readSecrets()
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
     static func readBlob() throws -> String {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -113,14 +197,19 @@ enum SecretStore {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-
+        
+        
+        
+        
+        
+        
+        
+        
+        
         if nonInteractive {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         }
-        var result: AnyObject?
-        let status = withInteractionSuppressed {
-            SecItemCopyMatching(query as CFDictionary, &result)
-        }
+        let (status, result) = withInteractionSuppressed { keychainRead(query) }
         if status == errSecItemNotFound {
             return ""
         }
@@ -135,6 +224,11 @@ enum SecretStore {
         return text
     }
 
+    
+    
+    
+    
+    
     static func writeBlob(_ content: String) throws {
         let valueData = Data(content.utf8)
         let searchQuery: [String: Any] = [
@@ -144,10 +238,7 @@ enum SecretStore {
         ]
 
         let updateStatus = withInteractionSuppressed {
-            SecItemUpdate(
-                searchQuery as CFDictionary,
-                [kSecValueData as String: valueData] as CFDictionary
-            )
+            keychainUpdate(searchQuery, [kSecValueData as String: valueData])
         }
 
         if updateStatus == errSecSuccess {
@@ -157,7 +248,7 @@ enum SecretStore {
         if updateStatus == errSecItemNotFound {
             var addQuery = searchQuery
             addQuery[kSecValueData as String] = valueData
-            let addStatus = withInteractionSuppressed { SecItemAdd(addQuery as CFDictionary, nil) }
+            let addStatus = withInteractionSuppressed { keychainAdd(addQuery) }
             guard addStatus == errSecSuccess else {
                 throw SecretStoreError.keychainError(status: addStatus)
             }
@@ -167,11 +258,22 @@ enum SecretStore {
         throw SecretStoreError.keychainError(status: updateStatus)
     }
 
+    
+
+    
+    
+    
+    
+    
+    
     private static func readSecrets() -> [Secret] {
         do {
             return EnvFileFormat.secretsFromBlob(try readBlob())
         } catch SecretStoreError.keychainError(let status) where status == errSecInteractionNotAllowed {
-
+            
+            
+            
+            
             FileHandle.standardError.write(
                 Data(
                     ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "

@@ -1,5 +1,8 @@
 import XCTest
 
+
+
+
 final class NewSessionUITests: XCTestCase {
 
     private enum EntryPoint {
@@ -46,17 +49,20 @@ final class NewSessionUITests: XCTestCase {
     func testDialogOffersThreeActionsAndEraseDoubleConfirms() {
         let app = launchApp(opening: .pastSessions)
 
+        
         let save = app.buttons["Save & start new"]
         XCTAssertTrue(save.waitForExistence(timeout: 60))
         XCTAssertTrue(app.buttons["New chat — skip memory"].exists)
         let erase = app.buttons["Erase & start new"]
         XCTAssertTrue(erase.exists)
 
+        
         erase.tap()
         let confirm = app.alerts["Erase the current session?"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 10))
         confirm.buttons["Cancel"].tap()
 
+        
         XCTAssertTrue(app.buttons["new-session-button"].waitForExistence(timeout: 10))
     }
 

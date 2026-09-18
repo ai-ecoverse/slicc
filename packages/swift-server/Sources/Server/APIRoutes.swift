@@ -17,26 +17,38 @@ private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
     "host", "connection", "x-target-url", "content-length", "transfer-encoding",
     "x-proxy-cookie", "x-proxy-origin", "x-proxy-referer",
-
+    
+    
+    
+    
     "x-slicc-raw-body",
-
+    
     "x-bridge-token",
-
+    
+    
+    
     "x-slicc-hmac-sign",
-
+    
+    
     "accept-encoding",
 ]
 private let hmacSignHeader = HTTPField.Name("X-Slicc-Hmac-Sign")!
 private let proxyBlockedResponseHeaders: Set<String> = [
     "transfer-encoding",
-
+    
+    
+    
     "content-encoding",
     "www-authenticate",
     "set-cookie",
 ]
 private let fetchProxyMethods: [HTTPRequest.Method] = [
     .get, .head, .post, .put, .patch, .delete, .options,
-
+    
+    
+    
+    
+    
     HTTPRequest.Method(rawValue: "PROPFIND")!,
     HTTPRequest.Method(rawValue: "PROPPATCH")!,
     HTTPRequest.Method(rawValue: "MKCOL")!,
@@ -75,10 +87,12 @@ func registerAPIRoutes(
     secretInjector: SecretInjector = SecretInjector(secrets: []),
     oauthStore: OAuthSecretStore? = nil
 ) {
-
+    
+    
     let hostMountRoots = HostFSRoutes.resolveRoots(mounts: config.mounts)
     HostFSRoutes.registerRoutes(router: router, roots: hostMountRoots)
-
+    
+    
     HostFSWatch.shared?.stop()
     let hostFsWatch = HostFSWatch(lickSystem: lickSystem)
     hostFsWatch.start(roots: hostMountRoots)
@@ -94,13 +108,15 @@ func registerAPIRoutes(
         let trayWorkerBaseUrl =
             config.leadWorkerBaseUrl
             ?? envWorkerBaseUrl
-
+            
             ?? "https://www.sliccy.ai"
         return try jsonResponse(
             .object([
                 "trayWorkerBaseUrl": jsonStringOrNull(trayWorkerBaseUrl),
                 "trayJoinUrl": jsonStringOrNull(config.joinUrl),
-
+                
+                
+                
                 "autoMounts": .array(
                     hostMountRoots.map {
                         .object(["path": .string($0.path), "hostPath": .string($0.root)])
@@ -109,6 +125,10 @@ func registerAPIRoutes(
         )
     }
 
+    
+    
+    
+    
     router.get("/api/status") { _, _ in
         try jsonResponse(
             .object([
@@ -225,6 +245,12 @@ func registerAPIRoutes(
         }
     }
 
+    
+    
+    
+    
+    
+    
     router.post("/api/handoff") { request, context in
         let payload: LickSystem.JSONObject
         do {
@@ -265,10 +291,14 @@ func registerAPIRoutes(
         )
     }
 
+    
     PersistedSecretAPIRoutes.register(router: router, injector: secretInjector)
 
     SessionSecretAPIRoutes.register(router: router, injector: secretInjector)
 
+    
+    
+    
     router.get("/api/secrets/masked") { _, _ in
         let entries = secretInjector.maskedEntries
         let items: [LickSystem.JSONValue] = entries.map { entry in
@@ -281,6 +311,15 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     router.post("/api/secrets/scrub") { request, _ in
         let payload: ScrubPayload
         do {
@@ -295,6 +334,10 @@ func registerAPIRoutes(
         return try jsonResponse(.object(["text": .string(secretInjector.scrub(text: text))]))
     }
 
+    
+    
+    
+    
     router.post("/api/secrets/redact-export") { request, _ in
         let payload: RedactExportPayload
         do {
@@ -319,6 +362,12 @@ func registerAPIRoutes(
         }
     }
 
+    
+    
+    
+    
+    
+    
     if let oauthStore {
         router.post("/api/secrets/oauth-update") { request, context in
             let payload: OAuthUpdatePayload
@@ -363,8 +412,16 @@ func registerAPIRoutes(
         }
     }
 
+    
+    
+    
+    
     SignAndForward.registerRoutes(router: router, httpClient: httpClient)
 
+    
+    
+    
+    
     SudoApprove.registerRoutes(router: router)
 
     for method in fetchProxyMethods {
@@ -373,6 +430,13 @@ func registerAPIRoutes(
                 return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
 
+            
+            
+            
+            
+            
+            
+            
             let urlCreds = secretInjector.extractAndUnmaskUrlCredentials(rawUrl: initialTargetURLValue)
             if let forbidden = urlCreds.forbidden {
                 return try proxyErrorResponse(
@@ -388,17 +452,24 @@ func registerAPIRoutes(
             do {
                 var rawBody = try await collectBody(from: request)
 
+                
                 var injectedHeaders = request.headers
-
+                
+                
+                
                 injectedHeaders[targetURLHeader] = urlCreds.url
-
+                
+                
+                
                 if let synthetic = urlCreds.syntheticAuthorization,
                     injectedHeaders[.authorization] == nil
                 {
                     injectedHeaders[.authorization] = synthetic
                 }
                 for field in request.headers {
-
+                    
+                    
+                    
                     if field.name == .authorization,
                         field.value.lowercased().hasPrefix("basic ")
                     {
@@ -430,12 +501,25 @@ func registerAPIRoutes(
                     }
                 }
 
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
                 if rawBody.readableBytes > 0 {
                     let contentType = injectedHeaders[.contentType] ?? ""
                     if isTextRequestContentType(contentType),
                         let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
                     {
-
+                        
+                        
+                        
                         let replaced =
                             isFormContentType(contentType)
                             ? unmaskFormBody(text: bodyString, hostname: targetHostname, injector: secretInjector)
@@ -451,6 +535,10 @@ func registerAPIRoutes(
                     }
                 }
 
+                
+                
+                
+                
                 if let hmacSpec = injectedHeaders[hmacSignHeader] {
                     injectedHeaders[hmacSignHeader] = nil
                     let bodyBytes = rawBody.getBytes(at: rawBody.readerIndex, length: rawBody.readableBytes) ?? []
@@ -486,7 +574,11 @@ func registerAPIRoutes(
                 )
 
                 let upstreamRequest = try makeProxyRequest(from: injectedRequest, targetURL: targetURL, rawBody: rawBody)
-
+                
+                
+                
+                
+                
                 let upstreamResponse = try await httpClient.execute(upstreamRequest, timeout: .hours(1))
                 return try makeStreamingProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
             } catch {
@@ -500,6 +592,9 @@ private struct OAuthRelayPayload: Decodable {
     let redirectUrl: String?
     let error: String?
 }
+
+
+
 
 private struct ScrubPayload: Decodable {
     let text: String?
@@ -527,11 +622,19 @@ private struct SecretScopePayload: Decodable {
     let domains: [String]?
 }
 
+
+
+
+
 private struct PersistedSecretPayload: Decodable {
     let name: String?
     let value: String?
     let domains: [String]?
 }
+
+
+
+
 
 private enum PersistedSecretAPIRoutes {
     static func register(router: Router<some RequestContext>, injector: SecretInjector) {
@@ -539,6 +642,11 @@ private enum PersistedSecretAPIRoutes {
         registerSet(router: router, injector: injector)
     }
 
+    
+    
+    
+    
+    
     private static func registerList(router: Router<some RequestContext>, injector: SecretInjector) {
         router.get("/api/secrets") { _, _ in
             let store = injector.persistedStore
@@ -555,6 +663,10 @@ private enum PersistedSecretAPIRoutes {
         }
     }
 
+    
+    
+    
+    
     private static func registerSet(router: Router<some RequestContext>, injector: SecretInjector) {
         router.post("/api/secrets") { request, _ in
             let payload: PersistedSecretPayload
@@ -566,21 +678,36 @@ private enum PersistedSecretAPIRoutes {
             guard let name = payload.name, let value = payload.value, let domains = payload.domains else {
                 return try jsonErrorResponse(status: .badRequest, message: "bad-request")
             }
-
+            
+            
+            
+            
+            
+            
             guard !domains.isEmpty else {
                 return try jsonErrorResponse(
                     status: .internalServerError,
                     message: "Secret \"\(name)\" must have at least one authorized domain"
                 )
             }
-
+            
+            
+            
+            
+            
             guard EnvFileFormat.isSingleLineValue(value) else {
                 return try jsonErrorResponse(
                     status: .badRequest,
                     message: EnvFileFormat.multilineValueError(name)
                 )
             }
-
+            
+            
+            
+            
+            
+            
+            
             guard !injector.envFileShadows(name) else {
                 return try jsonErrorResponse(
                     status: .conflict,
@@ -600,7 +727,8 @@ private enum PersistedSecretAPIRoutes {
             if case .failure(let error) = saved {
                 return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
             }
-
+            
+            
             await injector.reload()
             return try jsonResponse(.object(["ok": .bool(true)]))
         }
@@ -715,7 +843,10 @@ private enum SessionSecretAPIRoutes {
                 guard let existing = found else {
                     return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
                 }
-
+                
+                
+                
+                
                 guard EnvFileFormat.isSingleLineValue(existing.value) else {
                     return try jsonErrorResponse(
                         status: .badRequest,
@@ -749,9 +880,13 @@ private enum SessionSecretAPIRoutes {
     }
 }
 
+
+
 private struct RedactExportPayload: Decodable {
     let texts: [String]?
 }
+
+
 
 private struct OAuthUpdatePayload: Decodable {
     let providerId: String
@@ -873,6 +1008,11 @@ private func jsonErrorResponse(status: HTTPResponse.Status, message: String) thr
     try jsonResponse(.object(["error": .string(message)]), status: status)
 }
 
+
+
+
+
+
 private func persistedStoreTimeoutResponse() throws -> Response {
     try jsonResponse(
         .object([
@@ -882,6 +1022,8 @@ private func persistedStoreTimeoutResponse() throws -> Response {
         status: .serviceUnavailable
     )
 }
+
+
 
 private func persistedStoreWriteTimeoutResponse() throws -> Response {
     try jsonResponse(
@@ -893,12 +1035,21 @@ private func persistedStoreWriteTimeoutResponse() throws -> Response {
     )
 }
 
+
+
+
+
+
+
 private func reconcileLateWrite(_ injector: SecretInjector) -> @Sendable (Result<Void, Error>) -> Void {
     { result in
         guard case .success = result else { return }
         Task { await injector.reload() }
     }
 }
+
+
+
 
 private func proxyErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
     try jsonResponse(
@@ -948,26 +1099,30 @@ private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
 private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClientRequest {
     var headers = HTTPHeaders(request.headers)
 
+    
     if let proxyCookie = headers["x-proxy-cookie"].first {
         headers.add(name: "Cookie", value: proxyCookie)
     }
 
+    
     if let proxyOrigin = headers["X-Proxy-Origin"].first {
         headers.replaceOrAdd(name: "Origin", value: proxyOrigin)
     } else if let currentOrigin = headers["Origin"].first, BridgeSecurity.isLoopbackBridgeOrigin(currentOrigin) {
-
+        
         headers.remove(name: "Origin")
     }
     headers.remove(name: "X-Proxy-Origin")
 
+    
     if let proxyReferer = headers["X-Proxy-Referer"].first {
         headers.replaceOrAdd(name: "Referer", value: proxyReferer)
     } else if let currentReferer = headers["Referer"].first, BridgeSecurity.isLoopbackBridgeOrigin(currentReferer) {
-
+        
         headers.remove(name: "Referer")
     }
     headers.remove(name: "X-Proxy-Referer")
 
+    
     let proxyPrefixHeaders = headers.compactMap { field -> (String, String)? in
         let lower = field.name.lowercased()
         guard lower.hasPrefix("x-proxy-proxy-") else { return nil }
@@ -998,28 +1153,31 @@ private func makeStreamingProxyResponse(
     from response: HTTPClientResponse,
     secretInjector: SecretInjector
 ) throws -> Response {
-
+    
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
 
     var headers = HTTPFields(response.headers)
     for header in proxyBlockedResponseHeaders {
         headers[HTTPField.Name(header)!] = nil
     }
-
+    
     let xProxyNames = headers.compactMap { field -> HTTPField.Name? in
         field.name.canonicalName.lowercased().hasPrefix("x-proxy-") ? field.name : nil
     }
     for name in xProxyNames {
         headers[name] = nil
     }
-
+    
+    
+    
     let accessControlNames = headers.compactMap { field -> HTTPField.Name? in
         field.name.canonicalName.lowercased().hasPrefix("access-control-") ? field.name : nil
     }
     for name in accessControlNames {
         headers[name] = nil
     }
-
+    
+    
     headers[HTTPField.Name.contentLength] = nil
 
     if !setCookies.isEmpty,
@@ -1029,6 +1187,8 @@ private func makeStreamingProxyResponse(
         headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
     }
 
+    
+    
     if !secretInjector.isEmpty {
         var scrubbedHeaders = HTTPFields()
         for field in headers {
@@ -1040,6 +1200,11 @@ private func makeStreamingProxyResponse(
 
     headers[cacheControlHeader] = "no-store, no-cache"
 
+    
+    
+    
+    
+    
     var exposeNames: [String] = [
         "Link",
         "X-Proxy-Error",
@@ -1057,11 +1222,21 @@ private func makeStreamingProxyResponse(
     }
     headers[HTTPField.Name("Access-Control-Expose-Headers")!] = exposeNames.joined(separator: ", ")
 
+    
+    
+    
     let isText = isTextContentType(headers[HTTPField.Name.contentType] ?? "")
     let shouldScrub = isText && !secretInjector.isEmpty
     let upstreamBody = response.body
     let scrubber = secretInjector
 
+    
+    
+    
+    
+    
+    
+    
     let body = ResponseBody(
         asyncSequence: ScrubbingAsyncStream(
             upstream: upstreamBody,
@@ -1077,7 +1252,21 @@ private func makeStreamingProxyResponse(
     )
 }
 
-private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     typealias Element = ByteBuffer
     let upstream: HTTPClientResponse.Body
     let shouldScrub: Bool
@@ -1094,19 +1283,23 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
 
         mutating func next() async throws -> ByteBuffer? {
             guard shouldScrub else {
-
+                
                 return try await gzip.next(from: &inner)
             }
 
             while let chunk = try await gzip.next(from: &inner) {
-
+                
                 var bytes = pendingTail
                 bytes.append(contentsOf: chunk.readableBytesView)
                 pendingTail.removeAll(keepingCapacity: true)
 
+                
+                
+                
                 let cut = lastCompleteUTF8Boundary(bytes)
                 if cut == 0 {
-
+                    
+                    
                     pendingTail = bytes
                     continue
                 }
@@ -1116,13 +1309,18 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
                 }
 
                 guard let str = String(bytes: bytes, encoding: .utf8) else {
-
+                    
+                    
+                    
                     return ByteBuffer(bytes: bytes)
                 }
                 let scrubbed = scrubber.scrub(text: str)
                 return ByteBuffer(string: scrubbed)
             }
 
+            
+            
+            
             if !didEmitTail, !pendingTail.isEmpty {
                 didEmitTail = true
                 let tail = pendingTail
@@ -1143,39 +1341,52 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     }
 }
 
-private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
+
+
+
+
+
+func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
     if bytes.isEmpty { return 0 }
     var i = bytes.count
-
+    
+    
+    
     var continuations = 0
     while i > 0, (bytes[i - 1] & 0xC0) == 0x80, continuations < 3 {
         i -= 1
         continuations += 1
     }
     if i == 0 {
-
+        
+        
+        
         return bytes.count
     }
     let lead = bytes[i - 1]
     let needed: Int
     if lead & 0x80 == 0 {
         needed = 1
-    } else if lead & 0xE0 == 0xC0 {
+    }  
+    else if lead & 0xE0 == 0xC0 {
         needed = 2
-    } else if lead & 0xF0 == 0xE0 {
+    }  
+    else if lead & 0xF0 == 0xE0 {
         needed = 3
-    } else if lead & 0xF8 == 0xF0 {
+    }  
+    else if lead & 0xF8 == 0xF0 {
         needed = 4
-    } else {
+    }  
+    else {
         return bytes.count
-    }
+    }  
     let have = bytes.count - (i - 1)
     if have >= needed { return bytes.count }
     return i - 1
 }
 
 extension HTTPMethod {
-    fileprivate init(_ method: HTTPRequest.Method) {
+    init(_ method: HTTPRequest.Method) {
         switch method {
         case .connect: self = .CONNECT
         case .delete: self = .DELETE

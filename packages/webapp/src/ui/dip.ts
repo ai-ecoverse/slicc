@@ -24,6 +24,7 @@ import {
   type UsbDeviceFilter,
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
+import { DIP_PENDING_PLACEHOLDER } from './dip-placeholder.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
@@ -39,6 +40,10 @@ import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from '
 import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
 const isExtension = isExtensionRealm();
+
+void import('../shell/supplemental-commands/computer/screen-share-approval-live.js').then((m) => {
+  m.listenScreenShareApprovalChannel();
+});
 
 interface DipIframeResponseBody {
   type: string;
@@ -1055,28 +1060,86 @@ function openDipLink(url: unknown): void {
   } catch {}
 }
 
+export interface HydrateDipsOptions {
+  previous?: readonly DipInstance[];
+
+  streaming?: boolean;
+}
+
+const dipSlots = new WeakMap<DipInstance, { key: string; wrapper: HTMLElement }>();
+
+function canCarryDips(): boolean {
+  return typeof (Element.prototype as Partial<ParentNode>).moveBefore === 'function';
+}
+
+function carryDip(pool: DipInstance[], key: string, target: Element): DipInstance | null {
+  const index = pool.findIndex((instance) => {
+    const slot = dipSlots.get(instance);
+    return slot?.key === key && slot.wrapper.isConnected;
+  });
+  const instance = pool[index];
+  const slot = instance && dipSlots.get(instance);
+  if (!slot) return null;
+  try {
+    target.parentNode!.moveBefore(slot.wrapper, target);
+  } catch {
+    return null;
+  }
+  target.remove();
+  pool.splice(index, 1);
+  return instance;
+}
+
+function trackDip(instance: DipInstance, key: string, wrapper: HTMLElement): DipInstance {
+  dipSlots.set(instance, { key, wrapper });
+  return instance;
+}
+
 export function hydrateDips(
   containerEl: HTMLElement,
-  onLick: (action: string, data: unknown) => void
+  onLick: (action: string, data: unknown) => void,
+  options: HydrateDipsOptions = {}
 ): DipInstance[] {
   const instances: DipInstance[] = [];
+  const pool = [...(options.previous ?? [])];
+  const carry = canCarryDips();
+  const defer = options.streaming === true && !carry;
 
   const codeEls = containerEl.querySelectorAll<HTMLElement>('pre > code.language-shtml');
   for (const codeEl of codeEls) {
     const preEl = codeEl.parentElement!;
     const shtmlContent = codeEl.textContent ?? '';
+    const key = `shtml:${shtmlContent}`;
+
+    if (defer) {
+      preEl.replaceWith(
+        preEl.ownerDocument.createRange().createContextualFragment(DIP_PENDING_PLACEHOLDER)
+      );
+      continue;
+    }
+    const carried = carry ? carryDip(pool, key, preEl) : null;
+    if (carried) {
+      instances.push(carried);
+      continue;
+    }
 
     const wrapper = document.createElement('div');
     wrapper.className = 'msg__dip';
     preEl.replaceWith(wrapper);
 
-    instances.push(mountDip(wrapper, shtmlContent, onLick, false));
+    instances.push(trackDip(mountDip(wrapper, shtmlContent, onLick, false), key, wrapper));
   }
 
   const imgEls = containerEl.querySelectorAll<HTMLImageElement>('img[src$=".shtml"]');
   for (const imgEl of imgEls) {
     const src = imgEl.getAttribute('src');
-    if (!src) continue;
+    if (!src || defer) continue;
+    const key = `img:${src}`;
+    const carried = carry ? carryDip(pool, key, imgEl) : null;
+    if (carried) {
+      instances.push(carried);
+      continue;
+    }
 
     const wrapper = document.createElement('div');
     wrapper.className = 'msg__dip';
@@ -1096,7 +1159,7 @@ export function hydrateDips(
         }
       },
     };
-    instances.push(placeholder);
+    instances.push(trackDip(placeholder, key, wrapper));
 
     const isVfsPath = src.startsWith('/');
     const swControlled = typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
@@ -1136,6 +1199,7 @@ export function hydrateDips(
       });
   }
 
+  disposeDips(pool);
   return instances;
 }
 
@@ -1153,6 +1217,11 @@ export async function handleDipPickerAction(
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
   const filters = dipPickerFiltersFromData(msg.data);
+
+  if (msg.picker === 'screenshare') {
+    await runScreensharePicker(msg.action, onLick);
+    return;
+  }
 
   if (isExtension) {
     await handleDipPickerActionExtension(msg.picker, msg.action, filters, onLick);
@@ -1283,6 +1352,44 @@ function dispatchPickerDenial(
     return;
   }
   onLick(action, { error: denial.message ?? 'unknown error' });
+}
+
+async function runScreensharePicker(
+  action: string,
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const result = await requestPickerFromSurface('screenshare', {
+    constraints: { video: true },
+  });
+  if (!result) {
+    onLick(action, { error: 'screen capture is not available' });
+    return;
+  }
+  if (!result.ok) {
+    dispatchPickerDenial(action, result, 'screen capture is not available', onLick);
+    return;
+  }
+  const grant = result.grant as Extract<PermissionGrant, { kind: 'screenshare' }>;
+  const { adoptDisplayStream, displaySessions } = await import(
+    '../shell/supplemental-commands/screencapture-media.js'
+  );
+  try {
+    const adopted = await adoptDisplayStream(grant.stream);
+    if (!adopted.handle) {
+      onLick(action, { error: 'screen share produced no handle' });
+      return;
+    }
+    const { keepAdoptedScreenShare } = await import(
+      '../shell/supplemental-commands/computer/screen-share-approval-live.js'
+    );
+    if (!keepAdoptedScreenShare(adopted.handle, (handle) => displaySessions.stop(handle))) {
+      onLick(action, { cancelled: true });
+      return;
+    }
+    onLick(action, { granted: true, handle: adopted.handle });
+  } catch (err: unknown) {
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 async function runDirectoryPicker(

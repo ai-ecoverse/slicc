@@ -3,18 +3,35 @@ import SwiftUI
 import WebKit
 import os
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct SprinkleWebView: UIViewRepresentable {
     let sprinkleName: String
     let sprinkleTitle: String
-
+    
     let sprinkleContent: String
-
+    
     let updates: AnyCodable?
-
+    
     var onLick: (_ body: AnyCodable?, _ targetScoop: String?) -> Void
-
+    
     var onClose: () -> Void
 
+    
+    
+    
     @Environment(\.sprinkleThemeCSS) private var themeCSS
     @Environment(\.palette) private var palette
 
@@ -27,6 +44,7 @@ struct SprinkleWebView: UIViewRepresentable {
         let userContent = WKUserContentController()
         userContent.add(context.coordinator, name: "sliccBridge")
 
+        
         let escapedName =
             sprinkleName
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -59,24 +77,28 @@ struct SprinkleWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-
+        
         if context.coordinator.lastContent != sprinkleContent {
             context.coordinator.lastContent = sprinkleContent
             webView.loadHTMLString(Self.wrap(sprinkleContent), baseURL: URL(string: "about:blank"))
         }
-
+        
         if let data = updates {
             context.coordinator.deliverUpdate(data)
         }
         webView.backgroundColor = UIColor(palette.canvas)
         webView.scrollView.backgroundColor = webView.backgroundColor
-
+        
         if context.coordinator.lastThemeCSS != themeCSS {
             context.coordinator.lastThemeCSS = themeCSS
             webView.evaluateJavaScript(Self.themeInjectionJS(themeCSS), completionHandler: nil)
         }
     }
 
+    
+    
+    
+    
     static func themeInjectionJS(_ css: String) -> String {
         let encoded =
             (try? String(data: JSONEncoder().encode(css), encoding: .utf8)) ?? "\"\""
@@ -97,6 +119,8 @@ struct SprinkleWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "sliccBridge")
     }
 
+    
+
     class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let parent: SprinkleWebView
         weak var webView: WKWebView?
@@ -107,6 +131,8 @@ struct SprinkleWebView: UIViewRepresentable {
         init(parent: SprinkleWebView) {
             self.parent = parent
         }
+
+        
 
         func userContentController(
             _ userContentController: WKUserContentController,
@@ -125,7 +151,7 @@ struct SprinkleWebView: UIViewRepresentable {
                 parent.onLick(coded, targetScoop)
 
             case "stopCone":
-
+                
                 let body = AnyCodable(["action": "__stopCone__"])
                 parent.onLick(body, nil)
 
@@ -154,8 +180,10 @@ struct SprinkleWebView: UIViewRepresentable {
             }
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        
 
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            
             let key = "slicc-sprinkle-state:\(parent.sprinkleName)"
             let stateJson = UserDefaults.standard.string(forKey: key) ?? "null"
             let escaped =
@@ -165,6 +193,8 @@ struct SprinkleWebView: UIViewRepresentable {
                 .replacingOccurrences(of: "\n", with: "\\n")
             webView.evaluateJavaScript("__sliccSetCachedState('\(escaped)')", completionHandler: nil)
         }
+
+        
 
         func deliverUpdate(_ data: AnyCodable) {
             guard let webView = webView else { return }
@@ -180,6 +210,12 @@ struct SprinkleWebView: UIViewRepresentable {
         }
     }
 
+    
+
+    
+    
+    
+    
     private static func wrap(_ content: String) -> String {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         let isFullDocument =
@@ -205,6 +241,10 @@ struct SprinkleWebView: UIViewRepresentable {
             """
     }
 
+    
+
+    
+    
     private static let bridgeJS: String = """
         (function() {
           const updateListeners = new Set();
@@ -232,8 +272,15 @@ struct SprinkleWebView: UIViewRepresentable {
           const sprinkle = {
             get name() { return '__SPRINKLE_NAME__'; },
             lick: function(event) {
-              const body = (typeof event === 'string') ? { action: event } : event;
-              send('lick', { body: body });
+              if (typeof event === 'string') { send('lick', { body: { action: event } }); return; }
+              // `target` is the panel's own recipient (#3089). It travels as
+              // targetScoop, as on the web follower, not inside the body.
+              // Absent keys are omitted: postMessage has no `undefined`.
+              const body = { action: event.action };
+              if (event.data !== undefined) body.data = event.data;
+              const payload = { body: body };
+              if (typeof event.target === 'string' && event.target) payload.targetScoop = event.target;
+              send('lick', payload);
             },
             on: function(eventName, cb) {
               if (eventName === 'update') updateListeners.add(cb);

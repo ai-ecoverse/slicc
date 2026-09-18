@@ -107,15 +107,14 @@ test('argv, stdin and timeout ride the envelope', () => {
   });
 });
 
-test('cwd and env ride the XHR envelope', () => {
+test('cwd and env ride the envelope', () => {
   installFakeXhr();
   reply = okReply({ stdout: '/shared\n', stderr: '', exitCode: 0 });
-  createSyncExecXhrBridge('t').run('pwd', { cwd: '/shared', env: { MARKER: 'x' } });
+  createSyncExecXhrBridge('t').run(['pwd'], { cwd: '/shared', env: { MARKER: 'x' } });
   expect(JSON.parse(lastSent!.body)).toMatchObject({
-    command: 'pwd',
+    command: ['pwd'],
     cwd: '/shared',
     env: { MARKER: 'x' },
-    channel: 'exec',
   });
 });
 

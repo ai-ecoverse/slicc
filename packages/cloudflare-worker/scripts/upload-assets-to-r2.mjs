@@ -3,10 +3,7 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { runUploads } from './upload-lib.mjs';
-
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+import { runBulkUploads, totalFileBytes } from './upload-lib.mjs';
 
 function parseArgs(args) {
   const [bucket, ...rest] = args;
@@ -18,7 +15,7 @@ function parseArgs(args) {
 
   let dir = 'dist/ui/assets';
 
-  let concurrency = 4;
+  let concurrency = 20;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--dir' && i + 1 < rest.length) {
       dir = rest[i + 1];
@@ -46,10 +43,15 @@ function createExec() {
     });
 }
 
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
+}
+
 async function main() {
   try {
     const { bucket, dir, concurrency } = parseArgs(process.argv.slice(2));
-
     const assetDir = resolve(dir);
 
     let files;
@@ -65,18 +67,26 @@ async function main() {
       return;
     }
 
-    console.log(`Uploading ${files.length} files to R2 bucket '${bucket}'`);
+    const totalBytes = await totalFileBytes(files, assetDir);
+    const startedAt = Date.now();
+    console.log(
+      `Bulk-uploading ${files.length} files (${formatBytes(totalBytes)}) to R2 bucket '${bucket}' with concurrency ${concurrency}`
+    );
 
-    await runUploads(files, {
+    const result = await runBulkUploads(files, {
       bucket,
       dir: assetDir,
       exec: createExec(),
       concurrency,
 
-      retries: 5,
+      retries: 8,
+      log: (message) => console.warn(`R2 upload ${message}`),
     });
 
-    console.log('All files uploaded successfully');
+    const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(
+      `R2 bulk upload complete: ${files.length} files in ${result.groups} content types / ${result.chunks} chunks, ${result.invocations} Wrangler invocations (${result.retries} retries), ${elapsedSeconds}s`
+    );
   } catch (err) {
     console.error('Upload failed:', err.message);
     process.exit(1);

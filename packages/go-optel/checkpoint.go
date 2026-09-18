@@ -1,6 +1,14 @@
 package optel
 
+
+
+
+
 type Checkpoint string
+
+
+
+
 
 const (
 	Top         Checkpoint = "top"

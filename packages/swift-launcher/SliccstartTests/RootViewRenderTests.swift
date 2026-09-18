@@ -8,6 +8,10 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
 @MainActor
 final class RootViewRenderTests: XCTestCase {
     private var container: URL!
@@ -25,6 +29,10 @@ final class RootViewRenderTests: XCTestCase {
         UserDefaults.standard.removePersistentDomain(forName: suiteName)
     }
 
+    
+    
+    
+    
     private func model(
         process: SliccProcess = SliccProcess(),
         targets: [AppTarget] = []
@@ -47,6 +55,12 @@ final class RootViewRenderTests: XCTestCase {
                 installation: WidgetInstallationQuery { false },
                 makeConnector: { _ in InertConnector() }
             ),
+            computerTrayFollower: ComputerTrayFollower(
+                makeConnector: { _ in InertConnector() },
+                makeCapturer: { StubCapturer() },
+                permissions: ComputerPermissions(probe: .alwaysGranted),
+                eventSink: RecordingEventSink()
+            ),
             updateChecking: .init(check: { _, _ in }, isUpdateReady: { false }),
             scanApps: { _ in targets },
             checkInstallation: { _ in .installed },
@@ -68,7 +82,9 @@ final class RootViewRenderTests: XCTestCase {
     }
 
     private func target(_ name: String) -> AppTarget {
-
+        
+        
+        
         let icon = NSImage(size: NSSize(width: 16, height: 16))
         icon.lockFocus()
         NSColor.systemBlue.setFill()

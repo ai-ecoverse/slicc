@@ -4,6 +4,11 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
 final class ReleaseAssetFilterTests: XCTestCase {
 
     private func decode(_ json: String) throws -> [Release] {
@@ -22,7 +27,7 @@ final class ReleaseAssetFilterTests: XCTestCase {
             assets = """
                 [{
                   "name": "\(assetName)",
-                  "browser_download_url": "https://example.com/\(assetName)",
+                  "browser_download_url": "https:
                   "content_type": "\(contentType)"
                 }]
                 """
@@ -53,13 +58,16 @@ final class ReleaseAssetFilterTests: XCTestCase {
     }
 
     func testKeepsTolerantVPrefixedTag() throws {
-
+        // Tag "v2.0.0" parses to Version 2.0.0, whose description drops the
+        // "v", so the asset "Sliccstart-2.0.0.zip" must still match.
         let releases = try decode("[\(release(tag: "v2.0.0", assetName: "Sliccstart-2.0.0.zip"))]")
         XCTAssertEqual(provider.filterViableReleases(releases).count, 1)
     }
 
     func testKeepsReleaseWithMatchingTarAsset() throws {
-
+        // A `.tar` asset (content type maps to `.tar`) must be kept as viable:
+        // `name` is the extension-stripped asset name, so it equals the prefix
+        // and the tar case matches on content type + "tar" extension.
         let asset = release(
             tag: "v1.36.0",
             assetName: "Sliccstart-1.36.0.tar",
@@ -87,7 +95,7 @@ final class ReleaseAssetFilterTests: XCTestCase {
     }
 
     func testDropsReleaseWithWrongContentType() throws {
-
+        // Correct name and extension but a non-zip content type must not match.
         let asset = release(
             tag: "1.36.0",
             assetName: "Sliccstart-1.36.0.zip",

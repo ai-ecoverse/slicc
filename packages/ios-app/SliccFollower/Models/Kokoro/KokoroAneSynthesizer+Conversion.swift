@@ -2,7 +2,10 @@ import Accelerate
 @preconcurrency import CoreML
 import Foundation
 
+
 enum KokoroAneArrays {
+
+    
 
     private static func convertF32toF16(
         src: UnsafePointer<Float>, dst: UnsafeMutablePointer<UInt16>, count: Int
@@ -30,12 +33,17 @@ enum KokoroAneArrays {
         vImageConvert_Planar16FtoPlanarF(&srcBuf, &dstBuf, 0)
     }
 
+    
+    
     private static func genericCopy(_ source: MLMultiArray, into dst: MLMultiArray, count: Int) {
         for i in 0..<count {
             dst[i] = NSNumber(value: source[i].floatValue)
         }
     }
 
+    
+
+    
     static func float16Array(shape: [Int], from source: [Float]) throws -> MLMultiArray {
         let total = shape.reduce(1, *)
         precondition(
@@ -50,8 +58,9 @@ enum KokoroAneArrays {
         return arr
     }
 
+    
     static func float16Array(shape: [Int], from source: MLMultiArray) throws -> MLMultiArray {
-
+        
         let total = shape.reduce(1, *)
         let nsShape = shape.map { NSNumber(value: $0) }
         let dst = try MLMultiArray(shape: nsShape, dataType: .float16)
@@ -72,6 +81,8 @@ enum KokoroAneArrays {
         return dst
     }
 
+    
+
     static func float32Array(shape: [Int], from source: [Float]) throws -> MLMultiArray {
         let total = shape.reduce(1, *)
         precondition(
@@ -86,6 +97,7 @@ enum KokoroAneArrays {
         return arr
     }
 
+    
     static func float32Array(shape: [Int], from source: MLMultiArray) throws -> MLMultiArray {
         let total = shape.reduce(1, *)
         let nsShape = shape.map { NSNumber(value: $0) }
@@ -107,6 +119,8 @@ enum KokoroAneArrays {
         return dst
     }
 
+    
+
     static func int32Array(shape: [Int], from source: [Int32]) throws -> MLMultiArray {
         let total = shape.reduce(1, *)
         precondition(
@@ -121,10 +135,14 @@ enum KokoroAneArrays {
         return arr
     }
 
+    
     static func attentionMask(length: Int) throws -> MLMultiArray {
         return try int32Array(shape: [1, length], from: [Int32](repeating: 1, count: length))
     }
 
+    
+
+    
     static func readFloats(_ arr: MLMultiArray) -> [Float] {
         let count = arr.count
         if arr.dataType == .float32 {
@@ -139,7 +157,7 @@ enum KokoroAneArrays {
             }
             return out
         }
-
+        
         return (0..<count).map { Float(truncating: arr[$0]) }
     }
 }

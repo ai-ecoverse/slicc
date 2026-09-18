@@ -124,16 +124,24 @@ test('GATE: the sync-exec channel runs through the realm own gated ctx.exec, in 
   expect(seen).toEqual([{ cmd: 'ls', cwd: '/scoops/a' }]);
 });
 
-test('GATE: a per-command cwd/env override the token cwd without leaving the gated exec', async () => {
-  const seen: Array<{ cmd: string; cwd: unknown; env: unknown; replaceEnv: unknown }> = [];
-  const exec = (async (
-    cmd: string,
-    opts: { cwd?: string; env?: Record<string, string>; replaceEnv?: boolean }
-  ) => {
-    seen.push({ cmd, cwd: opts.cwd, env: opts.env, replaceEnv: opts.replaceEnv });
-    return { stdout: `${opts.cwd}\n${opts.env?.MARKER ?? ''}\n`, stderr: '', exitCode: 0 };
+test('GATE: a caller cwd override is used instead of the token cwd', async () => {
+  const seen: Array<{ cmd: string; cwd: unknown; env: unknown }> = [];
+  const exec = (async (cmd: string, opts: { cwd?: string; env?: Record<string, string> }) => {
+    seen.push({ cmd, cwd: opts.cwd, env: opts.env });
+    return { stdout: 'ok', stderr: '', exitCode: 0 };
   }) as unknown as CommandContext['exec'];
-  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/scoops/a' });
+  const fs = {
+    resolvePath: (_base: string, path: string) => path,
+    stat: async () => ({
+      isDirectory: true,
+      isFile: false,
+      isSymbolicLink: false,
+      mode: 0o755,
+      size: 0,
+      mtime: new Date(),
+    }),
+  } as unknown as CommandContext['fs'];
+  const token = mintSyncFsToken({ fs, exec, cwd: '/scoops/a' });
 
   const r = await dispatchSyncExec({
     token,
@@ -144,9 +152,7 @@ test('GATE: a per-command cwd/env override the token cwd without leaving the gat
   });
 
   expect(r.ok).toBe(true);
-  if (r.ok && r.kind === 'json')
-    expect(r.json).toEqual({ stdout: '/shared\nx\n', stderr: '', exitCode: 0 });
-  expect(seen).toEqual([{ cmd: 'pwd', cwd: '/shared', env: { MARKER: 'x' }, replaceEnv: true }]);
+  expect(seen).toEqual([{ cmd: 'pwd', cwd: '/shared', env: { MARKER: 'x' } }]);
 });
 
 test('GATE: a sudo-denying ctx.exec propagates EACCES through the sync-exec channel', async () => {

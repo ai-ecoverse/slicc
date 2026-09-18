@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
+
+
 type Kind uint8
+
 
 const (
 	KindInfo Kind = iota
@@ -20,26 +23,42 @@ const (
 	KindTool
 )
 
+
+
+
+
 const (
 	eraseLine = "\r\x1b[2K"
 	cursorUp  = "\x1b[1A"
 )
 
+
+
+
 const minRepaint = 80 * time.Millisecond
+
 
 const tapeBucketTicks = 5
 
+
 type Options struct {
+	
 	Mode Mode
-
+	
+	
 	Tag string
-
+	
+	
 	Width func() int
-
+	
 	Now func() time.Time
-
+	
 	Tick time.Duration
 }
+
+
+
+
 
 type Console struct {
 	w     io.Writer
@@ -55,19 +74,26 @@ type Console struct {
 	bucket   int
 	barShown bool
 	lastPain time.Time
-
+	
+	
 	lastMsg   string
 	lastKind  Kind
 	lastCount int
-
+	
+	
+	
+	
 	lastRows int
-
+	
+	
+	
 	repeatRow bool
 	stopped   bool
 
 	stop chan struct{}
 	done chan struct{}
 }
+
 
 func New(w io.Writer, opts Options) *Console {
 	c := &Console{
@@ -91,7 +117,10 @@ func New(w io.Writer, opts Options) *Console {
 	return c
 }
 
+
 func (c *Console) Mode() Mode { return c.mode }
+
+
 
 func (c *Console) Start() {
 	if !c.mode.Sticky {
@@ -108,6 +137,8 @@ func (c *Console) Start() {
 	go c.run(stop, done)
 }
 
+
+
 func (c *Console) Stop() {
 	c.mu.Lock()
 	if c.stopped {
@@ -118,6 +149,7 @@ func (c *Console) Stop() {
 	stop, done := c.stop, c.done
 	c.mu.Unlock()
 
+	
 	if stop != nil {
 		close(stop)
 		<-done
@@ -154,6 +186,7 @@ func (c *Console) run(stop <-chan struct{}, done chan<- struct{}) {
 	}
 }
 
+
 func (c *Console) Update(mutate func(*Status)) {
 	if mutate == nil {
 		return
@@ -165,19 +198,25 @@ func (c *Console) Update(mutate func(*Status)) {
 	c.paintBarLocked(false)
 }
 
+
 func (c *Console) Snapshot() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.status
 }
 
+
 func (c *Console) Beat() {
 	c.Update(func(s *Status) { s.LastBeat = c.now() })
 }
 
+
 func (c *Console) CountDiag() {
 	c.Update(func(s *Status) { s.Diags++ })
 }
+
+
+
 
 func (c *Console) Line(kind Kind, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
@@ -186,12 +225,18 @@ func (c *Console) Line(kind Kind, format string, args ...any) {
 	c.writeEntryLocked(kind, msg)
 }
 
+
+
+
+
 func (c *Console) Note(kind Kind, format string, args ...any) {
 	if c.mode.Sticky {
 		return
 	}
 	c.Line(kind, format, args...)
 }
+
+
 
 func (c *Console) Raw(style Style, text string) {
 	c.mu.Lock()
@@ -207,7 +252,10 @@ func (c *Console) Raw(style Style, text string) {
 
 func (c *Console) writeEntryLocked(kind Kind, msg string) {
 	if !c.mode.Sticky {
-
+		
+		
+		
+		
 		_, style := kindLook(c.mode, kind)
 		if c.tag != "" {
 			msg = c.tag + ": " + msg
@@ -225,6 +273,16 @@ func (c *Console) writeEntryLocked(kind Kind, msg string) {
 	c.lastRows = c.rewritableRows(rows)
 	c.repeatRow = false
 }
+
+
+
+
+
+
+
+
+
+
 
 func (c *Console) collapseRepeatLocked(kind Kind, msg string) {
 	c.lastCount++
@@ -245,6 +303,8 @@ func (c *Console) collapseRepeatLocked(kind Kind, msg string) {
 	c.repeatRow = c.lastRows > 0
 }
 
+
+
 func (c *Console) repeatMarker(kind Kind) string {
 	glyph, style := kindLook(c.mode, kind)
 	count := fmt.Sprintf("%s repeated (%s%d)", c.mode.Glyph(GlyphRepeat), multiplySign(c.mode), c.lastCount)
@@ -253,6 +313,8 @@ func (c *Console) repeatMarker(kind Kind) string {
 		c.mode.Paint(style, glyph),
 		c.mode.Paint(StyleDim, count))
 }
+
+
 
 func (c *Console) emitRowsLocked(rows []string, rewind int) {
 	c.clearBarLocked()
@@ -268,6 +330,7 @@ func (c *Console) emitRowsLocked(rows []string, rewind int) {
 	c.paintBarLocked(true)
 }
 
+
 func (c *Console) renderEntry(kind Kind, msg string, count int) []string {
 	glyph, style := kindLook(c.mode, kind)
 	stamp := c.now().Format("15:04:05")
@@ -278,7 +341,8 @@ func (c *Console) renderEntry(kind Kind, msg string, count int) []string {
 		head += c.mode.Paint(StyleDim, fmt.Sprintf(" (%s%d)", multiplySign(c.mode), count))
 	}
 	rows := []string{head}
-
+	
+	
 	indent := strings.Repeat(" ", len(stamp)+1)
 	for _, part := range parts[1:] {
 		rows = append(rows, indent+c.mode.Paint(StyleDim, c.mode.Glyph(GlyphContinuation)+" "+part))
@@ -286,7 +350,15 @@ func (c *Console) renderEntry(kind Kind, msg string, count int) []string {
 	return rows
 }
 
+
+
+
 const maxRewritableRows = 6
+
+
+
+
+
 
 func (c *Console) rewritableRows(rows []string) int {
 	if len(rows) == 0 || len(rows) > maxRewritableRows {
@@ -345,7 +417,8 @@ func (c *Console) paintBarLocked(force bool) {
 	if !force && c.barShown && now.Sub(c.lastPain) < minRepaint {
 		return
 	}
-
+	
+	
 	bar := c.status.render(c.mode, now, c.frame, c.widthLocked()-1)
 	fmt.Fprint(c.w, eraseLine+bar)
 	c.barShown = true
@@ -360,7 +433,12 @@ func (c *Console) widthLocked() int {
 	return w
 }
 
+
+
 const maxPartialLine = 8 << 10
+
+
+
 
 func (c *Console) LineWriter(kind Kind) io.Writer {
 	return &lineWriter{console: c, kind: kind}
@@ -392,6 +470,8 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	}
 	w.mu.Unlock()
 
+	
+	
 	for _, line := range lines {
 		w.console.Line(w.kind, "%s", strings.TrimRight(line, "\r"))
 	}

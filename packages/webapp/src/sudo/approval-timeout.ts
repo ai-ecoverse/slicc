@@ -37,8 +37,12 @@ export function isTimedOut(decision: SudoDecision): boolean {
 
 export function sudoRefusalMessage(prefix: string, decision: SudoDecision): string {
   const reason = decision.decision === 'deny' ? decision.reason : undefined;
-  if (!reason) return `${prefix}: approval denied`;
-  return `${prefix}: approval request timed out — ${timeoutNotice(reason)}`;
+  const base = reason
+    ? `${prefix}: approval request timed out — ${timeoutNotice(reason)}`
+    : `${prefix}: approval denied`;
+
+  const note = decision.note?.trim();
+  return note ? `${base} — approver's reason: ${note}` : base;
 }
 
 export interface ApprovalTimeoutOptions {

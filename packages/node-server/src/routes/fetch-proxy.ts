@@ -27,12 +27,27 @@ export interface FetchProxyDeps {
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }
 
+export function attachUpstreamAbort(res: Response): {
+  controller: AbortController;
+  detach: () => void;
+} {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.on('close', onClose);
+  return {
+    controller,
+    detach: () => res.off('close', onClose),
+  };
+}
+
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   if (value === undefined) return undefined;
   return Array.isArray(value) ? value[0] : value;
 }
 
-async function collectRawBody(req: Request): Promise<Buffer> {
+export async function collectRawBody(req: Request): Promise<Buffer> {
   if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
     return Buffer.from(JSON.stringify(req.body), 'utf-8');
   }
@@ -43,7 +58,7 @@ async function collectRawBody(req: Request): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-function buildForwardHeaders(req: Request, targetUrl: string): Record<string, string> {
+export function buildForwardHeaders(req: Request, targetUrl: string): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (!FETCH_PROXY_SKIP_HEADERS.has(key) && typeof value === 'string') {
@@ -88,7 +103,7 @@ interface ForbiddenSecret {
   hostname: string;
 }
 
-function injectRequestSecrets(
+export function injectRequestSecrets(
   secretProxy: SecretProxyManager,
   headers: Record<string, string>,
   targetUrl: string,
@@ -172,7 +187,7 @@ function forwardUpstreamHeaders(
   res.setHeader('Access-Control-Expose-Headers', buildFetchProxyExposeHeaders(forwardedNames));
 }
 
-function createScrubStream(secretProxy: SecretProxyManager, isText: boolean): Transform {
+export function createScrubStream(secretProxy: SecretProxyManager, isText: boolean): Transform {
   const utf8Decoder = new StringDecoder('utf8');
   return new Transform({
     transform(chunk, _enc, cb) {
@@ -210,7 +225,7 @@ function createScrubStream(secretProxy: SecretProxyManager, isText: boolean): Tr
   });
 }
 
-function streamUpstreamBody(
+export function streamUpstreamBody(
   res: Response,
   upstream: globalThis.Response,
   secretProxy: SecretProxyManager,
@@ -314,12 +329,9 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
 
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
 
-      const abortController = new AbortController();
-      onClientClose = () => {
-        if (!res.writableEnded) abortController.abort();
-      };
-      res.on('close', onClientClose);
-      fetchInit.signal = abortController.signal;
+      const upstreamAbort = attachUpstreamAbort(res);
+      onClientClose = upstreamAbort.detach;
+      fetchInit.signal = upstreamAbort.controller.signal;
 
       const upstream = await fetch(injection.cleanedUrl, fetchInit);
       logger.log(`[fetch-proxy] ${req.method} ${targetUrl} ← ${upstream.status}`);

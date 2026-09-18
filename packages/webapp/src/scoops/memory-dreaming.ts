@@ -1,4 +1,3 @@
-import DEFAULT_DREAMING_MD from '../../../vfs-root/shared/DREAMING.md?raw';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import {
   type AgenticMemoryPassResult,
@@ -10,15 +9,10 @@ import {
   runAgenticMemoryPass,
 } from './agentic-memory.js';
 
-export { DEFAULT_DREAMING_MD };
-
-export const DREAMING_INSTRUCTIONS_PATH = '/shared/DREAMING.md';
-
 export { dreamerAgentName };
 
 export const DREAMER_INSTRUCTIONS: MemoryPassInstructions = {
-  path: DREAMING_INSTRUCTIONS_PATH,
-  fallback: DEFAULT_DREAMING_MD,
+  kind: 'dream',
   nameFor: dreamerAgentName,
 
   rivalsFor: (folder) => [curatorAgentName(folder)],

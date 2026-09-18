@@ -1,5 +1,7 @@
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
+import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 
 const log = createLogger('welcome-detection');
@@ -50,7 +52,7 @@ function openChatDb(): Promise<IDBDatabase> {
   );
 }
 
-async function loadConeChatSession(): Promise<PersistedChatSession | null> {
+async function loadLegacyConeChatSession(): Promise<PersistedChatSession | null> {
   const db = await openChatDb();
   try {
     return await new Promise<PersistedChatSession | null>((resolve, reject) => {
@@ -64,15 +66,40 @@ async function loadConeChatSession(): Promise<PersistedChatSession | null> {
   }
 }
 
+async function loadConeChatMessages(): Promise<PersistedChatMessage[]> {
+  const [canonical, legacy] = await Promise.all([
+    loadCanonicalConeChatMessages().catch((err) => {
+      log.warn('Failed to read the cone conversation record', { error: errorText(err) });
+      return [];
+    }),
+    loadLegacyConeChatSession().catch((err) => {
+      log.warn('Failed to read the legacy cone chat session', { error: errorText(err) });
+      return null;
+    }),
+  ]);
+  const legacyMessages = Array.isArray(legacy?.messages) ? legacy.messages : [];
+  return [...canonical, ...legacyMessages];
+}
+
+async function loadCanonicalConeChatMessages(): Promise<PersistedChatMessage[]> {
+  const session = await new CanonicalSessionReader(
+    new WorkUnitConversationStore()
+  ).loadRootChatSession(PRIMARY_CONE_FOLDER);
+  return session?.messages ?? [];
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export interface WelcomeDetection {
   isFirstRun: boolean;
 }
 
 export async function hasWelcomeLickInHistory(): Promise<boolean> {
   try {
-    const session = await loadConeChatSession();
-    if (!session || !Array.isArray(session.messages)) return false;
-    return session.messages.some((msg) => messageMentionsWelcomeLick(msg));
+    const messages = await loadConeChatMessages();
+    return messages.some((msg) => messageMentionsWelcomeLick(msg));
   } catch (err) {
     log.warn('Failed to scan cone chat session for welcome lick', {
       error: err instanceof Error ? err.message : String(err),
@@ -137,9 +164,8 @@ function messageMentionsFinalLick(msg: PersistedChatMessage): boolean {
 
 export async function hasOnboardingFinalLickInHistory(): Promise<boolean> {
   try {
-    const session = await loadConeChatSession();
-    if (!session || !Array.isArray(session.messages)) return false;
-    return session.messages.some((msg) => messageMentionsFinalLick(msg));
+    const messages = await loadConeChatMessages();
+    return messages.some((msg) => messageMentionsFinalLick(msg));
   } catch (err) {
     log.warn('Failed to scan cone chat session for final lick', {
       error: err instanceof Error ? err.message : String(err),

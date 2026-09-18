@@ -1,4 +1,9 @@
 import type { AgentEvent, ChatMessage, LickEvent, MessageAttachment } from './agent-wire-types.js';
+import type {
+  ComputerDescriptor,
+  ComputerFrameMime,
+  ComputerInputEvent,
+} from './computer-protocol.js';
 import type { TranscriptExportErrorCode } from './transcript-export.js';
 
 export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
@@ -31,6 +36,8 @@ export interface TraySyncCapabilities {
   sudoApproval?: boolean;
 
   biometric?: boolean;
+
+  computer?: boolean;
 }
 
 export type TraySudoKind =
@@ -107,6 +114,8 @@ export type LeaderToFollowerMessage =
       requester?: string;
       suggestedPattern?: string;
 
+      reason?: string;
+
       scoopName?: string;
       expiresAt: number;
     }
@@ -145,6 +154,28 @@ export type LeaderToFollowerMessage =
   | { type: 'status'; scoopStatus: string; scoopJid: string }
   | { type: 'error'; error: string }
   | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }
+  | { type: 'computers.list'; computers: ComputerDescriptor[] }
+  | {
+      type: 'computer.frame';
+      id: string;
+      seq: number;
+      mime: ComputerFrameMime;
+      width: number;
+      height: number;
+      data?: string;
+      chunkData?: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+    }
+  | {
+      type: 'computer.native.capture';
+      requestId: string;
+      fps?: number;
+      maxWidth?: number;
+      watch?: boolean;
+    }
+  | { type: 'computer.native.unwatch'; requestId?: string }
+  | { type: 'computer.native.input'; requestId: string; events: ComputerInputEvent[] }
   | { type: 'models.list'; models: TrayModelCatalogEntry[] }
   | { type: 'model.state'; state: TrayModelSelectionState }
   | { type: 'sprinkles.list'; sprinkles: SprinkleSummary[] }
@@ -224,6 +255,25 @@ export type FollowerToLeaderMessage =
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
   | { type: 'request_snapshot'; scoopJid?: string }
   | { type: 'scoops.select'; scoopJid: string }
+  | { type: 'computer.watch'; id: string; fps?: number; maxWidth?: number }
+  | { type: 'computer.unwatch'; id: string }
+  | { type: 'computer.input'; id: string; events: ComputerInputEvent[] }
+  | {
+      type: 'computer.native.frame';
+      requestId: string;
+      seq: number;
+      mime: ComputerFrameMime;
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+      data?: string;
+      chunkData?: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+    }
+  | { type: 'computer.native.error'; requestId: string; error: string }
+  | { type: 'computer.native.input.result'; requestId: string; error?: string }
   | { type: 'models.request' }
   | {
       type: 'model.select';
@@ -496,6 +546,15 @@ const CDP_CHUNK_SIZE = 32 * 1024;
 
 type CDPResponseMessage = Extract<TraySyncMessage, { type: 'cdp.response' }>;
 
+export const COMPUTER_TRAY_MAX_FPS = 2;
+export const COMPUTER_TRAY_MAX_WIDTH = 480;
+
+export type ComputerFrameMessage = Extract<LeaderToFollowerMessage, { type: 'computer.frame' }>;
+export type ComputerNativeFrameMessage = Extract<
+  FollowerToLeaderMessage,
+  { type: 'computer.native.frame' }
+>;
+
 export function sendCDPResponse(
   channel: { send(message: TraySyncMessage): boolean },
   requestId: string,
@@ -577,5 +636,241 @@ export function reassembleCDPResponse(
     }
   }
 
+  return null;
+}
+
+export function sendComputerFrame(
+  channel: { send(message: TraySyncMessage): boolean; bufferedAmount?: number },
+  frame: {
+    id: string;
+    seq: number;
+    mime: ComputerFrameMime;
+    width: number;
+    height: number;
+    data: string;
+  }
+): boolean {
+  if (frame.data.length <= CDP_CHUNK_THRESHOLD) {
+    return channel.send({ type: 'computer.frame', ...frame });
+  }
+  const queued = channel.bufferedAmount;
+  if (typeof queued === 'number' && queued >= TRAY_SEND_HIGH_WATER_BYTES) {
+    return false;
+  }
+  const totalChunks = Math.ceil(frame.data.length / CDP_CHUNK_SIZE);
+  let allSent = true;
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkData = frame.data.slice(i * CDP_CHUNK_SIZE, (i + 1) * CDP_CHUNK_SIZE);
+    const ok = channel.send({
+      type: 'computer.frame',
+      id: frame.id,
+      seq: frame.seq,
+      mime: frame.mime,
+      width: frame.width,
+      height: frame.height,
+      chunkData,
+      chunkIndex: i,
+      totalChunks,
+    });
+    if (!ok) {
+      allSent = false;
+      break;
+    }
+  }
+  return allSent;
+}
+
+export function reassembleComputerFrame(
+  buffers: Map<string, { chunks: string[]; received: number; totalChunks: number }>,
+  message: ComputerFrameMessage
+): ComputerFrameMessage | null {
+  if (message.chunkIndex === undefined || message.totalChunks === undefined) {
+    return message;
+  }
+  const key = `${message.id}:${message.seq}`;
+  let buffer = buffers.get(key);
+  if (!buffer) {
+    buffer = {
+      chunks: new Array(message.totalChunks),
+      received: 0,
+      totalChunks: message.totalChunks,
+    };
+    buffers.set(key, buffer);
+  }
+  if (!buffer.chunks[message.chunkIndex] && message.chunkData !== undefined) {
+    buffer.chunks[message.chunkIndex] = message.chunkData;
+    buffer.received++;
+  }
+  if (buffer.received >= buffer.totalChunks) {
+    buffers.delete(key);
+    return {
+      type: 'computer.frame',
+      id: message.id,
+      seq: message.seq,
+      mime: message.mime,
+      width: message.width,
+      height: message.height,
+      data: buffer.chunks.join(''),
+    };
+  }
+  return null;
+}
+
+export function sendComputerNativeFrame(
+  channel: { send(message: TraySyncMessage): boolean; bufferedAmount?: number },
+  frame: {
+    requestId: string;
+    seq: number;
+    mime: ComputerFrameMime;
+    width: number;
+    height: number;
+    nativeWidth: number;
+    nativeHeight: number;
+    data: string;
+  }
+): boolean {
+  if (frame.data.length <= CDP_CHUNK_THRESHOLD) {
+    return channel.send({ type: 'computer.native.frame', ...frame });
+  }
+  const queued = channel.bufferedAmount;
+  if (typeof queued === 'number' && queued >= TRAY_SEND_HIGH_WATER_BYTES) {
+    return false;
+  }
+  const totalChunks = Math.ceil(frame.data.length / CDP_CHUNK_SIZE);
+  let allSent = true;
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkData = frame.data.slice(i * CDP_CHUNK_SIZE, (i + 1) * CDP_CHUNK_SIZE);
+    const ok = channel.send({
+      type: 'computer.native.frame',
+      requestId: frame.requestId,
+      seq: frame.seq,
+      mime: frame.mime,
+      width: frame.width,
+      height: frame.height,
+      nativeWidth: frame.nativeWidth,
+      nativeHeight: frame.nativeHeight,
+      chunkData,
+      chunkIndex: i,
+      totalChunks,
+    });
+    if (!ok) {
+      allSent = false;
+      break;
+    }
+  }
+  return allSent;
+}
+
+export type ComputerNativeFrameBuffer = {
+  chunks: string[];
+  received: number;
+  totalChunks: number;
+  bytes: number;
+};
+
+function nativeFrameBufferBytes(buffers: Map<string, ComputerNativeFrameBuffer>): number {
+  let total = 0;
+  for (const buffer of buffers.values()) total += buffer.bytes;
+  return total;
+}
+
+export type ComputerNativeReassemblyLimits = {
+  maxChunkCount: number;
+  maxPending: number;
+  maxBytes: number;
+};
+
+export const DEFAULT_NATIVE_FRAME_REASSEMBLY_LIMITS: ComputerNativeReassemblyLimits = {
+  maxChunkCount: TRAY_MAX_CHUNK_COUNT,
+  maxPending: TRAY_MAX_PENDING_REASSEMBLIES,
+  maxBytes: TRAY_MAX_REASSEMBLY_BYTES,
+};
+
+function evictNativeFrameOverflow(
+  buffers: Map<string, ComputerNativeFrameBuffer>,
+  extraBytes: number,
+  limits: ComputerNativeReassemblyLimits
+): void {
+  while (
+    buffers.size > 0 &&
+    (buffers.size >= limits.maxPending ||
+      nativeFrameBufferBytes(buffers) + extraBytes > limits.maxBytes)
+  ) {
+    const oldest = buffers.keys().next();
+    if (oldest.done) return;
+    buffers.delete(oldest.value);
+  }
+}
+
+export function reassembleComputerNativeFrame(
+  buffers: Map<string, ComputerNativeFrameBuffer>,
+  message: ComputerNativeFrameMessage,
+  limits: ComputerNativeReassemblyLimits = DEFAULT_NATIVE_FRAME_REASSEMBLY_LIMITS
+): ComputerNativeFrameMessage | null {
+  if (message.chunkIndex === undefined || message.totalChunks === undefined) {
+    return message;
+  }
+  const { totalChunks, chunkIndex, chunkData } = message;
+  if (
+    !Number.isInteger(totalChunks) ||
+    totalChunks <= 0 ||
+    totalChunks > limits.maxChunkCount ||
+    !Number.isInteger(chunkIndex) ||
+    chunkIndex < 0 ||
+    chunkIndex >= totalChunks
+  ) {
+    return null;
+  }
+  const key = `${message.requestId}:${message.seq}`;
+  let buffer = buffers.get(key);
+  if (buffer && buffer.totalChunks !== totalChunks) {
+    buffers.delete(key);
+    buffer = undefined;
+  }
+  const extra = chunkData?.length ?? 0;
+  if (!buffer) {
+    evictNativeFrameOverflow(buffers, extra, limits);
+    if (
+      buffers.size >= limits.maxPending ||
+      nativeFrameBufferBytes(buffers) + extra > limits.maxBytes
+    ) {
+      return null;
+    }
+    buffer = {
+      chunks: new Array(totalChunks),
+      received: 0,
+      totalChunks,
+      bytes: 0,
+    };
+    buffers.set(key, buffer);
+  }
+  if (!buffer.chunks[chunkIndex] && chunkData !== undefined) {
+    if (nativeFrameBufferBytes(buffers) + extra > limits.maxBytes) {
+      evictNativeFrameOverflow(buffers, extra, limits);
+      if (!buffers.has(key) || nativeFrameBufferBytes(buffers) + extra > limits.maxBytes) {
+        buffers.delete(key);
+        return null;
+      }
+      buffer = buffers.get(key);
+      if (!buffer) return null;
+    }
+    buffer.chunks[chunkIndex] = chunkData;
+    buffer.received++;
+    buffer.bytes += extra;
+  }
+  if (buffer.received >= buffer.totalChunks) {
+    buffers.delete(key);
+    return {
+      type: 'computer.native.frame',
+      requestId: message.requestId,
+      seq: message.seq,
+      mime: message.mime,
+      width: message.width,
+      height: message.height,
+      nativeWidth: message.nativeWidth,
+      nativeHeight: message.nativeHeight,
+      data: buffer.chunks.join(''),
+    };
+  }
   return null;
 }

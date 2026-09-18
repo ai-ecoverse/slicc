@@ -10,11 +10,16 @@ import {
 } from '../shell/supplemental-commands/hf-download.js';
 import { ESPEAK_DIST_VFS_PATH, ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE } from './espeak-phonemizer.js';
 import { KOKORO_MODEL_ID, WHISPER_MODEL_ID } from './model-ids.js';
+import { ORT_WEB_VERSION } from './ort-version.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from './transformers-env.js';
 
 const log = createLogger('speech:ensure-assets');
 
 const ORT_PACKAGE = 'onnxruntime-web';
+
+const ORT_PACKAGE_JSON_VFS = '/workspace/node_modules/onnxruntime-web/package.json';
+
+const ORT_INSTALL_SPEC = `${ORT_PACKAGE}@${ORT_WEB_VERSION}`;
 
 const ESPEAK_PACKAGE = 'espeak-ng';
 const ESPEAK_DIST_FILES: ReadonlyArray<string> = [ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE];
@@ -67,6 +72,23 @@ const ORT_REQUIRED_DIST_FILES: ReadonlyArray<string> = ORT_WASM_DIST_FILES.filte
   (f) => !/\.(asyncify|jspi)\./.test(f)
 );
 
+async function stagedOrtVersion(fs: VirtualFS): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(ORT_PACKAGE_JSON_VFS, { encoding: 'utf-8' });
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const parsed: unknown = JSON.parse(text);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'version' in parsed &&
+      typeof parsed.version === 'string'
+    ) {
+      return parsed.version;
+    }
+  } catch {}
+  return null;
+}
+
 async function ensureOrtStaged(
   deps: EnsureSpeechAssetsDeps,
   onProgress?: SpeechAssetProgressFn
@@ -74,12 +96,13 @@ async function ensureOrtStaged(
   const present = await Promise.all(
     ORT_REQUIRED_DIST_FILES.map((f) => deps.fs.exists(`${ORT_DIST_VFS_PATH}${f}`))
   );
-  if (present.every(Boolean)) {
+  const version = await stagedOrtVersion(deps.fs);
+  if (present.every(Boolean) && version === ORT_WEB_VERSION) {
     onProgress?.({ asset: ORT_PACKAGE, phase: 'present' });
     return false;
   }
   onProgress?.({ asset: ORT_PACKAGE, phase: 'staging' });
-  const { errors } = await installPackages([ORT_PACKAGE], {
+  const { errors } = await installPackages([ORT_INSTALL_SPEC], {
     fs: deps.fs,
     fetch: deps.fetch,
     cwd: WORKSPACE_CWD,

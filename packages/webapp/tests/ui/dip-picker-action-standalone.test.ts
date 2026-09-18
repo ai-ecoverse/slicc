@@ -55,12 +55,33 @@ vi.mock('../../src/kernel/serial-port-registry.js', () => ({
   getNavigatorSerial: vi.fn(),
 }));
 
+const screenMod = vi.hoisted(() => ({
+  adoptDisplayStream: vi.fn(async () => ({
+    bytes: new Uint8Array(0),
+    mimeType: 'application/octet-stream',
+    width: 1280,
+    height: 720,
+    handle: 'screen1',
+  })),
+  displaySessions: { stop: vi.fn(() => true) },
+}));
+vi.mock('../../src/shell/supplemental-commands/screencapture-media.js', () => ({
+  adoptDisplayStream: screenMod.adoptDisplayStream,
+  displaySessions: screenMod.displaySessions,
+}));
+
 const { handleDipPickerAction } = await import('../../src/ui/dip.js');
 
-beforeEach(() => {
+beforeEach(async () => {
   surfaceMock.request.mockReset();
   surfaceMock.addEventListener.mockReset();
   surfaceMock.removeEventListener.mockReset();
+  screenMod.adoptDisplayStream.mockClear();
+  screenMod.displaySessions.stop.mockClear();
+  const live = await import(
+    '../../src/shell/supplemental-commands/computer/screen-share-approval-live.js'
+  );
+  live.resetScreenShareApprovalLiveForTests();
 });
 
 afterEach(() => {
@@ -199,5 +220,43 @@ describe('handleDipPickerAction (standalone) — routes pickers through <slicc-p
     expect(onLick).toHaveBeenCalledWith('approve', {
       error: 'File System Access API not available',
     });
+  });
+
+  it('screenshare: surface grant → adoptDisplayStream → { granted, handle }', async () => {
+    const stream = { id: 'display' };
+    surfaceMock.request.mockResolvedValueOnce({
+      kind: 'screenshare',
+      stream,
+    });
+    const onLick = vi.fn();
+    await handleDipPickerAction(
+      { type: 'dip-picker-action', action: 'approve', picker: 'screenshare' },
+      onLick
+    );
+    expect(surfaceMock.request).toHaveBeenCalledWith('screenshare', {
+      constraints: { video: true },
+    });
+    expect(screenMod.adoptDisplayStream).toHaveBeenCalledWith(stream);
+    expect(onLick).toHaveBeenCalledWith('approve', { granted: true, handle: 'screen1' });
+  });
+
+  it('stops a late screenshare grant after approval expiry', async () => {
+    const live = await import(
+      '../../src/shell/supplemental-commands/computer/screen-share-approval-live.js'
+    );
+    live.beginScreenShareApproval('ui-1');
+    live.endScreenShareApproval('ui-1');
+    const stream = { id: 'display-late' };
+    surfaceMock.request.mockResolvedValueOnce({
+      kind: 'screenshare',
+      stream,
+    });
+    const onLick = vi.fn();
+    await handleDipPickerAction(
+      { type: 'dip-picker-action', action: 'approve', picker: 'screenshare' },
+      onLick
+    );
+    expect(screenMod.displaySessions.stop).toHaveBeenCalledWith('screen1');
+    expect(onLick).toHaveBeenCalledWith('approve', { cancelled: true });
   });
 });

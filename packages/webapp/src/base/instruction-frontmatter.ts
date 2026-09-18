@@ -131,12 +131,13 @@ export function readOptionalString(
 export function readBoundedTimeout(
   value: FrontmatterValue | undefined,
   fallback: number,
-  max: number
+  max: number,
+  key = 'timeoutSeconds'
 ): number {
   if (value === undefined) return fallback;
-  if (typeof value !== 'string') throw new Error('timeoutSeconds is invalid');
+  if (typeof value !== 'string') throw new Error(`${key} is invalid`);
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('timeoutSeconds must be positive');
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${key} must be positive`);
   return Math.min(parsed, max);
 }
 

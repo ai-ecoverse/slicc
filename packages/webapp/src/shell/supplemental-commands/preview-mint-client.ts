@@ -1,3 +1,5 @@
+import { PREVIEW_MAX_SNAPSHOTS_PER_TRAY } from '@slicc/shared-ts';
+
 export interface MintArgs {
   workerBaseUrl: string;
   trayId: string;
@@ -31,12 +33,44 @@ export interface PreviewListItem {
   createdAt: string;
   userHash?: string;
   mode?: 'live' | 'persistent';
+
+  state?: 'pending' | 'ready' | 'cleanup';
   expiresAt?: string;
 }
 
+interface WorkerErrorBody {
+  error?: string;
+  code?: string;
+  active?: number;
+  limit?: number;
+}
+
+function previewLimitMessage(body: WorkerErrorBody): string {
+  const counted = typeof body.active === 'number' && typeof body.limit === 'number';
+  if (body.code === 'LIVE_PREVIEW_LIMIT') {
+    const usage = counted ? ` (${body.active} of ${body.limit} live previews in use)` : '';
+    return (
+      `${body.error ?? 'Too many live previews'}${usage}. ` +
+      'List them with "serve --list" and stop the ones you no longer need with "serve --stop <token>".'
+    );
+  }
+  const usage = counted
+    ? `${body.active} of ${body.limit} --ttl snapshots in use`
+    : `limit ${PREVIEW_MAX_SNAPSHOTS_PER_TRAY} --ttl snapshots per tray`;
+  return (
+    `${body.error ?? 'Snapshot limit reached'} (${usage}, uploads in progress included; live previews do not count). ` +
+    'List them with "serve --list" and free one with "serve --stop <token>".'
+  );
+}
+
+const QUOTA_CODES = new Set(['PREVIEW_LIMIT', 'LIVE_PREVIEW_LIMIT']);
+
 async function workerError(prefix: string, response: Response): Promise<Error> {
   try {
-    const body = (await response.clone().json()) as { error?: string };
+    const body = (await response.clone().json()) as WorkerErrorBody;
+    if (body.code && QUOTA_CODES.has(body.code)) {
+      return new Error(`${prefix}: ${previewLimitMessage(body)}`);
+    }
     if (body.error) return new Error(`${prefix}: ${body.error}`);
   } catch {}
   return new Error(`${prefix}: ${response.status}`);

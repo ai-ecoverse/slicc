@@ -3,6 +3,7 @@ import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
+import { readoptFeatureFlagsFromCache } from '../core/feature-flags-cache.js';
 import { getBudgetWindowSnapshot, refreshBudgetWindow } from '../providers/budget-usage-source.js';
 import { AGENT_BRIDGE_GLOBAL_KEY, type AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
@@ -11,7 +12,6 @@ import { type CompactionRowAction, CompactionRowTracker } from '../scoops/compac
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { Orchestrator, OrchestratorCallbacks } from '../scoops/orchestrator.js';
-import { handleSprinkleOpResponse } from '../scoops/sprinkle-manager-proxy.js';
 import {
   capTranscriptToolInput,
   capTranscriptToolResultForBuffer,
@@ -47,7 +47,6 @@ import type {
   PanelToOffscreenMessage,
   ScoopCreatedMsg,
   ScoopListMsg,
-  ScoopMessagesReplacedMsg,
   ScoopModelSelection,
   ScoopStatusMsg,
   SessionBudgetWindow,
@@ -206,8 +205,6 @@ export class Bridge implements KernelFacade {
           bridge.currentMessageId.delete(scoopJid);
         }
 
-        bridge.persistScoop(scoopJid);
-
         void bridge.flushPendingMarkers(scoopJid);
 
         bridge.emit({
@@ -222,7 +219,6 @@ export class Bridge implements KernelFacade {
         const buf = bridge.getBuffer(targetJid);
         const msgId = `msg-${uid()}`;
         buf.push({ id: msgId, role: 'assistant', content: text, timestamp: Date.now() });
-        bridge.persistScoop(targetJid);
 
         bridge.emit({
           type: 'agent-event',
@@ -243,6 +239,9 @@ export class Bridge implements KernelFacade {
         if (status === 'ready') {
           bridge.currentMessageId.delete(scoopJid);
         }
+        if (status === 'ready' || status === 'error') {
+          void bridge.flushPendingMarkers(scoopJid);
+        }
 
         bridge.emit({
           type: 'scoop-status',
@@ -261,6 +260,7 @@ export class Bridge implements KernelFacade {
           state,
           trigger: detail.trigger,
           ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
+          ...(detail.failure ? { failure: detail.failure } : {}),
           ...(detail.roundId ? { roundId: detail.roundId } : {}),
           ...(action ? { rowId: action.messageId } : {}),
         });
@@ -268,12 +268,13 @@ export class Bridge implements KernelFacade {
         void bridge.recordCompactionRow(scoopJid, action);
       },
 
-      onError: (scoopJid, error) => {
-        bridge.recordErrorCard(scoopJid, error);
+      onError: (scoopJid, error, options) => {
+        void bridge.recordErrorCard(scoopJid, error);
         bridge.emit({
           type: 'error',
           scoopJid,
           error,
+          ...(options?.endTurn === false ? { endTurn: false } : {}),
         } satisfies ErrorMsg);
       },
 
@@ -381,8 +382,6 @@ export class Bridge implements KernelFacade {
       }
     }
 
-    this.persistScoop(scoopJid);
-
     this.emit({
       type: 'agent-event',
       scoopJid,
@@ -410,7 +409,6 @@ export class Bridge implements KernelFacade {
       lickState: message.lickState,
     };
     this.getBuffer(scoopJid).push(chatMsg);
-    this.persistScoop(scoopJid);
     this.notifyPanelIncomingMessage(scoopJid, message);
   }
 
@@ -458,10 +456,7 @@ export class Bridge implements KernelFacade {
     const entry = buf?.find(
       (m) => (update.lickId && m.lickId === update.lickId) || m.id === update.messageId
     );
-    if (entry) {
-      entry.lickState = update.lickState;
-      this.persistScoop(scoopJid);
-    }
+    if (entry) entry.lickState = update.lickState;
     this.emit({
       type: 'message-updated',
       scoopJid,
@@ -526,11 +521,31 @@ export class Bridge implements KernelFacade {
     }
     const scoops = this.orchestrator.getScoops();
 
-    const resolvedTarget = targetScoop ?? getSprinkleRoute(sprinkleName);
-
-    let target = resolvedTarget ? matchLickTargetAlias(scoops, resolvedTarget) : undefined;
+    const configuredRoute = getSprinkleRoute(sprinkleName);
+    const targetCandidates: Array<{
+      source: 'explicit target' | 'configured route';
+      value: string;
+    }> = [];
+    if (targetScoop) targetCandidates.push({ source: 'explicit target', value: targetScoop });
+    if (configuredRoute && configuredRoute !== targetScoop) {
+      targetCandidates.push({ source: 'configured route', value: configuredRoute });
+    }
+    const unresolvedTargets: typeof targetCandidates = [];
+    let target: RegisteredScoop | undefined;
+    for (const candidate of targetCandidates) {
+      target = matchLickTargetAlias(scoops, candidate.value);
+      if (target) break;
+      unresolvedTargets.push(candidate);
+    }
     if (!target) {
       target = this.originRootOf(scoops, origin?.unitJid) ?? rootsOf(scoops)[0];
+    }
+    if (unresolvedTargets.length > 0) {
+      log.warn('Sprinkle lick target could not be resolved; using fallback', {
+        sprinkleName,
+        unresolvedTargets,
+        fallbackJid: target?.jid,
+      });
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
@@ -541,9 +556,16 @@ export class Bridge implements KernelFacade {
       body,
       originLabel: origin?.label,
     } as Parameters<typeof formatLickEventForCone>[0]);
-    const content =
+    const baseContent =
       formatted?.content ??
       `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
+    const unresolvedTargetSummary = unresolvedTargets
+      .map(({ source, value }) => `${source} ${JSON.stringify(value)}`)
+      .join(' and ');
+    const deliveryNote = unresolvedTargetSummary
+      ? `\n\n> Delivery note: ${unresolvedTargetSummary} could not be resolved; delivered to fallback ${JSON.stringify(target.folder)}.`
+      : '';
+    const content = baseContent + deliveryNote;
     const channelMsg: ChannelMessage = {
       id: msgId,
       chatJid: target.jid,
@@ -562,7 +584,6 @@ export class Bridge implements KernelFacade {
       source: 'lick',
       channel: 'sprinkle',
     });
-    this.persistScoop(target.jid);
     await this.orchestrator.handleMessage(channelMsg);
   }
 
@@ -589,14 +610,6 @@ export class Bridge implements KernelFacade {
     this.messageBuffers.set(cone.jid, buf);
     this.currentMessageId.delete(cone.jid);
     this.agentEventStream.clear(cone.jid);
-    if (this.sessionStore) {
-      const sessionId = chatSessionIdFor(cone);
-      this.sessionStore.saveMessages(sessionId, messages).catch((err) => {
-        log.error('applyFollowerSnapshot persist failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
     this.emit({
       type: 'scoop-messages-replaced',
       scoopJid: cone.jid,
@@ -682,40 +695,6 @@ export class Bridge implements KernelFacade {
     this.emit({ type: 'scoop-status', scoopJid, status });
   }
 
-  private async buildBufferFromAgentMessages(
-    scoop: RegisteredScoop
-  ): Promise<BufferedChatMessage[] | null> {
-    const context = this.orchestrator?.getScoopContext(scoop.jid);
-    if (!context) return null;
-    const agentMessages = context.getAgentMessages();
-    if (agentMessages.length === 0) return null;
-    const { agentMessagesToChatMessages } = await import('../scoops/agent-message-to-chat.js');
-    const chatMessages = agentMessagesToChatMessages(agentMessages, {
-      source: sourceLabelFor(scoop),
-    });
-
-    const { interleaveMarkers } = await import('../work-unit/conversation/derive.js');
-    return this.overlayPersistedLickDecisionsOn(
-      scoop,
-      await this.withPersistedErrorCards(
-        scoop,
-        toBufferedChatMessages(
-          interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
-        )
-      )
-    );
-  }
-
-  private async loadConversationMarkers(
-    scoop: RegisteredScoop
-  ): Promise<ConversationMarker[] | undefined> {
-    const store = this.orchestrator?.getConversationStore?.();
-    if (!store) return undefined;
-    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
-    const record = await store.load(conversationKeyFor(scoop));
-    return record?.markers;
-  }
-
   private async buildBufferFromCanonicalRecord(
     scoop: RegisteredScoop
   ): Promise<BufferedChatMessage[] | null> {
@@ -727,10 +706,7 @@ export class Bridge implements KernelFacade {
     const { toChatMessages } = await import('../work-unit/conversation/derive.js');
     const chatMessages = await toChatMessages(record, { source: sourceLabelFor(scoop) });
     if (chatMessages.length === 0) return null;
-    return this.overlayPersistedLickDecisionsOn(
-      scoop,
-      await this.withPersistedErrorCards(scoop, toBufferedChatMessages(chatMessages))
-    );
+    return this.overlayPersistedLickDecisionsOn(scoop, toBufferedChatMessages(chatMessages));
   }
 
   private async overlayPersistedLickDecisionsOn(
@@ -739,12 +715,6 @@ export class Bridge implements KernelFacade {
   ): Promise<BufferedChatMessage[]> {
     if (!buf.some((m) => m.channel === 'sudo-request' || m.lickId || m.lickState)) return buf;
     const stored: PersistedLickDecision[] = [];
-    if (this.sessionStore) {
-      try {
-        const session = await this.sessionStore.load(chatSessionIdFor(scoop));
-        if (session?.messages) stored.push(...session.messages);
-      } catch {}
-    }
     try {
       const channel = await this.orchestrator?.getMessagesForScoop?.(scoop.jid);
       if (channel) {
@@ -762,17 +732,16 @@ export class Bridge implements KernelFacade {
     return overlayPersistedLickDecisions(buf, stored);
   }
 
-  async seedBuffersFromAgentState(): Promise<void> {
+  async hydrateBuffersFromRecords(): Promise<void> {
     if (!this.orchestrator) return;
     for (const scoop of this.orchestrator.getScoops()) {
       const existing = this.messageBuffers.get(scoop.jid);
       if (existing && existing.length > 0) continue;
-      const buf = await this.buildBufferFromAgentMessages(scoop);
+      const buf = await this.buildBufferFromCanonicalRecord(scoop);
       if (!buf) continue;
       this.messageBuffers.set(scoop.jid, buf);
       this.currentMessageId.delete(scoop.jid);
       this.agentEventStream.clear(scoop.jid);
-      await this.persistScoopAwait(scoop.jid);
     }
   }
 
@@ -798,55 +767,18 @@ export class Bridge implements KernelFacade {
       return;
     }
 
-    const buf = await this.buildBufferFromAgentMessages(scoop);
-    if (buf) {
-      this.messageBuffers.set(scoopJid, buf);
-      this.currentMessageId.delete(scoopJid);
-      this.agentEventStream.clear(scoopJid);
-
-      this.persistScoop(scoopJid);
-      this.emit({
-        type: 'scoop-messages-replaced',
-        scoopJid,
-        messages: buf,
-        queuedIds: this.queuedIdsFor(scoopJid),
-      });
-      return;
-    }
-
     const derived = await this.buildBufferFromCanonicalRecord(scoop);
     if (derived) {
       this.messageBuffers.set(scoopJid, derived);
       this.currentMessageId.delete(scoopJid);
       this.agentEventStream.clear(scoopJid);
-      this.persistScoop(scoopJid);
-      this.emit({ type: 'scoop-messages-replaced', scoopJid, messages: derived });
+      this.emit({
+        type: 'scoop-messages-replaced',
+        scoopJid,
+        messages: derived,
+        queuedIds: this.queuedIdsFor(scoopJid),
+      });
       return;
-    }
-
-    if (this.sessionStore) {
-      const sessionId = chatSessionIdFor(scoop);
-      try {
-        const session = await this.sessionStore.load(sessionId);
-        const messages = session?.messages ?? [];
-        if (messages.length > 0) {
-          this.messageBuffers.set(scoopJid, messages as unknown as BufferedChatMessage[]);
-          this.currentMessageId.delete(scoopJid);
-          this.agentEventStream.clear(scoopJid);
-          this.emit({
-            type: 'scoop-messages-replaced',
-            scoopJid,
-            messages: messages as unknown as BufferedChatMessage[],
-            queuedIds: this.queuedIdsFor(scoopJid),
-          });
-          return;
-        }
-      } catch (err) {
-        log.error('sessionStore load failed', {
-          sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
     }
 
     this.emit({
@@ -1075,25 +1007,10 @@ export class Bridge implements KernelFacade {
       return;
     }
 
-    const buf = await this.buildBufferFromAgentMessages(scoop);
-    if (buf && buf.length > 0) {
-      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: buf });
+    const derived = await this.buildBufferFromCanonicalRecord(scoop);
+    if (derived) {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: derived });
       return;
-    }
-
-    if (this.sessionStore) {
-      const sessionId = chatSessionIdFor(scoop);
-      try {
-        const session = await this.sessionStore.load(sessionId);
-        const messages = session?.messages ?? [];
-        this.emit({
-          type: 'scoop-chat-messages',
-          requestId,
-          scoopJid,
-          messages: messages as unknown as ScoopMessagesReplacedMsg['messages'],
-        });
-        return;
-      } catch {}
     }
 
     empty();
@@ -1123,7 +1040,6 @@ export class Bridge implements KernelFacade {
         });
       }
     }
-    this.persistScoop(scoopJid);
     const store = this.orchestrator?.getConversationStore?.();
     if (!store) return;
     const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
@@ -1165,57 +1081,84 @@ export class Bridge implements KernelFacade {
     const store = this.orchestrator?.getConversationStore?.();
     const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
     if (!store || !scoop) return;
-    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const { conversationIdentityFor, conversationKeyFor } = await import(
+      '../work-unit/conversation/key.js'
+    );
     const key = conversationKeyFor(scoop);
-    const stuck: ConversationMarker[] = [];
     for (const marker of held) {
-      if (!(await store.putMarker(key, marker))) stuck.push(marker);
+      let written = false;
+      try {
+        written = await store.putMarker(
+          key,
+          marker,
+          marker.kind === 'error' ? { createWith: conversationIdentityFor(scoop) } : undefined
+        );
+      } catch (err) {
+        log.warn('Conversation marker retry threw', {
+          scoopJid,
+          folder: scoop.folder,
+          markerId: marker.id,
+          kind: marker.kind,
+          errorName: err instanceof Error ? err.name : 'unknown',
+        });
+      }
+      if (written) {
+        this.dropPendingMarker(scoopJid, marker.id);
+      } else {
+        log.warn('Conversation marker retry deferred', {
+          scoopJid,
+          folder: scoop.folder,
+          markerId: marker.id,
+          kind: marker.kind,
+        });
+      }
     }
-    if (stuck.length === 0) this.pendingMarkers.delete(scoopJid);
-    else this.pendingMarkers.set(scoopJid, stuck);
   }
 
-  private recordErrorCard(scoopJid: string, error: string): void {
+  private async recordErrorCard(scoopJid: string, error: string): Promise<void> {
+    const id = uid();
+    const timestamp = Date.now();
     this.getBuffer(scoopJid).push({
-      id: uid(),
+      id,
       role: 'assistant',
       content: error,
-      timestamp: Date.now(),
+      timestamp,
       error: true,
     });
-    this.persistScoop(scoopJid);
-  }
+    const marker: ConversationMarker = { id, kind: 'error', timestamp, text: error };
 
-  private async withPersistedErrorCards(
-    scoop: RegisteredScoop,
-    rebuilt: BufferedChatMessage[]
-  ): Promise<BufferedChatMessage[]> {
-    if (!this.sessionStore) return rebuilt;
-    try {
-      const session = await this.sessionStore.load(chatSessionIdFor(scoop));
-      return foldPersistedErrorCards(rebuilt, session?.messages);
-    } catch {
-      return rebuilt;
+    this.holdPendingMarker(scoopJid, marker);
+    const store = this.orchestrator?.getConversationStore?.();
+    const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
+    if (!store || !scoop) {
+      log.warn('Error marker is waiting for a canonical target', {
+        scoopJid,
+        markerId: marker.id,
+        hasStore: Boolean(store),
+        hasScoop: Boolean(scoop),
+      });
+      return;
     }
-  }
-
-  persistScoop(jid: string): void {
-    void this.persistScoopAwait(jid);
-  }
-
-  private async persistScoopAwait(jid: string): Promise<void> {
-    if (!this.sessionStore || !this.orchestrator) return;
-    const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
-    if (!scoop) return;
-    const sessionId = chatSessionIdFor(scoop);
-    const buf = this.messageBuffers.get(jid);
-    if (!buf || buf.length === 0) return;
+    const { conversationIdentityFor } = await import('../work-unit/conversation/key.js');
+    const identity = conversationIdentityFor(scoop);
+    let written = false;
     try {
-      await this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]);
+      written = await store.putMarker(identity.key, marker, { createWith: identity });
     } catch (err) {
-      log.error('persistScoop failed', {
-        sessionId,
-        error: err instanceof Error ? err.message : String(err),
+      log.warn('Error marker write threw; queued for retry', {
+        scoopJid,
+        folder: scoop.folder,
+        markerId: marker.id,
+        errorName: err instanceof Error ? err.name : 'unknown',
+      });
+    }
+    if (written) {
+      this.dropPendingMarker(scoopJid, marker.id);
+    } else {
+      log.warn('Error marker write deferred', {
+        scoopJid,
+        folder: scoop.folder,
+        markerId: marker.id,
       });
     }
   }
@@ -1286,13 +1229,6 @@ export class Bridge implements KernelFacade {
   private setupMessageListener(): () => void {
     return this.transport.onMessage((msg) => {
       if (msg.source !== 'panel') return;
-
-      if ((msg.payload as { type?: string })?.type === 'sprinkle-op-response') {
-        handleSprinkleOpResponse(
-          msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
-        );
-        return;
-      }
 
       this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
         console.error('[kernel-bridge] handlePanelMessage error:', err);
@@ -1456,16 +1392,20 @@ export class Bridge implements KernelFacade {
 
       case 'local-storage-set': {
         this.applyLocalStorageOp(msg.type, (s) => s.setItem(msg.key, msg.value));
+        readoptFeatureFlagsFromCache(msg.key);
         break;
       }
 
       case 'local-storage-remove': {
         this.applyLocalStorageOp(msg.type, (s) => s.removeItem(msg.key));
+        readoptFeatureFlagsFromCache(msg.key);
         break;
       }
 
       case 'local-storage-clear': {
         this.applyLocalStorageOp(msg.type, (s) => s.clear());
+
+        readoptFeatureFlagsFromCache();
         break;
       }
     }
@@ -1565,7 +1505,6 @@ export class Bridge implements KernelFacade {
     const next = buf.filter((m) => m.id !== messageId);
     if (next.length === buf.length) return;
     this.messageBuffers.set(scoopJid, next);
-    this.persistScoop(scoopJid);
   }
 
   private async handleUserMessage(
@@ -1578,7 +1517,6 @@ export class Bridge implements KernelFacade {
       attachments: msg.attachments,
       timestamp: Date.now(),
     });
-    this.persistScoop(msg.scoopJid);
     if (this.followerSync) {
       if (msg.steer) {
         this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
@@ -1836,47 +1774,6 @@ function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedC
     compaction: m.compaction,
     error: m.error,
   }));
-}
-
-function foldPersistedErrorCards(
-  rebuilt: BufferedChatMessage[],
-  persisted: readonly ChatMessage[] | undefined
-): BufferedChatMessage[] {
-  if (!persisted || persisted.length === 0) return rebuilt;
-  const extras = persisted.filter((m) => m.error === true);
-  if (extras.length === 0) return rebuilt;
-  const seen = new Set(rebuilt.map((m) => m.id));
-  const fresh = extras.filter((m) => !seen.has(m.id));
-  if (fresh.length === 0) return rebuilt;
-  return interleaveBufferedByTimestamp(rebuilt, toBufferedChatMessages(fresh));
-}
-
-function interleaveBufferedByTimestamp(
-  base: BufferedChatMessage[],
-  extra: BufferedChatMessage[]
-): BufferedChatMessage[] {
-  const sorted = [...extra].sort((a, b) => bufferedTime(a) - bufferedTime(b));
-  const out: BufferedChatMessage[] = [];
-  let next = 0;
-  for (const message of base) {
-    const at = bufferedTime(message);
-    while (next < sorted.length && bufferedTime(sorted[next]) <= at) {
-      out.push(sorted[next++]);
-    }
-    out.push(message);
-  }
-  while (next < sorted.length) out.push(sorted[next++]);
-  return out;
-}
-
-function bufferedTime(message: { timestamp: number }): number {
-  const raw: unknown = message.timestamp;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-  if (typeof raw === 'string') {
-    const parsed = Date.parse(raw);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return Number.NEGATIVE_INFINITY;
 }
 
 interface PersistedLickDecision {

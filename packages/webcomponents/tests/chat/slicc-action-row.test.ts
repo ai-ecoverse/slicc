@@ -107,7 +107,7 @@ describe('slicc-action-row', () => {
     it('orders chip, label, badge, chevron in the header', () => {
       const el = mount((e) => {
         e.icon = '✎';
-        e.label = 'edit_file';
+        e.label = 'edit';
         e.result = '4 changes';
       });
       const parts = Array.from(head(el).children).map((c) => c.getAttribute('part'));
@@ -130,10 +130,10 @@ describe('slicc-action-row', () => {
       const link = document.createElement('a');
       link.className = 'vlink';
       link.textContent = 'hero.css';
-      el.append(document.createTextNode('edit_file · '), link);
+      el.append(document.createTextNode('edit · '), link);
       document.body.appendChild(el);
       expect(label(el).querySelector('.vlink')).not.toBeNull();
-      expect(label(el).textContent).toContain('edit_file');
+      expect(label(el).textContent).toContain('edit');
     });
 
     it('preserves slotted default-slot content across attribute re-syncs', () => {

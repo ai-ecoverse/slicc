@@ -1,11 +1,17 @@
 import SwiftUI
 
+
+
+
+
 struct FrozenSessionsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @State private var query = ""
     @State private var showNewSessionDialog = FrozenSessionsView.autoOpensNewSession()
 
+    
+    
     static func autoOpensNewSession() -> Bool {
         #if DEBUG
             return UserDefaults.standard.bool(forKey: "uiTestOpenNewSession")
@@ -33,7 +39,9 @@ struct FrozenSessionsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-
+                    
+                    
+                    
                     Button {
                         showNewSessionDialog = true
                     } label: {
@@ -75,7 +83,8 @@ struct FrozenSessionsView: View {
         } else {
             List {
                 if rebuilt {
-
+                    
+                    
                     Label(
                         "The session index was unreadable — showing recovered archives.",
                         systemImage: "exclamationmark.triangle"
@@ -91,7 +100,10 @@ struct FrozenSessionsView: View {
                 }
                 ForEach(filtered) { entry in
                     Button {
-
+                        
+                        
+                        
+                        
                         appState.openFrozenSession(entry)
                     } label: {
                         HStack {
@@ -120,6 +132,12 @@ struct FrozenSessionsView: View {
     }
 }
 
+
+
+
+
+
+
 struct FrozenSessionBanner: View {
     @EnvironmentObject var appState: AppState
 
@@ -141,6 +159,6 @@ struct FrozenSessionBanner: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .foregroundStyle(.white)
-        .background(Color(red: 0.23, green: 0.42, blue: 0.70))
+        .background(Color(red: 0.23, green: 0.42, blue: 0.70))  
     }
 }

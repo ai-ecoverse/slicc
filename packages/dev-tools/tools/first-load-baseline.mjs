@@ -71,18 +71,26 @@ function readLockPackages(tree) {
   }
 }
 
-function ancestorPackageChanged(path, base, head) {
-  let rest = path;
-  while (rest.includes('/node_modules/')) {
-    const idx = rest.lastIndexOf('/node_modules/');
-    rest = rest.slice(0, idx);
-    if (!rest.startsWith('node_modules/')) return false;
-    const from = base[rest]?.version;
-    if (!from) continue;
-    const to = head[rest]?.version ?? null;
-    if (to !== from) return true;
-  }
-  return false;
+function lockInstallRegistryName(installName) {
+  const nested = installName.lastIndexOf('/node_modules/');
+  return nested === -1 ? installName : installName.slice(nested + '/node_modules/'.length);
+}
+
+function isDefinitelyTypedPackage(installName) {
+  return lockInstallRegistryName(installName).startsWith('@types/');
+}
+
+function nestedCopyIsCovered(path, entry, _base, head) {
+  if (isDefinitelyTypedPackage(path.slice('node_modules/'.length))) return true;
+  const headEntry = head[path];
+  return entry.dev === true && (headEntry == null || headEntry.dev === true);
+}
+
+function registryName(path, entry) {
+  if (entry.name) return entry.name;
+  const installName = path.slice('node_modules/'.length);
+  const idx = installName.lastIndexOf('/node_modules/');
+  return idx === -1 ? installName : installName.slice(idx + '/node_modules/'.length);
 }
 
 export function dependencyDrift(repoRoot, tree) {
@@ -102,17 +110,41 @@ export function dependencyDrift(repoRoot, tree) {
     if (to === from) continue;
     const installName = path.slice('node_modules/'.length);
     if (installName.includes('/node_modules/')) {
-      if (ancestorPackageChanged(path, base, head)) continue;
-      unrealignable.push(`${path} (${from} -> ${to ?? 'removed'}, un-hoisted)`);
+      if (nestedCopyIsCovered(path, entry, base, head)) continue;
+
+      const drift = { path, name: registryName(path, entry), from, to };
+      (to === null ? missing : changed).push(drift);
       continue;
     }
 
     if (workspaces.has(installName)) continue;
 
-    const drift = { path, name: entry.name ?? installName, from, to };
+    if (isDefinitelyTypedPackage(installName)) continue;
+
+    const drift = { path, name: registryName(path, entry), from, to };
     (to === null ? missing : changed).push(drift);
   }
+  appendNestedUnderSwappedParents(changed, missing, base, head);
   return { changed, missing, unrealignable };
+}
+
+function appendNestedUnderSwappedParents(changed, missing, base, head) {
+  const swappedParents = [...changed, ...missing].map((d) => d.path);
+  const already = new Set(swappedParents);
+  for (const [path, entry] of Object.entries(base)) {
+    if (!path.startsWith('node_modules/') || !path.includes('/node_modules/')) continue;
+    if (already.has(path)) continue;
+    const from = entry?.version;
+    if (!from) continue;
+    if (nestedCopyIsCovered(path, entry, base, head)) continue;
+    if (!swappedParents.some((parent) => path.startsWith(`${parent}/node_modules/`))) {
+      continue;
+    }
+    const to = head[path]?.version ?? null;
+    const drift = { path, name: registryName(path, entry), from, to };
+    (to === null ? missing : changed).push(drift);
+    already.add(path);
+  }
 }
 
 export function materializeLinkedParents(nodeModules, relPath) {
@@ -146,15 +178,25 @@ function installBaseVersion(tree, staging, { path, name, from }, log) {
     ['pack', spec, '--pack-destination', staging, '--silent', '--no-audit', '--no-fund'],
     { cwd: tree }
   );
-  const tarball = (packed ?? '').split('\n').pop()?.trim();
-  if (!tarball) {
+  const tarballName = (packed ?? '').split('\n').pop()?.trim();
+  if (!tarballName) {
+    log(`could not fetch ${spec} for the baseline (npm pack failed)`);
+    return false;
+  }
+  const tarball = existsSync(tarballName) ? tarballName : join(staging, tarballName);
+  if (!existsSync(tarball)) {
     log(`could not fetch ${spec} for the baseline (npm pack failed)`);
     return false;
   }
   const unpacked = join(staging, `unpacked-${path.replace(/[@/]/g, '_')}`);
   mkdirSync(unpacked, { recursive: true });
-  if (run('tar', ['-xzf', join(staging, tarball), '-C', unpacked], { cwd: tree }) === null) {
+  if (run('tar', ['-xzf', tarball, '-C', unpacked], { cwd: tree }) === null) {
     log(`could not unpack ${spec} for the baseline`);
+    return false;
+  }
+  const pkgDir = join(unpacked, 'package');
+  if (!existsSync(pkgDir)) {
+    log(`could not unpack ${spec} for the baseline (tarball had no package/ directory)`);
     return false;
   }
   const dest = join(tree, path);
@@ -162,7 +204,7 @@ function installBaseVersion(tree, staging, { path, name, from }, log) {
   materializeLinkedParents(join(tree, 'node_modules'), path.slice('node_modules/'.length));
 
   rmSync(dest, { force: true, recursive: true });
-  renameSync(join(unpacked, 'package'), dest);
+  renameSync(pkgDir, dest);
   return true;
 }
 
@@ -180,11 +222,13 @@ export function realignDriftedDependencies(tree, drift, log = () => {}) {
   }
   const staging = mkdtempSync(join(tmpdir(), 'slicc-first-load-pack-'));
   try {
-    for (const entry of changed) {
+    const byDepth = (a, b) =>
+      a.path.split('/node_modules/').length - b.path.split('/node_modules/').length;
+    for (const entry of [...changed].sort(byDepth)) {
       if (!installBaseVersion(tree, staging, entry, log)) return false;
       log(`realigned ${entry.name} to the base version ${entry.from} (HEAD has ${entry.to})`);
     }
-    for (const entry of missing) {
+    for (const entry of [...missing].sort(byDepth)) {
       if (installBaseVersion(tree, staging, entry, log)) {
         log(`restored ${entry.name}@${entry.from}, which this change removes`);
       } else {

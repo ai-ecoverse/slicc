@@ -12,18 +12,38 @@ import (
 	"time"
 )
 
+
+
 const DefaultTimeout = 10 * time.Second
 
+
+
+
 type Transport interface {
+	
+	
+	
+	
 	Send(event Event, collectBaseURL string, wg *sync.WaitGroup)
 }
+
+
+
+
+
+
 
 type HTTPTransport struct {
 	Client  *http.Client
 	Timeout time.Duration
-
+	
+	
+	
 	Debug func(format string, args ...any)
 }
+
+
+
 
 func NewHTTPTransport(debug bool) *HTTPTransport {
 	t := &HTTPTransport{
@@ -35,6 +55,7 @@ func NewHTTPTransport(debug bool) *HTTPTransport {
 	}
 	return t
 }
+
 
 func (t *HTTPTransport) Send(event Event, collectBaseURL string, wg *sync.WaitGroup) {
 	body, err := json.Marshal(event)
@@ -84,6 +105,9 @@ func (t *HTTPTransport) Send(event Event, collectBaseURL string, wg *sync.WaitGr
 		}
 	}()
 }
+
+
+
 
 func buildBeaconURL(collectBaseURL string, weight int) (string, error) {
 	base, err := url.Parse(collectBaseURL)

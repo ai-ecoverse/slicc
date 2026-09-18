@@ -1,6 +1,20 @@
 import Foundation
 import Observation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @MainActor
 @Observable
 public final class SessionReachability {
@@ -19,10 +33,17 @@ public final class SessionReachability {
 
     public convenience init() {
         let config = URLSessionConfiguration.ephemeral
-
+        
+        
+        
         config.timeoutIntervalForRequest = 4
         config.timeoutIntervalForResource = 4
-
+        
+        
+        
+        
+        
+        
         let session = URLSession(
             configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
         self.init(maxSupersedeRedirects: 5) { request in
@@ -35,6 +56,8 @@ public final class SessionReachability {
         self.transport = transport
     }
 
+    
+    
     public func presumedReachable(_ id: String) -> Bool {
         verdicts[id] != .unreachable
     }
@@ -64,6 +87,12 @@ public final class SessionReachability {
             else { return .unreachable }
             let payload = try? JSONDecoder().decode(ProbePayload.self, from: data)
 
+            
+            
+            
+            
+            
+            
             let linkSuccessor =
                 SupersedeLink.successor(in: http) ?? SupersedeLink.redirectTarget(in: http)
 
@@ -80,6 +109,8 @@ public final class SessionReachability {
         }
     }
 
+    
+    
     private static func supersededURL(from payload: ProbePayload?, statusCode: Int) -> URL? {
         guard statusCode == 409, payload?.code == "TRAY_SUPERSEDED",
             let next = payload?.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -89,7 +120,11 @@ public final class SessionReachability {
     }
 
     private static func request(for url: URL) -> URLRequest? {
-
+        
+        
+        
+        
+        
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return nil
         }
@@ -104,10 +139,13 @@ public final class SessionReachability {
     }
 }
 
+
+
+
 public protocol ProbableSession {
-
+    
     var id: String { get }
-
+    
     var joinUrl: String { get }
 }
 

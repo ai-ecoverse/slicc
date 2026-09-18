@@ -24,6 +24,7 @@ export {
 
 import {
   clampSyncExecTimeout,
+  normalizeSyncExecEnv,
   SYNC_EXEC_CHANNEL,
   type SyncExecRequest,
 } from '../kernel/realm/sync-exec-dispatch.js';
@@ -104,12 +105,17 @@ async function parseSyncExecRequest(request: {
     args?: unknown;
     stdin?: unknown;
     timeoutMs?: unknown;
+    cwd?: unknown;
+    env?: unknown;
   };
   const command = p.command;
   const commandOk =
     typeof command === 'string' ||
     (Array.isArray(command) && command.every((a) => typeof a === 'string'));
   if (!commandOk) return null;
+  if (p.cwd !== undefined && typeof p.cwd !== 'string') return null;
+  const envResult = p.env === undefined ? undefined : normalizeSyncExecEnv(p.env);
+  if (envResult !== undefined && 'errno' in envResult) return null;
   return {
     token: request.headers.get(SYNC_FS_TOKEN_HEADER) ?? '',
     channel: SYNC_EXEC_CHANNEL,
@@ -119,6 +125,8 @@ async function parseSyncExecRequest(request: {
       : {}),
     ...(typeof p.stdin === 'string' ? { stdin: p.stdin } : {}),
     ...(typeof p.timeoutMs === 'number' ? { timeoutMs: p.timeoutMs } : {}),
+    ...(typeof p.cwd === 'string' ? { cwd: p.cwd } : {}),
+    ...(envResult !== undefined ? { env: envResult.env } : {}),
   };
 }
 

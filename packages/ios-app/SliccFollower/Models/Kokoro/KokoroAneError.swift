@@ -1,5 +1,6 @@
 import Foundation
 
+
 enum KokoroAneError: Error, LocalizedError {
     case modelNotLoaded(String)
     case downloadFailed(String)

@@ -3,6 +3,9 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
 final class NotificationCategoriesTests: XCTestCase {
     func testCategoryIdentifiersMatchTheHub() {
         let ids = Set(makeSliccNotificationCategories().map(\.identifier))

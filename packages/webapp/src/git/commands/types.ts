@@ -8,6 +8,10 @@ export interface GitCommandResult {
   exitCode: number;
 }
 
+export interface GitExecuteOptions {
+  stdoutIsTTY?: boolean;
+}
+
 export interface GitCommandsOptions {
   fs: VirtualFS;
 
@@ -56,4 +60,6 @@ export interface GitCommandContext {
   getConfigOverrides(): ReadonlyMap<string, string> | undefined;
 
   readonly stdin: string;
+
+  readonly useColor: boolean;
 }

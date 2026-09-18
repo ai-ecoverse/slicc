@@ -3,6 +3,15 @@ import Foundation
 import NIOCore
 import WebSocketKit
 
+
+
+
+
+
+
+
+
+
 enum WebSocketKitCDPTransportError: LocalizedError {
     case noSocket
 
@@ -13,9 +22,13 @@ enum WebSocketKitCDPTransportError: LocalizedError {
     }
 }
 
+
+
 struct CDPSocketClosedError: LocalizedError {
     var errorDescription: String? { "app CDP socket closed" }
 }
+
+
 
 private final class WSMessageBuffer: @unchecked Sendable {
     private let lock = NSLock()
@@ -63,7 +76,8 @@ private final class WSMessageBuffer: @unchecked Sendable {
 }
 
 final class WebSocketKitCDPTransport: CDPWebSocketTransport, @unchecked Sendable {
-
+    
+    
     static let maxFrameSize = 64 * 1024 * 1024
 
     private let socket: WebSocket
@@ -74,6 +88,8 @@ final class WebSocketKitCDPTransport: CDPWebSocketTransport, @unchecked Sendable
         self.buffer = buffer
     }
 
+    
+    
     static func connect(
         url: String,
         on eventLoopGroup: EventLoopGroup = HTTPClient.defaultEventLoopGroup
@@ -109,6 +125,7 @@ final class WebSocketKitCDPTransport: CDPWebSocketTransport, @unchecked Sendable
         return WebSocketKitCDPTransport(socket: socket, buffer: buffer)
     }
 
+    
     func sendFrame(_ payload: Data) async throws {
         try await socket.send(String(decoding: payload, as: UTF8.self))
     }

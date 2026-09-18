@@ -31,7 +31,7 @@ func TestGlyphFallsBackToASCII(t *testing.T) {
 	if got := (Mode{}).Glyph(Glyph(200)); got != "" {
 		t.Errorf("unknown glyph = %q, want empty", got)
 	}
-
+	
 	for g := range glyphs {
 		for _, mode := range []Mode{{Unicode: true}, {}} {
 			if w := visibleWidth(mode.Glyph(g)); w != 1 {
@@ -59,7 +59,7 @@ func TestVisibleWidthIgnoresEscapes(t *testing.T) {
 		"\x1b[1;32m✔\x1b[0m ok": 4,
 		"":                      0,
 		"\x1b[2K":               0,
-		"\x1bincomplete":        10,
+		"\x1bincomplete":        10, 
 	}
 	for in, want := range cases {
 		if got := visibleWidth(in); got != want {
@@ -78,7 +78,7 @@ func TestTruncateVisible(t *testing.T) {
 	if got := truncateVisible("abc", 0); got != "" {
 		t.Errorf("zero limit = %q, want empty", got)
 	}
-
+	
 	got := truncateVisible("\x1b[31mabcdef\x1b[0m", 3)
 	if visibleWidth(got) != 3 {
 		t.Errorf("styled truncate kept %d cells, want 3 (%q)", visibleWidth(got), got)
@@ -86,7 +86,7 @@ func TestTruncateVisible(t *testing.T) {
 	if !strings.HasSuffix(got, sgrReset) {
 		t.Errorf("styled truncate must end reset, got %q", got)
 	}
-
+	
 	if got := truncateVisible("♥♥♥♥", 2); got != "♥♥" {
 		t.Errorf("multibyte truncate = %q, want ♥♥", got)
 	}
@@ -95,14 +95,14 @@ func TestTruncateVisible(t *testing.T) {
 func TestCellWidthCountsTerminalCells(t *testing.T) {
 	cases := map[rune]int{
 		'a':      1,
-		'✔':      1,
-		'界':      2,
-		'ｗ':      2,
-		'한':      2,
-		'🚀':      2,
-		'\u0301': 0,
-		'\ufe0f': 0,
-		'\u200d': 0,
+		'✔':      1, 
+		'界':      2, 
+		'ｗ':      2, 
+		'한':      2, 
+		'🚀':      2, 
+		'\u0301': 0, 
+		'\ufe0f': 0, 
+		'\u200d': 0, 
 	}
 	for r, want := range cases {
 		if got := cellWidth(r); got != want {
@@ -112,18 +112,19 @@ func TestCellWidthCountsTerminalCells(t *testing.T) {
 }
 
 func TestVisibleWidthMeasuresWideAndCombiningRunes(t *testing.T) {
-
+	
 	if got := visibleWidth("世界e\u0301"); got != 5 {
 		t.Errorf("visibleWidth = %d, want 5", got)
 	}
-
+	
 	if got := visibleWidth("\x1b[31m世\x1b[0m"); got != 2 {
 		t.Errorf("visibleWidth with color = %d, want 2", got)
 	}
 }
 
 func TestTruncateVisibleKeepsWideRunesWhole(t *testing.T) {
-
+	
+	
 	got := truncateVisible("a世界", 2)
 	if got != "a" {
 		t.Errorf("truncateVisible = %q, want %q", got, "a")
@@ -136,9 +137,9 @@ func TestTruncateVisibleKeepsWideRunesWhole(t *testing.T) {
 func TestRewriteSafeOnlyTrustsRunesWeControl(t *testing.T) {
 	safe := []string{
 		"12:00:00 + connected",
-		"12:00:00 ✔ connected",
-		"\x1b[2m12:00:00\x1b[0m ↺ repeated (×3)",
-		"⠋ connecting  up 4s  ♥ 0s  ▁▄███",
+		"12:00:00 ✔ connected",                   
+		"\x1b[2m12:00:00\x1b[0m ↺ repeated (×3)", 
+		"⠋ connecting  up 4s  ♥ 0s  ▁▄███",       
 	}
 	for _, s := range safe {
 		if !rewriteSafe(s) {
@@ -146,11 +147,11 @@ func TestRewriteSafeOnlyTrustsRunesWeControl(t *testing.T) {
 		}
 	}
 	unsafe := []string{
-		"tray attach failed: 世界",
-		"deploy 🚀 failed",
-		"combining e\u0301",
-		"tab\there",
-		"bad utf8: \xff",
+		"tray attach failed: 世界", 
+		"deploy 🚀 failed",        
+		"combining e\u0301",      
+		"tab\there",              
+		"bad utf8: \xff",         
 	}
 	for _, s := range unsafe {
 		if rewriteSafe(s) {

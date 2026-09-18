@@ -50,6 +50,8 @@ protocol AudioSessionCoordinating: AnyObject {
     func endPlayback()
 }
 
+
+
 @MainActor
 final class AudioSessionCoordinator: AudioSessionCoordinating {
     static let shared = AudioSessionCoordinator(backend: SystemAudioSessionBackend())
@@ -150,6 +152,9 @@ enum AudioSessionCoordinatorError: LocalizedError, Equatable {
         case playback
     }
 
+    
+    
+    
     case busy(holder: LeaseHolder)
 
     var errorDescription: String? {

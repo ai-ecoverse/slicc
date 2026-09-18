@@ -76,6 +76,7 @@ func TestNotifierPrintsCachedNoticeAndSkipsFreshCheck(t *testing.T) {
 	now := time.Now()
 	notifier, out := testNotifier(t, handle, now)
 
+	
 	notifier.writeState(checkState{CheckedAt: now.Add(-time.Hour), LatestVersion: "v9.9.9"})
 
 	flush := notifier.Start()
@@ -141,7 +142,7 @@ func TestNotifierToleratesCorruptStateFile(t *testing.T) {
 
 func TestNilNotifierIsSafe(_ *testing.T) {
 	var notifier *Notifier
-	notifier.Start()()
+	notifier.Start()() 
 }
 
 func TestNewNotifierDisabledForDevAndOptOut(t *testing.T) {

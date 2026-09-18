@@ -3,21 +3,45 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "LaunchRecordStore")
 
+
+
+
+
 struct PersistedLaunchRecord: Codable, Equatable {
     let targetId: String
     let targetName: String
     let targetType: AppTargetType
-
+    
+    
     let electronAppPath: String?
-
+    
+    
     let servePort: UInt16
-
+    
+    
     let cdpPort: UInt16
-
+    
+    
+    
+    
+    
+    
+    
     var joinUrl: String?
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
     var bridgeToken: String?
 }
+
+
+
 
 struct LaunchRecordStore {
     let storeURL: URL
@@ -62,10 +86,15 @@ struct LaunchRecordStore {
         }
     }
 
+    
+    
     func clear() {
         try? FileManager.default.removeItem(at: storeURL)
     }
 }
+
+
+
 
 struct CDPLiveProbe {
     let fetch: (URL) async throws -> Int

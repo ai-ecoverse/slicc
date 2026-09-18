@@ -182,7 +182,7 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
       expect.objectContaining({
         cwd: '/workspace',
 
-        writablePaths: ['/sessions/.curation/frozen.md/draft.md'],
+        writablePaths: ['/sessions/.curation/frozen.md/draft.md', '/shared/wiki/'],
         visiblePaths: ['/sessions/', '/shared/', '/workspace/', '/sessions/.curation/frozen.md/'],
         notifyOnComplete: true,
       })

@@ -422,6 +422,37 @@ export class RestrictedFS {
       this.ephemeralFds.write(path, content);
       return;
     }
+    await this.checkContentWrite(path);
+    return this.vfs.writeFile(path, content, options);
+  }
+
+  async appendFile(path: string, content: FileContent): Promise<void> {
+    const devWrite = VIRTUAL_DEVICES[normalizePath(path)];
+    if (devWrite) {
+      devWrite.write(content);
+      return;
+    }
+    if (EphemeralFdStore.handles(path)) {
+      this.ephemeralFds.append(path, content);
+      return;
+    }
+    await this.checkContentWrite(path);
+    return this.vfs.appendFile(path, content);
+  }
+
+  async chmod(path: string, mode: number): Promise<void> {
+    this.refuseDescriptorTreeOp(path);
+    await this.checkContentWrite(path);
+    return this.vfs.chmod(path, mode);
+  }
+
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    this.refuseDescriptorTreeOp(path);
+    await this.checkContentWrite(path);
+    return this.vfs.utimes(path, atime, mtime);
+  }
+
+  private async checkContentWrite(path: string): Promise<void> {
     this.checkWrite(path);
     await this.checkParentRealpathEscape(path);
 
@@ -433,7 +464,6 @@ export class RestrictedFS {
     } catch (err) {
       if (err instanceof FsError && err.code === 'EACCES') throw err;
     }
-    return this.vfs.writeFile(path, content, options);
   }
 
   private refuseDescriptorTreeOp(path: string): void {

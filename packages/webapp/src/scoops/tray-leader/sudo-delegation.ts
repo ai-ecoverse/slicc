@@ -166,6 +166,8 @@ export class SudoDelegation {
       ...(scoopName ? { scoopName } : {}),
 
       ...(entry.request.requester ? { requester: entry.request.requester } : {}),
+
+      ...(entry.request.reason ? { reason: entry.request.reason } : {}),
       expiresAt: entry.expiresAt,
     });
     if (sent === false) {

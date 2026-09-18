@@ -1,8 +1,24 @@
 import Foundation
 import SliccTraySession
 
-enum TraySessionCLI {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+enum TraySessionCLI {
+    
+    
     struct Request: Equatable {
         var reveal: Bool
     }
@@ -10,12 +26,16 @@ enum TraySessionCLI {
     static let listFlag = "--list-sessions"
     static let revealFlag = "--reveal-urls"
 
+    
+    
     static func parse(_ argv: [String]) -> Request? {
         let args = argv.dropFirst()
         guard args.contains(listFlag) else { return nil }
         return Request(reveal: args.contains(revealFlag))
     }
 
+    
+    
     struct SessionDTO: Codable, Equatable {
         let id: String
         let label: String
@@ -47,17 +67,25 @@ enum TraySessionCLI {
         return try encoder.encode(payload(from: sessions, reveal: reveal))
     }
 
+    
+
+    
     enum StoredConsent: String {
         case allow
         case deny
     }
 
+    
     enum Outcome: Equatable {
         case allow
         case deny
         case prompt
     }
 
+    
+    
+    
+    
     static func outcome(stored: StoredConsent?, guiAvailable: Bool) -> Outcome {
         switch stored {
         case .allow: return .allow
@@ -66,6 +94,7 @@ enum TraySessionCLI {
         }
     }
 
+    
     enum PromptResult: Equatable {
         case denyOnce
         case allowOnce
@@ -75,6 +104,8 @@ enum TraySessionCLI {
 
     static let buttonTitles = ["Deny", "Allow Once", "Always Allow", "Always Deny"]
 
+    
+    
     static func promptResult(forButtonIndex index: Int) -> PromptResult {
         switch index {
         case 1001: return .allowOnce
@@ -84,6 +115,7 @@ enum TraySessionCLI {
         }
     }
 
+    
     static func effect(of result: PromptResult) -> (allow: Bool, persist: StoredConsent?) {
         switch result {
         case .allowOnce: return (true, nil)
@@ -93,12 +125,18 @@ enum TraySessionCLI {
         }
     }
 
+    
+    
+    
+    
+    
     static func consentKey(signingIdentifier: String?, executablePath: String?) -> String {
         if let signing = signingIdentifier, !signing.isEmpty { return "id:" + signing }
         if let path = executablePath, !path.isEmpty { return "path:" + path }
         return "unknown"
     }
 
+    
     static func describeCaller(name: String?, pid: Int32, signingIdentifier: String?) -> String {
         let label = (name?.isEmpty == false) ? name! : "An unidentified process"
         var description = "\(label) (pid \(pid))"
@@ -112,7 +150,10 @@ enum TraySessionCLI {
         if guiAvailable {
             return "Revealing session join URLs was denied.\n"
         }
-
+        
+        
+        
+        
         return """
             Revealing session join URLs requires approval, which cannot be shown over \
             a headless/SSH session. Re-run this same command from the Mac's screen \
@@ -121,6 +162,9 @@ enum TraySessionCLI {
             """
     }
 }
+
+
+
 
 struct RevealConsentStore {
     static let keyPrefix = "traySessionRevealConsent."

@@ -1,9 +1,14 @@
 import Foundation
 
-public protocol RandomSource {
 
+
+
+
+public protocol RandomSource {
+    
     func nextUnitDouble() -> Double
 }
+
 
 public struct SystemRandomSource: RandomSource {
     public init() {}

@@ -1,9 +1,14 @@
 import Foundation
 
+
+
+
+
+
 public struct OptelErrorMapping: Hashable, Sendable {
-
+    
     public let source: String
-
+    
     public let target: String
 
     public init(source: String, target: String) {
@@ -11,6 +16,9 @@ public struct OptelErrorMapping: Hashable, Sendable {
         self.target = target
     }
 
+    
+    
+    
     public static func from(error: Error) -> OptelErrorMapping {
         let nsError = error as NSError
         let domain = nsError.domain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -21,6 +29,8 @@ public struct OptelErrorMapping: Hashable, Sendable {
         return OptelErrorMapping(source: source, target: target)
     }
 
+    
+    
     public static func from(exception: NSException) -> OptelErrorMapping {
         let rawName = exception.name.rawValue
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,18 +43,27 @@ public struct OptelErrorMapping: Hashable, Sendable {
 }
 
 extension Optel {
-
+    
+    
     public func reportError(_ error: Error) {
         let mapping = OptelErrorMapping.from(error: error)
         sample(.error, source: mapping.source, target: mapping.target)
     }
 
+    
     public static func reportError(_ error: Error) {
         shared.reportError(error)
     }
 }
 
+
+
+
+
 private var optelPreviousUncaughtExceptionHandler: (@convention(c) (NSException) -> Void)?
+
+
+
 
 private func optelUncaughtExceptionTrampoline(_ exception: NSException) {
     let mapping = OptelErrorMapping.from(exception: exception)
@@ -52,16 +71,26 @@ private func optelUncaughtExceptionTrampoline(_ exception: NSException) {
     optelPreviousUncaughtExceptionHandler?(exception)
 }
 
+
+
+
+
+
+
+
 public enum OptelUncaughtExceptionHook {
     private static let lock = NSLock()
     private static var installed = false
 
+    
     public static var isInstalled: Bool {
         lock.lock()
         defer { lock.unlock() }
         return installed
     }
 
+    
+    
     public static func installIfNeeded() {
         lock.lock()
         guard !installed else {
@@ -74,6 +103,8 @@ public enum OptelUncaughtExceptionHook {
         NSSetUncaughtExceptionHandler(optelUncaughtExceptionTrampoline)
     }
 
+    
+    
     internal static func _testing_reset() {
         lock.lock()
         installed = false

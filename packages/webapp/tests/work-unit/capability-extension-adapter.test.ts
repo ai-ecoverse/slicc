@@ -220,6 +220,23 @@ describe('approvals over the extension sudo relay', () => {
     expect(result).toEqual({ ok: true, value: { decision: 'always', pattern: 'git *' } });
   });
 
+  it('relays the requester-stated reason to the panel, and omits it when absent', async () => {
+    installChrome();
+    reply = { ok: true, decision: { decision: 'allow' } };
+    const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
+    await broker.approvals.request({
+      kind: 'command',
+      detail: 'git status',
+      reason: 'the release tag is cut',
+    });
+    await broker.approvals.request({ kind: 'command', detail: 'git status' });
+    expect(sent[0].message).toMatchObject({
+      payload: { request: { reason: 'the release tag is cut' } },
+    });
+    const second = sent[1].message as { payload: { request: Record<string, unknown> } };
+    expect(second.payload.request).not.toHaveProperty('reason');
+  });
+
   it('reports a broken relay as a failure — a dead panel is not a human saying no', async () => {
     installChrome();
     reply = { ok: false, error: 'no responder' };

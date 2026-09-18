@@ -17,7 +17,7 @@ fi
 
 
 
-if git diff --cached --name-only | grep -qE '^(packages/webapp/src/|packages/dev-tools/tools/layer-back-edge-baseline\.json)'; then
+if git diff --cached --name-only | grep -qE '^(packages/(webapp|node-server|chrome-extension|cloudflare-worker)/src/|packages/dev-tools/tools/layer-back-edge-baseline)'; then
   node packages/dev-tools/tools/check-layer-back-edges.mjs
 fi
 

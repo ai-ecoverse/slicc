@@ -153,6 +153,27 @@ describe('sudo command', () => {
       expect(persistGrant).toHaveBeenCalledWith('git push origin main');
     });
 
+    it('uses the canonical node subject for jsh prompts and grants', async () => {
+      const broker = brokerReturning({ decision: 'always' });
+      const persistGrant = vi.fn(async () => {});
+      const suppressNextGate = vi.fn();
+      const exec = vi.fn(async () => execResult());
+      const cmd = createSudoCommand({ broker, persistGrant, suppressNextGate });
+
+      await cmd.execute(['jsh', '/workspace/tool.jsh'], createMockCtx({ exec }));
+
+      expect(broker.requestApproval).toHaveBeenCalledWith({
+        kind: 'command',
+        detail: 'node /workspace/tool.jsh',
+      });
+      expect(persistGrant).toHaveBeenCalledWith('node /workspace/tool.jsh');
+      expect(suppressNextGate).toHaveBeenCalledWith('node /workspace/tool.jsh');
+      expect(exec).toHaveBeenCalledWith('jsh', {
+        cwd: '/workspace',
+        args: ['/workspace/tool.jsh'],
+      });
+    });
+
     it('on always: swallows a persistGrant rejection and still runs the inner command', async () => {
       const broker = brokerReturning({ decision: 'always', pattern: 'rm *' });
       const persistGrant = vi.fn(async () => {

@@ -27,12 +27,6 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - (*os.File).Write
-    revive:
-      rules:
-        - name: package-comments
-          disabled: true
-        - name: exported
-          disabled: true
   exclusions:
     rules:
       - path: _test\.go

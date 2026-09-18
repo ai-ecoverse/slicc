@@ -152,7 +152,7 @@ describe('builtins with no implementable behaviour', () => {
       stderr: expect.stringContaining("use 'history'"),
     });
     await expect(run('umask')).resolves.toMatchObject({
-      stderr: expect.stringContaining("'chmod'"),
+      stderr: expect.stringContaining('use chmod'),
     });
   });
 });

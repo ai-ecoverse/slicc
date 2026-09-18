@@ -3,6 +3,9 @@ import Logging
 
 private let defaultTabSnapshotIntervalNanoseconds: UInt64 = 5_000_000_000
 
+
+
+
 private let tabSnapshotReadTimeoutNanoseconds: UInt64 = 3_000_000_000
 
 private enum SnapshotRead: Sendable {
@@ -27,6 +30,20 @@ private struct CDPTargetInfo: Decodable {
 private struct CDPTargetsResult: Decodable {
     let targetInfos: [CDPTargetInfo]
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 actor TabSessionRecorder {
     private let store: TabSessionStore
@@ -90,6 +107,10 @@ actor TabSessionRecorder {
         pollTask = nil
     }
 
+    
+    
+    
+    
     func snapshotNow() async {
         guard let urls = await restorableTabUrls() else { return }
         let sanitized = TabSessionStore.sanitize(rawUrls: urls, hostedOrigins: hostedOrigins)
@@ -99,6 +120,8 @@ actor TabSessionRecorder {
         logger.debug("Persisted \(sanitized.count) tab(s) for restore")
     }
 
+    
+    
     private func restorableTabUrls() async -> [String]? {
         guard let browserURL = await browserDebuggerURL() else { return nil }
         let session = openSession(browserURL)
@@ -112,7 +135,8 @@ actor TabSessionRecorder {
             group.cancelAll()
             return first
         }
-
+        
+        
         await session.close()
         switch read {
         case .completed(let urls):
@@ -150,7 +174,11 @@ actor TabSessionRecorder {
                 CDPBrowserContextsResult.self,
                 from: try await session.call(method: "Target.getBrowserContexts")
             )
-
+            
+            
+            
+            
+            
             guard let defaultContextId = contexts.defaultBrowserContextId else {
                 logger.debug("Tab snapshot skipped: browser reported no default context id")
                 return nil

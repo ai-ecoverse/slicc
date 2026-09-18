@@ -1,5 +1,8 @@
 import XCTest
 
+
+
+
 final class AttachmentUITests: XCTestCase {
 
     override func setUp() {
@@ -21,11 +24,14 @@ final class AttachmentUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(staged.waitForExistence(timeout: 60), "the fixture photo is staged")
 
+        
+        
         let send = app.buttons["composer-send"]
         XCTAssertTrue(send.waitForExistence(timeout: 10))
         XCTAssertTrue(send.isEnabled, "a photo with no caption is sendable")
         send.tap()
 
+        
         let chip = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH 'attachment-'")
         ).firstMatch

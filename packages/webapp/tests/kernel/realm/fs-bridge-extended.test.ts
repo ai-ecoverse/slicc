@@ -26,6 +26,47 @@ describe('fsBridge extended operations', () => {
     expect(out.stdout.trim()).toBe('foobar');
   });
 
+  it('concurrent fs.promises.appendFile keeps both payloads (issue #3174)', async () => {
+    const ctx = makeCtx({ files: { '/workspace/log.txt': '' } });
+    const out = await runCode(
+      `const fs = require('fs').promises;
+       await Promise.all([
+         fs.appendFile('/workspace/log.txt', 'A'),
+         fs.appendFile('/workspace/log.txt', 'B'),
+       ]);
+       console.log(await fs.readFile('/workspace/log.txt'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    const body = out.stdout.trim();
+    expect(body).toHaveLength(2);
+    expect(body).toContain('A');
+    expect(body).toContain('B');
+  });
+
+  it('concurrent appendFile keeps every payload through the realm bridge', async () => {
+    const ctx = makeCtx({ files: { '/workspace/log.txt': 'start\n' } });
+    const out = await runCode(
+      `const fs = require('fs').promises;
+       await Promise.all(
+         Array.from({ length: 40 }, (_, i) =>
+           fs.appendFile('/workspace/log.txt', String(i) + '\\n')
+         )
+       );
+       console.log(await fs.readFile('/workspace/log.txt'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.trim().split('\n');
+    expect(lines[0]).toBe('start');
+    expect(
+      lines
+        .slice(1)
+        .map(Number)
+        .sort((a, b) => a - b)
+    ).toEqual(Array.from({ length: 40 }, (_, i) => i));
+  });
+
   it('mkdir with recursive does not throw on existing dir', async () => {
     const ctx = makeCtx({ files: { '/workspace/dir/a.txt': 'x' } });
     const out = await runCode(

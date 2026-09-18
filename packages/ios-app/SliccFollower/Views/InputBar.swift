@@ -9,40 +9,65 @@ private let logger = Logger(subsystem: "com.sliccy.follower", category: "compose
 struct InputBar: View {
     @Binding var text: String
     let isStreaming: Bool
-
+    
+    
     let isConnected: Bool
-
+    
+    
     var isStalled: Bool = false
-
+    
+    
+    
     var steersActiveScoop: Bool = true
-
+    
+    
     @ObservedObject var ptt: PttController
-
+    
+    
+    
     let onSend: (String, [MessageAttachment]?, Bool) -> Void
     let onAbort: () -> Void
-
+    
+    
     var onSteer: (String, [MessageAttachment]?) -> Void = { _, _ in }
 
     @FocusState private var isFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.palette) private var palette
 
+    
+    
+    
+    
     @Binding var stagedAttachments: [MessageAttachment]
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
     @State private var showCamera = false
-
+    
+    
+    
+    
+    
+    
+    
     @State private var pasteboardHasImage = false
 
     private var canSend: Bool {
-
+        
+        
+        
         isComposable
             && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !stagedAttachments.isEmpty)
     }
 
+    
+    
+    
     private var isComposable: Bool { isConnected && !isStalled }
 
+    
+    
     private var placeholderText: String {
         if isStalled { return "The leader is busy — hang on…" }
         return isConnected ? "Message..." : "Disconnected"
@@ -50,7 +75,7 @@ struct InputBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-
+            
             Rectangle()
                 .fill(palette.line)
                 .frame(height: 0.5)
@@ -62,21 +87,28 @@ struct InputBar: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-
+                
                 attachButton
-
+                
                 textField
-
+                
                 actionButton
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .background(palette.surface)
-
+        
+        
+        
+        
+        
+        
+        
         .animation(.easeInOut(duration: 0.2), value: isStreaming)
         .overlay {
-
+            
+            
             if ptt.stage != .idle {
                 PttOverlayView(
                     stage: ptt.stage,
@@ -95,34 +127,50 @@ struct InputBar: View {
                     stage(UITestHooks.attachmentFixtureImage(), name: "fixture.jpg")
                 }
             #endif
-
+            
+            
             DispatchQueue.main.async {
                 pasteboardHasImage = UIPasteboard.general.hasImages
             }
         }
-
+        
+        
+        
+        
         .onChange(of: ptt.event) { _, event in
             guard let event else { return }
             switch event.kind {
             case .commit(let transcript):
-
+                
+                
+                
+                
+                
+                
+                
                 if !submit(transcript, dictated: true) {
                     logger.notice("dictation not sent — composer unavailable; kept as draft")
                     text = transcript
                 }
             case .quickTap:
-
+                
+                
                 isFocused = true
             }
         }
         .onChange(of: scenePhase) { _, phase in
-
+            
+            
+            
             if phase != .active {
                 ptt.pressCancelled()
             }
         }
         .onChange(of: pttArmed) { _, armed in
-
+            
+            
+            
+            
             if !armed {
                 ptt.pressCancelled()
             }
@@ -136,7 +184,8 @@ struct InputBar: View {
             NotificationCenter.default.publisher(
                 for: UIApplication.willEnterForegroundNotification)
         ) { _ in
-
+            
+            
             pasteboardHasImage = UIPasteboard.general.hasImages
         }
         .photosPicker(
@@ -160,6 +209,11 @@ struct InputBar: View {
         }
     }
 
+    
+
+    
+    
+    
     @ViewBuilder
     private var attachButton: some View {
         Menu {
@@ -192,7 +246,9 @@ struct InputBar: View {
     }
 
     private func stage(_ image: UIImage, name: String) {
-
+        
+        
+        
         let used = stagedAttachments.reduce(0) { $0 + ($1.data?.count ?? 0) }
         stagedAttachments.append(
             ImageAttachmentBuilder.inlineAttachment(
@@ -206,6 +262,7 @@ struct InputBar: View {
         }
     }
 
+    
     private func loadPhotoItems(_ items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }
         photoItems = []
@@ -219,10 +276,12 @@ struct InputBar: View {
         }
     }
 
+    
+
     @ViewBuilder
     private var textField: some View {
         ZStack(alignment: .topLeading) {
-
+            
             if text.isEmpty {
                 Text(placeholderText)
                     .foregroundColor(palette.inkSecondary)
@@ -242,14 +301,23 @@ struct InputBar: View {
                 .frame(minHeight: 38, maxHeight: 100)
                 .fixedSize(horizontal: false, vertical: true)
                 .focused($isFocused)
-
+                
+                
+                
+                
                 .onKeyPress(keys: [.return]) { event in
                     let reserved: EventModifiers = [.shift, .command, .control, .option]
                     guard event.modifiers.intersection(reserved).isEmpty else { return .ignored }
                     sendIfPossible()
                     return .handled
                 }
-
+                
+                
+                
+                
+                
+                
+                
                 .allowsHitTesting(!pttArmed)
         }
         .background(palette.field)
@@ -259,7 +327,10 @@ struct InputBar: View {
                 .stroke(palette.ink.opacity(0.12), lineWidth: 0.5)
         )
         .overlay {
-
+            
+            
+            
+            
             if pttArmed {
                 PttPressSurface(
                     onDown: { ptt.pressDown() },
@@ -269,8 +340,26 @@ struct InputBar: View {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private var pttArmed: Bool { text.isEmpty }
 
+    
+    
     static func makeDictationEngine() -> DictationEngine {
         #if DEBUG
             if let scripted = UITestHooks.speechEngine() { return scripted }
@@ -278,12 +367,16 @@ struct InputBar: View {
         return AppleDictationEngine()
     }
 
+    
+
     @ViewBuilder
     private var actionButton: some View {
         if isStreaming {
             HStack(spacing: 6) {
                 if canSend && steersActiveScoop {
-
+                    
+                    
+                    
                     Menu {
                         Button(role: .destructive) {
                             steerIfPossible()
@@ -323,10 +416,16 @@ struct InputBar: View {
         }
     }
 
+    
+
     private func sendIfPossible() {
         _ = submit(text, dictated: false)
     }
 
+    
+    
+    
+    
     @discardableResult
     private func submit(_ body: String, dictated: Bool) -> Bool {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -340,13 +439,15 @@ struct InputBar: View {
     private func steerIfPossible() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend, isStreaming else { return }
-
+        
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         onSteer(trimmed, stagedAttachments.isEmpty ? nil : stagedAttachments)
         text = ""
         stagedAttachments = []
     }
 }
+
+
 
 #Preview("Connected") {
     ZStack {

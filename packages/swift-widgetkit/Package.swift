@@ -7,6 +7,8 @@ let package = Package(
     
     
     
+    
+    
     platforms: [.macOS(.v14), .iOS("18.0")],
     products: [
         .library(name: "SliccWidgetKit", targets: ["SliccWidgetKit"])

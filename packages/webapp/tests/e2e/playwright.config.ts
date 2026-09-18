@@ -1,8 +1,11 @@
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { MQ_ONLY_SPEC_BASENAMES } from './mq-only-specs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+const prSuite = process.env['SLICC_E2E_PR'] === '1';
 
 function resolvePort(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -42,6 +45,7 @@ function resolveFixturePath(value: string): string {
 
 export default defineConfig({
   testDir: '.',
+  testIgnore: prSuite ? MQ_ONLY_SPEC_BASENAMES.map((name: string) => `**/${name}`) : [],
   webServer: [
     {
       command: `npx tsx ${resolve(repoRoot, 'packages/webapp/tests/e2e/cdp-browser.ts')}`,
@@ -69,7 +73,7 @@ export default defineConfig({
       gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
     },
     {
-      command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only --cdp-port=${CDP_PORT}`,
+      command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only --computer-demo --cdp-port=${CDP_PORT}`,
       port: BRIDGE_PORT,
       reuseExistingServer: !process.env['CI'],
       env: {

@@ -1,20 +1,43 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public enum SupersedeRedirect {
     public static let maxRedirects = 5
     public static let delaySeconds: TimeInterval = 1.0
 
     public enum Outcome: Equatable {
-
+        
         case terminal
-
+        
         case follow(URL)
-
+        
         case exhausted
-
+        
         case invalidJoinUrl
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     public static func outcome(
         for plan: FollowerAttachPlan, redirectsFollowed: Int
     ) -> Outcome {
@@ -23,13 +46,17 @@ public enum SupersedeRedirect {
         else { return .terminal }
 
         guard redirectsFollowed < maxRedirects else { return .exhausted }
-
+        
+        
+        
         guard let url = URL(string: raw), url.scheme != nil, url.host != nil else {
             return .invalidJoinUrl
         }
         return .follow(url)
     }
 
+    
+    
     public static func failureMessage(for outcome: Outcome) -> String? {
         switch outcome {
         case .exhausted:

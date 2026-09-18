@@ -1,3 +1,4 @@
+import Logging
 import XCTest
 
 @testable import slicc_server
@@ -6,6 +7,12 @@ final class TabSessionRecorderTests: XCTestCase {
     private let sliccOrigins = ["https://www.sliccy.ai", "http://localhost:5710"]
     private static let defaultContext = "DEFAULT-CTX"
     private static let incognitoContext = "OTR-CTX"
+
+    private func logger() -> Logger {
+        var logger = Logger(label: "tab-session-recorder-tests")
+        logger.logLevel = .trace
+        return logger
+    }
 
     func testSnapshotPersistsPageTargetsAndSkipsTheSliccTab() async {
         let store = TabSessionStore(fileURL: makeTemporaryFileURL())
@@ -66,6 +73,7 @@ final class TabSessionRecorderTests: XCTestCase {
             store: TabSessionStore(fileURL: makeTemporaryFileURL()),
             cdpPort: 9333,
             hostedOrigins: sliccOrigins,
+            logger: logger(),
             fetch: { url in
                 await requested.record(url)
                 return (200, Data(#"{"webSocketDebuggerUrl":"ws:
@@ -100,6 +108,7 @@ final class TabSessionRecorderTests: XCTestCase {
             store: store,
             cdpPort: 9222,
             hostedOrigins: sliccOrigins,
+            logger: logger(),
             fetch: { _ in try await queue.next() },
             
             openSession: { _ in BrowserSessionStub(defaultContextId: nil, targets: [], failing: true) }
@@ -123,6 +132,7 @@ final class TabSessionRecorderTests: XCTestCase {
             cdpPort: 9222,
             hostedOrigins: sliccOrigins,
             readTimeoutNanoseconds: 20_000_000,
+            logger: logger(),
             fetch: { _ in
                 (200, Data(#"{"webSocketDebuggerUrl":"ws:
             },
@@ -147,6 +157,7 @@ final class TabSessionRecorderTests: XCTestCase {
             cdpPort: 9222,
             hostedOrigins: sliccOrigins,
             intervalNanoseconds: 1_000_000,
+            logger: logger(),
             fetch: { url in
                 await requested.record(url)
                 return (200, Data(#"{"webSocketDebuggerUrl":"ws:
@@ -183,7 +194,8 @@ final class TabSessionRecorderTests: XCTestCase {
         let recorder = TabSessionRecorder(
             store: store,
             cdpPort: 1,
-            hostedOrigins: sliccOrigins
+            hostedOrigins: sliccOrigins,
+            logger: logger()
         )
 
         await recorder.snapshotNow()
@@ -200,6 +212,7 @@ final class TabSessionRecorderTests: XCTestCase {
             store: store,
             cdpPort: 9222,
             hostedOrigins: sliccOrigins,
+            logger: logger(),
             fetch: { _ in
                 (200, Data(#"{"webSocketDebuggerUrl":"ws:
             },

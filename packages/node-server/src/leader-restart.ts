@@ -69,7 +69,7 @@ interface PendingCall {
   reject: (err: Error) => void;
 }
 
-class CdpClient {
+export class CdpClient {
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   constructor(private readonly socket: WebSocket) {

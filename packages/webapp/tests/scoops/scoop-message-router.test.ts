@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatPromptWithAttachments } from '../../src/core/attachments.js';
 import { isAfterMessageWatermark, parseMessageWatermark } from '../../src/scoops/db.js';
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { ScoopMessageRouterDeps } from '../../src/scoops/scoop-message-router.js';
@@ -9,6 +10,7 @@ import {
   ScoopMessageRouter,
 } from '../../src/scoops/scoop-message-router.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
+import type { ConversationAttachmentOverlay } from '../../src/work-unit/conversation/types.js';
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
@@ -46,6 +48,7 @@ interface Harness {
   store: ChannelMessage[];
   errors: string[];
   backpressure: Array<{ jid: string; count: number; waitingMs: number }>;
+  recorded: Array<{ jid: string; overlays: ConversationAttachmentOverlay[] }>;
 }
 
 function makeHarness(opts?: {
@@ -75,6 +78,7 @@ function makeHarness(opts?: {
   const stateWrites: string[] = [];
   const errors: string[] = [];
   const backpressure: Array<{ jid: string; count: number; waitingMs: number }> = [];
+  const recorded: Harness['recorded'] = [];
   const probe = { max: 0 };
   let active = 0;
   let sendCount = 0;
@@ -105,6 +109,7 @@ function makeHarness(opts?: {
       senders.push(`${senderId}:${senderName}`);
     },
     notifyIncomingMessage: () => {},
+    recordSentAttachments: (jid, overlays) => recorded.push({ jid, overlays }),
     onError: (jid, error) => {
       errors.push(error);
       opts?.onError?.(jid, error);
@@ -163,8 +168,35 @@ function makeHarness(opts?: {
   const router = new ScoopMessageRouter(deps);
   for (const jid of jids) router.ensureQueue(jid);
   if (opts?.lastAgentTimestamp) router.setLastAgentTimestamp(jids[0], opts.lastAgentTimestamp);
-  return { router, sends, senders, probe, stateWrites, store, errors, backpressure };
+  return { router, sends, senders, probe, stateWrites, store, errors, backpressure, recorded };
 }
+
+describe('ScoopMessageRouter sent attachments (#2365)', () => {
+  it('records each attachment list under the exact body Pi receives', async () => {
+    const { router, sends, recorded } = makeHarness({ immediateIO: true });
+    const attachment = {
+      id: 'att-1',
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 5,
+      kind: 'text' as const,
+      text: 'hello',
+    };
+    await router.handleMessage({ ...makeMessage('cone', 0), attachments: [attachment] });
+    await router.handleMessage(makeMessage('cone', 1));
+
+    const overlays = recorded.flatMap((r) => r.overlays);
+    expect(overlays).toHaveLength(1);
+    expect(overlays[0]).toMatchObject({
+      id: 'id-cone-0',
+      timestamp: Date.UTC(2026, 0, 1),
+      attachments: [attachment],
+    });
+    expect(overlays[0].body).toBe(formatPromptWithAttachments('MSG_000', [attachment]));
+
+    expect(sends.join('\n')).toContain(`user: ${overlays[0].body}`);
+  });
+});
 
 describe('ScoopMessageRouter re-entrancy guard', () => {
   it('delivers each of 130 concurrent messages to exactly one sendPrompt payload', async () => {

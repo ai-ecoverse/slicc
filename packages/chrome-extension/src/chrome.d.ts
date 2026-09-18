@@ -176,13 +176,53 @@ interface ChromeAPI {
   };
   windows: {
     create(options: {
-      url?: string;
-      type?: string;
+      url?: string | string[];
+      type?: 'normal' | 'popup' | 'panel' | string;
       width?: number;
       height?: number;
+      left?: number;
+      top?: number;
       focused?: boolean;
-    }): Promise<{ id?: number }>;
-    update(windowId: number, properties: { focused?: boolean }): Promise<{ id?: number }>;
+      state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen' | string;
+    }): Promise<{
+      id?: number;
+      left?: number;
+      top?: number;
+      width?: number;
+      height?: number;
+      state?: string;
+      tabs?: Array<{ id?: number }>;
+    }>;
+    update(
+      windowId: number,
+      properties: {
+        focused?: boolean;
+        left?: number;
+        top?: number;
+        width?: number;
+        height?: number;
+        state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen' | string;
+      }
+    ): Promise<{
+      id?: number;
+      left?: number;
+      top?: number;
+      width?: number;
+      height?: number;
+      state?: string;
+    }>;
+    get(
+      windowId: number,
+      queryOptions?: { populate?: boolean }
+    ): Promise<{
+      id?: number;
+      left?: number;
+      top?: number;
+      width?: number;
+      height?: number;
+      state?: string;
+      tabs?: Array<{ id?: number }>;
+    }>;
     remove(windowId: number): Promise<void>;
     getAll(): Promise<Array<{ id: number }>>;
     getCurrent(): Promise<{ id: number }>;

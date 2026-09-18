@@ -1,7 +1,15 @@
 import Foundation
 
-protocol CDPBrowserSession: Sendable {
 
+
+
+
+
+
+
+
+protocol CDPBrowserSession: Sendable {
+    
     func call(method: String) async throws -> Data
     func close() async
 }
@@ -17,11 +25,17 @@ enum CDPBrowserSessionError: LocalizedError {
     }
 }
 
+
+
+
 protocol CDPWebSocketTransport: Sendable {
     func sendFrame(_ payload: Data) async throws
     func receiveFrame() async throws -> URLSessionWebSocketTask.Message
     func cancelSocket() async
 }
+
+
+
 
 final class URLSessionCDPWebSocket: CDPWebSocketTransport, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
@@ -44,8 +58,14 @@ final class URLSessionCDPWebSocket: CDPWebSocketTransport, @unchecked Sendable {
     }
 }
 
-actor WebSocketCDPBrowserSession: CDPBrowserSession {
 
+
+
+
+actor WebSocketCDPBrowserSession: CDPBrowserSession {
+    
+    
+    
     private static let maxFramesPerCall = 64
 
     private let socket: any CDPWebSocketTransport
@@ -78,6 +98,8 @@ actor WebSocketCDPBrowserSession: CDPBrowserSession {
         await socket.cancelSocket()
     }
 
+    
+    
     static func result(fromFrame frame: Data, id: Int) -> Data? {
         guard let object = try? JSONSerialization.jsonObject(with: frame) as? [String: Any],
             object["id"] as? Int == id

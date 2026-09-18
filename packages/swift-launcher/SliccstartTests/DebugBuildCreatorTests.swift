@@ -2,6 +2,10 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
 final class DebugBuildCreatorTests: XCTestCase {
     private var tempDir: URL!
 
@@ -13,6 +17,8 @@ final class DebugBuildCreatorTests: XCTestCase {
     override func tearDownWithError() throws {
         if let tempDir { try? FileManager.default.removeItem(at: tempDir) }
     }
+
+    
 
     func testEveryErrorHasNonEmptyDescription() {
         let errors: [DebugBuildCreator.DebugBuildError] = [
@@ -26,6 +32,8 @@ final class DebugBuildCreatorTests: XCTestCase {
         XCTAssertEqual(DebugBuildCreator.DebugBuildError.notElectronApp.errorDescription, "Not an Electron app")
         XCTAssertEqual(DebugBuildCreator.DebugBuildError.copyFailed("x").errorDescription, "Failed to copy app: x")
     }
+
+    
 
     func testUserApplicationsDirEndsWithApplications() {
         XCTAssertTrue(DebugBuildCreator.userApplicationsDir.hasSuffix("/Applications"))
@@ -42,7 +50,7 @@ final class DebugBuildCreatorTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(atPath: debugPath) }
 
         XCTAssertFalse(DebugBuildCreator.debugBuildExists(for: original))
-
+        
         try DebugBuildCreator.deleteDebugBuild(for: original)
 
         try FileManager.default.createDirectory(atPath: debugPath, withIntermediateDirectories: true)
@@ -51,15 +59,20 @@ final class DebugBuildCreatorTests: XCTestCase {
         XCTAssertFalse(DebugBuildCreator.debugBuildExists(for: original))
     }
 
+    
+
     func testResolveModuleBinFallsBackToNpxInDevMode() {
         let (executable, args) = DebugBuildCreator.resolveModuleBin("@electron/asar", binName: "asar")
         XCTAssertEqual(executable, "/usr/bin/env")
         XCTAssertEqual(args, ["npx", "@electron/asar"])
 
+        
         let (exe2, args2) = DebugBuildCreator.resolveModuleBin("@electron/fuses")
         XCTAssertEqual(exe2, "/usr/bin/env")
         XCTAssertEqual(args2, ["npx", "@electron/fuses"])
     }
+
+    
 
     func testPatchFilesInDirectoryReplacesPatternsAndSkipsNonMatches() throws {
         let dir = tempDir.path
@@ -69,7 +82,7 @@ final class DebugBuildCreatorTests: XCTestCase {
         try "if(BLOCK_CDP()){exit}".write(toFile: blocked, atomically: true, encoding: .utf8)
         let clean = "\(dir)/clean.js"
         try "console.log('ok')".write(toFile: clean, atomically: true, encoding: .utf8)
-
+        
         try "BLOCK_CDP()".write(toFile: "\(dir)/notjs.txt", atomically: true, encoding: .utf8)
 
         try DebugBuildCreator.patchFilesInDirectory(dir, patterns: patterns)
@@ -88,7 +101,7 @@ final class DebugBuildCreatorTests: XCTestCase {
         try DebugBuildCreator.patchFilesInDirectory(
             tempDir.path, patterns: [("BLOCK()", "true")], recursive: false
         )
-
+        
         XCTAssertEqual(try String(contentsOfFile: nestedFile, encoding: .utf8), "BLOCK()")
     }
 
@@ -108,8 +121,10 @@ final class DebugBuildCreatorTests: XCTestCase {
         XCTAssertEqual(try String(contentsOfFile: rootFile, encoding: .utf8), "y=false")
     }
 
-    func testPatchAsarReturnsEarlyWhenNoAsarPresent() async throws {
+    
 
+    func testPatchAsarReturnsEarlyWhenNoAsarPresent() async throws {
+        
         try await DebugBuildCreator.patchAsar(appPath: tempDir.path)
     }
 
@@ -118,13 +133,16 @@ final class DebugBuildCreatorTests: XCTestCase {
     }
 
     func testSignAppRunsCodesignOnDirectory() async {
-
+        
+        
         do {
             try await DebugBuildCreator.signApp(appPath: tempDir.path)
         } catch {
             XCTAssertTrue(error is DebugBuildCreator.DebugBuildError)
         }
     }
+
+    
 
     func testCreateDebugBuildThrowsCopyFailedForMissingSource() async {
         let missing = "/nonexistent-\(UUID().uuidString)/Ghost.app"

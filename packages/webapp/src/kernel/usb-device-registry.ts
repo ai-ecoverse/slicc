@@ -135,6 +135,79 @@ function sameDevice(a: UsbDevice, b: UsbDevice): boolean {
   );
 }
 
+export const DEFAULT_USB_OWNER = 'usb';
+
+export const USB_OWNER_SHELL = 'shell';
+
+export const USB_OWNER_REALM = 'realm';
+
+export function usbSprinkleOwner(sprinkleName: string): string {
+  return `sprinkle:${sprinkleName}`;
+}
+
+export function parseUsbSprinkleOwner(owner: string): string | undefined {
+  return owner.startsWith('sprinkle:') ? owner.slice('sprinkle:'.length) : undefined;
+}
+
+export interface UsbClaimOptions {
+  owner?: string;
+
+  wait?: boolean;
+
+  signal?: AbortSignal;
+}
+
+export interface UsbExclusiveOptions {
+  owner?: string;
+
+  force?: boolean;
+}
+
+export interface UsbInterfaceClaim {
+  handle: string;
+  interfaceNumber: number;
+  owner: string;
+}
+
+export interface UsbClaimEvent {
+  type: 'claim-lost' | 'disconnect';
+  handle: string;
+
+  interfaceNumber?: number;
+
+  holder: string;
+
+  displacedBy: string;
+  reason: 'close' | 'reset';
+}
+
+export type UsbClaimEventListener = (event: UsbClaimEvent) => void;
+
+export class UsbInterfaceClaimError extends Error {
+  readonly handle: string;
+  readonly holder: string;
+  readonly op: string;
+  readonly interfaceNumber?: number;
+
+  constructor(args: {
+    handle: string;
+    holder: string;
+    op: string;
+    interfaceNumber?: number;
+  }) {
+    const { handle, holder, op, interfaceNumber } = args;
+    const where =
+      interfaceNumber === undefined ? `'${handle}'` : `'${handle}' interface ${interfaceNumber}`;
+    const hint = op === 'claim' ? '' : ' (pass force to override)';
+    super(`usb ${op} ${where} refused: held by ${holder}${hint}`);
+    this.name = 'UsbInterfaceClaimError';
+    this.handle = handle;
+    this.holder = holder;
+    this.op = op;
+    if (interfaceNumber !== undefined) this.interfaceNumber = interfaceNumber;
+  }
+}
+
 export class DeviceHandleRegistry {
   private byHandle = new Map<string, UsbDevice>();
   private counter = 0;

@@ -3,6 +3,8 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
 final class TraySignalingSupersedeTests: XCTestCase {
 
     private let joinUrl = URL(string: "https://www.sliccy.ai/join/old.secret")!
@@ -29,6 +31,7 @@ final class TraySignalingSupersedeTests: XCTestCase {
             """#
     }
 
+    
     func testFollowsTheBodyJoinUrlWhenThereIsNoLink() async throws {
         let plan = try await client(
             status: 409,
@@ -38,22 +41,27 @@ final class TraySignalingSupersedeTests: XCTestCase {
         XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/from-body.beef")
     }
 
+    
+    
     func testAcceptsThe308RedirectBody() async throws {
         let body = #"""
             {"trayId":"t1","controllerId":"c1","role":"follower","leader":null,
              "participantCount":1,
              "result":{"action":"redirect","code":"TRAY_SUPERSEDED","error":"moved",
-                       "joinUrl":"https://www.sliccy.ai/join/fresh.beef"}}
+                       "joinUrl":"https:
             """#
         let plan = try await client(
             status: 308, body: body,
-            headers: ["Location": "https://www.sliccy.ai/join/fresh.beef?json=true"]
+            headers: ["Location": "https:
         ).attach(controllerId: "c1")
         XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/fresh.beef")
-
+        
+        
         XCTAssertEqual(plan.action, .fail)
     }
 
+    
+    
     func testFollowsThe308LocationAlone() async throws {
         let plan = try await client(
             status: 308, body: "",
@@ -62,6 +70,7 @@ final class TraySignalingSupersedeTests: XCTestCase {
         XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/fresh.beef")
     }
 
+    
     func testRejectsARedirectBodyWithoutAJoinUrl() async {
         let body = #"""
             {"trayId":"t1","controllerId":"c1","role":"follower","leader":null,
@@ -72,10 +81,11 @@ final class TraySignalingSupersedeTests: XCTestCase {
             _ = try await client(status: 308, body: body).attach(controllerId: "c1")
             XCTFail("expected an invalid-attach-response error")
         } catch {
-
+            
         }
     }
 
+    
     func testPrefersTheLinkOverTheBodyJoinUrl() async throws {
         let plan = try await client(
             status: 409,
@@ -86,6 +96,8 @@ final class TraySignalingSupersedeTests: XCTestCase {
         XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/fresh.beef")
     }
 
+    
+    
     func testFollowsTheLinkWhenTheBodyDoesNotValidate() async throws {
         let plan = try await client(
             status: 409,
@@ -97,6 +109,7 @@ final class TraySignalingSupersedeTests: XCTestCase {
         XCTAssertEqual(plan.code, "TRAY_SUPERSEDED")
     }
 
+    
     func testFollowsTheLinkWhenTheBodyIsNotDecodable() async throws {
         let plan = try await client(
             status: 409, body: "<html>gateway error</html>",
@@ -105,6 +118,8 @@ final class TraySignalingSupersedeTests: XCTestCase {
         XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/fresh.beef")
     }
 
+    
+    
     func testStillThrowsOnAnUnreadableBodyWithNoLink() async {
         do {
             _ = try await client(status: 409, body: "<html>gateway error</html>")
@@ -119,6 +134,7 @@ final class TraySignalingSupersedeTests: XCTestCase {
         }
     }
 
+    
     func testSupersededWithoutAnyReplacementIsStillInvalid() async {
         do {
             _ = try await client(

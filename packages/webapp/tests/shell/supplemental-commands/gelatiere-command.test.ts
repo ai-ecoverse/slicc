@@ -6,6 +6,7 @@ vi.mock('../../../src/core/feature-flags.js', () => ({
 }));
 
 import {
+  GELATIERE_BASE_ALLOWED_COMMANDS,
   GELATIERE_INSTRUCTIONS_PATH,
   GELATIERE_STATE_PATH,
   GELATIERE_SUGGESTIONS_PATH,
@@ -48,12 +49,23 @@ type Globals = typeof globalThis & { __slicc_gelatiere?: unknown };
 
 function fakeSeam(roots: Array<{ folder: string; name: string; jid: string }>) {
   let unit: { folder: string; jid: string } | undefined;
+  let inForce: readonly string[] | undefined;
   return {
-    ensureUnit: vi.fn(async () => {
+    ensureUnit: vi.fn(async (allowedCommands?: readonly string[]) => {
       const created = !unit;
       unit ??= { folder: 'gelatiere', jid: 'cone_gelatiere' };
-      return { ...unit, created };
+      if (allowedCommands) inForce = [...allowedCommands];
+      return {
+        ...unit,
+        created,
+        ...(created ? {} : { allowList: allowedCommands ? 'updated' : 'unchanged' }),
+      };
     }),
+    unitAllowedCommands: () => (unit ? inForce : undefined),
+
+    setInForce: (commands: readonly string[] | undefined) => {
+      inForce = commands;
+    },
     unregisterOwned: vi.fn(async () => {
       const gone = unit ? [unit.jid] : [];
       unit = undefined;
@@ -120,6 +132,41 @@ describe('gelatiere command', () => {
     expect(second.stdout).toContain('Found nightly pass');
   });
 
+  it("init hands the unit the file's allow-list, so an edit reaches a unit that already exists", async () => {
+    const fs = memoryFs({
+      [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree]\n---\nbody',
+    });
+    const created = await run(fs, ['init']);
+    expect(created.exitCode).toBe(0);
+    expect(seam.ensureUnit).toHaveBeenCalledWith(
+      expect.arrayContaining([...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree'])
+    );
+
+    expect(created.stdout).not.toContain('Updated its command allow-list');
+    const again = await run(fs, ['init']);
+    expect(again.stdout).toContain('Updated its command allow-list from GELATIERE.md');
+  });
+
+  it('init says nothing changed when the unit is mid-pass — applying would cancel it', async () => {
+    const fs = memoryFs({
+      [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree]\n---\nbody',
+    });
+    await run(fs, ['init']);
+    seam.ensureUnit.mockResolvedValueOnce({
+      folder: 'gelatiere',
+      jid: 'cone_gelatiere',
+      created: false,
+      allowList: 'deferred',
+    });
+    const deferred = await run(fs, ['init']);
+    expect(deferred.exitCode).toBe(0);
+    expect(deferred.stdout).toContain(
+      'Left its command allow-list alone: the gelatiere is mid-pass'
+    );
+    expect(deferred.stdout).toContain('run `gelatiere init` again once it is idle');
+    expect(deferred.stdout).not.toContain('Updated its command allow-list');
+  });
+
   it("init --reset drops the owner's units first, and a taken folder is reported cleanly", async () => {
     await run(memoryFs(), ['init']);
     const reset = await run(memoryFs(), ['init', '--reset']);
@@ -158,10 +205,14 @@ describe('gelatiere command', () => {
     expect(missing.stderr).toContain('cannot read /tmp/missing.json');
   });
 
-  it('deliver licks every other root with what is new, then stamps the delivery', async () => {
+  it('deliver licks each cone with what is addressed to it, then stamps the delivery', async () => {
     const fs = memoryFs({
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
         suggestion('new', { createdAt: '2026-09-09T10:00:00.000Z' }),
+        suggestion('research', {
+          createdAt: '2026-09-09T10:00:00.000Z',
+          cones: ['cone-research'],
+        }),
         suggestion('old', { createdAt: '2026-09-01T00:00:00.000Z' }),
       ]),
       [GELATIERE_STATE_PATH]: JSON.stringify({
@@ -171,21 +222,21 @@ describe('gelatiere command', () => {
     });
     const result = await run(fs, ['deliver']);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Delivered 1 new (2 open) to 2 cone(s): cone, cone-research');
-    expect(seam.lick).toHaveBeenCalledTimes(2);
-    expect(seam.lick).toHaveBeenNthCalledWith(
-      1,
-      'cone',
-      expect.objectContaining({
-        action: 'gelatiere-suggestions',
-        data: expect.objectContaining({
-          added: 1,
-          open: 2,
-          skill: expect.stringContaining('SKILL.md'),
-        }),
-      })
+    expect(result.stdout).toContain(
+      'Delivered to 2 cone(s): cone (1 new, 2 open), cone-research (1 new, 1 open)'
     );
-    expect(seam.lick).toHaveBeenNthCalledWith(2, 'cone-research', expect.anything());
+    expect(seam.lick).toHaveBeenCalledTimes(2);
+    const bodyFor = (target: string) =>
+      seam.lick.mock.calls.find(([t]) => t === target)?.[1] as {
+        action: string;
+        data: { added: number; open: number; skill: string; suggestions: GelatiereSuggestion[] };
+      };
+    expect(bodyFor('cone')).toMatchObject({
+      action: 'gelatiere-suggestions',
+      data: { added: 1, open: 2, skill: expect.stringContaining('SKILL.md') },
+    });
+    expect(bodyFor('cone').data.suggestions.map((s) => s.id)).toEqual(['new', 'old']);
+    expect(bodyFor('cone-research').data.suggestions.map((s) => s.id)).toEqual(['research']);
     expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).toBeTruthy();
 
     seam.lick.mockClear();
@@ -194,7 +245,7 @@ describe('gelatiere command', () => {
     expect(seam.lick).not.toHaveBeenCalled();
     const forced = await run(fs, ['deliver', '--force', '--scoop', 'Research']);
     expect(forced.stdout).toContain(
-      'to 1 cone(s): Research (targeted; the delivery watermark is unchanged)'
+      'to 1 cone(s): Research (0 new, 1 open) (targeted; the delivery watermark is unchanged)'
     );
     expect(seam.lick).toHaveBeenCalledWith('Research', expect.anything());
 
@@ -210,10 +261,48 @@ describe('gelatiere command', () => {
     );
   });
 
+  it('deliver leaves cones with nothing addressed to them alone', async () => {
+    const fs = memoryFs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion('research', { createdAt: '2026-09-09T10:00:00.000Z', cones: ['cone-research'] }),
+      ]),
+    });
+    const result = await run(fs, ['deliver']);
+    expect(result.stdout).toContain('Delivered to 1 cone(s): cone-research (1 new, 1 open)');
+    expect(seam.lick).toHaveBeenCalledTimes(1);
+    expect(seam.lick).toHaveBeenCalledWith('cone-research', expect.anything());
+
+    seam.lick.mockClear();
+    const primary = await run(fs, ['deliver', '--force', '--scoop', 'cone']);
+    expect(primary.stdout).toContain('Nothing addressed to cone; no lick sent (targeted');
+    expect(seam.lick).not.toHaveBeenCalled();
+  });
+
+  it('a known suggestion a later pass ties to another cone reaches that cone alone', async () => {
+    const fs = memoryFs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion('shared', { createdAt: '2026-09-01T00:00:00.000Z', cones: ['cone'] }),
+      ]),
+      [GELATIERE_STATE_PATH]: JSON.stringify({
+        passes: 1,
+        lastDeliveredAt: '2026-09-05T00:00:00.000Z',
+      }),
+      '/tmp/c.json': JSON.stringify([suggestion('shared', { cones: ['cone', 'cone-research'] })]),
+    });
+    await run(fs, ['suggest', '/tmp/c.json']);
+    const result = await run(fs, ['deliver']);
+    expect(result.stdout).toContain('Delivered to 1 cone(s): cone-research (1 new, 1 open)');
+    expect(seam.lick).toHaveBeenCalledTimes(1);
+    expect(seam.lick).toHaveBeenCalledWith('cone-research', expect.anything());
+  });
+
   it('a targeted deliver leaves the watermark alone so a later broadcast still reaches the rest', async () => {
     const fs = memoryFs({
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
-        suggestion('new', { createdAt: '2026-09-09T10:00:00.000Z' }),
+        suggestion('new', {
+          createdAt: '2026-09-09T10:00:00.000Z',
+          cones: ['cone', 'cone-research'],
+        }),
       ]),
       [GELATIERE_STATE_PATH]: JSON.stringify({
         passes: 1,
@@ -231,7 +320,7 @@ describe('gelatiere command', () => {
     seam.lick.mockClear();
     const broadcast = await run(fs, ['deliver']);
     expect(broadcast.stdout).toContain(
-      'Delivered 1 new (1 open) to 2 cone(s): cone, cone-research'
+      'Delivered to 2 cone(s): cone (1 new, 1 open), cone-research (1 new, 1 open)'
     );
     expect(seam.lick).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).not.toBe(
@@ -283,6 +372,7 @@ describe('gelatiere command', () => {
 
   it('status reports the unit, schedule, ledger, and counts', async () => {
     await run(memoryFs(), ['init']);
+    seam.setInForce([...GELATIERE_BASE_ALLOWED_COMMANDS]);
     const fs = memoryFs({
       [GELATIERE_STATE_PATH]: JSON.stringify({
         passes: 2,
@@ -299,11 +389,43 @@ describe('gelatiere command', () => {
     expect(result.stdout).toContain('Unit:           cone_gelatiere (folder gelatiere)');
     expect(result.stdout).toContain('Nightly:        registered, cron "0 3 * * *" (ct-1)');
     expect(result.stdout).toContain('Interval:       24h');
+    expect(result.stdout).toContain(
+      `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length} allowed without approval\n`
+    );
     expect(result.stdout).toContain('Passes:         2');
     expect(result.stdout).toContain('Last trigger:   never');
     expect(result.stdout).toContain('Last delivery:  2026-09-09T00:05:00.000Z');
     expect(result.stdout).toContain('Suggestions:    1 open, 1 taken, 3 total');
     expect(result.stdout).not.toContain('Memory v2');
+  });
+
+  it('status names the commands GELATIERE.md added on top of the built-in set', async () => {
+    const fs = memoryFs({
+      [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree, xxd]\n---\nbody',
+    });
+    await run(fs, ['init']);
+    const result = await run(fs, ['status']);
+    expect(result.stdout).toContain(
+      `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length + 2} allowed without approval (+tree, xxd from GELATIERE.md)`
+    );
+  });
+
+  it('status reports the list IN FORCE, not what an unapplied GELATIERE.md asks for', async () => {
+    const fs = memoryFs({
+      [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree, xxd]\n---\nbody',
+    });
+
+    const pending = await run(fs, ['status']);
+    expect(pending.stdout).toContain(
+      `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length + 2} configured (+tree, xxd from GELATIERE.md), pending — run \`gelatiere init\``
+    );
+
+    await run(fs, ['init']);
+    seam.setInForce([...GELATIERE_BASE_ALLOWED_COMMANDS]);
+    const drifted = await run(fs, ['status']);
+    expect(drifted.stdout).toContain(
+      `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length} in force; GELATIERE.md asks for ${GELATIERE_BASE_ALLOWED_COMMANDS.length + 2} (+tree, xxd from GELATIERE.md) — run \`gelatiere init\``
+    );
   });
 
   it('status leads with the flag when Memory v2 is off — "registered" must not read as "active"', async () => {
@@ -364,6 +486,133 @@ describe('gelatiere command', () => {
     const down = await run(memoryFs(), ['commands']);
     expect(down.exitCode).toBe(1);
     expect(down.stderr).toContain('HTTP 503');
+  });
+
+  const sitemapWith = (slugs: string[]): string =>
+    `<urlset>${slugs.map((slug) => `<loc>https://www.sliccy.com/use-cases/${slug}</loc>`).join('')}<loc>https://www.sliccy.com/man/bash</loc></urlset>`;
+
+  const useCasePage = (title: string, description: string): string =>
+    `<html><head><title>${title}</title>` +
+    `<meta name="description" content="${description}">` +
+    '<meta name="slicc-upskill" content="https://github.com/o/r/tree/main/skills/firefly, https://github.com/o/r/tree/main/skills/suno">' +
+    '</head><body>ignored</body></html>';
+
+  it('use-cases reads the sitemap, then one page each, and reports title, summary and skills', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        url.endsWith('/sitemap.xml')
+          ? sitemapWith(['creative', 'web-development'])
+          : useCasePage('Your partner in creative endeavors', 'It makes things &amp; ships them.'),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+    const cases = JSON.parse(result.stdout);
+    expect(cases).toHaveLength(2);
+    expect(cases[0]).toMatchObject({
+      slug: 'creative',
+      url: 'https://www.sliccy.com/use-cases/creative',
+      title: 'Your partner in creative endeavors',
+
+      description: 'It makes things & ships them.',
+      skills: [
+        'https://github.com/o/r/tree/main/skills/firefly',
+        'https://github.com/o/r/tree/main/skills/suno',
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/sitemap.xml', TIMED);
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/use-cases/creative', TIMED);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('use-cases keeps an apostrophe inside a double-quoted description', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        url.endsWith('/sitemap.xml')
+          ? sitemapWith(['ready'])
+          : useCasePage('Ready when you are', "You're ready to ship."),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)[0].description).toBe("You're ready to ship.");
+  });
+
+  it('use-cases rotates the selection by day when asked for fewer than the site has', async () => {
+    const slugs = ['alpha', 'beta', 'gamma', 'delta'];
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () => (url.endsWith('/sitemap.xml') ? sitemapWith(slugs) : useCasePage('T', 'D')),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const shownOn = async (iso: string): Promise<string[]> => {
+      vi.setSystemTime(new Date(iso));
+      const result = await run(memoryFs(), ['use-cases', '--limit', '2', '--json']);
+      expect(result.exitCode).toBe(0);
+      return JSON.parse(result.stdout).map((c: { slug: string }) => c.slug);
+    };
+    try {
+      expect(await shownOn('2026-09-15T02:00:00.000Z')).toEqual(
+        await shownOn('2026-09-15T22:00:00.000Z')
+      );
+
+      expect(await shownOn('2026-09-16T02:00:00.000Z')).not.toEqual(
+        await shownOn('2026-09-15T02:00:00.000Z')
+      );
+
+      expect((await shownOn('2026-09-15T02:00:00.000Z')).length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('use-cases survives a page that will not load, and rejects a bad --limit', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/sitemap.xml')) {
+          return { ok: true, status: 200, text: async () => sitemapWith(['stay-on-top']) };
+        }
+        return { ok: false, status: 500, text: async () => '' };
+      })
+    );
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+
+    expect(JSON.parse(result.stdout)).toEqual([
+      {
+        slug: 'stay-on-top',
+        url: 'https://www.sliccy.com/use-cases/stay-on-top',
+        title: 'Stay on top',
+        description: '',
+        skills: [],
+      },
+    ]);
+
+    for (const bad of ['0', '-1', 'three']) {
+      const rejected = await run(memoryFs(), ['use-cases', '--limit', bad]);
+      expect(rejected.exitCode, `--limit ${bad}`).toBe(1);
+      expect(rejected.stderr).toContain('--limit must be a positive whole number');
+    }
+  });
+
+  it('use-cases says so when the sitemap lists none, instead of printing nothing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '<urlset><loc>https://www.sliccy.com/man/bash</loc></urlset>',
+      }))
+    );
+    const result = await run(memoryFs(), ['use-cases']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no use cases found in the sitemap');
   });
 
   it('every seam-backed verb fails cleanly before the host publishes the seam', async () => {

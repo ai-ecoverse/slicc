@@ -147,6 +147,17 @@ describe('memory status', () => {
     expect(result.stdout).toContain('Health:     ok');
   });
 
+  it('flags a legacy /shared/MEMORY.md or DREAMING.md that is no longer read', async () => {
+    const fs = memoryFs({
+      [INDEX_PATH]: JSON.stringify([entry('a.md', '2026-09-01T00:00:00Z')]),
+      '/shared/DREAMING.md': '# custom dreamer rules',
+    });
+    const result = await run(fs, ['status', '--check']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('/shared/DREAMING.md is no longer read');
+    expect(result.stdout).toContain('/etc/MEMORY.md');
+  });
+
   it('--json emits the structured report', async () => {
     const fs = memoryFs({ [INDEX_PATH]: JSON.stringify([entry('a.md', '2026-09-01T00:00:00Z')]) });
     const result = await run(fs, ['status', '--json']);

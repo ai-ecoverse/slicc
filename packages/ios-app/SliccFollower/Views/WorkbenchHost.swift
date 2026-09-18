@@ -1,11 +1,20 @@
 import SliccTrayKit
 import SwiftUI
 
+
+
+
+
 struct WorkbenchHost: View {
     let surface: DockSurface
-
+    
+    
+    
     var isActive: Bool = true
-
+    
+    
+    
+    
     var terminalModel: TerminalViewModel?
 
     @EnvironmentObject var appState: AppState
@@ -20,7 +29,7 @@ struct WorkbenchHost: View {
                 if let sprinkle = appState.sprinkles.first(where: { $0.name == name }) {
                     SprinkleDetailView(sprinkle: sprinkle)
                 } else {
-
+                    
                     placeholder("This sprinkle is no longer registered on the leader.")
                 }
             case .monitor:

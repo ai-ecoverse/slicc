@@ -50,6 +50,12 @@ function createCollaborators(): FollowerDispatchCollaborators {
     biscottoReview: { submit: vi.fn() },
     tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
     oauthPopupDelegation: { handlePopupResponse: vi.fn() },
+    computersRouter: {
+      handleWatch: vi.fn(),
+      handleUnwatch: vi.fn(),
+      handleInput: vi.fn(),
+      handleNative: vi.fn(),
+    },
   };
 }
 
@@ -194,6 +200,64 @@ describe('FollowerDispatch', () => {
     });
     expect(onFollowerThinkingSet).toHaveBeenCalledWith('selected-scoop', 'xhigh', 'max');
     expect(c.broadcast.broadcastModelState).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispatches computer.watch and computer.unwatch', () => {
+    const { collaborators: c, dispatch } = createHarness();
+    dispatch.dispatch('follower', {
+      type: 'computer.watch',
+      id: 'jsh:fake',
+      fps: 2,
+      maxWidth: 480,
+    });
+    expect(c.computersRouter?.handleWatch).toHaveBeenCalledWith('follower', 'jsh:fake', 2, 480);
+    dispatch.dispatch('follower', { type: 'computer.unwatch', id: 'jsh:fake' });
+    expect(c.computersRouter?.handleUnwatch).toHaveBeenCalledWith('follower', 'jsh:fake');
+  });
+
+  it('dispatches computer.input and computer.native.frame/error', () => {
+    const { collaborators: c, dispatch } = createHarness();
+    dispatch.dispatch('follower', {
+      type: 'computer.input',
+      id: 'jsh:fake',
+      events: [{ type: 'key', keysym: 'Home' }],
+    });
+    expect(c.computersRouter?.handleInput).toHaveBeenCalledWith('follower', 'jsh:fake', [
+      { type: 'key', keysym: 'Home' },
+    ]);
+    dispatch.dispatch('follower', {
+      type: 'computer.native.frame',
+      requestId: 'cap-1',
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 1440,
+      nativeHeight: 900,
+      data: 'QUJD',
+    });
+    expect(c.computersRouter?.handleNative).toHaveBeenCalledWith(
+      'follower',
+      expect.objectContaining({ type: 'computer.native.frame', requestId: 'cap-1' })
+    );
+    dispatch.dispatch('follower', {
+      type: 'computer.native.error',
+      requestId: 'cap-1',
+      error: 'Screen Recording is off',
+    });
+    expect(c.computersRouter?.handleNative).toHaveBeenCalledWith(
+      'follower',
+      expect.objectContaining({ type: 'computer.native.error', requestId: 'cap-1' })
+    );
+    dispatch.dispatch('follower', {
+      type: 'computer.native.input.result',
+      requestId: 'in-1',
+      error: 'Accessibility is not allowed',
+    });
+    expect(c.computersRouter?.handleNative).toHaveBeenCalledWith(
+      'follower',
+      expect.objectContaining({ type: 'computer.native.input.result', requestId: 'in-1' })
+    );
   });
 
   it('rejects an invalid model id without throwing or broadcasting state', () => {

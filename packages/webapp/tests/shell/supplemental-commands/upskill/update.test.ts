@@ -10,7 +10,7 @@ import {
   isSafeSkillRelativePath,
   readProvenance,
 } from '../../../../src/shell/supplemental-commands/upskill/index.js';
-import { createMockCtx, response } from './test-helpers.js';
+import { createMockCtx, githubCommitsResponse, response } from './test-helpers.js';
 
 let dbCounter = 0;
 
@@ -26,9 +26,8 @@ function repoFetch(files: Record<string, string>, sha = 'a'.repeat(40)) {
   return vi.fn(async (url: string) => {
     if (url.includes('raw.githubusercontent.com')) throw new Error(`unexpected url: ${url}`);
     if (url.includes('codeload.github.com')) return response(200, repoZip(files));
-    if (url.includes('api.github.com') && url.includes('/commits/')) {
-      return response(200, JSON.stringify({ sha }));
-    }
+    const commits = githubCommitsResponse(url, sha);
+    if (commits) return commits;
     throw new Error(`unexpected url: ${url}`);
   });
 }
@@ -179,7 +178,8 @@ describe('upskill install — dotfile protection and provenance', () => {
     };
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) return response(500, 'no zip here');
-      if (url.includes('/commits/')) return response(200, JSON.stringify({ sha: 'c'.repeat(40) }));
+      const commits = githubCommitsResponse(url, 'c'.repeat(40));
+      if (commits) return commits;
       if (url.endsWith('/.config/token')) return response(200, 'UPSTREAM_TOKEN\n');
       if (url.endsWith('/SKILL.md')) return response(200, '# Alpha upstream\n');
       const match = url.match(/\/contents\/([^?]*)/);
@@ -206,7 +206,7 @@ describe('upskill install — dotfile protection and provenance', () => {
     );
   });
 
-  it('an anonymous install still spends no rate-limited API request', async () => {
+  it('an anonymous install records the commit sha via one commits lookup', async () => {
     _resetGlobalFsCache();
     const globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
     await globalFs.rm('/workspace/.git/github-token').catch(() => {});
@@ -217,13 +217,13 @@ describe('upskill install — dotfile protection and provenance', () => {
     const result = await cmd.execute(['octo/skills', '--skill', 'alpha'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(0);
-    for (const [url] of fetchMock.mock.calls) {
-      expect(String(url)).not.toContain('api.github.com');
-    }
-
+    const apiUrls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(apiUrls.some((url) => url.includes('/commits'))).toBe(true);
+    expect(apiUrls.some((url) => url.includes('/contents'))).toBe(false);
     const provenance = await readProvenance(fs, 'alpha');
     expect(provenance?.source).toBe('octo/skills');
-    expect(provenance?.sha).toBeUndefined();
+    expect(provenance?.sha).toBe('a'.repeat(40));
+    expect(provenance?.path).toBe('alpha');
   });
 
   it('refuses to write archive entries that escape the skill directory', async () => {
@@ -523,7 +523,8 @@ describe('upskill update', () => {
         );
       }
       if (url.endsWith('/alpha/SKILL.md')) return response(200, '# Alpha via API\n');
-      if (url.includes('/commits/')) return response(200, JSON.stringify({ sha: 'd'.repeat(40) }));
+      const commits = githubCommitsResponse(url, 'd'.repeat(40));
+      if (commits) return commits;
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -591,7 +592,7 @@ describe('upskill update', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('already current');
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
-    expect(urls.some((u) => u.includes('/commits/'))).toBe(true);
+    expect(urls.some((u) => u.includes('/commits'))).toBe(true);
     expect(urls.some((u) => u.includes('codeload.github.com'))).toBe(false);
   });
 
@@ -607,7 +608,7 @@ describe('upskill update', () => {
     const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(0);
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commits/'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commits'))).toBe(true);
   });
 
   it('does not short-circuit when a recorded file is missing locally', async () => {

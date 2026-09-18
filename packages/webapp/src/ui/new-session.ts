@@ -4,10 +4,12 @@ import { isFeatureEnabled } from '../core/feature-flags.js';
 import type { DirEntry } from '../fs/types.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
-import { SessionStore } from '../scoops/chat-session-store.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
+import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
+import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
+  type ConeSessionSource,
   curateFrozenSessionMemories,
   enrichPendingSession,
   type FreezerConeRef,
@@ -84,7 +86,7 @@ function resolveAgenticMemorySpawn(
 
 async function runAgenticMemoryFreeze(
   opts: RunNewSessionFreezeOptions,
-  sessionStore: SessionStore,
+  sessionStore: ConeSessionSource,
   model: Model<Api>,
   apiKey: string,
   headers: Record<string, string> | undefined,
@@ -116,7 +118,7 @@ async function runAgenticMemoryFreeze(
 
 async function runAgenticBackgroundPass(
   opts: RunNewSessionFreezeOptions,
-  sessionStore: SessionStore,
+  sessionStore: ConeSessionSource,
   model: Model<Api>,
   apiKey: string,
   headers: Record<string, string> | undefined,
@@ -268,15 +270,7 @@ export async function runNewSessionFreeze(
       ? { 'X-Session-Id': getDailyAdobeUuid(FREEZER_SESSION_ANCHOR) }
       : undefined;
 
-  const sessionStore = new SessionStore();
-  try {
-    await sessionStore.init();
-  } catch (err) {
-    log.warn('SessionStore init failed — cannot freeze', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
+  const sessionStore = new CanonicalSessionReader(new WorkUnitConversationStore());
 
   const agenticMemorySpawn = apiKey && model ? resolveAgenticMemorySpawn(opts) : undefined;
   if (agenticMemorySpawn) {
@@ -399,15 +393,7 @@ async function runQuickFreeze(
   opts: RunNewSessionFreezeOptions,
   memory: 'skip' | undefined
 ): Promise<FrozenSession | null> {
-  const sessionStore = new SessionStore();
-  try {
-    await sessionStore.init();
-  } catch (err) {
-    log.warn('SessionStore init failed — cannot quick-freeze', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
+  const sessionStore = new CanonicalSessionReader(new WorkUnitConversationStore());
 
   const frozen = await freezeConeSession({
     sessionStore,

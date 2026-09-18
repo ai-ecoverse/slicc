@@ -1,5 +1,8 @@
 import Foundation
 
+
+
+
 public enum RUMCheckpoint: Hashable, Sendable {
     case top
     case enter
@@ -14,6 +17,7 @@ public enum RUMCheckpoint: Hashable, Sendable {
     case error
     case raw(String)
 
+    
     public var rawValue: String {
         switch self {
         case .top: return "top"
@@ -32,6 +36,9 @@ public enum RUMCheckpoint: Hashable, Sendable {
     }
 }
 
+
+
+
 public struct RUMPingData: Hashable, Sendable {
     public var source: String?
     public var target: String?
@@ -43,10 +50,21 @@ public struct RUMPingData: Hashable, Sendable {
         self.value = value
     }
 
+    
     public var isEmpty: Bool {
         source == nil && target == nil && value == nil
     }
 }
+
+
+
+
+
+
+
+
+
+
 
 public struct RUMEvent: Hashable, Sendable {
     public var weight: Int
@@ -91,8 +109,12 @@ extension RUMEvent: Encodable {
     }
 }
 
-public enum RUMSessionID {
 
+
+
+
+public enum RUMSessionID {
+    
     public static func generate() -> String {
         let uuid = UUID().uuidString.lowercased()
         return String(uuid.suffix(9))

@@ -7,9 +7,14 @@ import (
 	"syscall"
 )
 
+
+
 func setProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
+
+
+
 
 func killProcess(cmd *exec.Cmd, name string) {
 	if cmd.Process == nil {
@@ -24,6 +29,9 @@ func killProcess(cmd *exec.Cmd, name string) {
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, sig)
 }
+
+
+
 
 func interruptProcess(cmd *exec.Cmd) bool {
 	if cmd.Process == nil {

@@ -6,7 +6,7 @@ export { pathGlobToRegExp } from '../fs/path-utils.js';
 
 const log = createLogger('sudo:sudoers');
 
-export type MatchResult = 'require-approval' | 'nopasswd-allow' | 'no-match';
+export type MatchResult = 'require-approval' | 'nopasswd-allow' | 'no-match' | 'deny';
 
 export type PathOp = 'read' | 'write';
 
@@ -32,11 +32,31 @@ export const SUDOERS_D_DIR = '/etc/sudoers.d';
 
 export const APPROVALS_FILE = '/etc/APPROVALS.md';
 
-const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
+const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers(?:\.d(?:\/.*)?)?$/;
+
+export function isUnhonoredSudoersPath(path: string): boolean {
+  return SCOOP_SUDOERS_RE.test(normalizePath(path));
+}
 
 export const PROTECTED_LAYOUTS_DIR = '/etc/slicc/layouts';
 
-export function scoopSudoersPath(folder: string): string {
+export const SCOOP_GRANTS_PREFIX = 'scoop-';
+
+export function isSafeScoopFolder(folder: string): boolean {
+  return folder.length > 0 && folder !== '.' && folder !== '..' && !/[/\\]/.test(folder);
+}
+
+export function scoopGrantsPath(folder: string): string | null {
+  return isSafeScoopFolder(folder) ? `${SUDOERS_D_DIR}/${SCOOP_GRANTS_PREFIX}${folder}` : null;
+}
+
+export function scoopFolderFromGrantsName(name: string): string | null {
+  return name.startsWith(SCOOP_GRANTS_PREFIX)
+    ? name.slice(SCOOP_GRANTS_PREFIX.length) || null
+    : null;
+}
+
+export function legacyScoopSudoersPath(folder: string): string {
   return `/scoops/${folder}/etc/sudoers`;
 }
 
@@ -216,7 +236,6 @@ function isSelfProtectedWrite(normalized: string): boolean {
     normalized === APPROVALS_FILE ||
     normalized === SUDOERS_D_DIR ||
     normalized.startsWith(`${SUDOERS_D_DIR}/`) ||
-    SCOOP_SUDOERS_RE.test(normalized) ||
     normalized === PROTECTED_LAYOUTS_DIR ||
     normalized.startsWith(`${PROTECTED_LAYOUTS_DIR}/`)
   );
@@ -230,6 +249,7 @@ export function matchPath(
 ): MatchResult {
   const normalized = normalizePath(path);
   if (op === 'write') {
+    if (SCOOP_SUDOERS_RE.test(normalized)) return 'deny';
     if (isSelfProtectedWrite(normalized)) return 'require-approval';
     if (opts?.isContentWrite && isNoOpWriteDevicePath(normalized)) return 'nopasswd-allow';
   }

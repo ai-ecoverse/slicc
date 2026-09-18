@@ -50,12 +50,30 @@ export async function tryResolveRevision(
 const ABBREVIATED_OID = /^[0-9a-f]{4,40}$/i;
 
 async function resolveBase(ctx: GitCommandContext, cwd: string, ref: string): Promise<string> {
+  if (ref === 'FETCH_HEAD') return await resolveFetchHead(ctx, cwd);
   try {
     return await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
   } catch (error) {
     if (!ABBREVIATED_OID.test(ref)) throw error;
   }
   return await git.expandOid({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid: ref });
+}
+
+async function resolveFetchHead(ctx: GitCommandContext, cwd: string): Promise<string> {
+  const root = await git.findRoot({ fs: ctx.lfs, filepath: cwd });
+  let text: string;
+  try {
+    const raw = await ctx.lfs.readFile(`${root}/.git/FETCH_HEAD`, { encoding: 'utf8' });
+    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  } catch {
+    throw new Error('Could not find FETCH_HEAD.');
+  }
+  const line = text.split('\n').find((entry) => entry.trim().length > 0);
+  const oid = line?.split(/[\t ]/)[0];
+  if (!oid || !ABBREVIATED_OID.test(oid) || oid.length !== 40) {
+    throw new Error('Could not find FETCH_HEAD.');
+  }
+  return oid.toLowerCase();
 }
 
 async function readParent(

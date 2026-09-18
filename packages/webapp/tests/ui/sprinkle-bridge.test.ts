@@ -94,6 +94,16 @@ describe('SprinkleBridge', () => {
     expect(event.body).toEqual({ action: 'click', data: { id: 42 } });
   });
 
+  it('lick() stamps an explicit per-lick target on the LickEvent', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.lick({ action: 'publish', target: 'cone-reviewer' });
+
+    expect(lickHandlerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetScoop: 'cone-reviewer' }),
+      undefined
+    );
+  });
+
   it('lick() accepts a plain string as action shorthand', () => {
     const api = bridge.createAPI('test-sprinkle');
     api.lick('add-year');

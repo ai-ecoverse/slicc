@@ -224,7 +224,7 @@ export const Thinking: Story = {
 };
 
 export const Progress: Story = {
-  render: () => buildMessage({ thinking: true, progress: 'Running tools — edit_file · bash' }),
+  render: () => buildMessage({ thinking: true, progress: 'Running tools — edit · bash' }),
 };
 
 export const Streaming: Story = {
@@ -245,7 +245,7 @@ export const States: Story = {
 
     wrap.append(
       buildMessage({ thinking: true, progress: 'Thinking…' }),
-      buildMessage({ thinking: true, progress: 'Running tools — edit_file · bash' }),
+      buildMessage({ thinking: true, progress: 'Running tools — edit · bash' }),
       buildMessage({ thinking: true, progress: 'Waiting for your reply…' })
     );
 

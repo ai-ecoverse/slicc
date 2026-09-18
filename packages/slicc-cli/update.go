@@ -9,6 +9,10 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
 
+
+
+
+
 func cmdUpdate(ctx context.Context, args []string) int {
 	checkOnly := false
 	for _, arg := range args {
@@ -31,7 +35,9 @@ func cmdUpdate(ctx context.Context, args []string) int {
 		reportRuntimeError("update", err)
 		return 1
 	}
-
+	
+	
+	
 	if !update.IsReleaseVersion(version) {
 		if checkOnly {
 			fmt.Printf("latest CLI release: %s (you run a development build, %s — not comparable)\n", release.Version, version)
@@ -64,6 +70,9 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	return 0
 }
 
+
+
+
 func executablePath() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -74,6 +83,11 @@ func executablePath() (string, error) {
 	}
 	return exePath, nil
 }
+
+
+
+
+
 
 func startUpdateNotice() func() {
 	if exePath, err := os.Executable(); err == nil {

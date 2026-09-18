@@ -109,24 +109,33 @@ export function createWcController(
       }
     },
     onMessageRendered: (message, els) => {
+      const previous = dipInstances.get(message.id);
       const messageHost = els[0];
-      if (!messageHost) return;
+      if (!messageHost) {
+        if (previous) disposeDips(previous);
+        dipInstances.delete(message.id);
+        return;
+      }
 
       host.onMessageRendered?.(messageHost);
 
       const originUnitId = addressedUnitId() ?? undefined;
       dipInstances.set(
         message.id,
-        hydrateDips(messageHost, (action, data) => {
-          const event: LickEvent = {
-            type: 'sprinkle',
-            sprinkleName: 'inline',
-            timestamp: new Date().toISOString(),
-            body: { action, data },
-          };
-          if (welcome?.intercept?.(event)) return;
-          host.sendSprinkleLick('inline', { action, data }, undefined, originUnitId);
-        })
+        hydrateDips(
+          messageHost,
+          (action, data) => {
+            const event: LickEvent = {
+              type: 'sprinkle',
+              sprinkleName: 'inline',
+              timestamp: new Date().toISOString(),
+              body: { action, data },
+            };
+            if (welcome?.intercept?.(event)) return;
+            host.sendSprinkleLick('inline', { action, data }, undefined, originUnitId);
+          },
+          { previous, streaming: message.isStreaming === true }
+        )
       );
     },
     onQueuedChange: (items) => refs.queuedStack.setMessages(items),

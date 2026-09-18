@@ -2,6 +2,13 @@ import SliccTrayKit
 import SwiftUI
 import UIKit
 
+
+
+
+
+
+
+
 struct FilesView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -14,9 +21,14 @@ struct FilesView: View {
     struct OpenFile: Identifiable {
         let id = UUID()
         let name: String
-
+        
+        
         let data: Data
-
+        
+        
+        
+        
+        
         var text: String? { String(data: data, encoding: .utf8) }
     }
 
@@ -122,7 +134,8 @@ struct FilesView: View {
             }
         #endif
         do {
-
+            
+            
             let data = try await appState.fsClient.readBinaryFile(filePath)
             openFile = OpenFile(name: name, data: data)
         } catch {
@@ -132,12 +145,18 @@ struct FilesView: View {
     }
 }
 
+
+
+
 struct FilePreviewSheet: View {
     let file: FilesView.OpenFile
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.palette) private var palette
 
+    
+    
+    
     @State private var stagedURL: URL?
 
     var body: some View {
@@ -166,7 +185,11 @@ struct FilePreviewSheet: View {
     @ViewBuilder
     private var content: some View {
         if let text = readableText {
-
+            
+            
+            
+            
+            
             ScrollView {
                 Text(text)
                     .font(.system(size: 13, design: .monospaced))
@@ -177,7 +200,9 @@ struct FilePreviewSheet: View {
                     .accessibilityIdentifier("file-preview-text")
             }
         } else if let stagedURL, QuickLookPreview.canPreview(stagedURL) {
-
+            
+            
+            
             QuickLookPreview(url: stagedURL)
                 .accessibilityIdentifier("file-preview-quicklook")
         } else {
@@ -193,11 +218,21 @@ struct FilePreviewSheet: View {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
     private var readableText: String? {
         guard MagicBytes.looksLikeText(file.data) else { return nil }
         return file.text
     }
 
+    
+    
+    
     private func temporaryFileURL() -> URL? {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("slicc-export", isDirectory: true)

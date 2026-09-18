@@ -118,8 +118,8 @@ describe('check-touched-exemptions: float-probe debt list wiring', () => {
   it('passes when the changed file is not on any real debt list', () => {
     const { code, out } = run({ CHANGED_FILES: FAKE_PATH });
     expect(code).toBe(0);
-    expect(out).toMatch(/OK|no debt lists found/);
-    expect(out).not.toContain('FAIL');
+
+    expect(out).toMatch(/no debt lists found|OK \(1 changed file\(s\), 0 still on any debt list\)/);
   });
 });
 

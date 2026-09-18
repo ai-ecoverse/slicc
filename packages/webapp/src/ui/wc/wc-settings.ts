@@ -1,6 +1,13 @@
 import { slugify } from '@slicc/shared-ts';
 import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-preference.js';
-import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
+import {
+  canOverrideFlag,
+  type FeatureFlagId,
+  isFeatureEnabled,
+  listFlags,
+  readFeatureFlagOverrides,
+  setFeatureFlagOverride,
+} from '../../core/feature-flags.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
 import {
@@ -93,6 +100,8 @@ slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}
 .wcset__radio-row__body{flex:1;min-width:0;}
 .wcset__radio-row__title{font-size:12.5px;font-weight:600;}
 .wcset__radio-row__detail{font-size:11px;color:var(--txt-3);margin-top:2px;line-height:1.4;}
+.wcset__notice{font-size:11.5px;line-height:1.45;color:var(--ink);background:var(--ghost);border:1px solid var(--line);border-left:3px solid var(--ctx);border-radius:8px;padding:8px 10px;}
+.wcset__notice[hidden]{display:none;}
 `;
 
 function ensureSettingsStyle(doc: Document): void {
@@ -411,15 +420,36 @@ function buildKeyboardModeSection(
   return section;
 }
 
+interface ExperimentalSection {
+  element: HTMLElement;
+
+  revert(): void;
+
+  commit(): void;
+}
+
 function buildExperimentalSection(deps: {
   log: SettingsLogger;
   setStatus(text: string, isError?: boolean): void;
-}): HTMLElement {
+
+  onPendingChange(pending: boolean): void;
+}): ExperimentalSection {
   const section = div('wcset__list');
   const flags = listFlags().filter((candidate) => candidate.userToggleable);
   if (flags.length === 0) {
     section.append(div('wcset__empty', 'No experimental features are available right now.'));
   }
+
+  const openedValues = new Map(flags.map((flag) => [flag.id, isFeatureEnabled(flag.id)]));
+  const openedOverrides = readFeatureFlagOverrides();
+  const checks = new Map<FeatureFlagId, HTMLInputElement>();
+
+  const staged = new Map<FeatureFlagId, boolean>();
+
+  const notePending = (): void => {
+    deps.onPendingChange([...staged].some(([id, want]) => want !== openedValues.get(id)));
+  };
+
   for (const flag of flags) {
     const row = div('wcset__toggle-row');
     const info = div('wcset__info');
@@ -432,19 +462,42 @@ function buildExperimentalSection(deps: {
     label.textContent = flag.label;
     info.append(label, div('wcset__detail', flag.description));
     check.addEventListener('change', () => {
-      try {
-        setFeatureFlagOverride(flag.id, check.checked ? 'on' : 'off');
-        check.checked = isFeatureEnabled(flag.id);
-        deps.setStatus('Saved.');
-      } catch (err) {
-        deps.log.error('Experimental settings update failed', { flagId: flag.id, err });
-        deps.setStatus('Unable to save this feature setting.', true);
+      if (!canOverrideFlag(flag.id)) {
+        check.checked = openedValues.get(flag.id) ?? false;
+        deps.setStatus('This feature cannot be changed on this runtime.', true);
+        return;
       }
+      staged.set(flag.id, check.checked);
+      deps.setStatus(
+        check.checked === openedValues.get(flag.id)
+          ? 'Back to the current setting.'
+          : 'Not applied yet — reload to apply.'
+      );
+      notePending();
     });
+    checks.set(flag.id, check);
     row.append(info, check);
     section.append(row);
   }
-  return section;
+
+  return {
+    element: section,
+    revert: () => {
+      staged.clear();
+      for (const [id, check] of checks) check.checked = openedValues.get(id) ?? false;
+      notePending();
+    },
+    commit: () => {
+      for (const [id, want] of staged) {
+        try {
+          if (want === openedValues.get(id)) setFeatureFlagOverride(id, openedOverrides[id]);
+          else setFeatureFlagOverride(id, want ? 'on' : 'off');
+        } catch (err) {
+          deps.log.error('Experimental settings update failed', { flagId: id, err });
+        }
+      }
+    },
+  };
 }
 
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
@@ -1030,9 +1083,25 @@ export async function showThemeSettings(
   });
 }
 
-export async function showExperimentalSettings(log: SettingsLogger): Promise<void> {
+const EXPERIMENTAL_DONE_LABEL = 'Done';
+
+const EXPERIMENTAL_RELOAD_LABEL = 'Reload now';
+
+const EXPERIMENTAL_REVERT_LABEL = 'Revert';
+const EXPERIMENTAL_RELOAD_NOTICE =
+  'Experimental features take effect when SLICC boots. Nothing is saved until you reload — reload this tab to apply your changes, or revert.';
+
+export interface ExperimentalSettingsOpts {
+  reload?(): void;
+}
+
+export async function showExperimentalSettings(
+  log: SettingsLogger,
+  opts: ExperimentalSettingsOpts = {}
+): Promise<void> {
   if (!isFeatureEnabled('experimental-settings')) return;
   ensureSettingsStyle(document);
+  const reload = opts.reload ?? ((): void => location.reload());
 
   return new Promise((resolve) => {
     const dialog = document.createElement('slicc-dialog');
@@ -1045,14 +1114,43 @@ export async function showExperimentalSettings(log: SettingsLogger): Promise<voi
       status.textContent = text;
       status.toggleAttribute('data-error', isError);
     };
-    body.append(buildExperimentalSection({ log, setStatus }), status);
-    dialog.append(body);
 
-    const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
+    const notice = div('wcset__notice', EXPERIMENTAL_RELOAD_NOTICE);
+    notice.hidden = true;
+
+    const hide = (): void => {
       (dialog as HTMLElement & { hide?: () => void }).hide?.();
+    };
+    const confirmBtn = button('wcset__btn wcset__btn--primary', EXPERIMENTAL_DONE_LABEL, () => {
+      if (pending) {
+        section.commit();
+        reload();
+      }
+      hide();
     });
-    done.setAttribute('slot', 'footer');
-    dialog.append(done);
+    confirmBtn.setAttribute('slot', 'footer');
+
+    const revertBtn = button('wcset__btn', EXPERIMENTAL_REVERT_LABEL, () => {
+      section.revert();
+      setStatus('Reverted.');
+    });
+    revertBtn.setAttribute('slot', 'footer');
+    revertBtn.hidden = true;
+
+    let pending = false;
+    const section = buildExperimentalSection({
+      log,
+      setStatus,
+      onPendingChange: (next) => {
+        pending = next;
+        notice.hidden = !next;
+        revertBtn.hidden = !next;
+        confirmBtn.textContent = next ? EXPERIMENTAL_RELOAD_LABEL : EXPERIMENTAL_DONE_LABEL;
+      },
+    });
+
+    body.append(section.element, notice, status);
+    dialog.append(body, revertBtn, confirmBtn);
 
     dialog.addEventListener('slicc-dialog-close', () => {
       dialog.remove();

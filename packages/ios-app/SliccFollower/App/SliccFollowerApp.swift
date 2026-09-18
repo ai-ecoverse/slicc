@@ -2,10 +2,12 @@ import SwiftUI
 
 @main
 struct SliccFollowerApp: App {
-
+    
+    
     @UIApplicationDelegateAdaptor(SliccAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
-
+    
+    
     @StateObject private var inboundActions = InboundActionCoordinator.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -14,18 +16,24 @@ struct SliccFollowerApp: App {
             rootView
                 .onOpenURL { url in
                     if appState.handleOpenCallback(url) { return }
-
+                    
+                    
+                    
+                    
                     _ = inboundActions.receive(deepLink: url)
                 }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
-
+                    
+                    
                     if let url = activity.webpageURL {
                         _ = inboundActions.receive(appLink: url)
                     }
                 }
         }
         .onChange(of: scenePhase) { _, phase in
-
+            
+            
+            
             if phase == .active {
                 inboundActions.drainShareInbox()
             }

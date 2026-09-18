@@ -20,6 +20,17 @@
     },
     {
       "whenUserMessageMatches": "what did we learn",
+      "content": "COMPACTION-TOOL-CONTINUATION: checking the compacted turn.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "printf 'compacted-once\\n'"
+          }
+        }
+      ]
+    },
+    {
       "content": "COMPACTION-DONE-ANSWER: we learned the story compresses well."
     }
   ]

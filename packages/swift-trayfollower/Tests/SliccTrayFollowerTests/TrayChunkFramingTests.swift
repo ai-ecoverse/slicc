@@ -3,10 +3,12 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
 final class TrayChunkFramingTests: XCTestCase {
 
     func testFrameChunksRoundTripsThroughReassembler() throws {
-
+        
+        
         let message = String(repeating: "SLICC-ünïcode-🍦-", count: 5_000)
         let frames = TrayChunkFraming.frameChunks(message, chunkId: "c1")
         XCTAssertGreaterThan(frames.count, 1)
@@ -35,5 +37,11 @@ final class TrayChunkFramingTests: XCTestCase {
             type: TrayChunkFrame.typeTag, chunkId: "x", chunkIndex: 5, totalChunks: 2,
             chunkData: "oops")
         XCTAssertEqual(reassembler.accept(bad).rejection, .malformed)
+    }
+
+    func testReassemblyByteCeilingMatchesSharedTs() {
+        XCTAssertEqual(TrayChunkLimits.maxReassemblyBytes, 32 * 1024 * 1024)
+        XCTAssertEqual(TrayChunkLimits.maxChunkCount, 8192)
+        XCTAssertEqual(TrayChunkLimits.maxPending, 8)
     }
 }

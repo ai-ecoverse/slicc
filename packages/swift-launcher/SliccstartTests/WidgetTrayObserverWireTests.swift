@@ -5,6 +5,14 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
+
+
+
 @MainActor
 final class WidgetTrayObserverWireTests: XCTestCase {
     private var container: URL!
@@ -29,6 +37,8 @@ final class WidgetTrayObserverWireTests: XCTestCase {
         )
     }
 
+    
+    
     private func connectorStandIn() -> TrayFollowerConnector {
         TrayFollowerConnector(joinUrl: URL(string: "https://tray.test/join/x")!)
     }
@@ -58,6 +68,8 @@ final class WidgetTrayObserverWireTests: XCTestCase {
         ChatMessage(id: id, role: role, content: content, timestamp: timestamp)
     }
 
+    
+
     func testOpeningTheChannelIntroducesTheFollowerAsReadOnly() throws {
         let observer = makeObserver()
         var sent: [Data] = []
@@ -68,6 +80,7 @@ final class WidgetTrayObserverWireTests: XCTestCase {
                 return true
             })
 
+        
         let hello = expectation(description: "hello sent")
         Task { @MainActor in hello.fulfill() }
         wait(for: [hello], timeout: 2)
@@ -121,6 +134,8 @@ final class WidgetTrayObserverWireTests: XCTestCase {
         await settleMainActor()
         let before = store.read()
 
+        
+        
         observer.connector(connectorStandIn(), isReconnecting: 3)
         observer.connector(connectorStandIn(), didReceiveInfo: "tray-1", participantCount: 4)
         await settleMainActor()
@@ -137,8 +152,11 @@ final class WidgetTrayObserverWireTests: XCTestCase {
         observer.connector(connectorStandIn(), didReceiveData: try scoopsList())
         await settleMainActor()
 
+        
         XCTAssertEqual(store.read()?.units.first?.name, "Sliccy")
     }
+
+    
 
     func testAPingIsAnsweredWithAPong() async throws {
         let observer = makeObserver()
@@ -214,6 +232,8 @@ final class WidgetTrayObserverWireTests: XCTestCase {
             "request_snapshot"
         )
 
+        
+        
         sent.removeAll()
         observer.route(try encode(.agentEvent(event: .turnEnd(messageId: "m1"), scoopJid: "cone")))
         XCTAssertTrue(sent.isEmpty, "the transcript fetch must be throttled")
@@ -232,7 +252,8 @@ final class WidgetTrayObserverWireTests: XCTestCase {
 
         observer.route(try scoopsList(active: "cone"))
         sent.removeAll()
-
+        
+        
         observer.route(try scoopsList(active: "s1"))
         XCTAssertFalse(sent.isEmpty, "an active-scoop change must refetch immediately")
     }
@@ -257,10 +278,13 @@ final class WidgetTrayObserverWireTests: XCTestCase {
         XCTAssertNil(snapshot.unitId, "a user message belongs to no unit")
     }
 
+    
+    
     private func settleMainActor() async {
         for _ in 0..<3 { await Task.yield() }
     }
 }
+
 
 @MainActor
 private final class StubWireConnector: WidgetTrayConnecting {

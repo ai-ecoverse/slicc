@@ -154,6 +154,20 @@ describe('usb command — bridged panel-rpc envelopes', () => {
     await createUsbCommand().execute(['reset', 'usb1'], ctx());
     expect(calls.map((c) => c.op)).toEqual(['usb-open', 'usb-close', 'usb-reset']);
     expect(calls[0].payload).toEqual({ handle: 'usb1' });
+    expect(calls[1].payload).toEqual({ handle: 'usb1', owner: 'shell', force: false });
+    expect(calls[2].payload).toEqual({ handle: 'usb1', owner: 'shell', force: false });
+  });
+
+  it('close --force and claim --wait thread through the rpc payload', async () => {
+    await createUsbCommand().execute(['close', 'usb1', '--force'], ctx());
+    await createUsbCommand().execute(['claim', 'usb1', '0', '--wait'], ctx());
+    expect(calls[0].payload).toEqual({ handle: 'usb1', owner: 'shell', force: true });
+    expect(calls[1].payload).toEqual({
+      handle: 'usb1',
+      interfaceNumber: 0,
+      owner: 'shell',
+      wait: true,
+    });
   });
 
   it('clear-halt carries the direction and endpoint', async () => {
@@ -183,7 +197,7 @@ describe('usb command — bridged panel-rpc envelopes', () => {
     await createUsbCommand().execute(['select-config', 'usb1', '1'], ctx());
     expect(calls[0]).toMatchObject({
       op: 'usb-claim-interface',
-      payload: { handle: 'usb1', interfaceNumber: 0 },
+      payload: { handle: 'usb1', interfaceNumber: 0, owner: 'shell', wait: false },
     });
     expect(calls[1]).toMatchObject({
       op: 'usb-select-configuration',

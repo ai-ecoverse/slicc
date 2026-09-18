@@ -1,5 +1,5 @@
 import type { SecureFetch } from 'just-bash';
-import type { DirEntry, VirtualFS } from '../../fs/index.js';
+import { type DirEntry, FsError, type VirtualFS } from '../../fs/index.js';
 import {
   preflightGlobalBinDelegators,
   reconcileGlobalBinDelegators,
@@ -129,12 +129,23 @@ async function writeEntries(fs: VirtualFS, installDir: string, entries: TarEntry
 }
 
 async function readJsonOr<T>(fs: VirtualFS, path: string, fallback: T): Promise<T> {
-  if (!(await fs.exists(path))) return fallback;
   let text: string;
   try {
     text = (await fs.readFile(path)) as string;
-  } catch {
-    return fallback;
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return fallback;
+    throw err;
+  }
+  return JSON.parse(text) as T;
+}
+
+async function readInstalledJsonOr<T>(fs: VirtualFS, path: string, fallback: T): Promise<T> {
+  let text: string;
+  try {
+    text = (await fs.readFile(path)) as string;
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return fallback;
+    throw err;
   }
   if (!text?.trim()) return fallback;
   try {
@@ -305,7 +316,7 @@ async function materializeNode(
   const installedManifestPath = joinPath(installDir, 'package.json');
   let alreadySatisfied = false;
   if (await fs.exists(installedManifestPath)) {
-    const installed = await readJsonOr<InstalledPackageManifest | null>(
+    const installed = await readInstalledJsonOr<InstalledPackageManifest | null>(
       fs,
       installedManifestPath,
       null
@@ -439,7 +450,7 @@ async function collectFromPackage(
   depth: number,
   out: InstalledBin[]
 ): Promise<void> {
-  const manifest = await readJsonOr<InstalledPackageManifest | null>(
+  const manifest = await readInstalledJsonOr<InstalledPackageManifest | null>(
     fs,
     joinPath(pkgDir, 'package.json'),
     null
@@ -975,7 +986,7 @@ export async function listGlobalPackages(fs: VirtualFS): Promise<GlobalPackageLi
   const out: GlobalPackageListing[] = [];
   for (const entry of entries) {
     const installedPath = joinPath(packageDirIn(GLOBAL_NODE_MODULES, entry.name), 'package.json');
-    const installed = await readJsonOr<{ version?: string }>(fs, installedPath, {});
+    const installed = await readInstalledJsonOr<{ version?: string }>(fs, installedPath, {});
     out.push({
       name: entry.name,
       version: typeof installed.version === 'string' ? installed.version : '?',
@@ -998,7 +1009,7 @@ export async function listLocalPackages(
   const out: GlobalPackageListing[] = [];
   for (const entry of entries) {
     const installedPath = joinPath(packageDirIn(modulesDir, entry.name), 'package.json');
-    const installed = await readJsonOr<{ version?: string }>(fs, installedPath, {});
+    const installed = await readInstalledJsonOr<{ version?: string }>(fs, installedPath, {});
     out.push({
       name: entry.name,
       version: typeof installed.version === 'string' ? installed.version : '?',

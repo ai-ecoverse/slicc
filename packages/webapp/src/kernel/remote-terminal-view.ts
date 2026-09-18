@@ -376,6 +376,11 @@ export class RemoteTerminalView {
       await this.runRemoteWithEsptoolPicker(command, esptoolFilters);
       return true;
     }
+    const screenAdd = parseComputerAddScreenCommand(command);
+    if (screenAdd) {
+      await this.runRemoteWithScreenShare(screenAdd.name);
+      return true;
+    }
     return false;
   }
 
@@ -598,6 +603,42 @@ export class RemoteTerminalView {
     }
   }
 
+  private async runRemoteWithScreenShare(name: string | undefined): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const result = await this.requestPermission('screenshare', {
+        constraints: { video: true },
+      });
+      if (!result.ok) {
+        this.writePickerDenial(
+          'computer',
+          result,
+          'screen capture is not available in this browser'
+        );
+        return;
+      }
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'screenshare' }>;
+      const { adoptDisplayStream, displaySessions } = await import(
+        '../shell/supplemental-commands/screencapture-media.js'
+      );
+      const adopted = await adoptDisplayStream(grant.stream);
+      if (!adopted.handle) {
+        this.terminal?.writeln('computer: screen share produced no handle');
+        return;
+      }
+      await finishAdoptedScreenRegistration(
+        (cmd) => this.client.exec(cmd),
+        (handle) => {
+          displaySessions.stop(handle);
+        },
+        adopted.handle,
+        name
+      );
+    } finally {
+      this.isExecuting = false;
+    }
+  }
+
   private async runRemoteWithLocalPicker(command: string, target: string): Promise<void> {
     this.isExecuting = true;
     try {
@@ -673,7 +714,8 @@ export function parseLocalMountTarget(line: string): string | null {
     tokens.includes('--help') ||
     tokens.includes('-h') ||
     tokens.includes('--list') ||
-    tokens.includes('-l')
+    tokens.includes('-l') ||
+    tokens.includes('--json')
   ) {
     return null;
   }
@@ -681,7 +723,7 @@ export function parseLocalMountTarget(line: string): string | null {
   const target = tokens.slice(1).find((t) => !t.startsWith('-'));
   if (!target) return null;
 
-  if (['list', 'unmount', 'refresh', 'recover'].includes(target)) return null;
+  if (['list', 'unmount', 'refresh', 'recover', 'info'].includes(target)) return null;
 
   if (!target.startsWith('/')) return null;
   return target;
@@ -689,6 +731,87 @@ export function parseLocalMountTarget(line: string): string | null {
 
 export function localMountIdbKey(target: string): string {
   return `pendingMount:term:${target}`;
+}
+
+export function tokenizeCommandLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (const ch of line.trim()) {
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+      continue;
+    }
+    if (quote === '"' && ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur.length > 0) {
+        out.push(cur);
+        cur = '';
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+function shellQuoteArg(arg: string): string {
+  if (arg === '') return "''";
+  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(arg)) return arg;
+  if (arg.includes('"') && !arg.includes("'")) return `'${arg}'`;
+  return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+export function buildComputerAddScreenResolvedCommand(handle: string, name?: string): string {
+  const args = ['computer', 'add', 'screen', '--__resolved', handle];
+  if (name !== undefined) args.push('-n', name);
+  return args.map(shellQuoteArg).join(' ');
+}
+
+export async function finishAdoptedScreenRegistration(
+  exec: (command: string) => Promise<TerminalExecResult>,
+  stop: (handle: string) => void,
+  handle: string,
+  name?: string
+): Promise<TerminalExecResult> {
+  try {
+    const result = await exec(buildComputerAddScreenResolvedCommand(handle, name));
+    if (result.exitCode !== 0) stop(handle);
+    return result;
+  } catch (err) {
+    stop(handle);
+    throw err;
+  }
+}
+
+export function parseComputerAddScreenCommand(line: string): { name?: string } | null {
+  const tokens = tokenizeCommandLine(line);
+  if (tokens[0] !== 'computer' || tokens[1] !== 'add' || tokens[2] !== 'screen') return null;
+  if (tokens.includes('--__resolved') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  const nameIdx = tokens.findIndex((t) => t === '-n' || t === '--name');
+  const name = nameIdx !== -1 ? tokens[nameIdx + 1] : undefined;
+  return name ? { name } : {};
 }
 
 function parseUsbRequestCommand(line: string): UsbDeviceFilter[] | null {

@@ -2,18 +2,38 @@ import CoreGraphics
 import Foundation
 import UIKit
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 enum MarkdownTableLayout {
-
+    
     static let minimumCellWidth: CGFloat = 56
-
+    
+    
     static let maximumCellWidth: CGFloat = 260
-
+    
     static let cellHorizontalPadding: CGFloat = 11
     static let cellVerticalPadding: CGFloat = 6
-
+    
+    
     static let bodyFontSize: CGFloat = 13
     static let codeFontSize: CGFloat = 14
 
+    
+    
+    
+    
+    
     static func columnWidths(
         for table: MarkdownTable,
         measuring: (_ markdown: String, _ isHeader: Bool) -> CGFloat
@@ -32,6 +52,13 @@ enum MarkdownTableLayout {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
     static func columnWidths(for table: MarkdownTable) -> [CGFloat] {
         let key = cacheKey(for: table) as NSString
         if let hit = cache.object(forKey: key) { return hit.widths }
@@ -40,10 +67,23 @@ enum MarkdownTableLayout {
         return widths
     }
 
+    
+    
+    
+    
+    
+    
+    
     static func totalWidth(for table: MarkdownTable) -> CGFloat {
         columnWidths(for: table).reduce(0, +)
     }
 
+    
+    
+    
+    
+    
+    
     static func textWidth(_ markdown: String, isHeader: Bool) -> CGFloat {
         let base = UIFont.systemFont(
             ofSize: bodyFontSize, weight: isHeader ? .semibold : .regular)
@@ -79,6 +119,8 @@ enum MarkdownTableLayout {
         (text as NSString).size(withAttributes: [.font: font]).width
     }
 
+    
+    
     private static func cacheKey(for table: MarkdownTable) -> String {
         ([table.header] + table.rows)
             .map { $0.joined(separator: "\u{1F}") }

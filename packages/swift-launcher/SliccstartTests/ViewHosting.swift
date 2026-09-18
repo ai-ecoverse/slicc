@@ -3,8 +3,30 @@ import CryptoKit
 import SwiftUI
 import XCTest
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 enum ViewHosting {
 
+    
     @MainActor
     static func render(_ view: some View, width: CGFloat = 520, height: CGFloat = 640) -> NSImage? {
         let renderer = ImageRenderer(content: view.frame(width: width, height: height))
@@ -12,6 +34,8 @@ enum ViewHosting {
         return renderer.nsImage
     }
 
+    
+    
     @MainActor
     @discardableResult
     static func digest(
@@ -37,6 +61,27 @@ enum ViewHosting {
         return SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     @MainActor
     static func assertRendersDifferently(
         _ lhs: some View,
@@ -52,6 +97,11 @@ enum ViewHosting {
         XCTAssertNotEqual(left, right, message(), file: file, line: line)
     }
 
+    
+
+    
+    
+    
     @MainActor
     static func hostedButtons(_ view: some View, width: CGFloat = 420, height: CGFloat = 60)
         -> [NSButton]

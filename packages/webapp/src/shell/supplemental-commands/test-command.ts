@@ -7,10 +7,12 @@ import { executeJsCode } from '../jsh-executor.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
 import { createIpkContextFromCtx } from './tsc-command.js';
 
-const HELP_TEXT = `test - run *.test.{js,ts} files with the bundled tst runner
+export const TST_COMMAND_NAME = 'tst';
+
+const HELP_TEXT = `tst - run *.test.{js,ts} files with the bundled tst runner
 
 Usage:
-  test [options] [glob...]
+  tst [options] [glob...]
 
 Options:
   --reporter=<name>     tap (default) | spec
@@ -43,7 +45,7 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
     if (arg === '--reporter') {
       const v = args[i + 1];
       if (v !== 'tap' && v !== 'spec') {
-        throw new Error('test: --reporter must be tap or spec');
+        throw new Error('tst: --reporter must be tap or spec');
       }
       reporter = v;
       i += 1;
@@ -52,13 +54,13 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
     if (arg.startsWith('--reporter=')) {
       const v = arg.slice('--reporter='.length);
       if (v !== 'tap' && v !== 'spec') {
-        throw new Error('test: --reporter must be tap or spec');
+        throw new Error('tst: --reporter must be tap or spec');
       }
       reporter = v;
       continue;
     }
     if (arg.startsWith('-')) {
-      throw new Error(`test: unknown option: ${arg}`);
+      throw new Error(`tst: unknown option: ${arg}`);
     }
     globs.push(arg);
   }
@@ -170,7 +172,7 @@ async function prepareTstHarness(ts: TypeScriptModule): Promise<string> {
     .replace(/\bimport\.meta\b/g, '({url:""})')
     .replace(
       /await\s+import\(['"](?:worker_threads|fs|path)['"]\)/g,
-      'await Promise.reject(new Error("test: fork mode is not supported in the realm"))'
+      'await Promise.reject(new Error("tst: fork mode is not supported in the realm"))'
     );
 
   preparedHarness = `
@@ -305,14 +307,14 @@ ${harness}
 const __tstReq = (id) => {
   if (id === "tst") return __tst_module_exports;
   if (id === "tst/assert") return __tst_assert_exports;
-  throw new Error("test: cannot require " + id);
+  throw new Error("tst: cannot require " + id);
 };
 const __localFactories = ${factories};
 const __localCache = Object.create(null);
 const __localReq = (absPath) => {
   if (absPath in __localCache) return __localCache[absPath].exports;
   const factory = __localFactories[absPath];
-  if (!factory) throw new Error("test: local module not bundled: " + absPath);
+  if (!factory) throw new Error("tst: local module not bundled: " + absPath);
   const module = { exports: {} };
   __localCache[absPath] = module;
   factory(module, module.exports, __localReq);
@@ -387,7 +389,7 @@ async function prepareTestRun(
     return {
       done: {
         stdout: '',
-        stderr: `test: no test files matched ${parsed.globs.join(' ')}\n`,
+        stderr: `tst: no test files matched ${parsed.globs.join(' ')}\n`,
         exitCode: 1,
       },
     };
@@ -400,7 +402,7 @@ async function prepareTestRun(
     return {
       done: {
         stdout: '',
-        stderr: `test: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `tst: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       },
     };
@@ -432,7 +434,7 @@ async function runOneTestFile(
   } catch (err) {
     return {
       stdout: '',
-      stderr: `test: ${file}: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `tst: ${file}: ${err instanceof Error ? err.message : String(err)}\n`,
       failed: true,
     };
   }
@@ -442,7 +444,7 @@ async function runOneTestFile(
   } catch (err) {
     return {
       stdout: '',
-      stderr: `test: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `tst: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`,
       failed: true,
     };
   }
@@ -459,7 +461,7 @@ async function runOneTestFile(
   } catch (err) {
     return {
       stdout: '',
-      stderr: `test: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `tst: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`,
       failed: true,
     };
   }
@@ -481,7 +483,7 @@ async function runOneTestFile(
 }
 
 export function createTestCommand(): Command {
-  return defineCommand('test', async (args, ctx) => {
+  return defineCommand(TST_COMMAND_NAME, async (args, ctx) => {
     const prep = await prepareTestRun(args, ctx);
     if ('done' in prep) return prep.done;
     const prefixWithFilename = prep.files.length > 1;

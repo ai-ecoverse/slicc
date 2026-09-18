@@ -242,6 +242,38 @@ describe('WcChatController', () => {
     expect(thread.querySelector('slicc-agent-message')?.textContent).toContain('tail text');
   });
 
+  it('never flushes a later message’s deltas into an earlier bubble via a stale frame', () => {
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((cb) => frames.push(cb));
+    try {
+      agent.emit({ type: 'message_start', messageId: 'm1' });
+      agent.emit({ type: 'content_delta', messageId: 'm1', text: 'Checking it:' });
+      agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls' });
+      agent.emit({ type: 'content_done', messageId: 'm1' });
+      agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
+
+      agent.emit({ type: 'message_start', messageId: 'm2' });
+      agent.emit({ type: 'content_delta', messageId: 'm2', text: 'Done.\n\n```shtml\n<div>' });
+
+      for (const cb of frames.splice(0)) cb(0);
+      agent.emit({ type: 'content_delta', messageId: 'm2', text: 'card</div>\n```\n\nTail.' });
+      agent.emit({ type: 'content_done', messageId: 'm2' });
+      agent.emit({ type: 'turn_end', messageId: 'm2' });
+      for (const cb of frames.splice(0)) cb(0);
+
+      const byId = new Map(controller.getMessages().map((m) => [m.id, m.content]));
+      expect(byId.get('m1')).toBe('Checking it:');
+      expect(byId.get('m2')).toBe('Done.\n\n```shtml\n<div>card</div>\n```\n\nTail.');
+      const bubbles = thread.querySelectorAll('slicc-agent-message');
+      expect(bubbles[0]?.textContent).not.toContain('Done.');
+      expect(bubbles[1]?.textContent).not.toContain('```');
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
   it('renders tool calls as action rows and resolves their results', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls -la' });
@@ -1140,26 +1172,50 @@ describe('WcChatController render/dispose lifecycle hooks', () => {
     expect(rendered).toHaveLength(2);
   });
 
-  it('defers rendered until a streaming message finalizes', () => {
+  it('fires rendered for every streaming render, without disposing', async () => {
     const { agent, rendered, disposed } = makeTracked();
     agent.emit({ type: 'message_start', messageId: 'm1' });
-    expect(rendered).toEqual([]);
-    agent.emit({ type: 'content_delta', messageId: 'm1', text: 'x' });
-    expect(rendered).toEqual([]);
-    agent.emit({ type: 'content_done', messageId: 'm1' });
     expect(rendered).toEqual(['m1']);
+    agent.emit({ type: 'content_delta', messageId: 'm1', text: 'x' });
+    await nextFrame();
+    expect(rendered).toEqual(['m1', 'm1']);
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(rendered).toEqual(['m1', 'm1', 'm1']);
 
-    expect(disposed).toEqual(['m1']);
+    expect(disposed).toEqual([]);
   });
 
-  it('re-fires rendered (after disposed) for post-stream tool results', () => {
+  it('re-fires rendered for post-stream tool results', () => {
     const { agent, rendered, disposed } = makeTracked();
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'content_done', messageId: 'm1' });
     agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls' });
     agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
-    expect(rendered).toEqual(['m1', 'm1', 'm1']);
-    expect(disposed).toEqual(['m1', 'm1', 'm1']);
+    expect(rendered).toEqual(['m1', 'm1', 'm1', 'm1']);
+    expect(disposed).toEqual([]);
+  });
+
+  it('runs rendered while the previous render is still in the thread', () => {
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const seen: Array<{ bubbles: number; streaming: boolean }> = [];
+    new WcChatController({
+      thread,
+      agent,
+      onMessageRendered: (message) =>
+        seen.push({
+          bubbles: thread.querySelectorAll('slicc-agent-message').length,
+          streaming: message.isStreaming === true,
+        }),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'content_done', messageId: 'm1' });
+    expect(seen).toEqual([
+      { bubbles: 1, streaming: true },
+      { bubbles: 2, streaming: false },
+    ]);
+    expect(thread.querySelectorAll('slicc-agent-message')).toHaveLength(1);
   });
 
   it('disposes everything on loadMessages and renders the new history', () => {

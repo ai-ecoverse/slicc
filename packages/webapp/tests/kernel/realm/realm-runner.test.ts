@@ -115,6 +115,43 @@ describe('runInRealm', () => {
     expect(procs[0].status).toBe('exited');
   });
 
+  it('keeps only a bounded diagnostic tail when captureOutput is false', async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const chunks: string[] = [];
+    const promise = runInRealm({
+      pm,
+      realmFactory: async () => realm,
+      owner: { kind: 'jshd' },
+      kind: 'js',
+      code: '',
+      argv: ['node'],
+      env: {},
+      cwd: '/workspace',
+      filename: '<eval>',
+      ctx,
+      captureOutput: false,
+      onOutput: (chunk) => {
+        chunks.push(chunk);
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const big = 'x'.repeat(80 * 1024);
+    realm.fireMessage({ type: 'realm-output', stream: 'stdout', chunk: big });
+    realm.fireMessage({ type: 'realm-output', stream: 'stdout', chunk: 'TAIL' });
+    realm.fireMessage({
+      type: 'realm-done',
+      stdout: 'TAIL',
+      stderr: '',
+      exitCode: 0,
+    } satisfies RealmDoneMsg);
+    const result = await promise;
+    expect(chunks.join('')).toBe(`${big}TAIL`);
+    expect(result.stdout.length).toBeLessThan(big.length);
+    expect(result.stdout.endsWith('TAIL')).toBe(true);
+  });
+
   it('terminates the realm on completion (idempotent cleanup)', async () => {
     const pm = new ProcessManager();
     const realm = makeMockRealm();

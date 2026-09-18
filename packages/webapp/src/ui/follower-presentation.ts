@@ -55,6 +55,7 @@ export function followerMeta(follower: ConnectedFollowerInfo, now: number = Date
 export function followerCapabilities(follower: ConnectedFollowerInfo): string[] {
   const chips: string[] = [];
   if (follower.exec) chips.push('can run commands');
+  if (follower.computer) chips.push('native screen');
   if (follower.cdp) chips.push('hosts tabs');
   return chips;
 }

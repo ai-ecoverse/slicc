@@ -86,7 +86,9 @@ final class KokoroModelInstallationTests: XCTestCase {
     }
 
     func testRequestStartsDownloadImmediately() async {
-
+        
+        
+        
         let (directory, cleanup) = temporaryDirectory()
         defer { cleanup() }
         let installation = makeInstallation(

@@ -282,6 +282,14 @@ export class FollowerRegistry {
     return ids;
   }
 
+  getComputerCapableBootstrapIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const [bootstrapId, follower] of this.followers) {
+      if (follower.peerCapabilities?.computer) ids.add(bootstrapId);
+    }
+    return ids;
+  }
+
   getBrowserCapableBootstrapIds(): Set<string> {
     return new Set(this.runtimeToBootstrap.values());
   }

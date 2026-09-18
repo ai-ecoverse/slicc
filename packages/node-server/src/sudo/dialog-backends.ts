@@ -7,9 +7,11 @@ export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }
 const defaultExec: ExecFn = promisify(nodeExecFile);
 
 export function describeRequest(req: SudoApproveRequest): string {
-  return req.requester
+  const head = req.requester
     ? `${req.kind} from ${req.requester}: ${req.detail}`
     : `${req.kind}: ${req.detail}`;
+  const reason = req.reason?.trim();
+  return reason ? `${head}\n\nReason given: ${reason}` : head;
 }
 
 function fallbackPattern(req: SudoApproveRequest): string {

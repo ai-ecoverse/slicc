@@ -7,7 +7,9 @@ import (
 )
 
 func TestSanitizeRedactsJoinURLToken(t *testing.T) {
-
+	
+	
+	
 	msg := `Get "https://sliccy.ai/join/super-secret-token-abc123": dial tcp: lookup sliccy.ai: no such host`
 	got := Sanitize(msg)
 	if strings.Contains(got, "super-secret-token-abc123") {
@@ -59,7 +61,9 @@ func TestSanitizeTruncates(t *testing.T) {
 }
 
 func TestSanitizeNeverGrowsAURLPastTruncationBoundary(t *testing.T) {
-
+	
+	
+	
 	prefix := strings.Repeat("x", 190)
 	msg := prefix + " https://sliccy.ai/join/leaked-token-should-not-appear"
 	got := Sanitize(msg)
@@ -76,7 +80,7 @@ func TestSanitizeLeavesOrdinaryMessagesAlone(t *testing.T) {
 }
 
 func TestSanitizeHandlesRealNetURLError(t *testing.T) {
-
+	
 	err := errors.New(`Post "https://sliccy.ai/join/abcdef0123456789": context deadline exceeded`)
 	got := Sanitize(err.Error())
 	if strings.Contains(got, "abcdef0123456789") {

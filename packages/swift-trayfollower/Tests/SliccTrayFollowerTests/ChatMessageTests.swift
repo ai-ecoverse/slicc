@@ -3,6 +3,10 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
+
+
 final class ChatMessageTests: XCTestCase {
 
     func testMessageRoleRoundTrip() throws {
@@ -49,12 +53,16 @@ final class ChatMessageTests: XCTestCase {
                 trigger: .idle, state: .summarized, transcriptPath: "/sessions/live-cone-a.md"))
     }
 
+    
+
     func testCompactionMarkerTriggerKnownValues() throws {
         for trigger in [CompactionMarkerTrigger.threshold, .overflow, .idle] {
             XCTAssertEqual(try WireCodec.roundTrip(trigger), trigger)
         }
     }
 
+    
+    
     func testCompactionMarkerTriggerUnknownDegradesToThreshold() throws {
         XCTAssertEqual(
             try WireCodec.decode(CompactionMarkerTrigger.self, from: #""manual""#), .threshold)
@@ -68,6 +76,8 @@ final class ChatMessageTests: XCTestCase {
         }
     }
 
+    
+    
     func testCompactionMarkerStateUnknownDegradesToSummarized() throws {
         XCTAssertEqual(
             try WireCodec.decode(CompactionMarkerState.self, from: #""retracted""#), .summarized)
@@ -92,6 +102,8 @@ final class ChatMessageTests: XCTestCase {
         XCTAssertEqual(decoded.transcriptPath, "/sessions/live-cone-x.md")
     }
 
+    
+    
     func testChatMessageWithoutCompactionDecodesAndOmitsTheKey() throws {
         let original = ChatMessage(id: "m1", role: .assistant, content: "hi", timestamp: 1)
         XCTAssertFalse(try WireCodec.jsonString(original).contains("compaction"))

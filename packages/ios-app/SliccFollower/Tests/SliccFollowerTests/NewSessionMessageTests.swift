@@ -3,6 +3,8 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
 final class NewSessionMessageTests: XCTestCase {
     func testAllThreeActionsRoundTrip() throws {
         for (action, wire) in [

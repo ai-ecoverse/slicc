@@ -189,17 +189,11 @@ export function createFsBridge(
   }
 
   async function appendFile(path: string, data: unknown): Promise<void> {
-    let existing: Uint8Array = new Uint8Array(0);
-    const fileExists = await rpc.call<boolean>('vfs', 'exists', [path]);
-    if (fileExists) {
-      const raw = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [path]);
-      existing = raw instanceof Uint8Array ? raw : new Uint8Array(raw as ArrayBuffer);
+    if (typeof data === 'string') {
+      await rpc.call('vfs', 'appendFile', [path, data]);
+      return;
     }
-    const suffix = toBytes(data);
-    const out = new Uint8Array(existing.byteLength + suffix.byteLength);
-    out.set(existing);
-    out.set(suffix, existing.byteLength);
-    await rpc.call('vfs', 'writeFileBinary', [path, out]);
+    await rpc.call('vfs', 'appendFile', [path, toBytes(data)]);
   }
 
   async function cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -328,12 +322,14 @@ function removeWithBridgeFallback(
   syncFs: SyncFsCache,
   bridge: SyncFsXhrBridge | undefined,
   resolved: string,
-  opts: { recursive?: boolean; requireFile?: boolean } = {}
+  opts: { recursive?: boolean; requireFile?: boolean } = {},
+  persistDelete?: (path: string) => void
 ): boolean {
   const recursive = opts.recursive === true;
   try {
     if (opts.requireFile) syncFs.unlink(resolved);
     else syncFs.rm(resolved, recursive);
+    persistDelete?.(resolved);
     return true;
   } catch (err) {
     if ((err as { code?: string })?.code !== 'ENOENT') throw err;
@@ -353,6 +349,7 @@ function removeWithBridgeFallback(
 interface RemovalDeps {
   syncFs: SyncFsCache;
   bridge: SyncFsXhrBridge | undefined;
+  persistDelete?: (path: string) => void;
   resolve: (p: string) => string;
   existsResolved: (resolved: string) => boolean;
   statResolved: (resolved: string) => {
@@ -381,9 +378,10 @@ function createRemovalOps(deps: RemovalDeps) {
     statResolved,
     readBytes,
     writeThrough,
+    persistDelete,
   } = deps;
   const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) =>
-    removeWithBridgeFallback(syncFs, bridge, resolved, opts);
+    removeWithBridgeFallback(syncFs, bridge, resolved, opts, persistDelete);
   return {
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
@@ -475,6 +473,41 @@ function overlaySyncStdio(ops: SyncStdioTargets, stdio: RealmStdioBridge | undef
   ops.lstatSync = (path) => (isDevStdioPath(path) ? devStdioStat() : base.lstatSync(path));
 }
 
+function overlayReaddir(
+  dir: string,
+  cached: string[],
+  live: string[],
+  isTombstoned: (path: string) => boolean
+): string[] {
+  const child = (name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
+  const names = new Set(live);
+  for (const name of cached) names.add(name);
+  for (const name of names) if (isTombstoned(child(name))) names.delete(name);
+  return [...names];
+}
+
+function readdirFromCacheOrBridge(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  resolved: string
+): string[] {
+  const dead = (p: string) => syncFs.isTombstoned(p);
+  try {
+    const cached = syncFs.readdir(resolved);
+    if (!bridge || !syncFs.isPartial(resolved) || dead(resolved)) return cached;
+    try {
+      return overlayReaddir(resolved, cached, bridge.readdir(resolved), dead);
+    } catch (e) {
+      if ((e as { code?: string })?.code === 'ENOENT') return cached;
+      throw e;
+    }
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (!bridge || dead(resolved) || code !== 'ENOENT') throw err;
+    return overlayReaddir(resolved, [], bridge.readdir(resolved), dead);
+  }
+}
+
 function toBytes(data: unknown): Uint8Array {
   if (typeof data === 'string') return new TextEncoder().encode(data);
   if (data instanceof Uint8Array) return data;
@@ -485,11 +518,33 @@ function toBytes(data: unknown): Uint8Array {
   return new TextEncoder().encode(String(data));
 }
 
+export type PersistSyncHooks = {
+  write?: (path: string, bytes: Uint8Array) => void;
+  delete?: (path: string) => void;
+};
+
+function writeThroughCacheOrBridge(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  persist: PersistSyncHooks | undefined,
+  resolved: string,
+  bytes: Uint8Array
+): void {
+  if (bridge) {
+    bridge.writeFile(resolved, bytes);
+    syncFs.commitWrite(resolved, bytes);
+  } else {
+    syncFs.writeFile(resolved, bytes);
+    persist?.write?.(resolved, bytes);
+  }
+}
+
 export function createSyncFsBridge(
   syncFs: SyncFsCache,
   cwd: string,
   bridge?: SyncFsXhrBridge,
-  stdio?: RealmStdioBridge
+  stdio?: RealmStdioBridge,
+  persist?: PersistSyncHooks
 ) {
   function resolve(p: string): string {
     return normalizePath(p.startsWith('/') ? p : cwd + (cwd.endsWith('/') ? '' : '/') + p);
@@ -506,15 +561,8 @@ export function createSyncFsBridge(
       throw err;
     }
   }
-
-  function writeThrough(resolved: string, bytes: Uint8Array): void {
-    if (bridge) {
-      bridge.writeFile(resolved, bytes);
-      syncFs.commitWrite(resolved, bytes);
-    } else {
-      syncFs.writeFile(resolved, bytes);
-    }
-  }
+  const writeThrough = (resolved: string, bytes: Uint8Array): void =>
+    writeThroughCacheOrBridge(syncFs, bridge, persist, resolved, bytes);
   function existsResolved(resolved: string): boolean {
     if (syncFs.exists(resolved)) return true;
 
@@ -539,15 +587,7 @@ export function createSyncFsBridge(
       return bridge.stat(resolved);
     }
   }
-  function readdirResolved(resolved: string): string[] {
-    try {
-      return syncFs.readdir(resolved);
-    } catch (err) {
-      const code = (err as { code?: string })?.code;
-      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
-      return bridge.readdir(resolved);
-    }
-  }
+
   function lstatResolved(resolved: string) {
     try {
       return syncFs.lstat(resolved);
@@ -577,13 +617,15 @@ export function createSyncFsBridge(
       return;
     }
     syncFs.mkdir(destR, true);
-    for (const name of readdirResolved(srcR)) copyTree(join(srcR, name), join(destR, name));
+    for (const name of readdirFromCacheOrBridge(syncFs, bridge, srcR))
+      copyTree(join(srcR, name), join(destR, name));
   }
 
   const ops = {
     ...createRemovalOps({
       syncFs,
       bridge,
+      persistDelete: persist?.delete,
       resolve,
       existsResolved,
       statResolved,
@@ -636,7 +678,7 @@ export function createSyncFsBridge(
       return resolved;
     },
     readdirSync(path: string): string[] {
-      return readdirResolved(resolve(path));
+      return readdirFromCacheOrBridge(syncFs, bridge, resolve(path));
     },
     copyFileSync(src: string, dest: string): void {
       writeThrough(resolve(dest), readBytes(resolve(src)));

@@ -6,6 +6,7 @@ import {
   type Directive,
   directiveForKind,
   emptyPolicy,
+  legacyScoopSudoersPath,
   matchExport,
   mergePolicies,
   parseSudoers,
@@ -13,7 +14,8 @@ import {
   SUDOERS_FILE,
   type SudoersPolicy,
   sanitizeGrantPattern,
-  scoopSudoersPath,
+  scoopFolderFromGrantsName,
+  scoopGrantsPath,
 } from '../base/sudoers.js';
 import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -43,27 +45,20 @@ function isSudoersPath(path: string): boolean {
   return path === SUDOERS_FILE || path === SUDOERS_D_DIR || path.startsWith(`${SUDOERS_D_DIR}/`);
 }
 
-const SCOOP_SUDOERS_PATH_RE = /^\/scoops\/([^/]+)\/etc\/sudoers$/;
-
-function isScoopSudoersPath(path: string): boolean {
-  return SCOOP_SUDOERS_PATH_RE.test(path);
-}
-
-function scoopFolderFromPath(path: string): string | null {
-  return SCOOP_SUDOERS_PATH_RE.exec(path)?.[1] ?? null;
+function scoopFolderFromGrantsPath(path: string): string | null {
+  if (!path.startsWith(`${SUDOERS_D_DIR}/`)) return null;
+  const name = path.slice(SUDOERS_D_DIR.length + 1);
+  return name.includes('/') ? null : scoopFolderFromGrantsName(name);
 }
 
 function trimTrailingSlash(s: string): string {
   return s.length > 1 && s.endsWith('/') ? s.slice(0, -1) : s;
 }
 
-const LEGACY_GENERATED_HEADER =
-  '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).';
-
 const SCOOP_SUDOERS_HEADER = [
-  '# Per-scoop sudoers — approved "Always" grants for this scoop.',
-  '# Sandbox grants come from ScoopConfig and are registered in memory, not here.',
-  '# Writes to this file always require approval (self-protected).',
+  '# Approved "Always" grants for one scoop. Loaded only for that scoop.',
+  '# Sandbox grants come from ScoopConfig, in memory — not here.',
+  '# Writes always require approval (self-protected).',
   '',
 ].join('\n');
 
@@ -109,7 +104,6 @@ export class SudoManager {
   private readonly onPolicyReload: (folder?: string) => void;
   private policy: SudoersPolicy = emptyPolicy();
   private unwatch: (() => void) | null = null;
-  private scoopUnwatch: (() => void) | null = null;
   private reloadChain: Promise<void> = Promise.resolve();
 
   private scoopPolicies: Map<string, SudoersPolicy> = new Map();
@@ -180,25 +174,11 @@ export class SudoManager {
 
   async initScoopPolicy(folder: string, config?: ScoopConfig | null): Promise<void> {
     this.registerScoopConfig(folder, config);
-    const path = scoopSudoersPath(folder);
-    let existing: string | null = null;
-    try {
-      if (await this.fs.exists(path)) {
-        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
-        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      }
-    } catch (err) {
-      log.warn('Failed to read per-scoop sudoers during init; treating as absent', {
-        folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    if (existing !== null && existing.split('\n', 1)[0]?.trim() === LEGACY_GENERATED_HEADER) {
-      await this.fs.writeFile(path, SCOOP_SUDOERS_HEADER);
-      log.info('Discarded legacy generated per-scoop sudoers (ambiguous rules, fail-closed)', {
-        folder,
-        path,
-      });
+
+    const legacyPath = legacyScoopSudoersPath(folder);
+    if (await this.fs.exists(legacyPath).catch(() => false)) {
+      const { migrateLegacyScoopSudoers } = await import('./migrate-scoop-sudoers.js');
+      await migrateLegacyScoopSudoers(folder, { fs: this.fs });
     }
     await this.reloadScoopPolicy(folder);
   }
@@ -211,21 +191,17 @@ export class SudoManager {
     const safe = sanitizeGrantPattern(pattern);
     if (!safe) return null;
     const directive = kind === 'command' ? 'Cmnd' : kind === 'read' ? 'Read' : 'Write';
-    const path = scoopSudoersPath(folder);
-
-    let existing = '';
-    try {
-      if (await this.fs.exists(path)) {
-        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
-        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      }
-    } catch (err) {
-      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
+    const path = scoopGrantsPath(folder);
+    if (!path) {
+      log.warn('Unspellable scoop folder; not persisting', { folder });
+      return null;
     }
+
+    const existing = await this.readTextOrEmpty(path);
 
     const line = `NOPASSWD ${directive} ${safe}`;
     if (existing.split('\n').some((l) => l.trim() === line)) {
-      log.info('Per-scoop sudoers rule already present; skipping duplicate append', {
+      log.info('Per-scoop grant already present; skipping duplicate append', {
         folder,
         kind,
         pattern: safe,
@@ -233,7 +209,7 @@ export class SudoManager {
       return safe;
     }
     try {
-      await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
+      await this.fs.mkdir(SUDOERS_D_DIR, { recursive: true });
     } catch {}
     const prefix = existing
       ? existing.endsWith('\n')
@@ -242,8 +218,19 @@ export class SudoManager {
       : SCOOP_SUDOERS_HEADER;
     await this.fs.writeFile(path, `${prefix}${line}\n`);
     await this.reloadScoopPolicy(folder);
-    log.info('Appended per-scoop sudoers rule', { folder, kind, pattern: safe });
+    log.info('Appended per-scoop grant', { folder, path, kind, pattern: safe });
     return safe;
+  }
+
+  private async readTextOrEmpty(path: string): Promise<string> {
+    try {
+      if (!(await this.fs.exists(path))) return '';
+      const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
+      return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'ENOENT') return '';
+      throw err;
+    }
   }
 
   getShellConfig(opts: { transparentGating?: boolean } = {}): ShellSudoConfig {
@@ -274,8 +261,6 @@ export class SudoManager {
   dispose(): void {
     this.unwatch?.();
     this.unwatch = null;
-    this.scoopUnwatch?.();
-    this.scoopUnwatch = null;
   }
 
   private reloadScoopPolicy(folder: string): Promise<void> {
@@ -286,7 +271,12 @@ export class SudoManager {
   }
 
   private async doReloadScoopPolicy(folder: string): Promise<void> {
-    const path = scoopSudoersPath(folder);
+    const path = scoopGrantsPath(folder);
+    if (!path) {
+      this.scoopPolicies.delete(folder);
+      this.onPolicyReload(folder);
+      return;
+    }
     try {
       if (!(await this.fs.exists(path))) {
         this.scoopPolicies.delete(folder);
@@ -308,6 +298,8 @@ export class SudoManager {
       const entries = await this.fs.readDir(SUDOERS_D_DIR);
       const names = entries
         .filter((e) => e.type === 'file')
+
+        .filter((e) => scoopFolderFromGrantsName(e.name) === null)
         .map((e) => e.name)
         .sort();
       for (const name of names) {
@@ -385,22 +377,29 @@ export class SudoManager {
 
   private startWatching(): void {
     if (!this.watcher) return;
-    if (!this.unwatch) {
-      this.unwatch = this.watcher.watch('/etc', isSudoersPath, () => {
-        void this.reload();
-      });
-    }
-    if (!this.scoopUnwatch) {
-      this.scoopUnwatch = this.watcher.watch('/scoops', isScoopSudoersPath, (events) => {
-        const folders = new Set<string>();
-        for (const ev of events) {
-          const folder = scoopFolderFromPath(ev.path);
-          if (folder) folders.add(folder);
+    if (this.unwatch) return;
+    this.unwatch = this.watcher.watch('/etc', isSudoersPath, (events) => {
+      const folders = new Set<string>();
+      let global = false;
+      let grantsDirChanged = false;
+      for (const ev of events) {
+        if (ev.path === SUDOERS_D_DIR) {
+          grantsDirChanged = true;
+          continue;
         }
-        for (const folder of folders) {
+        const folder = scoopFolderFromGrantsPath(ev.path);
+        if (folder) folders.add(folder);
+        else global = true;
+      }
+      if (grantsDirChanged) {
+        void this.reload();
+        for (const folder of [...this.scoopPolicies.keys()]) {
           void this.reloadScoopPolicy(folder);
         }
-      });
-    }
+        return;
+      }
+      if (global) void this.reload();
+      for (const folder of folders) void this.reloadScoopPolicy(folder);
+    });
   }
 }

@@ -10,8 +10,7 @@ VFS on init/reset. Paths below are relative to `packages/vfs-root/`.
 | `shared/`             | `/shared/` — shared content                                                      |
 | `workspace/`          | `/workspace/` — default workspace content                                        |
 | `shared/CLAUDE.md`    | Agent-facing runtime instructions → `/shared/CLAUDE.md`                          |
-| `shared/MEMORY.md`    | User-editable memory curator config → `/shared/MEMORY.md`                        |
-| `shared/DREAMING.md`  | User-editable memory dreamer config → `/shared/DREAMING.md`                      |
+| `etc/MEMORY.md`       | User-editable memory pass (curator + dreamer) config → `/etc/MEMORY.md`          |
 | `shared/GELATIERE.md` | User-editable gelatiere pass instructions + config → `/shared/GELATIERE.md`      |
 | `shared/wiki/`        | Shared knowledge-base scaffold (`WIKI.md` schema, empty `index.md`/`log.md`)     |
 | `shared/sprinkles/`   | Built-in sprinkle UIs                                                            |
@@ -28,12 +27,14 @@ Design, pieces table, and sprinkle details: `docs/gelatiere.md`.
 - `shared/GELATIERE.md` is the gelatiere's twin of `MEMORY.md`: the store's build-time fallback and
   the seeded `/shared/GELATIERE.md`, seeded only when absent, user-edited only. Same frontmatter
   dialect (`base/instruction-frontmatter.ts`); keys `intervalHours`, `nightly` (5-field cron),
-  `maxSuggestions` (≤10). No placeholders: the unit `cat`s it every pass, so keep it self-contained
+  `maxSuggestions` (≤10), `allowedCommands` (bare names, ADDITIVE over the built-in set). No placeholders: the unit `cat`s it every pass, so keep it self-contained
   (literal paths, `date` for today).
 - The gelatiere is a persistent SCOOP under a synthetic owner (`scoops/gelatiere-unit.ts`), not a
   spawned agent: charter is the record's `systemPromptAppend`, the pass recipe is this file.
   Deliverable is `gelatiere suggest <candidates.json> && gelatiere deliver`. Keep recipe commands on
-  `GELATIERE_ALLOWED_COMMANDS` (a child escalates the rest); cross-pass memory `/shared/.gelatiere/notes.md`.
+  `GELATIERE_BASE_ALLOWED_COMMANDS` (a child escalates the rest; the file's `allowedCommands` extends
+  it and is re-applied to the persisted record at boot / `gelatiere init`); cross-pass memory
+  `/shared/.gelatiere/notes.md`.
 - `shared/sprinkles/suggestions/suggestions.shtml` is the suggestion stream, split from the
   onboarding-only `shared/sprinkles/welcome/welcome.shtml` so follower/extension welcome-dip
   handling can never mask or restart it; re-posted as a dip on every delivery, rail-pickable under
@@ -41,10 +42,15 @@ Design, pieces table, and sprinkle details: `docs/gelatiere.md`.
 
 ### Memory curator
 
-- `shared/MEMORY.md` is the single source for the runner's build-time fallback and the seeded
-  `/shared/MEMORY.md`, seeded only when absent so customizations survive later boots. User-edited
-  only: the curator cannot rewrite its own instructions. It may rewrite the whole memory file; the
-  hard char budget covers the file — no protected region.
+- `etc/MEMORY.md` is the single source for the runner's build-time fallback and the seeded
+  `/etc/MEMORY.md`, seeded only when absent so customizations survive later boots. ONE document
+  drives both passes — the per-session curation pass and the nightly consolidation ("dreaming")
+  pass; the runtime fills `{{TASK}}` with which one this is, and `timeoutSeconds` /
+  `dreamTimeoutSeconds` bound them separately (the dream has no one waiting and gets the long
+  one). User-edited only: the pass cannot rewrite its own instructions. It may rewrite the whole
+  memory file; the hard char budget covers the file — no protected region. The pre-merge
+  `/shared/MEMORY.md` + `/shared/DREAMING.md` are no longer read; `memory status` flags a
+  surviving copy.
 - Frontmatter is a strict YAML subset: block-array items may have `#` comment tails; inline entries
   with commas must be quoted; a bare `/` is rejected from `writablePaths`. `allowedCommands` extend
   the built-in base set, never replace it.
@@ -58,8 +64,8 @@ Design, pieces table, and sprinkle details: `docs/gelatiere.md`.
 - Entries follow the provenance/supersession grammar (MEMORY.md "Entry grammar"): `human:`/
   `process:` actor prefixes, version pins instead of confidence scores, `stale_after: YYYY-MM-DD` as
   an absolute instant, corrections that REPLACE claims, and a `## Not true` block for refuted claims
-  kept as traps. The dreamer (`DREAMING.md`) enforces the grammar and reports contradiction-pair
-  counts before/after so an unproductive pass is visible.
+  kept as traps. Every pass enforces the grammar and reports contradiction-pair counts
+  before/after so an unproductive pass is visible.
 - Write grant is `/workspace/CLAUDE.md` alone, not `/workspace/`: a directory-wide grant would also
   let it install into `/workspace/skills/` (it can still `upskill`). Reads still cover `/workspace/`.
   Single-file `writablePaths` work because `generateScoopSudoers` emits the bare path + `/**`.
@@ -104,8 +110,8 @@ Full policy reference: `docs/approvals.md`.
   `skills/llm-wiki/wiki.jsh` with the wiki root pinned to `/shared/wiki`; keep it synced with
   upstream and keep the Tier-0 behavior (fs bound via `require`, zero scans fail loudly) — both
   pinned by `tests/shell/wiki-jsh.test.ts`.
-- The nightly dreamer (`shared/DREAMING.md`) holds the write path: over-budget reference knowledge
-  moves from memory files into wiki pages, leaving a pointer.
+- The memory pass (`etc/MEMORY.md`, consolidation step 5) holds the write path: over-budget
+  reference knowledge moves from memory files into wiki pages, leaving a pointer.
 
 ### Keyboard shortcuts
 

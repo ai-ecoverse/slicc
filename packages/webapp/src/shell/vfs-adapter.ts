@@ -1,5 +1,7 @@
+import { Buffer } from 'buffer';
 import type {
   BufferEncoding,
+  ByteString,
   CpOptions,
   FileContent,
   FsStat,
@@ -31,18 +33,22 @@ interface DirentEntry {
   isSymbolicLink: boolean;
 }
 
-function decodeReadBytes(bytes: Uint8Array): string {
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    const chars = new Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
-    return chars.join('');
-  }
+function fileEncoding(options?: ReadFileOptions | BufferEncoding): BufferEncoding {
+  return (typeof options === 'string' ? options : options?.encoding) ?? 'utf8';
 }
 
-function toIdentity(ino: number | undefined): string | undefined {
-  return typeof ino === 'number' && Number.isInteger(ino) && ino > 0 ? `vfs-ino:${ino}` : undefined;
+function encodeWriteContent(
+  content: FileContent,
+  options?: WriteFileOptions | BufferEncoding
+): Uint8Array {
+  if (typeof content !== 'string') return content;
+  const encoding = fileEncoding(options);
+
+  if (encoding === 'binary' || encoding === 'latin1') {
+    const cached = consumeCachedBinary(content);
+    if (cached) return cached;
+  }
+  return Buffer.from(content, encoding);
 }
 
 const LISTING_STAT_TTL_MS = 1000;
@@ -180,9 +186,10 @@ export class VfsAdapter implements IFileSystem {
       const normalized = normalizePath(path);
       const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
       const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
-      const text = decodeReadBytes(bytes);
+      const encoding = fileEncoding(options);
+      const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(encoding);
 
-      parkReadBytes(text, bytes);
+      if (encoding !== 'hex' && encoding !== 'base64') parkReadBytes(text, bytes);
       return text;
     });
   }
@@ -196,6 +203,13 @@ export class VfsAdapter implements IFileSystem {
     });
   }
 
+  async readFileBytes(path: string): Promise<ByteString> {
+    const bytes = await this.readFileBuffer(path);
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+      'latin1'
+    ) as unknown as ByteString;
+  }
+
   async getNativeFile(path: string): Promise<File | null> {
     return this.trusted(() => this.vfs.getNativeFile(normalizePath(path)));
   }
@@ -207,87 +221,24 @@ export class VfsAdapter implements IFileSystem {
   async writeFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions | BufferEncoding
+    options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     this.dropListingStats();
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      if (typeof content === 'string') {
-        const cachedBytes = consumeCachedBinary(content);
-        if (cachedBytes) {
-          await this.vfs.writeFile(normalized, cachedBytes);
-          return;
-        }
-
-        let hasHighCodepoints = false;
-        for (let i = 0; i < content.length; i++) {
-          if (content.charCodeAt(i) > 0xff) {
-            hasHighCodepoints = true;
-            break;
-          }
-        }
-        if (hasHighCodepoints) {
-          await this.vfs.writeFile(normalized, new TextEncoder().encode(content));
-        } else {
-          const bytes = new Uint8Array(content.length);
-          for (let i = 0; i < content.length; i++) {
-            bytes[i] = content.charCodeAt(i);
-          }
-          await this.vfs.writeFile(normalized, bytes);
-        }
-      } else {
-        await this.vfs.writeFile(normalized, content);
-      }
+      await this.vfs.writeFile(normalized, encodeWriteContent(content, options));
     });
   }
 
   async appendFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions | BufferEncoding
+    options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     this.dropListingStats();
-    return this.trusted(async () => {
-      const normalized = normalizePath(path);
-
-      try {
-        const s = await this.vfs.stat(normalized);
-        if (s.type === 'directory') {
-          throw new FsError('EISDIR', 'is a directory', normalized);
-        }
-      } catch (err) {
-        if (err instanceof FsError && err.code === 'EISDIR') throw err;
-      }
-
-      let existingBytes = new Uint8Array(0);
-      try {
-        const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
-        existingBytes =
-          existing instanceof Uint8Array
-            ? new Uint8Array(existing)
-            : new TextEncoder().encode(existing as string);
-      } catch (err) {
-        if (err instanceof FsError && err.code === 'ENOENT') {
-        } else {
-          throw err;
-        }
-      }
-
-      let newBytes: Uint8Array;
-      if (typeof content === 'string') {
-        newBytes = new Uint8Array(content.length);
-        for (let i = 0; i < content.length; i++) {
-          newBytes[i] = content.charCodeAt(i) & 0xff;
-        }
-      } else {
-        newBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
-      }
-
-      const combined = new Uint8Array(existingBytes.length + newBytes.length);
-      combined.set(existingBytes);
-      combined.set(newBytes, existingBytes.length);
-      await this.vfs.writeFile(normalized, combined);
-    });
+    return this.trusted(() =>
+      this.vfs.appendFile(normalizePath(path), encodeWriteContent(content, options))
+    );
   }
 
   async exists(path: string): Promise<boolean> {
@@ -311,10 +262,12 @@ export class VfsAdapter implements IFileSystem {
           isFile: fast.type === 'file',
           isDirectory: fast.type === 'directory',
           isSymbolicLink: !!fast.isSymlink,
-          mode: fast.type === 'directory' ? 0o755 : 0o644,
+          mode: fast.mode ?? (fast.type === 'directory' ? 0o755 : 0o644),
           size: fast.size,
           mtime: new Date(fast.mtime),
-          identity: toIdentity(fast.ino),
+          identity: fast.identity,
+          dev: fast.dev,
+          ino: fast.identity === undefined ? undefined : fast.ino,
         };
       }
 
@@ -323,10 +276,12 @@ export class VfsAdapter implements IFileSystem {
         isFile: s.type === 'file',
         isDirectory: s.type === 'directory',
         isSymbolicLink: !!s.isSymlink,
-        mode: s.type === 'directory' ? 0o755 : 0o644,
+        mode: s.mode ?? (s.type === 'directory' ? 0o755 : 0o644),
         size: s.size,
         mtime: new Date(s.mtime),
-        identity: toIdentity(s.ino),
+        identity: s.identity,
+        dev: s.dev,
+        ino: s.identity === undefined ? undefined : s.ino,
       };
     });
   }
@@ -344,10 +299,14 @@ export class VfsAdapter implements IFileSystem {
           isFile: fast.type === 'file',
           isDirectory: fast.type === 'directory',
           isSymbolicLink: fast.type === 'symlink',
-          mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
+          mode:
+            fast.mode ??
+            (fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644),
           size: fast.size,
           mtime: new Date(fast.mtime),
-          identity: toIdentity(fast.ino),
+          identity: fast.identity,
+          dev: fast.dev,
+          ino: fast.identity === undefined ? undefined : fast.ino,
         };
       }
       const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
@@ -355,10 +314,12 @@ export class VfsAdapter implements IFileSystem {
         isFile: s.type === 'file',
         isDirectory: s.type === 'directory',
         isSymbolicLink: s.type === 'symlink',
-        mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
+        mode: s.mode ?? (s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644),
         size: s.size,
         mtime: new Date(s.mtime),
-        identity: toIdentity(s.ino),
+        identity: s.identity,
+        dev: s.dev,
+        ino: s.identity === undefined ? undefined : s.ino,
       };
     });
   }
@@ -480,6 +441,10 @@ export class VfsAdapter implements IFileSystem {
     });
   }
 
+  async rename(src: string, dest: string): Promise<void> {
+    return this.mv(src, dest);
+  }
+
   resolvePath(base: string, path: string): string {
     if (path.startsWith('/')) return normalizePath(path);
     return normalizePath(joinPath(base, path));
@@ -489,7 +454,10 @@ export class VfsAdapter implements IFileSystem {
     return [];
   }
 
-  async chmod(_path: string, _mode: number): Promise<void> {}
+  async chmod(path: string, mode: number): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() => this.vfs.chmod(normalizePath(path), mode));
+  }
 
   async symlink(target: string, linkPath: string): Promise<void> {
     this.dropListingStats();
@@ -514,7 +482,10 @@ export class VfsAdapter implements IFileSystem {
     });
   }
 
-  async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {}
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() => this.vfs.utimes(normalizePath(path), atime, mtime));
+  }
 
   invalidatePaths(paths: string[]): void {
     this.dropListingStats();

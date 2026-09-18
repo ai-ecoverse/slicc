@@ -1,6 +1,0 @@
-{
-  "packages/cloudflare-worker/src/flags.ts": 1,
-  "packages/cloudflare-worker/src/preview-handler.ts": 2,
-  "packages/cloudflare-worker/src/preview-transfer-route.ts": 1,
-  "packages/cloudflare-worker/src/webhook-revoke-route.ts": 1
-}

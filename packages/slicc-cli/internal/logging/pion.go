@@ -7,9 +7,34 @@ import (
 	pionlogging "github.com/pion/logging"
 )
 
+
+
+
+
+
+
+
+
 type PionEvent func(scope string, level slog.Level, msg string)
 
+
 const eventLevel = slog.LevelWarn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func PionFactory(logf func(format string, args ...any), event PionEvent, wanted func(slog.Level) bool) pionlogging.LoggerFactory {
 	return &pionFactory{logf: logf, event: event, wanted: wanted}
@@ -21,9 +46,11 @@ type pionFactory struct {
 	wanted func(slog.Level) bool
 }
 
+
 func (f *pionFactory) logs(level slog.Level) bool {
 	return f.logf != nil && (f.wanted == nil || f.wanted(level))
 }
+
 
 func (f *pionFactory) consumes(level slog.Level) bool {
 	return f.logs(level) || (f.event != nil && level >= eventLevel)
@@ -32,6 +59,7 @@ func (f *pionFactory) consumes(level slog.Level) bool {
 func (f *pionFactory) NewLogger(scope string) pionlogging.LeveledLogger {
 	return &pionLogger{scope: scope, factory: f}
 }
+
 
 type pionLogger struct {
 	scope   string
@@ -48,7 +76,7 @@ func (l *pionLogger) emit(level slog.Level, msg string) {
 }
 
 func (l *pionLogger) emitf(level slog.Level, format string, args ...any) {
-
+	
 	if !l.factory.consumes(level) {
 		return
 	}

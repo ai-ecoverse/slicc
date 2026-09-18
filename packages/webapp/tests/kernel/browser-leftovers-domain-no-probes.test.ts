@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const onNoComment = existsSync(resolve(here, '../../../../.no-comment'));
 const src = (...parts: string[]): string =>
   readFileSync(join(here, '..', '..', 'src', ...parts), 'utf8');
 
@@ -184,7 +183,7 @@ describe('#2276 slice C — browser: snapshot.ts keeps its shell-owned realm rea
     expect(source).toContain('isExtensionRealm()');
   });
 
-  it.skipIf(onNoComment)('the read carries a one-sentence rationale at the call site', () => {
+  it('the read carries a one-sentence rationale at the call site', () => {
     const source = src('shell', 'supplemental-commands', 'playwright', 'handlers', 'snapshot.ts');
     expect(source).toContain('#2276: stays a `shell/`-owned realm read, not a CapabilityBroker op');
   });

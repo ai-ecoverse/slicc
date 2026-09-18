@@ -4,21 +4,21 @@ This file is bundled into the agent VFS at `/workspace/skills/skill-authoring/js
 
 ## Runtime globals (Globals API)
 
-Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, agent, http, browser, USB / Serial / HID, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
+Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, agent, http, browser, USB / Serial / HID, computer, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
 
 ### Node-standard bare globals
 
-| Global                                                           | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `process`                                                        | `argv` (with `.parseFlags()`), `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`. `stdin` is a fully-buffered (no streaming) one-shot value with three surfaces sharing one `consumed` flag — `read()` (returns `null` when nothing was piped, Node parity), events (`on('data')`→`'end'`→`'close'`, single chunk, no real streaming — `pause()` suppresses emission until `resume()`, and `exit(N)` from a handler exits with code `N`), and async iterator. Drain via exactly one; the others then see EOF. |
-| `console`                                                        | `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw). `group`/`groupCollapsed`/`groupEnd` indent; `time`/`timeEnd`/`timeLog` and `count`/`countReset` are labeled; `clear` is a no-op. All 19 standard methods are functions.                                                                                                                                                                                                                        |
-| `fetch`                                                          | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS + secret masking handled). Binary bodies (`Uint8Array` / `Blob` / `FormData`) are sent as raw bytes — bytes ≥0x80 are not UTF-8-expanded. `await res.json()` / `res.text()` resolve from the already-buffered body and keep the realm alive for the rest of the continuation.                                                                                                                                                                  |
-| `require(p)`                                                     | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges, `require('fs')` / `require('node:fs')` for the VFS bridge, `require('<pkg>')` for installed packages.                                                                                                                                                                                                                                                                                                                                  |
-| `Buffer` / `globalThis`                                          | Node-standard surface.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `setTimeout` / `clearTimeout` / `setInterval` / `queueMicrotask` | Web timer surface (also reachable through `globalThis`). Outstanding timeouts and intervals keep the realm alive the way Node keeps a process alive for ref'd handles; `queueMicrotask` is not a handle. `process.exit()` cancels pending timers.                                                                                                                                                                                                                                                                        |
-| `__dirname` / `__filename`                                       | CJS scope vars — the running script's own directory and absolute path.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `module` / `exports`                                             | CJS module record (writeable; useful when a `.jsh` is treated as a library by a sibling `require('./helper.jsh')`).                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `process.argv.parseFlags()`                                      | Parse `--flag=val` / `--flag val` / `-x` / positional / `--` passthrough into `{ positional, flags, subcommand, passthrough }`.                                                                                                                                                                                                                                                                                                                                                                                          |
+| Global                                                           | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`                                                        | `argv` (with `.parseFlags()`), `env`, `cwd()`, `exit(code)`, `exitCode` (deferred status: assignment does not unwind; the realm reads it after the event-loop drain, including from an async callback), `stdout.write`, `stderr.write`. `stdin` is a fully-buffered (no streaming) one-shot value with three surfaces sharing one `consumed` flag — `read()` (returns `null` when nothing was piped, Node parity), events (`on('data')`→`'end'`→`'close'`, single chunk, no real streaming — `pause()` suppresses emission until `resume()`, and `exit(N)` from a handler exits with code `N`), and async iterator. Drain via exactly one; the others then see EOF. |
+| `console`                                                        | `log`/`info`/`debug`/`dirxml`/`table`/`dir` → stdout; `warn`/`error`/`assert`/`trace` → stderr (`assert` does not throw). `group`/`groupCollapsed`/`groupEnd` indent; `time`/`timeEnd`/`timeLog` and `count`/`countReset` are labeled; `clear` is a no-op. All 19 standard methods are functions.                                                                                                                                                                                                                                                                                                                                                                   |
+| `fetch`                                                          | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS + secret masking handled). Binary bodies (`Uint8Array` / `Blob` / `FormData`) are sent as raw bytes — bytes ≥0x80 are not UTF-8-expanded. `await res.json()` / `res.text()` resolve from the already-buffered body and keep the realm alive for the rest of the continuation. Later WHATWG stream I/O (`Request`/`Response`/`Blob` body reads, `ReadableStream` `read`/`pipeTo`) also keeps the realm alive (succeed or reject — never silent exit 0).                                                                                                                                    |
+| `require(p)`                                                     | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges, `require('fs')` / `require('node:fs')` for the VFS bridge, `require('<pkg>')` for installed packages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `Buffer` / `globalThis`                                          | Node-standard surface.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `setTimeout` / `clearTimeout` / `setInterval` / `queueMicrotask` | Web timer surface (also reachable through `globalThis`). Outstanding timeouts and intervals keep the realm alive the way Node keeps a process alive for ref'd handles; `queueMicrotask` is not a handle. `process.exit()` cancels pending timers.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `__dirname` / `__filename`                                       | CJS scope vars — the running script's own directory and absolute path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `module` / `exports`                                             | CJS module record (writeable; useful when a `.jsh` is treated as a library by a sibling `require('./helper.jsh')`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `process.argv.parseFlags()`                                      | Parse `--flag=val` / `--flag val` / `-x` / positional / `--` passthrough into `{ positional, flags, subcommand, passthrough }`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ### Capability bridges — `sliccy:` virtual modules
 
@@ -30,8 +30,9 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 | `sliccy:agent`                                | Callable `agent(prompt, opts?)` — spawns a one-shot sub-scoop, feeds it the prompt, blocks until the agent loop completes; resolves to trimmed final text (JSON-parsed when `opts.schema` is set), REJECTS on non-zero exit or schema-parse failure. `.spawn(prompt, opts?)` is the non-throwing variant → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
 | `sliccy:skill`                                | Frozen `{ dir, root, refs, assets, config(), config(updates), token(providerId) }`. `refs`/`assets` resolve from the skill root (parent of `scripts/` when the script lives there). Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                                                                   |
 | `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                                                                                                                                                                      |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                                                                              |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                             |
 | `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                                                                                                                                                                  |
+| `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend. Screenshot/input/subscribe round-trip over host `computer-call` events (keep-alive via `onEvent`); frames return via `computer.frame`.                                                                                                                                                                                                                                 |
 | `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                                                                                                                                                                  |
 | `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                                                                                                                                                                                                                                        |
 | `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                                                                                                                                                                                                                       |
@@ -42,7 +43,7 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 
 ### Filesystem (VFS bridge)
 
-`require('fs')` and `require('node:fs')` return the VFS bridge (`readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile(url, path)`), plus the sync set (`readFileSync`, `writeFileSync`, `existsSync`, `statSync`, …). All paths are VFS-resolved. There is no bare `fs` global.
+`require('fs')` and `require('node:fs')` return the VFS bridge (`readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `appendFile`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile(url, path)`), plus the sync set (`readFileSync`, `writeFileSync`, `appendFileSync`, `existsSync`, `statSync`, …). All paths are VFS-resolved. There is no bare `fs` global. Async `appendFile` is one locked VFS RPC, so concurrent appends to the same path keep every payload. `writeFileSync` / `appendFileSync` persist at call time, and `console.log` is captured as it prints — a `timeout`/`kill` of the node realm (rc=124/137) still leaves the log file and the stdout written before the hang.
 
 Stdio fds and device paths work like Node: `fs.readFileSync(0, 'utf8')` (or `'/dev/stdin'`) reads the full piped stdin without consuming `process.stdin`; `fs.writeFileSync(1, …)` / `fs.writeFileSync(2, …)` (or `/dev/stdout` / `/dev/stderr`) write to stdout/stderr; `existsSync`/`statSync` report the three stream devices as present. Unknown numeric fds and wrong-direction stream ops throw `EBADF`.
 
@@ -175,7 +176,7 @@ const { promisify } = require('util');
 const { stdout } = await promisify(exec)('ls -la /workspace');
 ```
 
-The **sync forms** (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — just-bash has no synchronous or long-lived process model. `.bsh` scripts (which run in the target page via CDP, not the realm) have no shell bridge at all, so `require('child_process')` there is unavailable; use `exec()` from a `.jsh` script instead.
+The **sync forms** (`execSync` / `spawnSync` / `execFileSync`) run on the blocking sync-XHR bridge and follow Node's return/throw contracts (`spawnSync` never throws on a non-zero exit). `{ cwd }` sets the child's working directory; `{ env }` **replaces** the child's environment (spread `process.env` to extend). A missing `cwd` is `ENOENT`, not a silent fallback to the parent. They need a controlling Service Worker; on a float without one they throw an error naming the async escape hatch. `fork` always throws — no long-lived process model. `.bsh` scripts (which run in the target page via CDP, not the realm) have no shell bridge at all, so `require('child_process')` there is unavailable; use `exec()` from a `.jsh` script instead.
 
 ## jsh runtime extensions
 
@@ -208,17 +209,37 @@ const tmpl = await fs.readFile(`${skill.refs}/prompt.md`);
 
 ### `sliccy:browser` — page-context CDP bridge
 
-Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills. Accepts a `TabHandle` (from `findTab` / `ensureTab`) or a bare `targetId` string. `eval` / `evalAsync` serialize functions to a string call expression so realm code can pass a closure as ergonomically as a string.
+Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills. Accepts a `TabHandle` (from `findTab` / `ensureTab` / `openWindow`) or a bare `targetId` string. `eval` / `evalAsync` serialize functions to a string call expression so realm code can pass a closure as ergonomically as a string.
 
 ```typescript
 const browser = require('sliccy:browser');
 browser.findTab(opts: { domain?: string; urlMatch?: RegExp | string }): Promise<TabHandle | null>
 browser.ensureTab(url: string, opts?: { matchUrl?: RegExp | string }): Promise<TabHandle>
+browser.openWindow(url: string, opts?: {
+  width?: number; height?: number;   // FRAME DIP pixels (incl. chrome), not content area
+  left?: number; top?: number;
+  state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+  decorated?: boolean;               // default true; false → extension popup chrome
+  focus?: boolean;                   // default true
+}): Promise<TabHandle>
+browser.windowBounds(tab): Promise<{
+  left: number; top: number; width: number; height: number;
+  state: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+  dpr: number;                       // devicePixelRatio — capture frame = outer × dpr
+}>
+browser.setWindowBounds(tab, bounds: {
+  left?: number; top?: number; width?: number; height?: number;
+  state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+}): Promise</* achieved bounds (Chrome clamps silently) */>
 browser.eval(tab, fn: Function | string): Promise<unknown>      // sync expression
 browser.evalAsync(tab, fn: AsyncFunction): Promise<unknown>     // async, returns parsed JSON
 browser.cookie(tab, name: string): Promise<string | null>
 browser.localStorage(tab, key: string): Promise<string | null>
 ```
+
+**Window sizing units are frame DIP**, matching CDP `Target.createTarget` / `Browser.Bounds` and `chrome.windows.create` (height includes the title bar). That differs from `window.open` features, which size the content area. Do not port a `window.open` size naively — it will be short by the chrome height. `state` other than `normal` cannot be combined with left/top/width/height. `setWindowBounds` always reads back the achieved bounds because Chrome clamps oversized requests without error.
+
+Standalone (Swift / Node CDP) uses `Target.createTarget({ newWindow: true, … })` plus `Browser.get/setWindowBounds`. The Chrome extension maps the same CDP methods onto `chrome.windows.create` / `update` / `get` (chrome.debugger cannot run Browser-domain commands).
 
 ```javascript
 const browser = require('sliccy:browser');
@@ -227,6 +248,15 @@ const tab = await browser.findTab({ domain: 'slack.com' });
 if (!tab) cli.die('open slack.com first');
 const team = await browser.eval(tab, () => document.title);
 const xoxc = await browser.localStorage(tab, 'localConfig_v2');
+```
+
+```javascript
+// Sized + decorated capture window (frame 1280×800 at native dpr)
+const tab = await browser.openWindow('https://example.com/demo', {
+  width: 1280,
+  height: 800,
+});
+const { width, height, dpr } = await browser.windowBounds(tab);
 ```
 
 ### `browser.fetch(tab, url, opts)` — page-context fetch
@@ -396,11 +426,13 @@ console.log([...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' '));
 
 ```typescript
 device.open(): Promise<void>
-device.close(): Promise<void>
-device.reset(): Promise<void>
+device.close(opts?: { force?: boolean }): Promise<void>
+device.reset(opts?: { force?: boolean }): Promise<void>
 device.selectConfiguration(configurationValue: number): Promise<void>
-device.claimInterface(interfaceNumber: number): Promise<void>
+device.claimInterface(interfaceNumber: number, opts?: { wait?: boolean }): Promise<void>
 device.releaseInterface(interfaceNumber: number): Promise<void>
+device.addEventListener('disconnect' | 'claim-lost', cb): void
+device.removeEventListener('disconnect' | 'claim-lost', cb): void
 device.controlTransferIn(setup, length): Promise<{ status: string; data: DataView }>
 device.controlTransferOut(setup, data): Promise<{ status: string; bytesWritten: number }>
 device.transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>
@@ -411,8 +443,12 @@ device.clearHalt(direction: 'in' | 'out', endpointNumber: number): Promise<void>
 So it is `claimInterface(1)`, not `claim(1)`; `controlTransferIn(...)`, not `controlIn(...)`. Note the read results resolve `{ status, data }` where `data` is a **`DataView`** — wrap it (`new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength)`) before treating it as bytes.
 
 `clearHalt` recovers a single stalled bulk/interrupt endpoint. Prefer it to
-`reset()`, which re-enumerates the whole device and drops any claim another
-client (a host `adb` server, say) holds on it.
+`reset()`, which re-enumerates the whole device. Handles are shared with the
+`usb` shell command and `slicc.usb`, but interface claims are exclusive: a
+second `claimInterface` is refused with the current holder named (or queued
+with `{ wait: true }`). `close()` / `reset()` refuse while another consumer
+holds a claim unless `{ force: true }`, which emits `claim-lost` then
+`disconnect` so the displaced consumer is told.
 
 Each device also carries its **configuration descriptors** as plain data, so an
 interface can be located by class/subclass/protocol without opening the device
@@ -447,7 +483,7 @@ branch on it. Endpoints reported with a direction or type outside the vocabulary
 above are omitted rather than passed through, so matching on those fields is
 safe.
 
-Neither `serial.*` nor `usb.*` carries the `EventTarget` shape — those transports are explicit-poll.
+`serial.*` still has no `EventTarget` shape — that transport is explicit-poll.
 
 For ESP32 / ESP8266 work, drive `esptool` through `require('sliccy:exec')` (there is no bare `exec` global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
 
@@ -467,6 +503,46 @@ await exec.spawn([
   `${process.env.TMPDIR ?? '/tmp'}/header.bin`,
 ]);
 ```
+
+### `sliccy:computer` — jsh-hosted computer backends
+
+`require('sliccy:computer').register(handlers)` registers a computer the `computer` shell command can screenshot and poke. `register()` subscribes to host `computer-call` events, which keeps a `jshd` unit alive the same way `sliccy:hid` inputreport listeners do. The disposer unregisters. Ids are typically `jsh:<name>`.
+
+```javascript
+const computer = require('sliccy:computer');
+computer.register({
+  id: 'jsh:fake',
+  title: 'fake',
+  size: { width: 640, height: 400 },
+  capabilities: {
+    screenshot: true,
+    text: true,
+    frames: 'push',
+    keyboard: true,
+    mouse: 'absolute',
+    scroll: false,
+    exec: false,
+    inputAllowed: true,
+  },
+  async screenshot() {
+    return { seq: 1, mime: 'image/png', width: 640, height: 400, bytes };
+  },
+  subscribe(fps, onFrame, maxWidth) {
+    const timer = setInterval(() => {
+      void onFrame({ seq: 1, mime: 'image/png', width: 640, height: 400, bytes });
+    }, 1000 / fps);
+    return () => clearInterval(timer);
+  },
+  async text() {
+    return '(empty)';
+  },
+  async input(events) {
+    /* mousemove / button / click / scroll / key / text / wait / drag */
+  },
+});
+```
+
+Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame, maxWidth)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh` (640×400 clock, frame counter, click marker; Home/Back/Menu soft keys move the marker or cycle the background; OffscreenCanvas JPEG or stored-deflate PNG). The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
 
 ## Reaching these from sprinkles & dips
 

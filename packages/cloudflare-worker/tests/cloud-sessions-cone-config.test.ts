@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildStartConeArgs, coneConfigToBundle } from '../src/cloud/cone-config-bridge.js';
+import {
+  ADOBE_TOKEN_DOMAINS,
+  buildStartConeArgs,
+  coneConfigToBundle,
+} from '../src/cloud/cone-config-bridge.js';
 
 function fakeImsJwt(createdAt: number, expiresIn: number): string {
   const b64url = (o: object) =>
@@ -39,6 +43,12 @@ describe('coneConfigToBundle (worker-side default + validation)', () => {
       kind: 'oauth',
       tokenExpiresAt: created + ttl,
     });
+  });
+  it('scopes the synthesized Adobe default secret to ADOBE_TOKEN_DOMAINS', () => {
+    const bundle = coneConfigToBundle(undefined, 'bearer-x');
+    expect(bundle.secrets).toEqual([
+      { name: 'ADOBE_IMS_TOKEN', value: 'bearer-x', domains: [ADOBE_TOKEN_DOMAINS] },
+    ]);
   });
   it('rejects a bundle whose model provider has no account (narrow F6)', () => {
     expect(() =>

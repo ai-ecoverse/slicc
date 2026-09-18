@@ -1,4 +1,5 @@
 import type { ToolProgressEvent } from '@slicc/shared-ts';
+import { isGelatiereUnit } from '../base/gelatiere-constants.js';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
@@ -30,11 +31,14 @@ import { DefaultTranscriptExportService } from '../transcript/export-service.js'
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
+import { conversationIdentityFor } from '../work-unit/conversation/key.js';
 import { migrateConversations } from '../work-unit/conversation/migration.js';
+import { CanonicalSessionReader } from '../work-unit/conversation/sessions.js';
 import {
   type ConversationIdentity,
   WorkUnitConversationStore,
 } from '../work-unit/conversation/store.js';
+import type { ConversationAttachmentOverlay } from '../work-unit/conversation/types.js';
 import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
@@ -111,7 +115,7 @@ export interface OrchestratorCallbacks {
     detail: CompactionStateDetail
   ) => void;
 
-  onError: (scoopJid: string, error: string) => void;
+  onError: (scoopJid: string, error: string, options?: { endTurn?: boolean }) => void;
 
   onLickBackpressure?: (scoopJid: string, info: { count: number; waitingMs: number }) => void;
 
@@ -254,7 +258,9 @@ export class Orchestrator implements ConeApprovalRouter {
     sendPrompt: (jid, text, senderId, senderName, images, options) =>
       this.sendPrompt(jid, text, senderId, senderName, images ?? [], options),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
-    onError: (jid, error) => this.callbacks.onError(jid, error),
+    recordSentAttachments: (jid, overlays) => this.recordSentAttachments(jid, overlays),
+    onError: (jid: string, error: string, options?: { endTurn?: boolean }) =>
+      this.callbacks.onError(jid, error, options),
     onLickBackpressure: (jid, info) => this.callbacks.onLickBackpressure?.(jid, info),
     getSessionStore: () => this.sessionStore,
     resetCostTracker: () => this.costTracker.reset(),
@@ -324,7 +330,6 @@ export class Orchestrator implements ConeApprovalRouter {
         approveDirectedOrUser: (request) => this.approveDirectedOrUser(request),
         listPendingSudoRequests: (approverJid) => this.listPendingSudoRequests(approverJid),
       },
-      handleMessage: (msg) => this.handleMessage(msg),
     });
   }
 
@@ -497,10 +502,22 @@ export class Orchestrator implements ConeApprovalRouter {
         onProgress: onBootProgress,
       });
     } catch (err) {
-      log.warn('Canonical conversation migration failed; staying on the legacy stores', {
+      log.warn('Canonical conversation migration failed; it will retry on the next boot', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  private recordSentAttachments(jid: string, overlays: ConversationAttachmentOverlay[]): void {
+    const store = this.conversationStore;
+    const scoop = this.scoops.get(jid);
+    if (!store || !scoop) return;
+    store.putAttachments(conversationIdentityFor(scoop), overlays).catch((err) => {
+      log.warn('Failed to record sent attachments', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   private async backfillParent(
@@ -520,26 +537,36 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   private async backfillModels(): Promise<void> {
-    const pending = [...this.scoops.values()].filter((scoop) => !modelIdFor(scoop));
-    if (pending.length === 0) return;
-    const seed = globalSeedModel();
-
-    const ordered = [...pending].sort(
-      (a, b) => Number(a.parentJid !== null) - Number(b.parentJid !== null)
+    const pending = [...this.scoops.values()].filter(
+      (scoop) => !modelIdFor(scoop) && !isGelatiereUnit(scoop)
     );
-    for (const scoop of ordered) {
-      const parent = scoop.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
-      const model = (parent ? modelFor(parent) : undefined) ?? seed;
-      if (!model) continue;
-      setUnitModel(scoop, model);
-      try {
-        await db.saveScoop(scoop);
-      } catch (err) {
-        log.warn('Failed to persist backfilled model; will retry next boot', {
-          jid: scoop.jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    if (pending.length > 0) {
+      const seed = globalSeedModel();
+
+      const ordered = [...pending].sort(
+        (a, b) => Number(a.parentJid !== null) - Number(b.parentJid !== null)
+      );
+      for (const scoop of ordered) {
+        const parent = scoop.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
+        const model = (parent ? modelFor(parent) : undefined) ?? seed;
+        if (!model) continue;
+        setUnitModel(scoop, model);
+        try {
+          await db.saveScoop(scoop);
+        } catch (err) {
+          log.warn('Failed to persist backfilled model; will retry next boot', {
+            jid: scoop.jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
+    }
+    try {
+      await this.lifecycle.syncGelatiereModel();
+    } catch (err) {
+      log.warn('Failed to repair gelatiere model on boot; will retry next boot', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -734,6 +761,11 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lickRegistry.registerNavigate(event);
   }
 
+  getDefaultConeFs() {
+    const cone = this.defaultRoot();
+    return cone ? (this.lifecycle.getContext(cone.jid)?.getFS() ?? null) : null;
+  }
+
   registerSessionReloadLick(event: LickEvent): string {
     return this.lickRegistry.registerSessionReload(event);
   }
@@ -783,6 +815,14 @@ export class Orchestrator implements ConeApprovalRouter {
   async persistScoop(scoop: RegisteredScoop): Promise<void> {
     this.scoops.set(scoop.jid, scoop);
     await db.saveScoop(scoop);
+    if (scoop.parentJid === null) {
+      await this.lifecycle.syncGelatiereModel().catch((err) => {
+        log.warn('Failed to follow a persisted root leadership change', {
+          jid: scoop.jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   reinitLiveUnit(jid: string): Promise<void> {
@@ -948,6 +988,10 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lifecycle.setModel(jid, model);
   }
 
+  syncGelatiereModel(): Promise<boolean> {
+    return this.lifecycle.syncGelatiereModel();
+  }
+
   refreshModels(): void {
     this.lifecycle.refreshModels();
   }
@@ -1028,19 +1072,17 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   private buildWorkerExportService(): DefaultTranscriptExportService {
-    const uiSessionStore = new UiSessionStore();
+    const sessions = this.conversationStore
+      ? new CanonicalSessionReader(this.conversationStore)
+      : null;
     const fs = this.sharedFs!;
     return new DefaultTranscriptExportService({
       collection: {
         listScoops: () => this.getScoops(),
         isProcessing: (jid) => this.isProcessing(jid),
         getAgentMessages: (jid) => this.getScoopContext(jid)?.getAgentMessages() ?? null,
-        loadPersistedSessions: () => this.sessionStore?.loadAll() ?? Promise.resolve([]),
-        loadUiChatSessions: async () => {
-          const ids = await uiSessionStore.list();
-          const sessions = await Promise.all(ids.map((id) => uiSessionStore.load(id)));
-          return sessions.filter((s): s is NonNullable<typeof s> => s !== null);
-        },
+        loadPersistedSessions: async () => (await sessions?.loadAgentSessions()) ?? [],
+        loadUiChatSessions: async () => (await sessions?.loadChatSessions()) ?? [],
         wait: (ms) => new Promise((res) => setTimeout(res, ms)),
       },
       knownSecrets: getStrictKnownSecretRedactor(),

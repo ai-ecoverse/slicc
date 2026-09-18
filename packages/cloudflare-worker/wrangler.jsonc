@@ -50,7 +50,8 @@
         "experimental-settings": "on",
         "panel-layouts": "off",
         "agentic-memory": "off",
-        "compact-on-idle": "off",
+
+        "compact-on-idle": "on",
         "memory-v2": "off"
       },
       "floats": {
@@ -136,7 +137,8 @@
             "experimental-settings": "on",
             "panel-layouts": "off",
             "agentic-memory": "off",
-            "compact-on-idle": "off",
+
+            "compact-on-idle": "on",
             "memory-v2": "off"
           },
           "floats": {

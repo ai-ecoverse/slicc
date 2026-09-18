@@ -1,17 +1,17 @@
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { isFeatureEnabled } from '../../core/feature-flags.js';
-import { SessionStore as AgentSessionStore } from '../../core/session.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import type { RemoteTerminalView } from '../../kernel/remote-terminal-view.js';
 import { type SpawnedKernelHost, spawnKernelWorker } from '../../kernel/spawn.js';
 import { formatBudgetResets } from '../../providers/provider-budget.js';
-import { SessionStore as UiSessionStore } from '../../scoops/chat-session-store.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { registerTranscriptExportService } from '../../transcript/export-provider.js';
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
 import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
+import { CanonicalSessionReader } from '../../work-unit/conversation/sessions.js';
+import { WorkUnitConversationStore } from '../../work-unit/conversation/store.js';
 import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
 import type { WorkUnitWorkspace } from '../../work-unit/types.js';
@@ -816,6 +816,9 @@ export function attachWcWorkbench(
     lastActivity: boot.wiring.lastActivity,
   });
   wireWcBrowserOverlay(boot, options, log);
+  void import('./wc-computers.js')
+    .then(({ installWcComputers }) => installWcComputers({ openFs: openReader, log }))
+    .catch((err) => log.error('WC computers wiring failed', err));
   wireWcPermissionsSurface(boot, client, options, log);
 
   const workbenchActivator = createWorkbenchActivator({
@@ -938,6 +941,7 @@ export function attachWcWorkbench(
         refs,
         client,
         getUnits: () => workUnits.currentUnits(),
+        getSelected: () => boot.getSelected(),
 
         interceptWelcomeLick: (event) => welcomeHolder.intercept?.(event) ?? false,
         fs: createRemoteSprinkleVfs({ reader, writer }),
@@ -1002,25 +1006,23 @@ export function attachWcWorkbench(
           log,
         });
         boot.wiring.notifyScoopStateChanged = () => tray.scheduleScoopsListBroadcast();
+        boot.wiring.notifyUnitStatus = (jid, status) =>
+          tray.broadcastUnitStatus(jid, status === 'processing' ? 'processing' : 'ready');
       }
     })
     .catch((err) => log.error('WC sprinkle/tray wiring failed', err));
 
   {
-    const agentSessionStore = new AgentSessionStore();
-    const uiSessionStore = new UiSessionStore();
+    const sessions = new CanonicalSessionReader(new WorkUnitConversationStore());
     const pageService = new DefaultTranscriptExportService({
       collection: {
         listScoops: () => client.getScoops(),
         isProcessing: (jid) => client.isProcessing(jid),
 
         getAgentMessages: () => null,
-        loadPersistedSessions: () => agentSessionStore.loadAll(),
-        loadUiChatSessions: async () => {
-          const ids = await uiSessionStore.list();
-          const sessions = await Promise.all(ids.map((id) => uiSessionStore.load(id)));
-          return sessions.filter((s): s is NonNullable<typeof s> => s !== null);
-        },
+
+        loadPersistedSessions: () => sessions.loadAgentSessions(),
+        loadUiChatSessions: () => sessions.loadChatSessions(),
         wait: (ms) => new Promise((res) => setTimeout(res, ms)),
       },
       knownSecrets: getStrictKnownSecretRedactor(),

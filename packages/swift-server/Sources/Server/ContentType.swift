@@ -1,5 +1,26 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func isTextContentType(_ contentType: String) -> Bool {
     if contentType.isEmpty { return false }
     let normalized = contentType.lowercased()
@@ -13,10 +34,34 @@ func isTextContentType(_ contentType: String) -> Bool {
         || normalized.contains("svg")
 }
 
+
+
+
+
+
 func isFormContentType(_ contentType: String) -> Bool {
     if contentType.isEmpty { return false }
     return contentType.lowercased().contains("urlencoded")
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func isTextRequestContentType(_ contentType: String) -> Bool {
     if contentType.isEmpty { return false }

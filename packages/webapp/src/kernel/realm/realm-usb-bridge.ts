@@ -1,4 +1,9 @@
-import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from '../usb-device-registry.js';
+import type {
+  UsbClaimEvent,
+  UsbControlSetup,
+  UsbDeviceFilter,
+  UsbDeviceInfo,
+} from '../usb-device-registry.js';
 import {
   asFilterArray,
   bytesToDataView,
@@ -8,12 +13,19 @@ import {
   type WireOutResult,
 } from './realm-device-shared.js';
 
+export type RealmUsbDisconnectEvent = UsbClaimEvent;
+
+export type RealmUsbClaimLostEvent = UsbClaimEvent;
+
+export type RealmUsbEventType = 'disconnect' | 'claim-lost';
+export type RealmUsbEventListener = (event: UsbClaimEvent) => void;
+
 export interface RealmUsbDevice extends UsbDeviceInfo {
   open(): Promise<void>;
-  close(): Promise<void>;
-  reset(): Promise<void>;
+  close(opts?: { force?: boolean }): Promise<void>;
+  reset(opts?: { force?: boolean }): Promise<void>;
   selectConfiguration(value: number): Promise<void>;
-  claimInterface(interfaceNumber: number): Promise<void>;
+  claimInterface(interfaceNumber: number, opts?: { wait?: boolean }): Promise<void>;
   releaseInterface(interfaceNumber: number): Promise<void>;
   controlTransferIn(
     setup: UsbControlSetup,
@@ -26,6 +38,12 @@ export interface RealmUsbDevice extends UsbDeviceInfo {
   transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>;
   transferOut(endpointNumber: number, data: ArrayBuffer | ArrayBufferView): Promise<WireOutResult>;
   clearHalt(direction: 'in' | 'out', endpointNumber: number): Promise<void>;
+  addEventListener(type: 'disconnect', listener: RealmUsbEventListener): void;
+  addEventListener(type: 'claim-lost', listener: RealmUsbEventListener): void;
+  addEventListener(type: RealmUsbEventType, listener: RealmUsbEventListener): void;
+  removeEventListener(type: 'disconnect', listener: RealmUsbEventListener): void;
+  removeEventListener(type: 'claim-lost', listener: RealmUsbEventListener): void;
+  removeEventListener(type: RealmUsbEventType, listener: RealmUsbEventListener): void;
 }
 
 export interface RealmUsbApi {
@@ -36,15 +54,51 @@ export interface RealmUsbApi {
 function makeUsbDevice(rpc: DeviceRpc, info: UsbDeviceInfo): RealmUsbDevice {
   const h = info.handle;
   const toData = (r: WireInResult) => ({ status: r.status, data: bytesToDataView(r.bytes) });
+  const disconnectListeners = new Set<RealmUsbEventListener>();
+  const claimLostListeners = new Set<RealmUsbEventListener>();
+  let subscribed = false;
+  let offRpcEvent: (() => void) | null = null;
+
+  const dispatchClaimEvent = (payload: unknown): void => {
+    const event = payload as UsbClaimEvent | null | undefined;
+    if (!event || event.handle !== h) return;
+    const listeners = event.type === 'disconnect' ? disconnectListeners : claimLostListeners;
+    for (const cb of [...listeners]) {
+      try {
+        cb(event);
+      } catch {}
+    }
+  };
+
+  const ensureSubscription = (): void => {
+    if (subscribed) return;
+    subscribed = true;
+    offRpcEvent = rpc.onEvent ? rpc.onEvent('usb-claim-event', dispatchClaimEvent) : null;
+    void rpc.call<void>('usb', 'subscribeClaimEvents', [h]).catch(() => {
+      subscribed = false;
+      offRpcEvent?.();
+      offRpcEvent = null;
+    });
+  };
+
+  const maybeUnsubscribe = (): void => {
+    if (!subscribed || disconnectListeners.size > 0 || claimLostListeners.size > 0) return;
+    subscribed = false;
+    offRpcEvent?.();
+    offRpcEvent = null;
+    void rpc.call<void>('usb', 'unsubscribeClaimEvents', [h]).catch(() => {});
+  };
+
   return {
     ...info,
     open: () => rpc.call<void>('usb', 'open', [h]),
-    close: () => rpc.call<void>('usb', 'close', [h]),
-    reset: () => rpc.call<void>('usb', 'reset', [h]),
+    close: (opts) => rpc.call<void>('usb', 'close', opts?.force ? [h, { force: true }] : [h]),
+    reset: (opts) => rpc.call<void>('usb', 'reset', opts?.force ? [h, { force: true }] : [h]),
     clearHalt: (direction, endpointNumber) =>
       rpc.call<void>('usb', 'clearHalt', [h, direction, endpointNumber]),
     selectConfiguration: (value) => rpc.call<void>('usb', 'selectConfig', [h, value]),
-    claimInterface: (n) => rpc.call<void>('usb', 'claim', [h, n]),
+    claimInterface: (n, opts) =>
+      rpc.call<void>('usb', 'claim', opts?.wait ? [h, n, { wait: true }] : [h, n]),
     releaseInterface: (n) => rpc.call<void>('usb', 'release', [h, n]),
     controlTransferIn: async (setup, length) =>
       toData(await rpc.call<WireInResult>('usb', 'controlIn', [h, setup, length])),
@@ -54,6 +108,17 @@ function makeUsbDevice(rpc: DeviceRpc, info: UsbDeviceInfo): RealmUsbDevice {
       toData(await rpc.call<WireInResult>('usb', 'transferIn', [h, ep, length])),
     transferOut: (ep, data) =>
       rpc.call<WireOutResult>('usb', 'transferOut', [h, ep, toRealmBytes(data)]),
+    addEventListener(type: RealmUsbEventType, listener: RealmUsbEventListener): void {
+      if (type === 'disconnect') disconnectListeners.add(listener);
+      else if (type === 'claim-lost') claimLostListeners.add(listener);
+      else throw new TypeError(`usb device: unknown event type '${String(type)}'`);
+      ensureSubscription();
+    },
+    removeEventListener(type: RealmUsbEventType, listener: RealmUsbEventListener): void {
+      if (type === 'disconnect') disconnectListeners.delete(listener);
+      else if (type === 'claim-lost') claimLostListeners.delete(listener);
+      maybeUnsubscribe();
+    },
   };
 }
 

@@ -1,5 +1,12 @@
 import XCTest
 
+
+
+
+
+
+
+
 final class ComposerConnectionUITests: XCTestCase {
 
     override func setUp() {
@@ -7,6 +14,10 @@ final class ComposerConnectionUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    
+    
+    
+    
     func testTheComposerStaysTypableWhileDisconnected() {
         let app = launchApp(forcing: "failed")
         let composer = focusedComposer(in: app)
@@ -22,6 +33,8 @@ final class ComposerConnectionUITests: XCTestCase {
             "Sending is what an unusable leader blocks")
     }
 
+    
+    
     func testReachingTroubleDoesNotRaiseTheKeyboard() {
         let app = launchApp(connectedWithBlip: "1")
 
@@ -33,6 +46,9 @@ final class ComposerConnectionUITests: XCTestCase {
             "A connection change must never open the keyboard on its own")
     }
 
+    
+    
+    
     func testADropKeepsTheComposerFocused() {
         let app = launchApp(connectedWithBlip: "3")
         let composer = focusedComposer(in: app)
@@ -46,12 +62,24 @@ final class ComposerConnectionUITests: XCTestCase {
             "A drop must not take the keyboard from someone mid-sentence")
     }
 
+    
+    
+    
+    
+    
+    
+    
     func testABlipOnAnEmptyComposerKeepsTheKeyboardUp() {
-
+        
+        
+        
+        
         let app = launchApp(connectedWithBlip: "3,3")
         let composer = focusedComposer(in: app)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
 
+        
+        
         Thread.sleep(forTimeInterval: 9)
 
         XCTAssertTrue(
@@ -63,6 +91,10 @@ final class ComposerConnectionUITests: XCTestCase {
             "A blip must not take focus from an empty composer either")
     }
 
+    
+
+    
+    
     private func launchApp(forcing state: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", state]
@@ -70,6 +102,10 @@ final class ComposerConnectionUITests: XCTestCase {
         return app
     }
 
+    
+    
+    
+    
     private func launchApp(connectedWithBlip blip: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -81,6 +117,8 @@ final class ComposerConnectionUITests: XCTestCase {
         return app
     }
 
+    
+    
     private func troubledAvatar(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(identifier: "scoop-avatar")

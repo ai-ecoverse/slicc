@@ -1,6 +1,6 @@
 import { createLogger } from '../base/logger.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import type { CompactionState } from '../core/context-compaction.js';
+import type { CompactionFailureClass, CompactionState } from '../core/context-compaction.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type {
   AgentEventMsg,
@@ -53,6 +53,7 @@ import {
   setUnitThinking,
   thinkingFor,
 } from '../work-unit/record.js';
+import { getComputersStore } from './computers-store.js';
 
 const WEBHOOK_DELIVERY_ACK_TIMEOUT_MS = 2000;
 
@@ -88,6 +89,8 @@ export interface SessionStats {
 export interface CompactionNoticeDetail {
   trigger: 'threshold' | 'overflow' | 'idle';
   transcriptPath?: string;
+
+  failure?: CompactionFailureClass;
 
   roundId?: string;
 }
@@ -212,6 +215,7 @@ export class OffscreenClient implements KernelClientFacade {
     this.callbacks = callbacks;
     this.transport = transport ?? createPanelChromeRuntimeTransport<PanelToOffscreenMessage>();
     this.setupMessageListener();
+    getComputersStore().setSender((msg) => this.send(msg));
   }
 
   setLocalFS(fs: LocalVfsClient): void {
@@ -626,6 +630,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleOffscreenMessage(msg: OffscreenToPanelMessage | StateSnapshotMsg): void {
+    if (this.applySurfacePush(msg)) return;
     switch (msg.type) {
       case 'offscreen-ready':
         if (this.ready) {
@@ -775,7 +780,19 @@ export class OffscreenClient implements KernelClientFacade {
       case 'forward-lick':
         this.forwardLickHandler?.(msg.event as unknown as LickEvent);
         break;
+    }
+  }
 
+  private applySurfacePush(msg: OffscreenToPanelMessage | StateSnapshotMsg): boolean {
+    if (msg.type === 'computers') {
+      getComputersStore().applyList(msg);
+      return true;
+    }
+    if (msg.type === 'computer-frame') {
+      getComputersStore().applyFrame(msg);
+      return true;
+    }
+    switch (msg.type) {
       case 'terminal-status':
       case 'terminal-output':
       case 'terminal-media-preview':
@@ -790,8 +807,10 @@ export class OffscreenClient implements KernelClientFacade {
             });
           }
         }
-        break;
+        return true;
       }
+      default:
+        return false;
     }
   }
 
@@ -1010,6 +1029,7 @@ export class OffscreenClient implements KernelClientFacade {
     const detail: CompactionNoticeDetail = {
       trigger: msg.trigger ?? 'threshold',
       ...(msg.transcriptPath ? { transcriptPath: msg.transcriptPath } : {}),
+      ...(msg.failure ? { failure: msg.failure } : {}),
       ...(msg.roundId ? { roundId: msg.roundId } : {}),
     };
     this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state, detail);
@@ -1124,7 +1144,11 @@ export class OffscreenClient implements KernelClientFacade {
 
   private handleError(msg: ErrorMsg): void {
     if (msg.scoopJid === this.selectedScoopJid) {
-      this.emitToUI({ type: 'error', error: msg.error });
+      this.emitToUI({
+        type: 'error',
+        error: msg.error,
+        ...(msg.endTurn === false ? { endTurn: false } : {}),
+      });
     }
   }
 

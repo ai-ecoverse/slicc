@@ -3,6 +3,9 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
+
 final class TrayChunkReassemblerTests: XCTestCase {
 
     private func frame(_ chunkId: String, index: Int, total: Int, data: String) -> TrayChunkFrame {
@@ -34,7 +37,7 @@ final class TrayChunkReassemblerTests: XCTestCase {
     func testDuplicateFrameIsIgnored() {
         var reassembler = TrayChunkReassembler()
         XCTAssertNil(reassembler.accept(frame("c1", index: 0, total: 2, data: "a")).message)
-
+        
         let duplicate = reassembler.accept(frame("c1", index: 0, total: 2, data: "a"))
         XCTAssertNil(duplicate.message)
         XCTAssertNil(duplicate.rejection)
@@ -44,7 +47,7 @@ final class TrayChunkReassemblerTests: XCTestCase {
     func testTotalChunksMismatchIsRejected() {
         var reassembler = TrayChunkReassembler()
         XCTAssertNil(reassembler.accept(frame("c1", index: 0, total: 3, data: "a")).message)
-
+        
         let outcome = reassembler.accept(frame("c1", index: 1, total: 4, data: "b"))
         XCTAssertEqual(outcome.rejection, .malformed)
     }
@@ -57,7 +60,7 @@ final class TrayChunkReassemblerTests: XCTestCase {
 
     func testOversizeReassemblyIsRejected() {
         var reassembler = TrayChunkReassembler()
-
+        
         let huge = String(repeating: "x", count: TrayChunkLimits.maxTotalBytes + 1)
         let outcome = reassembler.accept(frame("c1", index: 0, total: 1, data: huge))
         XCTAssertEqual(outcome.rejection, .oversize)
@@ -74,12 +77,14 @@ final class TrayChunkReassemblerTests: XCTestCase {
 
     func testOldestBufferIsEvictedBeyondPendingBound() {
         var reassembler = TrayChunkReassembler()
-
+        
+        
         let openCount = TrayChunkLimits.maxPending + 2
         for i in 0..<openCount {
             XCTAssertNil(reassembler.accept(frame("c\(i)", index: 0, total: 2, data: "a")).message)
         }
-
+        
+        
         let outcome = reassembler.accept(frame("c0", index: 1, total: 2, data: "b"))
         XCTAssertNil(outcome.message)
         XCTAssertNil(outcome.rejection)

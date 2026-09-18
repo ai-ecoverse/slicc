@@ -320,26 +320,26 @@ describe('tray-sync-protocol', () => {
       };
       const serialized = JSON.stringify(original);
       const mid = Math.ceil(serialized.length / 2);
+      const buffers = new Map();
 
-      const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(0, mid),
-        chunkIndex: 0,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
-      expect(r1.result).toBeNull();
-      expect(r1.buffer).not.toBeNull();
-
-      const r2 = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(mid),
-        chunkIndex: 1,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
-      expect(r2.result).toEqual(original);
-      expect(r2.buffer).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(0, mid),
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(mid),
+          chunkIndex: 1,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toEqual(original);
     });
 
     it('handles out-of-order chunk delivery', () => {
@@ -349,86 +349,187 @@ describe('tray-sync-protocol', () => {
       };
       const serialized = JSON.stringify(original);
       const third = Math.ceil(serialized.length / 3);
+      const buffers = new Map();
 
-      const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(2 * third),
-        chunkIndex: 2,
-        totalChunks: 3,
-        scoopJid: 'cone',
-      });
-      expect(r1.result).toBeNull();
-
-      const r2 = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(0, third),
-        chunkIndex: 0,
-        totalChunks: 3,
-        scoopJid: 'cone',
-      });
-      expect(r2.result).toBeNull();
-
-      const r3 = reassembleSnapshot(r2.buffer, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(third, 2 * third),
-        chunkIndex: 1,
-        totalChunks: 3,
-        scoopJid: 'cone',
-      });
-      expect(r3.result).toEqual(original);
-      expect(r3.buffer).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(2 * third),
+          chunkIndex: 2,
+          totalChunks: 3,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(0, third),
+          chunkIndex: 0,
+          totalChunks: 3,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(third, 2 * third),
+          chunkIndex: 1,
+          totalChunks: 3,
+          scoopJid: 'cone',
+        })
+      ).toEqual(original);
     });
 
     it('ignores duplicate chunk deliveries', () => {
       const original = { messages: [] as ChatMessage[], scoopJid: 'cone' };
       const serialized = JSON.stringify(original);
       const mid = Math.ceil(serialized.length / 2);
+      const buffers = new Map();
 
-      const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(0, mid),
-        chunkIndex: 0,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
-
-      const r1dup = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(0, mid),
-        chunkIndex: 0,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
-      expect(r1dup.result).toBeNull();
-
-      const r2 = reassembleSnapshot(r1dup.buffer, {
-        type: 'snapshot_chunk',
-        chunkData: serialized.slice(mid),
-        chunkIndex: 1,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
-      expect(r2.result).toEqual(original);
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(0, mid),
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(0, mid),
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(mid),
+          chunkIndex: 1,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toEqual(original);
     });
 
     it('returns empty messages on corrupt JSON', () => {
-      const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk',
-        chunkData: '{"messages":',
-        chunkIndex: 0,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
-      const r2 = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk',
-        chunkData: 'INVALID}}}',
-        chunkIndex: 1,
-        totalChunks: 2,
-        scoopJid: 'cone',
-      });
+      const buffers = new Map();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: '{"messages":',
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: 'INVALID}}}',
+          chunkIndex: 1,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toEqual({ messages: [], scoopJid: 'cone' });
+    });
 
-      expect(r2.result).toEqual({ messages: [], scoopJid: 'cone' });
-      expect(r2.buffer).toBeNull();
+    it('keeps concurrent snapshots for different cones isolated', () => {
+      const primary = {
+        messages: [
+          { id: 'p', role: 'assistant', content: 'PRIMARY', timestamp: 1 },
+        ] as ChatMessage[],
+        scoopJid: 'primary',
+      };
+      const reviewer = {
+        messages: [
+          { id: 'r', role: 'assistant', content: 'REVIEWER', timestamp: 1 },
+        ] as ChatMessage[],
+        scoopJid: 'reviewer',
+      };
+      const primaryJson = JSON.stringify(primary);
+      const reviewerJson = JSON.stringify(reviewer);
+      const midP = Math.ceil(primaryJson.length / 2);
+      const midR = Math.ceil(reviewerJson.length / 2);
+      const buffers = new Map();
+
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: primaryJson.slice(0, midP),
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'primary',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: reviewerJson.slice(0, midR),
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'reviewer',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: primaryJson.slice(midP),
+          chunkIndex: 1,
+          totalChunks: 2,
+          scoopJid: 'primary',
+        })
+      ).toEqual(primary);
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: reviewerJson.slice(midR),
+          chunkIndex: 1,
+          totalChunks: 2,
+          scoopJid: 'reviewer',
+        })
+      ).toEqual(reviewer);
+    });
+
+    it('starts a fresh assembly when totalChunks changes for the same cone', () => {
+      const original = {
+        messages: [{ id: '1', role: 'user', content: 'hello', timestamp: 1 }] as ChatMessage[],
+        scoopJid: 'cone',
+      };
+      const serialized = JSON.stringify(original);
+      const mid = Math.ceil(serialized.length / 2);
+      const buffers = new Map();
+
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(0, Math.ceil(serialized.length / 3)),
+          chunkIndex: 0,
+          totalChunks: 3,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(0, mid),
+          chunkIndex: 0,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toBeNull();
+      expect(
+        reassembleSnapshot(buffers, {
+          type: 'snapshot_chunk',
+          chunkData: serialized.slice(mid),
+          chunkIndex: 1,
+          totalChunks: 2,
+          scoopJid: 'cone',
+        })
+      ).toEqual(original);
     });
 
     it('round-trips with sendSnapshot for large payloads', () => {
@@ -455,15 +556,14 @@ describe('tray-sync-protocol', () => {
 
       expect(sent.every((m) => m.type === 'snapshot_chunk')).toBe(true);
 
-      let buffer: { chunks: string[]; received: number; totalChunks: number } | null = null;
+      const buffers = new Map();
       let result: { messages: ChatMessage[]; scoopJid: string } | null = null;
       for (const msg of sent) {
-        const chunk = msg as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>;
-        const assembled = reassembleSnapshot(buffer, chunk);
-        buffer = assembled.buffer;
-        if (assembled.result) {
-          result = assembled.result;
-        }
+        const assembled = reassembleSnapshot(
+          buffers,
+          msg as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>
+        );
+        if (assembled) result = assembled;
       }
 
       expect(result).not.toBeNull();

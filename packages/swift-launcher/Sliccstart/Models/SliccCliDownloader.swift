@@ -59,7 +59,7 @@ struct SliccCliCodeSignatureInspection: Equatable {
 }
 
 enum SliccCliCodeSignatureValidator {
-
+    
     static let expectedTeamIdentifier = "S8LB56P782"
 
     typealias Inspector = (URL) -> SliccCliCodeSignatureInspection

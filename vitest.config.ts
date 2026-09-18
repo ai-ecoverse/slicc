@@ -86,6 +86,8 @@ export default defineConfig({
             buffer: 'buffer/',
 
             'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
+
+            '@cantoo/pdf-lib': resolve(workspaceRoot, 'node_modules/@cantoo/pdf-lib/cjs/index.js'),
             'node:zlib': resolve(webappDir, 'src/shims/empty.ts'),
             'node:module': resolve(webappDir, 'src/shims/empty.ts'),
             stream: resolve(webappDir, 'src/shims/stream.ts'),
@@ -99,6 +101,10 @@ export default defineConfig({
             '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js': resolve(
               workspaceRoot,
               'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
+            ),
+            '@earendil-works/pi-agent-core/edit-tool': resolve(
+              workspaceRoot,
+              'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
             ),
             '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
               workspaceRoot,
@@ -205,6 +211,13 @@ export default defineConfig({
         test: {
           name: 'claude-hooks',
           include: ['.claude/hooks/**/*.test.mjs'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'github-workflow',
+          include: ['packages/github-workflow/**/*.test.mjs'],
         },
       },
     ],

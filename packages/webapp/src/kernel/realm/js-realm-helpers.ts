@@ -34,7 +34,7 @@ export {
 export type { NodeOs } from './helpers/node-os.js';
 export { createNodeOs, DEFAULT_HOME, nodeOs } from './helpers/node-os.js';
 export type { NodePath, NodePathParsed } from './helpers/node-path.js';
-export { nodePath } from './helpers/node-path.js';
+export { createNodePath, nodePath } from './helpers/node-path.js';
 export { nodeStream } from './helpers/node-stream.js';
 export { nodeTty } from './helpers/node-tty.js';
 export type { NodeUrl } from './helpers/node-url.js';

@@ -73,6 +73,19 @@ function stubPageRealmSpeechPlugin() {
   };
 }
 
+function isolatePiEditToolPlugin() {
+  const marker = '?pi-edit-lazy';
+  return {
+    name: 'isolate-pi-edit-tool',
+    enforce: 'pre' as const,
+    resolveId(source: string, importer: string | undefined) {
+      if (!importer?.endsWith(marker) || !source.startsWith('.')) return undefined;
+      const cleanImporter = importer.slice(0, -marker.length);
+      return `${resolve(dirname(cleanImporter), source)}${marker}`;
+    },
+  };
+}
+
 function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
   return {
     name: 'raw-svg',
@@ -263,7 +276,8 @@ function buildWebappRuntimeAssetsPlugin() {
         iifeBundleMiddleware({ label: 'lucide-icons', entry: lucideIconsEntry })
       );
     },
-    closeBundle: buildProductionRuntimeAssets,
+
+    writeBundle: buildProductionRuntimeAssets,
   };
 }
 
@@ -292,6 +306,11 @@ const MODULE_ALIASES: Record<string, string> = {
     'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
   ),
 
+  '@earendil-works/pi-agent-core/edit-tool': resolve(
+    workspaceRoot,
+    'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
+  ),
+
   '@pierre/diffs/dist/components/web-components.js': resolve(
     workspaceRoot,
     'node_modules/@pierre/diffs/dist/components/web-components.js'
@@ -314,6 +333,7 @@ export default defineConfig(({ mode }) => ({
     stripOrtWasmAssetPlugin(),
     curatedShikiBundlePlugin(),
     stubPiNodeInternalsPlugin(),
+    isolatePiEditToolPlugin(),
     buildWebappRuntimeAssetsPlugin(),
 
     stripFfmpegCoreCdnLiteralPlugin(),
@@ -364,6 +384,7 @@ export default defineConfig(({ mode }) => ({
       curatedShikiBundlePlugin(),
       stubPiNodeInternalsPlugin(),
       stubPageRealmSpeechPlugin(),
+      isolatePiEditToolPlugin(),
     ],
   },
   build: {

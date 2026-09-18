@@ -22,13 +22,15 @@ import {
 import {
   getNavigatorUsb,
   getSharedUsbRegistry,
+  parseUsbSprinkleOwner,
+  type UsbClaimEvent,
   type UsbControlSetup,
   type UsbDeviceFilter,
   type UsbDeviceInfo,
+  usbSprinkleOwner,
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 import { captureSprinkleScreenshot } from './sprinkle-screenshot.js';
 
@@ -117,6 +119,29 @@ export interface SprinkleBrowserFetchOptions extends Omit<BrowserFetchOptions, '
 export interface SprinkleBrowserApi {
   findTab(query: { domain?: string; urlMatch?: string }): Promise<unknown>;
   ensureTab(url: string, options?: { matchUrl?: string }): Promise<unknown>;
+  openWindow(
+    url: string,
+    options?: {
+      width?: number;
+      height?: number;
+      left?: number;
+      top?: number;
+      state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+      decorated?: boolean;
+      focus?: boolean;
+    }
+  ): Promise<unknown>;
+  windowBounds(tab: unknown): Promise<unknown>;
+  setWindowBounds(
+    tab: unknown,
+    bounds: {
+      left?: number;
+      top?: number;
+      width?: number;
+      height?: number;
+      state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+    }
+  ): Promise<unknown>;
   eval(tab: unknown, code: string): Promise<unknown>;
   evalAsync(tab: unknown, code: string): Promise<unknown>;
   cookie(tab: unknown, name: string): Promise<string | null>;
@@ -137,6 +162,9 @@ export interface SprinkleHidInputReport {
 }
 
 export type SprinkleHidInputReportListener = (report: SprinkleHidInputReport) => void;
+
+export type SprinkleUsbClaimEvent = UsbClaimEvent;
+export type SprinkleUsbClaimListener = (event: SprinkleUsbClaimEvent) => void;
 
 export interface SprinkleHidApi {
   list(): Promise<HidDeviceInfo[]>;
@@ -159,10 +187,10 @@ export interface SprinkleUsbApi {
   list(): Promise<UsbDeviceInfo[]>;
   request(filters?: UsbDeviceFilter[]): Promise<UsbDeviceInfo>;
   open(handle: string): Promise<void>;
-  close(handle: string): Promise<void>;
-  reset(handle: string): Promise<void>;
+  close(handle: string, opts?: { force?: boolean }): Promise<void>;
+  reset(handle: string, opts?: { force?: boolean }): Promise<void>;
   selectConfiguration(handle: string, configurationValue: number): Promise<void>;
-  claimInterface(handle: string, interfaceNumber: number): Promise<void>;
+  claimInterface(handle: string, interfaceNumber: number, opts?: { wait?: boolean }): Promise<void>;
   releaseInterface(handle: string, interfaceNumber: number): Promise<void>;
   clearHalt(handle: string, direction: 'in' | 'out', endpointNumber: number): Promise<void>;
   controlTransferIn(
@@ -185,6 +213,8 @@ export interface SprinkleUsbApi {
     endpointNumber: number,
     bytes: Uint8Array
   ): Promise<{ status: string; bytesWritten: number }>;
+  on(event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener): void;
+  off(event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener): void;
 }
 
 export const JSH_RESULT_PREFIX = '\u0001SLICCJSH\u0001';
@@ -319,8 +349,15 @@ export function iframeFetchResponseSource(): string {
 
 export type SprinkleExecHandler = (cmd: string) => Promise<SprinkleExecResult>;
 
+export interface SprinkleLickRequest {
+  action: string;
+  data?: unknown;
+
+  target?: string;
+}
+
 export interface SprinkleBridgeAPI {
-  lick(event: { action: string; data?: unknown } | string): void;
+  lick(event: SprinkleLickRequest | string): void;
 
   on(event: 'update', callback: (data: unknown) => void): void;
 
@@ -404,7 +441,7 @@ export type SprinkleIframePusher = (
 
 export class SprinkleBridge {
   private listeners = new Map<string, Set<UpdateCallback>>();
-  private lickHandler: (event: LickEvent) => void;
+  private lickHandler: (event: LickEvent, originUnitId?: string) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
   private minimizeHandler: (name: string) => void;
@@ -415,10 +452,12 @@ export class SprinkleBridge {
 
   private hidSubs = new Map<string, Map<string, () => void | Promise<void>>>();
   private iframePusher: SprinkleIframePusher | undefined;
+  private usbClaimUnsub: (() => void) | null = null;
+  private usbClaimRelayReady: Promise<void> | null = null;
 
   constructor(
     fs: VirtualFS,
-    lickHandler: (event: LickEvent) => void,
+    lickHandler: (event: LickEvent, originUnitId?: string) => void,
     closeHandler: (name: string) => void,
     minimizeHandler: (name: string) => void,
     stopConeHandler: () => void,
@@ -525,11 +564,13 @@ export class SprinkleBridge {
   }
 
   private async usbOp(
-    _sprinkleName: string,
+    sprinkleName: string,
     op: string,
     args: readonly unknown[]
   ): Promise<unknown> {
     const reg = getSharedUsbRegistry();
+    const owner = usbSprinkleOwner(sprinkleName);
+    await this.ensureUsbClaimRelay();
     switch (op) {
       case 'list': {
         const usb = getNavigatorUsb();
@@ -548,11 +589,17 @@ export class SprinkleBridge {
         return { ok: true };
       }
       case 'close': {
-        await usbOps.usbClose(reg, args[0] as string);
+        await usbOps.usbClose(reg, args[0] as string, {
+          owner,
+          force: Boolean((args[1] as { force?: boolean } | null | undefined)?.force),
+        });
         return { ok: true };
       }
       case 'reset': {
-        await usbOps.usbReset(reg, args[0] as string);
+        await usbOps.usbReset(reg, args[0] as string, {
+          owner,
+          force: Boolean((args[1] as { force?: boolean } | null | undefined)?.force),
+        });
         return { ok: true };
       }
       case 'selectConfig': {
@@ -560,11 +607,14 @@ export class SprinkleBridge {
         return { ok: true };
       }
       case 'claim': {
-        await usbOps.usbClaimInterface(reg, args[0] as string, args[1] as number);
+        await usbOps.usbClaimInterface(reg, args[0] as string, args[1] as number, {
+          owner,
+          wait: Boolean((args[2] as { wait?: boolean } | null | undefined)?.wait),
+        });
         return { ok: true };
       }
       case 'release': {
-        await usbOps.usbReleaseInterface(reg, args[0] as string, args[1] as number);
+        await usbOps.usbReleaseInterface(reg, args[0] as string, args[1] as number, { owner });
         return { ok: true };
       }
       case 'clearHalt': {
@@ -679,6 +729,39 @@ export class SprinkleBridge {
     } catch {}
   }
 
+  private ensureUsbClaimRelay(): Promise<void> {
+    if (!this.usbClaimRelayReady) {
+      this.usbClaimRelayReady = import('../kernel/usb-claim-broker.js').then((m) => {
+        if (this.usbClaimUnsub) return;
+        this.usbClaimUnsub = m.addClaimListener(getSharedUsbRegistry(), (event) => {
+          this.deliverUsbClaimEvent(event);
+        });
+      });
+    }
+    return this.usbClaimRelayReady;
+  }
+
+  private deliverUsbClaimEvent(event: UsbClaimEvent): void {
+    const holderSprinkle = parseUsbSprinkleOwner(event.holder);
+    if (!holderSprinkle) return;
+    const channel = `usb:${event.type}` as const;
+    const set = this.listeners.get(`${holderSprinkle}:usb:${event.type}`);
+    if (set) {
+      for (const cb of set) {
+        const currentSet = set;
+        setTimeout(() => {
+          if (!currentSet.has(cb)) return;
+          try {
+            (cb as unknown as SprinkleUsbClaimListener)(event);
+          } catch {}
+        }, 0);
+      }
+    }
+    try {
+      this.iframePusher?.(holderSprinkle, channel, event);
+    } catch {}
+  }
+
   private async runExec(cmd: string): Promise<SprinkleExecResult> {
     if (!this.execHandler) {
       return { stdout: '', stderr: 'exec: shell bridge not available\n', exitCode: 127 };
@@ -706,19 +789,21 @@ export class SprinkleBridge {
   }
 
   private createLickHandler(
-    sprinkleName: string
-  ): (event: { action: string; data?: unknown } | string) => void {
+    sprinkleName: string,
+    getOriginUnitId: () => string | undefined
+  ): (event: SprinkleLickRequest | string) => void {
     return (event) => {
       const action = typeof event === 'string' ? event : event.action;
       const data = typeof event === 'string' ? undefined : event.data;
+      const targetScoop = typeof event === 'string' ? undefined : event.target;
       const lickEvent: LickEvent = {
         type: 'sprinkle',
         sprinkleName,
-        targetScoop: getSprinkleRoute(sprinkleName),
+        targetScoop,
         timestamp: new Date().toISOString(),
         body: { action, data },
       };
-      this.lickHandler(lickEvent);
+      this.lickHandler(lickEvent, getOriginUnitId());
     };
   }
 
@@ -805,17 +890,21 @@ export class SprinkleBridge {
       open: async (handle: string) => {
         await this.usbOp(sprinkleName, 'open', [handle]);
       },
-      close: async (handle: string) => {
-        await this.usbOp(sprinkleName, 'close', [handle]);
+      close: async (handle: string, opts?: { force?: boolean }) => {
+        await this.usbOp(sprinkleName, 'close', [handle, opts ?? null]);
       },
-      reset: async (handle: string) => {
-        await this.usbOp(sprinkleName, 'reset', [handle]);
+      reset: async (handle: string, opts?: { force?: boolean }) => {
+        await this.usbOp(sprinkleName, 'reset', [handle, opts ?? null]);
       },
       selectConfiguration: async (handle: string, configurationValue: number) => {
         await this.usbOp(sprinkleName, 'selectConfig', [handle, configurationValue]);
       },
-      claimInterface: async (handle: string, interfaceNumber: number) => {
-        await this.usbOp(sprinkleName, 'claim', [handle, interfaceNumber]);
+      claimInterface: async (
+        handle: string,
+        interfaceNumber: number,
+        opts?: { wait?: boolean }
+      ) => {
+        await this.usbOp(sprinkleName, 'claim', [handle, interfaceNumber, opts ?? null]);
       },
       releaseInterface: async (handle: string, interfaceNumber: number) => {
         await this.usbOp(sprinkleName, 'release', [handle, interfaceNumber]);
@@ -849,6 +938,19 @@ export class SprinkleBridge {
           endpointNumber,
           u8ToBase64(bytes),
         ]) as Promise<{ status: string; bytesWritten: number }>,
+      on: (event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener) => {
+        void this.ensureUsbClaimRelay();
+        const key = `${sprinkleName}:usb:${event}`;
+        let set = this.listeners.get(key);
+        if (!set) {
+          set = new Set();
+          this.listeners.set(key, set);
+        }
+        set.add(cb as unknown as UpdateCallback);
+      },
+      off: (event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener) => {
+        this.listeners.get(`${sprinkleName}:usb:${event}`)?.delete(cb as unknown as UpdateCallback);
+      },
     };
   }
 
@@ -869,10 +971,13 @@ export class SprinkleBridge {
     };
   }
 
-  createAPI(sprinkleName: string): SprinkleBridgeAPI {
+  createAPI(
+    sprinkleName: string,
+    getOriginUnitId: () => string | undefined = () => undefined
+  ): SprinkleBridgeAPI {
     const api: SprinkleBridgeAPI = {
       name: sprinkleName,
-      lick: this.createLickHandler(sprinkleName),
+      lick: this.createLickHandler(sprinkleName, getOriginUnitId),
       on: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);
@@ -946,6 +1051,11 @@ export class SprinkleBridge {
       browser: {
         findTab: (query) => this.jshDispatch('browser', ['findTab', query]),
         ensureTab: (url, options) => this.jshDispatch('browser', ['ensureTab', url, options ?? {}]),
+        openWindow: (url, options) =>
+          this.jshDispatch('browser', ['openWindow', url, options ?? {}]),
+        windowBounds: (tab) => this.jshDispatch('browser', ['windowBounds', tab]),
+        setWindowBounds: (tab, bounds) =>
+          this.jshDispatch('browser', ['setWindowBounds', tab, bounds]),
         eval: (tab, code) => this.jshDispatch('browser', ['eval', tab, code]),
         evalAsync: (tab, code) => this.jshDispatch('browser', ['evalAsync', tab, code]),
         cookie: (tab, name) =>

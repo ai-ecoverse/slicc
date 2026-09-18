@@ -715,7 +715,7 @@ The cone sets backend context in the scoop brief (option B). The scoop knows whe
 aem get <eds-url> --output /scoops/<scoop-name>/page.html
 
 # 2. Read and modify the HTML (e.g. update <title>, <meta>, headings)
-#    Use edit_file or read_file + write_file
+#    Use edit or read_file + write_file
 
 # 3. Write back
 aem put <eds-url> /scoops/<scoop-name>/page.html

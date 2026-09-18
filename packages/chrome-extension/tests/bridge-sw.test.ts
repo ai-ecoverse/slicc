@@ -4,8 +4,10 @@ import {
   __clearWelcomedLeaderPortsForTest,
   BRIDGE_ALLOWED_ORIGINS,
   type BridgeSwDeps,
+  chromeWindowInfoFromChrome,
   handleBridgePortConnect,
   notifyBridgeDebuggerDetached,
+  pickDefinedWindowFields,
   postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
@@ -81,8 +83,35 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
       { id: 43, title: 'Other', url: 'https://example.com/' },
     ],
     queryActiveTabId: async () => undefined,
-    getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
+    getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com', windowId: 7 }),
     createTab: async () => 99,
+    createWindow: vi.fn(async () => ({
+      windowId: 7,
+      tabId: 88,
+      left: 10,
+      top: 20,
+      width: 1280,
+      height: 800,
+      state: 'normal',
+    })),
+    getWindow: vi.fn(async (windowId) => ({
+      windowId,
+      tabId: 88,
+      left: 10,
+      top: 20,
+      width: 1280,
+      height: 800,
+      state: 'normal',
+    })),
+    updateWindow: vi.fn(async (windowId, props) => ({
+      windowId,
+      tabId: -1,
+      left: props.left ?? 10,
+      top: props.top ?? 20,
+      width: props.width ?? 1280,
+      height: props.height ?? 800,
+      state: props.state ?? 'normal',
+    })),
     removeTab: async () => undefined,
     activateTab: vi.fn(async () => undefined),
   };
@@ -320,6 +349,232 @@ describe('handleBridgePortConnect — pin gating', () => {
 describe('handleBridgePortConnect — CDP pass-through', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('opens a sized window via chrome.windows when Target.createTarget has newWindow', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    const response = await sendCdpRequest(port, 1, 'Target.createTarget', {
+      url: 'https://example.com/capture',
+      newWindow: true,
+      width: 1280,
+      height: 800,
+      left: 10,
+      top: 20,
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith({
+      url: 'https://example.com/capture',
+      type: 'normal',
+      focused: true,
+      width: 1280,
+      height: 800,
+      left: 10,
+      top: 20,
+    });
+    expect(response).toMatchObject({ result: { targetId: '88' } });
+  });
+
+  it('maps decorated:false to chrome.windows type popup', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    await sendCdpRequest(port, 1, 'Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      decorated: false,
+      width: 640,
+      height: 480,
+      background: true,
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith({
+      url: 'about:blank',
+      type: 'popup',
+      focused: false,
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('shims Browser.getWindowForTarget / getWindowBounds / setWindowBounds via chrome.windows', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    const forTarget = await sendCdpRequest(port, 1, 'Browser.getWindowForTarget', {
+      targetId: '88',
+    });
+    expect(forTarget).toMatchObject({
+      result: {
+        windowId: 7,
+        bounds: { left: 10, top: 20, width: 1280, height: 800, windowState: 'normal' },
+      },
+    });
+
+    const getBounds = await sendCdpRequest(port, 2, 'Browser.getWindowBounds', { windowId: 7 });
+    expect(getBounds).toMatchObject({
+      result: {
+        bounds: { left: 10, top: 20, width: 1280, height: 800, windowState: 'normal' },
+      },
+    });
+
+    const setBounds = await sendCdpRequest(port, 3, 'Browser.setWindowBounds', {
+      windowId: 7,
+      bounds: { width: 1000, height: 700 },
+    });
+    expect(deps.updateWindow).toHaveBeenCalledWith(7, { width: 1000, height: 700 });
+    expect(setBounds).toMatchObject({ result: {} });
+  });
+
+  it('covers window-shim error paths and non-normal state transitions', async () => {
+    const deps = makeDeps({
+      getTab: vi.fn(async (tabId) => {
+        if (tabId === 1) return { id: 1, title: 't', url: 'https://example.com' };
+        if (tabId === 2) return undefined;
+        return { id: tabId, title: 't', url: 'https://example.com', windowId: 7 };
+      }),
+      getWindow: vi.fn(async (windowId) => ({
+        windowId,
+        tabId: 88,
+        left: 10,
+        top: 20,
+        width: 1280,
+        height: 800,
+        state: '',
+      })),
+    });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    await sendCdpRequest(port, 1, 'Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      windowState: 'maximized',
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith({
+      url: 'about:blank',
+      type: 'normal',
+      focused: true,
+      state: 'maximized',
+    });
+
+    await sendCdpRequest(port, 2, 'Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      windowState: 'normal',
+      width: 400,
+      height: 300,
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 400, height: 300, state: 'normal' })
+    );
+
+    const tabOnly = await sendCdpRequest(port, 20, 'Target.createTarget', {
+      url: 'https://example.com/tab',
+    });
+    expect(tabOnly).toMatchObject({ result: { targetId: '99' } });
+
+    await sendCdpRequest(port, 21, 'Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      windowState: 'zoomed',
+      width: 200,
+      height: 100,
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 200, height: 100 })
+    );
+    expect(
+      (deps.createWindow as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]
+    ).not.toHaveProperty('state');
+
+    const badTarget = await sendCdpRequest(port, 3, 'Browser.getWindowForTarget', {
+      targetId: 'not-a-number',
+    });
+    expect(badTarget).toMatchObject({ error: expect.stringContaining('Invalid targetId') });
+
+    const noWindow = await sendCdpRequest(port, 4, 'Browser.getWindowForTarget', {
+      targetId: '1',
+    });
+    expect(noWindow).toMatchObject({ error: expect.stringContaining('No window') });
+
+    const missingTab = await sendCdpRequest(port, 22, 'Browser.getWindowForTarget', {
+      targetId: '2',
+    });
+    expect(missingTab).toMatchObject({ error: expect.stringContaining('No window') });
+
+    const badWinId = await sendCdpRequest(port, 5, 'Browser.getWindowBounds', {
+      windowId: 'x',
+    });
+    expect(badWinId).toMatchObject({ error: expect.stringContaining('Invalid windowId') });
+
+    const badSetId = await sendCdpRequest(port, 6, 'Browser.setWindowBounds', {
+      windowId: 'x',
+      bounds: { width: 1 },
+    });
+    expect(badSetId).toMatchObject({ error: expect.stringContaining('Invalid windowId') });
+
+    await sendCdpRequest(port, 7, 'Browser.setWindowBounds', {
+      windowId: 7,
+      bounds: { windowState: 'minimized' },
+    });
+    expect(deps.updateWindow).toHaveBeenCalledWith(7, { state: 'minimized' });
+
+    await sendCdpRequest(port, 8, 'Browser.setWindowBounds', {
+      windowId: 7,
+      bounds: { state: 'fullscreen' },
+    });
+    expect(deps.updateWindow).toHaveBeenCalledWith(7, { state: 'fullscreen' });
+
+    await sendCdpRequest(port, 23, 'Browser.setWindowBounds', {
+      windowId: 7,
+      bounds: { left: 5, top: 6, width: 7, height: 8, windowState: 'normal' },
+    });
+    expect(deps.updateWindow).toHaveBeenCalledWith(7, {
+      left: 5,
+      top: 6,
+      width: 7,
+      height: 8,
+      state: 'normal',
+    });
+
+    await sendCdpRequest(port, 9, 'Browser.setWindowBounds', {
+      windowId: 7,
+      bounds: null,
+    });
+    expect(deps.updateWindow).toHaveBeenCalledWith(7, {});
+
+    const badClose = await sendCdpRequest(port, 10, 'Target.closeTarget', {
+      targetId: 'nope',
+    });
+    expect(badClose).toMatchObject({ error: expect.stringContaining('Invalid targetId') });
+
+    const badAttach = await sendCdpRequest(port, 24, 'Target.attachToTarget', {
+      targetId: 'nope',
+    });
+    expect(badAttach).toMatchObject({ error: expect.stringContaining('Invalid targetId') });
   });
 
   it('attaches a tab on Target.attachToTarget and pipes commands through chrome.debugger', async () => {
@@ -1080,6 +1335,58 @@ describe('handleBridgePortConnect — leader.join-url message', () => {
         (m as { id?: number }).id === 1
     );
     expect(resp).toMatchObject({ result: { sessionId: '43' } });
+  });
+});
+
+describe('chrome.windows adapter helpers', () => {
+  it('pickDefinedWindowFields drops undefined keys', () => {
+    expect(pickDefinedWindowFields({ width: 100, height: undefined, state: 'normal' })).toEqual({
+      width: 100,
+      state: 'normal',
+    });
+    expect(pickDefinedWindowFields({})).toEqual({});
+  });
+
+  it('chromeWindowInfoFromChrome maps create results and defaults', () => {
+    expect(
+      chromeWindowInfoFromChrome(
+        {
+          id: 7,
+          tabs: [{ id: 88 }],
+          left: 1,
+          top: 2,
+          width: 3,
+          height: 4,
+          state: 'maximized',
+        },
+        'create'
+      )
+    ).toEqual({
+      windowId: 7,
+      tabId: 88,
+      left: 1,
+      top: 2,
+      width: 3,
+      height: 4,
+      state: 'maximized',
+    });
+
+    expect(chromeWindowInfoFromChrome({ id: 9, tabs: [{}] }, 'get', -1)).toEqual({
+      windowId: 9,
+      tabId: -1,
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      state: 'normal',
+    });
+  });
+
+  it('chromeWindowInfoFromChrome rejects missing ids', () => {
+    expect(() => chromeWindowInfoFromChrome({}, 'create')).toThrow(/window id/);
+    expect(() => chromeWindowInfoFromChrome({ id: 1, tabs: [] }, 'create')).toThrow(
+      /windowId\/tabId/
+    );
   });
 });
 

@@ -174,6 +174,13 @@ describe('git corpus — issue #1033 regressions', () => {
     expect(result.stdout).toContain('On branch');
   });
 
+  it('#3121: git --no-color log is log, not a missing command', async () => {
+    await seedRepo('/project');
+    const result = await git.execute(['--no-color', 'log', '-n', '1'], '/project');
+    expect(result.stderr).not.toContain('is not a git command');
+    expect(result.exitCode).toBe(0);
+  });
+
   it('#1033-nopager: git --no-pager diff works like git diff', async () => {
     await seedRepo('/project');
     await vfs.writeFile('/project/file.txt', 'changed line\n');

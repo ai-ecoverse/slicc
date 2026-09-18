@@ -70,6 +70,8 @@ export function openSudoApprovalDialog(
       )
     );
 
+    if (req.reason) body.append(row('Reason given', req.reason));
+
     let patternInput: HTMLInputElement | null = null;
     const suggested = req.suggestedPattern?.trim() || req.detail.trim();
     if (opts.allowAlways) {

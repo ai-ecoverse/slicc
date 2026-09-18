@@ -1,5 +1,6 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import { sgr } from './color.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
 import { logAllBranches, walkAllBranches } from './log-walk.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
@@ -257,9 +258,9 @@ async function renderLog(
     const { commit, oid } = entry;
     if (opts.format) output += `${formatLogEntry(oid, commit, opts.format)}\n`;
     else if (opts.oneline) {
-      output += `\x1b[33m${oid.slice(0, 7)}\x1b[0m ${commit.message.split('\n')[0]}\n`;
+      output += `${sgr(ctx.useColor, '33', oid.slice(0, 7))} ${commit.message.split('\n')[0]}\n`;
     } else {
-      output += `\x1b[33mcommit ${oid}\x1b[0m\n`;
+      output += `${sgr(ctx.useColor, '33', `commit ${oid}`)}\n`;
       output += `Author: ${commit.author.name} <${commit.author.email}>\n`;
       output += `Date:   ${new Date(commit.author.timestamp * 1000).toLocaleString()}\n\n`;
       output += `    ${commit.message.replace(/\n/g, '\n    ')}\n\n`;

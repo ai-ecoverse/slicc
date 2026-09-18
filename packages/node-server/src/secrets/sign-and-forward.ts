@@ -13,7 +13,7 @@ import type { SecretStore } from './types.js';
 
 export type { DaSignAndForwardEnvelope, S3SignAndForwardEnvelope } from '@slicc/shared-ts';
 
-function statusForErrorCode(code: SignAndForwardErrorCode): number {
+export function statusForErrorCode(code: SignAndForwardErrorCode): number {
   switch (code) {
     case 'invalid_profile':
     case 'invalid_request':

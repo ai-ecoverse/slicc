@@ -4,6 +4,8 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
 final class AttachmentMessageTests: XCTestCase {
 
     private func makeImage(width: CGFloat, height: CGFloat) -> UIImage {
@@ -16,6 +18,8 @@ final class AttachmentMessageTests: XCTestCase {
             context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         }
     }
+
+    
 
     func testUserMessageEncodesAttachments() throws {
         let attachment = MessageAttachment(
@@ -56,6 +60,8 @@ final class AttachmentMessageTests: XCTestCase {
         XCTAssertEqual(attachments?.first?.id, "p2")
         XCTAssertEqual(attachments?.first?.kind, .image)
     }
+
+    
 
     func testDownscaleCapsTheLongEdge() {
         let scaled = ImageAttachmentBuilder.downscale(

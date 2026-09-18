@@ -22,6 +22,10 @@ export interface PopupScreenCaptureRequest {
   kind: 'screen';
   mimeType: string;
   quality: number;
+
+  mode?: 'image' | 'video';
+  durationMs?: number;
+  audio?: boolean;
 }
 
 export type PopupCaptureRequest = PopupCameraCaptureRequest | PopupScreenCaptureRequest;

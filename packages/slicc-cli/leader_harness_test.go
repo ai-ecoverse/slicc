@@ -11,6 +11,8 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+
+
 func testRunner() []string {
 	if runtime.GOOS == "windows" {
 		return []string{"cmd", "/c"}
@@ -18,11 +20,17 @@ func testRunner() []string {
 	return []string{"sh", "-c"}
 }
 
+
+
+
+
 type bridgedLeader struct {
 	pc      *webrtc.PeerConnection
 	dc      *webrtc.DataChannel
 	joinURL string
 }
+
+
 
 func newBridgedLeader(t *testing.T) *bridgedLeader {
 	t.Helper()
@@ -37,6 +45,8 @@ func newBridgedLeader(t *testing.T) *bridgedLeader {
 		t.Fatalf("data channel: %v", err)
 	}
 
+	
+	
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		t.Fatalf("create offer: %v", err)
@@ -54,7 +64,7 @@ func newBridgedLeader(t *testing.T) *bridgedLeader {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		switch action, _ := body["action"].(string); action {
-		case "":
+		case "": 
 			writeJSONResp(w, map[string]any{
 				"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 1,
 				"result":     map[string]any{"action": "signal", "code": "LEADER_CONNECTED", "bootstrap": bstrap(0)},

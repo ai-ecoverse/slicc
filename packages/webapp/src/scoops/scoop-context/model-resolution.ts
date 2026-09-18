@@ -1,4 +1,5 @@
 import type { Api } from '@earendil-works/pi-ai';
+import { isGelatiereUnit } from '../../base/gelatiere-constants.js';
 import type { AgentMessage, Model } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import {
@@ -19,12 +20,17 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 export function getModelApiKey(scoop: RegisteredScoop): string | null {
   const pinned = modelProviderFor(scoop);
+  if (!pinned && isGelatiereUnit(scoop)) return null;
   return pinned ? getApiKeyForProvider(pinned) : getApiKey();
 }
 
 export function resolveScoopModel(scoop: RegisteredScoop): Model<Api> {
   const pinnedId = modelIdFor(scoop);
-  return pinnedId ? resolveModelById(pinnedId, modelProviderFor(scoop)) : resolveCurrentModel();
+  if (pinnedId) return resolveModelById(pinnedId, modelProviderFor(scoop));
+  if (isGelatiereUnit(scoop)) {
+    throw new Error('The gelatiere has no leading-cone model');
+  }
+  return resolveCurrentModel();
 }
 
 export function resolveModelForInit(scoop: RegisteredScoop, unit: WorkUnitDescriptor): Model<Api> {
@@ -79,6 +85,9 @@ export function estimateContextFill(
 }
 
 export function missingApiKeyMessage(scoop: RegisteredScoop): string {
+  if (isGelatiereUnit(scoop) && !modelIdFor(scoop)) {
+    return 'The gelatiere cannot run until the leading cone has a model.';
+  }
   let provider = modelProviderFor(scoop) ?? '';
   try {
     if (!provider) provider = getSelectedProvider();

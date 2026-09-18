@@ -2,6 +2,26 @@ import XCTest
 
 @testable import slicc_server
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 final class SigV4SignerTests: XCTestCase {
 
     private let testCreds = SigV4Credentials(
@@ -24,6 +44,8 @@ final class SigV4SignerTests: XCTestCase {
         cal.timeZone = TimeZone(identifier: "UTC")!
         return cal.date(from: components)!
     }
+
+    
 
     func testGetVanilla() {
         let signed = SigV4Signer.sign(
@@ -69,6 +91,8 @@ final class SigV4SignerTests: XCTestCase {
                 + "Signature=ff11897932ad3f4e8b18135d722051e5ac45fc38421b1da7b9d196a0fe09473a"
         )
     }
+
+    
 
     func testAddsContentSha256HeaderWhenServiceIsS3() {
         let signed = SigV4Signer.sign(
@@ -145,10 +169,48 @@ final class SigV4SignerTests: XCTestCase {
             service: "s3",
             now: testDate
         )
-
+        
         XCTAssertEqual(
             signed.headers["x-amz-content-sha256"],
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         )
+    }
+
+    func testCanonicalQuerySortsDecodesAndStrictlyReencodes() {
+        let url = URL(string: "https://example.test/path?z=last&a=two&a=one&space=a%20b&empty&slash=%2F")!
+        XCTAssertEqual(
+            SigV4Signer.canonicalQuery(url),
+            "a=one&a=two&empty=&slash=%2F&space=a%20b&z=last"
+        )
+        XCTAssertEqual(SigV4Signer.percentEncode("a b/é"), "a%20b%2F%C3%A9")
+    }
+
+    func testCanonicalizationCoversUnreservedCharactersAndEmptyPaths() {
+        XCTAssertEqual(SigV4Signer.percentEncode("AZaz09-_.~"), "AZaz09-_.~")
+        XCTAssertEqual(SigV4Signer.canonicalUri(URL(string: "https://example.test")!), "/")
+        XCTAssertEqual(
+            SigV4Signer.canonicalQuery(URL(string: "https://example.test/?%FF=value")!),
+            "%25FF=value"
+        )
+    }
+
+    func testSigningSynthesizesHostWhenCallerOmitsIt() {
+        let signed = SigV4Signer.sign(
+            SigV4Request(method: .GET, url: URL(string: "https://example.test/")!),
+            credentials: testCreds,
+            region: testRegion,
+            service: testService,
+            now: testDate
+        )
+        XCTAssertEqual(signed.headers["host"], "example.test")
+
+        let hostless = SigV4Signer.sign(
+            SigV4Request(method: .GET, url: URL(fileURLWithPath: "/tmp/object")),
+            credentials: testCreds,
+            region: testRegion,
+            service: testService,
+            now: testDate
+        )
+        XCTAssertEqual(hostless.headers["host"], "")
     }
 }

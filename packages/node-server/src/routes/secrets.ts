@@ -15,9 +15,11 @@ export interface SecretRoutesDeps {
   oauthStore: OauthSecretStore;
 
   devMode: boolean;
+  handleS3?: typeof handleS3SignAndForward;
+  handleDa?: typeof handleDaSignAndForward;
 }
 
-function respondSignAndForwardError(
+export function respondSignAndForwardError(
   res: Response,
   err: unknown,
   devMode: boolean,
@@ -43,7 +45,7 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((d) => typeof d === 'string');
 }
 
-async function handleScopeEdit(
+export async function handleScopeEdit(
   res: Response,
   name: unknown,
   domains: unknown,
@@ -91,7 +93,7 @@ function handleRedactExport(
   }
 }
 
-async function handleDeleteSecret(
+export async function handleDeleteSecret(
   name: string | undefined,
   res: Response,
   secretStore: EnvSecretStore,
@@ -119,8 +121,43 @@ async function handleDeleteSecret(
   }
 }
 
+function registerOauthSecretRoutes(
+  app: Express,
+  oauthStore: OauthSecretStore,
+  secretProxy: SecretProxyManager
+): void {
+  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
+    const { providerId, accessToken, domains } = req.body ?? {};
+    if (
+      typeof providerId !== 'string' ||
+      typeof accessToken !== 'string' ||
+      !isStringArray(domains) ||
+      domains.length === 0
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    const name = `oauth.${providerId}.token`;
+    oauthStore.set(name, accessToken, domains);
+    await secretProxy.reload();
+    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
+    res.json({ providerId, name, maskedValue: masked, domains });
+  });
+
+  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
+    const name = `oauth.${req.params.providerId}.token`;
+    if (!oauthStore.list().some((e) => e.name === name)) {
+      return res.status(404).json({ error: 'not-found' });
+    }
+    oauthStore.delete(name);
+    await secretProxy.reload();
+    res.status(204).end();
+  });
+}
+
 export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void {
   const { secretStore, secretProxy, oauthStore, devMode } = deps;
+  const handleS3 = deps.handleS3 ?? handleS3SignAndForward;
+  const handleDa = deps.handleDa ?? handleDaSignAndForward;
 
   app.get('/api/secrets', (_req, res) => {
     try {
@@ -197,7 +234,7 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
 
   app.post('/api/s3-sign-and-forward', async (req, res) => {
     try {
-      await handleS3SignAndForward(req, res, secretStore);
+      await handleS3(req, res, secretStore);
     } catch (err) {
       respondSignAndForwardError(res, err, devMode, 'S3');
     }
@@ -205,7 +242,7 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
 
   app.post('/api/da-sign-and-forward', async (req, res) => {
     try {
-      await handleDaSignAndForward(req, res);
+      await handleDa(req, res);
     } catch (err) {
       respondSignAndForwardError(res, err, devMode, 'DA');
     }
@@ -237,30 +274,5 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
     }
   });
 
-  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
-    const { providerId, accessToken, domains } = req.body ?? {};
-    if (
-      typeof providerId !== 'string' ||
-      typeof accessToken !== 'string' ||
-      !isStringArray(domains) ||
-      domains.length === 0
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    const name = `oauth.${providerId}.token`;
-    oauthStore.set(name, accessToken, domains);
-    await secretProxy.reload();
-    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
-    res.json({ providerId, name, maskedValue: masked, domains });
-  });
-
-  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
-    const name = `oauth.${req.params.providerId}.token`;
-    if (!oauthStore.list().some((e) => e.name === name)) {
-      return res.status(404).json({ error: 'not-found' });
-    }
-    oauthStore.delete(name);
-    await secretProxy.reload();
-    res.status(204).end();
-  });
+  registerOauthSecretRoutes(app, oauthStore, secretProxy);
 }

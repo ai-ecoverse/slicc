@@ -49,6 +49,9 @@ vi.mock('../../src/core/context-compaction.js', () => ({
     captures.createCompactContextCalls.push(config);
     return async (messages: unknown[]) => messages;
   },
+
+  estimateConversationTokens: () => 0,
+  hasCompactionProgress: () => false,
 }));
 
 vi.mock('@earendil-works/pi-ai/compat', () => ({
@@ -66,6 +69,7 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
 
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: () => [],
+  createMemoryWriteTool: () => ({ name: 'memory_write' }),
   createBashTool: () => ({ name: 'bash' }),
   createRequestSecretTool: () => ({ name: 'request_secret' }),
 }));

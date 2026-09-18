@@ -2,6 +2,16 @@ import AVFoundation
 import Foundation
 import OSLog
 
+
+
+
+
+
+
+
+
+
+
 @MainActor
 final class VoiceReply {
     static let shared = VoiceReply()
@@ -9,16 +19,30 @@ final class VoiceReply {
     private let logger = Logger(subsystem: "com.sliccy.follower", category: "voice-reply")
     private let speaker: SpeechSpeaking
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private struct PendingReply {
         let scoopJid: String
-
+        
         var messageId: String?
     }
 
     private var pending: [PendingReply] = []
 
+    
+    
     private static let maxPending = 8
 
+    
+    
+    
     init(speaker: SpeechSpeaking? = nil) {
         self.speaker =
             speaker
@@ -27,12 +51,18 @@ final class VoiceReply {
                 resourceDownloader: nil)
     }
 
+    
+    
     func markSubmission(scoopJid: String) {
         pending.append(PendingReply(scoopJid: scoopJid, messageId: nil))
         if pending.count > Self.maxPending { pending.removeFirst() }
         logger.notice("dictated turn marked (\(self.pending.count, privacy: .public) pending)")
     }
 
+    
+    
+    
+    
     func bindReply(scoopJid: String, messageId: String) {
         guard
             let idx = pending.firstIndex(where: {
@@ -42,6 +72,9 @@ final class VoiceReply {
         pending[idx].messageId = messageId
     }
 
+    
+    
+    
     func consumeSubmission(scoopJid: String, messageId: String) -> Bool {
         guard
             let idx = pending.firstIndex(where: {
@@ -52,6 +85,7 @@ final class VoiceReply {
         return true
     }
 
+    
     func rollbackSubmission(scoopJid: String) {
         guard
             let idx = pending.lastIndex(where: {
@@ -61,6 +95,8 @@ final class VoiceReply {
         pending.remove(at: idx)
     }
 
+    
+    
     func reset() {
         pending.removeAll()
         speaker.stop()
@@ -70,6 +106,12 @@ final class VoiceReply {
         await speaker.prewarm()
     }
 
+    
+    
+    
+    
+    
+    
     func speakReply(markdown: String) {
         let lang = DictationPriming.replyLang(markdown)
         if let lang, !speaker.hasVoice(for: lang) {
@@ -85,19 +127,28 @@ final class VoiceReply {
         speaker.speak(text, lang: lang)
     }
 
+    
     func stopSpeaking() {
         speaker.stop()
     }
 
-    static let maxSpeechCharacters = 20000
+    
 
+    
+    
+    static let maxSpeechCharacters = 20000
+    
     static let maxSpokenInlineCodeCharacters = 40
 
+    
+    
+    
     static func speechText(fromMarkdown markdown: String) -> String {
         var text = markdown
         text = replace(#"```[\s\S]*?```"#, in: text, with: " ")
         text = replace(#"~~~[\s\S]*?~~~"#, in: text, with: " ")
-
+        
+        
         text = replace(#"(?:```|~~~)[\s\S]*$"#, in: text, with: " ")
         text = replace(#"!\[([^\]]*)\]\([^)]*\)"#, in: text, with: "$1")
         text = replace(#"\[([^\]]+)\]\([^)]*\)"#, in: text, with: "$1")
@@ -112,7 +163,7 @@ final class VoiceReply {
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.count > maxSpeechCharacters {
             var clipped = String(text.prefix(maxSpeechCharacters))
-
+            
             if let lastSpace = clipped.lastIndex(of: " ") {
                 clipped = String(clipped[clipped.startIndex..<lastSpace])
             }
@@ -121,6 +172,7 @@ final class VoiceReply {
         return text
     }
 
+    
     private static func replaceInlineCode(in text: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: "`([^`]*)`") else { return text }
         let full = NSRange(text.startIndex..., in: text)
@@ -151,6 +203,10 @@ final class VoiceReply {
     }
 }
 
+
+
+
+
 @MainActor
 protocol SpeechSpeaking {
     func prewarm() async
@@ -162,6 +218,11 @@ protocol SpeechSpeaking {
 extension SpeechSpeaking {
     func prewarm() async {}
 }
+
+
+
+
+
 
 @MainActor
 final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelegate {
@@ -177,6 +238,9 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         let quality: Quality
     }
 
+    
+    
+    
     private var synthesizer: AVSpeechSynthesizer?
     private let audioSession: any AudioSessionCoordinating
     private var sessionActive = false
@@ -198,11 +262,13 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         if let lang, let voice = Self.voice(for: lang) {
             utterance.voice = voice
         }
-
+        
+        
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.92
         utterance.pitchMultiplier = 1.0
         let synthesizer = self.synthesizer ?? makeSynthesizer()
-
+        
+        
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
@@ -230,6 +296,8 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         return created
     }
 
+    
+    
     private static func voice(for lang: String) -> AVSpeechSynthesisVoice? {
         let voices = AVSpeechSynthesisVoice.speechVoices()
         let candidates = voices.map {
@@ -242,6 +310,10 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         return voices.first { $0.identifier == selected.identifier }
     }
 
+    
+    
+    
+    
     static func rankedVoice(
         for lang: String,
         from voices: [VoiceCandidate]
@@ -279,6 +351,12 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         }
     }
 
+    
+    
+    
+    
+    
+    
     private func activateSession() -> Bool {
         do {
             try audioSession.beginPlayback(preferredSampleRate: nil)
@@ -290,6 +368,8 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         }
     }
 
+    
+    
     private func releaseSession() {
         guard sessionActive else { return }
         audioSession.endPlayback()

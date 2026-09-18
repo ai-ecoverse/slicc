@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyHostFlagOverrides,
+  canOverrideFlag,
   coerceFeatureFlagValue,
   FEATURE_FLAG_STORAGE_KEY,
   getFeatureValue,
@@ -71,8 +72,9 @@ describe('feature flag registry', () => {
       expect.objectContaining({
         id: 'compact-on-idle',
         label: 'Compact on idle',
-        defaultValue: 'off',
-        userToggleable: true,
+
+        defaultValue: 'on',
+        userToggleable: false,
       }),
       expect.objectContaining({
         id: 'memory-v2',
@@ -85,6 +87,12 @@ describe('feature flag registry', () => {
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
+  });
+
+  it('records since as an ISO date on every flag', () => {
+    for (const flag of listFlags()) {
+      expect(flag.since).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
   });
 
   it('gates panel layouts OFF by default on every float', () => {
@@ -218,7 +226,7 @@ describe('feature flag registry', () => {
       'panel-layouts': 'off',
       'agentic-memory': 'off',
       'multiple-cones': 'on',
-      'compact-on-idle': 'off',
+      'compact-on-idle': 'on',
       'memory-v2': 'off',
     });
     expect(
@@ -232,7 +240,7 @@ describe('feature flag registry', () => {
       'panel-layouts': 'off',
       'agentic-memory': 'off',
       'multiple-cones': 'on',
-      'compact-on-idle': 'off',
+      'compact-on-idle': 'on',
       'memory-v2': 'off',
     });
   });
@@ -249,6 +257,25 @@ describe('feature flag registry', () => {
     setFeatureFlagOverride('experimental-settings', 'off');
     expect(readFeatureFlagOverrides()).toEqual({});
     expect(getFeatureValue('experimental-settings')).toBe('on');
+  });
+
+  it('reports which flags a local override can actually reach', () => {
+    expect(canOverrideFlag('agentic-memory')).toBe(true);
+    expect(canOverrideFlag('memory-v2')).toBe(true);
+
+    expect(canOverrideFlag('experimental-settings')).toBe(false);
+
+    expect(canOverrideFlag('multiple-cones')).toBe(false);
+    expect(canOverrideFlag('not-a-flag' as never)).toBe(false);
+  });
+
+  it('agrees with setFeatureFlagOverride about what is refused', () => {
+    for (const flag of listFlags()) {
+      const before = readFeatureFlagOverrides();
+      setFeatureFlagOverride(flag.id, 'on');
+      const wrote = readFeatureFlagOverrides()[flag.id] !== before[flag.id];
+      expect(wrote).toBe(canOverrideFlag(flag.id));
+    }
   });
 
   it('does not persist an override for cherry', () => {

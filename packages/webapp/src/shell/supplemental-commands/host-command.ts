@@ -27,6 +27,8 @@ export interface ConnectedFollowerInfo {
 
   exec?: boolean;
 
+  computer?: boolean;
+
   cdp?: boolean;
 
   motd?: string;

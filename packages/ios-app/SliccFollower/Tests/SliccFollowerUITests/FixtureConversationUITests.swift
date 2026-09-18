@@ -1,7 +1,19 @@
 import XCTest
 
+
+
+
+
+
+
 final class FixtureConversationUITests: XCTestCase {
 
+    
+    
+    
+    
+    
+    
     private static let expectedMessageIds: Set<String> = [
         "fx-user-1",
         "fx-assistant-1",
@@ -25,10 +37,11 @@ final class FixtureConversationUITests: XCTestCase {
         "fx-user-attachments",
         "fx-user-attachment-only",
         "fx-assistant-error",
-
+        
+        
         "fx-assistant-progress",
         "fx-assistant-progress-cluster",
-
+        
         "fx-compaction-idle",
         "fx-compaction-threshold-running",
         "fx-compaction-fallback",
@@ -36,27 +49,39 @@ final class FixtureConversationUITests: XCTestCase {
         "fx-assistant-streaming",
     ]
 
+    
+    
+    
     private static let newestFixtureMessageId = "fx-assistant-streaming"
 
+    
+    
+    
+    
+    
+    
+    
     private static let variantMarkers = [
-        "Working",
-        "edit: error",
-        "bash: running",
-        "list scoops",
-        "github-push",
-        "src-watch",
-        "0.4.1→0.5.0",
-        "Instructions from sliccy",
-        "npm run test",
-        "deploy-status \u{00D7}3",
-        "SOMETHING WENT WRONG",
-        "screenshot.png",
-        "diagram.png",
-        "Allow npm publish?",
-        "Waiting for approval on the leader",
-        "SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER",
-        "embedded follower garnish",
-
+        "Working",  
+        "edit: error",  
+        "bash: running",  
+        "list scoops",  
+        "github-push",  
+        "src-watch",  
+        "0.4.1→0.5.0",  
+        "Instructions from sliccy",  
+        "npm run test",  
+        "deploy-status \u{00D7}3",  
+        "SOMETHING WENT WRONG",  
+        "screenshot.png",  
+        "diagram.png",  
+        "Allow npm publish?",  
+        "Waiting for approval on the leader",  
+        "SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER",  
+        "embedded follower garnish",  
+        
+        
+        
         "Compacted while idle. Full transcript /sessions/live-cone-fixture-8egf.md",
         "Context filling up — compacting history. Full transcript /sessions/live-cone-fixture-8egf.md",
         "Summary unavailable — older messages truncated",
@@ -76,12 +101,20 @@ final class FixtureConversationUITests: XCTestCase {
         XCTAssertTrue(
             app.buttons["Reload"].waitForExistence(timeout: 30),
             "The fixture chrome should offer a reload control")
-
+        
+        
         XCTAssertFalse(
             app.staticTexts["connection-status"].exists,
             "The fixture route should not show a connection pill")
     }
 
+    
+    
+    
+    
+    
+    
+    
     func testEveryFixtureMessageVariantRenders() {
         let app = launchFixtureApp()
         XCTAssertTrue(
@@ -96,6 +129,8 @@ final class FixtureConversationUITests: XCTestCase {
         var previousScreen = seenIds.union(seenLabels)
         var unchangedScrolls = 0
 
+        
+        
         for _ in 0..<40 where !isComplete(ids: seenIds, labels: seenLabels) {
             app.swipeDown()
             let ids = visibleMessageIds(in: app)
@@ -103,10 +138,17 @@ final class FixtureConversationUITests: XCTestCase {
             seenIds.formUnion(ids)
             seenLabels.formUnion(labels)
 
+            
+            
+            
+            
+            
             let screen = ids.union(labels)
             unchangedScrolls = screen == previousScreen ? unchangedScrolls + 1 : 0
             previousScreen = screen
-
+            
+            
+            
             if unchangedScrolls >= 4 { break }
         }
 
@@ -120,6 +162,9 @@ final class FixtureConversationUITests: XCTestCase {
                 + "id while its specialized subview is gone")
     }
 
+    
+    
+    
     func testSettledLicksShowTheirDecisionGlyph() {
         let app = launchFixtureApp()
         XCTAssertTrue(
@@ -143,7 +188,8 @@ final class FixtureConversationUITests: XCTestCase {
         XCTAssertTrue(
             seen.contains("lick-state-dismissed"),
             "A dismissed lick should render its decision glyph")
-
+        
+        
         XCTAssertFalse(
             seen.contains("lick-state-pending"),
             "A pending lick should render no decision glyph")
@@ -184,6 +230,8 @@ final class FixtureConversationUITests: XCTestCase {
             NSPredicate(format: "label == %@", "A fenced code block:")
         ).firstMatch
 
+        
+        
         for _ in 0..<12 where !(codeBlock.isHittable && ordinaryText.isHittable) {
             app.swipeDown()
         }
@@ -200,6 +248,9 @@ final class FixtureConversationUITests: XCTestCase {
             codeBlock.frame.minX, leadingEdgeX - 20,
             "The guarded drag must still scroll the code block")
 
+        
+        
+        
         for _ in 0..<3 where selection.label == "Fixture scoop 1" {
             dragLeft(across: codeBlock, in: app)
         }
@@ -214,6 +265,13 @@ final class FixtureConversationUITests: XCTestCase {
             "Ordinary transcript text must not suppress scoop navigation")
     }
 
+    
+
+    
+    
+    
+    
+    
     private func launchFixtureApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -224,6 +282,14 @@ final class FixtureConversationUITests: XCTestCase {
         return app
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     private func waitForListToSettleAtBottom(in app: XCUIApplication, timeout: TimeInterval = 30)
         -> Bool
     {
@@ -235,6 +301,13 @@ final class FixtureConversationUITests: XCTestCase {
             .waitForExistence(timeout: timeout)
     }
 
+    
+    
+    
+    
+    
+    
+    
     private func waitForAnyMessageRow(in app: XCUIApplication, timeout: TimeInterval = 30) -> Bool {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-"))
@@ -242,6 +315,11 @@ final class FixtureConversationUITests: XCTestCase {
             .waitForExistence(timeout: timeout)
     }
 
+    
+    
+    
+    
+    
     private func visibleMessageIds(in app: XCUIApplication) -> Set<String> {
         let prefix = "message-"
         let rows = app.descendants(matching: .any)
@@ -251,6 +329,9 @@ final class FixtureConversationUITests: XCTestCase {
                 .map { String($0.identifier.dropFirst(prefix.count)) })
     }
 
+    
+    
+    
     private func visibleLabels(in app: XCUIApplication) -> Set<String> {
         var labels = Set<String>()
         labels.formUnion(app.staticTexts.allElementsBoundByAccessibilityElement.map(\.label))
@@ -258,6 +339,7 @@ final class FixtureConversationUITests: XCTestCase {
         return labels
     }
 
+    
     private func visibleStateIdentifiers(in app: XCUIApplication) -> Set<String> {
         let rows = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "lick-state-"))
@@ -277,7 +359,8 @@ final class FixtureConversationUITests: XCTestCase {
     private func dragLeft(across element: XCUIElement, in app: XCUIApplication) {
         let visibleFrame = element.frame.intersection(app.frame)
         XCTAssertGreaterThan(visibleFrame.width, 100, "Drag target must expose a horizontal span")
-
+        
+        
         let chatTrailingEdge = app.frame.maxX - 48
         let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let start = origin.withOffset(

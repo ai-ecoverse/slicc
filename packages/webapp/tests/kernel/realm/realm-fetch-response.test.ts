@@ -68,4 +68,15 @@ describe('reconstructFetchResponse', () => {
     await expect(res.json()).resolves.toEqual({ a: 1 });
     await expect(res.text()).rejects.toThrow(/already used/);
   });
+
+  it('marks bodyUsed and rejects bytes() after a shadowed read', async () => {
+    const res = reconstructFetchResponse(payload({ text: 'hello' }), '');
+    expect(res.bodyUsed).toBe(false);
+    await expect(res.text()).resolves.toBe('hello');
+    expect(res.bodyUsed).toBe(true);
+    await expect((res as Response & { bytes: () => Promise<Uint8Array> }).bytes()).rejects.toThrow(
+      /already used/
+    );
+    expect(() => res.clone()).toThrow();
+  });
 });

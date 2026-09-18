@@ -28,7 +28,7 @@ export function detectSudoEnv(): SudoEnv {
   };
 }
 
-function defaultWhich(cmd: string): boolean {
+export function defaultWhich(cmd: string): boolean {
   try {
     const probe = process.platform === 'win32' ? 'where' : 'which';
     execFileSync(probe, [cmd], { stdio: 'ignore' });

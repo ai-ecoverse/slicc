@@ -1,0 +1,84 @@
+diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
+index ac0cbbd..a255a56 100644
+--- a/node_modules/@zenfs/dom/dist/access.js
++++ b/node_modules/@zenfs/dom/dist/access.js
+@@ -58,12 +58,18 @@ export class WebAccessFS extends Async(IndexFS) {
+             const ino = this.index._alloc();
+             if (isKind(handle, 'file')) {
+                 const { lastModified, size } = await handle.getFile();
+-                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified, ino, data: ino + 1 }));
++                // PATCH(#2146): nlink MUST be 1. The Inode constructor warns on
++                // every inode with a real ino and nlink 0, and kerium retains
++                // every log entry — leaving nlink unset here flooded a
++                // long-lived kernel worker until the log Set hit V8's 2^24 cap
++                // and every FS op threw (2026-08-18 incident). 1.2.14 allocates
++                // ino/data (zen-fs/dom#43) but still omits nlink.
++                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified, ino, data: ino + 1, nlink: 1 }));
+                 continue;
+             }
+             if (!isKind(handle, 'directory'))
+                 throw withErrno('EIO', 'Invalid handle');
+-            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0, ino, data: ino + 1 }));
++            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0, ino, data: ino + 1, nlink: 1 }));
+         }
+     }
+     constructor(root, disableHandleCache = false) {
+@@ -93,7 +99,8 @@ export class WebAccessFS extends Async(IndexFS) {
+             // Try to add a new inode for the handle to the index
+             const handle = await this.get(null, path);
+             const ino = this.index._alloc();
+-            const inode = new Inode({ ino, data: ino + 1 });
++            // PATCH(#2146): nlink MUST be 1 — same warn-flood as _loadMetadata.
++            const inode = new Inode({ ino, data: ino + 1, nlink: 1 });
+             if (isKind(handle, 'file')) {
+                 const file = await handle.getFile();
+                 inode.update({
+@@ -148,7 +155,22 @@ export class WebAccessFS extends Async(IndexFS) {
+             if (dirname(p) == path)
+                 this._handles.delete(p);
+         this._handles.delete(path);
+-        await handle.removeEntry(basename(path), { recursive: true }).catch(ex => _throw(convertException(ex, path)));
++        // PATCH(#2157): tolerate an already-absent OPFS entry. `IndexFS` has
++        // already validated existence against the index (and removed the
++        // entry) before calling us, so the index — not OPFS — is authoritative
++        // here. Any path the index knows but OPFS does not is undeletable
++        // otherwise: every `unlink` throws ENOENT, the caller's exit code is
++        // wrong, and ZenFS keeps the vnode cached because the removal
++        // "failed", so the file comes back. That is the long-standing phantom-
++        // deletion class (any entry restored from a metadata sidecar whose OPFS
++        // counterpart is gone). Deleting something already gone is the
++        // requested end state, so report success.
++        await handle.removeEntry(basename(path), { recursive: true }).catch(ex => {
++            const converted = convertException(ex, path);
++            if (converted.code == 'ENOENT')
++                return;
++            _throw(converted);
++        });
+     }
+     removeSync() {
+         throw log.crit(withErrno('ENOSYS'));
+@@ -157,8 +179,22 @@ export class WebAccessFS extends Async(IndexFS) {
+         if (end <= offset)
+             return;
+         const handle = await this.get('file', path);
+-        const file = await handle.getFile();
+-        const data = await file.arrayBuffer();
++        // PATCH: a concurrent OPFS write invalidates an acquired File snapshot.
++        // Retry the byte read with a fresh snapshot, not the same stale File.
++        // Persistent failures remain fatal after three attempts; other errors
++        // (including permission failures) are never retried.
++        let data;
++        for (let attempt = 0; ; attempt++) {
++            const file = await handle.getFile();
++            try {
++                data = await file.arrayBuffer();
++                break;
++            }
++            catch (error) {
++                if (!(error instanceof DOMException) || error.name !== 'NotReadableError' || attempt >= 2)
++                    throw error;
++            }
++        }
+         if (data.byteLength < end - offset)
+             throw alert(withErrno('EIO', [
+                 'Unexpected mismatch in file data size. This should not happen.',

@@ -6,7 +6,11 @@ import (
 	"unicode/utf8"
 )
 
+
+
 type Style uint8
+
+
 
 const (
 	StyleNone Style = iota
@@ -39,6 +43,8 @@ var sgr = map[Style]string{
 
 const sgrReset = "\x1b[0m"
 
+
+
 func (m Mode) Paint(style Style, s string) string {
 	code, ok := sgr[style]
 	if !m.Color || !ok || s == "" {
@@ -47,7 +53,10 @@ func (m Mode) Paint(style Style, s string) string {
 	return code + s + sgrReset
 }
 
+
+
 type Glyph uint8
+
 
 const (
 	GlyphOk Glyph = iota
@@ -71,7 +80,7 @@ const (
 )
 
 var glyphs = map[Glyph][2]string{
-
+	
 	GlyphOk:           {"✔", "+"},
 	GlyphWarn:         {"⚠", "!"},
 	GlyphError:        {"✖", "x"},
@@ -92,6 +101,7 @@ var glyphs = map[Glyph][2]string{
 	GlyphRepeat:       {"↺", "~"},
 }
 
+
 func (m Mode) Glyph(g Glyph) string {
 	pair, ok := glyphs[g]
 	if !ok {
@@ -102,6 +112,8 @@ func (m Mode) Glyph(g Glyph) string {
 	}
 	return pair[1]
 }
+
+
 
 var (
 	spinnerUnicode = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -115,6 +127,8 @@ func (m Mode) spinner(frame int) string {
 	}
 	return set[((frame%len(set))+len(set))%len(set)]
 }
+
+
 
 func visibleWidth(s string) int {
 	width := 0
@@ -130,26 +144,39 @@ func visibleWidth(s string) int {
 	return width
 }
 
+
+
+
+
+
+
+
+
 var wideRanges = [][2]rune{
-	{0x1100, 0x115F},
-	{0x2E80, 0x303E},
-	{0x3041, 0x33FF},
-	{0x3400, 0x4DBF},
-	{0x4E00, 0x9FFF},
-	{0xA000, 0xA4CF},
-	{0xA960, 0xA97F},
-	{0xAC00, 0xD7A3},
-	{0xF900, 0xFAFF},
-	{0xFE10, 0xFE19},
-	{0xFE30, 0xFE6F},
-	{0xFF00, 0xFF60},
-	{0xFFE0, 0xFFE6},
-	{0x1F300, 0x1F64F},
-	{0x1F680, 0x1F6FF},
-	{0x1F900, 0x1F9FF},
-	{0x1FA70, 0x1FAFF},
-	{0x20000, 0x3FFFD},
+	{0x1100, 0x115F},   
+	{0x2E80, 0x303E},   
+	{0x3041, 0x33FF},   
+	{0x3400, 0x4DBF},   
+	{0x4E00, 0x9FFF},   
+	{0xA000, 0xA4CF},   
+	{0xA960, 0xA97F},   
+	{0xAC00, 0xD7A3},   
+	{0xF900, 0xFAFF},   
+	{0xFE10, 0xFE19},   
+	{0xFE30, 0xFE6F},   
+	{0xFF00, 0xFF60},   
+	{0xFFE0, 0xFFE6},   
+	{0x1F300, 0x1F64F}, 
+	{0x1F680, 0x1F6FF}, 
+	{0x1F900, 0x1F9FF}, 
+	{0x1FA70, 0x1FAFF}, 
+	{0x20000, 0x3FFFD}, 
 }
+
+
+
+
+
 
 func cellWidth(r rune) int {
 	if r == 0 {
@@ -176,6 +203,9 @@ func cellWidth(r rune) int {
 	return 1
 }
 
+
+
+
 var ownRunes = func() map[rune]bool {
 	set := map[rune]bool{'×': true}
 	add := func(s string) {
@@ -193,6 +223,17 @@ var ownRunes = func() map[rune]bool {
 	return set
 }()
 
+
+
+
+
+
+
+
+
+
+
+
 func rewriteSafe(s string) bool {
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b {
@@ -202,7 +243,7 @@ func rewriteSafe(s string) bool {
 		r, size := decodeRune(s[i:])
 		i += size
 		if r < 0x20 || r == 0x7f {
-			return false
+			return false 
 		}
 		if r < 0x80 || ownRunes[r] {
 			continue
@@ -211,6 +252,9 @@ func rewriteSafe(s string) bool {
 	}
 	return true
 }
+
+
+
 
 func truncateVisible(s string, limit int) string {
 	if limit <= 0 {
@@ -227,7 +271,8 @@ func truncateVisible(s string, limit int) string {
 			continue
 		}
 		r, size := decodeRune(s[i:])
-
+		
+		
 		if width+cellWidth(r) > limit {
 			if styled {
 				b.WriteString(sgrReset)
@@ -241,6 +286,9 @@ func truncateVisible(s string, limit int) string {
 	return b.String()
 }
 
+
+
+
 func escapeLen(s string) int {
 	if len(s) < 2 || s[1] != '[' {
 		return 1
@@ -252,6 +300,9 @@ func escapeLen(s string) int {
 	}
 	return len(s)
 }
+
+
+
 
 func decodeRune(s string) (rune, int) {
 	r, size := utf8.DecodeRuneInString(s)

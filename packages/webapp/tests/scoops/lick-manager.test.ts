@@ -18,6 +18,7 @@ const LOCAL_ONLY: ReadonlySet<LickEvent['type']> = new Set([
 
   'workflow',
   'bash',
+  'jshd',
   'sudo-request',
   'preview',
 ]);
@@ -32,6 +33,7 @@ const ALL_LICK_TYPES: LickEvent['type'][] = [
   'cherry',
   'workflow',
   'bash',
+  'jshd',
   'sudo-request',
   'preview',
   'discovery',
@@ -47,6 +49,7 @@ const _exhaustive: Record<LickEvent['type'], true> = {
   cherry: true,
   workflow: true,
   bash: true,
+  jshd: true,
   'sudo-request': true,
   preview: true,
   discovery: true,

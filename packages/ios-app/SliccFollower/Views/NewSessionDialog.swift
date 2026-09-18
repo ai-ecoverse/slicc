@@ -1,9 +1,16 @@
 import SwiftUI
 
+
+
+
+
+
+
 struct NewSessionDialog: ViewModifier {
     @Binding var isPresented: Bool
     @EnvironmentObject var appState: AppState
-
+    
+    
     var onRequested: () -> Void = {}
 
     @State private var confirmErase = false
@@ -22,7 +29,8 @@ struct NewSessionDialog: ViewModifier {
                     onRequested()
                 }
                 Button("Erase & start new", role: .destructive) {
-
+                    
+                    
                     confirmErase = true
                 }
                 Button("Cancel") { isPresented = false }

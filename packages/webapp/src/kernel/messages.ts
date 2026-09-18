@@ -1,5 +1,7 @@
 import {
   type CDPPayload,
+  type ComputerDescriptor,
+  type ComputerInputEvent,
   isExtensionMessage as isExtensionMessageEnvelope,
   type ToolProgressEvent,
   type WebhookDeliveryDisposition,
@@ -586,12 +588,52 @@ export interface VfsWatchEventMsg {
 
 export type VfsWatchPushMsg = VfsWatchResultMsg | VfsWatchEventMsg;
 
+export interface ComputersListMsg {
+  type: 'computers';
+  computers: ComputerDescriptor[];
+}
+
+export interface ComputerFrameMsg {
+  type: 'computer-frame';
+  id: string;
+  seq: number;
+  mime: 'image/png' | 'image/jpeg';
+  width: number;
+  height: number;
+  bytes: Uint8Array;
+  overCap?: boolean;
+}
+
+export interface ComputerWatchMsg {
+  type: 'computer-watch';
+  id: string;
+  fps: number;
+  maxWidth: number;
+}
+
+export interface ComputerUnwatchMsg {
+  type: 'computer-unwatch';
+  id: string;
+}
+
+export interface ComputerInputMsg {
+  type: 'computer-input';
+  id: string;
+  events: ComputerInputEvent[];
+}
+
+export type ComputerWatchControlMsg = ComputerWatchMsg | ComputerUnwatchMsg;
+
+export type ComputerPageControlMsg = ComputerWatchControlMsg | ComputerInputMsg;
+
 export const DETACHED_RUNTIME_QUERY_NAME = 'detached';
 
 export { LEADER_EXT_ID_QUERY_NAME } from '@slicc/shared-ts';
 
-export const LEADER_RUNTIME_QUERY_NAME = 'slicc';
-export const LEADER_RUNTIME_QUERY_VALUE = 'leader';
+export {
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../base/leader-runtime-query.js';
 
 export interface DetachedPopoutRequestMsg {
   type: 'detached-popout-request';
@@ -646,6 +688,8 @@ export type PanelToOffscreenMessage =
   | VfsReadRequestMsg
   | VfsWriteRequestMsg
   | VfsWatchControlMsg
+  | ComputerWatchControlMsg
+  | ComputerInputMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg;
 
@@ -694,6 +738,16 @@ export interface CompactionStateMsg {
 
   transcriptPath?: string;
 
+  failure?:
+    | 'rate-limit'
+    | 'quota-exhausted'
+    | 'authentication'
+    | 'provider-unavailable'
+    | 'empty-response'
+    | 'invalid-response'
+    | 'context-too-large'
+    | 'unknown';
+
   roundId?: string;
 
   rowId?: string;
@@ -735,6 +789,8 @@ export interface ErrorMsg {
   type: 'error';
   scoopJid: string;
   error: string;
+
+  endTurn?: boolean;
 }
 
 export interface LickBackpressureMsg {
@@ -935,7 +991,9 @@ export type OffscreenToPanelMessage =
   | TerminalEventMsg
   | VfsReadResultMsg
   | VfsWriteResultMsg
-  | VfsWatchPushMsg;
+  | VfsWatchPushMsg
+  | ComputersListMsg
+  | ComputerFrameMsg;
 
 export interface CdpCommandMsg {
   type: 'cdp-command';

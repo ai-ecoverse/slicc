@@ -8,7 +8,15 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/update"
 )
 
+
+
 const telemetryAppID = "slicc-cli"
+
+
+
+
+
+
 
 var knownSubcommands = map[string]bool{
 	"prompt": true, "exec": true, "watch": true, "follow": true, "update": true,
@@ -23,7 +31,21 @@ func classifySubcommand(sub string) string {
 	return "unknown"
 }
 
+
+
+
+
 var telemetryClient *optel.Client
+
+
+
+
+
+
+
+
+
+
 
 func initTelemetry(sub string) func() {
 	noop := func() {}
@@ -35,12 +57,23 @@ func initTelemetry(sub string) func() {
 	return func() { telemetryClient.Flush(2 * time.Second) }
 }
 
+
+
+
+
 func telemetryEnabled(ver, noTelemetryEnv string) bool {
 	if noTelemetryEnv != "" {
 		return false
 	}
 	return update.IsReleaseVersion(ver)
 }
+
+
+
+
+
+
+
 
 func reportRuntimeError(source string, err error) {
 	telemetryClient.ReportError(source, err)

@@ -151,6 +151,129 @@ describe('hydrateDips', () => {
   });
 });
 
+describe('hydrateDips — carrying dips across re-renders', () => {
+  const card = '<pre><code class="language-shtml">&lt;p&gt;Card&lt;/p&gt;</code></pre>';
+  let root: HTMLElement;
+  let restoreSW: (() => void) | null = null;
+
+  const nativeMoveBefore = Object.getOwnPropertyDescriptor(Element.prototype, 'moveBefore');
+
+  function render(html: string): HTMLElement {
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    root.prepend(host);
+    return host;
+  }
+
+  function installMoveBefore(): void {
+    Object.defineProperty(Element.prototype, 'moveBefore', {
+      configurable: true,
+      value(this: Element, node: Node, child: Node | null) {
+        this.insertBefore(node, child);
+      },
+    });
+  }
+
+  beforeEach(() => {
+    Reflect.deleteProperty(Element.prototype, 'moveBefore');
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    restoreSW = installFakeSWController();
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(Element.prototype, 'moveBefore');
+    if (nativeMoveBefore) Object.defineProperty(Element.prototype, 'moveBefore', nativeMoveBefore);
+    root.remove();
+    restoreSW?.();
+    restoreSW = null;
+  });
+
+  it('moves an unchanged dip into the new render instead of remounting it', () => {
+    installMoveBefore();
+    const first = render(card);
+    const previous = hydrateDips(first, vi.fn());
+    const iframe = first.querySelector('iframe');
+
+    const second = render(`<p>more text</p>${card}`);
+    const next = hydrateDips(second, vi.fn(), { previous, streaming: true });
+    first.remove();
+
+    expect(next).toEqual(previous);
+    expect(second.querySelector('iframe')).toBe(iframe);
+    expect(second.querySelector('pre')).toBeNull();
+  });
+
+  it('remounts a dip whose source changed and disposes the old one', () => {
+    installMoveBefore();
+    const first = render(card);
+    const previous = hydrateDips(first, vi.fn());
+    const dispose = vi.spyOn(previous[0]!, 'dispose');
+
+    const second = render(
+      '<pre><code class="language-shtml">&lt;p&gt;Other&lt;/p&gt;</code></pre>'
+    );
+    const next = hydrateDips(second, vi.fn(), { previous });
+
+    expect(next).toHaveLength(1);
+    expect(next[0]).not.toBe(previous[0]);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(second.querySelector('iframe')).not.toBeNull();
+  });
+
+  it('carries repeated identical dips in document order', () => {
+    installMoveBefore();
+    const first = render(card + card);
+    const previous = hydrateDips(first, vi.fn());
+    const iframes = [...first.querySelectorAll('iframe')];
+
+    const second = render(card + card);
+    const next = hydrateDips(second, vi.fn(), { previous });
+
+    expect(next).toEqual(previous);
+    expect([...second.querySelectorAll('iframe')]).toEqual(iframes);
+  });
+
+  it('keeps an image dip across renders without fetching it again', () => {
+    installMoveBefore();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(() => {}));
+    const img = '<img src="/shared/dips/welcome.shtml">';
+    const previous = hydrateDips(render(img), vi.fn());
+    const second = render(img);
+    const next = hydrateDips(second, vi.fn(), { previous });
+    try {
+      expect(next).toEqual(previous);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(second.querySelector('img')).toBeNull();
+    } finally {
+      disposeDips([...previous, ...next]);
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('shows the pending card mid-stream when the browser cannot move iframes intact', () => {
+    const host = render(card);
+    const instances = hydrateDips(host, vi.fn(), { streaming: true });
+
+    expect(instances).toEqual([]);
+    expect(host.querySelector('iframe')).toBeNull();
+    expect(host.querySelector('.msg__dip-pending')).not.toBeNull();
+  });
+
+  it('remounts on the final render when the browser cannot move iframes intact', () => {
+    const first = render(card);
+    const previous = hydrateDips(first, vi.fn());
+    const dispose = vi.spyOn(previous[0]!, 'dispose');
+
+    const second = render(card);
+    const next = hydrateDips(second, vi.fn(), { previous });
+
+    expect(next[0]).not.toBe(previous[0]);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(second.querySelector('iframe')).not.toBeNull();
+  });
+});
+
 describe('hydrateDips — preview-vfs bridge fallback for uncontrolled boots', () => {
   let container: HTMLElement;
   let responderChannel: BroadcastChannel | null = null;

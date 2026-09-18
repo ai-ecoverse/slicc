@@ -80,6 +80,8 @@ export interface FollowerSyncManagerOptions {
 
     requester?: string;
     suggestedPattern?: string;
+
+    reason?: string;
     scoopName?: string;
     expiresAt: number;
     signal: AbortSignal;

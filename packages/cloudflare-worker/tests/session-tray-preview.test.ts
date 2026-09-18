@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { parseByteRange } from '@slicc/shared-ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
@@ -425,6 +426,46 @@ describe('preview HTTP handler', () => {
     expect(await res.text()).toBe('<h1>hello</h1>');
   });
 
+  it('serves a multi-chunk binary file byte-for-byte', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+    const bytes = new Uint8Array(200_003);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31) & 0xff;
+    const b64 = Buffer.from(bytes).toString('base64');
+    const pieces: string[] = [];
+    for (let i = 0; i < b64.length; i += 65_536) pieces.push(b64.slice(i, i + 65_536));
+
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as { type: string; reqId?: string };
+      if (msg.type !== 'preview.request' || !msg.reqId) return;
+      pieces.forEach((content, chunkIndex) => {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: true,
+            mime: 'video/mp4',
+            chunkIndex,
+            totalChunks: pieces.length,
+            content,
+            encoding: 'base64',
+          })
+        );
+      });
+    });
+
+    const fileUrl = new URL(url);
+    fileUrl.pathname = '/clip.mp4';
+    const res = await handleWorkerRequest(new Request(fileUrl.toString()), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(Buffer.from(await res.arrayBuffer()).equals(Buffer.from(bytes))).toBe(true);
+  });
+
   it('preview fetch succeeds after DO hibernation (leader socket is recovered)', async () => {
     const { env, namespace } = createTestHarness();
     const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
@@ -673,5 +714,270 @@ describe('preview HTTP handler', () => {
     expect(rec.bridge).toBe(true);
     expect(rec.maxTabs).toBe(5);
     expect(rec.webhookId).toBe('wh1');
+  });
+});
+
+describe('live previews expire with the leader connection', () => {
+  async function reclaim(
+    env: ReturnType<typeof createTestHarness>['env'],
+    controllerUrl: string,
+    leaderKey: string
+  ): Promise<FakeWebSocket> {
+    const attach = await handleWorkerRequest(
+      new Request(controllerUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-2', leaderKey }),
+      }),
+      env
+    );
+    expect(attach.status).toBe(200);
+    const { websocket } = (await attach.json()) as { websocket: { url: string } };
+    const res = await handleWorkerRequest(
+      new Request(websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    return (res as unknown as { webSocket: FakeWebSocket }).webSocket;
+  }
+
+  async function setup() {
+    const { env, namespace } = createTestHarness();
+    const created = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string } };
+    };
+    const controllerUrl = session.capabilities.controller.url;
+    const attach = await handleWorkerRequest(
+      new Request(controllerUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env
+    );
+    const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
+    const socketRes = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    const socket = (socketRes as unknown as { webSocket: FakeWebSocket }).webSocket;
+    const controllerToken = new URL(controllerUrl).pathname.split('/').pop() ?? '';
+    const { previewToken } = await mintPreviewViaWorker(env, session.trayId, controllerToken);
+    const stub = namespace.get(namespace.idFromName(session.trayId));
+    return { env, stub, socket, controllerUrl, leaderKey: leader.leaderKey, previewToken };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps live previews across a short reconnect', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    t.socket.close();
+    vi.setSystemTime(Date.parse('2026-09-17T10:04:00Z'));
+    const socket = await reclaim(t.env, t.controllerUrl, t.leaderKey);
+    expect(socket.received.some((m) => m.includes('"preview.revoked"'))).toBe(false);
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).not.toBeNull();
+  });
+
+  it('drops them after a long outage and tells the returning leader', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    t.socket.close();
+    vi.setSystemTime(Date.parse('2026-09-17T10:06:00Z'));
+    const socket = await reclaim(t.env, t.controllerUrl, t.leaderKey);
+    expect(socket.received.map((m) => JSON.parse(m))).toContainEqual({
+      type: 'preview.revoked',
+      previewToken: t.previewToken,
+    });
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
+    expect(await asPreview(t.stub).listPreviews()).toEqual([]);
+  });
+
+  it('drops them when the leader socket goes silent without a close (ghost)', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+
+    vi.setSystemTime(Date.parse('2026-09-17T10:05:30Z'));
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
+  });
+
+  it('keeps them while the connected leader keeps pinging', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    for (let minute = 1; minute <= 10; minute++) {
+      vi.setSystemTime(Date.parse('2026-09-17T10:00:00Z') + minute * 60_000);
+      t.socket.send(JSON.stringify({ type: 'ping' }));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).not.toBeNull();
+  });
+
+  it('stops serving them to visitors during the outage', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-17T10:00:00Z') });
+    const t = await setup();
+    t.socket.close();
+    vi.setSystemTime(Date.parse('2026-09-17T10:05:01Z'));
+    expect(await asPreview(t.stub).resolvePreview(t.previewToken)).toBeNull();
+  });
+});
+
+describe('preview HTTP handler byte ranges', () => {
+  const MiB = 1024 * 1024;
+  const file = new Uint8Array(5000).map((_, i) => (i * 7) & 0xff);
+
+  interface SeenRequest {
+    type: string;
+    reqId?: string;
+    range?: string;
+  }
+
+  type Reply = (msg: SeenRequest) => Array<Record<string, unknown>>;
+
+  const rangedLeader: Reply = (msg) => {
+    const range = parseByteRange(msg.range, file.byteLength);
+    if (range === 'unsatisfiable') {
+      return [{ ok: false, status: 416, size: file.byteLength }];
+    }
+    if (!range) {
+      return [
+        {
+          ok: true,
+          status: 200,
+          size: file.byteLength,
+          content: Buffer.from(file).toString('base64'),
+        },
+      ];
+    }
+    const end = Math.min(range.end, range.start + 8 * MiB - 1);
+    return [
+      {
+        ok: true,
+        status: 206,
+        size: file.byteLength,
+        range: { start: range.start, end },
+        content: Buffer.from(file.subarray(range.start, end + 1)).toString('base64'),
+      },
+    ];
+  };
+
+  const oldLeader: Reply = () => [{ ok: true, content: Buffer.from(file).toString('base64') }];
+
+  async function serve(reply: Reply, headers: HeadersInit, path = '/clip.mp4') {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+    const seen: SeenRequest[] = [];
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as SeenRequest;
+      if (msg.type !== 'preview.request' || !msg.reqId) return;
+      seen.push(msg);
+      for (const part of reply(msg)) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            mime: 'video/mp4',
+            chunkIndex: 0,
+            totalChunks: 1,
+            encoding: 'base64',
+            ...part,
+          })
+        );
+      }
+    });
+    const fileUrl = new URL(url);
+    fileUrl.pathname = path;
+    const res = await handleWorkerRequest(new Request(fileUrl.toString(), { headers }), env);
+    return { res, seen };
+  }
+
+  it('forwards Range to the leader and answers 206 from its window', async () => {
+    const { res, seen } = await serve(rangedLeader, { range: 'bytes=1000-1999' });
+    expect(seen[0].range).toBe('bytes=1000-1999');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 1000-1999/5000');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(
+      Buffer.from(await res.arrayBuffer()).equals(Buffer.from(file.subarray(1000, 2000)))
+    ).toBe(true);
+  });
+
+  it('answers 416 with the entity size when the leader reports it', async () => {
+    const { res } = await serve(rangedLeader, { range: 'bytes=9000-' });
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe('bytes */5000');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+  });
+
+  it('advertises accept-ranges on a plain 200', async () => {
+    const { res, seen } = await serve(rangedLeader, {});
+    expect(seen[0]).not.toHaveProperty('range');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect((await res.arrayBuffer()).byteLength).toBe(5000);
+  });
+
+  it('drops the Range when If-Range is present and serves the whole body', async () => {
+    const { res, seen } = await serve(rangedLeader, {
+      range: 'bytes=0-9',
+      'if-range': '"anything"',
+    });
+    expect(seen[0]).not.toHaveProperty('range');
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(5000);
+  });
+
+  it('slices the full body of an old leader into a 206', async () => {
+    const { res } = await serve(oldLeader, { range: 'bytes=-100' });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 4900-4999/5000');
+    expect(Buffer.from(await res.arrayBuffer()).equals(Buffer.from(file.subarray(4900)))).toBe(
+      true
+    );
+  });
+
+  it('answers 416 for an old leader when the range misses the body', async () => {
+    const { res } = await serve(oldLeader, { range: 'bytes=5000-' });
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe('bytes */5000');
+  });
+
+  it('slices an old leader utf-8 body by bytes', async () => {
+    const text = 'héllo wörld';
+    const { res } = await serve(
+      () => [{ ok: true, encoding: 'utf-8', mime: 'text/plain', content: text }],
+      { range: 'bytes=0-1' },
+      '/note.txt'
+    );
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe(
+      `bytes 0-1/${new TextEncoder().encode(text).byteLength}`
+    );
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(Buffer.from('h\xc3', 'latin1'));
+  });
+
+  it('serves the old leader body whole for an unsupported Range', async () => {
+    const { res } = await serve(oldLeader, { range: 'bytes=0-1,5-6' });
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBe(5000);
+  });
+
+  it('passes other leader errors through with accept-ranges', async () => {
+    const { res } = await serve(() => [{ ok: false, status: 413, reason: 'too big' }], {
+      range: 'bytes=0-',
+    });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(await res.text()).toBe('too big');
   });
 });

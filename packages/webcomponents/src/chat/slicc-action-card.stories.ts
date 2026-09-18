@@ -185,7 +185,7 @@ export const ToneGithubDiff: Story = {
     variant: 'tool',
     icon: 'file-diff',
     tone: 'gh',
-    title: 'edit_file · hero.css',
+    title: 'edit · hero.css',
     body: () => [
       line('del', del(), ' background:#0b1120;'),
       '\n',
@@ -240,7 +240,7 @@ export const ToolCluster: Story = {
     const editLabel = h(
       'span',
       null,
-      'edit_file · ',
+      'edit · ',
       h('a', { class: 'vlink', 'data-file': 'fcss', 'data-kind': 'css' }, 'hero.css')
     );
     editRow.appendChild(editLabel);

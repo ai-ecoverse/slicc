@@ -29,6 +29,12 @@ struct ServerCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Kill existing Electron app")
     var kill: Bool = false
 
+    
+    
+    
+    
+    
+    
     @Flag(name: .long, help: "Lead mode (needs --lead-worker-base-url or WORKER_BASE_URL)")
     var lead: Bool = false
 
@@ -38,6 +44,11 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Chrome profile name")
     var profile: String?
 
+    
+    
+    
+    
+    
     @Option(
         name: [.customLong("join"), .customLong("join-url")],
         help: "Tray join URL (accepts --join <url> or --join-url <url>)"
@@ -56,6 +67,11 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Path to secrets .env file")
     var envFile: String?
 
+    
+    
+    
+    
+    
     @Option(
         name: .customLong("mount"),
         help:
@@ -88,8 +104,16 @@ struct ServerCommand: AsyncParsableCommand {
 
         let serveOrigin = "http://localhost:\(servePort)"
 
+        
+        
+        
+        
         let thinBridgeMode = Self.isThinBridgeMode(config: config)
-
+        
+        
+        
+        
+        
         let thinElectronMode = Self.isThinElectronMode(config: config, environment: environment)
         let bridgeToken: String? = Self.resolveBridgeToken(
             thinBridgeMode: thinBridgeMode,
@@ -98,17 +122,35 @@ struct ServerCommand: AsyncParsableCommand {
         )
 
         var browserProcess: Process?
-
+        
+        
+        
+        
         var browserKillPid: pid_t?
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
-
+        
+        
+        
+        
         var electronFollower: ElectronTrayFollower?
-
+        
+        
+        
+        
         var tabSessionRecorder: TabSessionRecorder?
 
+        
+        
+        
+        
+        
+        
         let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
-
+        
+        
+        
+        
         let sessionDir: URL = {
             if let envFileURL = config.envFileURL {
                 return envFileURL.deletingLastPathComponent()
@@ -120,7 +162,8 @@ struct ServerCommand: AsyncParsableCommand {
         do {
             sessionId = try SecretInjector.readOrCreateSessionId(in: sessionDir)
         } catch {
-
+            
+            
             logger.warning(
                 "session-id persistence failed; falling back to ephemeral session",
                 metadata: ["error": .string(String(describing: error))]
@@ -133,6 +176,14 @@ struct ServerCommand: AsyncParsableCommand {
             envFileSecrets: envFileSecrets,
             oauthStore: oauthStore
         )
+        
+        
+        
+        
+        
+        
+        
+        
 
         if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
@@ -161,7 +212,10 @@ struct ServerCommand: AsyncParsableCommand {
                 bridgeToken: bridgeToken
             )
             let userDataDir = chromeLauncher.resolveUserDataDir(servePort: servePort)
-
+            
+            
+            
+            
             let sliccOrigins = [resolveHostedLeaderOrigin(environment: environment), serveOrigin]
             let tabSessionStore = TabSessionStore(
                 fileURL: TabSessionStore.defaultFileURL(userDataDir: userDataDir)
@@ -200,7 +254,10 @@ struct ServerCommand: AsyncParsableCommand {
             secretInjector: secretInjector
         )
         var httpConfiguration = HTTPClient.Configuration()
-
+        
+        
+        
+        
         httpConfiguration.decompression = .enabled(limit: .none)
         let httpClient = HTTPClient(
             eventLoopGroupProvider: .singleton,
@@ -211,7 +268,18 @@ struct ServerCommand: AsyncParsableCommand {
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
         if Self.shouldMountThinBridgeCors(thinBridgeMode: thinBridgeMode, bridgeToken: bridgeToken) {
-
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
             router.middlewares.add(ThinBridgeCorsMiddleware<BasicRequestContext>(bridgeToken: bridgeToken))
         }
         registerAPIRoutes(
@@ -232,7 +300,10 @@ struct ServerCommand: AsyncParsableCommand {
             router: router,
             server: .http1WebSocketUpgrade(
                 webSocketRouter: wsRouter,
-
+                
+                
+                
+                
                 configuration: .init(maxFrameSize: CDPProxy.defaultMaxMessageSize)
             ),
             configuration: .init(
@@ -254,7 +325,10 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         do {
-
+            
+            
+            
+            
             let startupFailure = StartupFailureBox()
             let errorObserver = Task { [startupLatch] in
                 do {
@@ -278,7 +352,12 @@ struct ServerCommand: AsyncParsableCommand {
 
             let consoleForwarder: ConsoleForwarder?
             if config.electron {
-
+                
+                
+                
+                
+                
+                
                 if let bridgeToken {
                     let thinBridge = ThinBridgeConfig(
                         hostedLeaderOrigin: resolveHostedLeaderOrigin(environment: environment),
@@ -291,10 +370,22 @@ struct ServerCommand: AsyncParsableCommand {
                         projectRoot: repositoryRoot,
                         logger: Logger(label: "slicc.browser.electron-overlay"),
                         thinBridge: thinBridge,
-
+                        
+                        
+                        
+                        
+                        
+                        
+                        
+                        
+                        
                         trayJoinUrl: config.joinUrl.flatMap { Self.parseTrayJoinURL($0)?.joinURL }
                     )
-
+                    
+                    
+                    
+                    
+                    
                     if let joinURLString = config.joinUrl,
                         let joinURL = URL(string: joinURLString)
                     {
@@ -392,12 +483,13 @@ struct ServerConfig: Sendable, Equatable {
     let prompt: String?
     let envFile: String?
     let envFileURL: URL?
-
+    
     struct MountMapping: Sendable, Equatable {
         let hostPath: String
         let path: String
     }
 
+    
     var mounts: [MountMapping] = []
 
     static func resolve(from command: ServerCommand) -> ServerConfig {
@@ -451,6 +543,11 @@ struct ServerConfig: Sendable, Equatable {
         )
     }
 
+    
+    
+    
+    
+    
     private static func normalizedAbsolutePath(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("/") else { return nil }
@@ -468,6 +565,10 @@ struct ServerConfig: Sendable, Equatable {
         return path
     }
 
+    
+    
+    
+    
     static func parseMountMapping(
         _ value: String,
         homeDirectory: String = NSHomeDirectory()
@@ -489,6 +590,7 @@ struct ServerConfig: Sendable, Equatable {
         return MountMapping(hostPath: hostPath, path: path)
     }
 
+    
     static func normalizedMountTable(_ values: [String]) -> [MountMapping] {
         var seen = Set<String>()
         var result: [MountMapping] = []
@@ -532,14 +634,14 @@ struct ServerConfig: Sendable, Equatable {
 }
 
 @available(macOS 14, *)
-private actor StartupFailureBox {
+actor StartupFailureBox {
     private var error: Error?
     func set(_ error: Error) { self.error = error }
     func get() -> Error? { error }
 }
 
 @available(macOS 14, *)
-private actor ServerStartupLatch {
+actor ServerStartupLatch {
     private var started = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
@@ -596,7 +698,12 @@ extension ServerCommand {
             try await findAvailablePort(startingFrom: preferred, strict: strict)
         }
     ) async throws -> Int {
-
+        
+        
+        
+        
+        
+        
         if let explicit = preferredServePort(from: environment) {
             return try await resolveAvailablePort(explicit, true)
         }
@@ -631,18 +738,29 @@ extension ServerCommand {
             return cwdRoot
         }
 
+        
+        
         return URL(fileURLWithPath: filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+            .deletingLastPathComponent()  
+            .deletingLastPathComponent()  
+            .deletingLastPathComponent()  
+            .deletingLastPathComponent()  
+            .deletingLastPathComponent()  
     }
 
+    
+    
+    
+    
     static func isThinBridgeMode(config: ServerConfig) -> Bool {
         !config.serveOnly && !config.electron
     }
 
+    
+    
+    
+    
+    
     static func isThinElectronMode(config: ServerConfig, environment: [String: String]) -> Bool {
         guard config.electron, !config.serveOnly else { return false }
         guard let origin = environment["SLICC_HOSTED_LEADER_ORIGIN"], !origin.isEmpty else {
@@ -651,6 +769,14 @@ extension ServerCommand {
         return true
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     static func resolveBridgeToken(
         thinBridgeMode: Bool,
         thinElectronMode: Bool,
@@ -662,10 +788,24 @@ extension ServerCommand {
         return (thinBridgeMode || thinElectronMode) ? BridgeSecurity.mintToken() : nil
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static func shouldMountThinBridgeCors(thinBridgeMode: Bool, bridgeToken: String?) -> Bool {
         thinBridgeMode || bridgeToken != nil
     }
 
+    
+    
+    
+    
     static func resolveThinLeaderOrigin(
         config: ServerConfig,
         environment: [String: String]
@@ -678,10 +818,18 @@ extension ServerCommand {
                 options: .regularExpression
             )
         }
-
+        
         return "https://www.sliccy.ai"
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     static func resolveBrowserLaunchURL(
         serveOrigin: String,
         config: ServerConfig,
@@ -713,7 +861,11 @@ extension ServerCommand {
                     config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
                 )
             else {
-
+                
+                
+                
+                
+                
                 throw ValidationError(
                     "The --lead launch flow requires a tray worker base URL via --lead-worker-base-url <url> or the WORKER_BASE_URL environment variable."
                 )
@@ -817,7 +969,7 @@ extension ServerCommand {
             $0.name == "trayWorkerUrl" || $0.name == "lead" || $0.name == "tray"
         }
         queryItems.append(URLQueryItem(name: "tray", value: trayValue))
-        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             throw ValidationError("Invalid launch URL: \(locationHref)")
@@ -844,6 +996,12 @@ extension ServerCommand {
         let joinURL: String
     }
 
+    
+    
+    
+    
+    
+    
     static func parseEnvFileSecrets(at url: URL) -> [Secret]? {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else {
             return nil

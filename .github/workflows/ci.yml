@@ -1,8 +1,9 @@
 name: CI
+run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number || github.ref_name }}
 
 on:
   pull_request:
-    branches: [main, no-comment]
+    branches: [main]
   push:
     branches: [automation/planning-artifact-cleanup]
   merge_group:
@@ -29,8 +30,12 @@ jobs:
       spoon: ${{ steps.filter.outputs.spoon }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
+      cloudflare-r2: ${{ steps.filter.outputs.cloudflare-r2 }}
+      cloudflare-archive-smoke: ${{ steps.filter.outputs.cloudflare-archive-smoke }}
+      e2e: ${{ steps.filter.outputs.e2e }}
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
+      github-workflow: ${{ steps.filter.outputs.github-workflow }}
       capability-contract: ${{ steps.filter.outputs.capability-contract }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
@@ -73,10 +78,63 @@ jobs:
               - 'packages/chrome-extension/**'
             cloudflare-worker:
               - 'packages/cloudflare-worker/**'
+
+
+
+
+            cloudflare-r2:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
+              - 'packages/shared-ts/**'
+              - 'packages/webcomponents/**'
+              - 'packages/spoon/**'
+              - 'packages/cloud-core/**'
+              - 'packages/dev-tools/providers.build.json'
+              - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
+              - 'packages/cloudflare-worker/scripts/upload-lib.mjs'
+              - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
+              - 'packages/cloudflare-worker/src/asset-archive.mjs'
+              - 'packages/cloudflare-worker/tests/deployed.test.ts'
+              - 'packages/cloudflare-worker/wrangler.jsonc'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
+              - '.github/workflows/ci.yml'
+
+
+
+
+            cloudflare-archive-smoke:
+              - 'packages/cloudflare-worker/src/index.ts'
+
+
+
+            e2e:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
+              - 'packages/shared-ts/**'
+              - 'packages/spoon/**'
+              - 'packages/webcomponents/**'
+              - 'packages/cloud-core/**'
+              - 'packages/node-server/**'
+              - 'packages/cloudflare-worker/**'
+              - 'packages/dev-tools/tools/hf-cache-mirror.mjs'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
+              - 'tsconfig*.json'
+              - 'vitest*.config.*'
+              - '.github/workflows/ci.yml'
             cherry:
               - 'packages/cherry/**'
             dev-tools:
               - 'packages/dev-tools/**'
+            github-workflow:
+              - 'packages/github-workflow/**'
+              - '.github/workflows/slicc-*.yml'
+              - '.github/workflows/github-workflow-smoke.yml'
 
 
 
@@ -108,7 +166,9 @@ jobs:
 
               - 'packages/dev-tools/tools/ios-sim-test.sh'
               - 'packages/dev-tools/tools/ios-sim-select.sh'
+              - 'packages/dev-tools/tools/ios-sim-prepare.sh'
               - 'packages/dev-tools/tools/ios-ui-test-exclusions.mjs'
+              - 'packages/dev-tools/tools/check-ios-test-isolation.mjs'
               - 'packages/dev-tools/tools/check-swift-resolved-drift.mjs'
 
 
@@ -286,6 +346,7 @@ jobs:
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
+      needs.changes.outputs.github-workflow == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
 
@@ -364,8 +425,14 @@ jobs:
 
 
 
+
+
+
+
+
+
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|py-realm-worker|transformers\.web' || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|js-realm-shared|realm-inprocess|py-realm-worker|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in browser bundle:"
             for f in $MATCHES; do
@@ -397,18 +464,7 @@ jobs:
 
   e2e:
     needs: changes
-    if: >-
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
-      needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.shared == 'true' ||
-      needs.changes.outputs.spoon == 'true' ||
-      needs.changes.outputs.webcomponents == 'true' ||
-      needs.changes.outputs.cloud-core == 'true' ||
-      needs.changes.outputs.node-server == 'true' ||
-      needs.changes.outputs.cloudflare-worker == 'true' ||
-      needs.changes.outputs.root-config == 'true' ||
-      needs.changes.outputs.speech == 'true'
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
 
     timeout-minutes: 55
@@ -427,7 +483,7 @@ jobs:
         run: npm run build -w @slicc/node-server
 
       - name: Free disk space for the browser storage quota
-        if: needs.changes.outputs.speech == 'true'
+        if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -451,7 +507,7 @@ jobs:
           fi
 
       - name: Cache Hugging Face mirror store
-        if: needs.changes.outputs.speech == 'true'
+        if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: .cache/hf-mirror
@@ -459,7 +515,7 @@ jobs:
           restore-keys: |
             hf-mirror-
       - name: Start Hugging Face caching mirror
-        if: needs.changes.outputs.speech == 'true'
+        if: github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: |
           mkdir -p .cache/hf-mirror
           nohup node packages/dev-tools/tools/hf-cache-mirror.mjs \
@@ -468,7 +524,16 @@ jobs:
           for i in $(seq 1 50); do [ -f .cache/hf-mirror.ready ] && break; sleep 0.2; done
           test -f .cache/hf-mirror.ready || { cat .cache/hf-mirror.log; exit 1; }
           echo "HF_ENDPOINT=http://127.0.0.1:8791" >> "$GITHUB_ENV"
-      - name: E2E tests
+      - name: PR E2E suite
+        if: github.event_name == 'pull_request'
+
+        run: npm run test:e2e
+        env:
+          SLICC_E2E_PR: '1'
+          WRANGLER_LOG: debug
+          NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Full E2E suite
+        if: github.event_name != 'pull_request'
 
         run: npm run test:e2e
         env:
@@ -477,7 +542,7 @@ jobs:
 
           RUN_REAL_SPEECH_E2E: ${{ needs.changes.outputs.speech == 'true' && '1' || '' }}
       - name: Mirror log
-        if: always() && needs.changes.outputs.speech == 'true'
+        if: always() && github.event_name != 'pull_request' && needs.changes.outputs.speech == 'true'
         run: cat .cache/hf-mirror.log || true
       - name: Upload Playwright artifacts
 
@@ -611,7 +676,7 @@ jobs:
 
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
 
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|py-realm-worker|transformers\.web' || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|js-realm-shared|realm-inprocess|py-realm-worker|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in extension bundle:"
             for f in $MATCHES; do
@@ -652,17 +717,16 @@ jobs:
         run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
+    name: Cloudflare staging deploy
     needs: changes
-    if: >-
-      needs.changes.outputs.cloud-core == 'true' ||
-      needs.changes.outputs.cloudflare-worker == 'true' ||
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
-      needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}
 
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -699,22 +763,35 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
 
-      - name: Archive assets to R2 (staging)
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+      - name: Wait for staging mutation turn
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
+        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4
+        with:
+          queue-name: staging-mutation-queue
+          same-branch-only: false
+          job-to-wait-for: Cloudflare staging deploy
+          step-to-wait-for: Release staging mutation queue
+          poll-interval-seconds: 10
+          initial-wait-seconds: 20
+          retries: 3
+
+      - name: Verify preview storage lifecycle
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
-          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
+      - name: Archive assets to R2 (staging)
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && needs.changes.outputs.cloudflare-r2 == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
 
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -725,9 +802,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 1)
         id: deploy_attempt_1_secrets
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -745,11 +820,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 2
-        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         run: sleep 20
       - name: Deploy staging worker (attempt 2)
         id: deploy_attempt_2
-        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -760,7 +835,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 2)
         id: deploy_attempt_2_secrets
-        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -778,11 +853,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 3
-        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         run: sleep 40
       - name: Deploy staging worker (attempt 3)
         id: deploy_attempt_3
-        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -793,7 +868,7 @@ jobs:
           command: deploy --env staging
       - name: Upload staging secrets (attempt 3)
         id: deploy_attempt_3_secrets
-        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -812,7 +887,7 @@ jobs:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Finalize staging deploy
         id: deploy
-        if: (steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success')
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && ((steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success'))
         env:
           DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
           DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
@@ -834,12 +909,10 @@ jobs:
           fi
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-          github.event_name == 'push'
+        if: env.RUN_CLOUDFLARE_STAGING == 'true'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-          SLICC_ARCHIVE_SMOKE: '1'
+          SLICC_ARCHIVE_SMOKE: ${{ (needs.changes.outputs.cloudflare-r2 == 'true' || needs.changes.outputs.cloudflare-archive-smoke == 'true') && '1' || '' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
@@ -857,7 +930,8 @@ jobs:
           done
 
       - name: Deploy staging preview worker
-        if: steps.deploy.outcome == 'success'
+        id: deploy_preview
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy.outcome == 'success'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -866,6 +940,46 @@ jobs:
           workingDirectory: packages/cloudflare-worker
           environment: staging
           command: deploy --env staging --config wrangler-preview.jsonc
+
+      - name: Smoke test staging live preview
+        if: env.RUN_CLOUDFLARE_STAGING == 'true' && steps.deploy_preview.outcome == 'success'
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          for attempt in 1 2 3; do
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed-live-preview.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Live preview smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Live preview smoke attempt ${attempt} failed; waiting for propagation..."
+            sleep 15
+          done
+
+      - name: Release staging mutation queue
+        if: always()
+        run: true
+
+      - name: Publish Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node packages/dev-tools/tools/ci-job-timing.mjs
+          --job "Cloudflare staging deploy"
+          --title "Cloudflare worker timings"
+          --output test-results/cloudflare-worker-phase-timing.json
+          --exclude-step "Publish Cloudflare timing diagnostics"
+      - name: Upload Cloudflare timing diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cloudflare-worker-phase-timing
+          path: test-results/cloudflare-worker-phase-timing.json
+          if-no-files-found: ignore
 
   cloud-core:
     needs: changes
@@ -895,6 +1009,49 @@ jobs:
           if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/cloud-core
+
+  github-workflow:
+    needs: changes
+    if: >-
+      needs.changes.outputs.github-workflow == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:github-workflow
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-github-workflow
+          path: coverage/
+          if-no-files-found: ignore
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      - name: actionlint (composite actions + slicc-*.yml)
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+          "$(go env GOPATH)/bin/actionlint" -no-color \
+            .github/workflows/slicc-*.yml \
+            .github/workflows/github-workflow-smoke.yml
+          for f in packages/github-workflow/actions/*/action.yml; do
+            node -e '
+              const fs = require("fs");
+              const text = fs.readFileSync(process.argv[1], "utf8");
+              if (!/^runs:\n  using: composite/m.test(text)) { console.error(process.argv[1] + ": not a composite action"); process.exit(1); }
+            ' "$f"
+          done
 
   go-optel:
     needs: changes
@@ -1776,35 +1933,6 @@ jobs:
             sleep "$delay"
           done
 
-  release-gate:
-    if: github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      actions: read
-    steps:
-      - name: Wait for active release
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-          DEADLINE_MINUTES: '85'
-        run: |
-          deadline=$(( $(date +%s) + DEADLINE_MINUTES * 60 ))
-          while true; do
-            ACTIVE=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=in_progress&per_page=1" --jq '.total_count')
-            QUEUED=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=queued&per_page=1" --jq '.total_count')
-            if [ "$ACTIVE" = "0" ] && [ "$QUEUED" = "0" ]; then
-              echo "No release in progress, proceeding"
-              break
-            fi
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::Release still running (active=$ACTIVE queued=$QUEUED) after ${DEADLINE_MINUTES}m; giving up so this batch does not merge mid-release. Re-enqueue once the release completes."
-              exit 1
-            fi
-            echo "Release running (active=$ACTIVE queued=$QUEUED), waiting 30s..."
-            sleep 30
-          done
-
   bundle-size:
     needs: changes
     if: >-
@@ -1870,7 +1998,7 @@ jobs:
         ios-app-tests,
         go-optel,
         slicc-cli,
-        release-gate,
+        github-workflow,
       ]
     runs-on: ubuntu-latest
     steps:

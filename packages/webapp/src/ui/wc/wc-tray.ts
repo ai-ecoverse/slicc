@@ -128,6 +128,8 @@ export interface WcTrayHandle {
   getFollower(): PageFollowerTrayHandle | null;
 
   scheduleScoopsListBroadcast(): void;
+
+  broadcastUnitStatus(scoopJid: string, status: string): void;
   performTrayLeaveLocally(opts: {
     workerBaseUrl: string | null;
     requestId?: string;
@@ -167,6 +169,7 @@ function startFollowerRole(
 
 export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): TeleportFollowerInfo[] {
   const execIds = handle.sync.getExecCapableBootstrapIds();
+  const computerIds = handle.sync.getComputerCapableBootstrapIds();
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
   const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
@@ -184,6 +187,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
       peerState: follower.peerState,
       exec: execIds.has(follower.bootstrapId),
       cdp: cdpIds.has(follower.bootstrapId),
+      computer: computerIds.has(follower.bootstrapId),
       teleportEligible: teleportIds.has(follower.bootstrapId),
       motd: motds.get(follower.bootstrapId),
     };
@@ -498,6 +502,17 @@ export function buildFollowerOptions(
   return { dispose, options };
 }
 
+export function followerSprinkleLickOrigin(
+  manager: Pick<SprinkleManager, 'opened' | 'lickOriginUnitIdOf'>,
+  sprinkleName: string,
+  followerSelectedJid: string | undefined
+): string | undefined {
+  if (sprinkleName === 'inline' || !manager.opened().includes(sprinkleName)) {
+    return followerSelectedJid;
+  }
+  return manager.lickOriginUnitIdOf(sprinkleName);
+}
+
 function mirrorSprinkleInstances(state: TrayRoleState): void {
   writeSprinkleInstancesToShim(state.leader ? state.leader.sync.getSprinkleInstances() : []);
 }
@@ -674,7 +689,7 @@ export function createLeaderOptionsFactory(
     onSprinkleLick: (name, body, targetScoop, originLabel, originUnitJid) =>
       client.sendSprinkleLick(name, body, targetScoop, {
         label: originLabel,
-        unitJid: originUnitJid,
+        unitJid: followerSprinkleLickOrigin(deps.sprinkleManager, name, originUnitJid),
       }),
     onSprinkleInstancesChanged: () => mirrorSprinkleInstances(state),
     onFollowerMessage: (text, messageId, attachments, options) =>
@@ -729,6 +744,13 @@ export function createLeaderOptionsFactory(
       async readFile(path: string, options?: import('../../fs/types.js').ReadFileOptions) {
         const fs = await deps.openFs();
         return fs.readFile(path, options);
+      },
+
+      async readFileRange(path: string, start: number, end: number) {
+        const fs = await deps.openFs();
+        if (fs.readFileRange) return fs.readFileRange(path, start, end);
+        const whole = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+        return new Uint8Array(whole.subarray(start, Math.min(end, whole.byteLength)));
       },
       async readDir(path: string) {
         const fs = await deps.openFs();
@@ -1113,6 +1135,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     getLeader: () => state.leader,
     getFollower: () => state.follower,
     scheduleScoopsListBroadcast: () => state.leader?.scheduleScoopsListBroadcast(),
+    broadcastUnitStatus: (scoopJid, status) => state.leader?.sync.broadcastStatus(status, scoopJid),
     performTrayLeaveLocally,
   };
 }

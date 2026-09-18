@@ -12,11 +12,18 @@ import (
 	"time"
 )
 
+
+
+
+
+
 func TestEvalHelperProcess(_ *testing.T) {
 	if os.Getenv("SLICC_TEST_EVAL_REPL") == "" {
 		return
 	}
-
+	
+	
+	
 	signal.Ignore(os.Interrupt)
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -46,6 +53,9 @@ func startTestEval(t *testing.T) *EvalSession {
 	t.Cleanup(session.Close)
 	return session
 }
+
+
+
 
 func warmUpEval(t *testing.T, session *EvalSession) {
 	t.Helper()
@@ -87,6 +97,7 @@ func TestEvalPersistsAcrossCommands(t *testing.T) {
 		t.Fatalf("first output %q missing echo:one", first.joined())
 	}
 
+	
 	second := &chunkLog{}
 	res = session.Eval(context.Background(), "two\n", second.add, nil)
 	if res.Err != nil || res.ExitCode != 0 {
@@ -96,7 +107,7 @@ func TestEvalPersistsAcrossCommands(t *testing.T) {
 	if !strings.Contains(out, "echo:two") {
 		t.Fatalf("second output %q missing echo:two", out)
 	}
-
+	
 	if strings.Contains(out, "echo:\n") {
 		t.Fatalf("second output %q contains an empty echo — newline was doubled", out)
 	}
@@ -129,7 +140,8 @@ func TestEvalSerializesConcurrentCommands(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-
+	
+	
 	combined := logs[0].joined() + logs[1].joined()
 	for _, want := range []string{"echo:cmd0", "echo:cmd1"} {
 		if !strings.Contains(combined, want) {
@@ -148,6 +160,7 @@ func TestEvalReportsReplDeath(t *testing.T) {
 		t.Fatalf("exit code = %d, want the REPL's 3", res.ExitCode)
 	}
 
+	
 	res = session.Eval(context.Background(), "after", nil, nil)
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "exited") {
 		t.Fatalf("post-death Eval: %+v", res)
@@ -169,7 +182,9 @@ func TestEvalHonorsContextCancellation(t *testing.T) {
 }
 
 func TestEvalSurvivesConnectionScopedCancel(t *testing.T) {
-
+	
+	
+	
 	session := startTestEval(t)
 	warmUpEval(t, session)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -189,7 +204,10 @@ func TestEvalSurvivesConnectionScopedCancel(t *testing.T) {
 }
 
 func TestEvalSigintKeepsReplAlive(t *testing.T) {
-
+	
+	
+	
+	
 	session := startTestEval(t)
 	warmUpEval(t, session)
 	control := make(chan string, 1)

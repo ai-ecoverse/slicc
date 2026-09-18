@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+
+
+
+
+
 type corpusEntry struct {
 	Type    string          `json:"type"`
 	IOS     string          `json:"ios"`
@@ -34,6 +39,7 @@ func loadCorpus(t *testing.T) corpusDoc {
 	}
 	return doc
 }
+
 
 func target(typ string) any {
 	switch typ {
@@ -69,7 +75,7 @@ func TestCorpusExecAndHelloRoundTrip(t *testing.T) {
 	for _, e := range all {
 		dst := target(e.Type)
 		if dst == nil {
-			continue
+			continue 
 		}
 		modeled++
 		if err := json.Unmarshal(e.Message, dst); err != nil {
@@ -89,6 +95,7 @@ func TestCorpusExecAndHelloRoundTrip(t *testing.T) {
 		}
 	}
 
+	
 	if modeled < 11 {
 		t.Fatalf("expected >=11 modeled corpus fixtures, found %d — did exec.*/hello/status move?", modeled)
 	}

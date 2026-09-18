@@ -3,6 +3,9 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
 final class MarkdownTableLayoutTests: XCTestCase {
 
     private let padding = MarkdownTableLayout.cellHorizontalPadding * 2
@@ -16,9 +19,12 @@ final class MarkdownTableLayoutTests: XCTestCase {
             rows: rows)
     }
 
+    
     private func measureByLength(_ text: String, _ isHeader: Bool) -> CGFloat {
         CGFloat(text.count) * 10
     }
+
+    
 
     func testColumnHugsItsWidestCellPlusPadding() {
         let widths = MarkdownTableLayout.columnWidths(
@@ -44,6 +50,8 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(widths, [100 + padding, 120 + padding])
     }
 
+    
+
     func testNarrowColumnKeepsTheMinimumWidth() {
         let widths = MarkdownTableLayout.columnWidths(
             for: table(header: ["a"], rows: [["b"]]),
@@ -52,6 +60,8 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(widths, [MarkdownTableLayout.minimumCellWidth])
     }
 
+    
+    
     func testRunawayColumnIsCappedSoTheCellWraps() {
         let long = String(repeating: "x", count: 200)
         let widths = MarkdownTableLayout.columnWidths(
@@ -61,6 +71,10 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(widths, [MarkdownTableLayout.maximumCellWidth])
     }
 
+    
+
+    
+    
     func testRaggedRowsDoNotAffectColumnCount() {
         let widths = MarkdownTableLayout.columnWidths(
             for: table(header: ["ab", "cd"], rows: [["a"], ["a", "b", "abcdefghij"]]),
@@ -77,6 +91,11 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(widths, [MarkdownTableLayout.minimumCellWidth])
     }
 
+    
+
+    
+    
+    
     func testMeasurementIgnoresInlineMarkdownSyntax() {
         let styled = MarkdownTableLayout.textWidth("**Runtime**", isHeader: false)
         let plain = MarkdownTableLayout.textWidth("Runtime", isHeader: false)
@@ -103,6 +122,11 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(MarkdownTableLayout.textWidth("", isHeader: false), 0)
     }
 
+    
+
+    
+    
+    
     func testTotalWidthIsTheSumOfTheColumnWidths() {
         let subject = table(
             header: ["Float", "Runtime"],
@@ -122,6 +146,8 @@ final class MarkdownTableLayoutTests: XCTestCase {
             MarkdownTableLayout.totalWidth(for: narrow))
     }
 
+    
+
     func testMemoizedWidthsMatchTheMeasuredRule() {
         let subject = table(
             header: ["Float", "Runtime"],
@@ -136,6 +162,8 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(first, direct)
     }
 
+    
+    
     func testTablesDifferingInOneCellGetTheirOwnWidths() {
         let narrow = table(header: ["Float"], rows: [["CLI"]])
         let wide = table(header: ["Float"], rows: [["a much longer float name"]])

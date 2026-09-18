@@ -124,6 +124,10 @@ export class IdleCompaction {
         });
       }
     }
+
+    if (outcome === 'no-progress' || outcome === 'failed') {
+      this.arm();
+    }
     return outcome;
   }
 
@@ -150,6 +154,8 @@ export class IdleCompaction {
         force: true,
         trigger: 'idle',
         roundId,
+
+        allowNaiveDrop: false,
         deferMemoryExtraction: (extract) => {
           extractMemories = extract;
         },

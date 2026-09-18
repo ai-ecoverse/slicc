@@ -3,6 +3,8 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
 final class TrayTypesTests: XCTestCase {
 
     private func sampleOffer() -> TraySessionDescription {
@@ -16,6 +18,8 @@ final class TrayTypesTests: XCTestCase {
     private func sampleFailure() -> TrayBootstrapFailure {
         TrayBootstrapFailure(code: "TIMEOUT", message: "took too long", retryable: true, retryAfterMs: 500, failedAt: "2026-08-08T00:00:00Z")
     }
+
+    
 
     func testSessionDescriptionRoundTrip() throws {
         let decoded = try WireCodec.roundTrip(TraySessionDescription(type: .answer, sdp: "v=0\r\n"))
@@ -44,6 +48,8 @@ final class TrayTypesTests: XCTestCase {
         XCTAssertNil(decoded.sdpMLineIndex)
         XCTAssertNil(decoded.usernameFragment)
     }
+
+    
 
     func testBootstrapStateRoundTrips() throws {
         for state in [TrayBootstrapState.pending, .offered, .connected, .failed] {
@@ -87,6 +93,8 @@ final class TrayTypesTests: XCTestCase {
         XCTAssertNil(decoded.failure)
     }
 
+    
+
     func testTurnIceServerRoundTrip() throws {
         let decoded = try WireCodec.roundTrip(
             TurnIceServer(urls: ["turn:host:3478", "stun:host:3478"], username: "u", credential: "c"))
@@ -109,6 +117,8 @@ final class TrayTypesTests: XCTestCase {
         XCTAssertNil(decoded.reconnectDeadline)
         XCTAssertNil(decoded.lastSeenAt)
     }
+
+    
 
     func testBootstrapOfferEventRoundTrip() throws {
         guard

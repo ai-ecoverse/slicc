@@ -4,6 +4,17 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "DefaultBrowser")
 
+
+
+
+
+
+
+
+
+
+
+
 protocol DefaultBrowserSystem {
     func handlerURL(toOpen url: URL) -> URL?
     func setDefaultApplication(at bundleURL: URL, toOpenURLsWithScheme scheme: String) async -> Error?
@@ -30,9 +41,13 @@ struct WorkspaceDefaultBrowserSystem: DefaultBrowserSystem {
 }
 
 enum DefaultBrowserRegistration {
-
+    
+    
+    
     static let handledSchemes = ["http", "https"]
 
+    
+    
     static let probeURL = URL(string: "https://www.sliccy.ai")!
 
     static func isDefault(
@@ -42,13 +57,23 @@ enum DefaultBrowserRegistration {
         matches(handlerURL: system.handlerURL(toOpen: probeURL), bundleURL: bundleURL)
     }
 
+    
+    
+    
     static func matches(handlerURL: URL?, bundleURL: URL) -> Bool {
         guard let handlerURL else { return false }
         return canonicalPath(handlerURL) == canonicalPath(bundleURL)
     }
 
+    
+    
+    
     static var isRegistrable: Bool { SliccBootstrapper.isBundled }
 
+    
+    
+    
+    
     static func makeDefault(
         bundleURL: URL = Bundle.main.bundleURL,
         system: any DefaultBrowserSystem = WorkspaceDefaultBrowserSystem(),

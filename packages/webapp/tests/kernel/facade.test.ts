@@ -35,14 +35,13 @@ const mockChrome = {
 
 (globalThis as unknown as { chrome: typeof mockChrome }).chrome = mockChrome;
 
-const { mockSessionStore, mockHandleAction, mockHandleSprinkleOpResponse } = vi.hoisted(() => ({
+const { mockSessionStore, mockHandleAction } = vi.hoisted(() => ({
   mockSessionStore: vi.fn(function (this: Record<string, Mock>) {
     this.init = vi.fn().mockResolvedValue(undefined);
     this.saveMessages = vi.fn().mockResolvedValue(undefined);
     this.delete = vi.fn().mockResolvedValue(undefined);
   }),
   mockHandleAction: vi.fn().mockResolvedValue(undefined),
-  mockHandleSprinkleOpResponse: vi.fn(),
 }));
 
 vi.mock('../../src/scoops/chat-session-store.js', () => ({
@@ -56,10 +55,6 @@ vi.mock('../../src/tools/tool-ui.js', () => ({
     markMounted: vi.fn(),
   },
   TOOL_UI_MOUNTED_ACTION: '__mounted',
-}));
-
-vi.mock('../../src/scoops/sprinkle-manager-proxy.js', () => ({
-  handleSprinkleOpResponse: mockHandleSprinkleOpResponse,
 }));
 
 const { Bridge } = await import('../../src/kernel/facade.js');
@@ -508,30 +503,5 @@ describe('Kernel facade parity', () => {
     expect(followerSendMessage).toHaveBeenCalledWith('follower hi', 'msg-follower-1', undefined);
 
     expect(orchestrator.handleMessage).not.toHaveBeenCalled();
-  });
-
-  it('sprinkle-op-response payloads route to handleSprinkleOpResponse', async () => {
-    for (const listener of messageListeners) {
-      listener(
-        {
-          source: 'panel',
-          payload: {
-            type: 'sprinkle-op-response',
-            id: 'req-1',
-            result: { ok: true },
-          },
-        },
-        {},
-        () => {}
-      );
-    }
-    await tick();
-
-    expect(mockHandleSprinkleOpResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'sprinkle-op-response', id: 'req-1' })
-    );
-
-    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
-    expect(orchestrator.unregisterScoop).not.toHaveBeenCalled();
   });
 });

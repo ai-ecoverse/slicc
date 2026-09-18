@@ -83,7 +83,7 @@ export type AgentEvent =
     }
   | { type: 'turn_end'; messageId: string }
   | { type: 'compaction_notice'; messageId: string; marker: ChatCompactionMarker }
-  | { type: 'error'; error: string }
+  | { type: 'error'; error: string; endTurn?: boolean }
   | { type: 'screenshot'; base64: string; url?: string }
   | { type: 'terminal_output'; text: string };
 
@@ -160,6 +160,7 @@ export interface LickEvent {
     | 'cherry'
     | 'workflow'
     | 'bash'
+    | 'jshd'
     | 'sudo-request'
     | 'preview'
     | 'discovery';
@@ -200,6 +201,8 @@ export interface LickEvent {
   sudoDetail?: string;
   sudoScoopName?: string;
   sudoSuggestedPattern?: string;
+
+  sudoReason?: string;
   targetScoop?: string;
 
   originFollowerId?: string;
@@ -213,6 +216,9 @@ export interface LickEvent {
   bashExitCode?: number;
 
   bashJobPid?: number;
+
+  jshdName?: string;
+  jshdRestarts?: number;
 
   resultPath?: string;
   preview?: string;

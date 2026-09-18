@@ -1,0 +1,80 @@
+name: SLICC exec
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Command line for the leader's shell.
+        type: string
+        required: true
+      timeout:
+        description: Wall-clock cap.
+        type: string
+        default: 10m
+      fail-on-error:
+        description: Fail the job when the command exits non-zero.
+        type: boolean
+        default: true
+      cli-version:
+        description: Release tag of the Go `slicc` CLI, or `latest`.
+        type: string
+        default: latest
+      slicc-ref:
+        description: Ref of ai-ecoverse/slicc to take the actions from.
+        type: string
+        default: main
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+      artifact-name:
+        description: Artifact holding the full stdout.
+        type: string
+        default: slicc-exec-output
+    secrets:
+      SLICC_JOIN_URL:
+        description: The leader's join link.
+        required: true
+    outputs:
+      stdout:
+        description: Command stdout (truncated to 256 KB; full text in the artifact).
+        value: ${{ jobs.exec.outputs.stdout }}
+      exit-code:
+        description: Exit status of the command on the leader.
+        value: ${{ jobs.exec.outputs.exit-code }}
+
+permissions:
+  contents: read
+
+jobs:
+  exec:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 120
+    outputs:
+      stdout: ${{ steps.exec.outputs.stdout }}
+      exit-code: ${{ steps.exec.outputs.exit-code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ai-ecoverse/slicc
+          ref: ${{ inputs.slicc-ref }}
+          path: .slicc-gw
+          sparse-checkout: packages/github-workflow
+          persist-credentials: false
+      - uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
+        with:
+          version: ${{ inputs.cli-version }}
+      - id: exec
+        uses: ./.slicc-gw/packages/github-workflow/actions/exec
+        with:
+          join-url: ${{ secrets.SLICC_JOIN_URL }}
+          command: ${{ inputs.command }}
+          timeout: ${{ inputs.timeout }}
+          fail-on-error: ${{ inputs.fail-on-error }}
+          output-file: ${{ runner.temp }}/slicc-gw/out/stdout.txt
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/slicc-gw/out/stdout.txt
+          if-no-files-found: ignore

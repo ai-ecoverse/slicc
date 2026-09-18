@@ -30,42 +30,50 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+const USER_PROMPT = 'run the export scenario';
+
 async function seedBinaryAttachment(
   page: import('@playwright/test').Page,
   b64: string
 ): Promise<void> {
   await page.evaluate(
-    async (args: { b64: string }) => {
+    async (args: { b64: string; body: string }) => {
       await new Promise<void>((resolve, reject) => {
-        const req = indexedDB.open('browser-coding-agent', 1);
+        const req = indexedDB.open('slicc-work-units', 1);
         req.onsuccess = () => {
           const db = req.result;
-          const tx = db.transaction('sessions', 'readwrite');
-          const store = tx.objectStore('sessions');
-          const getReq = store.get('session-cone');
+          const tx = db.transaction('conversations', 'readwrite');
+          const store = tx.objectStore('conversations');
+          const getReq = store.getAll();
           getReq.onsuccess = () => {
-            const session = getReq.result as
-              | { id: string; messages: Array<{ role: string; attachments?: unknown[] }> }
-              | undefined;
-            if (!session?.messages?.length) {
+            const records = getReq.result as Array<{
+              workspaceId: string;
+              attachments?: unknown[];
+            }>;
+            const cone = records.find((r) => r.workspaceId === '/workspace');
+            if (!cone) {
               resolve();
               return;
             }
-            const firstUserMsg = session.messages.find((m) => m.role === 'user');
-            if (!firstUserMsg) {
-              resolve();
-              return;
-            }
-            if (!firstUserMsg.attachments) firstUserMsg.attachments = [];
-            firstUserMsg.attachments.push({
-              id: 'e2e-binary-fixture',
-              name: 'fixture.bin',
-              mimeType: 'application/octet-stream',
-              size: 8,
-              kind: 'file',
-              data: args.b64,
-            });
-            const putReq = store.put(session);
+            cone.attachments = [
+              ...(cone.attachments ?? []),
+              {
+                id: 'e2e-binary-fixture-message',
+                timestamp: 0,
+                body: args.body,
+                attachments: [
+                  {
+                    id: 'e2e-binary-fixture',
+                    name: 'fixture.bin',
+                    mimeType: 'application/octet-stream',
+                    size: 8,
+                    kind: 'file',
+                    data: args.b64,
+                  },
+                ],
+              },
+            ];
+            const putReq = store.put(cone);
             putReq.onsuccess = () => resolve();
             putReq.onerror = () => reject(putReq.error);
           };
@@ -74,7 +82,7 @@ async function seedBinaryAttachment(
         req.onerror = () => reject(req.error);
       });
     },
-    { b64 }
+    { b64, body: USER_PROMPT }
   );
 }
 
@@ -106,7 +114,7 @@ test.describe('transcript export — local ZIP download', () => {
       timeout: 20_000,
     });
 
-    await submitUserMessage(page, 'run the export scenario');
+    await submitUserMessage(page, USER_PROMPT);
 
     await expect(page.locator('slicc-chat-thread')).toContainText(
       'credential-shaped token appeared',

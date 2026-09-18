@@ -4,9 +4,11 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   __test__,
   detectWelcomeFirstRun,
+  hasOnboardingFinalLickInHistory,
   hasWelcomeLickInHistory,
   recordWelcomed,
 } from '../../src/scoops/welcome-detection.js';
+import { WorkUnitConversationStore } from '../../src/work-unit/conversation/store.js';
 
 interface PersistedSession {
   id: string;
@@ -78,6 +80,50 @@ describe('welcome-detection', () => {
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: `test-welcome-${dbCounter++}`, wipe: true });
     await clearConeSession();
+    await new WorkUnitConversationStore().clearAll();
+  });
+
+  describe('canonical conversation record', () => {
+    const primaryCone = {
+      key: '/workspace::cone_1',
+      workUnitId: 'cone_1',
+      workspaceId: '/workspace',
+      folder: 'cone',
+      legacyKeys: { agentSessionId: 'cone_1', chatSessionId: 'session-cone' },
+    };
+
+    function lickMessage(text: string) {
+      return { role: 'user', content: [{ type: 'text', text }], timestamp: 1 } as never;
+    }
+
+    it('finds a welcome lick recorded only in the canonical record', async () => {
+      await new WorkUnitConversationStore().syncAgentMessages(primaryCone, [
+        lickMessage(`${__test__.WELCOME_LICK_HEADER}\n\nNew user — first run`),
+      ]);
+      expect(await hasWelcomeLickInHistory()).toBe(true);
+      expect((await detectWelcomeFirstRun(vfs)).isFirstRun).toBe(false);
+    });
+
+    it('finds the final onboarding lick recorded only in the canonical record', async () => {
+      await new WorkUnitConversationStore().syncAgentMessages(primaryCone, [
+        lickMessage('{"action":"onboarding-complete-with-provider"}'),
+      ]);
+      expect(await hasOnboardingFinalLickInHistory()).toBe(true);
+    });
+
+    it('ignores a welcome recorded by an extra cone', async () => {
+      await new WorkUnitConversationStore().syncAgentMessages(
+        {
+          ...primaryCone,
+          key: '/cones/cone-two/workspace::cone_2',
+          workUnitId: 'cone_2',
+          workspaceId: '/cones/cone-two/workspace',
+          folder: 'cone-two',
+        },
+        [lickMessage(__test__.WELCOME_LICK_HEADER)]
+      );
+      expect(await hasWelcomeLickInHistory()).toBe(false);
+    });
   });
 
   describe('detectWelcomeFirstRun', () => {

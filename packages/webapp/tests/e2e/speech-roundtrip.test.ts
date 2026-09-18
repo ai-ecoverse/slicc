@@ -1,3 +1,4 @@
+import { ORT_WEB_VERSION } from '../../src/speech/ort-version.js';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 import { type ExecResult, execInTerminal, openTerminal } from './two-instance-helpers.js';
@@ -131,16 +132,18 @@ test.describe('say -o WAV output (real kokoro)', () => {
       const exported = await exec(page, `export HF_ENDPOINT=${JSON.stringify(hfEndpoint)}`);
       expect(exported.exitCode, `export HF_ENDPOINT stderr: ${exported.stderr}`).toBe(0);
     }
+
     const pkgs = await exec(
       page,
-      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
+      `cd /workspace && ipk add onnxruntime-web@${ORT_WEB_VERSION} espeak-ng`
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
 
     const KOKORO_DL_CMD =
       'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
       'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx';
-    const TRANSIENT_WRITE_FAILURE = /Cannot set property message|EINVAL/;
+    const TRANSIENT_WRITE_FAILURE = /Cannot set property message|Failed to write data to data pipe/;
+    const QUOTA_FAILURE = /storage quota|QuotaExceededError/;
 
     const clearPartialWeights = () =>
       exec(page, 'rm -rf /workspace/models/onnx-community/Kokoro-82M-v1.0-ONNX');
@@ -164,7 +167,11 @@ test.describe('say -o WAV output (real kokoro)', () => {
       await clearPartialWeights();
       kokoroDl = await exec(page, KOKORO_DL_CMD);
     }
-    expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
+    expect(
+      kokoroDl.exitCode,
+      `hf kokoro stderr: ${kokoroDl.stderr}` +
+        (QUOTA_FAILURE.test(kokoroDl.stderr) ? `\n${await storageReport(page)}` : '')
+    ).toBe(0);
 
     const warmup = await exec(page, 'say --warmup');
     expect(warmup.exitCode, `warmup stderr: ${warmup.stderr}`).toBe(0);

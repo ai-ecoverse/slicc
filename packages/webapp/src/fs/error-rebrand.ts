@@ -26,6 +26,7 @@ const KNOWN_CODES: FsErrorCode[] = [
   'EFBIG',
   'EBADF',
   'ENOSYS',
+  'EOPNOTSUPP',
   'EIO',
 ];
 
@@ -82,6 +83,9 @@ export function convertError(err: unknown, path: string): FsError {
   }
   if (msg.includes('ELOOP')) {
     return new FsError('ELOOP', 'too many levels of symbolic links', path);
+  }
+  if (msg.includes('EOPNOTSUPP') || msg.includes('ENOTSUP')) {
+    return new FsError('EOPNOTSUPP', 'operation not supported', path);
   }
 
   return new FsError('EINVAL', msg, path);

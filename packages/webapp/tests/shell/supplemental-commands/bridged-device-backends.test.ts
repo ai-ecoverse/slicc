@@ -67,6 +67,39 @@ describe('resolveUsbBackend + BridgedUsbBackend', () => {
     expect(calls[1].opts?.timeoutMs).toBeGreaterThanOrEqual(60_000);
   });
 
+  it('uses a long timeout for claim --wait and cancels the page-side waiter on failure', async () => {
+    const calls: Array<{ op: string; payload: unknown; opts?: { timeoutMs?: number } }> = [];
+    const call = vi.fn(async (op: string, payload: unknown, opts?: { timeoutMs?: number }) => {
+      calls.push({ op, payload, opts });
+      if (op === 'usb-claim-interface') throw new Error('rpc timeout');
+      return { done: true };
+    });
+    const rpc = { call, onEvent: vi.fn(() => () => undefined) } as never;
+    const backend = resolveUsbBackend(false, rpc);
+    await expect(backend!.claim('usb1', 0, { wait: true })).rejects.toThrow(/rpc timeout/);
+    expect(calls[0]?.op).toBe('usb-claim-interface');
+    expect(calls[0]?.opts).toEqual({ timeoutMs: 5 * 60_000 });
+    expect(calls[1]?.op).toBe('usb-cancel-claim-wait');
+    expect(calls[1]?.payload).toEqual({
+      handle: 'usb1',
+      interfaceNumber: 0,
+      owner: 'shell',
+    });
+  });
+
+  it('does not cancel a waiter when a non-wait claim fails', async () => {
+    const calls: Array<{ op: string; payload: unknown; opts?: { timeoutMs?: number } }> = [];
+    const call = vi.fn(async (op: string, payload: unknown, opts?: { timeoutMs?: number }) => {
+      calls.push({ op, payload, opts });
+      if (op === 'usb-claim-interface') throw new Error('busy');
+      return { done: true };
+    });
+    const rpc = { call, onEvent: vi.fn(() => () => undefined) } as never;
+    const backend = resolveUsbBackend(false, rpc);
+    await expect(backend!.claim('usb1', 0)).rejects.toThrow(/busy/);
+    expect(calls.map((c) => c.op)).toEqual(['usb-claim-interface']);
+  });
+
   it('returns null when neither DOM nor panelRpc is available', () => {
     expect(resolveUsbBackend(false, null)).toBeNull();
   });

@@ -39,6 +39,8 @@ export interface ToolDefinition {
   description: string;
   inputSchema: ToolInputSchema;
 
+  prepareArguments?: (args: unknown) => object;
+
   // biome-ignore lint/plugin: per-tool argument bag, shape declared by inputSchema.
   execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult>;
 }

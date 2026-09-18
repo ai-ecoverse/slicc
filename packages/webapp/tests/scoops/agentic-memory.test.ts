@@ -13,6 +13,7 @@ import {
   curatorAgentName,
   curatorScratchDir,
   DEFAULT_MEMORY_MD,
+  MEMORY_INSTRUCTIONS_PATH,
   runAgenticMemoryPass,
 } from '../../src/scoops/agentic-memory.js';
 import { CONE_MEMORY_PATH, computeBudget } from '../../src/scoops/cone-memory-budget.js';
@@ -43,6 +44,7 @@ const BASE_ALLOWED_COMMANDS = [
   'od',
   'printf',
   'readlink',
+  'rg',
   'sed',
   'sort',
   'stat',
@@ -50,6 +52,7 @@ const BASE_ALLOWED_COMMANDS = [
   'touch',
   'tr',
   'uniq',
+  'uname',
   'upskill',
   'wc',
   'xxd',
@@ -64,7 +67,7 @@ function fakeVfs(content: string | Error, liveMemory?: string): FakeVfs {
   return {
     writes,
     readFile: vi.fn(async (path: string) => {
-      if (path === '/shared/MEMORY.md') {
+      if (path === MEMORY_INSTRUCTIONS_PATH) {
         if (content instanceof Error) throw content;
         return content;
       }
@@ -137,9 +140,39 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
 
       maxWallClockMs: 45_000,
     });
+
     expect(options.prompt).toBe(
-      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`
+      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}\n\n` +
+        `**Curation pass**: mine the archived session at ${ARCHIVE_PATH} for what is worth carrying into future sessions, ` +
+        'fold it into the memory, and consolidate the whole file in the same pass. Work fast: a pass should finish in ' +
+        'well under 10 minutes and is hard-stopped after 1 minutes — mine the three signals, write, and stop, rather than ' +
+        'exploring the archive exhaustively.'
     );
+  });
+
+  it('fills {{TASK}} and {{TIMEOUT_MINUTES}} in place when the document has the slots', async () => {
+    const memoryMd = `---
+timeoutSeconds: 600
+---
+# Pass
+{{TASK}}
+Bound: {{TIMEOUT_MINUTES}} minutes. File: {{MEMORY_PATH}}.`;
+    const spawn = successSpawn();
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(memoryMd),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    const prompt = spawn.mock.calls[0][0].prompt;
+    expect(prompt.startsWith('# Pass\n**Curation pass**: mine the archived session at ')).toBe(
+      true
+    );
+    expect(prompt).toContain('hard-stopped after 10 minutes');
+    expect(prompt).toContain(`Bound: 10 minutes. File: ${DRAFT_PATH}.`);
+    expect(prompt).not.toContain('{{');
   });
 
   it('persists a durable transcript under the fixed memory-curator name', async () => {
@@ -204,6 +237,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     expect(prompt).toContain('`human:` for what the user said');
     expect(prompt).toContain('`process:` for what you inferred');
     expect(prompt).toContain('Version-pin claims that can rot');
+    expect(prompt).toContain('Runtime version comes from `uname -r`');
     expect(prompt).toContain('Never record a confidence score');
     expect(prompt).toContain('`stale_after: YYYY-MM-DD`, an absolute date, never a duration');
     expect(prompt).toContain('Supersede, never append.');
@@ -279,7 +313,7 @@ Curate {{MEMORY_PATH}}.`;
     expect(spawn.mock.calls[0][0].allowedCommands).toEqual(BASE_ALLOWED_COMMANDS);
   });
 
-  it.each(['awk', 'cp', 'echo', 'printf', 'sort'])(
+  it.each(['awk', 'cp', 'echo', 'printf', 'rg', 'sort', 'uname'])(
     'grants %s from the base set even when frontmatter omits it',
     async (command) => {
       const spawn = successSpawn();
@@ -344,12 +378,28 @@ Curate {{MEMORY_PATH}}.`;
   it('grants every command the seeded curator prompt is configured to use', async () => {
     const seeded = DEFAULT_MEMORY_MD.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
     const seededCommands = seeded
-      .match(/allowedCommands:\n((?:\s+-\s+\S+\n)+)/)?.[1]
+      .match(/allowedCommands:\n((?:\s+-\s+.+\n)+)/)?.[1]
       .split('\n')
-      .map((line) => line.replace(/^\s*-\s*/, '').trim())
+      .map((line) =>
+        line
+          .replace(/^\s*-\s*/, '')
+          .replace(/\s+#.*$/, '')
+          .trim()
+      )
       .filter(Boolean);
     expect(seededCommands?.length).toBeGreaterThan(0);
-    expect(BASE_ALLOWED_COMMANDS).toEqual(expect.arrayContaining(seededCommands ?? []));
+    expect(seededCommands).toContain('uname');
+    expect(seededCommands).toContain('rg');
+    const spawn = successSpawn();
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(DEFAULT_MEMORY_MD),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+    expect(spawn.mock.calls[0][0].allowedCommands).toEqual(
+      expect.arrayContaining(seededCommands ?? [])
+    );
   });
 
   it.each([
@@ -368,7 +418,7 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result).toEqual({ ok: true, report: 'done' });
     expect(warn).toHaveBeenCalled();
-    expect(spawn.mock.calls[0][0].writablePaths).toEqual([DRAFT_PATH]);
+    expect(spawn.mock.calls[0][0].writablePaths).toEqual([DRAFT_PATH, '/shared/wiki/']);
     expect(spawn.mock.calls[0][0].mergeOnSuccess?.targetPath).toBe(CONE_MEMORY_PATH);
   });
 
@@ -388,7 +438,7 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(spawn.mock.calls[0][0]).toMatchObject({
       cwd: '/workspace',
-      writablePaths: [DRAFT_PATH],
+      writablePaths: [DRAFT_PATH, '/shared/wiki/'],
       visiblePaths: ['/sessions/', '/shared/', '/workspace/', `${CURATION_DIR}/`],
       notifyOnComplete: true,
       mergeOnSuccess: {
@@ -601,7 +651,7 @@ Curate {{MEMORY_PATH}}.`;
       expect(options).toMatchObject({
         cwd: '/cones/cone-beta/workspace',
 
-        writablePaths: [DRAFT_PATH],
+        writablePaths: [DRAFT_PATH, '/shared/wiki/'],
         mergeOnSuccess: {
           targetPath: '/cones/cone-beta/CLAUDE.md',
           basePath: curationBasePath(ARCHIVE_PATH),
@@ -665,7 +715,9 @@ Curate {{MEMORY_PATH}}.`;
       });
 
       const prompt = spawn.mock.calls[0][0].prompt;
-      expect(prompt).toBe(`Draft in \`${scratch}/draft.md\`, then write ${DRAFT_PATH}.`);
+      expect(prompt.startsWith(`Draft in \`${scratch}/draft.md\`, then write ${DRAFT_PATH}.`)).toBe(
+        true
+      );
       expect(prompt).not.toContain(doubled);
     });
 
@@ -681,9 +733,11 @@ Curate {{MEMORY_PATH}}.`;
         cone: BETA,
       });
 
-      expect(spawn.mock.calls[0][0].prompt).toBe(
-        `Draft in \`/scoops/agent-memory-curator-cone-beta/draft.md\`, then write ${DRAFT_PATH}.`
-      );
+      expect(
+        spawn.mock.calls[0][0].prompt.startsWith(
+          `Draft in \`/scoops/agent-memory-curator-cone-beta/draft.md\`, then write ${DRAFT_PATH}.`
+        )
+      ).toBe(true);
     });
 
     it('leaves the primary cone byte-identical when named explicitly', async () => {
@@ -702,7 +756,7 @@ Curate {{MEMORY_PATH}}.`;
       expect(curatorAgentName('cone')).toBe('memory-curator');
       expect(options).toMatchObject({
         cwd: '/workspace',
-        writablePaths: [DRAFT_PATH],
+        writablePaths: [DRAFT_PATH, '/shared/wiki/'],
         name: 'memory-curator',
         mergeOnSuccess: {
           targetPath: CONE_MEMORY_PATH,
@@ -734,7 +788,7 @@ Curate {{MEMORY_PATH}}.`;
       const options = spawn.mock.calls[0][0];
       expect(options.name).toBe('memory-curator-cone-beta-2');
       expect(options.name).toMatch(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
-      expect(options.writablePaths).toEqual([DRAFT_PATH]);
+      expect(options.writablePaths).toEqual([DRAFT_PATH, '/shared/wiki/']);
       expect(options.mergeOnSuccess?.targetPath).toBe('/cones/cone-beta-2/CLAUDE.md');
     });
 
@@ -751,7 +805,7 @@ Curate {{MEMORY_PATH}}.`;
 
       const options = spawn.mock.calls[0][0];
       expect(options.name).toBe('memory-curator');
-      expect(options.writablePaths).toEqual([DRAFT_PATH]);
+      expect(options.writablePaths).toEqual([DRAFT_PATH, '/shared/wiki/']);
       expect(options.mergeOnSuccess?.targetPath).toBe('/cones/Cone_Weird!/CLAUDE.md');
     });
 

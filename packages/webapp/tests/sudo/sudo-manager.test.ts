@@ -2,11 +2,12 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   APPROVALS_FILE,
+  legacyScoopSudoersPath,
   matchCommand,
   matchPath,
   parseSudoers,
   SUDOERS_FILE,
-  scoopSudoersPath,
+  scoopGrantsPath,
 } from '../../src/base/sudoers.js';
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../src/fs/index.js';
@@ -14,6 +15,12 @@ import { FsError } from '../../src/fs/types.js';
 import { DEFAULT_APPROVALS_MD } from '../../src/scoops/approver-agent.js';
 import { generateScoopSudoers, SudoManager } from '../../src/sudo/sudo-manager.js';
 import type { SudoBroker } from '../../src/sudo/types.js';
+
+const grantsPath = (folder: string): string => {
+  const path = scoopGrantsPath(folder);
+  if (!path) throw new Error(`test used an unspellable scoop folder: ${folder}`);
+  return path;
+};
 
 const broker: SudoBroker = { requestApproval: vi.fn(async () => ({ decision: 'deny' as const })) };
 
@@ -410,14 +417,14 @@ describe('SudoManager per-scoop policy view', () => {
     mgr.dispose();
   });
 
-  it('live-reloads a scoop policy when its sudoers file changes via the watcher', async () => {
+  it('live-reloads a scoop policy when its grants drop-in changes via the watcher', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();
 
     await mgr.initScoopPolicy('andy', { allowedCommands: ['git'] });
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls')).toBe('no-match');
 
-    await vfs.writeFile(scoopSudoersPath('andy'), 'NOPASSWD Cmnd ls*\n');
+    await vfs.writeFile(grantsPath('andy'), 'NOPASSWD Cmnd ls*\n');
     await flush(() => matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la') === 'nopasswd-allow');
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('nopasswd-allow');
     mgr.dispose();
@@ -433,7 +440,7 @@ describe('SudoManager per-scoop policy view', () => {
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('nopasswd-allow');
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('nopasswd-allow');
 
-    await vfs.rm(scoopSudoersPath('andy'), { recursive: false });
+    await vfs.rm(grantsPath('andy'), { recursive: false });
     await flush(() => matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la') === 'no-match');
 
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('no-match');
@@ -442,13 +449,14 @@ describe('SudoManager per-scoop policy view', () => {
     mgr.dispose();
   });
 
-  it('writes to /scoops/<folder>/etc/sudoers via the raw fs are not self-gated', async () => {
+  it('writes to /etc/sudoers.d/scoop-<folder> via the raw fs are not self-gated', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();
 
     await expect(mgr.appendScoopRule('andy', 'command', 'git*')).resolves.toBe('git*');
+    await vfs.mkdir('/scoops/legacy/etc', { recursive: true });
     await vfs.writeFile(
-      scoopSudoersPath('legacy'),
+      legacyScoopSudoersPath('legacy'),
       '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).\nNOPASSWD Cmnd *\n'
     );
     await expect(mgr.initScoopPolicy('legacy', {})).resolves.toBeUndefined();
@@ -464,7 +472,7 @@ describe('SudoManager per-scoop policy view', () => {
     const saved = await mgr.appendScoopRule('andy', 'command', 'git push*');
 
     expect(saved).toBe('git push*');
-    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+    const written = (await vfs.readFile(grantsPath('andy'), {
       encoding: 'utf-8',
     })) as string;
     expect(written).toContain('NOPASSWD Cmnd git push*');
@@ -480,7 +488,7 @@ describe('SudoManager per-scoop policy view', () => {
     await mgr.initScoopPolicy('andy', { allowedCommands: ['git'] });
 
     await mgr.appendScoopRule('andy', 'command', 'ls*');
-    const path = scoopSudoersPath('andy');
+    const path = grantsPath('andy');
     const before = (await vfs.readFile(path, { encoding: 'utf-8' })) as string;
     const readFile = vi
       .spyOn(vfs, 'readFile')
@@ -505,7 +513,7 @@ describe('SudoManager per-scoop policy view', () => {
     await mgr.appendScoopRule('andy', 'read', '/workspace/.git/**');
     await mgr.appendScoopRule('andy', 'write', '/workspace/build/**');
 
-    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+    const written = (await vfs.readFile(grantsPath('andy'), {
       encoding: 'utf-8',
     })) as string;
     expect(written).toContain('NOPASSWD Cmnd ls*');
@@ -525,7 +533,7 @@ describe('SudoManager per-scoop policy view', () => {
     );
 
     expect(saved).toBe('rm -rf *');
-    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+    const written = (await vfs.readFile(grantsPath('andy'), {
       encoding: 'utf-8',
     })) as string;
     expect(written).toContain('NOPASSWD Cmnd rm -rf *');
@@ -539,28 +547,28 @@ describe('SudoManager per-scoop policy view', () => {
     await mgr.initScoopPolicy('andy', { allowedCommands: [] });
 
     await mgr.appendScoopRule('andy', 'command', 'ls*');
-    const before = (await vfs.readFile(scoopSudoersPath('andy'), {
+    const before = (await vfs.readFile(grantsPath('andy'), {
       encoding: 'utf-8',
     })) as string;
 
     const saved = await mgr.appendScoopRule('andy', 'command', '   \n  ');
 
     expect(saved).toBeNull();
-    const after = (await vfs.readFile(scoopSudoersPath('andy'), {
+    const after = (await vfs.readFile(grantsPath('andy'), {
       encoding: 'utf-8',
     })) as string;
     expect(after).toBe(before);
     mgr.dispose();
   });
 
-  it('appendScoopRule creates /scoops/<folder>/etc/sudoers on demand when not seeded', async () => {
+  it('appendScoopRule creates /etc/sudoers.d/scoop-<folder> on demand when not seeded', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();
 
     const saved = await mgr.appendScoopRule('newcomer', 'command', 'git*');
 
     expect(saved).toBe('git*');
-    expect(await vfs.exists(scoopSudoersPath('newcomer'))).toBe(true);
+    expect(await vfs.exists(grantsPath('newcomer'))).toBe(true);
     expect(matchCommand(mgr.getPolicyForScoop('newcomer'), 'git status')).toBe('nopasswd-allow');
     mgr.dispose();
   });
@@ -571,7 +579,7 @@ describe('SudoManager per-scoop policy view', () => {
     await mgr.initScoopPolicy('andy', { allowedCommands: ['git'] });
     mgr.dispose();
 
-    await vfs.writeFile(scoopSudoersPath('andy'), 'NOPASSWD Cmnd rm*\n');
+    await vfs.writeFile(grantsPath('andy'), 'NOPASSWD Cmnd rm*\n');
     await new Promise((r) => setTimeout(r, 10));
 
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('nopasswd-allow');
@@ -597,8 +605,7 @@ describe('SudoManager scoop config grants (issue #2416)', () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();
 
-    await vfs.mkdir('/scoops/location-finder/etc', { recursive: true });
-    await vfs.writeFile(scoopSudoersPath('location-finder'), 'NOPASSWD Write /shared/**\n');
+    await vfs.writeFile(grantsPath('location-finder'), 'NOPASSWD Write /shared/**\n');
     await mgr.reloadScoopPolicyByFolder('location-finder');
 
     expect(
@@ -652,8 +659,7 @@ describe('SudoManager scoop config grants (issue #2416)', () => {
     await mgr.init();
     await mgr.initScoopPolicy('seeded', { writablePaths: ['/.playwright/'] });
 
-    await vfs.mkdir('/scoops/seeded/etc', { recursive: true });
-    await vfs.writeFile(scoopSudoersPath('seeded'), '# wiped\n');
+    await vfs.writeFile(grantsPath('seeded'), '# wiped\n');
     await mgr.reloadScoopPolicyByFolder('seeded');
 
     expect(matchPath(mgr.getPolicyForScoop('seeded'), 'write', '/.playwright/a.png')).toBe(
@@ -671,7 +677,7 @@ describe('SudoManager scoop config grants (issue #2416)', () => {
     const saved = await mgr.appendScoopRule('deduper', 'write', '/.playwright/**');
 
     expect(saved).toBe('/.playwright/**');
-    const body = (await vfs.readFile(scoopSudoersPath('deduper'), {
+    const body = (await vfs.readFile(grantsPath('deduper'), {
       encoding: 'utf-8',
     })) as string;
     const occurrences = body
@@ -687,7 +693,7 @@ describe('SudoManager scoop config grants (issue #2416)', () => {
 
     await vfs.mkdir('/scoops/worker/etc', { recursive: true });
     await vfs.writeFile(
-      scoopSudoersPath('worker'),
+      legacyScoopSudoersPath('worker'),
       [
         '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).',
         '# Writes to this file always require approval (self-protected).',
@@ -713,7 +719,7 @@ describe('SudoManager scoop config grants (issue #2416)', () => {
 
     await mgr.initScoopPolicy('clean', { writablePaths: ['/shared/'], allowedCommands: ['git'] });
 
-    expect(await vfs.exists(scoopSudoersPath('clean'))).toBe(false);
+    expect(await vfs.exists(grantsPath('clean'))).toBe(false);
 
     const policy = mgr.getPolicyForScoop('clean');
     expect(matchPath(policy, 'write', '/shared/a.md')).toBe('nopasswd-allow');
@@ -743,20 +749,147 @@ describe('SudoManager scoop config grants (issue #2416)', () => {
     mgr.dispose();
   });
 
-  it('discards a legacy generated file but keeps a hand-written / Always-only file', async () => {
+  it('discards a legacy in-sandbox file without promoting its rules (fail-closed)', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();
 
     await vfs.mkdir('/scoops/handmade/etc', { recursive: true });
-    await vfs.writeFile(scoopSudoersPath('handmade'), 'NOPASSWD Cmnd ls*\n');
-    await mgr.initScoopPolicy('handmade', { writablePaths: [] });
-    expect(matchCommand(mgr.getPolicyForScoop('handmade'), 'ls -la')).toBe('nopasswd-allow');
+    await vfs.writeFile(legacyScoopSudoersPath('handmade'), 'NOPASSWD Cmnd ls*\n');
+    await mgr.initScoopPolicy('handmade', { writablePaths: [], allowedCommands: [] });
+    expect(matchCommand(mgr.getPolicyForScoop('handmade'), 'ls -la')).toBe('no-match');
+    expect(await vfs.exists(legacyScoopSudoersPath('handmade'))).toBe(false);
+    expect(await vfs.exists(grantsPath('handmade'))).toBe(false);
 
     await mgr.appendScoopRule('handmade', 'write', '/recordings/**');
-    await mgr.initScoopPolicy('handmade', { writablePaths: [] });
+    await mgr.initScoopPolicy('handmade', { writablePaths: [], allowedCommands: [] });
     expect(matchPath(mgr.getPolicyForScoop('handmade'), 'write', '/recordings/a.har')).toBe(
       'nopasswd-allow'
     );
+    mgr.dispose();
+  });
+});
+
+describe('SudoManager per-scoop grants live in /etc/sudoers.d (issue #3106)', () => {
+  let vfs: VirtualFS;
+  let watcher: FsWatcher;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    vfs = await VirtualFS.create({ dbName: `test-sudo-3106-${dbCounter++}`, wipe: true });
+    watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+  });
+  afterEach(async () => {
+    await vfs.dispose?.();
+  });
+
+  it('never reads policy from the in-sandbox path, even when the file survives', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.initScoopPolicy('ghost', { allowedCommands: [] });
+
+    await vfs.mkdir('/scoops/ghost/etc', { recursive: true });
+    await vfs.writeFile(legacyScoopSudoersPath('ghost'), 'NOPASSWD Cmnd *\n');
+    await mgr.reloadScoopPolicyByFolder('ghost');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(matchCommand(mgr.getPolicyForScoop('ghost'), 'rm -rf /workspace')).toBe('no-match');
+    mgr.dispose();
+  });
+
+  it('keeps a scoop drop-in out of the global policy and out of sibling scoops', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.initScoopPolicy('andy', { allowedCommands: [] });
+    await mgr.initScoopPolicy('beth', { allowedCommands: [] });
+
+    await mgr.appendScoopRule('andy', 'command', 'git push*');
+
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git push origin main')).toBe(
+      'nopasswd-allow'
+    );
+
+    expect(matchCommand(mgr.getPolicy(), 'git push origin main')).toBe('no-match');
+    expect(matchCommand(mgr.getPolicyForScoop('beth'), 'git push origin main')).toBe('no-match');
+    mgr.dispose();
+  });
+
+  it('a non-scoop drop-in still merges into the global policy', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    await vfs.writeFile('/etc/sudoers.d/granted', 'NOPASSWD Cmnd git push*\n');
+    await mgr.reload();
+
+    expect(matchCommand(mgr.getPolicy(), 'git push origin main')).toBe('nopasswd-allow');
+    mgr.dispose();
+  });
+
+  it('discards a pre-#3106 in-sandbox file without promoting its rules', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    await vfs.mkdir('/scoops/mover/etc', { recursive: true });
+    await vfs.writeFile(
+      legacyScoopSudoersPath('mover'),
+      '# a comment\nNOPASSWD Cmnd ls*\nNOPASSWD Write /recordings/**\n'
+    );
+
+    await mgr.initScoopPolicy('mover', { allowedCommands: [] });
+
+    expect(await vfs.exists(legacyScoopSudoersPath('mover'))).toBe(false);
+    expect(await vfs.exists(grantsPath('mover'))).toBe(false);
+    expect(matchCommand(mgr.getPolicyForScoop('mover'), 'ls -la')).toBe('no-match');
+    expect(matchPath(mgr.getPolicyForScoop('mover'), 'write', '/recordings/a.har')).toBe(
+      'no-match'
+    );
+    mgr.dispose();
+  });
+
+  it('discard leaves an existing cone-owned drop-in untouched', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.appendScoopRule('twice', 'command', 'ls*');
+
+    await vfs.mkdir('/scoops/twice/etc', { recursive: true });
+    await vfs.writeFile(legacyScoopSudoersPath('twice'), 'NOPASSWD Cmnd git*\n');
+    await mgr.initScoopPolicy('twice', { allowedCommands: [] });
+
+    const body = (await vfs.readFile(grantsPath('twice'), { encoding: 'utf-8' })) as string;
+    expect(body).toContain('NOPASSWD Cmnd ls*');
+    expect(body).not.toContain('NOPASSWD Cmnd git*');
+    expect(await vfs.exists(legacyScoopSudoersPath('twice'))).toBe(false);
+    mgr.dispose();
+  });
+
+  it('drops a legacy GENERATED file without promoting its rules', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    await vfs.mkdir('/scoops/gen/etc', { recursive: true });
+    await vfs.writeFile(
+      legacyScoopSudoersPath('gen'),
+      '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).\nNOPASSWD Cmnd *\n'
+    );
+
+    await mgr.initScoopPolicy('gen', { allowedCommands: [] });
+
+    expect(matchCommand(mgr.getPolicyForScoop('gen'), 'rm -rf /workspace')).toBe('no-match');
+    expect(await vfs.exists(grantsPath('gen'))).toBe(false);
+    expect(await vfs.exists(legacyScoopSudoersPath('gen'))).toBe(false);
+    mgr.dispose();
+  });
+
+  it('reloads every scoop cache when /etc/sudoers.d is removed as a directory', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.initScoopPolicy('andy', { allowedCommands: [] });
+    await mgr.appendScoopRule('andy', 'command', 'ls*');
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('nopasswd-allow');
+
+    await vfs.rm('/etc/sudoers.d', { recursive: true });
+    await flush(() => matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la') === 'no-match');
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('no-match');
     mgr.dispose();
   });
 });

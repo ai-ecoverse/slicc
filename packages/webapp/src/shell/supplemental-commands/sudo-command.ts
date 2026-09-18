@@ -2,6 +2,8 @@ import type { Command, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { sudoRefusalMessage } from '../../sudo/approval-timeout.js';
 import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
+import { commandSudoSubject } from '../sudo/command-guard.js';
+import { SUDO_REASON_ENV } from '../sudo/command-reason.js';
 
 const SUDO_HELP = `usage: sudo <command> [args...]
 
@@ -49,9 +51,15 @@ export function createSudoCommand(options: SudoCommandOptions = {}): Command {
       return { stdout: '', stderr: `${SUDO_NO_EXEC_MESSAGE}\n`, exitCode: 1 };
     }
 
-    const subject = args.join(' ').trim();
+    const subject = commandSudoSubject(args[0], args.slice(1));
 
-    const decision = await broker.requestApproval({ kind: 'command', detail: subject });
+    const reason = ctx.env?.get(SUDO_REASON_ENV);
+
+    const decision = await broker.requestApproval({
+      kind: 'command',
+      detail: subject,
+      ...(reason ? { reason } : {}),
+    });
 
     if (decision.decision === 'deny') {
       return refusalResult(decision);

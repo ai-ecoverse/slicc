@@ -1,9 +1,13 @@
 export type MountKind = 'local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc';
 
 export interface MountStatIdentity {
+  identity?: string;
+
   ctime?: number;
 
   ino?: number;
+
+  dev?: number;
   uid?: number;
   gid?: number;
 
@@ -69,7 +73,7 @@ export interface MountBackend {
   mkdir(path: string): Promise<void>;
   remove(path: string, opts?: { recursive?: boolean }): Promise<void>;
 
-  rename?(fromPath: string, toPath: string): Promise<void>;
+  rename?(fromPath: string, toPath: string): Promise<{ noop?: boolean } | void>;
 
   refresh(opts?: { bodies?: boolean }): Promise<RefreshReport>;
 

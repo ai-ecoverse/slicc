@@ -210,6 +210,15 @@ scoop_scoop({ name: "flaky-net", background_after: 60, allowedCommands: ["curl",
 
 The scoop can also override the budget per call (`bash({ command, background_after, timeout })`). Each run is a real pid: `ps` lists a detached job and `kill <pid>` stops it, so `timeout` is a kill rather than just a detach.
 
+### Filesystem work limits
+
+Scoop shell commands that use the upstream limits stop at 100,000 traversal entries,
+256 levels, 32 MiB input, or 64 MiB of tracked live buffers. Split large trees or
+inputs across calls when a command reports a limit. Environment variables cannot
+raise these limits. They are not an OPFS quota and do not cover custom `tar`,
+`unzip`, JavaScript, Python, Git, or browser command implementations. Existing
+`timeout` and `background_after` controls still apply independently.
+
 ## Parallel orchestration: `scoop_mute` / `scoop_unmute` / `scoop_wait`
 
 By default, every non-ephemeral scoop completion fires a `scoop-notify` event that wakes the cone for a fresh turn. Fanning out N scoops in parallel produces N extra cone turns whose only job is to acknowledge "scoop X finished" — expensive in tokens, disruptive to orchestration.
@@ -260,6 +269,11 @@ messages — run `list_sudo_requests` before concluding anything. Resolve or
 deny each pending request, then keep waiting. Only treat a fan-out as
 complete when every scoop has actually reported completion (via `scoop_wait`
 lick or `scoop_unmute` summaries), not because output files stopped changing.
+
+When you **deny** one, pass `reason` to `lick_dismiss`. The scoop sees the
+subject of its own request and your verdict; without a reason it cannot tell a
+refusal from a misunderstanding, so it retries the same thing or invents a
+workaround. Say what would make it acceptable, if anything would.
 
 ### Notes
 

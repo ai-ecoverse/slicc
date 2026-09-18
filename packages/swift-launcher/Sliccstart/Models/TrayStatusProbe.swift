@@ -17,8 +17,19 @@ enum TrayStatusProbeExhaustion {
     }
 }
 
-struct TrayStatusProbe {
 
+
+
+
+
+
+
+
+
+struct TrayStatusProbe {
+    
+    
+    
     let fetch: (URL) async throws -> (Int, Data)
 
     static let `default` = TrayStatusProbe(fetch: { url in
@@ -28,6 +39,10 @@ struct TrayStatusProbe {
         return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
     })
 
+    
+    
+    
+    
     func discoverJoinUrl(
         serveOrigin: String,
         maxAttempts: Int = 8,

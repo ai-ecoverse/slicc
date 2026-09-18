@@ -107,6 +107,7 @@ final class AudioSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(input.installedSampleRates, [48_000, 44_100])
     }
 
+    
     private static func degenerateFormat() -> AVAudioFormat? {
         var description = AudioStreamBasicDescription()
         description.mFormatID = kAudioFormatLinearPCM
@@ -119,7 +120,8 @@ final class AudioSessionCoordinatorTests: XCTestCase {
     }
 
     func testDegenerateInputFormatAbortsTapInstallation() throws {
-
+        
+        
         guard let degenerate = Self.degenerateFormat(),
             degenerate.sampleRate == 0 || degenerate.channelCount == 0
         else {

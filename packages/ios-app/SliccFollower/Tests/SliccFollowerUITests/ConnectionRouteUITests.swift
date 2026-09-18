@@ -1,7 +1,13 @@
 import XCTest
 
+
+
 final class ConnectionRouteUITests: XCTestCase {
 
+    
+    
+    
+    
     private static let unreachableJoinUrl = "http://127.0.0.1:1/join/ui-test"
 
     override func setUp() {
@@ -17,7 +23,8 @@ final class ConnectionRouteUITests: XCTestCase {
         XCTAssertTrue(
             app.navigationBars["Settings"].waitForExistence(timeout: 60),
             "An empty join URL should open the Settings sheet on launch")
-
+        
+        
         XCTAssertTrue(
             app.buttons["Done"].waitForExistence(timeout: 30),
             "The Settings sheet should offer its dismiss control")

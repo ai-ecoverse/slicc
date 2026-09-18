@@ -9,6 +9,13 @@ import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';
 
+const COMMAND_POLICY_ALIASES = new Map([['jsh', 'node']]);
+
+export function commandSudoSubject(name: string, args: readonly string[]): string {
+  const policyName = COMMAND_POLICY_ALIASES.get(name) ?? name;
+  return `${policyName} ${args.join(' ')}`.trim();
+}
+
 export function commandSudoMessage(decision: SudoDecision): string {
   return sudoRefusalMessage('sudo', decision);
 }
@@ -21,6 +28,8 @@ export interface CommandSudoDeps {
   persistGrant: (pattern: string) => Promise<void>;
 
   defaultDisposition?: DefaultDisposition;
+
+  reason?: string;
 }
 
 export interface CommandSudoResult {
@@ -45,7 +54,11 @@ export async function enforceCommandSudo(
     return { allowed: true };
   }
 
-  const decision = await deps.broker.requestApproval({ kind: 'command', detail: trimmed });
+  const decision = await deps.broker.requestApproval({
+    kind: 'command',
+    detail: trimmed,
+    ...(deps.reason ? { reason: deps.reason } : {}),
+  });
 
   if (decision.decision === 'deny') {
     return { allowed: false, message: commandSudoMessage(decision) };

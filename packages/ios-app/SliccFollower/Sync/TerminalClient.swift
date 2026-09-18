@@ -2,6 +2,10 @@ import Foundation
 import OSLog
 import SliccTrayKit
 
+
+
+
+
 @MainActor
 final class TerminalClient {
     static let retainedOutputLimit = 64 * 1_024
@@ -85,6 +89,8 @@ final class TerminalClient {
 
     var isRunning: Bool { pending != nil }
 
+    
+    
     func run(
         command: String,
         cwd: String? = nil,
@@ -103,6 +109,7 @@ final class TerminalClient {
         }
     }
 
+    
     func handleChunk(requestId: String, stream: String, base64Data: String) {
         guard var active = pending, active.requestId == requestId else { return }
         guard let outputStream = Stream(rawValue: stream),
@@ -117,6 +124,8 @@ final class TerminalClient {
         active.onChunk(chunk)
     }
 
+    
+    
     func handleResponse(requestId: String, exitCode: Int, signal: String?, error: String?) {
         guard let active = pending, active.requestId == requestId else { return }
         if let completionError = active.completionError {
@@ -129,17 +138,22 @@ final class TerminalClient {
                 chunks: active.chunks, exitCode: exitCode, signal: signal, error: error))
     }
 
+    
+    
     @discardableResult
     func cancel() -> Bool {
         guard let requestId = pending?.requestId else { return false }
         return cancel(requestId: requestId)
     }
 
+    
     func disconnect() {
         guard let requestId = pending?.requestId else { return }
         fail(requestId, with: .disconnected)
     }
 
+    
+    
     func refuseLeaderRequest(requestId: String) {
         _ = send(
             .execResponse(

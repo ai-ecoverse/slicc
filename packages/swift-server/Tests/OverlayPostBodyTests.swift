@@ -2,6 +2,10 @@ import XCTest
 
 @testable import slicc_server
 
+
+
+
+
 final class OverlayPostBodyTests: XCTestCase {
     private static let jpegSOI = Data([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe])
     private static let allBytes = Data((0...255).map { UInt8($0) })
@@ -11,7 +15,7 @@ final class OverlayPostBodyTests: XCTestCase {
             "hasPostData": true,
             "postDataEntries": [["bytes": Self.allBytes.base64EncodedString()]],
         ])
-
+        
         XCTAssertEqual(result, .bytes(Self.allBytes))
         guard case .bytes(let data) = result else { return XCTFail("expected bytes") }
         XCTAssertEqual(data.count, 256)
@@ -47,8 +51,10 @@ final class OverlayPostBodyTests: XCTestCase {
         XCTAssertEqual(result, .bytes(Data(body.utf8)))
     }
 
+    
+    
     func testDoesNotDecodeABase64ShapedBodyAsBase64() {
-        let body = "abcd"
+        let body = "abcd"  
         let result = decodeCdpRequestPostBody(request: ["postData": body, "hasPostData": true])
         XCTAssertEqual(result, .bytes(Data("abcd".utf8)))
     }

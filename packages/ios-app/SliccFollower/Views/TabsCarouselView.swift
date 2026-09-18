@@ -2,14 +2,33 @@ import SliccTrayKit
 import SwiftUI
 import WebKit
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct TabsCarouselView: View {
     @EnvironmentObject var appState: AppState
-
+    
     @State private var editingAddressTabId: String?
     @State private var addressText = ""
-
+    
+    
     @State private var pendingAddressFocusTabId: String?
-
+    
+    
+    
     @State private var tabSnapshots: [String: UIImage] = [:]
     @FocusState private var addressFocus: String?
 
@@ -24,11 +43,21 @@ struct TabsCarouselView: View {
         return appState.cdpTargets.first { $0.id == id }
     }
 
+    private var viewingComputer: ComputerDescriptor? {
+        guard let id = appState.viewingComputerId else { return nil }
+        return appState.computers.first { $0.id == id }
+    }
+
     var body: some View {
         Group {
-            if let target = viewingTarget {
+            if let computer = viewingComputer {
+                ComputerLiveView(
+                    computer: computer, frame: appState.liveFrame(forComputerId: computer.id))
+            } else if let target = viewingTarget {
                 browsingView(target)
-            } else if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty {
+            } else if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty
+                && appState.computers.isEmpty
+            {
                 emptyState
             } else {
                 tabOverview
@@ -38,13 +67,16 @@ struct TabsCarouselView: View {
         .navigationTitle("Tabs")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: appState.cdpTargets) { targets in
-
+            
             if let editing = editingAddressTabId, !targets.contains(where: { $0.id == editing }) {
                 endAddressEditing()
             }
         }
     }
 
+    
+
+    
     @ViewBuilder
     private func browsingView(_ target: CDPTargetSummary) -> some View {
         ZStack(alignment: .bottom) {
@@ -86,6 +118,8 @@ struct TabsCarouselView: View {
         .padding(.bottom, 10)
     }
 
+    
+    
     private func addressPill(_ target: CDPTargetSummary) -> some View {
         Button {
             beginEditingAddress(target)
@@ -141,6 +175,8 @@ struct TabsCarouselView: View {
         .accessibilityIdentifier(identifier ?? systemImage)
     }
 
+    
+    
     private func leaveBrowsing(_ target: CDPTargetSummary) {
         if let webView = appState.cdpWebView(for: target.id) {
             webView.takeSnapshot(with: nil) { image, _ in
@@ -151,6 +187,10 @@ struct TabsCarouselView: View {
         appState.browserViewingTabId = nil
     }
 
+    
+
+    
+    
     private var tabOverview: some View {
         ScrollView {
             LazyVGrid(
@@ -183,6 +223,20 @@ struct TabsCarouselView: View {
                         gridHeader("Elsewhere in the tray")
                     }
                 }
+                if !appState.computers.isEmpty {
+                    Section {
+                        ForEach(appState.computers) { computer in
+                            ComputerCard(
+                                computer: computer,
+                                frame: appState.liveFrame(forComputerId: computer.id)
+                            ) {
+                                appState.viewingComputerId = computer.id
+                            }
+                        }
+                    } header: {
+                        gridHeader("Computers")
+                    }
+                }
             }
             .padding(12)
         }
@@ -199,6 +253,8 @@ struct TabsCarouselView: View {
             .padding(.top, 4)
     }
 
+    
+    
     private var floatingNewTabButton: some View {
         Button {
             openNewTab()
@@ -214,12 +270,21 @@ struct TabsCarouselView: View {
         .padding(20)
     }
 
+    
+    
     private func openNewTab() {
         let id = appState.cdpOpenTab()
         appState.browserViewingTabId = id
         pendingAddressFocusTabId = id
     }
 
+    
+    
+    
+    
+    
+    
+    
     private func openRemoteTabLocally(_ target: TrayTargetEntry) {
         guard canControlTabs, !target.url.isEmpty else { return }
         if appState.supportsTabTeleport, appState.requestTabTeleport(targetId: target.targetId) {
@@ -228,6 +293,8 @@ struct TabsCarouselView: View {
         let id = appState.cdpOpenTab(url: target.url)
         appState.browserViewingTabId = id
     }
+
+    
 
     private func beginEditingAddress(_ target: CDPTargetSummary) {
         addressText = target.url == "about:blank" ? "" : target.url
@@ -245,6 +312,8 @@ struct TabsCarouselView: View {
         addressFocus = nil
     }
 
+    
+    
     static func normalizeUrl(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == "https://" || trimmed == "http://" {
@@ -256,9 +325,12 @@ struct TabsCarouselView: View {
         return "https://\(trimmed)"
     }
 
+    
     static func pillLabel(for url: String) -> String {
         url == "about:blank" ? "New tab" : RemoteTabCard.displayHost(url)
     }
+
+    
 
     @ViewBuilder
     private var emptyState: some View {
@@ -277,7 +349,9 @@ struct TabsCarouselView: View {
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 40)
-
+            
+            
+            
             Button {
                 openNewTab()
             } label: {
@@ -292,6 +366,11 @@ struct TabsCarouselView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+
+
+
+
 
 private struct LocalTabCard: View {
     let target: CDPTargetSummary
@@ -324,7 +403,8 @@ private struct LocalTabCard: View {
         ZStack {
             Rectangle().fill(palette.field)
             if let snapshot {
-
+                
+                
                 Color.clear
                     .overlay(
                         Image(uiImage: snapshot)
@@ -378,6 +458,10 @@ private struct LocalTabCard: View {
     }
 }
 
+
+
+
+
 private struct GlassCircleButtonStyle: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
@@ -406,6 +490,7 @@ private struct GlassCapsuleButtonStyle: ViewModifier {
     }
 }
 
+
 private struct GlassCapsuleBackground: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
@@ -426,6 +511,10 @@ private struct ProminentGlassButtonStyle: ViewModifier {
     }
 }
 
+
+
+
+
 struct CDPTargetWebView: UIViewRepresentable {
     let webView: WKWebView
 
@@ -437,7 +526,7 @@ struct CDPTargetWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-
+        
         if webView.superview !== uiView {
             attach(webView, to: uiView)
         }

@@ -1,5 +1,5 @@
 import express from 'express';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from '../src/links-middleware.js';
 
 function makeApp() {
@@ -103,6 +103,19 @@ describe('sliccLinksMiddleware', () => {
     });
     expect(nextCalled).toBe(true);
     expect(appended).toEqual([]);
+  });
+
+  it('bails out when the request has no Host header', () => {
+    const middleware = sliccLinksMiddleware();
+    const append = vi.fn();
+    const next = vi.fn();
+    middleware(
+      { path: '/api/status', headers: {} } as never,
+      { headersSent: false, append } as never,
+      next
+    );
+    expect(next).toHaveBeenCalledOnce();
+    expect(append).not.toHaveBeenCalled();
   });
 });
 

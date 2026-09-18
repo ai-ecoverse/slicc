@@ -1,5 +1,13 @@
 import Foundation
 
+
+
+
+
+
+
+
+
 public final class OptelCollector: @unchecked Sendable {
     private let transport: OptelTransport
     private let collectBaseURL: URL
@@ -8,6 +16,15 @@ public final class OptelCollector: @unchecked Sendable {
     private var buffered: [RUMEvent] = []
     private var session: SamplingSession?
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     public init(
         transport: OptelTransport = URLSessionOptelTransport(),
         collectBaseURL: URL = RUMReferer.defaultCollectBaseURL,
@@ -18,18 +35,23 @@ public final class OptelCollector: @unchecked Sendable {
         self.queueLimit = max(0, queueLimit)
     }
 
+    
     public var bufferedCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return buffered.count
     }
 
+    
     public var hasSession: Bool {
         lock.lock()
         defer { lock.unlock() }
         return session != nil
     }
 
+    
+    
+    
     public func enqueue(_ event: RUMEvent) {
         lock.lock()
         if let current = session {
@@ -41,12 +63,17 @@ public final class OptelCollector: @unchecked Sendable {
         }
         buffered.append(event)
         if buffered.count > queueLimit {
-
+            
+            
             buffered.removeFirst(buffered.count - queueLimit)
         }
         lock.unlock()
     }
 
+    
+    
+    
+    
     public func attach(session newSession: SamplingSession) {
         lock.lock()
         guard session == nil else {

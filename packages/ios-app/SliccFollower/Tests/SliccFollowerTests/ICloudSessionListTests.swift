@@ -4,10 +4,11 @@ import XCTest
 @testable import SliccFollower
 
 final class ICloudSessionListTests: XCTestCase {
+    
 
     func testGroupsKeyOnDeviceIdAndKeepNewestFirstDeviceOrder() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-
+        
         let sessions = [
             makeSession(joinUrl: "https://t.test/join/s1.secret", label: "Chrome on Studio", deviceId: "studio", deviceName: "MacBook Pro", lastSeenAt: now),
             makeSession(
@@ -21,7 +22,7 @@ final class ICloudSessionListTests: XCTestCase {
         let groups = ICloudSessionList.groups(from: sessions)
 
         XCTAssertEqual(groups.map(\.deviceId), ["studio", "book"])
-
+        
         XCTAssertEqual(groups.count, 2)
         XCTAssertEqual(groups[1].sessions.map(\.label), ["Chrome on Book", "Edge on Book"])
     }
@@ -37,10 +38,14 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertTrue(ICloudSessionList.groups(from: []).isEmpty)
     }
 
+    
+
     func testEmptyReasonDistinguishesSignedOutFromNoSessions() {
         XCTAssertEqual(ICloudSessionList.emptyReason(hasICloudIdentity: false), .iCloudUnavailable)
         XCTAssertEqual(ICloudSessionList.emptyReason(hasICloudIdentity: true), .noSessions)
     }
+
+    
 
     func testAgeThresholdsMatchTheLauncher() {
         let now = Date(timeIntervalSince1970: 100_000)
@@ -50,11 +55,12 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertEqual(ICloudSessionList.age(of: now.addingTimeInterval(-172_800), now: now), "2d ago")
     }
 
-    func testSessionsFixtureBackendSeedsTwoDevices() throws {
-        UserDefaults.standard.set(true, forKey: "uiTestSessionsFixture")
-        defer { UserDefaults.standard.removeObject(forKey: "uiTestSessionsFixture") }
+    
 
-        let backend = try XCTUnwrap(UITestHooks.sessionsFixtureBackend())
+    func testSessionsFixtureBackendSeedsTwoDevices() throws {
+        let defaults = try makeIsolatedDefaults(flags: ["uiTestSessionsFixture": true])
+
+        let backend = try XCTUnwrap(UITestHooks.sessionsFixtureBackend(defaults: defaults))
         let store = TraySessionSyncStore(
             backend: backend, deviceId: "ios-under-test", deviceName: "iPhone Under Test"
         )
@@ -62,30 +68,36 @@ final class ICloudSessionListTests: XCTestCase {
         let groups = ICloudSessionList.groups(from: store.sessions)
         XCTAssertEqual(Set(groups.map(\.deviceName)), ["Fixture MacBook", "Fixture Studio"])
         XCTAssertEqual(store.sessions.count, 3)
-
+        
         XCTAssertTrue(store.sessions.allSatisfy { $0.joinUrl.hasPrefix("http://127.0.0.1:1/") })
     }
 
     func testSessionsEmptyBackendYieldsDeterministicEmptyStore() throws {
-        UserDefaults.standard.set(true, forKey: "uiTestSessionsEmpty")
-        defer { UserDefaults.standard.removeObject(forKey: "uiTestSessionsEmpty") }
+        let defaults = try makeIsolatedDefaults(flags: ["uiTestSessionsEmpty": true])
 
-        let backend = try XCTUnwrap(UITestHooks.sessionsFixtureBackend())
+        let backend = try XCTUnwrap(UITestHooks.sessionsFixtureBackend(defaults: defaults))
         let store = TraySessionSyncStore(
             backend: backend, deviceId: "ios-under-test", deviceName: "iPhone Under Test"
         )
         XCTAssertTrue(store.sessions.isEmpty)
     }
 
-    func testNoFixtureArgumentsMeansNoBackend() {
-        XCTAssertNil(UITestHooks.sessionsFixtureBackend())
+    
+    
+    func testNoFixtureArgumentsMeansNoBackend() throws {
+        let defaults = try makeIsolatedDefaults()
+        XCTAssertNil(UITestHooks.sessionsFixtureBackend(defaults: defaults))
     }
 
+    
+
+    
+    
+    
     @MainActor
-    func testDiscoveredSessionConnectLeavesManualSurfacesUntouched() {
-        UserDefaults.standard.set(true, forKey: "uiTestRecentJoinsEmpty")
-        defer { UserDefaults.standard.removeObject(forKey: "uiTestRecentJoinsEmpty") }
-        let state = AppState()
+    func testDiscoveredSessionConnectLeavesManualSurfacesUntouched() throws {
+        let defaults = try makeIsolatedDefaults(flags: ["uiTestRecentJoinsEmpty": true])
+        let state = AppState(fixtureDefaults: defaults)
         defer { state.disconnect() }
         let secret = "http://127.0.0.1:1/join/discovered.secret"
 
@@ -97,6 +109,8 @@ final class ICloudSessionListTests: XCTestCase {
             state.recentJoinStore.recents.contains { $0.joinUrl == secret },
             "A dial that has not connected yet must not be remembered")
     }
+
+    
 
     func testRecentRowsHideATrayTheLiveListAlreadyShows() {
         let now = Date(timeIntervalSince1970: 1_000_000)
@@ -160,7 +174,7 @@ final class ICloudSessionListTests: XCTestCase {
             ICloudSessionList.recentSubtitle(
                 mine, thisDeviceId: "iPad", now: now, unreachable: true),
             "iPhone · tray.sliccy.ai · 2m ago · not responding")
-
+        
         let pasted = makeRecent(
             joinUrl: "https://tray.sliccy.ai/join/x.secret", label: "", deviceName: "iPad",
             lastConnectedAt: now)
@@ -171,10 +185,9 @@ final class ICloudSessionListTests: XCTestCase {
     }
 
     func testRecentJoinsFixtureBackendSeedsThisDeviceAndAnother() throws {
-        UserDefaults.standard.set(true, forKey: "uiTestRecentJoinsFixture")
-        defer { UserDefaults.standard.removeObject(forKey: "uiTestRecentJoinsFixture") }
+        let defaults = try makeIsolatedDefaults(flags: ["uiTestRecentJoinsFixture": true])
 
-        let backend = try XCTUnwrap(UITestHooks.recentJoinsFixtureBackend())
+        let backend = try XCTUnwrap(UITestHooks.recentJoinsFixtureBackend(defaults: defaults))
         let store = RecentJoinStore(
             backend: backend, deviceId: "ios-under-test", deviceName: "iPhone Under Test")
 
@@ -183,24 +196,27 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertEqual(
             Set(store.recents.map(\.label)), ["Safari on Fixture MacBook", ""],
             "The labelled fixture recent must not collide with a live fixture session")
-
+        
         XCTAssertTrue(store.recents.contains { $0.label.isEmpty })
         XCTAssertTrue(store.recents.allSatisfy { $0.joinUrl.hasPrefix("http://127.0.0.1:1/") })
     }
 
     func testRecentJoinsEmptyBackendYieldsDeterministicEmptyStore() throws {
-        UserDefaults.standard.set(true, forKey: "uiTestRecentJoinsEmpty")
-        defer { UserDefaults.standard.removeObject(forKey: "uiTestRecentJoinsEmpty") }
+        let defaults = try makeIsolatedDefaults(flags: ["uiTestRecentJoinsEmpty": true])
 
-        let backend = try XCTUnwrap(UITestHooks.recentJoinsFixtureBackend())
+        let backend = try XCTUnwrap(UITestHooks.recentJoinsFixtureBackend(defaults: defaults))
         let store = RecentJoinStore(
             backend: backend, deviceId: "ios-under-test", deviceName: "iPhone Under Test")
         XCTAssertTrue(store.recents.isEmpty)
     }
 
-    func testNoRecentJoinsArgumentsMeansNoBackend() {
-        XCTAssertNil(UITestHooks.recentJoinsFixtureBackend())
+    
+    func testNoRecentJoinsArgumentsMeansNoBackend() throws {
+        let defaults = try makeIsolatedDefaults()
+        XCTAssertNil(UITestHooks.recentJoinsFixtureBackend(defaults: defaults))
     }
+
+    
 
     private func makeRecent(
         joinUrl: String,

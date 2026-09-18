@@ -48,10 +48,32 @@ const CONE = {
   addedAt: '2026-01-04T10:00:00.000Z',
 };
 
-function makeConversationStore(markers: ConversationMarker[] = []) {
+function makeConversationStore(
+  getMessages: () => unknown[] = () => [],
+  markers: ConversationMarker[] = []
+) {
   return {
     markers,
-    load: vi.fn(async () => ({ markers })),
+    load: vi.fn(async () => ({
+      key: '/workspace::cone_1',
+      version: 1,
+      workUnitId: 'cone_1',
+      workspaceId: '/workspace',
+      folder: 'cone',
+      origin: 'agent-history',
+      entries: getMessages().map((message, seq) => ({
+        id: `e${seq}`,
+        seq,
+        kind: (message as { role: string }).role === 'assistant' ? 'assistant' : 'user',
+        timestamp: 0,
+        text: '',
+        message,
+      })),
+      markers,
+      createdAt: 1,
+      updatedAt: 1,
+      legacyKeys: { agentSessionId: 'cone_1', chatSessionId: 'session-cone' },
+    })),
     putMarker: vi.fn(async (_key: string, marker: ConversationMarker) => {
       const at = markers.findIndex((m) => m.id === marker.id);
       if (at >= 0) markers[at] = marker;
@@ -82,7 +104,8 @@ describe('kernel compaction-row persistence', () => {
       } as CompactionStateDetail
     );
 
-  const persisted = () => saved[saved.length - 1]?.messages ?? [];
+  const buffered = (b: unknown = bridge) =>
+    (b as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer('cone_1');
 
   beforeEach(async () => {
     sentMessages.length = 0;
@@ -97,7 +120,7 @@ describe('kernel compaction-row persistence', () => {
         model: 'claude-opus-4-6',
       },
     ];
-    conversationStore = makeConversationStore();
+    conversationStore = makeConversationStore(() => agentMessages);
 
     bridge = new Bridge();
     await bridge.bind({
@@ -114,7 +137,7 @@ describe('kernel compaction-row persistence', () => {
     await vi.waitFor(() => expect(sentMessages.length).toBeGreaterThan(0));
 
     expect(conversationStore.putMarker).not.toHaveBeenCalled();
-    expect(persisted().filter((m) => m.compaction)).toEqual([]);
+    expect(saved).toEqual([]);
   });
 
   it('records the round once it settles, as a marker and a row', async () => {
@@ -133,7 +156,8 @@ describe('kernel compaction-row persistence', () => {
       }),
     ]);
 
-    const rows = persisted().filter((m) => m.compaction);
+    expect(saved).toEqual([]);
+    const rows = buffered().filter((m) => m.compaction);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       role: 'assistant',
@@ -158,6 +182,23 @@ describe('kernel compaction-row persistence', () => {
     ]);
   });
 
+  it('forwards only the safe failure class when a preserved round is retracted', async () => {
+    phase('summarizing', { roundId: 'idle-failed' });
+    phase('cancelled', { roundId: 'idle-failed', failure: 'rate-limit' });
+
+    const emitted = sentMessages
+      .map(
+        (message) =>
+          (
+            message as {
+              payload: { type: string; state?: string; failure?: string };
+            }
+          ).payload
+      )
+      .filter((payload) => payload.type === 'compaction-state');
+    expect(emitted.at(-1)).toMatchObject({ state: 'cancelled', failure: 'rate-limit' });
+  });
+
   it('retracts a round that kept nothing, from the record AND the buffer', async () => {
     callbacks.onResponse?.('cone_1', 'shipped', false);
     phase('summarizing', { roundId: 'idle-1' });
@@ -167,7 +208,8 @@ describe('kernel compaction-row persistence', () => {
     await vi.waitFor(() => expect(conversationStore.deleteMarker).toHaveBeenCalled());
 
     expect(conversationStore.markers).toEqual([]);
-    expect(persisted().filter((m) => m.compaction)).toEqual([]);
+    expect(buffered().filter((m) => m.compaction)).toEqual([]);
+    expect(buffered().map((m) => m.content)).toEqual(['shipped']);
   });
 
   it('writes nothing for a phase that is not a row', async () => {
@@ -211,7 +253,7 @@ describe('kernel compaction-row persistence', () => {
     expect(conversationStore.markers).toEqual([]);
   });
 
-  it('folds a stored marker back into a rebuild from live agent state', async () => {
+  it('folds a stored marker back into a rebuild from the canonical record', async () => {
     conversationStore.markers.push({
       id: 'compaction-cone_1-stored',
       kind: 'compaction',
@@ -221,9 +263,9 @@ describe('kernel compaction-row persistence', () => {
 
     const rebuilt = (await (
       bridge as unknown as {
-        buildBufferFromAgentMessages: (scoop: unknown) => Promise<ChatMessage[] | null>;
+        buildBufferFromCanonicalRecord: (scoop: unknown) => Promise<ChatMessage[] | null>;
       }
-    ).buildBufferFromAgentMessages(CONE)) as ChatMessage[];
+    ).buildBufferFromCanonicalRecord(CONE)) as ChatMessage[];
 
     expect(rebuilt.map((m) => (m.compaction ? 'seam' : m.role))).toEqual([
       'user',
@@ -243,8 +285,8 @@ describe('kernel compaction-row persistence', () => {
 
     plainCallbacks.onCompactionStateChange?.('cone_1', 'summarizing', { trigger: 'threshold' });
     plainCallbacks.onCompactionStateChange?.('cone_1', 'idle', { trigger: 'threshold' });
-    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(buffered(plain).length).toBeGreaterThan(0));
 
-    expect(persisted().at(-1)?.compaction).toMatchObject({ state: 'summarized' });
+    expect(buffered(plain).at(-1)?.compaction).toMatchObject({ state: 'summarized' });
   });
 });

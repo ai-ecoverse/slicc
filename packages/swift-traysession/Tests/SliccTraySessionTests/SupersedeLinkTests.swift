@@ -3,6 +3,17 @@ import XCTest
 
 @testable import SliccTraySession
 
+
+
+
+
+
+
+
+
+
+
+
 final class SupersedeLinkTests: XCTestCase {
 
     private struct Vector {
@@ -79,7 +90,8 @@ final class SupersedeLinkTests: XCTestCase {
     }
 
     func testMergesRepeatedHeaderInstances() {
-
+        
+        
         let link = #"<https://www.sliccy.ai/join/a.b>; rel="successor-version""#
         let other = #"<https://www.sliccy.ai/status>; rel="status""#
         XCTAssertEqual(
@@ -111,6 +123,7 @@ final class SupersedeLinkTests: XCTestCase {
             SupersedeLink.successor(in: response)?.absoluteString,
             "https://www.sliccy.ai/join/a.b")
     }
+    
 
     private func httpResponse(status: Int, headers: [String: String]) -> HTTPURLResponse {
         HTTPURLResponse(
@@ -121,7 +134,8 @@ final class SupersedeLinkTests: XCTestCase {
     }
 
     func testRedirectTargetStripsTheHubProbeParameter() {
-
+        
+        
         XCTAssertEqual(
             SupersedeLink.redirectTarget(
                 in: httpResponse(
@@ -139,13 +153,14 @@ final class SupersedeLinkTests: XCTestCase {
     }
 
     func testRedirectTargetIgnoresNonRedirectsAndUnusableTargets() {
-
+        
         XCTAssertNil(
             SupersedeLink.redirectTarget(
                 in: httpResponse(
                     status: 409, headers: ["Location": "https://www.sliccy.ai/join/a.b"])))
         XCTAssertNil(SupersedeLink.redirectTarget(in: httpResponse(status: 308, headers: [:])))
-
+        
+        
         XCTAssertNil(
             SupersedeLink.redirectTarget(
                 in: httpResponse(status: 308, headers: ["Location": "/join/a.b"])))

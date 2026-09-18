@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+
+
 type syncBuffer struct {
 	mu sync.Mutex
 	b  strings.Builder
@@ -23,6 +25,8 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+
 
 func fixedClock() func() time.Time {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
@@ -52,7 +56,7 @@ func stickyConsole(w *syncBuffer, width int) *Console {
 func TestPlainModeReproducesTheClassicLines(t *testing.T) {
 	var buf syncBuffer
 	c := plainConsole(&buf)
-	c.Start()
+	c.Start() 
 	c.Line(KindOk, "connected")
 	c.Line(KindError, "%s", "tray attach failed")
 	c.Update(func(s *Status) { s.State = StateConnected; s.Sessions++ })
@@ -82,7 +86,7 @@ func TestPlainModeWithoutTag(t *testing.T) {
 }
 
 func TestPlainModeRepeatsAreNotCollapsed(t *testing.T) {
-
+	
 	var buf syncBuffer
 	c := plainConsole(&buf)
 	for i := 0; i < 3; i++ {
@@ -151,7 +155,7 @@ func TestStickyRepeatIsRewrittenInPlace(t *testing.T) {
 		t.Errorf("output %q is missing the repeat counter", out)
 	}
 	if strings.Contains(out, "(×2)") && strings.Contains(out, "(×3)") {
-
+		
 		if got := strings.Count(out, cursorUp); got < 2 {
 			t.Errorf("output %q rewrote in place %d times, want 2", out, got)
 		}
@@ -162,7 +166,8 @@ func TestStickyRepeatIsRewrittenInPlace(t *testing.T) {
 }
 
 func TestStickyWideRepeatCollapsesToAMarker(t *testing.T) {
-
+	
+	
 	var buf syncBuffer
 	c := stickyConsole(&buf, 24)
 	long := strings.Repeat("wide error ", 6)
@@ -194,7 +199,7 @@ func TestStickyDifferentMessageResetsCollapsing(t *testing.T) {
 	c := stickyConsole(&buf, 80)
 	c.Line(KindError, "first")
 	c.Line(KindError, "first")
-	c.Line(KindWarn, "first")
+	c.Line(KindWarn, "first") 
 	c.Line(KindError, "second")
 	out := buf.String()
 	if !strings.Contains(out, "⚠ first") {
@@ -292,7 +297,7 @@ func TestBeatAndDiagCounters(t *testing.T) {
 func TestUpdateIgnoresNil(_ *testing.T) {
 	var buf syncBuffer
 	c := stickyConsole(&buf, 80)
-	c.Update(nil)
+	c.Update(nil) 
 }
 
 func TestStopClearsTheBarAndIsIdempotent(t *testing.T) {
@@ -305,7 +310,7 @@ func TestStopClearsTheBarAndIsIdempotent(t *testing.T) {
 	if !strings.HasSuffix(buf.String(), eraseLine) {
 		t.Errorf("Stop must erase the bar, output ends %q", tail(buf.String(), 12))
 	}
-
+	
 	before := buf.String()
 	c.Line(KindInfo, "session ended")
 	after := strings.TrimPrefix(buf.String(), before)
@@ -325,7 +330,7 @@ func TestTickerRepaintsAndStopJoins(t *testing.T) {
 		Tick:  time.Millisecond,
 	})
 	c.Start()
-	c.Start()
+	c.Start() 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && strings.Count(buf.String(), eraseLine) < 3 {
 		time.Sleep(5 * time.Millisecond)
@@ -369,6 +374,7 @@ func TestConcurrentLinesAndUpdates(t *testing.T) {
 	}
 }
 
+
 func tail(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -378,7 +384,7 @@ func tail(s string, n int) string {
 
 func TestConsoleColorsLinesWithoutTheBar(t *testing.T) {
 	var buf strings.Builder
-
+	
 	c := New(&buf, Options{Mode: Mode{Color: true}, Tag: "slicc watch"})
 	c.Line(KindError, "boom")
 
@@ -397,7 +403,9 @@ func TestConsoleColorsLinesWithoutTheBar(t *testing.T) {
 func TestRepeatOfUnmeasurableTextUsesTheMarkerNotACursorRewind(t *testing.T) {
 	var buf syncBuffer
 	c := stickyConsole(&buf, 80)
-
+	
+	
+	
 	msg := "tray attach failed: 世界世界"
 	c.Line(KindError, "%s", msg)
 	first := buf.String()
@@ -413,7 +421,8 @@ func TestRepeatOfUnmeasurableTextUsesTheMarkerNotACursorRewind(t *testing.T) {
 	if strings.Contains(got, "世界") {
 		t.Errorf("repeat %q rewrote the unmeasurable row in place", got)
 	}
-
+	
+	
 	c.Line(KindError, "%s", msg)
 	if last := strings.TrimPrefix(buf.String(), first+got); !strings.Contains(last, cursorUp) {
 		t.Errorf("marker %q was not rewritten in place", last)

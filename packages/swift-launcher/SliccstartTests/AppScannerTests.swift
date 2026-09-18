@@ -47,7 +47,10 @@ final class AppScannerTests: XCTestCase {
     }
 
     func testKnownElectronAppsIncludeSignalWithRealBundleId() {
-
+        
+        
+        
+        
         let signal = AppTarget.knownElectronApps.first { $0.name == "Signal" }
         XCTAssertEqual(signal?.bundleId, "org.whispersystems.signal-desktop")
         XCTAssertFalse(
@@ -58,7 +61,8 @@ final class AppScannerTests: XCTestCase {
 
     func testKnownElectronAppBundleIdsAreWellFormedAndUnique() {
         let ids = AppTarget.knownElectronApps.map(\.bundleId)
-
+        
+        
         for id in ids {
             XCTAssertFalse(id.isEmpty, "empty bundle id in knownElectronApps")
             XCTAssertTrue(id.contains("."), "bundle id `\(id)` is not reverse-DNS")

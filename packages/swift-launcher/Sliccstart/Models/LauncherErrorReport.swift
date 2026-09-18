@@ -1,8 +1,21 @@
 import Foundation
 import SwiftOptel
 
-enum LauncherErrorReport {
 
+
+
+
+
+
+
+
+
+
+
+
+enum LauncherErrorReport {
+    
+    
     enum Operation: String {
         case updateCheck = "update-check"
         case updateDetach = "update-detach"
@@ -20,6 +33,8 @@ enum LauncherErrorReport {
         case openIncomingUrl = "open-incoming-url"
     }
 
+    
+    
     static let maxTargetLength = 120
 
     static func report(_ operation: Operation, _ error: Error) {
@@ -27,6 +42,8 @@ enum LauncherErrorReport {
         Optel.shared.sample(.error, source: mapping.source, target: mapping.target)
     }
 
+    
+    
     static func mapping(operation: Operation, error: Error) -> OptelErrorMapping {
         let derived = OptelErrorMapping.from(error: error)
         return OptelErrorMapping(
@@ -35,6 +52,10 @@ enum LauncherErrorReport {
         )
     }
 
+    
+    
+    
+    
     static func redact(_ message: String) -> String {
         var redacted = message
         for pattern in redactionPatterns {
@@ -56,8 +77,12 @@ enum LauncherErrorReport {
         let replacement: String
     }
 
+    
+    
+    
     private static let redactionPatterns: [RedactionPattern] = [
-
+        
+        
         (#"(?i)\b(token|secret|password|key)\b\s*[:=]\s*\S+"#, "$1=<redacted>"),
         (#"[a-zA-Z][a-zA-Z0-9+.-]*://\S*"#, "<url>"),
         (#"(?:/[^\s/:]+){2,}/?"#, "<path>"),

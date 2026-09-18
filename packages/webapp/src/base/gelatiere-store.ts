@@ -1,6 +1,8 @@
 import DEFAULT_GELATIERE_MD from '../../../vfs-root/shared/GELATIERE.md?raw';
 import {
+  type FrontmatterValue,
   parseFrontmatter,
+  readArray,
   readOptionalString,
   splitInstructionDocument,
 } from './instruction-frontmatter.js';
@@ -35,13 +37,70 @@ export const MAX_STORED_SUGGESTIONS = 40;
 
 export const LICK_SUGGESTION_LIMIT = 5;
 
+const MAX_SUGGESTION_CONES = 8;
+
 const GELATIERE_FRONTMATTER = {
-  arrayKeys: new Set<string>(),
+  arrayKeys: new Set(['allowedCommands']),
   scalarKeys: new Set(['intervalHours', 'nightly', 'maxSuggestions']),
 };
 
-export type GelatiereSuggestionKind = 'skill' | 'use-case' | 'tip';
-const SUGGESTION_KINDS: ReadonlySet<string> = new Set(['skill', 'use-case', 'tip']);
+export const GELATIERE_BASE_ALLOWED_COMMANDS = [
+  'awk',
+  'basename',
+  'cat',
+  'column',
+
+  'cut',
+  'date',
+  'dirname',
+  'echo',
+  'expr',
+  'false',
+  'file',
+  'find',
+
+  'fold',
+  'gelatiere',
+  'grep',
+  'head',
+  'jq',
+  'ls',
+  'man',
+
+  'memory',
+  'mkdir',
+  'nl',
+  'paste',
+  'printf',
+  'realpath',
+  'rg',
+  'sed',
+  'seq',
+  'sort',
+  'stat',
+  'tail',
+  'tee',
+  'test',
+  'touch',
+  'tr',
+  'true',
+  'uniq',
+  'upskill',
+  'wc',
+];
+
+const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export type GelatiereSuggestionKind = 'skill' | 'use-case' | 'tip' | 'skill-idea' | 'issue';
+const SUGGESTION_KINDS: ReadonlySet<string> = new Set([
+  'skill',
+  'use-case',
+  'tip',
+  'skill-idea',
+  'issue',
+]);
+
+const PROMPT_KINDS: ReadonlySet<string> = new Set(['use-case', 'skill-idea', 'issue']);
 
 export interface GelatiereSuggestion {
   id: string;
@@ -58,11 +117,20 @@ export interface GelatiereSuggestion {
 
   evidence?: string;
 
+  cones?: string[];
+
+  retargets?: GelatiereRetarget[];
+
   createdAt: string;
 
   dismissedAt?: string;
 
   takenAt?: string;
+}
+
+export interface GelatiereRetarget {
+  cone: string;
+  at: string;
 }
 
 export interface GelatiereState {
@@ -80,6 +148,8 @@ export interface GelatiereConfig {
 
   nightly: string;
   maxSuggestions: number;
+
+  allowedCommands: string[];
 
   instructions: string;
 }
@@ -113,6 +183,7 @@ export function parseGelatiereDocument(content: string): GelatiereConfig {
     throw new Error('nightly must be a 5-field cron expression');
   }
   return {
+    allowedCommands: readAllowedCommands(values),
     intervalHours: readPositiveNumber(
       values.intervalHours,
       'intervalHours',
@@ -125,6 +196,15 @@ export function parseGelatiereDocument(content: string): GelatiereConfig {
     ),
     instructions: document.body,
   };
+}
+
+function readAllowedCommands(values: Record<string, FrontmatterValue>): string[] {
+  const extra = readArray(values, 'allowedCommands', []);
+  const bad = extra.find((command) => !COMMAND_NAME.test(command));
+  if (bad !== undefined) {
+    throw new Error(`allowedCommands must contain bare command names, not "${bad}"`);
+  }
+  return [...new Set([...GELATIERE_BASE_ALLOWED_COMMANDS, ...extra])];
 }
 
 function readPositiveNumber(
@@ -174,12 +254,28 @@ export async function readGelatiereSuggestions(
   for (const entry of parsed) {
     const suggestion = coerceSuggestion(entry, null);
     if (!suggestion) continue;
-    const { dismissedAt, takenAt } = entry as { dismissedAt?: unknown; takenAt?: unknown };
+    const { dismissedAt, takenAt, retargets } = entry as {
+      dismissedAt?: unknown;
+      takenAt?: unknown;
+      retargets?: unknown;
+    };
     if (typeof dismissedAt === 'string' && dismissedAt) suggestion.dismissedAt = dismissedAt;
     if (typeof takenAt === 'string' && takenAt) suggestion.takenAt = takenAt;
+    const widened = storedRetargets(retargets);
+    if (widened.length > 0) suggestion.retargets = widened;
     kept.push(suggestion);
   }
   return kept;
+}
+
+function storedRetargets(value: unknown): GelatiereRetarget[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (r): r is GelatiereRetarget =>
+      Boolean(r) &&
+      typeof (r as GelatiereRetarget).cone === 'string' &&
+      typeof (r as GelatiereRetarget).at === 'string'
+  );
 }
 
 export async function writeGelatiereSuggestions(
@@ -243,13 +339,35 @@ export function suggestionsSince(
   suggestions: readonly GelatiereSuggestion[],
   since: string | undefined
 ): GelatiereSuggestion[] {
-  const open = openSuggestions(suggestions);
-  if (!since) return open;
-  const cutoff = Date.parse(since);
-  if (Number.isNaN(cutoff)) return open;
-  return open.filter((s) => {
-    const created = Date.parse(s.createdAt);
-    return Number.isNaN(created) || created > cutoff;
+  return openSuggestions(suggestions).filter((s) => isNewSince(s, since));
+}
+
+export function isNewSince(
+  suggestion: GelatiereSuggestion,
+  since: string | undefined,
+  cone?: string
+): boolean {
+  const cutoff = since ? Date.parse(since) : Number.NaN;
+  if (Number.isNaN(cutoff)) return true;
+  const after = (stamp: string): boolean => {
+    const parsed = Date.parse(stamp);
+    return Number.isNaN(parsed) || parsed > cutoff;
+  };
+  if (after(suggestion.createdAt)) return true;
+  return (suggestion.retargets ?? []).some(
+    (r) => (cone === undefined || r.cone === cone) && after(r.at)
+  );
+}
+
+export function suggestionsForCone(
+  suggestions: readonly GelatiereSuggestion[],
+  folder: string,
+  primary: string,
+  known: ReadonlySet<string>
+): GelatiereSuggestion[] {
+  return suggestions.filter((s) => {
+    const live = s.cones?.filter((cone) => known.has(cone)) ?? [];
+    return live.length > 0 ? live.includes(folder) : folder === primary;
   });
 }
 
@@ -325,6 +443,17 @@ function upskillInstall(value: string | undefined): string | undefined {
   return tokens.slice(1).every((token) => INSTALL_TOKEN_RE.test(token)) ? value : undefined;
 }
 
+const CONE_FOLDER_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+
+function coneFolders(value: unknown): string[] | undefined {
+  const list = typeof value === 'string' ? [value] : Array.isArray(value) ? value : [];
+  const folders = list
+    .map((entry) => optionalText(entry, 80))
+    .filter((entry): entry is string => entry !== undefined && CONE_FOLDER_RE.test(entry));
+  const unique = [...new Set(folders)].slice(0, MAX_SUGGESTION_CONES);
+  return unique.length > 0 ? unique : undefined;
+}
+
 interface RawSuggestion {
   id?: unknown;
   kind?: unknown;
@@ -335,6 +464,7 @@ interface RawSuggestion {
   prompt?: unknown;
   url?: unknown;
   evidence?: unknown;
+  cones?: unknown;
   createdAt?: unknown;
 }
 
@@ -355,7 +485,8 @@ function coerceSuggestion(raw: unknown, createdAt: string | null): GelatiereSugg
   const prompt = entry.prompt !== undefined ? optionalText(entry.prompt, 1_000) : undefined;
 
   if (kind === 'skill' && (!skill || !install)) return null;
-  if (kind === 'use-case' && !prompt) return null;
+  if (PROMPT_KINDS.has(kind) && !prompt) return null;
+  const cones = coneFolders(entry.cones);
   return {
     id,
     kind: kind as GelatiereSuggestionKind,
@@ -366,6 +497,7 @@ function coerceSuggestion(raw: unknown, createdAt: string | null): GelatiereSugg
     ...(entry.prompt !== undefined ? { prompt } : {}),
     ...(entry.url !== undefined ? { url: httpUrl(optionalText(entry.url, 500)) } : {}),
     ...(entry.evidence !== undefined ? { evidence: optionalText(entry.evidence, 500) } : {}),
+    ...(cones ? { cones } : {}),
     createdAt: stamp,
   };
 }
@@ -399,9 +531,10 @@ export function mergeSuggestions(
   incoming: readonly GelatiereSuggestion[],
   maxStored: number = MAX_STORED_SUGGESTIONS
 ): { merged: GelatiereSuggestion[]; added: GelatiereSuggestion[] } {
+  const byId = new Map(incoming.map((s) => [s.id, s]));
   const known = new Set(existing.map((s) => s.id));
   const added = incoming.filter((s) => !known.has(s.id));
-  const merged = [...added, ...existing];
+  const merged = [...added, ...existing.map((s) => widenCones(s, byId.get(s.id)))];
   while (merged.length > maxStored) {
     const dismissedIndex = findLastIndex(merged, (s) => Boolean(s.dismissedAt));
     const settledIndex =
@@ -409,6 +542,23 @@ export function mergeSuggestions(
     merged.splice(settledIndex >= 0 ? settledIndex : merged.length - 1, 1);
   }
   return { merged, added };
+}
+
+function widenCones(
+  stored: GelatiereSuggestion,
+  repeat: GelatiereSuggestion | undefined
+): GelatiereSuggestion {
+  if (!repeat?.cones || stored.dismissedAt || stored.takenAt) return stored;
+  const have = stored.cones ?? [];
+  const fresh = repeat.cones.filter((cone) => !have.includes(cone));
+  const cones = [...have, ...fresh].slice(0, MAX_SUGGESTION_CONES);
+  const joined = fresh.filter((cone) => cones.includes(cone));
+  if (joined.length === 0) return stored;
+  const retargets = [
+    ...(stored.retargets ?? []),
+    ...joined.map((cone) => ({ cone, at: repeat.createdAt })),
+  ];
+  return { ...stored, cones, retargets };
 }
 
 function findLastIndex<T>(list: readonly T[], predicate: (item: T) => boolean): number {

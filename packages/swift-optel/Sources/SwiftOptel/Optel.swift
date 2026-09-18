@@ -1,7 +1,23 @@
 import Foundation
 
-public final class Optel: @unchecked Sendable {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+public final class Optel: @unchecked Sendable {
+    
+    
     public static let shared = Optel()
 
     private let lock = NSLock()
@@ -14,6 +30,25 @@ public final class Optel: @unchecked Sendable {
 
     public init() {}
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     public func configure(
         appID: String,
         rate: String? = nil,
@@ -31,6 +66,9 @@ public final class Optel: @unchecked Sendable {
         )
     }
 
+    
+    
+    
     internal func configure(
         appID: String,
         rate: String?,
@@ -62,13 +100,23 @@ public final class Optel: @unchecked Sendable {
         lock.unlock()
     }
 
+    
+    
+    
+    
+    
+    
+    
     public func sample(
         _ checkpoint: RUMCheckpoint,
         source: String? = nil,
         target: String? = nil,
         value: Double? = nil
     ) {
-
+        
+        
+        
+        
         lock.lock()
         defer { lock.unlock() }
         guard let session = session, let collector = collector else {
@@ -106,6 +154,7 @@ public final class Optel: @unchecked Sendable {
         )
     }
 
+    
     public static func configure(
         appID: String,
         rate: String? = nil,
@@ -114,6 +163,7 @@ public final class Optel: @unchecked Sendable {
         shared.configure(appID: appID, rate: rate, collectBaseURL: collectBaseURL)
     }
 
+    
     public static func sample(
         _ checkpoint: RUMCheckpoint,
         source: String? = nil,

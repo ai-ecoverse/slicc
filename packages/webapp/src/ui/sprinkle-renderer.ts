@@ -89,6 +89,7 @@ interface SprinkleInboundMessage {
   id?: unknown;
   action?: string;
   data?: unknown;
+  target?: string;
   path?: string;
   content?: string;
   cmd?: string;
@@ -157,7 +158,7 @@ function createSharedBridgeHandlers(
 ): Record<string, BridgeMessageHandler> {
   return {
     'sprinkle-lick': (_iframe, msg) =>
-      bridge.lick({ action: msg.action as string, data: msg.data }),
+      bridge.lick({ action: msg.action as string, data: msg.data, target: msg.target }),
     'sprinkle-set-state': (_iframe, msg) => bridge.setState(msg.data),
     'sprinkle-close': () => bridge.close(),
     'sprinkle-minimize': () => bridge.minimize(),
@@ -419,6 +420,8 @@ export class SprinkleRenderer {
     return `(function() {
   var _updateListeners = new Set();
   var _hidInputReportListeners = new Set();
+  var _usbDisconnectListeners = new Set();
+  var _usbClaimLostListeners = new Set();
   var _sprinkleName = '';
   var _state = null;
   var _cbId = 0;
@@ -437,6 +440,14 @@ export class SprinkleRenderer {
     } else if (msg.type === 'sprinkle-device-event') {
       if (msg.channel === 'hid:inputreport') {
         _hidInputReportListeners.forEach(function(cb) {
+          try { cb(msg.payload); } catch(e) { console.error(e); }
+        });
+      } else if (msg.channel === 'usb:disconnect') {
+        _usbDisconnectListeners.forEach(function(cb) {
+          try { cb(msg.payload); } catch(e) { console.error(e); }
+        });
+      } else if (msg.channel === 'usb:claim-lost') {
+        _usbClaimLostListeners.forEach(function(cb) {
           try { cb(msg.payload); } catch(e) { console.error(e); }
         });
       }
@@ -484,9 +495,9 @@ export class SprinkleRenderer {
 
   var api = {
     lick: function(event) {
-      var action, data;
-      if (typeof event === 'string') { action = event; } else { action = event.action; data = event.data; }
-      parent.postMessage({ type: 'sprinkle-lick', action: action, data: data }, '*');
+      var action, data, target;
+      if (typeof event === 'string') { action = event; } else { action = event.action; data = event.data; target = event.target; }
+      parent.postMessage({ type: 'sprinkle-lick', action: action, data: data, target: target }, '*');
     },
     on: function(event, callback) { if (event === 'update') _updateListeners.add(callback); },
     off: function(event, callback) { if (event === 'update') _updateListeners.delete(callback); },
@@ -620,6 +631,9 @@ export class SprinkleRenderer {
     browser: {
       findTab: function(q) { return _jshCall('browser', ['findTab', q]); },
       ensureTab: function(url, options) { return _jshCall('browser', ['ensureTab', url, options || {}]); },
+      openWindow: function(url, options) { return _jshCall('browser', ['openWindow', url, options || {}]); },
+      windowBounds: function(tab) { return _jshCall('browser', ['windowBounds', tab]); },
+      setWindowBounds: function(tab, bounds) { return _jshCall('browser', ['setWindowBounds', tab, bounds]); },
       eval: function(tab, code) { return _jshCall('browser', ['eval', tab, code]); },
       evalAsync: function(tab, code) { return _jshCall('browser', ['evalAsync', tab, code]); },
       cookie: function(tab, name) { return _jshCall('browser', ['cookie', tab, name]); },
@@ -647,13 +661,13 @@ export class SprinkleRenderer {
       list: function() { return _deviceCall('usb', 'list', []); },
       request: function(filters) { return _deviceCall('usb', 'request', [filters || []]); },
       open: function(handle) { return _deviceCall('usb', 'open', [handle]).then(function() {}); },
-      close: function(handle) { return _deviceCall('usb', 'close', [handle]).then(function() {}); },
-      reset: function(handle) { return _deviceCall('usb', 'reset', [handle]).then(function() {}); },
+      close: function(handle, opts) { return _deviceCall('usb', 'close', [handle, opts || null]).then(function() {}); },
+      reset: function(handle, opts) { return _deviceCall('usb', 'reset', [handle, opts || null]).then(function() {}); },
       selectConfiguration: function(handle, value) {
         return _deviceCall('usb', 'selectConfig', [handle, value]).then(function() {});
       },
-      claimInterface: function(handle, n) {
-        return _deviceCall('usb', 'claim', [handle, n]).then(function() {});
+      claimInterface: function(handle, n, opts) {
+        return _deviceCall('usb', 'claim', [handle, n, opts || null]).then(function() {});
       },
       releaseInterface: function(handle, n) {
         return _deviceCall('usb', 'release', [handle, n]).then(function() {});
@@ -677,6 +691,14 @@ export class SprinkleRenderer {
       },
       transferOut: function(handle, ep, bytes) {
         return _deviceCall('usb', 'transferOut', [handle, ep, _u8ToB64(bytes)]);
+      },
+      on: function(event, cb) {
+        if (event === 'disconnect') _usbDisconnectListeners.add(cb);
+        else if (event === 'claim-lost') _usbClaimLostListeners.add(cb);
+      },
+      off: function(event, cb) {
+        if (event === 'disconnect') _usbDisconnectListeners['delete'](cb);
+        else if (event === 'claim-lost') _usbClaimLostListeners['delete'](cb);
       }
     },
     readFileBinary: function(path) { return _jshCall('readFileBinary', [path]).then(function(r) { return _b64ToU8(r.base64); }); },
@@ -709,10 +731,7 @@ export class SprinkleRenderer {
     const iframe = document.createElement('iframe');
 
     const nested = isNestedInAnotherFrame();
-    const sandboxTokens = nested
-      ? 'allow-scripts allow-same-origin allow-popups'
-      : 'allow-scripts allow-same-origin';
-    iframe.setAttribute('sandbox', sandboxTokens);
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups');
     iframe.style.cssText = fullDocIframeStyle(nested);
 
     const pinnedToHost = pinFullDocIframeToHost(iframe, this.container);

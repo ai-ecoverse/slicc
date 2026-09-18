@@ -1,4 +1,5 @@
 import type { ArgSpec } from '../../shell/arg-parser.js';
+import type { GitCommandResult } from './types.js';
 
 export const CLEAN_SPEC: ArgSpec = {
   boolean: ['dry-run', 'force', 'd', 'x', 'X', 'quiet'],
@@ -9,8 +10,8 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   init: { string: ['initial-branch'], alias: { b: 'initial-branch' } },
   clone: {
     string: ['branch', 'depth', 'origin', 'upload-pack'],
-    boolean: ['single-branch'],
-    alias: { b: 'branch', o: 'origin' },
+    boolean: ['single-branch', 'quiet'],
+    alias: { b: 'branch', o: 'origin', q: 'quiet' },
     default: { 'single-branch': true },
   },
   commit: {
@@ -30,7 +31,8 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
       'skip',
       'follow',
     ],
-    boolean: ['oneline', 'stat', 'reverse', 'all'],
+
+    boolean: ['oneline', 'stat', 'reverse', 'all', 'color'],
     alias: { n: 'max-count', pretty: 'format' },
     '--': true,
   },
@@ -45,6 +47,7 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
       'no-merged',
       'points-at',
     ],
+    boolean: ['color'],
     alias: { l: 'list', u: 'set-upstream-to', t: 'track' },
   },
   checkout: { string: ['b', 'B', 'orphan', 'track', 'start-point', 'conflict'], '--': true },
@@ -52,14 +55,20 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   diff: {
     string: ['format', 'diff-filter', 'unified'],
 
-    boolean: ['staged', 'cached', 'name-only', 'stat', 'no-index'],
+    boolean: ['staged', 'cached', 'name-only', 'name-status', 'stat', 'no-index', 'color'],
     alias: { pretty: 'format', U: 'unified' },
     '--': true,
   },
-  show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },
+  show: { string: ['format'], boolean: ['stat', 'color'], alias: { pretty: 'format' } },
+  status: {
+    boolean: ['short', 'porcelain', 'color'],
+    alias: { s: 'short' },
+  },
   merge: {
     string: ['message', 'strategy', 'strategy-option'],
-    alias: { m: 'message', s: 'strategy', X: 'strategy-option' },
+
+    boolean: ['ff', 'ff-only', 'abort', 'edit', 'quiet'],
+    alias: { m: 'message', s: 'strategy', X: 'strategy-option', q: 'quiet' },
   },
   'cherry-pick': {
     boolean: ['no-commit', 'x'],
@@ -86,12 +95,13 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   },
   fetch: {
     string: ['depth', 'o', 'refmap', 'upload-pack', 'negotiation-tip', 'server-option'],
-    boolean: ['prune'],
-    alias: { p: 'prune' },
+    boolean: ['prune', 'quiet'],
+    alias: { p: 'prune', q: 'quiet' },
   },
   pull: {
     string: ['depth', 's', 'strategy', 'X', 'strategy-option', 'upload-pack'],
-    boolean: ['ff-only', 'ff'],
+    boolean: ['ff-only', 'ff', 'quiet'],
+    alias: { q: 'quiet' },
   },
   push: {
     string: ['o', 'push-option', 'receive-pack', 'repo', 'exec', 'signed', '4', '6'],
@@ -111,6 +121,93 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     alias: { h: 'heads', t: 'tags' },
   },
 };
+
+const GIT_FLAG_RE = /^(--?)([^=]+)(=.*)?$/;
+
+function gitFlagNames(spec: ArgSpec): Set<string> {
+  const names = new Set<string>(spec.string ?? []);
+  for (const b of spec.boolean ?? []) {
+    names.add(b);
+    names.add(`no-${b}`);
+  }
+  for (const [key, val] of Object.entries(spec.alias ?? {})) {
+    names.add(key);
+    for (const n of Array.isArray(val) ? val : [val]) names.add(n);
+  }
+  return names;
+}
+
+function gitValueFlagNames(spec: ArgSpec): Set<string> {
+  const names = new Set<string>(spec.string ?? []);
+  for (const [key, val] of Object.entries(spec.alias ?? {})) {
+    const group = [key, ...(Array.isArray(val) ? val : [val])];
+    if (group.some((n) => names.has(n))) {
+      for (const n of group) names.add(n);
+    }
+  }
+  return names;
+}
+
+export function allGitValueFlagNames(): Set<string> {
+  const names = new Set(['c', 'C', 'git-dir', 'work-tree']);
+  for (const spec of Object.values(GIT_FLAG_SPECS)) {
+    for (const n of gitValueFlagNames(spec)) names.add(n);
+  }
+  return names;
+}
+
+function unknownClusteredShort(
+  name: string,
+  known: Set<string>,
+  valueNames: Set<string>
+): string | undefined {
+  for (const ch of name) {
+    if (!known.has(ch)) return ch;
+
+    if (valueNames.has(ch)) return undefined;
+  }
+  return undefined;
+}
+
+export function firstUnknownGitFlag(args: readonly string[], spec: ArgSpec): string | undefined {
+  const known = gitFlagNames(spec);
+  const valueNames = gitValueFlagNames(spec);
+  const terminator = args.indexOf('--');
+  const head = terminator === -1 ? args : args.slice(0, terminator);
+  for (let i = 0; i < head.length; i++) {
+    const token = head[i];
+    if (!token.startsWith('-') || token === '-') continue;
+    const m = GIT_FLAG_RE.exec(token);
+    if (!m) continue;
+    const name = m[2];
+    if (m[1] === '-' && name.length > 1 && !m[3] && !known.has(name)) {
+      const unknown = unknownClusteredShort(name, known, valueNames);
+      if (unknown) return unknown;
+      continue;
+    }
+    if (!known.has(name)) return name;
+    if (!m[3] && valueNames.has(name) && i + 1 < head.length) i++;
+  }
+  return undefined;
+}
+
+export function unknownGitFlagError(flag: string): GitCommandResult {
+  const kind = flag.length === 1 ? 'switch' : 'option';
+  return {
+    stdout: '',
+    stderr: `error: unknown ${kind} \`${flag}\`\n`,
+    exitCode: 129,
+  };
+}
+
+export function rejectUnknownGitFlags(
+  args: readonly string[],
+  spec: ArgSpec | undefined
+): GitCommandResult | undefined {
+  if (!spec) return undefined;
+  const unknown = firstUnknownGitFlag(args, spec);
+  return unknown ? unknownGitFlagError(unknown) : undefined;
+}
 
 export type GitFlagScalar = string | number | boolean;
 

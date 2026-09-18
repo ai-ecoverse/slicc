@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { matchHashedAssetPath, mimeForAssetPath } from '../src/asset-archive.mjs';
 
 export function assertAllHashed(names) {
@@ -8,27 +11,65 @@ export function assertAllHashed(names) {
   }
 }
 
-export function buildPutArgs(bucket, file, dir) {
-  const objectPath = `${bucket}/assets/${file}`;
-  const mime = mimeForAssetPath(`/assets/${file}`);
+export function buildManifestGroups(files, dir) {
+  assertAllHashed(files);
 
-  const filePath = dir ? `${dir}/${file}` : file;
+  const byContentType = new Map();
+  for (const file of files) {
+    const contentType = mimeForAssetPath(`/assets/${file}`);
+    const entries = byContentType.get(contentType) ?? [];
+    entries.push({
+      key: `assets/${file}`,
+      file: dir ? join(dir, file) : file,
+    });
+    byContentType.set(contentType, entries);
+  }
 
+  return [...byContentType.entries()]
+    .map(([contentType, entries]) => ({ contentType, entries }))
+    .sort(
+      (left, right) =>
+        right.entries.length - left.entries.length ||
+        left.contentType.localeCompare(right.contentType)
+    );
+}
+
+export function buildBulkPutArgs(bucket, manifestPath, contentType, concurrency) {
   return [
     'wrangler',
     'r2',
-    'object',
+    'bulk',
     'put',
-    objectPath,
-    '--file',
-    filePath,
+    bucket,
+    '--filename',
+    manifestPath,
     '--content-type',
-    mime,
+    contentType,
+    '--concurrency',
+    String(concurrency),
     '--remote',
+    '--force',
   ];
 }
 
-export const RETRY_BASE_DELAY_MS = 500;
+export async function totalFileBytes(files, dir, stat = fs.stat) {
+  const sizes = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return (await stat(join(dir, file))).size;
+      } catch {
+        return 0;
+      }
+    })
+  );
+  return sizes.reduce((sum, size) => sum + size, 0);
+}
+
+export const MANIFEST_CHUNK_SIZE = 100;
+
+export const RETRY_BASE_DELAY_MS = 2_000;
+
+export const RETRY_MAX_DELAY_MS = 60_000;
 
 const defaultSleep = (ms) =>
   new Promise((resolve) => {
@@ -36,44 +77,122 @@ const defaultSleep = (ms) =>
   });
 
 export function retryDelayMs(attempt, random = Math.random) {
-  return Math.round(random() * RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  const step = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  return Math.round(step / 2 + random() * (step / 2));
 }
 
-export async function runUploads(
+export function retryConcurrency(concurrency, attempt) {
+  return Math.max(1, Math.floor(Math.max(concurrency, 1) / 2 ** (attempt - 1)));
+}
+
+export function chunkEntries(entries, size = MANIFEST_CHUNK_SIZE) {
+  const chunkSize = Math.max(1, Math.floor(size));
+  const chunks = [];
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    chunks.push(entries.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+export async function runBulkUploads(
   files,
-  { bucket, dir, exec, concurrency = 1, retries = 1, sleep = defaultSleep }
+  {
+    bucket,
+    dir,
+    exec,
+    concurrency = 20,
+    retries = 1,
+    chunkSize = MANIFEST_CHUNK_SIZE,
+    sleep = defaultSleep,
+    random = Math.random,
+    log = () => {},
+  }
 ) {
-  assertAllHashed(files);
+  const groups = buildManifestGroups(files, dir);
+  if (groups.length === 0) {
+    return { groups: 0, chunks: 0, invocations: 0, retries: 0 };
+  }
 
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < files.length) {
-      const file = files[cursor++];
-      await uploadWithRetry(file, bucket, dir, exec, retries, sleep);
+  const manifestDir = await fs.mkdtemp(join(tmpdir(), 'slicc-r2-bulk-'));
+  try {
+    const manifests = [];
+    for (const group of groups) {
+      for (const entries of chunkEntries(group.entries, chunkSize)) {
+        const manifestPath = join(manifestDir, `manifest-${manifests.length + 1}.json`);
+        await fs.writeFile(manifestPath, `${JSON.stringify(entries)}\n`, 'utf8');
+        manifests.push({ contentType: group.contentType, entries, manifestPath });
+      }
     }
-  };
 
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(concurrency, 1), files.length) }, worker)
-  );
+    let invocations = 0;
+    let retryCount = 0;
+    for (const [index, manifest] of manifests.entries()) {
+      const attempts = await uploadManifestWithRetry({
+        bucket,
+        manifest,
+        exec,
+        concurrency,
+        retries,
+        sleep,
+        random,
+        log: (message) => log(`chunk ${index + 1}/${manifests.length}: ${message}`),
+      });
+      invocations += attempts;
+      retryCount += attempts - 1;
+    }
+
+    return {
+      groups: groups.length,
+      chunks: manifests.length,
+      invocations,
+      retries: retryCount,
+    };
+  } finally {
+    await fs.rm(manifestDir, { recursive: true, force: true });
+  }
 }
 
-async function uploadWithRetry(file, bucket, dir, exec, retries, sleep) {
+async function uploadManifestWithRetry({
+  bucket,
+  manifest,
+  exec,
+  concurrency,
+  retries,
+  sleep,
+  random,
+  log,
+}) {
   let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const argv = buildPutArgs(bucket, file, dir);
-      await exec(argv);
-      return;
+      await exec(
+        buildBulkPutArgs(
+          bucket,
+          manifest.manifestPath,
+          manifest.contentType,
+          retryConcurrency(concurrency, attempt)
+        )
+      );
+      return attempt;
     } catch (err) {
       lastError = err;
-
       if (attempt < retries) {
-        await sleep(retryDelayMs(attempt));
+        const delay = retryDelayMs(attempt, random);
+        log(
+          `attempt ${attempt}/${retries} failed (${errorSummary(err)}); ` +
+            `retrying ${manifest.entries.length} objects in ${(delay / 1000).toFixed(1)}s ` +
+            `with concurrency ${retryConcurrency(concurrency, attempt + 1)}`
+        );
+        await sleep(delay);
       }
     }
   }
 
   throw lastError;
+}
+
+function errorSummary(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split('\n')[0].slice(0, 160);
 }

@@ -2,14 +2,17 @@ import type { AgentMessage } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import type { ChatMessage } from '../../scoops/chat-types.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
-import { chatSessionIdFor } from '../record.js';
 import { entriesFromAgentMessages, entriesFromChatMessages } from './entries.js';
-import { conversationKeyFor, workspaceIdFor } from './key.js';
+import { conversationIdentityFor, conversationKeyFor } from './key.js';
 import type { ConversationMigrationState, WorkUnitConversationStore } from './store.js';
 import type { WorkUnitConversationRecord } from './types.js';
 import { CONVERSATION_RECORD_VERSION } from './types.js';
 
 const log = createLogger('work-unit-conversation');
+
+class CanonicalUnreadableError extends Error {}
+
+export const CONVERSATION_MIGRATION_VERSION = 1;
 
 export const CONVERSATION_MIGRATION_ID = 'conversations';
 
@@ -57,6 +60,7 @@ export async function migrateConversations(
   }
 
   const completed = new Set(state.completedKeys);
+  let retryNextBoot = false;
   for (const raw of deps.units) {
     const unit: MigratableUnit = { ...raw, parentJid: raw.parentJid ?? null };
     const key = conversationKeyFor(unit);
@@ -72,12 +76,19 @@ export async function migrateConversations(
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       summary.skipped++;
-      state.skipped.push({ key, reason });
-      log.warn('Skipping a unit whose legacy conversation could not be read', {
+      state.skipped = [...state.skipped.filter((s) => s.key !== key), { key, reason }];
+      log.warn('Skipping a unit whose conversation could not be migrated', {
         key,
         folder: unit.folder,
         error: reason,
       });
+      if (err instanceof CanonicalUnreadableError) {
+        retryNextBoot = true;
+        state.updatedAt = now();
+        await deps.store.putMigrationState(state);
+        deps.onProgress?.(`conversation-migrated:${unit.jid}`);
+        continue;
+      }
     }
 
     completed.add(key);
@@ -87,7 +98,7 @@ export async function migrateConversations(
     deps.onProgress?.(`conversation-migrated:${unit.jid}`);
   }
 
-  state.done = true;
+  state.done = !retryNextBoot;
   state.updatedAt = now();
   await deps.store.putMigrationState(state);
   log.info('Canonical conversation migration complete', { ...summary });
@@ -110,16 +121,10 @@ async function migrateUnit(
     return 'already';
   }
   if (current.status === 'error') {
-    throw new Error(`canonical record unreadable: ${current.reason}`);
+    throw new CanonicalUnreadableError(`canonical record unreadable: ${current.reason}`);
   }
 
-  const identity = {
-    key,
-    workUnitId: unit.jid,
-    workspaceId: workspaceIdFor(unit),
-    folder: unit.folder,
-    legacyKeys: { agentSessionId: unit.jid, chatSessionId: chatSessionIdFor(unit) },
-  };
+  const identity = conversationIdentityFor(unit);
 
   const agentSession = await deps.loadAgentSession(unit.jid);
   if (agentSession && !Array.isArray(agentSession.messages)) {
@@ -165,7 +170,7 @@ async function resumeState(
   now: number
 ): Promise<ConversationMigrationState> {
   const saved = await store.getMigrationState(CONVERSATION_MIGRATION_ID);
-  if (saved && saved.version === CONVERSATION_RECORD_VERSION) {
+  if (saved && saved.version === CONVERSATION_MIGRATION_VERSION) {
     return {
       ...saved,
       completedKeys: Array.isArray(saved.completedKeys) ? saved.completedKeys : [],
@@ -174,7 +179,7 @@ async function resumeState(
   }
   return {
     id: CONVERSATION_MIGRATION_ID,
-    version: CONVERSATION_RECORD_VERSION,
+    version: CONVERSATION_MIGRATION_VERSION,
     completedKeys: [],
     skipped: [],
     done: false,

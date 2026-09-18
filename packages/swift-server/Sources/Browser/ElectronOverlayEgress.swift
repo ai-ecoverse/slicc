@@ -1,5 +1,17 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
 let overlayEgressBlockErrorTexts: Set<String> = [
     "net::ERR_ACCESS_DENIED",
     "net::ERR_NETWORK_ACCESS_DENIED",
@@ -7,15 +19,24 @@ let overlayEgressBlockErrorTexts: Set<String> = [
     "net::ERR_BLOCKED_BY_ADMINISTRATOR",
 ]
 
+
+
+
 let overlayStatusMessageEgressBlocked =
     "SLICC is attached to this app, but it blocks embedded panels. Drive it from the SLICC leader window."
+
+
+
+
+
 
 func buildElectronOverlayStatusBootstrapScript(bundleSource: String, statusMessage: String) -> String {
     let escaped =
         statusMessage
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
-
+    
+    
     let frameGuard = "try{if(window.top!==window.self)return;}catch(e){return;}"
     let inject = "window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\",statusMessage:\"\(escaped)\"});"
     let injectBody =
@@ -24,22 +45,31 @@ func buildElectronOverlayStatusBootstrapScript(bundleSource: String, statusMessa
     return bundleSource + "\n" + injectionCall
 }
 
+
 enum OverlayNetworkSignal: Equatable {
-
+    
+    
     case trackOverlayRequest(String)
-
+    
+    
     case egressBlocked
-
+    
     case ignore
 }
 
 extension ElectronOverlayInjector {
-
+    
+    
     static func isEgressBlockError(_ errorText: String?) -> Bool {
         guard let errorText else { return false }
         return overlayEgressBlockErrorTexts.contains(errorText)
     }
 
+    
+    
+    
+    
+    
     static func classifyNetworkEvent(
         method: String,
         params: [String: Any]?,

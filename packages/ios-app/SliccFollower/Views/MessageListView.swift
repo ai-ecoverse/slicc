@@ -1,33 +1,49 @@
 import SliccTrayKit
 import SwiftUI
 
-enum MessageListLayout {
 
+
+enum MessageListLayout {
+    
+    
     static let maximumReadableWidth: CGFloat = 680
 }
 
 extension View {
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     fileprivate func readableTranscriptColumn() -> some View {
         frame(maxWidth: MessageListLayout.maximumReadableWidth)
     }
 }
 
+
 struct MessageListView: View {
     let messages: [ChatMessage]
     let isStreaming: Bool
-
+    
+    
     var toolProgress: [String: ToolProgressEvent] = [:]
-
+    
     var toolUICards: [ToolUIPlaceholder] = []
-
+    
     var openApprovals: [OpenApprovalRequest] = []
     var onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)?
-
+    
     var sudoApprovals: [SudoApprovalRequest] = []
     var sudoAllowAlways = false
     var onSudoApprovalDecision: ((String, SudoApprovalDecision) -> Void)?
-
+    
+    
+    
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
     init(
         messages: [ChatMessage],
@@ -55,6 +71,10 @@ struct MessageListView: View {
 
     @Environment(\.palette) private var palette
 
+    
+    
+    
+    
     @State private var isAtBottom = true
 
     var body: some View {
@@ -71,6 +91,8 @@ struct MessageListView: View {
         .environment(\.inlineSprinkleLick, onInlineSprinkleLick ?? { _, _ in })
     }
 
+    
+
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "bubble.left.and.bubble.right")
@@ -83,6 +105,8 @@ struct MessageListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             transcriptScrollView(proxy: proxy)
@@ -93,7 +117,7 @@ struct MessageListView: View {
         ScrollView {
             LazyVStack(spacing: 8) {
                 ForEach(groupedMessages) { group in
-
+                    
                     Text(group.label)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(palette.ink.opacity(0.3))
@@ -106,16 +130,26 @@ struct MessageListView: View {
                             message: message,
                             toolProgress: progressSlice(for: message)
                         )
-
+                        
+                        
+                        
+                        
                         .equatable()
                         .id(message.id)
                         .padding(.horizontal, 12)
-
+                        
+                        
+                        
+                        
+                        
+                        
                         .accessibilityIdentifier("message-\(message.id)")
                         .readableTranscriptColumn()
                     }
                 }
 
+                
+                
                 ForEach(toolUICards) { card in
                     ToolUICardView(card: card)
                         .padding(.horizontal, 12)
@@ -138,20 +172,44 @@ struct MessageListView: View {
                     .readableTranscriptColumn()
                 }
 
+                
+                
+                
+                
                 Color.clear
                     .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
                     .id(Self.bottomAnchorId)
             }
-
+            
+            
+            
             .scrollTargetLayout()
             .padding(.vertical, 8)
         }
-
+        
+        
+        
+        
+        
+        
+        
+        
+        
         .onScrollTargetVisibilityChange(idType: String.self) { visible in
-
+            
+            
+            
+            
+            
+            
+            
+            
             isAtBottom = messages.last.map { visible.contains($0.id) } ?? true
         }
-
+        
+        
+        
+        
         .onChange(of: messages.count) { _, _ in
             followBottom(proxy, force: messages.last?.role == .user)
         }
@@ -159,10 +217,39 @@ struct MessageListView: View {
         .onChange(of: toolUICards.count) { _, _ in followBottom(proxy) }
         .onChange(of: openApprovals.count) { _, _ in followBottom(proxy) }
         .onChange(of: sudoApprovals.count) { _, _ in followBottom(proxy) }
-
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         .defaultScrollAnchor(.bottom)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     private func followBottom(_ proxy: ScrollViewProxy, force: Bool = false) {
         guard force || isAtBottom else { return }
         withAnimation(.easeOut(duration: 0.2)) {
@@ -170,6 +257,13 @@ struct MessageListView: View {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
     private func progressSlice(for message: ChatMessage) -> [String: ToolProgressEvent] {
         guard !toolProgress.isEmpty, let calls = message.toolCalls, !calls.isEmpty else {
             return [:]
@@ -182,11 +276,14 @@ struct MessageListView: View {
     }
 
     #if DEBUG
-
+        
+        
         func progressSliceForTesting(_ message: ChatMessage) -> [String: ToolProgressEvent] {
             progressSlice(for: message)
         }
     #endif
+
+    
 
     private var groupedMessages: [MessageGroup] {
         var groups: [MessageGroup] = []
@@ -218,8 +315,22 @@ struct MessageListView: View {
         return groups
     }
 
+    
+    
     private static let bottomAnchorId = "bottom"
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private static let timeOnlyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -244,11 +355,15 @@ struct MessageListView: View {
     }
 }
 
+
+
 private struct MessageGroup: Identifiable {
     let id: String
     let label: String
     var messages: [ChatMessage]
 }
+
+
 
 #Preview {
     MessageListView(

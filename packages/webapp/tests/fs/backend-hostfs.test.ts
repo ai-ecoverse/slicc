@@ -71,6 +71,27 @@ const bodyDrops = () =>
   }) as unknown as Response;
 
 describe('HostFsMountBackend', () => {
+  it('names identity by bridge, device and inode, independent of the mounted pathname', async () => {
+    const one = backendWith(() => ok({ kind: 'file', size: 1, mtime: 0, dev: 1, ino: 42 }));
+    const two = backendWith(() => ok({ kind: 'file', size: 1, mtime: 0, dev: 2, ino: 42 }));
+    const original = await one.backend.stat('original');
+    const renamed = await one.backend.stat('renamed');
+    expect(original.identity).toBeDefined();
+    expect(renamed.identity).toBe(original.identity);
+    expect((await two.backend.stat('original')).identity).not.toBe(original.identity);
+    expect(original.dev).toBe(1);
+    await one.backend.close();
+    await two.backend.close();
+  });
+
+  it('does not synthesize a safe identity from an old or invalid device field', async () => {
+    for (const dev of [undefined, -1, 1.5, '1']) {
+      const { backend } = backendWith(() => ok({ kind: 'file', size: 1, mtime: 0, dev, ino: 42 }));
+      expect((await backend.stat('file')).identity).toBeUndefined();
+      await backend.close();
+    }
+  });
+
   it('derives a stable mount id from the configured target and host paths', () => {
     const first = new HostFsMountBackend({
       targetPath: '/mnt/kb',
@@ -89,7 +110,7 @@ describe('HostFsMountBackend', () => {
 
   it('routes rename through the stable endpoint with mount + to in the body', async () => {
     const { backend, calls, bodies } = backendWith(() => ok({ ok: true }));
-    await backend.rename('/a/old.txt', '/a/new.txt');
+    await expect(backend.rename('/a/old.txt', '/a/new.txt')).resolves.toEqual({});
     expect(calls).toEqual(['POST /api/hostfs']);
     expect(bodies[0]).toEqual({
       op: 'rename',
@@ -97,6 +118,11 @@ describe('HostFsMountBackend', () => {
       path: 'a/old.txt',
       to: 'a/new.txt',
     });
+  });
+
+  it('surfaces a POSIX same-inode no-op from the bridge', async () => {
+    const { backend } = backendWith(() => ok({ ok: true, noop: true }));
+    await expect(backend.rename('/a/Slicc.md', '/a/SLICC.md')).resolves.toEqual({ noop: true });
   });
 
   it('rethrows server errno JSON as a faithful FsError', async () => {
@@ -130,6 +156,45 @@ describe('HostFsMountBackend', () => {
       { name: 'a.txt', kind: 'file', size: 3, lastModified: 5 },
       { name: 'd', kind: 'directory' },
     ]);
+  });
+
+  it('writeFile does not replace directory listings with the write-set (#3193)', async () => {
+    const parentEntries = [
+      { name: '_archive', kind: 'directory' as const },
+      { name: 'tech', kind: 'directory' as const },
+      { name: 'readme.md', kind: 'file' as const, size: 1, lastModified: 1 },
+    ];
+    const archiveEntries = [
+      { name: 'index-full.md', kind: 'file' as const, size: 2, lastModified: 2 },
+    ];
+    const { backend } = backendWith((url, init) => {
+      if (init?.method === 'PUT' || String(url).includes('/write')) {
+        archiveEntries.push({ name: '.__probe.tmp', kind: 'file', size: 1, lastModified: 3 });
+        return new Response(null, { status: 200 });
+      }
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      if (body.op === 'list' && body.path === '_archive') return ok({ entries: archiveEntries });
+      if (body.op === 'list') return ok({ entries: parentEntries });
+      return ok({ ok: true });
+    });
+    expect((await backend.readDir('')).map((e) => e.name).sort()).toEqual([
+      '_archive',
+      'readme.md',
+      'tech',
+    ]);
+    await backend.writeFile('_archive/.__probe.tmp', new Uint8Array([120]));
+    expect((await backend.readDir('')).map((e) => e.name).sort()).toEqual([
+      '_archive',
+      'readme.md',
+      'tech',
+    ]);
+    expect((await backend.readDir('_archive')).map((e) => e.name).sort()).toEqual([
+      '.__probe.tmp',
+      'index-full.md',
+    ]);
+    expect(await backend.getCache().getListing('')).toBeNull();
+    expect(await backend.getCache().getListing('_archive')).toBeNull();
+    await backend.close();
   });
 
   it('sends every metadata op to the one stable URL', async () => {
@@ -470,6 +535,7 @@ describe('HostFsMountBackend', () => {
         mtime: 1000,
         ctime: 1200,
         ino: 42,
+        dev: 16777220,
         uid: 501,
         gid: 20,
         mode: 33261,
@@ -480,7 +546,9 @@ describe('HostFsMountBackend', () => {
       size: 7,
       mtime: 1000,
       ctime: 1200,
+      identity: expect.any(String),
       ino: 42,
+      dev: 16777220,
       uid: 501,
       gid: 20,
       mode: 33261,

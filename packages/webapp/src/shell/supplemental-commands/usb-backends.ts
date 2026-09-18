@@ -4,10 +4,15 @@ import {
   deviceToInfo,
   getNavigatorUsb,
   getSharedUsbRegistry,
+  USB_OWNER_SHELL,
+  type UsbClaimEvent,
+  type UsbClaimEventListener,
+  type UsbClaimOptions,
   type UsbControlSetup,
   type UsbDevice,
   type UsbDeviceFilter,
   type UsbDeviceInfo,
+  type UsbExclusiveOptions,
 } from '../../kernel/usb-device-registry.js';
 import * as usbOps from '../../kernel/usb-operations.js';
 import { canOpenUsbPickerPopup, openUsbPickerPopup } from './usb-picker.js';
@@ -26,16 +31,20 @@ export interface UsbBackend {
   request(filters: UsbDeviceFilter[]): Promise<UsbDeviceInfo>;
   info(handle: string): Promise<UsbDeviceInfo>;
   open(handle: string): Promise<void>;
-  close(handle: string): Promise<void>;
+  close(handle: string, opts?: UsbExclusiveOptions): Promise<void>;
   selectConfig(handle: string, value: number): Promise<void>;
-  claim(handle: string, iface: number): Promise<void>;
-  release(handle: string, iface: number): Promise<void>;
+  claim(handle: string, iface: number, opts?: UsbClaimOptions): Promise<void>;
+  release(handle: string, iface: number, opts?: UsbClaimOptions): Promise<void>;
   controlIn(handle: string, setup: UsbControlSetup, length: number): Promise<TransferInResult>;
   controlOut(handle: string, setup: UsbControlSetup, bytes: Uint8Array): Promise<TransferOutResult>;
   transferIn(handle: string, ep: number, length: number): Promise<TransferInResult>;
   transferOut(handle: string, ep: number, bytes: Uint8Array): Promise<TransferOutResult>;
   clearHalt(handle: string, direction: 'in' | 'out', ep: number): Promise<void>;
-  reset(handle: string): Promise<void>;
+  reset(handle: string, opts?: UsbExclusiveOptions): Promise<void>;
+
+  subscribeClaimEvents?(onEvent: UsbClaimEventListener): () => void;
+
+  dropOwner?(owner: string): Promise<void>;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -85,17 +94,17 @@ class LocalUsbBackend implements UsbBackend {
   open(handle: string) {
     return usbOps.usbOpen(this.registry, handle);
   }
-  close(handle: string) {
-    return usbOps.usbClose(this.registry, handle);
+  close(handle: string, opts?: UsbExclusiveOptions) {
+    return usbOps.usbClose(this.registry, handle, withShellOwner(opts));
   }
   selectConfig(handle: string, value: number) {
     return usbOps.usbSelectConfiguration(this.registry, handle, value);
   }
-  claim(handle: string, iface: number) {
-    return usbOps.usbClaimInterface(this.registry, handle, iface);
+  claim(handle: string, iface: number, opts?: UsbClaimOptions) {
+    return usbOps.usbClaimInterface(this.registry, handle, iface, withShellOwner(opts));
   }
-  release(handle: string, iface: number) {
-    return usbOps.usbReleaseInterface(this.registry, handle, iface);
+  release(handle: string, iface: number, opts?: UsbClaimOptions) {
+    return usbOps.usbReleaseInterface(this.registry, handle, iface, withShellOwner(opts));
   }
   async controlIn(handle: string, setup: UsbControlSetup, length: number) {
     const r = await usbOps.usbControlTransferIn(this.registry, handle, setup, length);
@@ -114,15 +123,33 @@ class LocalUsbBackend implements UsbBackend {
   clearHalt(handle: string, direction: 'in' | 'out', ep: number) {
     return usbOps.usbClearHalt(this.registry, handle, direction, ep);
   }
-  reset(handle: string) {
-    return usbOps.usbReset(this.registry, handle);
+  reset(handle: string, opts?: UsbExclusiveOptions) {
+    return usbOps.usbReset(this.registry, handle, withShellOwner(opts));
   }
+  subscribeClaimEvents(onEvent: UsbClaimEventListener) {
+    let unsub: (() => void) | undefined;
+    const ready = import('../../kernel/usb-claim-broker.js').then((m) => {
+      unsub = m.addClaimListener(this.registry, onEvent);
+    });
+    return () => {
+      void ready.then(() => unsub?.());
+    };
+  }
+  dropOwner(owner: string) {
+    return usbOps.usbDropOwner(this.registry, owner);
+  }
+}
+
+function withShellOwner<T extends { owner?: string }>(opts?: T): T & { owner: string } {
+  return { ...(opts as T), owner: opts?.owner ?? USB_OWNER_SHELL };
 }
 
 class BridgedUsbBackend implements UsbBackend {
   constructor(private rpc: PanelRpcClient) {}
 
   private static REQUEST_TIMEOUT_MS = 5 * 60_000;
+
+  private static CLAIM_WAIT_TIMEOUT_MS = 5 * 60_000;
 
   async list() {
     return (await this.rpc.call('usb-list', undefined)).devices;
@@ -142,17 +169,40 @@ class BridgedUsbBackend implements UsbBackend {
   async open(handle: string) {
     await this.rpc.call('usb-open', { handle });
   }
-  async close(handle: string) {
-    await this.rpc.call('usb-close', { handle });
+  async close(handle: string, opts?: UsbExclusiveOptions) {
+    await this.rpc.call('usb-close', {
+      handle,
+      owner: opts?.owner ?? USB_OWNER_SHELL,
+      force: opts?.force ?? false,
+    });
   }
   async selectConfig(handle: string, value: number) {
     await this.rpc.call('usb-select-configuration', { handle, configurationValue: value });
   }
-  async claim(handle: string, iface: number) {
-    await this.rpc.call('usb-claim-interface', { handle, interfaceNumber: iface });
+  async claim(handle: string, iface: number, opts?: UsbClaimOptions) {
+    const owner = opts?.owner ?? USB_OWNER_SHELL;
+    const wait = opts?.wait ?? false;
+    try {
+      await this.rpc.call(
+        'usb-claim-interface',
+        { handle, interfaceNumber: iface, owner, wait },
+        wait ? { timeoutMs: BridgedUsbBackend.CLAIM_WAIT_TIMEOUT_MS } : undefined
+      );
+    } catch (err) {
+      if (wait) {
+        await this.rpc
+          .call('usb-cancel-claim-wait', { handle, interfaceNumber: iface, owner })
+          .catch(() => undefined);
+      }
+      throw err;
+    }
   }
-  async release(handle: string, iface: number) {
-    await this.rpc.call('usb-release-interface', { handle, interfaceNumber: iface });
+  async release(handle: string, iface: number, opts?: UsbClaimOptions) {
+    await this.rpc.call('usb-release-interface', {
+      handle,
+      interfaceNumber: iface,
+      owner: opts?.owner ?? USB_OWNER_SHELL,
+    });
   }
   async controlIn(handle: string, setup: UsbControlSetup, length: number) {
     const r = await this.rpc.call('usb-control-transfer-in', { handle, setup, length });
@@ -179,8 +229,20 @@ class BridgedUsbBackend implements UsbBackend {
   async clearHalt(handle: string, direction: 'in' | 'out', ep: number) {
     await this.rpc.call('usb-clear-halt', { handle, direction, endpointNumber: ep });
   }
-  async reset(handle: string) {
-    await this.rpc.call('usb-reset', { handle });
+  async reset(handle: string, opts?: UsbExclusiveOptions) {
+    await this.rpc.call('usb-reset', {
+      handle,
+      owner: opts?.owner ?? USB_OWNER_SHELL,
+      force: opts?.force ?? false,
+    });
+  }
+  subscribeClaimEvents(onEvent: UsbClaimEventListener) {
+    return this.rpc.onEvent('usb-claim-event', (payload) => {
+      onEvent(payload as UsbClaimEvent);
+    });
+  }
+  async dropOwner(owner: string) {
+    await this.rpc.call('usb-drop-owner', { owner });
   }
 }
 

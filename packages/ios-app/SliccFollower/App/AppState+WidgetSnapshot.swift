@@ -2,8 +2,17 @@ import Foundation
 import SliccTrayKit
 import SliccWidgetKit
 
-extension AppState {
 
+
+
+
+
+
+extension AppState {
+    
+    
+    
+    
     func widgetSnapshot(now: Date = Date()) -> WidgetSnapshot {
         let units = scoops.map { $0.widgetUnit(isActive: $0.jid == leaderActiveScoopJid) }
         return WidgetSnapshot(
@@ -16,6 +25,8 @@ extension AppState {
         )
     }
 
+    
+    
     private var widgetInstanceLabel: String {
         let named = activeDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !named.isEmpty { return named }
@@ -23,6 +34,12 @@ extension AppState {
         return "SLICC"
     }
 
+    
+    
+    
+    
+    
+    
     private var widgetConnection: WidgetSnapshot.Connection {
         switch settledConnection.state {
         case .connected:
@@ -30,15 +47,24 @@ extension AppState {
         case .connecting, .reconnecting, .failed, .gaveUp:
             .disconnected
         case .disconnected:
-
+            
+            
+            
+            
+            
             hasEverJoinedAnInstance ? .disconnected : WidgetSnapshot.Connection.none
         }
     }
 
+    
+    
     private var hasEverJoinedAnInstance: Bool {
         !(activeDisplayName ?? "").isEmpty || !joinUrl.isEmpty || trayId != nil
     }
 
+    
+    
+    
     private var widgetLastMessage: WidgetMessage? {
         guard
             let last = messages.last(where: {
@@ -53,12 +79,23 @@ extension AppState {
         )
     }
 
+    
+    
+    
+    
+    
+    
+    
     func publishWidgetSnapshot() {
         let snapshot = widgetSnapshot()
         widgetPublisher.publish(snapshot)
         Task { await SliccConversationIndexer.shared.donate(snapshot.units) }
     }
 
+    
+    
+    
+    
     func clearWidgetSnapshot() {
         widgetPublisher.clear()
         Task { await SliccConversationIndexer.shared.donate([]) }
@@ -66,7 +103,9 @@ extension AppState {
 }
 
 extension ScoopSummary {
-
+    
+    
+    
     func widgetUnit(isActive: Bool) -> WidgetUnit {
         let status = self.status
         return WidgetUnit(

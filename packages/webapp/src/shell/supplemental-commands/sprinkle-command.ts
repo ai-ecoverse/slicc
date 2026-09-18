@@ -143,8 +143,7 @@ async function handleList(mgr: SprinkleManagerHandle, args: string[]): Promise<R
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 }
 
-function claimSprinkleRoute(name: string, env: LickTargetEnv): string | null {
-  const claimed = defaultLickTarget(undefined, env);
+function claimSprinkleRoute(name: string, claimed: string | undefined): string | null {
   if (!claimed || getSprinkleRoute(name)) return null;
   setSprinkleRoute(name, claimed);
   return getSprinkleRoute(name) === claimed ? claimed : null;
@@ -159,9 +158,14 @@ async function handleOpen(
   if ('error' in parsed) return fail('open', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('open', 'name required');
-  const claimed = claimSprinkleRoute(name, env);
+  const openingTarget = defaultLickTarget(undefined, env);
+  const claimed = claimSprinkleRoute(name, openingTarget);
   try {
-    await mgr.open(name);
+    if (openingTarget) {
+      await mgr.open(name, undefined, { lickOriginTarget: openingTarget });
+    } else {
+      await mgr.open(name);
+    }
   } catch (err) {
     if (claimed) clearSprinkleRoute(name);
     return fail('open', err instanceof Error ? err.message : String(err));

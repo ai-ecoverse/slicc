@@ -4,6 +4,9 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
 final class ReadOnlyScoopTests: XCTestCase {
     private func cone(
         jid: String = "cone", parentId: String? = nil, isCone: Bool? = true
@@ -21,6 +24,8 @@ final class ReadOnlyScoopTests: XCTestCase {
             assistantLabel: jid, trigger: nil, state: nil, fill: nil, parentId: parentId)
     }
 
+    
+
     func testOwnedUnitIsAScoopAndReadOnly() {
         let owned = scoop()
         XCTAssertFalse(owned.isRootUnit)
@@ -35,16 +40,23 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertFalse(root.isReadOnly)
     }
 
+    
+    
     func testLegacyLeaderWithoutParentIdFallsBackToIsCone() {
         XCTAssertEqual(cone(parentId: nil, isCone: true).role, .cone)
         XCTAssertEqual(scoop(parentId: nil, isCone: false).role, .scoop)
         XCTAssertTrue(scoop(parentId: nil, isCone: false).isReadOnly)
     }
 
+    
+    
     func testOwnershipEdgeOutranksTheLegacyFlag() {
         XCTAssertEqual(scoop(parentId: "cone", isCone: true).role, .scoop)
     }
 
+    
+    
+    
     func testRoleResolvesFromTheEdgeWhenIsConeIsAbsent() throws {
         XCTAssertEqual(cone(parentId: nil, isCone: nil).role, .cone)
         XCTAssertFalse(cone(parentId: nil, isCone: nil).isReadOnly)
@@ -71,6 +83,8 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertTrue(scoop(jid: "grandchild", parentId: "reviewer").isReadOnly)
     }
 
+    
+
     @MainActor
     func testComposerIsHiddenForASelectedScoopAndShownForACone() {
         let state = AppState()
@@ -83,6 +97,8 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertTrue(state.selectedUnitIsReadOnly, "A scoop renders read-only")
     }
 
+    
+    
     @MainActor
     func testUnknownSelectionKeepsTheComposer() {
         let state = AppState()
@@ -102,6 +118,10 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertTrue(state.selectedUnitIsReadOnly)
     }
 
+    
+
+    
+    
     @MainActor
     func testSendMessageIsRefusedWhileAScoopIsSelected() {
         let state = AppState()
@@ -126,6 +146,11 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertEqual(state.messagesByScoop["cone"]?.count, 1)
     }
 
+    
+
+    
+    
+    
     @MainActor
     func testToolUiForAScoopNeverMountsACard() throws {
         let state = AppState()
@@ -143,6 +168,9 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertTrue(state.toolUICards.isEmpty)
     }
 
+    
+    
+    
     @MainActor
     func testAConesPendingCardIsHiddenWhileAScoopIsSelected() throws {
         let state = AppState()

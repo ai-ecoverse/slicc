@@ -10,7 +10,9 @@ import {
   createNodeUtil,
 } from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
+import type { BodyReadHandleTracker } from './realm-body-handles.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
+import { createComputerBridge, type RealmComputerApi } from './realm-computer-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
 import { reconstructFetchResponse } from './realm-fetch-response.js';
 import {
@@ -38,7 +40,14 @@ import {
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import { createSerialBridge, type RealmSerialApi } from './realm-serial-bridge.js';
 import { createTimerHandleTracker, type TimerHandleTracker } from './realm-timer-handles.js';
-import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmFsDeleteMsg,
+  RealmFsWriteMsg,
+  RealmInitMsg,
+  RealmOutputMsg,
+  SerializedFetchResponse,
+} from './realm-types.js';
 import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
@@ -50,6 +59,14 @@ import {
   createSyncSabTransport,
   type SyncSabTransport,
 } from './sync-sab-bridge.js';
+
+const OUTPUT_TAIL_MAX = 64 * 1024;
+
+function appendOutputTail(current: string, chunk: string): string {
+  if (!chunk) return current;
+  const next = current + chunk;
+  return next.length <= OUTPUT_TAIL_MAX ? next : next.slice(next.length - OUTPUT_TAIL_MAX);
+}
 
 export async function initSyncFsCache(
   rpc: RealmRpcClient,
@@ -102,7 +119,15 @@ function installSyncBridges(
 ): SyncExecXhrBridge | undefined {
   const sab = resolveSyncSabTransport(init, port);
   const syncFsXhr = resolveSyncFsBridge(init, sab);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio));
+  const persist = {
+    write: (path: string, bytes: Uint8Array): void => {
+      port.postMessage({ type: 'realm-fs-write', path, bytes } satisfies RealmFsWriteMsg);
+    },
+    delete: (path: string): void => {
+      port.postMessage({ type: 'realm-fs-delete', path } satisfies RealmFsDeleteMsg);
+    },
+  };
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio, persist));
   if (!init.syncFsToken) return undefined;
   return createSyncExecXhrBridge(init.syncFsToken, {
     syncFs,
@@ -159,22 +184,38 @@ function createDeviceBridges(rpc: RealmRpcClient): {
   usbBridge: RealmUsbApi;
   serialBridge: RealmSerialApi;
   hidBridge: RealmHidApi;
+  computerBridge: RealmComputerApi;
 } {
   return {
     usbBridge: createUsbBridge(rpc),
     serialBridge: createSerialBridge(rpc),
     hidBridge: createHidBridge(rpc),
+    computerBridge: createComputerBridge(rpc),
   };
 }
 
 export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
+  const captureOutput = init.captureOutput !== false;
+  const output = { stdout: '', stderr: '' };
+  const writeStream = (stream: 'stdout' | 'stderr', value: unknown): void => {
+    const chunk = typeof value === 'string' ? value : String(value);
+    if (stream === 'stdout') {
+      output.stdout = captureOutput
+        ? output.stdout + chunk
+        : appendOutputTail(output.stdout, chunk);
+    } else {
+      output.stderr = captureOutput
+        ? output.stderr + chunk
+        : appendOutputTail(output.stderr, chunk);
+    }
+
+    port.postMessage({ type: 'realm-output', stream, chunk } satisfies RealmOutputMsg);
+  };
   const writeStdout = (value: unknown): void => {
-    stdoutChunks.push(typeof value === 'string' ? value : String(value));
+    writeStream('stdout', value);
   };
   const writeStderr = (value: unknown): void => {
-    stderrChunks.push(typeof value === 'string' ? value : String(value));
+    writeStream('stderr', value);
   };
 
   const nodeConsole = createNodeConsole(writeStdout, writeStderr);
@@ -203,7 +244,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   const browserBridge = createBrowserBridge(rpc);
 
-  const { usbBridge, serialBridge, hidBridge } = createDeviceBridges(rpc);
+  const { usbBridge, serialBridge, hidBridge, computerBridge } = createDeviceBridges(rpc);
 
   const httpGlobal = createHttpGlobal({ fetch: realmFetch });
 
@@ -230,6 +271,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     usb: usbBridge,
     serial: serialBridge,
     hid: hidBridge,
+    computer: computerBridge,
     cli: cliApi,
     color: colorApi,
   });
@@ -273,8 +315,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     writeStderr,
     rpc,
     syncFs,
-    stdoutChunks,
-    stderrChunks,
+    output,
     port,
   });
 }
@@ -292,8 +333,7 @@ async function finishJsRealm(opts: {
   writeStderr: (value: unknown) => void;
   rpc: RealmRpcClient;
   syncFs: SyncFsCache;
-  stdoutChunks: string[];
-  stderrChunks: string[];
+  output: { stdout: string; stderr: string };
   port: RealmPortLike;
 }): Promise<void> {
   const g = globalThis as GlobalWithWasmCompile;
@@ -306,7 +346,11 @@ async function finishJsRealm(opts: {
       throw err;
     },
   });
+
+  const { createBodyReadHandleTracker } = await import('./realm-body-handles.js');
+  const bodyReads = createBodyReadHandleTracker(globalThis);
   timers.install();
+  bodyReads.install();
   try {
     const exitCode = await runEntryThenDrain({
       entryCode: opts.entryCode,
@@ -326,18 +370,20 @@ async function finishJsRealm(opts: {
       syncFs: opts.syncFs,
       proc: opts.proc,
       timers,
+      bodyReads,
     });
     delete g.__slicc_compileWasm;
     opts.rpc.dispose();
     opts.port.postMessage({
       type: 'realm-done',
-      stdout: opts.stdoutChunks.join(''),
-      stderr: opts.stderrChunks.join(''),
+      stdout: opts.output.stdout,
+      stderr: opts.output.stderr,
       exitCode,
     } satisfies RealmDoneMsg);
   } finally {
     timers.clearPending();
     timers.restore();
+    bodyReads.restore();
   }
 }
 
@@ -350,6 +396,7 @@ async function runEntryThenDrain(opts: {
   syncFs: SyncFsCache;
   proc: ReturnType<typeof createProcessShim>;
   timers: TimerHandleTracker;
+  bodyReads: BodyReadHandleTracker;
 }): Promise<number> {
   const exitCode = await runUserCode(
     opts.entryCode,
@@ -362,15 +409,17 @@ async function runEntryThenDrain(opts: {
     opts.timers.clearPending();
     return opts.proc.getExitCode();
   }
-  await drainEventLoop(opts.rpc, opts.timers, opts.proc);
+  await drainEventLoop(opts.rpc, opts.timers, opts.bodyReads, opts.proc);
   if (opts.proc.getDidCallProcessExit()) {
     opts.timers.clearPending();
   }
 
   await flushSyncFsCache(opts.rpc, opts.syncFs, opts.writeStderr);
-  if (opts.proc.getDidCallProcessExit()) return opts.proc.getExitCode();
-  if (exitCode !== 0) return exitCode;
-  return opts.proc.getExitCode();
+
+  if (opts.proc.getDidCallProcessExit() || exitCode === 0) {
+    return opts.proc.getExitCode();
+  }
+  return exitCode;
 }
 
 async function flushSyncFsCache(
@@ -398,13 +447,18 @@ async function flushSyncFsCache(
 async function drainEventLoop(
   rpc: RealmRpcClient,
   timers: TimerHandleTracker,
+  bodyReads: BodyReadHandleTracker,
   proc: ReturnType<typeof createProcessShim>
 ): Promise<void> {
   await timers.tick();
-  while (!proc.getDidCallProcessExit() && (rpc.pendingCount > 0 || timers.pendingCount > 0)) {
+  while (
+    !proc.getDidCallProcessExit() &&
+    (rpc.pendingCount > 0 || timers.pendingCount > 0 || bodyReads.pendingCount > 0)
+  ) {
     const waits: Promise<void>[] = [];
     if (rpc.pendingCount > 0) waits.push(rpc.waitForProgress());
     if (timers.pendingCount > 0) waits.push(timers.waitForProgress());
+    if (bodyReads.pendingCount > 0) waits.push(bodyReads.waitForProgress());
     if (waits.length === 0) break;
     await Promise.race(waits);
     if (!proc.getDidCallProcessExit()) await timers.tick();

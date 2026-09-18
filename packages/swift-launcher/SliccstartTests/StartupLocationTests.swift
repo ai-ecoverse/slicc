@@ -3,6 +3,12 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
+
 final class StartupLocationTests: XCTestCase {
 
     private func defaults(enabled: Bool?) -> UserDefaults {
@@ -16,6 +22,8 @@ final class StartupLocationTests: XCTestCase {
             defaults.removeObject(forKey: key)
         }
     }
+
+    
 
     func testAnAppInApplicationsCountsAsInstalled() {
         XCTAssertTrue(
@@ -35,7 +43,8 @@ final class StartupLocationTests: XCTestCase {
     }
 
     func testADeveloperOrCiBuildDoesNotCountAsInstalled() {
-
+        
+        
         XCTAssertFalse(
             StartupPreference.isInstalledLocation(
                 bundlePath: "/Users/dev/slicc/packages/swift-launcher/build/Sliccstart.app"
@@ -52,7 +61,7 @@ final class StartupLocationTests: XCTestCase {
         XCTAssertFalse(
             StartupPreference.isInstalledLocation(bundlePath: "/Users/dev/Downloads/Sliccstart.app")
         )
-
+        
         XCTAssertFalse(
             StartupPreference.isInstalledLocation(
                 bundlePath:
@@ -62,7 +71,8 @@ final class StartupLocationTests: XCTestCase {
     }
 
     func testAPathThatMerelyStartsWithApplicationsIsNotInstalled() {
-
+        
+        
         XCTAssertFalse(
             StartupPreference.isInstalledLocation(bundlePath: "/ApplicationsOld/Sliccstart.app")
         )
@@ -83,6 +93,8 @@ final class StartupLocationTests: XCTestCase {
             )
         )
     }
+
+    
 
     func testBothHalvesAreRequiredToAutoLaunch() {
         let on = defaults(enabled: true)
@@ -129,7 +141,8 @@ final class StartupLocationTests: XCTestCase {
     }
 
     func testTheLegacyMigrationStillRunsForAnUninstalledCopy() {
-
+        
+        
         let suite = UserDefaults(suiteName: "sliccstart.tests.startup.\(UUID().uuidString)")!
         suite.set("/Applications/Google Chrome.app", forKey: autoLaunchAppIdKey)
         defer {
@@ -149,6 +162,8 @@ final class StartupLocationTests: XCTestCase {
             "the legacy picker still migrates to the new key"
         )
     }
+
+    
 
     func testTheStartupCaptionExplainsWhyAnUninstalledBuildWillNotAutoLaunch() {
         let installed = StartupSettingsView.launchCaption(isInstalled: true)

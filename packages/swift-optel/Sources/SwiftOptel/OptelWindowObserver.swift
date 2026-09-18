@@ -1,5 +1,12 @@
 import Foundation
 
+
+
+
+
+
+
+
 public struct OptelWindowIdentity: Equatable, Hashable, Sendable {
     public let key: String
     public let source: String
@@ -9,6 +16,19 @@ public struct OptelWindowIdentity: Equatable, Hashable, Sendable {
         self.source = source
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     public static func make(
         identifier: String?,
         title: String?,
@@ -21,7 +41,9 @@ public struct OptelWindowIdentity: Equatable, Hashable, Sendable {
         if !trimmedID.isEmpty {
             key = "id:\(trimmedID)"
         } else if !trimmedTitle.isEmpty {
-
+            
+            
+            
             key = "title:\(trimmedTitle)#ref:\(fallbackKey)"
         } else {
             key = "ref:\(fallbackKey)"
@@ -40,6 +62,11 @@ public struct OptelWindowIdentity: Equatable, Hashable, Sendable {
     }
 }
 
+
+
+
+
+
 public enum OptelWindowNavigateDecider {
     public struct Decision: Equatable, Sendable {
         public let shouldEmit: Bool
@@ -51,6 +78,8 @@ public enum OptelWindowNavigateDecider {
         }
     }
 
+    
+    
     public static func decide(
         previous: OptelWindowIdentity?,
         current: OptelWindowIdentity
@@ -65,18 +94,29 @@ public enum OptelWindowNavigateDecider {
 #if os(macOS)
     import AppKit
 
+    
+    
+    
+    
+    
+    
+    
     public enum OptelWindowObserver {
         private static let lock = NSLock()
         private static var installed = false
         private static var observers: [NSObjectProtocol] = []
         private static var lastIdentity: OptelWindowIdentity?
 
+        
         public static var isInstalled: Bool {
             lock.lock()
             defer { lock.unlock() }
             return installed
         }
 
+        
+        
+        
         public static func installIfNeeded() {
             lock.lock()
             guard !installed else {
@@ -103,6 +143,8 @@ public enum OptelWindowNavigateDecider {
             lock.unlock()
         }
 
+        
+        
         public static func uninstall() {
             lock.lock()
             let toRemove = observers
@@ -116,6 +158,8 @@ public enum OptelWindowNavigateDecider {
             }
         }
 
+        
+        
         static func handle(window: NSWindow) {
             let identity = identity(for: window)
             let decision: OptelWindowNavigateDecider.Decision
@@ -131,6 +175,8 @@ public enum OptelWindowNavigateDecider {
             }
         }
 
+        
+        
         static func identity(for window: NSWindow) -> OptelWindowIdentity {
             OptelWindowIdentity.make(
                 identifier: window.identifier?.rawValue,
@@ -139,6 +185,8 @@ public enum OptelWindowNavigateDecider {
             )
         }
 
+        
+        
         internal static func _testing_reset() {
             uninstall()
         }

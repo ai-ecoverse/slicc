@@ -228,8 +228,8 @@ describe('upgrade apply', () => {
     expect(await fs.readFile(second)).toBe('second base\n');
   });
 
-  it('merges the curator contract at /shared/MEMORY.md while keeping local edits', async () => {
-    const path = '/shared/MEMORY.md';
+  it('merges the memory contract at /etc/MEMORY.md while keeping local edits', async () => {
+    const path = '/etc/MEMORY.md';
     await fs.writeFile(path, 'intro\nlocal rule\noutro\n');
 
     const { result, json } = await run(

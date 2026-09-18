@@ -9,7 +9,7 @@ description: |
   checking installed skills for updates with `upskill list --outdated`, are
   separate steps you can run first. Never auto-applies; the user resolves the
   card.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Upgrade
@@ -67,7 +67,7 @@ Show the conventional-commit messages grouped by type (`feat`, `fix`, `chore`, .
 upgrade apply --from="${FROM_VERSION}" --to="${TO_VERSION}"
 ```
 
-The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, and `/etc`, plus the single file `/shared/MEMORY.md`; prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. `/shared/MEMORY.md` (the memory-curator contract) and the `/etc` policy files (`sudoers`, `models`, `llmstxtignore`) are seeded only when absent, so this merge is the only way a rule change in them reaches an existing profile — including approval rules such as the `Write /etc/models` gate. Applying a change to `/etc/sudoers` still raises its own approval prompt: the card authorizes the merge, not the policy edit. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
+The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, and `/etc`, prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. `/etc/MEMORY.md` (the memory-pass contract) and the `/etc` policy files (`sudoers`, `models`, `llmstxtignore`) are seeded only when absent, so this merge is the only way a rule change in them reaches an existing profile — including approval rules such as the `Write /etc/models` gate. Applying a change to `/etc/sudoers` still raises its own approval prompt: the card authorizes the merge, not the policy edit. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
 
 An exit code of `1` means discovery/fetch failed or at least one path needs review. Conflicts are written to the reported collision-safe sidecar while the live file remains unchanged. Show the JSON summary and sidecar paths to the user; never copy conflict markers into the live file automatically. The command never deletes local-only files.
 
@@ -75,7 +75,7 @@ The command can also be run directly with explicit release versions for manual r
 
 ## Also check installed skills (separate step — not a card action)
 
-The card only covers **bundled** files (`/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, `/shared/MEMORY.md`, `/etc`). Skills the user installed themselves with `upskill` are never touched by it, and they drift silently — a stale one can sit months behind upstream while still loading fine.
+The card only covers **bundled** files (`/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, `/etc`). Skills the user installed themselves with `upskill` are never touched by it, and they drift silently — a stale one can sit months behind upstream while still loading fine.
 
 A new SLICC release is a good moment to check them. This is read-only:
 
@@ -83,7 +83,7 @@ A new SLICC release is a good moment to check them. This is read-only:
 upskill list --outdated
 ```
 
-It reuses the same classification as `upskill update --dry-run`: each skill's `.upskill` provenance record (source repo, ref, resolved commit, file list) compared against the ref's head. Only skills a bare `upskill update` would actually change are listed. Skills with no record are omitted with a skipped count — they are not printed as current. Exit 0 whether or not anything is stale; a skill whose check itself failed still exits 1. Use `upskill update --dry-run` when you want the per-file `unchanged` / `updated` / `added` / `removed` / `kept-local` breakdown.
+It reuses the same classification as `upskill update --dry-run`: each skill's `.upskill` provenance record (source repo, ref, resolved commit, file list) compared against the latest commit that touched the recorded upstream path. Only skills a bare `upskill update` would actually change are listed. Skills with no record are omitted with a skipped count — they are not printed as current. Exit 0 whether or not anything is stale; a skill whose check itself failed still exits 1. Use `upskill update --dry-run` when you want the per-file `unchanged` / `updated` / `added` / `removed` / `kept-local` breakdown.
 
 Report what would change and let the user decide. To apply:
 
@@ -104,6 +104,6 @@ Notes worth knowing:
 - Do not call `lick_confirm` or `lick_dismiss` while `list_scoops` shows a scoop `processing`. In-flight work can drop to `ready` with no notification; wait until scoops are idle, or expect to re-feed them.
 - Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
-- Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, `/shared/MEMORY.md`, and `/etc/` without the user explicitly extending the scope.
+- Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, and `/etc/` without the user explicitly extending the scope.
 - Do not run `upskill update` (without `--dry-run`) unless the user asks for it — `upskill list --outdated` (or `upskill update --dry-run`) is the safe default when you are volunteering the check.
 - Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

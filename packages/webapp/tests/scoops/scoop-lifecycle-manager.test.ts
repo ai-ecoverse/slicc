@@ -6,7 +6,7 @@ import {
   type ScoopLifecycleDeps,
   ScoopLifecycleManager,
 } from '../../src/scoops/scoop-lifecycle-manager.js';
-import type { ChannelMessage, RegisteredScoop } from '../../src/scoops/types.js';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 vi.mock('../../src/scoops/scoop-context.js', () => ({
   ScoopContext: class {
@@ -187,6 +187,66 @@ describe('ScoopLifecycleManager', () => {
     expect(forgetScoop).toHaveBeenCalledWith(supervisor.jid);
   });
 
+  it('awaits the conversation and session deletes before unregister resolves', async () => {
+    const scoops = new Map([
+      [scoop.jid, scoop],
+      [worker.jid, worker],
+    ]);
+    let conversationDeleted = false;
+    let sessionDeleted = false;
+    const conversationStore = {
+      delete: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              conversationDeleted = true;
+              resolve();
+            }, 10);
+          })
+      ),
+    };
+    const sessionStore = {
+      delete: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              sessionDeleted = true;
+              resolve();
+            }, 10);
+          })
+      ),
+    };
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => sessionStore,
+      getConversationStore: () => conversationStore,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getLickManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      db: { saveScoop: vi.fn(async () => {}), deleteScoop: vi.fn(async () => {}) },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      costTracker: { snapshot: vi.fn() },
+      approvalRouter: { failScoop: vi.fn(() => 0) },
+      completionService: { forgetScoop: vi.fn(), clearResponse: vi.fn() },
+    } as unknown as ScoopLifecycleDeps);
+
+    await manager.unregister(worker.jid);
+
+    expect(conversationStore.delete).toHaveBeenCalledWith(
+      `/scoops/${worker.folder}/workspace::${worker.jid}`
+    );
+    expect(sessionStore.delete).toHaveBeenCalledWith(worker.jid);
+    expect(conversationDeleted).toBe(true);
+    expect(sessionDeleted).toBe(true);
+  });
+
   it('binds each cone memory append to that cone workspace', async () => {
     const extraCone: RegisteredScoop = {
       ...scoop,
@@ -238,22 +298,21 @@ describe('ScoopLifecycleManager', () => {
     ]);
   });
 
-  it('routes fatal scoop errors to the cone and releases active scoop_wait callers', async () => {
+  it('records fatal scoop errors for the owner without prompting it and releases scoop_wait', async () => {
     const scoops = new Map([
       [scoop.jid, scoop],
       [worker.jid, worker],
     ]);
-    const incoming: ChannelMessage[] = [];
-    const routed: ChannelMessage[] = [];
+    const onError = vi.fn();
+    const handleMessage = vi.fn(async () => {});
+    const notifyIncomingMessage = vi.fn();
     const completionService = new ScoopCompletionService({
       getSharedFs: () => null,
       getScoop: (jid) => scoops.get(jid),
       findParent: () => scoop,
       hasScoop: (jid) => scoops.has(jid),
-      notifyIncomingMessage: (_jid, message) => incoming.push(message),
-      handleMessage: async (message) => {
-        routed.push(message);
-      },
+      notifyIncomingMessage,
+      handleMessage,
       reportError: vi.fn(),
     });
     const forgetScoop = vi.spyOn(completionService, 'forgetScoop');
@@ -265,9 +324,8 @@ describe('ScoopLifecycleManager', () => {
       getProcessManager: () => null,
       getSudoManager: () => null,
       callbacks: {
-        onError: vi.fn(),
+        onError,
         onStatusChange: vi.fn(),
-        onIncomingMessage: (_jid: string, message: ChannelMessage) => incoming.push(message),
       },
       completionService,
       idleTimers: { start: vi.fn(), clear: vi.fn() },
@@ -276,12 +334,10 @@ describe('ScoopLifecycleManager', () => {
         forgetScoop: vi.fn(),
         flushOnIdle: vi.fn(async () => {}),
       },
-      handleMessage: async (message: ChannelMessage) => {
-        routed.push(message);
-      },
     } as unknown as ScoopLifecycleDeps);
 
     await manager.createTab(worker.jid);
+    completionService.muteScoops([worker.jid]);
     const waitPromise = completionService.waitForScoops([worker.jid]);
     const context = manager.getContext(worker.jid) as unknown as {
       callbacks: { onFatalError(error: string): void };
@@ -293,15 +349,77 @@ describe('ScoopLifecycleManager', () => {
       { jid: worker.jid, summary: null, timedOut: true },
     ]);
     expect(forgetScoop).toHaveBeenCalledWith(worker.jid, 'fatal-error');
-    expect(incoming).toEqual([
-      expect.objectContaining({ chatJid: scoop.jid, channel: 'scoop-error' }),
+    expect(completionService.isScoopMuted(worker.jid)).toBe(false);
+    expect(manager.getTab(worker.jid)).toMatchObject({
+      status: 'error',
+      error: 'Context window exceeded and could not be reduced',
+    });
+    expect(onError.mock.calls).toEqual([
+      [worker.jid, 'Context window exceeded and could not be reduced'],
+      [
+        scoop.jid,
+        '[@overflow-worker FAILED]: Context window exceeded and could not be reduced',
+        { endTurn: false },
+      ],
     ]);
-    expect(routed).toEqual([
-      expect.objectContaining({
-        chatJid: scoop.jid,
-        channel: 'scoop-error',
-        content: expect.stringContaining('Context window exceeded and could not be reduced'),
-      }),
+
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(notifyIncomingMessage).not.toHaveBeenCalled();
+  });
+
+  it('records a nested fatal error on the direct owner without cascading to the root', async () => {
+    const supervisor: RegisteredScoop = {
+      ...worker,
+      jid: 'scoop_supervisor',
+      name: 'supervisor',
+      folder: 'supervisor',
+      parentJid: scoop.jid,
+      assistantLabel: 'supervisor',
+      config: { canCreateChildren: true },
+    };
+    const grandchild: RegisteredScoop = {
+      ...worker,
+      jid: 'scoop_grandchild',
+      name: 'grandchild',
+      folder: 'grandchild',
+      parentJid: supervisor.jid,
+      assistantLabel: 'grandchild',
+    };
+    const scoops = new Map([
+      [scoop.jid, scoop],
+      [supervisor.jid, supervisor],
+      [grandchild.jid, grandchild],
+    ]);
+    const onError = vi.fn();
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getConversationStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      callbacks: { onError, onStatusChange: vi.fn() },
+      completionService: {
+        forgetScoop: vi.fn(),
+        clearResponse: vi.fn(),
+      },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+    } as unknown as ScoopLifecycleDeps);
+
+    await manager.createTab(grandchild.jid);
+    const context = manager.getContext(grandchild.jid) as unknown as {
+      callbacks: { onFatalError(error: string): void };
+    };
+    context.callbacks.onFatalError('provider unavailable');
+
+    expect(onError.mock.calls).toEqual([
+      [grandchild.jid, 'provider unavailable'],
+      [supervisor.jid, '[@grandchild FAILED]: provider unavailable', { endTurn: false }],
     ]);
   });
 

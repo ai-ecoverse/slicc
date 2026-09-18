@@ -1,15 +1,37 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 enum TranscriptLink: Equatable {
-
+    
     case file(path: String, line: Int?)
-
+    
     case phone(String)
-
+    
+    
     case code(String)
 
     static let scheme = "slicc-transcript"
 
+    
+    
+    
+    
+    
+    
     static let maximumCodeLength = 2048
 
     var url: URL? {
@@ -32,6 +54,7 @@ enum TranscriptLink: Equatable {
         return components.url
     }
 
+    
     static func decode(_ url: URL) -> TranscriptLink? {
         guard url.scheme?.lowercased() == scheme,
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -55,6 +78,12 @@ enum TranscriptLink: Equatable {
         }
     }
 
+    
+    
+    
+    
+    
+    
     var systemURL: URL? {
         switch self {
         case .phone(let number):
@@ -67,8 +96,18 @@ enum TranscriptLink: Equatable {
     }
 }
 
-enum PhoneMentions {
 
+
+
+
+
+
+
+
+
+enum PhoneMentions {
+    
+    
     struct Candidate: Equatable {
         let number: String
         let offset: Int
@@ -81,6 +120,12 @@ enum PhoneMentions {
         try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue)
     }()
 
+    
+    
+    
+    
+    
+    
     static let minimumDigits = 7
 
     static func scan(_ text: String) -> [Candidate] {

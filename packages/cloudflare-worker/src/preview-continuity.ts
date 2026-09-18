@@ -1,4 +1,8 @@
 import {
+  MAX_LIVE_PREVIEWS_PER_TRAY,
+  MAX_SNAPSHOTS_PER_TRAY,
+} from './persistent-preview-storage.js';
+import {
   type DurableObjectNamespaceLike,
   jsonResponse,
   type PreviewRecord,
@@ -294,10 +298,12 @@ export class PreviewContinuity {
     if (tray.previewTransfer || !body.sourceTrayId || !body.id || !Array.isArray(body.records))
       return conflict();
 
-    const activeCount = [...Object.values(tray.previews ?? {}), ...body.records].filter(
-      (record) => record.state !== 'cleanup'
+    const combined = [...Object.values(tray.previews ?? {}), ...body.records];
+    const snapshots = combined.filter(
+      (record) => record.mode === 'persistent' && record.state !== 'cleanup'
     ).length;
-    if (activeCount > 10) return conflict();
+    const live = combined.filter((record) => record.mode !== 'persistent').length;
+    if (snapshots > MAX_SNAPSHOTS_PER_TRAY || live > MAX_LIVE_PREVIEWS_PER_TRAY) return conflict();
     for (const record of body.records) {
       if (
         !parseCapabilityToken(record.previewToken) ||

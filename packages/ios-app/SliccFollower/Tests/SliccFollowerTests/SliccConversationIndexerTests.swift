@@ -3,8 +3,16 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
+
+
 final class SliccConversationIndexerTests: XCTestCase {
 
+    
+    
     private actor FakeIndex: SpotlightConversationIndex {
         enum Operation: Equatable {
             case delete
@@ -12,7 +20,9 @@ final class SliccConversationIndexerTests: XCTestCase {
         }
 
         private(set) var operations: [Operation] = []
-
+        
+        
+        
         private(set) var contents: [String] = []
         private var deleteDelay: Duration = .zero
 
@@ -38,6 +48,8 @@ final class SliccConversationIndexerTests: XCTestCase {
         WidgetUnit(id: id, name: id, role: .cone)
     }
 
+    
+
     func testASingleDonationDeletesThenIndexes() async {
         let fake = FakeIndex()
         let indexer = SliccConversationIndexer(index: fake)
@@ -49,6 +61,8 @@ final class SliccConversationIndexerTests: XCTestCase {
         XCTAssertEqual(settled, ["a"])
     }
 
+    
+    
     func testAnEmptyDonationDeletesAndDoesNotIndex() async {
         let fake = FakeIndex()
         let indexer = SliccConversationIndexer(index: fake)
@@ -60,6 +74,11 @@ final class SliccConversationIndexerTests: XCTestCase {
         XCTAssertEqual(settled, [])
     }
 
+    
+
+    
+    
+    
     func testDetachRacingAPublishLeavesTheIndexEmpty() async {
         let fake = FakeIndex()
         await fake.stallDeletes(by: .milliseconds(50))
@@ -74,6 +93,8 @@ final class SliccConversationIndexerTests: XCTestCase {
         XCTAssertEqual(settled, [], "a detach must win over an in-flight publish")
     }
 
+    
+    
     func testTheLastQueuedDonationDecidesTheIndex() async {
         let fake = FakeIndex()
         await fake.stallDeletes(by: .milliseconds(20))
@@ -89,6 +110,8 @@ final class SliccConversationIndexerTests: XCTestCase {
         let settled = await fake.settled()
         XCTAssertEqual(settled, ["new"], "the last donation queued decides the index")
 
+        
+        
         let ops = await fake.log()
         let indexed = ops.compactMap { op -> [String]? in
             if case .index(let ids) = op { return ids }
@@ -97,6 +120,8 @@ final class SliccConversationIndexerTests: XCTestCase {
         XCTAssertFalse(indexed.contains(["mid"]), "a superseded donation does no indexing")
     }
 
+    
+    
     func testSequentialDonationsEachApply() async {
         let fake = FakeIndex()
         let indexer = SliccConversationIndexer(index: fake)
@@ -108,6 +133,8 @@ final class SliccConversationIndexerTests: XCTestCase {
         XCTAssertEqual(ops, [.delete, .index(["first"]), .delete, .index(["second"])])
     }
 
+    
+    
     func testDonationsDoNotInterleave() async {
         let fake = FakeIndex()
         await fake.stallDeletes(by: .milliseconds(10))

@@ -6,7 +6,7 @@ import {
   createGelatiereSeam,
   ensureGelatiereUnit,
   findGelatiereUnit,
-  GELATIERE_ALLOWED_COMMANDS,
+  GELATIERE_BASE_ALLOWED_COMMANDS,
   GELATIERE_CHARTER,
   GELATIERE_SEAM_GLOBAL_KEY,
   GelatiereFolderTakenError,
@@ -44,8 +44,20 @@ function fakeOrchestrator(initial: RegisteredScoop[]) {
       const index = scoops.findIndex((s) => s.jid === jid);
       if (index >= 0) scoops.splice(index, 1);
     }),
+    persistScoop: vi.fn(async (scoop: RegisteredScoop) => {
+      const index = scoops.findIndex((s) => s.jid === scoop.jid);
+      if (index >= 0) scoops.splice(index, 1, scoop);
+    }),
+    reinitLiveUnit: vi.fn(async () => {}),
+    syncGelatiereModel: vi.fn(async () => false),
+    getScoopTabState: vi.fn(() => tab),
   };
-  return orchestrator;
+  let tab: { status: 'initializing' | 'ready' | 'processing' | 'error' } | undefined;
+  return Object.assign(orchestrator, {
+    setStatus(status: 'ready' | 'processing') {
+      tab = { status };
+    },
+  });
 }
 
 function fakeLickManager(tasks: CronTaskEntry[] = []) {
@@ -116,7 +128,7 @@ describe('gelatiere unit', () => {
       systemPromptAppend: GELATIERE_CHARTER,
       visiblePaths: ['/sessions/', '/shared/', '/workspace/', '/home/', '/cones/'],
       writablePaths: ['/shared/.gelatiere/'],
-      allowedCommands: GELATIERE_ALLOWED_COMMANDS,
+      allowedCommands: GELATIERE_BASE_ALLOWED_COMMANDS,
     });
     for (const cmd of [
       'cat',
@@ -130,17 +142,125 @@ describe('gelatiere unit', () => {
 
       'memory',
     ]) {
-      expect(GELATIERE_ALLOWED_COMMANDS).toContain(cmd);
+      expect(GELATIERE_BASE_ALLOWED_COMMANDS).toContain(cmd);
     }
 
     for (const cmd of ['curl', 'wget', 'fetch', 'nc', 'ssh']) {
-      expect(GELATIERE_ALLOWED_COMMANDS).not.toContain(cmd);
+      expect(GELATIERE_BASE_ALLOWED_COMMANDS).not.toContain(cmd);
     }
     expect(GELATIERE_CHARTER).toContain('cat /shared/GELATIERE.md');
     expect(GELATIERE_CHARTER).toContain('gelatiere deliver');
     const second = await ensureGelatiereUnit(orchestrator);
-    expect(second).toEqual({ folder: 'gelatiere', jid: first.jid, created: false });
+    expect(second).toEqual({
+      folder: 'gelatiere',
+      jid: first.jid,
+      created: false,
+      allowList: 'unchanged',
+    });
     expect(orchestrator.registerScoop).toHaveBeenCalledTimes(1);
+    expect(orchestrator.syncGelatiereModel).toHaveBeenCalledOnce();
+  });
+
+  it('inherits from the canonical primary cone even when an older extra cone is first', async () => {
+    const orchestrator = fakeOrchestrator([
+      root('cone-research', {
+        addedAt: '2026-08-01T00:00:00.000Z',
+        model: { provider: 'openai', id: 'gpt-5' },
+      }),
+      root('cone', {
+        addedAt: '2026-09-01T00:00:00.000Z',
+        model: { provider: 'adobe', id: 'claude-opus-4-8' },
+      }),
+    ]);
+
+    await ensureGelatiereUnit(orchestrator);
+
+    expect(orchestrator.scoops.find(isGelatiereUnit)?.model).toEqual({
+      provider: 'adobe',
+      id: 'claude-opus-4-8',
+    });
+  });
+
+  it("applies GELATIERE.md's allow-list at creation and to an existing unit", async () => {
+    const orchestrator = fakeOrchestrator([root('cone')]);
+    const merged = [...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree'];
+    const created = await ensureGelatiereUnit(orchestrator, merged);
+    expect(created.created).toBe(true);
+    const record = () => orchestrator.scoops.find((s) => s.folder === 'gelatiere');
+    expect(record()?.config?.allowedCommands).toEqual(merged);
+
+    const unchanged = await ensureGelatiereUnit(orchestrator, [...merged]);
+    expect(unchanged.allowList).toBe('unchanged');
+    expect(orchestrator.persistScoop).not.toHaveBeenCalled();
+
+    const widened = [...merged, 'xxd'];
+    const updated = await ensureGelatiereUnit(orchestrator, widened);
+    expect(updated).toEqual({
+      folder: 'gelatiere',
+      jid: created.jid,
+      created: false,
+      allowList: 'updated',
+    });
+    expect(record()?.config?.allowedCommands).toEqual(widened);
+
+    expect(orchestrator.reinitLiveUnit).toHaveBeenCalledWith(created.jid);
+
+    expect(record()?.config?.writablePaths).toEqual(['/shared/.gelatiere/']);
+    expect(record()?.config?.systemPromptAppend).toBe(GELATIERE_CHARTER);
+
+    const untouched = await ensureGelatiereUnit(orchestrator);
+    expect(untouched.allowList).toBe('unchanged');
+    expect(record()?.config?.allowedCommands).toEqual(widened);
+  });
+
+  it('defers the allow-list while a pass is in flight — a rebuild would cancel it', async () => {
+    resetLoggerDedupForTests();
+    const orchestrator = fakeOrchestrator([root('cone')]);
+    const created = await ensureGelatiereUnit(orchestrator, [...GELATIERE_BASE_ALLOWED_COMMANDS]);
+    const record = () => orchestrator.scoops.find((s) => s.jid === created.jid);
+    orchestrator.setStatus('processing');
+
+    const deferred = await ensureGelatiereUnit(orchestrator, [
+      ...GELATIERE_BASE_ALLOWED_COMMANDS,
+      'tree',
+    ]);
+    expect(deferred.allowList).toBe('deferred');
+    expect(orchestrator.persistScoop).not.toHaveBeenCalled();
+    expect(orchestrator.reinitLiveUnit).not.toHaveBeenCalled();
+    expect(record()?.config?.allowedCommands).not.toContain('tree');
+
+    orchestrator.setStatus('ready');
+    const applied = await ensureGelatiereUnit(orchestrator, [
+      ...GELATIERE_BASE_ALLOWED_COMMANDS,
+      'tree',
+    ]);
+    expect(applied.allowList).toBe('updated');
+    expect(record()?.config?.allowedCommands).toContain('tree');
+  });
+
+  it('puts the old record back when the store write fails, so a retry still syncs', async () => {
+    resetLoggerDedupForTests();
+    const orchestrator = fakeOrchestrator([root('cone')]);
+    const base = [...GELATIERE_BASE_ALLOWED_COMMANDS];
+    const created = await ensureGelatiereUnit(orchestrator, base);
+    const record = () => orchestrator.scoops.find((s) => s.jid === created.jid);
+    const persist = vi.mocked(orchestrator.persistScoop);
+    const saved = persist.getMockImplementation();
+
+    persist.mockImplementationOnce(async (scoop: RegisteredScoop) => {
+      await saved?.(scoop);
+      throw new Error('IndexedDB is gone');
+    });
+    await expect(ensureGelatiereUnit(orchestrator, [...base, 'tree'])).rejects.toThrow(
+      'IndexedDB is gone'
+    );
+    expect(record()?.config?.allowedCommands).toEqual(base);
+    expect(orchestrator.reinitLiveUnit).not.toHaveBeenCalled();
+
+    const retried = await ensureGelatiereUnit(orchestrator, [...base, 'tree']);
+    expect(retried.allowList).toBe('updated');
+    expect(record()?.config?.allowedCommands).toContain('tree');
+    expect(orchestrator.reinitLiveUnit).toHaveBeenCalledWith(created.jid);
   });
 
   it('refuses to register while a foreign unit holds the folder, and --reset drops only its own', async () => {
@@ -229,13 +349,18 @@ describe('gelatiere unit', () => {
   it('publishGelatiereSeam publishes on the given target; bootGelatiere never throws', async () => {
     resetLoggerDedupForTests();
     const target: Record<string, unknown> = {};
-    const seam = createGelatiereSeam(fakeOrchestrator([root('cone')]), fakeLickManager());
+    const orchestrator = fakeOrchestrator([root('cone')]);
+    const seam = createGelatiereSeam(orchestrator, fakeLickManager());
     publishGelatiereSeam(seam, target);
     expect(target[GELATIERE_SEAM_GLOBAL_KEY]).toBe(seam);
     expect(GELATIERE_SEAM_GLOBAL_KEY).toBe('__slicc_gelatiere');
 
-    await bootGelatiere(seam, '0 3 * * *');
+    await bootGelatiere(seam, '0 3 * * *', [...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree']);
     expect(seam.unit()).toBeDefined();
+    const booted = orchestrator.scoops.find((s) => s.folder === 'gelatiere');
+    expect(booted?.config?.allowedCommands).toContain('tree');
+
+    expect(seam.unitAllowedCommands()).toContain('tree');
     const broken = {
       ...seam,
       ensureUnit: async () => {

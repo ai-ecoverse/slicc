@@ -56,11 +56,17 @@ export class RealmRpcClient {
   }
 
   get pendingCount(): number {
-    return this.pending.size;
+    return this.pending.size + this.eventSubscriptionCount;
+  }
+
+  get eventSubscriptionCount(): number {
+    let n = 0;
+    for (const set of this.eventSubscribers.values()) n += set.size;
+    return n;
   }
 
   waitForProgress(): Promise<void> {
-    if (this.pending.size === 0) return Promise.resolve();
+    if (this.pendingCount === 0) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.progressWaiters.add(resolve);
     });
@@ -93,11 +99,13 @@ export class RealmRpcClient {
       this.eventSubscribers.set(channel, subs);
     }
     subs.add(handler);
+    this.notifyProgress();
     return () => {
       const set = this.eventSubscribers.get(channel);
       if (!set) return;
       set.delete(handler);
       if (set.size === 0) this.eventSubscribers.delete(channel);
+      this.notifyProgress();
     };
   }
 

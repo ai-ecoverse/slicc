@@ -11,6 +11,7 @@ enum InstallationStatus: Equatable {
 
 @Observable
 
+
 class SliccBootstrapper {
     static let repoURL = "https://github.com/ai-ecoverse/slicc.git"
 
@@ -22,32 +23,37 @@ class SliccBootstrapper {
     var isWorking = false
     var lastError: String?
 
+    
     static var isBundled: Bool {
         resolveBundledServerBinaryPath(resourcePath: Bundle.main.resourcePath) != nil
     }
 
+    
     static var bundledSliccDir: String? {
         resolveBundledSliccDir(resourcePath: Bundle.main.resourcePath)
     }
 
+    
     static var bundledServerBinaryPath: String? {
         resolveBundledServerBinaryPath(resourcePath: Bundle.main.resourcePath)
     }
 
+    
     static var bundledNodePath: String? {
         guard let resourcePath = Bundle.main.resourcePath else { return nil }
         let path = resourcePath + "/node/bin/node"
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
+    
     static func findNode() -> String? {
-
+        
         if let bundled = bundledNodePath {
             log.info("findNode: using bundled node at \(bundled)")
             return bundled
         }
         log.info("findNode: no bundled node, searching system")
-
+        
         for candidate in [
             "/usr/local/bin/node",
             "/opt/homebrew/bin/node",
@@ -55,7 +61,7 @@ class SliccBootstrapper {
         ] {
             if FileManager.default.fileExists(atPath: candidate) { return candidate }
         }
-
+        
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         task.arguments = ["node"]
@@ -99,12 +105,13 @@ class SliccBootstrapper {
         sliccDir: String = defaultSliccDir,
         resourcePath: String? = Bundle.main.resourcePath
     ) -> InstallationStatus {
-
+        
         if resolveBundledServerBinaryPath(resourcePath: resourcePath) != nil {
             log.info("checkInstallation: bundled native server present — installed")
             return .installed
         }
 
+        
         let fm = FileManager.default
         guard fm.fileExists(atPath: sliccDir + "/package.json") else { return .notInstalled }
         if findServerBinary(sliccDir: sliccDir, resourcePath: resourcePath) != nil {
@@ -178,6 +185,8 @@ class SliccBootstrapper {
         progressMessage = "Updated!"
     }
 
+    
+    
     static var enrichedEnvironment: [String: String] {
         var env = ProcessInfo.processInfo.environment
         let extraPaths = [

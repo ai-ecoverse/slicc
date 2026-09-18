@@ -27,17 +27,16 @@ export interface CpExecBridge {
   start(commandOrArgv: string | string[], opts?: CpExecStartOptions): CpExecHandle;
 }
 
+export interface CpSyncRunOptions {
+  args?: string[];
+  input?: string;
+  timeout?: number;
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
 export interface CpSyncExecBridge {
-  run(
-    command: string | string[],
-    opts?: {
-      args?: string[];
-      input?: string;
-      timeout?: number;
-      cwd?: string;
-      env?: Record<string, string>;
-    }
-  ): CpExecResult;
+  run(command: string | string[], opts?: CpSyncRunOptions): CpExecResult;
 }
 
 interface CpOptions {
@@ -95,43 +94,38 @@ function cpChunkToString(chunk: unknown): string {
   return String(chunk);
 }
 
-function cpEncodeChunk(text: string, encoding: string | null | undefined): CpChunk {
-  if (encoding === undefined || encoding === 'utf8' || encoding === 'utf-8') return text;
-  if (encoding === 'buffer' || encoding === null) return bufferFrom(text);
-  return bufferFrom(text).toString(encoding as BufferEncoding);
+function invalidArgType(name: string, expected: string, actual: unknown): TypeError {
+  const received = actual === null ? 'null' : Array.isArray(actual) ? 'array' : typeof actual;
+  return Object.assign(
+    new TypeError(`The "${name}" argument must be of type ${expected}. Received ${received}`),
+    { code: 'ERR_INVALID_ARG_TYPE' }
+  );
 }
 
-type EnvBag = { [key: string]: string | undefined };
-
-function cpStringEnv(env: unknown): Record<string, string> | undefined {
+function cpNormalizeEnv(env: unknown): Record<string, string> | undefined {
   if (env === undefined) return undefined;
   if (env === null || typeof env !== 'object' || Array.isArray(env)) {
-    throw new TypeError('The "options.env" property must be of type object');
+    throw invalidArgType('options.env', 'object', env);
   }
-  const bag = env as EnvBag;
   const out: Record<string, string> = {};
-  for (const key of Object.keys(bag)) {
-    const value = bag[key];
-    if (typeof value === 'string') out[key] = value;
+  for (const [key, value] of Object.entries(env as { [name: string]: string | undefined })) {
+    if (value === undefined) continue;
+    if (typeof value !== 'string') throw invalidArgType(`options.env[${key}]`, 'string', value);
+    out[key] = value;
   }
   return out;
 }
 
-function cpOptionalCwd(cwd: unknown): string | undefined {
+function cpNormalizeCwd(cwd: unknown): string | undefined {
   if (cwd === undefined) return undefined;
-  if (typeof cwd !== 'string') {
-    throw new TypeError('The "options.cwd" property must be of type string');
-  }
+  if (typeof cwd !== 'string') throw invalidArgType('options.cwd', 'string', cwd);
   return cwd;
 }
 
-function cpContext(options: CpOptions): { cwd?: string; env?: Record<string, string> } {
-  const env = cpStringEnv(options.env);
-  const cwd = cpOptionalCwd(options.cwd);
-  return {
-    ...(cwd !== undefined ? { cwd } : {}),
-    ...(env !== undefined ? { env } : {}),
-  };
+function cpEncodeChunk(text: string, encoding: string | null | undefined): CpChunk {
+  if (encoding === undefined || encoding === 'utf8' || encoding === 'utf-8') return text;
+  if (encoding === 'buffer' || encoding === null) return bufferFrom(text);
+  return bufferFrom(text).toString(encoding as BufferEncoding);
 }
 
 function cpJoin(chunks: CpChunk[], encoding: string | null | undefined): CpChunk {
@@ -225,7 +219,7 @@ function createCpSyncForms(
   const runSync = (
     name: string,
     command: string | string[],
-    opts: { input?: string; timeout?: number; cwd?: string; env?: Record<string, string> }
+    opts: CpSyncRunOptions
   ): CpExecResult => {
     if (!syncExec) {
       throw new Error(
@@ -237,13 +231,16 @@ function createCpSyncForms(
     return syncExec.run(command, opts);
   };
 
-  const runOptions = (
-    options: CpOptions
-  ): { input?: string; timeout?: number; cwd?: string; env?: Record<string, string> } => ({
-    ...cpContext(options),
-    ...(options.input !== undefined ? { input: cpChunkToString(options.input) } : {}),
-    ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
-  });
+  const runOptions = (options: CpOptions): CpSyncRunOptions => {
+    const cwd = cpNormalizeCwd(options.cwd);
+    const env = cpNormalizeEnv(options.env);
+    return {
+      ...(options.input !== undefined ? { input: cpChunkToString(options.input) } : {}),
+      ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(env !== undefined ? { env } : {}),
+    };
+  };
 
   const throwingSync = (
     name: string,
@@ -303,6 +300,7 @@ function createCpSyncForms(
       try {
         result = runSync('spawnSync', commandOrArgv, runOptions(options));
       } catch (err) {
+        if (err instanceof TypeError) throw err;
         const empty = cpEncodeChunk('', encoding);
         return {
           pid,
@@ -339,7 +337,13 @@ export function createNodeChildProcess(
     spawnfile: string,
     spawnargs: string[]
   ): ChildProcess => {
-    const handle = exec.start(commandOrArgv, cpContext(options));
+    const cwd = cpNormalizeCwd(options.cwd);
+    const env = cpNormalizeEnv(options.env);
+    const startOpts: CpExecStartOptions = {
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(env !== undefined ? { env } : {}),
+    };
+    const handle = exec.start(commandOrArgv, startOpts);
     const child = new ChildProcess(handle, encoding, spawnfile, spawnargs);
     if (options.input !== undefined) child.stdin.write(cpChunkToString(options.input));
     queueMicrotask(() => handle.stdin.end());

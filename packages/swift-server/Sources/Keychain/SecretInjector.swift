@@ -1,7 +1,31 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public final class SecretInjector: @unchecked Sendable {
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     struct LoadedSecret: Sendable {
         let name: String
         let realValue: String
@@ -18,29 +42,39 @@ public final class SecretInjector: @unchecked Sendable {
         }
     }
 
+    
     enum InjectionResult: Sendable {
-
+        
         case success(text: String)
-
+        
         case domainBlocked(secretName: String, hostname: String)
     }
 
+    
     struct ForbiddenInfo: Sendable, Equatable {
         let secretName: String
         let hostname: String
     }
 
+    
+    
     struct BasicResult: Sendable, Equatable {
         let value: String
         let forbidden: ForbiddenInfo?
     }
 
+    
     struct ExtractedUrlCreds: Sendable, Equatable {
         let url: String
         let syntheticAuthorization: String?
         let forbidden: ForbiddenInfo?
     }
 
+    
+    
+    
+    
+    
     struct HmacSignResult: Sendable, Equatable {
         let headerName: String?
         let signatureHex: String?
@@ -49,13 +83,26 @@ public final class SecretInjector: @unchecked Sendable {
         let forbidden: ForbiddenInfo?
     }
 
+    
     private let sessionId: String?
 
+    
     private let _envFileSecrets: [Secret]
 
+    
     let persistedStore: SecretStoreAccess
     let sessionStore: SessionSecretStore
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func envFileShadows(_ name: String) -> Bool {
         _envFileSecrets.contains { $0.name == name }
     }
@@ -90,6 +137,7 @@ public final class SecretInjector: @unchecked Sendable {
         _responseScrubber = scrubber
     }
 
+    
     init(
         secrets: [LoadedSecret],
         persistedStore: SecretStoreAccess = .keychain,
@@ -105,6 +153,16 @@ public final class SecretInjector: @unchecked Sendable {
         self._oauthStore = nil
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     init(
         sessionId: String,
         envFileSecrets: [Secret] = [],
@@ -119,19 +177,33 @@ public final class SecretInjector: @unchecked Sendable {
         self._secrets = []
         self._responseScrubber = { $0 }
         self._oauthStore = oauthStore
-
+        
+        
+        
+        
         loadSecretsKeychainAndEnv()
     }
 
+    
+    
+    
     func setOAuthStore(_ store: OAuthSecretStore) {
         lock.lock()
         defer { lock.unlock() }
         _oauthStore = store
     }
 
+    
+    
+    
+    
     func reload() async {
         guard let sessionId else { return }
-
+        
+        
+        
+        
+        
         let store = persistedStore
         guard let persisted = await BoundedStoreCall.run({ store.loadAll() }) else {
             FileHandle.standardError.write(
@@ -141,9 +213,16 @@ public final class SecretInjector: @unchecked Sendable {
         }
         var loaded = self.loadSecretsKeychainAndEnvSnapshot(persisted: persisted)
 
+        
+        
+        
         if let store = oauthStore {
             for entry in await store.list() {
-
+                
+                
+                
+                
+                
                 if entry.value.utf16.count < minMaskableSecretLength {
                     FileHandle.standardError.write(
                         Data(
@@ -178,6 +257,8 @@ public final class SecretInjector: @unchecked Sendable {
             }
         }
 
+        
+        
         let persistedNames = Set(loaded.map(\.name))
         for entry in await sessionStore.listAll() where !persistedNames.contains(entry.name) {
             if entry.value.utf16.count < minMaskableSecretLength {
@@ -204,6 +285,9 @@ public final class SecretInjector: @unchecked Sendable {
                 ))
         }
 
+        
+        
+        
         let pairs =
             loaded
             .filter { $0.isMaskable }
@@ -211,9 +295,13 @@ public final class SecretInjector: @unchecked Sendable {
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }
 
+    
+    
+    
     private func loadSecretsKeychainAndEnv() {
         let loaded = loadSecretsKeychainAndEnvSnapshot()
-
+        
+        
         let pairs =
             loaded
             .filter { $0.isMaskable }
@@ -221,12 +309,24 @@ public final class SecretInjector: @unchecked Sendable {
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }
 
+    
+    
+    
     private func loadSecretsKeychainAndEnvSnapshot(persisted: [Secret]? = nil) -> [LoadedSecret] {
         guard let sessionId else { return [] }
-
+        
+        
+        
         var loaded: [LoadedSecret] = []
         for secret in persisted ?? persistedStore.loadAll() {
-
+            
+            
+            
+            
+            
+            
+            
+            
             if secret.value.utf16.count < minMaskableSecretLength {
                 FileHandle.standardError.write(
                     Data(
@@ -252,13 +352,17 @@ public final class SecretInjector: @unchecked Sendable {
                 ))
         }
 
+        
         for secret in _envFileSecrets {
             if secret.value.utf16.count < minMaskableSecretLength {
                 FileHandle.standardError.write(
                     Data(
                         "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
                     ))
-
+                
+                
+                
+                
                 let shortEntry = LoadedSecret(
                     name: secret.name,
                     realValue: secret.value,
@@ -289,10 +393,30 @@ public final class SecretInjector: @unchecked Sendable {
         return loaded
     }
 
+    
+    
+    
     func maskedValue(for name: String) -> String? {
         secrets.first(where: { $0.name == name })?.maskedValue
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static func readOrCreateSessionId(in dir: URL) throws -> String {
         let fm = FileManager.default
         let path = dir.appendingPathComponent("session-id")
@@ -307,9 +431,10 @@ public final class SecretInjector: @unchecked Sendable {
         }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let fresh = UUID().uuidString
-
+        
+        
         try (fresh + "\n").data(using: .utf8)!.write(to: path, options: .atomic)
-
+        
         try? fm.setAttributes(
             [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: path.path
@@ -317,8 +442,16 @@ public final class SecretInjector: @unchecked Sendable {
         return fresh
     }
 
+    
+    
+    
+    
     var isEmpty: Bool { secrets.allSatisfy { !$0.isMaskable } }
 
+    
+    
+    
+    
     var maskedEnvironment: [String: String] {
         var env: [String: String] = [:]
         for s in secrets {
@@ -327,14 +460,27 @@ public final class SecretInjector: @unchecked Sendable {
         return env
     }
 
+    
+    
+    
+    
     var maskedEntries: [(name: String, maskedValue: String, domains: [String])] {
         secrets.map { (name: $0.name, maskedValue: $0.maskedValue, domains: $0.domains) }
     }
 
+    
+    
+    
+    
+    
+    
     func inject(text: String, hostname: String) -> InjectionResult {
         var result = text
         for secret in secrets {
-
+            
+            
+            
+            
             guard secret.isMaskable else { continue }
             guard result.contains(secret.maskedValue) else { continue }
             guard isAllowedDomain(patterns: secret.domains, hostname: hostname) else {
@@ -345,13 +491,19 @@ public final class SecretInjector: @unchecked Sendable {
         return .success(text: result)
     }
 
+    
+    
+    
+    
+    
+    
     func injectBody(text: String, hostname: String) -> String {
         var result = text
         for secret in secrets {
             guard secret.isMaskable else { continue }
             guard result.contains(secret.maskedValue) else { continue }
             guard isAllowedDomain(patterns: secret.domains, hostname: hostname) else {
-
+                
                 continue
             }
             result = result.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
@@ -359,12 +511,32 @@ public final class SecretInjector: @unchecked Sendable {
         return result
     }
 
+    
     func scrub(text: String) -> String {
         responseScrubber(text)
     }
 
-    func unmaskAuthorizationBasic(value: String, targetHostname: String) -> BasicResult {
+    
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    func unmaskAuthorizationBasic(value: String, targetHostname: String) -> BasicResult {
+        
         let trimmedHeader = value
         guard
             let match = trimmedHeader.range(
@@ -381,7 +553,7 @@ public final class SecretInjector: @unchecked Sendable {
         guard let decoded = decodeBase64ToString(String(payload)) else {
             return BasicResult(value: value, forbidden: nil)
         }
-
+        
         guard let colonIdx = decoded.firstIndex(of: ":") else {
             return BasicResult(value: value, forbidden: nil)
         }
@@ -409,6 +581,22 @@ public final class SecretInjector: @unchecked Sendable {
         return BasicResult(value: "Basic \(reencoded)", forbidden: nil)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func extractAndUnmaskUrlCredentials(rawUrl: String) -> ExtractedUrlCreds {
         guard var components = URLComponents(string: rawUrl) else {
             return ExtractedUrlCreds(url: rawUrl, syntheticAuthorization: nil, forbidden: nil)
@@ -457,6 +645,16 @@ public final class SecretInjector: @unchecked Sendable {
         return ExtractedUrlCreds(url: stripped, syntheticAuthorization: synthetic, forbidden: nil)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func unmaskBodyBytes(bytes: Data, targetHostname: String) -> Data {
         var out = bytes
         for secret in secrets {
@@ -469,6 +667,24 @@ public final class SecretInjector: @unchecked Sendable {
         return out
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func signHmac(
         spec: String,
         body: [UInt8],
@@ -528,6 +744,18 @@ public final class SecretInjector: @unchecked Sendable {
         return HmacSignResult(headerName: headerName, signatureHex: signatureHex, timestampHeaderName: nil, timestampValue: nil, forbidden: nil)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func redactForExport(texts: [String]) -> (texts: [String], redactionCount: Int) {
         let maskableSecrets = secrets.filter { $0.isMaskable }
         let shortSecrets = secrets.filter { !$0.isMaskable }
@@ -535,14 +763,14 @@ public final class SecretInjector: @unchecked Sendable {
             let values: [String]
             let marker: String
         }
-
+        
         var allMarkers: [MarkerSpec] = maskableSecrets.enumerated().map { index, secret in
             MarkerSpec(
                 values: [secret.realValue, secret.maskedValue].filter { !$0.isEmpty },
                 marker: "⟦REDACTED:known-secret:k\(index + 1)⟧"
             )
         }
-
+        
         let base = maskableSecrets.count
         for (index, secret) in shortSecrets.enumerated() {
             allMarkers.append(
@@ -566,10 +794,19 @@ public final class SecretInjector: @unchecked Sendable {
         return (texts: redacted, redactionCount: redactionCount)
     }
 
+    
+    
+    
+    
+    
     func scrubResponseBytes(bytes: Data) -> Data {
         var out = bytes
         for secret in secrets {
-
+            
+            
+            
+            
+            
             guard secret.isMaskable else { continue }
             let needle = Data(secret.realValue.utf8)
             let replacement = Data(secret.maskedValue.utf8)
@@ -578,6 +815,11 @@ public final class SecretInjector: @unchecked Sendable {
         return out
     }
 }
+
+
+
+
+
 
 private func decodeBase64ToString(_ s: String) -> String? {
     let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -593,6 +835,8 @@ private func decodeBase64ToString(_ s: String) -> String? {
     }
     return nil
 }
+
+
 
 private func replaceAllBytes(in haystack: Data, needle: Data, replacement: Data) -> Data {
     guard !needle.isEmpty else { return haystack }

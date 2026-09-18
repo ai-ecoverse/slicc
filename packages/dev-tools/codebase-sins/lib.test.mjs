@@ -1,11 +1,6 @@
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildPrompt, resolveSin, SINS, selectSinOfDay } from './sins.mjs';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const onNoComment = existsSync(resolve(here, '../../../.no-comment'));
 
 describe('SINS', () => {
   it('has seven sins in the severity order, with derived labels and prompt files', () => {
@@ -26,7 +21,7 @@ describe('SINS', () => {
     }
   });
 
-  it.skipIf(onNoComment)('points every promptFile at a file that exists on disk', () => {
+  it('points every promptFile at a file that exists on disk', () => {
     for (const s of SINS) {
       expect(existsSync(s.promptFile), `${s.id} prompt missing: ${s.promptFile}`).toBe(true);
     }

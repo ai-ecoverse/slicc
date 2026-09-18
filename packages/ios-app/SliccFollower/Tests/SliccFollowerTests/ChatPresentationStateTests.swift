@@ -42,7 +42,8 @@ final class ChatPresentationStateTests: XCTestCase {
         let owner = try XCTUnwrap(constructedOwners.first)
         let ownerIdentity = ObjectIdentifier(owner)
         owner.activeSurface = .browser
-
+        
+        
         owner.terminalWasOpened = true
         owner.composerDraft = "Keep this unfinished thought"
         owner.stagedAttachments = [
@@ -77,10 +78,23 @@ final class ChatPresentationStateTests: XCTestCase {
                 owner.stagedAttachments.map(\.id),
                 ["staged-1"],
                 "\(step.name) discarded a photo the user had already picked")
-
+            
+            
+            
+            
+            
+            
+            
+            
+            
         }
     }
 
+    
+    
+    
+    
+    
     func testTerminalKeepsItsTypedInputAcrossMultitaskingLayoutTransitions() async throws {
         let steps = multitaskingSteps
         let appState = AppState()
@@ -110,7 +124,10 @@ final class ChatPresentationStateTests: XCTestCase {
 
         let terminal = owner.terminal(client: appState.terminalClient)
         let terminalIdentity = ObjectIdentifier(terminal)
-
+        
+        
+        
+        
         let started = await settle(until: {
             terminal.accessibilityTranscript.contains("Sliccy leader terminal")
         })
@@ -136,6 +153,8 @@ final class ChatPresentationStateTests: XCTestCase {
         }
     }
 
+    
+    
     private func settle(
         until condition: @MainActor () -> Bool,
         timeout: TimeInterval = 5
@@ -162,6 +181,8 @@ final class ChatPresentationStateTests: XCTestCase {
         host.view.layoutIfNeeded()
     }
 }
+
+
 
 private let multitaskingSteps: [LayoutStep] = [
     .init(name: "Slide Over", sizeClass: .compact, width: 320, mode: .compactOverlay),

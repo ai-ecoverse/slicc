@@ -3,6 +3,8 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
 final class SteerMessageTests: XCTestCase {
     func testSteerIsOmittedWhenFalse() throws {
         let data = try JSONEncoder().encode(
@@ -32,7 +34,7 @@ final class SteerMessageTests: XCTestCase {
     @MainActor
     func testComposerTargetsLeaderActiveScoopGatesOnMismatchOnly() {
         let state = AppState()
-
+        
         XCTAssertTrue(state.composerTargetsLeaderActiveScoop)
         state.selectedScoopJid = "scoop-a"
         XCTAssertTrue(state.composerTargetsLeaderActiveScoop)

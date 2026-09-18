@@ -1,0 +1,35 @@
+name: SLICC — write VFS file
+description: Write one file into the leader's VFS from a runner file or inline text, creating parent directories.
+inputs:
+  join-url:
+    description: The leader's join link.
+    required: true
+  path:
+    description: Absolute VFS path to write.
+    required: true
+  local:
+    description: Runner file to upload (takes precedence over `content`).
+    default: ''
+  content:
+    description: Inline text to write when `local` is empty.
+    default: ''
+  timeout:
+    description: Wall-clock cap.
+    default: 10m
+outputs:
+  bytes:
+    description: Bytes written.
+    value: ${{ steps.copy.outputs.bytes }}
+runs:
+  using: composite
+  steps:
+    - id: copy
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_MODE: write
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_LOCAL: ${{ inputs.local }}
+        INPUT_CONTENT: ${{ inputs.content }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+      run: node "${{ github.action_path }}/../../scripts/vfs-file.mjs"

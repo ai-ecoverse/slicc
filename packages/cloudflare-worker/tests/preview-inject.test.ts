@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
-import { injectBridge } from '../src/preview-bridge-routes.js';
+import { injectBridge } from '../src/preview-handler.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
 import { makeEnv } from './helpers/fake-env.js';
@@ -257,6 +257,55 @@ describe('preview-inject', () => {
     expect(csp).toMatch(/connect-src 'self' wss:\/\//);
   });
 
+  it('serves bridged html whole: the leader never sees the Range', async () => {
+    for (const bridge of [true, false]) {
+      const { env, previewHost, clientSocket } = await fakeEnv({ bridge });
+      const ranges: Array<string | undefined> = [];
+      clientSocket.addEventListener('message', (event) => {
+        const msg = JSON.parse(event.data ?? '{}') as { type: string; range?: string };
+        if (msg.type === 'preview.request') ranges.push(msg.range);
+      });
+      const res = await handleWorkerRequest(
+        new Request(`https://${previewHost}/index.html`, { headers: { range: 'bytes=0-9' } }),
+        env
+      );
+
+      for (const path of ['/docs/', '/docs', '/']) {
+        await handleWorkerRequest(
+          new Request(`https://${previewHost}${path}`, { headers: { range: 'bytes=0-9' } }),
+          env
+        );
+      }
+
+      await handleWorkerRequest(
+        new Request(`https://${previewHost}/clip.mp4`, { headers: { range: 'bytes=0-9' } }),
+        env
+      );
+      expect(ranges).toEqual(
+        bridge
+          ? [undefined, undefined, undefined, undefined, 'bytes=0-9']
+          : ['bytes=0-9', 'bytes=0-9', 'bytes=0-9', 'bytes=0-9', 'bytes=0-9']
+      );
+      if (bridge) {
+        expect(res.status).toBe(200);
+        expect(await res.text()).toContain('/__slicc/preview-bridge.js');
+      } else {
+        expect(res.status).toBe(200);
+      }
+    }
+  });
+
+  it('never serves /__slicc/* routes for a non-bridged preview', async () => {
+    const { env, previewHost } = await fakeEnv({ bridge: false });
+    const res = await handleWorkerRequest(
+      new Request(`https://${previewHost}/__slicc/preview-bridge.js`),
+      env
+    );
+
+    expect(res.headers.get('content-type') ?? '').not.toMatch(/javascript/);
+    expect(await res.text()).not.toContain('slicc.emit');
+  });
+
   it('does not inject for non-bridged previews', async () => {
     const { env, previewHost } = await fakeEnv({ bridge: false });
 
@@ -285,6 +334,16 @@ describe('injectBridge (unit)', () => {
 
     expect(csp.match(/connect-src/g)?.length).toBe(1);
     expect(await res.text()).toContain('/__slicc/preview-bridge.js');
+  });
+
+  it('leaves a 206 window untouched', async () => {
+    const window = new Response('<html><he', {
+      status: 206,
+      headers: { 'content-type': 'text/html', 'content-range': 'bytes 0-9/100' },
+    });
+    const res = await injectBridge(window, opts);
+    expect(res.status).toBe(206);
+    expect(await res.text()).toBe('<html><he');
   });
 
   it('injects the bootstrap even when the document has no <head>', async () => {

@@ -4,15 +4,26 @@ import os
 
 private let log = Logger(subsystem: "ai.sliccy.traysession", category: "TraySessionSyncStore")
 
+
+
+
 public protocol KeyValueSyncBackend: AnyObject {
     func data(forKey key: String) -> Data?
     func setData(_ data: Data?, forKey key: String)
-
+    
+    
     func keys(withPrefix prefix: String) -> [String]
     @discardableResult func synchronize() -> Bool
-
+    
+    
+    
+    
     var externalChange: (name: Notification.Name, object: AnyObject?)? { get }
 }
+
+
+
+
 
 public final class UbiquitousKeyValueBackend: KeyValueSyncBackend {
     private let store: NSUbiquitousKeyValueStore
@@ -47,6 +58,7 @@ public final class UbiquitousKeyValueBackend: KeyValueSyncBackend {
     }
 }
 
+
 public final class InMemoryKeyValueBackend: KeyValueSyncBackend {
     public init() {}
 
@@ -61,14 +73,28 @@ public final class InMemoryKeyValueBackend: KeyValueSyncBackend {
     public var externalChange: (name: Notification.Name, object: AnyObject?)? { nil }
 }
 
+
+
+
+
+
+
+
+
+
 @Observable
 public final class TraySessionSyncStore {
-
+    
+    
+    
+    
+    
     public static let storageKeyPrefix = "traySessions.v2."
     public static let deviceIdDefaultsKey = "traySyncDeviceId"
     public static let defaultTTL: TimeInterval = 12 * 60 * 60
     public static let maxSessions = 64
 
+    
     public private(set) var sessions: [SyncedTraySession] = []
 
     @ObservationIgnored private let backend: KeyValueSyncBackend
@@ -103,10 +129,15 @@ public final class TraySessionSyncStore {
         }
     }
 
+    
+
+    
     public var remoteSessions: [SyncedTraySession] {
         sessions.filter { $0.deviceId != deviceId }
     }
 
+    
+    
     public var localSessions: [SyncedTraySession] {
         sessions.filter { $0.deviceId == deviceId }
     }
@@ -115,6 +146,11 @@ public final class TraySessionSyncStore {
         sessions = TraySessionSyncStore.active(from: decodeAll(), ttl: ttl, now: clock())
     }
 
+    
+
+    
+    
+    
     public func publish(joinUrl: String, label: String) {
         guard !joinUrl.isEmpty else { return }
         let now = clock()
@@ -132,16 +168,22 @@ public final class TraySessionSyncStore {
         persistOwn(TraySessionSyncStore.active(from: own, ttl: ttl, now: now))
     }
 
+    
     public func withdraw(joinUrl: String) {
         let id = SyncedTraySession.identifier(forJoinUrl: joinUrl)
         persistOwn(TraySessionSyncStore.active(from: decodeOwn().filter { $0.id != id }, ttl: ttl, now: clock()))
     }
 
+    
+    
+    
     public func withdrawLocalSessions() {
         backend.setData(nil, forKey: ownKey)
         _ = backend.synchronize()
         reload()
     }
+
+    
 
     public static func upsert(_ session: SyncedTraySession, into list: [SyncedTraySession]) -> [SyncedTraySession] {
         var next = list.filter { $0.id != session.id }
@@ -159,7 +201,8 @@ public final class TraySessionSyncStore {
 
     public static func currentDeviceName() -> String {
         #if os(macOS)
-
+            
+            
             let name = Host.current().localizedName ?? ""
             return name.isEmpty ? "This device" : name
         #else
@@ -167,6 +210,9 @@ public final class TraySessionSyncStore {
         #endif
     }
 
+    
+    
+    
     public static func currentDeviceId(defaults: UserDefaults = .standard) -> String {
         if let existing = defaults.string(forKey: deviceIdDefaultsKey), !existing.isEmpty {
             return existing
@@ -176,10 +222,14 @@ public final class TraySessionSyncStore {
         return fresh
     }
 
+    
+
+    
     private func decodeOwn() -> [SyncedTraySession] {
         decode(key: ownKey)
     }
 
+    
     private func decodeAll() -> [SyncedTraySession] {
         backend.keys(withPrefix: Self.storageKeyPrefix).flatMap { decode(key: $0) }
     }

@@ -1,6 +1,7 @@
 import type {
   SprinkleEntry,
   SprinkleManagerProxySurface,
+  SprinkleOpenOptions,
   SprinkleSendReport,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
@@ -19,6 +20,8 @@ export interface SprinkleBridgeRequestMsg {
   data?: unknown;
 
   target?: SprinkleSendTarget;
+
+  openOptions?: SprinkleOpenOptions;
 }
 
 export interface SprinkleBridgeResponseMsg {
@@ -91,8 +94,8 @@ export function createSprinkleManagerProxyOverChannel(
     opened(): string[] {
       return cachedOpened;
     },
-    async open(name: string): Promise<void> {
-      await request('open', { name });
+    async open(name: string, _zone?: string, openOptions?: SprinkleOpenOptions): Promise<void> {
+      await request('open', { name, openOptions });
     },
     close(name: string): void {
       request('close', { name }).catch(() => {});
@@ -180,7 +183,7 @@ export function installSprinkleManagerHandlerOverChannel(
             respond(id, manager.available().length);
             return;
           case 'open':
-            await manager.open(name ?? '');
+            await manager.open(name ?? '', undefined, req.openOptions);
             respond(id, true);
             return;
           case 'close':

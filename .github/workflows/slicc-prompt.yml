@@ -1,0 +1,75 @@
+name: SLICC prompt
+
+on:
+  workflow_call:
+    inputs:
+      prompt:
+        description: The user message.
+        type: string
+        required: true
+      timeout:
+        description: Wall-clock cap for the turn.
+        type: string
+        default: 30m
+      cli-version:
+        description: Release tag of the Go `slicc` CLI, or `latest`.
+        type: string
+        default: latest
+      slicc-ref:
+        description: Ref of ai-ecoverse/slicc to take the actions from.
+        type: string
+        default: main
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+      artifact-name:
+        description: Artifact holding the full reply.
+        type: string
+        default: slicc-response
+    secrets:
+      SLICC_JOIN_URL:
+        description: The leader's `https://…/join/<token>` link.
+        required: true
+    outputs:
+      response:
+        description: Assistant reply (truncated to 256 KB; full text in the artifact).
+        value: ${{ jobs.prompt.outputs.response }}
+      exit-code:
+        description: CLI exit status.
+        value: ${{ jobs.prompt.outputs.exit-code }}
+
+permissions:
+  contents: read
+
+jobs:
+  prompt:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 360
+    outputs:
+      response: ${{ steps.prompt.outputs.response }}
+      exit-code: ${{ steps.prompt.outputs.exit-code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ai-ecoverse/slicc
+          ref: ${{ inputs.slicc-ref }}
+          path: .slicc-gw
+          sparse-checkout: packages/github-workflow
+          persist-credentials: false
+      - uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
+        with:
+          version: ${{ inputs.cli-version }}
+      - id: prompt
+        uses: ./.slicc-gw/packages/github-workflow/actions/prompt
+        with:
+          join-url: ${{ secrets.SLICC_JOIN_URL }}
+          prompt: ${{ inputs.prompt }}
+          timeout: ${{ inputs.timeout }}
+          output-file: ${{ runner.temp }}/slicc-gw/out/response.md
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/slicc-gw/out/response.md
+          if-no-files-found: ignore

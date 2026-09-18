@@ -242,6 +242,44 @@ test('parseSyncFsRequest: exec route → exec channel request off the JSON envel
   });
 });
 
+test('parseSyncFsRequest: exec route preserves cwd and env from the envelope', async () => {
+  const body = new TextEncoder().encode(
+    JSON.stringify({
+      command: ['pwd'],
+      cwd: '/shared',
+      env: { MARKER: 'x' },
+    })
+  );
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/exec-sync',
+    method: 'POST',
+    headers: { get: (n) => (n === 'x-slicc-fs-token' ? 'tok' : null) },
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  });
+  expect(parsed).toEqual({
+    token: 'tok',
+    channel: 'exec',
+    command: ['pwd'],
+    cwd: '/shared',
+    env: { MARKER: 'x' },
+  });
+});
+
+test('parseSyncFsRequest: exec route rejects a malformed cwd or env rather than dropping them', async () => {
+  const badCwd = new TextEncoder().encode(JSON.stringify({ command: 'pwd', cwd: 12 }));
+  const badEnv = new TextEncoder().encode(JSON.stringify({ command: 'pwd', env: 'nope' }));
+  const parse = (body: Uint8Array) =>
+    parseSyncFsRequest({
+      url: 'https://www.sliccy.ai/__slicc/exec-sync',
+      method: 'POST',
+      headers: { get: (n) => (n === 'x-slicc-fs-token' ? 'tok' : null) },
+      arrayBuffer: async () =>
+        body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
+    });
+  expect(await parse(badCwd)).toBeNull();
+  expect(await parse(badEnv)).toBeNull();
+});
+
 test('parseSyncFsRequest: exec route rejects a GET (POST-only envelope)', async () => {
   const parsed = await parseSyncFsRequest({
     url: 'https://www.sliccy.ai/__slicc/exec-sync',

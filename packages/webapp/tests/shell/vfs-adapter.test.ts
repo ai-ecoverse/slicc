@@ -16,7 +16,7 @@ describe('VfsAdapter', () => {
     adapter = new VfsAdapter(vfs);
   });
 
-  describe('writeFile — binary detection', () => {
+  describe('writeFile — explicit encodings', () => {
     it('writes ASCII text correctly', async () => {
       await adapter.writeFile('/test.txt', 'hello world');
       const content = await vfs.readFile('/test.txt', { encoding: 'binary' });
@@ -27,9 +27,9 @@ describe('VfsAdapter', () => {
       expect(bytes[4]).toBe(111);
     });
 
-    it('preserves latin1-encoded binary data (chars <= 0xFF)', async () => {
+    it('preserves explicitly latin1-encoded binary data', async () => {
       const latin1 = String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10);
-      await adapter.writeFile('/image.jpg', latin1);
+      await adapter.writeFile('/image.jpg', latin1, 'latin1');
       const content = await vfs.readFile('/image.jpg', { encoding: 'binary' });
       const bytes = content instanceof Uint8Array ? content : new Uint8Array();
       expect(bytes[0]).toBe(0xff);
@@ -292,6 +292,37 @@ describe('VfsAdapter', () => {
 
       expect(visited).toContain('/root/a/loop');
       expect(visited.some((p) => p.includes('/loop/a'))).toBe(false);
+    });
+  });
+
+  describe('chmod — no silent no-op (#3109)', () => {
+    it('persists executable bits on an existing VFS file', async () => {
+      await adapter.writeFile('/script.sh', '#!/bin/bash\necho ran-ok\n');
+      const before = await adapter.stat('/script.sh');
+      expect(before.mode & 0o7777).toBe(0o644);
+
+      await adapter.chmod('/script.sh', 0o755);
+
+      const after = await adapter.stat('/script.sh');
+      expect(after.mode & 0o7777).toBe(0o755);
+      expect(await adapter.readFile('/script.sh')).toBe('#!/bin/bash\necho ran-ok\n');
+    });
+
+    it('fails with ENOENT when the path is missing', async () => {
+      await expect(adapter.chmod('/gone.sh', 0o755)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+
+    it('preserves EIO from the backend instead of mapping it to ENOENT', async () => {
+      const { FsError } = await import('../../src/fs/types.js');
+      const fake = {
+        chmod: async (path: string) => {
+          throw new FsError('EIO', 'io error', path);
+        },
+      };
+      const adapterWithIo = new VfsAdapter(fake as unknown as VirtualFS);
+      await expect(adapterWithIo.chmod('/mnt/x', 0o755)).rejects.toMatchObject({ code: 'EIO' });
     });
   });
 });

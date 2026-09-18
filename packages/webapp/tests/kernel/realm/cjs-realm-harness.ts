@@ -86,7 +86,15 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
       store.delete(normalizePath(p));
     },
     async cp(): Promise<void> {},
-    async mv(): Promise<void> {},
+    async mv(src: string, dest: string): Promise<void> {
+      const from = normalizePath(src);
+      const to = normalizePath(dest);
+      const content = store.get(from);
+      if (content === undefined) throw new Error(`ENOENT: ${src}`);
+      store.set(to, content);
+      store.delete(from);
+      addAncestorDirs(to);
+    },
     resolvePath(base: string, p: string): string {
       if (p.startsWith('/')) return normalizePath(p);
       return normalizePath(`${base}/${p}`);

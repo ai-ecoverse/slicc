@@ -15,6 +15,8 @@ export interface TransformersEnvLike {
   remoteHost?: string;
 
   remotePathTemplate?: string;
+
+  useBrowserCache?: boolean;
 }
 
 const FETCH_WRAPPED_MARKER = Symbol.for('slicc.transformers-env.fetch-wrapped');
@@ -83,6 +85,8 @@ export const ORT_WASM_DIST_FILES: ReadonlyArray<string> = [
   'ort-wasm-simd-threaded.wasm',
   'ort-wasm-simd-threaded.asyncify.mjs',
   'ort-wasm-simd-threaded.asyncify.wasm',
+  'ort-wasm-simd-threaded.jspi.mjs',
+  'ort-wasm-simd-threaded.jspi.wasm',
 ];
 
 const VFS_ENOENT_MARKER = Symbol.for('slicc.transformers-env.vfs-enoent');
@@ -290,6 +294,8 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
   env.allowRemoteModels = false;
   env.allowLocalModels = true;
   env.localModelPath = toPreviewUrl(LOCAL_MODELS_VFS_PATH);
+
+  env.useBrowserCache = false;
   if (isExtensionFloat()) return;
 
   env.allowRemoteModels = true;

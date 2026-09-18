@@ -1,6 +1,17 @@
 import SliccTrayKit
 import SwiftUI
 
+
+
+
+
+
+
+
+
+
+
+
 struct AttachmentChips: View {
     let attachments: [MessageAttachment]
 
@@ -10,7 +21,8 @@ struct AttachmentChips: View {
     private var borderColor: Color { palette.ink.opacity(0.10) }
 
     var body: some View {
-
+        
+        
         HStack(spacing: 6) {
             Spacer(minLength: 0)
             ForEach(attachments) { attachment in
@@ -52,7 +64,8 @@ struct AttachmentChips: View {
                 .frame(width: 30, height: 30)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
         } else {
-
+            
+            
             Image(systemName: SliccIcons.attachment(attachment.kind))
                 .font(.system(size: 16))
                 .foregroundStyle(palette.ink.opacity(0.6))
@@ -68,11 +81,30 @@ struct AttachmentChips: View {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct ErrorCard: View {
     let message: ChatMessage
 
+    
     private var quota: QuotaExceededDetail? { QuotaExceededDetail(content: message.content) }
 
+    
     private var headerLabel: String {
         quota == nil ? "Something went wrong" : QuotaExceededDetail.label
     }

@@ -4,6 +4,14 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
+
+
+
 private struct LeakyError: LocalizedError {
     var errorDescription: String? { "cannot write /Users/jane/Library/Application Support/Sliccstart/x.json" }
 }
@@ -40,6 +48,8 @@ final class LauncherErrorReportTests: XCTestCase {
         let reported = target(.updateCheck, URLError(.notConnectedToInternet))
         XCTAssertTrue(reported.contains("NSURLErrorDomain"), reported)
     }
+
+    
 
     func testRedactsJoinURLBecauseItCarriesTheSessionSecret() {
         let redacted = LauncherErrorReport.redact(
@@ -91,7 +101,10 @@ final class LauncherErrorReportTests: XCTestCase {
     }
 
     func testReportDoesNotThrowWhenOptelIsUnconfigured() {
-
+        
+        
+        
+        
         LauncherErrorReport.report(.bootstrap, URLError(.timedOut))
     }
 }

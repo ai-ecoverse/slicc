@@ -1,19 +1,15 @@
 import { isSliccAppUrl } from '@slicc/shared-ts';
+import type { TabDescriptor } from '@slicc/webcomponents';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
 import { teleportTabOneWay } from '../../scoops/tray-leader/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { bindComputerOverlay, mergeOverlayTabs, parseComputerOverlayId } from './wc-computers.js';
 import type { WcShellRefs } from './wc-shell.js';
 
 const PEEK_MS = 5000;
 
 interface TabOverlayLike extends HTMLElement {
-  tabs: Array<{
-    id: string;
-    title?: string;
-    url?: string;
-    screenshot?: string;
-    active?: boolean;
-  }>;
+  tabs: TabDescriptor[];
   show(): void;
   hide(): void;
 }
@@ -85,8 +81,9 @@ export interface WcBrowserHandle {
 export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
   const { refs, browser, log } = deps;
   const overlay = document.createElement('slicc-tab-overlay') as TabOverlayLike;
-  overlay.setAttribute('heading', 'Browser · open tabs');
+  overlay.setAttribute('heading', 'Browser · tabs & computers');
   document.body.append(overlay);
+  bindComputerOverlay(overlay, log);
 
   let refreshSeq = 0;
 
@@ -100,18 +97,20 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
       pages = await browser.listAllTargets();
     } catch (err) {
       log.error('WC browser overlay: listing tabs failed', err);
-      overlay.tabs = [];
+      overlay.tabs = mergeOverlayTabs([]);
       return;
     }
     if (seq !== refreshSeq) return;
 
     const selfOrigins = location?.origin ? [location.origin] : undefined;
     pages = pages.filter((p) => !isSliccAppUrl(p.url ?? '', { selfOrigins }));
-    overlay.tabs = pages.map((p) => ({
-      id: p.targetId,
-      title: p.title || p.url || p.targetId,
-      url: p.url,
-    }));
+    overlay.tabs = mergeOverlayTabs(
+      pages.map((p) => ({
+        id: p.targetId,
+        title: p.title || p.url || p.targetId,
+        url: p.url,
+      }))
+    );
 
     for (const p of pages) {
       if (seq !== refreshSeq || !overlay.hasAttribute('open')) return;
@@ -170,13 +169,17 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
   };
 
   overlay.addEventListener('tab-activate', (event) => {
-    void activate((event as CustomEvent<{ id: string }>).detail.id);
+    const id = (event as CustomEvent<{ id: string }>).detail.id;
+    if (parseComputerOverlayId(id)) return;
+    void activate(id);
   });
 
   const peek = createPeek({ browser, log, activate, agentTarget: () => agentTarget });
 
   overlay.addEventListener('tab-peek', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail.id;
+
+    if (parseComputerOverlayId(id)) return;
 
     if (id.includes(':')) {
       void activate(id);
@@ -187,6 +190,7 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
 
   overlay.addEventListener('tab-close', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail.id;
+    if (parseComputerOverlayId(id)) return;
     void browser
       .closePage(id)
       .then(() => refresh())

@@ -4,10 +4,14 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "IncomingURL")
 
+
+
+
 protocol LeaderBrowserLaunching: AnyObject {
-
+    
     var leaderBrowserEndpoint: LeaderBrowserEndpoint? { get }
-
+    
+    
     func isRunningAsFollower(_ target: AppTarget) -> Bool
     func launchStandalone(_ target: AppTarget) throws
 }
@@ -34,15 +38,32 @@ enum IncomingURLRouterError: LocalizedError, Equatable {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
 @MainActor
 final class IncomingURLRouter {
-
+    
+    
+    
+    
     static let openableSchemes: Set<String> = ["http", "https", "file"]
 
     static let leaderWaitPollInterval: TimeInterval = 0.5
-
+    
+    
     static let maxLeaderWaitPolls = 90
-
+    
+    
+    
     static let launchRetryEveryPolls = 20
 
     private let process: any LeaderBrowserLaunching
@@ -81,6 +102,8 @@ final class IncomingURLRouter {
         self.report = report
     }
 
+    
+    
     nonisolated static func defaultOrderedBrowsers() -> [AppTarget] {
         AppOrdering.orderedBrowsers(
             in: AppScanner.scan(hasAppManagementPermission: false),
@@ -88,6 +111,10 @@ final class IncomingURLRouter {
         )
     }
 
+    
+    
+    
+    
     func handle(_ urls: [URL]) async {
         let openable = Self.openableURLs(from: urls)
         guard !openable.isEmpty else { return }
@@ -106,7 +133,9 @@ final class IncomingURLRouter {
         while !pending.isEmpty {
             await open(pending.removeFirst(), cdpPort: leader.cdpPort)
         }
-
+        
+        
+        
         activateBrowser(leader.appPath)
     }
 
@@ -114,6 +143,9 @@ final class IncomingURLRouter {
         urls.filter { openableSchemes.contains($0.scheme?.lowercased() ?? "") }
     }
 
+    
+    
+    
     static func newTabRequest(cdpPort: UInt16, target: URL) -> URLRequest? {
         guard
             let encoded = target.absoluteString.addingPercentEncoding(
@@ -127,6 +159,8 @@ final class IncomingURLRouter {
         return request
     }
 
+    
+    
     static func activateRequest(cdpPort: UInt16, targetId: String) -> URLRequest? {
         guard
             let encodedId = targetId.addingPercentEncoding(
@@ -140,6 +174,7 @@ final class IncomingURLRouter {
         return request
     }
 
+    
     static func createdTargetId(from body: Data) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
             let id = json["id"] as? String,
@@ -156,7 +191,9 @@ final class IncomingURLRouter {
                 throw IncomingURLRouterError.newTabRejected(status: status)
             }
             log.info("open: opened link in leader on cdp \(cdpPort, privacy: .public)")
-
+            
+            
+            
             guard let targetId = Self.createdTargetId(from: body),
                 let activate = Self.activateRequest(cdpPort: cdpPort, targetId: targetId)
             else {
@@ -185,7 +222,11 @@ final class IncomingURLRouter {
 
     private func launchLeader() {
         let browsers = orderedBrowsers()
-
+        
+        
+        
+        
+        
         guard let target = browsers.first(where: { !process.isRunningAsFollower($0) }) else {
             log.error("launchLeader: no browser available to become the leader")
             return
@@ -194,7 +235,9 @@ final class IncomingURLRouter {
             log.info("launchLeader: starting \(target.name, privacy: .public) for an incoming link")
             try process.launchStandalone(target)
         } catch {
-
+            
+            
+            
             log.info("launchLeader: launch attempt failed: \(error.localizedDescription, privacy: .public)")
         }
     }

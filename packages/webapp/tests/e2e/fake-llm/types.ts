@@ -17,6 +17,8 @@ export interface AssistantTurn {
   contentChunkSize?: number;
 
   toolArgumentsChunkSize?: number;
+
+  holdAfterContentChunks?: number;
 }
 
 export interface Fixture {

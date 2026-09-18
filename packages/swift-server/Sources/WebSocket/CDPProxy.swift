@@ -14,6 +14,15 @@ actor CDPProxy {
     static let defaultChromeInboundMessageBufferLimit = 1_000
     static let defaultReconnectDelayNanoseconds: UInt64 = 1_000_000_000
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static let cdpProxyInspectBytes = 256 * 1024
     static let cdpProxyHardFrameCap = 64 * 1024 * 1024
     static let cdpLoopEventPrefixes = [
@@ -21,10 +30,49 @@ actor CDPProxy {
         "{\"method\":\"Network.webSocketFrameSent\"",
     ]
 
+    
+    
+    
+    
+    
+    
+    
     static let supersededCloseCode: UInt16 = 4001
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static let upstreamResetCloseCode: UInt16 = 4002
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static let upstreamResetFailureThreshold = 3
 
     private let logger: Logger
@@ -45,10 +93,14 @@ actor CDPProxy {
     private var chromeConnectionTask: Task<ChromeSocketHandle, Error>?
     private var chromeReconnectTask: Task<Void, Never>?
     private var activeClient: ClientHandle?
-
+    
+    
     private var chromeDropSlotHolderID: UUID?
     private var messageBuffer: ClientFrameBuffer?
 
+    
+    
+    
     private var sessionToUrl: [String: String] = [:]
     private var sessionToTargetId: [String: String] = [:]
     private var sessionToRootFrame: [String: String] = [:]
@@ -85,6 +137,15 @@ actor CDPProxy {
             })
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func install(
         on router: Router<BasicWebSocketRequestContext>,
         cdpPort: Int,
@@ -111,6 +172,15 @@ actor CDPProxy {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static func evaluateBridgeUpgrade(
         origin: String?,
         subprotocolHeader: String?,
@@ -208,7 +278,9 @@ actor CDPProxy {
     func addClient(_ client: ClientHandle) async {
         if let activeClient {
             self.logger.info("[cdp-proxy] Closing previous client connection")
-
+            
+            
+            
             await activeClient.close(.unknown(Self.supersededCloseCode), "Replaced by newer /cdp client")
         }
 
@@ -217,6 +289,11 @@ actor CDPProxy {
         self.logger.info("[cdp-proxy] New client connected")
     }
 
+    
+    
+    
+    
+    
     private func adoptClientSlot(clientID: UUID) {
         if let buffer = self.messageBuffer, buffer.generation.clientID != clientID {
             self.discardBufferedMessages(reason: .clientSuperseded)
@@ -226,6 +303,9 @@ actor CDPProxy {
         }
     }
 
+    
+    
+    
     private func currentBufferGeneration(clientID: UUID?) -> ClientFrameBufferGeneration {
         let legIsLive = self.chromeSocket?.isOpen() ?? false
         return ClientFrameBufferGeneration(
@@ -272,7 +352,8 @@ actor CDPProxy {
             return
         }
         self.activeClient = nil
-
+        
+        
         self.discardBufferedMessages(reason: .clientDisconnected)
         self.logger.info("[cdp-proxy] \(reason)")
     }
@@ -337,6 +418,12 @@ actor CDPProxy {
         self.messageBuffer = buffer
     }
 
+    
+    
+    
+    
+    
+    
     private func flushBufferedMessages(
         using chromeSocket: ChromeSocketHandle,
         connectionID: UUID?
@@ -360,6 +447,9 @@ actor CDPProxy {
         }
     }
 
+    
+    
+    
     private func discardBufferedMessages(reason: ClientFrameBufferDropReason) {
         guard let buffer = self.messageBuffer else {
             return
@@ -412,6 +502,12 @@ actor CDPProxy {
         }
     }
 
+    
+    
+    
+    
+    
+    
     static func chromeFrameDropReason(_ message: ProxyMessage) -> String? {
         let byteLen: Int
         let head: String?
@@ -434,6 +530,18 @@ actor CDPProxy {
         }
         return nil
     }
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     func sessionURLSnapshot() -> [String: String] { self.sessionToUrl }
 
@@ -479,7 +587,9 @@ actor CDPProxy {
             guard let sid = obj["sessionId"] as? String,
                 let frame = params["frame"] as? [String: Any]
             else { return }
-
+            
+            
+            
             let parentId = (frame["parentId"] as? String) ?? ""
             guard parentId.isEmpty else { return }
             if let fid = frame["id"] as? String {
@@ -517,7 +627,7 @@ actor CDPProxy {
         }
         let targets: Set<String> = ["Runtime.callFunctionOn", "Runtime.evaluate", "Input.insertText"]
         guard targets.contains(method) else { return nil }
-
+        
         guard let sid = obj["sessionId"] as? String,
             let url = urlForSession(sid),
             let host = URL(string: url)?.host,
@@ -655,14 +765,19 @@ actor CDPProxy {
 
     private func handleChromeDisconnect(reason: String, bufferMessage: ProxyMessage? = nil) {
         let droppedConnectionID = self.chromeConnectionID
-
+        
+        
+        
+        
         self.chromeDropSlotHolderID = self.activeClient?.id
         self.chromeSocket = nil
         self.chromeConnectionID = nil
         self.chromeConnectionTask = nil
 
         if self.messageBuffer == nil, self.activeClient != nil || bufferMessage != nil {
-
+            
+            
+            
             self.messageBuffer = ClientFrameBuffer(
                 generation: ClientFrameBufferGeneration(
                     chromeConnectionID: droppedConnectionID,
@@ -709,7 +824,11 @@ actor CDPProxy {
                 let freshURL = try await Self.cdpURL(for: cdpPort, using: self.discoverer)
                 self.cachedCDPPort = cdpPort
                 self.cachedCDPURL = freshURL
-
+                
+                
+                
+                
+                
                 try await self.ensureChromeConnection(url: freshURL)
                 self.logger.info("[cdp-proxy] Chrome WS auto-reconnected")
                 await self.resetStaleSlotHolderAfterReconnect()
@@ -729,6 +848,18 @@ actor CDPProxy {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private func resetStaleSlotHolderAfterReconnect() async {
         guard let holderID = self.chromeDropSlotHolderID, self.activeClient?.id == holderID else {
             if self.activeClient != nil {
@@ -740,13 +871,19 @@ actor CDPProxy {
         await self.closeActiveClientForUpstreamReset(reason: "Chrome WS auto-reconnected")
     }
 
+    
+    
+    
+    
+    
     private func closeActiveClientForUpstreamReset(reason: String) async {
         guard let activeClient = self.activeClient else {
             return
         }
 
         self.activeClient = nil
-
+        
+        
         self.discardBufferedMessages(reason: .upstreamReset)
         self.logger.info("[cdp-proxy] Closing client (upstream-reset): \(reason)")
         await activeClient.close(.unknown(Self.upstreamResetCloseCode), "upstream-reset")
@@ -843,7 +980,11 @@ actor CDPProxy {
 }
 
 extension CDPProxy {
-
+    
+    
+    
+    
+    
     static func inboundOverflowLogLine(
         result: ChromeInboundMessagePump.EnqueueResult,
         messagePump: ChromeInboundMessagePump,
@@ -862,6 +1003,8 @@ extension CDPProxy {
         return "[cdp-proxy] Inbound Chrome frame buffer overflowed — \(diagnostics)"
     }
 
+    
+    
     private static func handleInboundEnqueue(
         result: ChromeInboundMessagePump.EnqueueResult,
         messagePump: ChromeInboundMessagePump,

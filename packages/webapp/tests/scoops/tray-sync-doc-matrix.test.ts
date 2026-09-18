@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -9,8 +9,6 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const architectureMdPath = resolve(here, '../../../../docs/architecture.md');
-const repoRoot = resolve(here, '../../../..');
-const onNoComment = existsSync(resolve(repoRoot, '.no-comment'));
 
 function extractMatrix(md: string): string {
   const start = '<!-- tray-sync-matrix:start -->';
@@ -65,17 +63,15 @@ function parseMatrixVariants(table: string): {
   return { leaderToFollower, followerToLeader, l2fFollowers, f2lFollowers };
 }
 
-describe.skipIf(onNoComment)('tray sync doc matrix ↔ protocol unions', () => {
-  const loadDocVariants = () => {
-    const md = readFileSync(architectureMdPath, 'utf8');
-    return parseMatrixVariants(extractMatrix(md));
-  };
+describe('tray sync doc matrix ↔ protocol unions', () => {
+  const md = readFileSync(architectureMdPath, 'utf8');
+  const table = extractMatrix(md);
+  const docVariants = parseMatrixVariants(table);
 
   const corpusLeader = new Set(Object.keys(LEADER_TO_FOLLOWER_CORPUS));
   const corpusFollower = new Set(Object.keys(FOLLOWER_TO_LEADER_CORPUS));
 
   it('every Leader→Follower union variant has a doc row', () => {
-    const docVariants = loadDocVariants();
     const missing = [...corpusLeader].filter((v) => !docVariants.leaderToFollower.has(v));
     expect(
       missing,
@@ -86,7 +82,6 @@ describe.skipIf(onNoComment)('tray sync doc matrix ↔ protocol unions', () => {
   });
 
   it('every doc row names a real Leader→Follower variant', () => {
-    const docVariants = loadDocVariants();
     const extra = [...docVariants.leaderToFollower].filter((v) => !corpusLeader.has(v));
     expect(
       extra,
@@ -97,7 +92,6 @@ describe.skipIf(onNoComment)('tray sync doc matrix ↔ protocol unions', () => {
   });
 
   it('every Follower→Leader union variant has a doc row', () => {
-    const docVariants = loadDocVariants();
     const missing = [...corpusFollower].filter((v) => !docVariants.followerToLeader.has(v));
     expect(
       missing,
@@ -108,7 +102,6 @@ describe.skipIf(onNoComment)('tray sync doc matrix ↔ protocol unions', () => {
   });
 
   it('every doc row names a real Follower→Leader variant', () => {
-    const docVariants = loadDocVariants();
     const extra = [...docVariants.followerToLeader].filter((v) => !corpusFollower.has(v));
     expect(
       extra,
@@ -119,7 +112,6 @@ describe.skipIf(onNoComment)('tray sync doc matrix ↔ protocol unions', () => {
   });
 
   it('the Followers column agrees with the corpus about iOS support', () => {
-    const docVariants = loadDocVariants();
     const mismatches: string[] = [];
     const check = (
       direction: string,

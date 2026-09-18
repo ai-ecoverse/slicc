@@ -4,13 +4,22 @@ import { parseArgs } from '../../shell/arg-parser.js';
 import { formatDiffStatText, unifiedDiff } from '../diff.js';
 import { diffNoIndex } from './diff-no-index.js';
 import { matchesPathspec, pathspecCouldMatch, resolveRevision } from './revision.js';
-import { GIT_FLAG_SPECS, NO_INDEX_REFRESH } from './shared.js';
+import { GIT_FLAG_SPECS, NO_INDEX_REFRESH, rejectUnknownGitFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
-type FileChange = { filepath: string; oldContent: string; newContent: string };
+type FileChange = {
+  filepath: string;
+  oldContent: string;
+  newContent: string;
+
+  oldPresent?: boolean;
+
+  newPresent?: boolean;
+};
 
 interface DiffFormatOptions {
   nameOnly: boolean;
+  nameStatus?: boolean;
   stat: boolean;
   pathspecs?: string[];
 
@@ -38,15 +47,18 @@ export async function diff(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags, positionals, doubleDashRest } = parseArgs(
-    normalizeUnifiedFlag(args),
-    GIT_FLAG_SPECS.diff
-  );
+  const normalized = normalizeUnifiedFlag(args);
+  const unknown = rejectUnknownGitFlags(normalized, GIT_FLAG_SPECS.diff);
+  if (unknown) return unknown;
+
+  const { flags, positionals, doubleDashRest } = parseArgs(normalized, GIT_FLAG_SPECS.diff);
   const staged = flags.staged === true || flags.cached === true;
+  const extraPathspecs = positionals.length >= 2 ? positionals.slice(2) : [];
   const opts: DiffFormatOptions = {
     nameOnly: flags['name-only'] === true,
+    nameStatus: flags['name-status'] === true,
     stat: flags.stat === true,
-    pathspecs: doubleDashRest,
+    pathspecs: [...extraPathspecs, ...doubleDashRest],
     context: parseContext(flags.unified),
   };
 
@@ -58,6 +70,8 @@ export async function diff(
     return diffCommits(ctx, cwd, positionals[0], positionals[1], opts);
   }
   if (positionals.length === 1) {
+    const threeDot = splitThreeDotRange(positionals[0]);
+    if (threeDot) return diffThreeDot(ctx, cwd, threeDot[0], threeDot[1], opts);
     const range = splitTwoDotRange(positionals[0]);
     if (range) return diffCommits(ctx, cwd, range[0], range[1], opts);
     if (staged) return diffCommitIndex(ctx, cwd, positionals[0], opts);
@@ -67,32 +81,7 @@ export async function diff(
   const changes = staged
     ? await diffStagedChanges(ctx, cwd, opts.pathspecs)
     : await diffWorkdirChanges(ctx, cwd, opts.pathspecs);
-
-  if (changes.length === 0) {
-    return { stdout: '', stderr: '', exitCode: 0 };
-  }
-
-  if (opts.nameOnly) {
-    const output = changes.map((c) => c.filepath).join('\n') + '\n';
-    return { stdout: output, stderr: '', exitCode: 0 };
-  }
-
-  if (opts.stat) {
-    return formatDiffStat(changes);
-  }
-
-  let output = '';
-  for (const change of changes) {
-    output += unifiedDiff({
-      oldContent: change.oldContent,
-      newContent: change.newContent,
-      oldName: change.filepath,
-      newName: change.filepath,
-      context: opts.context,
-    });
-  }
-
-  return { stdout: output, stderr: '', exitCode: 0 };
+  return formatChanges(ctx, changes, opts);
 }
 
 async function diffStagedChanges(
@@ -125,7 +114,13 @@ async function diffStagedChanges(
       const oldText = await readBlobText(ctx, cwd, headOid);
       const newText = await readBlobText(ctx, cwd, stageOid);
 
-      changes.push({ filepath, oldContent: oldText, newContent: newText });
+      changes.push({
+        filepath,
+        oldContent: oldText,
+        newContent: newText,
+        oldPresent: Boolean(headOid),
+        newPresent: Boolean(stageOid),
+      });
       return undefined;
     },
   });
@@ -146,7 +141,7 @@ async function diffCommitIndex(
     return ambiguousRevision(ref);
   }
   const changes = await diffStagedChanges(ctx, cwd, opts.pathspecs, resolved);
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 async function diffWorkdirChanges(
@@ -184,7 +179,15 @@ async function diffWorkdirChanges(
 
       const oldContent = await readBlobText(ctx, cwd, stageOid);
       const newContent = workBytes ? new TextDecoder().decode(workBytes) : '';
-      if (oldContent !== newContent) changes.push({ filepath, oldContent, newContent });
+      if (oldContent !== newContent) {
+        changes.push({
+          filepath,
+          oldContent,
+          newContent,
+          oldPresent: Boolean(stageOid),
+          newPresent: Boolean(workBytes),
+        });
+      }
       return null;
     },
   });
@@ -234,6 +237,38 @@ export async function diffCommits(
   }
 }
 
+async function diffThreeDot(
+  ctx: GitCommandContext,
+  cwd: string,
+  ref1: string,
+  ref2: string,
+  opts: DiffFormatOptions
+): Promise<GitCommandResult> {
+  const left = ref1 || 'HEAD';
+  const right = ref2 || 'HEAD';
+  try {
+    const oidA = await resolveRevision(ctx, cwd, left);
+    const oidB = await resolveRevision(ctx, cwd, right);
+    const bases = await git.findMergeBase({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oids: [oidA, oidB],
+    });
+    if (!bases[0]) {
+      return {
+        stdout: '',
+        stderr: `fatal: '${left}...${right}' has no merge base\n`,
+        exitCode: 128,
+      };
+    }
+    return await diffResolvedTrees(ctx, cwd, bases[0], oidB, opts);
+  } catch {
+    const invalid = await firstInvalidRef(ctx, cwd, [left, right]);
+    return ambiguousRevision(invalid ?? left);
+  }
+}
+
 async function diffResolvedTrees(
   ctx: GitCommandContext,
   cwd: string,
@@ -257,7 +292,7 @@ async function diffResolvedTrees(
     },
   });
 
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 async function diffCommitWorkdir(
@@ -299,7 +334,7 @@ async function diffCommitWorkdir(
       return undefined;
     },
   });
-  return formatChanges(changes, opts);
+  return formatChanges(ctx, changes, opts);
 }
 
 function ancestorDirs(files: Iterable<string>): Set<string> {
@@ -343,15 +378,30 @@ async function compareWalkerEntries(
     filepath,
     oldContent: oldContent ? new TextDecoder().decode(oldContent) : '',
     newContent: newContent ? new TextDecoder().decode(newContent) : '',
+    oldPresent: Boolean(oldOid),
+    newPresent: Boolean(newOid),
   };
 }
 
-function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitCommandResult {
+function formatChanges(
+  ctx: GitCommandContext,
+  changes: FileChange[],
+  opts: DiffFormatOptions
+): GitCommandResult {
   if (changes.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
+  if (opts.nameStatus) {
+    const lines = changes.map((c) => {
+      const oldPresent = c.oldPresent ?? c.oldContent !== '';
+      const newPresent = c.newPresent ?? c.newContent !== '';
+      const status = !oldPresent ? 'A' : !newPresent ? 'D' : 'M';
+      return `${status}\t${c.filepath}`;
+    });
+    return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
+  }
   if (opts.nameOnly) {
     return { stdout: `${changes.map((c) => c.filepath).join('\n')}\n`, stderr: '', exitCode: 0 };
   }
-  if (opts.stat) return formatDiffStat(changes);
+  if (opts.stat) return formatDiffStat(changes, ctx.useColor);
   const stdout = changes
     .map((change) =>
       unifiedDiff({
@@ -360,6 +410,7 @@ function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitComma
         oldName: change.filepath,
         newName: change.filepath,
         context: opts.context,
+        color: ctx.useColor,
       })
     )
     .join('');
@@ -380,9 +431,16 @@ function parseContext(value: ArgFlagValue | undefined): number | undefined {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+function splitThreeDotRange(value: string): [string, string] | null {
+  const idx = value.indexOf('...');
+  if (idx === -1) return null;
+  return [value.slice(0, idx), value.slice(idx + 3)];
+}
+
 function splitTwoDotRange(value: string): [string, string] | null {
+  if (value.includes('...')) return null;
   const match = /^(.+)\.\.([^.]*)$/.exec(value);
-  return match?.[2] ? [match[1], match[2]] : null;
+  return match?.[1] !== undefined && match[2] !== undefined ? [match[1], match[2]] : null;
 }
 
 async function firstInvalidRef(
@@ -405,10 +463,12 @@ function ambiguousRevision(ref: string): GitCommandResult {
 }
 
 function formatDiffStat(
-  changes: { filepath: string; oldContent: string; newContent: string }[]
+  changes: { filepath: string; oldContent: string; newContent: string }[],
+  color = false
 ): GitCommandResult {
   const stdout = formatDiffStatText(
-    changes.map((c) => ({ name: c.filepath, oldContent: c.oldContent, newContent: c.newContent }))
+    changes.map((c) => ({ name: c.filepath, oldContent: c.oldContent, newContent: c.newContent })),
+    { color }
   );
   return { stdout, stderr: '', exitCode: 0 };
 }
@@ -446,7 +506,7 @@ export async function diffInitialCommit(
       oldContent: '',
       newContent: f.content,
     }));
-    return formatDiffStat(changes).stdout;
+    return formatDiffStat(changes, ctx.useColor).stdout;
   }
 
   let output = '';
@@ -456,6 +516,7 @@ export async function diffInitialCommit(
       newContent: file.content,
       oldName: file.filepath,
       newName: file.filepath,
+      color: ctx.useColor,
     });
   }
   return output;

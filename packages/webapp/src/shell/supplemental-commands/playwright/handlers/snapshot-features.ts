@@ -58,15 +58,23 @@ export async function hiresClip(
   clip: ScreenshotClip | undefined,
   fullPage: boolean
 ): Promise<ScreenshotClip> {
-  const dims = parsePageJson<{ dpr: number; w: number; h: number; sh: number }>(
+  const dims = parsePageJson<{
+    dpr: number;
+    w: number;
+    h: number;
+    sh: number;
+    x: number;
+    y: number;
+  }>(
     await page.evaluate(
-      `JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight, sh: document.documentElement.scrollHeight })`
+      `JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight, sh: document.documentElement.scrollHeight, x: window.scrollX, y: window.scrollY })`
     ),
     '--hires viewport dimensions'
   );
   const scale = dims.dpr || 1;
   if (clip) return { ...clip, scale };
-  return { x: 0, y: 0, width: dims.w, height: fullPage ? dims.sh : dims.h, scale };
+  if (fullPage) return { x: 0, y: 0, width: dims.w, height: dims.sh, scale };
+  return { x: dims.x ?? 0, y: dims.y ?? 0, width: dims.w, height: dims.h, scale };
 }
 
 const FIND_CONTEXT_LINES = 2;

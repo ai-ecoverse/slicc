@@ -1,20 +1,35 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
 public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
     public let requestId: String
-
+    
     public let kind: String
-
+    
+    
+    
     public let detail: String
-
+    
+    
     public let requester: String?
-
+    
     public let suggestedPattern: String?
-
+    
+    
+    public let reason: String?
+    
     public let scoopName: String?
-
+    
     public let expiresAt: Date
-
+    
     public let receivedAt: Date
 
     public var id: String { requestId }
@@ -25,6 +40,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         detail: String,
         requester: String? = nil,
         suggestedPattern: String?,
+        reason: String? = nil,
         scoopName: String?,
         expiresAt: Date,
         receivedAt: Date
@@ -34,16 +50,19 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         self.detail = detail
         self.requester = requester
         self.suggestedPattern = suggestedPattern
+        self.reason = reason
         self.scoopName = scoopName
         self.expiresAt = expiresAt
         self.receivedAt = receivedAt
     }
 
+    
     public var defaultPattern: String {
         let trimmed = suggestedPattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? detail : trimmed
     }
 
+    
     public var heading: String {
         switch kind {
         case "command": return "Run command?"
@@ -55,6 +74,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         }
     }
 
+    
     public var detailLabel: String {
         switch kind {
         case "command": return "Command"
@@ -65,6 +85,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         }
     }
 
+    
     public var displayDetail: String {
         guard kind == "export" else { return detail }
         if detail == "active" { return "Active session" }
@@ -75,12 +96,14 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
     }
 }
 
+
 public enum SudoApprovalDecision: Equatable, Sendable {
     case allowOnce
-
+    
     case always(pattern: String)
     case deny
 }
+
 
 public enum SudoAttestation: String, Sendable {
     case biometric
@@ -88,17 +111,20 @@ public enum SudoAttestation: String, Sendable {
     case none
 }
 
+
 public enum SudoAuthOutcome: Equatable, Sendable {
     case authenticated(SudoAttestation)
-
+    
     case refused
 }
 
+
 public typealias SudoAuthenticator = @Sendable (String) async -> SudoAuthOutcome
+
 
 @MainActor
 public final class SudoApprovalController {
-
+    
     enum WireDecision: String {
         case allow, always, deny
     }
@@ -116,6 +142,13 @@ public final class SudoApprovalController {
         didSet { onPendingChanged(pending) }
     }
 
+    
+    
+    
+    
+    
+    
+    
     public init(
         send: @escaping (FollowerToLeaderMessage) -> Bool,
         authenticate: @escaping SudoAuthenticator,
@@ -132,12 +165,15 @@ public final class SudoApprovalController {
         self.onWithdrawn = onWithdrawn
     }
 
+    
+    
     public func handle(
         requestId: String,
         kind: String,
         detail: String,
         requester: String? = nil,
         suggestedPattern: String?,
+        reason: String? = nil,
         scoopName: String?,
         expiresAt: Date
     ) {
@@ -150,6 +186,7 @@ public final class SudoApprovalController {
             detail: detail,
             requester: requester,
             suggestedPattern: suggestedPattern,
+            reason: reason,
             scoopName: scoopName,
             expiresAt: expiresAt,
             receivedAt: current)
@@ -163,11 +200,14 @@ public final class SudoApprovalController {
         }
     }
 
+    
     public func cancel(requestId: String) {
         guard remove(requestId: requestId) != nil else { return }
         onWithdrawn(requestId)
     }
 
+    
+    
     public func transportLost() {
         for request in pending {
             onWithdrawn(request.requestId)
@@ -178,6 +218,8 @@ public final class SudoApprovalController {
         pending.removeAll()
     }
 
+    
+    
     public func resolve(requestId: String, decision: SudoApprovalDecision) async {
         guard let request = pending.first(where: { $0.requestId == requestId }),
             !inFlight.contains(requestId)
@@ -210,6 +252,7 @@ public final class SudoApprovalController {
         }
     }
 
+    
     public func denyFromNotification(requestId: String) {
         guard pending.contains(where: { $0.requestId == requestId }) else { return }
         reply(requestId: requestId, decision: .deny, pattern: nil, attestation: nil)

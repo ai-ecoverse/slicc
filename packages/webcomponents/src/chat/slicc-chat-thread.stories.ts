@@ -77,7 +77,7 @@ function editFileRow(): HTMLElement {
   const label = h(
     'span',
     null,
-    'edit_file · ',
+    'edit · ',
     h('a', { class: 'vlink', 'data-file': 'hero', 'data-kind': 'css' }, 'hero.css')
   );
   row.appendChild(label);

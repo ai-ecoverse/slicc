@@ -4,6 +4,12 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
+
 final class ReleaseFetchPaginationTests: XCTestCase {
 
     private func releaseJSON(tag: String, assetName: String?) -> String {
@@ -12,7 +18,7 @@ final class ReleaseFetchPaginationTests: XCTestCase {
             assets = """
                 [{
                   "name": "\(assetName)",
-                  "browser_download_url": "https://example.com/\(assetName)",
+                  "browser_download_url": "https:
                   "content_type": "application/zip"
                 }]
                 """
@@ -31,6 +37,8 @@ final class ReleaseFetchPaginationTests: XCTestCase {
             """
     }
 
+    /// Records requests and replays canned pages keyed by the `page` query
+    /// item, advertising the next page through a GitHub-shaped `Link` header.
     private final class PageStub: @unchecked Sendable {
         private(set) var requestedURLs: [URL] = []
         private(set) var authHeaders: [String?] = []
@@ -74,6 +82,8 @@ final class ReleaseFetchPaginationTests: XCTestCase {
         }
     }
 
+    
+    
     private func provider(
         _ stub: PageStub,
         authToken: String? = nil,
@@ -125,7 +135,8 @@ final class ReleaseFetchPaginationTests: XCTestCase {
     }
 
     func testStopsAtThePageHoldingTheRunningRelease() async throws {
-
+        
+        
         let stub = PageStub(pages: [
             "[\(releaseJSON(tag: "v5.81.1", assetName: nil))]",
             "[\(releaseJSON(tag: "v5.33.0", assetName: nil)),\(releaseJSON(tag: "v5.32.10", assetName: nil))]",
@@ -139,7 +150,10 @@ final class ReleaseFetchPaginationTests: XCTestCase {
     }
 
     func testABackportOnAnEarlierPageDoesNotEndTheWalk() async throws {
-
+        
+        
+        
+        
         let stub = PageStub(pages: [
             "[\(releaseJSON(tag: "v5.81.1", assetName: nil)),\(releaseJSON(tag: "v5.32.9", assetName: nil))]",
             "[\(releaseJSON(tag: "v5.80.0", assetName: nil))]",
@@ -153,7 +167,8 @@ final class ReleaseFetchPaginationTests: XCTestCase {
     }
 
     func testAnUnparsableTagDoesNotEndTheWalk() async throws {
-
+        
+        
         let stub = PageStub(pages: [
             "[\(releaseJSON(tag: "nightly", assetName: nil)),\(releaseJSON(tag: "v5.81.1", assetName: nil))]",
             "[\(releaseJSON(tag: "v5.74.0", assetName: "Sliccstart-5.74.0.zip"))]",
@@ -166,7 +181,9 @@ final class ReleaseFetchPaginationTests: XCTestCase {
     }
 
     func testStopsOncePastTheRunningVersionEvenIfItsReleaseIsGone() async throws {
-
+        
+        
+        
         let stub = PageStub(pages: [
             "[\(releaseJSON(tag: "v5.81.1", assetName: nil))]",
             "[\(releaseJSON(tag: "v5.32.9", assetName: nil)),\(releaseJSON(tag: "v5.32.8", assetName: nil))]",
@@ -200,10 +217,14 @@ final class ReleaseFetchPaginationTests: XCTestCase {
         let releases = try await provider(stub, currentVersion: Version(5, 81, 1))
             .fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
 
+        
+        
         XCTAssertEqual(releases.map(\.tagName), [Version(5, 81, 1)])
         XCTAssertEqual(stub.requestedURLs.count, 1)
     }
 
+    
+    
     func testStopsAtThePageBudgetWhenNothingIsViable() async throws {
         let pages = (0..<(TolerantGithubReleaseProvider.maxReleasePages + 3)).map { index in
             "[\(releaseJSON(tag: "v5.\(index).0", assetName: nil))]"
@@ -224,6 +245,8 @@ final class ReleaseFetchPaginationTests: XCTestCase {
             XCTAssertEqual((error as? URLError)?.code, .badServerResponse)
         }
     }
+
+    
 
     func testNextPageURLParsesGithubStyleHeader() {
         let header =

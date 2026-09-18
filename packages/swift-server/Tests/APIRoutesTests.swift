@@ -11,6 +11,9 @@ import XCTest
 
 @testable import slicc_server
 
+
+
+
 private func referenceHmacSHA256Hex(key: String, message: String) -> String {
     let keyData = Array(key.utf8)
     let messageData = Array(message.utf8)
@@ -56,7 +59,8 @@ final class APIRoutesTests: XCTestCase {
                     XCTAssertEqual(response.headers[HTTPField.Name("Cache-Control")!], "no-store")
                     let body = try self.decodeJSONObject(from: response.body)
                     XCTAssertEqual(body["status"], .string("ok"))
-
+                    
+                    
                     XCTAssertEqual(body["service"], .string("slicc-server"))
                     if case .string(let timestamp)? = body["timestamp"] {
                         XCTAssertFalse(timestamp.isEmpty)
@@ -221,7 +225,14 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testAuthCallbackAlwaysPostsResultRegardlessOfOpener() async throws {
-
+        
+        
+        
+        
+        
+        
+        
+        
         try await self.withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
@@ -235,7 +246,14 @@ final class APIRoutesTests: XCTestCase {
                         XCTFail("callback script has no /api/oauth-result POST")
                         return
                     }
-
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
                     func skipBraceBlock(from openBrace: String.Index) -> String.Index? {
                         var depth = 1
                         var idx = html.index(after: openBrace)
@@ -274,7 +292,13 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testAuthCallbackDefersCloseUntilResultPosted() async throws {
-
+        
+        
+        
+        
+        
+        
+        
         try await self.withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
@@ -302,7 +326,10 @@ final class APIRoutesTests: XCTestCase {
                         XCTFail("callback script missing fetch or window.close()")
                         return
                     }
-
+                    
+                    
+                    
+                    
                     XCTAssertTrue(
                         closeRange.lowerBound < fetchRange.lowerBound,
                         "window.close() must live in the pre-fetch closeWindow helper, not fire synchronously after the POST"
@@ -313,7 +340,10 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testFetchProxyMissingTargetURLIsTaggedAsProxyError() async throws {
-
+        
+        
+        
+        
         try await self.withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(
@@ -338,7 +368,9 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testFetchProxyUpstreamFailureIsTaggedAsProxyError() async throws {
-
+        
+        
+        
         try await self.withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(
@@ -362,12 +394,20 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    
+    
+    
+    
     func testFetchProxyForwardsJpegRequestBytesUnchanged() async throws {
         let probe: [UInt8] = [0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]
         try await self.runBinaryBodyRoundTrip(contentType: "image/jpeg", probe: probe)
         try await self.runBinaryBodyRoundTrip(contentType: nil, probe: probe)
     }
 
+    
+    
+    
+    
     func testFetchProxyStripsRawBodyAndBridgeTokenHeaders() async throws {
         let captured = InternalHeaderCaptureBox()
         let upstreamRouter = Router()
@@ -421,6 +461,17 @@ final class APIRoutesTests: XCTestCase {
         XCTAssertFalse(snapshot.bridgeTokenPresent, "x-bridge-token must never reach upstream")
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
     func testFetchProxyForwardsPropfindWithBodyAndDavHeaders() async throws {
         try await self.runDavRoundTripTest(
             method: "PROPFIND",
@@ -449,7 +500,11 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testFetchProxyForwardsMkcalendarWithoutBody() async throws {
-
+        
+        
+        
+        
+        
         try await self.runDavRoundTripTest(
             method: "MKCALENDAR",
             davHeaderName: nil,
@@ -459,7 +514,10 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testFetchProxyForwardsLockWithBodyAndTimeoutHeader() async throws {
-
+        
+        
+        
+        
         try await self.runDavRoundTripTest(
             method: "LOCK",
             davHeaderName: "Timeout",
@@ -475,8 +533,17 @@ final class APIRoutesTests: XCTestCase {
         )
     }
 
+    
+    
+    
+    
+    
+    
     func testFetchProxyStripsUpstreamAccessControlHeaders() async throws {
-
+        
+        
+        
+        
         let upstreamRouter = Router()
         upstreamRouter.get("/upstream") { _, _ in
             Response(
@@ -493,6 +560,8 @@ final class APIRoutesTests: XCTestCase {
         }
         let upstreamApp = Application(responder: upstreamRouter.buildResponder())
 
+        
+        
         let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
 
@@ -530,7 +599,8 @@ final class APIRoutesTests: XCTestCase {
                             response.headers[HTTPField.Name("Access-Control-Max-Age")!],
                             "proxy must not forward upstream Access-Control-Max-Age"
                         )
-
+                        
+                        
                         let expose = response.headers[HTTPField.Name("Access-Control-Expose-Headers")!] ?? ""
                         XCTAssertFalse(
                             expose.lowercased() == "x-evil",
@@ -557,6 +627,11 @@ final class APIRoutesTests: XCTestCase {
         try await eventLoopGroup.shutdownGracefully()
     }
 
+    
+    
+    
+    
+    
     func testFetchProxySignsRequestBodyViaHmacSentinelAndStripsSentinel() async throws {
         let hmacSecret = "job-signing-secret-abcdefghijklmnop"
         let injector = SecretInjector(secrets: [
@@ -626,6 +701,8 @@ final class APIRoutesTests: XCTestCase {
         XCTAssertFalse(snapshot.sentinelStillPresent, "x-slicc-hmac-sign must never reach upstream")
     }
 
+    
+    
     func testFetchProxySignHmacReturns403ForOutOfScopeDomain() async throws {
         let injector = SecretInjector(secrets: [
             .init(name: "SIGNING_KEY", realValue: "job-signing-secret-value", maskedValue: "masked-signing-key", domains: ["api.github.com"])
@@ -657,6 +734,24 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private func runBinaryBodyRoundTrip(contentType: String?, probe: [UInt8]) async throws {
         let captured = BinaryCaptureBox()
         let upstreamRouter = Router()
@@ -723,6 +818,7 @@ final class APIRoutesTests: XCTestCase {
         }()
         let captured = CapturedRequestBox()
 
+        
         let upstreamRouter = Router()
         upstreamRouter.on("/upstream", method: httpMethod) { request, _ in
             let body = try await request.body.collect(upTo: 1 * 1024 * 1024)
@@ -739,6 +835,11 @@ final class APIRoutesTests: XCTestCase {
         }
         let upstreamApp = Application(responder: upstreamRouter.buildResponder())
 
+        
+        
+        
+        
+        
         let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
 
@@ -823,7 +924,7 @@ final class APIRoutesTests: XCTestCase {
                     uri: "/api/oauth-result",
                     method: .post,
                     headers: [.contentType: "application/json"],
-                    body: ByteBuffer(string: #"{"redirectUrl":"https://callback.example","error":"denied"}"#)
+                    body: ByteBuffer(string: #"{"redirectUrl":"https:
                 ) { response in
                     XCTAssertEqual(response.status, .ok)
                 }
@@ -881,7 +982,7 @@ final class APIRoutesCoverageTests: XCTestCase {
                     uri: "/api/webhooks",
                     method: .post,
                     headers: [.contentType: "application/json"],
-                    body: ByteBuffer(string: #"{"url":"https://example.test/hook"}"#)
+                    body: ByteBuffer(string: #"{"url":"https:
                 ) { response in
                     XCTAssertEqual(response.status, .ok)
                 }
@@ -1357,6 +1458,8 @@ extension APIRoutesTests {
     }
 }
 
+
+
 private actor BinaryCaptureBox {
     private var bytes: [UInt8] = []
 
@@ -1368,6 +1471,10 @@ private actor BinaryCaptureBox {
         self.bytes
     }
 }
+
+
+
+
 
 private actor CapturedRequestBox {
     struct Snapshot {
@@ -1391,6 +1498,8 @@ private actor CapturedRequestBox {
     }
 }
 
+
+
 private actor HeaderCaptureBox {
     struct Snapshot {
         let body: String?
@@ -1412,6 +1521,8 @@ private actor HeaderCaptureBox {
         .init(body: self.body, jobSignature: self.jobSignature, sentinelStillPresent: self.sentinelStillPresent)
     }
 }
+
+
 
 private actor InternalHeaderCaptureBox {
     struct Snapshot {

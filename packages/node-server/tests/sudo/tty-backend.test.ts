@@ -1,6 +1,6 @@
 import type { Interface as ReadlineInterface } from 'readline';
 import { describe, expect, it, vi } from 'vitest';
-import { createTtyBackend } from '../../src/sudo/tty-backend.js';
+import { createTtyBackend, defaultRl } from '../../src/sudo/tty-backend.js';
 import type { SudoApproveRequest } from '../../src/sudo/types.js';
 
 const REQ: SudoApproveRequest = {
@@ -26,6 +26,12 @@ function makeBackend(answers: string[]) {
 }
 
 describe('tty backend', () => {
+  it('constructs the default readline interface', () => {
+    const rl = defaultRl();
+    expect(rl.question).toBeTypeOf('function');
+    rl.close();
+  });
+
   it('allows on "a"', async () => {
     const { backend } = makeBackend(['a']);
     expect(await backend.prompt(REQ)).toEqual({ decision: 'allow' });
@@ -55,5 +61,20 @@ describe('tty backend', () => {
     const { backend, rl } = makeBackend(['d']);
     await backend.prompt(REQ);
     expect(rl.close).toHaveBeenCalled();
+  });
+
+  it('denies when readline throws', async () => {
+    const rl = {
+      question: vi.fn(() => {
+        throw new Error('input closed');
+      }) as unknown as ReadlineInterface['question'],
+      close: vi.fn(),
+    };
+    const backend = createTtyBackend({
+      output: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      createRl: () => rl,
+    });
+    expect(await backend.prompt(REQ)).toEqual({ decision: 'deny' });
+    expect(rl.close).toHaveBeenCalledOnce();
   });
 });

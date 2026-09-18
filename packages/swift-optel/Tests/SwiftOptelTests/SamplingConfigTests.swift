@@ -24,7 +24,8 @@ final class SamplingConfigTests: XCTestCase {
     }
 
     func testNumericStringFallsBackToDefault() {
-
+        
+        
         XCTAssertEqual(SamplingConfig(rate: "0").weight, 100)
         XCTAssertEqual(SamplingConfig(rate: "1").weight, 100)
         XCTAssertEqual(SamplingConfig(rate: "42").weight, 100)

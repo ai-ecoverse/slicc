@@ -1,6 +1,8 @@
 import Foundation
 import WebRTC
 
+
+
 public protocol WebRTCManagerDelegate: AnyObject {
     func webRTCManager(_ manager: WebRTCManager, didOpenDataChannel channel: RTCDataChannel)
     func webRTCManager(_ manager: WebRTCManager, didReceiveMessage data: Data)
@@ -8,6 +10,8 @@ public protocol WebRTCManagerDelegate: AnyObject {
     func webRTCManager(_ manager: WebRTCManager, didGenerateLocalCandidate candidate: RTCIceCandidate)
     func webRTCManagerDidDisconnect(_ manager: WebRTCManager, reason: String)
 }
+
+
 
 public class WebRTCManager: NSObject {
     public weak var delegate: WebRTCManagerDelegate?
@@ -17,10 +21,13 @@ public class WebRTCManager: NSObject {
     private var dataChannelOpenAnnounced: Bool = false
     private let factory: RTCPeerConnectionFactory
 
+    
     public var isConnected: Bool {
         dataChannel?.readyState == .open
     }
 
+    
+    
     public var bufferedAmount: UInt64 {
         dataChannel?.bufferedAmount ?? 0
     }
@@ -36,8 +43,11 @@ public class WebRTCManager: NSObject {
         super.init()
     }
 
-    public func configure(iceServers: [TurnIceServer]) {
+    
 
+    
+    public func configure(iceServers: [TurnIceServer]) {
+        
         close()
 
         let rtcIceServers = iceServers.map { server in
@@ -65,6 +75,10 @@ public class WebRTCManager: NSObject {
         )
     }
 
+    
+
+    
+    
     public func handleOffer(sdp: String) async throws -> (type: String, sdp: String) {
         guard let pc = peerConnection else {
             throw WebRTCError.notConfigured
@@ -83,6 +97,9 @@ public class WebRTCManager: NSObject {
         return (type: "answer", sdp: answer.sdp)
     }
 
+    
+
+    
     public func addIceCandidate(
         candidate: String, sdpMid: String?, sdpMLineIndex: Int32?
     ) async throws {
@@ -98,6 +115,9 @@ public class WebRTCManager: NSObject {
         try await pc.add(iceCandidate)
     }
 
+    
+
+    
     @discardableResult
     public func sendData(_ data: Data) -> Bool {
         guard let channel = dataChannel, channel.readyState == .open else {
@@ -107,6 +127,7 @@ public class WebRTCManager: NSObject {
         return channel.sendData(buffer)
     }
 
+    
     @discardableResult
     public func sendString(_ message: String) -> Bool {
         guard let data = message.data(using: .utf8) else {
@@ -119,6 +140,9 @@ public class WebRTCManager: NSObject {
         return channel.sendData(buffer)
     }
 
+    
+
+    
     public func close() {
         dataChannel?.close()
         dataChannel = nil
@@ -127,6 +151,12 @@ public class WebRTCManager: NSObject {
         peerConnection = nil
     }
 
+    
+    
+    
+    
+    
+    
     private func announceDataChannelOpenIfNeeded(_ channel: RTCDataChannel) {
         guard !dataChannelOpenAnnounced else { return }
         dataChannelOpenAnnounced = true
@@ -139,6 +169,8 @@ public class WebRTCManager: NSObject {
     }
 }
 
+
+
 enum WebRTCError: LocalizedError {
     case notConfigured
 
@@ -150,21 +182,23 @@ enum WebRTCError: LocalizedError {
     }
 }
 
+
+
 extension WebRTCManager: RTCPeerConnectionDelegate {
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
-
+        
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-
+        
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
-
+        
     }
 
     public func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
-
+        
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
@@ -181,7 +215,7 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
-
+        
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
@@ -189,20 +223,22 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
-
+        
     }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
-
+        
         self.dataChannel = dataChannel
         dataChannelOpenAnnounced = false
         dataChannel.delegate = self
         if dataChannel.readyState == .open {
             announceDataChannelOpenIfNeeded(dataChannel)
         }
-
+        
     }
 }
+
+
 
 extension WebRTCManager: RTCDataChannelDelegate {
     public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {

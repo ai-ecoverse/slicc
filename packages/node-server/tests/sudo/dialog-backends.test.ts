@@ -30,6 +30,22 @@ describe('describeRequest', () => {
   it('formats kind + detail', () => {
     expect(describeRequest(REQ)).toBe('command: git push origin main');
   });
+
+  it('appends the stated reason below the subject', () => {
+    expect(describeRequest({ ...REQ, reason: 'the release tag is cut' })).toBe(
+      'command: git push origin main\n\nReason given: the release tag is cut'
+    );
+  });
+
+  it('keeps requester above the subject and the reason below it', () => {
+    expect(describeRequest({ ...REQ, requester: 'guest-42', reason: 'trust me' })).toBe(
+      'command from guest-42: git push origin main\n\nReason given: trust me'
+    );
+  });
+
+  it('adds nothing for a blank reason', () => {
+    expect(describeRequest({ ...REQ, reason: '   ' })).toBe('command: git push origin main');
+  });
 });
 
 describe('osascript backend', () => {
@@ -125,6 +141,17 @@ describe('kdialog backend', () => {
     expect(await createKdialogBackend(exec).prompt(REQ)).toEqual({
       decision: 'always',
       pattern: 'edited*',
+    });
+  });
+
+  it('falls back to the suggested pattern when the entry dialog fails', async () => {
+    const exec = vi
+      .fn<ExecFn>()
+      .mockRejectedValueOnce({ code: 2 })
+      .mockRejectedValueOnce(new Error('entry closed'));
+    expect(await createKdialogBackend(exec).prompt(REQ)).toEqual({
+      decision: 'always',
+      pattern: 'git push*',
     });
   });
 });

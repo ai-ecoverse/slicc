@@ -68,13 +68,11 @@ describe('SessionPersistence with a canonical record', () => {
     return { persistence, legacy, messages };
   }
 
-  it('writes BOTH stores on one persist', async () => {
-    const { persistence, legacy, messages } = build();
+  it('writes only the canonical record', async () => {
+    const { persistence, legacy } = build();
     persistence.persistNow();
-    await vi.waitFor(async () => {
-      expect(legacy.saved.get('cone_1')?.messages).toEqual(messages);
-      expect(await canonicalStore.load(identity.key)).not.toBeNull();
-    });
+    await vi.waitFor(async () => expect(await canonicalStore.load(identity.key)).not.toBeNull());
+    expect(legacy.store.save).not.toHaveBeenCalled();
   });
 
   it('restores from the canonical record when there is one', async () => {
@@ -88,18 +86,16 @@ describe('SessionPersistence with a canonical record', () => {
     expect(legacy.store.load).not.toHaveBeenCalled();
   });
 
-  it('falls back to the legacy store when no canonical record exists', async () => {
+  it('restores nothing when there is no canonical record, whatever the legacy store holds', async () => {
     const { persistence, legacy, messages } = build();
     legacy.saved.set('cone_1', { messages, createdAt: 5 });
 
-    expect(await persistence.restore()).toEqual(messages);
-    expect(legacy.store.load).toHaveBeenCalledWith('cone_1');
+    expect(await persistence.restore()).toEqual([]);
+    expect(legacy.store.load).not.toHaveBeenCalled();
   });
 
-  it('falls back when the canonical record derives to no Pi history', async () => {
-    const { persistence, legacy, messages } = build();
-    legacy.saved.set('cone_1', { messages, createdAt: 5 });
-
+  it('restores no Pi history from a ui-projection record', async () => {
+    const { persistence, legacy } = build();
     await canonicalStore.save({
       ...identity,
       version: CONVERSATION_RECORD_VERSION,
@@ -109,27 +105,52 @@ describe('SessionPersistence with a canonical record', () => {
       updatedAt: 1,
     });
 
-    expect(await persistence.restore()).toEqual(messages);
-    expect(legacy.store.load).toHaveBeenCalledWith('cone_1');
+    expect(await persistence.restore()).toEqual([]);
+    expect(legacy.store.load).not.toHaveBeenCalled();
   });
 
-  it('falls back when the canonical store cannot be read at all', async () => {
-    const { persistence, legacy, messages } = build();
-    legacy.saved.set('cone_1', { messages, createdAt: 5 });
+  it('starts fresh and reports it when the canonical store cannot be read at all', async () => {
+    const onRestoreError = vi.fn();
+    const { legacy } = build();
+    const persistence = new SessionPersistence({
+      store: legacy.store,
+      sessionId: 'cone_1',
+      folder: 'cone',
+      getMessages: () => undefined,
+      isDisposed: () => false,
+      onRestoreError,
+      canonical: { store: canonicalStore, identity },
+    });
     vi.spyOn(canonicalStore, 'load').mockRejectedValue(new Error('IndexedDB unavailable'));
 
-    expect(await persistence.restore()).toEqual(messages);
-    expect(legacy.store.load).toHaveBeenCalledWith('cone_1');
+    expect(await persistence.restore()).toEqual([]);
+    expect(onRestoreError).toHaveBeenCalledTimes(1);
+    expect(legacy.store.load).not.toHaveBeenCalled();
   });
 
-  it('behaves exactly as before when no canonical store is wired', async () => {
-    const { persistence, legacy, messages } = build({ canonical: false });
+  it('persists and restores nothing when no canonical store is wired', async () => {
+    const { persistence, legacy } = build({ canonical: false });
     persistence.persistNow();
-    await vi.waitFor(() => expect(legacy.saved.get('cone_1')?.messages).toEqual(messages));
+    persistence.schedule();
+    expect(await persistence.restore()).toEqual([]);
+    expect(legacy.store.save).not.toHaveBeenCalled();
     expect(await canonicalStore.listKeys()).toEqual([]);
   });
 
-  it('clear() forgets BOTH representations, so "New chat" stays cleared', async () => {
+  it('keeps the first createdAt across persists', async () => {
+    const { persistence } = build();
+    persistence.persistNow();
+    await vi.waitFor(async () => expect(await canonicalStore.load(identity.key)).not.toBeNull());
+    const first = (await canonicalStore.load(identity.key))?.createdAt;
+    const sync = vi.spyOn(canonicalStore, 'syncAgentMessages');
+
+    persistence.persistNow();
+
+    await vi.waitFor(() => expect(sync).toHaveBeenCalled());
+    expect(sync.mock.calls[0][2]).toEqual({ createdAt: first });
+  });
+
+  it('clear() forgets the record AND the frozen legacy row, so "New chat" stays cleared', async () => {
     const { persistence, legacy } = build();
     persistence.persistNow();
     await vi.waitFor(async () => expect(await canonicalStore.load(identity.key)).not.toBeNull());
@@ -154,12 +175,15 @@ describe('SessionPersistence with a canonical record', () => {
     expect(await canonicalStore.load(identity.key)).toBeNull();
   });
 
-  it('a canonical write failure never costs the legacy write', async () => {
-    const { persistence, legacy, messages } = build();
-    vi.spyOn(canonicalStore, 'syncAgentMessages').mockRejectedValue(new Error('quota exceeded'));
+  it('a canonical write failure is logged, never thrown, and never touches the legacy store', async () => {
+    const { persistence, legacy } = build();
+    const sync = vi
+      .spyOn(canonicalStore, 'syncAgentMessages')
+      .mockRejectedValue(new Error('quota exceeded'));
 
-    persistence.persistNow();
+    expect(() => persistence.persistNow()).not.toThrow();
 
-    await vi.waitFor(() => expect(legacy.saved.get('cone_1')?.messages).toEqual(messages));
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(1));
+    expect(legacy.store.save).not.toHaveBeenCalled();
   });
 });

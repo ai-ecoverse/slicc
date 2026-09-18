@@ -1,10 +1,12 @@
-import type { WorkerEnv } from './index.js';
+interface WebhookHomeStub {
+  fetch(request: Request): Promise<Response>;
+}
 
 export async function handleWebhookRevoke(
   request: Request,
-  env: WorkerEnv,
   coneId: string,
-  encodedWebhookId: string
+  encodedWebhookId: string,
+  getWebhookHome: (coneId: string) => WebhookHomeStub
 ): Promise<Response> {
   const reply = (status: number, body: object) =>
     Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
@@ -29,7 +31,7 @@ export async function handleWebhookRevoke(
     return reply(400, { error: 'Invalid revocation request', code: 'INVALID_BODY' });
   }
   try {
-    const home = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(coneId));
+    const home = getWebhookHome(coneId);
     const signal = AbortSignal.timeout(15_000);
     const response = await Promise.race([
       home.fetch(

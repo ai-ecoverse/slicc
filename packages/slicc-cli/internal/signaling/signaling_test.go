@@ -28,6 +28,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+
 func newMock(t *testing.T, handler func(action string, body map[string]any) any) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +99,8 @@ func TestAttachWaitAndSupersede(t *testing.T) {
 	}
 }
 
+
+
 func TestAttachReadsSupersede308WithoutFollowingIt(t *testing.T) {
 	fresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("net/http followed the 308; the hop must be reported to the caller")
@@ -131,6 +134,7 @@ func TestAttachReadsSupersede308WithoutFollowingIt(t *testing.T) {
 	}
 }
 
+
 func TestAttachFallsBackToLocationHeader(t *testing.T) {
 	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "https://hub.example/join/new?json=true")
@@ -142,7 +146,7 @@ func TestAttachFallsBackToLocationHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-
+	
 	if plan.JoinURL != "https://hub.example/join/new" {
 		t.Fatalf("joinURL = %q", plan.JoinURL)
 	}
@@ -172,6 +176,8 @@ func TestRedirectLocation(t *testing.T) {
 		})
 	}
 }
+
+
 
 func TestNewDoesNotMutateCallerClient(t *testing.T) {
 	caller := &http.Client{}
@@ -216,6 +222,7 @@ func TestPollDecodesEvents(t *testing.T) {
 		t.Fatalf("ice event = %+v", poll.Events[1])
 	}
 
+	
 	if _, err := client.SendAnswer(ctx, "ctrl", "b1", "v=0"); err != nil {
 		t.Fatalf("answer: %v", err)
 	}

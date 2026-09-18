@@ -293,9 +293,12 @@ async function resolveInvocation(args: string[], ctx: CommandContext): Promise<N
   };
 }
 
-export function createNodeCommand(options: NodeCommandOptions = {}): Command {
+export function createNodeCommand(
+  options: NodeCommandOptions = {},
+  name: 'node' | 'jsh' = 'node'
+): Command {
   return {
-    name: 'node',
+    name,
 
     trusted: true,
     async execute(args: string[], ctx: CommandContext) {

@@ -3,6 +3,8 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
 final class AgentEventTests: XCTestCase {
 
     private func roundTrip(_ event: AgentEvent) throws -> AgentEvent {
@@ -82,7 +84,8 @@ final class AgentEventTests: XCTestCase {
             return
         }
         XCTAssertNil(input)
-
+        
+        
         XCTAssertNil(toolCallId)
     }
 
@@ -145,7 +148,8 @@ final class AgentEventTests: XCTestCase {
             XCTFail("expected toolProgress")
             return
         }
-
+        
+        
         XCTAssertNil(progress.fraction)
         XCTAssertNil(progress.etaMs)
         XCTAssertNil(progress.unit)
@@ -153,6 +157,8 @@ final class AgentEventTests: XCTestCase {
         XCTAssertEqual(progress.phase, .start)
     }
 
+    
+    
     func testUnknownToolProgressPhaseDecodesAsUpdate() throws {
         let json = #"""
             {"type":"tool_progress","messageId":"m1","toolName":"bash",
@@ -234,7 +240,7 @@ final class AgentEventTests: XCTestCase {
     }
 
     func testUnknownEncodesBareType() throws {
-
+        
         XCTAssertEqual(try WireCodec.discriminator(AgentEvent.unknown(type: "future_event")), "future_event")
     }
 

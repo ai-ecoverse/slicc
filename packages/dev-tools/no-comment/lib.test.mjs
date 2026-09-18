@@ -140,5 +140,15 @@ describe('lint wiring', () => {
     expect(yml).toContain('branches: [main]');
     expect(yml).toContain('refs/heads/no-comment');
     expect(yml).toContain('packages/dev-tools/no-comment/strip.mjs');
+    expect(yml).toMatch(/npx biome format --write \./);
+    expect(yml).not.toMatch(/npx biome check --write \./);
+
+    expect(yml).toMatch(/HUSKY:\s*['"]0['"]/);
+  });
+
+  it('pre-push gates only feature branches (not main or no-comment)', () => {
+    const prePush = readFileSync(join(repoRoot, '.husky/pre-push'), 'utf8');
+    expect(prePush).toContain('DERIVED_BRANCH="no-comment"');
+    expect(prePush).toMatch(/refs\/heads\/\$DEFAULT_BRANCH"\s*\|\s*"refs\/heads\/\$DERIVED_BRANCH/);
   });
 });

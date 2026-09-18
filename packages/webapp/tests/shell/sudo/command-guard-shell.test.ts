@@ -9,6 +9,7 @@ import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
 const POLICY = parseSudoers('Cmnd  touch /workspace/gated*');
 const GIT_POLICY = parseSudoers('Cmnd  git push*');
 const RM_POLICY = parseSudoers('Cmnd  rm -rf *');
+const NODE_POLICY = parseSudoers('Cmnd  node *');
 
 function brokerReturning(decision: SudoDecision): SudoBroker {
   return { requestApproval: vi.fn(async () => decision) };
@@ -25,6 +26,56 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
   function makeShell(sudo: ShellSudoConfig): AlmostBashShellHeadless {
     return new AlmostBashShellHeadless({ fs, sudo });
   }
+
+  it('carries a leading comment into the approval prompt', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand(
+      '# drop the stale fixture before regenerating\ntouch /workspace/gated.txt'
+    );
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'touch /workspace/gated.txt',
+      reason: 'drop the stale fixture before regenerating',
+    });
+  });
+
+  it('does not attach a reason when the script has no leading comment', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand('touch /workspace/gated.txt # explained too late');
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'touch /workspace/gated.txt',
+    });
+  });
+
+  it("does not leak one run's reason into the next run on the same shell", async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand('# first run explains itself\ntouch /workspace/gated.txt');
+    await shell.executeCommand('touch /workspace/gated.txt');
+
+    expect(broker.requestApproval).toHaveBeenLastCalledWith({
+      kind: 'command',
+      detail: 'touch /workspace/gated.txt',
+    });
+  });
+
+  it("surfaces the approver's note in the stderr the agent reads", async () => {
+    const broker = brokerReturning({ decision: 'deny', note: 'regenerate it instead of deleting' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    const result = await shell.executeCommand('touch /workspace/gated.txt');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('regenerate it instead of deleting');
+  });
 
   it('blocks a denied command without executing it', async () => {
     const broker = brokerReturning({ decision: 'deny' });
@@ -104,6 +155,50 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('hello');
     expect(broker.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('applies node sudo rules to the jsh alias', async () => {
+    await fs.writeFile('/workspace/blocked.jsh', 'console.log("should not run");');
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => NODE_POLICY, broker });
+
+    const result = await shell.executeCommand('jsh /workspace/blocked.jsh');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).not.toContain('should not run');
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'node /workspace/blocked.jsh',
+    });
+  });
+
+  it('applies NOPASSWD node grants to the jsh alias', async () => {
+    await fs.writeFile('/workspace/allowed.jsh', 'console.log("allowed");');
+    const broker = brokerReturning({ decision: 'deny' });
+    const policy = parseSudoers('Cmnd  node *\nNOPASSWD Cmnd  node *');
+    const shell = makeShell({ getPolicy: () => policy, broker });
+
+    const result = await shell.executeCommand('jsh /workspace/allowed.jsh');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('allowed');
+    expect(broker.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('sudo jsh prompts once using the canonical node subject', async () => {
+    await fs.writeFile('/workspace/approved.jsh', 'console.log("approved");');
+    const broker = brokerReturning({ decision: 'allow' });
+    const shell = makeShell({ getPolicy: () => NODE_POLICY, broker });
+
+    const result = await shell.executeCommand('sudo jsh /workspace/approved.jsh');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('approved');
+    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'node /workspace/approved.jsh',
+    });
   });
 
   it('runs ungated when no policy is active', async () => {

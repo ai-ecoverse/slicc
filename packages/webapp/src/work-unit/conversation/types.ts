@@ -1,8 +1,17 @@
 import type { LickChannel } from '../../base/lick-channels.js';
+import type { MessageAttachment } from '../../core/attachments.js';
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatCompactionMarker, ChatMessage } from '../../scoops/chat-types.js';
 
-export const CONVERSATION_RECORD_VERSION = 1;
+export const CONVERSATION_RECORD_VERSION = 2;
+
+export function recordSchemaVersion(
+  record: Pick<WorkUnitConversationRecord, 'markers' | 'projectionPrefix'>
+): number {
+  const hasErrorMarker = record.markers?.some((m) => m.kind === 'error') ?? false;
+  const hasPrefix = (record.projectionPrefix?.length ?? 0) > 0;
+  return hasErrorMarker || hasPrefix ? 2 : 1;
+}
 
 export type ConversationEntryKind =
   | 'user'
@@ -60,12 +69,31 @@ export interface ToolResultConversationEntry extends MessageEntryBase {
   isError?: boolean;
 }
 
-export interface ConversationMarker {
+export interface CompactionConversationMarker {
   id: string;
   kind: 'compaction';
 
   timestamp: number;
   compaction: ChatCompactionMarker;
+}
+
+export interface ErrorConversationMarker {
+  id: string;
+  kind: 'error';
+  timestamp: number;
+
+  text: string;
+}
+
+export type ConversationMarker = CompactionConversationMarker | ErrorConversationMarker;
+
+export interface ConversationAttachmentOverlay {
+  id: string;
+
+  timestamp: number;
+
+  body: string;
+  attachments: MessageAttachment[];
 }
 
 export type ConversationEntry =
@@ -97,6 +125,10 @@ export interface WorkUnitConversationRecord {
   entries: ConversationEntry[];
 
   markers?: ConversationMarker[];
+
+  projectionPrefix?: ChatMessage[];
+
+  attachments?: ConversationAttachmentOverlay[];
   createdAt: number;
   updatedAt: number;
 

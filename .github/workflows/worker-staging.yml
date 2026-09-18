@@ -1,4 +1,5 @@
 name: Worker Staging Deploy
+run-name: 'staging-mutation-queue · Worker staging · PR #${{ github.event.pull_request.number }}'
 
 on:
   pull_request:
@@ -11,21 +12,46 @@ on:
 
       - '.github/workflows/worker-staging.yml'
 
-concurrency:
-  group: worker-staging-e2b-slicc-staging
-  cancel-in-progress: false
-
 permissions:
+  actions: read
   contents: read
   deployments: write
+  pull-requests: read
 
 jobs:
   deploy-staging:
-    name: Deploy staging + smoke test
+    name: Cloudflare staging deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: changes
+        with:
+          filters: |
+            r2:
+              - 'packages/webapp/**'
+              - 'packages/vfs-root/**'
+              - 'packages/assets/**'
+              - 'packages/shared-ts/**'
+              - 'packages/webcomponents/**'
+              - 'packages/spoon/**'
+              - 'packages/cloud-core/**'
+              - 'packages/dev-tools/providers.build.json'
+              - 'packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs'
+              - 'packages/cloudflare-worker/scripts/upload-lib.mjs'
+              - 'packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs'
+              - 'packages/cloudflare-worker/src/asset-archive.mjs'
+              - 'packages/cloudflare-worker/tests/deployed.test.ts'
+              - 'packages/cloudflare-worker/wrangler.jsonc'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
+              - '.github/workflows/worker-staging.yml'
+            archive-smoke:
+              - 'packages/cloudflare-worker/src/index.ts'
 
       - uses: actions/setup-node@v7
         with:
@@ -68,20 +94,37 @@ jobs:
       - name: Build dependencies for e2b template
         run: npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @slicc/node-server
 
+      - name: Wait for staging mutation turn
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: softprops/turnstyle@3805450be63b8c80577dc253e8c17e9132036df4
+        with:
+          queue-name: staging-mutation-queue
+          same-branch-only: false
+          job-to-wait-for: Cloudflare staging deploy
+          step-to-wait-for: Release staging mutation queue
+          poll-interval-seconds: 10
+          initial-wait-seconds: 20
+          retries: 3
+
       - name: Build and push e2b template (isolated staging alias)
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
           SLICC_E2B_TEMPLATE_NAME: slicc-staging
         run: bash packages/dev-tools/e2b-template/scripts/build-template.sh
 
-      - name: Archive assets to R2 (staging)
+      - name: Verify preview storage lifecycle
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
-          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+        run: node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
+      - name: Archive assets to R2 (staging)
+        if: (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && steps.changes.outputs.r2 == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
 
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
@@ -199,7 +242,7 @@ jobs:
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-          SLICC_ARCHIVE_SMOKE: '1'
+          SLICC_ARCHIVE_SMOKE: ${{ (steps.changes.outputs.r2 == 'true' || steps.changes.outputs.archive-smoke == 'true') && '1' || '' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
@@ -219,6 +262,31 @@ jobs:
             echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
             sleep 15
           done
+
+      - name: Release staging mutation queue
+        if: always()
+        run: true
+
+      - name: Publish Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node packages/dev-tools/tools/ci-job-timing.mjs
+          --job "Cloudflare staging deploy"
+          --title "Worker staging workflow timings"
+          --output test-results/worker-staging-phase-timing.json
+          --exclude-step "Publish Cloudflare timing diagnostics"
+
+      - name: Upload Cloudflare timing diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: worker-staging-phase-timing
+          path: test-results/worker-staging-phase-timing.json
+          if-no-files-found: ignore
 
       - name: Mark deployment successful
         if: success()

@@ -3,14 +3,19 @@ name: Release
 on:
   push:
     branches: [main]
+
+  schedule:
+    - cron: '15,45 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+  pull-requests: read
+
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}-${{ github.event_name == 'schedule' && 'catchup' || 'main' }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   analyze:
@@ -32,10 +37,25 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
+      - name: Check merge queue
+        id: mq
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node packages/dev-tools/tools/merge-queue-busy.mjs
+
       - name: Plan release
         id: release
+        env:
+          QUEUE_BUSY: ${{ steps.mq.outputs.busy }}
         run: |
           set -euo pipefail
+          if [ "${QUEUE_BUSY}" = 'true' ]; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "Merge queue has entries — deferring release until the queue drains."
+            exit 0
+          fi
+
           RELEASE_TYPE="$(node packages/dev-tools/tools/release-plan.mjs)"
 
           if [ "$RELEASE_TYPE" != 'none' ]; then

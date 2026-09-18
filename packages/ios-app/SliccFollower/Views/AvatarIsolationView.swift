@@ -1,7 +1,7 @@
 import SwiftUI
 
 #if DEBUG
-
+    
     struct AvatarIsolationView: View {
         let variant: String
 
@@ -21,6 +21,8 @@ import SwiftUI
         private var isToolbar: Bool { variant.hasSuffix("toolbar") }
         private var scheme: ColorScheme { isDark ? .dark : .light }
 
+        
+        
         private struct ExpressionState {
             let name: String
             let activity: AvatarExpression.Activity
@@ -59,6 +61,9 @@ import SwiftUI
             ]
         }
 
+        
+        
+        
         private func engine(for state: ExpressionState) -> AvatarExpressionEngine {
             let time = FrozenClock()
             let engine = AvatarExpressionEngine(clock: { time.now }, random: { 0.5 })
@@ -71,7 +76,7 @@ import SwiftUI
             case .glower: engine.glower()
             case .scrutiny: engine.scrutinize()
             case .drowse:
-
+                
                 time.now = 100
                 engine.advance(to: time.now)
             }
@@ -116,6 +121,13 @@ import SwiftUI
             }
         }
 
+        
+        
+        
+        
+        
+        
+        
         private var toolbarBody: some View {
             NavigationStack {
                 ScrollView {
@@ -123,7 +135,8 @@ import SwiftUI
                         Text("Toolbar · \(isDark ? "dark" : "light")")
                             .font(.headline)
                             .accessibilityIdentifier("avatar-fixture-toolbar")
-
+                        
+                        
                         HStack(spacing: 12) {
                             ForEach(expressionStates.prefix(4).indices, id: \.self) { index in
                                 let state = expressionStates[index]
@@ -153,12 +166,15 @@ import SwiftUI
             .environment(\.colorScheme, scheme)
         }
 
+        
         private func headerGeometry(for state: ExpressionState) -> SliccAgentAvatarGeometry {
             SliccAgentAvatarGeometry(
                 type: .cone, color: "#B07823", eyes: state.eyes, fill: state.fill,
                 blink: false, sideLength: 30, activity: state.activity)
         }
 
+        
+        
         private var expressionBody: some View {
             VStack(spacing: 10) {
                 Text("Expression · \(isDark ? "dark" : "light")")
@@ -194,7 +210,9 @@ import SwiftUI
                             expression: engine(for: state))
                     }
                 }
-
+                
+                
+                
                 Text("cone").font(.caption)
                 HStack(spacing: 10) {
                     ForEach(expressionStates.prefix(4).indices, id: \.self) { index in

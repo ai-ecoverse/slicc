@@ -45,3 +45,33 @@ export function buildPreviewUrl(
   const scheme = base.startsWith('localhost') ? 'http' : 'https';
   return `${scheme}://${label}.${base}${p}`;
 }
+
+export const PREVIEW_MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+export const PREVIEW_MAX_RANGE_BYTES = 8 * 1024 * 1024;
+
+export const PREVIEW_MAX_SNAPSHOTS_PER_TRAY = 10;
+
+export const PREVIEW_LIVE_ORPHAN_MINUTES = 5;
+
+const PREVIEW_LABEL_RE = /^([0-9a-f]{32})--(?:[0-9a-f]{8}-)?([0-9a-f]+)$/i;
+
+export function previewTokenFromUrl(input: string): string | null {
+  let host: string;
+  try {
+    host = new URL(input.includes('://') ? input : `https://${input}`).hostname;
+  } catch {
+    return null;
+  }
+  const match = PREVIEW_LABEL_RE.exec(host.split('.')[0] ?? '');
+  if (!match || !host.includes('.')) return null;
+  const compact = match[1]!.toLowerCase();
+  const trayId = [
+    compact.slice(0, 8),
+    compact.slice(8, 12),
+    compact.slice(12, 16),
+    compact.slice(16, 20),
+    compact.slice(20),
+  ].join('-');
+  return `${trayId}.${match[2]!.toLowerCase()}`;
+}

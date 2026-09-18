@@ -242,6 +242,8 @@ export interface ApprovalRequest {
 
   suggestedPattern?: string;
 
+  reason?: string;
+
   approver?: SudoApproverDirective;
 
   signal?: AbortSignal;

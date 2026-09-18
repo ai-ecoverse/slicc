@@ -210,12 +210,12 @@ describe('slicc-agent-message', () => {
     it('shows the progress label beside the dots while thinking', () => {
       const el = mount((e) => {
         e.thinking = true;
-        e.progress = 'Running tools — edit_file';
+        e.progress = 'Running tools — edit';
       });
       const label = el.querySelector('.progress') as HTMLElement;
       expect(label).not.toBeNull();
       expect(label.getAttribute('part')).toBe('progress');
-      expect(label.textContent).toBe('Running tools — edit_file');
+      expect(label.textContent).toBe('Running tools — edit');
 
       expect(el.querySelector('.thinkrow-row .dots')).not.toBeNull();
       expect(el.querySelector('.thinkrow-row .progress')).toBe(label);

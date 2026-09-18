@@ -73,6 +73,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'ffmpeg',
   'screencapture',
   'say',
+  'hear',
   'afplay',
   'chime',
   'echo',
@@ -122,11 +123,12 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'html-to-markdown',
   'git',
   'node',
+  'jsh',
   'python',
   'python3',
   'sqlite3',
   'tsc',
-  'test',
+  'tst',
   'esbuild',
   'biome',
   'skill',
@@ -148,6 +150,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'crontask',
   'ps',
   'kill',
+  'jshd',
 ];
 
 describe('commands command', () => {
@@ -233,16 +236,30 @@ describe('commands command', () => {
     expect(result.stdout).not.toContain('Other:');
   });
 
-  it('groups tsc/test/esbuild/biome under Build tools', async () => {
+  it('groups jshd with ps and kill under Process', async () => {
     const cmd = createCommandsCommand();
-    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'test', 'esbuild', 'biome']));
+    const result = await cmd.execute([], createMockCtx(['ps', 'kill', 'jshd']));
+    expect(result.exitCode).toBe(0);
+    expect(lineAfterCategory(result.stdout, 'Process')?.trim()).toBe('ps, kill, jshd');
+  });
+
+  it('groups jsh beside node under Languages', async () => {
+    const cmd = createCommandsCommand();
+    const result = await cmd.execute([], createMockCtx(['node', 'jsh']));
+    expect(result.exitCode).toBe(0);
+    expect(lineAfterCategory(result.stdout, 'Languages')?.trim()).toBe('node, jsh');
+  });
+
+  it('groups tsc/tst/esbuild/biome under Build tools', async () => {
+    const cmd = createCommandsCommand();
+    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'tst', 'esbuild', 'biome']));
     expect(result.exitCode).toBe(0);
     const lines = result.stdout.split('\n');
     const idx = lines.findIndex((l) => l.includes('Build tools:'));
     expect(idx).toBeGreaterThan(-1);
     const listing = (lines[idx + 1] ?? '').trim();
     expect(listing).toContain('tsc');
-    expect(listing).toContain('test');
+    expect(listing).toContain('tst');
     expect(listing).toContain('esbuild');
     expect(listing).toContain('biome');
   });

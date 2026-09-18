@@ -1,6 +1,11 @@
 @preconcurrency import CoreML
 import Foundation
 
+
+
+
+
+
 struct KokoroAneComputeUnits: Sendable, Equatable {
     var albert: MLComputeUnits
     var postAlbert: MLComputeUnits
@@ -28,13 +33,18 @@ struct KokoroAneComputeUnits: Sendable, Equatable {
         self.tail = tail
     }
 
+    
     static let `default` = KokoroAneComputeUnits()
 
+    
     static let cpuAndGpu = KokoroAneComputeUnits(
         albert: .cpuAndGPU, postAlbert: .cpuAndGPU, alignment: .cpuAndGPU,
         prosody: .cpuAndGPU, noise: .cpuAndGPU, vocoder: .cpuAndGPU, tail: .cpuAndGPU
     )
 
+    
+    
+    
     static let allAne = KokoroAneComputeUnits(
         albert: .cpuAndNeuralEngine, postAlbert: .cpuAndNeuralEngine,
         alignment: .cpuAndNeuralEngine, prosody: .cpuAndNeuralEngine,
@@ -42,11 +52,16 @@ struct KokoroAneComputeUnits: Sendable, Equatable {
         tail: .cpuAndNeuralEngine
     )
 
+    
+    
     static let cpuOnly = KokoroAneComputeUnits(
         albert: .cpuOnly, postAlbert: .cpuOnly, alignment: .cpuOnly,
         prosody: .cpuOnly, noise: .cpuOnly, vocoder: .cpuOnly, tail: .cpuOnly
     )
 
+    
+    
+    
     init(preset: TtsComputeUnitPreset) {
         switch preset {
         case .default:
@@ -72,6 +87,10 @@ struct KokoroAneComputeUnits: Sendable, Equatable {
         }
     }
 }
+
+
+
+
 
 actor KokoroAneModelStore {
 
@@ -99,6 +118,12 @@ actor KokoroAneModelStore {
         self.resourceDownloader = resourceDownloader
     }
 
+    
+    
+    
+    
+    
+    
     func loadIfNeeded() async throws {
         guard models.isEmpty else { return }
 
@@ -126,6 +151,8 @@ actor KokoroAneModelStore {
         let elapsed = Date().timeIntervalSince(loadStart)
         logger.info("All 7 KokoroAne models loaded in \(String(format: "%.2f", elapsed))s")
 
+        
+        
         guard
             let vocabURL = ModelNames.KokoroAne.vocabularyFiles
                 .map({ repoDir.appendingPathComponent($0) })
@@ -137,10 +164,14 @@ actor KokoroAneModelStore {
         let loadedVocab = try KokoroAneVocab.load(from: vocabURL)
         logger.info("Loaded vocab (\(loadedVocab.map.count) entries)")
 
+        
+        
         self.models = pendingModels
         self.vocab = loadedVocab
         self.repoDirectory = repoDir
 
+        
+        
         _ = try await voicePack(variant.defaultVoice)
     }
 

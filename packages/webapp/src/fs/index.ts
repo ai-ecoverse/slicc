@@ -2,6 +2,13 @@ export type { FsChangeEvent, FsChangeType, FsWatchCallback, FsWatchFilter } from
 export { FsWatcher } from './fs-watcher.js';
 export type { ReadDirOptions } from './mount/backend.js';
 export type {
+  MountInfo,
+  MountProbeFs,
+  NameSensitivity,
+  UnicodeNormalization,
+  UnicodeStorage,
+} from './mount/probe-info.js';
+export type {
   IndexingStatus,
   MountIndexAbortCause,
   MountIndexEntry,
@@ -11,6 +18,7 @@ export { MountIndex } from './mount-index.js';
 export { joinPath, normalizePath, pathSegments, splitPath } from './path-utils.js';
 export type { RestrictedFsOptions, RestrictedFsWriteEnforcement } from './restricted-fs.js';
 export { RestrictedFS } from './restricted-fs.js';
+export { sameFileIdentity } from './same-file-identity.js';
 export type {
   DirEntry,
   Encoding,

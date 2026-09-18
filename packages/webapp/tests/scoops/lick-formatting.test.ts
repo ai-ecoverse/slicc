@@ -461,6 +461,22 @@ describe('webhook lick preview attribution', () => {
     expect(out!.content).toContain('error: no rule');
   });
 
+  it('formats a jshd crash-loop lick with the unit name and log path', () => {
+    const out = formatLickEventForCone({
+      type: 'jshd',
+      jshdName: 'phone',
+      jshdRestarts: 8,
+      resultPath: '/workspace/.jshd/log/phone.log',
+      preview: "jshd unit 'phone' marked errored",
+      timestamp: new Date().toISOString(),
+      body: { kind: 'jshd', reason: 'crash-loop' },
+    } as never);
+    expect(out!.label).toBe('jshd Unit');
+    expect(out!.content).toContain('[jshd Unit: phone]');
+    expect(out!.content).toContain('jshd logs phone');
+    expect(out!.content).toContain('crash-loop');
+  });
+
   it('renders a plain webhook lick (no preview headers) as the generic Webhook Event chip', () => {
     const formatted = formatLickEventForCone({
       type: 'webhook',

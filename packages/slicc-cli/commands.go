@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/execrun"
@@ -27,6 +28,95 @@ type inbound struct {
 	raw []byte
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+const promptSettleGrace = 2 * time.Second
+
+func promptSettleWindow() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SLICC_PROMPT_SETTLE")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return promptSettleGrace
+}
+
+
+
+
+type promptTurn struct {
+	mu            sync.Mutex
+	sawProcessing bool
+	pendingTools  int
+	readyAt       time.Time 
+}
+
+
+func (p *promptTurn) activity() {
+	p.mu.Lock()
+	p.sawProcessing = true
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
+func (p *promptTurn) toolStart() {
+	p.mu.Lock()
+	p.pendingTools++
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
+func (p *promptTurn) toolResult() {
+	p.mu.Lock()
+	if p.pendingTools > 0 {
+		p.pendingTools--
+	}
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
+
+func (p *promptTurn) status(scoopStatus string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if scoopStatus == protocol.ScoopStatusProcessing {
+		p.sawProcessing = true
+		p.readyAt = time.Time{}
+		return false
+	}
+	if !p.sawProcessing {
+		return false
+	}
+	p.readyAt = now
+	return true
+}
+
+
+
+func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.readyAt.IsZero() || p.pendingTools > 0 {
+		return false, 0
+	}
+	if remaining := grace - now.Sub(p.readyAt); remaining > 0 {
+		return false, remaining
+	}
+	return true, 0
+}
+
+
 func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	done := make(chan int, 1)
 	finish := func(code int) {
@@ -35,8 +125,16 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		default:
 		}
 	}
-
-	sawProcessing := false
+	turn := &promptTurn{}
+	
+	
+	kick := make(chan struct{}, 1)
+	wake := func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
 	handler := func(typ string, raw []byte) {
 		switch typ {
 		case protocol.TypeAgentEvent:
@@ -44,25 +142,32 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			if json.Unmarshal(raw, &env) != nil {
 				return
 			}
+			debugLogf("prompt: agent_event %s", env.Event.Type)
 			switch env.Event.Type {
 			case protocol.AgentContentDelta:
 				fmt.Print(env.Event.Text)
+				turn.activity()
+			case protocol.AgentToolUseStart:
+				turn.toolStart()
+			case protocol.AgentToolResult:
+				turn.toolResult()
+			case protocol.AgentMessageStart, protocol.AgentContentDone:
+				turn.activity()
 			case protocol.AgentTurnEnd:
 				finish(0)
 			case protocol.AgentError:
 				errLineAfterStream("prompt", "%s", env.Event.Error)
 				finish(1)
 			}
+			wake()
 		case protocol.TypeStatus:
 			var s protocol.Status
 			if json.Unmarshal(raw, &s) != nil {
 				return
 			}
-			if s.ScoopStatus == protocol.ScoopStatusProcessing {
-				sawProcessing = true
-			} else if sawProcessing {
-				finish(0)
-			}
+			debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
+			turn.status(s.ScoopStatus, time.Now())
+			wake()
 		case protocol.TypeError:
 			var e struct {
 				Error string `json:"error"`
@@ -88,19 +193,37 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		return 1
 	}
 
-	select {
-	case code := <-done:
-		fmt.Println()
-		return code
-	case <-conn.Done():
-		errLineAfterStream("prompt", "connection closed before the turn completed")
-		return 1
-	case <-ctx.Done():
-
-		_ = conn.SendJSON(protocol.Abort{Type: "abort"})
-		return 130
+	grace := promptSettleWindow()
+	settle := time.NewTimer(time.Hour)
+	settle.Stop()
+	defer settle.Stop()
+	for {
+		select {
+		case code := <-done:
+			fmt.Println()
+			return code
+		case <-conn.Done():
+			errLineAfterStream("prompt", "connection closed before the turn completed")
+			return 1
+		case <-ctx.Done():
+			
+			_ = conn.SendJSON(protocol.Abort{Type: "abort"})
+			return 130
+		case <-kick:
+		case <-settle.C:
+		}
+		if ok, wait := turn.settled(time.Now(), grace); ok {
+			fmt.Println()
+			return 0
+		} else if wait > 0 {
+			settle.Stop()
+			settle.Reset(wait)
+		}
 	}
 }
+
+
+
 
 func readPipedStdinBase64(r io.Reader) (string, error) {
 	if f, ok := r.(*os.File); ok {
@@ -121,6 +244,7 @@ func readPipedStdinBase64(r io.Reader) (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
 }
+
 
 func cmdExec(ctx context.Context, joinURL, command string) int {
 	requestID := newID()
@@ -188,7 +312,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 		errLine("exec", "connection closed")
 		return 1
 	case <-ctx.Done():
-
+		
 		_ = conn.SendJSON(protocol.ExecSignal{Type: "exec.signal", RequestID: requestID, Signal: "SIGINT"})
 		select {
 		case code := <-done:
@@ -200,6 +324,11 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 		}
 	}
 }
+
+
+
+
+
 
 func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 	what := "the leader's agent output"
@@ -251,6 +380,8 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 	}
 }
 
+
+
 type watchRender struct {
 	console *ui.Console
 	out     ui.Mode
@@ -263,12 +394,13 @@ func watchOnce(
 	onJoinURLChanged func(string),
 ) (clean bool, err error) {
 	sawProcessing := false
-
+	
 	inScoop := func(js string) bool { return scoopJid == "" || js == scoopJid }
 	handler := func(typ string, raw []byte) {
 		switch typ {
 		case protocol.TypeUserMessageEcho:
-
+			
+			
 			var m protocol.UserMessageEcho
 			if json.Unmarshal(raw, &m) == nil && inScoop(m.ScoopJid) {
 				fmt.Printf("\n%s\n", r.out.Paint(ui.StyleBold, "> "+m.Text))
@@ -283,7 +415,8 @@ func watchOnce(
 			if json.Unmarshal(raw, &s) != nil {
 				return
 			}
-
+			
+			
 			if s.ScoopStatus == protocol.ScoopStatusProcessing {
 				sawProcessing = true
 			} else if sawProcessing {
@@ -316,6 +449,12 @@ func watchOnce(
 	}
 }
 
+
+
+
+
+
+
 func printWatchEvent(ev protocol.AgentEvent, r watchRender) {
 	switch ev.Type {
 	case protocol.AgentContentDelta:
@@ -337,6 +476,8 @@ func printWatchEvent(ev protocol.AgentEvent, r watchRender) {
 	}
 }
 
+
+
 func compactArgs(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -348,6 +489,8 @@ func compactArgs(raw json.RawMessage) string {
 	return " " + truncateOneLine(buf.String(), 160)
 }
 
+
+
 func truncateOneLine(s string, limit int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
@@ -357,8 +500,13 @@ func truncateOneLine(s string, limit int) string {
 	return string(r[:limit]) + "…"
 }
 
-func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 
+
+
+func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
+	
+	
+	
 	var eval *execrun.EvalSession
 	if fa.eval {
 		if len(fa.runner) == 0 {
@@ -426,7 +574,9 @@ func followOnce(
 	console *ui.Console,
 	onJoinURLChanged func(string),
 ) (connected bool, err error) {
-
+	
+	
+	
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -448,7 +598,7 @@ func followOnce(
 		OnMessage: func(typ string, raw []byte) {
 			select {
 			case msgCh <- inbound{typ: typ, raw: raw}:
-			default:
+			default: 
 			}
 		},
 	})
@@ -483,6 +633,9 @@ func followOnce(
 	}
 }
 
+
+
+
 func newConsole(tag string, mode ui.Mode) *ui.Console {
 	return ui.New(os.Stderr, ui.Options{
 		Mode:  mode,
@@ -491,12 +644,19 @@ func newConsole(tag string, mode ui.Mode) *ui.Console {
 	})
 }
 
+
+
+
+
+
 func watchModes(console, out ui.Mode) (ui.Mode, ui.Mode) {
 	if out.Sticky {
 		console.Sticky = false
 	}
 	return console, out
 }
+
+
 
 func outputMode(f *os.File, plain bool) ui.Mode {
 	if plain {
@@ -505,6 +665,13 @@ func outputMode(f *os.File, plain bool) ui.Mode {
 	return stickyUnlessLogging(ui.Detect(f, os.LookupEnv), diagLogger)
 }
 
+
+
+
+
+
+
+
 func stickyUnlessLogging(mode ui.Mode, diag *logging.Logger) ui.Mode {
 	if diag.Enabled() {
 		mode.Sticky = false
@@ -512,16 +679,23 @@ func stickyUnlessLogging(mode ui.Mode, diag *logging.Logger) ui.Mode {
 	return mode
 }
 
+
+
+
+
 func errLine(verb, format string, args ...any) {
 	mode := outputMode(os.Stderr, false)
 	msg := fmt.Sprintf("slicc %s: %s", verb, fmt.Sprintf(format, args...))
 	fmt.Fprintln(os.Stderr, mode.Paint(ui.StyleRed, msg))
 }
 
+
+
 func errLineAfterStream(verb, format string, args ...any) {
 	fmt.Fprintln(os.Stderr)
 	errLine(verb, format, args...)
 }
+
 
 func markConnected(s *ui.Status) {
 	s.State = ui.StateConnected
@@ -529,6 +703,8 @@ func markConnected(s *ui.Status) {
 	s.Attempt = 0
 	s.RetryAt = time.Time{}
 }
+
+
 
 func retrying(failures int, backoff time.Duration) func(*ui.Status) {
 	retryAt := time.Now().Add(backoff)
@@ -539,6 +715,10 @@ func retrying(failures int, backoff time.Duration) func(*ui.Status) {
 	}
 }
 
+
+
+
+
 func linkDiagCounter(console *ui.Console) logging.PionEvent {
 	return func(_ string, level slog.Level, _ string) {
 		if level >= slog.LevelWarn {
@@ -546,6 +726,9 @@ func linkDiagCounter(console *ui.Console) logging.PionEvent {
 		}
 	}
 }
+
+
+
 
 func printSessionSummary(console *ui.Console) {
 	console.Stop()
@@ -559,6 +742,12 @@ func printSessionSummary(console *ui.Console) {
 		plural(st.Sessions-1, "reconnect"),
 		plural(st.Diags, "link diagnostic"))
 }
+
+
+
+
+
+
 
 func followPeer(mode ui.Mode, runner []string) string {
 	who := fmt.Sprintf("%s@%s", currentUser(), shortHost(hostname()))
@@ -582,6 +771,11 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+
+
+
+
+
 const followArt = `   _____ _ _
   / ____| (_)
  | (___ | |_  ___ ___
@@ -589,6 +783,13 @@ const followArt = `   _____ _ _
   ____) | | | (_| (__
  |_____/|_|_|\___\___|   follow
 `
+
+
+
+
+
+
+
 
 func printFollowBanner(console *ui.Console, fa followArgs) {
 	if fa.showBanner {
@@ -617,6 +818,9 @@ func printFollowBanner(console *ui.Console, fa followArgs) {
 	}
 }
 
+
+
+
 func evalRunnerWarning(runner []string) string {
 	base := shellBase(runner[0])
 	if base != "node" {
@@ -630,6 +834,10 @@ func evalRunnerWarning(runner []string) string {
 	return "node buffers piped stdin until EOF — you probably want: follow --eval node -i"
 }
 
+
+
+
+
 func followMotd(runner []string, eval bool) string {
 	if len(runner) == 0 {
 		return ""
@@ -642,22 +850,31 @@ func followMotd(runner []string, eval bool) string {
 		currentUser(), hostname(), runtime.GOOS, runtime.GOARCH, strings.Join(runner, " "))
 }
 
+
+
 var knownShells = map[string]bool{
 	"bash": true, "sh": true, "zsh": true, "dash": true,
 	"ksh": true, "ash": true, "fish": true, "elvish": true,
 }
+
+
 
 var wrapperTools = map[string]bool{
 	"docker": true, "podman": true, "nerdctl": true, "container": true,
 	"kubectl": true, "lxc": true, "lxc-attach": true, "flatpak-spawn": true, "ssh": true,
 }
 
+
+
+
+
 func runnerExecWarning(runner []string) string {
 	if len(runner) == 0 {
 		return ""
 	}
 	joined := strings.Join(runner, " ")
-
+	
+	
 	lastShell := -1
 	for i, tok := range runner {
 		if knownShells[shellBase(tok)] {
@@ -667,7 +884,7 @@ func runnerExecWarning(runner []string) string {
 	if lastShell >= 0 {
 		for _, tok := range runner[lastShell+1:] {
 			if tok == "-c" {
-				return ""
+				return "" 
 			}
 		}
 		base := shellBase(runner[lastShell])
@@ -682,6 +899,8 @@ func runnerExecWarning(runner []string) string {
 	}
 	return ""
 }
+
+
 
 func shellBase(tok string) string {
 	b := tok
@@ -707,7 +926,12 @@ func hostname() string {
 	return "localhost"
 }
 
+
+
+
 var diagLogger = logging.NewFromEnv(os.Stderr)
+
+
 
 func debugLogf(format string, args ...any) {
 	diagLogger.Logf(format, args...)

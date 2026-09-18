@@ -1,6 +1,8 @@
+import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import type { OpenWindowOptions, WindowBoundsInput } from '../../cdp/types.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
@@ -29,7 +31,12 @@ import type {
   SerialOpenOptions,
   SerialOutputSignals,
 } from '../serial-port-registry.js';
-import type { UsbControlSetup, UsbDeviceFilter } from '../usb-device-registry.js';
+import {
+  USB_OWNER_REALM,
+  type UsbClaimEvent,
+  type UsbControlSetup,
+  type UsbDeviceFilter,
+} from '../usb-device-registry.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
   RealmEventMsg,
@@ -41,6 +48,7 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
+import { normalizeSyncExecEnv, resolveSyncExecCwd } from './sync-exec-dispatch.js';
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import type { SyncFsToken } from './sync-fs-wire.js';
@@ -75,7 +83,11 @@ export interface RealmHostOptions {
   syncFsBridgeEnabled?: boolean;
 
   syncSab?: SharedArrayBuffer;
+
+  onHostFsMutation?: (paths: readonly string[]) => void;
 }
+
+let realmUsbOwnerSeq = 0;
 
 export function attachRealmHost(
   port: RealmPortLike,
@@ -83,6 +95,8 @@ export function attachRealmHost(
   opts: RealmHostOptions = {}
 ): RealmHostHandle {
   const hidSubscriptions = new Map<string, () => void | Promise<void>>();
+  const usbClaimSubscriptions = new Map<string, () => void | Promise<void>>();
+  const usbOwner = `${USB_OWNER_REALM}:${++realmUsbOwnerSeq}`;
 
   const syncFsToken = opts.syncFsBridgeEnabled
     ? mintSyncFsToken({ fs: ctx.fs, ...(ctx.exec ? { exec: ctx.exec } : {}), cwd: ctx.cwd })
@@ -95,14 +109,27 @@ export function attachRealmHost(
     } catch {}
   };
   const hidCtx: HidDispatchCtx = { subscriptions: hidSubscriptions, pushEvent };
+  const usbCtx: UsbDispatchCtx = {
+    subscriptions: usbClaimSubscriptions,
+    pushEvent,
+    owner: usbOwner,
+  };
 
   const execSpawns = new Map<number, { controller: AbortController; pid: number }>();
   const execCtx: ExecDispatchCtx = { spawns: execSpawns, opts };
+  const computerCtx: ComputerDispatchCtx = {
+    pushEvent,
+    pending: new Map(),
+    registered: [],
+    backends: new Map(),
+    requestSeq: 0,
+    pid: opts.ppid ?? null,
+  };
   const handler = (event: MessageEvent): void => {
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx, opts, hidCtx, execCtx);
+    void respond(port, req, ctx, opts, hidCtx, usbCtx, execCtx, computerCtx);
   };
   port.addEventListener('message', handler);
 
@@ -133,6 +160,17 @@ export function attachRealmHost(
         } catch {}
       }
       hidSubscriptions.clear();
+      disposeComputerCtx(computerCtx);
+      for (const unsub of usbClaimSubscriptions.values()) {
+        try {
+          void Promise.resolve(unsub()).catch(() => {});
+        } catch {}
+      }
+      usbClaimSubscriptions.clear();
+      try {
+        const backend = opts.usbBackend ?? resolveUsbBackendForHost(opts);
+        void backend.dropOwner?.(usbOwner)?.catch(() => {});
+      } catch {}
     },
   };
 }
@@ -143,10 +181,12 @@ async function respond(
   ctx: CommandContext,
   opts: RealmHostOptions,
   hidCtx: HidDispatchCtx,
-  execCtx: ExecDispatchCtx
+  usbCtx: UsbDispatchCtx,
+  execCtx: ExecDispatchCtx,
+  computerCtx: ComputerDispatchCtx
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx, opts, hidCtx, execCtx);
+    const result = await dispatch(req, ctx, opts, hidCtx, usbCtx, execCtx, computerCtx);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
 
     const transfer = collectTransferables(result);
@@ -163,11 +203,13 @@ async function dispatch(
   ctx: CommandContext,
   opts: RealmHostOptions,
   hidCtx: HidDispatchCtx,
-  execCtx: ExecDispatchCtx
+  usbCtx: UsbDispatchCtx,
+  execCtx: ExecDispatchCtx,
+  computerCtx: ComputerDispatchCtx
 ): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
-      return dispatchVfs(req.op, req.args, ctx);
+      return dispatchVfs(req.op, req.args, ctx, opts.onHostFsMutation);
     case 'exec':
       return dispatchExec(req.op, req.args, ctx, execCtx);
     case 'fetch':
@@ -175,11 +217,13 @@ async function dispatch(
     case 'browser':
       return dispatchBrowser(req.op, req.args, resolveBrowser(opts), opts);
     case 'usb':
-      return dispatchUsb(req.op, req.args, resolveUsbBackendForHost(opts));
+      return dispatchUsb(req.op, req.args, resolveUsbBackendForHost(opts), usbCtx);
     case 'serial':
       return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
     case 'hid':
       return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
+    case 'computer':
+      return dispatchComputer(req.op, req.args, computerCtx);
     case 'module':
       return dispatchModule(req.op, req.args, ctx);
     case 'wasm':
@@ -224,7 +268,20 @@ function resolveHidBackendForHost(opts: RealmHostOptions): HidBackend {
   return backend;
 }
 
-async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+function flushMutationPaths(mutations: SyncFsMutations): string[] {
+  return [
+    ...mutations.deleted,
+    ...mutations.created.map((entry) => entry.path),
+    ...mutations.modified.map((entry) => entry.path),
+  ];
+}
+
+async function dispatchVfs(
+  op: string,
+  args: unknown[],
+  ctx: CommandContext,
+  onMutation?: (paths: readonly string[]) => void
+): Promise<unknown> {
   const path = typeof args[0] === 'string' ? (args[0] as string) : null;
   const resolved = path !== null ? ctx.fs.resolvePath(ctx.cwd, path) : null;
   switch (op) {
@@ -234,9 +291,15 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return ctx.fs.readFileBuffer(resolved!);
     case 'writeFile':
       await ctx.fs.writeFile(resolved!, args[1] as string);
+      if (resolved) onMutation?.([resolved]);
       return true;
     case 'writeFileBinary':
       await ctx.fs.writeFile(resolved!, args[1] as Uint8Array);
+      if (resolved) onMutation?.([resolved]);
+      return true;
+    case 'appendFile':
+      await ctx.fs.appendFile(resolved!, args[1] as string | Uint8Array);
+      if (resolved) onMutation?.([resolved]);
       return true;
     case 'readDir':
       return ctx.fs.readdir(resolved!);
@@ -251,17 +314,14 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'rm':
       await ctx.fs.rm(resolved!, { recursive: true });
+      if (resolved) onMutation?.([resolved]);
       return true;
     case 'rename': {
       const newPath = ctx.fs.resolvePath(ctx.cwd, args[1] as string);
-      const fs = ctx.fs as { rename?: (a: string, b: string) => Promise<void> };
-      if (fs.rename) {
-        await fs.rename(resolved!, newPath);
-      } else {
-        const content = await ctx.fs.readFileBuffer(resolved!);
-        await ctx.fs.writeFile(newPath, content);
-        await ctx.fs.rm(resolved!, { recursive: true });
-      }
+
+      const { renameViaFs } = await import('./rename-via-fs.js');
+      await renameViaFs(ctx.fs, resolved!, newPath);
+      onMutation?.(resolved ? [resolved, newPath] : [newPath]);
       return true;
     }
     case 'resolvePath':
@@ -281,6 +341,7 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
     case 'flushWrites': {
       const mutations = args[0] as SyncFsMutations;
       await applySyncFsMutations(ctx, mutations);
+      onMutation?.(flushMutationPaths(mutations));
       return true;
     }
     default:
@@ -527,24 +588,6 @@ async function dispatchExec(
   throw new Error(`realm-host: unknown exec op '${op}'`);
 }
 
-type ExecStartCallOptions = {
-  stdin?: string;
-  stdinKind?: 'text' | 'bytes';
-  args?: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-};
-
-type CtxExecCallOptions = {
-  cwd: string;
-  signal: AbortSignal;
-  stdin?: string;
-  stdinKind?: 'text' | 'bytes';
-  args?: string[];
-  env?: Record<string, string>;
-  replaceEnv?: boolean;
-};
-
 function assertExecStartOptions(opts: {
   stdin?: unknown;
   stdinKind?: unknown;
@@ -564,57 +607,37 @@ function assertExecStartOptions(opts: {
   ) {
     throw new Error('exec.start: args must be a string[]');
   }
-  if (opts.cwd !== undefined && (typeof opts.cwd !== 'string' || opts.cwd.length === 0)) {
-    throw new Error('exec.start: cwd must be a non-empty string');
+  if (opts.cwd !== undefined && typeof opts.cwd !== 'string') {
+    throw new Error('exec.start: cwd must be a string');
   }
   if (opts.env !== undefined) {
     if (opts.env === null || typeof opts.env !== 'object' || Array.isArray(opts.env)) {
-      throw new Error('exec.start: env must be a string record');
+      throw new Error('exec.start: env must be an object');
     }
-    const bag = opts.env as { [key: string]: string | undefined };
-    for (const key of Object.keys(bag)) {
-      const value = bag[key];
+    for (const [key, value] of Object.entries(opts.env as { [name: string]: string | undefined })) {
       if (value !== undefined && typeof value !== 'string') {
-        throw new Error('exec.start: env values must be strings');
+        throw new Error(`exec.start: env[${key}] must be a string`);
       }
     }
   }
 }
 
-function parseExecStartArgv(commandOrArgv: unknown): {
-  cmd: string;
-  argvTail?: string[];
-  procArgv: string[];
-} {
-  if (Array.isArray(commandOrArgv)) {
-    if (commandOrArgv.length === 0 || !commandOrArgv.every((a) => typeof a === 'string')) {
-      throw new Error('exec.start: argv must be a non-empty string[]');
-    }
-    const [cmd, ...argvTail] = commandOrArgv as string[];
-    return { cmd: cmd!, argvTail, procArgv: commandOrArgv.slice() as string[] };
-  }
-  if (typeof commandOrArgv === 'string') {
-    return { cmd: commandOrArgv, procArgv: [commandOrArgv] };
-  }
-  throw new Error('exec.start: command must be a string or a non-empty string[]');
+function throwExecErrno(result: { errno: string; message: string }): never {
+  throw Object.assign(new Error(result.message), { code: result.errno });
 }
 
-function buildCtxExecOptions(
-  opts: ExecStartCallOptions,
-  argvTail: string[] | undefined,
-  cwd: string,
-  signal: AbortSignal
-): CtxExecCallOptions {
-  const execOptions: CtxExecCallOptions = { cwd, signal };
-  if (opts.stdin !== undefined) execOptions.stdin = opts.stdin;
-  if (opts.stdinKind !== undefined) execOptions.stdinKind = opts.stdinKind;
-  if (argvTail !== undefined) execOptions.args = argvTail;
-  else if (opts.args !== undefined) execOptions.args = opts.args;
-  if (opts.env !== undefined) {
-    execOptions.env = opts.env;
-    execOptions.replaceEnv = true;
-  }
-  return execOptions;
+async function resolveExecStartChildOpts(
+  ctx: CommandContext,
+  opts: { cwd?: string; env?: Record<string, string> }
+): Promise<{ cwd: string; env?: Record<string, string> }> {
+  const cwdResult = await resolveSyncExecCwd(ctx.fs, ctx.cwd, opts.cwd);
+  if ('errno' in cwdResult) throwExecErrno(cwdResult);
+  const envResult = normalizeSyncExecEnv(opts.env);
+  if (envResult !== undefined && 'errno' in envResult) throwExecErrno(envResult);
+  return {
+    cwd: cwdResult.cwd,
+    ...(envResult !== undefined ? { env: envResult.env } : {}),
+  };
 }
 
 async function dispatchExecStart(
@@ -625,7 +648,16 @@ async function dispatchExecStart(
   const [spawnId, commandOrArgv, options] = args as [
     number,
     string | string[],
-    ExecStartCallOptions | undefined,
+    (
+      | {
+          stdin?: string;
+          stdinKind?: 'text' | 'bytes';
+          args?: string[];
+          cwd?: string;
+          env?: Record<string, string>;
+        }
+      | undefined
+    ),
   ];
   if (typeof spawnId !== 'number') {
     throw new Error('exec.start: spawnId must be a number');
@@ -634,12 +666,26 @@ async function dispatchExecStart(
   if (execCtx.spawns.has(spawnId)) {
     throw new Error(`exec.start: spawnId ${spawnId} is already in use`);
   }
-  const { cmd, argvTail, procArgv } = parseExecStartArgv(commandOrArgv);
+  let cmd: string;
+  let argvTail: string[] | undefined;
+  let procArgv: string[];
+  if (Array.isArray(commandOrArgv)) {
+    if (commandOrArgv.length === 0 || !commandOrArgv.every((a) => typeof a === 'string')) {
+      throw new Error('exec.start: argv must be a non-empty string[]');
+    }
+    [cmd, ...argvTail] = commandOrArgv;
+    procArgv = commandOrArgv.slice();
+  } else if (typeof commandOrArgv === 'string') {
+    cmd = commandOrArgv;
+    procArgv = [commandOrArgv];
+  } else {
+    throw new Error('exec.start: command must be a string or a non-empty string[]');
+  }
 
   const opts = options ?? {};
 
   assertExecStartOptions(opts);
-  const childCwd = opts.cwd ?? ctx.cwd;
+  const childOpts = await resolveExecStartChildOpts(ctx, opts);
   const controller = new AbortController();
   const { pm, owner } = execCtx.opts;
   let pid = 0;
@@ -647,10 +693,9 @@ async function dispatchExecStart(
     const proc = pm.spawn({
       kind: 'shell',
       argv: procArgv,
-      cwd: childCwd,
+      cwd: childOpts.cwd,
       owner,
       ...(execCtx.opts.ppid !== undefined ? { ppid: execCtx.opts.ppid } : {}),
-      ...(opts.env !== undefined ? { env: opts.env } : {}),
       adoptAbort: controller,
     });
     pid = proc.pid;
@@ -659,7 +704,25 @@ async function dispatchExecStart(
 
   let result: { stdout: string; stderr: string; exitCode: number } | undefined;
   try {
-    result = await ctx.exec!(cmd, buildCtxExecOptions(opts, argvTail, childCwd, controller.signal));
+    const execOptions: {
+      cwd: string;
+      signal: AbortSignal;
+      stdin?: string;
+      stdinKind?: 'text' | 'bytes';
+      args?: string[];
+      env?: Record<string, string>;
+      replaceEnv?: boolean;
+    } = { cwd: childOpts.cwd, signal: controller.signal };
+    if (opts.stdin !== undefined) execOptions.stdin = opts.stdin;
+    if (opts.stdinKind !== undefined) execOptions.stdinKind = opts.stdinKind;
+
+    if (argvTail !== undefined) execOptions.args = argvTail;
+    else if (opts.args !== undefined) execOptions.args = opts.args;
+    if (childOpts.env !== undefined) {
+      execOptions.env = childOpts.env;
+      execOptions.replaceEnv = true;
+    }
+    result = await ctx.exec!(cmd, execOptions);
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   } finally {
     execCtx.spawns.delete(spawnId);
@@ -778,6 +841,20 @@ async function dispatchBrowser(
       const url = args[0] as string;
       const options = (args[1] as { matchUrl?: string } | undefined) ?? {};
       return ensureTab(browser, url, options);
+    }
+    case 'openWindow': {
+      const url = args[0] as string;
+      const options = (args[1] as OpenWindowOptions | undefined) ?? {};
+      return openWindow(browser, url, options);
+    }
+    case 'windowBounds': {
+      const targetId = args[0] as string;
+      return browser.getWindowBounds(targetId);
+    }
+    case 'setWindowBounds': {
+      const targetId = args[0] as string;
+      const bounds = (args[1] as WindowBoundsInput | undefined) ?? {};
+      return browser.setWindowBounds(targetId, bounds);
     }
     case 'eval': {
       const targetId = args[0] as string;
@@ -953,6 +1030,18 @@ async function ensureTab(
   return { targetId, url, title: '' };
 }
 
+async function openWindow(
+  browser: BrowserAPI,
+  url: string,
+  options: OpenWindowOptions
+): Promise<TabHandle> {
+  if (typeof browser.openWindow !== 'function') {
+    throw new Error('browser.openWindow is not available in this runtime');
+  }
+  const targetId = await browser.openWindow(url, options);
+  return { targetId, url: url || 'about:blank', title: '' };
+}
+
 async function evalInTab(
   browser: BrowserAPI,
   targetId: string,
@@ -1084,7 +1173,18 @@ function safeOrigin(url: string): string | null {
   }
 }
 
-async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Promise<unknown> {
+interface UsbDispatchCtx {
+  subscriptions: Map<string, () => void | Promise<void>>;
+  pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+  owner: string;
+}
+
+async function dispatchUsb(
+  op: string,
+  args: unknown[],
+  backend: UsbBackend,
+  usbCtx: UsbDispatchCtx
+): Promise<unknown> {
   switch (op) {
     case 'list':
       return backend.list();
@@ -1095,17 +1195,26 @@ async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Pr
     case 'open':
       return backend.open(args[0] as string);
     case 'close':
-      return backend.close(args[0] as string);
+      return backend.close(args[0] as string, {
+        owner: usbCtx.owner,
+        force: Boolean((args[1] as { force?: boolean } | undefined)?.force),
+      });
     case 'reset':
-      return backend.reset(args[0] as string);
+      return backend.reset(args[0] as string, {
+        owner: usbCtx.owner,
+        force: Boolean((args[1] as { force?: boolean } | undefined)?.force),
+      });
     case 'clearHalt':
       return backend.clearHalt(args[0] as string, args[1] as 'in' | 'out', args[2] as number);
     case 'selectConfig':
       return backend.selectConfig(args[0] as string, args[1] as number);
     case 'claim':
-      return backend.claim(args[0] as string, args[1] as number);
+      return backend.claim(args[0] as string, args[1] as number, {
+        owner: usbCtx.owner,
+        wait: Boolean((args[2] as { wait?: boolean } | undefined)?.wait),
+      });
     case 'release':
-      return backend.release(args[0] as string, args[1] as number);
+      return backend.release(args[0] as string, args[1] as number, { owner: usbCtx.owner });
     case 'controlIn':
       return backend.controlIn(args[0] as string, args[1] as UsbControlSetup, args[2] as number);
     case 'controlOut':
@@ -1118,6 +1227,26 @@ async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Pr
       return backend.transferIn(args[0] as string, args[1] as number, args[2] as number);
     case 'transferOut':
       return backend.transferOut(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    case 'subscribeClaimEvents': {
+      const handle = args[0] as string;
+      if (usbCtx.subscriptions.has(handle)) return true;
+      const subscribe = backend.subscribeClaimEvents;
+      if (!subscribe) return true;
+      const off = subscribe((event: UsbClaimEvent) => {
+        if (event.handle !== handle) return;
+        usbCtx.pushEvent({ type: 'realm-event', channel: 'usb-claim-event', payload: event });
+      });
+      usbCtx.subscriptions.set(handle, off);
+      return true;
+    }
+    case 'unsubscribeClaimEvents': {
+      const handle = args[0] as string;
+      const off = usbCtx.subscriptions.get(handle);
+      if (!off) return true;
+      usbCtx.subscriptions.delete(handle);
+      await off();
+      return true;
+    }
     default:
       throw new Error(`realm-host: unknown usb op '${op}'`);
   }
@@ -1153,6 +1282,94 @@ async function dispatchSerial(
       return backend.setSignals(args[0] as string, args[1] as SerialOutputSignals);
     default:
       throw new Error(`realm-host: unknown serial op '${op}'`);
+  }
+}
+
+interface ComputerDispatchCtx {
+  pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+  pending: Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void }>;
+  registered: string[];
+  backends: Map<string, { pushFrame: (frame: ComputerFrame) => void }>;
+  requestSeq: number;
+  pid: number | null;
+}
+
+interface ComputerReply {
+  error?: string;
+}
+
+function disposeComputerCtx(computerCtx: ComputerDispatchCtx): void {
+  const ids = computerCtx.registered.splice(0);
+  computerCtx.backends.clear();
+  if (ids.length > 0) {
+    void import('../../computers/registry.js').then(({ getComputerRegistry }) => {
+      const registry = getComputerRegistry();
+      for (const id of ids) void registry?.unregister(id);
+    });
+  }
+  for (const slot of computerCtx.pending.values()) {
+    slot.reject(new Error('realm disposed'));
+  }
+  computerCtx.pending.clear();
+}
+
+async function dispatchComputer(
+  op: string,
+  args: unknown[],
+  computerCtx: ComputerDispatchCtx
+): Promise<unknown> {
+  switch (op) {
+    case 'register': {
+      const descriptor = args[0] as ComputerDescriptor;
+      const [{ JshComputerBackend }, { getComputerRegistry, installComputerRegistry }] =
+        await Promise.all([
+          import('../../computers/adapters/jsh.js'),
+          import('../../computers/registry.js'),
+        ]);
+      const backend = new JshComputerBackend(descriptor, (callOp, callArgs) => {
+        const requestId = `c${++computerCtx.requestSeq}`;
+        return new Promise((resolve, reject) => {
+          computerCtx.pending.set(requestId, { resolve, reject });
+          computerCtx.pushEvent({
+            type: 'realm-event',
+            channel: 'computer-call',
+            payload: { requestId, id: descriptor.id, op: callOp, args: callArgs },
+          });
+        });
+      });
+      const registry = getComputerRegistry() ?? installComputerRegistry(null);
+      registry.register(backend, { pid: computerCtx.pid });
+      computerCtx.registered.push(descriptor.id);
+      computerCtx.backends.set(descriptor.id, backend);
+      return { id: descriptor.id };
+    }
+    case 'unregister': {
+      const id = String(args[0] ?? '');
+      computerCtx.backends.delete(id);
+      const { getComputerRegistry } = await import('../../computers/registry.js');
+      await getComputerRegistry()?.unregister(id);
+      computerCtx.registered = computerCtx.registered.filter((x) => x !== id);
+      return { ok: true };
+    }
+    case 'reply': {
+      const requestId = String(args[0] ?? '');
+      const result = args[1];
+      const slot = computerCtx.pending.get(requestId);
+      if (!slot) return { ok: false };
+      computerCtx.pending.delete(requestId);
+      const err = (result as ComputerReply | undefined)?.error;
+      if (err) slot.reject(new Error(err));
+      else slot.resolve(result);
+      return { ok: true };
+    }
+    case 'frame': {
+      const id = String(args[0] ?? '');
+      const frame = args[1] as ComputerFrame;
+      computerCtx.backends.get(id)?.pushFrame(frame);
+      return { ok: true };
+    }
+    default:
+      throw new Error(`realm-host: unknown computer op '${op}'`);
   }
 }
 

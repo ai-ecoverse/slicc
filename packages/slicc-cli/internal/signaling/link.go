@@ -6,7 +6,26 @@ import (
 	"strings"
 )
 
+
+
+
+
 const SuccessorVersionRel = "successor-version"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func SuccessorVersionFromLinkHeader(header http.Header) string {
 	if header == nil {
@@ -37,6 +56,10 @@ func successorVersionFromLinkValues(values []string) string {
 	}
 	return ""
 }
+
+
+
+
 
 func splitOutsideQuotes(input string, sep byte) []string {
 	var out []string
@@ -76,6 +99,8 @@ func splitOutsideQuotes(input string, sep byte) []string {
 	return kept
 }
 
+
+
 func hasSuccessorVersionRel(params string) bool {
 	for _, param := range splitOutsideQuotes(params, ';') {
 		eq := strings.Index(param, "=")
@@ -89,7 +114,8 @@ func hasSuccessorVersionRel(params string) bool {
 		if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
 			value = value[1 : len(value)-1]
 		}
-
+		
+		
 		for _, token := range strings.Fields(value) {
 			if strings.EqualFold(token, SuccessorVersionRel) {
 				return true
@@ -98,6 +124,7 @@ func hasSuccessorVersionRel(params string) bool {
 	}
 	return false
 }
+
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {

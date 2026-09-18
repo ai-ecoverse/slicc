@@ -1,5 +1,10 @@
 import { createLogger } from '../base/logger.js';
-import { matchCommand, matchPath, type SudoersPolicy } from '../base/sudoers.js';
+import {
+  isUnhonoredSudoersPath,
+  matchCommand,
+  matchPath,
+  type SudoersPolicy,
+} from '../base/sudoers.js';
 import {
   type ConeApprovalRouter,
   ConeRequestRegistry,
@@ -161,6 +166,14 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { decision: 'deny' };
     }
 
+    if (request.kind === 'write' && isUnhonoredSudoersPath(request.detail)) {
+      log.warn('Refusing sudo request for an unhonoured sudoers path', {
+        scoopJid,
+        detail: request.detail,
+      });
+      return { decision: 'deny' };
+    }
+
     const alreadyGranted = this.admitIfAlreadyGranted(scoopJid, request);
     if (alreadyGranted) return alreadyGranted;
 
@@ -182,6 +195,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       sudoScoopName:
         request.requester ?? scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
       sudoSuggestedPattern: request.suggestedPattern,
+      sudoReason: request.reason,
       targetScoop: cone.name,
       timestamp: new Date().toISOString(),
       body: {
@@ -189,6 +203,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
         kind: request.kind,
         detail: request.detail,
         suggestedPattern: request.suggestedPattern,
+        reason: request.reason,
         scoopJid,
       },
     });
@@ -381,12 +396,13 @@ function formatSudoRequestNotification(
     `Kind: ${request.kind}`,
     `Detail: ${request.detail}`,
   ];
+  if (request.reason) lines.push(`Reason given: ${request.reason}`);
   if (request.suggestedPattern) {
     lines.push(`Suggested pattern: ${request.suggestedPattern}`);
   }
   lines.push(
     '',
-    `Use the lick_confirm tool with lick_id="${id}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${id}" to deny.`
+    `Use the lick_confirm tool with lick_id="${id}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${id}" and a reason to deny. A denial without a reason tells the scoop nothing it can act on.`
   );
   return lines.join('\n');
 }

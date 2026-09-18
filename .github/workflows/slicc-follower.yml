@@ -1,0 +1,93 @@
+name: SLICC follower
+
+on:
+  workflow_call:
+    inputs:
+      duration:
+        description: How long to stay connected (`30m`, `2h`; max 350m).
+        type: string
+        default: 30m
+      runner:
+        description: Runner argv the leader's commands are appended to.
+        type: string
+        default: bash -c
+      eval:
+        description: Persistent-REPL mode (`follow --eval`).
+        type: boolean
+        default: false
+      eval-quiet:
+        description: Output-quiescence window for eval mode.
+        type: string
+        default: ''
+      checkout:
+        description: Check out the calling repository first.
+        type: boolean
+        default: true
+      cli-version:
+        description: Release tag of the Go `slicc` CLI, or `latest`.
+        type: string
+        default: latest
+      slicc-ref:
+        description: Ref of ai-ecoverse/slicc to take the actions from.
+        type: string
+        default: main
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        description: Job timeout; must exceed `duration` plus setup.
+        type: number
+        default: 360
+      artifact-name:
+        description: Artifact holding the follower log.
+        type: string
+        default: slicc-follower-logs
+    secrets:
+      SLICC_JOIN_URL:
+        description: The leader's join link.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  follower:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Check out the calling repository
+        if: inputs.checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out the SLICC actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ai-ecoverse/slicc
+          ref: ${{ inputs.slicc-ref }}
+          path: .slicc-gw
+          sparse-checkout: packages/github-workflow
+          persist-credentials: false
+      - uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
+        with:
+          version: ${{ inputs.cli-version }}
+      - name: Follow the leader
+        uses: ./.slicc-gw/packages/github-workflow/actions/follow
+        with:
+          join-url: ${{ secrets.SLICC_JOIN_URL }}
+          runner: ${{ inputs.runner }}
+          eval: ${{ inputs.eval }}
+          eval-quiet: ${{ inputs.eval-quiet }}
+      - name: Stay connected
+        uses: ./.slicc-gw/packages/github-workflow/actions/keep-alive
+        with:
+          watch: followers
+          until: ${{ inputs.duration }}
+      - name: Disconnect
+        if: always()
+        uses: ./.slicc-gw/packages/github-workflow/actions/stop-leader
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/slicc-gw/*.log
+          if-no-files-found: ignore

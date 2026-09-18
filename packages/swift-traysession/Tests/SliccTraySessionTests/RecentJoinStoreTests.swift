@@ -3,6 +3,7 @@ import XCTest
 
 @MainActor
 final class RecentJoinStoreTests: XCTestCase {
+    
 
     func testIdentityMatchesTheSessionHashSoLiveAndRecentCollapse() {
         let joinUrl = "https://slicc.test/join/abc.secret"
@@ -26,7 +27,7 @@ final class RecentJoinStoreTests: XCTestCase {
         XCTAssertEqual(
             makeRecent(joinUrl: "http://192.168.1.4:5710/join/abc.secret").displayHost,
             "192.168.1.4:5710")
-
+        
         XCTAssertFalse(
             makeRecent(joinUrl: "https://tray.sliccy.ai/join/abc.secret").displayHost
                 .contains("secret"))
@@ -39,6 +40,8 @@ final class RecentJoinStoreTests: XCTestCase {
         XCTAssertFalse(recent.isStale(ttl: 60, now: now.addingTimeInterval(59)))
         XCTAssertTrue(recent.isStale(ttl: 60, now: now.addingTimeInterval(61)))
     }
+
+    
 
     func testRecordRemembersAJoinURLThisDeviceConnectedTo() {
         let store = makeStore(deviceName: "iPhone")
@@ -80,7 +83,7 @@ final class RecentJoinStoreTests: XCTestCase {
     func testAnUnlabelledReconnectKeepsTheNameAnEarlierConnectLearned() {
         let store = makeStore(deviceName: "iPhone")
         store.record(joinUrl: "https://slicc.test/join/a.secret", label: "Chrome on Studio")
-
+        
         store.record(joinUrl: "https://slicc.test/join/a.secret", label: "")
         XCTAssertEqual(store.recents.first?.label, "Chrome on Studio")
     }
@@ -93,7 +96,7 @@ final class RecentJoinStoreTests: XCTestCase {
             store.record(joinUrl: "https://slicc.test/join/\(index).secret", label: "S\(index)")
         }
         XCTAssertEqual(store.recents.count, RecentJoinStore.maxRecents)
-
+        
         XCTAssertEqual(store.recents.map(\.label), ["S7", "S6", "S5", "S4", "S3"])
     }
 
@@ -106,6 +109,8 @@ final class RecentJoinStoreTests: XCTestCase {
 
         XCTAssertEqual(store.recents.map(\.label), ["New"])
     }
+
+    
 
     func testAPasteOnAnotherDeviceShowsUpHere() {
         let backend = InMemoryKeyValueBackend()
@@ -143,7 +148,7 @@ final class RecentJoinStoreTests: XCTestCase {
         phone.reload()
 
         XCTAssertEqual(phone.recents.count, 1)
-
+        
         XCTAssertEqual(phone.recents.first?.deviceName, "iPad")
         XCTAssertEqual(phone.recents.first?.label, "Shared")
         XCTAssertEqual(phone.recents.first?.firstConnectedAt, Date(timeIntervalSince1970: 1_000))
@@ -153,7 +158,7 @@ final class RecentJoinStoreTests: XCTestCase {
     func testMergedPoolIsBounded() {
         var now = Date(timeIntervalSince1970: 1_000)
         let backend = InMemoryKeyValueBackend()
-
+        
         for device in 0..<6 {
             let store = makeStore(deviceName: "device\(device)", backend: backend, clock: { now })
             for entry in 0..<5 {
@@ -165,6 +170,8 @@ final class RecentJoinStoreTests: XCTestCase {
         XCTAssertEqual(reader.recents.count, RecentJoinStore.maxPooled)
     }
 
+    
+
     func testRankPutsReachableFirstThenNewest() {
         let base = Date(timeIntervalSince1970: 1_000)
         let live = makeRecent(joinUrl: "https://t.test/join/live.secret", lastConnectedAt: base)
@@ -175,12 +182,13 @@ final class RecentJoinStoreTests: XCTestCase {
 
         let ranked = RecentJoinStore.rank([live, deadNewer, liveNewest]) { $0 != deadNewer.id }
 
+        
         XCTAssertEqual(ranked.map(\.id), [liveNewest.id, live.id, deadNewer.id])
     }
 
     func testRankCapsAtFiveAfterRankingSoALiveOlderRowCanDisplaceADeadNewerOne() {
         let base = Date(timeIntervalSince1970: 1_000)
-
+        
         let dead = (0..<5).map { index in
             makeRecent(
                 joinUrl: "https://t.test/join/dead\(index).secret",
@@ -192,7 +200,7 @@ final class RecentJoinStoreTests: XCTestCase {
 
         XCTAssertEqual(ranked.count, RecentJoinStore.maxRecents)
         XCTAssertEqual(ranked.first?.id, liveOld.id)
-
+        
         XCTAssertFalse(ranked.contains(dead[0]))
     }
 
@@ -218,6 +226,8 @@ final class RecentJoinStoreTests: XCTestCase {
         XCTAssertTrue(store.ranked(limit: 0) { _ in true }.isEmpty)
     }
 
+    
+
     func testForgetDropsOneOwnEntry() {
         let store = makeStore(deviceName: "iPhone")
         store.record(joinUrl: "https://slicc.test/join/a.secret", label: "A")
@@ -237,8 +247,12 @@ final class RecentJoinStoreTests: XCTestCase {
 
         phone.clearLocalHistory()
 
+        
+        
         XCTAssertEqual(phone.recents.map(\.label), ["B"])
     }
+
+    
 
     func testCorruptPayloadDecodesAsEmptyRatherThanCrashing() {
         let backend = InMemoryKeyValueBackend()
@@ -273,6 +287,8 @@ final class RecentJoinStoreTests: XCTestCase {
             TraySessionSyncStore.storageKeyPrefix.hasPrefix(RecentJoinStore.storageKeyPrefix))
     }
 
+    
+
     private func makeStore(
         deviceName: String,
         backend: KeyValueSyncBackend = InMemoryKeyValueBackend(),
@@ -304,6 +320,9 @@ final class RecentJoinStoreTests: XCTestCase {
         )
     }
 }
+
+
+
 
 private final class ObservableRecentsBackend: KeyValueSyncBackend {
     static let changeName = Notification.Name("SliccTraySessionTest.recentsChanged")

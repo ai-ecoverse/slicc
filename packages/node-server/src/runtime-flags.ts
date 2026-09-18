@@ -26,6 +26,8 @@ export interface CliRuntimeFlags {
 
   installDir: string | null;
 
+  computerDemo: boolean;
+
   mounts: HostMountMapping[];
 }
 
@@ -116,6 +118,7 @@ function createDefaultFlags(): CliRuntimeFlags {
     hosted: false,
     installCli: false,
     installDir: null,
+    computerDemo: false,
     mounts: [],
   };
 }
@@ -144,6 +147,10 @@ function applySimpleFlag(flags: CliRuntimeFlags, arg: string): boolean {
   }
   if (arg === '--install-cli') {
     flags.installCli = true;
+    return true;
+  }
+  if (arg === '--computer-demo') {
+    flags.computerDemo = true;
     return true;
   }
   return false;

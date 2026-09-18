@@ -43,6 +43,7 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
 
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: () => [],
+  createMemoryWriteTool: () => ({ name: 'memory_write' }),
   createBashTool: () => ({ name: 'bash' }),
   createRequestSecretTool: () => ({ name: 'request_secret' }),
 }));
@@ -147,6 +148,32 @@ function assistantMessage(text: string): AgentMessage {
   } as unknown as AgentMessage;
 }
 
+function canonicalStoreHolding(messages: AgentMessage[]) {
+  return {
+    load: vi.fn().mockResolvedValue({
+      key: 'k',
+      version: 1,
+      workUnitId: baseScoop.jid,
+      workspaceId: '/workspace',
+      folder: baseScoop.folder,
+      origin: 'agent-history',
+      entries: messages.map((message, seq) => ({
+        id: `e${seq}`,
+        seq,
+        kind: message.role === 'assistant' ? 'assistant' : 'user',
+        timestamp: 0,
+        text: '',
+        message,
+      })),
+      createdAt: 42,
+      updatedAt: 42,
+      legacyKeys: { agentSessionId: baseScoop.jid, chatSessionId: 'session-x' },
+    }),
+    syncAgentMessages: vi.fn().mockResolvedValue(null),
+    delete: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 describe('ScoopContext session restore — orphan healing', () => {
   beforeEach(() => {
     captures.agentCtorCalls.length = 0;
@@ -154,21 +181,18 @@ describe('ScoopContext session restore — orphan healing', () => {
 
   it('strips a leading orphaned toolResult from a corrupt persisted session', async () => {
     const corrupt: AgentMessage[] = [orphanedToolResult(), userMessage('continue')];
-    const sessionStore = {
-      load: vi.fn().mockResolvedValue({ messages: corrupt, createdAt: 42 }),
-      save: vi.fn().mockResolvedValue(undefined),
-    };
+    const conversationStore = canonicalStoreHolding(corrupt);
 
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
       createMockFs() as never,
-      sessionStore as never,
+      undefined,
       undefined,
       'cone_test_1',
       undefined,
       undefined,
-      undefined,
+      conversationStore as never,
       createFakeCapabilityBroker()
     );
     await ctx.init();
@@ -186,21 +210,18 @@ describe('ScoopContext session restore — orphan healing', () => {
       orphanedToolResult('id-2'),
       userMessage('continue'),
     ];
-    const sessionStore = {
-      load: vi.fn().mockResolvedValue({ messages: corrupt, createdAt: 42 }),
-      save: vi.fn().mockResolvedValue(undefined),
-    };
+    const conversationStore = canonicalStoreHolding(corrupt);
 
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
       createMockFs() as never,
-      sessionStore as never,
+      undefined,
       undefined,
       'cone_test_1',
       undefined,
       undefined,
-      undefined,
+      conversationStore as never,
       createFakeCapabilityBroker()
     );
     await ctx.init();
@@ -212,21 +233,18 @@ describe('ScoopContext session restore — orphan healing', () => {
 
   it('passes already-clean sessions through unchanged', async () => {
     const clean: AgentMessage[] = [userMessage('hello'), assistantMessage('hi')];
-    const sessionStore = {
-      load: vi.fn().mockResolvedValue({ messages: clean, createdAt: 42 }),
-      save: vi.fn().mockResolvedValue(undefined),
-    };
+    const conversationStore = canonicalStoreHolding(clean);
 
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
       createMockFs() as never,
-      sessionStore as never,
+      undefined,
       undefined,
       'cone_test_1',
       undefined,
       undefined,
-      undefined,
+      conversationStore as never,
       createFakeCapabilityBroker()
     );
     await ctx.init();

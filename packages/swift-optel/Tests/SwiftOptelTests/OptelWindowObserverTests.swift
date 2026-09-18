@@ -3,6 +3,7 @@ import XCTest
 @testable import SwiftOptel
 
 final class OptelWindowObserverTests: XCTestCase {
+    
 
     func testIdentityPrefersTitleAsSourceWhenPresent() {
         let identity = OptelWindowIdentity.make(
@@ -11,7 +12,7 @@ final class OptelWindowObserverTests: XCTestCase {
             fallbackKey: "0xDEAD"
         )
         XCTAssertEqual(identity.source, "Sliccstart")
-
+        
         XCTAssertEqual(identity.key, "id:main-window")
     }
 
@@ -32,7 +33,9 @@ final class OptelWindowObserverTests: XCTestCase {
             fallbackKey: "0xBEEF"
         )
         XCTAssertEqual(identity.source, "Inspector")
-
+        
+        
+        
         XCTAssertEqual(identity.key, "title:Inspector#ref:0xBEEF")
     }
 
@@ -53,7 +56,10 @@ final class OptelWindowObserverTests: XCTestCase {
     }
 
     func testIdentityKeysDistinguishSameTitleWindowsByFallback() {
-
+        
+        
+        
+        
         let first = OptelWindowIdentity.make(
             identifier: nil,
             title: "Untitled",
@@ -65,7 +71,7 @@ final class OptelWindowObserverTests: XCTestCase {
             fallbackKey: "0xBBB"
         )
         XCTAssertNotEqual(first.key, second.key)
-
+        
         XCTAssertEqual(first.source, "Untitled")
         XCTAssertEqual(second.source, "Untitled")
 
@@ -75,7 +81,9 @@ final class OptelWindowObserverTests: XCTestCase {
     }
 
     func testIdentityKeyStableAcrossReFocusOfSameWindow() {
-
+        
+        
+        
         let first = OptelWindowIdentity.make(
             identifier: nil,
             title: "Untitled",
@@ -92,7 +100,10 @@ final class OptelWindowObserverTests: XCTestCase {
     }
 
     func testIdentityKeyIgnoresFallbackWhenIdentifierPresent() {
-
+        
+        
+        
+        
         let first = OptelWindowIdentity.make(
             identifier: "main-window",
             title: "Sliccstart",
@@ -106,6 +117,8 @@ final class OptelWindowObserverTests: XCTestCase {
         XCTAssertEqual(first.key, "id:main-window")
         XCTAssertEqual(second.key, "id:main-window")
     }
+
+    
 
     func testFirstWindowEmits() {
         let current = OptelWindowIdentity(key: "id:A", source: "Window A")
@@ -130,12 +143,15 @@ final class OptelWindowObserverTests: XCTestCase {
     }
 
     func testKeyComparisonIgnoresDisplaySourceChanges() {
-
+        
+        
         let previous = OptelWindowIdentity(key: "id:A", source: "Window A")
         let renamed = OptelWindowIdentity(key: "id:A", source: "Window A (modified)")
         let decision = OptelWindowNavigateDecider.decide(previous: previous, current: renamed)
         XCTAssertFalse(decision.shouldEmit)
     }
+
+    
 
     #if os(macOS)
         func testObserverInstallIsIdempotent() {
@@ -143,12 +159,12 @@ final class OptelWindowObserverTests: XCTestCase {
             XCTAssertFalse(OptelWindowObserver.isInstalled)
             OptelWindowObserver.installIfNeeded()
             XCTAssertTrue(OptelWindowObserver.isInstalled)
-
+            
             OptelWindowObserver.installIfNeeded()
             XCTAssertTrue(OptelWindowObserver.isInstalled)
             OptelWindowObserver.uninstall()
             XCTAssertFalse(OptelWindowObserver.isInstalled)
-
+            
             OptelWindowObserver.uninstall()
             XCTAssertFalse(OptelWindowObserver.isInstalled)
         }

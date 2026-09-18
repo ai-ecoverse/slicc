@@ -59,6 +59,7 @@ export interface PreviewOpListItem {
   allowLive: boolean;
   createdAt: string;
   mode?: 'live' | 'persistent';
+  state?: 'pending' | 'ready' | 'cleanup';
   expiresAt?: string;
 }
 

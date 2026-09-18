@@ -11,13 +11,20 @@ import (
 	"time"
 )
 
+
+
+
 const DefaultEvalQuiet = 500 * time.Millisecond
 
+
 type EvalOptions struct {
+	
+	
 	Runner []string
-
+	
+	
 	Quiet time.Duration
-
+	
 	Env map[string]string
 }
 
@@ -26,19 +33,27 @@ type evalEvent struct {
 	data   []byte
 }
 
+
+
+
+
+
 type EvalSession struct {
 	quiet time.Duration
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
-
+	
+	
 	events chan evalEvent
-
+	
 	exited     chan struct{}
 	exitResult Result
 
 	mu   sync.Mutex
 	dead bool
 }
+
+
 
 func StartEval(opts EvalOptions) (*EvalSession, error) {
 	if len(opts.Runner) == 0 {
@@ -104,6 +119,7 @@ func (e *EvalSession) pumpInto(r io.Reader, stream string, wg *sync.WaitGroup) {
 	}
 }
 
+
 func waitResult(err error) Result {
 	if err == nil {
 		return Result{ExitCode: 0}
@@ -118,6 +134,12 @@ func waitResult(err error) Result {
 	return Result{ExitCode: 1, Err: err}
 }
 
+
+
+
+
+
+
 func (e *EvalSession) Eval(
 	ctx context.Context,
 	command string,
@@ -129,18 +151,23 @@ func (e *EvalSession) Eval(
 	if e.dead {
 		return e.deadResult()
 	}
-
+	
+	
+	
 	e.drainPending(onChunk)
 
 	if !strings.HasSuffix(command, "\n") {
 		command += "\n"
 	}
 	if _, err := io.WriteString(e.stdin, command); err != nil {
-
+		
+		
 		return e.finishDead()
 	}
 	return e.collect(ctx, onChunk, control)
 }
+
+
 
 func (e *EvalSession) collect(ctx context.Context, onChunk ChunkFunc, control <-chan string) Result {
 	timer := time.NewTimer(e.quiet)
@@ -161,7 +188,12 @@ func (e *EvalSession) collect(ctx context.Context, onChunk ChunkFunc, control <-
 		case <-timer.C:
 			return Result{ExitCode: 0}
 		case <-ctx.Done():
-
+			
+			
+			
+			
+			
+			
 			interruptProcess(e.cmd)
 			return Result{ExitCode: 130, Signal: "interrupted", Err: ctx.Err()}
 		case name, ok := <-control:
@@ -170,7 +202,9 @@ func (e *EvalSession) collect(ctx context.Context, onChunk ChunkFunc, control <-
 				continue
 			}
 			if name == "SIGINT" {
-
+				
+				
+				
 				interruptProcess(e.cmd)
 				continue
 			}
@@ -178,6 +212,7 @@ func (e *EvalSession) collect(ctx context.Context, onChunk ChunkFunc, control <-
 		}
 	}
 }
+
 
 func (e *EvalSession) drainPending(onChunk ChunkFunc) {
 	for {
@@ -195,6 +230,7 @@ func (e *EvalSession) drainPending(onChunk ChunkFunc) {
 	}
 }
 
+
 func (e *EvalSession) finishDead() Result {
 	<-e.exited
 	e.dead = true
@@ -211,6 +247,7 @@ func (e *EvalSession) deadResult() Result {
 	}
 	return res
 }
+
 
 func (e *EvalSession) Close() {
 	killProcess(e.cmd, "SIGKILL")

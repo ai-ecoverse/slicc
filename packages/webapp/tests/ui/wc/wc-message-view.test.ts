@@ -212,7 +212,9 @@ describe('buildThreadChildren', () => {
 
     const labels = [...rows].map((r) => r.getAttribute('label') ?? '');
     expect(labels.some((l) => l === "Use Sliccy's computer")).toBe(true);
-    expect(labels.every((l) => !/^(bash|read_file|write_file|edit_file)\b/.test(l))).toBe(true);
+    expect(labels.every((l) => !/^(bash|read_file|write_file|edit|edit_file)\b/.test(l))).toBe(
+      true
+    );
 
     const clustered = fixture.filter((m) => (m.toolCalls?.length ?? 0) >= 3);
     expect(host.querySelectorAll('slicc-tool-cluster').length).toBe(clustered.length);
@@ -467,7 +469,14 @@ describe('tool presentation', () => {
       ['bash', { command: 'frobnicate --wat' }, "Use Sliccy's computer", 'terminal'],
       ['read_file', { path: '/workspace/CLAUDE.md' }, 'Read CLAUDE.md', 'file-text'],
       ['write_file', { path: '/tmp/a.ts', content: 'x' }, 'Write a.ts', 'file-plus'],
-      ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
+      ['memory_write', { path: '/workspace/CLAUDE.md', content: 'x' }, 'Update memory', 'brain'],
+      [
+        'memory_write',
+        { path: '/workspace/CLAUDE.md', edits: [{ oldText: 'a', newText: 'b' }] },
+        'Update memory',
+        'brain',
+      ],
+      ['edit', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
       ['lick_confirm', { lick_id: 'lick-1' }, 'Grant the scoop access', 'shield-check'],
@@ -597,6 +606,28 @@ describe('tool presentation', () => {
     expect(custom.output).toBe('On branch main');
   });
 
+  it('passes toolCallId and done onto slicc-bash-renderer-computer', () => {
+    const [, doneRow] = messageEls(
+      call('bash', { command: 'computer -c jsh:fake screenshot' }, 'screen: /tmp/x.jpg')
+    );
+    const done = doneRow.querySelector('slicc-bash-renderer-computer') as HTMLElement & {
+      toolCallId?: string;
+      done?: boolean;
+    };
+    expect(done).toBeTruthy();
+    expect(done.toolCallId).toBe('t1');
+    expect(done.done).toBe(true);
+    expect(done.getAttribute('tool-call-id')).toBe('t1');
+    expect(done.hasAttribute('done')).toBe(true);
+
+    const [, pendingRow] = messageEls(call('bash', { command: 'computer watch -c jsh:fake' }));
+    const pending = pendingRow.querySelector('slicc-bash-renderer-computer') as HTMLElement & {
+      done?: boolean;
+    };
+    expect(pending.done).toBe(false);
+    expect(pending.hasAttribute('done')).toBe(false);
+  });
+
   it('ranks chained bash segments so housekeeping preambles lose the icon', () => {
     const cases: Array<[string, string]> = [
       ['cd repo && git push', 'git-branch'],
@@ -607,7 +638,7 @@ describe('tool presentation', () => {
 
       ['echo hi && npm test', 'package'],
 
-      ['echo hi && test foo', 'flask-conical'],
+      ['echo hi && tst foo', 'flask-conical'],
 
       ['cat foo | grep bar', 'file-text'],
 
@@ -642,16 +673,62 @@ describe('tool presentation', () => {
     }
   });
 
-  it('edit bodies show old/new with the diff classes; writes show added content', () => {
+  it('Pi edit bodies show every old/new pair with diff classes; writes show added content', () => {
+    const [, editRow] = messageEls(
+      call(
+        'edit',
+        {
+          path: '/a.ts',
+          edits: [
+            { oldText: 'before one', newText: 'after one' },
+            { oldText: 'before two', newText: 'after two' },
+          ],
+        },
+        'ok'
+      )
+    );
+    expect([...editRow.querySelectorAll('.del')].map((el) => el.textContent)).toEqual([
+      'before one',
+      'before two',
+    ]);
+    expect([...editRow.querySelectorAll('.add')].map((el) => el.textContent)).toEqual([
+      'after one',
+      'after two',
+    ]);
+
+    const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
+    expect(writeRow.querySelector('.add')?.textContent).toBe('body');
+    expect(writeRow.textContent).toContain('/a.ts');
+  });
+
+  it('memory_write bodies follow the two shapes: content like a write, edits like an edit', () => {
+    const [, editRow] = messageEls(
+      call(
+        'memory_write',
+        {
+          path: '/workspace/CLAUDE.md',
+          edits: [{ oldText: '- stale fact', newText: '- fresh fact (2026-09-16)' }],
+        },
+        'Wrote /workspace/CLAUDE.md: 120 chars, 5880 under the 6000-char budget.'
+      )
+    );
+    expect(editRow.querySelector('.del')?.textContent).toBe('- stale fact');
+    expect(editRow.querySelector('.add')?.textContent).toBe('- fresh fact (2026-09-16)');
+    expect(editRow.textContent).toContain('/workspace/CLAUDE.md');
+
+    const [, writeRow] = messageEls(
+      call('memory_write', { path: '/workspace/CLAUDE.md', content: '# Memory\n' }, 'ok')
+    );
+    expect(writeRow.querySelector('.del')).toBeNull();
+    expect(writeRow.querySelector('.add')?.textContent).toBe('# Memory\n');
+  });
+
+  it('still renders legacy edit_file transcript bodies', () => {
     const [, editRow] = messageEls(
       call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')
     );
     expect(editRow.querySelector('.del')?.textContent).toBe('before');
     expect(editRow.querySelector('.add')?.textContent).toBe('after');
-
-    const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
-    expect(writeRow.querySelector('.add')?.textContent).toBe('body');
-    expect(writeRow.textContent).toContain('/a.ts');
   });
 
   it('labels clusters via quickLabel from inputs alone — results not required', async () => {

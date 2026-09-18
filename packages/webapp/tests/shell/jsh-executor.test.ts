@@ -139,6 +139,29 @@ describe('executeJshFile', () => {
     expect(result.stderr).toBe('');
   });
 
+  it('strips a leading shebang so the script compiles', async () => {
+    const ctx = createMockCtx({
+      '/workspace/hello.jsh': '#!/usr/bin/env jsh\nconsole.log("shebang ok");\n',
+    });
+    const result = await executeJshFile('/workspace/hello.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('shebang ok');
+    expect(result.stderr).not.toMatch(/SyntaxError|Unexpected/);
+  });
+
+  it('keeps shebang-stripped error line numbers aligned with the file', async () => {
+    const ctx = createMockCtx({
+      '/workspace/blank.jsh': '\nthrow new Error("boom");\n',
+      '/workspace/bang.jsh': '#!/usr/bin/env jsh\nthrow new Error("boom");\n',
+    });
+    const blank = await executeJshFile('/workspace/blank.jsh', [], ctx);
+    const bang = await executeJshFile('/workspace/bang.jsh', [], ctx);
+    expect(blank.exitCode).toBe(1);
+    expect(bang.exitCode).toBe(1);
+    const line = (stderr: string) => stderr.match(/:(\d+)(?::\d+)?/)?.[1];
+    expect(line(bang.stderr)).toBe(line(blank.stderr));
+  });
+
   it('sets process.argv correctly', async () => {
     const ctx = createMockCtx({
       '/workspace/args.jsh': 'console.log(JSON.stringify(process.argv));',
@@ -180,11 +203,11 @@ describe('executeJshFile', () => {
     }
   });
 
-  it('never seeds the provider env into scoop-owned realms', async () => {
+  it('never seeds the provider env into scoop-owned or jshd-owned realms', async () => {
     const { ProcessManager } = await import('../../src/kernel/process-manager.js');
     registerProviderEnvSeeder(() => ({ AI_GATEWAY_API_KEY: 'vck_seeded' }));
     try {
-      const run = (kind: 'cone' | 'scoop' | 'system') =>
+      const run = (kind: 'cone' | 'scoop' | 'system' | 'jshd') =>
         executeJshFile(
           '/workspace/seed.jsh',
           [],
@@ -194,6 +217,7 @@ describe('executeJshFile', () => {
           { processManager: new ProcessManager(), owner: { kind } }
         );
       expect((await run('scoop')).stdout.trim()).toBe('undefined');
+      expect((await run('jshd')).stdout.trim()).toBe('undefined');
       expect((await run('cone')).stdout.trim()).toBe('vck_seeded');
       expect((await run('system')).stdout.trim()).toBe('vck_seeded');
     } finally {

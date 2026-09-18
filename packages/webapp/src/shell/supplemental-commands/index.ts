@@ -16,6 +16,7 @@ import {
   createPbpasteCommand,
 } from './clipboard-commands.js';
 import { createCmpCommand } from './cmp-command.js';
+import { createComputerCommand } from './computer-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { type CrontaskCommandOptions, createCrontaskCommand } from './crontask-command.js';
@@ -40,6 +41,7 @@ import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
 import { createIpkCommand } from './ipk-command.js';
 import { createIpxCommand } from './ipx-command.js';
+import { createJshdCommand } from './jshd-command.js';
 import { createKillCommand } from './kill-command.js';
 import { createLayoutCommand } from './layout-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
@@ -63,6 +65,7 @@ import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-
 import { createPluginCommand } from './plugin-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createPython3LikeCommand } from './python-command.js';
+import { createRgCommand } from './rg-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
@@ -202,6 +205,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createEsbuildCommand(),
     createBiomeCommand(),
     createNodeCommand({ buildProcessConfig: options.buildProcessConfig }),
+    createNodeCommand({ buildProcessConfig: options.buildProcessConfig }, 'jsh'),
     createPython3LikeCommand('python3', { buildProcessConfig: options.buildProcessConfig }),
     createPython3LikeCommand('python', { buildProcessConfig: options.buildProcessConfig }),
     ...packageManagerCommands(options),
@@ -242,6 +246,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhoamiCommand(),
     createUnlinkCommand(),
     createMktempCommand(),
+
+    createRgCommand(),
     createManCommand(),
     createDigCommand(),
     createOAuthTokenCommand(),
@@ -267,6 +273,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPsCommand({ processManager: options.processManager }),
     createUptimeCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createJshdCommand({
+      processManager: options.processManager,
+      scriptCatalog: options.scriptCatalog,
+    }),
 
     ...createBashBuiltinCommands(),
     createMeminfoCommand(),
@@ -275,6 +285,11 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createHidCommand(),
     createSerialCommand(),
     createV86Command({ processManager: options.processManager }),
+    createComputerCommand({
+      processManager: options.processManager,
+      browser: options.browserAPI,
+      sudoBroker: options.sudoCommand?.broker,
+    }),
     createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
     createSliccFsCleanupCommand(),

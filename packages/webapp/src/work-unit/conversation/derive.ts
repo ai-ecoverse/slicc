@@ -1,6 +1,11 @@
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatMessage, CompactionMarkerState } from '../../scoops/chat-types.js';
-import type { ConversationEntry, ConversationMarker, WorkUnitConversationRecord } from './types.js';
+import type {
+  ConversationAttachmentOverlay,
+  ConversationEntry,
+  ConversationMarker,
+  WorkUnitConversationRecord,
+} from './types.js';
 import { isReadableRecord } from './types.js';
 
 const RESTORABLE_STATES: ReadonlySet<CompactionMarkerState> = new Set<CompactionMarkerState>([
@@ -32,17 +37,41 @@ export async function toChatMessages(
     }
     return interleaveMarkers(out, record.markers);
   }
+  const prefix = record.projectionPrefix ?? [];
   const messages = toAgentMessages(record);
-  if (messages.length === 0) return [];
+  if (messages.length === 0) return interleaveMarkers([...prefix], record.markers);
   const { agentMessagesToChatMessages } = await import('../../scoops/agent-message-to-chat.js');
-  return interleaveMarkers(agentMessagesToChatMessages(messages, options), record.markers);
+  const derived = applyAttachmentOverlays(
+    agentMessagesToChatMessages(messages, options),
+    record.attachments
+  );
+  return interleaveMarkers([...prefix, ...derived], record.markers);
+}
+
+export function applyAttachmentOverlays(
+  rows: ChatMessage[],
+  overlays: readonly ConversationAttachmentOverlay[] | undefined
+): ChatMessage[] {
+  if (!overlays?.length) return rows;
+  const pending = [...overlays].sort((a, b) => a.timestamp - b.timestamp);
+  const used = new Set<number>();
+  return rows.map((row) => {
+    if (row.role !== 'user' || row.attachments?.length) return row;
+    const body = row.content.trim();
+    const at = pending.findIndex((o, i) => !used.has(i) && o.body.trim() === body);
+    if (at < 0) return row;
+    used.add(at);
+    return { ...row, attachments: pending[at].attachments };
+  });
 }
 
 export function interleaveMarkers(
   messages: ChatMessage[],
   markers: readonly ConversationMarker[] | undefined
 ): ChatMessage[] {
-  const live = (markers ?? []).filter((m) => RESTORABLE_STATES.has(m.compaction.state));
+  const live = (markers ?? []).filter(
+    (m) => m.kind !== 'compaction' || RESTORABLE_STATES.has(m.compaction.state)
+  );
   if (live.length === 0) return messages;
   const sorted = [...live].sort((a, b) => a.timestamp - b.timestamp);
   const out: ChatMessage[] = [];
@@ -69,6 +98,15 @@ function messageTime(message: ChatMessage): number {
 }
 
 function markerRow(marker: ConversationMarker): ChatMessage {
+  if (marker.kind === 'error') {
+    return {
+      id: marker.id,
+      role: 'assistant',
+      content: marker.text,
+      timestamp: marker.timestamp,
+      error: true,
+    };
+  }
   return {
     id: marker.id,
     role: 'assistant',
@@ -81,6 +119,10 @@ function markerRow(marker: ConversationMarker): ChatMessage {
 export function toTranscriptText(record: WorkUnitConversationRecord | null): string {
   if (!isReadableRecord(record) || record === null) return '';
   const lines: string[] = [];
+  for (const message of record.projectionPrefix ?? []) {
+    const text = typeof message.content === 'string' ? message.content.trim() : '';
+    if (text.length > 0) lines.push(`${message.role}: ${text}`);
+  }
   for (const entry of record.entries) {
     const label = transcriptLabel(entry);
     if (!label) continue;
@@ -104,7 +146,8 @@ export function toChildResultSummary(record: WorkUnitConversationRecord | null):
 
 export function conversationLength(record: WorkUnitConversationRecord | null): number {
   if (!isReadableRecord(record) || record === null) return 0;
-  return record.entries.filter((e) => e.kind !== 'tool-call').length;
+  const prefix = record.projectionPrefix?.length ?? 0;
+  return prefix + record.entries.filter((e) => e.kind !== 'tool-call').length;
 }
 
 function transcriptLabel(entry: ConversationEntry): string | null {

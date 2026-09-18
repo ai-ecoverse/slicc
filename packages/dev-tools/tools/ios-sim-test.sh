@@ -45,6 +45,8 @@ done
 
 # shellcheck source=packages/dev-tools/tools/ios-sim-select.sh
 source "$SCRIPT_DIR/ios-sim-select.sh"
+# shellcheck source=packages/dev-tools/tools/ios-sim-prepare.sh
+source "$SCRIPT_DIR/ios-sim-prepare.sh"
 # shellcheck source=packages/dev-tools/tools/swift-coverage-runner-retry.sh
 source "$SCRIPT_DIR/swift-coverage-runner-retry.sh"
 
@@ -67,11 +69,7 @@ fi
 
 
 
-
-echo "==> waiting for simulator $UDID to finish booting"
-xcrun simctl boot "$UDID" 2>/dev/null || true
-xcrun simctl bootstatus "$UDID" -b ||
-  echo "::warning::simctl bootstatus did not report a clean boot; continuing"
+prepare_ios_simulator "$UDID"
 
 echo "==> xcodebuild test ($ONLY_TESTING, simulator $UDID)"
 

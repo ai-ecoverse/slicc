@@ -1,3 +1,4 @@
+import type { GelatiereSuggestion } from '../../../base/gelatiere-store.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { defaultLickTarget, type LickTargetEnv } from '../../lick-target-env.js';
 import { parseKnownFlags } from '../subcommand-flags.js';
@@ -10,10 +11,14 @@ interface GelatiereRootLike {
   name: string;
   jid: string;
 }
+type AllowListOutcome = 'unchanged' | 'updated' | 'deferred';
 interface GelatiereSeamLike {
-  ensureUnit(): Promise<{ folder: string; jid: string; created: boolean }>;
+  ensureUnit(
+    allowedCommands?: readonly string[]
+  ): Promise<{ folder: string; jid: string; created: boolean; allowList?: AllowListOutcome }>;
   unregisterOwned(): Promise<string[]>;
   unit(): GelatiereRootLike | undefined;
+  unitAllowedCommands(): readonly string[] | undefined;
   roots(): GelatiereRootLike[];
   ensureNightly(cron: string): Promise<{ id: string; cron: string; created: boolean }>;
   nightly(): { id: string; cron: string } | undefined;
@@ -33,20 +38,27 @@ const HELP = `usage: gelatiere <command> [options]
 The gelatiere is SLICC's resident advisor: a persistent unit no cone owns that
 reviews your archived sessions — nightly, and after a chat ends — and suggests
 skills to install, use cases to try, and habits to change. Suggestions show up
-as cards in the suggestions sprinkle and every cone gets a lick.
+as cards in the suggestions sprinkle and each cone they address gets a lick.
 
 Commands:
   init [--reset]       Create the gelatiere unit and its nightly crontask (idempotent);
                        --reset first drops every unit the gelatiere owner holds
   run                  Ask the gelatiere for a pass right now
   suggest <file>       Fold a pass's candidates (JSON) into the store — the gelatiere's own step
-  deliver [options]    Lick every other cone with the open suggestions — the gelatiere's other step
+  deliver [options]    Lick each cone with the suggestions addressed to it — the gelatiere's other step
   list [--all|--json]  Show open suggestions (--all includes taken and dismissed)
   dismiss <id>         Wave a suggestion away so it is not shown again
   status               Unit, nightly schedule, last pass, last delivery, counts
   catalog              The skill catalog (JSON) from www.sliccy.com
   commands             Every shell command SLICC ships, from the sitemap
   man <command>        One man page, plain text
+  use-cases [options]  What SLICC is for, from the sitemap: title, summary and the
+                       skills each one wants
+
+use-cases options:
+  --limit <n>          At most n of them (default: all). Fewer than the site has
+                       rotates daily, so a second look is not the same three
+  --json               Machine-readable, for the suggestions card's empty state
 
 deliver options:
   --scoop <target>     One cone (folder, name or jid) instead of every cone; does not
@@ -54,7 +66,8 @@ deliver options:
   --force              Send even when nothing is new since the last delivery
 
 Files:
-  /shared/GELATIERE.md                 Pass instructions + config (intervalHours, nightly, maxSuggestions)
+  /shared/GELATIERE.md                 Pass instructions + config (intervalHours, nightly, maxSuggestions,
+                                       allowedCommands — extra shell commands a pass may run unattended)
   /shared/.gelatiere/suggestions.json  Every suggestion; takenAt when acted on, dismissedAt when waved away
   /shared/.gelatiere/state.json        Pass and delivery ledger
 
@@ -63,9 +76,13 @@ Examples:
   gelatiere run
   gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
   gelatiere dismiss skill-github
+  gelatiere use-cases --limit 3 --json
 `;
 
 const DELIVER_VALUE_FLAGS = ['--scoop'] as const;
+const USE_CASES_VALUE_FLAGS = ['--limit'] as const;
+
+const HELP_VALUE_FLAGS = [...DELIVER_VALUE_FLAGS, ...USE_CASES_VALUE_FLAGS] as const;
 
 function ok(stdout: string): CommandResult {
   return { stdout, stderr: '', exitCode: 0 };
@@ -98,9 +115,9 @@ async function handleInit(args: string[], fs: VirtualFS): Promise<CommandResult>
     const jids = await host.unregisterOwned();
     dropped = jids.length ? `Dropped ${jids.length} gelatiere unit(s): ${jids.join(', ')}\n` : '';
   }
-  let unit: { folder: string; jid: string; created: boolean };
+  let unit: { folder: string; jid: string; created: boolean; allowList?: AllowListOutcome };
   try {
-    unit = await host.ensureUnit();
+    unit = await host.ensureUnit(config.allowedCommands);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
   }
@@ -108,9 +125,18 @@ async function handleInit(args: string[], fs: VirtualFS): Promise<CommandResult>
   return ok(
     dropped +
       `${unit.created ? 'Created' : 'Found'} the gelatiere (${unit.jid}, folder ${unit.folder})\n` +
+      allowListLine(unit.allowList) +
       `${nightly.created ? 'Registered' : 'Found'} nightly pass: cron "${nightly.cron}" (${nightly.id})\n` +
       'Suggestions render in the suggestions card; `gelatiere run` asks for a pass now.\n'
   );
+}
+
+function allowListLine(outcome: AllowListOutcome | undefined): string {
+  if (outcome === 'updated') return 'Updated its command allow-list from GELATIERE.md\n';
+  if (outcome === 'deferred') {
+    return 'Left its command allow-list alone: the gelatiere is mid-pass and applying it would\ncancel the pass — run `gelatiere init` again once it is idle\n';
+  }
+  return '';
 }
 
 async function handleRun(env: LickTargetEnv): Promise<CommandResult> {
@@ -162,25 +188,57 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
   }
 
   const roster = host.roots();
+  if (roster.length === 0) return fail('no cone is running to deliver to');
   const explicit = parsed.values.get('--scoop');
-  const resolves = (r: GelatiereRootLike): boolean =>
-    r.folder === explicit || r.name === explicit || r.jid === explicit;
-  if (explicit && !roster.some(resolves)) {
-    const known = roster.map((r) => r.folder).join(', ') || 'none running';
+  const chosen = explicit
+    ? roster.find((r) => r.folder === explicit || r.name === explicit || r.jid === explicit)
+    : undefined;
+  if (explicit && !chosen) {
+    const known = roster.map((r) => r.folder).join(', ');
     return fail(`unknown delivery target "${explicit}" (cones: ${known})`);
   }
-  const targets = explicit ? [explicit] : roster.map((r) => r.folder);
-  if (targets.length === 0) return fail('no cone is running to deliver to');
-  const body = store.buildGelatiereLickBody(added, open);
-  for (const target of targets) host.lick(target, body);
+  const sent = await lickEachCone(host, roster, chosen ? [chosen] : roster, {
+    since: state.lastDeliveredAt,
+    open,
+    force: parsed.bools.has('--force'),
+    alias: explicit,
+  });
 
   if (!explicit) {
     await store.writeGelatiereState(fs, { ...state, lastDeliveredAt: new Date().toISOString() });
   }
   const note = explicit ? ' (targeted; the delivery watermark is unchanged)' : '';
-  return ok(
-    `Delivered ${added.length} new (${open.length} open) to ${targets.length} cone(s): ${targets.join(', ')}${note}\n`
-  );
+  if (sent.length === 0) {
+    return ok(`Nothing addressed to ${explicit ?? 'any running cone'}; no lick sent${note}\n`);
+  }
+  return ok(`Delivered to ${sent.length} cone(s): ${sent.join(', ')}${note}\n`);
+}
+
+async function lickEachCone(
+  host: GelatiereSeamLike,
+  roster: readonly GelatiereRootLike[],
+  targets: readonly GelatiereRootLike[],
+  batch: {
+    since: string | undefined;
+    open: readonly GelatiereSuggestion[];
+    force: boolean;
+
+    alias?: string;
+  }
+): Promise<string[]> {
+  const store = await loadStore();
+  const known = new Set(roster.map((r) => r.folder));
+  const primary = roster[0].folder;
+  const sent: string[] = [];
+  for (const root of targets) {
+    const open = store.suggestionsForCone(batch.open, root.folder, primary, known);
+    const added = open.filter((s) => store.isNewSince(s, batch.since, root.folder));
+    if (added.length === 0 && !(batch.force && open.length > 0)) continue;
+    const target = batch.alias ?? root.folder;
+    host.lick(target, store.buildGelatiereLickBody(added, open));
+    sent.push(`${target} (${added.length} new, ${open.length} open)`);
+  }
+  return sent;
 }
 
 async function handleList(args: string[], fs: VirtualFS): Promise<CommandResult> {
@@ -222,6 +280,12 @@ const MAN_BYTE_CAP = 16_000;
 
 const FETCH_BYTE_CAP = 512_000;
 const MAN_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+const USE_CASE_BYTE_CAP = 24_000;
+
+const MAX_USE_CASE_PAGES = 12;
+
+const USE_CASE_CONCURRENCY = 4;
 
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -269,6 +333,129 @@ async function handleMan(args: string[]): Promise<CommandResult> {
   }
 }
 
+interface UseCase {
+  slug: string;
+  url: string;
+  title: string;
+  description: string;
+
+  skills: string[];
+}
+
+function parseUseCasePage(slug: string, url: string, html: string): UseCase {
+  const meta = (name: string): string => {
+    const found = html.match(
+      new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=(["'])((?:(?!\\1).)*)\\1`, 'i')
+    );
+    return found ? decodeEntities(found[2]).trim() : '';
+  };
+  const titleTag = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  return {
+    slug,
+    url,
+    title: titleTag ? decodeEntities(titleTag[1]).trim() : humanizeSlug(slug),
+    description: meta('description'),
+    skills: meta('slicc-upskill')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  };
+}
+
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  '#39': "'",
+  '#x27': "'",
+};
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-z]+);/g, (whole, name: string) => {
+    const known = ENTITIES[name.toLowerCase()];
+    if (known) return known;
+    const numeric = name.match(/^#(x?)([0-9a-fA-F]+)$/i);
+    if (!numeric) return whole;
+    const code = Number.parseInt(numeric[2], numeric[1] ? 16 : 10);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+  });
+}
+
+function humanizeSlug(slug: string): string {
+  const words = slug.replace(/-/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function rotationOffset(total: number, now: number): number {
+  if (total <= 0) return 0;
+  return Math.floor(now / 86_400_000) % total;
+}
+
+function selectUseCases<T>(all: readonly T[], limit: number, now: number): T[] {
+  if (limit >= all.length) return [...all];
+  const start = rotationOffset(all.length, now);
+  return Array.from({ length: limit }, (_, i) => all[(start + i) % all.length]);
+}
+
+async function mapLimited<T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      out[index] = await task(items[index]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(USE_CASE_CONCURRENCY, items.length) }, () => worker())
+  );
+  return out;
+}
+
+async function handleUseCases(args: string[]): Promise<CommandResult> {
+  const parsed = parseKnownFlags(args, { value: USE_CASES_VALUE_FLAGS, bool: ['--json'] });
+  if ('error' in parsed) return fail(parsed.error);
+  const rawLimit = parsed.values.get('--limit');
+  const limit = rawLimit === undefined ? MAX_USE_CASE_PAGES : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    return fail(`--limit must be a positive whole number, not "${rawLimit}"`);
+  }
+  let slugs: string[];
+  try {
+    const xml = await fetchSliccy('/sitemap.xml', FETCH_BYTE_CAP);
+    slugs = [
+      ...new Set(
+        [...xml.matchAll(/<loc>[^<]*\/use-cases\/([a-z0-9-]+)(?:\.html)?<\/loc>/g)].map((m) => m[1])
+      ),
+    ].sort();
+  } catch (error) {
+    return fail(`sitemap fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (slugs.length === 0) return fail('no use cases found in the sitemap');
+  const shown = selectUseCases(slugs, Math.min(limit, MAX_USE_CASE_PAGES), Date.now());
+  const cases = await mapLimited(shown, async (slug): Promise<UseCase> => {
+    const url = `${GELATIERE_FETCH_ORIGIN}/use-cases/${slug}`;
+    try {
+      return parseUseCasePage(
+        slug,
+        url,
+        await fetchSliccy(`/use-cases/${slug}`, USE_CASE_BYTE_CAP)
+      );
+    } catch {
+      return { slug, url, title: humanizeSlug(slug), description: '', skills: [] };
+    }
+  });
+  if (parsed.bools.has('--json')) return ok(`${JSON.stringify(cases, null, 2)}\n`);
+  let output = '';
+  for (const entry of cases) {
+    output += `${entry.slug}\t${entry.title}\n  ${entry.url}\n`;
+    if (entry.description) output += `  ${entry.description}\n`;
+    if (entry.skills.length) output += `  skills: ${entry.skills.join(' ')}\n`;
+  }
+  return ok(output);
+}
+
 async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   const store = await loadStore();
   const host = seam();
@@ -287,6 +474,7 @@ async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   const nightly = host?.nightly();
   output += `Nightly:        ${nightly ? `registered, cron "${nightly.cron}" (${nightly.id})` : `not registered — run \`gelatiere init\` (cron "${config.nightly}")`}\n`;
   output += `Interval:       ${config.intervalHours}h between session-end passes\n`;
+  output += commandsLine(config.allowedCommands, host?.unitAllowedCommands(), store);
   output += `Passes:         ${state.passes}\n`;
   output += `Last pass:      ${state.lastPassAt ?? 'never'}\n`;
   output += `Last trigger:   ${state.lastTriggeredAt ?? 'never'}\n`;
@@ -295,13 +483,36 @@ async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   return ok(output);
 }
 
+function commandsLine(
+  configured: readonly string[],
+  inForce: readonly string[] | undefined,
+  store: Awaited<ReturnType<typeof loadStore>>
+): string {
+  const extras = (list: readonly string[]): string => {
+    const found = list.filter(
+      (command) => !store.GELATIERE_BASE_ALLOWED_COMMANDS.includes(command)
+    );
+    return found.length ? ` (+${found.join(', ')} from GELATIERE.md)` : '';
+  };
+  if (!inForce) {
+    return `Commands:       ${configured.length} configured${extras(configured)}, pending — run \`gelatiere init\`\n`;
+  }
+  const same =
+    inForce.length === configured.length && inForce.every((cmd, i) => cmd === configured[i]);
+  if (same) return `Commands:       ${inForce.length} allowed without approval${extras(inForce)}\n`;
+  return (
+    `Commands:       ${inForce.length} in force${extras(inForce)}; GELATIERE.md asks for ` +
+    `${configured.length}${extras(configured)} — run \`gelatiere init\`\n`
+  );
+}
+
 export async function runGelatiere(
   args: string[],
   ctx: { env: LickTargetEnv },
   options: GelatiereCommandOptions
 ): Promise<CommandResult> {
   const subcommand = args[0];
-  if (!subcommand || isHelpRequest(args, { valueFlags: DELIVER_VALUE_FLAGS })) return ok(HELP);
+  if (!subcommand || isHelpRequest(args, { valueFlags: HELP_VALUE_FLAGS })) return ok(HELP);
   const rest = args.slice(1);
   switch (subcommand) {
     case 'init':
@@ -324,6 +535,8 @@ export async function runGelatiere(
       return handleCommands();
     case 'man':
       return handleMan(rest);
+    case 'use-cases':
+      return handleUseCases(rest);
     default:
       return fail(`unknown command: ${subcommand}\n${HELP}`);
   }

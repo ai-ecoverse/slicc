@@ -10,6 +10,9 @@ export interface MockCommandContextOptions {
   exportedEnv?: Record<string, string>;
 
   overrides?: Partial<CommandContext>;
+
+  stdoutIsTTY?: boolean;
+  stdinIsTTY?: boolean;
 }
 
 export function mockCommandContext(
@@ -19,7 +22,7 @@ export function mockCommandContext(
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
     ...options.fs,
   };
-  return createCommandContext({
+  const ctx = createCommandContext({
     fs: fs as IFileSystem,
     cwd: options.cwd ?? '/home',
     env: options.env ?? new Map<string, string>(),
@@ -27,4 +30,11 @@ export function mockCommandContext(
     ...(options.exportedEnv ? { exportedEnv: options.exportedEnv } : {}),
     ...options.overrides,
   });
+  if (typeof options.stdoutIsTTY === 'boolean') {
+    Object.assign(ctx, { stdoutIsTTY: options.stdoutIsTTY });
+  }
+  if (typeof options.stdinIsTTY === 'boolean') {
+    Object.assign(ctx, { stdinIsTTY: options.stdinIsTTY });
+  }
+  return ctx;
 }

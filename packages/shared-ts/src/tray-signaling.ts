@@ -140,6 +140,8 @@ export interface WorkerPreviewRequest {
   servedRoot: string;
   vfsPath: string;
   asText: boolean;
+
+  range?: string;
 }
 
 export interface WorkerPreviewRevoked {
@@ -240,14 +242,23 @@ export interface LeaderPreviewResponseOk {
 
   content: string;
   encoding: 'utf-8' | 'base64';
+
+  status?: 200 | 206;
+
+  size?: number;
+
+  range?: { start: number; end: number };
 }
 
 export interface LeaderPreviewResponseError {
   type: 'preview.response';
   reqId: string;
   ok: false;
-  status: 404 | 403 | 500;
+
+  status: 404 | 403 | 413 | 416 | 500;
   reason?: string;
+
+  size?: number;
 }
 
 export interface LeaderPreviewPurge {

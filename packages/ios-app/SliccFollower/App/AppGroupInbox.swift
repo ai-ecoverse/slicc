@@ -1,5 +1,14 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
 struct AppGroupInbox {
     struct Request: Codable, Equatable {
         let id: UUID
@@ -9,7 +18,8 @@ struct AppGroupInbox {
 
     static let suiteName = "group.ai.sliccy.follower"
     static let key = "inbound-share-requests"
-
+    
+    
     static let maxPending = 5
 
     private let defaults: UserDefaults?
@@ -18,6 +28,8 @@ struct AppGroupInbox {
         self.defaults = defaults
     }
 
+    
+    
     @discardableResult
     func enqueue(url: URL, now: Date = Date()) -> Bool {
         guard let defaults else { return false }
@@ -29,6 +41,7 @@ struct AppGroupInbox {
         return true
     }
 
+    
     func drain() -> [Request] {
         guard let defaults else { return [] }
         let pending = load()

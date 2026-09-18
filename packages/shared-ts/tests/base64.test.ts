@@ -43,6 +43,13 @@ describe('base64 codec', () => {
     expect(asPlain(decoded)).toEqual(bytes);
   });
 
+  it('encodes an offset view as the slice, not the backing buffer', () => {
+    const padded = new Uint8Array([0xaa, 0x68, 0x69, 0xbb]);
+    const view = padded.subarray(1, 3);
+    expect(uint8ToBase64(view)).toBe(uint8ToBase64(new Uint8Array([0x68, 0x69])));
+    expect(asPlain(base64ToUint8(uint8ToBase64(view)))).toEqual(new Uint8Array([0x68, 0x69]));
+  });
+
   it('survives inputs larger than the chunk size (would stack-overflow the naive spread)', () => {
     const bytes = makeBytes(128 * 1024);
     const decoded = base64ToUint8(uint8ToBase64(bytes));
@@ -81,6 +88,12 @@ describe('base64 codec — universal fallback (no Buffer)', () => {
     const bytes = makeBytes(128 * 1024);
     const decoded = base64ToUint8(uint8ToBase64(bytes));
     expect(asPlain(decoded)).toEqual(bytes);
+  });
+
+  it('encodes an offset view as the slice without the Node fast-path', () => {
+    const padded = new Uint8Array([0xaa, 0x68, 0x69, 0xbb]);
+    const view = padded.subarray(1, 3);
+    expect(uint8ToBase64(view)).toBe(uint8ToBase64(new Uint8Array([0x68, 0x69])));
   });
 });
 

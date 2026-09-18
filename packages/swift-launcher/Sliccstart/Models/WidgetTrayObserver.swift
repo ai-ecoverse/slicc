@@ -7,48 +7,84 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "WidgetTrayObserver")
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @MainActor
 final class WidgetTrayObserver: NSObject {
     private let publisher: WidgetSnapshotPublisher
     private let installation: WidgetInstallationQuery
-    private let makeConnector: (URL) -> WidgetTrayConnecting
+    private let makeConnector: (URL) -> TrayFollowerConnecting
 
-    private var connector: WidgetTrayConnecting?
-
+    private var connector: TrayFollowerConnecting?
+    
+    
+    
+    
     private var startTask: Task<Void, Never>?
-
+    
+    
+    
+    
+    
+    
     private var lastSync: Task<Void, Never>?
     private var sendData: ((Data) -> Bool)?
     private var reassembler = TrayChunkReassembler()
 
+    
     private var joinUrl: URL?
     private var label: String?
 
+    
+    
     private var scoops: [ScoopSummary] = []
     private var activeScoopJid: String?
     private var lastMessage: WidgetMessage?
     private var connected = false
-
+    
+    
     private var recency = UnitRecencyLedger()
 
+    
+    
     private var snapshotChunks: [Int: String] = [:]
     private var snapshotTotalChunks = 0
-
+    
+    
+    
     private var lastSnapshotRequest: Date?
     private let snapshotRequestInterval: TimeInterval = 30
 
     init(
         publisher: WidgetSnapshotPublisher? = nil,
         installation: WidgetInstallationQuery = .default,
-        makeConnector: @escaping (URL) -> WidgetTrayConnecting = { TrayFollowerConnector(joinUrl: $0) }
+        makeConnector: @escaping (URL) -> TrayFollowerConnecting = { TrayFollowerConnector(joinUrl: $0) }
     ) {
-
+        
+        
+        
         self.publisher = publisher ?? WidgetSnapshotPublisher(store: WidgetHost.sliccstart.store)
         self.installation = installation
         self.makeConnector = makeConnector
         super.init()
     }
 
+    
+    
+    
+    
     func leaderChanged(joinUrl rawJoinUrl: String?, label: String?) {
         let url = rawJoinUrl.flatMap(URL.init(string:))
         guard url?.absoluteString != joinUrl?.absoluteString || url == nil else { return }
@@ -56,13 +92,16 @@ final class WidgetTrayObserver: NSObject {
         stop()
         joinUrl = url
         guard url != nil else {
-
+            
+            
             publisher.clear()
             return
         }
         refresh()
     }
 
+    
+    
     func refresh() {
         guard startTask == nil else { return }
         let task = Task { @MainActor [weak self] in
@@ -73,6 +112,8 @@ final class WidgetTrayObserver: NSObject {
         lastSync = task
     }
 
+    
+    
     func _testing_settle() async {
         await lastSync?.value
     }
@@ -83,6 +124,9 @@ final class WidgetTrayObserver: NSObject {
         teardownConnection()
     }
 
+    
+    
+    
     private func teardownConnection() {
         connector?.stop()
         connector = nil
@@ -94,10 +138,20 @@ final class WidgetTrayObserver: NSObject {
         snapshotChunks.removeAll()
         lastSnapshotRequest = nil
         reassembler = TrayChunkReassembler()
-
+        
+        
         recency = UnitRecencyLedger()
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private func syncWithInstallation() async {
         guard let url = joinUrl else {
             teardownConnection()
@@ -105,6 +159,11 @@ final class WidgetTrayObserver: NSObject {
         }
         let installed = await installation.isInstalled()
 
+        
+        
+        
+        
+        
         guard !Task.isCancelled, joinUrl?.absoluteString == url.absoluteString else { return }
 
         guard installed else {
@@ -127,6 +186,8 @@ final class WidgetTrayObserver: NSObject {
         }
     }
 
+    
+
     private func publish() {
         let now = Date()
         let units = scoops.map { $0.widgetUnit(isActive: $0.jid == activeScoopJid) }
@@ -140,12 +201,15 @@ final class WidgetTrayObserver: NSObject {
                 lastMessage: lastMessage))
     }
 
+    
     private var instanceLabel: String {
         let named = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !named.isEmpty { return named }
         if let host = joinUrl?.host, !host.isEmpty { return host }
         return "SLICC"
     }
+
+    
 
     private func send(_ message: FollowerToLeaderMessage) -> Bool {
         guard let sendData, let data = try? JSONEncoder().encode(message) else { return false }
@@ -195,7 +259,8 @@ final class WidgetTrayObserver: NSObject {
             else { return }
             ingest(messages: payload.messages)
         case .agentEvent(let event, _):
-
+            
+            
             if case .turnEnd = event { requestSnapshotIfDue() }
         case .ping:
             _ = send(.pong)
@@ -219,15 +284,6 @@ final class WidgetTrayObserver: NSObject {
     }
 }
 
-@MainActor
-protocol WidgetTrayConnecting: AnyObject {
-    var delegate: TrayFollowerConnectorDelegate? { get set }
-    func start() async throws
-    func stop()
-}
-
-extension TrayFollowerConnector: WidgetTrayConnecting {}
-
 extension WidgetTrayObserver: TrayFollowerConnectorDelegate {
     nonisolated func connector(
         _ connector: TrayFollowerConnector, didConnect channelSend: @escaping (Data) -> Bool
@@ -236,7 +292,8 @@ extension WidgetTrayObserver: TrayFollowerConnectorDelegate {
             guard let self else { return }
             sendData = channelSend
             connected = true
-
+            
+            
             _ = send(
                 .hello(
                     protocolVersion: traySyncProtocolVersion,
@@ -275,6 +332,12 @@ extension WidgetTrayObserver: TrayFollowerConnectorDelegate {
     }
 }
 
+
+
+
+
+
+
 struct WidgetInstallationQuery: Sendable {
     let isInstalled: @Sendable () async -> Bool
 
@@ -285,7 +348,9 @@ struct WidgetInstallationQuery: Sendable {
                 case .success(let widgets):
                     continuation.resume(returning: widgets.contains { $0.kind == UnitsWidget.kind })
                 case .failure:
-
+                    
+                    
+                    
                     continuation.resume(returning: false)
                 }
             }
@@ -294,12 +359,15 @@ struct WidgetInstallationQuery: Sendable {
 }
 
 extension ScoopSummary {
-
+    
+    
     func widgetUnit(isActive: Bool) -> WidgetUnit {
         WidgetUnit(
             id: jid,
             name: assistantLabel.isEmpty ? name : assistantLabel,
-
+            
+            
+            
             role: (parentId == nil && (isCone ?? true)) ? .cone : .scoop,
             parentId: parentId,
             lifecycle: WidgetUnit.Lifecycle(rawValue: state ?? "") ?? .unknown,

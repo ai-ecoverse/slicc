@@ -42,6 +42,28 @@ export async function loadFakeLlmFixture(
   }
 }
 
+export async function waitForFakeLlmHold(
+  timeoutMs = 30_000,
+  baseUrl: string = FAKE_LLM_BASE_URL
+): Promise<void> {
+  const origin = baseUrl.replace(/\/v1\/?$/, '');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${origin}/__state`);
+    if (res.ok && ((await res.json()) as { held?: boolean }).held) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`waitForFakeLlmHold: no stream parked within ${timeoutMs}ms`);
+}
+
+export async function releaseFakeLlmHold(baseUrl: string = FAKE_LLM_BASE_URL): Promise<void> {
+  const origin = baseUrl.replace(/\/v1\/?$/, '');
+  const res = await fetch(`${origin}/__release`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(`releaseFakeLlmHold: HTTP ${res.status} at ${origin}/__release`);
+  }
+}
+
 const LOCAL_LLM_PROVIDER_ID = 'local-llm';
 
 const ACCOUNTS_KEY = 'slicc_accounts';

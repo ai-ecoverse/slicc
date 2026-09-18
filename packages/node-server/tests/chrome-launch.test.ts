@@ -1319,3 +1319,146 @@ describe('migrateLegacyDefaultChromeProfile', () => {
     expect(fsExistsSync(newProfile)).toBe(false);
   });
 });
+
+describe('chrome launch defensive adapters', () => {
+  it('returns null for unreadable, empty, and unsupported Chrome-for-Testing caches', () => {
+    const base = {
+      homeDir: '/missing-home',
+      env: {},
+      existsSyncImpl: (() => false) as typeof fsExistsSync,
+    };
+    expect(
+      findChromeExecutable({
+        ...base,
+        platform: 'linux',
+        readdirSyncImpl: (() => {
+          throw new Error('unreadable cache');
+        }) as typeof readdirSync,
+      })
+    ).toBeNull();
+    expect(
+      findChromeExecutable({
+        ...base,
+        platform: 'linux',
+        readdirSyncImpl: (() => ['linux-123']) as unknown as typeof readdirSync,
+      })
+    ).toBeNull();
+    expect(
+      findChromeExecutable({
+        ...base,
+        platform: 'freebsd' as NodeJS.Platform,
+        readdirSyncImpl: (() => []) as typeof readdirSync,
+      })
+    ).toBeNull();
+  });
+
+  it('rejects stderr discovery without stderr and accepts a complete unterminated line', async () => {
+    const { EventEmitter } = await import('events');
+    const missing = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (missing as { stderr: null }).stderr = null;
+    await expect(waitForCdpPortFromStderr(missing)).rejects.toThrow('no stderr stream');
+
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+    const promise = waitForCdpPortFromStderr(child, 5000);
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:57322/devtools/browser/unterminated')
+    );
+    await expect(promise).resolves.toBe(57322);
+  });
+
+  it('does not rewrite preferences already marked as a clean exit', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    const content = '{"profile":{"exit_type":"Normal","exited_cleanly":true}}';
+    await writeFile(prefsPath, content);
+    await clearChromeRestoreState(dir);
+    expect(await readFile(prefsPath, 'utf8')).toBe(content);
+  });
+
+  it('uses the default PID probe for live and stale singleton owners', async () => {
+    const liveDir = await mkdtemp(join(tmpdir(), 'slicc-singleton-live-'));
+    const staleDir = await mkdtemp(join(tmpdir(), 'slicc-singleton-stale-'));
+    tempDirs.push(liveDir, staleDir);
+    await symlink(`host-${process.pid}`, join(liveDir, 'SingletonLock'));
+    await symlink('host-2147483647', join(staleDir, 'SingletonLock'));
+    const signals: NodeJS.Signals[] = [];
+    await terminateExistingProfileChrome(liveDir, {
+      kill: (_pid, signal) => signals.push(signal),
+      sleep: async () => {},
+    });
+    await terminateExistingProfileChrome(staleDir, {
+      kill: () => {
+        throw new Error('a stale owner must not be killed');
+      },
+      sleep: async () => {},
+    });
+    expect(signals).toContain('SIGTERM');
+    expect(signals).toContain('SIGKILL');
+  });
+
+  it('collapses synchronous request construction failures to false', async () => {
+    await expect(
+      probeCdpAlive(1234, {
+        requestImpl: (() => {
+          throw new Error('request construction failed');
+        }) as typeof import('node:http').request,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('returns false for malformed JSON and an invalid websocket URL', async () => {
+    const { createServer } = await import('http');
+    let body = 'not json';
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(body);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+      body = JSON.stringify({ webSocketDebuggerUrl: 'not a url' });
+      await expect(
+        probeCdpAlive(port, { expectedWebSocketPath: '/devtools/browser/x' })
+      ).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('uses the real CDP verifier when no active-port test verifier is supplied', async () => {
+    const { createServer } = await import('http');
+    const wsPath = '/devtools/browser/default-verifier';
+    const server = createServer((_req, res) => {
+      res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:0${wsPath}` }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), `${port}\n${wsPath}\n`);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    try {
+      await expect(waitForCdpPortFromActivePortFile(dir, child, 1000, 10)).resolves.toBe(port);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('surfaces the first concrete error when both discovery paths fail', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: null }).stderr = null;
+    await expect(waitForCdpPort(child, { userDataDir: dir, timeoutMs: 10 })).rejects.toThrow(
+      'no stderr stream'
+    );
+  });
+});

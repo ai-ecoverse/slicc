@@ -35,7 +35,6 @@ test.describe('compact-on-idle', () => {
     await page.addInitScript(
       (seed: { minutes: string; minTokens: string }) => {
         try {
-          localStorage.setItem('slicc_feature_flags', JSON.stringify({ 'compact-on-idle': 'on' }));
           localStorage.setItem('slicc_idle_compaction_minutes', seed.minutes);
           localStorage.setItem('slicc_idle_compaction_min_tokens', seed.minTokens);
         } catch {}

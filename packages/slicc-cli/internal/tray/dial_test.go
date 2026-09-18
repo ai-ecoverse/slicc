@@ -45,6 +45,8 @@ func TestFollowSupersedeBoundsTheChain(t *testing.T) {
 	}
 }
 
+
+
 func TestHandleAttachFailSupersedeWithoutReplacement(t *testing.T) {
 	err := handleAttachFail(&signaling.AttachPlan{Code: "TRAY_SUPERSEDED", Error: "moved"})
 	if !IsSupersedeMissingJoin(err) {
@@ -70,7 +72,8 @@ func TestDialSupersedeMissingJoinURL(t *testing.T) {
 }
 
 func TestDialSupersedeChainExhausted(t *testing.T) {
-
+	
+	
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hop := 0
@@ -91,6 +94,9 @@ func TestDialSupersedeChainExhausted(t *testing.T) {
 	}
 }
 
+
+
+
 func TestDialFollowsSuccessorVersionLinkWithoutBodyCode(t *testing.T) {
 	var hops []string
 	var srv *httptest.Server
@@ -107,7 +113,7 @@ func TestDialFollowsSuccessorVersionLinkWithoutBodyCode(t *testing.T) {
 		w.Header().Set("Link", "<"+srv.URL+`?hop=1>; rel="successor-version", `+
 			"<"+srv.URL+`/status>; rel="status"`)
 		w.WriteHeader(http.StatusConflict)
-
+		
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"trayId": "t1", "role": "follower", "participantCount": 0,
 			"result": map[string]any{"action": "redirect", "code": "TRAY_SUPERSEDED", "error": "moved"},
@@ -130,6 +136,7 @@ func TestDialFollowsSuccessorVersionLinkWithoutBodyCode(t *testing.T) {
 		t.Fatalf("expected 2 attaches, got %v", hops)
 	}
 }
+
 
 func TestDialFollowsSuccessorVersionLinkWithUndecodableBody(t *testing.T) {
 	var srv *httptest.Server
@@ -154,6 +161,7 @@ func TestDialFollowsSuccessorVersionLinkWithUndecodableBody(t *testing.T) {
 		t.Fatalf("expected to land on the replacement tray, got %v", err)
 	}
 }
+
 
 func TestDialPrefersLinkOverBodyJoinURL(t *testing.T) {
 	var hops []string

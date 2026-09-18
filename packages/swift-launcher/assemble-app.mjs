@@ -248,6 +248,8 @@ ${
     <string>Slicc launches Google Chrome to host the assistant UI. Chrome — not Slicc — uses the microphone for sites you visit (Google Meet, Zoom, etc.). Grant access if you want microphone-enabled sites to work inside Slicc.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Sliccstart uses Apple Events to open a new Terminal or iTerm2 window and attach it to your running SLICC session.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Sliccstart captures this Mac's screen so a connected SLICC session can show and drive the desktop as a computer.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

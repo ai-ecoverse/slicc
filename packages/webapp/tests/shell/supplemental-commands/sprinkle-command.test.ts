@@ -312,6 +312,9 @@ describe('sprinkle open — claims the route for the invoking cone (#2311)', () 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('cone-research');
     expect(getSprinkleRoute('dash')).toBe('cone-research');
+    expect(mockMgr.open).toHaveBeenCalledWith('dash', undefined, {
+      lickOriginTarget: 'cone-research',
+    });
   });
 
   it('never overrides an existing route', async () => {
@@ -329,6 +332,7 @@ describe('sprinkle open — claims the route for the invoking cone (#2311)', () 
     const result = await open({});
     expect(result.exitCode).toBe(0);
     expect(getSprinkleRoute('dash')).toBeUndefined();
+    expect(mockMgr.open).toHaveBeenCalledWith('dash');
   });
 
   it('installs the route BEFORE open(), so a startup lick already sees it', async () => {

@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { baselineFiles, LAYER_PACKAGES } from './check-layer-back-edges.mjs';
+import { baselineFiles, LAYER_STACKS } from './check-layer-back-edges.mjs';
 import { BASELINE_PATH as FLOAT_PROBE_BASELINE_PATH } from './check-no-float-probes.mjs';
 import { BASELINE_PATH as RECORD_BASELINE_PATH } from './check-record-string-unknown.mjs';
 import {
@@ -166,23 +166,25 @@ function main() {
       baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key, rule.group),
       baseReadable: baseConfig !== null,
     })),
-    ...LAYER_PACKAGES.map((pkg) => {
-      const baseline = readBaselineFile(pkg.baselinePath);
-      const baseBaseline = readBaseJson(baseRef, pkg.baselineRel);
-      const label = pkg.id === 'webapp' ? 'layer-back-edge' : `layer-back-edge:${pkg.id}`;
+    ...LAYER_STACKS.map((stack) => {
+      const listRef = relative(repoRoot, stack.baselinePath).split('\\').join('/');
+      const layerBaseline = readBaselineFile(stack.baselinePath);
+      const baseLayerBaseline = readBaseJson(baseRef, listRef);
       return {
-        label,
-        listRef: pkg.baselineRel,
+        label: stack.id === 'webapp' ? 'layer-back-edge' : `layer-back-edge (${stack.id})`,
+        listRef,
         fixIt:
           'Fix: in this same PR, remove every up-the-stack import from the file (move the\n' +
-          'pure helper into the lower layer), then ratchet the baseline:\n' +
+          'pure helper into the lower layer — see docs/review-patterns.md § Layer-stack\n' +
+          `import direction; ${stack.id} stack: ${stack.stackLabel}), then ratchet the baseline:\n` +
           '  node packages/dev-tools/tools/check-layer-back-edges.mjs --update',
         addFixIt:
-          'Fix: remove the new up-the-stack or sideways import instead of growing the\n' +
-          `baseline — move the helper into the lower layer (${pkg.stackLabel}).`,
-        globs: baselineFiles(baseline),
-        baseGlobs: baselineFiles(baseBaseline),
-        baseReadable: baseBaseline !== null,
+          'Fix: remove the new up-the-stack import instead of growing the baseline — move\n' +
+          'the pure helper into the lower layer (see docs/review-patterns.md §\n' +
+          `Layer-stack import direction; ${stack.id} stack: ${stack.stackLabel}).`,
+        globs: baselineFiles(layerBaseline),
+        baseGlobs: baselineFiles(baseLayerBaseline),
+        baseReadable: baseLayerBaseline !== null,
       };
     }),
     {

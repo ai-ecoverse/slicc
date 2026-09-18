@@ -25,6 +25,8 @@ export interface FeatureFlagDefinition {
   readonly floatDefaults?: Readonly<Partial<Record<FeatureFlagFloat, string>>>;
   readonly userToggleable: boolean;
   readonly overridableFloats?: readonly FeatureFlagFloat[];
+
+  readonly since: string;
 }
 
 export const FEATURE_FLAG_STORAGE_KEY = 'slicc_feature_flags';
@@ -37,6 +39,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
     userToggleable: false,
+    since: '2026-07-31',
   }),
   Object.freeze({
     id: 'panel-layouts',
@@ -45,6 +48,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
 
     defaultValue: 'off',
     userToggleable: true,
+    since: '2026-08-03',
   }),
   Object.freeze({
     id: 'agentic-memory',
@@ -53,6 +57,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
       'Curate session memory with a background agent instead of a one-shot extraction call.',
     defaultValue: 'off',
     userToggleable: true,
+    since: '2026-08-05',
   }),
   Object.freeze({
     id: 'multiple-cones',
@@ -63,14 +68,17 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
     userToggleable: false,
+    since: '2026-08-21',
   }),
   Object.freeze({
     id: 'compact-on-idle',
     label: 'Compact on idle',
     description:
       'When a cone has been idle for a while with a large context, summarize its history in the background. The full transcript is kept in /sessions.',
-    defaultValue: 'off',
-    userToggleable: true,
+
+    defaultValue: 'on',
+    userToggleable: false,
+    since: '2026-09-02',
   }),
   Object.freeze({
     id: 'memory-v2',
@@ -79,6 +87,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
       'Searchable session history, scoop pre-compaction snapshots, and the gelatiere — a resident advisor that reviews your sessions and suggests skills and use cases.',
     defaultValue: 'off',
     userToggleable: true,
+    since: '2026-09-10',
   }),
 ]);
 
@@ -153,6 +162,11 @@ export function writeFeatureFlagOverrides(overrides: Readonly<FeatureFlagValues>
   } catch {}
 }
 
+export function canOverrideFlag(id: FeatureFlagId): boolean {
+  const definition = FEATURE_FLAGS_BY_ID.get(id);
+  return definition !== undefined && canOverride(definition, activeFloat);
+}
+
 export function setFeatureFlagOverride(id: FeatureFlagId, value: string | undefined): void {
   const definition = FEATURE_FLAGS_BY_ID.get(id);
   if (!definition || !canOverride(definition, activeFloat)) return;
@@ -169,6 +183,14 @@ export function initFeatureFlags(
   activeFloat = float;
   remoteValues = sanitizeValues(centralValues);
   hostValues = {};
+}
+
+export function updateCentralFlagValues(
+  float: FeatureFlagFloat,
+  centralValues: Readonly<FeatureFlagValues>
+): void {
+  activeFloat = float;
+  remoteValues = sanitizeValues(centralValues);
 }
 
 export interface UntrustedFlagValues {

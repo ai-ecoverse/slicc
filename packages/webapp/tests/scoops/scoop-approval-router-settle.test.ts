@@ -369,7 +369,7 @@ describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
     const h = makeHarness(managerGranting('NOPASSWD Write /**'));
     const pending = h.router.enqueueSudoRequest('scoop_a', {
       kind: 'write',
-      detail: '/scoops/scoop_a-folder/etc/sudoers',
+      detail: '/etc/sudoers',
     });
     await flush();
 
@@ -451,5 +451,33 @@ describe('ScoopApprovalRouter settle paths flip the lick card off pending', () =
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('ScoopApprovalRouter unhonoured sudoers subjects', () => {
+  it('denies a write to an in-sandbox sudoers path without prompting the cone', async () => {
+    const h = makeHarness();
+
+    const decision = await h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/scoops/scoop_a-folder/etc/sudoers',
+    });
+
+    expect(decision).toEqual({ decision: 'deny' });
+    expect(h.router.listPendingSudoRequests()).toHaveLength(0);
+    expect(h.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('still routes an ordinary write to the cone', async () => {
+    const h = makeHarness();
+
+    void h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/workspace/notes.md',
+    });
+    await flush();
+
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    expect(h.handleMessage).toHaveBeenCalled();
   });
 });

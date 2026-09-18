@@ -30,6 +30,10 @@ export interface SprinkleBroadcastResult {
   unknownRuntime?: string;
 }
 
+export interface SprinkleOpenOptions {
+  lickOriginTarget?: string;
+}
+
 export function sendReportReach(report: SprinkleSendReport): number {
   return (report.leader ? 1 : 0) + report.followers.length;
 }
@@ -49,7 +53,7 @@ export interface SprinkleManagerHandle {
   refresh(): Promise<void>;
   available(): ShellSprinkle[];
   opened(): string[];
-  open(name: string): Promise<void>;
+  open(name: string, zone?: string, options?: SprinkleOpenOptions): Promise<void>;
   close(name: string): void;
   reload(name: string): Promise<void>;
   sendToSprinkle(

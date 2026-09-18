@@ -204,16 +204,18 @@ describe('sliccy: virtual-module scheme', () => {
     expect(out.stdout.trim()).toBe('function');
   });
 
-  it("require('sliccy:browser'|'usb'|'serial'|'hid') exposes the documented surface", async () => {
+  it("require('sliccy:browser'|'usb'|'serial'|'hid'|'computer') exposes the documented surface", async () => {
     const code = `
       console.log(typeof require('sliccy:browser').findTab);
       console.log(typeof require('sliccy:usb').request);
       console.log(typeof require('sliccy:serial').request);
       console.log(typeof require('sliccy:hid').request);
+      console.log(typeof require('sliccy:computer').register);
     `;
     const out = await runCode(code, makeCtx());
     expect(out.exitCode).toBe(0);
     expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      'function',
       'function',
       'function',
       'function',

@@ -33,7 +33,7 @@ self.onmessage = async ({ data: seed }) => {
     }
   };
   try {
-    await resolveMountConfig({ backend: WebAccess, handle });
+    await resolveMountConfig({ backend: WebAccess, handle, maxOpenFilesForCopy: 16 });
     postMessage({ ok: true, peak, active });
   } catch (error) {
     postMessage({ ok: false, name: error.name, message: error.message, peak, active });

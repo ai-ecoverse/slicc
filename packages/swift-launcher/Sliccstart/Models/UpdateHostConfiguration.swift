@@ -1,5 +1,22 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct UpdateHostConfiguration: Equatable {
     let baseURL: URL
 
@@ -32,6 +49,7 @@ struct UpdateHostConfiguration: Equatable {
         return nil
     }
 
+    
     func releasesURL(owner: String, repo: String) -> URL {
         baseURL.appendingPathComponent("repos/\(owner)/\(repo)/releases")
     }

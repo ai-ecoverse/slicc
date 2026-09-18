@@ -13,9 +13,15 @@ import (
 	"time"
 )
 
+
 const bundleID = "com.slicc.sliccstart"
 
+
 const executableRelPath = "Contents/MacOS/Sliccstart"
+
+
+
+
 
 func LocateExecutable() (string, error) {
 	if override := os.Getenv("SLICCSTART_APP"); override != "" {
@@ -37,6 +43,8 @@ func LocateExecutable() (string, error) {
 	}
 	return "", fmt.Errorf("cannot find Sliccstart.app (install it, or set SLICCSTART_APP to the app or its executable)")
 }
+
+
 
 func executableIn(path string) (string, error) {
 	exe := path
@@ -67,10 +75,18 @@ func mdfindApp() string {
 	return ""
 }
 
+
+
+
+
 const (
 	listTimeout   = 20 * time.Second
 	revealTimeout = 2 * time.Minute
 )
+
+
+
+
 
 func List(reveal bool) ([]Session, error) {
 	exe, err := LocateExecutable()

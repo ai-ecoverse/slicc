@@ -7,15 +7,20 @@ import WebKit
 import WebRTC
 import os
 
+
 enum ConnectionState: String {
     case disconnected
     case connecting
     case connected
     case reconnecting
     case failed
-
+    
+    
+    
     case gaveUp
 }
+
+
 
 enum ReconnectBackoff {
     static let baseDelay: TimeInterval = 1
@@ -23,6 +28,7 @@ enum ReconnectBackoff {
     static let maxDelay: TimeInterval = 30
     static let maxAttempts = 10
 
+    
     static func delay(forAttempt attempt: Int) -> TimeInterval {
         guard attempt > 1 else { return baseDelay }
         let grown = baseDelay * pow(multiplier, Double(attempt - 1))
@@ -30,15 +36,28 @@ enum ReconnectBackoff {
     }
 }
 
+
+
+
+
 private struct SnapshotPayload: Codable {
     let messages: [ChatMessage]
     let scoopJid: String
 }
 
+
+
+
+
+
 @MainActor
 class AppState: ObservableObject {
 
+    
+
     private let logger = Logger(subsystem: "com.slicc.follower", category: "AppState")
+
+    
 
     @Published var connectionState: ConnectionState = .disconnected {
         didSet { ingestConnectionHealth() }
@@ -46,14 +65,19 @@ class AppState: ObservableObject {
     @Published var joinUrl: String = ""
     @Published var trayId: String?
     @Published var messages: [ChatMessage] = []
-
+    
+    
+    
     @Published var toolUICards: [ToolUIPlaceholder] = []
     @Published var openApprovals: [OpenApprovalRequest] = []
     @Published var openGrants: [OpenGrant] = []
-
+    
     @Published var sudoApprovals: [SudoApprovalRequest] = []
     @Published var isStreaming: Bool = false {
-
+        
+        
+        
+        
         didSet {
             guard oldValue != isStreaming else { return }
             runningToolCalls = 0
@@ -61,128 +85,229 @@ class AppState: ObservableObject {
         }
     }
 
+    
+    
+    
+    
+    
+    
+
+    
+    
+    
     @Published private(set) var runningToolCalls: Int = 0
-
+    
+    
     @Published private(set) var awaitingUserSince: Date?
-
+    
+    
     let avatarExpression = AvatarExpressionEngine()
 
+    
+    
     @Published var scoops: [ScoopSummary] = []
-
+    
+    @Published var computers: [ComputerDescriptor] = []
+    let computerRosterStorage = ComputerRosterStorage()
+    
     @Published var selectedScoopJid: String?
-
+    
     @Published var leaderActiveScoopJid: String?
 
+    
+    
     @Published private(set) var leaderProtocolVersion: Int?
     @Published private(set) var modelCatalog: [TrayModelCatalogEntry] = []
     @Published private(set) var modelSelectionState: TrayModelSelectionState?
 
+    
+    
+    
+    
+    
+    
     var composerTargetsLeaderActiveScoop: Bool {
         guard let selected = selectedScoopJid, let active = leaderActiveScoopJid else {
             return true
         }
         return selected == active
     }
-
+    
+    
+    
     var messagesByScoop: [String: [ChatMessage]] = [:]
-
+    
+    
+    
+    
+    
+    
+    
+    
     @Published var toolProgress: [String: ToolProgressEvent] = [:]
 
+    
     @Published var sprinkles: [SprinkleSummary] = []
-
+    
     @Published var sprinkleContents: [String: String] = [:]
-
+    
     private var pendingSprinkleFetches: [String: SprinkleFetchBuffer] = [:]
-
+    
     private var inflightSprinkleNameToRequest: [String: String] = [:]
-
+    
     private var sprinkleContentWaiters: [String: [CheckedContinuation<String, Error>]] = [:]
-
+    
+    
     private(set) lazy var fsClient = FsClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
-
+    
+    
+    
     private(set) lazy var fileMentionResolver = FileMentionResolver { [weak self] path in
         guard let self else { return false }
         return await self.transcriptFileExists(path)
     }
-
+    
     private(set) lazy var terminalClient = TerminalClient { [weak self] in
         self?.sendToLeader($0) ?? false
     }
     private(set) lazy var openApprovalController = makeOpenApprovalController()
     private(set) lazy var sudoApprovalController = makeSudoApprovalController()
-
+    
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
-
+    
+    
     @Published private(set) var leaderCapabilities: TraySyncCapabilities?
     private(set) var leaderMotd: String?
-
+    
+    
+    
     private var seenHandoffFingerprints: Set<String> = []
-
+    
     @Published var sprinkleUpdates: [String: AnyCodable] = [:]
-
+    
     @Published var sprinkleReloadGeneration: [String: Int] = [:]
 
+    
     @Published var leaderConnected: Bool = false
     @Published var participantCount: Int = 0
     @Published var connectedSince: Date?
     @Published var autoReconnect: Bool = true
 
+    
+    
+    
     @Published var lastError: String?
-
+    
+    
     @Published var leaderTheme: SliccTheme?
 
+    
+    
+    
     @Published var leaderError: String?
 
+    
+    
+    
+    
     @Published var isLeaderStalled: Bool = false {
         didSet { ingestConnectionHealth() }
     }
 
+    
     @Published var reconnectAttempt: Int = 0 {
         didSet { ingestConnectionHealth() }
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     @Published private(set) var settledConnection = ConnectionHealth(state: .disconnected)
 
+    
+    
+    
+    
+    
+    
+    
     let connectionSettler = ConnectionSettler(
         initial: ConnectionHealth(state: .disconnected))
 
+    
+    
     var connectionIngestSuspended = false
 
+    
     private struct SprinkleFetchBuffer {
         let sprinkleName: String
         var chunks: [Int: String] = [:]
         var totalChunks: Int = 1
     }
 
-    let widgetPublisher: WidgetSnapshotPublisher
+    
 
+    
+    
+    
+    
+    
+    
+    
+    let widgetPublisher: WidgetSnapshotPublisher
+    
+    
     var widgetRecency = UnitRecencyLedger()
     let sessionStore: TraySessionSyncStore
-
+    
+    
+    
     let recentJoinStore: RecentJoinStore
     private let credentialStore: TrayCredentialStore
     private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
     let openGrantStore: OpenGrantStore
 
+    
+    
+    
+    
+    
     init(
         credentialStore: TrayCredentialStore = TrayCredentialStore(),
         fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle(),
-        openGrantStore: OpenGrantStore = OpenGrantStore()
+        openGrantStore: OpenGrantStore = OpenGrantStore(),
+        fixtureDefaults: UserDefaults = .standard
     ) {
         widgetPublisher = WidgetSnapshotPublisher(store: WidgetHost.follower.store)
-        sessionStore = AppState.makeSessionStore()
-        recentJoinStore = AppState.makeRecentJoinStore()
+        sessionStore = AppState.makeSessionStore(fixtureDefaults: fixtureDefaults)
+        recentJoinStore = AppState.makeRecentJoinStore(fixtureDefaults: fixtureDefaults)
         self.credentialStore = credentialStore
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
         self.openGrantStore = openGrantStore
         openGrants = openGrantStore.grants
         connectionSettler.onChange = { [weak self] health in
             self?.settledConnection = health
-
+            
+            
+            
+            
+            
+            
+            
+            
             self?.publishWidgetSnapshot()
         }
         Self.purgeLegacyJoinURLDefaults()
@@ -199,60 +324,105 @@ class AppState: ObservableObject {
             configureSudoApprovalFixture()
         #endif
         wireNotificationActions()
-
+        
+        
+        
+        
         publishWidgetSnapshot()
     }
 
+    
+
+    
     fileprivate var signalingClient: TraySignalingClient?
     private var webRTCManager: WebRTCManager?
     private var webRTCDelegate: WebRTCBridge?
     private var keepalive: DataChannelKeepalive?
     private var connectTask: Task<Void, Never>?
-
+    
+    
+    
     private var reconnectTask: Task<Void, Never>?
     fileprivate var controllerId: String = UUID().uuidString
     fileprivate var currentBootstrapId: String?
 
+    
     private var snapshotChunks: [Int: String] = [:]
     private var snapshotTotalChunks: Int = 0
-
+    
     private var chunkReassembler = TrayChunkReassembler()
 
+    
     private(set) var streamingMessageId: String?
 
+    
+    
+    
+    
     private var pendingMessagesFlush: Task<Void, Never>?
 
+    
+
+    
     private var cdpBridge: CDPBridge?
-
+    
     private var targetsAdvertiseTimer: Timer?
-
+    
     @Published var cdpTargets: [CDPTargetSummary] = []
-
+    
+    
     @Published var remoteTargets: [TrayTargetEntry] = []
-
+    
+    
+    
     @Published var browserViewingTabId: String?
-
+    
+    
+    @Published var viewingComputerId: String?
+    
+    
+    
+    
     @Published var leaderOpenedTabId: String?
 
+    
+
+    
+    
+    
+    
     private var activeJoinUrl: String = ""
     var activeDisplayName: String?
 
+    
+
+    
+    
+    
+    
     @Published var newSessionInFlight = false
     private var newSessionTimeout: Task<Void, Never>?
 
     @Published var frozenListState: FrozenListState = .idle
     @Published var frozenSessions: [FrozenSessionIndexEntry] = []
-
+    
+    
+    
     @Published var frozenOpeningId: String?
-
+    
+    
     @Published var openFrozen: OpenFrozenSession?
     @Published var frozenOpenError: String?
 
+    
+    
+    
     func requestNewSession(_ action: NewSessionAction) {
         guard !newSessionInFlight else { return }
         guard sendToLeader(.newSession(action: action)) else { return }
         newSessionInFlight = true
-
+        
+        
         newSessionTimeout?.cancel()
         newSessionTimeout = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
@@ -268,12 +438,15 @@ class AppState: ObservableObject {
 
         connectionState = .connecting
         lastError = nil
-
+        
+        
         leaderTheme = nil
-
+        
+        
         activeJoinUrl = trimmed
         activeDisplayName = displayName
 
+        
         tearDown()
 
         controllerId = UUID().uuidString
@@ -292,8 +465,11 @@ class AppState: ObservableObject {
         }
     }
 
+    
+    
     func disconnect() {
-
+        
+        
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
@@ -301,7 +477,8 @@ class AppState: ObservableObject {
         fileProviderDomainLifecycle.removeDomain()
         tearDown()
         resetCDPState()
-
+        
+        
         updateConnection {
             isLeaderStalled = false
             connectionState = .disconnected
@@ -312,13 +489,17 @@ class AppState: ObservableObject {
         connectedSince = nil
         isStreaming = false
         streamingMessageId = nil
-
+        
+        
+        
         VoiceReply.shared.reset()
         DictationPriming.reset()
-
+        
+        
         fileMentionResolver.reset()
         TranscriptInlineCache.shared.clear()
         scoops = []
+        resetComputers()
         selectedScoopJid = nil
         leaderActiveScoopJid = nil
         leaderProtocolVersion = nil
@@ -331,7 +512,7 @@ class AppState: ObservableObject {
         sprinkleUpdates.removeAll()
         pendingSprinkleFetches.removeAll()
         inflightSprinkleNameToRequest.removeAll()
-
+        
         let waiters = sprinkleContentWaiters
         sprinkleContentWaiters.removeAll()
         for (_, list) in waiters {
@@ -339,35 +520,59 @@ class AppState: ObservableObject {
                 waiter.resume(throwing: SprinkleFetchError.fetchFailed("Disconnected"))
             }
         }
-
+        
+        
         fsClient.cancelAll()
-
+        
+        
+        
+        
+        
         clearWidgetSnapshot()
     }
 
+    
+    
+    
     private func resetCDPState() {
         stopTargetsAdvertiseTimer()
         cdpBridge?.reset()
         cdpBridge = nil
         cdpTargets.removeAll()
-
+        
+        
+        
         remoteTargets.removeAll()
     }
 
+    
+
+    
+    
+    
+    
     func sendMessage(
         _ text: String, steer: Bool = false, attachments: [MessageAttachment]? = nil,
         dictated: Bool = false
     ) {
         var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attached = (attachments?.isEmpty == false) ? attachments : nil
-
+        
+        
         guard !trimmed.isEmpty || attached != nil else { return }
-
+        
+        
+        
         guard !selectedUnitIsReadOnly else { return }
 
+        
+        
         let dictationScoop = selectedScoopJid ?? ""
         if dictated {
-
+            
+            
+            
+            
             trimmed = DictationPriming.applyMarkers(
                 trimmed, isFirst: DictationPriming.isFirstPending)
             VoiceReply.shared.markSubmission(scoopJid: dictationScoop)
@@ -382,7 +587,7 @@ class AppState: ObservableObject {
             attachments: attached
         )
         messages.append(message)
-
+        
         if let jid = selectedScoopJid {
             messagesByScoop[jid, default: []].append(message)
         }
@@ -390,34 +595,46 @@ class AppState: ObservableObject {
         let msg = FollowerToLeaderMessage.userMessage(
             text: trimmed, messageId: messageId, steer: steer, attachments: attached)
         #if DEBUG
-
+            
+            
+            
             let hermeticallyConnected = UITestHooks.forcedConnectionState != nil
         #else
             let hermeticallyConnected = false
         #endif
         if !sendToLeader(msg), !hermeticallyConnected {
             markUndelivered(messageId)
-
+            
+            
+            
+            
             if dictated { VoiceReply.shared.rollbackSubmission(scoopJid: dictationScoop) }
         } else if dictated {
             DictationPriming.commitFirst()
         }
     }
 
+    
     func abort() {
         isStreaming = false
         streamingMessageId = nil
         sendToLeader(.abort)
     }
 
+    
+
+    
     func refreshSprinkles() {
         sendToLeader(.sprinklesRefresh)
     }
 
+    
+    
+    
     func fetchSprinkleContent(_ sprinkleName: String) async throws -> String {
         if let cached = sprinkleContents[sprinkleName] { return cached }
         let requestId = UUID().uuidString
-
+        
         if inflightSprinkleNameToRequest[sprinkleName] == nil {
             inflightSprinkleNameToRequest[sprinkleName] = requestId
             pendingSprinkleFetches[requestId] = SprinkleFetchBuffer(sprinkleName: sprinkleName)
@@ -428,6 +645,16 @@ class AppState: ObservableObject {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     enum HandoffForwardResult: Equatable {
         case sent
         case duplicate
@@ -447,6 +674,9 @@ class AppState: ObservableObject {
         return sendToLeader(.lick(event: event)) ? .sent : .notDelivered
     }
 
+    
+    
+    
     nonisolated static func handoffFingerprint(_ match: HandoffMatch) -> String {
         [
             match.verb.rawValue, match.target, match.branch ?? "", match.path ?? "",
@@ -454,6 +684,7 @@ class AppState: ObservableObject {
         ].joined(separator: "\0")
     }
 
+    
     func sendSprinkleLick(_ sprinkleName: String, body: AnyCodable?, targetScoop: String? = nil) {
         sendToLeader(
             .sprinkleLick(
@@ -463,6 +694,7 @@ class AppState: ObservableObject {
             ))
     }
 
+    
     private func handleSprinkleContent(
         requestId: String,
         sprinkleName: String,
@@ -523,6 +755,9 @@ class AppState: ObservableObject {
         }
     }
 
+    
+
+    
     func dataChannelOpened() {
         logger.info("Data channel opened")
         connectionState = .connected
@@ -534,17 +769,25 @@ class AppState: ObservableObject {
         modelCatalog = []
         modelSelectionState = nil
         let credentialsSaved = persistTrayCredentials(connectedAt: connectedAt)
-
+        
+        
+        
         recentJoinStore.record(joinUrl: activeJoinUrl, label: activeDisplayName ?? "")
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialsSaved)
         Task { await VoiceReply.shared.prewarm() }
 
+        
+        
+        
+        
         let bridge = ensureCdpBridge()
-
+        
+        
         bridge.advertiseTargets()
         refreshCDPTargets()
         startTargetsAdvertiseTimer()
 
+        
         let rtc = webRTCManager
         keepalive = DataChannelKeepalive(
             sendPing: { [weak rtc] in
@@ -558,7 +801,9 @@ class AppState: ObservableObject {
                     self?.handleDisconnect(reason: "Keepalive timeout")
                 }
             },
-
+            
+            
+            
             isTransportOpen: { [weak rtc] in rtc?.isConnected ?? false },
             onStalled: { [weak self] in
                 Task { @MainActor [weak self] in self?.isLeaderStalled = true }
@@ -569,6 +814,7 @@ class AppState: ObservableObject {
         )
         Task { await keepalive?.start() }
 
+        
         sendToLeader(
             .hello(
                 protocolVersion: traySyncProtocolVersion,
@@ -578,9 +824,16 @@ class AppState: ObservableObject {
         openApprovalController.transportAvailable()
         startPushRegistration()
 
+        
+        
         sendToLeader(snapshotRequestForConnection())
     }
 
+    
+    
+    
+    
+    
     func handleDataChannelMessage(_ data: Data) {
         if let frame = try? JSONDecoder().decode(TrayChunkFrame.self, from: data),
             frame.type == TrayChunkFrame.typeTag
@@ -591,6 +844,7 @@ class AppState: ObservableObject {
         routeLeaderMessage(data)
     }
 
+    
     private func routeLeaderMessage(_ data: Data) {
         let decoder = JSONDecoder()
 
@@ -606,7 +860,8 @@ class AppState: ObservableObject {
         case .snapshot(let chatMessages, let scoopJid):
             logger.info("Snapshot received: \(chatMessages.count) messages, scoopJid=\(scoopJid)")
             ingestSnapshot(messages: chatMessages, scoopJid: scoopJid)
-
+            
+            
             inboundSnapshot.settle(scoopJid: scoopJid)
 
         case .snapshotChunk(let chunkData, let chunkIndex, let totalChunks, _):
@@ -658,7 +913,7 @@ class AppState: ObservableObject {
             }
             logger.debug("Status update: \(scoopStatus)")
             let wasStreaming = isStreaming
-
+            
             isStreaming = ["processing", "streaming", "running"].contains(scoopStatus)
             if wasStreaming && !isStreaming {
                 streamingMessageId = nil
@@ -673,7 +928,7 @@ class AppState: ObservableObject {
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
             publishWidgetSnapshot()
-
+            
             let preservedScoopExists =
                 selectedScoopJid.map { selected in
                     scoops.contains(where: { $0.jid == selected })
@@ -684,7 +939,8 @@ class AppState: ObservableObject {
                 let initial = hadMissingSelection ? activeScoopJid : (cone?.jid ?? activeScoopJid)
                 if !initial.isEmpty {
                     selectedScoopJid = initial
-
+                    
+                    
                     if hadMissingSelection || messagesByScoop[initial] == nil {
                         sendToLeader(.scoopsSelect(scoopJid: initial))
                     } else {
@@ -693,6 +949,10 @@ class AppState: ObservableObject {
                     refreshModels()
                 }
             }
+
+        case .computersList, .computerFrame, .computerNativeCapture, .computerNativeUnwatch,
+            .computerNativeInput:
+            handleComputerLeaderMessage(msg)
 
         case .modelsList(let models):
             guard supportsModelControls else {
@@ -746,17 +1006,32 @@ class AppState: ObservableObject {
         case .tabOpen(let requestId, let url):
             logger.info(
                 "\(SafeLeaderMessageLog.urlEventSummary("Leader requested new tab", url: url))")
-
+            
+            
+            
             leaderOpenedTabId = cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .previewOpen(let requestId, let url):
-
+            
+            
+            
+            
+            
             logger.info(
                 "\(SafeLeaderMessageLog.urlEventSummary("Leader requested preview tab", url: url))")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .targetsRegistry(let targets):
-
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
             remoteTargets = BrowserTargets.visible(
                 targets, ownRuntimeId: controllerId, joinUrl: activeJoinUrl)
 
@@ -775,11 +1050,15 @@ class AppState: ObservableObject {
             Task { await keepalive?.receivedPong() }
 
         case .cherrySliccEvent(let targetId, let name, _):
-
+            
+            
+            
             logger.debug("Ignoring cherry.slicc_event for target=\(targetId) name=\(name) (cherry pages not hosted on iOS)")
 
         case .fsRequest(let requestId, let request):
-
+            
+            
+            
             _ = sendToLeader(
                 .fsResponse(requestId: requestId, response: FsClient.refusal(for: request)))
 
@@ -801,11 +1080,14 @@ class AppState: ObservableObject {
                 motd: motd)
 
         case .unknown(let type):
-
+            
             logger.warning("Unknown leader message type — skewed leader? type=\(type)")
         }
     }
 
+    
+    
+    
     private func handleLeaderHello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?
     ) {
@@ -825,10 +1107,21 @@ class AppState: ObservableObject {
         }
     }
 
+    
+    
     let inboundPrompt = InboundPromptWaiter()
-
+    
     let inboundSnapshot = InboundSnapshotWaiter()
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private func speakIfDictated(
         _ message: ChatMessage, scoopJid: String, isVisible: Bool
     ) {
@@ -839,6 +1132,8 @@ class AppState: ObservableObject {
         logger.notice("speaking the reply to a dictated turn")
         VoiceReply.shared.speakReply(markdown: message.content)
     }
+
+    
 
     private func startTargetsAdvertiseTimer() {
         targetsAdvertiseTimer?.invalidate()
@@ -855,20 +1150,31 @@ class AppState: ObservableObject {
         targetsAdvertiseTimer = nil
     }
 
+    
     private func refreshCDPTargets() {
         cdpTargets = cdpBridge?.currentTargets() ?? []
-
+        
+        
         SliccTabRegistry.shared.publish(cdpTargets)
-
+        
+        
+        
         if let viewing = browserViewingTabId, !cdpTargets.contains(where: { $0.id == viewing }) {
             browserViewingTabId = nil
         }
     }
 
+    
+    
     func cdpWebView(for targetId: String) -> WKWebView? {
         cdpBridge?.webView(for: targetId)
     }
 
+    
+    
+    
+    
+    
     private func ensureCdpBridge() -> CDPBridge {
         if let existing = cdpBridge { return existing }
         let bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
@@ -886,15 +1192,19 @@ class AppState: ObservableObject {
         return bridge
     }
 
+    
+    
     @discardableResult
     func cdpOpenTab(url: String = "about:blank") -> String {
         ensureCdpBridge().openTab(url: url)
     }
 
+    
     func cdpNavigate(_ targetId: String, to url: String) {
         cdpBridge?.navigate(targetId: targetId, to: url)
     }
 
+    
     func cdpCloseTab(_ targetId: String) {
         cdpBridge?.handleRequest(
             requestId: "ui-close-\(UUID().uuidString)",
@@ -905,6 +1215,7 @@ class AppState: ObservableObject {
         )
     }
 
+    
     func cdpBridgeReload(_ targetId: String) {
         cdpBridge?.handleRequest(
             requestId: "ui-reload-\(UUID().uuidString)",
@@ -915,18 +1226,30 @@ class AppState: ObservableObject {
         )
     }
 
+    
+    
     private func ingestSnapshot(messages chatMessages: [ChatMessage], scoopJid: String) {
-
+        
+        
+        
+        
+        
+        
         if newSessionInFlight && chatMessages.isEmpty {
             newSessionInFlight = false
             newSessionTimeout?.cancel()
-
+            
+            
+            
             VoiceReply.shared.reset()
             DictationPriming.reset()
         }
         pruneToolProgress(replacing: messagesByScoop[scoopJid] ?? [], with: chatMessages)
         messagesByScoop[scoopJid] = chatMessages
-
+        
+        
+        
+        
         toolUICards.removeAll()
         if selectedScoopJid == nil { selectedScoopJid = scoopJid }
         if scoopJid == selectedScoopJid {
@@ -936,6 +1259,7 @@ class AppState: ObservableObject {
         }
     }
 
+    
     private func handleAgentEvent(_ event: AgentEvent, scoopJid: String) {
         var buffer = messagesByScoop[scoopJid] ?? []
         let isVisible = (scoopJid == selectedScoopJid)
@@ -943,7 +1267,8 @@ class AppState: ObservableObject {
         switch event {
         case .messageStart(let messageId):
             logger.info("Agent event: message_start id=\(messageId) scoop=\(scoopJid)")
-
+            
+            
             VoiceReply.shared.bindReply(scoopJid: scoopJid, messageId: messageId)
             let newMsg = ChatMessage(
                 id: messageId,
@@ -974,7 +1299,11 @@ class AppState: ObservableObject {
             logger.debug("Agent event: content_done id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
-
+                
+                
+                
+                
+                
                 if let model { buffer[idx].model = model }
                 if let usage { buffer[idx].usage = usage }
                 messagesByScoop[scoopJid] = buffer
@@ -998,13 +1327,17 @@ class AppState: ObservableObject {
         case .toolResult(let messageId, let toolName, let result, let isError, let toolCallId):
             if isVisible {
                 runningToolCalls = max(0, runningToolCalls - 1)
-
+                
+                
                 if isError == true { avatarExpression.glower() }
             }
             applyToolResult(
                 messageId: messageId, toolName: toolName, result: result, isError: isError,
                 toolCallId: toolCallId, buffer: &buffer, scoopJid: scoopJid, isVisible: isVisible)
 
+        
+        
+        
         case .toolProgress(let messageId, let toolName, let progress, let toolCallId):
             applyToolProgress(
                 messageId: messageId, toolName: toolName, progress: progress,
@@ -1027,6 +1360,12 @@ class AppState: ObservableObject {
                 notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
             }
 
+        
+        
+        
+        
+        
+        
         case .compactionNotice(let messageId, let marker):
             logger.info(
                 "Agent event: compaction_notice id=\(messageId) state=\(marker.state.rawValue)")
@@ -1049,11 +1388,16 @@ class AppState: ObservableObject {
             inboundPrompt.fail(scoopJid: scoopJid, error: error)
             settleTurn(messageId: nil, isVisible: isVisible)
 
+        
+        
+        
+        
         case .toolUI, .toolUIDone, .screenshot, .terminalOutput, .unknown:
             handleNonTranscriptAgentEvent(event, scoopJid: scoopJid)
         }
     }
 
+    
     private func settleTurn(messageId: String?, isVisible: Bool) {
         guard isVisible, let activeMessageId = streamingMessageId else { return }
         guard messageId == nil || messageId == activeMessageId else { return }
@@ -1061,10 +1405,21 @@ class AppState: ObservableObject {
         streamingMessageId = nil
     }
 
+    
+    
+    
+    
+    
+    
     private func handleNonTranscriptAgentEvent(_ event: AgentEvent, scoopJid: String) {
         switch event {
         case .toolUI(let messageId, let toolName, let requestId, let html):
-
+            
+            
+            
+            
+            
+            
             guard scoops.first(where: { $0.jid == scoopJid })?.isReadOnly != true else {
                 logger.debug("Ignoring tool_ui for read-only unit \(scoopJid)")
                 return
@@ -1073,7 +1428,7 @@ class AppState: ObservableObject {
                 "Agent event: tool_ui id=\(messageId) tool=\(toolName) request=\(requestId)"
             )
             let card = ToolUIPlaceholder(requestId: requestId, html: html)
-
+            
             if let existing = toolUICards.firstIndex(where: { $0.id == requestId }) {
                 toolUICards[existing] = card
             } else {
@@ -1081,7 +1436,8 @@ class AppState: ObservableObject {
             }
         case .toolUIDone(let messageId, let requestId):
             logger.debug("Agent event: tool_ui_done id=\(messageId) request=\(requestId)")
-
+            
+            
             toolUICards.removeAll { $0.id == requestId }
         case .screenshot, .terminalOutput:
             break
@@ -1090,6 +1446,19 @@ class AppState: ObservableObject {
         }
     }
 
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     @discardableResult
     func sendToLeader(_ msg: FollowerToLeaderMessage) -> Bool {
         let data: Data
@@ -1114,7 +1483,8 @@ class AppState: ObservableObject {
             logger.error("Refusing to send oversize message (\(data.count) bytes)")
             return false
         }
-
+        
+        
         let queued = webRTCManager?.bufferedAmount ?? 0
         guard queued < UInt64(TrayChunkLimits.sendHighWaterBytes) else {
             logger.error("Refusing chunked send — channel congested (\(queued) bytes queued)")
@@ -1132,15 +1502,23 @@ class AppState: ObservableObject {
         return true
     }
 
+    
+
+    
+    
+    
     private static let messagesFlushIntervalNs: UInt64 = 33_000_000
 
+    
+    
     private func scheduleMessagesFlush(for scoopJid: String) {
         guard pendingMessagesFlush == nil else { return }
         pendingMessagesFlush = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: AppState.messagesFlushIntervalNs)
             guard let self else { return }
             self.pendingMessagesFlush = nil
-
+            
+            
             if self.selectedScoopJid == scoopJid,
                 let buffer = self.messagesByScoop[scoopJid]
             {
@@ -1149,11 +1527,18 @@ class AppState: ObservableObject {
         }
     }
 
+    
+    
+    
+    
     func cancelPendingMessagesFlush() {
         pendingMessagesFlush?.cancel()
         pendingMessagesFlush = nil
     }
 
+    
+
+    
     func handleDisconnect(reason: String) {
         guard connectionState == .connected || connectionState == .reconnecting else { return }
 
@@ -1161,6 +1546,14 @@ class AppState: ObservableObject {
         sudoApprovalController.transportLost()
         terminalClient.disconnect()
 
+        
+        
+        
+        
+        
+        
+        
+        
         let willRetry = autoReconnect
         updateConnection {
             isLeaderStalled = false
@@ -1179,6 +1572,11 @@ class AppState: ObservableObject {
         }
     }
 
+    
+    
+    
+    
+    
     private func runReconnectLoop(initialReason: String) async {
         for attempt in 1...ReconnectBackoff.maxAttempts {
             reconnectAttempt = attempt
@@ -1187,11 +1585,14 @@ class AppState: ObservableObject {
             let delay = ReconnectBackoff.delay(forAttempt: attempt)
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             if Task.isCancelled { return }
-
+            
+            
             guard connectionState == .reconnecting else { return }
 
             connect(to: activeJoinUrl, displayName: activeDisplayName)
 
+            
+            
             await connectTask?.value
             if Task.isCancelled { return }
             if connectionState == .connected {
@@ -1211,8 +1612,13 @@ class AppState: ObservableObject {
 
 }
 
-extension AppState {
 
+
+extension AppState {
+    
+    
+    
+    
     fileprivate func tearDown() {
         openApprovalController.disconnect()
         sudoApprovalController.transportLost()
@@ -1228,16 +1634,18 @@ extension AppState {
         snapshotChunks.removeAll()
         chunkReassembler.removeAll()
         cancelPendingMessagesFlush()
-
+        
+        
         stopTargetsAdvertiseTimer()
     }
 
 }
 
 extension AppState {
-
+    
     func clearStoredData() {
-
+        
+        
         recentJoinStore.clearLocalHistory()
         credentialStore.clear()
         fileProviderDomainLifecycle.removeDomain()
@@ -1246,7 +1654,7 @@ extension AppState {
     }
 
     fileprivate static func purgeLegacyJoinURLDefaults() {
-
+        
         UserDefaults.standard.removeObject(forKey: "joinUrlHistory")
         UserDefaults.standard.removeObject(forKey: "joinUrl")
     }
@@ -1267,33 +1675,50 @@ extension AppState {
     }
 }
 
-extension AppState {
 
+
+extension AppState {
+    
     func selectScoop(jid: String) {
         guard jid != selectedScoopJid else { return }
         guard scoops.contains(where: { $0.jid == jid }) else { return }
         selectedScoopJid = jid
-
+        
         let cached = messagesByScoop[jid] ?? []
         messages = cached
         isStreaming = cached.last?.isStreaming == true
         streamingMessageId = isStreaming ? cached.last?.id : nil
-
+        
+        
+        
         sendToLeader(.scoopsSelect(scoopJid: jid))
         refreshModels()
     }
 }
 
-extension AppState {
 
+
+
+
+
+extension AppState {
+    
     func connect() {
         connect(to: joinUrl, displayName: nil)
     }
 
+    
+    
+    
     func connectToDiscoveredSession(joinUrl url: String, displayName: String? = nil) {
         connect(to: url, displayName: displayName)
     }
 
+    
+    
+    
+    
+    
     @discardableResult
     func attemptStoredConnection() -> Bool {
         guard autoReconnect,
@@ -1307,8 +1732,12 @@ extension AppState {
     }
 }
 
-extension AppState {
 
+
+extension AppState {
+    
+    
+    
     func acceptChunkFrame(_ frame: TrayChunkFrame) {
         let outcome = chunkReassembler.accept(frame)
         switch outcome.rejection {
@@ -1323,6 +1752,10 @@ extension AppState {
         routeLeaderMessage(message)
     }
 }
+
+
+
+
 
 private class WebRTCBridge: NSObject, WebRTCManagerDelegate {
     private weak var appState: AppState?
@@ -1344,13 +1777,13 @@ private class WebRTCBridge: NSObject, WebRTCManagerDelegate {
     }
 
     func webRTCManager(_ manager: WebRTCManager, didChangeConnectionState state: RTCIceConnectionState) {
-
+        
     }
 
     func webRTCManager(_ manager: WebRTCManager, didGenerateLocalCandidate candidate: RTCIceCandidate) {
         Task { @MainActor [weak self] in
             guard let self, let appState = self.appState else { return }
-
+            
             guard let client = appState.signalingClient else { return }
             let trayCandidate = TrayIceCandidate(
                 candidate: candidate.sdp,
@@ -1358,7 +1791,7 @@ private class WebRTCBridge: NSObject, WebRTCManagerDelegate {
                 sdpMLineIndex: Int(candidate.sdpMLineIndex),
                 usernameFragment: nil
             )
-
+            
             Task {
                 _ = try? await client.sendIceCandidate(
                     controllerId: appState.controllerId,
@@ -1376,6 +1809,8 @@ private class WebRTCBridge: NSObject, WebRTCManagerDelegate {
     }
 }
 
+
+
 enum AppStateError: LocalizedError {
     case attachFailed(String)
 
@@ -1387,11 +1822,19 @@ enum AppStateError: LocalizedError {
     }
 }
 
-extension AppState {
 
+
+
+
+
+extension AppState {
+    
     private func runSignalingLoop(client: TraySignalingClient, rtc: WebRTCManager) async {
         do {
-
+            
+            
+            
+            
             let (plan, client) = try await attachWithRetry(client: client)
 
             self.trayId = plan.trayId
@@ -1406,14 +1849,19 @@ extension AppState {
                 return
             }
 
+            
             rtc.configure(iceServers: iceServers)
 
+            
             let bootstrapId = bootstrap.bootstrapId
             self.currentBootstrapId = bootstrapId
             var cursor: Int? = bootstrap.cursor
 
+            
+            
+
             var gotOffer = false
-            let maxPolls = 60
+            let maxPolls = 60  
             for _ in 0..<maxPolls {
                 if Task.isCancelled { return }
 
@@ -1454,15 +1902,19 @@ extension AppState {
                     }
                 }
 
+                
                 if poll.bootstrap.state == .connected {
                     break
                 }
 
+                
+                
                 if gotOffer && poll.events.isEmpty {
-
+                    
                     try? await Task.sleep(nanoseconds: 500_000_000)
                 }
 
+                
                 if poll.events.isEmpty && !gotOffer {
                     let delay = poll.bootstrap.retryAfterMs ?? 2000
                     try? await Task.sleep(
@@ -1478,6 +1930,11 @@ extension AppState {
         }
     }
 
+    
+    
+    
+    
+    
     private func attachWithRetry(
         client: TraySignalingClient
     ) async throws -> (plan: FollowerAttachPlan, client: TraySignalingClient) {
@@ -1491,6 +1948,11 @@ extension AppState {
 
             let plan = try await client.attach(controllerId: controllerId)
 
+            
+            
+            
+            
+            
             if plan.supersededByJoinUrl != nil {
                 let outcome = SupersedeRedirect.outcome(
                     for: plan, redirectsFollowed: redirectsFollowed)
@@ -1520,6 +1982,11 @@ extension AppState {
         throw AppStateError.attachFailed("Max attach retries exceeded")
     }
 
+    
+    
+    
+    
+    
     private func followSuperseded(to replacement: URL) -> TraySignalingClient {
         logger.info("Tray superseded; following redirect to the replacement tray")
         controllerId = UUID().uuidString

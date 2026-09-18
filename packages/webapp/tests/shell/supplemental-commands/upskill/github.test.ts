@@ -8,7 +8,7 @@ import {
   createUpskillCommand,
   parseGitHubRef,
 } from '../../../../src/shell/supplemental-commands/upskill/index.js';
-import { createMockCtx, response } from './test-helpers.js';
+import { createMockCtx, githubCommitsResponse, response } from './test-helpers.js';
 
 let dbCounter = 0;
 
@@ -159,6 +159,8 @@ describe('upskill command GitHub flows', () => {
       }
       if (url.endsWith('/alpha/SKILL.md')) return response(200, '# Alpha skill\n');
       if (url.endsWith('/alpha/helper.txt')) return response(200, 'helper\n');
+      const commits = githubCommitsResponse(url);
+      if (commits) return commits;
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -238,6 +240,8 @@ describe('upskill command GitHub flows', () => {
           'Too Many Requests'
         );
       }
+      const commits = githubCommitsResponse(url);
+      if (commits) return commits;
       throw new Error(`unexpected url: ${url}`);
     });
 

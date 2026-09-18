@@ -1,6 +1,8 @@
 import Foundation
 import Security
 
+
+
 struct Secret: Equatable, Identifiable, Hashable {
     var name: String
     var value: String
@@ -29,10 +31,24 @@ enum SecretsError: LocalizedError {
     }
 }
 
+
+
+
+
+
+
 enum SecretsKeychain {
     static let service = "ai.sliccy.slicc"
     static let account = "__envfile__"
 
+    
+    
+    
+    
+    
+    
+    
+    
     static func readBlob() throws -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -84,6 +100,8 @@ enum SecretsKeychain {
         throw SecretsError.keychainError(status: updateStatus)
     }
 }
+
+
 
 enum EnvFileFormat {
     static let domainsSuffix = "_DOMAINS"
@@ -138,6 +156,14 @@ enum EnvFileFormat {
             .filter { !$0.isEmpty }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     static func isValidHostnamePattern(_ pattern: String) -> Bool {
         let trimmed = pattern.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return false }

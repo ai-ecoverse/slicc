@@ -8,7 +8,7 @@ description: |
   creation, modification, layout constraints, the cone-to-scoop orchestration
   rules, the `slicc.*` bridge API, and `sprinkle chat` for blocking inline
   prompts.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Sprinkles
@@ -18,7 +18,7 @@ allowed-tools: bash, read_file, write_file, edit_file
 ## Two rendering modes
 
 - **Fragment mode** (default): plain HTML fragments injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.sprinkle-*` classes. Scripts get a `slicc` bridge object automatically.
-- **Full-document mode**: complete HTML documents (starting with `<!DOCTYPE html>` or `<html>`) render inside sandboxed iframes. Use this for complex layouts with custom CSS, sidebars, split panes, modals, or canvas/SVG visualizations. The bridge script is auto-injected — `window.slicc` and `window.bridge` are available. The parent page's S2 theme tokens are injected automatically.
+- **Full-document mode**: complete HTML documents (starting with `<!DOCTYPE html>` or `<html>`) render inside sandboxed iframes. Use this for complex layouts with custom CSS, sidebars, split panes, modals, or canvas/SVG visualizations. The bridge script is auto-injected — `window.slicc` and `window.bridge` are available. The parent page's S2 theme tokens are injected automatically. The iframe sandbox grants `allow-popups`, so a real click handler can `window.open(url, name, 'popup=yes,width=1280,height=800')` and get a sized window handle back (a sized popup is the only way to open a fixed-size, dpr-preserving capture window); it does NOT grant top navigation, so the sprinkle cannot replace the host page.
 
 Pick full-document mode when you need custom CSS beyond `.sprinkle-*` classes, complex layouts (sidebar + main, split panes, tabs), or interactive canvas/SVG.
 
@@ -311,10 +311,10 @@ sprinkle chat '<div class="sprinkle-action-card">
 
 Available as `slicc` in `<script>` tags and `onclick` attributes:
 
-- `slicc.lick(event)` — send a lick event to the cone (cone routes to the right scoop). Accepts a string shortcut (`slicc.lick('cancel')` → `{ action: 'cancel' }`) or `{ action, data? }`. See payload-shape note below.
+- `slicc.lick(event)` — send a lick event to the cone (cone routes to the right scoop). Accepts a string shortcut (`slicc.lick('cancel')` → `{ action: 'cancel' }`) or `{ action, data?, target? }`. `target` is a cone/scoop name or folder alias and overrides the sprinkle's configured route for that lick, on the leader and on followers alike. Without it, a click on any copy of the panel goes to the cone that opened it. See payload-shape note below.
 - `slicc.on('update', function(data) {...})` — receive data sent via `sprinkle send`.
 
-> **Payload shape:** the cone reads `event.data` as the payload — top-level extras outside `action` and `data` are silently dropped by the sprinkle bridge. Always use `slicc.lick({ action: 'deploy', data: { env: 'prod' } })`, not `slicc.lick({ action: 'deploy', env: 'prod' })`.
+> **Payload shape:** the cone reads `event.data` as the payload — top-level extras outside `action`, `data`, and `target` are silently dropped by the sprinkle bridge. Always use `slicc.lick({ action: 'deploy', data: { env: 'prod' } })`, not `slicc.lick({ action: 'deploy', env: 'prod' })`.
 
 - `slicc.name` — the sprinkle's name.
 - `slicc.close()` — close the sprinkle.
@@ -338,7 +338,7 @@ The bridge also reaches the **same worker shell** that `.jsh` scripts and `node 
 - `slicc.agent(prompt, opts?)` — spawn a one-shot sub-scoop, feed it `prompt`, block until it completes, and resolve with its final message on `stdout`. Returns `Promise<{stdout, exitCode}>`. `opts`: `{cwd?, allowedCommands?, model?, thinking?, readOnly?}`. Sugar over `slicc.exec` building the `agent` command — the same handoff-free delegation as the `agent` shell command. On failure the error text comes back on `stdout` with a non-zero `exitCode`, never thrown.
 - `slicc.fetch(url, init?)` — proxied, secret-injecting fetch (NOT the iframe's CORS-bound native fetch). Resolves to a native `Response` (with `.json()`/`.text()`/`.arrayBuffer()`/`.blob()` and `.ok`/`.status`/`.headers`/`.url`).
 - `slicc.http.client(config)` — higher-level API client over the proxied fetch (`get`/`post`/`put`/`patch`/`delete`). `config`: `{baseUrl?, token?, headers?, retry?, timeoutMs?}`.
-- `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring `require('sliccy:browser')` in jsh.
+- `slicc.browser.*` — Playwright-style CDP surface (`findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`), mirroring `require('sliccy:browser')` in jsh.
 - `slicc.fetchToFile(url, path)` — download a URL (via the proxied fetch) straight to a VFS file; resolves with the byte count.
 - `slicc.readFileBinary(path)` / `slicc.writeFileBinary(path, bytes)` — binary VFS I/O (parity with `require('fs')` in jsh).
 - `slicc.hid.*` / `slicc.serial.*` / `slicc.usb.*` — stateful device surfaces for WebHID / Web Serial / WebUSB (Chromium-only; absent in the cloud / hosted-leader float). Same opaque handles (`hid1`, `serial1`, `usb1`, …) as the `hid` / `serial` / `usb` shell commands and the `require('sliccy:hid' | 'sliccy:serial' | 'sliccy:usb')` realm modules — discover via `list()` or trigger the OS picker via `request()` (a button-click is a real user gesture). For HID, `open(handle)` auto-attaches the input-report stream so every `slicc.hid.on('inputreport', cb)` listener receives `{ handle, reportId, data: Uint8Array }` until `close(handle)` or sprinkle teardown. Use this for keyboard configurators, gamepad dashboards, ESP32 monitor panels — anything that needs a persistent device session across multiple button clicks. The realm bridge in `slicc.exec('node -e …')` resets per call, so push handle ops through `slicc.hid|serial|usb` instead.
@@ -359,9 +359,14 @@ slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
 // USB — full transfer surface, so a sprinkle can drive a device itself.
 slicc.usb.list(): Promise<UsbDeviceInfo[]>
 slicc.usb.request(filters?): Promise<UsbDeviceInfo>      // needs button-click gesture
-slicc.usb.open(handle) / close(handle) / reset(handle): Promise<void>
+slicc.usb.open(handle) / close(handle, opts?) / reset(handle, opts?): Promise<void>
 slicc.usb.selectConfiguration(handle, value): Promise<void>
-slicc.usb.claimInterface(handle, n) / releaseInterface(handle, n): Promise<void>
+slicc.usb.claimInterface(handle, n, opts?) / releaseInterface(handle, n): Promise<void>
+slicc.usb.on('disconnect' | 'claim-lost', cb) / off(...): void
+  // Handles are shared with the `usb` shell command and `require('sliccy:usb')`.
+  // Interface claims are exclusive: a second claim is refused naming the
+  // holder; close/reset refuse while another consumer holds a claim unless
+  // `{ force: true }`. Forced displacement delivers claim-lost then disconnect.
 slicc.usb.clearHalt(handle, 'in' | 'out', endpoint): Promise<void>
 slicc.usb.transferIn(handle, endpoint, length): Promise<{ status, bytes: Uint8Array }>
 slicc.usb.transferOut(handle, endpoint, bytes: Uint8Array): Promise<{ status, bytesWritten }>

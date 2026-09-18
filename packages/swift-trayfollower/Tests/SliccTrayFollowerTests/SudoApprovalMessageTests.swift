@@ -3,7 +3,10 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
 final class SudoApprovalMessageTests: XCTestCase {
+    
 
     func testSudoApproveRequestRoundTrip() throws {
         let message = LeaderToFollowerMessage.sudoApproveRequest(
@@ -12,16 +15,22 @@ final class SudoApprovalMessageTests: XCTestCase {
             detail: "git push origin main",
             requester: "biscotto \u{201C}Anna\u{201D}",
             suggestedPattern: "git push *",
+            reason: "the release branch is tagged and CI is green",
             scoopName: "Researcher",
             expiresAt: 1_750_000_300_000)
         guard
             case .sudoApproveRequest(
-                let id, let kind, let detail, let requester, let pattern, let scoop, let exp) =
+                let id, let kind, let detail, let requester, let pattern, let reason, let scoop,
+                let exp) =
                 try WireCodec.roundTrip(message)
         else { return XCTFail("expected sudoApproveRequest") }
         XCTAssertEqual([id, kind, detail, pattern, scoop], ["sudo-1", "command", "git push origin main", "git push *", "Researcher"])
-
+        
+        
         XCTAssertEqual(requester, "biscotto \u{201C}Anna\u{201D}")
+        
+        
+        XCTAssertEqual(reason, "the release branch is tagged and CI is green")
         XCTAssertEqual(exp, 1_750_000_300_000)
         let json = try WireCodec.jsonString(message)
         XCTAssertTrue(json.contains(#""type":"sudo.approve.request""#))
@@ -31,20 +40,23 @@ final class SudoApprovalMessageTests: XCTestCase {
     func testSudoApproveRequestOptionalFieldsDecodeAbsent() throws {
         let wire = #"{"type":"sudo.approve.request","requestId":"p","kind":"export","detail":"active","expiresAt":1}"#
         guard
-            case .sudoApproveRequest(_, let kind, _, let requester, let pattern, let scoop, _) =
+            case .sudoApproveRequest(
+                _, let kind, _, let requester, let pattern, let reason, let scoop, _) =
                 try WireCodec.decode(LeaderToFollowerMessage.self, from: wire)
         else { return XCTFail("expected sudoApproveRequest") }
         XCTAssertEqual(kind, "export")
         XCTAssertNil(requester)
         XCTAssertNil(pattern)
+        XCTAssertNil(reason)
         XCTAssertNil(scoop)
-
+        
         let json = try WireCodec.jsonString(
             LeaderToFollowerMessage.sudoApproveRequest(
                 requestId: "p", kind: "export", detail: "active", requester: nil,
-                suggestedPattern: nil, scoopName: nil, expiresAt: 1))
+                suggestedPattern: nil, reason: nil, scoopName: nil, expiresAt: 1))
         XCTAssertFalse(json.contains("requester"))
         XCTAssertFalse(json.contains("suggestedPattern"))
+        XCTAssertFalse(json.contains("reason"))
         XCTAssertFalse(json.contains("scoopName"))
     }
 
@@ -54,6 +66,8 @@ final class SudoApprovalMessageTests: XCTestCase {
         XCTAssertEqual(id, "sudo-9")
         XCTAssertTrue(try WireCodec.jsonString(LeaderToFollowerMessage.sudoApproveCancel(requestId: "x")).contains(#""type":"sudo.approve.cancel""#))
     }
+
+    
 
     func testSudoApproveResponseRoundTrip() throws {
         let message = FollowerToLeaderMessage.sudoApproveResponse(
@@ -77,6 +91,8 @@ final class SudoApprovalMessageTests: XCTestCase {
         XCTAssertEqual([platform, decodedToken, environment], ["ios", token, "production"])
         XCTAssertTrue(try WireCodec.jsonString(message).contains(#""type":"push.register""#))
     }
+
+    
 
     func testCapabilityFlagsRoundTripAndOmitWhenNil() throws {
         let full = TraySyncCapabilities(exec: true, browser: true, oauthPopup: nil, sudoApproval: true, biometric: true)

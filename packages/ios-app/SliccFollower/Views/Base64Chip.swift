@@ -1,5 +1,16 @@
 import SwiftUI
 
+
+
+
+
+
+
+
+
+
+
+
 struct Base64Chip: View {
     let payload: Base64Payload
 
@@ -58,6 +69,8 @@ struct Base64Chip: View {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
+    
+    
     static func icon(for mime: String) -> String {
         switch true {
         case mime.hasPrefix("image/"): return "photo"

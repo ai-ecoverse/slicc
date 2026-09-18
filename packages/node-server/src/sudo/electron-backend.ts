@@ -47,7 +47,10 @@ export function createElectronBackend(deps: ElectronBackendDeps = {}): SudoBacke
           message: req.requester
             ? `Approve ${req.kind} from ${req.requester}`
             : `Approve ${req.kind}`,
-          detail: req.detail,
+
+          detail: req.reason?.trim()
+            ? `${req.detail}\n\nReason given: ${req.reason.trim()}`
+            : req.detail,
         });
         response = result.response;
       } catch {

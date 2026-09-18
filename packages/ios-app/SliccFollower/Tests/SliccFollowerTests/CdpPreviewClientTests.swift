@@ -4,6 +4,8 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
 @MainActor
 final class CdpPreviewClientTests: XCTestCase {
 
@@ -27,7 +29,7 @@ final class CdpPreviewClientTests: XCTestCase {
         }
 
         async let capture = client.capturePreview(targetId: "tab1")
-
+        
         while sent.isEmpty { await Task.yield() }
         guard
             case .cdpRequest(let attachId, "leader", "tab1", "Target.attachToTarget", _, _) =
@@ -74,7 +76,7 @@ final class CdpPreviewClientTests: XCTestCase {
         guard case .cdpRequest(let attachId, _, _, _, _, _) = sent[0] else {
             return XCTFail()
         }
-
+        
         let serialized = #"{"sessionId":"s2"}"#
         let mid = serialized.index(serialized.startIndex, offsetBy: 7)
         client.handleResponse(

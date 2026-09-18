@@ -1,6 +1,7 @@
 import UIKit
 import XCTest
 
+
 final class RemoteTabUITests: XCTestCase {
 
     override func setUp() {
@@ -25,6 +26,17 @@ final class RemoteTabUITests: XCTestCase {
             "leader tabs get preview screenshots")
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func testRemoteOnlyStateOpensLocalTab() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -63,7 +75,9 @@ final class RemoteTabUITests: XCTestCase {
         XCTAssertFalse(
             app.buttons["dock-browser"].exists,
             "full-screen browsing hides the dock rail")
-
+        
+        
+        
         addressField.tap()
         addressField.typeText("about:blank\n")
 
@@ -83,6 +97,9 @@ final class RemoteTabUITests: XCTestCase {
             "leaving full screen brings the dock rail back")
     }
 
+    
+    
+    
     func testRemoteCardOpensLocally() {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -104,6 +121,8 @@ final class RemoteTabUITests: XCTestCase {
             "full-screen browsing hides the dock rail")
     }
 
+    
+    
     func testRegularWidthBrowsingEntersAndExitsFullScreen() throws {
         let app = XCUIApplication()
         app.launchArguments += [

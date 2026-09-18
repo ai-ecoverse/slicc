@@ -18,7 +18,6 @@ import {
   curatorReceiptPath,
   runAgenticMemoryPass,
 } from '../scoops/agentic-memory.js';
-import type { SessionStore } from '../scoops/chat-session-store.js';
 import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
@@ -92,8 +91,12 @@ export interface FreezerConeRef {
   jid?: string;
 }
 
+export interface ConeSessionSource {
+  load(sessionId: string): Promise<Session | null>;
+}
+
 export interface FreezeConeSessionOptions {
-  sessionStore: SessionStore;
+  sessionStore: ConeSessionSource;
 
   vfs: WritableVfsClient;
 
@@ -540,7 +543,10 @@ function coneMemoryPathFor(folder: string): string {
   return workspaceFor({ parentJid: null, folder }).memoryPath;
 }
 
-async function loadSessionSafely(store: SessionStore, folder: string): Promise<Session | null> {
+async function loadSessionSafely(
+  store: ConeSessionSource,
+  folder: string
+): Promise<Session | null> {
   const sessionId = chatSessionIdFor({ folder });
   try {
     return await store.load(sessionId);

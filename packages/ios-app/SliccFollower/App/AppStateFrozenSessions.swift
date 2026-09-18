@@ -1,11 +1,19 @@
 import Foundation
 
+
+
+
+
+
+
 extension AppState {
 
+    
     enum FrozenListState: Equatable {
         case idle
         case loading
-
+        
+        
         case loaded(rebuilt: Bool)
         case failed(String)
     }
@@ -15,6 +23,9 @@ extension AppState {
         let archive: ParsedFrozenArchive
     }
 
+    
+    
+    
     func loadFrozenSessions() {
         #if DEBUG
             if let fixture = UITestHooks.frozenFixture() {
@@ -24,7 +35,8 @@ extension AppState {
             }
         #endif
         guard connectionState == .connected else {
-
+            
+            
             frozenSessions = []
             frozenListState = .failed("Connect to a leader to browse its past sessions.")
             return
@@ -39,10 +51,11 @@ extension AppState {
                     self.frozenListState = .loaded(rebuilt: false)
                     return
                 }
-
+                
                 try await self.rebuildFrozenList()
             } catch {
-
+                
+                
                 do {
                     try await self.rebuildFrozenList()
                 } catch {
@@ -59,6 +72,8 @@ extension AppState {
         frozenListState = .loaded(rebuilt: true)
     }
 
+    
+    
     func openFrozenSession(_ entry: FrozenSessionIndexEntry) {
         frozenOpenError = nil
         #if DEBUG

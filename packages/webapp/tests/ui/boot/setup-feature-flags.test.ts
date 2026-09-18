@@ -5,6 +5,10 @@ import {
   featureFlagsRemoteCacheKey,
 } from '../../../src/core/feature-flags-remote.js';
 import { setupFeatureFlagsForPage } from '../../../src/ui/boot/setup-feature-flags.js';
+import {
+  FEATURE_FLAGS_REFRESH_INTERVAL_MS,
+  stopFeatureFlagsRefresh,
+} from '../../../src/ui/boot/setup-feature-flags-remote.js';
 
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -20,7 +24,11 @@ function memoryStorage(): Storage {
   } as Storage;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  stopFeatureFlagsRefresh();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('feature flag page boot', () => {
   it('applies the last-known-good cache before the lazy refresh starts', async () => {
@@ -71,5 +79,37 @@ describe('feature flag page boot', () => {
       expect.objectContaining({ cache: 'no-store' })
     );
     expect(storage.getItem(featureFlagsRemoteCacheKey('cherry'))).toBeNull();
+  });
+
+  it('re-reads central flags on a timer so a kill switch reaches an open tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const storage = memoryStorage();
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ float: 'standalone', flags: { 'panel-layouts': 'on' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    );
+    vi.stubGlobal('fetch', fetchImpl);
+
+    setupFeatureFlagsForPage({
+      locationHref: 'https://app.example/',
+      storage,
+      envBaseUrl: null,
+      isDev: false,
+      isExtension: false,
+    });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+
+    await vi.advanceTimersByTimeAsync(FEATURE_FLAGS_REFRESH_INTERVAL_MS);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(FEATURE_FLAGS_REFRESH_INTERVAL_MS);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    expect(storage.getItem(featureFlagsRemoteCacheKey('standalone'))).toBe(
+      JSON.stringify({ 'panel-layouts': 'on' })
+    );
   });
 });

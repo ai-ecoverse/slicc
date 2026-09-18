@@ -1,3 +1,4 @@
+import type { CommandContext } from 'just-bash';
 import { type SyncFsRequest, type SyncFsResult, toErrno } from './sync-fs-dispatch.js';
 import { resolveSyncFsToken, trackSyncExec } from './sync-fs-token-registry.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS } from './sync-fs-wire.js';
@@ -33,39 +34,6 @@ export function isSyncExecRequest(req: SyncFsRequest | SyncExecRequest): req is 
   return (req as SyncExecRequest).channel === SYNC_EXEC_CHANNEL;
 }
 
-function normalizeCwd(
-  cwd: unknown,
-  fallback: string
-): { cwd: string } | { errno: string; message: string } {
-  if (cwd === undefined) return { cwd: fallback };
-  if (typeof cwd !== 'string' || cwd.length === 0) {
-    return { errno: 'EINVAL', message: 'sync-exec: cwd must be a non-empty string' };
-  }
-  return { cwd };
-}
-
-type EnvBag = { [key: string]: string | undefined };
-
-function normalizeEnv(
-  env: unknown
-): { env?: Record<string, string> } | { errno: string; message: string } {
-  if (env === undefined) return {};
-  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
-    return { errno: 'EINVAL', message: 'sync-exec: env must be a string record' };
-  }
-  const bag = env as EnvBag;
-  const out: Record<string, string> = {};
-  for (const key of Object.keys(bag)) {
-    const value = bag[key];
-    if (value === undefined) continue;
-    if (typeof value !== 'string') {
-      return { errno: 'EINVAL', message: 'sync-exec: env values must be strings' };
-    }
-    out[key] = value;
-  }
-  return { env: out };
-}
-
 function normalizeCommand(
   req: SyncExecRequest
 ): { cmd: string; args?: string[] } | { errno: string; message: string } {
@@ -89,6 +57,54 @@ function normalizeCommand(
   return { cmd: command };
 }
 
+type ErrnoResult = { errno: string; message: string };
+
+export async function resolveSyncExecCwd(
+  fs: CommandContext['fs'],
+  baseCwd: string,
+  requested: unknown
+): Promise<{ cwd: string } | ErrnoResult> {
+  if (requested === undefined) return { cwd: baseCwd };
+  if (typeof requested !== 'string') {
+    return { errno: 'EINVAL', message: 'sync-exec: cwd must be a string' };
+  }
+  if (requested.length === 0) {
+    return { errno: 'ENOENT', message: 'sync-exec: cwd is empty' };
+  }
+  const cwd = fs.resolvePath(baseCwd, requested);
+  try {
+    const st = await fs.stat(cwd);
+    if (!st.isDirectory) {
+      return { errno: 'ENOTDIR', message: `sync-exec: cwd is not a directory: ${cwd}` };
+    }
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'EACCES' || code === 'EPERM') {
+      return { errno: code, message: `sync-exec: cwd not accessible: ${cwd}` };
+    }
+    return { errno: 'ENOENT', message: `sync-exec: cwd does not exist: ${cwd}` };
+  }
+  return { cwd };
+}
+
+export function normalizeSyncExecEnv(
+  env: unknown
+): { ok: true; env: Record<string, string> } | ErrnoResult | undefined {
+  if (env === undefined) return undefined;
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
+    return { errno: 'EINVAL', message: 'sync-exec: env must be an object' };
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env as { [name: string]: string | undefined })) {
+    if (value === undefined) continue;
+    if (typeof value !== 'string') {
+      return { errno: 'EINVAL', message: `sync-exec: env[${key}] must be a string` };
+    }
+    out[key] = value;
+  }
+  return { ok: true, env: out };
+}
+
 export function clampSyncExecTimeout(timeoutMs: number | undefined, fallbackMs: number): number {
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return Math.min(fallbackMs, SYNC_EXEC_MAX_TIMEOUT_MS);
@@ -108,13 +124,13 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   if ('errno' in normalized) {
     return { ok: false, errno: normalized.errno, message: normalized.message };
   }
-  const cwd = normalizeCwd(req.cwd, entry.cwd);
-  if ('errno' in cwd) {
-    return { ok: false, errno: cwd.errno, message: cwd.message };
+  const cwdResult = await resolveSyncExecCwd(entry.fs, entry.cwd, req.cwd);
+  if ('errno' in cwdResult) {
+    return { ok: false, errno: cwdResult.errno, message: cwdResult.message };
   }
-  const env = normalizeEnv(req.env);
-  if ('errno' in env) {
-    return { ok: false, errno: env.errno, message: env.message };
+  const envResult = normalizeSyncExecEnv(req.env);
+  if (envResult !== undefined && 'errno' in envResult) {
+    return { ok: false, errno: envResult.errno, message: envResult.message };
   }
 
   const controller = new AbortController();
@@ -130,11 +146,11 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   const untrack = trackSyncExec(req.token, controller);
   try {
     const result = await entry.exec(normalized.cmd, {
-      cwd: cwd.cwd,
+      cwd: cwdResult.cwd,
       signal: controller.signal,
       ...(normalized.args !== undefined ? { args: normalized.args } : {}),
       ...(req.stdin !== undefined ? { stdin: req.stdin } : {}),
-      ...(env.env !== undefined ? { env: env.env, replaceEnv: true } : {}),
+      ...(envResult !== undefined ? { env: envResult.env, replaceEnv: true } : {}),
     });
     return {
       ok: true,

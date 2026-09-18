@@ -1,9 +1,30 @@
 import Foundation
 
-public enum RUMReferer {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+public enum RUMReferer {
+    
     public static let defaultCollectBaseURL = URL(string: "https://rum.hlx.page/")!
 
+    
+    
+    
+    
+    
+    
+    
     public static func build(appID: String, viewPath: String = "/") -> String {
         let normalized: String
         if viewPath.isEmpty {

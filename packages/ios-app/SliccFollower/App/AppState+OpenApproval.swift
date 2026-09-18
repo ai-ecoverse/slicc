@@ -2,6 +2,8 @@ import Foundation
 import SliccTrayKit
 import UIKit
 
+
+
 extension AppState {
     func handleExecMessage(_ message: LeaderToFollowerMessage) {
         handleApprovalGatedExecMessage(
@@ -15,7 +17,8 @@ extension AppState {
             self?.sendToLeader($0) ?? false
         }
         #if DEBUG
-
+            
+            
             if UITestHooks.stagesOpenApprovalFixture { send = { _ in true } }
         #endif
         return OpenApprovalController(
@@ -79,7 +82,9 @@ extension AppState {
     }
 
     #if DEBUG
-
+        
+        
+        
         func configureOpenApprovalFixture() {
             guard let fixture = UITestHooks.openApprovalFixture() else { return }
             connectionState = .connected

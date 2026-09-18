@@ -93,11 +93,27 @@ export async function resolveCommitSha(
   repo: string,
   ref: string | undefined,
   github: GitHubRequestContext,
-  allowAnonymous = false
+  allowAnonymous = false,
+  path?: string
 ): Promise<string | undefined> {
   if (!github.hasToken && !allowAnonymous) return undefined;
   try {
     const target = ref || 'HEAD';
+    const normalizedPath = path?.replace(/^\/+|\/+$/g, '');
+    if (normalizedPath) {
+      const params = new URLSearchParams({
+        path: normalizedPath,
+        sha: target,
+        per_page: '1',
+      });
+      const response = await github.request(
+        `https://api.github.com/repos/${owner}/${repo}/commits?${params.toString()}`
+      );
+      if (response.status !== 200) return undefined;
+      const commits = parseFetchJson<Array<{ sha?: string }>>(response.body);
+      const sha = Array.isArray(commits) ? commits[0]?.sha : undefined;
+      return typeof sha === 'string' ? sha : undefined;
+    }
     const response = await github.request(
       `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(target)}`
     );

@@ -20,6 +20,8 @@ export interface RealmInitMsg {
 
   syncSab?: SharedArrayBuffer;
 
+  captureOutput?: boolean;
+
   stdin?: string;
 
   pyodideIndexURL?: string;
@@ -51,6 +53,23 @@ export interface RealmErrorMsg {
   message: string;
 }
 
+export interface RealmOutputMsg {
+  type: 'realm-output';
+  stream: 'stdout' | 'stderr';
+  chunk: string;
+}
+
+export interface RealmFsWriteMsg {
+  type: 'realm-fs-write';
+  path: string;
+  bytes: Uint8Array;
+}
+
+export interface RealmFsDeleteMsg {
+  type: 'realm-fs-delete';
+  path: string;
+}
+
 export type RealmRpcChannel =
   | 'vfs'
   | 'exec'
@@ -59,6 +78,7 @@ export type RealmRpcChannel =
   | 'usb'
   | 'serial'
   | 'hid'
+  | 'computer'
   | 'module'
   | 'wasm';
 

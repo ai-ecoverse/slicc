@@ -2,7 +2,16 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
+
+
+
 final class TranscriptEntityScanTests: XCTestCase {
+
+    
 
     private func paths(_ text: String) -> [String] {
         FileMentions.scan(text).map(\.path)
@@ -44,10 +53,16 @@ final class TranscriptEntityScanTests: XCTestCase {
         XCTAssertEqual(paths("the Makefile drives it"), ["Makefile"])
     }
 
+    
+    
+    
     func testIgnoresPathsInsideURLs() {
         XCTAssertEqual(paths("see https://example.com/static/app.js for the bundle"), [])
     }
 
+    
+    
+    
     func testOffsetsSurviveMaskingAMultiByteURL() {
         let text = "see https://exämple.com/ünicode.html then open notes.md"
         guard let found = FileMentions.scan(text).first else { return XCTFail("no mention") }
@@ -61,15 +76,21 @@ final class TranscriptEntityScanTests: XCTestCase {
         XCTAssertEqual(FileMentions.scan(many).count, FileMentions.maximumCandidates)
     }
 
+    
+
     func testFindsPhoneNumber() {
         let found = PhoneMentions.scan("If it is urgent, call +1 (415) 555-0134.")
         XCTAssertEqual(found.count, 1)
         XCTAssertEqual(found.first?.number, "+1 (415) 555-0134")
     }
 
+    
+    
     func testIgnoresShortDigitRuns() {
         XCTAssertEqual(PhoneMentions.scan("listening on 12345").count, 0)
     }
+
+    
 
     private static let noteBase64 =
         "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZywgYW5kIHRoZW4ga2VlcHMgb24ganVtcGluZyB1bnRp"
@@ -90,6 +111,8 @@ final class TranscriptEntityScanTests: XCTestCase {
         XCTAssertEqual(found.first?.data, Self.noteBase64)
     }
 
+    
+    
     func testReassemblesColumnWrappedBlock() {
         let wrapped = stride(from: 0, to: Self.noteBase64.count, by: 76)
             .map { start -> String in
@@ -107,11 +130,13 @@ final class TranscriptEntityScanTests: XCTestCase {
     }
 
     func testIgnoresShortAlphabetRuns() {
-
+        
         let digest = String(repeating: "a1b2", count: 16)
         XCTAssertEqual(Base64Mentions.scan("digest \(digest) done").count, 0)
     }
 
+    
+    
     func testIgnoresRaggedProseLines() {
         let prose = """
             The quick brown fox jumps over the lazy dog and keeps going for a while

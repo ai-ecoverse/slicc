@@ -1,3 +1,17 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 package logging
 
 import (
@@ -9,19 +23,23 @@ import (
 	"strings"
 )
 
+
 const (
 	EnvLevel  = "SLICC_LOG_LEVEL"
 	EnvFormat = "SLICC_LOG_FORMAT"
 	EnvDebug  = "SLICC_DEBUG"
 )
 
+
 type Config struct {
+	
 	Enabled bool
-
+	
 	Level slog.Level
-
+	
 	JSON bool
 }
+
 
 func ParseLevel(name string) (slog.Level, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
@@ -38,7 +56,9 @@ func ParseLevel(name string) (slog.Level, bool) {
 	}
 }
 
+
 type LookupEnv func(string) (string, bool)
+
 
 func ConfigFromEnv(lookup LookupEnv) Config {
 	if lookup == nil {
@@ -64,10 +84,13 @@ func ConfigFromEnv(lookup LookupEnv) Config {
 	return cfg
 }
 
+
+
 type Logger struct {
 	slog    *slog.Logger
 	enabled bool
 }
+
 
 func New(w io.Writer, cfg Config) *Logger {
 	if !cfg.Enabled || w == nil {
@@ -83,13 +106,19 @@ func New(w io.Writer, cfg Config) *Logger {
 	return &Logger{slog: slog.New(handler), enabled: true}
 }
 
+
 func NewFromEnv(w io.Writer) *Logger {
 	return New(w, ConfigFromEnv(os.LookupEnv))
 }
 
+
 func (l *Logger) Enabled() bool {
 	return l != nil && l.enabled
 }
+
+
+
+
 
 func (l *Logger) EnabledAt(level slog.Level) bool {
 	if !l.Enabled() {
@@ -97,6 +126,7 @@ func (l *Logger) EnabledAt(level slog.Level) bool {
 	}
 	return l.slog.Enabled(context.Background(), level)
 }
+
 
 func (l *Logger) With(args ...any) *Logger {
 	if !l.Enabled() || len(args) == 0 {
@@ -112,13 +142,20 @@ func (l *Logger) log(level slog.Level, msg string, args ...any) {
 	l.slog.Log(context.Background(), level, msg, args...)
 }
 
+
 func (l *Logger) Debug(msg string, args ...any) { l.log(slog.LevelDebug, msg, args...) }
+
 
 func (l *Logger) Info(msg string, args ...any) { l.log(slog.LevelInfo, msg, args...) }
 
+
 func (l *Logger) Warn(msg string, args ...any) { l.log(slog.LevelWarn, msg, args...) }
 
+
 func (l *Logger) Error(msg string, args ...any) { l.log(slog.LevelError, msg, args...) }
+
+
+
 
 func (l *Logger) Logf(format string, args ...any) {
 	if !l.Enabled() {

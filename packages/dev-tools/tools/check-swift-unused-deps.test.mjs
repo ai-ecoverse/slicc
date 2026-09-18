@@ -8,6 +8,7 @@ import { checkRepo, findManifests, targetSourceRoots } from './check-swift-unuse
 import {
   analyzeManifest,
   blankStringLiterals,
+  collectImportHits,
   collectImports,
   matchBracket,
   moduleName,
@@ -180,6 +181,16 @@ let package = Package(
 
   it('throws on a manifest without a Package clause', () => {
     expect(() => parseManifest('import PackageDescription\n')).toThrow(/no `let package/);
+  });
+});
+
+describe('collectImportHits', () => {
+  it('records 1-based line numbers and kind', () => {
+    const hits = collectImportHits('import Foundation\n@_exported import WebRTC\n');
+    expect(hits).toEqual([
+      { module: 'Foundation', line: 1, kind: 'import' },
+      { module: 'WebRTC', line: 2, kind: 'import' },
+    ]);
   });
 });
 

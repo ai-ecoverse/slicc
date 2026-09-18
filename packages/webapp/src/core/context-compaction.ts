@@ -63,6 +63,8 @@ export interface CompactionStateDetail {
 
   transcriptPath?: string;
 
+  failure?: CompactionFailureClass;
+
   roundId?: string;
 }
 
@@ -74,7 +76,19 @@ export interface CompactionOptions {
   trigger?: CompactionTrigger;
 
   roundId?: string;
+
+  allowNaiveDrop?: boolean;
 }
+
+export type CompactionFailureClass =
+  | 'rate-limit'
+  | 'quota-exhausted'
+  | 'authentication'
+  | 'provider-unavailable'
+  | 'empty-response'
+  | 'invalid-response'
+  | 'context-too-large'
+  | 'unknown';
 
 export type CompactionState =
   | 'summarizing'
@@ -210,6 +224,74 @@ ${conversationText}
 </conversation>`;
 }
 
+class CompactionCallError extends Error {
+  constructor(
+    readonly failure: CompactionFailureClass,
+    message: string
+  ) {
+    super(message);
+    this.name = 'CompactionCallError';
+  }
+}
+
+interface ProviderErrorLike {
+  message?: unknown;
+  status?: unknown;
+  statusCode?: unknown;
+  code?: unknown;
+}
+
+function classifyCompactionFailure(error: unknown): CompactionFailureClass {
+  if (error instanceof CompactionCallError) return error.failure;
+  const candidate =
+    typeof error === 'object' && error !== null ? (error as ProviderErrorLike) : undefined;
+  const status = candidate?.status ?? candidate?.statusCode ?? candidate?.code;
+  const message =
+    typeof candidate?.message === 'string'
+      ? candidate.message.toLowerCase()
+      : String(error).toLowerCase();
+  if (
+    status === 429 ||
+    status === '429' ||
+    /rate[ -]?limit|too many requests|throttl/.test(message)
+  ) {
+    return 'rate-limit';
+  }
+  if (/quota|credit|budget|billing|allowance|resource exhausted/.test(message)) {
+    return 'quota-exhausted';
+  }
+  if (
+    status === 401 ||
+    status === '401' ||
+    /unauthori[sz]ed|authentication|invalid api.?key|invalid x-api-key|session expired/.test(
+      message
+    )
+  ) {
+    return 'authentication';
+  }
+  if (
+    (typeof status === 'number' && status >= 500) ||
+    (typeof status === 'string' && /^5\d\d$/.test(status)) ||
+    /service unavailable|provider unavailable|overloaded|outage|timed? out|timeout|network|fetch failed|connection/.test(
+      message
+    )
+  ) {
+    return 'provider-unavailable';
+  }
+  return 'unknown';
+}
+
+interface CompactionResponseLike {
+  stopReason?: unknown;
+  errorMessage?: unknown;
+  content?: unknown;
+}
+
+interface CompactionContentLike {
+  type?: unknown;
+  text?: unknown;
+}
+
 async function runCompactionCall(
   model: Model<Api>,
   apiKey: string,
@@ -229,14 +311,44 @@ async function runCompactionCall(
     { systemPrompt, messages: [userMessage] },
     { maxTokens, apiKey, headers, signal }
   );
-  if (response.stopReason === 'error') {
-    throw new Error(`Compaction call failed: ${response.errorMessage || 'Unknown error'}`);
+  if (typeof response !== 'object' || response === null) {
+    throw new CompactionCallError('invalid-response', 'Compaction call returned no response');
   }
-  return response.content
-    .filter((c) => c.type === 'text')
-    .map((c) => (c as { text: string }).text)
+  const reply = response as CompactionResponseLike;
+  if (typeof reply.stopReason !== 'string' || !Array.isArray(reply.content)) {
+    throw new CompactionCallError(
+      'invalid-response',
+      'Compaction call returned an invalid response envelope'
+    );
+  }
+  if (reply.stopReason === 'error') {
+    const providerMessage =
+      typeof reply.errorMessage === 'string' ? reply.errorMessage : 'Unknown provider error';
+    throw new CompactionCallError(
+      classifyCompactionFailure(new Error(providerMessage)),
+      `Compaction call failed: ${providerMessage}`
+    );
+  }
+  const textBlocks = reply.content.filter(
+    (content): content is CompactionContentLike =>
+      typeof content === 'object' &&
+      content !== null &&
+      (content as CompactionContentLike).type === 'text'
+  );
+  if (textBlocks.some((content) => typeof content.text !== 'string')) {
+    throw new CompactionCallError(
+      'invalid-response',
+      'Compaction call returned an invalid text block'
+    );
+  }
+  const text = textBlocks
+    .map((content) => content.text as string)
     .join('\n')
     .trim();
+  if (!text) {
+    throw new CompactionCallError('empty-response', 'Compaction call returned no summary text');
+  }
+  return text;
 }
 
 const DEFAULT_HOPELESS_MULTIPLIER = 4;
@@ -620,6 +732,10 @@ async function extractMemoriesIfConfigured(
   }
 }
 
+type SummaryAttempt =
+  | { kind: 'summarized'; messages: AgentMessage[] }
+  | { kind: 'failed'; failure: CompactionFailureClass };
+
 async function summarizeWithLlm(
   config: CompactionConfig,
   apiKey: string,
@@ -631,7 +747,7 @@ async function summarizeWithLlm(
   signal: AbortSignal | undefined,
   detail: CompactionStateDetail,
   deferMemoryExtraction: CompactionOptions['deferMemoryExtraction']
-): Promise<AgentMessage[] | null> {
+): Promise<SummaryAttempt> {
   try {
     const safeToSummarize = elideOversizedMessages(
       messagesToSummarize,
@@ -682,12 +798,14 @@ async function summarizeWithLlm(
     }
 
     emitCompactionState(config, 'idle', detail);
-    return [summaryMessage, ...messagesToKeep];
+    return { kind: 'summarized', messages: [summaryMessage, ...messagesToKeep] };
   } catch (err) {
-    log.warn('LLM summarization failed, falling back to naive drop', {
+    const failure = classifyCompactionFailure(err);
+    log.warn('LLM summarization failed', {
+      failure,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { kind: 'failed', failure };
   }
 }
 
@@ -718,6 +836,112 @@ async function snapshotBeforeCompaction(
 function withTranscriptPointer(text: string, transcriptPath: string | undefined): string {
   if (!transcriptPath) return text;
   return `${text}\n\nThe full transcript of the conversation before this compaction is saved at ${transcriptPath} — read it when the summary is not enough.`;
+}
+
+function finishEarlyElision(
+  config: CompactionConfig,
+  messages: AgentMessage[],
+  elided: AgentMessage[],
+  trigger: CompactionTrigger,
+  detail: CompactionStateDetail,
+  allowNaiveDrop: boolean | undefined
+): AgentMessage[] {
+  if (allowNaiveDrop === false) {
+    const preservedDetail = { ...detail, failure: 'context-too-large' as const };
+    log.info('Idle compaction skipped destructive hopeless-context elision', {
+      trigger,
+      failure: preservedDetail.failure,
+    });
+    emitCompactionState(config, 'cancelled', preservedDetail);
+    emitCompactionState(config, 'idle', preservedDetail);
+    return messages;
+  }
+  emitCompactionState(config, 'summarizing', detail);
+  emitCompactionState(config, 'idle', detail);
+  return elided;
+}
+
+async function attemptSummary(
+  config: CompactionConfig,
+  messagesToSummarize: AgentMessage[],
+  messagesToKeep: AgentMessage[],
+  reserveTokens: number,
+  contextWindow: number,
+  originalMessageCount: number,
+  signal: AbortSignal | undefined,
+  detail: CompactionStateDetail,
+  options: CompactionOptions | undefined,
+  isHopeless: boolean
+): Promise<SummaryAttempt> {
+  if (isHopeless) return { kind: 'failed', failure: 'context-too-large' };
+  const apiKey = config.getApiKey();
+  if (!apiKey) {
+    log.warn('No API key available for LLM summarization');
+    return { kind: 'failed', failure: 'authentication' };
+  }
+  return summarizeWithLlm(
+    config,
+    apiKey,
+    messagesToSummarize,
+    messagesToKeep,
+    reserveTokens,
+    contextWindow,
+    originalMessageCount,
+    signal,
+    detail,
+    options?.deferMemoryExtraction
+  );
+}
+
+function finishFailedSummary(
+  config: CompactionConfig,
+  messages: AgentMessage[],
+  messagesToKeep: AgentMessage[],
+  contextWindow: number,
+  settings: Parameters<typeof shouldCompact>[2],
+  signal: AbortSignal | undefined,
+  options: CompactionOptions | undefined,
+  trigger: CompactionTrigger,
+  detail: CompactionStateDetail,
+  failure: CompactionFailureClass
+): AgentMessage[] {
+  if (signal?.aborted) {
+    log.info('Compaction aborted before the fallback drop (history untouched)', { trigger });
+    emitCompactionState(config, 'cancelled', detail);
+    emitCompactionState(config, 'idle', detail);
+    return messages;
+  }
+  if (options?.allowNaiveDrop === false) {
+    const preservedDetail = { ...detail, failure };
+    log.warn('Compaction summary unavailable; preserving history for a later retry', {
+      trigger,
+      failure,
+    });
+    emitCompactionState(config, 'cancelled', preservedDetail);
+    emitCompactionState(config, 'idle', preservedDetail);
+    return messages;
+  }
+  emitCompactionState(config, 'fallback', detail);
+  emitCompactionState(config, 'idle', detail);
+  const compactedMsg: UserMessage = {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text: withTranscriptPointer(
+          '[Earlier conversation messages were compacted to save context space]',
+          detail.transcriptPath
+        ),
+      },
+    ],
+    timestamp: Date.now(),
+  };
+  const keptTail = elideTailImages([compactedMsg], messagesToKeep, contextWindow, settings);
+  log.info('Naive compaction applied', {
+    originalMessages: messages.length,
+    compactedMessages: 1 + keptTail.length,
+  });
+  return [compactedMsg, ...keptTail];
 }
 
 export function createCompactContext(
@@ -760,9 +984,14 @@ export function createCompactContext(
       settings
     );
     if (hopeless.earlyReturn) {
-      emitCompactionState(config, 'summarizing', detail);
-      emitCompactionState(config, 'idle', detail);
-      return hopeless.earlyReturn;
+      return finishEarlyElision(
+        config,
+        messages,
+        hopeless.earlyReturn,
+        trigger,
+        detail,
+        options?.allowNaiveDrop
+      );
     }
     const workingMessages = hopeless.messages;
     const isHopeless = hopeless.isHopeless;
@@ -775,7 +1004,7 @@ export function createCompactContext(
     });
 
     const slices = selectCompactionSlices(workingMessages, keepRecentTokens);
-    if (!slices) return workingMessages;
+    if (!slices) return options?.allowNaiveDrop === false ? messages : workingMessages;
     const { messagesToSummarize, messagesToKeep } = slices;
 
     log.info('Compaction cut point', {
@@ -783,60 +1012,35 @@ export function createCompactContext(
       keeping: messagesToKeep.length,
     });
 
-    const apiKey = isHopeless ? undefined : config.getApiKey();
-    if (apiKey) {
-      const summarized = await summarizeWithLlm(
-        config,
-        apiKey,
-        messagesToSummarize,
-        messagesToKeep,
-        reserveTokens,
-        contextWindow,
-        messages.length,
-        signal,
-        detail,
-        options?.deferMemoryExtraction
-      );
-      if (summarized) {
-        const [summaryHead, ...tail] = summarized;
-        return [summaryHead, ...elideTailImages([summaryHead], tail, contextWindow, settings)];
-      }
-    } else if (!isHopeless) {
-      log.warn('No API key available for LLM summarization, falling back to naive drop');
+    const attempt = await attemptSummary(
+      config,
+      messagesToSummarize,
+      messagesToKeep,
+      reserveTokens,
+      contextWindow,
+      messages.length,
+      signal,
+      detail,
+      options,
+      isHopeless
+    );
+    if (attempt.kind === 'summarized') {
+      const [summaryHead, ...tail] = attempt.messages;
+      return [summaryHead, ...elideTailImages([summaryHead], tail, contextWindow, settings)];
     }
 
-    if (signal?.aborted) {
-      log.info('Compaction aborted before the fallback drop (history untouched)', { trigger });
-      emitCompactionState(config, 'cancelled', detail);
-      emitCompactionState(config, 'idle', detail);
-      return messages;
-    }
-
-    emitCompactionState(config, 'fallback', detail);
-    emitCompactionState(config, 'idle', detail);
-
-    const compactedMsg: UserMessage = {
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: withTranscriptPointer(
-            '[Earlier conversation messages were compacted to save context space]',
-            detail.transcriptPath
-          ),
-        },
-      ],
-      timestamp: Date.now(),
-    };
-
-    const keptTail = elideTailImages([compactedMsg], messagesToKeep, contextWindow, settings);
-
-    log.info('Naive compaction applied', {
-      originalMessages: messages.length,
-      compactedMessages: 1 + keptTail.length,
-    });
-
-    return [compactedMsg, ...keptTail];
+    return finishFailedSummary(
+      config,
+      messages,
+      messagesToKeep,
+      contextWindow,
+      settings,
+      signal,
+      options,
+      trigger,
+      detail,
+      attempt.failure
+    );
   };
 }
 

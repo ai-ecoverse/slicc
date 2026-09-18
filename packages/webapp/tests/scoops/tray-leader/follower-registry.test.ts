@@ -110,12 +110,16 @@ describe('FollowerRegistry', () => {
     exec.peerMotd = 'remote shell';
     registry.setRuntimeId('runtime-browser', 'browser');
 
+    const computer = registry.addFollower('computer', new FakeChannel());
+    computer.peerCapabilities = { computer: true };
     expect(registry.getExecCapableBootstrapIds()).toEqual(new Set(['exec']));
+    expect(registry.getComputerCapableBootstrapIds()).toEqual(new Set(['computer']));
     expect(registry.getBrowserCapableBootstrapIds()).toEqual(new Set(['browser']));
     expect(registry.getFollowerMotds()).toEqual(new Map([['exec', 'remote shell']]));
 
     registry.removeFollower('exec');
     registry.removeFollower('browser');
+    registry.removeFollower('computer');
   });
 
   it('exposes follower metadata and live keepalive health through a read snapshot', () => {

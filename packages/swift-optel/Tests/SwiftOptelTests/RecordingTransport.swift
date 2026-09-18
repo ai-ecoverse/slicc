@@ -2,6 +2,8 @@ import Foundation
 
 @testable import SwiftOptel
 
+
+
 final class RecordingTransport: OptelTransport, @unchecked Sendable {
     struct Call: Equatable {
         let event: RUMEvent

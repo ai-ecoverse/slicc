@@ -205,17 +205,23 @@ export class TabHandle {
     } else {
       let vw = 1280;
       let vh = 800;
+
+      let vx = 0;
+      let vy = 0;
       try {
         await this.send('Runtime.enable');
         const dim = await this.send('Runtime.evaluate', {
-          expression: 'JSON.stringify({w:window.innerWidth,h:window.innerHeight})',
+          expression:
+            'JSON.stringify({w:window.innerWidth,h:window.innerHeight,x:window.scrollX,y:window.scrollY})',
           returnByValue: true,
         });
         const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
         vw = v.w || 1280;
         vh = v.h || 800;
+        if (typeof v.x === 'number') vx = v.x;
+        if (typeof v.y === 'number') vy = v.y;
       } catch {}
-      params['clip'] = { x: 0, y: 0, width: vw, height: vh, scale };
+      params['clip'] = { x: vx, y: vy, width: vw, height: vh, scale };
     }
     params['captureBeyondViewport'] = true;
 

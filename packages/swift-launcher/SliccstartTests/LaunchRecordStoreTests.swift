@@ -55,13 +55,17 @@ final class LaunchRecordStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
         let loaded = store.load()
         XCTAssertEqual(loaded, records)
-
+        
+        
         XCTAssertEqual(loaded.first?.bridgeToken, "standalone-token-abc")
         XCTAssertEqual(loaded.last?.bridgeToken, "electron-token-def")
     }
 
     func testDecodeLegacyJSONWithoutBridgeTokenFieldDefaultsToNil() throws {
-
+        
+        
+        
+        
         let legacyJSON = """
             [
               {
@@ -84,7 +88,9 @@ final class LaunchRecordStoreTests: XCTestCase {
     }
 
     func testDecodeLegacyJSONWithoutJoinUrlFieldDefaultsToNil() throws {
-
+        
+        
+        
         let legacyJSON = """
             [
               {

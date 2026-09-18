@@ -7,15 +7,15 @@ description: |
   backend to use; do NOT default to a local file picker when the user
   names a remote service. Covers credential setup with profile-namespaced
   `secret set` keys (e.g. `s3.aws.access_key_id`) or the extension Options
-  page, the right `mount --source` invocation per intent, and common errors
-  (EACCES on missing credentials, EBUSY on concurrent edits, EFBIG on
-  oversized files).
-allowed-tools: bash, read_file, write_file, edit_file
+  page, the right `mount --source` invocation per intent, `mount info` for
+  probed case/Unicode/exec-bit semantics, and common errors (EACCES on
+  missing credentials, EBUSY on concurrent edits, EFBIG on oversized files).
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Mount
 
-The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit_file`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends:
+The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends:
 
 | Backend | Source URI                    | Auth                                                   |
 | ------- | ----------------------------- | ------------------------------------------------------ |
@@ -111,6 +111,8 @@ Useful flags:
 ```bash
 mount list                         # show all active mounts
 mount --list                       # same as `mount list` (`-l` also works)
+mount info /tmp                    # probe case / Unicode / exec-bit / name semantics
+mount info --json /mnt/kb          # same report as JSON (the programmatic form)
 mount unmount /mnt/r2              # tear down (cache stays for next mount within TTL)
 umount /mnt/r2                     # alias for `mount unmount` (same flags, same exit codes)
 mount unmount --clear-cache /mnt/r2 # tear down + drop cached listings/bodies
@@ -119,6 +121,20 @@ mount refresh --bodies /mnt/r2     # also conditionally re-fetch changed bodies
 ```
 
 `umount <path>` is a plain alias for `mount unmount <path>` — same parser, same `--clear-cache`, same exit codes; only the error prefix says `umount:`. Use whichever spelling the user typed. Unmounting a path that is not mounted is a no-op (not an error) under both.
+
+### `mount info` — ask before assuming names are unique
+
+Two mounts in one runtime can disagree about identity. MEASURED: `/tmp` is case-sensitive and byte-exact; a macOS APFS hostfs mount (`/mnt/kb`) is case- **and** Unicode-normalization-insensitive. `ls` / `exists` / `read_file` will resolve `SLICC.md` to `Slicc.md` on the latter, and an NFC spelling of an NFD-stored name. **Do not discover this by renaming.** A rename between two names the volume considers equal has truncated files (#3107). Ask instead:
+
+```bash
+mount info --json /mnt/kb
+```
+
+The report is probed (scratch file, stat back, always cleaned up), not declared from `diskutil`. Fields: `caseSensitivity`, `unicodeNormalization` (`byte-exact` vs `insensitive`), `unicodeStorage` (`nfc` / `nfd` / `as-written`), `executableBit`, `namesRoundTripByteExact`, `maxFilenameLength`, `writable`, `hostBacked`. If `unicodeNormalization` is `insensitive` or `caseSensitivity` is `insensitive`, compare names by folding case and NFC — do not treat a case/Unicode mismatch as a missing file, and do not rename one spelling onto the other.
+
+Built-in VFS paths such as `/tmp` support executable bits through `chmod`.
+Mounted sources report the capability their bridge implements; the host disk's
+capabilities alone do not imply that the mounted metadata operation is supported.
 
 `mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires.
 
@@ -143,7 +159,7 @@ Treat the mount path like any other VFS directory:
 ls /mnt/da
 read_file /mnt/da/index.html
 write_file /mnt/da/new-page.html "<html>..."
-edit_file /mnt/da/index.html       # via the standard edit_file tool
+edit /mnt/da/index.html            # via the standard edit tool
 rm /mnt/da/old.html
 ```
 
@@ -178,3 +194,4 @@ For AEM: listings _do_ carry size and mtime, so `ls -l` costs one listing and no
 - Don't ask "do you have credentials" if the user has already named a service — try the mount first, surface the actionable error from the probe, and walk them through the specific `secret set` commands.
 - Don't work around a `could not determine the content source` failure by switching to `--no-probe` — that flag doesn't skip the content-source probe, and the failure is telling you the login is missing.
 - Don't fall back to a local mount if the user mentioned a remote service. Default to clarifying which remote backend, not which directory to pick.
+- Don't rename a file to change only case or Unicode form until `mount info` says the volume is byte-exact. On an insensitive mount that is the #3107 truncate.

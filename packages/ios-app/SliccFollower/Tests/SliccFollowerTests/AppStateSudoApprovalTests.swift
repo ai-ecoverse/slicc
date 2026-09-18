@@ -4,6 +4,9 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
 @MainActor
 final class AppStateSudoApprovalTests: XCTestCase {
     private func send(_ message: LeaderToFollowerMessage, to state: AppState) throws {
@@ -17,6 +20,7 @@ final class AppStateSudoApprovalTests: XCTestCase {
             detail: "git push origin main",
             requester: "biscotto \u{201C}Anna\u{201D}",
             suggestedPattern: "git push *",
+            reason: "the release tag is cut and CI is green",
             scoopName: "Researcher",
             expiresAt: Date().addingTimeInterval(300).timeIntervalSince1970 * 1000)
     }
@@ -26,13 +30,18 @@ final class AppStateSudoApprovalTests: XCTestCase {
         try send(prompt(), to: state)
         XCTAssertEqual(state.sudoApprovals.map(\.requestId), ["sudo-1"])
         XCTAssertEqual(state.sudoApprovals.first?.scoopName, "Researcher")
-
+        
+        
         XCTAssertEqual(state.sudoApprovals.first?.requester, "biscotto \u{201C}Anna\u{201D}")
+        
+        
+        XCTAssertEqual(
+            state.sudoApprovals.first?.reason, "the release tag is cut and CI is green")
         XCTAssertEqual(state.sudoApprovals.first?.heading, "Run command?")
 
         try send(.sudoApproveCancel(requestId: "sudo-1"), to: state)
         XCTAssertTrue(state.sudoApprovals.isEmpty)
-
+        
         try send(.sudoApproveCancel(requestId: "nope"), to: state)
     }
 
@@ -41,7 +50,7 @@ final class AppStateSudoApprovalTests: XCTestCase {
         try send(
             .sudoApproveRequest(
                 requestId: "late", kind: "write", detail: "/etc/sudoers", requester: nil,
-                suggestedPattern: nil, scoopName: nil, expiresAt: 1000),
+                suggestedPattern: nil, reason: nil, scoopName: nil, expiresAt: 1000),
             to: state)
         XCTAssertTrue(state.sudoApprovals.isEmpty)
     }
@@ -63,7 +72,9 @@ final class AppStateSudoApprovalTests: XCTestCase {
         let caps = state.followerCapabilities()
         XCTAssertTrue(caps.exec)
         XCTAssertEqual(caps.sudoApproval, true)
-
+        XCTAssertNil(caps.computer)
+        
+        
         XCTAssertEqual(caps.biometric, AppState.deviceOwnerAuthAvailable() ? true : nil)
     }
 

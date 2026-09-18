@@ -99,18 +99,24 @@ export function sendSnapshot(
   return allSent;
 }
 
+export type SnapshotChunkBuffer = {
+  chunks: string[];
+  received: number;
+  totalChunks: number;
+};
+
 export function reassembleSnapshot(
-  buffer: { chunks: string[]; received: number; totalChunks: number } | null,
+  buffers: Map<string, SnapshotChunkBuffer>,
   message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>
-):
-  | { result: { messages: ChatMessage[]; scoopJid: string }; buffer: null }
-  | { result: null; buffer: { chunks: string[]; received: number; totalChunks: number } } {
-  if (!buffer) {
+): { messages: ChatMessage[]; scoopJid: string } | null {
+  let buffer = buffers.get(message.scoopJid);
+  if (!buffer || buffer.totalChunks !== message.totalChunks) {
     buffer = {
       chunks: new Array(message.totalChunks),
       received: 0,
       totalChunks: message.totalChunks,
     };
+    buffers.set(message.scoopJid, buffer);
   }
 
   if (!buffer.chunks[message.chunkIndex]) {
@@ -118,22 +124,21 @@ export function reassembleSnapshot(
     buffer.received++;
   }
 
-  if (buffer.received >= buffer.totalChunks) {
-    try {
-      const parsed = JSON.parse(buffer.chunks.join('')) as {
-        messages: ChatMessage[];
-        scoopJid: string;
-      };
-      return { result: parsed, buffer: null };
-    } catch (err) {
-      log.error('Failed to reassemble snapshot', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return { result: { messages: [], scoopJid: message.scoopJid }, buffer: null };
-    }
-  }
+  if (buffer.received < buffer.totalChunks) return null;
 
-  return { result: null, buffer };
+  buffers.delete(message.scoopJid);
+  try {
+    return JSON.parse(buffer.chunks.join('')) as {
+      messages: ChatMessage[];
+      scoopJid: string;
+    };
+  } catch (err) {
+    log.error('Failed to reassemble snapshot', {
+      error: err instanceof Error ? err.message : String(err),
+      scoopJid: message.scoopJid,
+    });
+    return { messages: [], scoopJid: message.scoopJid };
+  }
 }
 
 const textEncoder = new TextEncoder();

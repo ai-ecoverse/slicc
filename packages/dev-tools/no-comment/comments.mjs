@@ -1,7 +1,7 @@
 import { basename, extname } from 'node:path';
 
 const DIRECTIVE_RE =
-  /(?:^#!)|@ts-(?:expect-error|ignore|nocheck|check)\b|biome-ignore\b|eslint-(?:disable|enable|global)|prettier-ignore|unused-dep-ok:|(?:@vite-ignore|vite-ignore|webpackIgnore)|@vitest-environment|#__PURE__|#__NO_SIDE_EFFECTS__|@__PURE__|@__NO_SIDE_EFFECTS__|<reference\s|source(?:MappingURL|URL)=|go:(?:build|generate|embed|noinline|norace|nosplit)\b|\+build\s|^export\s+[A-Za-z_][A-Za-z0-9_]*$|nolint\b|^line(?:\s+\S*)?:\d+(?::\d+)?$|swift-tools-version:|swiftlint:|swiftformat:|sourcery:|shellcheck\s|yamllint\s|istanbul\s+ignore|c8\s+ignore|v8\s+ignore|deno-lint-|gofmt:|fmt:off|fmt:on|\bindirect\b/i;
+  /(?:^#!)|@ts-(?:expect-error|ignore|nocheck|check)\b|biome-ignore\b|eslint-(?:disable|enable|global)|prettier-ignore|unused-dep-ok:|(?:@vite-ignore|vite-ignore|webpackIgnore)|@vitest-environment|#__PURE__|#__NO_SIDE_EFFECTS__|@__PURE__|@__NO_SIDE_EFFECTS__|<reference\s|source(?:MappingURL|URL)=|go:(?:build|generate|embed|noinline|norace|nosplit)\b|\+build\s|^export\s+[A-Za-z_][A-Za-z0-9_]*$|nolint\b|^line(?:\s+\S*)?:\d+(?::\d+)?$|swift-tools-version:|swiftlint:|swiftformat:|sourcery:|shellcheck\s|yamllint\s|istanbul\s+ignore|c8\s+ignore|v8\s+ignore|deno-lint-|gofmt:|fmt:off|fmt:on/i;
 
 const JS_EXTS = new Set([
   '.ts',
@@ -107,14 +107,7 @@ export function isProductMarkdown(relPath) {
 }
 
 export function isDeletedPath(relPath) {
-  if (
-    relPath === 'README.md' ||
-    relPath === 'LICENSE' ||
-    relPath === '.no-comment' ||
-    relPath === 'NOCOMMENT.md'
-  ) {
-    return false;
-  }
+  if (relPath === 'README.md' || relPath === 'LICENSE' || relPath === '.no-comment') return false;
   if (relPath.startsWith('packages/vfs-root/')) return false;
   const base = basename(relPath);
   if (base === 'CLAUDE.md' || base === 'AGENTS.md') return true;
@@ -201,50 +194,6 @@ function scanQuoted(source, start, quote) {
     }
     if (source[i] === quote) {
       i++;
-      break;
-    }
-    i++;
-  }
-  return { text: source.slice(start, i), end: i };
-}
-
-function scanSwiftMultilineString(source, start) {
-  let i = start + 3;
-  const n = source.length;
-  while (i < n) {
-    if (source[i] === '"' && source[i + 1] === '"' && source[i + 2] === '"') {
-      i += 3;
-      break;
-    }
-    i++;
-  }
-  return { text: source.slice(start, i), end: i };
-}
-
-function scanSwiftRawString(source, start) {
-  let hashes = 0;
-  while (source[start + hashes] === '#') hashes++;
-  if (source[start + hashes] !== '"') return null;
-  const open = start + hashes;
-  if (source[open + 1] === '"' && source[open + 2] === '"') {
-    let i = open + 3;
-    const n = source.length;
-    const close = `"${'#'.repeat(hashes)}`;
-    while (i < n) {
-      if (source.startsWith('"""', i) && source.startsWith(close, i + 2)) {
-        i += 3 + hashes;
-        break;
-      }
-      i++;
-    }
-    return { text: source.slice(start, i), end: i };
-  }
-  let i = open + 1;
-  const n = source.length;
-  const close = `"${'#'.repeat(hashes)}`;
-  while (i < n) {
-    if (source.startsWith(close, i)) {
-      i += close.length;
       break;
     }
     i++;
@@ -437,22 +386,6 @@ function consumeRawTicks(source, start, end, visit) {
   return i;
 }
 
-function tryConsumeSwiftString(source, i, visit) {
-  const ch = source[i];
-  if (ch === '#') {
-    const raw = scanSwiftRawString(source, i);
-    if (!raw) return null;
-    visit('keep', raw.text, i);
-    return raw.end;
-  }
-  if (ch === '"' && source[i + 1] === '"' && source[i + 2] === '"') {
-    const multi = scanSwiftMultilineString(source, i);
-    visit('keep', multi.text, i);
-    return multi.end;
-  }
-  return null;
-}
-
 function walkCLike(source, visit, { nested = false, rawTicks = false, lineComments = true } = {}) {
   let i = 0;
   const end = source.length;
@@ -461,13 +394,6 @@ function walkCLike(source, visit, { nested = false, rawTicks = false, lineCommen
     if (rawTicks && ch === '`') {
       i = consumeRawTicks(source, i, end, visit);
       continue;
-    }
-    if (nested && (ch === '#' || ch === '"')) {
-      const next = tryConsumeSwiftString(source, i, visit);
-      if (next !== null) {
-        i = next;
-        continue;
-      }
     }
     if (ch === '"' || ch === "'") {
       const scanned = scanQuoted(source, i, ch);

@@ -1,9 +1,15 @@
 import SliccTrayKit
 import SwiftUI
 
+
+
+
+
 struct RemoteTabCard: View {
     let target: TrayTargetEntry
-
+    
+    
+    
     var onOpen: (() -> Void)?
 
     @EnvironmentObject var appState: AppState
@@ -20,7 +26,11 @@ struct RemoteTabCard: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             thumbnail
-
+            
+            
+            
+            
+            
             caption
         }
         .frame(height: 156)
@@ -43,7 +53,10 @@ struct RemoteTabCard: View {
             case .loading:
                 ProgressView()
             case .image(let image):
-
+                
+                
+                
+                
                 Color.clear
                     .overlay(
                         Image(uiImage: image)
@@ -62,7 +75,7 @@ struct RemoteTabCard: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
                 }
-
+                
                 .padding(.bottom, 48)
             }
         }
@@ -70,6 +83,12 @@ struct RemoteTabCard: View {
         .clipped()
     }
 
+    
+    
+    
+    
+    
+    
     private var caption: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(target.title.isEmpty ? "Untitled tab" : target.title)
@@ -96,6 +115,8 @@ struct RemoteTabCard: View {
         .background(.regularMaterial)
     }
 
+    
+    
     static func displayHost(_ url: String) -> String {
         guard let host = URLComponents(string: url)?.host, !host.isEmpty else { return url }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
@@ -109,7 +130,8 @@ struct RemoteTabCard: View {
             }
         #endif
         guard target.runtimeId == "leader" else {
-
+            
+            
             preview = .unavailable("Live on \(target.runtimeId) — no preview path yet")
             return
         }

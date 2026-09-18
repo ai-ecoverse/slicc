@@ -1,5 +1,6 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import { clearMergeState, readMergeHead, readMergeMsg } from './merge-state.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -25,10 +26,28 @@ export async function commit(
   const expandedArgs = expandCombinedFlags(args);
   const flags = parseArgs(expandedArgs, GIT_FLAG_SPECS.commit).flags as GitParsedFlags;
 
+  const mergeHead = await readMergeHead(ctx, cwd);
   const resolved = await resolveCommitMessage(ctx, cwd, flags);
-  if (typeof resolved !== 'string') return resolved;
-  const message = resolved;
+  if (typeof resolved !== 'string') {
+    if (mergeHead) {
+      const mergeMsg = await readMergeMsg(ctx, cwd);
+      if (mergeMsg) {
+        return await finishCommit(ctx, cwd, flags, mergeMsg, mergeHead);
+      }
+    }
+    return resolved;
+  }
 
+  return await finishCommit(ctx, cwd, flags, resolved, mergeHead);
+}
+
+async function finishCommit(
+  ctx: GitCommandContext,
+  cwd: string,
+  flags: GitParsedFlags,
+  message: string,
+  mergeHead: string | undefined
+): Promise<GitCommandResult> {
   const amend = flags.amend === true;
   const autoStage = flags.all === true;
   const allowEmpty = flags['allow-empty'] === true;
@@ -37,7 +56,7 @@ export async function commit(
     await stageTrackedChanges(ctx, cwd);
   }
 
-  if (!allowEmpty && !amend) {
+  if (!allowEmpty && !amend && !mergeHead) {
     const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
     const hasStaged = matrix.some(([, head, , stage]) => stage !== head);
     if (!hasStaged) {
@@ -57,7 +76,13 @@ export async function commit(
     author: await ctx.resolveAuthor(cwd),
     amend,
     noUpdateBranch: undefined,
+    ...(mergeHead
+      ? {
+          parent: [await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' }), mergeHead],
+        }
+      : {}),
   });
+  if (mergeHead) await clearMergeState(ctx, cwd);
 
   const shortSha = sha.slice(0, 7);
   const branch = await git.currentBranch({ fs: ctx.lfs, dir: cwd });

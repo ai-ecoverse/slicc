@@ -1,0 +1,126 @@
+name: SLICC — start leader
+description: >-
+  Boot a SLICC hosted leader (node-server --hosted + headless Chrome) on this
+  runner, seed credentials, and wait for its tray join URL. Pair with
+  `keep-alive` and `stop-leader`.
+inputs:
+  slicc-version:
+    description: npm version/tag of the `sliccy` package to run (ignored when `node-server` is set).
+    default: latest
+  node-server:
+    description: Path to a locally built `dist/node-server/index.js` instead of installing from npm.
+    default: ''
+  port:
+    description: Local bridge port for node-server.
+    default: '5710'
+  duration:
+    description: How long the leader should live (e.g. `30m`, `2h`, `1h30m`). Max 350m.
+    default: 30m
+  mounts:
+    description: Mount table, one `<runner-path>:<slicc-path>` per line (served over /api/hostfs, auto-mounted at boot).
+    default: ''
+  cone-config:
+    description: JSON `{model?, effortLevel?, accounts[], secrets[]}` bundle (same shape as @slicc/cloud-core ConeConfig). Pass a secret.
+    default: ''
+  secrets-env:
+    description: secrets.env text (`NAME=value` + `NAME_DOMAINS=a,b` pairs). Pass a secret. Wins over `cone-config.secrets` on collisions.
+    default: ''
+  provider:
+    description: Single-provider shortcut — provider id for one apikey account (e.g. `anthropic`, `openai`, `bedrock-camp`). Requires `provider-api-key`.
+    default: ''
+  provider-api-key:
+    description: API key for `provider`. Pass a secret.
+    default: ''
+  provider-base-url:
+    description: Base URL for providers that need one (e.g. `https://bedrock-runtime.us-west-2.amazonaws.com` for `bedrock-camp`).
+    default: ''
+  model:
+    description: Model id override (`<provider>:<model>`, e.g. `anthropic:claude-opus-4-6`).
+    default: ''
+  effort-level:
+    description: One of off|minimal|low|medium|high|xhigh.
+    default: ''
+  ui-origin:
+    description: Hosted UI origin Chrome loads (defaults to production sliccy.ai). Sets WORKER_BASE_URL.
+    default: ''
+  tray-worker-base-url:
+    description: Tray relay override (sets SLICC_TRAY_WORKER_BASE_URL), e.g. a staging hub.
+    default: ''
+  boot-timeout:
+    description: How long to wait for the join URL.
+    default: 180s
+  cdp-launch-timeout:
+    description: Chrome launch timeout forwarded as SLICC_CDP_LAUNCH_TIMEOUT_MS.
+    default: 60s
+  mask-join-url:
+    description: Register the join URL as a secret so it is redacted from logs. Masked values cannot cross job boundaries as outputs.
+    default: 'true'
+  setup-node:
+    description: Run actions/setup-node inside this action (node-server needs Node >= 22.18).
+    default: 'true'
+  node-version:
+    description: Node version for setup-node.
+    default: '24'
+outputs:
+  join-url:
+    description: The leader's `https://…/join/<token>` link (masked unless `mask-join-url` is false).
+    value: ${{ steps.start.outputs.join-url }}
+  tray-id:
+    description: Tray id minted by the leader.
+    value: ${{ steps.start.outputs.tray-id }}
+  slicc-version:
+    description: SLICC version reported by the leader.
+    value: ${{ steps.start.outputs.slicc-version }}
+  pid:
+    description: node-server pid.
+    value: ${{ steps.start.outputs.pid }}
+  port:
+    description: Bridge port in use.
+    value: ${{ steps.start.outputs.port }}
+  log-path:
+    description: node-server log file on the runner.
+    value: ${{ steps.start.outputs.log-path }}
+  state-path:
+    description: Job state file consumed by keep-alive / stop-leader / follow.
+    value: ${{ steps.start.outputs.state-path }}
+  deadline:
+    description: ISO timestamp when `keep-alive` will let the job proceed to teardown.
+    value: ${{ steps.start.outputs.deadline }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      if: inputs.setup-node == 'true'
+      with:
+        node-version: ${{ inputs.node-version }}
+    - name: Prepare /slicc (hosted bootstrap reads /slicc/cone-config.json)
+      shell: bash
+      run: |
+        if [ -w /slicc ] 2>/dev/null; then exit 0; fi
+        if command -v sudo >/dev/null 2>&1; then
+          sudo mkdir -p /slicc && sudo chown "$(id -u)" /slicc
+        else
+          mkdir -p /slicc
+        fi
+    - name: Start node-server --hosted and wait for the join URL
+      id: start
+      shell: bash
+      env:
+        INPUT_SLICC_VERSION: ${{ inputs.slicc-version }}
+        INPUT_NODE_SERVER: ${{ inputs.node-server }}
+        INPUT_PORT: ${{ inputs.port }}
+        INPUT_DURATION: ${{ inputs.duration }}
+        INPUT_MOUNTS: ${{ inputs.mounts }}
+        INPUT_CONE_CONFIG: ${{ inputs.cone-config }}
+        INPUT_SECRETS_ENV: ${{ inputs.secrets-env }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_EFFORT_LEVEL: ${{ inputs.effort-level }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_PROVIDER_API_KEY: ${{ inputs.provider-api-key }}
+        INPUT_PROVIDER_BASE_URL: ${{ inputs.provider-base-url }}
+        INPUT_UI_ORIGIN: ${{ inputs.ui-origin }}
+        INPUT_TRAY_WORKER_BASE_URL: ${{ inputs.tray-worker-base-url }}
+        INPUT_BOOT_TIMEOUT: ${{ inputs.boot-timeout }}
+        INPUT_CDP_LAUNCH_TIMEOUT: ${{ inputs.cdp-launch-timeout }}
+        INPUT_MASK_JOIN_URL: ${{ inputs.mask-join-url }}
+      run: node "${{ github.action_path }}/../../scripts/start-leader.mjs"

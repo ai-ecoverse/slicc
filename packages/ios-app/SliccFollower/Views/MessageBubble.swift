@@ -1,18 +1,41 @@
 import SliccTrayKit
 import SwiftUI
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct MessageBubble: View, Equatable {
     let message: ChatMessage
-
+    
+    
+    
     var toolProgress: [String: ToolProgressEvent] = [:]
 
     @Environment(\.palette) private var palette
     @Environment(\.inlineSprinkleLick) private var onInlineSprinkleLick
 
+    
+    
+    
+    
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message == rhs.message && lhs.toolProgress == rhs.toolProgress
     }
 
+    
+    
     private var isLick: Bool {
         if message.source == "lick" { return true }
         if let channel = message.channel, LickRow.isLickChannel(channel) { return true }
@@ -20,7 +43,16 @@ struct MessageBubble: View, Equatable {
     }
 
     var body: some View {
-
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         if let compaction = message.compaction {
             if compaction.state != .discarded {
                 CompactionMarkerRow(marker: compaction)
@@ -29,14 +61,17 @@ struct MessageBubble: View, Equatable {
             LickRow(message: message)
                 .padding(.horizontal, 4)
         } else if message.error == true, message.role != .user {
-
+            
+            
+            
+            
             ErrorCard(message: message)
         } else if message.role == .user {
             VStack(alignment: .trailing, spacing: 6) {
                 if let attachments = message.attachments, !attachments.isEmpty {
                     AttachmentChips(attachments: attachments)
                 }
-
+                
                 if !message.content.isEmpty {
                     HStack {
                         Spacer(minLength: UIScreen.main.bounds.width * 0.2)
@@ -60,7 +95,9 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .leading, spacing: 6) {
                 if let source = message.source, source != "cone" {
                     HStack(spacing: 4) {
-
+                        
+                        
+                        
                         if message.channel?.isEmpty == false {
                             SliccGlyphView(
                                 glyph: SliccIcons.messageSource(message), size: 10)
@@ -78,16 +115,40 @@ struct MessageBubble: View, Equatable {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     @ViewBuilder
     private var userBubbleText: some View {
-
+        
+        
+        
         let body = DictationPriming.stripMarkers(message.content)
-
+        
+        
+        
         let annotated = TranscriptInlineCache.shared.paragraph(markdown: body, files: [:])
         Text(styleUserBubbleCode(annotated.attributed))
             .tint(palette.bubbleText)
     }
 
+    
+    
+    
+    
+    
+    
     private func styleUserBubbleCode(_ input: AttributedString) -> AttributedString {
         return styledInlineCode(
             input,
@@ -98,7 +159,8 @@ struct MessageBubble: View, Equatable {
 
     @ViewBuilder
     private var assistantBody: some View {
-
+        
+        
         let extracted = extractInlineSprinkles(
             from: DictationPriming.stripReplyLangMarker(message.content))
         VStack(alignment: .leading, spacing: 8) {
@@ -120,6 +182,9 @@ struct MessageBubble: View, Equatable {
         .padding(.horizontal, 4)
     }
 
+    
+    
+    
     @ViewBuilder
     private func renderInlineContent(cleaned: String, fragments: [String]) -> some View {
         let segments = splitIntoSegments(cleaned, fragments: fragments)
@@ -174,6 +239,8 @@ struct MessageBubble: View, Equatable {
         return result
     }
 
+    
+
     private var streamingIndicator: some View {
         HStack(spacing: 4) {
             ForEach(0..<3) { i in
@@ -185,6 +252,8 @@ struct MessageBubble: View, Equatable {
         }
         .padding(.top, 2)
     }
+
+    
 
     @ViewBuilder
     private func toolCallsSection(_ toolCalls: [ToolCall]) -> some View {
@@ -198,12 +267,17 @@ struct MessageBubble: View, Equatable {
         }
     }
 
+    
+    
+    
     @ViewBuilder
     private func singleToolCallRow(_ tc: ToolCall) -> some View {
         let unit = toolProgress[tc.id]
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 4) {
-
+                
+                
+                
                 if let unit {
                     ToolProgressBar(unit: unit, color: palette.accent)
                         .padding(.bottom, 2)
@@ -247,7 +321,8 @@ struct MessageBubble: View, Equatable {
                         .truncationMode(.tail)
                 }
                 if let unit {
-
+                    
+                    
                     Spacer(minLength: 4)
                     Text(toolProgressCaption(unit))
                         .font(.system(size: 10, design: .monospaced))
@@ -265,6 +340,10 @@ struct MessageBubble: View, Equatable {
         .tint(palette.ink.opacity(0.4))
     }
 
+    
+    
+    
+    
     @ViewBuilder
     private func workingClusterRow(_ toolCalls: [ToolCall]) -> some View {
         let aggregate = aggregateToolProgress(calls: toolCalls, progress: toolProgress)
@@ -310,6 +389,13 @@ struct MessageBubble: View, Equatable {
         .tint(.white.opacity(0.4))
     }
 
+    
+    
+    
+    
+    
+    
+    
     @ViewBuilder
     private func clusterDots(for toolCalls: [ToolCall]) -> some View {
         HStack(spacing: 4) {
@@ -322,12 +408,18 @@ struct MessageBubble: View, Equatable {
         }
     }
 
+    
+    
     private func toolStatusLabel(for tc: ToolCall) -> String {
         if tc.isError == true { return "error" }
         if tc.result == nil { return "running" }
         return "done"
     }
 
+    
+    
+    
+    
     private func clusterPreview(for toolCalls: [ToolCall]) -> String {
         let joined = toolCalls.map { SliccIcons.toolTitle($0.name) }.joined(separator: ", ")
         guard joined.count > 80 else { return joined }
@@ -335,12 +427,24 @@ struct MessageBubble: View, Equatable {
     }
 }
 
+
+
+
+
 private enum ToolGroup {
     case single(ToolCall)
     case cluster([ToolCall])
 }
 
+
+
+
 private let toolClusterMin = 3
+
+
+
+
+
 
 private func groupToolCalls(_ toolCalls: [ToolCall]) -> [ToolGroup] {
     if toolCalls.isEmpty { return [] }
@@ -352,10 +456,14 @@ private func groupToolCalls(_ toolCalls: [ToolCall]) -> [ToolGroup] {
 
 extension MessageBubble {
 
+    
+    
+    
+    
     fileprivate func toolPreview(for tc: ToolCall) -> String? {
         guard let input = tc.input?.value as? [String: Any] else { return nil }
         switch tc.name {
-        case "read_file", "write_file", "edit_file":
+        case "read_file", "write_file", "edit", "edit_file":
             return input["path"] as? String
         case "bash":
             if let cmd = input["command"] as? String {
@@ -381,6 +489,9 @@ extension MessageBubble {
     }
 }
 
+
+
+
 private struct InlineSprinkleHost: View {
     let id: String
     let html: String
@@ -403,6 +514,11 @@ private struct InlineSprinkleHost: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
+
+
+
+
+
 
 struct LickRow: View {
     let message: ChatMessage
@@ -432,6 +548,7 @@ struct LickRow: View {
         SliccIcons.lick(channel, sprinkleName: parseSprinkleName())
     }
 
+    
     private func parseSprinkleName() -> String? {
         guard channel == "sprinkle" else { return nil }
         guard
@@ -450,12 +567,17 @@ struct LickRow: View {
         LickRow.parseLickContent(message.content)
     }
 
+    
+    
     private var previewLabel: String {
         let count = message.lickCount ?? 1
         guard count > 1 else { return parsed.preview }
         return parsed.preview.isEmpty ? "×\(count)" : "\(parsed.preview) ×\(count)"
     }
 
+    
+    
+    
     private var bodies: [String] {
         guard let parts = message.lickParts, parts.count > 1 else {
             return parsed.body.isEmpty ? [] : [parsed.body]
@@ -464,6 +586,8 @@ struct LickRow: View {
             .filter { !$0.isEmpty }
     }
 
+    
+    
     private var contentOpacity: Double {
         message.lickState == .dismissed ? 0.62 : 1
     }
@@ -541,8 +665,10 @@ struct LickRow: View {
         .opacity(contentOpacity)
     }
 
-    private static let headerRegex: NSRegularExpression = {
+    
 
+    private static let headerRegex: NSRegularExpression = {
+        
         try! NSRegularExpression(pattern: #"^\[([^\]:]+?)(?:\s+Event)?:\s*([^\]]+?)\]\s*\n?"#)
     }()
 
@@ -596,6 +722,8 @@ struct LickRow: View {
         return (preview.trimmingCharacters(in: .whitespaces), stripFences(content))
     }
 
+    
+    
     private static func stripFences(_ text: String) -> String {
         var s = text
         if let fence = s.range(of: #"^```[a-zA-Z0-9]*\n"#, options: .regularExpression) {
@@ -607,6 +735,8 @@ struct LickRow: View {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+
 
 private struct PulsingDot: ViewModifier {
     let delay: Double
@@ -625,6 +755,8 @@ private struct PulsingDot: ViewModifier {
             .onAppear { isAnimating = true }
     }
 }
+
+
 
 #Preview {
     VStack(spacing: 12) {

@@ -42,6 +42,8 @@ export interface WcLiveWiring {
   getSelected(): WorkUnitSummary | null;
   selectScoop(unit: WorkUnitSummary): void;
   notifyScoopStateChanged?(): void;
+
+  notifyUnitStatus?(jid: string, status: ScoopStatus): void;
   refreshScoops?(): void;
   notifyReady?(): void;
 
@@ -113,6 +115,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       const previous = wiring.statuses.get(jid);
       const next = status as ScoopStatus;
       wiring.statuses.set(jid, next);
+      if (previous !== next) wiring.notifyUnitStatus?.(jid, next);
       if (next !== 'ready' && wiring.awaitingInput === jid) wiring.awaitingInput = null;
 
       if (

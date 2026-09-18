@@ -43,6 +43,9 @@ func TestTelemetryEnabled(t *testing.T) {
 	}
 }
 
+
+
+
 func withTelemetryGlobals(t *testing.T) {
 	t.Helper()
 	origVersion, origClient := version, telemetryClient
@@ -55,7 +58,7 @@ func TestInitTelemetryNoopWhenDisabled(t *testing.T) {
 	telemetryClient = nil
 
 	flush := initTelemetry("prompt")
-	flush()
+	flush() 
 	if telemetryClient != nil {
 		t.Fatal("expected telemetryClient to stay nil for a dev build")
 	}
@@ -75,7 +78,10 @@ func TestInitTelemetryOptOutEvenOnReleaseBuild(t *testing.T) {
 
 func TestInitTelemetryConfiguresOnReleaseBuildWithoutNetworkCall(t *testing.T) {
 	withTelemetryGlobals(t)
-
+	
+	
+	
+	
 	t.Setenv("OPTEL_RATE", "off")
 	version = "v5.71.1"
 	telemetryClient = nil
@@ -91,6 +97,7 @@ func TestReportRuntimeErrorNilSafety(t *testing.T) {
 	withTelemetryGlobals(t)
 	telemetryClient = nil
 
+	
 	reportRuntimeError("dial", nil)
 	reportRuntimeError("dial", errors.New("boom"))
 }

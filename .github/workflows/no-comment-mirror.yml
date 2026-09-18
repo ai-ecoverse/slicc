@@ -36,12 +36,18 @@ jobs:
         run: node packages/dev-tools/no-comment/strip.mjs
 
       - name: Format the stripped tree
+
+        # biome's check+write path; leftover biome-ignore directives became
+
         run: |
           set -euo pipefail
-          npx biome check --write .
+          npx biome format --write .
           npx prettier --write .
 
       - name: Commit the stripped tree onto no-comment
+
+        env:
+          HUSKY: '0'
         run: |
           set -euo pipefail
           git add -A
@@ -80,5 +86,5 @@ jobs:
           else
             COMMIT=$(git commit-tree "$TREE" -F /tmp/no-comment-msg)
           fi
-          git push origin "$COMMIT:refs/heads/no-comment"
+          git push origin "${COMMIT}:refs/heads/no-comment"
           echo "Pushed $COMMIT to no-comment (mirrors $MAIN_SHA)"

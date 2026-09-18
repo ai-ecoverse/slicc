@@ -1,11 +1,19 @@
 import XCTest
 
+
+
+
+
+
+
 final class ConnectionStateUITests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
     }
 
+    
+    
     func testAStalledLeaderSaysSoInsteadOfClaimingDisconnection() {
         let app = launchApp(forcing: "stalled")
 
@@ -18,6 +26,10 @@ final class ConnectionStateUITests: XCTestCase {
             "A stall is not a disconnect and must not read as one")
     }
 
+    
+    
+    
+    
     func testAStallRefusesTheSendAndSaysWhy() {
         let app = launchApp(forcing: "stalled")
 
@@ -27,6 +39,7 @@ final class ConnectionStateUITests: XCTestCase {
         XCTAssertFalse(app.buttons["composer-send"].isEnabled)
     }
 
+    
     func testReconnectingShowsWhichAttemptIsInFlight() {
         let app = launchApp(forcing: "reconnecting")
 
@@ -37,6 +50,7 @@ final class ConnectionStateUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["composer-placeholder"].label, "Disconnected")
     }
 
+    
     func testGivingUpReturnsToSettings() {
         let app = launchApp(forcing: "gaveUp")
 
@@ -71,6 +85,10 @@ final class ConnectionStateUITests: XCTestCase {
             "Connection state belongs in the avatar and must produce zero transcript layout shift")
     }
 
+    
+
+    
+    
     private func launchApp(forcing state: String, completedTurn: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [

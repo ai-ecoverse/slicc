@@ -72,7 +72,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'screencapture',
     ],
   ],
-  ['Audio', ['say', 'afplay', 'chime']],
+  ['Audio', ['say', 'hear', 'afplay', 'chime']],
   [
     'Environment & shell',
     [
@@ -114,16 +114,16 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Hashes', ['md5sum', 'sha1sum', 'sha256sum']],
   ['Network', ['curl', 'curlwright', 'wget', 'dig', 'websocat', 'html-to-markdown']],
   ['Version control', ['git']],
-  ['Languages', ['node', 'python', 'python3', 'sqlite3']],
-  ['Virtualization', ['v86']],
-  ['Build tools', ['tsc', 'test', 'esbuild', 'biome']],
+  ['Languages', ['node', 'jsh', 'python', 'python3', 'sqlite3']],
+  ['Virtualization', ['v86', 'computer']],
+  ['Build tools', ['tsc', 'tst', 'esbuild', 'biome']],
   ['Packages', ['ipk', 'hf', 'npm', 'i', 'ipx', 'npx']],
   ['Skills', ['skill', 'upskill']],
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'sprinkle']],
   ['Clipboard', ['pbcopy', 'pbpaste', 'xclip', 'xsel']],
   ['Filesystem', ['mount', 'umount', 'fswatch']],
   ['Scoops & agents', ['agent', 'gelatiere', 'mcp', 'webhook', 'crontask']],
-  ['Process', ['ps', 'kill', 'meminfo', 'uptime']],
+  ['Process', ['ps', 'kill', 'jshd', 'meminfo', 'uptime']],
 
   ['Shell builtins (limited)', [...BASH_BUILTIN_COMMAND_NAMES]],
 ]);

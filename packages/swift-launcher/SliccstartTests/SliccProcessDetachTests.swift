@@ -2,6 +2,13 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
+
+
 @MainActor
 final class SliccProcessDetachTests: XCTestCase {
 
@@ -13,6 +20,10 @@ final class SliccProcessDetachTests: XCTestCase {
         let store = LaunchRecordStore(storeURL: storeURL)
         let proc = SliccProcess(recordStore: store, cdpLiveProbe: .default)
 
+        
+        
+        
+        
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: "/bin/sleep")
         helper.arguments = ["60"]
@@ -35,6 +46,9 @@ final class SliccProcessDetachTests: XCTestCase {
         XCTAssertEqual(firstSnapshot.first?.targetId, "test-target")
         XCTAssertEqual(store.load().count, 1, "first call must persist the live record")
 
+        
+        
+        
         let secondSnapshot = proc.detachAll()
         XCTAssertEqual(secondSnapshot.count, 1, "second call must surface the persisted snapshot")
         let onDisk = store.load()
@@ -45,7 +59,10 @@ final class SliccProcessDetachTests: XCTestCase {
     }
 
     func testDetachAllPersistsBridgeTokenFromLaunchRecord() throws {
-
+        
+        
+        
+        
         let storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SliccProcessDetachTests-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: storeURL) }
@@ -97,10 +114,13 @@ final class SliccProcessDetachTests: XCTestCase {
         try store.save(seeded)
 
         let proc = SliccProcess(recordStore: store, cdpLiveProbe: .default)
-
+        
+        
         _ = proc.detachAll()
         _ = proc.detachAll()
-
+        
+        
+        
         XCTAssertEqual(
             proc.detachAll().count, store.load().count,
             "repeated detachAll() calls must agree on the persisted state")

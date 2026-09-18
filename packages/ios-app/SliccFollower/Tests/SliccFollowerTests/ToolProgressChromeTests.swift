@@ -3,6 +3,10 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
 final class ToolProgressChromeTests: XCTestCase {
     private func unit(
         fraction: Double? = nil, etaMs: Double? = nil, done: Double? = nil,
@@ -12,6 +16,8 @@ final class ToolProgressChromeTests: XCTestCase {
             id: "u1", label: "sleep 30", fraction: fraction, etaMs: etaMs, done: done,
             total: total, unit: measure, phase: .update)
     }
+
+    
 
     func testFractionClampsToUnitRange() {
         XCTAssertEqual(toolProgressFraction(unit(fraction: 1.4)), 1)
@@ -26,6 +32,8 @@ final class ToolProgressChromeTests: XCTestCase {
         XCTAssertNil(toolProgressFraction(unit(fraction: .infinity)))
     }
 
+    
+
     func testCaptionCombinesCountPercentAndEta() {
         XCTAssertEqual(
             toolProgressCaption(
@@ -33,6 +41,8 @@ final class ToolProgressChromeTests: XCTestCase {
             "3/12 · 25% · ~21s")
     }
 
+    
+    
     func testCaptionFallsBackToBytesWhenIndeterminate() {
         XCTAssertEqual(
             toolProgressCaption(unit(done: 45_678_901, measure: "bytes")), "46 MB")
@@ -42,6 +52,7 @@ final class ToolProgressChromeTests: XCTestCase {
         XCTAssertEqual(toolProgressCaption(unit()), "")
     }
 
+    
     func testEtaKeepsTheRemainderLikeTheWebFormatter() {
         XCTAssertEqual(formatProgressEta(8_000), "8s")
         XCTAssertEqual(formatProgressEta(400), "0s")
@@ -51,6 +62,7 @@ final class ToolProgressChromeTests: XCTestCase {
         XCTAssertEqual(formatProgressEta(7_140_000), "1h59m")
     }
 
+    
     func testBytesFormatMatchesTheWebScale() {
         XCTAssertEqual(formatProgressBytes(512), "512 B")
         XCTAssertEqual(formatProgressBytes(2_048), "2.0 kB")
@@ -59,6 +71,8 @@ final class ToolProgressChromeTests: XCTestCase {
         XCTAssertEqual(formatProgressBytes(45_678_901), "46 MB")
         XCTAssertEqual(formatProgressBytes(-1), "")
     }
+
+    
 
     private func call(_ id: String, result: String? = nil) -> ToolCall {
         ToolCall(id: id, name: "bash", input: nil, result: result)
@@ -69,12 +83,15 @@ final class ToolProgressChromeTests: XCTestCase {
         let aggregate = try XCTUnwrap(
             aggregateToolProgress(calls: calls, progress: ["b": unit(fraction: 0.5)]))
 
+        
         XCTAssertEqual(try XCTUnwrap(aggregate.fraction), 0.5, accuracy: 0.0001)
         XCTAssertEqual(aggregate.done, 1)
         XCTAssertEqual(aggregate.total, 3)
         XCTAssertEqual(aggregate.label, "1 of 3 done")
     }
 
+    
+    
     func testClusterAggregateStaysDeterminateWithIndeterminateMembers() throws {
         let calls = [call("a", result: "ok"), call("b")]
         let aggregate = try XCTUnwrap(
@@ -89,6 +106,7 @@ final class ToolProgressChromeTests: XCTestCase {
         XCTAssertNil(aggregateToolProgress(calls: [], progress: [:]))
     }
 
+    
     func testClusterAggregateNeverExceedsOne() throws {
         let calls = [call("a", result: "ok"), call("b")]
         let aggregate = try XCTUnwrap(
@@ -96,6 +114,10 @@ final class ToolProgressChromeTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(aggregate.fraction), 1, accuracy: 0.0001)
     }
 
+    
+
+    
+    
     func testChatFixtureStagesProgressOnRealRows() {
         let rows = Set(
             ChatFixture.makeMessages().flatMap { $0.toolCalls ?? [] }.map(\.id))

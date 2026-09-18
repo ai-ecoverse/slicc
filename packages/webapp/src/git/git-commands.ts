@@ -11,6 +11,7 @@ import { checkout } from './commands/checkout.js';
 import { cherryPick } from './commands/cherry-pick.js';
 import { clean } from './commands/clean.js';
 import { clone } from './commands/clone.js';
+import { colorWhenFromArgs, normalizeGitColorArgs, resolveGitColor } from './commands/color.js';
 import { commit } from './commands/commit.js';
 import { config } from './commands/config.js';
 import { diff } from './commands/diff.js';
@@ -23,7 +24,6 @@ import { lsTree } from './commands/ls-tree.js';
 import { merge } from './commands/merge.js';
 import { mergeBase } from './commands/merge-base.js';
 import { mergeFile } from './commands/merge-file.js';
-import { mv } from './commands/mv.js';
 import { pull } from './commands/pull.js';
 import { push } from './commands/push.js';
 import { rebase } from './commands/rebase.js';
@@ -39,7 +39,12 @@ import { stash } from './commands/stash.js';
 import { status } from './commands/status.js';
 import { symbolicRef } from './commands/symbolic-ref.js';
 import { tag } from './commands/tag.js';
-import type { GitCommandContext, GitCommandResult, GitCommandsOptions } from './commands/types.js';
+import type {
+  GitCommandContext,
+  GitCommandResult,
+  GitCommandsOptions,
+  GitExecuteOptions,
+} from './commands/types.js';
 import { createCommandScopedReadCache } from './fs-command-cache.js';
 import { GitCacheManager } from './git-cache.js';
 import { readGlobalGitConfigValue } from './git-config.js';
@@ -49,7 +54,7 @@ import {
   type IsoGitFsPromises,
 } from './vfs-fs-adapter.js';
 
-export type { GitCommandResult, GitCommandsOptions } from './commands/types.js';
+export type { GitCommandResult, GitCommandsOptions, GitExecuteOptions } from './commands/types.js';
 
 const logger = createLogger('git-commands');
 const NETWORK_COMMANDS = new Set(['clone', 'fetch', 'pull', 'push', 'ls-remote']);
@@ -78,7 +83,8 @@ const CACHEABLE_COMMANDS = new Set([
 
 const GLOBAL_SPEC: ArgSpec = {
   string: ['c', 'C', 'git-dir', 'work-tree'],
-  boolean: ['help', 'version', 'no-pager', 'paginate', 'no-replace-objects'],
+
+  boolean: ['help', 'version', 'no-pager', 'paginate', 'no-replace-objects', 'color'],
   alias: { h: 'help' },
   stopEarly: true,
 };
@@ -132,7 +138,10 @@ export class GitCommands {
     });
   }
 
-  private contextFor(command: string): { ctx: GitCommandContext; client: IsoGitFsClient } {
+  private contextFor(
+    command: string,
+    useColor: boolean
+  ): { ctx: GitCommandContext; client: IsoGitFsClient } {
     const client = createIsomorphicGitFs(this.options.fs, { objectCache: true });
     const lfs = CACHEABLE_COMMANDS.has(command)
       ? createCommandScopedReadCache(client.promises)
@@ -159,6 +168,7 @@ export class GitCommands {
       },
       getConfigOverrides: () => this.currentConfigOverrides,
       stdin: this.currentStdin,
+      useColor,
     };
     return { ctx, client };
   }
@@ -278,13 +288,14 @@ export class GitCommands {
     args: string[],
     cwd: string,
     env?: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
-    stdin?: string
+    stdin?: string,
+    executeOpts?: GitExecuteOptions
   ): Promise<GitCommandResult> {
     if (args.length === 0) {
       return this.help();
     }
 
-    const parsed = this.stripGlobalFlags(args, cwd);
+    const parsed = this.stripGlobalFlags(normalizeGitColorArgs(args), cwd);
     if (parsed.versionRequested && parsed.remainingArgs.length === 0) {
       return this.version();
     }
@@ -305,8 +316,9 @@ export class GitCommands {
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
     this.currentStdin = stdin ?? '';
+    const useColor = this.invocationColor(args, env, parsed.configOverrides, executeOpts);
 
-    const { ctx, client } = this.contextFor(command);
+    const { ctx, client } = this.contextFor(command, useColor);
     try {
       this.cacheManager.setDeepVerification(this.shouldVerifyPackfiles());
       await this.cacheManager.beforeCommand(effectiveCwd);
@@ -315,84 +327,7 @@ export class GitCommands {
       }
       await this.loadGithubToken();
 
-      switch (command) {
-        case 'init':
-          return await init(ctx, effectiveCwd, rest);
-        case 'clone':
-          return await clone(ctx, effectiveCwd, rest);
-        case 'add':
-          return await add(ctx, effectiveCwd, rest);
-        case 'status':
-          return await status(ctx, effectiveCwd, rest);
-        case 'commit':
-          return await commit(ctx, effectiveCwd, rest);
-        case 'log':
-          return await log(ctx, effectiveCwd, rest);
-        case 'ls-remote':
-          return await lsRemote(ctx, effectiveCwd, rest);
-        case 'branch':
-          return await branch(ctx, effectiveCwd, rest);
-        case 'checkout':
-          return await checkout(ctx, effectiveCwd, rest);
-        case 'clean':
-          return await clean(ctx, effectiveCwd, rest);
-        case 'diff':
-          return await diff(ctx, effectiveCwd, rest);
-        case 'show':
-          return await show(ctx, effectiveCwd, rest);
-        case 'remote':
-          return await remote(ctx, effectiveCwd, rest);
-        case 'fetch':
-          return await fetch(ctx, effectiveCwd, rest);
-        case 'pull':
-          return await pull(ctx, effectiveCwd, rest);
-        case 'push':
-          return await push(ctx, effectiveCwd, rest);
-        case 'merge':
-          return await merge(ctx, effectiveCwd, rest);
-        case 'merge-base':
-          return await mergeBase(ctx, effectiveCwd, rest);
-        case 'cherry-pick':
-          return await cherryPick(ctx, effectiveCwd, rest);
-        case 'rebase':
-          return await rebase(ctx, effectiveCwd, rest);
-        case 'revert':
-          return await revert(ctx, effectiveCwd, rest);
-        case 'merge-file':
-          return await mergeFile(ctx, effectiveCwd, rest);
-        case 'reset':
-          return await reset(ctx, effectiveCwd, rest);
-        case 'config':
-          return await config(ctx, effectiveCwd, rest);
-        case 'tag':
-          return await tag(ctx, effectiveCwd, rest);
-        case 'ls-files':
-          return await lsFiles(ctx, effectiveCwd, rest);
-        case 'ls-tree':
-          return await lsTree(ctx, effectiveCwd, rest);
-        case 'show-ref':
-          return await showRef(ctx, effectiveCwd, rest);
-        case 'symbolic-ref':
-          return await symbolicRef(ctx, effectiveCwd, rest);
-        case 'stash':
-          return await stash(ctx, effectiveCwd, rest);
-        case 'rm':
-          return await rm(ctx, effectiveCwd, rest);
-        case 'mv':
-          return await mv(ctx, effectiveCwd, rest);
-        case 'rev-parse':
-          return await revParse(ctx, effectiveCwd, rest);
-        case 'help':
-          return this.help();
-        case 'version':
-          return this.version();
-        default:
-          return {
-            stdout: '',
-            stderr: `git: '${command}' is not a git command. See 'git help'.\n`,
-            exitCode: 127,
-          };
-      }
+      return await this.dispatch(command, ctx, effectiveCwd, rest);
     } catch (err) {
       const message = expandGitError(err);
       return {
@@ -410,6 +345,109 @@ export class GitCommands {
 
       client.clearStatCache();
     }
+  }
+
+  private async dispatch(
+    command: string,
+    ctx: GitCommandContext,
+    cwd: string,
+    rest: string[]
+  ): Promise<GitCommandResult> {
+    switch (command) {
+      case 'init':
+        return await init(ctx, cwd, rest);
+      case 'clone':
+        return await clone(ctx, cwd, rest);
+      case 'add':
+        return await add(ctx, cwd, rest);
+      case 'status':
+        return await status(ctx, cwd, rest);
+      case 'commit':
+        return await commit(ctx, cwd, rest);
+      case 'log':
+        return await log(ctx, cwd, rest);
+      case 'ls-remote':
+        return await lsRemote(ctx, cwd, rest);
+      case 'branch':
+        return await branch(ctx, cwd, rest);
+      case 'checkout':
+        return await checkout(ctx, cwd, rest);
+      case 'clean':
+        return await clean(ctx, cwd, rest);
+      case 'diff':
+        return await diff(ctx, cwd, rest);
+      case 'show':
+        return await show(ctx, cwd, rest);
+      case 'remote':
+        return await remote(ctx, cwd, rest);
+      case 'fetch':
+        return await fetch(ctx, cwd, rest);
+      case 'pull':
+        return await pull(ctx, cwd, rest);
+      case 'push':
+        return await push(ctx, cwd, rest);
+      case 'merge':
+        return await merge(ctx, cwd, rest);
+      case 'merge-base':
+        return await mergeBase(ctx, cwd, rest);
+      case 'cherry-pick':
+        return await cherryPick(ctx, cwd, rest);
+      case 'rebase':
+        return await rebase(ctx, cwd, rest);
+      case 'revert':
+        return await revert(ctx, cwd, rest);
+      case 'merge-file':
+        return await mergeFile(ctx, cwd, rest);
+      case 'reset':
+        return await reset(ctx, cwd, rest);
+      case 'config':
+        return await config(ctx, cwd, rest);
+      case 'tag':
+        return await tag(ctx, cwd, rest);
+      case 'ls-files':
+        return await lsFiles(ctx, cwd, rest);
+      case 'ls-tree':
+        return await lsTree(ctx, cwd, rest);
+      case 'show-ref':
+        return await showRef(ctx, cwd, rest);
+      case 'symbolic-ref':
+        return await symbolicRef(ctx, cwd, rest);
+      case 'stash':
+        return await stash(ctx, cwd, rest);
+      case 'rm':
+        return await rm(ctx, cwd, rest);
+      case 'mv': {
+        const { mv } = await import('./commands/mv.js');
+        return await mv(ctx, cwd, rest);
+      }
+      case 'rev-parse':
+        return await revParse(ctx, cwd, rest);
+      case 'help':
+        return this.help();
+      case 'version':
+        return this.version();
+      default:
+        return {
+          stdout: '',
+          stderr: `git: '${command}' is not a git command. See 'git help'.\n`,
+          exitCode: 127,
+        };
+    }
+  }
+
+  private invocationColor(
+    args: string[],
+    env: ReadonlyMap<string, string> | Readonly<Record<string, string>> | undefined,
+    configOverrides: ReadonlyMap<string, string> | undefined,
+    executeOpts: GitExecuteOptions | undefined
+  ): boolean {
+    return resolveGitColor({
+      cliWhen: colorWhenFromArgs(args),
+      colorUi: configOverrides?.get('color.ui'),
+      noColorEnv: Boolean(env && readEnvVar(env, 'NO_COLOR')),
+      stdoutIsTTY: executeOpts?.stdoutIsTTY === true,
+      term: env ? readEnvVar(env, 'TERM') : undefined,
+    });
   }
 
   private shouldVerifyPackfiles(): boolean {

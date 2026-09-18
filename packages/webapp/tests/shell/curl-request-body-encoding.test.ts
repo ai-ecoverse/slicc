@@ -12,7 +12,7 @@ let realChrome: unknown;
 const PAYLOAD = '{"body":"plan → build — ship ✓ café"}';
 const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-async function sentBytes(index = 0): Promise<Uint8Array> {
+async function sentBytes(index = 0): Promise<Uint8Array<ArrayBuffer>> {
   expect(proxyFetch.mock.calls.length).toBeGreaterThan(index);
   const init = proxyFetch.mock.calls[index][1] as RequestInit;
   return new Uint8Array(await new Response(init.body).arrayBuffer());
@@ -57,6 +57,19 @@ afterEach(async () => {
 });
 
 describe('curl request bodies keep their bytes', () => {
+  it('-F preserves all file bytes alongside Unicode text fields', async () => {
+    const bytes = Uint8Array.from({ length: 256 }, (_, index) => index);
+    await fs.writeFile('/workspace/payload.bin', bytes);
+    await post("-F file=@/workspace/payload.bin -F 'label=café → ship'");
+    const init = proxyFetch.mock.calls[0][1] as RequestInit;
+    const headers = new Headers(init.headers);
+    const form = await new Response(await sentBytes(), {
+      headers: { 'content-type': headers.get('content-type') ?? '' },
+    }).formData();
+    expect(new Uint8Array(await (form.get('file') as File).arrayBuffer())).toEqual(bytes);
+    expect(form.get('label')).toBe('café → ship');
+  });
+
   it('--data-binary @file with a UTF-8 JSON payload', async () => {
     await fs.writeFile('/workspace/body.json', PAYLOAD);
     await post("-H 'Content-Type: application/json' --data-binary @/workspace/body.json");

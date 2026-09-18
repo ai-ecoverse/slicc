@@ -3,11 +3,18 @@ import XCTest
 @testable import SliccFollower
 @testable import SliccTrayKit
 
+
+
+
+
+
 final class LickEnvelopeTests: XCTestCase {
     private func encode(_ message: FollowerToLeaderMessage) throws -> [String: Any] {
         let data = try JSONEncoder().encode(message)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
+
+    
 
     func testNavigateLickEncodesTheWireShapeTheLeaderExpects() throws {
         let match = HandoffMatch(
@@ -35,7 +42,8 @@ final class LickEnvelopeTests: XCTestCase {
     }
 
     func testAbsentHandoffFieldsAreOmittedNotNulled() throws {
-
+        
+        
         let match = HandoffMatch(verb: .handoff, target: "https://example.com/p")
         let event = LickEvent.navigate(
             pageURL: "https://example.com/p", match: match, title: nil,
@@ -67,13 +75,16 @@ final class LickEnvelopeTests: XCTestCase {
     }
 
     func testOnlyForwardableLickTypesExist() {
-
+        
+        
         XCTAssertEqual(Set(["navigate", "discovery"]), Set(["navigate", "discovery"]))
         XCTAssertEqual(FollowerLickType.navigate.rawValue, "navigate")
         XCTAssertEqual(FollowerLickType.discovery.rawValue, "discovery")
         XCTAssertNil(FollowerLickType(rawValue: "sprinkle"))
         XCTAssertNil(FollowerLickType(rawValue: "webhook"))
     }
+
+    
 
     func testFollowerHelloAdvertisesExec() throws {
         let json = try encode(
@@ -91,7 +102,8 @@ final class LickEnvelopeTests: XCTestCase {
     }
 
     func testMotdIdentifiesThePhone() {
-
+        
+        
         let motd = trayFollowerMotd
         XCTAssertTrue(motd.contains("iOS"), "motd should name the platform: \(motd)")
         XCTAssertTrue(motd.contains("only supported command: open"))
@@ -117,7 +129,7 @@ final class LickEnvelopeTests: XCTestCase {
     }
 
     func testLegacyHelloWithoutTheNewFieldsStillDecodes() throws {
-
+        
         let payload = #"{"type":"hello","protocolVersion":1,"runtime":"slicc-standalone"}"#
         let decoded = try JSONDecoder().decode(
             LeaderToFollowerMessage.self, from: Data(payload.utf8))
@@ -128,23 +140,30 @@ final class LickEnvelopeTests: XCTestCase {
         XCTAssertNil(motd)
     }
 
-    func testWrappingAnAlreadyWrappedValueDoesNotEncodeNull() throws {
+    
 
+    func testWrappingAnAlreadyWrappedValueDoesNotEncodeNull() throws {
+        
+        
+        
         let doubled = AnyCodable(AnyCodable(["k": "v"]))
         let data = try JSONEncoder().encode(doubled)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["k"] as? String, "v")
     }
 
-    func testFingerprintIgnoresThePageThatAdvertisedIt() {
+    
 
+    func testFingerprintIgnoresThePageThatAdvertisedIt() {
+        
+        
         let a = HandoffMatch(verb: .upskill, target: "https://github.com/o/r", branch: "main")
         let b = HandoffMatch(verb: .upskill, target: "https://github.com/o/r", branch: "main")
         XCTAssertEqual(AppState.handoffFingerprint(a), AppState.handoffFingerprint(b))
     }
 
     func testFingerprintSeparatesAdjacentFields() {
-
+        
         let a = HandoffMatch(verb: .upskill, target: "https://x/r", branch: "ab", path: "c")
         let b = HandoffMatch(verb: .upskill, target: "https://x/r", branch: "a", path: "bc")
         XCTAssertNotEqual(AppState.handoffFingerprint(a), AppState.handoffFingerprint(b))
@@ -158,24 +177,30 @@ final class LickEnvelopeTests: XCTestCase {
 
     @MainActor
     func testTheSameHandoffIsForwardedOnlyOnce() {
-
+        
+        
         let state = AppState()
         let match = HandoffMatch(verb: .handoff, target: "do the thing")
-
+        
+        
+        
         XCTAssertEqual(
             state.forwardNavigateLick(pageURL: "https://a.example/1", match: match, title: nil),
             .notDelivered)
-
+        
+        
         XCTAssertEqual(
             state.forwardNavigateLick(pageURL: "https://a.example/2", match: match, title: nil),
             .duplicate)
-
+        
         XCTAssertEqual(
             state.forwardNavigateLick(
                 pageURL: "https://a.example/2",
                 match: HandoffMatch(verb: .handoff, target: "something else"), title: nil),
             .notDelivered)
     }
+
+    
 
     private func response(url: String, headers: [String: String]) -> HTTPURLResponse? {
         HTTPURLResponse(
@@ -195,7 +220,8 @@ final class LickEnvelopeTests: XCTestCase {
     }
 
     func testSubFrameHandoffsAreIgnored() {
-
+        
+        
         let link = "<https://github.com/o/r>; rel=\"\(HandoffLink.upskillRel)\""
         XCTAssertNil(
             CDPTarget.handoff(
@@ -223,7 +249,7 @@ final class LickEnvelopeTests: XCTestCase {
     }
 
     func testNonHttpResponsesAreIgnored() {
-
+        
         let plain = URLResponse(
             url: URL(string: "file:///tmp/x.html")!, mimeType: "text/html",
             expectedContentLength: 0, textEncodingName: nil)

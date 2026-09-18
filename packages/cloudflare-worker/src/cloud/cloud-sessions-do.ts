@@ -11,7 +11,11 @@ import {
 } from '@slicc/cloud-core';
 import { bundleIndex, type ConeConfigDelta, imsTokenExpiry } from '@slicc/cloud-core/cone-config';
 import { checkCapsForRun } from './caps.js';
-import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
+import {
+  ADOBE_TOKEN_DOMAINS,
+  buildStartConeArgs,
+  coneConfigToBundle,
+} from './cone-config-bridge.js';
 import { errorResponse, okResponse } from './error-envelope.js';
 import { LocalRegistry } from './local-registry.js';
 
@@ -30,8 +34,6 @@ interface DurableObjectStateLike {
   };
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
 }
-
-export const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev';
 
 interface StartConeBody {
   bearer: string;

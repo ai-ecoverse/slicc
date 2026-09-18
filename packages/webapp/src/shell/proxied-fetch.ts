@@ -468,6 +468,8 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
     });
 
     const init: RequestInit = { method, headers, cache: 'no-store' };
+    const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+    if (signal) init.signal = signal;
     if (options?.body && !['GET', 'HEAD'].includes(method)) {
       const prepared = prepareRequestBody(
         options.body as SecureFetchRequestBody | undefined,

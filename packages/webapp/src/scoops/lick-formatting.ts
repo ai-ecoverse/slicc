@@ -18,6 +18,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'cherry',
   'workflow',
   'bash',
+  'jshd',
   'sudo-request',
   'preview',
   'discovery',
@@ -39,6 +40,7 @@ const LICK_LABELS: Record<LickEvent['type'], string> = {
   cherry: 'Cherry Event',
   workflow: 'Workflow Event',
   bash: 'Background Command',
+  jshd: 'jshd Unit',
   cron: 'Cron Event',
   'sudo-request': 'Scoop Access Request',
   preview: 'Preview',
@@ -67,6 +69,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return (event as { workflowName?: string }).workflowName;
     case 'bash':
       return (event as { bashJobId?: string }).bashJobId;
+    case 'jshd':
+      return (event as { jshdName?: string }).jshdName;
     case 'sudo-request':
       return (event as { sudoScoopName?: string }).sudoScoopName;
     case 'discovery':
@@ -163,6 +167,24 @@ function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
   };
 }
 
+function formatJshdLick(event: LickEvent, label: string): FormattedLick {
+  const name = event.jshdName ?? 'unknown';
+  const restarts = event.jshdRestarts ?? 0;
+  const path = event.resultPath;
+  const tail = path
+    ? `Logs: ${path} (page with \`jshd logs ${name}\`).`
+    : 'No log file was written.';
+  const preview = event.preview?.length ? `\n\n\`\`\`\n${event.preview}\n\`\`\`` : '';
+  return {
+    label,
+    content:
+      `[${label}: ${name}] marked errored after ${restarts} restarts.\n` +
+      `The restart policy stopped trying so the unit does not crash-loop.\n` +
+      `${tail}${preview}\n\n` +
+      `Inspect with \`jshd status ${name}\`; start it again with \`jshd start -n ${name}\` after fixing the script.`,
+  };
+}
+
 function formatBashLick(event: LickEvent, label: string): FormattedLick {
   const jobId = event.bashJobId ?? 'unknown job';
   const pid = event.bashJobPid === undefined ? '' : ` (pid ${event.bashJobPid})`;
@@ -201,12 +223,13 @@ function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
     `Kind: ${kind}`,
     `Detail: ${detail}`,
   ];
+  if (event.sudoReason) lines.push(`Reason given: ${event.sudoReason}`);
   if (event.sudoSuggestedPattern) {
     lines.push(`Suggested pattern: ${event.sudoSuggestedPattern}`);
   }
   lines.push(
     '',
-    `Use the lick_confirm tool with lick_id="${lickId}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${lickId}" to deny.`
+    `Use the lick_confirm tool with lick_id="${lickId}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${lickId}" and a reason to deny.`
   );
   return { label, content: lines.join('\n') };
 }
@@ -269,7 +292,8 @@ function formatNavigateLick(event: LickEvent, label: string): FormattedLick {
     verb === 'upskill'
       ? `\n\nLick ID: ${lickId}\n` +
         `Upskill install. To install, call \`lick_confirm\` with this lick id ` +
-        `(it runs \`upskill\` with any branch/path scope from the body); to skip, call ` +
+        `(it runs \`upskill … --all\` with any branch/path scope from the body, so it ` +
+        `installs EVERY skill under that scope — a broad path can be many); to skip, call ` +
         `\`lick_dismiss\`. The card flips to ✓ on confirm / muted ✗ on dismiss.`
       : `\n\nLick ID: ${lickId}\n` +
         `External handoff — stays human-gated. Show the approval dip and wait for the user; ` +
@@ -288,6 +312,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'preview') return formatPreviewLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
   if (event.type === 'bash') return formatBashLick(event, label);
+  if (event.type === 'jshd') return formatJshdLick(event, label);
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
   if (event.type === 'navigate') return formatNavigateLick(event, label);
   if (event.type === 'webhook') return formatWebhookLick(event, label);

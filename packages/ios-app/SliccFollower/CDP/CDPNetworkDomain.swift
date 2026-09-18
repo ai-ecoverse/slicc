@@ -1,8 +1,19 @@
 import Foundation
 import WebKit
 
-enum CDPNetworkDomain {
 
+
+
+
+
+
+
+
+
+
+
+enum CDPNetworkDomain {
+    
     static func isSupported(_ method: String) -> Bool {
         switch method {
         case "Network.enable", "Network.disable", "Network.getCookies",
@@ -14,6 +25,8 @@ enum CDPNetworkDomain {
         }
     }
 
+    
+    
     static func encode(_ cookie: HTTPCookie) -> [String: Any] {
         var out: [String: Any] = [
             "name": cookie.name,
@@ -24,7 +37,10 @@ enum CDPNetworkDomain {
             "httpOnly": cookie.isHTTPOnly,
             "session": cookie.expiresDate == nil,
         ]
-
+        
+        
+        
+        
         let expires: Double = cookie.expiresDate.map { $0.timeIntervalSince1970 } ?? -1
         out["expires"] = expires
         switch cookie.sameSitePolicy {
@@ -35,6 +51,13 @@ enum CDPNetworkDomain {
         return out
     }
 
+    
+    
+    
+    
+    
+    
+    
     static func decode(_ raw: [String: Any]) -> HTTPCookie? {
         guard let name = raw["name"] as? String,
             let value = raw["value"] as? String
@@ -62,6 +85,16 @@ enum CDPNetworkDomain {
         return HTTPCookie(properties: props)
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static func filter(_ cookies: [HTTPCookie], urls: [String]) -> [HTTPCookie] {
         let hosts = urls.compactMap { URL(string: $0)?.host?.lowercased() }
         guard !hosts.isEmpty else { return [] }
@@ -70,12 +103,23 @@ enum CDPNetworkDomain {
         }
     }
 
+    
+    
     private static func domainMatches(cookieDomain: String, host: String) -> Bool {
         let domain = cookieDomain.lowercased()
         let bare = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
         return host == bare || host.hasSuffix(".\(bare)")
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     static func matchesDeletion(
         _ cookie: HTTPCookie,
         name: String,

@@ -1,14 +1,32 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public enum TrayFsReadEncoding: String, Codable {
     case utf8 = "utf-8"
     case binary
 }
 
+
 public enum TrayFsWriteEncoding: String, Codable {
     case utf8 = "utf-8"
     case base64
 }
+
 
 public enum TrayFsRequest: Codable, Equatable {
     case readFile(path: String, encoding: TrayFsReadEncoding?)
@@ -24,6 +42,7 @@ public enum TrayFsRequest: Codable, Equatable {
         case op, path, content, encoding, recursive
     }
 
+    
     public var op: String {
         switch self {
         case .readFile: return "readFile"
@@ -37,6 +56,7 @@ public enum TrayFsRequest: Codable, Equatable {
         }
     }
 
+    
     public var path: String {
         switch self {
         case .readFile(let path, _),
@@ -107,6 +127,9 @@ public enum TrayFsRequest: Codable, Equatable {
     }
 }
 
+
+
+
 public enum TrayFsNodeType: String, Codable {
     case file
     case directory
@@ -136,6 +159,7 @@ public struct TrayFsDirEntry: Codable, Equatable {
         self.type = type
     }
 }
+
 
 public enum TrayFsResponseData: Codable, Equatable {
     case file(content: String, encoding: TrayFsWriteEncoding)
@@ -200,6 +224,11 @@ public enum TrayFsResponseData: Codable, Equatable {
     }
 }
 
+
+
+
+
+
 public struct TrayFsResponse: Codable, Equatable {
     public let ok: Bool
     public let data: TrayFsResponseData?
@@ -224,6 +253,9 @@ public struct TrayFsResponse: Codable, Equatable {
         self.totalChunks = totalChunks
     }
 
+    
+    
+    
     public static func success(_ data: TrayFsResponseData) -> TrayFsResponse {
         TrayFsResponse(ok: true, data: data)
     }

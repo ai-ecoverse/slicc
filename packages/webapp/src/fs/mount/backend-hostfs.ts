@@ -1,4 +1,5 @@
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
+import { inodeIdentity } from '../stat-identity.js';
 import { FsError, type FsErrorCode } from '../types.js';
 import type {
   MountBackend,
@@ -83,6 +84,7 @@ function transientBridgeError(
 interface RawStatIdentity {
   ctime?: unknown;
   ino?: unknown;
+  dev?: unknown;
   uid?: unknown;
   gid?: unknown;
   mode?: unknown;
@@ -98,6 +100,11 @@ function readStatIdentity(raw: RawStatIdentity): MountStatIdentity {
   if (ctime !== undefined) identity.ctime = ctime;
   const ino = finiteNumber(raw.ino);
   if (ino !== undefined) identity.ino = ino;
+  const dev = finiteNumber(raw.dev);
+  if (dev !== undefined && Number.isSafeInteger(dev) && dev >= 0) {
+    identity.dev = dev;
+    identity.identity = inodeIdentity(`hostfs:${resolveApiUrl(HOSTFS_STABLE_PATH)}`, ino, dev);
+  }
   const uid = finiteNumber(raw.uid);
   if (uid !== undefined) identity.uid = uid;
   const gid = finiteNumber(raw.gid);
@@ -436,15 +443,16 @@ export class HostFsMountBackend implements MountBackend {
     await this.request('mkdir', path, drainBody, { method: 'POST' });
   }
 
-  async rename(fromPath: string, toPath: string): Promise<void> {
-    await this.request('rename', fromPath, drainBody, {
+  async rename(fromPath: string, toPath: string): Promise<{ noop?: boolean }> {
+    const body = (await this.request('rename', fromPath, readJson, {
       method: 'POST',
       extra: { to: toPath.replace(/^\/+/, '') },
-    });
+    })) as { noop?: unknown };
     const fromRel = this.bodyKey(fromPath);
     const toRel = this.bodyKey(toPath);
 
     await this.invalidateCachePrefixes([fromRel, toRel]);
+    return body.noop === true ? { noop: true } : {};
   }
 
   async remove(path: string, opts?: { recursive?: boolean }): Promise<void> {

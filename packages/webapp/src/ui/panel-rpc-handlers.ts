@@ -25,6 +25,7 @@ import {
   type SerialPort,
 } from '../kernel/serial-port-registry.js';
 import {
+  DEFAULT_USB_OWNER,
   getNavigatorUsb,
   getSharedUsbRegistry,
   type UsbDevice,
@@ -71,16 +72,7 @@ export interface StandalonePanelRpcHandlerOptions {
     previewToken: string;
   }) => Promise<{ revoked: boolean; webhookId?: string }>;
 
-  listPreviews?: () => Promise<{
-    previews: Array<{
-      previewToken: string;
-      url: string;
-      servedRoot: string;
-      entryPath: string;
-      allowLive: boolean;
-      createdAt: string;
-    }>;
-  }>;
+  listPreviews?: () => Promise<PanelRpcResults['tray-list-previews']>;
 
   getPreviewLifecycleRecords?: (previewToken?: string) => PanelRpcResults['tray-preview-logs'];
 
@@ -111,6 +103,10 @@ export interface StandalonePanelRpcHandlerOptions {
     timeoutMs?: number;
     stdin?: string;
   }) => Promise<{ stdout: string; stderr: string; exitCode: number; error?: string }>;
+
+  computerNative?: (
+    payload: PanelRpcPayloadFor<'tray-computer-native'>
+  ) => Promise<PanelRpcResults['tray-computer-native']>;
 
   sliccSidecar?: SidecarRegistryLike;
   signalRemoteExec?: (payload: { execToken: string }) => void;
@@ -151,6 +147,7 @@ export function createStandalonePanelRpcHandlers(
   options: StandalonePanelRpcHandlerOptions = {}
 ): PanelRpcHandlers {
   const hidSubscriptions = new Map<string, () => void>();
+  ensureScreenSessionEndedRelay(options.emitEvent);
 
   return {
     ...buildPageAudioHandlers(),
@@ -158,7 +155,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildHearHandlers(),
     ...buildTrayOauthHandlers(options),
     ...buildSliccSidecarHandlers(options),
-    ...buildUsbHandlers(),
+    ...buildUsbHandlers(options),
     ...buildHidHandlers(options, hidSubscriptions),
     ...buildSerialHandlers(),
     ...buildEsptoolHandlers(options),
@@ -171,6 +168,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildMountBridgeHandler(),
     ...buildThemeHandler(),
     ...buildLayoutHandler(),
+    ...buildComputerTabHandlers(),
   };
 }
 
@@ -229,6 +227,53 @@ function buildProxiedFetchHandler() {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
+async function handleScreencaptureRpc(payload: {
+  mimeType: string;
+  quality: number;
+  mode?: 'image' | 'video' | 'session';
+  durationMs?: number;
+  audio?: boolean;
+  session?: 'start' | 'frame' | 'stop' | 'record';
+  handle?: string;
+  maxWidth?: number;
+}): Promise<{
+  bytes: ArrayBuffer;
+  width: number;
+  height: number;
+  mimeType: string;
+  durationMs?: number;
+  handle?: string;
+}> {
+  const { captureDisplayMedia, sessionCaptureRequest } = await import(
+    '../shell/supplemental-commands/screencapture-media.js'
+  );
+  const { mimeType, quality, mode, durationMs, audio, session, handle, maxWidth } = payload;
+  const captured = await captureDisplayMedia(
+    mode === 'session'
+      ? sessionCaptureRequest({ session, handle, mimeType, quality, durationMs, maxWidth })
+      : mode === 'video'
+        ? {
+            mode: 'video',
+            mimeType,
+            durationMs: durationMs ?? 5_000,
+            audio: !!audio,
+          }
+        : { mode: 'image', mimeType, quality }
+  );
+  const buffer = captured.bytes.buffer.slice(
+    captured.bytes.byteOffset,
+    captured.bytes.byteOffset + captured.bytes.byteLength
+  ) as ArrayBuffer;
+  return {
+    bytes: buffer,
+    width: captured.width,
+    height: captured.height,
+    mimeType: captured.mimeType,
+    ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
+    ...(captured.handle !== undefined ? { handle: captured.handle } : {}),
+  };
+}
+
 function buildPageAudioHandlers() {
   return {
     'page-info': () => ({
@@ -237,18 +282,7 @@ function buildPageAudioHandlers() {
       title: document.title || '',
     }),
 
-    screencapture: async ({ mimeType, quality }) => {
-      const blob = await captureScreen(mimeType, quality);
-      const buffer = await blob.arrayBuffer();
-
-      const dims = await readBlobDimensions(blob);
-      return {
-        bytes: buffer,
-        width: dims.width,
-        height: dims.height,
-        mimeType,
-      };
-    },
+    screencapture: (payload) => handleScreencaptureRpc(payload),
 
     'speak-text': async ({ text, lang, voice, rate, pitch, volume }) => {
       const { speak } = await import('../speech/speak.js');
@@ -585,6 +619,13 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
       return { ok: true };
     },
 
+    'tray-computer-native': async (payload) => {
+      if (!options.computerNative) {
+        throw new Error('computer native: no active leader tray in this environment');
+      }
+      return await options.computerNative(payload);
+    },
+
     'oauth-extras-set': ({ providerId, domains }) => {
       setExtraOAuthDomains(providerId, domains);
       return { storeAfter: getAllExtraOAuthDomains() };
@@ -664,7 +705,8 @@ function buildSliccSidecarHandlers(options: StandalonePanelRpcHandlerOptions) {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
-function buildUsbHandlers() {
+function buildUsbHandlers(options: StandalonePanelRpcHandlerOptions) {
+  ensureUsbClaimEventRelay(options.emitEvent);
   return {
     'usb-list': async () => ({ devices: await usbOps.usbList(usbRegistry(), requireUsb()) }),
 
@@ -681,8 +723,8 @@ function buildUsbHandlers() {
       return { done: true };
     },
 
-    'usb-close': async ({ handle }) => {
-      await usbOps.usbClose(usbRegistry(), handle);
+    'usb-close': async ({ handle, owner, force }) => {
+      await usbOps.usbClose(usbRegistry(), handle, { owner, force });
       return { done: true };
     },
 
@@ -691,13 +733,28 @@ function buildUsbHandlers() {
       return { done: true };
     },
 
-    'usb-claim-interface': async ({ handle, interfaceNumber }) => {
-      await usbOps.usbClaimInterface(usbRegistry(), handle, interfaceNumber);
+    'usb-claim-interface': async ({ handle, interfaceNumber, owner, wait }) => {
+      await usbOps.usbClaimInterface(usbRegistry(), handle, interfaceNumber, { owner, wait });
       return { done: true };
     },
 
-    'usb-release-interface': async ({ handle, interfaceNumber }) => {
-      await usbOps.usbReleaseInterface(usbRegistry(), handle, interfaceNumber);
+    'usb-release-interface': async ({ handle, interfaceNumber, owner }) => {
+      await usbOps.usbReleaseInterface(usbRegistry(), handle, interfaceNumber, { owner });
+      return { done: true };
+    },
+
+    'usb-cancel-claim-wait': async ({ handle, interfaceNumber, owner }) => {
+      await usbOps.usbCancelClaimWait(
+        usbRegistry(),
+        handle,
+        interfaceNumber,
+        owner ?? DEFAULT_USB_OWNER
+      );
+      return { done: true };
+    },
+
+    'usb-drop-owner': async ({ owner }) => {
+      await usbOps.usbDropOwner(usbRegistry(), owner);
       return { done: true };
     },
 
@@ -713,8 +770,8 @@ function buildUsbHandlers() {
     'usb-transfer-out': async ({ handle, endpointNumber, bytes }) =>
       usbOps.usbTransferOut(usbRegistry(), handle, endpointNumber, bytes),
 
-    'usb-reset': async ({ handle }) => {
-      await usbOps.usbReset(usbRegistry(), handle);
+    'usb-reset': async ({ handle, owner, force }) => {
+      await usbOps.usbReset(usbRegistry(), handle, { owner, force });
       return { done: true };
     },
 
@@ -1035,6 +1092,35 @@ function usbRegistry() {
   return getSharedUsbRegistry();
 }
 
+let usbClaimRelay: (() => void) | null = null;
+let usbClaimEmit: ((channel: string, payload: unknown) => void) | undefined;
+let screenEndedRelay: (() => void) | null = null;
+let screenEndedEmit: ((channel: string, payload: unknown) => void) | undefined;
+
+function ensureUsbClaimEventRelay(emitEvent?: (channel: string, payload: unknown) => void): void {
+  usbClaimEmit = emitEvent;
+  if (usbClaimRelay || !emitEvent) return;
+  void import('../kernel/usb-claim-broker.js').then((m) => {
+    if (usbClaimRelay) return;
+    usbClaimRelay = m.addClaimListener(usbRegistry(), (event) => {
+      usbClaimEmit?.('usb-claim-event', event);
+    });
+  });
+}
+
+function ensureScreenSessionEndedRelay(
+  emitEvent?: (channel: string, payload: unknown) => void
+): void {
+  screenEndedEmit = emitEvent;
+  if (screenEndedRelay || !emitEvent) return;
+  void import('../shell/supplemental-commands/screencapture-media.js').then((m) => {
+    if (screenEndedRelay) return;
+    screenEndedRelay = m.displaySessions.onEnded((handle) => {
+      screenEndedEmit?.(m.SCREENCAPTURE_SESSION_ENDED_CHANNEL, { handle });
+    });
+  });
+}
+
 function requireUsb() {
   const usb = getNavigatorUsb();
   if (!usb) throw new Error('WebUSB is unavailable in this browser');
@@ -1350,62 +1436,6 @@ function toVoiceInfo(v: SpeechSynthesisVoice): {
   return { name: v.name, lang: v.lang, default: v.default, onDevice: false };
 }
 
-async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    throw new Error('screen capture is not supported in this browser');
-  }
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-  try {
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () =>
-        video
-          .play()
-          .then(() => resolve())
-          .catch(reject);
-      video.onerror = () => reject(new Error('Failed to load video stream'));
-    });
-    await new Promise<void>((r) => setTimeout(r, 100));
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get canvas context');
-    ctx.drawImage(video, 0, 0, width, height);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error('Failed to create image blob'))),
-        mimeType,
-        quality
-      );
-    });
-  } finally {
-    stream.getTracks().forEach((t) => {
-      t.stop();
-    });
-  }
-}
-
-async function readBlobDimensions(blob: Blob): Promise<{ width: number; height: number }> {
-  const url = URL.createObjectURL(blob);
-  try {
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('Failed to decode capture'));
-      img.src = url;
-    });
-    return { width: img.naturalWidth, height: img.naturalHeight };
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
 async function reencodeAsPng(blob: Blob): Promise<Blob> {
   const url = URL.createObjectURL(blob);
   try {
@@ -1508,6 +1538,29 @@ function buildLayoutHandler() {
 
       const result = await applier(msg);
       return result ?? { applied: true };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+function pageBrowser(): import('../cdp/browser-api.js').BrowserAPI {
+  const g = globalThis as { __slicc_browser?: import('../cdp/browser-api.js').BrowserAPI };
+  if (!g.__slicc_browser) throw new Error('no browser API on this page');
+  return g.__slicc_browser;
+}
+
+function buildComputerTabHandlers() {
+  return {
+    'computer-tab-screenshot': async (payload) => {
+      const { screenshotTab } = await import('../computers/adapters/tab.js');
+      return screenshotTab(pageBrowser(), payload.targetId, {
+        maxWidth: payload.maxWidth,
+        format: payload.format,
+      });
+    },
+    'computer-tab-input': async (payload) => {
+      const { inputTab } = await import('../computers/adapters/tab.js');
+      await inputTab(pageBrowser(), payload.targetId, payload.events);
+      return { ok: true as const };
     },
   } satisfies Partial<PanelRpcHandlers>;
 }

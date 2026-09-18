@@ -1,3 +1,4 @@
+import { type ByteRange, parseByteRange } from '@slicc/shared-ts';
 import type { PreviewRecord } from './shared.js';
 
 export const PREVIEW_ARCHIVE_PREFIX = 'previews/';
@@ -5,6 +6,12 @@ export const MAX_PREVIEW_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_PREVIEW_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_PREVIEW_FILES = 1_000;
 export const MAX_PREVIEW_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const MAX_SNAPSHOTS_PER_TRAY = 10;
+
+export const MAX_LIVE_PREVIEWS_PER_TRAY = 200;
+
+export const LIVE_PREVIEW_ORPHAN_MS = 5 * 60 * 1000;
 
 export function normalizePreviewArchivePath(value: string): string | null {
   const normalized = value.replaceAll('\\', '/');
@@ -54,15 +61,25 @@ export async function servePersistentPreview(
   const remainingSeconds = Math.floor((Date.parse(record.expiresAt) - Date.now()) / 1000);
   if (remainingSeconds <= 0) return new Response('Not found', { status: 404 });
 
-  const objectKey = record.uploadedFiles?.[relativePath]?.key;
-  if (!objectKey) return new Response('Not found', { status: 404 });
-  const object = await bucket.get(objectKey);
+  const file = record.uploadedFiles?.[relativePath];
+  if (!file?.key) return new Response('Not found', { status: 404 });
+  const range = await requestedRange(request, file, bucket);
+  if (range === 'unsatisfiable') {
+    return new Response(null, {
+      status: 416,
+      headers: { 'accept-ranges': 'bytes', 'content-range': `bytes */${file.size}` },
+    });
+  }
+  const object = await bucket.get(
+    file.key,
+    range ? { range: { offset: range.start, length: range.end - range.start + 1 } } : undefined
+  );
   if (!object) return new Response('Not found', { status: 404 });
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('content-length', String(object.size));
+  headers.set('accept-ranges', 'bytes');
 
   headers.set('cache-control', 'public, max-age=0, must-revalidate');
   headers.set(
@@ -72,5 +89,25 @@ export async function servePersistentPreview(
   if (request.headers.get('if-none-match') === object.httpEtag) {
     return new Response(null, { status: 304, headers });
   }
-  return new Response(request.method === 'HEAD' ? null : object.body, { status: 200, headers });
+  const body = request.method === 'HEAD' ? null : object.body;
+  if (!range) {
+    headers.set('content-length', String(object.size));
+    return new Response(body, { status: 200, headers });
+  }
+  headers.set('content-length', String(range.end - range.start + 1));
+  headers.set('content-range', `bytes ${range.start}-${range.end}/${object.size}`);
+  return new Response(body, { status: 206, headers });
+}
+
+async function requestedRange(
+  request: Request,
+  file: { key: string; size: number },
+  bucket: R2Bucket
+): Promise<ByteRange | 'unsatisfiable' | null> {
+  const range = parseByteRange(request.headers.get('range'), file.size);
+  if (range === null) return null;
+  const ifRange = request.headers.get('if-range');
+  if (ifRange === null) return range;
+  const head = await bucket.head(file.key);
+  return head && ifRange === head.httpEtag ? range : null;
 }

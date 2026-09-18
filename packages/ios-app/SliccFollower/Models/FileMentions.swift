@@ -1,36 +1,79 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 enum FileMentions {
 
+    
+    
+    
+    
+    
+    
     struct Candidate: Equatable {
-
+        
         let path: String
-
+        
         let line: Int?
-
+        
         let offset: Int
-
+        
         let length: Int
 
         var range: Range<Int> { offset..<(offset + length) }
     }
 
+    
+    
+    
     private static let wordyExtensions: Set<String> = [
         "so", "in", "at", "is", "it", "as", "be", "do", "go", "me", "my", "no",
         "of", "on", "or", "to", "up", "us", "we", "am", "an", "by", "if", "ok",
     ]
 
+    
+    
+    
     private static let tldLike: Set<String> = [
         "com", "org", "net", "io", "dev", "ai", "app", "co", "gov", "edu",
         "ly", "tv", "xyz", "cloud", "computer", "software",
     ]
 
+    
+    
     private static let extensionlessFilenames: [String] = [
         "Makefile", "Dockerfile", "Justfile", "Rakefile", "Gemfile", "Procfile",
         "Brewfile", "Vagrantfile", "CODEOWNERS", "LICENSE", "README", "CHANGELOG",
         "AGENTS",
     ]
 
+    
+    
+    
+    
+    
+    
+    
+    
     private static let mentionPattern =
         #"(?:^|[\s(\['"`<>,;=|])((?:~/|\.{1,2}/|/)?(?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z0-9]{1,12})((?::\d+){0,2})"#
 
@@ -44,14 +87,28 @@ enum FileMentions {
         return try? NSRegularExpression(pattern: pattern)
     }()
 
+    /// Trailing punctuation that belongs to the sentence, not to the name.
     private static let trailingPunctuation = CharacterSet(charactersIn: ".,;:!?)]}'\"`>")
 
+    
+    
+    
+    
+    
+    
     static let maximumCandidates = 16
 
+    
+    
+    
+    
     private static let urlRegex: NSRegularExpression? = {
         try? NSRegularExpression(pattern: #"\b[a-z][a-z0-9+.-]*://\S+"#, options: [.caseInsensitive])
     }()
 
+    
+    
+    
     static func maskingURLs(in text: String) -> String {
         guard let urlRegex else { return text }
         var masked = text
@@ -64,6 +121,8 @@ enum FileMentions {
         return masked
     }
 
+    
+    
     static func scan(_ source: String) -> [Candidate] {
         guard !source.isEmpty else { return [] }
         var found: [Candidate] = []
@@ -87,7 +146,7 @@ enum FileMentions {
         for match in regex.matches(in: text, range: whole) {
             guard let captured = Range(match.range(at: 1), in: text) else { continue }
             var path = String(text[captured])
-
+            
             let trimmed = trimTrailing(path)
             if !trimmed.isEmpty { path = trimmed }
 
@@ -123,8 +182,11 @@ enum FileMentions {
         return digits.isEmpty ? nil : Int(digits)
     }
 
+    
+    
     static func isPlausibleFile(_ path: String) -> Bool {
-
+        
+        
         let hasDirectory = path.contains("/")
         let base = path.contains("/") ? String(path[path.index(after: path.lastIndex(of: "/")!)...]) : path
 
@@ -135,9 +197,9 @@ enum FileMentions {
         let ext = String(base[base.index(after: dot)...]).lowercased()
 
         if ext.isEmpty { return false }
-
+        
         if ext.allSatisfy(\.isNumber) { return false }
-
+        
         if !hasDirectory, !stem.isEmpty, stem.allSatisfy({ $0.isNumber || $0 == "." }) { return false }
 
         if hasDirectory { return true }

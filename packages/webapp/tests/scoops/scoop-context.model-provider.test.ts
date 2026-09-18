@@ -56,6 +56,7 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
 
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: () => [],
+  createMemoryWriteTool: () => ({ name: 'memory_write' }),
   createBashTool: () => ({ name: 'bash' }),
   createRequestSecretTool: () => ({ name: 'request_secret' }),
 }));

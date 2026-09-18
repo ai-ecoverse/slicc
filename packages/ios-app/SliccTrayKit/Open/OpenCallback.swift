@@ -1,6 +1,7 @@
 import Foundation
 import Security
 
+
 public enum OpenCallbackLimits {
     public static let parameterCount = 16
     public static let serializedBytes = 16 * 1024
@@ -16,6 +17,11 @@ public struct OpenCallbackParameter: Codable, Equatable, Sendable {
     public let name: String
     public let value: String
 }
+
+
+
+
+
 
 public struct OpenCallbackResult: Codable, Equatable, Sendable {
     public let status: OpenCallbackStatus
@@ -67,6 +73,9 @@ public enum OpenCallbackCodec {
         return difference == 0
     }
 
+    
+    
+    
     public static func launchURL(
         for command: ParsedOpenCommand,
         requestId: String,

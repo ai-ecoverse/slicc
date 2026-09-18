@@ -13,12 +13,20 @@ enum ScoopLifecycle: String, CaseIterable, Equatable, Sendable {
     }
 }
 
+
+
+
+
+
+
+
+
 enum ScoopActivity: String, CaseIterable, Equatable, Sendable {
-
+    
     case thinking
-
+    
     case tool
-
+    
     case awaiting
 
     init?(activity: String?) {

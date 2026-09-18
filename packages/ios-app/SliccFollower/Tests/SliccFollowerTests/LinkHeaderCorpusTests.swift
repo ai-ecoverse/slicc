@@ -2,6 +2,14 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
+
+
+
+
 final class LinkHeaderCorpusTests: XCTestCase {
     private struct CorpusError: Error, CustomStringConvertible {
         let description: String
@@ -30,7 +38,8 @@ final class LinkHeaderCorpusTests: XCTestCase {
     }
 
     private func loadCases() throws -> [Case] {
-
+        
+        
         guard
             let url = Bundle(for: Self.self).url(
                 forResource: "link-header-corpus", withExtension: "json")
@@ -51,7 +60,8 @@ final class LinkHeaderCorpusTests: XCTestCase {
             throw CorpusError(
                 description: "corpus declares \(declaredCount) cases but carries \(rawCases.count)")
         }
-
+        
+        
         XCTAssertEqual(root["handoffRel"] as? String, HandoffLink.handoffRel)
         XCTAssertEqual(root["upskillRel"] as? String, HandoffLink.upskillRel)
 
@@ -89,7 +99,8 @@ final class LinkHeaderCorpusTests: XCTestCase {
     }
 
     func testCorpusIsNotEmpty() throws {
-
+        
+        
         let cases = try loadCases()
         XCTAssertGreaterThanOrEqual(cases.count, 30, "corpus shrank — did a regeneration truncate it?")
     }
@@ -130,6 +141,11 @@ final class LinkHeaderCorpusTests: XCTestCase {
             XCTAssertEqual(match.path, expected.path, "path for '\(testCase.name)'")
         }
     }
+
+    
+    
+    
+    
 
     func testBranchAllowlistRejectsShellMetacharacters() {
         for unsafe in ["a;b", "a|b", "a&b", "a$b", "a`b", "a(b", "a b", "a\nb", "a\"b", "a'b"] {

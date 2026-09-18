@@ -69,7 +69,8 @@ final class CDPProxyTests: XCTestCase {
         await harness.emitText("{\"id\":7}")
 
         XCTAssertEqual(firstClient.closeReasonsSnapshot(), ["Replaced by newer /cdp client"])
-
+        
+        
         XCTAssertEqual(firstClient.closeCodesSnapshot(), [.unknown(CDPProxy.supersededCloseCode)])
         XCTAssertEqual(firstClient.sentTextsSnapshot(), [])
         XCTAssertEqual(secondClient.sentTextsSnapshot(), ["{\"id\":7}"])
@@ -89,9 +90,10 @@ final class CDPProxyTests: XCTestCase {
         try await proxy.preWarm(cdpPort: 9222)
         await proxy.addClient(client.handle)
 
+        
         await harness.emitText("{\"method\":\"Network.webSocketFrameReceived\",\"params\":{}}")
         await harness.emitText("{\"method\":\"Network.webSocketFrameSent\",\"params\":{}}")
-
+        
         await harness.emitText("{\"id\":7,\"result\":{}}")
 
         XCTAssertEqual(client.sentTextsSnapshot(), ["{\"id\":7,\"result\":{}}"])
@@ -108,14 +110,14 @@ final class CDPProxyTests: XCTestCase {
                 .text("{\"method\":\"Network.webSocketFrameSent\",\"params\":{}}")
             )
         )
-
+        
         XCTAssertNil(
             CDPProxy.chromeFrameDropReason(
                 .text("{\"method\":\"Target.attachedToTarget\",\"params\":{}}")
             )
         )
         XCTAssertNil(CDPProxy.chromeFrameDropReason(.text("{\"id\":1,\"result\":{}}")))
-
+        
         let oversized = String(repeating: "a", count: CDPProxy.cdpProxyHardFrameCap + 1)
         XCTAssertNotNil(CDPProxy.chromeFrameDropReason(.text(oversized)))
     }
@@ -152,7 +154,10 @@ final class CDPProxyTests: XCTestCase {
         }
 
         XCTAssertEqual(harness.connectCountSnapshot(), 2)
-
+        
+        
+        
+        
         XCTAssertEqual(harness.sentTextsSnapshot(), [])
     }
 
@@ -305,6 +310,8 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertEqual(finalEvents, ["closed: code=nil"])
     }
 
+    
+
     private func makeProxyWithInjector(
         harness: ChromeConnectorHarness,
         secrets: [SecretInjector.LoadedSecret]
@@ -321,6 +328,10 @@ final class CDPProxyTests: XCTestCase {
         return (proxy, injector)
     }
 
+    
+    
+    
+    
     private func setupClientWithFlush(
         proxy: CDPProxy,
         client: ClientRecorder
@@ -342,8 +353,9 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
+        
         let attached =
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/path"}}}"#
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -368,7 +380,7 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         let attached =
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://evil.example.org/"}}}"#
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -384,6 +396,7 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
+        
         let masked = Self.inDomainSecret.maskedValue
         let outbound = #"{"id":1,"method":"Runtime.evaluate","params":{"expression":"\#(masked)"},"sessionId":"unknown"}"#
         await proxy.receive(.text(outbound), from: client.handle.id)
@@ -398,7 +411,7 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         let attached =
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -427,7 +440,7 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         let attached =
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -448,7 +461,7 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         let attached =
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -477,15 +490,16 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         await harness.emitText(
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#)
-
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
+        
         await harness.emitText(
-            #"{"method":"Page.frameNavigated","params":{"frame":{"id":"sub-frame","parentId":"main-frame","url":"https://evil.example.org/"}},"sessionId":"S1"}"#
+            #"{"method":"Page.frameNavigated","params":{"frame":{"id":"sub-frame","parentId":"main-frame","url":"https:
         )
         let urlsAfterSub = await proxy.sessionURLSnapshot()
         XCTAssertEqual(urlsAfterSub["S1"], "https://example.com/")
 
-        await harness.emitText(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","url":"https://example.com/new"}},"sessionId":"S1"}"#)
+        
+        await harness.emitText(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","url":"https:
         let urlsAfterMain = await proxy.sessionURLSnapshot()
         XCTAssertEqual(urlsAfterMain["S1"], "https://example.com/new")
     }
@@ -497,15 +511,15 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         await harness.emitText(
-            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/old"}}}"#)
-        await harness.emitText(#"{"method":"Target.targetInfoChanged","params":{"targetInfo":{"targetId":"T1","url":"https://example.com/new"}}}"#)
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https:
+        await harness.emitText(#"{"method":"Target.targetInfoChanged","params":{"targetInfo":{"targetId":"T1","url":"https:
         let urls = await proxy.sessionURLSnapshot()
         XCTAssertEqual(urls["S1"], "https://example.com/new")
     }
 
     func testNoInjectorIsNoOpPassthrough() async throws {
         let harness = ChromeConnectorHarness()
-
+        
         let proxy = CDPProxy(
             logger: Logger(label: "test.cdp-proxy"),
             discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
@@ -521,6 +535,15 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+
     func testEvaluateBridgeUpgradeLegacyModeAllowsAllUpgrades() {
         let decision = CDPProxy.evaluateBridgeUpgrade(
             origin: "https://untrusted.example.com",
@@ -531,7 +554,7 @@ final class CDPProxyTests: XCTestCase {
             XCTFail("Expected .upgrade for legacy (nil token) mode, got \(decision)")
             return
         }
-
+        
         XCTAssertTrue(headers.isEmpty)
     }
 
@@ -547,7 +570,8 @@ final class CDPProxyTests: XCTestCase {
             XCTFail("Expected .upgrade for matching token, got \(decision)")
             return
         }
-
+        
+        
         XCTAssertEqual(headers[.secWebSocketProtocol], subprotocol)
     }
 

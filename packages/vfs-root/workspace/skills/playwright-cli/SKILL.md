@@ -177,6 +177,8 @@ playwright-cli screenshot --tab=<id> --type=jpeg                 # png (default)
 playwright-cli screenshot --tab=<id> --hires                     # Capture in device pixels (honors device pixel ratio)
 ```
 
+Viewport screenshots (default, `--max-width`, `--hires`) honor the tab's current scroll position. `--fullPage` captures from the document origin.
+
 An element screenshot (`screenshot e5`) returns **that element's crop or fails**
 (exit 1) — typically because the snapshot went stale after a navigation or
 layout change. Re-run `snapshot` and retry with a fresh ref; it never silently
@@ -245,6 +247,7 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 - `open --view <path>` — reads an image from the VFS and returns it. Works with PNG, JPEG, GIF, WebP, SVG.
 - `playwright-cli screenshot --tab=<id>` + `open --view <path>` — screenshot a tab, then view it.
 - `screencapture --view screenshot.png` — capture the user's screen via browser screen sharing.
+- `screencapture --video -V 10 clip.webm` — record a timed screen/window/tab clip (WebM).
 - `playwright-cli snapshot --tab=<id>` — accessibility tree (text). Use to verify content without vision.
 
 **What only the human sees:**
@@ -253,7 +256,9 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 - Preview URLs survive authenticated tray roves without changing their original directory, entry file, or bridge permissions. A handoff can briefly return `503`; retry the same pending rove rather than minting another target. Bridge tabs reconnect automatically (their connection IDs may change). Revoked previews stay revoked, and persistent snapshots keep their original expiry rather than receiving a fresh TTL.
 - Persistent uploads retry safely only with the same file bytes and MIME type. Body/R2-write waits time out after 30 seconds. Unknown writes retain bounded cleanup bookkeeping (up to eight unresolved uploads per preview); expiry/revoke never makes such a preview serve again, even if a delayed write finishes later.
 - `serve --ttl 30d <dir>` — uploads an immutable snapshot that works without the leader. TTL units are whole `m`, `h`, `d`, or `w`, capped at 30 days. It implies `--no-bridge`, conflicts with `--bridge`/`--max-tabs`, and is limited to 1,000 files, 25 MiB per file, and 50 MiB total. Use `serve --list` for mode/expiry and `serve --stop <token>` to revoke it early.
+- **`serve` limits — plan for them:** a live-preview file over 25 MiB is served only through Range requests (a plain GET answers 413; media elements use ranges, so no splitting is needed), and `--ttl` files must be ≤ 25 MiB. A tray holds at most **10 `--ttl` snapshots** (uploads in progress count); live previews have no quota. A live preview is deleted once the leader has been disconnected for 5 minutes; a snapshot lasts until its TTL. Each `serve` prints `Preview token: …`; `serve --stop <token-or-url>` snapshots you no longer need, and on `Snapshot limit reached` run `serve --list` and stop old ones.
 - `serve --bridge <dir>` — opens a **driveable** preview whose visitors auto-connect as live synthetic-CDP targets you can navigate/click/evaluate/screenshot via playwright. **Security: opt-in only; cross-subdomain cookie risk accepted (host-only cookies isolated; `Domain=.sliccy.now` cookies readable across previews).** Flags: `--max-tabs <N>` (default 20), `--quiet` (suppress the first-visit announcement), `--no-bridge` (force read-only), `--stop <token>` (revoke + delete webhook). Use `serve --logs [<token>] [--lines <N>]` to inspect leader-memory-only connect/disconnect records without emitting a lick or waking the cone. `serve --truncate [<token>]` clears matching records **and re-arms the first-visit announcement**, so the next visit announces once. Visitor page API: `window.slicc.emit(name, detail?)` (fires webhook lick on cone), `window.slicc.on(name, cb)` (subscribes to CustomEvents you dispatch).
+- **Media in `serve` previews plays through Range requests:** live previews answer `Range` in ≤ 8 MiB windows, so `<video>`/`<audio>` larger than 25 MiB play and seek without splitting; only a plain full-file GET of such a file gets 413. `--ttl` snapshots support Range too (their files stay ≤ 25 MiB).
 - `open <path>` (no flags) — opens a file in a browser tab.
 - `imgcat <path>` — displays an image in the terminal preview.
 

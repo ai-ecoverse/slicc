@@ -33,6 +33,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=packages/dev-tools/tools/ios-sim-select.sh
 source "$SCRIPT_DIR/ios-sim-select.sh"
+# shellcheck source=packages/dev-tools/tools/ios-sim-prepare.sh
+source "$SCRIPT_DIR/ios-sim-prepare.sh"
 
 select_iphone_for_sdk() {
   select_ios_sim_for_sdk "$1" iPhone
@@ -129,13 +131,7 @@ if [[ -n "$XCODE_SCHEME" ]]; then
 
 
 
-
-
-
-  echo "==> waiting for simulator $UDID to finish booting"
-  xcrun simctl boot "$UDID" 2>/dev/null || true
-  xcrun simctl bootstatus "$UDID" -b ||
-    echo "::warning::simctl bootstatus did not report a clean boot; continuing"
+  prepare_ios_simulator "$UDID"
 
   echo "==> xcodebuild test -enableCodeCoverage YES ($PACKAGE_DIR, simulator $UDID)"
   mkdir -p .build/coverage

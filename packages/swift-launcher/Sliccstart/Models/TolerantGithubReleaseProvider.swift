@@ -2,12 +2,32 @@ import AppUpdater
 import Foundation
 import Version
 
-struct TolerantGithubReleaseProvider: ReleaseProvider {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct TolerantGithubReleaseProvider: ReleaseProvider {
+    
+    
     typealias PageFetcher = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
+    
     static let releasesPerPage = 100
 
+    
+    
+    
+    
     static let maxReleasePages = 20
 
     private let github = GithubReleaseProvider()
@@ -24,7 +44,10 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         currentVersion: Version = Bundle.main.version,
         fetchPage: PageFetcher? = nil
     ) {
-
+        
+        
+        
+        
         let resolved = authToken ?? ProcessInfo.processInfo.environment["GH_TOKEN"]
         self.authToken = resolved.flatMap { $0.isEmpty ? nil : $0 }
         self.host = host
@@ -33,6 +56,20 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         self.fetchPage = fetchPage ?? Self.urlSessionFetchPage
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func fetchReleases(owner: String, repo: String, proxy: URLRequestProxy?) async throws -> [Release] {
         var nextURL: URL? = Self.firstPageURL(host.releasesURL(owner: owner, repo: repo))
         var viable: [Release] = []
@@ -53,7 +90,12 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
             let decoder = JSONDecoder()
             decoder.userInfo[.decodingMethod] = DecodingMethod.tolerant
             let releases = try decoder.decode([Release].self, from: data)
-
+            
+            
+            
+            
+            
+            
             viable = filterViableReleases(releases)
             reachedCurrentVersion = hasReached(currentVersion, on: releases)
             nextURL = Self.nextPageURL(
@@ -65,6 +107,18 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         return viable
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     func hasReached(_ currentVersion: Version, on releases: [Release]) -> Bool {
         let parsed = releases.map(\.tagName).filter { $0 != Version(0, 0, 0) }
         guard !parsed.isEmpty else { return false }
@@ -72,6 +126,9 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         return parsed.allSatisfy { $0 < currentVersion }
     }
 
+    
+    
+    
     static func firstPageURL(_ url: URL) -> URL {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         let existing = components.queryItems ?? []
@@ -80,6 +137,10 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         return components.url ?? url
     }
 
+    
+    
+    
+    
     static func nextPageURL(linkHeader: String?, expectedHost: String? = nil) -> URL? {
         guard let linkHeader else { return nil }
         for link in linkHeader.split(separator: ",") {
@@ -111,10 +172,20 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         return (data, httpResponse)
     }
 
+    
+    
+    
     func filterViableReleases(_ releases: [Release]) -> [Release] {
         releases.filter { hasViableMacOSAsset($0) }
     }
 
+    
+    
+    
+    
+    
+    
+    
     private func hasViableMacOSAsset(_ release: Release) -> Bool {
         let prefix = "\(releasePrefix.lowercased())-\(release.tagName)"
         return release.assets.contains { asset in

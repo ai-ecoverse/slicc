@@ -10,25 +10,27 @@ require (
 	golang.org/x/sys v0.47.0
 )
 
+
+
 replace github.com/ai-ecoverse/go-optel => ../go-optel
 
 require (
-	github.com/google/uuid v1.6.0 // indirect
-	github.com/pion/datachannel v1.6.2 // indirect
-	github.com/pion/dtls/v3 v3.1.8 // indirect
-	github.com/pion/interceptor v0.1.48 // indirect
-	github.com/pion/mdns/v2 v2.2.0 // indirect
-	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.17 // indirect
-	github.com/pion/rtp v1.10.5 // indirect
-	github.com/pion/sctp v1.11.1 // indirect
-	github.com/pion/sdp/v3 v3.0.19 // indirect
-	github.com/pion/srtp/v3 v3.0.13 // indirect
-	github.com/pion/stun/v4 v4.0.0 // indirect
-	github.com/pion/transport/v4 v4.1.0 // indirect
-	github.com/pion/turn/v5 v5.1.0 // indirect
-	github.com/wlynxg/anet v0.0.5 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
+	github.com/google/uuid v1.6.0 
+	github.com/pion/datachannel v1.6.2 
+	github.com/pion/dtls/v3 v3.1.8 
+	github.com/pion/interceptor v0.1.48 
+	github.com/pion/mdns/v2 v2.2.0 
+	github.com/pion/randutil v0.1.0 
+	github.com/pion/rtcp v1.2.17 
+	github.com/pion/rtp v1.10.5 
+	github.com/pion/sctp v1.11.1 
+	github.com/pion/sdp/v3 v3.0.19 
+	github.com/pion/srtp/v3 v3.0.13 
+	github.com/pion/stun/v4 v4.0.0 
+	github.com/pion/transport/v4 v4.1.0 
+	github.com/pion/turn/v5 v5.1.0 
+	github.com/wlynxg/anet v0.0.5 
+	golang.org/x/crypto v0.52.0 
+	golang.org/x/net v0.55.0 
+	golang.org/x/time v0.14.0 
 )

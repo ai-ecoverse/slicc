@@ -1,3 +1,8 @@
+
+
+
+
+
 package follow
 
 import (
@@ -12,37 +17,53 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
+
 type Sender interface {
 	SendJSON(v any) error
 }
 
+
 type Session struct {
 	sender Sender
-
+	
+	
 	runner []string
-
+	
+	
+	
+	
 	eval *execrun.EvalSession
-
+	
+	
+	
 	log io.Writer
 
 	mu      sync.Mutex
 	running map[string]chan string
 }
 
+
+
+
 func NewSession(sender Sender, runner []string, log io.Writer) *Session {
 	return &Session{sender: sender, runner: runner, log: log, running: make(map[string]chan string)}
 }
 
+
+
 func NewEvalSession(sender Sender, eval *execrun.EvalSession, log io.Writer) *Session {
 	return &Session{
 		sender: sender,
-
+		
+		
 		runner:  []string{"eval"},
 		eval:    eval,
 		log:     log,
 		running: make(map[string]chan string),
 	}
 }
+
+
 
 func (s *Session) Handle(ctx context.Context, msgType string, raw []byte) {
 	switch msgType {
@@ -113,7 +134,8 @@ func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 		}
 		var res execrun.Result
 		if s.eval != nil {
-
+			
+			
 			res = s.eval.Eval(ctx, req.Command, onChunk, ctrl)
 		} else {
 			res = execrun.Run(ctx, req.Command, execrun.Options{

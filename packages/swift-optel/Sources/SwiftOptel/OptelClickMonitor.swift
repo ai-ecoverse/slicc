@@ -2,10 +2,24 @@
     import Foundation
     import AppKit
 
+    
+    
+    
+    
+    
+    
+    
     public enum OptelClickEmitDecider {
-
+        
+        
+        
+        
+        
+        
         public static let ignoreIdentifier = "optel-ignore"
 
+        
+        
         public struct Decision: Equatable, Sendable {
             public let shouldEmit: Bool
             public let source: String?
@@ -18,8 +32,17 @@
             }
         }
 
+        
+        
         public static let skip = Decision(shouldEmit: false, source: nil, target: nil)
 
+        
+        
+        
+        
+        
+        
+        
         public static func decide(for element: OptelAccessibleElement?) -> Decision {
             guard let element else { return skip }
             if hasIgnoreMarker(in: element) { return skip }
@@ -27,6 +50,9 @@
             return Decision(shouldEmit: true, source: derived.source, target: derived.target)
         }
 
+        
+        
+        
         static func hasIgnoreMarker(in element: OptelAccessibleElement) -> Bool {
             var current: OptelAccessibleElement? = element
             var depth = 0
@@ -44,17 +70,32 @@
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     public enum OptelClickMonitor {
         private static let lock = NSLock()
         private static var installed = false
         private static var monitor: Any?
 
+        
         public static var isInstalled: Bool {
             lock.lock()
             defer { lock.unlock() }
             return installed
         }
 
+        
+        
+        
         public static func installIfNeeded() {
             lock.lock()
             guard !installed else {
@@ -70,6 +111,7 @@
             lock.unlock()
         }
 
+        
         public static func uninstall() {
             lock.lock()
             let token = monitor
@@ -81,17 +123,30 @@
             }
         }
 
+        
+        
+        
+        
+        
+        
+        
         static func handle(event: NSEvent) {
             guard let window = event.window ?? NSApplication.shared.keyWindow,
                 let contentView = window.contentView
             else {
                 return
             }
-
+            
+            
+            
             let hit = contentView.hitTest(event.locationInWindow)
             let decision = OptelClickEmitDecider.decide(for: hit)
             guard decision.shouldEmit else { return }
-
+            
+            
+            
+            
+            
             let epoch = OptelClickCoordinator.beginMonitorEvent()
             DispatchQueue.main.async {
                 OptelClickMonitor.deferredEmit(
@@ -102,11 +157,15 @@
             }
         }
 
+        
+        
+        
         static func deferredEmit(epoch: UInt64, source: String?, target: String?) {
             guard !OptelClickCoordinator.wasClaimedByRefined(epoch: epoch) else { return }
             Optel.sample(.click, source: source, target: target)
         }
 
+        
         internal static func _testing_reset() {
             uninstall()
         }

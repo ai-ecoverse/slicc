@@ -181,6 +181,7 @@ export function adaptTool(
     label: tool.name,
     description: tool.description,
     parameters: tool.inputSchema as any,
+    prepareArguments: tool.prepareArguments,
     async execute(
       toolCallId: string,
       params: unknown,

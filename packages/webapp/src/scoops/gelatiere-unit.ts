@@ -6,12 +6,13 @@ import {
   GELATIERE_SPRINKLE_NAME,
   isGelatiereUnit,
 } from '../base/gelatiere-constants.js';
+import { GELATIERE_BASE_ALLOWED_COMMANDS } from '../base/gelatiere-store.js';
 import { createLogger } from '../base/logger.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { modelFor } from '../work-unit/record.js';
+import { leadingRootOf, modelFor } from '../work-unit/record.js';
 import type { CronTaskEntry } from './lick-manager.js';
-import type { RegisteredScoop } from './types.js';
+import type { RegisteredScoop, ScoopTabState } from './types.js';
 
 const log = createLogger('gelatiere-unit');
 
@@ -30,10 +31,14 @@ export interface GelatiereRoot {
   jid: string;
 }
 
+export type GelatiereAllowListOutcome = 'unchanged' | 'updated' | 'deferred';
+
 export interface GelatiereUnitInfo {
   folder: string;
   jid: string;
   created: boolean;
+
+  allowList?: GelatiereAllowListOutcome;
 }
 
 export class GelatiereFolderTakenError extends Error {
@@ -46,11 +51,13 @@ export class GelatiereFolderTakenError extends Error {
 }
 
 export interface GelatiereSeam {
-  ensureUnit(): Promise<GelatiereUnitInfo>;
+  ensureUnit(allowedCommands?: readonly string[]): Promise<GelatiereUnitInfo>;
 
   unregisterOwned(): Promise<string[]>;
 
   unit(): GelatiereRoot | undefined;
+
+  unitAllowedCommands(): readonly string[] | undefined;
 
   roots(): GelatiereRoot[];
 
@@ -67,6 +74,14 @@ export interface GelatiereOrchestrator {
   getScoops(): RegisteredScoop[];
   registerScoop(scoop: RegisteredScoop): Promise<void>;
   unregisterScoop(jid: string): Promise<void>;
+
+  persistScoop(scoop: RegisteredScoop): Promise<void>;
+
+  reinitLiveUnit(jid: string): Promise<void>;
+
+  syncGelatiereModel(): Promise<boolean>;
+
+  getScoopTabState(jid: string): { status: ScoopTabState['status'] } | undefined;
 }
 
 export interface GelatiereLickManager {
@@ -92,50 +107,7 @@ function toRoot(scoop: RegisteredScoop): GelatiereRoot {
   return { folder: scoop.folder, name: scoop.name, jid: scoop.jid };
 }
 
-export const GELATIERE_ALLOWED_COMMANDS = [
-  'awk',
-  'basename',
-  'cat',
-  'column',
-
-  'cut',
-  'date',
-  'dirname',
-  'echo',
-  'expr',
-  'false',
-  'file',
-  'find',
-
-  'fold',
-  'gelatiere',
-  'grep',
-  'head',
-  'jq',
-  'ls',
-  'man',
-
-  'memory',
-  'mkdir',
-  'nl',
-  'paste',
-  'printf',
-  'realpath',
-  'rg',
-  'sed',
-  'seq',
-  'sort',
-  'stat',
-  'tail',
-  'tee',
-  'test',
-  'touch',
-  'tr',
-  'true',
-  'uniq',
-  'upskill',
-  'wc',
-];
+export { GELATIERE_BASE_ALLOWED_COMMANDS };
 
 export const GELATIERE_VISIBLE_PATHS = [
   '/sessions/',
@@ -147,17 +119,57 @@ export const GELATIERE_VISIBLE_PATHS = [
 
 export const GELATIERE_WRITABLE_PATHS = ['/shared/.gelatiere/'];
 
+async function syncAllowedCommands(
+  orchestrator: GelatiereOrchestrator,
+  unit: RegisteredScoop,
+  allowedCommands: readonly string[] | undefined
+): Promise<GelatiereAllowListOutcome> {
+  if (!allowedCommands) return 'unchanged';
+  const current = unit.config?.allowedCommands ?? [];
+  if (sameCommands(current, allowedCommands)) return 'unchanged';
+
+  if (orchestrator.getScoopTabState(unit.jid)?.status === 'processing') {
+    log.info('gelatiere allow-list edit deferred: the unit is mid-pass', { jid: unit.jid });
+    return 'deferred';
+  }
+  const record: RegisteredScoop = {
+    ...unit,
+    config: { ...unit.config, allowedCommands: [...allowedCommands] },
+  };
+  try {
+    await orchestrator.persistScoop(record);
+  } catch (error) {
+    await orchestrator.persistScoop(unit).catch(() => {});
+    throw error;
+  }
+  await orchestrator.reinitLiveUnit(record.jid);
+  log.info('gelatiere allow-list updated from GELATIERE.md', {
+    jid: record.jid,
+    commands: allowedCommands.length,
+  });
+  return 'updated';
+}
+
+function sameCommands(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((command, index) => command === b[index]);
+}
+
 export async function ensureGelatiereUnit(
-  orchestrator: GelatiereOrchestrator
+  orchestrator: GelatiereOrchestrator,
+  allowedCommands?: readonly string[]
 ): Promise<GelatiereUnitInfo> {
   const existing = orchestrator.getScoops();
   const found = findGelatiereUnit(existing);
-  if (found) return { folder: found.folder, jid: found.jid, created: false };
+  if (found) {
+    await orchestrator.syncGelatiereModel();
+    const allowList = await syncAllowedCommands(orchestrator, found, allowedCommands);
+    return { folder: found.folder, jid: found.jid, created: false, allowList };
+  }
 
   const holder = existing.find((s) => s.folder === GELATIERE_FOLDER);
   if (holder) throw new GelatiereFolderTakenError(holder);
-  const defaultRoot = rootsOf(existing)[0];
-  const inheritedModel = defaultRoot ? modelFor(defaultRoot) : undefined;
+  const leadingRoot = leadingRootOf(existing);
+  const inheritedModel = leadingRoot ? modelFor(leadingRoot) : undefined;
   const record: RegisteredScoop = {
     ...buildWorkUnitRecord({
       parentId: GELATIERE_OWNER_JID,
@@ -168,7 +180,7 @@ export async function ensureGelatiereUnit(
         systemPromptAppend: GELATIERE_CHARTER,
         visiblePaths: [...GELATIERE_VISIBLE_PATHS],
         writablePaths: [...GELATIERE_WRITABLE_PATHS],
-        allowedCommands: [...GELATIERE_ALLOWED_COMMANDS],
+        allowedCommands: [...(allowedCommands ?? GELATIERE_BASE_ALLOWED_COMMANDS)],
       },
     }),
     assistantLabel: GELATIERE_FOLDER,
@@ -184,7 +196,7 @@ export function createGelatiereSeam(
   lickManager: GelatiereLickManager
 ): GelatiereSeam {
   return {
-    ensureUnit: () => ensureGelatiereUnit(orchestrator),
+    ensureUnit: (allowedCommands) => ensureGelatiereUnit(orchestrator, allowedCommands),
     unregisterOwned: async () => {
       for (const task of lickManager.listCronTasks()) {
         if (task.name === GELATIERE_NIGHTLY_CRON_NAME) await lickManager.deleteCronTask(task.id);
@@ -197,6 +209,7 @@ export function createGelatiereSeam(
       const found = findGelatiereUnit(orchestrator.getScoops());
       return found ? toRoot(found) : undefined;
     },
+    unitAllowedCommands: () => findGelatiereUnit(orchestrator.getScoops())?.config?.allowedCommands,
     roots: () => rootsOf(orchestrator.getScoops()).map(toRoot),
     nightly: () => {
       const found = findNightly(lickManager);
@@ -238,13 +251,18 @@ export function publishGelatiereSeam(seam: GelatiereSeam, target: object = globa
   (target as GelatiereGlobals)[GELATIERE_SEAM_GLOBAL_KEY] = seam;
 }
 
-export async function bootGelatiere(seam: GelatiereSeam, nightlyCron: string): Promise<void> {
+export async function bootGelatiere(
+  seam: GelatiereSeam,
+  nightlyCron: string,
+  allowedCommands?: readonly string[]
+): Promise<void> {
   try {
-    const unit = await seam.ensureUnit();
+    const unit = await seam.ensureUnit(allowedCommands);
     const nightly = await seam.ensureNightly(nightlyCron);
     log.info('gelatiere ready', {
       jid: unit.jid,
       created: unit.created,
+      allowList: unit.allowList,
       nightly: nightly.cron,
       nightlyCreated: nightly.created,
     });

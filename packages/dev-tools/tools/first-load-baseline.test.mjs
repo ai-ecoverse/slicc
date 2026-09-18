@@ -231,17 +231,81 @@ describe('dependencyDrift', () => {
     expect(dependencyDrift(repo, tree).changed).toEqual([]);
   });
 
-  it('flags an un-hoisted nested copy as unrealignable', () => {
-    lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0' } });
-    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0' } });
+  it('reports an un-hoisted nested production copy as changed', () => {
+    lock(repo, { 'node_modules/glob/node_modules/brace-expansion': { version: '2.1.7' } });
+    lock(tree, { 'node_modules/glob/node_modules/brace-expansion': { version: '2.0.2' } });
     const drift = dependencyDrift(repo, tree);
-    expect(drift.changed).toEqual([]);
-    expect(drift.unrealignable).toEqual([
-      'node_modules/a/node_modules/b (1.0.0 -> 2.0.0, un-hoisted)',
+    expect(drift.missing).toEqual([]);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.changed).toEqual([
+      {
+        path: 'node_modules/glob/node_modules/brace-expansion',
+        name: 'brace-expansion',
+        from: '2.0.2',
+        to: '2.1.7',
+      },
     ]);
   });
 
-  it('does not flag a nested copy whose parent package also changed', () => {
+  it('fetches a nested scoped copy under @scope/name, not the parent path', () => {
+    lock(repo, {
+      'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.147.0' },
+    });
+    lock(tree, {
+      'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.143.0' },
+    });
+    expect(dependencyDrift(repo, tree).changed).toEqual([
+      {
+        path: 'node_modules/oxc-parser/node_modules/@oxc-project/types',
+        name: '@oxc-project/types',
+        from: '0.143.0',
+        to: '0.147.0',
+      },
+    ]);
+  });
+
+  it('skips a hoisted @types package bump', () => {
+    lock(repo, { 'node_modules/@types/node': { version: '24.13.4' } });
+    lock(tree, { 'node_modules/@types/node': { version: '24.13.3' } });
+    expect(dependencyDrift(repo, tree)).toEqual(empty);
+  });
+
+  it('skips an un-hoisted nested @types copy the change removes', () => {
+    lock(repo, {});
+    lock(tree, {
+      'node_modules/@earendil-works/pi-coding-agent/node_modules/@types/node': {
+        version: '22.19.19',
+      },
+    });
+    expect(dependencyDrift(repo, tree)).toEqual(empty);
+  });
+
+  it('skips an un-hoisted nested copy that exists only in the dev tree', () => {
+    lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0', dev: true } });
+    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.changed).toEqual([]);
+    expect(drift.missing).toEqual([]);
+    expect(drift.unrealignable).toEqual([]);
+  });
+
+  it('skips a nested dev copy the change removes', () => {
+    lock(repo, {});
+    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
+    expect(dependencyDrift(repo, tree)).toEqual(empty);
+  });
+
+  it('realigns a nested copy that graduates from dev to production', () => {
+    lock(repo, { 'node_modules/a/node_modules/b': { version: '2.0.0' } });
+    lock(tree, { 'node_modules/a/node_modules/b': { version: '1.0.0', dev: true } });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.changed).toEqual([
+      { path: 'node_modules/a/node_modules/b', name: 'b', from: '1.0.0', to: '2.0.0' },
+    ]);
+    expect(drift.unrealignable).toEqual([]);
+  });
+
+  it('flags a nested copy whose parent package also changed', () => {
     lock(repo, {
       'node_modules/oxc-parser': { version: '0.147.0' },
       'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.147.0' },
@@ -259,10 +323,43 @@ describe('dependencyDrift', () => {
         from: '0.143.0',
         to: '0.147.0',
       },
+      {
+        path: 'node_modules/oxc-parser/node_modules/@oxc-project/types',
+        name: '@oxc-project/types',
+        from: '0.143.0',
+        to: '0.147.0',
+      },
     ]);
   });
 
-  it('does not flag a nested copy under a parent the change removes', () => {
+  it('reinstalls a same-version nested copy under a swapped parent', () => {
+    lock(repo, {
+      'node_modules/isomorphic-git': { version: '1.42.0' },
+      'node_modules/isomorphic-git/node_modules/pako': { version: '1.0.11' },
+    });
+    lock(tree, {
+      'node_modules/isomorphic-git': { version: '1.41.9' },
+      'node_modules/isomorphic-git/node_modules/pako': { version: '1.0.11' },
+    });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.changed).toEqual([
+      {
+        path: 'node_modules/isomorphic-git',
+        name: 'isomorphic-git',
+        from: '1.41.9',
+        to: '1.42.0',
+      },
+      {
+        path: 'node_modules/isomorphic-git/node_modules/pako',
+        name: 'pako',
+        from: '1.0.11',
+        to: '1.0.11',
+      },
+    ]);
+  });
+
+  it('flags a nested copy under a parent the change removes', () => {
     lock(repo, {});
     lock(tree, {
       'node_modules/a': { version: '1.0.0' },
@@ -270,10 +367,13 @@ describe('dependencyDrift', () => {
     });
     const drift = dependencyDrift(repo, tree);
     expect(drift.unrealignable).toEqual([]);
-    expect(drift.missing).toEqual([{ path: 'node_modules/a', name: 'a', from: '1.0.0', to: null }]);
+    expect(drift.missing).toEqual([
+      { path: 'node_modules/a', name: 'a', from: '1.0.0', to: null },
+      { path: 'node_modules/a/node_modules/b', name: 'b', from: '1.0.0', to: null },
+    ]);
   });
 
-  it('does not flag a deeply nested copy whose grandparent changed', () => {
+  it('flags a deeply nested copy whose grandparent changed', () => {
     lock(repo, {
       'node_modules/a': { version: '2.0.0' },
       'node_modules/a/node_modules/b': { version: '1.0.0' },
@@ -288,6 +388,19 @@ describe('dependencyDrift', () => {
     expect(drift.unrealignable).toEqual([]);
     expect(drift.changed).toEqual([
       { path: 'node_modules/a', name: 'a', from: '1.0.0', to: '2.0.0' },
+      {
+        path: 'node_modules/a/node_modules/b/node_modules/c',
+        name: 'c',
+        from: '1.0.0',
+        to: '2.0.0',
+      },
+
+      {
+        path: 'node_modules/a/node_modules/b',
+        name: 'b',
+        from: '1.0.0',
+        to: '1.0.0',
+      },
     ]);
   });
 
@@ -432,5 +545,41 @@ describe('materializeLinkedParents', () => {
     mkdirSync(join(tree, 'node_modules/plain'), { recursive: true });
     materializeLinkedParents(join(tree, 'node_modules'), 'plain');
     expect(lstatSync(join(tree, 'node_modules/plain')).isDirectory()).toBe(true);
+  });
+
+  it('splits a package nested node_modules so a nested copy can be replaced locally', () => {
+    mkdirSync(join(repo, 'node_modules/glob/node_modules/brace-expansion'), { recursive: true });
+    mkdirSync(join(repo, 'node_modules/glob/node_modules/minimatch'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules/glob/package.json'), '{}');
+    writeFileSync(
+      join(repo, 'node_modules/glob/node_modules/brace-expansion/marker.txt'),
+      'caller'
+    );
+    writeFileSync(join(repo, 'node_modules/glob/node_modules/minimatch/marker.txt'), 'caller');
+    symlinkSync(join(repo, 'node_modules/glob'), join(tree, 'node_modules/glob'), 'dir');
+
+    materializeLinkedParents(join(tree, 'node_modules'), 'glob/node_modules/brace-expansion');
+    expect(lstatSync(join(tree, 'node_modules/glob')).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(tree, 'node_modules/glob/node_modules')).isSymbolicLink()).toBe(false);
+
+    rmSync(join(tree, 'node_modules/glob/node_modules/brace-expansion'), {
+      force: true,
+      recursive: true,
+    });
+    mkdirSync(join(tree, 'node_modules/glob/node_modules/brace-expansion'));
+    writeFileSync(
+      join(tree, 'node_modules/glob/node_modules/brace-expansion/marker.txt'),
+      'baseline'
+    );
+
+    expect(
+      readFileSync(join(repo, 'node_modules/glob/node_modules/brace-expansion/marker.txt'), 'utf8')
+    ).toBe('caller');
+    expect(
+      readFileSync(join(tree, 'node_modules/glob/node_modules/brace-expansion/marker.txt'), 'utf8')
+    ).toBe('baseline');
+    expect(realpathSync(join(tree, 'node_modules/glob/node_modules/minimatch'))).toBe(
+      realpathSync(join(repo, 'node_modules/glob/node_modules/minimatch'))
+    );
   });
 });

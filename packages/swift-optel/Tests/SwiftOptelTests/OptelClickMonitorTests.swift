@@ -2,6 +2,8 @@
     import XCTest
     @testable import SwiftOptel
 
+    
+    
     private final class FakeElement: OptelAccessibleElement {
         var optelAccessibilityRole: String?
         var optelAccessibilityIdentifier: String?
@@ -25,6 +27,7 @@
     }
 
     final class OptelClickMonitorTests: XCTestCase {
+        
 
         func testNormalElementEmitsWithDerivedSourceAndTarget() {
             let window = FakeElement(windowTitle: "Main")
@@ -43,7 +46,9 @@
         }
 
         func testUndeterminableElementStillEmitsViewFallback() {
-
+            
+            
+            
             let bare = FakeElement()
             let decision = OptelClickEmitDecider.decide(for: bare)
             XCTAssertTrue(decision.shouldEmit)
@@ -64,7 +69,8 @@
         }
 
         func testAncestorWithIgnoreMarkerSkipsTheClick() {
-
+            
+            
             let container = FakeElement(
                 role: "group",
                 identifier: OptelClickEmitDecider.ignoreIdentifier
@@ -91,7 +97,8 @@
         }
 
         func testIgnoreMarkerOnDeepAncestorIsHonored() {
-
+            
+            
             let outer = FakeElement(
                 role: "window",
                 identifier: OptelClickEmitDecider.ignoreIdentifier
@@ -112,21 +119,27 @@
             XCTAssertNil(skip.target)
         }
 
+        
+
         func testMonitorInstallIsIdempotent() {
             OptelClickMonitor._testing_reset()
             XCTAssertFalse(OptelClickMonitor.isInstalled)
             OptelClickMonitor.installIfNeeded()
             XCTAssertTrue(OptelClickMonitor.isInstalled)
-
+            
             OptelClickMonitor.installIfNeeded()
             XCTAssertTrue(OptelClickMonitor.isInstalled)
             OptelClickMonitor.uninstall()
             XCTAssertFalse(OptelClickMonitor.isInstalled)
-
+            
             OptelClickMonitor.uninstall()
             XCTAssertFalse(OptelClickMonitor.isInstalled)
         }
 
+        
+
+        
+        
         private struct FixedRandom: RandomSource {
             let value: Double
             func nextUnitDouble() -> Double { value }
@@ -148,7 +161,7 @@
             OptelClickCoordinator._testing_reset()
             let transport = makeRecordingOptel()
             let epoch = OptelClickCoordinator.beginMonitorEvent()
-
+            
             OptelClickMonitor.deferredEmit(epoch: epoch, source: "Main button#go", target: "Go")
             let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
             XCTAssertEqual(clicks.count, 1)
@@ -157,12 +170,17 @@
         }
 
         func testDeferredEmitIsSkippedWhenRefinedClaimsTheEpoch() {
-
+            
+            
+            
+            
             OptelClickCoordinator._testing_reset()
             let transport = makeRecordingOptel()
             let epoch = OptelClickCoordinator.beginMonitorEvent()
             OptelClickCoordinator.claimByRefined()
-
+            
+            
+            
             Optel.sample(.click, source: "panel button#submit")
             OptelClickMonitor.deferredEmit(epoch: epoch, source: "ax-derived", target: "Submit")
             let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
@@ -171,7 +189,9 @@
         }
 
         func testDeferredEmitFiresForUnrelatedSubsequentEvent() {
-
+            
+            
+            
             OptelClickCoordinator._testing_reset()
             let transport = makeRecordingOptel()
             let firstEpoch = OptelClickCoordinator.beginMonitorEvent()

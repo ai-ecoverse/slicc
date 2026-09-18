@@ -6,7 +6,7 @@ import {
   validateConeConfig,
 } from '@slicc/cloud-core/cone-config';
 
-import { ADOBE_TOKEN_DOMAINS } from './cloud-sessions-do.js';
+export const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev';
 
 const AUTH_OPTIONAL_PROVIDERS = new Set<string>(['local']);
 

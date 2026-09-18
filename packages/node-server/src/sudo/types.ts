@@ -14,6 +14,8 @@ export interface SudoApproveRequest {
 
   requester?: string;
 
+  reason?: string;
+
   suggestedPattern: string;
 }
 

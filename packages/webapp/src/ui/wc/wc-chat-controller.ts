@@ -138,8 +138,10 @@ export class WcChatController {
   #currentStreamId: string | null = null;
 
   #turnAssistantId: string | null = null;
+
   #pendingDelta = '';
-  #flushScheduled = false;
+  #pendingDeltaId: string | null = null;
+  #flushFrame: number | null = null;
   #processing = false;
 
   #busyPhase: BusyPhase = 'thinking';
@@ -370,8 +372,7 @@ export class WcChatController {
     const streamingTail = [...this.#messages].reverse().find((m) => m.isStreaming);
     this.#currentStreamId = streamingTail?.id ?? null;
     if (streamingTail) this.#turnAssistantId = streamingTail.id;
-    this.#pendingDelta = '';
-    this.#flushScheduled = false;
+    this.#dropPendingDelta();
     this.#els.clear();
 
     const children: HTMLElement[] = [];
@@ -396,9 +397,7 @@ export class WcChatController {
 
     this.#reflowToolClusters();
     for (const message of this.#messages) {
-      if (!message.isStreaming) {
-        this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
-      }
+      this.#onMessageRendered?.(message, this.#els.get(message.id) ?? []);
     }
     this.#syncCopyRow();
     this.#scrollToBottom();
@@ -619,7 +618,7 @@ export class WcChatController {
         this.#handleCompactionNotice(event.messageId, event.marker);
         break;
       case 'error':
-        this.#handleError(event.error);
+        this.#handleError(event.error, event.endTurn !== false);
         break;
 
       case 'screenshot':
@@ -650,20 +649,28 @@ export class WcChatController {
 
   #handleContentDelta(messageId: string, text: string): void {
     if (!this.#findMessage(messageId)) return;
+
+    if (this.#pendingDeltaId !== messageId) this.#flushDelta();
+    this.#pendingDeltaId = messageId;
     this.#pendingDelta += text;
-    if (this.#flushScheduled) return;
-    this.#flushScheduled = true;
-    requestAnimationFrame(() => this.#flushDelta(messageId));
+    this.#flushFrame ??= requestAnimationFrame(() => this.#flushDelta());
   }
 
-  #flushDelta(messageId: string): void {
-    this.#flushScheduled = false;
-    if (!this.#pendingDelta) return;
-    const message = this.#findMessage(messageId);
+  #flushDelta(): void {
+    const messageId = this.#pendingDeltaId;
+    const text = this.#pendingDelta;
+    this.#dropPendingDelta();
+    const message = text && messageId ? this.#findMessage(messageId) : undefined;
     if (!message) return;
-    message.content += this.#pendingDelta;
-    this.#pendingDelta = '';
+    message.content += text;
     this.#rerenderMessage(message);
+  }
+
+  #dropPendingDelta(): void {
+    if (this.#flushFrame !== null) cancelAnimationFrame(this.#flushFrame);
+    this.#flushFrame = null;
+    this.#pendingDelta = '';
+    this.#pendingDeltaId = null;
   }
 
   #handleContentDone(
@@ -675,11 +682,10 @@ export class WcChatController {
     if (!message) return;
     if (model) message.model = model;
     if (usage) message.usage = usage;
-    if (this.#pendingDelta && this.#currentStreamId === messageId) {
+    if (this.#pendingDeltaId === messageId) {
       message.content += this.#pendingDelta;
+      this.#dropPendingDelta();
     }
-    this.#pendingDelta = '';
-    this.#flushScheduled = false;
     message.isStreaming = false;
     this.#rerenderMessage(message);
   }
@@ -780,8 +786,10 @@ export class WcChatController {
     this.setProcessing(false);
   }
 
-  #handleError(error: unknown): void {
-    this.setProcessing(false);
+  #handleError(error: unknown, endTurn = true): void {
+    if (endTurn) {
+      this.setProcessing(false);
+    }
 
     this.#appendMessage({
       id: uid(),
@@ -949,7 +957,7 @@ export class WcChatController {
     this.#els.set(message.id, els);
     this.#thread.append(...els);
     this.#reflowToolClusters();
-    if (!message.isStreaming) this.#onMessageRendered?.(message, els);
+    this.#onMessageRendered?.(message, els);
 
     if (message.role === 'user') this.#scrollToBottom();
     else this.#followThread();
@@ -957,19 +965,17 @@ export class WcChatController {
 
   #rerenderMessage(message: ChatMessage): void {
     this.#unwrapToolClusters();
-    this.#onMessageDisposed?.(message.id);
     const old = this.#els.get(message.id) ?? [];
     const next = this.#safeMessageEls(message);
 
     const anchor = old[0] ?? null;
     const parent = anchor?.parentNode;
-    if (parent) {
-      for (const el of next) parent.insertBefore(el, anchor);
-      for (const el of old) el.remove();
-    } else {
-      this.#thread.append(...next);
-    }
+    if (parent) for (const el of next) parent.insertBefore(el, anchor);
+    else this.#thread.append(...next);
     this.#els.set(message.id, next);
+
+    this.#onMessageRendered?.(message, next);
+    for (const el of old) el.remove();
 
     for (const call of message.toolCalls ?? []) {
       if (call.id && this.#toolProgress.has(call.id)) this.#applyToolProgress(call.id);
@@ -977,7 +983,6 @@ export class WcChatController {
     this.#reflowToolClusters();
 
     this.#refreshClusterProgress();
-    if (!message.isStreaming) this.#onMessageRendered?.(message, next);
     this.#followThread();
   }
 

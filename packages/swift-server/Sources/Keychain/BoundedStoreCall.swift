@@ -1,10 +1,36 @@
 import Dispatch
 import Foundation
 
-enum BoundedStoreCall {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+enum BoundedStoreCall {
+    
+    
+    
+    
+    
     static let defaultTimeoutSeconds: TimeInterval = 5
 
+    
+    
     static let timeoutMessage =
         "saved-secret store did not respond within \(Int(defaultTimeoutSeconds))s — on Sliccstart this "
         + "usually means the macOS Keychain access dialog is waiting unanswered (every rebuild re-raises "
@@ -12,16 +38,32 @@ enum BoundedStoreCall {
         + "packages/dev-tools/tools/setup-dev-cert.sh for a grant that survives rebuilds; see "
         + "docs/secrets.md. Session secrets are unaffected."
 
+    
     static let timeoutErrorCode = "persisted-store-unavailable"
 
+    
+    
+    
+    
+    
+    
+    
+    
     static let writeTimeoutMessage =
         "saved-secret store did not respond within \(Int(defaultTimeoutSeconds))s, so this write's outcome "
         + "is unknown — it may still be applied once the macOS Keychain access dialog is answered. Nothing "
         + "was rolled back: check `secret list` before retrying so a rotation is not applied twice. See "
         + "docs/secrets.md."
 
+    
     static let writeTimeoutErrorCode = "persisted-store-write-unknown"
 
+    
+    
+    
+    
+    
+    
     static func run<T: Sendable>(
         timeoutSeconds: TimeInterval = defaultTimeoutSeconds,
         onLateCompletion: (@Sendable (T) -> Void)? = nil,
@@ -39,6 +81,9 @@ enum BoundedStoreCall {
         }
     }
 
+    
+    
+    
     static func runThrowing<T: Sendable>(
         timeoutSeconds: TimeInterval = defaultTimeoutSeconds,
         onLateCompletion: (@Sendable (Result<T, Error>) -> Void)? = nil,
@@ -50,6 +95,9 @@ enum BoundedStoreCall {
     }
 }
 
+
+
+
 private final class OneShotResumer<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<T, Never>?
@@ -58,6 +106,7 @@ private final class OneShotResumer<T>: @unchecked Sendable {
         self.continuation = continuation
     }
 
+    
     @discardableResult
     func resume(_ value: T) -> Bool {
         lock.lock()

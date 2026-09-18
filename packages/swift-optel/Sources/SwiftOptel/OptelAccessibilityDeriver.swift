@@ -4,23 +4,40 @@
         import AppKit
     #endif
 
+    
+    
+    
+    
+    
+    
     public protocol OptelAccessibleElement {
-
+        
+        
         var optelAccessibilityRole: String? { get }
-
+        
         var optelAccessibilityIdentifier: String? { get }
-
+        
         var optelAccessibilityLabel: String? { get }
-
+        
         var optelAccessibilityWindowTitle: String? { get }
-
+        
         var optelAccessibilityParent: OptelAccessibleElement? { get }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     public enum OptelAccessibilityDeriver {
-
+        
+        
         public static let maxAncestorDepth = 64
 
+        
         public struct Derived: Equatable, Sendable {
             public let source: String
             public let target: String?
@@ -31,6 +48,10 @@
             }
         }
 
+        
+        
+        
+        
         public static func derive(from element: OptelAccessibleElement) -> Derived {
             let resolved = nearestMeaningful(from: element) ?? element
             let windowTitle = walkForWindowTitle(from: element)
@@ -46,6 +67,8 @@
             return Derived(source: source, target: label)
         }
 
+        
+        
         static let genericRoles: Set<String> = [
             "AXUnknown", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXLayoutArea",
             "AXLayoutItem", "AXGenericElement",
@@ -95,7 +118,9 @@
     }
 
     #if canImport(AppKit)
-
+        
+        
+        
         extension NSView: OptelAccessibleElement {
             public var optelAccessibilityRole: String? { accessibilityRole()?.rawValue }
             public var optelAccessibilityIdentifier: String? { accessibilityIdentifier() }

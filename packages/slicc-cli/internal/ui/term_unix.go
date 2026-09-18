@@ -8,6 +8,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+
+
 func terminalSize(f *os.File) (int, bool) {
 	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
 	if err != nil {
@@ -15,5 +17,6 @@ func terminalSize(f *os.File) (int, bool) {
 	}
 	return int(ws.Col), true
 }
+
 
 func prepareTerminal(*os.File) bool { return true }

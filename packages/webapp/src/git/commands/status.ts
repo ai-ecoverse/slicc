@@ -1,4 +1,6 @@
 import * as git from 'isomorphic-git';
+import { sgr } from './color.js';
+import { conflictedWorktreePaths, mergeInProgress } from './merge-state.js';
 import { matchesPathspec } from './revision.js';
 import { NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
@@ -21,9 +23,24 @@ export async function status(
 
   try {
     const branch = await git.currentBranch({ fs: ctx.lfs, dir: cwd });
-    output += `On branch ${branch ?? '(no branch)'}\n\n`;
+    output += `On branch ${branch ?? '(no branch)'}\n`;
   } catch {
-    output += 'Not on any branch.\n\n';
+    output += 'Not on any branch.\n';
+  }
+
+  const merging = await mergeInProgress(ctx, cwd);
+  if (merging) {
+    const conflicted = await conflictedWorktreePaths(ctx, cwd);
+    if (conflicted.length > 0) {
+      output += 'You have unmerged paths.\n';
+      output += '  (fix conflicts and run "git commit")\n';
+      output += '  (use "git merge --abort" to abort the merge)\n\n';
+    } else {
+      output += 'All conflicts fixed but you are still merging.\n';
+      output += '  (use "git commit" to conclude merge)\n\n';
+    }
+  } else {
+    output += '\n';
   }
 
   const matrix = await git.statusMatrix({
@@ -34,7 +51,7 @@ export async function status(
   });
   const { staged, unstaged, untracked } = classifyStatusMatrix(matrix, pathspecs);
 
-  output += formatStatusLong(staged, unstaged, untracked);
+  output += formatStatusLong(staged, unstaged, untracked, merging, ctx.useColor);
 
   return { stdout: output, stderr: '', exitCode: 0 };
 }
@@ -67,14 +84,20 @@ function classifyStatusMatrix(
   return { staged, unstaged, untracked };
 }
 
-function formatStatusLong(staged: string[], unstaged: string[], untracked: string[]): string {
+function formatStatusLong(
+  staged: string[],
+  unstaged: string[],
+  untracked: string[],
+  merging = false,
+  color = false
+): string {
   let output = '';
 
   if (staged.length > 0) {
     output += 'Changes to be committed:\n';
     output += '  (use "git restore --staged <file>..." to unstage)\n\n';
     for (const file of staged) {
-      output += `\t\x1b[32m${file}\x1b[0m\n`;
+      output += `\t${sgr(color, '32', file)}\n`;
     }
     output += '\n';
   }
@@ -83,7 +106,7 @@ function formatStatusLong(staged: string[], unstaged: string[], untracked: strin
     output += 'Changes not staged for commit:\n';
     output += '  (use "git add <file>..." to update what will be committed)\n\n';
     for (const file of unstaged) {
-      output += `\t\x1b[31m${file}\x1b[0m\n`;
+      output += `\t${sgr(color, '31', file)}\n`;
     }
     output += '\n';
   }
@@ -92,12 +115,12 @@ function formatStatusLong(staged: string[], unstaged: string[], untracked: strin
     output += 'Untracked files:\n';
     output += '  (use "git add <file>..." to include in what will be committed)\n\n';
     for (const file of untracked) {
-      output += `\t\x1b[31m${file}\x1b[0m\n`;
+      output += `\t${sgr(color, '31', file)}\n`;
     }
     output += '\n';
   }
 
-  if (staged.length === 0 && unstaged.length === 0 && untracked.length === 0) {
+  if (staged.length === 0 && unstaged.length === 0 && untracked.length === 0 && !merging) {
     output += 'nothing to commit, working tree clean\n';
   }
 

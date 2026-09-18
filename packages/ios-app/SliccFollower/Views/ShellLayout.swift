@@ -1,12 +1,15 @@
 import SwiftUI
 
+
+
 enum ShellLayoutMode: CaseIterable, Equatable, Sendable {
     case compactOverlay
     case regularSplit
 }
 
-enum ShellLayout {
 
+enum ShellLayout {
+    
     static let narrowBreakpoint: CGFloat = 560
 
     static func mode(

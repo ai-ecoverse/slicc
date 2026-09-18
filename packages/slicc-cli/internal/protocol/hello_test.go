@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+
+
+
+
 func TestHelloCapabilitiesRoundTripExplicitFalse(t *testing.T) {
 	h := Hello{
 		Type:            "hello",
@@ -30,6 +34,8 @@ func TestHelloCapabilitiesRoundTripExplicitFalse(t *testing.T) {
 	}
 }
 
+
+
 func TestHelloMotdRoundTrip(t *testing.T) {
 	h := Hello{
 		Type:            TypeHello,
@@ -52,6 +58,8 @@ func TestHelloMotdRoundTrip(t *testing.T) {
 		t.Fatalf("motd round-trip: got %q, want %q", back.Motd, h.Motd)
 	}
 
+	
+	
 	plain, _ := json.Marshal(Hello{Type: TypeHello, ProtocolVersion: 1})
 	if strings.Contains(string(plain), "motd") {
 		t.Fatalf("empty motd must be omitted: %s", plain)

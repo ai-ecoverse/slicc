@@ -563,7 +563,10 @@ Slicc-level options (consumed before tool args):
 Arguments are coerced according to the tool's JSON Schema:
   string/integer/number/boolean. Bare \`--flag\` (no value or "--" next)
   is treated as true. Repeating a flag accumulates into an array when
-  the schema declares \`type: array\`.
+  the schema declares \`type: array\`. A \`type: object\` flag (and an
+  array of objects) is parsed as JSON, e.g. \`--params '{"url":"…"}'\`.
+  Nested fields can be set with dotted flags (\`--params.url …\`).
+  Unknown \`--flags\` exit non-zero instead of being dropped.
 `;
 }
 
@@ -596,9 +599,13 @@ interface JsonSchemaObject {
   required?: string[];
 }
 
-type McpArgValue = string | number | boolean | McpArgValue[];
+type McpArgValue = string | number | boolean | null | McpArgValue[] | McpArgObject;
 
-type McpToolArguments = Record<string, McpArgValue>;
+interface McpArgObject {
+  [key: string]: McpArgValue;
+}
+
+type McpToolArguments = McpArgObject;
 
 function asSchemaObject(schema: unknown): JsonSchemaObject {
   return (schema ?? {}) as JsonSchemaObject;
@@ -649,7 +656,7 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
   const s = asSchemaObject(schema);
   const properties = s.properties ?? {};
   const required = new Set(Array.isArray(s.required) ? s.required : []);
-  const out: McpToolArguments = {};
+  const out: McpToolArguments = emptyArgObject();
 
   let i = 0;
   while (i < args.length) {
@@ -659,7 +666,7 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
   }
 
   for (const r of required) {
-    if (!(r in out)) {
+    if (!Object.hasOwn(out, r)) {
       return { ok: false, error: `missing required flag --${r}` };
     }
   }
@@ -677,38 +684,160 @@ function parseOneFlag(
     return { ok: false, error: `unexpected positional argument "${a}"` };
   }
   const { key, inlineValue } = splitFlag(a);
-  const meta = properties[key];
-  const type = meta?.type ?? 'string';
+  const resolved = resolveToolFlag(key, properties);
+  if (!resolved.ok) return resolved;
+
+  const { rootKey, dottedPath, meta } = resolved;
+  const declaredType = meta.type;
+  const type = declaredType ?? 'string';
   const isArray = type === 'array';
-  const itemType = (isArray ? meta?.items?.type : undefined) ?? 'string';
-
-  let raw: string | undefined = inlineValue;
-  let nextIndex: number;
-  if (raw === undefined) {
-    const next = args[i + 1];
-    if (type === 'boolean' && (next === undefined || next.startsWith('--'))) {
-      out[key] = true;
-      return { ok: true, nextIndex: i + 1 };
-    }
-    if (next === undefined) {
-      return { ok: false, error: `flag --${key} requires a value` };
-    }
-    raw = next;
-    nextIndex = i + 2;
-  } else {
-    nextIndex = i + 1;
+  const itemType = (isArray ? meta.items?.type : undefined) ?? 'string';
+  if (dottedPath && declaredType !== undefined && declaredType !== 'object') {
+    return { ok: false, error: `unknown flag: --${key}` };
   }
 
-  const coerced = coerceScalar(raw, isArray ? itemType : type);
+  const taken = readFlagRaw(args, i, key, inlineValue, type, dottedPath);
+  if (!taken.ok) return taken;
+  if (taken.bareBoolean) {
+    out[rootKey] = true;
+    return { ok: true, nextIndex: taken.nextIndex };
+  }
+
+  const valueType = dottedPath ? 'string' : isArray ? itemType : type;
+  const coerced = coerceScalar(taken.raw, valueType);
   if (!coerced.ok) return { ok: false, error: `--${key}: ${coerced.error}` };
-  if (isArray) {
-    const prev = out[key];
-    if (Array.isArray(prev)) prev.push(coerced.value);
-    else out[key] = [coerced.value];
-  } else {
-    out[key] = coerced.value;
+  const assigned = assignFlagValue(out, rootKey, dottedPath, coerced.value, isArray);
+  if (!assigned.ok) return assigned;
+  return { ok: true, nextIndex: taken.nextIndex };
+}
+
+interface ResolvedToolFlag {
+  ok: true;
+  rootKey: string;
+  dottedPath: string[] | null;
+  meta: JsonSchemaProperty;
+}
+
+function resolveToolFlag(
+  key: string,
+  properties: Record<string, JsonSchemaProperty>
+): ResolvedToolFlag | CoerceErr {
+  if (Object.hasOwn(properties, key)) {
+    return { ok: true, rootKey: key, dottedPath: null, meta: properties[key] ?? {} };
   }
-  return { ok: true, nextIndex };
+  const dot = key.indexOf('.');
+  if (dot <= 0) return { ok: false, error: `unknown flag: --${key}` };
+  const rootKey = key.slice(0, dot);
+  const rest = key.slice(dot + 1);
+  if (!Object.hasOwn(properties, rootKey) || rest.length === 0) {
+    return { ok: false, error: `unknown flag: --${key}` };
+  }
+  const parts = rest.split('.');
+  if (isUnsafeObjectKey(rootKey) || parts.some((p) => p.length === 0 || isUnsafeObjectKey(p))) {
+    return { ok: false, error: `unknown flag: --${key}` };
+  }
+  return { ok: true, rootKey, dottedPath: parts, meta: properties[rootKey] ?? {} };
+}
+
+interface FlagRaw {
+  ok: true;
+  raw: string;
+  nextIndex: number;
+  bareBoolean: boolean;
+}
+
+function readFlagRaw(
+  args: string[],
+  i: number,
+  key: string,
+  inlineValue: string | undefined,
+  type: string,
+  dottedPath: string[] | null
+): FlagRaw | CoerceErr {
+  if (inlineValue !== undefined) {
+    return { ok: true, raw: inlineValue, nextIndex: i + 1, bareBoolean: false };
+  }
+  const next = args[i + 1];
+  if (!dottedPath && type === 'boolean' && (next === undefined || next.startsWith('--'))) {
+    return { ok: true, raw: '', nextIndex: i + 1, bareBoolean: true };
+  }
+  if (next === undefined) {
+    return { ok: false, error: `flag --${key} requires a value` };
+  }
+  return { ok: true, raw: next, nextIndex: i + 2, bareBoolean: false };
+}
+
+function assignFlagValue(
+  out: McpToolArguments,
+  rootKey: string,
+  dottedPath: string[] | null,
+  value: McpArgValue,
+  isArray: boolean
+): CoerceErr | { ok: true } {
+  if (dottedPath) return setDotted(out, rootKey, dottedPath, value);
+  if (isArray) {
+    const prev = out[rootKey];
+    if (Array.isArray(prev)) prev.push(value);
+    else out[rootKey] = [value];
+    return { ok: true };
+  }
+  const existing = out[rootKey];
+  if (isPlainObject(existing) && isPlainObject(value)) {
+    Object.assign(existing, value);
+    return { ok: true };
+  }
+  out[rootKey] = value;
+  return { ok: true };
+}
+
+function setDotted(
+  out: McpToolArguments,
+  rootKey: string,
+  path: string[],
+  value: McpArgValue
+): CoerceErr | { ok: true } {
+  if (isUnsafeObjectKey(rootKey) || path.some((p) => p.length === 0 || isUnsafeObjectKey(p))) {
+    return { ok: false, error: `unknown flag: --${rootKey}.${path.join('.')}` };
+  }
+  const existing = Object.hasOwn(out, rootKey) ? out[rootKey] : undefined;
+  if (existing === undefined) {
+    out[rootKey] = emptyArgObject();
+  } else if (!isPlainObject(existing)) {
+    return { ok: false, error: `--${rootKey}: cannot nest into a ${typeof existing} value` };
+  }
+  let cursor = out[rootKey] as McpArgObject;
+  for (let i = 0; i < path.length - 1; i++) {
+    const seg = path[i];
+    const next = Object.hasOwn(cursor, seg) ? cursor[seg] : undefined;
+    if (next === undefined) {
+      cursor[seg] = emptyArgObject();
+    } else if (!isPlainObject(next)) {
+      return {
+        ok: false,
+        error: `--${rootKey}.${path.slice(0, i + 1).join('.')}: cannot nest into a ${typeof next} value`,
+      };
+    }
+    cursor = cursor[seg] as McpArgObject;
+  }
+  cursor[path[path.length - 1]] = value;
+  return { ok: true };
+}
+
+function emptyArgObject(): McpArgObject {
+  return Object.create(null) as McpArgObject;
+}
+
+function isUnsafeObjectKey(key: string): boolean {
+  return key === '__proto__' || key === 'prototype' || key === 'constructor';
+}
+
+function isPlainObject(value: unknown): value is McpArgObject {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    value !== Object.prototype
+  );
 }
 
 function splitFlag(a: string): { key: string; inlineValue: string | undefined } {
@@ -736,9 +865,26 @@ function coerceScalar(
       if (raw === 'false' || raw === '0' || raw === 'no') return { ok: true, value: false };
       return { ok: false, error: `expected boolean, got "${raw}"` };
     }
+    case 'object':
+      return coerceJsonObject(raw);
     default:
       return { ok: true, value: raw };
   }
+}
+
+function coerceJsonObject(
+  raw: string
+): { ok: true; value: McpArgObject } | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: `expected object JSON, got "${raw}"` };
+  }
+  if (!isPlainObject(parsed)) {
+    return { ok: false, error: `expected object JSON, got "${raw}"` };
+  }
+  return { ok: true, value: parsed };
 }
 
 interface ToolResultContent {

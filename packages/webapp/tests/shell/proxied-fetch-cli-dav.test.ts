@@ -122,4 +122,16 @@ describe('createProxiedFetch — CLI branch DAV verb pass-through', () => {
     const init = mockFetch.mock.calls[0][1] as RequestInit;
     expect(init.body).toBeUndefined();
   });
+
+  it('forwards AbortSignal onto the outer fetch RequestInit', async () => {
+    const { createProxiedFetch } = await import('../../src/shell/proxied-fetch.js');
+    const proxiedFetch = createProxiedFetch();
+    const ac = new AbortController();
+    await proxiedFetch('https://api.example.com/v1', {
+      method: 'GET',
+      signal: ac.signal,
+    } as never);
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(init.signal).toBe(ac.signal);
+  });
 });

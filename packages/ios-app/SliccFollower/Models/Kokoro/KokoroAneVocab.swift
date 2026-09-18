@@ -1,9 +1,13 @@
 import Foundation
 
+
+
+
 struct KokoroAneVocab: Sendable {
 
     let map: [Character: Int32]
 
+    
     static func load(from url: URL) throws -> KokoroAneVocab {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw KokoroAneError.vocabMissing(url)
@@ -24,6 +28,9 @@ struct KokoroAneVocab: Sendable {
         return KokoroAneVocab(map: parsed)
     }
 
+    
+    
+    
     func encode(_ phonemes: String) throws -> [Int32] {
         if phonemes.count > KokoroAneConstants.maxPhonemeLength {
             throw KokoroAneError.phonemeSequenceTooLong(phonemes.count)

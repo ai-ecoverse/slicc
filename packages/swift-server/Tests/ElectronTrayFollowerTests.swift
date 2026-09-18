@@ -179,4 +179,88 @@ final class ElectronTrayFollowerTests: XCTestCase {
         follower.stop()
         follower.startIfNeeded()  
     }
+
+    func testRunSuccessConnectorFailureAndCancellationPaths() async throws {
+        let session = makeEndpointSession()
+        let success = ElectronTrayFollower(
+            cdpPort: 9223,
+            joinURL: URL(string: "https://tray.example.test/join/a.b")!,
+            logger: Logger(label: "test.follower.success"),
+            session: session,
+            connectorStart: {},
+            servicerConnect: { _, _ in }
+        )
+        await success.run()
+        success.stop()
+
+        let connectorFailure = ElectronTrayFollower(
+            cdpPort: 9223,
+            joinURL: URL(string: "https://tray.example.test/join/a.b")!,
+            logger: Logger(label: "test.follower.failure"),
+            session: session,
+            connectorStart: { throw URLError(.cannotConnectToHost) },
+            servicerConnect: { _, _ in }
+        )
+        await connectorFailure.run()
+        connectorFailure.stop()
+
+        let cancelled = ElectronTrayFollower(
+            cdpPort: 9223,
+            joinURL: URL(string: "https://tray.example.test/join/a.b")!,
+            logger: Logger(label: "test.follower.cancelled"),
+            session: session,
+            connectorStart: { XCTFail("cancelled run must not start connector") },
+            servicerConnect: { _, _ in }
+        )
+        cancelled.stop()
+        await cancelled.run()
+    }
+
+    func testEndpointDiscoveryListingAndDataDelegateUseInjectedSession() async throws {
+        let follower = ElectronTrayFollower(
+            cdpPort: 9223,
+            joinURL: URL(string: "https://tray.example.test/join/a.b")!,
+            logger: Logger(label: "test.follower.endpoints"),
+            session: makeEndpointSession()
+        )
+        let browserURL = await follower.resolveBrowserWebSocketURL()
+        XCTAssertEqual(browserURL?.absoluteString, "ws://127.0.0.1:9223/devtools/browser/test")
+        let targets = await follower.listTargets()
+        XCTAssertEqual(targets.map(\.id), ["page-1"])
+
+        let sent = captureSends(follower)
+        let connector = TrayFollowerConnector(joinUrl: URL(string: "https://tray.example.test/join/a.b")!)
+        follower.connector(connector, didReceiveData: Data(#"{"type":"ping"}"#.utf8))
+        guard case .pong = sent().first else { return XCTFail("expected pong") }
+    }
+
+    private func makeEndpointSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ElectronFollowerURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
+private final class ElectronFollowerURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let body: String
+        if path == "/json/version" {
+            body = #"{"webSocketDebuggerUrl":"ws:
+        } else {
+            body = #"[{"id":"page-1","type":"page","title":"App","url":"file:
+        }
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

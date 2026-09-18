@@ -127,6 +127,60 @@ async function startFakeBrowserCdp(
 }
 
 describe('ElectronFederatedCdp servicer', () => {
+  it('advertises targets through the injected transport', () => {
+    const sent: FollowerToLeaderMessage[] = [];
+    const servicer = new ElectronFederatedCdp({ runtimeId: 'runtime', send: (m) => sent.push(m) });
+    servicer.advertiseTargets([{ id: 'page', type: 'page', title: 'App', url: 'app://page' }]);
+    expect(sent).toEqual([
+      {
+        type: 'targets.advertise',
+        runtimeId: 'runtime',
+        targets: [{ targetId: 'page', title: 'App', url: 'app://page', kind: 'browser' }],
+      },
+    ]);
+  });
+
+  it('answers immediately when an open socket throws during send', () => {
+    const sent: FollowerToLeaderMessage[] = [];
+    const servicer = new ElectronFederatedCdp({ runtimeId: 'r1', send: (m) => sent.push(m) });
+    (servicer as unknown as { ws: { readyState: number; send(frame: string): void } }).ws = {
+      readyState: 1,
+      send: () => {
+        throw new Error('closing now');
+      },
+    };
+    servicer.handleCdpRequest({ requestId: 'request', localTargetId: 'target', method: 'X' });
+    expect(sent).toEqual([
+      {
+        type: 'cdp.response',
+        requestId: 'request',
+        result: undefined,
+        error: 'cdp-send-failed: closing now',
+      },
+    ]);
+  });
+
+  it('rejects pending requests on stop and ignores malformed CDP frames', () => {
+    const sent: FollowerToLeaderMessage[] = [];
+    const servicer = new ElectronFederatedCdp({ runtimeId: 'r1', send: (m) => sent.push(m) });
+    const close = vi.fn();
+    (
+      servicer as unknown as {
+        ws: { readyState: number; send(frame: string): void; close(): void };
+      }
+    ).ws = { readyState: 1, send: vi.fn(), close };
+    servicer.handleCdpRequest({ requestId: 'pending', localTargetId: 'target', method: 'X' });
+    (servicer as unknown as { onCdpFrame(raw: string): void }).onCdpFrame('not-json');
+    servicer.stop();
+    expect(sent).toContainEqual({
+      type: 'cdp.response',
+      requestId: 'pending',
+      result: undefined,
+      error: 'cdp-closed',
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('forwards a leader cdp.request to CDP and returns the correlated cdp.response', async () => {
     const fake = await startFakeBrowserCdp((frame, socket) => {
       if (typeof frame.id === 'number' && frame.method === 'Runtime.evaluate') {

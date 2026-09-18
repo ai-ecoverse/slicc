@@ -36,7 +36,9 @@ export function resolveSudoRequest(req: SudoRequest, deps: PanelResponderDeps = 
   }
 
   const who = req.requester ? `Requested by: ${req.requester}\n\n` : '';
-  const label = `Approve ${req.kind}:\n\n${who}${req.detail}\n\nOK = allow · Cancel = deny`;
+
+  const why = req.reason ? `\n\nReason given: ${req.reason}` : '';
+  const label = `Approve ${req.kind}:\n\n${who}${req.detail}${why}\n\nOK = allow · Cancel = deny`;
   if (!confirmFn(label)) return { decision: 'deny' };
 
   const suggested = req.suggestedPattern?.trim() || req.detail.trim();

@@ -5,6 +5,7 @@ import {
   type AgenticMemoryPassResult,
   type CuratorConeRef,
   runAgenticMemoryPass,
+  seedMemoryInstructions,
 } from './agentic-memory.js';
 import { runMemoryDreamPass } from './memory-dreaming.js';
 
@@ -36,6 +37,7 @@ interface MemorySeamGlobals {
 }
 
 export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
+  void seedMemoryInstructions(sharedFs);
   return {
     async curate(request: MemoryCurateRequest): Promise<AgenticMemoryPassResult> {
       const bridge = (globalThis as unknown as MemorySeamGlobals).__slicc_agent;

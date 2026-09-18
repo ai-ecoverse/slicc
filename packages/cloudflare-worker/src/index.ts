@@ -839,7 +839,9 @@ async function tryHandleSessionCapabilityRoutes(
   const revokeMatch = url.pathname.match(/^\/webhooks\/([^/]+)\/([^/]+)\/revoke$/);
   if (revokeMatch) {
     if (request.method !== 'POST') return new Response(null, { status: 405 });
-    return handleWebhookRevoke(request, env, revokeMatch[1]!, revokeMatch[2]!);
+    return handleWebhookRevoke(request, revokeMatch[1]!, revokeMatch[2]!, (coneId) =>
+      env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(coneId))
+    );
   }
 
   const coneWebhookMatch = url.pathname.match(/^\/wh\/([^/]+?)(?:\/([^/]+))?$/);

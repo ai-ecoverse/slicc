@@ -16,14 +16,18 @@ const STORED_SESSIONS: Record<string, { id: string; messages: unknown[] }> = {
     messages: [{ id: 'm2', role: 'user', content: 'research history', timestamp: 1 }],
   },
 };
-vi.mock('../../../src/scoops/chat-session-store.js', () => ({
-  SessionStore: class {
-    async init(): Promise<void> {}
-    async load(id: string): Promise<unknown> {
+
+vi.mock('../../../src/work-unit/conversation/sessions.js', () => ({
+  CanonicalSessionReader: class {
+    async loadRootChatSession(folder: string): Promise<unknown> {
+      const id = `session-${folder}`;
       sessionLoads.push(id);
       return STORED_SESSIONS[id] ?? null;
     }
   },
+}));
+vi.mock('../../../src/work-unit/conversation/store.js', () => ({
+  WorkUnitConversationStore: class {},
 }));
 
 import {

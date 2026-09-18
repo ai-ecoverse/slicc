@@ -120,18 +120,18 @@ describe('zero-byte files on the OPFS backend (#2157)', () => {
   });
 });
 
-describe('@zenfs/dom zero-byte materialization patch (#2157)', () => {
+describe('@zenfs/dom zero-byte materialization protections (#2157)', () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
-  it('the patch is present in the installed dist', () => {
+  it('uses upstream _create while retaining the missing-entry removal patch', () => {
     const src = readFileSync(resolve(repoRoot, 'node_modules/@zenfs/dom/dist/access.js'), 'utf8');
+    expect(src).toContain('async _create(path, inode)');
+    expect(src).not.toContain('async createFile(path, options)');
     expect(
       src.includes('PATCH(#2157)'),
-      'Installed @zenfs/dom no longer materializes a file handle in ' +
-        'createFile / no longer tolerates an absent OPFS entry in remove; ' +
-        'patches/@zenfs+dom+*.patch is missing or failed to apply. Zero-byte ' +
+      'Installed @zenfs/dom no longer tolerates an absent OPFS entry in remove; ' +
+        'patches/@zenfs+dom+*.patch is missing or failed to apply. Phantom ' +
         'files then become undeletable again — see patches/README.md.'
     ).toBe(true);
-    expect(src).toContain('async createFile(path, options)');
   });
 });

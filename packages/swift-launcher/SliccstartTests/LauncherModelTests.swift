@@ -6,8 +6,14 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
 @MainActor
 final class LauncherModelTests: XCTestCase {
+
+    
 
     private var container: URL!
     private var suiteName: String!
@@ -52,6 +58,8 @@ final class LauncherModelTests: XCTestCase {
         var checks = 0
     }
 
+    
+    
     private func makeModel(
         process: SliccProcess = SliccProcess(),
         scan: @escaping (Bool) -> [AppTarget] = { _ in [] },
@@ -81,6 +89,12 @@ final class LauncherModelTests: XCTestCase {
                 installation: WidgetInstallationQuery { false },
                 makeConnector: { _ in NeverConnector() }
             ),
+            computerTrayFollower: ComputerTrayFollower(
+                makeConnector: { _ in NeverConnector() },
+                makeCapturer: { StubCapturer() },
+                permissions: ComputerPermissions(probe: .alwaysGranted),
+                eventSink: RecordingEventSink()
+            ),
             bootstrapper: bootstrapper,
             updateChecking: updateChecking
                 ?? LauncherModel.UpdateChecking(check: { _, _ in }, isUpdateReady: { false }),
@@ -92,6 +106,8 @@ final class LauncherModelTests: XCTestCase {
             savedBrowserOrder: { savedBrowserOrder }
         )
     }
+
+    
 
     func testInitializeScansAndBecomesReady() async {
         let chrome = target("Chrome")
@@ -126,7 +142,8 @@ final class LauncherModelTests: XCTestCase {
     }
 
     func testNeedsBuildIsNotTreatedAsMissing() async {
-
+        
+        
         let bootstrapper = FailingBootstrapper(error: CancellationError())
         let model = makeModel(installation: .needsBuild, bootstrapper: bootstrapper)
 
@@ -160,6 +177,8 @@ final class LauncherModelTests: XCTestCase {
 
         XCTAssertEqual(checks, 1)
     }
+
+    
 
     func testAutoLaunchIsSkippedWhenThePreferenceIsOff() async {
         let process = RecordingProcess()
@@ -229,6 +248,8 @@ final class LauncherModelTests: XCTestCase {
         )
     }
 
+    
+
     func testLaunchFailureBecomesAnAlert() {
         let process = RecordingProcess()
         process.standaloneError = SliccProcess.LaunchError.serverBinaryNotFound
@@ -259,6 +280,8 @@ final class LauncherModelTests: XCTestCase {
 
         XCTAssertTrue(model.showAlert)
     }
+
+    
 
     private func electronModel(state: AppRuntimeState) -> (LauncherModel, RecordingProcess) {
         let process = RecordingProcess()
@@ -310,6 +333,7 @@ final class LauncherModelTests: XCTestCase {
             sessionStore: model.sessionStore,
             fileProviderCoordinator: model.fileProviderCoordinator,
             widgetTrayObserver: model.widgetTrayObserver,
+            computerTrayFollower: model.computerTrayFollower,
             permission: permission,
             updateChecking: .init(check: { _, _ in }, isUpdateReady: { false })
         )
@@ -321,7 +345,9 @@ final class LauncherModelTests: XCTestCase {
     }
 
     func testAnElectronAppWithoutALeaderIsIgnoredRatherThanStarted() {
-
+        
+        
+        
         let (model, process) = electronModel(state: .cannotStart(.needsLeader))
         model.handleElectronLaunch(target("Signal", type: .electronApp))
         XCTAssertTrue(process.electronLaunches.isEmpty)
@@ -347,6 +373,8 @@ final class LauncherModelTests: XCTestCase {
         model.handleElectronLaunch(target("Signal", type: .electronApp))
         XCTAssertTrue(model.showAlert)
     }
+
+    
 
     func testCreatingADebugBuildRescansAndReportsSuccess() async {
         var scans = 0
@@ -401,6 +429,8 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertTrue(built.isEmpty)
     }
 
+    
+
     func testACheckInFlightIsNotRestarted() {
         var checks = 0
         let model = makeModel(
@@ -426,7 +456,7 @@ final class LauncherModelTests: XCTestCase {
     }
 
     func testASuccessfulCheckWithAStagedUpdateGoesBackToIdle() async {
-
+        
         let model = makeModel(
             updateChecking: .init(check: { success, _ in success() }, isUpdateReady: { true })
         )
@@ -482,6 +512,8 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertEqual(model.bootstrapper.lastError, "npm exploded")
     }
 
+    
+
     func testTheRuntimeTickDoesNothingBeforeTheWindowIsReady() {
         let process = RecordingProcess()
         let model = makeModel(process: process)
@@ -535,6 +567,8 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertEqual(scans, 1)
     }
 
+    
+
     func testALeaderIsAdvertisedToEveryConsumerOfTheJoinUrl() {
         let model = makeModel()
         model.leaderJoinUrlChanged("https://tray.test/join/x.secret")
@@ -579,6 +613,11 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertEqual(live.sessionStore.localSessions.count, 1)
     }
 
+    
+    
+    
+    
+    
     func testRepublishingDoesNotRenewALeaderThatCannotBeReached() async throws {
         let probes = ProbeCounter()
         let process = try leaderProcess(answering: .unreachable, counting: probes)
@@ -589,7 +628,9 @@ final class LauncherModelTests: XCTestCase {
         let published = model.sessionStore.localSessions.first?.lastSeenAt
 
         model.republishLeaderSession()
-
+        
+        
+        
         await waitUntilProbed(probes, atLeast: republishProbeAttempts)
         await settle()
 
@@ -618,6 +659,9 @@ final class LauncherModelTests: XCTestCase {
             ["https://tray.test/join/reminted.secret"])
     }
 
+    
+    
+    
     func testAReMintedTrayReplacesTheAdvertisementItSupersedes() {
         let model = makeModel()
         model.leaderJoinUrlChanged("https://tray.test/join/old.secret")
@@ -643,6 +687,8 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertEqual(probeCount, 0, "no window, no probe")
     }
 
+    
+
     private enum TrayStatusAnswer {
         case joinUrl(String)
         case unreachable
@@ -653,6 +699,9 @@ final class LauncherModelTests: XCTestCase {
         func tick() { count += 1 }
     }
 
+    
+    
+    
     private func leaderProcess(
         answering answer: TrayStatusAnswer,
         counting probes: ProbeCounter? = nil
@@ -683,6 +732,7 @@ final class LauncherModelTests: XCTestCase {
         return process
     }
 
+    
     private let republishProbeAttempts = 3
 
     private func waitUntilProbed(
@@ -706,16 +756,25 @@ final class LauncherModelTests: XCTestCase {
         }
     }
 
+    
+
     func testDialogPromptsNameTheAppTheyAreAbout() {
         let signal = target("Signal", type: .electronApp)
         XCTAssertTrue(RootView.debugBuildPrompt(for: signal).contains("Signal Debug.app"))
         XCTAssertTrue(RootView.electronRestartPrompt(for: signal).contains("Signal is already running"))
     }
 
+    
+    
+    
     private func settle() async {
         for _ in 0..<50 { await Task.yield() }
     }
 }
+
+
+
+
 
 private final class RecordingProcess: SliccProcess {
     var standaloneLaunches: [String] = []
@@ -776,6 +835,8 @@ private final class RecordingProcess: SliccProcess {
         []
     }
 }
+
+
 
 private final class FailingBootstrapper: SliccBootstrapper {
     private let error: Error

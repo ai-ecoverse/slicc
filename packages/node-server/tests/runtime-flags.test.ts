@@ -8,6 +8,34 @@ import {
 } from '../src/runtime-flags.js';
 
 describe('parseCliRuntimeFlags', () => {
+  it('parses prompt and env-file in equals and separate-token forms', () => {
+    expect(parseCliRuntimeFlags(['--prompt=hello', '--env-file=/tmp/one.env'])).toMatchObject({
+      prompt: 'hello',
+      envFile: '/tmp/one.env',
+    });
+    expect(parseCliRuntimeFlags(['--prompt', 'world', '--env-file', '/tmp/two.env'])).toMatchObject(
+      {
+        prompt: 'world',
+        envFile: '/tmp/two.env',
+      }
+    );
+    expect(parseCliRuntimeFlags(['--prompt=', '--env-file='])).toMatchObject({
+      prompt: null,
+      envFile: null,
+    });
+  });
+
+  it('does not let a later bare --electron overwrite an explicit app', () => {
+    expect(
+      parseCliRuntimeFlags(['--electron-app=/Applications/First.app', '--electron', 'ignored'])
+        .electronApp
+    ).toBe('/Applications/First.app');
+  });
+
+  it('parses profile as a separate value token', () => {
+    expect(parseCliRuntimeFlags(['--profile', ' worker ']).profile).toBe('worker');
+  });
+
   it('uses the default CLI runtime flags', () => {
     expect(parseCliRuntimeFlags([])).toEqual({
       serveOnly: false,
@@ -29,6 +57,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -54,6 +83,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -87,6 +117,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -114,6 +145,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -139,6 +171,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -164,6 +197,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -189,6 +223,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -214,6 +249,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -264,6 +300,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -289,6 +326,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -350,10 +388,17 @@ describe('parseCliRuntimeFlags', () => {
     });
   });
 
+  it('parses the computer-demo flag', () => {
+    expect(parseCliRuntimeFlags(['--computer-demo'])).toMatchObject({
+      computerDemo: true,
+    });
+  });
+
   it('parses the install-cli flag', () => {
     expect(parseCliRuntimeFlags(['--install-cli'])).toMatchObject({
       installCli: true,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -373,6 +418,7 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['--install-dir', '--install-cli'])).toMatchObject({
       installCli: true,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });

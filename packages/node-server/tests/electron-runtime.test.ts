@@ -1,8 +1,12 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   buildElectronAppLaunchSpec,
   buildElectronAppProcessMatchPatterns,
+  buildElectronChildWindowOptions,
   buildElectronOverlayBootstrapScript,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
@@ -10,20 +14,60 @@ import {
   DEFAULT_ELECTRON_SERVE_HOST,
   DEFAULT_ELECTRON_SERVE_PORT,
   DEFAULT_ELECTRON_TARGET_URL,
+  ELECTRON_FLOAT_WINDOW_BOX,
+  findAvailablePort,
   getElectronAppDisplayName,
   getElectronAppPort,
   getElectronAppPorts,
   getElectronOverlayEntryDistPath,
   getElectronServeOrigin,
   hashString,
+  isExecutableFile,
+  isPortAvailable,
   PORT_HASH_RANGE,
   parseElectronFloatFlags,
   resolveElectronAppExecutablePath,
   selectBestOverlayTargets,
   shouldInjectElectronOverlayTarget,
+  tryListenOnPort,
+  windowOpenFeaturesRequestSize,
 } from '../src/electron-runtime.js';
 
 describe('electron-runtime', () => {
+  describe('renderer-opened child windows', () => {
+    it('detects a requested size in a window.open features string', () => {
+      expect(windowOpenFeaturesRequestSize('popup=yes,width=1280,height=800')).toBe(true);
+      expect(windowOpenFeaturesRequestSize('height=800')).toBe(true);
+      expect(windowOpenFeaturesRequestSize(' innerWidth = 640 , innerHeight = 480 ')).toBe(true);
+      expect(windowOpenFeaturesRequestSize('')).toBe(false);
+      expect(windowOpenFeaturesRequestSize('noopener,noreferrer')).toBe(false);
+      expect(windowOpenFeaturesRequestSize('popup=yes')).toBe(false);
+    });
+
+    it('leaves a sized popup alone so the requested 1280×800 is honoured unclamped', () => {
+      expect(buildElectronChildWindowOptions('popup=yes,width=1280,height=800')).toEqual({
+        autoHideMenuBar: true,
+      });
+    });
+
+    it('gives a featureless target="_blank" window the default float box', () => {
+      expect(buildElectronChildWindowOptions('')).toEqual({
+        autoHideMenuBar: true,
+        ...ELECTRON_FLOAT_WINDOW_BOX,
+      });
+      expect(ELECTRON_FLOAT_WINDOW_BOX).toEqual({
+        width: 1440,
+        height: 960,
+        minWidth: 1024,
+        minHeight: 720,
+      });
+    });
+  });
+
+  it('rejects missing executable files', () => {
+    expect(isExecutableFile(join(tmpdir(), 'missing-slicc-executable'))).toBe(false);
+  });
+
   it('parses the default Electron float flags', () => {
     expect(parseElectronFloatFlags([])).toEqual({
       cdpPort: DEFAULT_ELECTRON_CDP_PORT,
@@ -108,6 +152,15 @@ describe('electron-runtime', () => {
     );
   });
 
+  it('serializes optional status-only overlay fields', () => {
+    const result = buildElectronOverlayInjectionCall({
+      appUrl: '',
+      open: false,
+      statusMessage: 'Network access blocked',
+    });
+    expect(result).toContain('"appUrl":"","open":false,"statusMessage":"Network access blocked"');
+  });
+
   it('builds a macOS app launch spec from a .app bundle path', () => {
     expect(
       buildElectronAppLaunchSpec('/Applications/Slack.app', { cdpPort: 9223, platform: 'darwin' })
@@ -144,6 +197,39 @@ describe('electron-runtime', () => {
       '/Applications/Slack.app',
       '/Applications/Slack.app/Contents/MacOS/Slack',
     ]);
+  });
+
+  it('discovers expected, Electron, and fallback macOS bundle executables', () => {
+    const root = mkdtempSync(join(tmpdir(), 'slicc-electron-runtime-'));
+    const app = join(root, 'Example.app');
+    const macOS = join(app, 'Contents', 'MacOS');
+    mkdirSync(macOS, { recursive: true });
+    try {
+      const expected = join(macOS, 'Example');
+      writeFileSync(expected, 'binary');
+      expect(resolveElectronAppExecutablePath(app, 'darwin')).toBe(expected);
+
+      rmSync(expected);
+      const electron = join(macOS, 'Electron');
+      writeFileSync(electron, 'binary');
+      chmodSync(electron, 0o755);
+      expect(resolveElectronAppExecutablePath(app, 'darwin')).toBe(electron);
+
+      rmSync(electron);
+      writeFileSync(join(macOS, '.hidden'), 'skip');
+      writeFileSync(join(macOS, 'setup.sh'), 'skip');
+      writeFileSync(join(macOS, 'Example Helper'), 'skip');
+      writeFileSync(join(macOS, 'not-executable'), 'skip');
+      const main = join(macOS, 'MainApp');
+      writeFileSync(main, 'binary');
+      chmodSync(main, 0o755);
+      expect(resolveElectronAppExecutablePath(app, 'darwin')).toBe(main);
+
+      rmSync(macOS, { recursive: true, force: true });
+      expect(resolveElectronAppExecutablePath(app, 'darwin')).toBe(expected);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('builds the combined overlay bootstrap script', () => {
@@ -310,9 +396,77 @@ describe('electron-runtime', () => {
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(2);
     });
+
+    it('keeps malformed target URLs in a stable fallback origin group', () => {
+      const result = selectBestOverlayTargets([
+        { type: 'page', title: 'short', url: 'not a url', webSocketDebuggerUrl: 'ws://1' },
+        {
+          type: 'page',
+          title: 'a longer title',
+          url: 'not a url',
+          webSocketDebuggerUrl: 'ws://2',
+        },
+      ]);
+      expect(result.map((target) => target.webSocketDebuggerUrl)).toEqual(['ws://2']);
+    });
   });
 
   describe('dynamic port allocation', () => {
+    it('binds an ephemeral loopback port and closes it again', async () => {
+      await expect(tryListenOnPort(0, '127.0.0.1')).resolves.toBeGreaterThan(0);
+    });
+
+    it('classifies IPv4 and IPv6 bind failures independently', async () => {
+      const hosts: string[] = [];
+      await expect(
+        isPortAvailable(9000, async (_port, host) => {
+          hosts.push(host);
+          return 9000;
+        })
+      ).resolves.toBe(true);
+      expect(hosts).toEqual(['127.0.0.1', '::1']);
+
+      await expect(
+        isPortAvailable(9000, async () => {
+          throw Object.assign(new Error('busy'), { code: 'EADDRINUSE' });
+        })
+      ).resolves.toBe(false);
+
+      let call = 0;
+      await expect(
+        isPortAvailable(9000, async () => {
+          call++;
+          if (call === 2) throw Object.assign(new Error('no ipv6'), { code: 'EAFNOSUPPORT' });
+          return 9000;
+        })
+      ).resolves.toBe(true);
+
+      call = 0;
+      await expect(
+        isPortAvailable(9000, async () => {
+          call++;
+          if (call === 2) throw Object.assign(new Error('busy'), { code: 'EADDRINUSE' });
+          return 9000;
+        })
+      ).resolves.toBe(false);
+    });
+
+    it('searches forward for a port and fails after the bounded attempt count', async () => {
+      await expect(findAvailablePort(9100, 3, async (port) => port === 9102)).resolves.toBe(9102);
+      await expect(findAvailablePort(9100, 2, async () => false)).rejects.toThrow(
+        'Could not find available port starting from 9100'
+      );
+    });
+
+    it('uses the preferred app slot or advances to the next open port', async () => {
+      const appPath = '/Applications/Test.app';
+      const preferred = 9200 + hashString(appPath, PORT_HASH_RANGE);
+      await expect(getElectronAppPort(appPath, 9200, async () => true)).resolves.toBe(preferred);
+      await expect(
+        getElectronAppPort(appPath, 9200, async (port) => port === preferred + 2)
+      ).resolves.toBe(preferred + 2);
+    });
+
     it('hashString returns deterministic values within range', () => {
       const hash1 = hashString('/Applications/Slack.app', PORT_HASH_RANGE);
       const hash2 = hashString('/Applications/Slack.app', PORT_HASH_RANGE);

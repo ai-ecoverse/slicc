@@ -5,6 +5,9 @@ import XCTest
 
 @testable import slicc_server
 
+
+
+
 final class CDPProxyUpstreamResetTests: XCTestCase {
     func testChromeReconnectClosesClientWithUpstreamResetOnlyAfterChromeIsBack() async throws {
         let reconnectGate = AsyncGate()
@@ -26,6 +29,8 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         await harness.emitEvent(.closed("code=Optional(messageTooLarge)"))
         await proxy.receive(.text("{\"id\":24,\"method\":\"Target.getTargets\"}"), from: client.handle.id)
 
+        
+        
         XCTAssertEqual(client.closeCodesSnapshot(), [])
 
         harness.holdConnectsUntilReleased()
@@ -33,7 +38,8 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         try await self.waitUntil("the reconnect to reach Chrome") {
             harness.connectCountSnapshot() >= 2
         }
-
+        
+        
         XCTAssertEqual(client.closeCodesSnapshot(), [])
 
         await harness.releaseHeldConnects()
@@ -41,15 +47,20 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
             !client.closeCodesSnapshot().isEmpty
         }
 
+        
+        
         XCTAssertEqual(client.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
         XCTAssertEqual(client.closeReasonsSnapshot(), ["upstream-reset"])
-
+        
+        
+        
         XCTAssertEqual(harness.connectCountSnapshot(), 2)
         XCTAssertEqual(harness.sentTextsSnapshot(), [])
     }
 
     func testChromeReconnectClosesClientWithUpstreamResetAfterThirdFailedAttempt() async throws {
-
+        
+        
         let attemptGate = StepGate()
         let harness = ChromeConnectorHarness()
         let proxy = CDPProxy(
@@ -66,7 +77,8 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         try await proxy.preWarm(cdpPort: 9222)
         await proxy.addClient(client.handle)
         await harness.emitEvent(.closed("code=Optional(messageTooLarge)"))
-
+        
+        
         harness.failNextConnects(3)
 
         for attempt in 1...2 {
@@ -74,7 +86,8 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
             try await self.waitUntil("reconnect attempt \(attempt)") {
                 harness.connectAttemptCountSnapshot() >= attempt + 1
             }
-
+            
+            
             XCTAssertEqual(client.closeCodesSnapshot(), [], "closed after \(attempt) failed attempt(s)")
         }
 
@@ -89,7 +102,7 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         try await self.waitUntil("the reconnect loop to succeed on the fourth attempt") {
             harness.connectCountSnapshot() >= 2
         }
-
+        
         XCTAssertEqual(client.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
     }
 
@@ -111,9 +124,12 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         try await proxy.preWarm(cdpPort: 9222)
         await proxy.addClient(stale.handle)
 
+        
+        
         await harness.emitEvent(.closed("code=Optional(messageTooLarge)"))
         await proxy.receive(.text("{\"id\":1,\"method\":\"Target.createTarget\"}"), from: stale.handle.id)
 
+        
         await proxy.addClient(replacement.handle)
         await proxy.receive(.text("{\"id\":2,\"method\":\"Target.createTarget\"}"), from: replacement.handle.id)
 
@@ -122,11 +138,15 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
             !harness.sentTextsSnapshot().isEmpty
         }
 
+        
+        
         XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":2,\"method\":\"Target.createTarget\"}"])
-
+        
+        
         XCTAssertEqual(replacement.closeCodesSnapshot(), [])
         XCTAssertEqual(stale.closeCodesSnapshot(), [.unknown(CDPProxy.supersededCloseCode)])
 
+        
         await harness.emitText("{\"method\":\"Target.targetCreated\",\"params\":{}}")
         try await self.waitUntil("the replacement to keep receiving Chrome frames") {
             !replacement.sentTextsSnapshot().isEmpty
@@ -144,7 +164,7 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
             messagePump.enqueue(.text("{\"method\":\"Page.frameNavigated\",\"sessionId\":\"S2\"}")),
             .enqueued
         )
-
+        
         XCTAssertNil(messagePump.overflowDiagnosticsSummary())
 
         XCTAssertEqual(
@@ -159,6 +179,8 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
             "queued=3 distinctSessionIds=2 topMethods: Page.frameNavigated=2, Network.requestWillBeSent=1"
         )
 
+        
+        
         await CDPProxy.runChromeMessagePump(messagePump) { _ in }
         XCTAssertEqual(messagePump.overflowDiagnosticsSummary(), summary)
     }
@@ -188,7 +210,8 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
             "[cdp-proxy] Inbound Chrome frame buffer overflowed — "
                 + "queued=1 distinctSessionIds=1 topMethods: Page.frameNavigated=1"
         )
-
+        
+        
         XCTAssertNil(
             CDPProxy.inboundOverflowLogLine(
                 result: .overflow,
@@ -219,7 +242,7 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         for _ in 0..<2 {
             messages.append(.text("{\"method\":\"Page.loadEventFired\",\"sessionId\":\"S0\"}"))
         }
-
+        
         messages.append(.text("{\"method\":\"Runtime.consoleAPICalled\",\"sessionId\":\"S0\"}"))
         messages.append(.text("{\"id\":7,\"result\":{}}"))
         messages.append(.binary(ByteBuffer(bytes: [0x01, 0x02])))

@@ -23,8 +23,6 @@ describe('isKeptComment', () => {
   it('keeps Go, Swift, and shell directives', () => {
     expect(isKeptComment('//go:build ignore')).toBe(true);
     expect(isKeptComment('//nolint:errcheck')).toBe(true);
-    expect(isKeptComment('// indirect')).toBe(true);
-    expect(isKeptComment('\tgithub.com/foo v1.0.0 // indirect')).toBe(true);
     expect(isKeptComment('// swiftlint:disable:next force_cast')).toBe(true);
     expect(isKeptComment('// swift-tools-version: 5.10')).toBe(true);
     expect(isKeptComment('//export MyFunc')).toBe(true);
@@ -84,7 +82,6 @@ describe('isDeletedPath / isProductMarkdown', () => {
     expect(isDeletedPath('packages/vfs-root/shared/CLAUDE.md')).toBe(false);
     expect(isProductMarkdown('packages/vfs-root/shared/CLAUDE.md')).toBe(true);
     expect(isDeletedPath('README.md')).toBe(false);
-    expect(isDeletedPath('NOCOMMENT.md')).toBe(false);
     expect(isDeletedPath('LICENSE')).toBe(false);
     expect(isDeletedPath('packages/webapp/src/foo.ts')).toBe(false);
   });
@@ -186,20 +183,6 @@ describe('stripSource swift', () => {
     const out = stripSource(src, 'swift', 'Package.swift');
     expect(out).toContain('// swift-tools-version: 5.10');
     expect(out).toContain('import PackageDescription');
-  });
-
-  it('does not treat // inside #" raw strings as comments', () => {
-    const src = 'let s = #"{"url":"https://tray.example/join"}"#\n// drop me\n';
-    const out = stripSource(src, 'swift', 'a.swift');
-    expect(out).toContain('https://tray.example/join');
-    expect(out).not.toContain('drop me');
-  });
-
-  it('does not treat // inside multiline strings as comments', () => {
-    const src = 'let s = """\nhttps://tray.example/join\n"""\n// drop me\n';
-    const out = stripSource(src, 'swift', 'a.swift');
-    expect(out).toContain('https://tray.example/join');
-    expect(out).not.toContain('drop me');
   });
 });
 

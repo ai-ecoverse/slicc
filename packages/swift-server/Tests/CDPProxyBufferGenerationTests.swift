@@ -5,7 +5,13 @@ import XCTest
 
 @testable import slicc_server
 
+
+
+
+
 final class CDPProxyBufferGenerationTests: XCTestCase {
+
+    
 
     func testDropReasonAllowsAMatchingGeneration() {
         let chrome = UUID()
@@ -21,7 +27,9 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
     }
 
     func testDropReasonAllowsAnInitialConnectBufferOntoAnyConnection() {
-
+        
+        
+        
         let client = UUID()
 
         XCTAssertNil(
@@ -73,7 +81,8 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
     }
 
     func testDropReasonsMatchTheNodeServerWireStrings() {
-
+        
+        
         XCTAssertEqual(ClientFrameBufferDropReason.chromeLegReset.rawValue, "chrome-leg-reset")
         XCTAssertEqual(ClientFrameBufferDropReason.clientSuperseded.rawValue, "client-superseded")
         XCTAssertEqual(ClientFrameBufferDropReason.clientDisconnected.rawValue, "client-disconnected")
@@ -81,8 +90,11 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
         XCTAssertEqual(ClientFrameBufferDropReason.noClient.rawValue, "no-client")
     }
 
-    func testInitialConnectBufferStillFlushesOntoTheFirstConnection() async {
+    
 
+    func testInitialConnectBufferStillFlushesOntoTheFirstConnection() async {
+        
+        
         let harness = ChromeConnectorHarness(waitForExplicitResume: true)
         let proxy = self.makeProxy(harness: harness)
         let client = ClientRecorder()
@@ -111,12 +123,15 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
         }
         await proxy.receive(.text("{\"id\":1,\"method\":\"Target.createTarget\"}"), from: first.handle.id)
 
+        
         await proxy.addClient(second.handle)
         await proxy.receive(.text("{\"id\":2,\"method\":\"Target.getTargets\"}"), from: second.handle.id)
 
         await harness.resumePendingConnection()
         await prepareTask.value
 
+        
+        
         XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":2,\"method\":\"Target.getTargets\"}"])
         XCTAssertEqual(first.closeCodesSnapshot(), [.unknown(CDPProxy.supersededCloseCode)])
     }
@@ -136,11 +151,17 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
         await harness.resumePendingConnection()
         await prepareTask.value
 
+        
+        
         XCTAssertEqual(harness.sentTextsSnapshot(), [])
     }
 
-    func testReconnectLoopHasNoAttemptCap() async throws {
+    
 
+    func testReconnectLoopHasNoAttemptCap() async throws {
+        
+        
+        
         let attemptGate = StepGate()
         let harness = ChromeConnectorHarness()
         let proxy = self.makeProxy(harness: harness, sleep: { _ in await attemptGate.wait() })
@@ -164,11 +185,16 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
             harness.connectCountSnapshot() >= 2
         }
 
+        
+        
         XCTAssertEqual(client.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
     }
 
     func testSuccessAfterFailuresLeavesAClientThatConnectedInTheMeantimeConnected() async throws {
-
+        
+        
+        
+        
         let attemptGate = StepGate()
         let harness = ChromeConnectorHarness()
         let proxy = self.makeProxy(harness: harness, sleep: { _ in await attemptGate.wait() })
@@ -190,6 +216,8 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
             !first.closeCodesSnapshot().isEmpty
         }
 
+        
+        
         await proxy.addClient(second.handle)
         XCTAssertEqual(second.closeCodesSnapshot(), [])
 
@@ -198,6 +226,9 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
             harness.connectCountSnapshot() >= 2
         }
 
+        
+        
+        
         XCTAssertEqual(second.closeCodesSnapshot(), [])
         XCTAssertEqual(first.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
     }

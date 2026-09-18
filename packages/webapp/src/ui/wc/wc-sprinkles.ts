@@ -1,13 +1,17 @@
+import { matchLickTargetAlias } from '../../base/lick-target-match.js';
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
-import type { SprinkleSendTarget } from '../../shell/sprinkle-manager-handle.js';
+import type {
+  SprinkleOpenOptions,
+  SprinkleSendTarget,
+} from '../../shell/sprinkle-manager-handle.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
 import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
 import type { WcShellRefs } from './wc-shell.js';
-import { defaultRootOf } from './wc-unit-context.js';
+import { defaultRootOf, rootForSelection } from './wc-unit-context.js';
 
 const SPRINKLE_PREFIX = 'sprinkle:';
 
@@ -324,6 +328,8 @@ export interface WireWcSprinklesDeps {
   client: OffscreenClient;
 
   getUnits(): readonly WorkUnitSummary[];
+
+  getSelected(): WorkUnitSummary | null;
   fs: import('../../fs/virtual-fs.js').VirtualFS;
 
   instanceId?: string;
@@ -344,10 +350,16 @@ export interface WireWcSprinklesDeps {
 export function makeSprinkleLickHandler(
   client: Pick<OffscreenClient, 'sendSprinkleLick'>,
   interceptWelcomeLick?: (event: LickEvent) => boolean
-): (event: LickEvent) => void {
-  return (event) => {
+): (event: LickEvent, originUnitId?: string) => void {
+  return (event, originUnitId) => {
     if (event.type !== 'sprinkle' || !event.sprinkleName) return;
     if (interceptWelcomeLick?.(event)) return;
+    if (originUnitId) {
+      client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop, {
+        unitJid: originUnitId,
+      });
+      return;
+    }
     client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
   };
 }
@@ -427,6 +439,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       inlineSprinkles: new Set(['welcome']),
       execHandler,
       onAttachImage: onAttachImage ?? (() => {}),
+      resolveLickOriginUnitId: (target) => matchLickTargetAlias(deps.getUnits(), target)?.id,
     }
   );
   (window as unknown as SprinkleManagerGlobal).__slicc_sprinkleManager = manager;
@@ -437,14 +450,15 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
   } else if (isExtension) {
     const { handleSprinkleOp } = await import('../sprinkle-op-handler.js');
     client.setSprinkleOpHandler((payload: unknown) => {
-      const { id, op, name, data, target } = payload as {
+      const { id, op, name, data, target, openOptions } = payload as {
         id: unknown;
         op: string;
         name: string;
         data: unknown;
         target?: SprinkleSendTarget;
+        openOptions?: SprinkleOpenOptions;
       };
-      void handleSprinkleOp(manager, id, op, name, data, target);
+      void handleSprinkleOp(manager, id, op, name, data, target, openOptions);
     });
   }
 
@@ -452,7 +466,11 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     const name = sprinkleNameFromId(id);
     if (name) {
-      manager.activate(name).catch((err) => log.error('WC sprinkle activate failed', err));
+      const openingRoot = rootForSelection(deps.getUnits(), deps.getSelected());
+      const activation = openingRoot
+        ? manager.activate(name, undefined, { lickOriginTarget: openingRoot.folder })
+        : manager.activate(name);
+      activation.catch((err) => log.error('WC sprinkle activate failed', err));
       return;
     }
     if (id && isToolPanelId(id)) {

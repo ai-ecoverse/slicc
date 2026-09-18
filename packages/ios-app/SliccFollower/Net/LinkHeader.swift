@@ -1,18 +1,35 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct ParsedLink: Equatable {
-
+    
     let href: String
-
+    
     let rel: [String]
-
+    
     let params: [String: String]
 
     var title: String? { params["title"] }
 }
 
 enum LinkHeader {
-
+    
+    
+    
+    
+    
     static func parse(_ values: [String], baseURL: String? = nil) -> [ParsedLink] {
         parse(values.joined(separator: ", "), baseURL: baseURL)
     }
@@ -46,6 +63,10 @@ enum LinkHeader {
         return out
     }
 
+    
+
+    
+    
     private static func readParams(
         _ chars: [Character], from start: Int
     ) -> (Int, [(String, String)]) {
@@ -67,7 +88,7 @@ enum LinkHeader {
 
             let nameStart = i
             while i < chars.count, isTokenChar(chars[i]) { i += 1 }
-
+            
             if i < chars.count, chars[i] == "*" { i += 1 }
             if nameStart == i {
                 i = skipToNextValue(chars, i)
@@ -114,6 +135,8 @@ enum LinkHeader {
 
     private static func isOWSChar(_ c: Character) -> Bool { c == " " || c == "\t" }
 
+    
+    
     private static func skipToNextValue(_ chars: [Character], _ start: Int) -> Int {
         var i = start
         var inQuote = false
@@ -138,7 +161,7 @@ enum LinkHeader {
     private static func readQuotedString(
         _ chars: [Character], _ start: Int
     ) -> (value: String, end: Int) {
-        var i = start + 1
+        var i = start + 1  
         var result = ""
         while i < chars.count {
             let c = chars[i]
@@ -158,6 +181,7 @@ enum LinkHeader {
         return (result, i)
     }
 
+    
     private static func isTokenChar(_ c: Character) -> Bool {
         guard let ascii = c.asciiValue else { return false }
         switch ascii {
@@ -170,6 +194,8 @@ enum LinkHeader {
             return false
         }
     }
+
+    
 
     private static func buildLink(
         rawURI: String, rawParams: [(String, String)], baseURL: String?
@@ -184,11 +210,11 @@ enum LinkHeader {
                 }
                 continue
             }
-
+            
             if name == "rel", params["rel"] != nil { continue }
             params[name] = value
         }
-
+        
         for (name, value) in extOverrides { params[name] = value }
 
         let href = resolveURI(rawURI, baseURL: baseURL)
@@ -200,12 +226,15 @@ enum LinkHeader {
 
     private static func resolveURI(_ ref: String, baseURL: String?) -> String {
         guard let baseURL, let base = URL(string: baseURL) else { return ref }
-
+        
         if ref.isEmpty { return base.absoluteString }
         guard let resolved = URL(string: ref, relativeTo: base) else { return ref }
         return resolved.absoluteURL.absoluteString
     }
 
+    
+    
+    
     static func decodeExtValue(_ value: String) -> String? {
         guard let firstQuote = value.firstIndex(of: "'") else { return nil }
         let afterFirst = value.index(after: firstQuote)

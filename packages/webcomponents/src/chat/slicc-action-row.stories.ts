@@ -137,7 +137,7 @@ export const OpenDiff: Story = {
     tone: 'vi',
     result: '4 changes',
     labelNodes: () => [
-      'edit_file · ',
+      'edit · ',
       h('a', { class: 'vlink', 'data-file': 'fcss', 'data-kind': 'css' }, 'hero.css'),
     ],
     body: () =>

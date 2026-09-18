@@ -1,9 +1,14 @@
 import SliccTrayKit
 import SwiftUI
 
+
+
+
+
 struct SudoApprovalCard: View {
     let request: SudoApprovalRequest
-
+    
+    
     let allowAlways: Bool
     let onDecision: (SudoApprovalDecision) -> Void
 
@@ -16,7 +21,10 @@ struct SudoApprovalCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(request.heading, systemImage: "key.fill")
                 .font(.headline)
-
+            
+            
+            
+            
             if let who = request.requester ?? request.scoopName {
                 detail("Requested by", who)
             }
@@ -31,6 +39,11 @@ struct SudoApprovalCard: View {
                     .textSelection(.enabled)
             }
             .font(.subheadline)
+            
+            
+            if let why = request.reason, !why.isEmpty {
+                detail("Reason given", why)
+            }
             if showsPattern {
                 TextField("Always allow pattern", text: $pattern)
                     .font(.system(.subheadline, design: .monospaced))

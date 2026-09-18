@@ -3,6 +3,9 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
 @MainActor
 final class ThemePaletteTests: XCTestCase {
 
@@ -11,6 +14,8 @@ final class ThemePaletteTests: XCTestCase {
     ) -> SliccTheme {
         SliccTheme(id: "t", name: "Test", base: base, tokens: tokens)
     }
+
+    
 
     func testHexTokenParsesSixAndThreeDigitForms() {
         XCTAssertNotNil(Color(hexToken: "#0a0a0a"))
@@ -25,6 +30,8 @@ final class ThemePaletteTests: XCTestCase {
         XCTAssertNil(Color(hexToken: "#12345"))
         XCTAssertNil(Color(hexToken: "#zzzzzz"))
     }
+
+    
 
     func testUnthemedFollowsTheSystemScheme() {
         XCTAssertEqual(
@@ -45,7 +52,7 @@ final class ThemePaletteTests: XCTestCase {
         let themed = ThemePalette.fromTheme(
             theme(base: .dark, tokens: ["--canvas": "#123456"]))
         XCTAssertEqual(themed.canvas, Color(hexToken: "#123456"))
-
+        
         XCTAssertEqual(themed.surface, ThemePalette.dark.surface)
         XCTAssertEqual(themed.ink, ThemePalette.dark.ink)
         XCTAssertTrue(themed.isLeaderTheme)
@@ -56,6 +63,8 @@ final class ThemePaletteTests: XCTestCase {
             theme(base: .light, tokens: ["--ink": "var(--nope)"]))
         XCTAssertEqual(themed.ink, ThemePalette.light.ink)
     }
+
+    
 
     func testSprinkleCSSCarriesTokensAndMappings() {
         let css = theme(
@@ -88,16 +97,19 @@ final class ThemePaletteTests: XCTestCase {
         XCTAssertEqual(css, "html { color-scheme: light; }")
     }
 
-    func testThemedBubbleFollowsTheDeepContract() {
+    
 
+    func testThemedBubbleFollowsTheDeepContract() {
+        
         let dark = ThemePalette.fromTheme(theme(base: .dark))
         XCTAssertEqual(dark.bubble, Color(hexToken: "#f5f5f2"))
         XCTAssertEqual(dark.bubbleText, Color(hexToken: "#0a0a0a"))
-
+        
         let light = ThemePalette.fromTheme(theme(base: .light))
         XCTAssertEqual(light.bubble, Color(hexToken: "#000000") ?? .black)
         XCTAssertEqual(light.bubbleText, .white)
-
+        
+        
         let custom = ThemePalette.fromTheme(
             theme(base: .dark, tokens: ["--deep": "#123456"]))
         XCTAssertEqual(custom.bubble, Color(hexToken: "#123456"))
@@ -108,6 +120,8 @@ final class ThemePaletteTests: XCTestCase {
         XCTAssertEqual(ThemePalette.dark.bubble, ThemePalette.dark.accent)
         XCTAssertEqual(ThemePalette.dark.bubbleText, .white)
     }
+
+    
 
     func testApplyLeaderThemeDecodesAndPublishes() {
         let state = AppState()

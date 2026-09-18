@@ -1,8 +1,8 @@
 import {
   type FeatureFlagFloat,
   type FeatureFlagValues,
-  initFeatureFlags,
   type UntrustedFlagValues,
+  updateCentralFlagValues,
 } from './feature-flags.js';
 import {
   type FeatureFlagsRemoteStorage,
@@ -49,7 +49,7 @@ export async function refreshFeatureFlagsFromRemote(
     if (!flags) return;
     writeFeatureFlagsRemoteCache(storage, float, flags);
 
-    initFeatureFlags(float, flags);
+    updateCentralFlagValues(float, flags);
   } catch {}
 }
 

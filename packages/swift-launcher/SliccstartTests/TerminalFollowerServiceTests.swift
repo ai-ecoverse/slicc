@@ -3,6 +3,9 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
 @MainActor
 final class TerminalFollowerServiceTests: XCTestCase {
     func testIsCliAvailableReflectsLocatorResult() {
@@ -18,6 +21,8 @@ final class TerminalFollowerServiceTests: XCTestCase {
         XCTAssertFalse(missing.isTerminalCliAvailable())
     }
 
+    
+    
     func testLiveServiceProbeAgreesWithLocator() {
         XCTAssertEqual(
             TerminalFollowerLaunchService.live.isCliAvailable(),
@@ -25,6 +30,8 @@ final class TerminalFollowerServiceTests: XCTestCase {
         )
     }
 
+    
+    
     func testLaunchDownloadsCliWhenMissingAndExposesIt() async throws {
         let downloaded = URL(fileURLWithPath: "/downloads/slicc")
         var exposed: URL?
@@ -54,6 +61,8 @@ final class TerminalFollowerServiceTests: XCTestCase {
         )
     }
 
+    
+    
     func testLaunchTerminalFollowerPublishesDownloadProgress() async throws {
         let service = TerminalFollowerLaunchService(
             findCliBinary: { nil },
@@ -71,7 +80,7 @@ final class TerminalFollowerServiceTests: XCTestCase {
             terminalTarget(),
             joinURLOverride: "https://remote.test/join/token.secret"
         )
-
+        
         await Task.yield()
 
         XCTAssertEqual(process.terminalCliDownloadProgress, .installing)
@@ -90,6 +99,8 @@ final class TerminalFollowerServiceTests: XCTestCase {
         XCTAssertNil(bootstrapper.lastError)
         XCTAssertTrue(SliccBootstrapper.defaultSliccDir.hasSuffix("/.slicc/slicc"))
     }
+
+    
 
     private func makeService(cliPath: String?) -> TerminalFollowerLaunchService {
         TerminalFollowerLaunchService(

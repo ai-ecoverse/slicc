@@ -2,9 +2,17 @@ import Foundation
 import SliccTrayKit
 import UIKit
 
+
+
+
+
+
+
+
 @MainActor
 final class CdpPreviewClient {
-
+    
+    
     static let jpegQuality = 60
     static let requestTimeout: TimeInterval = 15
 
@@ -33,6 +41,9 @@ final class CdpPreviewClient {
         }
     }
 
+    
+    
+    
     func capturePreview(targetId: String) async throws -> UIImage {
         let attach = try await request(
             targetRuntimeId: "leader", localTargetId: targetId,
@@ -48,7 +59,10 @@ final class CdpPreviewClient {
                     localTargetId: targetId, method: "Target.detachFromTarget",
                     params: AnyCodable(["sessionId": sessionId]), sessionId: nil))
         }
-
+        
+        
+        
+        
         _ = try? await request(
             targetRuntimeId: "leader", localTargetId: targetId,
             method: "Page.bringToFront", params: [:], sessionId: sessionId)
@@ -89,6 +103,9 @@ final class CdpPreviewClient {
         }
     }
 
+    
+    
+    
     func handleResponse(
         requestId: String, result: AnyCodable?, error: String?,
         chunkData: String?, chunkIndex: Int?, totalChunks: Int?

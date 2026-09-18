@@ -88,7 +88,8 @@ func TestParseSelectorErrors(t *testing.T) {
 }
 
 func TestParseSelectorMissingValue(t *testing.T) {
-
+	
+	
 	if _, _, err := ParseSelector([]string{"--index"}); err == nil {
 		t.Error("expected error for --index with no value")
 	}
@@ -170,7 +171,7 @@ func TestFormatTable(t *testing.T) {
 	if !strings.Contains(out, "LABEL") || !strings.Contains(out, "AGE") {
 		t.Errorf("missing header: %q", out)
 	}
-
+	
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if !strings.Contains(lines[1], "New") {
 		t.Errorf("first row should be newest: %q", lines[1])
@@ -179,7 +180,7 @@ func TestFormatTable(t *testing.T) {
 		t.Errorf("table must not contain join URLs: %q", out)
 	}
 	if strings.Contains(out, "just now") {
-
+		
 		t.Errorf("expected minute-granular age, got %q", out)
 	}
 }
@@ -218,7 +219,8 @@ func TestTruncateAndShortID(t *testing.T) {
 	if got := truncate("abcdefghij", 5); got != "abcd…" {
 		t.Errorf("truncate = %q", got)
 	}
-
+	
+	
 	got := truncate("日本語のデバイス名", 4)
 	if got != "日本語…" {
 		t.Errorf("multibyte truncate = %q, want 日本語…", got)

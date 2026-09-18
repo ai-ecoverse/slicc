@@ -73,13 +73,28 @@ export function selectNewCandidates(rows, existingFps) {
   return aggregateCandidates(rows).filter((c) => !filed.has(c.fingerprint));
 }
 
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+
+function buildSinceExpression(opts) {
+  const raw = opts.since == null ? '' : String(opts.since);
+  if (raw === '') {
+    const sinceDays = Number.isFinite(opts.sinceDays) ? Math.max(1, Math.floor(opts.sinceDays)) : 1;
+    return `TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${sinceDays} DAY)`;
+  }
+  if (!ISO_INSTANT.test(raw) || Number.isNaN(Date.parse(raw))) {
+    throw new Error(
+      `buildErrorQuery: since must be an ISO-8601 UTC instant like 2026-09-15T03:00:00Z, got ${JSON.stringify(raw)}`
+    );
+  }
+  return `TIMESTAMP("${raw}")`;
+}
+
 export function buildErrorQuery(opts = {}) {
-  const sinceDays = Number.isFinite(opts.sinceDays) ? Math.max(1, Math.floor(opts.sinceDays)) : 1;
   const hosts = opts.hosts?.length ? opts.hosts : DEFAULT_HOSTS;
   const table = opts.table ?? RUM_TABLE;
   const hostList = hosts.map((h) => `"${String(h).replace(/[^\w.:-]/g, '')}"`).join(',');
   return `
-DECLARE since TIMESTAMP DEFAULT TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${sinceDays} DAY);
+DECLARE since TIMESTAMP DEFAULT ${buildSinceExpression(opts)};
 DECLARE hosts ARRAY<STRING> DEFAULT [${hostList}];
 WITH sess AS (
   SELECT id,

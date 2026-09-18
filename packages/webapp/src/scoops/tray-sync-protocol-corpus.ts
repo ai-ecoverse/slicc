@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   ChatCompactionMarker,
   ChatMessage,
+  ComputerDescriptor,
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
   MessageAttachment,
@@ -253,6 +254,67 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
         },
       ],
       activeScoopJid: 'cone',
+    },
+  },
+
+  'computers.list': {
+    ios: 'decoded',
+    message: {
+      type: 'computers.list',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: { width: 8, height: 8 },
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll',
+            keyboard: true,
+            mouse: 'absolute',
+            scroll: true,
+            exec: false,
+            inputAllowed: true,
+          },
+          pid: null,
+        } satisfies ComputerDescriptor,
+      ],
+    },
+  },
+  'computer.frame': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.frame',
+      id: 'jsh:fake',
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      data: 'QUJD',
+    },
+  },
+  'computer.native.capture': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.capture',
+      requestId: 'cap-1',
+      fps: 4,
+      maxWidth: 768,
+      watch: true,
+    },
+  },
+  'computer.native.unwatch': {
+    ios: 'decoded',
+    message: { type: 'computer.native.unwatch', requestId: 'cap-1' },
+  },
+  'computer.native.input': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.input',
+      requestId: 'in-1',
+      events: [{ type: 'click', button: 1, count: 1, x: 10, y: 20 }],
     },
   },
   'models.list': {
@@ -513,6 +575,54 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     message: { type: 'request_snapshot', scoopJid: 'cone' },
   },
   'scoops.select': { ios: 'decoded', message: { type: 'scoops.select', scoopJid: 'cone' } },
+  'computer.watch': {
+    ios: 'decoded',
+    message: { type: 'computer.watch', id: 'jsh:fake', fps: 2, maxWidth: 480 },
+  },
+  'computer.unwatch': {
+    ios: 'decoded',
+    message: { type: 'computer.unwatch', id: 'jsh:fake' },
+  },
+  'computer.input': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.input',
+      id: 'jsh:fake',
+      events: [{ type: 'key', keysym: 'Home' }],
+    },
+  },
+  'computer.native.frame': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.frame',
+      requestId: 'cap-1',
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 1440,
+      nativeHeight: 900,
+      data: 'QUJD',
+    },
+  },
+  'computer.native.error': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.error',
+      requestId: 'cap-1',
+      error:
+        'Screen Recording is denied. Enable it in System Settings → Privacy & Security → Screen Recording.',
+    },
+  },
+  'computer.native.input.result': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.input.result',
+      requestId: 'in-1',
+      error:
+        'Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again.',
+    },
+  },
   'models.request': { ios: 'decoded', message: { type: 'models.request' } },
   'model.select': {
     ios: 'decoded',
@@ -834,8 +944,9 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
   },
   error: {
     ios: 'decoded',
-    fields: { type: 'mirrored', error: 'mirrored' },
-    event: { type: 'error', error: 'boom' },
+
+    fields: { type: 'mirrored', error: 'mirrored', endTurn: 'dropped' },
+    event: { type: 'error', error: 'boom', endTurn: false },
   },
 
   screenshot: {
@@ -1115,6 +1226,41 @@ const TRAY_TARGET_ENTRY: NestedPayloadEntry<TrayTargetEntry> = {
   },
 };
 
+const COMPUTER_DESCRIPTOR: NestedPayloadEntry<ComputerDescriptor> = {
+  ios: 'mirrored',
+  fields: {
+    id: 'mirrored',
+    kind: 'mirrored',
+    title: 'mirrored',
+    size: 'mirrored',
+    state: 'mirrored',
+    capabilities: 'mirrored',
+    pid: 'mirrored',
+    softKeys: 'mirrored',
+    lastShot: 'mirrored',
+  },
+  sample: {
+    id: 'jsh:fake',
+    kind: 'jsh',
+    title: 'fake',
+    size: { width: 8, height: 8 },
+    state: 'live',
+    capabilities: {
+      screenshot: true,
+      text: false,
+      frames: 'poll',
+      keyboard: true,
+      mouse: 'absolute',
+      scroll: true,
+      exec: false,
+      inputAllowed: true,
+    },
+    pid: 42,
+    softKeys: [{ label: 'Home', keysym: 'Home' }],
+    lastShot: { width: 8, height: 8, scale: 1, at: 1 },
+  },
+};
+
 export const NESTED_PAYLOAD_CORPUS = {
   ChatMessage: CHAT_MESSAGE,
   ChatCompactionMarker: CHAT_COMPACTION_MARKER,
@@ -1126,6 +1272,7 @@ export const NESTED_PAYLOAD_CORPUS = {
   TrayTargetEntry: TRAY_TARGET_ENTRY,
   TrayFsRequest: TRAY_FS_REQUEST,
   TrayFsResponse: TRAY_FS_RESPONSE,
+  ComputerDescriptor: COMPUTER_DESCRIPTOR,
 } as const;
 
 function fieldsWith(

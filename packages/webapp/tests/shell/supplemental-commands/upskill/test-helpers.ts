@@ -26,3 +26,9 @@ export function response(
     url: 'https://example.test',
   };
 }
+
+export function githubCommitsResponse(url: string, sha = 'a'.repeat(40)) {
+  if (!url.includes('api.github.com') || !url.includes('/commits')) return null;
+  if (url.includes('?')) return response(200, JSON.stringify([{ sha }]));
+  return response(200, JSON.stringify({ sha }));
+}

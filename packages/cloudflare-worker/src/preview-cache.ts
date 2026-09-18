@@ -4,13 +4,36 @@ export interface CachedPreviewOpts {
   request: Request;
   allowLive: boolean;
   cacheVersion: number;
-  fetchFromDO: () => Promise<Response>;
+
+  fetchFromDO: (range: string | undefined) => Promise<Response>;
+}
+
+async function fetchFromDOSafely(
+  fetchFromDO: CachedPreviewOpts['fetchFromDO'],
+  range: string | undefined
+): Promise<Response> {
+  try {
+    return await fetchFromDO(range);
+  } catch (err) {
+    console.error('preview fetch failed', err instanceof Error ? err.message : String(err));
+    return new Response('Preview temporarily unavailable', {
+      status: 503,
+      headers: { 'cache-control': 'no-store', 'retry-after': '1' },
+    });
+  }
+}
+
+function effectiveRange(request: Request): string | undefined {
+  if (request.headers.has('if-range')) return undefined;
+  return request.headers.get('range') ?? undefined;
 }
 
 export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Response> {
-  const { request, allowLive, cacheVersion, fetchFromDO } = opts;
+  const { request, allowLive, cacheVersion } = opts;
+  const range = effectiveRange(request);
+  const fetchFromDO = () => fetchFromDOSafely(opts.fetchFromDO, range);
 
-  if (allowLive || request.method !== 'GET') {
+  if (allowLive || request.method !== 'GET' || range !== undefined) {
     return fetchFromDO();
   }
 
@@ -46,7 +69,8 @@ export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Respo
   headers.set('etag', etag);
 
   const response = new Response(body, { status: 200, headers });
-  await cache.put(cacheKey, response.clone());
+
+  await cache.put(cacheKey, response.clone()).catch(() => {});
   return response;
 }
 

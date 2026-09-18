@@ -6,7 +6,12 @@ import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.
 import { resolveModelSelectionForScoop } from '../../providers/account-store.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { TurnGuestGate } from '../../sudo/types.js';
-import { createBashTool, createFileTools, createRequestSecretTool } from '../../tools/index.js';
+import {
+  createBashTool,
+  createFileTools,
+  createMemoryWriteTool,
+  createRequestSecretTool,
+} from '../../tools/index.js';
 import type { BashJobProcess } from '../../tools/types.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { ScoopContextCallbacks } from '../scoop-context.js';
@@ -32,6 +37,8 @@ export interface ScoopToolsDeps {
   fs: VirtualFS;
 
   gatedFs: VirtualFS;
+
+  memoryFs: VirtualFS;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
   getTurnPid: () => number | undefined;
@@ -86,9 +93,18 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
     onListSudoRequests: callbacks.onListSudoRequests,
   };
   const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
+  const fileTools = createFileTools(deps.gatedFs, unit.workspace.root);
+
+  const memoryWriteTool = createMemoryWriteTool(deps.memoryFs, {
+    readSessionCount: async () => {
+      const { readSessionCount } = await import('../cone-memory-budget.js');
+      return readSessionCount(deps.fs);
+    },
+  });
 
   const legacyTools = [
-    ...createFileTools(deps.gatedFs),
+    ...fileTools,
+    memoryWriteTool,
 
     createBashTool(deps.shell, deps.fs, unit.workspace.scratch, {
       defaultBackgroundAfterSeconds: scoop.config?.backgroundAfterSeconds,

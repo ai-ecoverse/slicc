@@ -23,6 +23,8 @@ describe('convertError', () => {
     ['EISDIR: illegal operation on a directory', 'EISDIR'],
     ['ENOTEMPTY: directory not empty', 'ENOTEMPTY'],
     ['ELOOP: too many symbolic links', 'ELOOP'],
+    ['EOPNOTSUPP: operation not supported', 'EOPNOTSUPP'],
+    ['ENOTSUP: operation not supported', 'EOPNOTSUPP'],
   ])('falls back to substring matching for LightningFS-style %s', (message, expected) => {
     expect(convertError(new Error(message), '/p').code).toBe(expected);
   });

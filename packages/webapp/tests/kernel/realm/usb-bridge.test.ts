@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import { createUsbBridge } from '../../../src/kernel/realm/realm-usb-bridge.js';
+import type { UsbClaimEvent } from '../../../src/kernel/usb-device-registry.js';
 import type { UsbBackend } from '../../../src/shell/supplemental-commands/usb-backends.js';
 import { makeCtx, makePortPair } from './device-bridge-test-helpers.js';
 
@@ -11,12 +12,17 @@ interface Recorded {
   args: unknown[];
 }
 
-function makeMockBackend(recorded: Recorded[], throwOn?: string): UsbBackend {
+function makeMockBackend(
+  recorded: Recorded[],
+  throwOn?: string,
+  claimListeners?: Array<(event: UsbClaimEvent) => void>
+): UsbBackend {
   const rec = (op: string, args: unknown[]) => recorded.push({ op, args });
   const guard = (op: string) => {
     if (throwOn === op) throw new Error(`backend ${op} boom`);
   };
   const info = (handle: string) => ({ handle, vendorId: 0x2e8a, productId: 0x0003, opened: false });
+  const listeners = claimListeners ?? [];
   return {
     list: async () => {
       rec('list', []);
@@ -37,8 +43,9 @@ function makeMockBackend(recorded: Recorded[], throwOn?: string): UsbBackend {
     close: async (h) => rec('close', [h]) as unknown as void,
     reset: async (h) => rec('reset', [h]) as unknown as void,
     selectConfig: async (h, v) => rec('selectConfig', [h, v]) as unknown as void,
-    claim: async (h, i) => rec('claim', [h, i]) as unknown as void,
-    release: async (h, i) => rec('release', [h, i]) as unknown as void,
+    claim: async (h, i, opts) => rec('claim', [h, i, opts?.owner]) as unknown as void,
+    release: async (h, i, opts) => rec('release', [h, i, opts?.owner]) as unknown as void,
+    dropOwner: async (owner) => rec('dropOwner', [owner]) as unknown as void,
     controlIn: async (h, setup, length) => {
       rec('controlIn', [h, setup, length]);
       return { status: 'ok', bytes: new Uint8Array([1, 2, 3]) };
@@ -58,17 +65,30 @@ function makeMockBackend(recorded: Recorded[], throwOn?: string): UsbBackend {
     clearHalt: async (h, direction, ep) => {
       rec('clearHalt', [h, direction, ep]);
     },
+    subscribeClaimEvents: (onEvent) => {
+      rec('subscribeClaimEvents', []);
+      listeners.push(onEvent);
+      return () => {
+        rec('unsubscribeClaimEvents', []);
+        const i = listeners.indexOf(onEvent);
+        if (i >= 0) listeners.splice(i, 1);
+      };
+    },
   };
 }
 
 function setup(recorded: Recorded[], throwOn?: string) {
   const ctx: CommandContext = makeCtx();
   const { realm, host } = makePortPair();
-  const handle = attachRealmHost(host, ctx, { usbBackend: makeMockBackend(recorded, throwOn) });
+  const claimListeners: Array<(event: UsbClaimEvent) => void> = [];
+  const handle = attachRealmHost(host, ctx, {
+    usbBackend: makeMockBackend(recorded, throwOn, claimListeners),
+  });
   const client = new RealmRpcClient(realm);
   const usb = createUsbBridge(client);
   return {
     usb,
+    claimListeners,
     dispose: () => {
       client.dispose();
       handle.dispose();
@@ -113,7 +133,10 @@ describe('realm usb bridge', () => {
     await device.claimInterface(0);
     await device.selectConfiguration(1);
     expect(rec).toContainEqual({ op: 'open', args: ['usb1'] });
-    expect(rec).toContainEqual({ op: 'claim', args: ['usb1', 0] });
+    expect(rec).toContainEqual({
+      op: 'claim',
+      args: ['usb1', 0, expect.stringMatching(/^realm:/)],
+    });
     expect(rec).toContainEqual({ op: 'selectConfig', args: ['usb1', 1] });
     dispose();
   });
@@ -152,6 +175,64 @@ describe('realm usb bridge', () => {
     const { usb, dispose } = setup(rec, 'open');
     const device = await usb.request([]);
     await expect(device.open()).rejects.toThrow(/backend open boom/);
+    dispose();
+  });
+
+  it('stamps each realm host with a distinct USB claim owner and drops it on dispose', async () => {
+    const rec: Recorded[] = [];
+    const backend = makeMockBackend(rec);
+    const ctx = makeCtx();
+    const a = makePortPair();
+    const b = makePortPair();
+    const hostA = attachRealmHost(a.host, ctx, { usbBackend: backend });
+    const hostB = attachRealmHost(b.host, ctx, { usbBackend: backend });
+    const clientA = new RealmRpcClient(a.realm);
+    const clientB = new RealmRpcClient(b.realm);
+    const usbA = createUsbBridge(clientA);
+    const usbB = createUsbBridge(clientB);
+    const deviceA = await usbA.request([]);
+    const deviceB = await usbB.request([]);
+    await deviceA.claimInterface(0);
+    await deviceB.claimInterface(0);
+    const owners = rec.filter((r) => r.op === 'claim').map((r) => r.args[2] as string);
+    expect(owners).toHaveLength(2);
+    expect(owners[0]).toMatch(/^realm:/);
+    expect(owners[1]).toMatch(/^realm:/);
+    expect(owners[0]).not.toBe(owners[1]);
+    hostA.dispose();
+    hostB.dispose();
+    expect(rec.filter((r) => r.op === 'dropOwner').map((r) => r.args[0])).toEqual(owners);
+    clientA.dispose();
+    clientB.dispose();
+  });
+
+  it('delivers claim-lost and disconnect to device listeners', async () => {
+    const rec: Recorded[] = [];
+    const { usb, claimListeners, dispose } = setup(rec);
+    const device = await usb.request([]);
+    const lost: UsbClaimEvent[] = [];
+    const gone: UsbClaimEvent[] = [];
+    device.addEventListener('claim-lost', (e) => lost.push(e));
+    device.addEventListener('disconnect', (e) => gone.push(e));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(rec).toContainEqual({ op: 'subscribeClaimEvents', args: [] });
+    const event: UsbClaimEvent = {
+      type: 'claim-lost',
+      handle: 'usb1',
+      interfaceNumber: 0,
+      holder: 'realm',
+      displacedBy: 'shell',
+      reason: 'close',
+    };
+    for (const cb of claimListeners) cb(event);
+    for (const cb of claimListeners) {
+      cb({ ...event, type: 'disconnect', interfaceNumber: undefined });
+    }
+    await new Promise((r) => setTimeout(r, 10));
+    expect(lost).toHaveLength(1);
+    expect(lost[0].holder).toBe('realm');
+    expect(gone).toHaveLength(1);
+    expect(gone[0].type).toBe('disconnect');
     dispose();
   });
 

@@ -2,10 +2,15 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
+
+
 final class TrayStatusProbeTests: XCTestCase {
 
     func testReturnsJoinUrlOnFirstSuccessfulRead() async {
-        let payload = #"{"state":"connected","joinUrl":"https://example.test/join/abc.def"}"#
+        let payload = #"{"state":"connected","joinUrl":"https:
         let probe = TrayStatusProbe(fetch: { _ in (200, Data(payload.utf8)) })
 
         let joinUrl = await probe.discoverJoinUrl(
@@ -19,7 +24,7 @@ final class TrayStatusProbeTests: XCTestCase {
 
     func testRetriesWhileLeaderIsConnectingAndReturnsLaterUrl() async {
         let connecting = Data(#"{"state":"connecting"}"#.utf8)
-        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/x.y"}"#.utf8)
+        let ready = Data(#"{"state":"connected","joinUrl":"https:
 
         actor Counter {
             var count = 0

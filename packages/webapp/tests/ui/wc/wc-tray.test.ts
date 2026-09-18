@@ -43,6 +43,7 @@ vi.mock('../../../src/ui/page-leader-tray.js', () => ({
         broadcastTheme: vi.fn(),
         getSprinkleInstances: () => [],
         getExecCapableBootstrapIds: () => new Set(),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
@@ -164,5 +165,74 @@ describe('wireWcTray tab persistence guard', () => {
     testWindow.dispatchEvent(new Event('beforeunload'));
     expect(guard.deactivate).toHaveBeenCalledTimes(2);
     expect(trayMocks.stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wireWcTray follower sprinkle lick origin (#3089)', () => {
+  beforeEach(() => {
+    trayMocks.options = null;
+  });
+
+  async function wireWithPanels(owners: Record<string, string | undefined>) {
+    const { deps } = makeDeps();
+    const sendSprinkleLick = vi.fn();
+    Object.assign(deps.client, { sendSprinkleLick });
+    Object.assign(deps.sprinkleManager, {
+      opened: () => Object.keys(owners),
+      lickOriginUnitIdOf: (name: string) => owners[name],
+    });
+    await wireWcTray(deps as never);
+    const onSprinkleLick = trayMocks.options?.onSprinkleLick as (
+      name: string,
+      body: unknown,
+      targetScoop?: string,
+      originLabel?: string,
+      originUnitJid?: string
+    ) => void;
+    return { onSprinkleLick, sendSprinkleLick };
+  }
+
+  it("stamps an open panel's opening cone, not the follower's selection", async () => {
+    const { onSprinkleLick, sendSprinkleLick } = await wireWithPanels({ review: 'cone-b' });
+
+    onSprinkleLick('review', { action: 'publish' }, undefined, 'follower', 'cone-c');
+
+    expect(sendSprinkleLick).toHaveBeenCalledWith('review', { action: 'publish' }, undefined, {
+      label: 'follower',
+      unitJid: 'cone-b',
+    });
+  });
+
+  it('keeps an explicit target and still stamps the opening cone as fallback', async () => {
+    const { onSprinkleLick, sendSprinkleLick } = await wireWithPanels({ review: 'cone-b' });
+
+    onSprinkleLick('review', { action: 'publish' }, 'cone-a', 'follower', 'cone-c');
+
+    expect(sendSprinkleLick).toHaveBeenCalledWith('review', { action: 'publish' }, 'cone-a', {
+      label: 'follower',
+      unitJid: 'cone-b',
+    });
+  });
+
+  it('gives an owner-less open panel no origin, matching a click on the leader', async () => {
+    const { onSprinkleLick, sendSprinkleLick } = await wireWithPanels({ review: undefined });
+
+    onSprinkleLick('review', { action: 'publish' }, undefined, 'follower', 'cone-c');
+
+    expect(sendSprinkleLick).toHaveBeenCalledWith('review', { action: 'publish' }, undefined, {
+      label: 'follower',
+      unitJid: undefined,
+    });
+  });
+
+  it("keeps the follower's selection for an inline dip lick (#2312)", async () => {
+    const { onSprinkleLick, sendSprinkleLick } = await wireWithPanels({ inline: 'cone-b' });
+
+    onSprinkleLick('inline', { action: 'ok' }, undefined, 'follower', 'cone-c');
+
+    expect(sendSprinkleLick).toHaveBeenCalledWith('inline', { action: 'ok' }, undefined, {
+      label: 'follower',
+      unitJid: 'cone-c',
+    });
   });
 });

@@ -157,6 +157,7 @@ export class LickRegistry {
     if (entry.branch) parts.push('--branch', quote(entry.branch));
     if (entry.path) parts.push('--path', quote(entry.path));
     parts.push(quote(entry.target));
+    parts.push('--all');
     try {
       const result = await shell.executeCommand(parts.join(' '));
       const out = `${result.stdout}${result.stderr}`.trim();

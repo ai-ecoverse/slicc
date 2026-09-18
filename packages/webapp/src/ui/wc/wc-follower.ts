@@ -614,6 +614,7 @@ export async function bootFollowerFloat(
             kind: request.kind,
             detail: request.detail,
             ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
+            ...(request.reason ? { reason: request.reason } : {}),
           },
           {
             allowAlways: false,

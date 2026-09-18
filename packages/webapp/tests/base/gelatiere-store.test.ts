@@ -8,6 +8,7 @@ import {
   DEFAULT_MAX_SUGGESTIONS,
   describeGelatiereLick,
   dismissGelatiereSuggestion,
+  GELATIERE_BASE_ALLOWED_COMMANDS,
   GELATIERE_INSTRUCTIONS_PATH,
   GELATIERE_SKILL_PATH,
   GELATIERE_STATE_PATH,
@@ -15,6 +16,7 @@ import {
   GELATIERE_SUGGESTIONS_PATH,
   type GelatiereSuggestion,
   type GelatiereVfs,
+  isNewSince,
   isPassDue,
   loadGelatiereConfig,
   MAX_STORED_SUGGESTIONS,
@@ -25,6 +27,7 @@ import {
   readGelatiereSuggestions,
   recordGelatiereTrigger,
   recordPass,
+  suggestionsForCone,
   suggestionsSince,
   takeGelatiereSuggestion,
   takenSuggestions,
@@ -79,6 +82,37 @@ describe('parseGelatiereDocument', () => {
     expect(config.instructions).not.toContain('curl ');
 
     expect(config.instructions).not.toMatch(/\{\{[A-Z_]+\}\}/);
+  });
+
+  it("extends the built-in allow-list with the file's own, deduped", () => {
+    const base = parseGelatiereDocument(DEFAULT_GELATIERE_MD);
+
+    expect(base.allowedCommands).toEqual(GELATIERE_BASE_ALLOWED_COMMANDS);
+
+    for (const command of ['jq', 'rg', 'upskill', 'gelatiere', 'memory']) {
+      expect(base.allowedCommands).toContain(command);
+    }
+
+    for (const command of ['curl', 'wget', 'nc', 'ssh']) {
+      expect(base.allowedCommands).not.toContain(command);
+    }
+
+    const extended = parseGelatiereDocument(`---\nallowedCommands: [tree, xxd, jq]\n---\nBody`);
+
+    expect(extended.allowedCommands).toEqual([...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree', 'xxd']);
+    const block = parseGelatiereDocument(
+      `---\nallowedCommands:\n  - tree # a directory view\n---\nBody`
+    );
+    expect(block.allowedCommands).toContain('tree');
+  });
+
+  it('rejects an allow-list entry that is not a bare command name', () => {
+    expect(() => parseGelatiereDocument('---\nallowedCommands: ["curl -sS"]\n---\nbody')).toThrow(
+      'allowedCommands must contain bare command names, not "curl -sS"'
+    );
+    expect(() => parseGelatiereDocument('---\nallowedCommands: ["rm -rf /"]\n---\nbody')).toThrow(
+      'allowedCommands must contain bare command names'
+    );
   });
 
   it('honours custom values and clamps the per-pass cap', () => {
@@ -347,6 +381,26 @@ describe('coerceSuggestions', () => {
     expect(coerceSuggestions('nope', 'now')).toEqual([]);
   });
 
+  it('keeps skill-idea and issue when they carry a prompt, and drops them when they do not', () => {
+    const kept = coerceSuggestions(
+      [
+        { kind: 'skill-idea', title: 'no prompt', body: 'b' },
+        { kind: 'issue', title: 'no prompt', body: 'b' },
+        { kind: 'skill-idea', title: 'ok', body: 'b', prompt: 'Write a skill for my release run' },
+        {
+          kind: 'issue',
+          title: 'ok',
+          body: 'b',
+          prompt: 'File an issue against ai-ecoverse/slicc',
+        },
+      ],
+      'now'
+    );
+    expect(kept.map((s) => `${s.kind}:${s.title}`)).toEqual(['skill-idea:ok', 'issue:ok']);
+
+    expect(kept[0].install).toBeUndefined();
+  });
+
   it('drops non-http(s) urls — the one field that renders as an href, not text', () => {
     const entry = (url: string) => ({ kind: 'tip', title: 't', body: 'b', url });
     const urls = (raw: string[]) =>
@@ -407,7 +461,98 @@ describe('coerceSuggestions', () => {
   });
 });
 
+describe('suggestion cones', () => {
+  it('keeps bare folder names, accepts a lone string, and drops junk', () => {
+    const [listed, single, junk, empty] = coerceSuggestions(
+      [
+        suggestion({ id: 'a', cones: ['cone-bakery', 'cone-bakery', '../etc', 'cone'] }),
+        { ...suggestion({ id: 'b' }), cones: 'cone-bakery' },
+        { ...suggestion({ id: 'c' }), cones: [42, 'has space'] },
+        suggestion({ id: 'd', cones: [] }),
+      ],
+      'now'
+    );
+    expect(listed.cones).toEqual(['cone-bakery', 'cone']);
+    expect(single.cones).toEqual(['cone-bakery']);
+    expect(junk).not.toHaveProperty('cones');
+    expect(empty).not.toHaveProperty('cones');
+  });
+
+  it('counts a later-joined cone as new for that cone only', () => {
+    const s = suggestion({
+      createdAt: '2026-09-01T00:00:00.000Z',
+      cones: ['cone', 'cone-research'],
+      retargets: [{ cone: 'cone-research', at: '2026-09-10T00:00:00.000Z' }],
+    });
+    const since = '2026-09-05T00:00:00.000Z';
+    expect(isNewSince(s, since, 'cone-research')).toBe(true);
+    expect(isNewSince(s, since, 'cone')).toBe(false);
+    expect(isNewSince(s, since)).toBe(true);
+    expect(isNewSince(s, '2026-09-11T00:00:00.000Z')).toBe(false);
+    expect(isNewSince(s, undefined, 'cone')).toBe(true);
+    expect(suggestionsSince([s], since)).toHaveLength(1);
+  });
+
+  it('survives a store round-trip', async () => {
+    const vfs = fakeVfs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        {
+          ...suggestion({ cones: ['cone-bakery'] }),
+          retargets: [{ cone: 'cone-bakery', at: 't' }, { cone: 1 }, 'junk'],
+        },
+      ]),
+    });
+    const [read] = await readGelatiereSuggestions(vfs);
+    expect(read.cones).toEqual(['cone-bakery']);
+    expect(read.retargets).toEqual([{ cone: 'cone-bakery', at: 't' }]);
+  });
+
+  it('routes addressed suggestions to their cones and the rest to the primary', () => {
+    const list = [
+      suggestion({ id: 'wide' }),
+      suggestion({ id: 'bakery', cones: ['cone-bakery'] }),
+      suggestion({ id: 'both', cones: ['cone', 'cone-bakery'] }),
+      suggestion({ id: 'orphan', cones: ['cone-retired'] }),
+    ];
+    const known = new Set(['cone', 'cone-bakery', 'cone-idle']);
+    const ids = (folder: string) =>
+      suggestionsForCone(list, folder, 'cone', known).map((s) => s.id);
+    expect(ids('cone')).toEqual(['wide', 'both', 'orphan']);
+    expect(ids('cone-bakery')).toEqual(['bakery', 'both']);
+    expect(ids('cone-idle')).toEqual([]);
+  });
+});
+
 describe('mergeSuggestions', () => {
+  it('widens an open entry to new cones, stamped, and leaves settled ones alone', () => {
+    const existing = [
+      suggestion({ id: 'open', cones: ['cone-bakery'] }),
+      suggestion({ id: 'wide' }),
+      suggestion({ id: 'done', cones: ['cone-bakery'], dismissedAt: 'x' }),
+    ];
+    const at = '2026-09-10T00:00:00.000Z';
+    const { merged, added } = mergeSuggestions(existing, [
+      suggestion({ id: 'open', cones: ['cone-bakery', 'cone-research'], createdAt: at }),
+      suggestion({ id: 'wide', cones: ['cone-research'], createdAt: at }),
+      suggestion({ id: 'done', cones: ['cone-research'], createdAt: at }),
+    ]);
+    expect(added).toEqual([]);
+    expect(merged[0]).toMatchObject({
+      cones: ['cone-bakery', 'cone-research'],
+      retargets: [{ cone: 'cone-research', at }],
+      createdAt: '2026-09-01T00:00:00.000Z',
+    });
+    expect(merged[1]).toMatchObject({ cones: ['cone-research'] });
+    expect(merged[2]).toBe(existing[2]);
+    expect(existing[0].cones).toEqual(['cone-bakery']);
+  });
+
+  it('keeps an entry untouched when the repeat adds no cone', () => {
+    const existing = [suggestion({ id: 'a', cones: ['cone'] })];
+    const { merged } = mergeSuggestions(existing, [suggestion({ id: 'a', cones: ['cone'] })]);
+    expect(merged[0]).toBe(existing[0]);
+  });
+
   it('prepends new ids, keeps existing entries (and their dismissal) verbatim', () => {
     const existing = [suggestion({ id: 'a', dismissedAt: '2026-09-02T00:00:00.000Z' })];
     const { merged, added } = mergeSuggestions(existing, [

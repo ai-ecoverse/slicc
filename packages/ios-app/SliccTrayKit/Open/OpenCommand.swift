@@ -1,5 +1,9 @@
 import Foundation
 
+
+
+
+
 public enum OpenExecExitCode: Int, Sendable {
     case success = 0
     case callbackError = 1
@@ -17,6 +21,10 @@ public enum OpenCommandMode: String, Codable, Sendable {
     case universal
     case xCallback
 }
+
+
+
+
 
 public struct OpenGrantScope: Codable, Hashable, Sendable {
     public let scheme: String
@@ -52,6 +60,12 @@ public struct OpenCommandParseError: Error, Equatable, Sendable {
 public enum OpenCommandParser {
     private static let disallowedShellScalars = CharacterSet(charactersIn: ";|`$<>\\")
 
+    
+    
+    
+    
+    
+    
     public static func parse(_ command: String) throws -> ParsedOpenCommand {
         guard !command.isEmpty else { throw usage("open requires one URL") }
         guard let separator = command.firstIndex(where: \.isWhitespace) else {
@@ -129,7 +143,9 @@ public enum OpenCommandParser {
             throw invalidURL()
         }
         let canonicalURL = rawPath.isHierarchical ? inputURL.standardized : inputURL
-
+        
+        
+        
         guard !rawPath.isHierarchical || canonicalURL.absoluteString == value,
             let components = URLComponents(url: canonicalURL, resolvingAgainstBaseURL: false),
             let rawScheme = components.scheme,
@@ -167,6 +183,9 @@ public enum OpenCommandParser {
             displayHostAction: hostAction)
     }
 
+    
+    
+    
     private static func rawPath(in value: String) throws -> (path: String, isHierarchical: Bool) {
         guard let schemeEnd = value.firstIndex(of: ":"), schemeEnd != value.startIndex else {
             throw invalidURL()
@@ -188,6 +207,9 @@ public enum OpenCommandParser {
         return (String(value[pathStart..<pathEnd]), isHierarchical)
     }
 
+    
+    
+    
     private static func pathSegmentIsUnambiguous(_ rawSegment: Substring) -> Bool {
         var segment = String(rawSegment)
         guard segment != ".", segment != "..", !segment.contains("\\") else { return false }

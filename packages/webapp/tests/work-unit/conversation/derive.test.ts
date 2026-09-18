@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { agentMessagesToChatMessages } from '../../../src/scoops/agent-message-to-chat.js';
 import type { ChatMessage } from '../../../src/scoops/chat-types.js';
 import {
+  applyAttachmentOverlays,
   conversationLength,
   interleaveMarkers,
   toAgentMessages,
@@ -14,7 +15,7 @@ import {
   entriesFromChatMessages,
 } from '../../../src/work-unit/conversation/entries.js';
 import type {
-  ConversationMarker,
+  CompactionConversationMarker,
   ConversationOrigin,
   WorkUnitConversationRecord,
 } from '../../../src/work-unit/conversation/types.js';
@@ -39,7 +40,7 @@ function record(
   };
 }
 
-function marker(over: Partial<ConversationMarker> = {}): ConversationMarker {
+function marker(over: Partial<CompactionConversationMarker> = {}): CompactionConversationMarker {
   return {
     id: 'compaction-1',
     kind: 'compaction',
@@ -231,6 +232,131 @@ describe('toChildResultSummary', () => {
 describe('conversationLength', () => {
   it('counts messages, not entries', () => {
     expect(conversationLength(record(entriesFromAgentMessages(legacyAgentMessages())))).toBe(4);
+  });
+});
+
+describe('error markers (#2365)', () => {
+  it('fold back as error rows, whatever the compaction states around them', () => {
+    const rows = interleaveMarkers(
+      [{ id: 'm1', role: 'user', content: 'go', timestamp: 10 }],
+      [
+        { id: 'err', kind: 'error', timestamp: 20, text: 'rate limited' },
+        marker({ id: 'gone', timestamp: 5, compaction: { trigger: 'idle', state: 'discarded' } }),
+      ]
+    );
+    expect(rows).toEqual([
+      { id: 'm1', role: 'user', content: 'go', timestamp: 10 },
+      { id: 'err', role: 'assistant', content: 'rate limited', timestamp: 20, error: true },
+    ]);
+  });
+
+  it('never reach Pi history or the transcript text', () => {
+    const stored = {
+      ...record(entriesFromAgentMessages(legacyAgentMessages())),
+      markers: [{ id: 'err', kind: 'error' as const, timestamp: 1, text: 'boom' }],
+    };
+    expect(toAgentMessages(stored)).toEqual(legacyAgentMessages());
+    expect(toTranscriptText(stored)).not.toContain('boom');
+  });
+});
+
+describe('projectionPrefix (#2365)', () => {
+  const prefix = (): ChatMessage[] => [
+    { id: 'old-1', role: 'user', content: 'from before', timestamp: 1 },
+    { id: 'old-2', role: 'assistant', content: 'the old answer', timestamp: 2 },
+  ];
+
+  it('renders ahead of the derived history and is never shown to Pi', async () => {
+    const messages = legacyAgentMessages();
+    const stored = { ...record(entriesFromAgentMessages(messages)), projectionPrefix: prefix() };
+    const derived = await toChatMessages(stored, { idSeed: seededIds() });
+    const live = agentMessagesToChatMessages(messages, { idSeed: seededIds() });
+    expect(derived).toEqual([...prefix(), ...live]);
+    expect(toAgentMessages(stored)).toEqual(messages);
+  });
+
+  it('still renders when the Pi history is empty', async () => {
+    const stored = { ...record([]), projectionPrefix: prefix() };
+    expect(await toChatMessages(stored)).toEqual(prefix());
+  });
+
+  it('leads the transcript text and the message count', () => {
+    const stored = {
+      ...record(entriesFromAgentMessages(legacyAgentMessages())),
+      projectionPrefix: prefix(),
+    };
+    expect(toTranscriptText(stored).split('\n').slice(0, 3)).toEqual([
+      'user: from before',
+      'assistant: the old answer',
+      'user: ship the release',
+    ]);
+    expect(conversationLength(stored)).toBe(6);
+  });
+});
+
+describe('attachment overlays (#2365)', () => {
+  const file = (id: string) => ({
+    id,
+    name: `${id}.bin`,
+    mimeType: 'application/octet-stream',
+    size: 1,
+    kind: 'file' as const,
+    data: 'AA==',
+  });
+  const user = (id: string, content: string): ChatMessage => ({
+    id,
+    role: 'user',
+    content,
+    timestamp: 10,
+  });
+
+  it('puts an attachment list back on the row whose content is the sent body', () => {
+    const rows = applyAttachmentOverlays(
+      [user('u1', 'plain'), user('u2', 'with file')],
+      [{ id: 'm2', timestamp: 1, body: 'with file', attachments: [file('a')] }]
+    );
+    expect(rows[0].attachments).toBeUndefined();
+    expect(rows[1].attachments).toEqual([file('a')]);
+  });
+
+  it('pairs identical bodies in send order, and leaves unmatched overlays out', () => {
+    const rows = applyAttachmentOverlays(
+      [user('u1', 'same'), user('u2', 'same')],
+      [
+        { id: 'late', timestamp: 2, body: 'same', attachments: [file('second')] },
+        { id: 'gone', timestamp: 0, body: 'compacted away', attachments: [file('x')] },
+        { id: 'early', timestamp: 1, body: 'same', attachments: [file('first')] },
+      ]
+    );
+    expect(rows.map((r) => r.attachments?.[0]?.id)).toEqual(['first', 'second']);
+  });
+
+  it('never touches assistant rows or rows that already carry attachments', () => {
+    const own = { ...user('u1', 'x'), attachments: [file('own')] };
+    const assistant: ChatMessage = { id: 'a1', role: 'assistant', content: 'x', timestamp: 1 };
+    const rows = applyAttachmentOverlays(
+      [own, assistant],
+      [{ id: 'm', timestamp: 0, body: 'x', attachments: [file('overlay')] }]
+    );
+    expect(rows[0].attachments).toEqual([file('own')]);
+    expect(rows[1].attachments).toBeUndefined();
+  });
+
+  it('is applied by toChatMessages for an agent-history record', async () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: '[Jan 1, 9:00 AM] User: see file' }] },
+    ] as never;
+    const stored = {
+      ...record(entriesFromAgentMessages(messages)),
+      attachments: [{ id: 'm', timestamp: 0, body: 'see file', attachments: [file('f')] }],
+    };
+    const derived = await toChatMessages(stored);
+    expect(derived[0]).toMatchObject({ content: 'see file', attachments: [file('f')] });
+  });
+
+  it('returns the input untouched when there is nothing to apply', () => {
+    const rows = [user('u1', 'x')];
+    expect(applyAttachmentOverlays(rows, undefined)).toBe(rows);
   });
 });
 

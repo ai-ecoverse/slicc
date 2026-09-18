@@ -1,4 +1,5 @@
 import type { ToolProgressEvent } from '@slicc/shared-ts';
+import { isGelatiereUnit } from '../base/gelatiere-constants.js';
 import { createLogger } from '../base/logger.js';
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import type { SessionStore } from '../core/session.js';
@@ -22,6 +23,7 @@ import {
   rootsOf,
 } from '../work-unit/policy.js';
 import {
+  leadingRootOf,
   modelFor,
   modelIdFor,
   normalizeScoopRecord,
@@ -61,7 +63,7 @@ export interface ScoopLifecycleCallbacks {
     state: CompactionState,
     detail: CompactionStateDetail
   ): void;
-  onError(scoopJid: string, error: string): void;
+  onError(scoopJid: string, error: string, options?: { endTurn?: boolean }): void;
   getBrowserAPI(): ReturnType<ScoopContextCallbacks['getBrowserAPI']>;
   onToolStart?(scoopJid: string, toolName: string, toolInput: unknown, toolCallId?: string): void;
   onToolEnd?(
@@ -191,12 +193,12 @@ export interface ScoopLifecycleDeps {
       approverJid?: string
     ): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
   };
-
-  handleMessage(msg: ChannelMessage): Promise<void>;
 }
 
 export class ScoopLifecycleManager {
   private units: Map<string, LiveWorkUnit> = new Map();
+
+  private gelatiereModelSync: Promise<void> = Promise.resolve();
 
   constructor(private deps: ScoopLifecycleDeps) {}
 
@@ -466,6 +468,13 @@ export class ScoopLifecycleManager {
     images: ImageContent[] = [],
     options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
+    const record = this.deps.getScoops().get(jid);
+    if (record && isGelatiereUnit(record)) {
+      await this.syncGelatiereModel();
+      if (!modelFor(record)) {
+        throw new Error('The gelatiere cannot run until the leading cone has a model');
+      }
+    }
     let context = this.getContext(jid);
 
     if (!context) {
@@ -504,6 +513,7 @@ export class ScoopLifecycleManager {
 
   async register(scoop: RegisteredScoop): Promise<void> {
     const scoops = this.deps.getScoops();
+    const previousLeadingJid = leadingRootOf(scoops.values())?.jid;
     normalizeScoopRecord(scoop);
     this.inheritModel(scoop);
 
@@ -564,9 +574,22 @@ export class ScoopLifecycleManager {
       });
       throw err;
     }
+    if (leadingRootOf(scoops.values())?.jid !== previousLeadingJid) {
+      await this.syncGelatiereModel().catch((err) => {
+        log.warn('Failed to follow the new leading cone after registration', {
+          jid: scoop.jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   private inheritModel(scoop: RegisteredScoop): void {
+    if (isGelatiereUnit(scoop)) {
+      const leading = leadingRootOf(this.deps.getScoops().values());
+      setUnitModel(scoop, leading ? modelFor(leading) : undefined);
+      return;
+    }
     if (modelIdFor(scoop)) return;
     const parent = scoop.parentJid ? this.deps.getScoops().get(scoop.parentJid) : undefined;
     const model = (parent ? modelFor(parent) : undefined) ?? globalSeedModel();
@@ -575,6 +598,7 @@ export class ScoopLifecycleManager {
 
   async unregister(jid: string): Promise<void> {
     const scoops = this.deps.getScoops();
+    const wasLeadingRoot = leadingRootOf(scoops.values())?.jid === jid;
 
     for (const child of childrenOf(scoops.values(), jid)) {
       await this.unregister(child.jid);
@@ -610,16 +634,18 @@ export class ScoopLifecycleManager {
 
     this.destroyTab(jid);
 
-    if (scoop) void this.deps.getConversationStore()?.delete(conversationKeyFor(scoop));
-    this.deps
-      .getSessionStore()
-      ?.delete(jid)
-      .catch((err) => {
-        log.warn('Failed to delete agent session', {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+    await Promise.all([
+      scoop ? this.deps.getConversationStore()?.delete(conversationKeyFor(scoop)) : undefined,
+      this.deps
+        .getSessionStore()
+        ?.delete(jid)
+        .catch((err) => {
+          log.warn('Failed to delete agent session', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }),
+    ]);
     await this.deps.db.deleteScoop(jid);
     scoops.delete(jid);
     this.deps.messageRouter.forgetScoop(jid);
@@ -644,11 +670,24 @@ export class ScoopLifecycleManager {
         });
       }
     }
+    if (wasLeadingRoot) {
+      await this.syncGelatiereModel().catch((err) => {
+        log.warn('Failed to follow the replacement leading cone after root removal', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   }
 
   async setModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) return false;
+    if (isGelatiereUnit(scoop)) {
+      await this.syncGelatiereModel();
+      return false;
+    }
+    const changesLeadingModel = leadingRootOf(this.deps.getScoops().values())?.jid === jid;
     const previous = scoop.model;
     setUnitModel(scoop, model);
     this.getContext(jid)?.updateModel();
@@ -663,7 +702,58 @@ export class ScoopLifecycleManager {
       });
       return false;
     }
+    if (changesLeadingModel) {
+      await this.syncGelatiereModel().catch((err) => {
+        log.warn('Failed to synchronize gelatiere after leading model change', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
     return true;
+  }
+
+  syncGelatiereModel(): Promise<boolean> {
+    const run = this.gelatiereModelSync.then(() => this.applyGelatiereModel());
+    this.gelatiereModelSync = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async applyGelatiereModel(): Promise<boolean> {
+    const scoops = this.deps.getScoops();
+    const gelatiere = [...scoops.values()].find(isGelatiereUnit);
+    if (!gelatiere) return false;
+
+    const leading = leadingRootOf(scoops.values());
+    const desired = leading ? modelFor(leading) : undefined;
+    const current = modelFor(gelatiere);
+    const unchanged = desired
+      ? current?.provider === desired.provider && current.id === desired.id
+      : modelIdFor(gelatiere) === undefined;
+
+    if (!unchanged) {
+      const previousModel = gelatiere.model ? { ...gelatiere.model } : undefined;
+      const previousConfig = gelatiere.config ? { ...gelatiere.config } : undefined;
+      setUnitModel(gelatiere, desired);
+      try {
+        await this.deps.db.saveScoop(gelatiere);
+      } catch (err) {
+        gelatiere.model = previousModel;
+        gelatiere.config = previousConfig;
+        throw err;
+      }
+      log.info('Gelatiere model synchronized with leading cone', {
+        jid: gelatiere.jid,
+        leadingJid: leading?.jid,
+        model: desired ? `${desired.provider}:${desired.id}` : undefined,
+      });
+    }
+
+    if (desired) this.getContext(gelatiere.jid)?.updateModel();
+    return !unchanged;
   }
 
   refreshModels(): void {
@@ -873,34 +963,18 @@ export class ScoopLifecycleManager {
 
     this.deps.completionService.forgetScoop(jid, 'fatal-error');
 
-    const cone = this.parentOf(scoopRecord);
-    if (!cone) return;
-
-    const notifyMsg: ChannelMessage = {
-      id: `scoop-error-${jid}-${Date.now()}`,
-      chatJid: cone.jid,
-      senderId: scoopRecord.folder,
-      senderName: scoopRecord.assistantLabel,
-      content: `[@${scoopRecord.assistantLabel} FAILED]: ${error}`,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'scoop-error',
-    };
+    const parent = this.parentOf(scoopRecord);
+    if (!parent) return;
 
     try {
-      this.deps.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
+      this.deps.callbacks.onError(parent.jid, `[@${scoopRecord.assistantLabel} FAILED]: ${error}`, {
+        endTurn: false,
+      });
     } catch (err) {
-      log.warn('onIncomingMessage for scoop-error threw', {
+      log.error('Failed to record fatal error for scoop owner', {
         scoop: scoopRecord.folder,
         error: err instanceof Error ? err.message : String(err),
       });
     }
-
-    this.deps.handleMessage(notifyMsg).catch((err) => {
-      log.error('Failed to route fatal error to cone', {
-        scoop: scoopRecord.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
   }
 }

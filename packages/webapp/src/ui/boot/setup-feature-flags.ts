@@ -17,7 +17,10 @@ interface FeatureFlagsPageBootOptions extends FeatureFlagsBootOptions {
 export function setupFeatureFlags(float: FeatureFlagFloat, options: FeatureFlagsBootOptions): void {
   initFeatureFlagsFromRemoteCache(float, options.storage);
   void import('./setup-feature-flags-remote.js')
-    .then(({ refreshFeatureFlagsForPage }) => refreshFeatureFlagsForPage(float, options))
+    .then(({ refreshFeatureFlagsForPage, scheduleFeatureFlagsRefresh }) => {
+      scheduleFeatureFlagsRefresh(float, options);
+      return refreshFeatureFlagsForPage(float, options);
+    })
     .catch(() => {});
 }
 

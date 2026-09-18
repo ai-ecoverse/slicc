@@ -5,8 +5,12 @@ import XCTest
 
 @testable import Sliccstart
 
+
+
+
 @MainActor
 final class TraySessionLauncherTests: XCTestCase {
+    
 
     func testAgeFormatting() {
         let now = Date(timeIntervalSince1970: 100_000)
@@ -109,6 +113,8 @@ final class TraySessionLauncherTests: XCTestCase {
         XCTAssertEqual(unreachableButtons.filter(\.isEnabled).count, 1)
     }
 
+    
+
     func testTerminalFollowerUsesOverrideWithoutLocalLeader() async throws {
         var launchedCommand: String?
         let service = TerminalFollowerLaunchService(
@@ -119,7 +125,8 @@ final class TraySessionLauncherTests: XCTestCase {
             launchTerminal: { _, command in launchedCommand = command }
         )
         let process = SliccProcess(terminalFollowerLaunchService: service)
-
+        
+        
         XCTAssertFalse(process.isLeaderReady())
 
         try await process.launchTerminalFollower(
@@ -132,6 +139,8 @@ final class TraySessionLauncherTests: XCTestCase {
             "/usr/local/bin/slicc https://remote.test/join/token.secret follow /bin/zsh -c"
         )
     }
+
+    
 
     private func terminalTarget() -> AppTarget {
         AppTarget(

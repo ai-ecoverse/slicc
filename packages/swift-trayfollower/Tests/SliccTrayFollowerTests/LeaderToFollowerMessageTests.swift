@@ -3,11 +3,15 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
 final class LeaderToFollowerMessageTests: XCTestCase {
 
     private func roundTrip(_ message: LeaderToFollowerMessage) throws -> LeaderToFollowerMessage {
         try WireCodec.roundTrip(message)
     }
+
+    
 
     func testSnapshotRoundTrip() throws {
         let message = ChatMessage(id: "m1", role: .assistant, content: "hello", timestamp: 1_700)
@@ -22,7 +26,7 @@ final class LeaderToFollowerMessageTests: XCTestCase {
     }
 
     func testSnapshotToleratesMissingFields() throws {
-
+        
         guard case .snapshot(let messages, let scoopJid) = try WireCodec.decode(LeaderToFollowerMessage.self, from: #"{"type":"snapshot"}"#) else {
             XCTFail("expected snapshot")
             return
@@ -88,6 +92,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertNil(attachments)
     }
 
+    
+
     func testStatusWithScoopJid() throws {
         guard case .status(let scoopStatus, let scoopJid) = try roundTrip(.status(scoopStatus: "thinking", scoopJid: "s1")) else {
             XCTFail("expected status")
@@ -113,6 +119,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         }
         XCTAssertEqual(error, "boom")
     }
+
+    
 
     func testScoopsListRoundTrip() throws {
         let scoop = ScoopSummary(
@@ -210,8 +218,10 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(name, "s")
     }
 
+    
+
     func testCdpRequestRoundTrip() throws {
-        let params = try WireCodec.anyCodable(#"{"url":"https://example.com"}"#)
+        let params = try WireCodec.anyCodable(#"{"url":"https:
         guard
             case .cdpRequest(let requestId, let localTargetId, let method, let decodedParams, let sessionId) =
                 try roundTrip(.cdpRequest(requestId: "r1", localTargetId: "t1", method: "Page.navigate", params: params, sessionId: "sess"))
@@ -295,6 +305,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertNil(detail)
     }
 
+    
+
     func testFsRequestRoundTrip() throws {
         guard
             case .fsRequest(let requestId, let request) =
@@ -369,6 +381,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(requestId, "r1")
         XCTAssertEqual(signal, "SIGTERM")
     }
+
+    
 
     func testThemeApplyWithJson() throws {
         guard case .themeApply(let themeJson) = try roundTrip(.themeApply(themeJson: #"{"base":"dark"}"#)) else {
@@ -446,6 +460,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         }
     }
 
+    
+
     func testDiscriminatorsMatchWireTags() throws {
         XCTAssertEqual(try WireCodec.discriminator(LeaderToFollowerMessage.ping), "ping")
         XCTAssertEqual(try WireCodec.discriminator(LeaderToFollowerMessage.pong), "pong")
@@ -456,5 +472,126 @@ final class LeaderToFollowerMessageTests: XCTestCase {
             try WireCodec.discriminator(LeaderToFollowerMessage.execSignal(requestId: "r", signal: "SIGINT")),
             "exec.signal")
         XCTAssertEqual(try WireCodec.discriminator(LeaderToFollowerMessage.error(error: "x")), "error")
+        XCTAssertEqual(
+            try WireCodec.discriminator(LeaderToFollowerMessage.computersList(computers: [])),
+            "computers.list")
+        XCTAssertEqual(
+            try WireCodec.discriminator(
+                LeaderToFollowerMessage.computerNativeUnwatch(requestId: nil)),
+            "computer.native.unwatch")
+    }
+
+    
+
+    private func computerDescriptor() -> ComputerDescriptor {
+        ComputerDescriptor(
+            id: "jsh:clock", kind: "jsh", title: "Clock",
+            size: ComputerSize(width: 640, height: 400),
+            state: "live",
+            capabilities: ComputerCapabilities(
+                screenshot: true, text: false, frames: "poll", keyboard: true,
+                mouse: "absolute", scroll: true, exec: false, inputAllowed: true),
+            pid: nil, softKeys: [ComputerSoftKey(label: "Home", keysym: "Home")])
+    }
+
+    func testComputersListRoundTripAndMissingArray() throws {
+        let roster = [computerDescriptor()]
+        guard case .computersList(let computers) = try roundTrip(.computersList(computers: roster))
+        else {
+            XCTFail("expected computers.list")
+            return
+        }
+        XCTAssertEqual(computers, roster)
+
+        guard
+            case .computersList(let empty) = try WireCodec.decode(
+                LeaderToFollowerMessage.self, from: #"{"type":"computers.list"}"#)
+        else {
+            XCTFail("expected computers.list")
+            return
+        }
+        XCTAssertTrue(empty.isEmpty)
+    }
+
+    func testComputerFrameUnchunkedAndChunkedRoundTrip() throws {
+        guard
+            case .computerFrame(
+                let id, let seq, let mime, let width, let height, let data, let chunkData,
+                let chunkIndex, let totalChunks) = try roundTrip(
+                    .computerFrame(
+                        id: "jsh:clock", seq: 3, mime: "image/jpeg", width: 8, height: 8,
+                        data: "QUJD", chunkData: nil, chunkIndex: nil, totalChunks: nil))
+        else {
+            XCTFail("expected computer.frame")
+            return
+        }
+        XCTAssertEqual(id, "jsh:clock")
+        XCTAssertEqual(seq, 3)
+        XCTAssertEqual(mime, "image/jpeg")
+        XCTAssertEqual(width, 8)
+        XCTAssertEqual(height, 8)
+        XCTAssertEqual(data, "QUJD")
+        XCTAssertNil(chunkData)
+        XCTAssertNil(chunkIndex)
+        XCTAssertNil(totalChunks)
+
+        guard
+            case .computerFrame(_, _, _, _, _, _, let slice, let index, let total) = try roundTrip(
+                .computerFrame(
+                    id: "jsh:clock", seq: 4, mime: "image/png", width: 16, height: 16,
+                    data: nil, chunkData: "aa", chunkIndex: 0, totalChunks: 2))
+        else {
+            XCTFail("expected chunked computer.frame")
+            return
+        }
+        XCTAssertEqual(slice, "aa")
+        XCTAssertEqual(index, 0)
+        XCTAssertEqual(total, 2)
+    }
+
+    func testComputerNativeLeaderMessagesRoundTrip() throws {
+        guard
+            case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch) =
+                try roundTrip(
+                    .computerNativeCapture(
+                        requestId: "cap-1", fps: 2, maxWidth: 480, watch: true))
+        else {
+            XCTFail("expected computer.native.capture")
+            return
+        }
+        XCTAssertEqual(requestId, "cap-1")
+        XCTAssertEqual(fps, 2)
+        XCTAssertEqual(maxWidth, 480)
+        XCTAssertEqual(watch, true)
+
+        guard
+            case .computerNativeUnwatch(let missing) = try roundTrip(
+                .computerNativeUnwatch(requestId: nil))
+        else {
+            XCTFail("expected computer.native.unwatch")
+            return
+        }
+        XCTAssertNil(missing)
+
+        let events: [ComputerInputEvent] = [.click(button: 1, count: 1, holdMs: nil, x: 10, y: 20)]
+        guard
+            case .computerNativeInput(let inputId, let decoded) = try roundTrip(
+                .computerNativeInput(requestId: "in-1", events: events))
+        else {
+            XCTFail("expected computer.native.input")
+            return
+        }
+        XCTAssertEqual(inputId, "in-1")
+        XCTAssertEqual(decoded, events)
+
+        guard
+            case .computerNativeInput(_, let empty) = try WireCodec.decode(
+                LeaderToFollowerMessage.self,
+                from: #"{"type":"computer.native.input","requestId":"in-2"}"#)
+        else {
+            XCTFail("expected computer.native.input")
+            return
+        }
+        XCTAssertTrue(empty.isEmpty)
     }
 }

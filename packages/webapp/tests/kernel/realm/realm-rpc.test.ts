@@ -57,7 +57,10 @@ function makeMockFs(files: Record<string, string> = {}): IFileSystem {
     async writeFile(path: string, content: string | Uint8Array) {
       store.set(path, typeof content === 'string' ? content : new TextDecoder().decode(content));
     },
-    async appendFile() {},
+    async appendFile(path: string, content: string | Uint8Array) {
+      const suffix = typeof content === 'string' ? content : new TextDecoder().decode(content);
+      store.set(path, (store.get(path) || '') + suffix);
+    },
     async exists(path: string) {
       return store.has(path);
     },
@@ -80,7 +83,12 @@ function makeMockFs(files: Record<string, string> = {}): IFileSystem {
       store.delete(path);
     },
     async cp() {},
-    async mv() {},
+    async mv(src: string, dest: string) {
+      const content = store.get(src);
+      if (content === undefined) throw new Error(`ENOENT: ${src}`);
+      store.set(dest, content);
+      store.delete(src);
+    },
     resolvePath(base: string, path: string): string {
       if (path.startsWith('/')) return path;
       return base === '/' ? `/${path}` : `${base}/${path}`;
@@ -134,6 +142,36 @@ describe('realm RPC: vfs channel', () => {
     const client = new RealmRpcClient(realm);
     await client.call('vfs', 'writeFile', ['/tmp/out.txt', 'written']);
     expect(await fs.readFile('/tmp/out.txt')).toBe('written');
+    client.dispose();
+  });
+
+  it('appendFile is one op into ctx.fs.appendFile and reports the mutation', async () => {
+    const fs = makeMockFs({ '/tmp/log.txt': 'start' });
+    const onHostFsMutation = vi.fn();
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { onHostFsMutation });
+    const client = new RealmRpcClient(realm);
+    await client.call('vfs', 'appendFile', ['/tmp/log.txt', 'A']);
+    expect(await fs.readFile('/tmp/log.txt')).toBe('startA');
+    expect(onHostFsMutation).toHaveBeenCalledWith(['/tmp/log.txt']);
+    client.dispose();
+  });
+
+  it('concurrent appendFile RPCs keep both payloads', async () => {
+    const fs = makeMockFs({ '/tmp/log.txt': '' });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    await Promise.all([
+      client.call('vfs', 'appendFile', ['/tmp/log.txt', 'A']),
+      client.call('vfs', 'appendFile', ['/tmp/log.txt', 'B']),
+    ]);
+    const body = await fs.readFile('/tmp/log.txt');
+    expect(body).toHaveLength(2);
+    expect(body).toContain('A');
+    expect(body).toContain('B');
     client.dispose();
   });
 
@@ -245,31 +283,6 @@ describe('realm RPC: exec.start / exec.kill (kill + buffered stdin)', () => {
     client.dispose();
   });
 
-  it('exec.start forwards cwd and env to ctx.exec with replaceEnv', async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: '/shared\n', stderr: '', exitCode: 0 });
-    const ctx = makeCtx({ exec });
-    const pm = new ProcessManager();
-    const { realm, host } = makePortPair();
-    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
-    const client = new RealmRpcClient(realm);
-    const bridge = createExecBridge(client);
-
-    const handle = bridge.start('pwd', { cwd: '/shared', env: { MARKER: 'x' } });
-    handle.stdin.end();
-    const result = await handle.done;
-
-    expect(result.stdout.trim()).toBe('/shared');
-    expect(exec).toHaveBeenCalledWith(
-      'pwd',
-      expect.objectContaining({
-        cwd: '/shared',
-        env: { MARKER: 'x' },
-        replaceEnv: true,
-      })
-    );
-    client.dispose();
-  });
-
   it('buffered stdin (write + end) is delivered as the command stdin', async () => {
     const exec = vi.fn(async (_cmd: string, options: { stdin?: string }) => ({
       stdout: options.stdin ?? '',
@@ -291,6 +304,44 @@ describe('realm RPC: exec.start / exec.kill (kill + buffered stdin)', () => {
 
     expect(result.stdout).toBe('hello');
     expect(exec).toHaveBeenCalledWith('cat', expect.objectContaining({ stdin: 'hello' }));
+    client.dispose();
+  });
+
+  it('exec.start forwards cwd and env (replace) to ctx.exec', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '/shared\n', stderr: '', exitCode: 0 });
+    const fs = makeMockFs();
+    fs.stat = async (path: string) => {
+      if (path === '/shared' || path === '/workspace') {
+        return {
+          isDirectory: true,
+          isFile: false,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(),
+        };
+      }
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+    };
+    const ctx = makeCtx({ exec, fs });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('pwd', { cwd: '/shared', env: { MARKER: 'from-env' } });
+    handle.stdin.end();
+    await handle.done;
+
+    expect(exec).toHaveBeenCalledWith(
+      'pwd',
+      expect.objectContaining({
+        cwd: '/shared',
+        env: { MARKER: 'from-env' },
+        replaceEnv: true,
+      })
+    );
     client.dispose();
   });
 
@@ -1018,5 +1069,19 @@ describe('realm RPC: client lifecycle', () => {
     const client = new RealmRpcClient(realm);
     client.dispose();
     await expect(client.call('vfs', 'readFile', ['/x'])).rejects.toThrow(/disposed/);
+  });
+
+  it('counts event subscriptions as pending handles and wakes waitForProgress on unsubscribe', async () => {
+    const { realm } = makePortPair();
+    const client = new RealmRpcClient(realm);
+    expect(client.pendingCount).toBe(0);
+    const off = client.onEvent('hid-input-report', () => undefined);
+    expect(client.eventSubscriptionCount).toBe(1);
+    expect(client.pendingCount).toBe(1);
+    const woke = client.waitForProgress();
+    off();
+    await woke;
+    expect(client.pendingCount).toBe(0);
+    client.dispose();
   });
 });

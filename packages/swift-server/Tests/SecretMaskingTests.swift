@@ -4,8 +4,10 @@ import XCTest
 
 final class SecretMaskingTests: XCTestCase {
 
-    func testHmacSHA256HexMatchesKnownVector() {
+    
 
+    func testHmacSHA256HexMatchesKnownVector() {
+        
         let hex = hmacSHA256Hex(key: "Jefe", message: Array("what do ya want for nothing?".utf8))
         XCTAssertEqual(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
     }
@@ -23,6 +25,8 @@ final class SecretMaskingTests: XCTestCase {
         let b = hmacSHA256Hex(key: "secret-key-two", message: body)
         XCTAssertNotEqual(a, b)
     }
+
+    
 
     func testDeterministicOutput() {
         let a = mask(sessionId: "session-1", secretName: "GITHUB_TOKEN", realValue: "ghp_abc123xyz")
@@ -96,6 +100,8 @@ final class SecretMaskingTests: XCTestCase {
         XCTAssertEqual(result.count, real.count)
     }
 
+    
+
     func testScrubberReplacesRealValues() {
         let scrub = buildScrubber(secrets: [SecretPair(realValue: "secret123", maskedValue: "masked00")])
         XCTAssertEqual(scrub("token is secret123 here"), "token is masked00 here")
@@ -127,19 +133,21 @@ final class SecretMaskingTests: XCTestCase {
         XCTAssertEqual(scrub("hello"), "hello")
     }
 
+    
+
     func testMinMaskableSecretLengthIsNine() {
         XCTAssertEqual(minMaskableSecretLength, 9)
     }
 
     func testScrubberSkipsValueShorterThanMinimum() {
-
+        
         let eight = "abcdefgh"
         let scrub = buildScrubber(secrets: [SecretPair(realValue: eight, maskedValue: "MASKED88")])
         XCTAssertEqual(scrub("hello \(eight) world"), "hello \(eight) world")
     }
 
     func testScrubberKeepsValueAtMinimumLength() {
-
+        
         let nine = "abcdefghi"
         let scrub = buildScrubber(secrets: [SecretPair(realValue: nine, maskedValue: "MASKED999")])
         XCTAssertEqual(scrub("hello \(nine) world"), "hello MASKED999 world")
@@ -147,11 +155,13 @@ final class SecretMaskingTests: XCTestCase {
 
     func testScrubberBoundaryMixedShortAndLong() {
         let scrub = buildScrubber(secrets: [
-            SecretPair(realValue: "short78", maskedValue: "mask7777"),
-            SecretPair(realValue: "longSecret123", maskedValue: "longMasked123"),
+            SecretPair(realValue: "short78", maskedValue: "mask7777"),  
+            SecretPair(realValue: "longSecret123", maskedValue: "longMasked123"),  
         ])
         XCTAssertEqual(scrub("short78 and longSecret123"), "short78 and longMasked123")
     }
+
+    
 
     func testExactDomainMatch() {
         XCTAssertTrue(domainMatches(pattern: "api.github.com", hostname: "api.github.com"))
@@ -184,6 +194,8 @@ final class SecretMaskingTests: XCTestCase {
         XCTAssertTrue(domainMatches(pattern: "*", hostname: "example.com"))
         XCTAssertTrue(domainMatches(pattern: "*", hostname: "localhost"))
     }
+
+    
 
     func testAllowedDomainAnyMatch() {
         XCTAssertTrue(isAllowedDomain(patterns: ["api.github.com", "*.openai.com"], hostname: "api.openai.com"))

@@ -60,13 +60,10 @@ class MaybeGunzipTransform extends Transform {
         cb();
         return;
       }
-      this.#finishDecide((err) => {
-        if (err) {
-          cb(err);
-          return;
-        }
-        this.#endGunzipOrFinish(cb);
-      });
+
+      this.#decided = true;
+      this.#onDecided?.(false);
+      cb(null, this.#head);
       return;
     }
     this.#endGunzipOrFinish(cb);

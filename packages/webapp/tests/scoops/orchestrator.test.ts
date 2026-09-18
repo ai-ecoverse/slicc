@@ -2797,7 +2797,7 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     expect(await scoopFs.readTextFile('/recordings/first.har')).toBe('approved capture');
     await expect(scoopFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
 
-    const sudoers = (await sharedFs.readFile('/scoops/test-scoop/etc/sudoers', {
+    const sudoers = (await sharedFs.readFile('/etc/sudoers.d/scoop-test-scoop', {
       encoding: 'utf-8',
     })) as string;
     expect(sudoers).toContain('NOPASSWD Read /recordings/*.har');
@@ -2808,7 +2808,7 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     expect(await restoredFs.readTextFile('/recordings/first.har')).toBe('approved capture');
     await expect(restoredFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
 
-    await sharedFs.writeFile('/scoops/test-scoop/etc/sudoers', '# grant revoked\n');
+    await sharedFs.writeFile('/etc/sudoers.d/scoop-test-scoop', '# grant revoked\n');
     await vi.waitFor(async () => {
       expect(await restoredFs.exists('/recordings/first.har')).toBe(false);
     });
@@ -3171,7 +3171,7 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
 
     expect(executeCommand).toHaveBeenCalledTimes(1);
     expect(executeCommand.mock.calls[0][0]).toBe(
-      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r'"
+      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r' --all"
     );
     expect(result.settled).toBe(true);
     expect(result.message).toContain('Installed skill');

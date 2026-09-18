@@ -3,7 +3,12 @@ import XCTest
 
 @testable import SliccTrayFollower
 
+
+
+
 final class ProtocolValueTypesTests: XCTestCase {
+
+    
 
     func testProtocolVersionMatchesSharedTs() {
         XCTAssertEqual(traySyncProtocolVersion, 8)
@@ -13,11 +18,17 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertTrue(trayFollowerCapabilities.exec)
         XCTAssertEqual(trayFollowerCapabilities.browser, true)
         XCTAssertNil(trayFollowerCapabilities.oauthPopup)
-
+        
+        
         XCTAssertEqual(trayFollowerCapabilities.sudoApproval, true)
         XCTAssertNil(trayFollowerCapabilities.biometric)
         XCTAssertEqual(makeTrayFollowerCapabilities(deviceOwnerAuth: true).biometric, true)
+        
+        XCTAssertNil(trayFollowerCapabilities.computer)
+        XCTAssertNil(makeTrayFollowerCapabilities(deviceOwnerAuth: true).computer)
     }
+
+    
 
     func testNewSessionActionRawValues() throws {
         XCTAssertEqual(NewSessionAction.save.rawValue, "save")
@@ -35,6 +46,8 @@ final class ProtocolValueTypesTests: XCTestCase {
         }
     }
 
+    
+
     func testScoopSummaryFullRoundTripAndIdentity() throws {
         let scoop = ScoopSummary(
             jid: "j1", name: "Cone", folder: "/root", isCone: true, assistantLabel: "Assistant",
@@ -51,6 +64,9 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(scoop.parentId)
     }
 
+    
+    
+    
     func testScoopSummaryDecodesWithoutIsCone() throws {
         let decoder = JSONDecoder()
         let root = try decoder.decode(
@@ -69,6 +85,7 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(child.isCone)
         XCTAssertEqual(child.parentId, "c")
 
+        
         let list = try decoder.decode(
             LeaderToFollowerMessage.self,
             from: Data(
@@ -82,6 +99,9 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(scoops[0].isCone)
     }
 
+    
+    
+    
     func testScoopSummaryParentIdRoundTripAndLegacyDecode() throws {
         let scoop = ScoopSummary(
             jid: "s1", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
@@ -104,6 +124,8 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(old.parentId)
     }
 
+    
+
     func testSprinkleSummaryIdentityAndDefaults() {
         let sprinkle = SprinkleSummary(name: "n", title: "T", path: "/p", open: false)
         XCTAssertEqual(sprinkle.id, "n")
@@ -116,6 +138,8 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertEqual(try WireCodec.roundTrip(sprinkle), sprinkle)
     }
 
+    
+
     func testModelCatalogEntryIdentityAndRoundTrip() throws {
         let entry = TrayModelCatalogEntry(providerName: "anthropic", modelId: "claude-x", modelName: "Claude X", reasoning: true)
         XCTAssertEqual(entry.id, "claude-x")
@@ -126,6 +150,8 @@ final class ProtocolValueTypesTests: XCTestCase {
         let state = TrayModelSelectionState(activeModelId: "claude-x", scoopJid: "j1", thinkingLevel: .medium, effortOverride: nil)
         XCTAssertEqual(try WireCodec.roundTrip(state), state)
     }
+
+    
 
     func testCherryCapabilitiesRoundTrip() throws {
         let caps = CherryCapabilities(navigate: true, network: false, screenshot: true)
@@ -143,6 +169,15 @@ final class ProtocolValueTypesTests: XCTestCase {
         let caps = TraySyncCapabilities(exec: false, browser: true, oauthPopup: false)
         XCTAssertEqual(try WireCodec.roundTrip(caps), caps)
     }
+
+    func testTraySyncCapabilitiesComputerFlagRoundTrip() throws {
+        let caps = TraySyncCapabilities(exec: true, computer: true)
+        XCTAssertEqual(try WireCodec.roundTrip(caps).computer, true)
+        let json = try WireCodec.jsonString(caps)
+        XCTAssertTrue(json.contains("\"computer\":true"))
+    }
+
+    
 
     func testRemoteTargetInfoOptionalDefaults() {
         let target = RemoteTargetInfo(targetId: "t1", title: "Tab", url: "https://x")
@@ -164,6 +199,8 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(entry.capabilities)
         XCTAssertEqual(try WireCodec.roundTrip(entry), entry)
     }
+
+    
 
     func testCdpTargetSummaryEqualityAndIdentity() {
         let a = CDPTargetSummary(id: "t1", title: "Tab", url: "https://x")

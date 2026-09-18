@@ -291,6 +291,12 @@ interface MergeOutcome {
   conflicts: number;
 
   error?: string;
+
+  promotedOnTrip?: boolean;
+}
+
+export function isRunBoundTrip(finalText: string): boolean {
+  return /^agent run terminated: .*\bbound\b.*\bexceeded\b/.test(finalText);
 }
 
 async function applyMergeOnSuccess(
@@ -380,7 +386,9 @@ async function writeOutcomeReceipt(
           exitCode: result.exitCode,
           finishedAt: new Date().toISOString(),
 
-          ...(result.exitCode === 0 ? {} : { reason: result.finalText.slice(0, 500) }),
+          ...(result.exitCode === 0 && !merge?.promotedOnTrip
+            ? {}
+            : { reason: result.finalText.slice(0, 500) }),
           ...(merge ? { merge } : {}),
         },
         null,
@@ -599,6 +607,21 @@ async function runScoopToOutcome(
         finalText: `agent: mergeOnSuccess failed: ${merge.error}`,
         exitCode: 1,
       };
+    }
+  } else if (options.mergeOnSuccess && isRunBoundTrip(outcome.finalText)) {
+    merge = await applyMergeOnSuccess(ctx.sharedFs, options.mergeOnSuccess);
+    if (merge.applied) {
+      merge.promotedOnTrip = true;
+      log.info('run tripped its bound; staged rewrite promoted', {
+        target: options.mergeOnSuccess.targetPath,
+        conflicts: merge.conflicts,
+      });
+      outcome = {
+        finalText: `${outcome.finalText} — staged rewrite promoted`,
+        exitCode: 0,
+      };
+    } else if (merge.error === undefined) {
+      merge = undefined;
     }
   }
   if (outcome.exitCode === 0 && options.successReceiptPath) {

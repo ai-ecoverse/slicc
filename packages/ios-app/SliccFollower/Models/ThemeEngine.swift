@@ -1,5 +1,15 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
 struct SliccTheme: Codable, Equatable {
     enum Base: String, Codable {
         case dark, light
@@ -32,6 +42,8 @@ struct SliccTheme: Codable, Equatable {
     }
 }
 
+
+
 struct ThemeSlots: Codable, Equatable {
     let background: String
     let surface: String
@@ -43,7 +55,7 @@ struct ThemeSlots: Codable, Equatable {
 }
 
 enum ThemeEngine {
-
+    
     static func hexToHsl(_ hex: String) -> (h: Double, s: Double, l: Double) {
         func channel(_ start: Int) -> Double {
             let from = hex.index(hex.startIndex, offsetBy: start)
@@ -74,6 +86,7 @@ enum ThemeEngine {
         return (h, s, l)
     }
 
+    
     static func hslToHex(_ h: Double, _ s: Double, _ l: Double) -> String {
         func hue2rgb(_ p: Double, _ q: Double, _ t0: Double) -> Double {
             var t = t0
@@ -102,7 +115,8 @@ enum ThemeEngine {
         }
 
         func toHex(_ v: Double) -> String {
-
+            
+            
             String(format: "%02x", Int((v * 255).rounded()))
         }
         return "#\(toHex(r))\(toHex(g))\(toHex(b))"
@@ -118,12 +132,16 @@ enum ThemeEngine {
         return hslToHex(h, max(0, min(1, s + delta)), l)
     }
 
+    
+    
+    
     static func deriveTokens(slots: ThemeSlots, base: SliccTheme.Base) -> [String: String] {
         let isDark = base == .dark
         let step: Double = isDark ? 0.03 : -0.02
 
         var t: [String: String] = [:]
 
+        
         t["--s2-gray-25"] = slots.background
         t["--s2-bg-base"] = slots.background
         t["--s2-gray-50"] = adjustLightness(slots.background, step)
@@ -135,8 +153,10 @@ enum ThemeEngine {
         t["--s2-bg-layer-2"] = adjustLightness(slots.background, step * 2)
         t["--s2-bg-elevated"] = adjustLightness(slots.background, step * 3)
 
+        
         t["--s2-gray-300"] = slots.surface
 
+        
         t["--s2-gray-900"] = slots.text
         t["--s2-gray-1000"] = isDark ? "#ffffff" : "#000000"
         t["--s2-gray-800"] = adjustLightness(slots.text, isDark ? -0.05 : 0.05)
@@ -145,6 +165,7 @@ enum ThemeEngine {
         t["--s2-content-tertiary"] = adjustLightness(slots.text, isDark ? -0.2 : 0.2)
         t["--s2-content-disabled"] = adjustLightness(slots.text, isDark ? -0.3 : 0.3)
 
+        
         t["--s2-accent"] = slots.accent
         t["--s2-accent-hover"] = adjustLightness(slots.accent, isDark ? 0.08 : -0.06)
         t["--s2-accent-down"] = adjustLightness(slots.accent, isDark ? -0.06 : 0.08)
@@ -154,17 +175,20 @@ enum ThemeEngine {
         t["--slicc-scoop-purple"] = adjustLightness(slots.accent, 0.05)
         t["--slicc-scoop-teal"] = adjustLightness(slots.accent, -0.05)
 
+        
         t["--s2-positive"] = slots.success
         t["--s2-negative"] = slots.error
         t["--s2-informative"] = slots.accent
         t["--s2-notice"] = adjustLightness(slots.accent, isDark ? 0.1 : -0.1)
 
+        
         t["--s2-border-default"] = slots.border
         t["--s2-border-subtle"] = adjustLightness(slots.border, isDark ? -0.03 : 0.03)
         t["--s2-border-focus"] = slots.accent
         t["--s2-shadow-elevated"] = isDark ? "rgba(0, 0, 0, 0.4)" : "rgba(0, 0, 0, 0.1)"
         t["--s2-shadow-container"] = isDark ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.05)"
 
+        
         t["--canvas"] = slots.background
         t["--bg"] = adjustLightness(slots.background, isDark ? -0.02 : 0.02)
         t["--ghost"] = adjustLightness(slots.background, step * 2)
@@ -178,6 +202,7 @@ enum ThemeEngine {
         t["--waffle"] = slots.accent
         t["--shaderbg"] = slots.background
 
+        
         t["--amber"] = slots.accent
         t["--violet"] = adjustLightness(slots.accent, isDark ? 0.08 : -0.06)
         t["--cyan"] = adjustLightness(slots.accent, isDark ? -0.06 : 0.08)

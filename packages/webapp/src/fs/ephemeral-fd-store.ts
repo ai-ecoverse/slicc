@@ -31,6 +31,15 @@ export class EphemeralFdStore {
     this.entries.set(key, { bytes, mtime: now, ctime: existing?.ctime ?? now });
   }
 
+  append(path: string, content: FileContent): void {
+    const existing = this.entries.get(normalizePath(path))?.bytes ?? new Uint8Array(0);
+    const added = typeof content === 'string' ? encoder.encode(content) : content;
+    const bytes = new Uint8Array(existing.length + added.length);
+    bytes.set(existing);
+    bytes.set(added, existing.length);
+    this.write(path, bytes);
+  }
+
   read(path: string, options?: ReadFileOptions): FileContent {
     const entry = this.require(path);
     if ((options?.encoding ?? 'utf-8') === 'utf-8') return decoder.decode(entry.bytes);

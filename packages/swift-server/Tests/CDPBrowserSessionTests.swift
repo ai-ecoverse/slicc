@@ -16,7 +16,7 @@ final class CDPBrowserSessionTests: XCTestCase {
     }
 
     func testSkipsEventsAndOtherRepliesSoAReadLoopKeepsGoing() {
-
+        
         XCTAssertNil(result(#"{"method":"Target.targetCreated","params":{}}"#, id: 7))
         XCTAssertNil(result(#"{"id":6,"result":{}}"#, id: 7))
         XCTAssertNil(result("not json", id: 7))
@@ -24,7 +24,8 @@ final class CDPBrowserSessionTests: XCTestCase {
     }
 
     func testTreatsAReplyWithoutAResultAsAnEmptyObject() {
-
+        
+        
         XCTAssertEqual(result(#"{"id":7,"error":{"code":-32000}}"#, id: 7), "{}")
     }
 
@@ -49,14 +50,16 @@ final class CDPBrowserSessionTests: XCTestCase {
 
         XCTAssertEqual(String(decoding: contexts, as: UTF8.self), #"{"browserContextIds":["CTX"]}"#)
         XCTAssertEqual(String(decoding: targets, as: UTF8.self), #"{"targetInfos":[]}"#)
-
+        
+        
         let sent = await socket.sentCommands()
         XCTAssertEqual(sent.map(\.id), [1, 2])
         XCTAssertEqual(sent.map(\.method), ["Target.getBrowserContexts", "Target.getTargets"])
     }
 
     func testCallGivesUpOnABrowserThatOnlyEmitsEvents() async {
-
+        
+        
         let event = URLSessionWebSocketTask.Message.string(#"{"method":"Target.targetInfoChanged"}"#)
         let socket = SocketStub(frames: Array(repeating: event, count: 256))
         let session = WebSocketCDPBrowserSession(socket: socket)
@@ -73,7 +76,8 @@ final class CDPBrowserSessionTests: XCTestCase {
     }
 
     func testAClosedPortSurfacesAsAThrownErrorRatherThanAHang() async {
-
+        
+        
         let session = WebSocketCDPBrowserSession(url: URL(string: "ws://127.0.0.1:1/devtools/browser/none")!)
 
         do {
@@ -95,6 +99,8 @@ final class CDPBrowserSessionTests: XCTestCase {
         XCTAssertTrue(cancelled)
     }
 }
+
+
 
 private actor SocketStub: CDPWebSocketTransport {
     struct Command {

@@ -35,6 +35,7 @@ describe('WC tray connected follower mapping', () => {
     const handle = {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['browser-1']),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(['browser-1']),
         getTeleportEligibleBootstrapIds: () => new Set(['browser-1']),
         getFollowerMotds: () => new Map([['browser-1', 'remote browser']]),
@@ -96,6 +97,7 @@ describe('WC tray connected follower mapping', () => {
         peerState: 'connected',
         exec: true,
         cdp: true,
+        computer: false,
         teleportEligible: true,
         motd: 'remote browser',
       },
@@ -112,6 +114,7 @@ describe('WC tray connected follower mapping', () => {
         peerState: 'connected',
         exec: false,
         cdp: false,
+        computer: false,
 
         teleportEligible: false,
         motd: undefined,
@@ -185,6 +188,7 @@ describe('WC tray connected follower mapping', () => {
     const handle = {
       sync: {
         getExecCapableBootstrapIds: () => new Set(),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
@@ -243,6 +247,7 @@ describe('WC tray connected follower mapping', () => {
     const handle = {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['cli-1']),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),
@@ -393,5 +398,30 @@ describe('WC tray follower message routing (#2382)', () => {
     await Promise.resolve();
 
     expect(stops).toEqual(['cone_b']);
+  });
+
+  it('proxies ranged preview reads, slicing when the client has no windowed read', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 3, 4, 5]);
+    const ranged = { readFileRange: vi.fn(async () => new Uint8Array([9])), readFile: vi.fn() };
+    const plain = { readFile: vi.fn(async () => bytes) };
+    let fs: object = ranged;
+    const deps = {
+      refs: {},
+      client: {},
+      workUnits: { subscribeList: () => () => undefined },
+      openFs: async () => fs,
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
+    const options = createLeaderOptionsFactory(
+      deps,
+      {} as Parameters<typeof createLeaderOptionsFactory>[1],
+      {} as Parameters<typeof createLeaderOptionsFactory>[2]
+    )('https://tray.example');
+
+    expect(await options.vfs!.readFileRange('/a.mp4', 1, 2)).toEqual(new Uint8Array([9]));
+    expect(ranged.readFileRange).toHaveBeenCalledWith('/a.mp4', 1, 2);
+
+    fs = plain;
+    expect(await options.vfs!.readFileRange('/a.mp4', 2, 10)).toEqual(new Uint8Array([2, 3, 4, 5]));
+    expect(plain.readFile).toHaveBeenCalledWith('/a.mp4', { encoding: 'binary' });
   });
 });

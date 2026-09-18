@@ -1,5 +1,30 @@
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 actor DataChannelKeepalive {
     private let sendPing: @Sendable () -> Void
     private let onDead: @Sendable () -> Void
@@ -7,10 +32,16 @@ actor DataChannelKeepalive {
     private let onStalled: (@Sendable () -> Void)?
     private let onRecovered: (@Sendable () -> Void)?
 
+    
     private let pingInterval: TimeInterval
 
+    
     private let maxMissed: Int
 
+    
+    
+    
+    
     private let hardMaxMissed: Int
 
     private var pingTask: Task<Void, Never>?
@@ -19,6 +50,19 @@ actor DataChannelKeepalive {
     private var stopped: Bool = false
     private var stalled: Bool = false
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     init(
         sendPing: @escaping @Sendable () -> Void,
         onDead: @escaping @Sendable () -> Void,
@@ -31,7 +75,11 @@ actor DataChannelKeepalive {
     ) {
         precondition(pingInterval > 0, "pingInterval must be positive; got \(pingInterval)")
         precondition(maxMissed >= 1, "maxMissed must be a positive integer; got \(maxMissed)")
-
+        
+        
+        
+        
+        
         precondition(
             hardMaxMissed >= maxMissed,
             "hardMaxMissed (\(hardMaxMissed)) must be >= maxMissed (\(maxMissed))")
@@ -46,6 +94,7 @@ actor DataChannelKeepalive {
         self.hardMaxMissed = hardMaxMissed
     }
 
+    
     func start() {
         guard pingTask == nil, !stopped else { return }
         pingTask = Task { [weak self] in
@@ -58,6 +107,10 @@ actor DataChannelKeepalive {
         }
     }
 
+    
+    
+    
+    
     func stop() {
         stopped = true
         stalled = false
@@ -65,6 +118,7 @@ actor DataChannelKeepalive {
         pingTask = nil
     }
 
+    
     func receivedPong() {
         guard !stopped else { return }
         awaitingPong = false
@@ -72,6 +126,10 @@ actor DataChannelKeepalive {
         clearStall()
     }
 
+    
+    
+    
+    
     func receivedPing() {
         guard !stopped else { return }
         missedPongs = 0
@@ -79,10 +137,14 @@ actor DataChannelKeepalive {
         clearStall()
     }
 
+    
     var missed: Int { missedPongs }
 
+    
     var isStalled: Bool { stalled }
 
+    
+    
     func tick() {
         guard !stopped else { return }
 
@@ -95,14 +157,19 @@ actor DataChannelKeepalive {
         sendPing()
     }
 
+    
+
     private func clearStall() {
         guard stalled else { return }
         stalled = false
         onRecovered?()
     }
 
+    
+    
     private func declareUnreachable() -> Bool {
-
+        
+        
         if missedPongs < hardMaxMissed && isTransportOpen() {
             if !stalled {
                 stalled = true

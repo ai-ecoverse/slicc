@@ -1,41 +1,50 @@
 import SliccTrayKit
 import SwiftUI
 
+
+
+
 enum SliccIcons {
 
+    
+
+    
+    
+    
     static func tool(_ toolName: String) -> SliccGlyph {
         switch toolName {
-
-        case "read_file": return .system("doc.text")
-        case "write_file": return .system("doc.badge.plus")
-        case "edit_file": return .system("pencil")
-
-        case "bash": return .system("terminal")
-        case "browser": return .system("globe")
-        case "javascript": return .system("chevron.left.forwardslash.chevron.right")
-
-        case "send_message": return .system("message.fill")
-        case "feed_scoop": return .system("fork.knife")
-        case "scoop_scoop": return .lucide(.iceCreamCone)
-        case "drop_scoop": return .system("trash")
-        case "scoop_mute": return .system("bell.slash")
-        case "scoop_unmute": return .system("bell.and.waves.left.and.right")
-        case "scoop_wait": return .system("hourglass")
-        case "list_scoops": return .lucide(.iceCreamCone)
-        case "list_tasks": return .system("checklist")
-        case "register_scoop": return .system("person.badge.plus")
-        case "schedule_task": return .system("clock")
-        case "update_global_memory": return .system("brain")
-        case "delegate_to_scoop": return .system("paperplane.fill")
+        
+        case "read_file": return .system("doc.text")  
+        case "write_file": return .system("doc.badge.plus")  
+        case "edit", "edit_file": return .system("pencil")  
+        
+        case "bash": return .system("terminal")  
+        case "browser": return .system("globe")  
+        case "javascript": return .system("chevron.left.forwardslash.chevron.right")  
+        
+        case "send_message": return .system("message.fill")  
+        case "feed_scoop": return .system("fork.knife")  
+        case "scoop_scoop": return .lucide(.iceCreamCone)  
+        case "drop_scoop": return .system("trash")  
+        case "scoop_mute": return .system("bell.slash")  
+        case "scoop_unmute": return .system("bell.and.waves.left.and.right")  
+        case "scoop_wait": return .system("hourglass")  
+        case "list_scoops": return .lucide(.iceCreamCone)  
+        case "list_tasks": return .system("checklist")  
+        case "register_scoop": return .system("person.badge.plus")  
+        case "schedule_task": return .system("clock")  
+        case "update_global_memory": return .system("brain")  
+        case "delegate_to_scoop": return .system("paperplane.fill")  
         default: return .system("wrench.and.screwdriver")
         }
     }
 
+    
     static func toolTitle(_ toolName: String) -> String {
         switch toolName {
         case "read_file": return "read"
         case "write_file": return "write"
-        case "edit_file": return "edit"
+        case "edit", "edit_file": return "edit"
         case "bash": return "bash"
         case "browser": return "browser"
         case "javascript": return "javascript"
@@ -56,6 +65,10 @@ enum SliccIcons {
         }
     }
 
+    
+
+    
+    
     static func lick(_ channel: String, sprinkleName: String? = nil) -> SliccGlyph {
         if channel == "sprinkle", let name = sprinkleName,
             let override = sprinkleIconOverrides[name]
@@ -63,24 +76,36 @@ enum SliccIcons {
             return .system(override)
         }
         switch channel {
-        case "webhook": return .system("bolt.horizontal.fill")
-        case "cron": return .system("calendar.badge.clock")
-        case "sprinkle": return .system("sparkles")
-        case "fswatch": return .system("eye")
-        case "navigate": return .system("safari")
-        case "session-reload": return .system("arrow.counterclockwise")
-        case "upgrade": return .system("arrow.up.circle.fill")
-        case "scoop-notify": return .system("bell.and.waves.left.and.right")
-        case "scoop-idle": return .system("moon")
-        case "scoop-wait": return .system("hourglass")
-        default: return .system("bell")
+        case "webhook": return .system("bolt.horizontal.fill")  
+        case "cron": return .system("calendar.badge.clock")  
+        case "sprinkle": return .system("sparkles")  
+        case "fswatch": return .system("eye")  
+        case "navigate": return .system("safari")  
+        case "session-reload": return .system("arrow.counterclockwise")  
+        case "upgrade": return .system("arrow.up.circle.fill")  
+        case "scoop-notify": return .system("bell.and.waves.left.and.right")  
+        case "scoop-idle": return .system("moon")  
+        case "scoop-wait": return .system("hourglass")  
+        default: return .system("bell")  
         }
     }
 
+    
+    
     private static let sprinkleIconOverrides: [String: String] = [
         "welcome": "door.right.hand.open"
     ]
 
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
     static func sprinkle(iconSpec: String?) -> String {
         guard let spec = iconSpec?.trimmingCharacters(in: .whitespacesAndNewlines),
             isLucideName(spec)
@@ -88,6 +113,8 @@ enum SliccIcons {
         return lucideToSFSymbol[spec] ?? "sparkles"
     }
 
+    
+    
     static func isLucideName(_ spec: String) -> Bool {
         guard !spec.isEmpty else { return false }
         var previousWasDash = true
@@ -103,6 +130,10 @@ enum SliccIcons {
         return !previousWasDash
     }
 
+    
+    
+    
+    
     private static let lucideToSFSymbol: [String: String] = [
         "activity": "waveform.path.ecg",
         "alarm-clock": "alarm",
@@ -254,6 +285,8 @@ enum SliccIcons {
         "zap": "bolt",
     ]
 
+    
+    
     static func lickLabel(_ channel: String) -> String {
         switch channel {
         case "webhook": return "webhook"
@@ -270,32 +303,43 @@ enum SliccIcons {
         }
     }
 
+    
+
     static func messageSource(_ message: ChatMessage) -> SliccGlyph {
         if message.role == .user { return .system("person.crop.circle") }
         if let channel = message.channel, !channel.isEmpty {
             return lick(channel)
         }
-
+        
+        
         if message.source == "cone" { return .lucide(.iceCreamCone) }
         return .lucide(.iceCreamBowl)
     }
 
+    
+
+    
     static func attachment(_ kind: MessageAttachmentKind) -> String {
         switch kind {
-        case .image: return "photo"
-        case .text: return "doc.text"
-        case .file: return "doc"
+        case .image: return "photo"  
+        case .text: return "doc.text"  
+        case .file: return "doc"  
         }
     }
 
+    
+
+    
+    
     static func lickState(_ state: LickState) -> String? {
         switch state {
         case .pending: return nil
-        case .confirmed: return "checkmark.circle"
-        case .dismissed: return "xmark.circle"
+        case .confirmed: return "checkmark.circle"  
+        case .dismissed: return "xmark.circle"  
         }
     }
 
+    
     static func toolStatusColor(_ tc: ToolCall) -> Color {
         if tc.result == nil { return .yellow.opacity(0.8) }
         if tc.isError == true { return .red.opacity(0.8) }

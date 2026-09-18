@@ -54,12 +54,43 @@ final class FetchProxyGzipTests: XCTestCase {
         XCTAssertEqual(String(buffer: inflated), plainJS)
     }
 
+    func testMaybeGunzipHandlesEmptySingleByteAndIncrementalStreams() async throws {
+        var emptyState = MaybeGunzipState<ChunkIterator>()
+        var empty = ChunkIterator(chunks: [])
+        let firstEmpty = try await emptyState.next(from: &empty)
+        let secondEmpty = try await emptyState.next(from: &empty)
+        XCTAssertNil(firstEmpty)
+        XCTAssertNil(secondEmpty)
+
+        var oneByteState = MaybeGunzipState<ChunkIterator>()
+        var oneByte = ChunkIterator(chunks: [ByteBuffer(bytes: [0x61])])
+        let emittedByte = try await oneByteState.next(from: &oneByte)
+        XCTAssertEqual(
+            Array(try XCTUnwrap(emittedByte).readableBytesView),
+            [0x61]
+        )
+
+        let source = (0..<100_000).map { UInt8($0 % 251) }
+        let gzipBytes = try gzipForTest(source)
+        var incrementalState = MaybeGunzipState<ChunkIterator>()
+        var incremental = ChunkIterator(chunks: [
+            ByteBuffer(bytes: Array(gzipBytes.prefix(10))),
+            ByteBuffer(bytes: Array(gzipBytes.dropFirst(10))),
+        ])
+        var output: [UInt8] = []
+        while let chunk = try await incrementalState.next(from: &incremental) {
+            output.append(contentsOf: chunk.readableBytesView)
+        }
+        XCTAssertEqual(output, source)
+    }
+
     func testPushAfterStreamEndDoesNotRestartInflater() throws {
         let gz = try gzipForTest(Array(plainJS.utf8))
         let inflater = GzipInflater()
         let first = try inflater.push(gz, finish: true)
         XCTAssertEqual(String(data: Data(first), encoding: .utf8), plainJS)
-
+        
+        
         let again = try inflater.push([], finish: true)
         XCTAssertTrue(again.isEmpty)
     }
@@ -90,7 +121,49 @@ final class FetchProxyGzipTests: XCTestCase {
             _ = try await collect(chunks: [ByteBuffer(bytes: truncated)])
             XCTFail("truncated gzip must throw")
         } catch {
+            
+        }
+    }
 
+    func testUTF8BoundaryRecognizesCompleteIncompleteAndMalformedTails() {
+        XCTAssertEqual(lastCompleteUTF8Boundary([]), 0)
+        XCTAssertEqual(lastCompleteUTF8Boundary(Array("a".utf8)), 1)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0x61, 0xC2]), 1)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xC2]), 0)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xC2, 0xA2]), 2)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xE2, 0x82]), 0)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xE2, 0x82, 0xAC]), 3)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xF0, 0x9F, 0x92]), 0)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xF0, 0x9F, 0x92, 0xA9]), 4)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0x80]), 1)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0xFF]), 1)
+        XCTAssertEqual(lastCompleteUTF8Boundary([0x80, 0x80, 0x80, 0x80]), 4)
+    }
+
+    func testFetchProxyPreservesUTF8SplitAcrossChunksAndAnIncompleteFinalTail() async throws {
+        let cases: [([[UInt8]], [UInt8])] = [
+            ([[0x68, 0x69, 0xF0], [0x9F, 0x92, 0xA9]], Array("hi💩".utf8)),
+            ([[0x68, 0x69, 0xF0]], [0x68, 0x69, 0xF0]),
+        ]
+        for (chunks, expected) in cases {
+            let responseChunks = chunks
+            let upstreamRouter = Router()
+            upstreamRouter.get("/upstream") { _, _ in
+                Response(
+                    status: .ok,
+                    headers: [.contentType: "text/plain; charset=utf-8"],
+                    body: ResponseBody { writer in
+                        for bytes in responseChunks {
+                            try await writer.write(ByteBuffer(bytes: bytes))
+                            try await Task.sleep(nanoseconds: 1_000_000)
+                        }
+                        try await writer.finish(nil)
+                    }
+                )
+            }
+            try await self.runLiveFetchProxy(upstreamRouter: upstreamRouter) { response in
+                XCTAssertEqual(Array(response.body.readableBytesView), expected)
+            }
         }
     }
 
@@ -289,6 +362,7 @@ private struct ChunkIterator: AsyncIteratorProtocol {
         return chunks[index]
     }
 }
+
 
 func gzipForTest(_ input: [UInt8]) throws -> [UInt8] {
     var stream = z_stream()

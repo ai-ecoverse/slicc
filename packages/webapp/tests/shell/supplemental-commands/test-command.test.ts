@@ -1,5 +1,7 @@
 import type { IFileSystem } from 'just-bash';
+import { Bash, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
 import { resetTypeScriptForTests } from '../../../src/shell/supplemental-commands/shared.js';
 import {
   _resetTstHarnessForTests,
@@ -9,7 +11,42 @@ import {
   hasTstFailureMarker,
   parseTestArgs,
   resolveTestFiles,
+  TST_COMMAND_NAME,
 } from '../../../src/shell/supplemental-commands/test-command.js';
+
+const JUST_BASH_UNREACHABLE_NAMES: ReadonlySet<string> = new Set([
+  'test',
+  '[',
+  '[[',
+  'cd',
+  'export',
+  'unset',
+  'eval',
+  'source',
+  '.',
+  'true',
+  'false',
+  'help',
+  'type',
+  'command',
+  'builtin',
+  'hash',
+  'exit',
+  'return',
+  'break',
+  'continue',
+  'shift',
+  'set',
+  'shopt',
+  'local',
+  'declare',
+  'readonly',
+  'let',
+  'read',
+  'getopts',
+  'wait',
+  'exec',
+]);
 
 function createMockCtx(
   overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string; stdin: string }> = {}
@@ -163,6 +200,41 @@ describe('resolveTestFiles', () => {
 });
 
 describe('createTestCommand (end-to-end via realm)', () => {
+  it('registers as tst, which is not a just-bash builtin (#3122)', () => {
+    const cmd = createTestCommand();
+    expect(cmd.name).toBe(TST_COMMAND_NAME);
+    expect(cmd.name).toBe('tst');
+    expect(getCommandNames()).not.toContain('tst');
+    expect(getNetworkCommandNames()).not.toContain('tst');
+    const names = createSupplementalCommands().map((c) => c.name);
+    expect(names).toContain('tst');
+    expect(names).not.toContain('test');
+  });
+
+  it('does not register a name just-bash will silently swallow', () => {
+    expect(JUST_BASH_UNREACHABLE_NAMES.has('test')).toBe(true);
+    expect(JUST_BASH_UNREACHABLE_NAMES.has('[')).toBe(true);
+    expect(JUST_BASH_UNREACHABLE_NAMES.has('tst')).toBe(false);
+    const names = createSupplementalCommands().map((c) => c.name);
+    expect(names.filter((n) => JUST_BASH_UNREACHABLE_NAMES.has(n))).toEqual([]);
+  });
+
+  it('is dispatched by just-bash; POSIX test stays the builtin', async () => {
+    const bash = new Bash({
+      files: { '/workspace/.keep': '' },
+      cwd: '/workspace',
+      customCommands: [createTestCommand()],
+    });
+    const help = await bash.exec('tst --help');
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain('tst - run');
+
+    const posix = await bash.exec('test --help');
+    expect(posix.exitCode).toBe(0);
+    expect(posix.stdout).toBe('');
+    expect(posix.stderr).toBe('');
+  });
+
   it('emits TAP for a passing fixture', async () => {
     _resetTstHarnessForTests();
     const cmd = createTestCommand();
@@ -181,6 +253,29 @@ test('one plus one', ({ is, ok }) => {
     expect(result.stdout).toContain('ok 1 - one plus one');
     expect(result.stdout).toContain('# pass 1');
     expect(result.stdout).not.toContain('not ok');
+  }, 20_000);
+
+  it('runs a file with one passing and one failing test and exits non-zero', async () => {
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/sample.test.js',
+      `import test from 'tst';
+test('arithmetic works', ({ is }) => {
+  is(1 + 1, 2);
+});
+test('this one fails on purpose', ({ is }) => {
+  is(1 + 1, 3);
+});
+`
+    );
+    const result = await cmd.execute(['sample.test.js'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('ok 1 - arithmetic works');
+    expect(result.stdout).toContain('not ok 2 - this one fails on purpose');
+    expect(result.stdout).toContain('# fail 1');
+    expect(result.stdout).toContain('# pass 1');
   }, 20_000);
 
   it('exits non-zero and reports failure for a failing fixture', async () => {
@@ -268,7 +363,7 @@ test('uses local add', ({ is }) => {
     const cmd = createTestCommand();
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('test - run');
+    expect(result.stdout).toContain('tst - run');
   });
 
   it('surfaces the pinned TypeScript 6 install command in a browser float', async () => {

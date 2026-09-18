@@ -3,8 +3,14 @@ import XCTest
 
 @testable import SliccFollower
 
+
+
+
+
 final class SVGPathTests: XCTestCase {
 
+    
+    
     private func bounds(_ data: String) -> CGRect {
         SVGPath.parse(data).boundingBoxOfPath
     }
@@ -24,7 +30,7 @@ final class SVGPathTests: XCTestCase {
     }
 
     func testRepeatedPairsAfterMovetoAreImplicitLinetos() {
-
+        
         XCTAssertEqual(bounds("M 0 0 4 0 4 4"), bounds("M 0 0 L 4 0 L 4 4"))
     }
 
@@ -35,7 +41,7 @@ final class SVGPathTests: XCTestCase {
     }
 
     func testNegativeNumbersNeedNoSeparator() {
-
+        
         XCTAssertEqual(bounds("M0 0L4-3"), bounds("M 0 0 L 4 -3"))
     }
 
@@ -44,7 +50,8 @@ final class SVGPathTests: XCTestCase {
     }
 
     func testSemicircleArcSpansItsDiameter() {
-
+        
+        
         let box = bounds("M 0 0 A 5 5 0 0 1 10 0")
         XCTAssertEqual(box.minX, 0, accuracy: 0.01)
         XCTAssertEqual(box.maxX, 10, accuracy: 0.01)
@@ -59,7 +66,7 @@ final class SVGPathTests: XCTestCase {
     }
 
     func testUndersizedArcRadiiAreScaledUpToReachTheEndpoint() {
-
+        
         let box = bounds("M 0 0 A 1 1 0 0 1 10 0")
         XCTAssertEqual(box.maxX, 10, accuracy: 0.01)
         XCTAssertEqual(box.minY, -5, accuracy: 0.1)
@@ -70,7 +77,7 @@ final class SVGPathTests: XCTestCase {
     }
 
     func testArcFlagsMayBeWrittenUnseparated() {
-
+        
         XCTAssertEqual(bounds("M0 0a5 5 0 116 0"), bounds("M 0 0 a 5 5 0 1 1 6 0"))
     }
 
@@ -88,7 +95,7 @@ final class SVGPathTests: XCTestCase {
     }
 
     func testTrailingCloseWithoutACommandTerminates() {
-
+        
         XCTAssertFalse(bounds("M 0 0 L 4 4 Z 1 2").isNull)
     }
 
@@ -98,8 +105,10 @@ final class SVGPathTests: XCTestCase {
         XCTAssertTrue(SVGPath.parse("M").isEmpty, "a moveto with no operands draws nothing")
     }
 
-    func testGlyphIsScaledAndCenteredInTheTargetRect() {
+    
 
+    func testGlyphIsScaledAndCenteredInTheTargetRect() {
+        
         let rect = CGRect(x: 0, y: 0, width: 48, height: 48)
         let box = SVGPath.path(from: "M 0 0 L 24 24", in: rect).boundingBoxOfPath
         XCTAssertEqual(box.minX, 0, accuracy: 0.001)
@@ -113,6 +122,8 @@ final class SVGPathTests: XCTestCase {
         XCTAssertEqual(box.minX, 25, accuracy: 0.001, "centered on the long side")
     }
 
+    
+
     func testEveryPortedLucideGlyphParsesAndFillsItsBox() {
         for glyph in LucideGlyph.allCases {
             var combined = CGRect.null
@@ -122,7 +133,8 @@ final class SVGPathTests: XCTestCase {
                     box.isNull || box.isEmpty, "\(glyph.rawValue) has an unparsed subpath")
                 combined = combined.union(box)
             }
-
+            
+            
             XCTAssertGreaterThan(
                 combined.width, 10, "\(glyph.rawValue) is too narrow to be intact")
             XCTAssertGreaterThan(

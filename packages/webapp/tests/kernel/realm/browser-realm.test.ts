@@ -89,7 +89,30 @@ interface MockBrowserState {
   createdUrls: string[];
 
   attachedTargets: string[];
+
+  openWindowCalls: Array<{ url: string; opts: Record<string, unknown> }>;
+
+  windowBounds: Record<
+    string,
+    {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      state: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+      dpr: number;
+    }
+  >;
 }
+
+const defaultBounds = {
+  left: 0,
+  top: 0,
+  width: 1200,
+  height: 800,
+  state: 'normal' as const,
+  dpr: 2,
+};
 
 function makeMockBrowser(state: MockBrowserState): BrowserAPI {
   const api = {
@@ -104,6 +127,27 @@ function makeMockBrowser(state: MockBrowserState): BrowserAPI {
       state.createdUrls.push(url ?? 'about:blank');
       state.pages.push({ targetId: id, url: url ?? 'about:blank', title: '' });
       return id;
+    },
+    async openWindow(url: string, opts: Record<string, unknown> = {}): Promise<string> {
+      state.openWindowCalls.push({ url, opts });
+      const id = `w-${state.openWindowCalls.length}`;
+      state.pages.push({ targetId: id, url: url || 'about:blank', title: '' });
+      return id;
+    },
+    async getWindowBounds(targetId: string) {
+      return { ...(state.windowBounds[targetId] ?? defaultBounds) };
+    },
+    async setWindowBounds(targetId: string, bounds: Record<string, unknown>) {
+      const prev = state.windowBounds[targetId] ?? defaultBounds;
+      const next = {
+        ...prev,
+        ...bounds,
+        dpr: prev.dpr,
+      };
+
+      if (typeof next.height === 'number' && next.height > 900) next.height = 809;
+      state.windowBounds[targetId] = next as typeof defaultBounds;
+      return { ...next };
     },
 
     async withTab<T>(targetId: string, fn: (tab: unknown) => Promise<T>): Promise<T> {
@@ -138,6 +182,8 @@ function makeBrowserState(overrides: Partial<MockBrowserState> = {}): MockBrowse
     localStorageStore: new Map(),
     createdUrls: [],
     attachedTargets: [],
+    openWindowCalls: [],
+    windowBounds: {},
     ...overrides,
   };
 }
@@ -253,6 +299,63 @@ describe('realm RPC: browser channel — ensureTab', () => {
     ]);
     expect(handle.targetId).toBe('t2');
     expect(state.createdUrls).toEqual([]);
+    dispose();
+  });
+});
+
+describe('realm RPC: browser channel — openWindow / windowBounds', () => {
+  it('openWindow returns a TabHandle and records geometry opts', async () => {
+    const state = makeBrowserState();
+    const { client, dispose } = setup(state);
+    const handle = await client.call<TabHandle>('browser', 'openWindow', [
+      'https://example.com/demo',
+      { width: 1280, height: 800, decorated: true },
+    ]);
+    expect(handle).toEqual({
+      targetId: 'w-1',
+      url: 'https://example.com/demo',
+      title: '',
+    });
+    expect(state.openWindowCalls).toEqual([
+      {
+        url: 'https://example.com/demo',
+        opts: { width: 1280, height: 800, decorated: true },
+      },
+    ]);
+    dispose();
+  });
+
+  it('windowBounds reads frame geometry + dpr', async () => {
+    const state = makeBrowserState({
+      windowBounds: {
+        'w-1': { left: 10, top: 20, width: 1280, height: 800, state: 'normal', dpr: 2 },
+      },
+    });
+    const { client, dispose } = setup(state);
+    const bounds = await client.call('browser', 'windowBounds', ['w-1']);
+    expect(bounds).toEqual({
+      left: 10,
+      top: 20,
+      width: 1280,
+      height: 800,
+      state: 'normal',
+      dpr: 2,
+    });
+    dispose();
+  });
+
+  it('setWindowBounds returns achieved (clamped) bounds', async () => {
+    const state = makeBrowserState({
+      windowBounds: {
+        'w-1': { left: 0, top: 0, width: 1200, height: 800, state: 'normal', dpr: 2 },
+      },
+    });
+    const { client, dispose } = setup(state);
+    const achieved = await client.call('browser', 'setWindowBounds', [
+      'w-1',
+      { width: 1080, height: 1080 },
+    ]);
+    expect(achieved).toMatchObject({ width: 1080, height: 809, dpr: 2 });
     dispose();
   });
 });

@@ -19,7 +19,12 @@ struct AppListView: View {
     let onUpdate: () -> Void
     let onBeginUpdate: () -> Void
     let onRescan: () -> Void
-
+    
+    
+    
+    
+    
+    
     var isBundledBuild: Bool = SliccBootstrapper.isBundled
 
     @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
@@ -298,7 +303,9 @@ struct AppListView: View {
     }
 
     private func handleBrowserLaunch(_ target: AppTarget) {
-
+        
+        
+        
         sessionReachability.probe(sessionStore.remoteSessions)
         switch BrowserLaunchAction.resolve(
             isRunning: sliccProcess.runtimeState(for: target).isRunning,
@@ -351,7 +358,8 @@ struct AppListView: View {
     }
 
     private func beginTerminalLaunch(_ target: AppTarget, warningAcknowledged: Bool = false) {
-
+        
+        
         let leaderReady = sliccProcess.isLeaderReady() || pendingJoinURLOverride != nil
         let nextStep = TerminalLaunchDecision.nextStep(
             leaderReady: leaderReady,
@@ -460,10 +468,18 @@ struct AppListView: View {
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
     enum UpdateAffordance: Equatable {
-
+        
         case ready
-
+        
         case discouraged
     }
 
@@ -695,7 +711,8 @@ struct AppRow: View {
         .accessibilityIdentifier("app-row-\(target.name)")
         .accessibilityLabel(target.name)
         .onHover { hovering in
-
+            
+            
             guard !isDisabled else { return }
             if hovering {
                 NSCursor.pointingHand.push()
@@ -717,6 +734,8 @@ struct AppRow: View {
         )
     }
 
+    
+    
     static func statusDot(for runtimeState: AppRuntimeState) -> AppRowStatusDot? {
         switch runtimeState {
         case .notRunning:
@@ -796,6 +815,8 @@ extension AppRowStatusDot {
     }
 }
 
+
+
 struct ReorderableRow: ViewModifier {
     let target: AppTarget
     @Binding var order: [String]
@@ -830,6 +851,10 @@ private struct ReorderDropDelegate: DropDelegate {
     @Binding var dragging: String?
     let onCommit: ([String]) -> Void
 
+    
+    
+    
+    
     private var currentIds: [String] {
         AppOrdering.persistableOrder(from: displayed)
     }

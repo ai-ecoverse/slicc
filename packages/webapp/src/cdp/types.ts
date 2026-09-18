@@ -78,6 +78,40 @@ export interface BoundingBox {
   height: number;
 }
 
+export type WindowState = 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+
+export interface WindowBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  state: WindowState;
+}
+
+export interface WindowBoundsInput {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  state?: WindowState;
+}
+
+export interface OpenWindowOptions {
+  width?: number;
+  height?: number;
+  left?: number;
+  top?: number;
+  state?: WindowState;
+
+  decorated?: boolean;
+
+  focus?: boolean;
+}
+
+export interface WindowBoundsInfo extends WindowBounds {
+  dpr: number;
+}
+
 export interface FrameInfo {
   frameId: string;
   parentFrameId?: string;

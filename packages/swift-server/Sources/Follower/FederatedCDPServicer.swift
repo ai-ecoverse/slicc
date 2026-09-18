@@ -2,9 +2,31 @@ import Foundation
 import Logging
 import SliccTrayFollower
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 let cdpChunkThresholdBytes = 64 * 1024
 
+
 let cdpChunkSizeBytes = 32 * 1024
+
 
 public struct FederatedCdpInspectableTarget: Sendable, Equatable {
     public let id: String
@@ -20,6 +42,13 @@ public struct FederatedCdpInspectableTarget: Sendable, Equatable {
     }
 }
 
+
+
+
+
+
+
+
 func buildTargetsAdvertise(
     runtimeId: String, targets: [FederatedCdpInspectableTarget]
 ) -> FollowerToLeaderMessage {
@@ -28,6 +57,11 @@ func buildTargetsAdvertise(
     }
     return .targetsAdvertise(targets: entries, runtimeId: runtimeId)
 }
+
+
+
+
+
 
 func buildCdpResponses(
     requestId: String, result: [String: Any]?, error: String?
@@ -65,11 +99,18 @@ func buildCdpResponses(
     }
 }
 
+
+
 func buildCdpEvent(
     method: String, params: [String: Any]?, sessionId: String?
 ) -> FollowerToLeaderMessage {
     .cdpEvent(method: method, params: AnyCodable(params ?? [:]), sessionId: sessionId)
 }
+
+
+
+
+
 
 func messagesForCdpFrame(
     _ object: [String: Any], pending: inout [Int: String]
@@ -95,6 +136,11 @@ func messagesForCdpFrame(
     return []
 }
 
+
+
+
+
+
 func chunkSerializedResult(_ text: String, maxBytes: Int) -> [String] {
     let budget = max(1, maxBytes)
     var slices: [String] = []
@@ -114,15 +160,23 @@ func chunkSerializedResult(_ text: String, maxBytes: Int) -> [String] {
     return slices
 }
 
+
+
+
+
+
+
 actor FederatedCDPServicer {
     private let runtimeId: String
     private let send: @Sendable (FollowerToLeaderMessage) -> Void
     private let logger: Logger
-
+    
+    
+    
     private var transport: (any CDPWebSocketTransport)?
     private var receiveLoop: Task<Void, Never>?
     private var nextCdpId = 0
-
+    
     private var pending: [Int: String] = [:]
     private var stopped = false
 
@@ -136,8 +190,15 @@ actor FederatedCDPServicer {
         self.send = send
     }
 
+    
+    
+    
     private static let probeId = 999_999
 
+    
+    
+    
+    
     func connect(browserWsUrl: URL) async {
         logger.info("federated CDP servicer connecting to \(browserWsUrl.absoluteString)")
         do {
@@ -149,12 +210,18 @@ actor FederatedCDPServicer {
         }
     }
 
+    
+    
     func connect(transport: any CDPWebSocketTransport) {
         self.transport = transport
         receiveLoop = Task { [weak self] in await self?.readLoop() }
         Task { [weak self] in await self?.probeConnection() }
     }
 
+    
+    
+    
+    
     private func probeConnection() async {
         guard let transport = transport else { return }
         let frame: [String: Any] = ["id": Self.probeId, "method": "Browser.getVersion"]
@@ -167,10 +234,13 @@ actor FederatedCDPServicer {
         }
     }
 
+    
     func advertiseTargets(_ targets: [FederatedCdpInspectableTarget]) {
         send(buildTargetsAdvertise(runtimeId: runtimeId, targets: targets))
     }
 
+    
+    
     func handleCdpRequest(
         requestId: String, method: String, params: [String: Any]?, sessionId: String?
     ) async {
@@ -200,6 +270,7 @@ actor FederatedCDPServicer {
         }
     }
 
+    
     func stop() {
         stopped = true
         receiveLoop?.cancel()
@@ -239,7 +310,9 @@ actor FederatedCDPServicer {
                 onCdpFrame(data)
             } catch {
                 if !stopped {
-
+                    
+                    
+                    
                     logger.warning(
                         "federated CDP read loop ENDED after \(frameCount) frames (socket lost): \(error.localizedDescription)"
                     )
@@ -254,7 +327,7 @@ actor FederatedCDPServicer {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
         }
-
+        
         if object["id"] as? Int == Self.probeId {
             if let error = object["error"] as? [String: Any] {
                 logger.warning("federated CDP probe: app CDP error — \(error["message"] as? String ?? "?")")

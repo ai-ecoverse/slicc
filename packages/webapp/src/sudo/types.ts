@@ -24,6 +24,8 @@ export interface SudoRequest {
   approver?: SudoApproverDirective;
 
   suggestedPattern?: string;
+
+  reason?: string;
 }
 
 export interface SudoDecision {
@@ -32,6 +34,8 @@ export interface SudoDecision {
   pattern?: string;
 
   reason?: SudoTimeoutReason;
+
+  note?: string;
 
   attestation?: 'biometric' | 'passcode' | 'none';
 }

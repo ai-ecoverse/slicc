@@ -1,10 +1,15 @@
 import Foundation
 
+
+
+
+
 struct PttEvent: Equatable {
     enum Kind: Equatable {
-
+        
         case commit(String)
-
+        
+        
         case quickTap
     }
 
@@ -17,18 +22,29 @@ struct PttEvent: Equatable {
     }
 }
 
+
+
+
+
+
 enum PttStage: Equatable {
     case idle
-
+    
     case enable
-
+    
     case prompting
-
+    
+    
+    
     case denied(message: String?)
     case recording
-
+    
     case finalizing
 }
+
+
+
+
 
 protocol PttScheduling {
     func schedule(afterMs: Int, _ work: @escaping @MainActor () -> Void) -> () -> Void
@@ -45,41 +61,66 @@ struct MainQueuePttScheduler: PttScheduling {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
 @MainActor
 final class PttController: ObservableObject {
-
+    
     static let engageMs = 400
-
+    
     static let holdToEnableMs = 1000
-
+    
     static let captionMaxWords = 8
 
     @Published private(set) var stage: PttStage = .idle
-
+    
+    
     @Published private(set) var caption = ""
     @Published private(set) var captionIsError = false
-
+    
+    
+    
+    
+    
+    
     @Published private(set) var event: PttEvent?
 
     var engineStatusLine: String { engine.statusLine }
 
     private let engine: DictationEngine
     private let scheduler: PttScheduling
-
+    
+    
     private let permissionTimeoutMs: Int
-
+    
     private let finalizeTimeoutMs: Int
     private let prepareForRecording: @MainActor () -> Void
 
     private var pressed = false
-
+    
     private var token = 0
     private var cancelEngage: (() -> Void)?
     private var cancelEnable: (() -> Void)?
     private var session: DictationSession?
-
+    
+    
+    
+    
+    
+    
     private var startHandle: StartHandle?
 
+    
+    
     private final class StartHandle {
         let task: Task<DictationSession?, Never>
         init(_ task: Task<DictationSession?, Never>) { self.task = task }
@@ -99,6 +140,8 @@ final class PttController: ObservableObject {
         self.prepareForRecording = prepareForRecording
     }
 
+    
+
     func pressDown() {
         guard !pressed, stage == .idle else { return }
         pressed = true
@@ -115,7 +158,8 @@ final class PttController: ObservableObject {
         guard pressed else { return }
         pressed = false
         if let cancel = cancelEngage {
-
+            
+            
             cancel()
             cancelEngage = nil
             token += 1
@@ -128,7 +172,8 @@ final class PttController: ObservableObject {
             cancelEnable = nil
             reset()
         case .prompting:
-
+            
+            
             break
         case .recording:
             finalize()
@@ -137,6 +182,8 @@ final class PttController: ObservableObject {
         }
     }
 
+    
+    
     func pressCancelled() {
         guard pressed else { return }
         pressed = false
@@ -150,6 +197,8 @@ final class PttController: ObservableObject {
         if case .prompting = stage { return }
         reset()
     }
+
+    
 
     private func engaged(_ t: Int) {
         guard pressed, t == token else { return }
@@ -187,7 +236,8 @@ final class PttController: ObservableObject {
                 if self.pressed {
                     self.startRecording(t)
                 } else {
-
+                    
+                    
                     self.reset()
                 }
             case .restricted:
@@ -203,7 +253,8 @@ final class PttController: ObservableObject {
                     self.reset()
                 }
             case nil:
-
+                
+                
                 if self.pressed {
                     self.stage = .denied(
                         message: "The microphone didn't respond. Check Settings, then hold again.")
@@ -249,7 +300,9 @@ final class PttController: ObservableObject {
                 session?.cancel()
                 return
             }
-
+            
+            
+            
             guard self.startHandle === handle else { return }
             self.startHandle = nil
             guard t == self.token, self.stage == .recording else {
@@ -267,7 +320,7 @@ final class PttController: ObservableObject {
         let pending = startHandle
         startHandle = nil
         guard live != nil || pending != nil else {
-
+            
             reset()
             event = PttEvent(.quickTap)
             return
@@ -286,7 +339,7 @@ final class PttController: ObservableObject {
             self.reset()
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
-
+                
                 self.event = PttEvent(.quickTap)
             } else {
                 self.event = PttEvent(.commit(trimmed))
@@ -310,22 +363,39 @@ final class PttController: ObservableObject {
     }
 
     #if DEBUG
-
+        
+        
+        
+        
         func forceStage(_ stage: PttStage, caption: String = "") {
             self.stage = stage
             self.caption = caption
         }
     #endif
 
+    
+
     static let restrictedMessage =
         "Speech recognition is restricted on this device (Screen Time or a profile), "
         + "so push to talk is unavailable."
 
+    
     static func trailingWords(_ text: String) -> String {
         let words = text.split(whereSeparator: \.isWhitespace)
         return words.suffix(captionMaxWords).joined(separator: " ")
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     private static func withTimeout<T: Sendable>(
         ms: Int,
         fallback: T,
@@ -343,6 +413,8 @@ final class PttController: ObservableObject {
         }
     }
 
+    
+    
     @MainActor
     private final class ResumeOnceGate<T: Sendable> {
         private var continuation: CheckedContinuation<T, Never>?

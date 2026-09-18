@@ -1,6 +1,39 @@
 import CryptoKit
 import Foundation
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 public struct SigV4Credentials: Sendable, Equatable {
     public let accessKeyId: String
     public let secretAccessKey: String
@@ -12,6 +45,10 @@ public struct SigV4Credentials: Sendable, Equatable {
         self.sessionToken = sessionToken
     }
 }
+
+
+
+
 
 public enum SigV4Method: String, Sendable, Equatable, CaseIterable {
     case GET, PUT, POST, DELETE, HEAD
@@ -36,6 +73,10 @@ public enum SigV4Signer {
     private static let signedAlgorithm = "AWS4-HMAC-SHA256"
     private static let emptyBodyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+    
+    
+    
+    
     public static func sign(
         _ request: SigV4Request,
         credentials: SigV4Credentials,
@@ -49,6 +90,12 @@ public enum SigV4Signer {
         let bodyData = request.body ?? Data()
         let bodyHash = bodyData.isEmpty ? emptyBodyHash : sha256Hex(bodyData)
 
+        
+        
+        
+        
+        
+        
         var headers = request.headers
         let existingHost = headers.first(where: { $0.key.lowercased() == "host" })?.value
         headers["host"] = existingHost ?? (request.url.host ?? "")
@@ -59,7 +106,10 @@ public enum SigV4Signer {
         if let sessionToken = credentials.sessionToken {
             headers["x-amz-security-token"] = sessionToken
         }
-
+        
+        
+        
+        
         for key in headers.keys where key != "host" && key.lowercased() == "host" {
             headers.removeValue(forKey: key)
         }
@@ -82,6 +132,7 @@ public enum SigV4Signer {
             sha256Hex(Data(canonicalRequest.utf8)),
         ].joined(separator: "\n")
 
+        
         let kSecret = Data("AWS4\(credentials.secretAccessKey)".utf8)
         let kDate = hmacSha256(key: kSecret, data: Data(date.utf8))
         let kRegion = hmacSha256(key: kDate, data: Data(region.utf8))
@@ -98,8 +149,13 @@ public enum SigV4Signer {
     }
 }
 
+
+
 extension SigV4Signer {
 
+    
+    
+    
     static func percentEncode(_ s: String) -> String {
         var out = ""
         out.reserveCapacity(s.utf8.count)
@@ -115,11 +171,11 @@ extension SigV4Signer {
     }
 
     private static func isUnreserved(_ b: UInt8) -> Bool {
-
+        
         if b >= 0x41 && b <= 0x5A { return true }
         if b >= 0x61 && b <= 0x7A { return true }
         if b >= 0x30 && b <= 0x39 { return true }
-
+        
         return b == 0x2D || b == 0x5F || b == 0x2E || b == 0x7E
     }
 
@@ -131,8 +187,12 @@ extension SigV4Signer {
         return "\(hi)\(lo)"
     }
 
+    
+    
     static func canonicalUri(_ url: URL) -> String {
-
+        
+        
+        
         let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
         if path.isEmpty { return "/" }
         let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
@@ -141,6 +201,8 @@ extension SigV4Signer {
         return result.isEmpty ? "/" : result
     }
 
+    
+    
     static func canonicalQuery(_ url: URL) -> String {
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -148,7 +210,9 @@ extension SigV4Signer {
         else {
             return ""
         }
-
+        
+        
+        
         let pairs: [(String, String)] = queryItems.map { item in
             let key = item.name.removingPercentEncoding ?? item.name
             let value = (item.value?.removingPercentEncoding) ?? item.value ?? ""
@@ -164,10 +228,16 @@ extension SigV4Signer {
             .joined(separator: "&")
     }
 
+    
+    
+    
     static func canonicalHeaders(_ headers: [String: String]) -> (canonical: String, signed: String) {
         let normalized: [(key: String, value: String)] = headers.map { (key, value) in
             let lowerKey = key.lowercased()
-
+            
+            
+            
+            
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             let collapsed = trimmed.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
             return (lowerKey, collapsed)
@@ -178,6 +248,8 @@ extension SigV4Signer {
         return (canonical, signed)
     }
 }
+
+
 
 extension SigV4Signer {
 
@@ -201,6 +273,8 @@ extension SigV4Signer {
     }
 }
 
+
+
 extension SigV4Signer {
 
     private static let utcCalendar: Calendar = {
@@ -209,6 +283,7 @@ extension SigV4Signer {
         return cal
     }()
 
+    
     static func formatYMD(_ date: Date) -> String {
         let c = utcCalendar.dateComponents([.year, .month, .day], from: date)
         return String(
@@ -217,6 +292,7 @@ extension SigV4Signer {
         )
     }
 
+    
     static func formatISO8601(_ date: Date) -> String {
         let c = utcCalendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
         return String(

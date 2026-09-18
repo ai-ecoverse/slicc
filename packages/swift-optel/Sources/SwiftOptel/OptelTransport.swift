@@ -4,17 +4,38 @@ import Foundation
     import os
 #endif
 
-public protocol OptelTransport: Sendable {
 
+
+
+public protocol OptelTransport: Sendable {
+    
     func send(_ event: RUMEvent, collectBaseURL: URL)
 }
 
-public final class URLSessionOptelTransport: OptelTransport {
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+public final class URLSessionOptelTransport: OptelTransport {
+    
+    
     public static let defaultTimeout: TimeInterval = 10
 
+    
     public static let loggerSubsystem = "com.slicc.swift-optel"
 
+    
     public static let loggerCategory = "transport"
 
     private let session: URLSession
@@ -24,6 +45,13 @@ public final class URLSessionOptelTransport: OptelTransport {
         private let logger: Logger?
     #endif
 
+    
+    
+    
+    
+    
+    
+    
     public init(
         session: URLSession = URLSessionOptelTransport.makeDefaultSession(),
         timeout: TimeInterval = URLSessionOptelTransport.defaultTimeout,
@@ -57,7 +85,9 @@ public final class URLSessionOptelTransport: OptelTransport {
             let bodySize = request.httpBody?.count ?? 0
             logger?.debug("optel beacon → \(urlString, privacy: .public) (\(bodySize) bytes)")
             let task = session.dataTask(with: request) { _, response, _ in
-
+                
+                
+                
                 if let http = response as? HTTPURLResponse {
                     logger?.debug(
                         "optel beacon ← \(urlString, privacy: .public) status=\(http.statusCode)"
@@ -66,12 +96,16 @@ public final class URLSessionOptelTransport: OptelTransport {
             }
         #else
             let task = session.dataTask(with: request) { _, _, _ in
-
+                
+                
+                
             }
         #endif
         task.resume()
     }
 
+    
+    
     public static func makeDefaultSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = defaultTimeout
@@ -81,13 +115,19 @@ public final class URLSessionOptelTransport: OptelTransport {
         return URLSession(configuration: config)
     }
 
+    
+    
+    
     static func makeRequest(
         event: RUMEvent,
         collectBaseURL: URL,
         timeout: TimeInterval,
         encoder: JSONEncoder = JSONEncoder()
     ) -> URLRequest? {
-
+        
+        
+        
+        
         guard let url = URL(string: ".rum/\(event.weight)", relativeTo: collectBaseURL) else {
             return nil
         }
