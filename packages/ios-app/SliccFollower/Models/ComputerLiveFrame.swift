@@ -1,4 +1,5 @@
 import Combine
+import SliccTrayFollower
 import SliccTrayKit
 import UIKit
 
@@ -26,41 +27,103 @@ final class ComputerLiveFrame: ObservableObject, Identifiable {
 /// CDP-style `computer.frame` chunk reassembly. Mirrors
 /// `reassembleComputerFrame` on the TypeScript side: a one-shot `data`
 /// payload is already complete; `chunkData` / `chunkIndex` / `totalChunks`
-/// wait until every slice has arrived.
+/// wait until every slice has arrived. Peer-controlled `totalChunks` is
+/// capped, incomplete sequences are evicted, and pending bytes are bounded
+/// the same way as `TrayChunkLimits`.
 struct ComputerFrameAssembler {
-    private var buffers: [String: (chunks: [String?], received: Int, total: Int)] = [:]
+    private struct Buffer {
+        var chunks: [String?]
+        var received: Int
+        var total: Int
+        var bytes: Int
+    }
+
+    private let maxChunkCount: Int
+    private let maxPending: Int
+    private let maxReassemblyBytes: Int
+    private var buffers: [String: Buffer] = [:]
+    private var order: [String] = []
+
+    init(
+        maxChunkCount: Int = TrayChunkLimits.maxChunkCount,
+        maxPending: Int = TrayChunkLimits.maxPending,
+        maxReassemblyBytes: Int = TrayChunkLimits.maxReassemblyBytes
+    ) {
+        self.maxChunkCount = maxChunkCount
+        self.maxPending = maxPending
+        self.maxReassemblyBytes = maxReassemblyBytes
+    }
+
+    var pendingCount: Int { buffers.count }
 
     mutating func accept(
         id: String, seq: Int, data: String?, chunkData: String?, chunkIndex: Int?, totalChunks: Int?
     ) -> String? {
+        let key = bufferKey(id: id, seq: seq)
         if let data, chunkIndex == nil {
-            buffers.removeValue(forKey: bufferKey(id: id, seq: seq))
+            evict(key)
             return data
         }
         guard let chunkData, let chunkIndex, let totalChunks, totalChunks > 0,
-            chunkIndex >= 0, chunkIndex < totalChunks
+            totalChunks <= maxChunkCount, chunkIndex >= 0, chunkIndex < totalChunks
         else {
             return nil
         }
-        let key = bufferKey(id: id, seq: seq)
-        var buffer = buffers[key] ?? (
-            chunks: Array(repeating: nil, count: totalChunks), received: 0, total: totalChunks
-        )
-        if buffer.total != totalChunks {
-            buffer = (chunks: Array(repeating: nil, count: totalChunks), received: 0, total: totalChunks)
+        if buffers[key] == nil {
+            evictWhileNeeded(addingBytes: chunkData.utf8.count)
+            guard buffers.count < maxPending,
+                totalBytes + chunkData.utf8.count <= maxReassemblyBytes
+            else {
+                return nil
+            }
+            buffers[key] = Buffer(
+                chunks: Array(repeating: nil, count: totalChunks), received: 0, total: totalChunks,
+                bytes: 0)
+            order.append(key)
+        }
+        guard var buffer = buffers[key], buffer.total == totalChunks else {
+            evict(key)
+            return nil
         }
         if buffer.chunks[chunkIndex] == nil {
+            let extra = chunkData.utf8.count
+            if totalBytes + extra > maxReassemblyBytes {
+                evictWhileNeeded(addingBytes: extra)
+                if totalBytes + extra > maxReassemblyBytes {
+                    evict(key)
+                    return nil
+                }
+            }
             buffer.chunks[chunkIndex] = chunkData
             buffer.received += 1
+            buffer.bytes += extra
         }
         buffers[key] = buffer
         guard buffer.received >= buffer.total else { return nil }
-        buffers.removeValue(forKey: key)
+        evict(key)
         return buffer.chunks.compactMap { $0 }.joined()
     }
 
     mutating func removeAll() {
         buffers.removeAll()
+        order.removeAll()
+    }
+
+    private var totalBytes: Int {
+        buffers.values.reduce(0) { $0 + $1.bytes }
+    }
+
+    private mutating func evictWhileNeeded(addingBytes: Int) {
+        while !order.isEmpty,
+            buffers.count >= maxPending || totalBytes + addingBytes > maxReassemblyBytes
+        {
+            evict(order[0])
+        }
+    }
+
+    private mutating func evict(_ key: String) {
+        buffers.removeValue(forKey: key)
+        order.removeAll { $0 == key }
     }
 
     private func bufferKey(id: String, seq: Int) -> String {

@@ -37,11 +37,14 @@ public enum TrayChunkLimits {
     /// dead one. Mirrors `TRAY_SEND_HIGH_WATER_BYTES`.
     public static let sendHighWaterBytes = 8 * 1024 * 1024
     /// Concurrent in-flight reassemblies before the oldest is evicted.
-    static let maxPending = 8
+    public static let maxPending = 8
     /// Max frames one message may claim. Bounds the buffer allocated from a
     /// peer-controlled `totalChunks` before any payload arrives; far above the
     /// ~512 frames the 8 MiB cap produces at ~16 KiB each.
-    static let maxChunkCount = 8192
+    public static let maxChunkCount = 8192
+    /// Max bytes held across all in-flight reassemblies before the oldest is
+    /// evicted. Mirrors `TRAY_MAX_REASSEMBLY_BYTES`.
+    public static let maxReassemblyBytes = 32 * 1024 * 1024
 }
 
 // MARK: - Framing

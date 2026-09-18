@@ -191,6 +191,7 @@ final class ComputerFrameAssemblerTests: XCTestCase {
             assembler.accept(
                 id: "a", seq: 1, data: "abc", chunkData: nil, chunkIndex: nil, totalChunks: nil),
             "abc")
+        XCTAssertEqual(assembler.pendingCount, 0)
     }
 
     func testChunksJoinInIndexOrder() {
@@ -202,5 +203,47 @@ final class ComputerFrameAssemblerTests: XCTestCase {
             assembler.accept(
                 id: "a", seq: 1, data: nil, chunkData: "XX", chunkIndex: 0, totalChunks: 2),
             "XXYY")
+        XCTAssertEqual(assembler.pendingCount, 0)
+    }
+
+    func testMalformedChunkCountIsRejectedWithoutAllocating() {
+        var assembler = ComputerFrameAssembler(maxChunkCount: 4, maxPending: 2, maxReassemblyBytes: 64)
+        XCTAssertNil(
+            assembler.accept(
+                id: "a", seq: 1, data: nil, chunkData: "x", chunkIndex: 0, totalChunks: 100_000))
+        XCTAssertNil(
+            assembler.accept(
+                id: "a", seq: 1, data: nil, chunkData: "x", chunkIndex: 0, totalChunks: 0))
+        XCTAssertNil(
+            assembler.accept(
+                id: "a", seq: 1, data: nil, chunkData: "x", chunkIndex: 4, totalChunks: 4))
+        XCTAssertEqual(assembler.pendingCount, 0)
+    }
+
+    func testPartialStreamsAreEvictedWhenPendingOverflows() {
+        var assembler = ComputerFrameAssembler(maxChunkCount: 4, maxPending: 2, maxReassemblyBytes: 64)
+        XCTAssertNil(
+            assembler.accept(
+                id: "a", seq: 1, data: nil, chunkData: "A0", chunkIndex: 0, totalChunks: 2))
+        XCTAssertNil(
+            assembler.accept(
+                id: "b", seq: 1, data: nil, chunkData: "B0", chunkIndex: 0, totalChunks: 2))
+        XCTAssertEqual(assembler.pendingCount, 2)
+        XCTAssertNil(
+            assembler.accept(
+                id: "c", seq: 1, data: nil, chunkData: "C0", chunkIndex: 0, totalChunks: 2))
+        XCTAssertEqual(assembler.pendingCount, 2)
+        XCTAssertNil(
+            assembler.accept(
+                id: "a", seq: 1, data: nil, chunkData: "A1", chunkIndex: 1, totalChunks: 2),
+            "stale incomplete frame a must not complete after eviction")
+    }
+
+    func testOversizedChunkIsRejected() {
+        var assembler = ComputerFrameAssembler(maxChunkCount: 4, maxPending: 2, maxReassemblyBytes: 4)
+        XCTAssertNil(
+            assembler.accept(
+                id: "a", seq: 1, data: nil, chunkData: "too-big", chunkIndex: 0, totalChunks: 2))
+        XCTAssertEqual(assembler.pendingCount, 0)
     }
 }
