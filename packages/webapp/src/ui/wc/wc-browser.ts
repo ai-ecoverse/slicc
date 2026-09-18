@@ -162,7 +162,7 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
       pages = await browser.listAllTargets();
     } catch (err) {
       log.error('WC browser overlay: listing tabs failed', err);
-      overlay.tabs = [];
+      overlay.tabs = mergeOverlayTabs([]);
       return;
     }
     if (seq !== refreshSeq) return;

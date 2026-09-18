@@ -511,4 +511,51 @@ describe('peek and the agent attachment', () => {
     expect(browser.withTab).not.toHaveBeenCalledWith('jsh:fake', expect.anything());
     expect(browser.withTab).not.toHaveBeenCalledWith('computer:jsh:fake', expect.anything());
   });
+
+  it('keeps computer cards when the CDP tab list fails', async () => {
+    const store = getComputersStore();
+    store.setSender(() => undefined);
+    store.applyList({
+      type: 'computers',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: { width: 8, height: 8 },
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll',
+            keyboard: true,
+            mouse: 'absolute',
+            scroll: true,
+            exec: false,
+            inputAllowed: true,
+          },
+          pid: null,
+        },
+      ],
+    });
+    const refs = makeRefs();
+    const browser = makeFakeBrowser();
+    browser.listAllTargets = vi.fn(async () => {
+      throw new Error('cdp gone');
+    });
+    const { overlay, refresh } = wireWcBrowser({
+      refs,
+      browser: browser as unknown as BrowserAPI,
+      log,
+    });
+    await refresh();
+    const tabs = (overlay as OverlayEl & { tabs: Array<{ id: string; kind?: string }> }).tabs;
+    expect(tabs.map((t) => t.id)).toEqual(['computer:jsh:fake']);
+    expect(tabs[0]?.kind).toBe('computer');
+    expect(overlay.hasAttribute('open')).toBe(true);
+    expect(log.error).toHaveBeenCalledWith(
+      'WC browser overlay: listing tabs failed',
+      expect.anything()
+    );
+  });
 });
