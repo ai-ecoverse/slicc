@@ -264,6 +264,12 @@ describe('slicc-image-preview', () => {
     expect(inputs[2]?.key).toBe('a');
     expect(overlay.classList.contains('closing')).toBe(false);
 
+    img.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    img.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+    expect(inputs.map((d) => d.kind)).toEqual(['click', 'scroll', 'key', 'click', 'click']);
+    expect(inputs[3]?.button).toBe(2);
+    expect(inputs[4]?.button).toBe(3);
+
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(overlay.classList.contains('closing')).toBe(true);
     expect(inputs.some((d) => d.key === 'Escape')).toBe(false);

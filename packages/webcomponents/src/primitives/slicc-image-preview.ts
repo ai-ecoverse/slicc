@@ -50,7 +50,7 @@ let activePreview: SliccImagePreview | null = null;
  *
  * @attr open - reflects whether the lightbox is mounted/visible (read-only mirror; see `isOpen`)
  * @attr src - the image source currently shown (reflected)
- * @attr drive - when set, clicks/scroll/keys on the image emit input instead of dismissing; Escape still closes
+ * @attr drive - when set, clicks/scroll/keys on the image emit input instead of dismissing; Escape still closes. Middle and right buttons use `auxclick`.
  * @fires slicc-image-preview-open - composed, bubbling; fired once the image starts animating in
  * @fires slicc-image-preview-close - composed, bubbling; fired when dismissal begins
  * @fires slicc-image-preview-input - composed, bubbling; drive-mode click, scroll, or key (Escape never fires)
@@ -256,6 +256,7 @@ export class SliccImagePreview extends HTMLElement {
       this.#emitKey(e);
     };
     overlay.addEventListener('click', (e) => this.#onOverlayClick(e));
+    overlay.addEventListener('auxclick', (e) => this.#onOverlayAuxClick(e));
     this.#onWheel = (e) => this.#onImageWheel(e);
     this.#onContext = (e) => {
       if (this.drive) e.preventDefault();
@@ -363,6 +364,13 @@ export class SliccImagePreview extends HTMLElement {
       return;
     }
     this.close();
+  }
+
+  #onOverlayAuxClick(event: MouseEvent): void {
+    if (!this.drive || event.target !== this.#img) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.#emitClick(event);
   }
 
   #onImageWheel(event: WheelEvent): void {
