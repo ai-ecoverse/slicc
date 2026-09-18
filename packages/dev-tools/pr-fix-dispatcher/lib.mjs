@@ -418,13 +418,16 @@ function bareCheckName(jobName) {
 }
 
 /**
- * The `CI / ci` aggregator job (`if: always()` over `needs: [*]`). Its log
- * never names a cause — it only echoes that a sibling failed.
+ * The `CI / ci` and `CI / ci-stack` aggregator jobs (`if: always()` over
+ * `needs: [*]`). Their logs never name a cause — they only echo that a
+ * sibling failed. `bareCheckName` already strips the `CI / ` prefix.
  * @param {string} jobName
  * @returns {boolean}
  */
+const CI_AGGREGATOR_JOBS = new Set(['ci', 'ci-stack']);
+
 export function isCiAggregatorJob(jobName) {
-  return bareCheckName(jobName) === 'ci';
+  return CI_AGGREGATOR_JOBS.has(bareCheckName(jobName));
 }
 
 /**
@@ -491,8 +494,9 @@ export const CODE_WORKFLOW_NAME = 'CI';
 
 const NON_CODE_JOBS = new Set([
   // The `if: always()` rollup over `needs: [*]`; its log only echoes that a
-  // sibling failed.
+  // sibling failed. Stacked runs report the same job as `ci-stack`.
   'ci',
+  'ci-stack',
   // The `dorny/paths-filter` job every other job gates on.
   'changes',
 ]);
@@ -524,9 +528,10 @@ function codeVerdict(name, category) {
 }
 
 /**
- * Spend the per-PR log budget on jobs that can name a cause. The `ci`
- * aggregator is last: its log is boilerplate (`One or more jobs failed…` plus
- * the env dump) and fetching it first used to starve a sibling (PR #3008).
+ * Spend the per-PR log budget on jobs that can name a cause. The `ci` /
+ * `ci-stack` aggregator is last: its log is boilerplate (`One or more jobs
+ * failed…` plus the env dump) and fetching it first used to starve a sibling
+ * (PR #3008).
  * @param {Array<{name?: string, jobName?: string}>} failing
  * @returns {Array<{name?: string, jobName?: string}>}
  */

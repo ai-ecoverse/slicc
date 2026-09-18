@@ -351,27 +351,29 @@ What runs on a stack:
   `storybook-screenshots.yml` stay `branches: [main]`.
 
 The aggregate job reports as **`ci-stack`**, not `ci`. The ruleset on `main`
-requires exactly one context, `ci`. A skipped-or-green check named `ci` counts
-as passing, so a simulator-less stacked commit must not mint that name — after
-a retarget it could otherwise reach `main` with the simulators never run
-anywhere (merge-queue non-leaders already skip every macOS job and rely on
-the PR-level run).
+requires exactly one context, `ci`. Documented GitHub behaviour is that a
+required check skipped by `if:` still satisfies branch protection
+([status checks](https://docs.github.com/en/pull-requests/reference/status-checks));
+this change does not rely on that — stacked runs never mint a check named
+`ci`. After a retarget, a stacked SHA that had carried `ci` could otherwise
+reach `main` with the simulators never run anywhere (merge-queue non-leaders
+already skip every macOS job and rely on the PR-level run).
 
 `edited` is not a trigger. `concurrency.cancel-in-progress: true` would cancel
 an in-flight run on a title/body edit, and a no-op run could mint a skipped
-`ci`. After you retarget a stack to `main`:
+`ci`. After you retarget a stack to `main`, a later `synchronize` (new commit
+or rebase/force-push) starts the full `main`-based set. Close + reopen is the
+recommended recipe when you have no code change:
 
 ```bash
 gh pr close <n> && gh pr reopen <n>
 ```
 
-Close + reopen is the only recipe that starts the full set (including
-`ios-app-tests`) and reports the aggregate as `ci`. A `PATCH base=main` alone
-does not.
+A `PATCH base=main` alone does not start CI.
 
 `delete_branch_on_merge` is `false` on this repo (owner decision, not part of
 the stacked-CI change). GitHub therefore does not auto-retarget a child when
-its parent merges — retarget the child yourself, then close + reopen.
+its parent merges — retarget the child yourself, then close + reopen or push.
 
 ## Other CI-only gates
 

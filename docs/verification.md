@@ -6,11 +6,8 @@ The stacked-PR CI contract is documented here so a search of `docs/` finds it.
 
 ## Stacked PRs
 
-A stacked PR is one whose base is another topic branch, not `main`. Until
-#3277, `ci.yml` was `on.pull_request.branches: [main]`, so stacks got review
-bots only — no lint, tests, coverage, or Swift gates.
-
-`ci.yml` now uses `pull_request.branches-ignore: [no-comment]`. PRs based on
+A stacked PR is one whose base is another topic branch, not `main`.
+`ci.yml` uses `pull_request.branches-ignore: [no-comment]`. PRs based on
 the `no-comment` benchmark mirror still get no CI. Every other base, including
 topic-branch stacks, runs the workflow from the PR's merge commit.
 
@@ -30,12 +27,15 @@ Stacked runs never mutate staging. The deploy lives in `ci.yml`'s
 `cloudflare-worker` job (`RUN_CLOUDFLARE_STAGING`), not only in
 `worker-staging.yml`.
 
-The aggregate must not be named `ci` on a stacked commit. A job skipped by
-`if:` still creates a check run that **counts as passing** for a required
-check. The ruleset on `main` requires exactly one context, `ci`. A green or
-skipped `ci` on a simulator-less stacked SHA would let a retargeted PR reach
-`main` with the simulators never run anywhere — merge-queue non-leaders
-already skip every macOS job and rely on the PR-level run.
+The aggregate must not be named `ci` on a stacked commit. Documented GitHub
+behaviour is that a required check skipped by `if:` still satisfies branch
+protection
+([status checks](https://docs.github.com/en/pull-requests/reference/status-checks)).
+This change does not rely on that: stacked runs never mint a check named `ci`.
+The ruleset on `main` requires exactly one context, `ci`. A green or skipped
+`ci` on a simulator-less stacked SHA would let a retargeted PR reach `main`
+with the simulators never run anywhere — merge-queue non-leaders already skip
+every macOS job and rely on the PR-level run.
 
 ### After you retarget to `main`
 
@@ -43,7 +43,9 @@ already skip every macOS job and rely on the PR-level run.
 is `true`, so handling `edited` would cancel an in-flight run on a title/body
 edit. `PATCH`ing the base to `main` therefore does not start CI.
 
-Close and reopen:
+Any later `synchronize` event (new commit, rebase, or force-push) starts the
+full `main`-based run. Close + reopen is the recommended recipe when you have
+no code change:
 
 ```bash
 gh pr close <n> && gh pr reopen <n>
@@ -56,4 +58,4 @@ aggregate as `ci`.
 
 The repo setting is `false` (owner decision; this change does not flip it).
 GitHub will not auto-retarget a stacked child when its parent merges. Retarget
-the child yourself, then close + reopen so the full `ci` set runs.
+the child yourself, then close + reopen or push so the full `ci` set runs.

@@ -32,18 +32,21 @@ export const MERGE_QUEUE_COUNT_QUERY = `query($owner: String!, $name: String!, $
  * turnstyle + deploy + smoke so five candidates do not serialize on
  * `staging-mutation-queue`.
  *
- * @param {{ eventName: string, isForkPr?: boolean, isDependabot?: boolean, isQueueLeader?: boolean, isStacked?: boolean }} opts
+ * @param {{ eventName: string, isForkPr?: boolean, isDependabot?: boolean, isQueueLeader?: boolean, isStacked?: boolean | string }} opts
  */
 export function shouldMutateCloudflareStaging({
   eventName,
   isForkPr = false,
   isDependabot = false,
   isQueueLeader = true,
-  isStacked = false,
-}) {
+  isStacked,
+} = {}) {
+  // Fail-closed, matching `is-stacked == 'false'` in ci.yml. Missing,
+  // empty, or garbage values skip mutation (unknown ⇒ no deploy). Only an
+  // explicit boolean/string false is "not stacked".
+  if (isStacked !== false && isStacked !== 'false') return false;
   const trusted = eventName !== 'pull_request' || (!isForkPr && !isDependabot);
   if (!trusted) return false;
-  if (isStacked) return false;
   if (eventName === 'merge_group') return isQueueLeader === true;
   return true;
 }
