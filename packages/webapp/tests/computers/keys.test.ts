@@ -4,6 +4,8 @@ import {
   parseKeysym,
   toCdpKeyEvents,
   toTouchAction,
+  toXdotoolKey,
+  toYdotoolKey,
 } from '../../src/computers/keys.js';
 
 describe('computer keys', () => {
@@ -54,5 +56,14 @@ describe('computer keys', () => {
       x2: 8,
       y2: 9,
     });
+  });
+
+  it('emits xdotool and ydotool chords', () => {
+    const parsed = parseKeysym('ctrl+alt+Delete');
+    expect(parsed).not.toBeNull();
+    expect(toXdotoolKey(parsed!)).toBe('ctrl+alt+Delete');
+    expect(toYdotoolKey(parsed!)).toContain('29:1');
+    expect(toYdotoolKey(parsed!)).toContain('111:');
+    expect(toXdotoolKey(parseKeysym('Return')!)).toBe('Return');
   });
 });

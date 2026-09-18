@@ -10,7 +10,8 @@ import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
 import {
   clampVideoDurationMs,
-  type DisplayCaptureRequest,
+  type DisplayStillRequest,
+  type DisplayVideoRequest,
   describeDisplayCaptureError,
 } from './screencapture-media-shared.js';
 import { basename } from './shared.js';
@@ -97,7 +98,7 @@ function getVideoMimeTypeForExtension(filename: string): string {
 async function captureScreenBytes(
   local: boolean,
   panelRpc: NonNullable<ReturnType<typeof getPanelRpcClient>>,
-  request: DisplayCaptureRequest
+  request: DisplayStillRequest | DisplayVideoRequest
 ): Promise<
   { bytes: Uint8Array; mimeType: string; durationMs?: number } | { error: ScreencaptureResult }
 > {
@@ -382,7 +383,9 @@ function resolveVideoDurationMs(
   return {};
 }
 
-function buildCaptureRequest(opts: ScreencaptureOptions): DisplayCaptureRequest {
+function buildCaptureRequest(
+  opts: ScreencaptureOptions
+): DisplayStillRequest | DisplayVideoRequest {
   if (opts.wantVideo) {
     return {
       mode: 'video',

@@ -6,6 +6,7 @@
 import type { ComputerDescriptor, ComputerInputEvent, ComputerMouseButton } from '@slicc/shared-ts';
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
+import { getToolExecutionContext } from '../../../base/tool-execution-context.js';
 import {
   BridgedTabComputerBackend,
   LocalTabComputerBackend,
@@ -34,9 +35,13 @@ import {
 } from '../../../computers/scale.js';
 import type { BrowserAPI } from '../../../kernel/browser-api.js';
 import type { PanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
+import { getPanelRpcClient, PANEL_RPC_DEFAULT_TIMEOUT_MS } from '../../../kernel/panel-rpc.js';
 import type { ProcessManager } from '../../../kernel/process-manager.js';
+import { sudoRefusalMessage } from '../../../sudo/approval-timeout.js';
+import type { SudoBroker } from '../../../sudo/types.js';
 import type { ComputerCommandDeps } from '../computer-command.js';
+import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from '../host-command.js';
+import { clampVideoDurationMs } from '../screencapture-media-shared.js';
 import { isHelpRequest, subcommandHelpText } from '../subcommand-help.js';
 import { COMPUTER_HELP, COMPUTER_VALUE_FLAGS } from './help.js';
 import {
@@ -49,6 +54,7 @@ import {
   positionals,
   type VerbCall,
 } from './parse.js';
+import { runScreenShareApproval } from './screen-approval.js';
 import { resolveComputerId } from './target.js';
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
@@ -77,6 +83,62 @@ function lookupBrowser(deps: ComputerCommandDeps): BrowserAPI | null {
 
 function lookupRpc(deps: ComputerCommandDeps): PanelRpcClient | null {
   return deps.panelRpc ?? (globalThis as KernelGlobals).__slicc_panelRpc ?? getPanelRpcClient();
+}
+
+function lookupSudo(deps: ComputerCommandDeps): SudoBroker | null {
+  if (deps.sudoBroker) return deps.sudoBroker;
+  const hook = (globalThis as { __slicc_sudo?: SudoBroker }).__slicc_sudo;
+  return hook ?? null;
+}
+
+function listFollowers(deps: ComputerCommandDeps): ConnectedFollowerInfo[] {
+  return deps.listFollowers?.() ?? getConnectedFollowersWithFallback();
+}
+
+async function execOnFollower(
+  deps: ComputerCommandDeps,
+  runtimeId: string,
+  command: string,
+  timeoutMs?: number
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  if (deps.sshExec) return deps.sshExec(runtimeId, command, timeoutMs);
+  const rpc = lookupRpc(deps);
+  if (!rpc) throw new Error('no panel RPC in this float');
+  const timeout = timeoutMs ?? 30_000;
+  const result = await rpc.call(
+    'tray-exec',
+    {
+      runtimeId,
+      command,
+      execToken: `computer-ssh-${Date.now().toString(36)}`,
+      timeoutMs: timeout,
+    },
+    { timeoutMs: timeout + PANEL_RPC_DEFAULT_TIMEOUT_MS }
+  );
+  if (result.error) throw new Error(result.error);
+  return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+}
+
+function resolveSshFollower(
+  query: string,
+  followers: ConnectedFollowerInfo[]
+): ConnectedFollowerInfo | { error: string } {
+  const capable = followers.filter((f) => f.exec);
+  const exact = capable.find((f) => f.runtimeId === query);
+  if (exact) return exact;
+  const hits = capable.filter((f) => f.runtimeId.endsWith(query) || f.runtimeId.includes(query));
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
+  return {
+    error: `add ssh: no exec-capable follower '${query}' — try \`ssh --list\``,
+  };
+}
+
+function lsExtras(c: ComputerDescriptor): string {
+  const bits: string[] = [];
+  if (c.kind === 'screen') bits.push('display slot');
+  if (c.kind === 'ssh') bits.push(c.capabilities.inputAllowed ? 'input' : 'view-only');
+  return bits.length > 0 ? ` [${bits.join(', ')}]` : '';
 }
 
 function registryOf(deps: ComputerCommandDeps): ComputerRegistry {
@@ -145,6 +207,8 @@ async function runVerb(
       return verbText(globals, ctx, registry);
     case 'watch':
       return verbWatch(call.args, globals, ctx, registry, deps);
+    case 'record':
+      return verbRecord(call.args, globals, ctx, registry);
     case 'exec':
       return verbExec(call.args, globals, ctx, registry);
     default:
@@ -156,9 +220,11 @@ function verbLs(registry: ComputerRegistry, json: boolean): CmdResult {
   const list = registry.list();
   if (json) return ok(`${JSON.stringify(list)}\n`);
   if (list.length === 0) return ok('no computers registered\n');
-  const lines = ['ID                   KIND  STATE     TITLE'];
+  const lines = ['ID                   KIND   STATE     TITLE'];
   for (const c of list) {
-    lines.push(`${c.id.padEnd(20)} ${c.kind.padEnd(5)} ${c.state.padEnd(9)} ${c.title}`);
+    lines.push(
+      `${c.id.padEnd(20)} ${c.kind.padEnd(6)} ${c.state.padEnd(9)} ${c.title}${lsExtras(c)}`
+    );
   }
   return ok(`${lines.join('\n')}\n`);
 }
@@ -170,9 +236,125 @@ async function verbAdd(
   registry: ComputerRegistry
 ): Promise<CmdResult> {
   const kind = args[0];
-  if (kind !== 'tab') {
-    return fail(`add: unknown kind '${kind ?? ''}' — phase 1 supports \`computer add tab\``);
+  if (kind === 'tab') return verbAddTab(args, ctx, deps, registry);
+  if (kind === 'screen') return verbAddScreen(args, ctx, deps, registry);
+  if (kind === 'ssh') return verbAddSsh(args, ctx, deps, registry);
+  if (kind === 'url') return verbAddUrl(args, ctx, deps, registry);
+  return fail(
+    `add: unknown kind '${kind ?? ''}' — phase 3 supports \`computer add tab\`, \`computer add screen\`, \`computer add ssh\`, and \`computer add url\``
+  );
+}
+
+async function resolveUrlFetch(
+  deps: ComputerCommandDeps
+): Promise<NonNullable<ComputerCommandDeps['urlFetch']>> {
+  if (deps.urlFetch) return deps.urlFetch;
+  const { createProxiedFetch } = await import('../../proxied-fetch.js');
+  const { wrapUrlComputerFetch } = await import('../../../computers/adapters/url.js');
+  const sf = createProxiedFetch();
+  return wrapUrlComputerFetch((url, init) => sf(url, init as Parameters<typeof sf>[1]));
+}
+
+async function verbAddUrl(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const name = flagValue(args, ['-n', '--name']);
+  const spec = positionals(args).slice(1)[0];
+  if (!spec) return fail('add url: requires <http(s)://base>');
+  const { UrlComputerBackend, probeUrlComputer, normalizeComputerBase } = await import(
+    '../../../computers/adapters/url.js'
+  );
+  let base: string;
+  try {
+    base = normalizeComputerBase(spec);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return fail(`add url: ${msg}`);
   }
+  const fetchImpl = await resolveUrlFetch(deps);
+  let desc;
+  try {
+    desc = await probeUrlComputer(fetchImpl, base);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return fail(msg.startsWith('add url:') ? msg : `add url: ${msg}`);
+  }
+  if (name) desc = { ...desc, title: name };
+  const backend = new UrlComputerBackend(fetchImpl, base, desc);
+  const registered = registry.register(backend);
+  registry.use(registered.id);
+  void ctx;
+  return ok(`registered ${registered.id} (${registered.title})\n`);
+}
+
+async function verbAddSsh(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const name = flagValue(args, ['-n', '--name']);
+  const sim = flagValue(args, ['--sim']);
+  const allowInput = hasFlag(args, '--allow-input');
+  const query = positionals(args).slice(1)[0];
+  if (!query) return fail('add ssh: requires <follower>');
+  const follower = resolveSshFollower(query, listFollowers(deps));
+  if ('error' in follower) return fail(follower.error);
+  if (follower.floatType === 'ios') {
+    return fail(
+      'add ssh: the iOS follower itself is not a driven computer (a real iPhone is out of scope; pass --sim <udid> on a Mac follower)'
+    );
+  }
+  const { SshComputerBackend, probeSsh } = await import('../../../computers/adapters/ssh.js');
+  const exec = (command: string, opts?: { timeoutMs?: number }) =>
+    execOnFollower(deps, follower.runtimeId, command, opts?.timeoutMs);
+  let probe;
+  try {
+    probe = await probeSsh(exec, sim);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return fail(msg.startsWith('add ssh:') ? msg : `add ssh: ${msg}`);
+  }
+  if (allowInput && probe.input === 'none') {
+    return fail(
+      'add ssh: --allow-input needs cliclick, xdotool, ydotool, or idb on the follower (screenshot-only otherwise)'
+    );
+  }
+  if (allowInput) {
+    const broker = lookupSudo(deps);
+    if (!broker) return fail('add ssh: --allow-input needs sudo approval (not configured)');
+    const decision = await broker.requestApproval({
+      kind: 'command',
+      detail: `computer add ssh ${follower.runtimeId}${sim ? ` --sim ${sim}` : ''} --allow-input`,
+      reason: 'grant pointer and keyboard control of the follower desktop',
+    });
+    if (decision.decision === 'deny') {
+      return fail(sudoRefusalMessage('add ssh', decision));
+    }
+  }
+  const title = name ?? (sim ? `${follower.runtimeId} sim ${sim}` : follower.runtimeId);
+  const backend = new SshComputerBackend(exec, {
+    runtimeId: follower.runtimeId,
+    title,
+    probe,
+    inputAllowed: allowInput,
+    sim,
+  });
+  const desc = registry.register(backend);
+  registry.use(desc.id);
+  void ctx;
+  return ok(`registered ${desc.id} (${desc.title})\n`);
+}
+
+async function verbAddTab(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
   const name = flagValue(args, ['-n', '--name']);
   const spec = positionals(args).slice(1)[0];
   if (!spec) return fail('add tab: requires <targetId|url>');
@@ -192,6 +374,48 @@ async function verbAdd(
   const backend = rpc
     ? new BridgedTabComputerBackend(rpc, page.targetId, info)
     : new LocalTabComputerBackend(browser, page.targetId, info);
+  const desc = registry.register(backend);
+  registry.use(desc.id);
+  void ctx;
+  return ok(`registered ${desc.id} (${desc.title})\n`);
+}
+
+async function verbAddScreen(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const name = flagValue(args, ['-n', '--name']);
+  const resolved = flagValue(args, ['--__resolved']);
+  let handle = resolved;
+  if (!handle) {
+    if (!getToolExecutionContext()) {
+      return fail(
+        'add screen: needs a user gesture — type `computer add screen` in the panel terminal, or run it from a cone tool call so an approval card can open the picker'
+      );
+    }
+    try {
+      handle = (await runScreenShareApproval()).handle;
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
+  }
+  const rpc = lookupRpc(deps);
+  if (!rpc) return fail('add screen: no panel RPC in this float');
+  const { BridgedScreenComputerBackend, screenComputerId } = await import(
+    '../../../computers/adapters/screen.js'
+  );
+  const backend = new BridgedScreenComputerBackend(
+    rpc,
+    handle,
+    {
+      title: name ?? 'Display',
+    },
+    () => {
+      registry.refresh(screenComputerId(handle));
+    }
+  );
   const desc = registry.register(backend);
   registry.use(desc.id);
   void ctx;
@@ -308,6 +532,62 @@ async function verbWatch(
   return ok(`watching ${target.id} at ${fps} fps\n`);
 }
 
+interface ScreenClipper {
+  recordClip(durationMs: number): Promise<{
+    bytes: Uint8Array;
+    mime: string;
+    width: number;
+    height: number;
+    durationMs?: number;
+  }>;
+}
+
+function hasRecordClip(backend: ComputerBackend): backend is ComputerBackend & ScreenClipper {
+  return 'recordClip' in backend && typeof (backend as ScreenClipper).recordClip === 'function';
+}
+
+function durationSeconds(args: string[]): number {
+  const raw = flagValue(args, ['-V', '--duration']);
+  if (raw === undefined) return 5;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error('-V/--duration requires a positive number of seconds');
+  }
+  return n;
+}
+
+async function verbRecord(
+  args: string[],
+  globals: { computer: string | undefined; json: boolean },
+  ctx: CommandContext,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const target = requireTarget(registry, globals.computer, ctx);
+  if ('exitCode' in target) return target;
+  const kind = target.descriptor.kind;
+  if (kind !== 'screen' || !hasRecordClip(target.backend)) {
+    return fail(`record: not supported for '${kind}' yet (phase 4)`);
+  }
+  let seconds: number;
+  try {
+    seconds = durationSeconds(args);
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err));
+  }
+  const durationMs = clampVideoDurationMs(seconds * 1000);
+  const clip = await target.backend.recordClip(durationMs);
+  const file = positionals(args)[0] ?? 'clip.webm';
+  const dest = ctx.fs.resolvePath(ctx.cwd, file);
+  await ctx.fs.writeFile(dest, clip.bytes);
+  const elapsed = clip.durationMs ?? durationMs;
+  if (globals.json) {
+    return ok(
+      `${JSON.stringify({ id: target.id, path: dest, durationMs: elapsed, mime: clip.mime })}\n`
+    );
+  }
+  return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height} → ${dest}\n`);
+}
+
 function resolveWatchControl(deps: ComputerCommandDeps): {
   watch: (id: string, fps: number, maxWidth: number) => void;
   unwatch: (id: string) => void;
@@ -358,13 +638,15 @@ async function writePostActionFrame(
   registry: ComputerRegistry
 ): Promise<CmdResult> {
   const maxWidth = target.descriptor.lastShot?.width ?? 768;
+  const abort = new AbortController();
   let frame;
   try {
     frame = await raceTimeout(
-      target.backend.screenshot({ format: 'jpeg', maxWidth }),
+      target.backend.screenshot({ format: 'jpeg', maxWidth, signal: abort.signal }),
       POST_ACTION_TIMEOUT_MS
     );
   } catch (err) {
+    abort.abort();
     return fail(
       `screenshot failed after input: ${err instanceof Error ? err.message : String(err)}`
     );

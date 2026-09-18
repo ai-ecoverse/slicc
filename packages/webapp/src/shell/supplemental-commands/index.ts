@@ -348,6 +348,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createComputerCommand({
       processManager: options.processManager,
       browser: options.browserAPI,
+      sudoBroker: options.sudoCommand?.broker,
     }),
     createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),

@@ -90,6 +90,8 @@ export interface ComputerFrame {
 export interface ComputerScreenshotOpts {
   format: 'png' | 'jpeg';
   maxWidth?: number;
+  /** Adapters that issue HTTP must abort the in-flight request when this fires. */
+  signal?: AbortSignal;
 }
 
 export interface ComputerExecResult {

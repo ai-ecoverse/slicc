@@ -756,7 +756,9 @@ WebHID `requestDevice` family — only run from inside a real user-gesture
 handler. The kernel worker that hosts shell commands has no `window`, so these
 APIs cannot run there directly. The panel terminal bridges the gesture; agent
 `bash` calls fall back to an in-chat approval dip (`mount`) or fail with a
-clear "needs a real user gesture" message (`usb`/`serial`/`hid`/`esptool`).
+clear "needs a real user gesture" message (`usb`/`serial`/`hid`/`esptool`/`computer add screen`).
+`--allow-input` on `computer add ssh` is **sudo**, not a browser picker: it rides
+`sudo.approve.request` (`kind: 'command'`) so a tray phone can answer with Face ID.
 
 ### Single gesture entry — `<slicc-permissions>`
 
@@ -894,7 +896,7 @@ for the API and HTML conventions.
 | `packages/webapp/src/base/permissions-surface-registry.ts`           | Leader-surface singleton (bottom of the layer stack so `shell/` can look it up)                                                                     |
 | `packages/webapp/src/ui/wc/wc-permissions-registry.ts`               | `getLeaderPermissionsSurface()` accessor — the single page-realm seam                                                                               |
 | `packages/webapp/src/ui/wc/wc-permissions-providers.ts`              | Extension popup-backed providers (filesystem + usb + hid + serial)                                                                                  |
-| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` keystroke gesture → `surface.request(kind)`                                                                                |
+| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` / `computer add screen` keystroke gesture → `surface.request(kind)`                                                        |
 | `packages/webapp/src/speech/composer-speech.ts`                      | Composer mic / PTT → `surface.request('microphone')`                                                                                                |
 | `packages/webapp/src/ui/wc/wc-attach.ts`                             | Composer photo/video capture → `surface.prompt({ kinds: ['camera','microphone'], skipIfGranted: true })`                                            |
 | `packages/webapp/src/speech/hear.ts`                                 | `hear` mic capture → `surface.prompt({ kinds: ['microphone'], skipIfGranted: true })`                                                               |
@@ -931,6 +933,10 @@ outcome. ✅ = pass, ⚠️ = noted asymmetry, ❌ = regression — fix before m
 | Composer "Take a photo" (add-menu)                                                 | Composer             | First capture: SLICC Allow/Cancel then the browser camera/mic prompt; later captures skip the in-app dialog and open the inline capture surface                                                                        |
 | `ffmpeg -f avfoundation -i 0 -frames:v 1 photo.jpg` (after `ipk add @ffmpeg/core`) | Panel terminal       | First capture: `<slicc-permissions>` Allow/Cancel then the browser camera prompt → photo lands in VFS; later captures skip the in-app dialog. Denying surfaces a clean `camera permission denied` error and no capture |
 | `hear` (mic capture)                                                               | Panel terminal       | First capture: SLICC Allow/Cancel then the browser mic prompt; later captures skip the in-app dialog and transcribe                                                                                                    |
+| `computer add screen`                                                              | Panel terminal       | `<slicc-permissions>` screenshare chooser → `computer ls` shows `screen:<handle> [display slot]`                                                                                                                       |
+| Agent issues `computer add screen`                                                 | Cone-driven approval | Chat card "Share this display" → click → getDisplayMedia in the leader tab → handle returned (`data-picker="screenshare"`, not a PickerKind popup)                                                                     |
+| `computer add ssh <follower> --allow-input`                                        | Sudo                 | `sudo.approve.request` (`kind: command`) — Allow/Always/Deny (Face ID on a tray phone). `computer ls` shows `[input]`                                                                                                  |
+| `computer add ssh <follower> --allow-input` denied                                 | Sudo                 | stderr `computer: add ssh: approval denied` (or timeout copy); computer is not registered                                                                                                                              |
 
 Cancel / deny on each row to confirm the surface emits `slicc-permission-deny`
 with `reason: 'cancelled'`; the picker dip should not stay open.

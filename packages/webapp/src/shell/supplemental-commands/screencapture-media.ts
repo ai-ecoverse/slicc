@@ -1,10 +1,11 @@
 /**
- * Page-realm display capture for `screencapture`.
+ * Page-realm display capture for `screencapture` and `computer add screen`.
  *
  * Still frames go through a canvas; video clips go through MediaRecorder.
- * Both paths always stop every track in `finally` so a cancelled picker or
- * a short clip does not leave the browser's display-capture slot held
- * (see issue #3233).
+ * One-shot paths always stop every track in `finally` so a cancelled picker
+ * or a short clip does not leave the browser's display-capture slot held
+ * (see issue #3233). Session mode (`start` / `frame` / `stop` / `record`)
+ * keeps the tracks alive until `stop`, `computer rm`, or page unload.
  *
  * Pure helpers live in `screencapture-media-shared.ts` so the kernel worker
  * can import types/clamps without hoisting this DOM module into its eager
@@ -15,9 +16,14 @@ import {
   clampVideoDurationMs,
   type DisplayCaptureRequest,
   type DisplayCaptureResult,
+  type DisplaySessionFrameRequest,
+  type DisplaySessionRecordRequest,
+  type DisplaySessionStartRequest,
+  type DisplaySessionStopRequest,
   type DisplayStillRequest,
   type DisplayVideoRequest,
   describeDisplayCaptureError,
+  fitDisplaySize,
   MIN_VIDEO_DURATION_MS,
 } from './screencapture-media-shared.js';
 
@@ -25,14 +31,114 @@ export type {
   DisplayCaptureMode,
   DisplayCaptureRequest,
   DisplayCaptureResult,
+  DisplaySessionFrameRequest,
+  DisplaySessionRecordRequest,
+  DisplaySessionStartRequest,
+  DisplaySessionStopRequest,
   DisplayStillRequest,
   DisplayVideoRequest,
 } from './screencapture-media-shared.js';
 export {
   clampVideoDurationMs,
   describeDisplayCaptureError,
+  fitDisplaySize,
   MIN_VIDEO_DURATION_MS,
+  SCREENCAPTURE_SESSION_ENDED_CHANNEL,
+  sessionCaptureRequest,
 } from './screencapture-media-shared.js';
+
+interface LiveDisplaySession {
+  handle: string;
+  stream: MediaStream;
+  video: HTMLVideoElement;
+}
+
+/**
+ * In-page registry of live getDisplayMedia sessions. Kernel code must not
+ * import this module (bundle-size); callers dynamic-import it from the page.
+ */
+export class DisplaySessionStore {
+  private readonly sessions = new Map<string, LiveDisplaySession>();
+  private readonly endedListeners = new Set<(handle: string) => void>();
+  private nextId = 1;
+  private unloadHooked = false;
+
+  ids(): string[] {
+    return [...this.sessions.keys()];
+  }
+
+  get(handle: string): LiveDisplaySession | undefined {
+    return this.sessions.get(handle);
+  }
+
+  add(stream: MediaStream, video: HTMLVideoElement): string {
+    const handle = `screen${this.nextId++}`;
+    this.sessions.set(handle, { handle, stream, video });
+    this.hookUnload();
+    for (const track of stream.getTracks()) {
+      track.addEventListener(
+        'ended',
+        () => {
+          this.stop(handle);
+        },
+        { once: true }
+      );
+    }
+    return handle;
+  }
+
+  stop(handle: string): boolean {
+    const session = this.sessions.get(handle);
+    if (!session) return false;
+    this.sessions.delete(handle);
+    session.video.srcObject = null;
+    stopMediaStreamTracks(session.stream);
+    this.notifyEnded(handle);
+    return true;
+  }
+
+  onEnded(listener: (handle: string) => void): () => void {
+    this.endedListeners.add(listener);
+    return () => {
+      this.endedListeners.delete(listener);
+    };
+  }
+
+  stopAll(): void {
+    for (const handle of [...this.sessions.keys()]) this.stop(handle);
+  }
+
+  private hookUnload(): void {
+    if (this.unloadHooked || typeof window === 'undefined') return;
+    this.unloadHooked = true;
+    window.addEventListener('pagehide', () => {
+      this.stopAll();
+    });
+  }
+
+  private notifyEnded(handle: string): void {
+    for (const listener of [...this.endedListeners]) {
+      try {
+        listener(handle);
+      } catch {
+        /* listener faults must not poison session teardown */
+      }
+    }
+  }
+}
+
+export const displaySessions = new DisplaySessionStore();
+
+/** Stop every MediaStreamTrack on `stream` (best-effort). */
+export function stopMediaStreamTracks(stream: { getTracks(): Array<{ stop(): void }> }): void {
+  for (const track of stream.getTracks()) {
+    try {
+      track.stop();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
 
 /**
  * Capture a still frame or a timed video clip via `getDisplayMedia`.
@@ -43,6 +149,9 @@ export {
 export async function captureDisplayMedia(
   req: DisplayCaptureRequest
 ): Promise<DisplayCaptureResult> {
+  if (req.mode === 'session') {
+    return runDisplaySession(req);
+  }
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw new Error('screen capture is not supported in this browser');
   }
@@ -66,14 +175,92 @@ export async function captureDisplayMedia(
     }
     return await grabDisplayStill(stream, req);
   } finally {
-    for (const t of stream.getTracks()) {
-      try {
-        t.stop();
-      } catch {
-        /* best-effort */
-      }
-    }
+    stopMediaStreamTracks(stream);
   }
+}
+
+async function runDisplaySession(
+  req:
+    | DisplaySessionStartRequest
+    | DisplaySessionFrameRequest
+    | DisplaySessionStopRequest
+    | DisplaySessionRecordRequest
+): Promise<DisplayCaptureResult> {
+  if (req.action === 'start') return startDisplaySession();
+  if (req.action === 'frame') return frameDisplaySession(req);
+  if (req.action === 'record') return recordDisplaySession(req);
+  const stopped = displaySessions.stop(req.handle);
+  if (!stopped) throw new Error(`no screen-share session '${req.handle}'`);
+  return {
+    bytes: new Uint8Array(0),
+    mimeType: 'application/octet-stream',
+    width: 0,
+    height: 0,
+    handle: req.handle,
+  };
+}
+
+async function startDisplaySession(): Promise<DisplayCaptureResult> {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('screen capture is not supported in this browser');
+  }
+  await whenDisplayCaptureReady();
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: false,
+    });
+  } catch (err) {
+    throw new Error(describeDisplayCaptureError(err));
+  }
+  return adoptDisplayStream(stream);
+}
+
+/**
+ * Adopt an already-granted display MediaStream into the session store.
+ * Used by the panel terminal after `requestPermission('screenshare')` so
+ * the OS picker does not run twice.
+ */
+export async function adoptDisplayStream(stream: MediaStream): Promise<DisplayCaptureResult> {
+  let video: HTMLVideoElement;
+  try {
+    video = await attachVideoElement(stream);
+    await new Promise<void>((r) => setTimeout(r, 100));
+  } catch (err) {
+    stopMediaStreamTracks(stream);
+    throw err;
+  }
+  const handle = displaySessions.add(stream, video);
+  return {
+    bytes: new Uint8Array(0),
+    mimeType: 'application/octet-stream',
+    width: video.videoWidth,
+    height: video.videoHeight,
+    handle,
+  };
+}
+
+async function frameDisplaySession(req: DisplaySessionFrameRequest): Promise<DisplayCaptureResult> {
+  const session = displaySessions.get(req.handle);
+  if (!session) throw new Error(`no screen-share session '${req.handle}'`);
+  return grabStillFromVideo(session.video, {
+    mimeType: req.mimeType ?? 'image/jpeg',
+    quality: req.quality ?? 0.7,
+    maxWidth: req.maxWidth,
+  });
+}
+
+async function recordDisplaySession(
+  req: DisplaySessionRecordRequest
+): Promise<DisplayCaptureResult> {
+  const session = displaySessions.get(req.handle);
+  if (!session) throw new Error(`no screen-share session '${req.handle}'`);
+  return recordDisplayVideo(session.stream, {
+    mode: 'video',
+    mimeType: req.mimeType ?? 'video/webm',
+    durationMs: req.durationMs,
+  });
 }
 
 async function grabDisplayStill(
@@ -83,30 +270,41 @@ async function grabDisplayStill(
   const video = await attachVideoElement(stream);
   try {
     await new Promise<void>((r) => setTimeout(r, 100));
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get canvas context');
-    ctx.drawImage(video, 0, 0, width, height);
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error('Failed to create image blob'))),
-        req.mimeType,
-        req.quality
-      );
+    return await grabStillFromVideo(video, {
+      mimeType: req.mimeType,
+      quality: req.quality,
     });
-    return {
-      bytes: new Uint8Array(await blob.arrayBuffer()),
-      mimeType: blob.type || req.mimeType,
-      width,
-      height,
-    };
   } finally {
     video.srcObject = null;
   }
+}
+
+async function grabStillFromVideo(
+  video: HTMLVideoElement,
+  opts: { mimeType: string; quality: number; maxWidth?: number }
+): Promise<DisplayCaptureResult> {
+  const nativeW = video.videoWidth;
+  const nativeH = video.videoHeight;
+  const { width, height } = fitDisplaySize(nativeW, nativeH, opts.maxWidth);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to get canvas context');
+  ctx.drawImage(video, 0, 0, width, height);
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error('Failed to create image blob'))),
+      opts.mimeType,
+      opts.quality
+    );
+  });
+  return {
+    bytes: new Uint8Array(await blob.arrayBuffer()),
+    mimeType: blob.type || opts.mimeType,
+    width,
+    height,
+  };
 }
 
 async function recordDisplayVideo(

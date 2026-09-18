@@ -283,6 +283,7 @@ export function createStandalonePanelRpcHandlers(
   // to the page-side `inputreport` unsubscribe so the matching
   // `hid-unsubscribe-input-reports` op (or a re-subscribe) tears it down.
   const hidSubscriptions = new Map<string, () => void>();
+  ensureScreenSessionEndedRelay(options.emitEvent);
 
   return {
     ...buildPageAudioHandlers(),
@@ -412,6 +413,53 @@ function buildProxiedFetchHandler() {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
+async function handleScreencaptureRpc(payload: {
+  mimeType: string;
+  quality: number;
+  mode?: 'image' | 'video' | 'session';
+  durationMs?: number;
+  audio?: boolean;
+  session?: 'start' | 'frame' | 'stop' | 'record';
+  handle?: string;
+  maxWidth?: number;
+}): Promise<{
+  bytes: ArrayBuffer;
+  width: number;
+  height: number;
+  mimeType: string;
+  durationMs?: number;
+  handle?: string;
+}> {
+  const { captureDisplayMedia, sessionCaptureRequest } = await import(
+    '../shell/supplemental-commands/screencapture-media.js'
+  );
+  const { mimeType, quality, mode, durationMs, audio, session, handle, maxWidth } = payload;
+  const captured = await captureDisplayMedia(
+    mode === 'session'
+      ? sessionCaptureRequest({ session, handle, mimeType, quality, durationMs, maxWidth })
+      : mode === 'video'
+        ? {
+            mode: 'video',
+            mimeType,
+            durationMs: durationMs ?? 5_000,
+            audio: !!audio,
+          }
+        : { mode: 'image', mimeType, quality }
+  );
+  const buffer = captured.bytes.buffer.slice(
+    captured.bytes.byteOffset,
+    captured.bytes.byteOffset + captured.bytes.byteLength
+  ) as ArrayBuffer;
+  return {
+    bytes: buffer,
+    width: captured.width,
+    height: captured.height,
+    mimeType: captured.mimeType,
+    ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
+    ...(captured.handle !== undefined ? { handle: captured.handle } : {}),
+  };
+}
+
 /** Page identity, screen/speech/audio output. */
 function buildPageAudioHandlers() {
   return {
@@ -421,32 +469,7 @@ function buildPageAudioHandlers() {
       title: document.title || '',
     }),
 
-    screencapture: async ({ mimeType, quality, mode, durationMs, audio }) => {
-      const { captureDisplayMedia } = await import(
-        '../shell/supplemental-commands/screencapture-media.js'
-      );
-      const captured = await captureDisplayMedia(
-        mode === 'video'
-          ? {
-              mode: 'video',
-              mimeType,
-              durationMs: durationMs ?? 5_000,
-              audio: !!audio,
-            }
-          : { mode: 'image', mimeType, quality }
-      );
-      const buffer = captured.bytes.buffer.slice(
-        captured.bytes.byteOffset,
-        captured.bytes.byteOffset + captured.bytes.byteLength
-      ) as ArrayBuffer;
-      return {
-        bytes: buffer,
-        width: captured.width,
-        height: captured.height,
-        mimeType: captured.mimeType,
-        ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
-      };
-    },
+    screencapture: (payload) => handleScreencaptureRpc(payload),
 
     // Routed through the kokoro-aware speak helper: the on-device voice runs
     // once its chained download is ready (or when `voice` names a kokoro
@@ -1395,6 +1418,8 @@ function usbRegistry() {
 
 let usbClaimRelay: (() => void) | null = null;
 let usbClaimEmit: ((channel: string, payload: unknown) => void) | undefined;
+let screenEndedRelay: (() => void) | null = null;
+let screenEndedEmit: ((channel: string, payload: unknown) => void) | undefined;
 
 /**
  * One page-side subscription so worker-side shell/realm consumers hear
@@ -1409,6 +1434,24 @@ function ensureUsbClaimEventRelay(emitEvent?: (channel: string, payload: unknown
     if (usbClaimRelay) return;
     usbClaimRelay = m.addClaimListener(usbRegistry(), (event) => {
       usbClaimEmit?.('usb-claim-event', event);
+    });
+  });
+}
+
+/**
+ * Fan page-side display-share track ends (browser Stop sharing) to the
+ * worker so `screen:` computers can mark `gone`. Rebinding `emitEvent`
+ * does not stack listeners on the session store.
+ */
+function ensureScreenSessionEndedRelay(
+  emitEvent?: (channel: string, payload: unknown) => void
+): void {
+  screenEndedEmit = emitEvent;
+  if (screenEndedRelay || !emitEvent) return;
+  void import('../shell/supplemental-commands/screencapture-media.js').then((m) => {
+    if (screenEndedRelay) return;
+    screenEndedRelay = m.displaySessions.onEnded((handle) => {
+      screenEndedEmit?.(m.SCREENCAPTURE_SESSION_ENDED_CHANNEL, { handle });
     });
   });
 }

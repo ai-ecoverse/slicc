@@ -19,10 +19,11 @@ npm run package:release
 - **Hosted mode (`--hosted`)**: bundled with the e2b template (`packages/dev-tools/e2b-template/`). Boots headless Chromium against `?runtime=hosted-leader`, persists `--user-data-dir=/data/profile`, exposes `/api/cloud-status` + `/api/leader-restart`, reads `SLICC_TRAY_WORKER_BASE_URL`.
 - **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox, mutually exclusive with `--hosted`. Lifecycle lives in `@slicc/cloud-core`; `src/cloud/` are thin adapters over the file-backed registry (`~/.slicc/cloud-sessions.json`) + e2b substrate (`dispatch.ts` parses argv; each `<op>.ts` is 1:1 over `cloud-core/src/operations/`). See [`cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md).
 - **CLI installer (`--install-cli`)**: downloads the released Go `slicc` follower binary (`packages/slicc-cli`) and exits — no server boots. `src/install-cli.ts` uses `scanGithubReleases` (`@slicc/shared-ts`) to walk releases newest→oldest for the first `slicc-<os>-<arch>` asset (sparse: binaries attach only when `packages/slicc-cli` changed), installing to an OS-idiomatic dir or `--install-dir`.
+- **Computer demo (`--computer-demo`)**: mounts `GET /computer`, `GET /computer/screenshot`, `GET /computer/text`, `POST /computer/input`, and optional `WS /computer/frames` on the bridge port so `computer add url http://127.0.0.1:5710` has an in-tree remote. Implementation: `src/computer-demo.ts` (services layer; `runtime-flags.ts` holds the boolean only).
 
 ## `--prompt` & flags
 
-`src/runtime-flags.ts` is the source of truth for flags (`--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, `--prompt`, …). `--prompt` auto-submits when the UI loads — quickest smoke-test: `npm run dev -- --prompt "ls /workspace"`.
+`src/runtime-flags.ts` is the source of truth for flags (`--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, `--prompt`, `--computer-demo`, …). `--prompt` auto-submits when the UI loads — quickest smoke-test: `npm run dev -- --prompt "ls /workspace"`.
 
 ## Mount table (`--mount`)
 

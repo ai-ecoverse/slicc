@@ -14,7 +14,10 @@ export function resolveComputerId(
   if (last && registry.get(last)) return { id: last };
   if (list.length === 1) return { id: list[0].id };
   if (list.length === 0) {
-    return { error: 'no computers registered — `computer add tab <id>` or `v86 start`' };
+    return {
+      error:
+        'no computers registered — `computer add tab <id>`, `computer add screen`, `computer add ssh <follower>`, `computer add url <http(s)://base>`, or `v86 start`',
+    };
   }
   const ids = list.map((c) => c.id).join(', ');
   return { error: `which computer? pass -c <id> or \`computer use\`. registered: ${ids}` };
@@ -28,7 +31,10 @@ function matchQuery(list: ComputerDescriptor[], query: string): { id: string } |
       c.id.endsWith(`:${query}`) ||
       c.title === query ||
       c.id === `v86:${query}` ||
-      c.id === `tab:${query}`
+      c.id === `tab:${query}` ||
+      c.id === `screen:${query}` ||
+      c.id === `ssh:${query}` ||
+      c.id === `url:${query}`
   );
   if (hits.length === 1) return { id: hits[0].id };
   if (hits.length > 1) {

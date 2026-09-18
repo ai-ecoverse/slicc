@@ -138,13 +138,19 @@ export function parseFrozenFrameHint(output: string): FrozenFrameHint | null {
 
 export { frameToDataUrl } from '../computer-frame-url.js';
 
+function overlayTitle(computer: ComputerDescriptor): string {
+  if (computer.kind !== 'ssh') return computer.title;
+  const badge = computer.capabilities.inputAllowed ? 'input' : 'view-only';
+  return `${computer.title} [${badge}]`;
+}
+
 export function computerToTab(
   computer: ComputerDescriptor,
   frame: ComputerFrame | null
 ): TabDescriptor {
   return {
     id: computerOverlayId(computer.id),
-    title: computer.title,
+    title: overlayTitle(computer),
     url: computer.kind,
     screenshot: frame ? frameToDataUrl(frame) : undefined,
     kind: 'computer',

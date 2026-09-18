@@ -11,6 +11,7 @@ export const VERBS = [
   'screenshot',
   'text',
   'watch',
+  'record',
   'mousemove',
   'click',
   'mousedown',
@@ -56,6 +57,10 @@ const VALUE_FLAGS = new Set([
   '--name',
   '-c',
   '--computer',
+  '--__resolved',
+  '-V',
+  '--duration',
+  '--sim',
 ]);
 
 export interface ParsedGlobals {
@@ -179,7 +184,7 @@ function takeRestArgs(tokens: readonly string[], start: number): { args: string[
 }
 
 function isFlagToken(tok: string): boolean {
-  return tok.startsWith('--') || tok === '-n' || tok === '-c';
+  return tok.startsWith('--') || tok === '-n' || tok === '-c' || tok === '-V';
 }
 
 function appendFlag(tokens: readonly string[], i: number, args: string[]): number {
@@ -251,6 +256,8 @@ function positionalCount(verb: ComputerVerb): number {
       return 1;
     case 'screenshot':
       return 1;
+    case 'record':
+      return 1;
     default:
       return 0;
   }
@@ -293,7 +300,7 @@ export function positionals(args: readonly string[]): string[] {
       out.push(...args.slice(i + 1));
       break;
     }
-    if (tok.startsWith('--') || tok === '-n' || tok === '-c') {
+    if (tok.startsWith('--') || tok === '-n' || tok === '-c' || tok === '-V') {
       if (VALUE_FLAGS.has(tok)) i += 1;
       continue;
     }

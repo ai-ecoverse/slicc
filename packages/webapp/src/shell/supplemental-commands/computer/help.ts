@@ -10,7 +10,16 @@ Lifecycle:
   ls                         list registered computers
   add tab <targetId|url> [-n name]
                              register a browser tab (refuses SLICC app tabs)
-  rm [id]                    unregister (does not stop a v86 guest)
+  add screen [-n name]       share this display (needs a user gesture)
+  add ssh <follower> [--sim <udid>] [--allow-input] [-n name]
+                             follower desktop (or iOS Simulator on a Mac).
+                             --allow-input needs sudo (phone can Face ID).
+                             The iOS follower itself is never a computer.
+  add url <http(s)://base> [-n name]
+                             HTTP remote computer (GET /computer). Trailing
+                             /computer is stripped. node-server --computer-demo
+                             is the in-tree reference.
+  rm [id]                    unregister (stops a live screen share)
   use <id>                   set the default computer
   info                       descriptor for the current target
 
@@ -19,6 +28,8 @@ Look:
                              JPEG; prints WxH → wxh (scale s) and a frozen frame
   text                       text-mode dump when the backend supports it
   watch [--fps N] [--stop]   live frames to the page (phase 2 UI)
+  record [-V|--duration SEC] [file]
+                             timed clip from a live screen session (other kinds: phase 4)
 
 Poke (xdotool; every verb ends with a frozen-frame line):
   mousemove <x> <y> [--relative]
@@ -55,4 +66,8 @@ export const COMPUTER_VALUE_FLAGS = [
   '--fps',
   '-n',
   '--name',
+  '--__resolved',
+  '-V',
+  '--duration',
+  '--sim',
 ] as const;
