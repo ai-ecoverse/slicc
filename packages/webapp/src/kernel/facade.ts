@@ -399,7 +399,7 @@ export class Bridge implements KernelFacade {
         void bridge.recordCompactionRow(scoopJid, action);
       },
 
-      onError: (scoopJid, error) => {
+      onError: (scoopJid, error, options) => {
         // Record before the panel-facing emit: `#handleError` only appends
         // in-memory, and Pi history never holds this row. The canonical
         // record's error marker is the durability path (#3003, #2365).
@@ -408,6 +408,7 @@ export class Bridge implements KernelFacade {
           type: 'error',
           scoopJid,
           error,
+          ...(options?.endTurn === false ? { endTurn: false } : {}),
         } satisfies ErrorMsg);
       },
 

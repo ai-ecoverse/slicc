@@ -740,10 +740,12 @@ deferred `agent.continue()`. Recovery is limited to one attempt until a successf
 message resets the attempt flag; there is no trimming fallback.
 
 A second overflow before success, a compaction failure, or unavailable model credentials escalates
-through `onFatalError`. The scoop lifecycle sends a `scoop-error` message to the cone and releases
-`scoop_wait` through `forgetScoop`; abort and disposal exit without escalation. A scoop has no human
-to trigger another turn, so a stalled scoop is a bug: every failed terminal path must notify the
-cone, which can re-delegate a narrower task.
+through `onFatalError`. The scoop lifecycle records a durable error card on the direct owner and
+releases `scoop_wait` through `forgetScoop`; it does not prompt the owner's model, so a shared
+provider outage cannot cascade up a nested ownership tree. Fatal state bypasses `scoop_mute`. Abort
+and disposal exit without escalation. A scoop has no human to trigger another turn, so a stalled
+scoop is a bug: every failed terminal path must notify the owner, which can re-delegate a narrower
+task.
 
 **Transcript snapshots**: every compaction round on a cone — threshold, overflow recovery, or idle —
 first hands the untouched history to `CompactionConfig.onBeforeCompaction`, which

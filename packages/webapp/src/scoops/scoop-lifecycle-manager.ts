@@ -5,8 +5,8 @@
  * (`destroyTab`), the per-scoop sudoers seed/reload (`ensureSudoersLoaded`),
  * the {@link ScoopContextCallbacks} factory wired into every new context, the
  * per-scoop observer subscription (`observe` + `dispatch`), and the
- * "unrecoverable scoop failure" handler that escalates a fatal error to the
- * cone (`handleFatalError`).
+ * "unrecoverable scoop failure" handler that records a fatal error on the
+ * owning unit (`handleFatalError`).
  *
  * Since #1666 (Phase 2) the manager is a host of {@link LiveWorkUnit}s: one
  * `Map<jid, LiveWorkUnit>` owns each scoop's context, tab record and
@@ -96,7 +96,7 @@ export interface ScoopLifecycleCallbacks {
     state: CompactionState,
     detail: CompactionStateDetail
   ): void;
-  onError(scoopJid: string, error: string): void;
+  onError(scoopJid: string, error: string, options?: { endTurn?: boolean }): void;
   getBrowserAPI(): ReturnType<ScoopContextCallbacks['getBrowserAPI']>;
   onToolStart?(scoopJid: string, toolName: string, toolInput: unknown, toolCallId?: string): void;
   onToolEnd?(
@@ -244,8 +244,6 @@ export interface ScoopLifecycleDeps {
       approverJid?: string
     ): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
   };
-  /** Routes the synthesized cone-facing fatal-error notification through the message router. */
-  handleMessage(msg: ChannelMessage): Promise<void>;
 }
 
 export class ScoopLifecycleManager {
@@ -1242,7 +1240,7 @@ export class ScoopLifecycleManager {
   /**
    * Handle an unrecoverable scoop failure (invalid model, auth failure,
    * exhausted retries). Fatal errors bypass mute and always notify the
-   * cone immediately so the user is aware the scoop died.
+   * owning unit immediately so the user is aware the scoop died.
    */
   private handleFatalError(jid: string, error: string): void {
     const scoops = this.deps.getScoops();
@@ -1268,34 +1266,25 @@ export class ScoopLifecycleManager {
     // callers unblock instead of stalling.
     this.deps.completionService.forgetScoop(jid, 'fatal-error');
 
-    const cone = this.parentOf(scoopRecord);
-    if (!cone) return;
+    const parent = this.parentOf(scoopRecord);
+    if (!parent) return;
 
-    const notifyMsg: ChannelMessage = {
-      id: `scoop-error-${jid}-${Date.now()}`,
-      chatJid: cone.jid,
-      senderId: scoopRecord.folder,
-      senderName: scoopRecord.assistantLabel,
-      content: `[@${scoopRecord.assistantLabel} FAILED]: ${error}`,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'scoop-error',
-    };
-
+    // A fatal child report is durable UI state, not a prompt. `onError`
+    // records a canonical error marker for the owning unit and renders the
+    // same card live; unlike `handleMessage`, it never enters the parent's
+    // prompt queue. `endTurn: false` keeps the owner's mid-turn /
+    // `scoop_wait` processing state intact — only the dying child ends its
+    // turn (above). This prevents one provider outage from recursively
+    // waking every owner in a nested scoop tree.
     try {
-      this.deps.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
+      this.deps.callbacks.onError(parent.jid, `[@${scoopRecord.assistantLabel} FAILED]: ${error}`, {
+        endTurn: false,
+      });
     } catch (err) {
-      log.warn('onIncomingMessage for scoop-error threw', {
+      log.error('Failed to record fatal error for scoop owner', {
         scoop: scoopRecord.folder,
         error: err instanceof Error ? err.message : String(err),
       });
     }
-
-    this.deps.handleMessage(notifyMsg).catch((err) => {
-      log.error('Failed to route fatal error to cone', {
-        scoop: scoopRecord.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
   }
 }

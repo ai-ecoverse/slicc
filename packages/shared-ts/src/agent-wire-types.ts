@@ -137,7 +137,13 @@ export type AgentEvent =
    * the row the opening state created rather than appending a second one.
    */
   | { type: 'compaction_notice'; messageId: string; marker: ChatCompactionMarker }
-  | { type: 'error'; error: string }
+  /**
+   * Durable error card for the selected unit. When `endTurn` is `false`, the
+   * card is notice-only: append it without clearing processing (used for a
+   * child scoop's fatal report on an owner that is still mid-turn / mid
+   * `scoop_wait`). Omitted / `true` ends the turn as before.
+   */
+  | { type: 'error'; error: string; endTurn?: boolean }
   | { type: 'screenshot'; base64: string; url?: string }
   | { type: 'terminal_output'; text: string };
 

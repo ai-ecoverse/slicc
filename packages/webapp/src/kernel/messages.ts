@@ -1258,6 +1258,11 @@ export interface ErrorMsg {
   type: 'error';
   scoopJid: string;
   error: string;
+  /**
+   * When `false`, the panel appends a durable error card without clearing
+   * processing (owner notice for a child fatal). Omitted / `true` ends the turn.
+   */
+  endTurn?: boolean;
 }
 
 /** Sustained lick queue backpressure; `count: 0` retracts the signal. */

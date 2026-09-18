@@ -1062,8 +1062,9 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
   },
   error: {
     ios: 'decoded',
-    fields: { type: 'mirrored', error: 'mirrored' },
-    event: { type: 'error', error: 'boom' },
+    // `endTurn` is leader-UI only (#3262); followers never drive processing state.
+    fields: { type: 'mirrored', error: 'mirrored', endTurn: 'dropped' },
+    event: { type: 'error', error: 'boom', endTurn: false },
   },
   // Both are deliberate render no-ops on every follower — the webapp chat
   // thread names them explicitly for exactly this reason. They still have to
