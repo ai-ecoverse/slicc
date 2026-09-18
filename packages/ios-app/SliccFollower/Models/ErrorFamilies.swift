@@ -28,15 +28,16 @@ struct ExhaustedBudgetDetail: Equatable {
     /// The `error.type` the Adobe proxy stamps on an exhausted-budget refusal.
     private static let adobeTypeToken = "quota_exceeded"
 
-    /// Stable halves of Grok's 403 credit/subscription refusal. Requiring both
-    /// keeps generic permission failures and transient rate limits out.
+    /// Stable halves of Grok's 403 credit/subscription refusal. Subscription
+    /// markers keep the "Grok" token so a third provider's generic credits +
+    /// subscription prose cannot inherit Grok-branded copy.
     private static let grokResourceMarkers = [
         "run out of available resources", "ran out of available resources",
         "run out of credits", "ran out of credits",
     ]
     private static let grokSubscriptionMarkers = [
         "active grok subscription", "need a grok subscription",
-        "needs a grok subscription", "need a subscription", "needs a subscription",
+        "needs a grok subscription",
     ]
     private static let grokMessage =
         "Your Grok account has run out of credits or does not have an active subscription."

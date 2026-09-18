@@ -41,6 +41,10 @@ describe('isExhaustedBudgetError', () => {
     expect(isExhaustedBudgetError('Adobe session expired — please log in again')).toBe(false);
     expect(isExhaustedBudgetError('429 Too Many Requests')).toBe(false);
     expect(isExhaustedBudgetError('403 Forbidden')).toBe(false);
+    // Generic credits + subscription prose must not inherit Grok-branded copy.
+    expect(
+      isExhaustedBudgetError('403 You have run out of credits and need a subscription to continue.')
+    ).toBe(false);
     expect(isExhaustedBudgetError('')).toBe(false);
     expect(isExhaustedBudgetError(null)).toBe(false);
     expect(isExhaustedBudgetError(undefined)).toBe(false);

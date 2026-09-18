@@ -61,6 +61,11 @@ final class ExhaustedBudgetDetailTests: XCTestCase {
         XCTAssertNil(ExhaustedBudgetDetail(content: "Adobe session expired — please log in again"))
         XCTAssertNil(ExhaustedBudgetDetail(content: "429 Too Many Requests"))
         XCTAssertNil(ExhaustedBudgetDetail(content: "403 Forbidden"))
+        // Generic credits + subscription prose must not inherit Grok-branded copy.
+        XCTAssertNil(
+            ExhaustedBudgetDetail(
+                content: "403 You have run out of credits and need a subscription to continue."
+            ))
         XCTAssertNil(ExhaustedBudgetDetail(content: ""))
     }
 

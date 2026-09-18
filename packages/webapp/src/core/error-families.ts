@@ -80,7 +80,11 @@ export interface ExhaustedBudgetDetail {
 /** The `error.type` the Adobe proxy stamps on an exhausted-budget refusal. */
 const ADOBE_QUOTA_ERROR_TYPE = 'quota_exceeded';
 
-/** Stable halves of Grok's 403 credit/subscription refusal. */
+/**
+ * Stable halves of Grok's 403 credit/subscription refusal. Subscription
+ * markers keep the "Grok" token so a third provider's generic credits +
+ * subscription prose cannot enter this family and inherit Grok-branded copy.
+ */
 const GROK_RESOURCE_MARKERS = [
   'run out of available resources',
   'ran out of available resources',
@@ -91,8 +95,6 @@ const GROK_SUBSCRIPTION_MARKERS = [
   'active grok subscription',
   'need a grok subscription',
   'needs a grok subscription',
-  'need a subscription',
-  'needs a subscription',
 ] as const;
 
 /**
@@ -110,11 +112,12 @@ const QUOTA_CONNECT_CTA_RE = /\s*You can (?:also )?connect your own LLM provider
 
 /**
  * Detect a cone failure caused by an exhausted provider budget. Adobe is
- * matched on its machine-readable `error.type`; Grok is matched on the two
- * independently meaningful halves of its 403 refusal. Matching the complete
- * Grok condition keeps ordinary permission failures and transient 429 rate
- * limits outside this family. Substring matching also survives a `Scoop …
- * failed with unrecoverable error: ` wrapper.
+ * matched on its machine-readable `error.type`; Grok is matched on a resource
+ * half plus a Grok-named subscription half of its 403 refusal. The Grok token
+ * in the subscription markers keeps ordinary permission failures, transient
+ * 429s, and other providers' generic credits/subscription prose outside this
+ * family. Substring matching also survives a `Scoop … failed with
+ * unrecoverable error: ` wrapper.
  */
 export function isExhaustedBudgetError(content: string | null | undefined): boolean {
   if (typeof content !== 'string' || !content) return false;
