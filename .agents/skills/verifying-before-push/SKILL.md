@@ -330,6 +330,46 @@ the same `llvm-cov` path as the SPM packages. See
 [`packages/ios-app/CLAUDE.md`](../../../packages/ios-app/CLAUDE.md) for the simulator
 prerequisites.
 
+## Stacked PRs
+
+A PR whose base is another topic branch (not `main`) now gets verification CI
+on every push. `ci.yml` uses `pull_request.branches-ignore: [no-comment]`, so
+every base except the comment-free benchmark mirror runs the workflow.
+
+What runs on a stack:
+
+- The same path-filtered jobs as a `main`-based PR, including the cheap
+  `swift-*` coverage/lint jobs and `ios-app` (SwiftLint + `swift format`).
+- **Not** `ios-app-tests` (the 4-way simulator matrix). Those 15–38 min cells
+  stay `main`-only so a stack does not burn simulator minutes or wait for a
+  macOS runner. After you retarget to `main`, they run there.
+- **Not** `worker-staging.yml`, `ios-screenshots.yml`, or
+  `storybook-screenshots.yml` — those stay `branches: [main]`. Stacks must
+  never deploy staging or take screenshot minutes.
+
+The aggregate job reports as **`ci-stack`**, not `ci`. The ruleset on `main`
+requires exactly one context, `ci`. A skipped-or-green check named `ci` counts
+as passing, so a simulator-less stacked commit must not mint that name — after
+a retarget it could otherwise reach `main` with the simulators never run
+anywhere (merge-queue non-leaders already skip every macOS job and rely on
+the PR-level run).
+
+`edited` is not a trigger. `concurrency.cancel-in-progress: true` would cancel
+an in-flight run on a title/body edit, and a no-op run could mint a skipped
+`ci`. After you retarget a stack to `main`:
+
+```bash
+gh pr close <n> && gh pr reopen <n>
+```
+
+Close + reopen is the only recipe that starts the full set (including
+`ios-app-tests`) and reports the aggregate as `ci`. A `PATCH base=main` alone
+does not.
+
+`delete_branch_on_merge` is `false` on this repo (owner decision, not part of
+the stacked-CI change). GitHub therefore does not auto-retarget a child when
+its parent merges — retarget the child yourself, then close + reopen.
+
 ## Other CI-only gates
 
 If local checks pass but CI still fails, inspect
