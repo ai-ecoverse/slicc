@@ -1045,13 +1045,11 @@ production copies (`node_modules/<pkg>/node_modules/<dep>`) are realigned
 the same way as hoisted ones: `materializeLinkedParents` splits the parent
 package symlink so the nested entry can be swapped without writing through
 the caller's install (Dependabot PR #3200, `glob/node_modules/brace-expansion`
-2.0.2 -> 2.1.7, is the specimen). A nested copy under a parent that VERSION-
-BUMPED (present on both sides) is covered by that parent swap (knip 6.33.0
-nesting `@oxc-project/types` under `oxc-parser` is the specimen). A nested
-copy under a parent HEAD removed is realigned on its own — `npm pack` of the
-restored parent does not ship installed nested deps (`@cantoo/pdf-lib` 2.9 →
-2.11 dropping `@pdf-lib/upng` + nested `pako@1.0.11` is the specimen). Nested
-copies that
+2.0.2 -> 2.1.7, is the specimen). Nested copies under a bumped or removed
+parent are also realigned independently — `npm pack` of the parent does not
+ship installed nested deps (`isomorphic-git` 1.41 → 1.42 nested `pako@1`, and
+`@cantoo/pdf-lib` 2.9 → 2.11 dropping `@pdf-lib/upng` + nested `pako@1`, are
+the specimens). Nested copies that
 exist only in the dev tree (`dev: true`) and DefinitelyTyped `@types/*`
 packages (declaration files; they cannot appear in `dist/ui`) are skipped
 rather than refused — otherwise a types-only bump such as `@types/node`

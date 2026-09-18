@@ -356,11 +356,11 @@ describe('dependencyDrift', () => {
   });
 
   /**
-   * Nested copies under a parent that is itself being swapped are covered by
-   * that parent realignment — there is no independent hole. Knip 6.33.0
-   * nests `@oxc-project/types` under `oxc-parser` for exactly this reason.
+   * Nested copies under a bumped parent must still be realigned: `npm pack`
+   * of the parent does not ship installed nested node_modules (isomorphic-git
+   * 1.41 → 1.42 nested pako@1 is the live specimen).
    */
-  it('does not flag a nested copy whose parent package also changed', () => {
+  it('flags a nested copy whose parent package also changed', () => {
     lock(repo, {
       'node_modules/oxc-parser': { version: '0.147.0' },
       'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.147.0' },
@@ -377,6 +377,41 @@ describe('dependencyDrift', () => {
         name: 'oxc-parser',
         from: '0.143.0',
         to: '0.147.0',
+      },
+      {
+        path: 'node_modules/oxc-parser/node_modules/@oxc-project/types',
+        name: '@oxc-project/types',
+        from: '0.143.0',
+        to: '0.147.0',
+      },
+    ]);
+  });
+
+  it('reinstalls a same-version nested copy under a swapped parent', () => {
+    // Parent bump destroys nested node_modules even when the nested version
+    // is unchanged on both sides (isomorphic-git nested pako@1.0.11).
+    lock(repo, {
+      'node_modules/isomorphic-git': { version: '1.42.0' },
+      'node_modules/isomorphic-git/node_modules/pako': { version: '1.0.11' },
+    });
+    lock(tree, {
+      'node_modules/isomorphic-git': { version: '1.41.9' },
+      'node_modules/isomorphic-git/node_modules/pako': { version: '1.0.11' },
+    });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.changed).toEqual([
+      {
+        path: 'node_modules/isomorphic-git',
+        name: 'isomorphic-git',
+        from: '1.41.9',
+        to: '1.42.0',
+      },
+      {
+        path: 'node_modules/isomorphic-git/node_modules/pako',
+        name: 'pako',
+        from: '1.0.11',
+        to: '1.0.11',
       },
     ]);
   });
@@ -398,7 +433,7 @@ describe('dependencyDrift', () => {
     ]);
   });
 
-  it('does not flag a deeply nested copy whose grandparent changed', () => {
+  it('flags a deeply nested copy whose grandparent changed', () => {
     lock(repo, {
       'node_modules/a': { version: '2.0.0' },
       'node_modules/a/node_modules/b': { version: '1.0.0' },
@@ -413,6 +448,19 @@ describe('dependencyDrift', () => {
     expect(drift.unrealignable).toEqual([]);
     expect(drift.changed).toEqual([
       { path: 'node_modules/a', name: 'a', from: '1.0.0', to: '2.0.0' },
+      {
+        path: 'node_modules/a/node_modules/b/node_modules/c',
+        name: 'c',
+        from: '1.0.0',
+        to: '2.0.0',
+      },
+      // Same-version nested b is reinstalled because swapping a destroys it.
+      {
+        path: 'node_modules/a/node_modules/b',
+        name: 'b',
+        from: '1.0.0',
+        to: '1.0.0',
+      },
     ]);
   });
 
