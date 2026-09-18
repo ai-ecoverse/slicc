@@ -3,7 +3,12 @@ run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number |
 
 on:
   pull_request:
-    branches: [main]
+    # Any base except the no-comment benchmark mirror. Stacked PRs (base =
+    # another topic branch) used to get no verification CI because this was
+    # `branches: [main]`. The required check on `main` is still the `ci`
+    # job name; stacked runs report as `ci-stack` so a simulator-less
+    # commit cannot satisfy branch protection.
+    branches-ignore: [no-comment]
   push:
     branches: [automation/planning-artifact-cleanup]
   merge_group:
@@ -57,6 +62,7 @@ jobs:
       native-root-config: ${{ steps.filter.outputs.native-root-config }}
       speech: ${{ steps.filter.outputs.speech }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
+      is-stacked: ${{ steps.stacked.outputs.stacked }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -265,6 +271,36 @@ jobs:
             echo "leader=false" >> "$GITHUB_OUTPUT"
             echo "Queue position: $POSITION (skipping expensive jobs)"
           fi
+
+      - name: Detect stacked pull request
+        id: stacked
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "main" ]; then
+            echo "stacked=true" >> "$GITHUB_OUTPUT"
+            echo "Stacked PR (base: $BASE_REF); skipping ios-app-tests"
+          else
+            echo "stacked=false" >> "$GITHUB_OUTPUT"
+          fi
+      # Fail the job unless stacked is exactly true|false. Dependents then
+      # skip and the aggregate reports failure, so an unknown value cannot
+      # fail-open a staging deploy or fail-closed a required simulator run.
+      - name: Validate stacked output
+        if: always()
+        env:
+          STACKED: ${{ steps.stacked.outputs.stacked }}
+        run: |
+          set -euo pipefail
+          case "${STACKED}" in
+            true|false) ;;
+            *)
+              echo "::error::is-stacked must be exactly true or false, got: ${STACKED-}"
+              exit 1
+              ;;
+          esac
 
   lint:
     runs-on: ubuntu-latest
@@ -869,9 +905,12 @@ jobs:
       # On merge_group only the queue leader mutates the shared staging Worker
       # (turnstyle + deploy + smoke). Followers still dry-run + unit-test, so
       # five parallel candidates do not serialize on staging-mutation-queue.
+      # Stacked PRs (base != main) also skip mutation: the deploy lives in
+      # THIS job, not only in worker-staging.yml. The job still runs build,
+      # dry-run size validation, typecheck, and the coverage gate.
       # Logic mirrored in packages/dev-tools/tools/merge-queue-lib.mjs
       # (`shouldMutateCloudflareStaging`).
-      RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}
+      RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') && needs.changes.outputs.is-stacked == 'false' }}
     # Raised from 15: the job itself runs ~9 minutes, which left no room for
     # the npm-ci action to time out a hung install and retry it (~9 minutes).
     # A single hang would have failed the job instead of recovering from it.
@@ -2031,9 +2070,15 @@ jobs:
   # a beta-image breakage must not hold the merge queue.
   ios-app-tests:
     needs: [changes, lint]
+    # `== 'false'` (not `!= 'true'`): the Validate stacked output step fails
+    # `changes` unless the value is exactly true or false, so unknown is
+    # already impossible. Either comparison is then safe; this form matches
+    # the staging gate. Flipping to `== 'false'` *without* that validation
+    # would skip simulators on a main-based run while `ci` went green.
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
+      needs.changes.outputs.is-stacked == 'false' &&
       (needs.changes.outputs.ios-app == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
@@ -2344,7 +2389,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The first-load check builds this change's merge-base to measure
-          # the delta, so it needs history and an `origin/main` ref.
+          # the delta, so it needs history and `origin/<base>` (the default
+          # fetch of refs/heads/* already provides every parent branch).
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -2361,7 +2407,15 @@ jobs:
         run: npm run bundle-size
 
   # Summary job — the single required status check for branch protection
+  # on `main`. Stacked PRs must NOT mint a check named `ci`: a skipped or
+  # green `ci` on a simulator-less stacked commit would satisfy the
+  # required context after a retarget (skipped jobs count as passing).
+  # `edited` is intentionally not a trigger: concurrency.cancel-in-progress
+  # would cancel an in-flight run on a title/body edit. After retargeting
+  # a stack to `main`, close + reopen so the full set (incl. simulators)
+  # reports as `ci`.
   ci:
+    name: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && 'ci-stack' || 'ci' }}
     if: always()
     needs:
       [
