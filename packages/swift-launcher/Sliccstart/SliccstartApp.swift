@@ -64,12 +64,17 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     /// actually installed — see `WidgetTrayObserver`. `@MainActor` and lazy so
     /// the delegate's own (nonisolated) init does not have to build it.
     @MainActor lazy var widgetTrayObserver = WidgetTrayObserver()
+    /// Native ScreenCaptureKit / CGEvent tray follower. Always dials when a
+    /// leader join URL is set — unlike the widget observer, capture is a
+    /// capability of this Mac, not of an installed widget.
+    @MainActor lazy var computerTrayFollower = ComputerTrayFollower()
     /// The window's behavior. Lazy for the same reason.
     @MainActor lazy var model = LauncherModel(
         process: sliccProcess,
         sessionStore: sessionStore,
         fileProviderCoordinator: fileProviderCoordinator,
         widgetTrayObserver: widgetTrayObserver,
+        computerTrayFollower: computerTrayFollower,
         updateChecking: .live(appUpdater)
     )
     /// Created on the first incoming link (only reachable while Sliccstart is
@@ -104,7 +109,10 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         // The leader is going away, so stop advertising it to other devices.
         sessionStore.withdrawLocalSessions()
         fileProviderCoordinator.withdrawOnQuit()
-        MainActor.assumeIsolated { widgetTrayObserver.stop() }
+        MainActor.assumeIsolated {
+            widgetTrayObserver.stop()
+            computerTrayFollower.stop()
+        }
     }
 }
 

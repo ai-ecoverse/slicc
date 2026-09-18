@@ -45,6 +45,7 @@ final class LauncherModel {
     let sessionStore: TraySessionSyncStore
     let fileProviderCoordinator: FileProviderCoordinator
     let widgetTrayObserver: WidgetTrayObserver
+    let computerTrayFollower: ComputerTrayFollower
     let permission: AppManagementPermission
     let bootstrapper: SliccBootstrapper
 
@@ -76,6 +77,7 @@ final class LauncherModel {
         sessionStore: TraySessionSyncStore,
         fileProviderCoordinator: FileProviderCoordinator,
         widgetTrayObserver: WidgetTrayObserver,
+        computerTrayFollower: ComputerTrayFollower,
         permission: AppManagementPermission = AppManagementPermission(),
         bootstrapper: SliccBootstrapper = SliccBootstrapper(),
         updateChecking: UpdateChecking,
@@ -96,6 +98,7 @@ final class LauncherModel {
         self.sessionStore = sessionStore
         self.fileProviderCoordinator = fileProviderCoordinator
         self.widgetTrayObserver = widgetTrayObserver
+        self.computerTrayFollower = computerTrayFollower
         self.permission = permission
         self.bootstrapper = bootstrapper
         self.updateChecking = updateChecking
@@ -402,10 +405,12 @@ final class LauncherModel {
             sessionStore.publish(joinUrl: joinUrl, label: label)
             fileProviderCoordinator.leaderJoinUrlChanged(joinUrl, label: label)
             widgetTrayObserver.leaderChanged(joinUrl: joinUrl, label: label)
+            computerTrayFollower.leaderChanged(joinUrl: joinUrl)
         } else {
             sessionStore.withdrawLocalSessions()
             fileProviderCoordinator.leaderJoinUrlChanged(nil, label: nil)
             widgetTrayObserver.leaderChanged(joinUrl: nil, label: nil)
+            computerTrayFollower.leaderChanged(joinUrl: nil)
         }
     }
 
@@ -434,6 +439,7 @@ final class LauncherModel {
             // Same beat: pick up a widget the user added since the leader
             // started, without a notification WidgetKit does not send.
             widgetTrayObserver.refresh()
+            computerTrayFollower.refresh()
         }
     }
 

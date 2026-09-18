@@ -55,6 +55,12 @@ final class RootViewRenderTests: XCTestCase {
                 installation: WidgetInstallationQuery { false },
                 makeConnector: { _ in InertConnector() }
             ),
+            computerTrayFollower: ComputerTrayFollower(
+                makeConnector: { _ in InertConnector() },
+                makeCapturer: { StubCapturer() },
+                permissions: ComputerPermissions(probe: .alwaysGranted),
+                eventSink: RecordingEventSink()
+            ),
             updateChecking: .init(check: { _, _ in }, isUpdateReady: { false }),
             scanApps: { _ in targets },
             checkInstallation: { _ in .installed },

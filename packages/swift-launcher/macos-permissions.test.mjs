@@ -19,6 +19,11 @@ describe('Sliccstart Apple Events packaging', () => {
     expect(assemblySource).toContain('open a new Terminal or iTerm2 window');
   });
 
+  it('declares why the assembled app captures the screen', () => {
+    expect(assemblySource).toContain('<key>NSScreenCaptureUsageDescription</key>');
+    expect(assemblySource).toContain("captures this Mac's screen");
+  });
+
   it('enables Apple Events automation in the signing entitlements', () => {
     expect(entitlements).toContain('<key>com.apple.security.automation.apple-events</key>');
     expect(entitlements).toMatch(/com\.apple\.security\.automation\.apple-events<\/key>\s*<true\/>/);

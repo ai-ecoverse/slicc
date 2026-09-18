@@ -89,6 +89,12 @@ final class LauncherModelTests: XCTestCase {
                 installation: WidgetInstallationQuery { false },
                 makeConnector: { _ in NeverConnector() }
             ),
+            computerTrayFollower: ComputerTrayFollower(
+                makeConnector: { _ in NeverConnector() },
+                makeCapturer: { StubCapturer() },
+                permissions: ComputerPermissions(probe: .alwaysGranted),
+                eventSink: RecordingEventSink()
+            ),
             bootstrapper: bootstrapper,
             updateChecking: updateChecking
                 ?? LauncherModel.UpdateChecking(check: { _, _ in }, isUpdateReady: { false }),
@@ -327,6 +333,7 @@ final class LauncherModelTests: XCTestCase {
             sessionStore: model.sessionStore,
             fileProviderCoordinator: model.fileProviderCoordinator,
             widgetTrayObserver: model.widgetTrayObserver,
+            computerTrayFollower: model.computerTrayFollower,
             permission: permission,
             updateChecking: .init(check: { _, _ in }, isUpdateReady: { false })
         )
