@@ -3,7 +3,12 @@ run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number |
 
 on:
   pull_request:
-    branches: [main]
+    # Any base except the no-comment benchmark mirror. Stacked PRs (base =
+    # another topic branch) used to get no verification CI because this was
+    # `branches: [main]`. The required check on `main` is still the `ci`
+    # job name; stacked runs report as `ci-stack` so a simulator-less
+    # commit cannot satisfy branch protection. See #3277.
+    branches-ignore: [no-comment]
   push:
     branches: [automation/planning-artifact-cleanup]
   merge_group:
@@ -57,6 +62,7 @@ jobs:
       native-root-config: ${{ steps.filter.outputs.native-root-config }}
       speech: ${{ steps.filter.outputs.speech }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
+      is-stacked: ${{ steps.stacked.outputs.stacked }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -264,6 +270,16 @@ jobs:
           else
             echo "leader=false" >> "$GITHUB_OUTPUT"
             echo "Queue position: $POSITION (skipping expensive jobs)"
+          fi
+
+      - name: Detect stacked pull request
+        id: stacked
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.base_ref }}" != "main" ]; then
+            echo "stacked=true" >> "$GITHUB_OUTPUT"
+            echo "Stacked PR (base: ${{ github.base_ref }}); skipping ios-app-tests"
+          else
+            echo "stacked=false" >> "$GITHUB_OUTPUT"
           fi
 
   lint:
@@ -2034,6 +2050,7 @@ jobs:
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
+      needs.changes.outputs.is-stacked != 'true' &&
       (needs.changes.outputs.ios-app == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
@@ -2361,7 +2378,15 @@ jobs:
         run: npm run bundle-size
 
   # Summary job — the single required status check for branch protection
+  # on `main`. Stacked PRs must NOT mint a check named `ci`: a skipped or
+  # green `ci` on a simulator-less stacked commit would satisfy the
+  # required context after a retarget (skipped jobs count as passing).
+  # `edited` is intentionally not a trigger: concurrency.cancel-in-progress
+  # would cancel an in-flight run on a title/body edit. After retargeting
+  # a stack to `main`, close + reopen so the full set (incl. simulators)
+  # reports as `ci`.
   ci:
+    name: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && 'ci-stack' || 'ci' }}
     if: always()
     needs:
       [

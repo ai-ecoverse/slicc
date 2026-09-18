@@ -178,6 +178,37 @@ describe('CI critical-path routing', () => {
     );
   });
 
+  it('runs stacked PRs without minting a required ci check or the simulator matrix', () => {
+    expect(workflow).toContain('branches-ignore: [no-comment]');
+    expect(workflow).not.toMatch(/pull_request:\n {4}branches: \[main\]/);
+    expect(workflow).toContain('is-stacked: ${{ steps.stacked.outputs.stacked }}');
+    expect(workflow).toContain('id: stacked');
+    expect(workflow).toContain(
+      'if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.base_ref }}" != "main" ]; then'
+    );
+
+    const iosTests = jobBody('ios-app-tests', 'global-install');
+    expect(iosTests).toContain("needs.changes.outputs.is-stacked != 'true'");
+    expect(iosTests).toContain("needs.changes.outputs.is-queue-leader == 'true'");
+
+    const swiftFollower = jobBody('swift-trayfollower', 'swift-widgetkit');
+    expect(swiftFollower).toContain("needs.changes.outputs.is-queue-leader == 'true'");
+    expect(swiftFollower).not.toContain('is-stacked');
+
+    const iosLint = jobBody('ios-app', 'ios-app-tests');
+    expect(iosLint).toContain("needs.changes.outputs.is-queue-leader == 'true'");
+    expect(iosLint).not.toContain('is-stacked');
+
+    const aggregate = workflow.slice(workflow.lastIndexOf('\n  ci:'));
+    expect(aggregate).toContain(
+      "name: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && 'ci-stack' || 'ci' }}"
+    );
+    expect(aggregate).toContain('if: always()');
+    expect(aggregate).toContain("contains(needs.*.result, 'failure')");
+    expect(aggregate).toContain("contains(needs.*.result, 'cancelled')");
+    expect(workflow).not.toMatch(/pull_request:\n {4}types:/);
+  });
+
   it('publishes phase timing summaries for both Cloudflare staging paths', () => {
     const timing = stepBody(worker, 'Publish Cloudflare timing diagnostics');
     expect(timing).toContain('ci-job-timing.mjs');
