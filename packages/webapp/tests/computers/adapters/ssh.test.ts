@@ -10,7 +10,7 @@ import {
   sshComputerId,
   sshTempBase,
 } from '../../../src/computers/adapters/ssh.js';
-import { sshInputCommands } from '../../../src/computers/adapters/ssh-input.js';
+import { shQuote, sshInputCommands } from '../../../src/computers/adapters/ssh-input.js';
 import { base64FromBytes } from '../../../src/computers/encode-frame.js';
 import { DECODABLE_PNG } from '../../../src/computers/frame-bytes.js';
 import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
@@ -167,7 +167,7 @@ describe('ssh backend', () => {
       mouse: 'absolute',
     });
     await backend.input([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
-    expect(exec).toHaveBeenCalledWith('cliclick c:10,20', { timeoutMs: 15_000 });
+    expect(exec).toHaveBeenCalledWith("cliclick 'c:10,20'", { timeoutMs: 15_000 });
   });
 
   it('keeps native 1920×1080 after a 768-wide encode so lastShot remaps', async () => {
@@ -208,14 +208,52 @@ describe('ssh backend', () => {
 describe('ssh input emitters', () => {
   it('maps click/key/text onto xdotool and idb', () => {
     expect(sshInputCommands({ type: 'click', button: 1, count: 1, x: 4, y: 5 }, 'xdotool')[1]).toBe(
-      'xdotool click --repeat 1 1'
+      "xdotool click --repeat '1' '1'"
     );
     expect(sshInputCommands({ type: 'key', keysym: 'Return' }, 'xdotool')).toEqual([
-      'xdotool key Return',
+      "xdotool key 'Return'",
     ]);
     expect(sshInputCommands({ type: 'text', text: 'hi' }, 'cliclick')[0]).toContain('t:hi');
     expect(
       sshInputCommands({ type: 'click', button: 1, count: 1, x: 1, y: 2 }, 'idb', 'UDID')[0]
-    ).toContain('idb ui tap 1 2');
+    ).toContain("idb ui tap '1' '2'");
+  });
+
+  it('preserves cliclick middle and right press/release prefixes', () => {
+    expect(
+      sshInputCommands({ type: 'button', button: 2, down: true, x: 1, y: 2 }, 'cliclick')
+    ).toEqual(["cliclick 'md:1,2'"]);
+    expect(
+      sshInputCommands({ type: 'button', button: 2, down: false, x: 1, y: 2 }, 'cliclick')
+    ).toEqual(["cliclick 'mu:1,2'"]);
+    expect(
+      sshInputCommands({ type: 'button', button: 3, down: true, x: 3, y: 4 }, 'cliclick')
+    ).toEqual(["cliclick 'rd:3,4'"]);
+    expect(
+      sshInputCommands({ type: 'button', button: 3, down: false, x: 3, y: 4 }, 'cliclick')
+    ).toEqual(["cliclick 'ru:3,4'"]);
+    expect(
+      sshInputCommands({ type: 'button', button: 1, down: true, x: 0, y: 0 }, 'cliclick')
+    ).toEqual(["cliclick 'dd:0,0'"]);
+  });
+
+  it('quotes hostile chords and type payloads so they cannot break out of sh', () => {
+    const hostileText = `'; rm -rf /; echo '`;
+    expect(sshInputCommands({ type: 'text', text: hostileText }, 'xdotool')).toEqual([
+      `xdotool type -- ${shQuote(hostileText)}`,
+    ]);
+    expect(sshInputCommands({ type: 'text', text: hostileText }, 'ydotool')).toEqual([
+      `ydotool type -- ${shQuote(hostileText)}`,
+    ]);
+    expect(sshInputCommands({ type: 'text', text: hostileText }, 'cliclick')).toEqual([
+      `cliclick ${shQuote(`t:${hostileText}`)}`,
+    ]);
+    expect(sshInputCommands({ type: 'key', keysym: ';' }, 'xdotool')).toEqual(["xdotool key ';'"]);
+    expect(sshInputCommands({ type: 'key', keysym: '`' }, 'xdotool')).toEqual(["xdotool key '`'"]);
+    expect(sshInputCommands({ type: 'key', keysym: ';' }, 'cliclick')).toEqual(["cliclick 'kp:;'"]);
+    const ydotoolA = sshInputCommands({ type: 'key', keysym: 'a' }, 'ydotool');
+    expect(ydotoolA).toHaveLength(1);
+    expect(ydotoolA[0]).toMatch(/^ydotool key '/);
+    expect(ydotoolA[0]?.endsWith("'")).toBe(true);
   });
 });
