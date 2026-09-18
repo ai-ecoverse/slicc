@@ -139,6 +139,9 @@ class ComputersStore {
     for (const id of [...this.invocations.keys()]) {
       if (!live.has(id)) this.invocations.delete(id);
     }
+    for (const id of [...this.frames.keys()]) {
+      if (!live.has(id)) this.frames.delete(id);
+    }
     for (const listener of [...this.listListeners]) listener(this.computers);
   }
 

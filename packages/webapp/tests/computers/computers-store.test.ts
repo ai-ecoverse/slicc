@@ -140,4 +140,70 @@ describe('computers-store', () => {
       { type: 'computer-input', id: 'jsh:fake', events: [{ type: 'key', keysym: 'Return' }] },
     ]);
   });
+
+  it('drops cached frames when a computer leaves the roster', () => {
+    resetComputersStoreForTests();
+    const store = getComputersStore();
+    store.applyList({
+      type: 'computers',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: null,
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: true,
+            frames: 'push',
+            keyboard: true,
+            mouse: 'none',
+            scroll: false,
+            exec: true,
+            inputAllowed: true,
+          },
+          pid: 1,
+        },
+      ],
+    });
+    store.applyFrame({
+      type: 'computer-frame',
+      id: 'jsh:fake',
+      seq: 7,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    store.recordInvocation('jsh:fake', 'call-old');
+    expect(store.lastFrame('jsh:fake')?.seq).toBe(7);
+    store.applyList({ type: 'computers', computers: [] });
+    expect(store.lastFrame('jsh:fake')).toBeNull();
+    expect(store.newestInvocation('jsh:fake')).toBeNull();
+    store.applyList({
+      type: 'computers',
+      computers: [
+        {
+          id: 'jsh:fake',
+          kind: 'jsh',
+          title: 'fake',
+          size: null,
+          state: 'live',
+          capabilities: {
+            screenshot: true,
+            text: true,
+            frames: 'push',
+            keyboard: true,
+            mouse: 'none',
+            scroll: false,
+            exec: true,
+            inputAllowed: true,
+          },
+          pid: 2,
+        },
+      ],
+    });
+    expect(store.lastFrame('jsh:fake')).toBeNull();
+  });
 });
