@@ -448,7 +448,8 @@ jobs:
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
           else
-            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY" --label ops
+            # No dedicated "ops" label in this repo; use bug so create succeeds.
+            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY" --label bug
           fi
 
       - name: Cleanup keychain

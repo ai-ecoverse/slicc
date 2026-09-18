@@ -121,11 +121,19 @@ describe('service-worker mount.sign-and-forward external Port', () => {
     return { messageListeners, posted };
   }
 
-  async function dispatch(conn: { messageListeners: ((raw: any) => void)[] }, msg: any) {
+  async function dispatch(
+    conn: { messageListeners: ((raw: any) => void)[]; posted: any[] },
+    msg: { id: number; [key: string]: unknown }
+  ) {
     conn.messageListeners.forEach((l) => {
       l(msg);
     });
-    await new Promise((r) => setTimeout(r, 40));
+    // S3 success path runs SigV4 over crypto.subtle before fetch; a fixed
+    // 40ms sleep flakes under release-job load (reply still undefined). Wait
+    // for the id-matched Port reply instead.
+    await vi.waitFor(() => {
+      expect(conn.posted.find((m) => m.id === msg.id)).toBeDefined();
+    });
   }
 
   it('forwards a configured S3 request via fetch for a pinned sender, posting { id, response }', async () => {
