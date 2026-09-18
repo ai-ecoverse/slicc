@@ -6,6 +6,8 @@
  * and any suffix (`-scoop`, `custom-${id}`).
  */
 
+// #3277 stacked-CI experiment: path-filter trigger, do not merge.
+
 export interface SlugifyOptions {
   /** Cap the slug at this many characters after hyphen-trim. */
   maxLen?: number;

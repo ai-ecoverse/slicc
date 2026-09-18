@@ -1,5 +1,7 @@
 import Foundation
 
+// #3277 stacked-CI experiment: path-filter trigger, do not merge.
+
 // MARK: - AnyCodable
 
 /// Minimal wrapper for arbitrary JSON values (String, Int, Double, Bool, Array, Dictionary, null).
