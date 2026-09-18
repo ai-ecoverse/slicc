@@ -368,7 +368,8 @@ jobs:
           SLICC_TF_DEMO_JOIN_URL: ${{ vars.SLICC_TF_DEMO_JOIN_URL }}
 
           SLICC_TF_WHATS_NEW: ${{ needs.analyze.outputs.tf_whats_new }}
-        run: npx semantic-release
+
+        run: node packages/dev-tools/tools/release-publish.mjs
 
       - name: Alert on red release
         if: failure()
