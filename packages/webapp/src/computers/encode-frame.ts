@@ -144,26 +144,38 @@ export function base64FromBytes(bytes: Uint8Array): string {
 }
 
 /**
- * Cap an encoded computer frame at `maxWidth`. Canvas floats resample;
- * Node tests (no OffscreenCanvas) patch SOF0/IHDR so jpegSize/pngSize
- * match the promised width.
+ * Cap an encoded computer frame at `maxWidth`. Production resamples via
+ * createImageBitmap + OffscreenCanvas + convertToBlob. If those APIs are
+ * missing, the original pixels pass through and `overCap` is set — never
+ * rewrite JPEG/PNG headers to claim a smaller size.
  */
 export async function fitComputerFrame(
   frame: ComputerFrame,
-  maxWidth: number
+  maxWidth: number,
+  resample: (
+    frame: ComputerFrame,
+    width: number,
+    height: number
+  ) => Promise<Uint8Array | null> = resampleEncodedFrame
 ): Promise<ComputerFrame> {
-  if (!maxWidth || frame.width <= maxWidth) return frame;
+  if (!maxWidth || frame.width <= maxWidth) {
+    if (!frame.overCap) return frame;
+    return {
+      seq: frame.seq,
+      mime: frame.mime,
+      width: frame.width,
+      height: frame.height,
+      bytes: frame.bytes,
+    };
+  }
   const scale = maxWidth / frame.width;
   const width = Math.max(1, Math.round(frame.width * scale));
   const height = Math.max(1, Math.round(frame.height * scale));
-  const resampled = await resampleEncodedFrame(frame, width, height);
-  if (resampled) return { ...frame, width, height, mime: 'image/jpeg', bytes: resampled };
-  return {
-    ...frame,
-    width,
-    height,
-    bytes: patchEncodedSize(frame.bytes, width, height),
-  };
+  const resampled = await resample(frame, width, height);
+  if (resampled) {
+    return { seq: frame.seq, mime: 'image/jpeg', width, height, bytes: resampled };
+  }
+  return { ...frame, overCap: true };
 }
 
 async function resampleEncodedFrame(
@@ -190,33 +202,4 @@ async function resampleEncodedFrame(
   } catch {
     return null;
   }
-}
-
-function patchEncodedSize(bytes: Uint8Array, width: number, height: number): Uint8Array {
-  const copy = bytes.slice();
-  if (pngSize(copy)) {
-    if (copy.length >= 24) {
-      writeU32be(copy, 16, width);
-      writeU32be(copy, 20, height);
-    }
-    return copy;
-  }
-  for (let i = 0; i < copy.length - 8; i++) {
-    if (copy[i] !== 0xff) continue;
-    const marker = copy[i + 1];
-    if (marker !== 0xc0 && marker !== 0xc2) continue;
-    copy[i + 5] = (height >> 8) & 0xff;
-    copy[i + 6] = height & 0xff;
-    copy[i + 7] = (width >> 8) & 0xff;
-    copy[i + 8] = width & 0xff;
-    break;
-  }
-  return copy;
-}
-
-function writeU32be(bytes: Uint8Array, offset: number, value: number): void {
-  bytes[offset] = (value >>> 24) & 0xff;
-  bytes[offset + 1] = (value >>> 16) & 0xff;
-  bytes[offset + 2] = (value >>> 8) & 0xff;
-  bytes[offset + 3] = value & 0xff;
 }

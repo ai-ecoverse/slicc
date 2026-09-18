@@ -83,6 +83,8 @@ export interface ComputerFrame {
   width: number;
   height: number;
   bytes: Uint8Array;
+  /** Encoded pixels are wider than the requested maxWidth (resample unavailable). */
+  overCap?: boolean;
 }
 
 export interface ComputerScreenshotOpts {

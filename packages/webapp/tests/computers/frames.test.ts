@@ -26,7 +26,7 @@ describe('encode-frame', () => {
     expect(jpeg[1]).toBe(0xd8);
   });
 
-  it('caps a 640-wide JPEG at maxWidth 480', async () => {
+  it('resamples a 640-wide JPEG when a canvas encoder is supplied', async () => {
     const wide = Uint8Array.of(
       0xff,
       0xd8,
@@ -47,13 +47,64 @@ describe('encode-frame', () => {
       0xd9
     );
     expect(jpegSize(wide)).toEqual({ width: 640, height: 400 });
+    const scaled = Uint8Array.of(
+      0xff,
+      0xd8,
+      0xff,
+      0xc0,
+      0x00,
+      0x0b,
+      0x08,
+      0x01,
+      0x2c,
+      0x01,
+      0xe0,
+      0x01,
+      0x01,
+      0x11,
+      0x00,
+      0xff,
+      0xd9
+    );
+    const fitted = await fitComputerFrame(
+      { seq: 1, mime: 'image/jpeg', width: 640, height: 400, bytes: wide },
+      480,
+      async () => scaled
+    );
+    expect(fitted).toMatchObject({ width: 480, height: 300, mime: 'image/jpeg' });
+    expect(fitted.overCap).toBeUndefined();
+    expect(fitted.bytes).toBe(scaled);
+  });
+
+  it('passes over-cap pixels through unchanged when resample is unavailable', async () => {
+    const wide = Uint8Array.of(
+      0xff,
+      0xd8,
+      0xff,
+      0xc0,
+      0x00,
+      0x0b,
+      0x08,
+      0x01,
+      0x90,
+      0x02,
+      0x80,
+      0x01,
+      0x01,
+      0x11,
+      0x00,
+      0xff,
+      0xd9
+    );
     const fitted = await fitComputerFrame(
       { seq: 1, mime: 'image/jpeg', width: 640, height: 400, bytes: wide },
       480
     );
-    expect(fitted.width).toBe(480);
-    expect(fitted.height).toBe(300);
-    expect(jpegSize(fitted.bytes)).toEqual({ width: 480, height: 300 });
+    expect(fitted.width).toBe(640);
+    expect(fitted.height).toBe(400);
+    expect(fitted.overCap).toBe(true);
+    expect(fitted.bytes).toEqual(wide);
+    expect(jpegSize(fitted.bytes)).toEqual({ width: 640, height: 400 });
   });
 });
 

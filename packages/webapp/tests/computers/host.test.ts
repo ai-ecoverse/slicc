@@ -187,7 +187,7 @@ describe('computers host watch transport', () => {
     host.stop();
   });
 
-  it('downscales a push source wider than the watch maxWidth', async () => {
+  it('forwards over-cap push frames unchanged when resample is unavailable', async () => {
     const registry = installComputerRegistry(null);
     const backend = new FakePushBackend('wide');
     registry.register(backend);
@@ -200,9 +200,15 @@ describe('computers host watch transport', () => {
       expect(sent.some((m) => m.type === 'computer-frame')).toBe(true);
     });
     const frame = sent.find((m) => m.type === 'computer-frame');
-    expect(frame).toMatchObject({ type: 'computer-frame', id: 'wide', width: 480, height: 300 });
+    expect(frame).toMatchObject({
+      type: 'computer-frame',
+      id: 'wide',
+      width: 640,
+      height: 400,
+      overCap: true,
+    });
     if (frame && frame.type === 'computer-frame') {
-      expect(jpegSize(frame.bytes)).toEqual({ width: 480, height: 300 });
+      expect(jpegSize(frame.bytes)).toEqual({ width: 640, height: 400 });
     }
     host.stop();
   });

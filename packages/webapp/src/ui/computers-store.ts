@@ -149,6 +149,7 @@ class ComputersStore {
       width: msg.width,
       height: msg.height,
       bytes: coerceComputerFrameBytes(msg.bytes),
+      ...(msg.overCap ? { overCap: true } : {}),
     };
     this.frames.set(msg.id, frame);
     for (const listener of [...this.frameListeners]) listener(msg.id, frame);

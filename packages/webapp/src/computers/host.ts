@@ -93,6 +93,7 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
         width: fitted.width,
         height: fitted.height,
         bytes: copy,
+        ...(fitted.overCap ? { overCap: true } : {}),
       },
       [copy.buffer]
     );

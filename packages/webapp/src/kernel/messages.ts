@@ -959,6 +959,7 @@ export interface ComputerFrameMsg {
   width: number;
   height: number;
   bytes: Uint8Array;
+  overCap?: boolean;
 }
 
 /** Panel → worker: subscribe to live frames for one computer. */
