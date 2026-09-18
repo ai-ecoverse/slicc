@@ -94,7 +94,7 @@ export interface ScoopLifecycleCallbacks {
     state: CompactionState,
     detail: CompactionStateDetail
   ): void;
-  onError(scoopJid: string, error: string): void;
+  onError(scoopJid: string, error: string, options?: { endTurn?: boolean }): void;
   getBrowserAPI(): ReturnType<ScoopContextCallbacks['getBrowserAPI']>;
   onToolStart?(scoopJid: string, toolName: string, toolInput: unknown, toolCallId?: string): void;
   onToolEnd?(
@@ -1156,10 +1156,14 @@ export class ScoopLifecycleManager {
     // A fatal child report is durable UI state, not a prompt. `onError`
     // records a canonical error marker for the owning unit and renders the
     // same card live; unlike `handleMessage`, it never enters the parent's
-    // prompt queue. This prevents one provider outage from recursively
+    // prompt queue. `endTurn: false` keeps the owner's mid-turn /
+    // `scoop_wait` processing state intact — only the dying child ends its
+    // turn (above). This prevents one provider outage from recursively
     // waking every owner in a nested scoop tree.
     try {
-      this.deps.callbacks.onError(parent.jid, `[@${scoopRecord.assistantLabel} FAILED]: ${error}`);
+      this.deps.callbacks.onError(parent.jid, `[@${scoopRecord.assistantLabel} FAILED]: ${error}`, {
+        endTurn: false,
+      });
     } catch (err) {
       log.error('Failed to record fatal error for scoop owner', {
         scoop: scoopRecord.folder,

@@ -1054,7 +1054,7 @@ export class WcChatController {
         this.#handleCompactionNotice(event.messageId, event.marker);
         break;
       case 'error':
-        this.#handleError(event.error);
+        this.#handleError(event.error, event.endTurn !== false);
         break;
       // Carried by `AgentEvent` for other surfaces (offscreen screenshot
       // pipe, terminal echo) — the chat thread doesn't render them but
@@ -1273,8 +1273,10 @@ export class WcChatController {
     this.setProcessing(false);
   }
 
-  #handleError(error: unknown): void {
-    this.setProcessing(false);
+  #handleError(error: unknown, endTurn = true): void {
+    if (endTurn) {
+      this.setProcessing(false);
+    }
     // The error path renders as `<slicc-error-card>` (a presentational card
     // with a "Try again" button that emits the bubbled `slicc-error-retry`
     // event picked up by `#handleErrorRetry`). Mark the message with `error`
@@ -1284,6 +1286,9 @@ export class WcChatController {
     // never renders `[object Object]`. Leave strings intact: quota
     // envelopes (`429 {"error":{"type":"quota_exceeded",…}}`) must still
     // reach `errorCardEl` so it can detect the family and read `resets_at`.
+    // Notice-only cards (`endTurn: false`) still get the retry affordance,
+    // but they must not clear a mid-turn / mid-`scoop_wait` processing state
+    // on the owner that received a child fatal report (#3262).
     this.#appendMessage({
       id: uid(),
       role: 'assistant',

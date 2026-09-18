@@ -1613,9 +1613,10 @@ A scoop has no human to trigger a next turn. A second overflow before a successf
 message, unavailable compaction, or compaction failure must call `onFatalError`; the lifecycle then
 records a durable error card on the direct owner and releases `scoop_wait` through `forgetScoop`;
 it does not route the failure through `handleMessage`, because that would wake the owner's model
-and amplify the same provider outage up a nested ownership tree. Fatal state bypasses
-`scoop_mute`. Abort and disposal are clean exits, but any other terminal path that leaves a scoop
-stalled is a bug.
+and amplify the same provider outage up a nested ownership tree. The owner notice uses
+`endTurn: false` so a mid-turn / mid-`scoop_wait` parent keeps its processing state. Fatal state
+bypasses `scoop_mute`. Abort and disposal are clean exits, but any other terminal path that leaves
+a scoop stalled is a bug.
 
 ## Service Worker Must Be Self-Contained
 

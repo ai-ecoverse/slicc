@@ -361,7 +361,11 @@ describe('ScoopLifecycleManager', () => {
     });
     expect(onError.mock.calls).toEqual([
       [worker.jid, 'Context window exceeded and could not be reduced'],
-      [scoop.jid, '[@overflow-worker FAILED]: Context window exceeded and could not be reduced'],
+      [
+        scoop.jid,
+        '[@overflow-worker FAILED]: Context window exceeded and could not be reduced',
+        { endTurn: false },
+      ],
     ]);
     // Zero parent LLM calls: fatal state must not enter the prompt queue.
     expect(handleMessage).not.toHaveBeenCalled();
@@ -420,7 +424,7 @@ describe('ScoopLifecycleManager', () => {
 
     expect(onError.mock.calls).toEqual([
       [grandchild.jid, 'provider unavailable'],
-      [supervisor.jid, '[@grandchild FAILED]: provider unavailable'],
+      [supervisor.jid, '[@grandchild FAILED]: provider unavailable', { endTurn: false }],
     ]);
   });
 

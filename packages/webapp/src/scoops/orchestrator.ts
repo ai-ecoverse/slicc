@@ -133,8 +133,12 @@ export interface OrchestratorCallbacks {
     state: CompactionState,
     detail: CompactionStateDetail
   ) => void;
-  /** Called on error */
-  onError: (scoopJid: string, error: string) => void;
+  /**
+   * Called on error. Pass `{ endTurn: false }` for a durable notice that must
+   * not clear the unit's processing state (e.g. a child scoop's fatal report
+   * while the owner is still mid-turn / mid `scoop_wait`).
+   */
+  onError: (scoopJid: string, error: string, options?: { endTurn?: boolean }) => void;
   /** Called when sustained lick backpressure is reported or cleared. */
   onLickBackpressure?: (scoopJid: string, info: { count: number; waitingMs: number }) => void;
   /** Get the BrowserAPI used by browser automation commands */
@@ -354,7 +358,8 @@ export class Orchestrator implements ConeApprovalRouter {
       this.sendPrompt(jid, text, senderId, senderName, images ?? [], options),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
     recordSentAttachments: (jid, overlays) => this.recordSentAttachments(jid, overlays),
-    onError: (jid, error) => this.callbacks.onError(jid, error),
+    onError: (jid: string, error: string, options?: { endTurn?: boolean }) =>
+      this.callbacks.onError(jid, error, options),
     onLickBackpressure: (jid, info) => this.callbacks.onLickBackpressure?.(jid, info),
     getSessionStore: () => this.sessionStore,
     resetCostTracker: () => this.costTracker.reset(),
