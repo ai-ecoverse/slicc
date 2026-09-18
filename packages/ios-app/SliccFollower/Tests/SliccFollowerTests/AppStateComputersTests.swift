@@ -41,7 +41,8 @@ final class AppStateComputersTests: XCTestCase {
 
     func testComputersListPaintsRosterAndDropsStaleFrames() throws {
         let state = AppState()
-        try send(.computersList(computers: [descriptor(), descriptor(id: "ssh:desk", title: "Desk")]),
+        try send(
+            .computersList(computers: [descriptor(), descriptor(id: "ssh:desk", title: "Desk")]),
             to: state)
         XCTAssertEqual(state.computers.map(\.id), ["jsh:clock", "ssh:desk"])
         _ = state.liveFrame(forComputerId: "jsh:clock")

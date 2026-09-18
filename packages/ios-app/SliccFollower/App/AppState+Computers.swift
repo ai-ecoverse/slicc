@@ -25,7 +25,8 @@ extension AppState {
         switch message {
         case .computersList(let next):
             applyComputerRoster(next)
-        case .computerFrame(let id, let seq, _, let width, let height, let data, let chunkData,
+        case .computerFrame(
+            let id, let seq, _, let width, let height, let data, let chunkData,
             let chunkIndex, let totalChunks):
             applyComputerFrame(
                 id: id, seq: seq, width: width, height: height, data: data,
