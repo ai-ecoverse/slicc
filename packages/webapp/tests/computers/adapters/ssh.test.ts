@@ -203,6 +203,42 @@ describe('ssh backend', () => {
     expect(mapping.scale).toBeCloseTo(768 / 1920);
     expect(mapPoint(384, 216, toLastShot(mapping, 1), false)).toEqual({ x: 960, y: 540 });
   });
+
+  it('prefers native capture and input over tray-exec', async () => {
+    const exec = vi.fn(async () => ok(''));
+    const capture = vi.fn(async () => ({
+      bytes: new Uint8Array([9, 8, 7]),
+      mime: 'image/jpeg' as const,
+      width: 480,
+      height: 270,
+      nativeWidth: 1920,
+      nativeHeight: 1080,
+    }));
+    const input = vi.fn();
+    const unwatch = vi.fn();
+    const backend = new SshComputerBackend(exec, {
+      runtimeId: 'sliccstart-computer-1',
+      title: 'desk',
+      probe: { platform: 'darwin', tools: [], capture: null, input: 'none' },
+      inputAllowed: true,
+      native: { capture, input, unwatch },
+    });
+    expect(backend.describe().capabilities).toMatchObject({
+      screenshot: true,
+      inputAllowed: true,
+      keyboard: true,
+      mouse: 'absolute',
+      scroll: true,
+    });
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 480 });
+    expect(frame).toMatchObject({ mime: 'image/jpeg', width: 480, height: 270 });
+    expect(capture).toHaveBeenCalledWith({ fps: 2, maxWidth: 480, watch: false });
+    expect(exec).not.toHaveBeenCalled();
+    await backend.input([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
+    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
+    await backend.close();
+    expect(unwatch).toHaveBeenCalled();
+  });
 });
 
 describe('ssh input emitters', () => {

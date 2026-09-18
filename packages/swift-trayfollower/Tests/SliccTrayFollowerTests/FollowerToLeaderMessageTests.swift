@@ -401,4 +401,117 @@ final class FollowerToLeaderMessageTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - computers (#3248)
+
+    func testComputerWatchUnwatchAndInputRoundTrip() throws {
+        guard
+            case .computerWatch(let id, let fps, let maxWidth) = try roundTrip(
+                .computerWatch(id: "jsh:clock", fps: 2, maxWidth: 480))
+        else {
+            XCTFail("expected computer.watch")
+            return
+        }
+        XCTAssertEqual(id, "jsh:clock")
+        XCTAssertEqual(fps, 2)
+        XCTAssertEqual(maxWidth, 480)
+
+        guard case .computerUnwatch(let dropped) = try roundTrip(.computerUnwatch(id: "jsh:clock"))
+        else {
+            XCTFail("expected computer.unwatch")
+            return
+        }
+        XCTAssertEqual(dropped, "jsh:clock")
+
+        let events: [ComputerInputEvent] = [.text(text: "ls"), .key(keysym: "Return", down: nil)]
+        guard
+            case .computerInput(let target, let decoded) = try roundTrip(
+                .computerInput(id: "jsh:clock", events: events))
+        else {
+            XCTFail("expected computer.input")
+            return
+        }
+        XCTAssertEqual(target, "jsh:clock")
+        XCTAssertEqual(decoded, events)
+
+        guard
+            case .computerInput(_, let empty) = try WireCodec.decode(
+                FollowerToLeaderMessage.self, from: #"{"type":"computer.input","id":"jsh:clock"}"#)
+        else {
+            XCTFail("expected computer.input")
+            return
+        }
+        XCTAssertTrue(empty.isEmpty)
+    }
+
+    func testComputerNativeFollowerMessagesRoundTrip() throws {
+        guard
+            case .computerNativeFrame(
+                let requestId, let seq, let mime, let width, let height, let nativeWidth,
+                let nativeHeight, let data, let chunkData, let chunkIndex, let totalChunks) =
+                try roundTrip(
+                    .computerNativeFrame(
+                        requestId: "cap-1", seq: 7, mime: "image/jpeg", width: 480, height: 270,
+                        nativeWidth: 1920, nativeHeight: 1080, data: "QUJD", chunkData: nil,
+                        chunkIndex: nil, totalChunks: nil))
+        else {
+            XCTFail("expected computer.native.frame")
+            return
+        }
+        XCTAssertEqual(requestId, "cap-1")
+        XCTAssertEqual(seq, 7)
+        XCTAssertEqual(mime, "image/jpeg")
+        XCTAssertEqual(width, 480)
+        XCTAssertEqual(height, 270)
+        XCTAssertEqual(nativeWidth, 1920)
+        XCTAssertEqual(nativeHeight, 1080)
+        XCTAssertEqual(data, "QUJD")
+        XCTAssertNil(chunkData)
+        XCTAssertNil(chunkIndex)
+        XCTAssertNil(totalChunks)
+
+        guard
+            case .computerNativeFrame(_, _, _, _, _, _, _, _, let slice, let index, let total) =
+                try roundTrip(
+                    .computerNativeFrame(
+                        requestId: "cap-1", seq: 8, mime: "image/jpeg", width: 16, height: 16,
+                        nativeWidth: 16, nativeHeight: 16, data: nil, chunkData: "aa",
+                        chunkIndex: 0, totalChunks: 2))
+        else {
+            XCTFail("expected chunked computer.native.frame")
+            return
+        }
+        XCTAssertEqual(slice, "aa")
+        XCTAssertEqual(index, 0)
+        XCTAssertEqual(total, 2)
+
+        guard
+            case .computerNativeError(let errId, let error) = try roundTrip(
+                .computerNativeError(requestId: "cap-1", error: "Screen Recording denied"))
+        else {
+            XCTFail("expected computer.native.error")
+            return
+        }
+        XCTAssertEqual(errId, "cap-1")
+        XCTAssertEqual(error, "Screen Recording denied")
+
+        guard
+            case .computerNativeInputResult(let okId, let okError) = try roundTrip(
+                .computerNativeInputResult(requestId: "in-ok", error: nil))
+        else {
+            XCTFail("expected computer.native.input.result")
+            return
+        }
+        XCTAssertEqual(okId, "in-ok")
+        XCTAssertNil(okError)
+
+        guard
+            case .computerNativeInputResult(_, let denied) = try roundTrip(
+                .computerNativeInputResult(requestId: "in-no", error: "Accessibility denied"))
+        else {
+            XCTFail("expected computer.native.input.result")
+            return
+        }
+        XCTAssertEqual(denied, "Accessibility denied")
+    }
 }

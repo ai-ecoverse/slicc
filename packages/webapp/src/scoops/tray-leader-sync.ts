@@ -4,6 +4,7 @@
  */
 
 import type {
+  ComputerInputEvent,
   FollowerBiscottoIdentity,
   FollowerTrust,
   LeaderToWorkerControlMessage,
@@ -39,7 +40,11 @@ import { BiscottoReview } from './tray-leader/biscotto-review.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
 import { CDPRouter } from './tray-leader/cdp-router.js';
 import { CherryRouter } from './tray-leader/cherry-router.js';
-import { ComputersRouter, type TrayComputersSource } from './tray-leader/computers-router.js';
+import {
+  ComputersRouter,
+  type NativeComputerCaptureResult,
+  type TrayComputersSource,
+} from './tray-leader/computers-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
 import { FollowerDispatch } from './tray-leader/follower-dispatch.js';
 import {
@@ -528,8 +533,27 @@ export class LeaderSyncManager {
     return this.remoteExec.execOnRemote(runtimeId, command, opts);
   }
 
+  captureNativeComputer(
+    runtimeId: string,
+    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+  ): Promise<NativeComputerCaptureResult> {
+    return this.computersRouter.captureNative(runtimeId, opts);
+  }
+
+  inputNativeComputer(runtimeId: string, events: ComputerInputEvent[]): Promise<void> {
+    return this.computersRouter.inputNative(runtimeId, events);
+  }
+
+  unwatchNativeComputer(runtimeId: string): void {
+    this.computersRouter.unwatchNative(runtimeId);
+  }
+
   getExecCapableBootstrapIds(): Set<string> {
     return this.followerRegistry.getExecCapableBootstrapIds();
+  }
+
+  getComputerCapableBootstrapIds(): Set<string> {
+    return this.followerRegistry.getComputerCapableBootstrapIds();
   }
 
   getBrowserCapableBootstrapIds(): Set<string> {

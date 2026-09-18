@@ -544,7 +544,7 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const help = await cmd.execute(['--help'], makeCtx().ctx);
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('$TMPDIR/computer/<name>/<seq>.jpg');
-    expect(help.stdout).toContain('$TMPDIR/v86-serve-<name>/');
+    expect(help.stdout).toContain('computer watch -c v86:<name>');
     expect(help.stdout).not.toMatch(/\/tmp\/v86/);
   });
 
@@ -621,50 +621,16 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(result.stderr).toContain("no VM named 'vm0'");
   });
 
-  it('serves the screen into a VFS directory and stops on --stop', async () => {
-    const emulator = makeFakeEmulator();
-    await startVm(emulator);
-    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
-    const { ctx, written } = makeCtx();
-
-    const served = await cmd.execute(['serve'], ctx);
+  it('retires serve with a pointer to computer watch', async () => {
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
+    const served = await cmd.execute(['serve', '-n', 'arch'], makeCtx().ctx);
     expect(served.stderr).toBe('');
     expect(served.exitCode).toBe(0);
-    expect(served.stdout).toContain('/tmp/v86-serve-vm0');
-    expect(served.stdout).toContain('serve /tmp/v86-serve-vm0');
-    expect(served.stdout).toContain('prefer: computer watch -c v86:vm0');
-    expect(written.has('/tmp/v86-serve-vm0/index.html')).toBe(true);
-    // Text-mode guest: the pump writes screen.txt + state.json.
-    expect(written.has('/tmp/v86-serve-vm0/screen.txt')).toBe(true);
-    const state = JSON.parse(written.get('/tmp/v86-serve-vm0/state.json') as string);
-    expect(state).toMatchObject({ name: 'vm0', mode: 'text' });
-    expect(getVm('vm0')?.serve?.fps).toBe(2);
-
-    const dup = await cmd.execute(['serve'], ctx);
-    expect(dup.exitCode).toBe(1);
-    expect(dup.stderr).toContain('already serving');
-
-    const stopped = await cmd.execute(['serve', '--stop'], ctx);
-    expect(stopped.exitCode).toBe(0);
-    expect(getVm('vm0')?.serve).toBeNull();
-  });
-
-  it('validates --fps and clears the serve pump on VM stop', async () => {
-    const emulator = makeFakeEmulator();
-    await startVm(emulator);
-    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
-    const { ctx } = makeCtx();
-
-    const bad = await cmd.execute(['serve', '--fps', '99'], ctx);
-    expect(bad.exitCode).toBe(1);
-    expect(bad.stderr).toContain('--fps');
-
-    const served = await cmd.execute(['serve', '--fps', '5'], ctx);
-    expect(served.exitCode).toBe(0);
-    expect(getVm('vm0')?.serve?.fps).toBe(5);
-
-    await cmd.execute(['stop'], ctx);
-    expect(getVm('vm0')).toBeUndefined();
+    expect(served.stdout).toContain('retired');
+    expect(served.stdout).toContain('computer watch -c v86:arch');
+    const again = await cmd.execute(['serve', '--stop'], makeCtx().ctx);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toContain('computer watch -c v86:vm0');
   });
 
   it('reports the engine version via --version', async () => {

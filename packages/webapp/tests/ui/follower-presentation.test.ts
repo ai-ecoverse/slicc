@@ -123,6 +123,7 @@ describe('followerCapabilities', () => {
       'can run commands',
       'hosts tabs',
     ]);
+    expect(followerCapabilities(follower({ computer: true }))).toEqual(['native screen']);
   });
 
   it('claims nothing for a plain follower', () => {

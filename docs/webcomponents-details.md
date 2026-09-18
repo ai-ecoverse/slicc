@@ -143,6 +143,9 @@ keyboard handler only activates when `event.target` is the card itself.
 Activating a computer is a host concern — the overlay still fires
 `tab-activate`. The page host (`ui/wc/wc-computers.ts`) merges computers
 after browser tabs and opens `<slicc-image-preview>` live via `setSrc()`.
+When the computer allows input, that host sets the `drive` attribute so
+clicks/scroll/keys emit `slicc-image-preview-input` (display CSS pixels);
+Escape and the backdrop still dismiss. Frozen stills never set `drive`.
 
 `<slicc-bash-renderer-computer>` (`src/computer/`) is the bash-row body for
 the `computer` program: `$ command`, text output (ANSI painted by the host
@@ -152,7 +155,7 @@ pushed `computer-frame` is on screen. `computerId` is the resolved target
 (`-c` or the shell's `target: <id>` stamp). `frameSrc` must be a browser-decodable
 JPEG/PNG data URL — the SOF0-only stub used in kernel tests paints as a
 broken-image icon. A frozen still can open the lightbox with no `computerId`
-(static preview, no watch). The host element keeps
+(static preview, no watch, no drive). The host element keeps
 class `wcmsg-bash` so the action-row progress chrome still matches.
 
 ## File tree + Quick Look (Pierre libraries)

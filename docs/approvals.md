@@ -961,6 +961,10 @@ must run from a context that can host the dialog — same constraint as the moun
 If capture fails with `Invalid state`, another tab may still hold a display-capture
 session — stop that share, focus SLICC, and retry (or reload if it stays wedged).
 
+### Native macOS capture (`computer add ssh`)
+
+When a Swift-launcher follower advertises `capabilities.computer`, `computer add ssh` prefers ScreenCaptureKit JPEG frames and CGEvent input over `screencapture`/`cliclick` shell-out. Those TCC prompts are **lazy on first use** (`ComputerPermissions.swift`): Screen Recording for capture, Accessibility for input. A capture denial returns a System Settings error on `computer.native.error`. An input denial returns the same Accessibility text on `computer.native.input.result` (and `computer.native.error`) so the leader can fail the shell verb. `--allow-input` is still the sudo hop above; native capture does not skip it. Fallback remains the probe + tray-exec path when the follower has no `computer` capability (Linux, old launcher, iOS).
+
 ### Microphone (voice input)
 
 The composer's push-to-talk requests the microphone during the hold, through
@@ -996,6 +1000,7 @@ flag still skips.
 | `packages/webapp/src/speech/hear.ts`                                       | `hear` command mic acquisition (`skipIfGranted`)       |
 | `packages/webapp/src/ui/wc/wc-attach.ts`                                   | Composer photo/video capture (`skipIfGranted`)         |
 | `packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts`        | `ffmpeg -f avfoundation` camera/mic (`skipIfGranted`)  |
+| `packages/swift-launcher/Sliccstart/Models/ComputerPermissions.swift`      | Lazy Screen Recording / Accessibility for native ssh   |
 
 ---
 

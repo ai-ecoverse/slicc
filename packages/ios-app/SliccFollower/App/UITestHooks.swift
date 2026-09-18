@@ -484,6 +484,44 @@ import UIKit
             ]
         }
 
+        /// Seed leader computers (`-uiTestComputersFixture YES`) so the
+        /// browser surface shows computer cards without a tray stream.
+        static func computersFixture() -> [ComputerDescriptor]? {
+            guard UserDefaults.standard.bool(forKey: "uiTestComputersFixture") else {
+                return nil
+            }
+            let caps = ComputerCapabilities(
+                screenshot: true, text: false, frames: "poll", keyboard: true, mouse: "absolute",
+                scroll: true, exec: false, inputAllowed: true)
+            return [
+                ComputerDescriptor(
+                    id: "ssh:sliccstart-computer-1", kind: "ssh", title: "Desk",
+                    size: ComputerSize(width: 1920, height: 1080), state: "live",
+                    capabilities: caps, pid: nil,
+                    softKeys: [ComputerSoftKey(label: "Home", keysym: "Home")]),
+                ComputerDescriptor(
+                    id: "jsh:clock", kind: "jsh", title: "Clock",
+                    size: ComputerSize(width: 640, height: 400), state: "live",
+                    capabilities: caps, pid: nil, softKeys: nil),
+            ]
+        }
+
+        static func computerPreviewFixtureImage() -> UIImage? {
+            guard UserDefaults.standard.bool(forKey: "uiTestComputersFixture") else {
+                return nil
+            }
+            let size = CGSize(width: 480, height: 270)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 24, y: 24, width: 432, height: 40))
+                context.fill(CGRect(x: 24, y: 84, width: 280, height: 16))
+            }
+        }
+
         static func remotePreviewFixtureImage() -> UIImage? {
             guard UserDefaults.standard.bool(forKey: "uiTestRemoteTargetsFixture") else {
                 return nil

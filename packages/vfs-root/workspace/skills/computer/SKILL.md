@@ -34,7 +34,7 @@ computer screenshot --size high out.jpg
 computer text                       # text-mode dump when the backend supports it
 ```
 
-`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last screenshot unless `--native`.
+`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last screenshot unless `--native`. A human can also click, scroll, and type in the live lightbox when the computer allows input; Escape releases. Frozen stills in the transcript never forward.
 
 ## Poke (xdotool; chainable)
 
@@ -60,9 +60,10 @@ computer use v86:arch
 computer screenshot
 computer type "uname -a\n"
 computer key Return
+computer record -V 5 guest.webm
 ```
 
-`computer rm` unregisters `v86:<name>` and does **not** power the guest off. `v86 stop` / `kill <pid>` still does.
+`computer rm` unregisters `v86:<name>` and does **not** power the guest off. `v86 stop` / `kill <pid>` still does. `v86 serve` is retired — use `computer watch -c v86:<name>`.
 
 ## Browser tab
 
@@ -86,7 +87,7 @@ computer rm screen:screen1           # stops the getDisplayMedia tracks
 
 `computer add screen` needs a real user gesture (`getDisplayMedia`). Type it in the panel terminal, or run it from a cone tool call so an approval card can open the picker. `computer ls` marks a live share with `[display slot]`. Input (keyboard/mouse) is not supported. Screen share cannot come back after `jshd --enable` restore — there is no gesture at boot.
 
-`computer record` is screen-only in this phase; other kinds fail with a phase-4 message.
+`computer record` writes a clip to a VFS path (default `clip.webm`, max 60s). `screen` uses the live session recorder; v86/tab/url/jsh/ssh poll JPEG stills and pipe them through in-repo ffmpeg wasm (`-f image2pipe`). Default `--fps` is 2.
 
 ## Follower desktop (`ssh`)
 
@@ -99,7 +100,7 @@ computer click 1 --at 100,80 type hello
 computer add ssh mac-follower --sim UDID-1 --allow-input   # iOS Simulator
 ```
 
-Probes at add: `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec. `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
+Probes at add: native ScreenCaptureKit/CGEvent when the follower advertises `capabilities.computer` (Swift launcher `sliccstart-computer`); else `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec (or `computer.native.frame` when native). `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
 
 ## HTTP remote (`url`)
 

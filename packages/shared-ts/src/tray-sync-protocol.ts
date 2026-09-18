@@ -8,7 +8,7 @@
  *   reply pair, federated FS (request + response), liveness (ping/pong/status/error).
  *
  * Follower → Leader: user input, abort, snapshot/scoop selection requests,
- *   computer watch/unwatch, model catalog requests + model/thinking selection, sprinkle refresh +
+ *   computer watch/unwatch/input, native capture frames, model catalog requests + model/thinking selection, sprinkle refresh +
  *   content fetch + lick, target advertisement, federated
  *   CDP (request + response + event), federated tab.open and its reply pair,
  *   federated FS (request + response), ping/pong.
@@ -19,7 +19,9 @@
  * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT
  * originate `tab.open` against another runtime, so that path is TS-only. iOS
  * DOES originate `tab.teleport.request` (pull a tray tab here, with state).
- * The delegated-OAuth pair (`oauth.popup.*`) is TS-only: iOS has no popup
+ * Computer roster/frames/watch/input are TS + iOS (viewer); `computer.native.*`
+ * is decoded on iOS and ignored (macOS capture only). The delegated-OAuth pair
+ * (`oauth.popup.*`) is TS-only: iOS has no popup
  * model and never advertises `capabilities.oauthPopup`. The delegated sudo
  * triple (`sudo.approve.*`, v7) and `push.register` are TS + iOS: the phone is
  * the approval surface the leader has been missing (issue #2062). The per-variant iOS decision is MECHANICALLY enforced by the
@@ -40,7 +42,11 @@
  */
 
 import type { AgentEvent, ChatMessage, LickEvent, MessageAttachment } from './agent-wire-types.js';
-import type { ComputerDescriptor, ComputerFrameMime } from './computer-protocol.js';
+import type {
+  ComputerDescriptor,
+  ComputerFrameMime,
+  ComputerInputEvent,
+} from './computer-protocol.js';
 import type { TranscriptExportErrorCode } from './transcript-export.js';
 
 /**
@@ -156,6 +162,14 @@ export interface TraySyncCapabilities {
    * can never widen the policy.
    */
   biometric?: boolean;
+  /**
+   * This peer can capture its own screen and inject input natively
+   * (`computer.native.*`: ScreenCaptureKit + CGEvent on macOS). Leaders use it
+   * to skip the `screencapture`/`cliclick` tray-exec fallback on
+   * `computer add ssh`. Additive — legacy peers omit it. iOS never sets it
+   * (viewer only, not a driven computer).
+   */
+  computer?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +448,24 @@ export type LeaderToFollowerMessage =
       totalChunks?: number;
     }
   /**
+   * Ask a `capabilities.computer` follower to grab a JPEG (and optionally
+   * keep streaming). Additive; older followers drop it. Chunked replies
+   * arrive as `computer.native.frame`.
+   */
+  | {
+      type: 'computer.native.capture';
+      requestId: string;
+      fps?: number;
+      maxWidth?: number;
+      watch?: boolean;
+    }
+  | { type: 'computer.native.unwatch'; requestId?: string }
+  /**
+   * Inject pointer/key events on a `capabilities.computer` follower. The
+   * leader still gates this behind `--allow-input` (sudo) before sending.
+   */
+  | { type: 'computer.native.input'; requestId: string; events: ComputerInputEvent[] }
+  /**
    * Compact catalog rows normally remain below the 64 KiB CDP chunk threshold.
    * A bespoke semantic chunk variant is unnecessary: the generic
    * `TrayChunkFrame` layer frames and reassembles any oversize message.
@@ -548,6 +580,38 @@ export type FollowerToLeaderMessage =
   | { type: 'scoops.select'; scoopJid: string }
   | { type: 'computer.watch'; id: string; fps?: number; maxWidth?: number }
   | { type: 'computer.unwatch'; id: string }
+  /**
+   * Follower driving a leader-hosted computer (iOS soft keys / later
+   * lightbox-on-follower). Events are screenshot-space unless `native`.
+   */
+  | { type: 'computer.input'; id: string; events: ComputerInputEvent[] }
+  /**
+   * Native capture JPEG from a `capabilities.computer` follower. Small
+   * payloads carry `data`; oversize frames reuse CDP-style chunks.
+   * `nativeWidth`/`nativeHeight` are the unscaled display so the leader can
+   * map screenshot-space input.
+   */
+  | {
+      type: 'computer.native.frame';
+      requestId: string;
+      seq: number;
+      mime: ComputerFrameMime;
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+      data?: string;
+      chunkData?: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+    }
+  | { type: 'computer.native.error'; requestId: string; error: string }
+  /**
+   * Ack for `computer.native.input`. Always sent. `error` is the
+   * Accessibility-denial text (or another injector failure); omitted on
+   * success so the leader can unblock the shell verb.
+   */
+  | { type: 'computer.native.input.result'; requestId: string; error?: string }
   | { type: 'models.request' }
   | {
       type: 'model.select';
@@ -1076,6 +1140,10 @@ export const COMPUTER_TRAY_MAX_FPS = 2;
 export const COMPUTER_TRAY_MAX_WIDTH = 480;
 
 export type ComputerFrameMessage = Extract<LeaderToFollowerMessage, { type: 'computer.frame' }>;
+export type ComputerNativeFrameMessage = Extract<
+  FollowerToLeaderMessage,
+  { type: 'computer.native.frame' }
+>;
 
 /**
  * Send a CDP response, automatically chunking if the serialized result exceeds CDP_CHUNK_THRESHOLD.
@@ -1259,6 +1327,175 @@ export function reassembleComputerFrame(
       mime: message.mime,
       width: message.width,
       height: message.height,
+      data: buffer.chunks.join(''),
+    };
+  }
+  return null;
+}
+
+/**
+ * Send a computer.native.frame, chunking the base64 `data` the same way
+ * {@link sendComputerFrame} chunks leader→follower frames.
+ */
+export function sendComputerNativeFrame(
+  channel: { send(message: TraySyncMessage): boolean; bufferedAmount?: number },
+  frame: {
+    requestId: string;
+    seq: number;
+    mime: ComputerFrameMime;
+    width: number;
+    height: number;
+    nativeWidth: number;
+    nativeHeight: number;
+    data: string;
+  }
+): boolean {
+  if (frame.data.length <= CDP_CHUNK_THRESHOLD) {
+    return channel.send({ type: 'computer.native.frame', ...frame });
+  }
+  const queued = channel.bufferedAmount;
+  if (typeof queued === 'number' && queued >= TRAY_SEND_HIGH_WATER_BYTES) {
+    return false;
+  }
+  const totalChunks = Math.ceil(frame.data.length / CDP_CHUNK_SIZE);
+  let allSent = true;
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkData = frame.data.slice(i * CDP_CHUNK_SIZE, (i + 1) * CDP_CHUNK_SIZE);
+    const ok = channel.send({
+      type: 'computer.native.frame',
+      requestId: frame.requestId,
+      seq: frame.seq,
+      mime: frame.mime,
+      width: frame.width,
+      height: frame.height,
+      nativeWidth: frame.nativeWidth,
+      nativeHeight: frame.nativeHeight,
+      chunkData,
+      chunkIndex: i,
+      totalChunks,
+    });
+    if (!ok) {
+      allSent = false;
+      break;
+    }
+  }
+  return allSent;
+}
+
+export type ComputerNativeFrameBuffer = {
+  chunks: string[];
+  received: number;
+  totalChunks: number;
+  bytes: number;
+};
+
+function nativeFrameBufferBytes(buffers: Map<string, ComputerNativeFrameBuffer>): number {
+  let total = 0;
+  for (const buffer of buffers.values()) total += buffer.bytes;
+  return total;
+}
+
+export type ComputerNativeReassemblyLimits = {
+  maxChunkCount: number;
+  maxPending: number;
+  maxBytes: number;
+};
+
+export const DEFAULT_NATIVE_FRAME_REASSEMBLY_LIMITS: ComputerNativeReassemblyLimits = {
+  maxChunkCount: TRAY_MAX_CHUNK_COUNT,
+  maxPending: TRAY_MAX_PENDING_REASSEMBLIES,
+  maxBytes: TRAY_MAX_REASSEMBLY_BYTES,
+};
+
+function evictNativeFrameOverflow(
+  buffers: Map<string, ComputerNativeFrameBuffer>,
+  extraBytes: number,
+  limits: ComputerNativeReassemblyLimits
+): void {
+  while (
+    buffers.size > 0 &&
+    (buffers.size >= limits.maxPending ||
+      nativeFrameBufferBytes(buffers) + extraBytes > limits.maxBytes)
+  ) {
+    const oldest = buffers.keys().next();
+    if (oldest.done) return;
+    buffers.delete(oldest.value);
+  }
+}
+
+/**
+ * Reassemble chunked computer.native.frame payloads. Returns the message with
+ * `data` filled in when all chunks have arrived, or null while waiting.
+ * Peer-controlled `totalChunks` is capped the same way as transport framing;
+ * incomplete sequences are FIFO-evicted against pending/byte limits.
+ */
+export function reassembleComputerNativeFrame(
+  buffers: Map<string, ComputerNativeFrameBuffer>,
+  message: ComputerNativeFrameMessage,
+  limits: ComputerNativeReassemblyLimits = DEFAULT_NATIVE_FRAME_REASSEMBLY_LIMITS
+): ComputerNativeFrameMessage | null {
+  if (message.chunkIndex === undefined || message.totalChunks === undefined) {
+    return message;
+  }
+  const { totalChunks, chunkIndex, chunkData } = message;
+  if (
+    !Number.isInteger(totalChunks) ||
+    totalChunks <= 0 ||
+    totalChunks > limits.maxChunkCount ||
+    !Number.isInteger(chunkIndex) ||
+    chunkIndex < 0 ||
+    chunkIndex >= totalChunks
+  ) {
+    return null;
+  }
+  const key = `${message.requestId}:${message.seq}`;
+  let buffer = buffers.get(key);
+  if (buffer && buffer.totalChunks !== totalChunks) {
+    buffers.delete(key);
+    buffer = undefined;
+  }
+  const extra = chunkData?.length ?? 0;
+  if (!buffer) {
+    evictNativeFrameOverflow(buffers, extra, limits);
+    if (
+      buffers.size >= limits.maxPending ||
+      nativeFrameBufferBytes(buffers) + extra > limits.maxBytes
+    ) {
+      return null;
+    }
+    buffer = {
+      chunks: new Array(totalChunks),
+      received: 0,
+      totalChunks,
+      bytes: 0,
+    };
+    buffers.set(key, buffer);
+  }
+  if (!buffer.chunks[chunkIndex] && chunkData !== undefined) {
+    if (nativeFrameBufferBytes(buffers) + extra > limits.maxBytes) {
+      evictNativeFrameOverflow(buffers, extra, limits);
+      if (!buffers.has(key) || nativeFrameBufferBytes(buffers) + extra > limits.maxBytes) {
+        buffers.delete(key);
+        return null;
+      }
+      buffer = buffers.get(key);
+      if (!buffer) return null;
+    }
+    buffer.chunks[chunkIndex] = chunkData;
+    buffer.received++;
+    buffer.bytes += extra;
+  }
+  if (buffer.received >= buffer.totalChunks) {
+    buffers.delete(key);
+    return {
+      type: 'computer.native.frame',
+      requestId: message.requestId,
+      seq: message.seq,
+      mime: message.mime,
+      width: message.width,
+      height: message.height,
+      nativeWidth: message.nativeWidth,
+      nativeHeight: message.nativeHeight,
       data: buffer.chunks.join(''),
     };
   }

@@ -32,7 +32,7 @@ export interface VmScreenState {
   frame: { data: Uint8ClampedArray; width: number; height: number } | null;
 }
 
-/** Live screen-serve pump attached to a VM by `v86 serve`. */
+/** Residual screen-serve pump field; `v86 serve` no longer starts one. */
 export interface VmServeState {
   /** VFS directory the viewer + frames are written into. */
   dir: string;

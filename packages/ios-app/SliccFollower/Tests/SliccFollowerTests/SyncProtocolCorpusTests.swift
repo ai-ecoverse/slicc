@@ -151,6 +151,8 @@ final class SyncProtocolCorpusTests: XCTestCase {
             reencoded = try encoder.encode(try decoder.decode(TrayFsRequest.self, from: sample))
         case "TrayFsResponse":
             reencoded = try encoder.encode(try decoder.decode(TrayFsResponse.self, from: sample))
+        case "ComputerDescriptor":
+            reencoded = try encoder.encode(try decoder.decode(ComputerDescriptor.self, from: sample))
         default:
             return nil
         }

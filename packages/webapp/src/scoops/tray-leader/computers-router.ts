@@ -3,10 +3,24 @@ import {
   COMPUTER_TRAY_MAX_WIDTH,
   type ComputerDescriptor,
   type ComputerFrame,
+  type ComputerInputEvent,
+  type ComputerNativeFrameBuffer,
+  type ComputerNativeFrameMessage,
+  type FollowerToLeaderMessage,
+  reassembleComputerNativeFrame,
   sendComputerFrame,
   uint8ToBase64,
 } from '@slicc/shared-ts';
 import type { LeaderSyncContext } from './context.js';
+
+export interface NativeComputerCaptureResult {
+  jpeg: string;
+  mime: string;
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+}
 
 /**
  * Page-side computer roster the tray leader can subscribe to. Filled from
@@ -20,14 +34,28 @@ export interface TrayComputersSource {
   lastFrame(id: string): ComputerFrame | null;
   watch(id: string, fps?: number, maxWidth?: number): number;
   unwatch(id: string, token?: number): void;
+  /** Drive a computer from a follower (iOS soft keys). */
+  input?(id: string, events: ComputerInputEvent[]): Promise<void> | void;
 }
 
 const TRAY_FRAME_MIN_INTERVAL_MS = 1000 / COMPUTER_TRAY_MAX_FPS;
 
+type NativeFanoutMessage = Extract<
+  FollowerToLeaderMessage,
+  { type: 'computer.native.frame' | 'computer.native.error' }
+>;
+
+type NativeWireMessage = Extract<
+  FollowerToLeaderMessage,
+  {
+    type: 'computer.native.frame' | 'computer.native.error' | 'computer.native.input.result';
+  }
+>;
+
 /**
  * Fans `computers.list` / `computer.frame` to full-trust followers and answers
- * `computer.watch` / `computer.unwatch`. Caps the tray stream at 2 fps / 480 px.
- * Wire-only this phase — no follower UI.
+ * `computer.watch` / `computer.unwatch` / `computer.input`. Caps the tray
+ * stream at 2 fps / 480 px. Native capture frames fan out via `onNative`.
  */
 export class ComputersRouter {
   /** Computer ids each follower is watching. */
@@ -38,6 +66,26 @@ export class ComputersRouter {
   private readonly storeWatchTokens = new Map<string, number>();
   /** Last successful frame send per follower+computer, for the 2 fps cap. */
   private readonly lastSentAt = new Map<string, number>();
+  private readonly nativeListeners = new Set<
+    (bootstrapId: string, message: NativeFanoutMessage) => void
+  >();
+  private readonly nativeChunks = new Map<string, ComputerNativeFrameBuffer>();
+  private readonly pendingNative = new Map<
+    string,
+    {
+      resolve: (frame: NativeComputerCaptureResult) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private readonly pendingInput = new Map<
+    string,
+    {
+      resolve: () => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private unsubList: (() => void) | null = null;
   private unsubFrame: (() => void) | null = null;
 
@@ -121,7 +169,115 @@ export class ComputersRouter {
     }
   }
 
+  handleInput(bootstrapId: string, id: string, events: ComputerInputEvent[]): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower || follower.trust === 'biscotto') return;
+    const src = this.source();
+    if (!src?.input) {
+      this.context.log.warn('computer.input dropped — no store handler', { bootstrapId, id });
+      return;
+    }
+    void Promise.resolve(src.input(id, events)).catch((err: unknown) => {
+      this.context.log.warn('computer.input failed', {
+        bootstrapId,
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  async captureNative(
+    runtimeId: string,
+    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+  ): Promise<NativeComputerCaptureResult> {
+    const follower = this.requireComputerFollower(runtimeId);
+    const requestId = `ncap-${crypto.randomUUID()}`;
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    return await new Promise<NativeComputerCaptureResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingNative.delete(requestId);
+        reject(new Error(`computer.native.capture timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingNative.set(requestId, { resolve, reject, timer });
+      const sent = follower.sync.send({
+        type: 'computer.native.capture',
+        requestId,
+        fps: opts.fps,
+        maxWidth: opts.maxWidth,
+        watch: opts.watch ?? false,
+      });
+      if (!sent) {
+        this.pendingNative.delete(requestId);
+        clearTimeout(timer);
+        reject(new Error(`Failed to send computer.native.capture to '${runtimeId}'`));
+      }
+    });
+  }
+
+  async inputNative(
+    runtimeId: string,
+    events: ComputerInputEvent[],
+    opts: { timeoutMs?: number } = {}
+  ): Promise<void> {
+    const follower = this.requireComputerFollower(runtimeId);
+    const requestId = `nin-${crypto.randomUUID()}`;
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingInput.delete(requestId);
+        reject(new Error(`computer.native.input timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingInput.set(requestId, { resolve, reject, timer });
+      const sent = follower.sync.send({
+        type: 'computer.native.input',
+        requestId,
+        events,
+      });
+      if (!sent) {
+        this.pendingInput.delete(requestId);
+        clearTimeout(timer);
+        reject(new Error(`Failed to send computer.native.input to '${runtimeId}'`));
+      }
+    });
+  }
+
+  unwatchNative(runtimeId: string): void {
+    const follower = this.requireComputerFollower(runtimeId);
+    follower.sync.send({ type: 'computer.native.unwatch' });
+  }
+
+  handleNative(bootstrapId: string, message: NativeWireMessage): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower || follower.trust === 'biscotto') return;
+    if (message.type === 'computer.native.input.result') {
+      this.settleNativeInput(message.requestId, message.error);
+      return;
+    }
+    if (message.type === 'computer.native.error') {
+      this.settleNativeInput(message.requestId, message.error);
+    }
+    this.settleNative(message);
+    this.nativeListeners.forEach((listener) => {
+      try {
+        listener(bootstrapId, message);
+      } catch (err) {
+        this.context.log.warn('computer.native listener failed', {
+          bootstrapId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  }
+
+  onNative(listener: (bootstrapId: string, message: NativeFanoutMessage) => void): () => void {
+    this.nativeListeners.add(listener);
+    return () => {
+      this.nativeListeners.delete(listener);
+    };
+  }
+
   removeFollower(bootstrapId: string): void {
+    this.nativeChunks.clear();
     const ids = this.watches.get(bootstrapId);
     if (!ids) return;
     for (const id of [...ids]) this.handleUnwatch(bootstrapId, id);
@@ -168,6 +324,55 @@ export class ComputersRouter {
 
   private frameKey(bootstrapId: string, id: string): string {
     return `${bootstrapId}:${id}`;
+  }
+
+  private requireComputerFollower(runtimeId: string) {
+    const resolved = this.context.followers.resolveFollowerByRuntimeId(runtimeId);
+    if (!resolved) throw new Error(`No connected follower for '${runtimeId}'`);
+    if (resolved.follower.trust === 'biscotto') {
+      throw new Error(`Follower '${runtimeId}' cannot drive computer.native.*`);
+    }
+    if (resolved.follower.peerCapabilities?.computer !== true) {
+      throw new Error(`Follower '${runtimeId}' does not advertise computer capture`);
+    }
+    return resolved.follower;
+  }
+
+  private settleNativeInput(requestId: string, error?: string): void {
+    const pending = this.pendingInput.get(requestId);
+    if (!pending) return;
+    this.pendingInput.delete(requestId);
+    clearTimeout(pending.timer);
+    if (error) pending.reject(new Error(error));
+    else pending.resolve();
+  }
+
+  private settleNative(message: NativeFanoutMessage): void {
+    if (message.type === 'computer.native.error') {
+      const pending = this.pendingNative.get(message.requestId);
+      if (!pending) return;
+      this.pendingNative.delete(message.requestId);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message.error));
+      return;
+    }
+    const assembled = reassembleComputerNativeFrame(
+      this.nativeChunks,
+      message as ComputerNativeFrameMessage
+    );
+    if (!assembled?.data) return;
+    const pending = this.pendingNative.get(assembled.requestId);
+    if (!pending) return;
+    this.pendingNative.delete(assembled.requestId);
+    clearTimeout(pending.timer);
+    pending.resolve({
+      jpeg: assembled.data,
+      mime: assembled.mime,
+      width: assembled.width,
+      height: assembled.height,
+      nativeWidth: assembled.nativeWidth,
+      nativeHeight: assembled.nativeHeight,
+    });
   }
 
   private source(): TrayComputersSource | undefined {

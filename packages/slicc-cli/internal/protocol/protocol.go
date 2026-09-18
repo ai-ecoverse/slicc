@@ -46,6 +46,9 @@ type Capabilities struct {
 	OAuthPopup   *bool `json:"oauthPopup,omitempty"`
 	SudoApproval *bool `json:"sudoApproval,omitempty"`
 	Biometric    *bool `json:"biometric,omitempty"`
+	// Computer is the macOS native-capture advertisement (`computer.native.*`).
+	// The CLI never sets it; modeled so a corpus round-trip keeps the field.
+	Computer *bool `json:"computer,omitempty"`
 }
 
 // Hello is the additive version handshake both sides send first.

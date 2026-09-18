@@ -340,10 +340,9 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       activeScoopJid: 'cone',
     },
   },
-  // Additive computer roster (#3246). iOS has no computer surface this phase;
-  // the decoder must land on `.unknown` rather than fail the session.
+  // Additive computer roster (#3246 / #3248). iOS renders cards from this list.
   'computers.list': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: {
       type: 'computers.list',
       computers: [
@@ -369,7 +368,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     },
   },
   'computer.frame': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: {
       type: 'computer.frame',
       id: 'jsh:fake',
@@ -378,6 +377,28 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       width: 8,
       height: 8,
       data: 'QUJD',
+    },
+  },
+  'computer.native.capture': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.capture',
+      requestId: 'cap-1',
+      fps: 4,
+      maxWidth: 768,
+      watch: true,
+    },
+  },
+  'computer.native.unwatch': {
+    ios: 'decoded',
+    message: { type: 'computer.native.unwatch', requestId: 'cap-1' },
+  },
+  'computer.native.input': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.input',
+      requestId: 'in-1',
+      events: [{ type: 'click', button: 1, count: 1, x: 10, y: 20 }],
     },
   },
   'models.list': {
@@ -647,12 +668,52 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   },
   'scoops.select': { ios: 'decoded', message: { type: 'scoops.select', scoopJid: 'cone' } },
   'computer.watch': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'computer.watch', id: 'jsh:fake', fps: 2, maxWidth: 480 },
   },
   'computer.unwatch': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'computer.unwatch', id: 'jsh:fake' },
+  },
+  'computer.input': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.input',
+      id: 'jsh:fake',
+      events: [{ type: 'key', keysym: 'Home' }],
+    },
+  },
+  'computer.native.frame': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.frame',
+      requestId: 'cap-1',
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 1440,
+      nativeHeight: 900,
+      data: 'QUJD',
+    },
+  },
+  'computer.native.error': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.error',
+      requestId: 'cap-1',
+      error:
+        'Screen Recording is denied. Enable it in System Settings → Privacy & Security → Screen Recording.',
+    },
+  },
+  'computer.native.input.result': {
+    ios: 'decoded',
+    message: {
+      type: 'computer.native.input.result',
+      requestId: 'in-1',
+      error:
+        'Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again.',
+    },
   },
   'models.request': { ios: 'decoded', message: { type: 'models.request' } },
   'model.select': {
@@ -1308,6 +1369,41 @@ const TRAY_TARGET_ENTRY: NestedPayloadEntry<TrayTargetEntry> = {
   },
 };
 
+const COMPUTER_DESCRIPTOR: NestedPayloadEntry<ComputerDescriptor> = {
+  ios: 'mirrored',
+  fields: {
+    id: 'mirrored',
+    kind: 'mirrored',
+    title: 'mirrored',
+    size: 'mirrored',
+    state: 'mirrored',
+    capabilities: 'mirrored',
+    pid: 'mirrored',
+    softKeys: 'mirrored',
+    lastShot: 'mirrored',
+  },
+  sample: {
+    id: 'jsh:fake',
+    kind: 'jsh',
+    title: 'fake',
+    size: { width: 8, height: 8 },
+    state: 'live',
+    capabilities: {
+      screenshot: true,
+      text: false,
+      frames: 'poll',
+      keyboard: true,
+      mouse: 'absolute',
+      scroll: true,
+      exec: false,
+      inputAllowed: true,
+    },
+    pid: 42,
+    softKeys: [{ label: 'Home', keysym: 'Home' }],
+    lastShot: { width: 8, height: 8, scale: 1, at: 1 },
+  },
+};
+
 /**
  * Field-level coverage for the payload types nested INSIDE the message
  * variants. The variant maps above only ever proved that an envelope reaches a
@@ -1330,6 +1426,7 @@ export const NESTED_PAYLOAD_CORPUS = {
   TrayTargetEntry: TRAY_TARGET_ENTRY,
   TrayFsRequest: TRAY_FS_REQUEST,
   TrayFsResponse: TRAY_FS_RESPONSE,
+  ComputerDescriptor: COMPUTER_DESCRIPTOR,
 } as const;
 
 /** Field names of a nested payload entry carrying the given expectation. */

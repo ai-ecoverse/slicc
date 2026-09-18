@@ -21,10 +21,14 @@ const STYLE = `
 :host{position:fixed;inset:0;z-index:1000;display:none;}
 :host([open]){display:block;}
 .overlay{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+:host([drive]) .overlay{cursor:default;}
 .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);opacity:0;transition:opacity .35s cubic-bezier(.2,0,.13,1);}
 .overlay.visible .backdrop{opacity:1;}
 .overlay.closing .backdrop{opacity:0;}
 .image{position:absolute;border-radius:6px;box-shadow:0 20px 60px rgba(0,0,0,.4),0 8px 20px rgba(0,0,0,.3);max-width:90vw;max-height:90vh;object-fit:contain;transform-origin:center center;will-change:transform;transition:transform .35s cubic-bezier(.2,0,.13,1),border-radius .35s cubic-bezier(.2,0,.13,1);}
+:host([drive]) .image{cursor:crosshair;}
+.chip{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:2;pointer-events:none;font:600 12px/1.2 var(--ui,system-ui,sans-serif);letter-spacing:.02em;color:#fff;background:rgba(0,0,0,.55);border-radius:999px;padding:6px 12px;opacity:0;}
+:host([drive]) .chip{opacity:1;}
 `;
 const SHEET = sheet(STYLE);
 
@@ -46,18 +50,51 @@ let activePreview: SliccImagePreview | null = null;
  *
  * @attr open - reflects whether the lightbox is mounted/visible (read-only mirror; see `isOpen`)
  * @attr src - the image source currently shown (reflected)
+ * @attr drive - when set, clicks/scroll/keys on the image emit input instead of dismissing; Escape still closes. Middle and right buttons use `auxclick`.
  * @fires slicc-image-preview-open - composed, bubbling; fired once the image starts animating in
  * @fires slicc-image-preview-close - composed, bubbling; fired when dismissal begins
+ * @fires slicc-image-preview-input - composed, bubbling; drive-mode click, scroll, or key (Escape never fires)
  * @csspart overlay - the full-viewport overlay (scrim + cursor target)
  * @csspart backdrop - the blurred dark scrim
  * @csspart image - the zoomed image
+ * @csspart chip - the "driving" chip shown while `drive` is set
  */
+
+export type ImagePreviewInputDetail =
+  | {
+      kind: 'click';
+      button: 1 | 2 | 3;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+  | {
+      kind: 'scroll';
+      dx: number;
+      dy: number;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+  | {
+      kind: 'key';
+      key: string;
+      code: string;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+      metaKey: boolean;
+    };
 export class SliccImagePreview extends HTMLElement {
   readonly #root: ShadowRoot;
   #overlay: HTMLDivElement | null = null;
   #img: HTMLImageElement | null = null;
   #originEl: HTMLElement | null = null;
   #onKey: ((e: KeyboardEvent) => void) | null = null;
+  #onWheel: ((e: WheelEvent) => void) | null = null;
+  #onContext: ((e: Event) => void) | null = null;
   #dismissed = false;
   #dismissTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -85,6 +122,20 @@ export class SliccImagePreview extends HTMLElement {
   /** Whether the lightbox is currently mounted/visible (mirrors the `open` attr). */
   get isOpen(): boolean {
     return this.hasAttribute('open');
+  }
+
+  /**
+   * When true, pointer/keyboard on the image forward as
+   * `slicc-image-preview-input` instead of dismissing. Escape and backdrop
+   * clicks still close (release).
+   */
+  get drive(): boolean {
+    return this.hasAttribute('drive');
+  }
+
+  set drive(value: boolean) {
+    if (value) this.setAttribute('drive', '');
+    else this.removeAttribute('drive');
   }
 
   /**
@@ -131,6 +182,12 @@ export class SliccImagePreview extends HTMLElement {
     img.src = src;
     img.alt = 'Image preview';
     overlay.appendChild(img);
+
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.setAttribute('part', 'chip');
+    chip.textContent = 'driving';
+    overlay.appendChild(chip);
 
     this.#root.appendChild(overlay);
     this.#overlay = overlay;
@@ -189,10 +246,24 @@ export class SliccImagePreview extends HTMLElement {
     }
 
     this.#onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') this.close();
+      if (e.key === 'Escape') {
+        this.close();
+        return;
+      }
+      if (!this.drive) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.#emitKey(e);
     };
-    overlay.addEventListener('click', () => this.close());
-    document.addEventListener('keydown', this.#onKey);
+    overlay.addEventListener('click', (e) => this.#onOverlayClick(e));
+    overlay.addEventListener('auxclick', (e) => this.#onOverlayAuxClick(e));
+    this.#onWheel = (e) => this.#onImageWheel(e);
+    this.#onContext = (e) => {
+      if (this.drive) e.preventDefault();
+    };
+    img.addEventListener('wheel', this.#onWheel, { passive: false });
+    img.addEventListener('contextmenu', this.#onContext);
+    document.addEventListener('keydown', this.#onKey, true);
 
     this.dispatchEvent(
       new CustomEvent('slicc-image-preview-open', {
@@ -268,9 +339,13 @@ export class SliccImagePreview extends HTMLElement {
       this.#dismissTimer = null;
     }
     if (this.#onKey) {
-      document.removeEventListener('keydown', this.#onKey);
+      document.removeEventListener('keydown', this.#onKey, true);
       this.#onKey = null;
     }
+    if (this.#img && this.#onWheel) this.#img.removeEventListener('wheel', this.#onWheel);
+    if (this.#img && this.#onContext) this.#img.removeEventListener('contextmenu', this.#onContext);
+    this.#onWheel = null;
+    this.#onContext = null;
     if (this.#overlay) {
       this.#overlay.remove();
       this.#overlay = null;
@@ -280,6 +355,78 @@ export class SliccImagePreview extends HTMLElement {
     this.removeAttribute('open');
     this.removeAttribute('src');
     if (activePreview === this) activePreview = null;
+  }
+
+  #onOverlayClick(event: MouseEvent): void {
+    if (this.drive && event.target === this.#img) {
+      event.stopPropagation();
+      this.#emitClick(event);
+      return;
+    }
+    this.close();
+  }
+
+  #onOverlayAuxClick(event: MouseEvent): void {
+    if (!this.drive || event.target !== this.#img) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.#emitClick(event);
+  }
+
+  #onImageWheel(event: WheelEvent): void {
+    if (!this.drive) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const img = this.#img;
+    if (!img) return;
+    const dx = event.deltaX === 0 ? 0 : event.deltaX > 0 ? 1 : -1;
+    const dy = event.deltaY === 0 ? 0 : event.deltaY > 0 ? 1 : -1;
+    if (dx === 0 && dy === 0) return;
+    this.#emitInput({
+      kind: 'scroll',
+      dx,
+      dy,
+      x: event.offsetX,
+      y: event.offsetY,
+      width: img.clientWidth,
+      height: img.clientHeight,
+    });
+  }
+
+  #emitClick(event: MouseEvent): void {
+    const img = this.#img;
+    if (!img) return;
+    const button: 1 | 2 | 3 = event.button === 1 ? 2 : event.button === 2 ? 3 : 1;
+    this.#emitInput({
+      kind: 'click',
+      button,
+      x: event.offsetX,
+      y: event.offsetY,
+      width: img.clientWidth,
+      height: img.clientHeight,
+    });
+  }
+
+  #emitKey(event: KeyboardEvent): void {
+    this.#emitInput({
+      kind: 'key',
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+    });
+  }
+
+  #emitInput(detail: ImagePreviewInputDetail): void {
+    this.dispatchEvent(
+      new CustomEvent('slicc-image-preview-input', {
+        bubbles: true,
+        composed: true,
+        detail,
+      })
+    );
   }
 
   /**

@@ -96,6 +96,7 @@ describe('computer command', () => {
     expect(help.stdout).toContain('left_click');
     expect(help.stdout).toContain('add ssh');
     expect(help.stdout).toContain('add url');
+    expect(help.stdout).toContain('image2pipe');
   });
 
   it('answers click --help without dispatching input', async () => {
@@ -395,7 +396,7 @@ describe('computer command', () => {
     expect(added.stderr).toContain('needs a user gesture');
   });
 
-  it('record writes a clip for screen and refuses other kinds', async () => {
+  it('record writes a clip for screen and encodes worker-hosted kinds via ffmpeg', async () => {
     const webm = Uint8Array.of(1, 2, 3);
     class ScreenBackend extends FakeBackend {
       constructor() {
@@ -440,10 +441,30 @@ describe('computer command', () => {
 
     const other = new ComputerRegistry(null);
     other.register(new FakeBackend());
-    const otherCmd = createComputerCommand({ registry: other });
-    const refused = await otherCmd.execute(['record'], makeCtx().ctx);
-    expect(refused.exitCode).toBe(1);
-    expect(refused.stderr).toContain("not supported for 'jsh' yet (phase 4)");
+    const encoded = Uint8Array.of(9, 9, 9);
+    const otherCmd = createComputerCommand({
+      registry: other,
+      encodeRecordedFrames: async ({ frames, dest, ctx: encodeCtx, sourcePath }) => {
+        expect(sourcePath || frames.length > 0).toBeTruthy();
+        await encodeCtx.fs.writeFile(dest, encoded);
+        return { mime: 'video/webm' };
+      },
+    });
+    const polled = makeCtx();
+    const worker = await otherCmd.execute(['record', '-V', '0.1', 'jsh.webm'], polled.ctx);
+    expect(worker.exitCode).toBe(0);
+    expect(worker.stdout).toContain('recorded 100ms');
+    expect(polled.written.get('/jsh.webm')).toEqual(encoded);
+  });
+
+  it('record rejects --fps above 10', async () => {
+    const registry = new ComputerRegistry(null);
+    registry.register(new FakeBackend());
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const rec = await cmd.execute(['record', '--fps', '11', '-V', '1'], ctx);
+    expect(rec.exitCode).toBe(1);
+    expect(rec.stderr).toContain('--fps exceeds 10');
   });
 
   it('watch and --stop drive kernel start/stop control', async () => {
@@ -657,6 +678,144 @@ describe('computer parse', () => {
     const added = await cmd.execute(['add', 'ssh', 'iphone-1'], ctx);
     expect(added.exitCode).toBe(1);
     expect(added.stderr).toContain('iOS follower');
+  });
+
+  it('add ssh uses a computer-only follower without probing tray-exec', async () => {
+    const sshExec = vi.fn();
+    const capture = vi.fn(async () => ({
+      bytes: MINIMAL_JPEG,
+      mime: 'image/jpeg' as const,
+      width: 1,
+      height: 1,
+      nativeWidth: 1920,
+      nativeHeight: 1080,
+    }));
+    const input = vi.fn();
+    const unwatch = vi.fn();
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec,
+      nativeComputer: () => ({ capture, input, unwatch }),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '-n', 'desk'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(sshExec).not.toHaveBeenCalled();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(capture).toHaveBeenCalled();
+  });
+
+  it('add ssh --allow-input on a computer follower does not need cliclick', async () => {
+    const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
+    const input = vi.fn();
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => ({
+          bytes: MINIMAL_JPEG,
+          mime: 'image/jpeg' as const,
+          width: 1,
+          height: 1,
+          nativeWidth: 1,
+          nativeHeight: 1,
+        }),
+        input,
+        unwatch: vi.fn(),
+      }),
+      sudoBroker: { requestApproval },
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--allow-input'], ctx);
+    expect(added.exitCode).toBe(0);
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(0);
+    expect(input).toHaveBeenCalled();
+  });
+
+  it('surfaces Accessibility denial from native input through the shell verb', async () => {
+    const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
+    const input = vi.fn(async () => {
+      throw new Error(
+        'Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again.'
+      );
+    });
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => ({
+          bytes: MINIMAL_JPEG,
+          mime: 'image/jpeg' as const,
+          width: 1,
+          height: 1,
+          nativeWidth: 1,
+          nativeHeight: 1,
+        }),
+        input,
+        unwatch: vi.fn(),
+      }),
+      sudoBroker: { requestApproval },
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--allow-input'], ctx);
+    expect(added.exitCode).toBe(0);
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(1);
+    expect(typed.stderr).toContain('Accessibility is not allowed');
+    expect(typed.stderr).toContain('System Settings');
+  });
+
+  it('add ssh --sim refuses a computer-only follower', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => {
+          throw new Error('unused');
+        },
+        input: vi.fn(),
+        unwatch: vi.fn(),
+      }),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--sim', 'UDID'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('--sim needs an exec-capable');
   });
 
   it('add url probes GET /computer through the injected fetch', async () => {

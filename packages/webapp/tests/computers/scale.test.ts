@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatScaleLine,
+  mapDisplayedToNative,
   mapPoint,
   parseSizeSpec,
   roundTrip,
@@ -46,5 +47,20 @@ describe('computer scale', () => {
 
   it('round-trips native points through the shot scale', () => {
     expect(roundTrip(200, 100, 0.5)).toEqual({ x: 200, y: 100 });
+  });
+
+  it('maps displayed CSS pixels onto native computer pixels', () => {
+    const displayed = { width: 100, height: 50 };
+    const native = { width: 8, height: 8 };
+    expect(mapDisplayedToNative(50, 25, displayed, native)).toEqual({ x: 4, y: 4 });
+    expect(mapDisplayedToNative(-1, 999, displayed, native)).toEqual({ x: 0, y: 7 });
+    expect(mapDisplayedToNative(10, 10, displayed, { width: 0, height: 0 })).toEqual({
+      x: 10,
+      y: 10,
+    });
+    expect(mapDisplayedToNative(1, 1, { width: 0, height: 0 }, native)).toEqual({
+      x: 0,
+      y: 0,
+    });
   });
 });

@@ -44,7 +44,7 @@ Terminal rows attach the selected terminal to the current leader via `slicc <joi
 
 ## Widget Extension (Cones & Scoops)
 
-`SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`) shows cones and scoops in Notification Centre / on the desktop; views live in **`packages/swift-widgetkit`**, this package owns only the `@main` bundle and build wiring. Capture is `Models/WidgetTrayObserver.swift`: a **read-only tray follower** off `leaderJoinUrl`, **gated on the widget being installed** (`WidgetInstallationQuery`) so no WebRTC slot stays open for an unused tile. [details](../../docs/swift-launcher-details.md#widget-extension)
+`SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`) shows cones and scoops in Notification Centre / on the desktop; views live in **`packages/swift-widgetkit`**, this package owns only the `@main` bundle and build wiring. Capture is `Models/WidgetTrayObserver.swift`: a **read-only tray follower** off `leaderJoinUrl`, **gated on the widget being installed** (`WidgetInstallationQuery`) so no WebRTC slot stays open for an unused tile. Native desktop capture is a **separate** follower (`Models/ComputerTrayFollower.swift`, runtime `sliccstart-computer`) that **always dials** when a leader join URL is set, advertises `capabilities.computer`, and never `exec`. [details](../../docs/swift-launcher-details.md#widget-extension)
 
 ## Finder File Provider (leader VFS)
 

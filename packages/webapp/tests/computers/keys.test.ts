@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   chordToScancodes,
+  keysymFromKeyEvent,
   parseKeysym,
   toCdpKeyEvents,
   toTouchAction,
@@ -65,5 +66,20 @@ describe('computer keys', () => {
     expect(toYdotoolKey(parsed!)).toContain('29:1');
     expect(toYdotoolKey(parsed!)).toContain('111:');
     expect(toXdotoolKey(parseKeysym('Return')!)).toBe('Return');
+  });
+
+  it('rebuilds xdotool chords from browser key events and skips Escape', () => {
+    const none = { ctrlKey: false, altKey: false, shiftKey: false, metaKey: false };
+    expect(keysymFromKeyEvent({ ...none, key: 'a' })).toBe('a');
+    expect(keysymFromKeyEvent({ ...none, key: 'Enter' })).toBe('Return');
+    expect(keysymFromKeyEvent({ ...none, key: ' ' })).toBe('space');
+    expect(keysymFromKeyEvent({ ...none, key: 'ArrowUp' })).toBe('Up');
+    expect(keysymFromKeyEvent({ ...none, key: 'F5' })).toBe('F5');
+    expect(keysymFromKeyEvent({ ...none, ctrlKey: true, key: 'c' })).toBe('ctrl+c');
+    expect(keysymFromKeyEvent({ ...none, shiftKey: true, key: 'Tab' })).toBe('shift+Tab');
+    expect(keysymFromKeyEvent({ ...none, shiftKey: true, key: 'A' })).toBe('A');
+    expect(keysymFromKeyEvent({ ...none, key: 'Escape' })).toBeNull();
+    expect(keysymFromKeyEvent({ ...none, key: 'Shift' })).toBeNull();
+    expect(keysymFromKeyEvent({ ...none, key: 'Dead' })).toBeNull();
   });
 });

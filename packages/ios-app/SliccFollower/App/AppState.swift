@@ -106,6 +106,9 @@ class AppState: ObservableObject {
     // Multi-scoop awareness
     /// All scoops the leader has registered (cone first), updated via `scoops.list`.
     @Published var scoops: [ScoopSummary] = []
+    /// Leader `computers.list` roster. Viewer only — iOS never captures.
+    @Published var computers: [ComputerDescriptor] = []
+    let computerRosterStorage = ComputerRosterStorage()
     /// JID of the scoop this follower is currently viewing (independent from leader's selection).
     @Published var selectedScoopJid: String?
     /// JID of the leader's currently active scoop (informational; used to mark the active row).
@@ -373,6 +376,9 @@ class AppState: ObservableObject {
     /// tab overview grid. Published because the shell reacts too: full
     /// screen hides the dock rail and the navigation bar.
     @Published var browserViewingTabId: String?
+    /// Full-screen live computer; nil means the tab overview. Same shell
+    /// contract as `browserViewingTabId`.
+    @Published var viewingComputerId: String?
     /// A tab the LEADER just opened here. Published so the shell can bring it
     /// to the front: before this, `tab.open` created a WKWebView target the
     /// user never saw, so a teleported login sat waiting behind the chat with
@@ -493,6 +499,7 @@ class AppState: ObservableObject {
         fileMentionResolver.reset()
         TranscriptInlineCache.shared.clear()
         scoops = []
+        resetComputers()
         selectedScoopJid = nil
         leaderActiveScoopJid = nil
         leaderProtocolVersion = nil
@@ -942,6 +949,10 @@ class AppState: ObservableObject {
                     refreshModels()
                 }
             }
+
+        case .computersList, .computerFrame, .computerNativeCapture, .computerNativeUnwatch,
+            .computerNativeInput:
+            handleComputerLeaderMessage(msg)
 
         case .modelsList(let models):
             guard supportsModelControls else {

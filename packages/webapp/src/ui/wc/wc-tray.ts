@@ -199,6 +199,7 @@ function startFollowerRole(
 
 export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): TeleportFollowerInfo[] {
   const execIds = handle.sync.getExecCapableBootstrapIds();
+  const computerIds = handle.sync.getComputerCapableBootstrapIds();
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
   const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
@@ -216,6 +217,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
       peerState: follower.peerState,
       exec: execIds.has(follower.bootstrapId),
       cdp: cdpIds.has(follower.bootstrapId),
+      computer: computerIds.has(follower.bootstrapId),
       teleportEligible: teleportIds.has(follower.bootstrapId),
       motd: motds.get(follower.bootstrapId),
     };

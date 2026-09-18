@@ -25,9 +25,9 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "WidgetTra
 final class WidgetTrayObserver: NSObject {
     private let publisher: WidgetSnapshotPublisher
     private let installation: WidgetInstallationQuery
-    private let makeConnector: (URL) -> WidgetTrayConnecting
+    private let makeConnector: (URL) -> TrayFollowerConnecting
 
-    private var connector: WidgetTrayConnecting?
+    private var connector: TrayFollowerConnecting?
     /// Dedupe handle: a second `refresh()` must not start a parallel dial
     /// while the first is still asking WidgetKit whether a widget exists.
     /// Cleared by `stop()`, so a new leader is never blocked by a sync that
@@ -70,7 +70,7 @@ final class WidgetTrayObserver: NSObject {
     init(
         publisher: WidgetSnapshotPublisher? = nil,
         installation: WidgetInstallationQuery = .default,
-        makeConnector: @escaping (URL) -> WidgetTrayConnecting = { TrayFollowerConnector(joinUrl: $0) }
+        makeConnector: @escaping (URL) -> TrayFollowerConnecting = { TrayFollowerConnector(joinUrl: $0) }
     ) {
         // Not a default argument: the publisher is `@MainActor`, and a default
         // argument is evaluated in the caller's isolation, which the compiler
@@ -283,19 +283,6 @@ final class WidgetTrayObserver: NSObject {
         publish()
     }
 }
-
-// MARK: - Connector seam
-
-/// The slice of `TrayFollowerConnector` this observer uses, so its wiring is
-/// testable without a leader, a network or WebRTC.
-@MainActor
-protocol WidgetTrayConnecting: AnyObject {
-    var delegate: TrayFollowerConnectorDelegate? { get set }
-    func start() async throws
-    func stop()
-}
-
-extension TrayFollowerConnector: WidgetTrayConnecting {}
 
 extension WidgetTrayObserver: TrayFollowerConnectorDelegate {
     nonisolated func connector(

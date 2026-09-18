@@ -27,6 +27,20 @@ export const SSH_B64_CHUNK = 3 * 1024 * 1024;
 export type SshExecResult = { stdout: string; stderr: string; exitCode: number };
 export type SshExec = (command: string, opts?: { timeoutMs?: number }) => Promise<SshExecResult>;
 
+/** Injected native capture/input for a `capabilities.computer` follower. */
+export interface NativeComputerChannel {
+  capture(opts: { fps?: number; maxWidth?: number; watch?: boolean }): Promise<{
+    bytes: Uint8Array;
+    mime: 'image/jpeg';
+    width: number;
+    height: number;
+    nativeWidth: number;
+    nativeHeight: number;
+  }>;
+  unwatch(): void;
+  input(events: ComputerInputEvent[]): Promise<void> | void;
+}
+
 export type SshPlatform = 'darwin' | 'linux' | 'unknown';
 export type SshCaptureTool = 'screencapture' | 'grim' | 'scrot' | 'import' | 'simctl';
 export type { SshInputTool };
@@ -45,6 +59,7 @@ export interface SshComputerOptions {
   probe: SshProbe;
   inputAllowed: boolean;
   sim?: string;
+  native?: NativeComputerChannel;
 }
 
 export function sshComputerId(runtimeId: string, sim?: string): string {
@@ -167,8 +182,12 @@ export function sshCaptureScript(opts: {
   return `${capture} && base64 < ${png} | tr -d '\\n' > ${b64} && n=$(wc -c < ${b64} | tr -d ' ') && printf 'SLICC_SSH_B64 %s\\n' "$n"`;
 }
 
-export function sshCapabilities(probe: SshProbe, inputAllowed: boolean): ComputerCapabilities {
-  const canType = inputAllowed && probe.input !== 'none';
+export function sshCapabilities(
+  probe: SshProbe,
+  inputAllowed: boolean,
+  native = false
+): ComputerCapabilities {
+  const canType = inputAllowed && (probe.input !== 'none' || native);
   const mouse: ComputerCapabilities['mouse'] = !canType
     ? 'none'
     : probe.input === 'idb'
@@ -180,7 +199,7 @@ export function sshCapabilities(probe: SshProbe, inputAllowed: boolean): Compute
     frames: 'poll',
     keyboard: canType,
     mouse,
-    scroll: canType && probe.input !== 'cliclick',
+    scroll: canType && (native || probe.input !== 'cliclick'),
     exec: false,
     inputAllowed: canType,
   };
@@ -201,6 +220,7 @@ export class SshComputerBackend implements ComputerBackend {
   private readonly probe: SshProbe;
   private readonly inputAllowed: boolean;
   private readonly title: string;
+  private readonly native?: NativeComputerChannel;
 
   constructor(
     private readonly sshExec: SshExec,
@@ -209,13 +229,14 @@ export class SshComputerBackend implements ComputerBackend {
     this.runtimeId = opts.runtimeId;
     this.sim = opts.sim;
     this.probe = opts.probe;
-    this.inputAllowed = opts.inputAllowed && opts.probe.input !== 'none';
+    this.native = opts.native;
+    this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!opts.native);
     this.title = opts.title;
     this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim));
   }
 
   describe(): ComputerDescriptor {
-    const caps = sshCapabilities(this.probe, this.inputAllowed);
+    const caps = sshCapabilities(this.probe, this.inputAllowed, !!this.native);
     return {
       id: sshComputerId(this.runtimeId, this.sim),
       kind: 'ssh',
@@ -229,6 +250,24 @@ export class SshComputerBackend implements ComputerBackend {
   }
 
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
+    if (this.native) {
+      const shot = await this.native.capture({
+        fps: 2,
+        maxWidth: opts.maxWidth,
+        watch: false,
+      });
+      this.seq += 1;
+      let frame: ComputerFrame = {
+        seq: this.seq,
+        mime: shot.mime,
+        width: shot.width,
+        height: shot.height,
+        bytes: shot.bytes,
+      };
+      if (opts.maxWidth) frame = await fitComputerFrame(frame, opts.maxWidth);
+      this.size = { width: shot.nativeWidth, height: shot.nativeHeight };
+      return frame;
+    }
     if (!this.probe.capture) throw new Error('no screenshot tool on the follower');
     const script = sshCaptureScript({
       capture: this.probe.capture,
@@ -276,6 +315,10 @@ export class SshComputerBackend implements ComputerBackend {
   async input(events: ComputerInputEvent[]): Promise<void> {
     if (!this.inputAllowed) throw new Error('input is not allowed');
     const filled = applyPointerToEvents(this.pointer, events);
+    if (this.native) {
+      await this.native.input(filled);
+      return;
+    }
     for (const event of filled) {
       const commands = sshInputCommands(event, this.probe.input, this.sim);
       for (const command of commands) {
@@ -288,6 +331,8 @@ export class SshComputerBackend implements ComputerBackend {
   }
 
   async close(): Promise<void> {
+    this.native?.unwatch();
+    if (!this.probe.capture) return;
     try {
       await this.sshExec(
         `rm -f ${shQuote(`${this.tmpBase}.png`)} ${shQuote(`${this.tmpBase}.b64`)}`,
