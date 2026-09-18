@@ -164,6 +164,48 @@ final class ComputerTrayFollowerTests: XCTestCase {
             return obj["error"] as? String
         }
         XCTAssertEqual(errors, [ComputerPermissionError.accessibilityMessage])
+        XCTAssertTrue(
+            ComputerPermissionError.accessibilityMessage.contains("System Settings"))
+    }
+
+    func testUnknownKeysymFailsTheAckAndPostsNothing() async throws {
+        let sink = RecordingEventSink()
+        let (follower, _, _) = makeFollower(sink: sink)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-bad",
+                    events: [
+                        .click(button: 1, count: 1, holdMs: nil, x: 10, y: 20),
+                        .key(keysym: "Foo", down: nil),
+                    ])))
+        await follower._testing_settle()
+        XCTAssertTrue(sink.actions.isEmpty)
+        let results = sent.compactMap { data -> (String, String?)? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.input.result",
+                let requestId = obj["requestId"] as? String
+            else { return nil }
+            return (requestId, obj["error"] as? String)
+        }
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].0, "in-bad")
+        XCTAssertEqual(results[0].1, "unknown keysym 'Foo' for macOS")
+        let errors = sent.compactMap { data -> String? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.error"
+            else { return nil }
+            return obj["error"] as? String
+        }
+        XCTAssertEqual(errors, ["unknown keysym 'Foo' for macOS"])
     }
 
     func testGrantedInputUsesNativeCoordinatesWithoutRescaling() async throws {

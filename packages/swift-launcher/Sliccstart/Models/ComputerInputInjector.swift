@@ -84,6 +84,19 @@ enum ComputerInputScaler {
     }
 }
 
+enum ComputerInputError: Error, Equatable, CustomStringConvertible {
+    case unknownKeysym(String)
+
+    var message: String {
+        switch self {
+        case .unknownKeysym(let keysym):
+            return "unknown keysym '\(keysym)' for macOS"
+        }
+    }
+
+    var description: String { message }
+}
+
 struct ComputerInputInjector {
     var sink: ComputerEventSink
     var encodedSize: CGSize
@@ -101,13 +114,24 @@ struct ComputerInputInjector {
         self.delay = delay
     }
 
-    mutating func apply(_ events: [ComputerInputEvent]) async {
+    mutating func apply(_ events: [ComputerInputEvent]) async throws {
+        try Self.validate(events)
         for event in events {
-            await apply(event)
+            await perform(event)
         }
     }
 
-    mutating func apply(_ event: ComputerInputEvent) async {
+    static func validate(_ events: [ComputerInputEvent]) throws {
+        for event in events {
+            if case .key(let keysym, _) = event {
+                guard ComputerKeysyms.parse(keysym) != nil else {
+                    throw ComputerInputError.unknownKeysym(keysym)
+                }
+            }
+        }
+    }
+
+    private mutating func perform(_ event: ComputerInputEvent) async {
         switch event {
         case .mousemove(let x, let y, let relative):
             if relative == true {

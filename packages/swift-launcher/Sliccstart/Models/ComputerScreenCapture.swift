@@ -41,6 +41,9 @@ enum ComputerCaptureFailure {
         if let capture = error as? ComputerCaptureError {
             return capture.message
         }
+        if let input = error as? ComputerInputError {
+            return input.message
+        }
         return String(describing: error)
     }
 }

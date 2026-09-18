@@ -31,6 +31,8 @@ final class ComputerKeysymsTests: XCTestCase {
             let titled = name.prefix(1).uppercased() + name.dropFirst()
             XCTAssertEqual(ComputerKeysyms.parse(String(titled))?.keyCode, code, String(titled))
         }
+        XCTAssertEqual(ComputerKeysyms.parse("RETURN")?.keyCode, 0x24)
+        XCTAssertEqual(ComputerKeysyms.parse("F5")?.keyCode, 0x60)
     }
 
     func testLettersAndDigits() {
@@ -62,25 +64,15 @@ final class ComputerKeysymsTests: XCTestCase {
         }
     }
 
-    func testUppercaseNativePassthrough() {
-        XCTAssertTrue(ComputerKeysyms.isNativeToken("KEYCODE_BACK"))
-        XCTAssertTrue(ComputerKeysyms.isNativeToken("KEYCODE_HOME"))
-        XCTAssertFalse(ComputerKeysyms.isNativeToken("A"))
-        XCTAssertFalse(ComputerKeysyms.isNativeToken("keycode_back"))
-        XCTAssertFalse(ComputerKeysyms.isNativeToken("Return"))
-        let press = ComputerKeysyms.parse("KEYCODE_BACK")
-        XCTAssertEqual(press?.unicode, "KEYCODE_BACK")
-        XCTAssertNil(press?.keyCode)
-        let chord = ComputerKeysyms.parse("ctrl+KEYCODE_ENTER")
-        XCTAssertEqual(chord?.unicode, "KEYCODE_ENTER")
-        XCTAssertEqual(chord?.ctrl, true)
-    }
-
-    func testUnknownTokenIsNil() {
+    func testUnknownTokensAreNil() {
         XCTAssertNil(ComputerKeysyms.parse("not-a-key"))
         XCTAssertNil(ComputerKeysyms.parse(""))
         XCTAssertNil(ComputerKeysyms.parse("+"))
         XCTAssertNil(ComputerKeysyms.parse("foo+a"))
+        XCTAssertNil(ComputerKeysyms.parse("KEYCODE_BACK"))
+        XCTAssertNil(ComputerKeysyms.parse("RETRUN"))
+        XCTAssertNil(ComputerKeysyms.parse("cmd+QUIT"))
+        XCTAssertNil(ComputerKeysyms.parse("ctrl+KEYCODE_ENTER"))
     }
 }
 
@@ -98,9 +90,9 @@ final class ComputerInputInjectorTests: XCTestCase {
         )
     }
 
-    func testClickScalesFromEncodedToNative() async {
+    func testClickScalesFromEncodedToNative() async throws {
         var (injector, sink) = injector()
-        await injector.apply([.click(button: 1, count: 1, holdMs: nil, x: 100, y: 50)])
+        try await injector.apply([.click(button: 1, count: 1, holdMs: nil, x: 100, y: 50)])
         XCTAssertEqual(
             sink.actions,
             [
@@ -109,11 +101,11 @@ final class ComputerInputInjectorTests: XCTestCase {
             ])
     }
 
-    func testNativePixelPathDoesNotRescaleWhenSizesMatch() async {
+    func testNativePixelPathDoesNotRescaleWhenSizesMatch() async throws {
         var (injector, sink) = injector(
             encoded: CGSize(width: 1920, height: 1080),
             native: CGSize(width: 1920, height: 1080))
-        await injector.apply([.mousemove(x: 1200, y: 400, relative: false)])
+        try await injector.apply([.mousemove(x: 1200, y: 400, relative: false)])
         XCTAssertEqual(sink.actions, [.mouseMove(CGPoint(x: 1200, y: 400))])
     }
 
@@ -123,10 +115,10 @@ final class ComputerInputInjectorTests: XCTestCase {
         XCTAssertEqual(point, CGPoint(x: 10, y: 20))
     }
 
-    func testMoveButtonClickDragScrollKeyTextWait() async {
+    func testMoveButtonClickDragScrollKeyTextWait() async throws {
         var slept: [Double] = []
         var (injector, sink) = injector(delay: { slept.append($0) })
-        await injector.apply([
+        try await injector.apply([
             .mousemove(x: 10, y: 5, relative: false),
             .mousemove(x: 2, y: 3, relative: true),
             .button(button: 1, down: true, x: 20, y: 10),
@@ -140,8 +132,6 @@ final class ComputerInputInjectorTests: XCTestCase {
             .key(keysym: "a", down: true),
             .key(keysym: "a", down: false),
             .key(keysym: "ctrl+shift+alt+cmd+c", down: true),
-            .key(keysym: "KEYCODE_BACK", down: false),
-            .key(keysym: "not-a-key", down: nil),
             .text(text: "hi"),
             .wait(ms: 40),
         ])
@@ -187,10 +177,26 @@ final class ComputerInputInjectorTests: XCTestCase {
         XCTAssertTrue(chordFlags.contains(.maskShift))
         XCTAssertTrue(chordFlags.contains(.maskAlternate))
         XCTAssertTrue(chordFlags.contains(.maskCommand))
-        XCTAssertEqual(sink.actions[23], .unicode("KEYCODE_BACK", flags: []))
-        XCTAssertEqual(sink.actions[24], .unicode("hi", flags: []))
-        XCTAssertEqual(sink.actions[25], .wait(milliseconds: 40))
-        XCTAssertEqual(sink.actions.count, 26)
+        XCTAssertEqual(sink.actions[23], .unicode("hi", flags: []))
+        XCTAssertEqual(sink.actions[24], .wait(milliseconds: 40))
+        XCTAssertEqual(sink.actions.count, 25)
+    }
+
+    func testUnknownKeyThrowsAndPostsNothing() async {
+        var (injector, sink) = injector()
+        do {
+            try await injector.apply([
+                .click(button: 1, count: 1, holdMs: nil, x: 10, y: 10),
+                .key(keysym: "Foo", down: nil),
+            ])
+            XCTFail("expected unknown keysym to throw")
+        } catch let error as ComputerInputError {
+            XCTAssertEqual(error, .unknownKeysym("Foo"))
+            XCTAssertEqual(error.message, "unknown keysym 'Foo' for macOS")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+        XCTAssertTrue(sink.actions.isEmpty)
     }
 
     func testDelayZeroReturnsImmediately() async {
@@ -244,6 +250,9 @@ final class ComputerCaptureLayoutTests: XCTestCase {
             ComputerCaptureFailure.message(for: ComputerCaptureError.encodeFailed),
             "failed to encode a JPEG frame")
         XCTAssertEqual(ComputerCaptureFailure.message(for: StubCaptureError.boom), "boom")
+        XCTAssertEqual(
+            ComputerCaptureFailure.message(for: ComputerInputError.unknownKeysym("Foo")),
+            "unknown keysym 'Foo' for macOS")
     }
 }
 

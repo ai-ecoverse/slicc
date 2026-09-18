@@ -216,19 +216,18 @@ final class ComputerTrayFollower: NSObject {
     }
 
     private func handleInput(requestId: String, events: [ComputerInputEvent]) async {
+        // Wire events are already native pixels (leader/lightbox map once).
         do {
             try permissions.ensureAccessibility()
+            var injector = ComputerInputInjector(
+                sink: eventSink, encodedSize: nativeSize, nativeSize: nativeSize)
+            try await injector.apply(events)
+            _ = send(.computerNativeInputResult(requestId: requestId, error: nil))
         } catch {
             let text = ComputerCaptureFailure.message(for: error)
             _ = send(.computerNativeError(requestId: requestId, error: text))
             _ = send(.computerNativeInputResult(requestId: requestId, error: text))
-            return
         }
-        // Wire events are already native pixels (leader/lightbox map once).
-        var injector = ComputerInputInjector(
-            sink: eventSink, encodedSize: nativeSize, nativeSize: nativeSize)
-        await injector.apply(events)
-        _ = send(.computerNativeInputResult(requestId: requestId, error: nil))
     }
 }
 

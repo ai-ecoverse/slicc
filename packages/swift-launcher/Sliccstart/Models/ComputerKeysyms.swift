@@ -51,22 +51,7 @@ enum ComputerKeysyms {
             return ComputerKeyPress(
                 keyCode: nil, unicode: last, shift: shift, ctrl: ctrl, alt: alt, meta: meta)
         }
-        if isNativeToken(rawLast) {
-            return ComputerKeyPress(
-                keyCode: nil, unicode: rawLast, shift: shift, ctrl: ctrl, alt: alt, meta: meta)
-        }
         return nil
-    }
-
-    /// `KEYCODE_BACK`-shaped tokens pass through for Android / cliclick.
-    static func isNativeToken(_ token: String) -> Bool {
-        let scalars = token.unicodeScalars
-        guard scalars.count >= 2, let first = scalars.first, ("A"..."Z").contains(first) else {
-            return false
-        }
-        return scalars.allSatisfy {
-            ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_"
-        }
     }
 
     // ANSI / ISO virtual key codes — same numbers HIToolbox publishes.
