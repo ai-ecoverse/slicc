@@ -58,6 +58,12 @@ jobs:
           npx prettier --write .
 
       - name: Commit the stripped tree onto no-comment
+        # HUSKY=0: this is a derived-branch push, not a feature PR. The
+        # pre-push linear-history + lint gates compare against origin/main and
+        # reject no-comment's own ancestry (which includes an old merge). Same
+        # escape as claude-md-compactor.yml.
+        env:
+          HUSKY: '0'
         run: |
           set -euo pipefail
           git add -A
