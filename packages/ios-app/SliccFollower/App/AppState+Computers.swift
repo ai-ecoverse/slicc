@@ -93,6 +93,18 @@ extension AppState {
             computerRosterStorage.watchCounts.removeValue(forKey: id)
             sendComputerToLeader(.computerUnwatch(id: id))
         }
+        replayComputerWatches()
+    }
+
+    /// The leader drops every watch when this follower disconnects. Transient
+    /// reconnects keep `watchCounts` (cards + full-screen viewer), so the
+    /// refreshed roster must re-send `computer.watch`.
+    private func replayComputerWatches() {
+        for id in computerRosterStorage.watchCounts.keys {
+            sendComputerToLeader(
+                .computerWatch(
+                    id: id, fps: Self.computerTrayFps, maxWidth: Self.computerTrayMaxWidth))
+        }
     }
 
     private func applyComputerFrame(

@@ -114,6 +114,45 @@ final class AppStateComputersTests: XCTestCase {
         XCTAssertTrue(state.computers.isEmpty)
     }
 
+    func testReconnectReplaysRefcountedWatchesForCardsAndViewer() throws {
+        let state = AppState()
+        state.autoReconnect = false
+        state.connectionState = .connected
+        try send(
+            .computersList(computers: [
+                descriptor(), descriptor(id: "ssh:desk", title: "Desk"),
+            ]), to: state)
+        // Visible card + full-screen viewer share a refcount; a second card
+        // is its own watch.
+        state.startWatchingComputer("jsh:clock")
+        state.startWatchingComputer("jsh:clock")
+        state.startWatchingComputer("ssh:desk")
+        state.viewingComputerId = "jsh:clock"
+        let initialWatches = state.debugComputerOutgoing.compactMap { message -> String? in
+            if case .computerWatch(let id, _, _) = message { return id }
+            return nil
+        }
+        XCTAssertEqual(Set(initialWatches), ["jsh:clock", "ssh:desk"])
+        XCTAssertEqual(initialWatches.count, 2)
+
+        state.debugComputerOutgoing.removeAll()
+        state.handleDisconnect(reason: "transient")
+        XCTAssertEqual(state.computerRosterStorage.watchCounts["jsh:clock"], 2)
+        XCTAssertEqual(state.computerRosterStorage.watchCounts["ssh:desk"], 1)
+        XCTAssertEqual(state.computers.map(\.id), ["jsh:clock", "ssh:desk"])
+
+        try send(
+            .computersList(computers: [
+                descriptor(), descriptor(id: "ssh:desk", title: "Desk"),
+            ]), to: state)
+        let replayed = state.debugComputerOutgoing.compactMap { message -> String? in
+            if case .computerWatch(let id, _, _) = message { return id }
+            return nil
+        }
+        XCTAssertEqual(Set(replayed), ["jsh:clock", "ssh:desk"])
+        XCTAssertEqual(replayed.count, 2)
+    }
+
     func testSoftKeySendsComputerInput() {
         let state = AppState()
         state.sendComputerSoftKey(id: "jsh:clock", keysym: "Home")
