@@ -144,7 +144,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
                 .computerNativeInput(
                     requestId: "in-1",
                     events: [.click(button: 1, count: 1, holdMs: nil, x: 10, y: 20)])))
-        await settle()
+        await follower._testing_settle()
         XCTAssertTrue(sink.actions.isEmpty)
         let results = sent.compactMap { data -> (String, String?)? in
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -165,30 +165,30 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(errors, [ComputerPermissionError.accessibilityMessage])
     }
 
-    func testGrantedInputScalesClicksToNative() async throws {
+    func testGrantedInputUsesNativeCoordinatesWithoutRescaling() async throws {
         let sink = RecordingEventSink()
         let capturer = StubCapturer(
-            image: ComputerTestImages.solid(width: 400, height: 200),
-            native: CGSize(width: 800, height: 400))
+            image: ComputerTestImages.solid(width: 480, height: 270),
+            native: CGSize(width: 1920, height: 1080))
         let (follower, _, _) = makeFollower(capturer: capturer, sink: sink)
         follower.connector(connectorStandIn(), didConnect: { _ in true })
-        await settle()
+        await follower._testing_settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 400, watch: false)))
-        await settle()
+                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 480, watch: false)))
+        await follower._testing_settle()
         follower.route(
             try encode(
                 .computerNativeInput(
                     requestId: "in-2",
-                    events: [.click(button: 1, count: 1, holdMs: nil, x: 100, y: 50)])))
-        await settle()
+                    events: [.click(button: 1, count: 1, holdMs: nil, x: 1200, y: 400)])))
+        await follower._testing_settle()
 
         XCTAssertEqual(
             sink.actions,
             [
-                .mouseButton(.left, down: true, at: CGPoint(x: 200, y: 100)),
-                .mouseButton(.left, down: false, at: CGPoint(x: 200, y: 100)),
+                .mouseButton(.left, down: true, at: CGPoint(x: 1200, y: 400)),
+                .mouseButton(.left, down: false, at: CGPoint(x: 1200, y: 400)),
             ])
     }
 
@@ -215,7 +215,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
                 .computerNativeInput(
                     requestId: "in-ok",
                     events: [.click(button: 1, count: 1, holdMs: nil, x: 10, y: 20)])))
-        await settle()
+        await follower._testing_settle()
         let results = sent.compactMap { data -> (String, String?)? in
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 obj["type"] as? String == "computer.native.input.result",
@@ -256,6 +256,66 @@ final class ComputerTrayFollowerTests: XCTestCase {
         follower.leaderChanged(joinUrl: nil)
         await follower._testing_settle()
         XCTAssertEqual(connector.stopped, 1)
+    }
+
+    func testGivingUpClearsTheConnectorSoRefreshCanRedial() async {
+        var created = 0
+        let connectors = [
+            RecordingConnector(), RecordingConnector(), RecordingConnector(),
+        ]
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in
+                let connector = connectors[min(created, connectors.count - 1)]
+                created += 1
+                return connector
+            },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink())
+        follower.leaderChanged(joinUrl: "https://tray.test/join/x")
+        await follower._testing_settle()
+        XCTAssertEqual(created, 1)
+        XCTAssertEqual(connectors[0].started, 1)
+
+        follower.connector(connectorStandIn(), didGiveUp: "reconnect exhausted")
+        await settle()
+        follower.refresh()
+        await follower._testing_settle()
+        XCTAssertEqual(created, 2, "give-up must drop the retained connector so refresh can attach")
+        XCTAssertEqual(connectors[1].started, 1)
+    }
+
+    func testWaitYieldsTheMainActorSoPingIsAnsweredBeforeAck() async throws {
+        let (follower, _, _) = makeFollower()
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await follower._testing_settle()
+        sent.removeAll()
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-wait", events: [.wait(ms: 80)])))
+        await Task.yield()
+        await Task.yield()
+        follower.route(try encode(.ping))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let typesBeforeAck = sent.compactMap { data -> String? in
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+        }
+        XCTAssertTrue(
+            typesBeforeAck.contains("pong"),
+            "a wait must not Thread.sleep on MainActor and starve ping")
+        XCTAssertFalse(typesBeforeAck.contains("computer.native.input.result"))
+        await follower._testing_settle()
+        let types = sent.compactMap { data -> String? in
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+        }
+        XCTAssertTrue(types.contains("computer.native.input.result"))
     }
 
     func testPingAnswersPong() async throws {
@@ -400,13 +460,14 @@ final class ComputerNativeFramingTests: XCTestCase {
 }
 
 final class ComputerInputInjectorTests: XCTestCase {
-    func testClickScalesFromEncodedToNative() {
+    func testClickScalesFromEncodedToNative() async {
         let sink = RecordingSink()
         var injector = ComputerInputInjector(
             sink: sink,
             encodedSize: CGSize(width: 400, height: 200),
-            nativeSize: CGSize(width: 800, height: 400))
-        injector.apply([.click(button: 1, count: 1, holdMs: nil, x: 100, y: 50)])
+            nativeSize: CGSize(width: 800, height: 400),
+            delay: { _ in })
+        await injector.apply([.click(button: 1, count: 1, holdMs: nil, x: 100, y: 50)])
         XCTAssertEqual(
             sink.actions,
             [
@@ -415,12 +476,34 @@ final class ComputerInputInjectorTests: XCTestCase {
             ])
     }
 
-    func testKeyChordPostsDownAndUp() {
+    func testWaitUsesInjectedDelayInsteadOfBlocking() async {
+        let sink = RecordingSink()
+        var slept: [Double] = []
+        var injector = ComputerInputInjector(
+            sink: sink, encodedSize: CGSize(width: 1, height: 1),
+            nativeSize: CGSize(width: 1, height: 1),
+            delay: { ms in slept.append(ms) })
+        await injector.apply([
+            .click(button: 1, count: 1, holdMs: 25, x: 1, y: 1),
+            .wait(ms: 40),
+        ])
+        XCTAssertEqual(slept, [25, 40])
+        XCTAssertEqual(
+            sink.actions,
+            [
+                .mouseButton(.left, down: true, at: CGPoint(x: 1, y: 1)),
+                .wait(milliseconds: 25),
+                .mouseButton(.left, down: false, at: CGPoint(x: 1, y: 1)),
+                .wait(milliseconds: 40),
+            ])
+    }
+
+    func testKeyChordPostsDownAndUp() async {
         let sink = RecordingSink()
         var injector = ComputerInputInjector(
             sink: sink, encodedSize: CGSize(width: 1, height: 1),
-            nativeSize: CGSize(width: 1, height: 1))
-        injector.apply([.key(keysym: "Return", down: nil)])
+            nativeSize: CGSize(width: 1, height: 1), delay: { _ in })
+        await injector.apply([.key(keysym: "Return", down: nil)])
         XCTAssertEqual(sink.actions.count, 2)
         guard case .key(let downCode, true, _) = sink.actions[0],
             case .key(let upCode, false, _) = sink.actions[1]
@@ -431,12 +514,12 @@ final class ComputerInputInjectorTests: XCTestCase {
         XCTAssertEqual(upCode, 0x24)
     }
 
-    func testRelativeMoveAccumulates() {
+    func testRelativeMoveAccumulates() async {
         let sink = RecordingSink()
         var injector = ComputerInputInjector(
             sink: sink, encodedSize: CGSize(width: 1, height: 1),
-            nativeSize: CGSize(width: 1, height: 1))
-        injector.apply([
+            nativeSize: CGSize(width: 1, height: 1), delay: { _ in })
+        await injector.apply([
             .mousemove(x: 10, y: 5, relative: false),
             .mousemove(x: 2, y: 3, relative: true),
         ])

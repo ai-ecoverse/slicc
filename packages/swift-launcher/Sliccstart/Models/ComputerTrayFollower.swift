@@ -30,9 +30,9 @@ final class ComputerTrayFollower: NSObject {
     private var joinUrl: URL?
     private var seq = 0
     private var currentRequestId: String?
-    private var encodedSize = CGSize(width: 1, height: 1)
     private var nativeSize = CGSize(width: 1, height: 1)
     private var lastMaxWidth: Int?
+    private var lastInput: Task<Void, Never>?
 
     init(
         makeConnector: @escaping (URL) -> TrayFollowerConnecting = {
@@ -70,6 +70,7 @@ final class ComputerTrayFollower: NSObject {
 
     func _testing_settle() async {
         await lastSync?.value
+        await lastInput?.value
     }
 
     func stop() {
@@ -138,7 +139,7 @@ final class ComputerTrayFollower: NSObject {
             capturer = nil
             currentRequestId = nil
         case .computerNativeInput(let requestId, let events):
-            handleInput(requestId: requestId, events: events)
+            lastInput = Task { await handleInput(requestId: requestId, events: events) }
         default:
             break
         }
@@ -192,7 +193,6 @@ final class ComputerTrayFollower: NSObject {
             return
         }
         seq += 1
-        encodedSize = CGSize(width: encoded.width, height: encoded.height)
         let nativeW = native.width > 0 ? native.width : CGFloat(encoded.nativeWidth)
         let nativeH = native.height > 0 ? native.height : CGFloat(encoded.nativeHeight)
         nativeSize = CGSize(width: nativeW, height: nativeH)
@@ -210,7 +210,7 @@ final class ComputerTrayFollower: NSObject {
         }
     }
 
-    private func handleInput(requestId: String, events: [ComputerInputEvent]) {
+    private func handleInput(requestId: String, events: [ComputerInputEvent]) async {
         do {
             try permissions.ensureAccessibility()
         } catch let error as ComputerPermissionError {
@@ -223,9 +223,10 @@ final class ComputerTrayFollower: NSObject {
             _ = send(.computerNativeInputResult(requestId: requestId, error: text))
             return
         }
+        // Wire events are already native pixels (leader/lightbox map once).
         var injector = ComputerInputInjector(
-            sink: eventSink, encodedSize: encodedSize, nativeSize: nativeSize)
-        injector.apply(events)
+            sink: eventSink, encodedSize: nativeSize, nativeSize: nativeSize)
+        await injector.apply(events)
         _ = send(.computerNativeInputResult(requestId: requestId, error: nil))
     }
 }
@@ -258,7 +259,9 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
     nonisolated func connector(_ connector: TrayFollowerConnector, isReconnecting attempt: Int) {}
 
     nonisolated func connector(_ connector: TrayFollowerConnector, didGiveUp lastError: String) {
-        connectorDidDisconnect(connector, reason: lastError)
+        Task { @MainActor [weak self] in
+            self?.teardownConnection()
+        }
     }
 
     nonisolated func connector(

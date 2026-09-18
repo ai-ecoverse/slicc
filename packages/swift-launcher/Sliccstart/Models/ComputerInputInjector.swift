@@ -58,11 +58,17 @@ struct LiveCGEventSink: ComputerEventSink {
             let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
             up?.flags = flags
             up?.post(tap: .cghidEventTap)
-        case .wait(let ms):
-            if ms > 0 {
-                Thread.sleep(forTimeInterval: ms / 1000)
-            }
+        case .wait:
+            break
         }
+    }
+}
+
+enum ComputerInputDelay {
+    static func sleep(_ milliseconds: Double) async {
+        guard milliseconds > 0 else { return }
+        let ns = UInt64((milliseconds * 1_000_000).rounded())
+        try? await Task.sleep(nanoseconds: ns)
     }
 }
 
@@ -82,21 +88,26 @@ struct ComputerInputInjector {
     var sink: ComputerEventSink
     var encodedSize: CGSize
     var nativeSize: CGSize
+    var delay: (Double) async -> Void
     private var cursor = CGPoint.zero
 
-    init(sink: ComputerEventSink, encodedSize: CGSize, nativeSize: CGSize) {
+    init(
+        sink: ComputerEventSink, encodedSize: CGSize, nativeSize: CGSize,
+        delay: @escaping (Double) async -> Void = ComputerInputDelay.sleep
+    ) {
         self.sink = sink
         self.encodedSize = encodedSize
         self.nativeSize = nativeSize
+        self.delay = delay
     }
 
-    mutating func apply(_ events: [ComputerInputEvent]) {
+    mutating func apply(_ events: [ComputerInputEvent]) async {
         for event in events {
-            apply(event)
+            await apply(event)
         }
     }
 
-    mutating func apply(_ event: ComputerInputEvent) {
+    mutating func apply(_ event: ComputerInputEvent) async {
         switch event {
         case .mousemove(let x, let y, let relative):
             if relative == true {
@@ -115,7 +126,10 @@ struct ComputerInputInjector {
             let hold = holdMs ?? 0
             for _ in 0..<max(1, count) {
                 sink.post(.mouseButton(cg, down: true, at: cursor))
-                if hold > 0 { sink.post(.wait(milliseconds: hold)) }
+                if hold > 0 {
+                    sink.post(.wait(milliseconds: hold))
+                    await delay(hold)
+                }
                 sink.post(.mouseButton(cg, down: false, at: cursor))
             }
         case .scroll(let dx, let dy, let x, let y):
@@ -146,6 +160,7 @@ struct ComputerInputInjector {
             sink.post(.unicode(text, flags: []))
         case .wait(let ms):
             sink.post(.wait(milliseconds: ms))
+            await delay(ms)
         }
     }
 
