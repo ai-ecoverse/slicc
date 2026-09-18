@@ -1382,30 +1382,97 @@ export function sendComputerNativeFrame(
   return allSent;
 }
 
+export type ComputerNativeFrameBuffer = {
+  chunks: string[];
+  received: number;
+  totalChunks: number;
+  bytes: number;
+};
+
+function nativeFrameBufferBytes(buffers: Map<string, ComputerNativeFrameBuffer>): number {
+  let total = 0;
+  for (const buffer of buffers.values()) total += buffer.bytes;
+  return total;
+}
+
+function evictNativeFrameOverflow(
+  buffers: Map<string, ComputerNativeFrameBuffer>,
+  extraBytes: number
+): void {
+  while (
+    buffers.size > 0 &&
+    (buffers.size >= TRAY_MAX_PENDING_REASSEMBLIES ||
+      nativeFrameBufferBytes(buffers) + extraBytes > TRAY_MAX_REASSEMBLY_BYTES)
+  ) {
+    const oldest = buffers.keys().next();
+    if (oldest.done) return;
+    buffers.delete(oldest.value);
+  }
+}
+
 /**
  * Reassemble chunked computer.native.frame payloads. Returns the message with
  * `data` filled in when all chunks have arrived, or null while waiting.
+ * Peer-controlled `totalChunks` is capped the same way as transport framing;
+ * incomplete sequences are FIFO-evicted against pending/byte limits.
  */
 export function reassembleComputerNativeFrame(
-  buffers: Map<string, { chunks: string[]; received: number; totalChunks: number }>,
+  buffers: Map<string, ComputerNativeFrameBuffer>,
   message: ComputerNativeFrameMessage
 ): ComputerNativeFrameMessage | null {
   if (message.chunkIndex === undefined || message.totalChunks === undefined) {
     return message;
   }
+  const { totalChunks, chunkIndex, chunkData } = message;
+  if (
+    !Number.isInteger(totalChunks) ||
+    totalChunks <= 0 ||
+    totalChunks > TRAY_MAX_CHUNK_COUNT ||
+    !Number.isInteger(chunkIndex) ||
+    chunkIndex < 0 ||
+    chunkIndex >= totalChunks
+  ) {
+    return null;
+  }
   const key = `${message.requestId}:${message.seq}`;
   let buffer = buffers.get(key);
+  if (buffer && buffer.totalChunks !== totalChunks) {
+    buffers.delete(key);
+    buffer = undefined;
+  }
+  const extra = chunkData?.length ?? 0;
   if (!buffer) {
+    evictNativeFrameOverflow(buffers, extra);
+    if (
+      buffers.size >= TRAY_MAX_PENDING_REASSEMBLIES ||
+      nativeFrameBufferBytes(buffers) + extra > TRAY_MAX_REASSEMBLY_BYTES
+    ) {
+      return null;
+    }
     buffer = {
-      chunks: new Array(message.totalChunks),
+      chunks: new Array(totalChunks),
       received: 0,
-      totalChunks: message.totalChunks,
+      totalChunks,
+      bytes: 0,
     };
     buffers.set(key, buffer);
   }
-  if (!buffer.chunks[message.chunkIndex] && message.chunkData !== undefined) {
-    buffer.chunks[message.chunkIndex] = message.chunkData;
+  if (!buffer.chunks[chunkIndex] && chunkData !== undefined) {
+    if (nativeFrameBufferBytes(buffers) + extra > TRAY_MAX_REASSEMBLY_BYTES) {
+      evictNativeFrameOverflow(buffers, extra);
+      if (
+        !buffers.has(key) ||
+        nativeFrameBufferBytes(buffers) + extra > TRAY_MAX_REASSEMBLY_BYTES
+      ) {
+        buffers.delete(key);
+        return null;
+      }
+      buffer = buffers.get(key);
+      if (!buffer) return null;
+    }
+    buffer.chunks[chunkIndex] = chunkData;
     buffer.received++;
+    buffer.bytes += extra;
   }
   if (buffer.received >= buffer.totalChunks) {
     buffers.delete(key);

@@ -15,6 +15,8 @@ import {
   sendCDPResponse,
   sendComputerFrame,
   sendComputerNativeFrame,
+  TRAY_MAX_CHUNK_COUNT,
+  TRAY_MAX_PENDING_REASSEMBLIES,
   TRAY_SEND_HIGH_WATER_BYTES,
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
@@ -546,6 +548,60 @@ describe('tray-sync-protocol', () => {
         nativeHeight: 900,
         data,
       });
+    });
+
+    it('rejects peer-controlled totalChunks above the transport ceiling', () => {
+      const buffers = new Map();
+      const assembled = reassembleComputerNativeFrame(buffers, {
+        type: 'computer.native.frame',
+        requestId: 'cap-1',
+        seq: 1,
+        mime: 'image/jpeg',
+        width: 8,
+        height: 8,
+        nativeWidth: 8,
+        nativeHeight: 8,
+        chunkData: 'AA',
+        chunkIndex: 0,
+        totalChunks: TRAY_MAX_CHUNK_COUNT + 1,
+      });
+      expect(assembled).toBeNull();
+      expect(buffers.size).toBe(0);
+    });
+
+    it('evicts the oldest incomplete native frame when pending reassemblies overflow', () => {
+      const buffers = new Map();
+      for (let seq = 0; seq < TRAY_MAX_PENDING_REASSEMBLIES + 1; seq++) {
+        reassembleComputerNativeFrame(buffers, {
+          type: 'computer.native.frame',
+          requestId: 'cap-1',
+          seq,
+          mime: 'image/jpeg',
+          width: 8,
+          height: 8,
+          nativeWidth: 8,
+          nativeHeight: 8,
+          chunkData: 'AA',
+          chunkIndex: 0,
+          totalChunks: 2,
+        });
+      }
+      expect(buffers.size).toBe(TRAY_MAX_PENDING_REASSEMBLIES);
+      expect(buffers.has('cap-1:0')).toBe(false);
+      const completed = reassembleComputerNativeFrame(buffers, {
+        type: 'computer.native.frame',
+        requestId: 'cap-1',
+        seq: 0,
+        mime: 'image/jpeg',
+        width: 8,
+        height: 8,
+        nativeWidth: 8,
+        nativeHeight: 8,
+        chunkData: 'BB',
+        chunkIndex: 1,
+        totalChunks: 2,
+      });
+      expect(completed).toBeNull();
     });
   });
 });

@@ -350,4 +350,40 @@ describe('ComputersRouter', () => {
     });
     await expect(pending).rejects.toThrow(/Accessibility is not allowed/);
   });
+
+  it('drops incomplete native frames when the follower is removed', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.captureNative('mac', { timeoutMs: 40 });
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 8,
+      nativeHeight: 8,
+      chunkData: 'AA',
+      chunkIndex: 0,
+      totalChunks: 2,
+    });
+    router.removeFollower('mac');
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 8,
+      nativeHeight: 8,
+      chunkData: 'BB',
+      chunkIndex: 1,
+      totalChunks: 2,
+    });
+    await expect(pending).rejects.toThrow('timed out');
+  });
 });

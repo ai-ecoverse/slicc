@@ -4,6 +4,7 @@ import {
   type ComputerDescriptor,
   type ComputerFrame,
   type ComputerInputEvent,
+  type ComputerNativeFrameBuffer,
   type ComputerNativeFrameMessage,
   type FollowerToLeaderMessage,
   reassembleComputerNativeFrame,
@@ -68,10 +69,7 @@ export class ComputersRouter {
   private readonly nativeListeners = new Set<
     (bootstrapId: string, message: NativeFanoutMessage) => void
   >();
-  private readonly nativeChunks = new Map<
-    string,
-    { chunks: string[]; received: number; totalChunks: number }
-  >();
+  private readonly nativeChunks = new Map<string, ComputerNativeFrameBuffer>();
   private readonly pendingNative = new Map<
     string,
     {
@@ -279,6 +277,7 @@ export class ComputersRouter {
   }
 
   removeFollower(bootstrapId: string): void {
+    this.nativeChunks.clear();
     const ids = this.watches.get(bootstrapId);
     if (!ids) return;
     for (const id of [...ids]) this.handleUnwatch(bootstrapId, id);
