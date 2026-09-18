@@ -1,8 +1,8 @@
 diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
-index 1bffd24..b0edc88 100644
+index 74361cc..ef0e71b 100644
 --- a/node_modules/isomorphic-git/index.js
 +++ b/node_modules/isomorphic-git/index.js
-@@ -3576,6 +3576,64 @@ async function shasumRange(
+@@ -3613,6 +3613,64 @@ async function shasumRange(
    return shasum(buffer.subarray(start, end))
  }
  
@@ -67,7 +67,7 @@ index 1bffd24..b0edc88 100644
  async function readObjectPacked({
    fs,
    cache,
-@@ -3613,37 +3671,22 @@ async function readObjectPacked({
+@@ -3650,37 +3708,22 @@ async function readObjectPacked({
        }
  
        // === Packfile Integrity Verification ===

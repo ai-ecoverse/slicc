@@ -392,7 +392,7 @@ command. At most four pack BUFFERS stay resident; the least recently used are
 unloaded and re-read on demand, while their parsed indexes stay cached.
 
 `git` also skips isomorphic-git's deep SHA-1 verification of the pack payload
-(`patches/isomorphic-git+1.42.1.patch`) — a 5.2 s hash of a 92 MB pack that
+(`patches/isomorphic-git+1.42.2.patch`) — a 5.2 s hash of a 92 MB pack that
 canonical git only performs on `fsck` / `index-pack`. The O(1) trailer check
 still runs, and `SLICC_GIT_VERIFY_PACKS=1` in the environment turns the deep
 check back on.
