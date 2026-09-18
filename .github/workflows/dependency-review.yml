@@ -1,0 +1,22 @@
+name: Dependency Review
+
+# Blocks pull requests that introduce dependencies with known vulnerabilities
+# (GitHub Advisory Database) of high severity or worse. Complements Dependabot
+# security updates and Renovate's vulnerabilityAlerts, which fix already-merged
+# dependencies; this gate stops new ones from coming in.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high

@@ -294,6 +294,8 @@ SLICC can safely manage API keys, tokens, and credentials with domain-scoped inj
 
 See [docs/secrets.md](docs/secrets.md) for setup instructions.
 
+Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md).
+
 ## Related projects and lineage
 
 SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing set of AI-native tools and workflows. Its distinctive angle is simple: browser-native, practical, and job-oriented.
