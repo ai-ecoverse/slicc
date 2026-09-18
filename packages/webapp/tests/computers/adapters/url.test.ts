@@ -67,7 +67,8 @@ function mockFetch(routes: {
       };
     }
     void init;
-    return { status: 404, headers: {}, body: new Uint8Array() };
+    const headers: Record<string, string> = {};
+    return { status: 404, headers, body: new Uint8Array() };
   };
 }
 

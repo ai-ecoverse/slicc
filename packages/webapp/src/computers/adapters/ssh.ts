@@ -203,7 +203,7 @@ export class SshComputerBackend implements ComputerBackend {
   private readonly title: string;
 
   constructor(
-    private readonly exec: SshExec,
+    private readonly sshExec: SshExec,
     opts: SshComputerOptions
   ) {
     this.runtimeId = opts.runtimeId;
@@ -235,7 +235,7 @@ export class SshComputerBackend implements ComputerBackend {
       tmpBase: this.tmpBase,
       udid: this.sim,
     });
-    const cap = await this.exec(script, { timeoutMs: 60_000 });
+    const cap = await this.sshExec(script, { timeoutMs: 60_000 });
     if (cap.exitCode !== 0) {
       throw new Error((cap.stderr || cap.stdout || 'screenshot failed').trim());
     }
@@ -243,7 +243,7 @@ export class SshComputerBackend implements ComputerBackend {
     if (!Number.isFinite(nchars) || nchars <= 0) throw new Error('empty screenshot from follower');
     const parts: string[] = [];
     for (const cmd of sshB64ChunkCommands(`${this.tmpBase}.b64`, nchars)) {
-      const chunk = await this.exec(cmd, { timeoutMs: 30_000 });
+      const chunk = await this.sshExec(cmd, { timeoutMs: 30_000 });
       if (chunk.exitCode !== 0) {
         throw new Error((chunk.stderr || 'screenshot chunk failed').trim());
       }
@@ -279,7 +279,7 @@ export class SshComputerBackend implements ComputerBackend {
     for (const event of filled) {
       const commands = sshInputCommands(event, this.probe.input, this.sim);
       for (const command of commands) {
-        const result = await this.exec(command, { timeoutMs: 15_000 });
+        const result = await this.sshExec(command, { timeoutMs: 15_000 });
         if (result.exitCode !== 0) {
           throw new Error((result.stderr || result.stdout || `input failed: ${command}`).trim());
         }
@@ -289,9 +289,12 @@ export class SshComputerBackend implements ComputerBackend {
 
   async close(): Promise<void> {
     try {
-      await this.exec(`rm -f ${shQuote(`${this.tmpBase}.png`)} ${shQuote(`${this.tmpBase}.b64`)}`, {
-        timeoutMs: 5_000,
-      });
+      await this.sshExec(
+        `rm -f ${shQuote(`${this.tmpBase}.png`)} ${shQuote(`${this.tmpBase}.b64`)}`,
+        {
+          timeoutMs: 5_000,
+        }
+      );
     } catch {
       // best-effort temp cleanup
     }

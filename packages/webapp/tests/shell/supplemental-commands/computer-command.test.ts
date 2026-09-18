@@ -691,12 +691,20 @@ describe('computer parse', () => {
         return { status: 200, headers: { 'content-type': 'image/jpeg' }, body: jpeg };
       }
       if (path === '/computer/text') {
-        return { status: 200, headers: {}, body: new TextEncoder().encode('demo\n') };
+        return {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+          body: new TextEncoder().encode('demo\n'),
+        };
       }
       if (path === '/computer/input') {
-        return { status: 200, headers: {}, body: new TextEncoder().encode('{"ok":true}') };
+        return {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode('{"ok":true}'),
+        };
       }
-      return { status: 404, headers: {}, body: new Uint8Array() };
+      return { status: 404, headers: { 'content-type': 'text/plain' }, body: new Uint8Array() };
     });
     const registry = new ComputerRegistry(null);
     const cmd = createComputerCommand({ registry, urlFetch });
