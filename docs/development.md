@@ -37,6 +37,7 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
 4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
 5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing. Worker and Chrome deploy scripts independently skip their release operations when their dependent sources did not change, and GitHub Release creation attaches the generated artifacts.
+6. `packages/dev-tools/tools/release-publish.mjs` is what the Publish step runs. If `@semantic-release/git` cannot fast-forward the version commit because `main` moved during prepare, the wrapper exits 0. That race is a deferral, not a failed publish: rebasing would tag commits the analyzer did not see, and the push that moved `main` (or the half-hourly schedule) publishes from the new tip. Other semantic-release failures still fail the job and open the red-release tracking issue.
 
 ### GitHub Release outputs
 
