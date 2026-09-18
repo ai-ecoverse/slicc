@@ -25,6 +25,16 @@ describe('coerceComputerFrameBytes', () => {
     expect(cloned instanceof Uint8Array).toBe(false);
     expect(coerceComputerFrameBytes(cloned)).toEqual(DECODABLE_PNG);
   });
+
+  it('does not stack-overflow on a JSON-cloned frame past the argument-spread limit', () => {
+    const rec: Record<string, number> = {};
+    const len = 200_000;
+    for (let i = 0; i < len; i++) rec[i] = i & 0xff;
+    const copy = coerceComputerFrameBytes(rec);
+    expect(copy.byteLength).toBe(len);
+    expect(copy[0]).toBe(0);
+    expect(copy[len - 1]).toBe((len - 1) & 0xff);
+  });
 });
 
 describe('sniffFrameMime', () => {

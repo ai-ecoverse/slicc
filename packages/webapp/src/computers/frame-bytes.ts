@@ -120,24 +120,29 @@ export function coerceComputerFrameBytes(bytes: unknown): Uint8Array {
     return new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
   }
   if (Array.isArray(bytes)) return Uint8Array.from(bytes as number[]);
-  if (bytes && typeof bytes === 'object') {
-    const rec = bytes as JsonClonedByteArray;
-    const declared =
-      typeof rec.byteLength === 'number'
-        ? rec.byteLength
-        : typeof rec.length === 'number'
-          ? rec.length
-          : -1;
-    const keys = Object.keys(rec)
-      .filter((k) => /^\d+$/.test(k))
-      .map(Number);
-    const len = declared >= 0 ? declared : keys.length > 0 ? Math.max(...keys) + 1 : 0;
-    const out = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      const n = rec[i];
-      if (typeof n === 'number') out[i] = n & 0xff;
-    }
-    return out;
-  }
+  if (bytes && typeof bytes === 'object')
+    return coerceJsonClonedBytes(bytes as JsonClonedByteArray);
   return new Uint8Array(0);
+}
+
+function jsonClonedLength(rec: JsonClonedByteArray): number {
+  if (typeof rec.byteLength === 'number') return rec.byteLength;
+  if (typeof rec.length === 'number') return rec.length;
+  let maxKey = -1;
+  for (const k of Object.keys(rec)) {
+    if (!/^\d+$/.test(k)) continue;
+    const n = Number(k);
+    if (n > maxKey) maxKey = n;
+  }
+  return maxKey + 1;
+}
+
+function coerceJsonClonedBytes(rec: JsonClonedByteArray): Uint8Array {
+  const len = jsonClonedLength(rec);
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    const n = rec[i];
+    if (typeof n === 'number') out[i] = n & 0xff;
+  }
+  return out;
 }
