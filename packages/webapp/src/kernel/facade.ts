@@ -388,6 +388,7 @@ export class Bridge implements KernelFacade {
           state,
           trigger: detail.trigger,
           ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
+          ...(detail.failure ? { failure: detail.failure } : {}),
           ...(detail.roundId ? { roundId: detail.roundId } : {}),
           ...(action ? { rowId: action.messageId } : {}),
         });

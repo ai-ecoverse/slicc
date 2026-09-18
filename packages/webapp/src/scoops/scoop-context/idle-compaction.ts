@@ -221,6 +221,10 @@ export class IdleCompaction {
         force: true,
         trigger: 'idle',
         roundId,
+        // Idle maintenance is speculative: no user turn is blocked, so a
+        // provider failure must preserve the exact live/canonical history.
+        // Overflow recovery keeps the compactor's default emergency drop.
+        allowNaiveDrop: false,
         deferMemoryExtraction: (extract) => {
           extractMemories = extract;
         },

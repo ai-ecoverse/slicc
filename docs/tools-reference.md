@@ -794,6 +794,17 @@ the round's `AbortSignal`), and the round's memory extraction is deferred
 (`CompactionOptions.deferMemoryExtraction`) until the result is adopted, so a discarded round never
 writes bullets for a history that is still in the conversation.
 
+Idle rounds also set `CompactionOptions.allowNaiveDrop: false`. Only a successful, non-empty text
+summary may replace their input: rate limits, exhausted quota, authentication failures, provider
+outages, missing credentials, empty summaries, malformed responses, and hopeless-context branches
+all return the exact input history. `Agent.state.messages` therefore keeps its identity and content,
+`SessionPersistence` does not rewrite the canonical work-unit record, and the ordinary
+`onDiscarded(roundId)` path retracts the in-progress marker instead of ever showing “older messages
+truncated.” The already-written live transcript snapshot remains available, and the next eligible
+idle window can retry. Terminal state detail carries only a safe `failure` class (never provider
+error text) for diagnostics. Threshold and active overflow recovery keep the default
+`allowNaiveDrop: true` emergency policy so turn-liveness remains a separate decision.
+
 An aborted round costs nothing: `compactContext` checks the signal before the naive-drop fallback
 and returns the input history untouched, emitting `cancelled` → `idle` instead of the `fallback`
 state. Without that check a cancelled round claimed a truncation it had not performed, and any
