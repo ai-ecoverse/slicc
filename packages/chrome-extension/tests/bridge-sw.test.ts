@@ -81,8 +81,35 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
       { id: 43, title: 'Other', url: 'https://example.com/' },
     ],
     queryActiveTabId: async () => undefined,
-    getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
+    getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com', windowId: 7 }),
     createTab: async () => 99,
+    createWindow: vi.fn(async () => ({
+      windowId: 7,
+      tabId: 88,
+      left: 10,
+      top: 20,
+      width: 1280,
+      height: 800,
+      state: 'normal',
+    })),
+    getWindow: vi.fn(async (windowId) => ({
+      windowId,
+      tabId: 88,
+      left: 10,
+      top: 20,
+      width: 1280,
+      height: 800,
+      state: 'normal',
+    })),
+    updateWindow: vi.fn(async (windowId, props) => ({
+      windowId,
+      tabId: -1,
+      left: props.left ?? 10,
+      top: props.top ?? 20,
+      width: props.width ?? 1280,
+      height: props.height ?? 800,
+      state: props.state ?? 'normal',
+    })),
     removeTab: async () => undefined,
     activateTab: vi.fn(async () => undefined),
   };
@@ -324,6 +351,98 @@ describe('handleBridgePortConnect — pin gating', () => {
 describe('handleBridgePortConnect — CDP pass-through', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('opens a sized window via chrome.windows when Target.createTarget has newWindow', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    const response = await sendCdpRequest(port, 1, 'Target.createTarget', {
+      url: 'https://example.com/capture',
+      newWindow: true,
+      width: 1280,
+      height: 800,
+      left: 10,
+      top: 20,
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith({
+      url: 'https://example.com/capture',
+      type: 'normal',
+      focused: true,
+      width: 1280,
+      height: 800,
+      left: 10,
+      top: 20,
+    });
+    expect(response).toMatchObject({ result: { targetId: '88' } });
+  });
+
+  it('maps decorated:false to chrome.windows type popup', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    await sendCdpRequest(port, 1, 'Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      decorated: false,
+      width: 640,
+      height: 480,
+      background: true,
+    });
+    expect(deps.createWindow).toHaveBeenCalledWith({
+      url: 'about:blank',
+      type: 'popup',
+      focused: false,
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('shims Browser.getWindowForTarget / getWindowBounds / setWindowBounds via chrome.windows', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+
+    const forTarget = await sendCdpRequest(port, 1, 'Browser.getWindowForTarget', {
+      targetId: '88',
+    });
+    expect(forTarget).toMatchObject({
+      result: {
+        windowId: 7,
+        bounds: { left: 10, top: 20, width: 1280, height: 800, windowState: 'normal' },
+      },
+    });
+
+    const getBounds = await sendCdpRequest(port, 2, 'Browser.getWindowBounds', { windowId: 7 });
+    expect(getBounds).toMatchObject({
+      result: {
+        bounds: { left: 10, top: 20, width: 1280, height: 800, windowState: 'normal' },
+      },
+    });
+
+    const setBounds = await sendCdpRequest(port, 3, 'Browser.setWindowBounds', {
+      windowId: 7,
+      bounds: { width: 1000, height: 700 },
+    });
+    expect(deps.updateWindow).toHaveBeenCalledWith(7, { width: 1000, height: 700 });
+    expect(setBounds).toMatchObject({ result: {} });
   });
 
   it('attaches a tab on Target.attachToTarget and pipes commands through chrome.debugger', async () => {

@@ -30,7 +30,7 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 | `sliccy:agent`                                | Callable `agent(prompt, opts?)` — spawns a one-shot sub-scoop, feeds it the prompt, blocks until the agent loop completes; resolves to trimmed final text (JSON-parsed when `opts.schema` is set), REJECTS on non-zero exit or schema-parse failure. `.spawn(prompt, opts?)` is the non-throwing variant → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
 | `sliccy:skill`                                | Frozen `{ dir, root, refs, assets, config(), config(updates), token(providerId) }`. `refs`/`assets` resolve from the skill root (parent of `scripts/` when the script lives there). Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                                                                   |
 | `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                                                                                                                                                                      |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                                                                              |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `openWindow`, `windowBounds`, `setWindowBounds`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                             |
 | `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                                                                                                                                                                  |
 | `sliccy:computer`                             | `register(handlers)` — jsh-hosted computer backend. Screenshot/input/subscribe round-trip over host `computer-call` events (keep-alive via `onEvent`); frames return via `computer.frame`.                                                                                                                                                                                                                                 |
 | `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                                                                                                                                                                  |
@@ -209,17 +209,37 @@ const tmpl = await fs.readFile(`${skill.refs}/prompt.md`);
 
 ### `sliccy:browser` — page-context CDP bridge
 
-Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills. Accepts a `TabHandle` (from `findTab` / `ensureTab`) or a bare `targetId` string. `eval` / `evalAsync` serialize functions to a string call expression so realm code can pass a closure as ergonomically as a string.
+Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills. Accepts a `TabHandle` (from `findTab` / `ensureTab` / `openWindow`) or a bare `targetId` string. `eval` / `evalAsync` serialize functions to a string call expression so realm code can pass a closure as ergonomically as a string.
 
 ```typescript
 const browser = require('sliccy:browser');
 browser.findTab(opts: { domain?: string; urlMatch?: RegExp | string }): Promise<TabHandle | null>
 browser.ensureTab(url: string, opts?: { matchUrl?: RegExp | string }): Promise<TabHandle>
+browser.openWindow(url: string, opts?: {
+  width?: number; height?: number;   // FRAME DIP pixels (incl. chrome), not content area
+  left?: number; top?: number;
+  state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+  decorated?: boolean;               // default true; false → extension popup chrome
+  focus?: boolean;                   // default true
+}): Promise<TabHandle>
+browser.windowBounds(tab): Promise<{
+  left: number; top: number; width: number; height: number;
+  state: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+  dpr: number;                       // devicePixelRatio — capture frame = outer × dpr
+}>
+browser.setWindowBounds(tab, bounds: {
+  left?: number; top?: number; width?: number; height?: number;
+  state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+}): Promise</* achieved bounds (Chrome clamps silently) */>
 browser.eval(tab, fn: Function | string): Promise<unknown>      // sync expression
 browser.evalAsync(tab, fn: AsyncFunction): Promise<unknown>     // async, returns parsed JSON
 browser.cookie(tab, name: string): Promise<string | null>
 browser.localStorage(tab, key: string): Promise<string | null>
 ```
+
+**Window sizing units are frame DIP**, matching CDP `Target.createTarget` / `Browser.Bounds` and `chrome.windows.create` (height includes the title bar). That differs from `window.open` features, which size the content area. Do not port a `window.open` size naively — it will be short by the chrome height. `state` other than `normal` cannot be combined with left/top/width/height. `setWindowBounds` always reads back the achieved bounds because Chrome clamps oversized requests without error.
+
+Standalone (Swift / Node CDP) uses `Target.createTarget({ newWindow: true, … })` plus `Browser.get/setWindowBounds`. The Chrome extension maps the same CDP methods onto `chrome.windows.create` / `update` / `get` (chrome.debugger cannot run Browser-domain commands).
 
 ```javascript
 const browser = require('sliccy:browser');
@@ -228,6 +248,15 @@ const tab = await browser.findTab({ domain: 'slack.com' });
 if (!tab) cli.die('open slack.com first');
 const team = await browser.eval(tab, () => document.title);
 const xoxc = await browser.localStorage(tab, 'localConfig_v2');
+```
+
+```javascript
+// Sized + decorated capture window (frame 1280×800 at native dpr)
+const tab = await browser.openWindow('https://example.com/demo', {
+  width: 1280,
+  height: 800,
+});
+const { width, height, dpr } = await browser.windowBounds(tab);
 ```
 
 ### `browser.fetch(tab, url, opts)` — page-context fetch

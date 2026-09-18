@@ -24,8 +24,13 @@ import type {
   CDPConnectOptions,
   CDPEventListener,
   ConnectionState,
+  OpenWindowOptions,
   PageInfo,
   TargetInfo,
+  WindowBounds,
+  WindowBoundsInfo,
+  WindowBoundsInput,
+  WindowState,
 } from './types.js';
 
 /**
@@ -1056,6 +1061,129 @@ export class BrowserAPI implements TabHost {
   }
 
   /**
+   * Open a sized browser window and return its first tab's targetId.
+   *
+   * Frame dimensions (width/height/left/top) are DIP pixels **including chrome**,
+   * matching CDP and `chrome.windows` — not `window.open` content-area sizes.
+   * Geometry params require `newWindow: true` on CDP (silently inert otherwise);
+   * the extension bridge maps the same contract onto `chrome.windows.create`.
+   */
+  async openWindow(url: string, opts: OpenWindowOptions = {}): Promise<string> {
+    await this.ensureConnected();
+    await this.ensureLocalConnected();
+    assertWindowGeometryCompatible(opts);
+    const focus = opts.focus !== false;
+    const params: CreateTargetWindowParams = {
+      url: url || 'about:blank',
+      // Sizing is inert unless newWindow is true (CDP docs). Extension bridge
+      // keys off the same flag to call chrome.windows.create instead of tabs.create.
+      newWindow: true,
+      background: !focus,
+    };
+    // Extension-only hint: CDP ignores this; bridge-sw maps it to type popup|normal.
+    if (opts.decorated === false) params.decorated = false;
+    const state = opts.state;
+    if (state && state !== 'normal') {
+      params.windowState = state;
+    } else {
+      if (opts.width !== undefined) params.width = opts.width;
+      if (opts.height !== undefined) params.height = opts.height;
+      if (opts.left !== undefined) params.left = opts.left;
+      if (opts.top !== undefined) params.top = opts.top;
+      if (state) params.windowState = state;
+    }
+    const result = await this.localClient.send(
+      'Target.createTarget',
+      params as unknown as CdpPayload
+    );
+    const targetId = result['targetId'];
+    if (typeof targetId !== 'string' || !targetId) {
+      throw new Error('Target.createTarget did not return a usable targetId');
+    }
+    return targetId;
+  }
+
+  /**
+   * Read the frame bounds of the window that owns `targetId`, plus the page's
+   * `devicePixelRatio` (needed to predict capture resolution).
+   */
+  async getWindowBounds(targetId: string): Promise<WindowBoundsInfo> {
+    await this.ensureConnected();
+    const transport = await this.transportForWindowOps(targetId);
+    const forTarget = await transport.send('Browser.getWindowForTarget', {
+      targetId: localTargetIdOf(targetId),
+    });
+    const bounds = normalizeWindowBounds(forTarget['bounds']);
+    const dpr = await this.readDevicePixelRatio(targetId);
+    return { ...bounds, dpr };
+  }
+
+  /**
+   * Apply frame bounds (or window state) and return the **achieved** bounds.
+   * Chrome silently clamps oversized requests; callers must not trust the input.
+   */
+  async setWindowBounds(targetId: string, bounds: WindowBoundsInput): Promise<WindowBoundsInfo> {
+    await this.ensureConnected();
+    assertWindowGeometryCompatible(bounds);
+    const transport = await this.transportForWindowOps(targetId);
+    const localTargetId = localTargetIdOf(targetId);
+    const forTarget = await transport.send('Browser.getWindowForTarget', {
+      targetId: localTargetId,
+    });
+    const windowId = forTarget['windowId'];
+    if (typeof windowId !== 'number') {
+      throw new Error('Browser.getWindowForTarget did not return a windowId');
+    }
+    const cdpBounds: CdpBoundsPatch = {};
+    const state = bounds.state;
+    if (state && state !== 'normal') {
+      cdpBounds.windowState = state;
+    } else {
+      if (bounds.left !== undefined) cdpBounds.left = bounds.left;
+      if (bounds.top !== undefined) cdpBounds.top = bounds.top;
+      if (bounds.width !== undefined) cdpBounds.width = bounds.width;
+      if (bounds.height !== undefined) cdpBounds.height = bounds.height;
+      if (state) cdpBounds.windowState = state;
+    }
+    await transport.send('Browser.setWindowBounds', {
+      windowId,
+      bounds: cdpBounds as unknown as CdpPayload,
+    });
+    // Always read back — Chrome clamps without error (issue #3271).
+    const achieved = await transport.send('Browser.getWindowBounds', { windowId });
+    const normalized = normalizeWindowBounds(achieved['bounds']);
+    const dpr = await this.readDevicePixelRatio(targetId);
+    return { ...normalized, dpr };
+  }
+
+  /** Best-effort page DPR; defaults to 1 when the target cannot evaluate. */
+  private async readDevicePixelRatio(targetId: string): Promise<number> {
+    try {
+      const value = await this.withTab(targetId, (page) =>
+        page.evaluate('window.devicePixelRatio', { awaitPromise: false, returnByValue: true })
+      );
+      return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  /**
+   * Browser-level window commands ride the same transport as the target's
+   * Chrome instance (local `/cdp` or a tray remote), never a page session.
+   */
+  private async transportForWindowOps(targetId: string): Promise<CDPTransport> {
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+      return this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
+    }
+    await this.ensureLocalConnected();
+    return this.localClient;
+  }
+
+  /**
    * Create a new tab on a remote runtime within the tray.
    * Requires a tray target provider with openRemoteTab support.
    * Returns the composite targetId ("{runtimeId}:{localTargetId}").
@@ -1716,4 +1844,104 @@ export class BrowserAPI implements TabHost {
     this.sessionId = null;
     this.attachedTargetId = null;
   }
+}
+
+const WINDOW_STATES: ReadonlySet<string> = new Set([
+  'normal',
+  'minimized',
+  'maximized',
+  'fullscreen',
+]);
+
+/** Params for `Target.createTarget` when opening a sized window. */
+interface CreateTargetWindowParams {
+  url: string;
+  newWindow: true;
+  background: boolean;
+  /** Extension-only hint; CDP ignores it. */
+  decorated?: false;
+  windowState?: WindowState;
+  width?: number;
+  height?: number;
+  left?: number;
+  top?: number;
+}
+
+/** Partial `Browser.Bounds` patch for `Browser.setWindowBounds`. */
+interface CdpBoundsPatch {
+  windowState?: WindowState;
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+}
+
+/** Loose CDP/chrome.windows bounds payload before normalization. */
+interface RawWindowBoundsFields {
+  left?: unknown;
+  top?: unknown;
+  width?: unknown;
+  height?: unknown;
+  windowState?: unknown;
+  state?: unknown;
+}
+
+/** Strip a tray composite id (`runtimeId:localTargetId`) down to the local id. */
+function localTargetIdOf(targetId: string): string {
+  const colon = targetId.indexOf(':');
+  return colon >= 0 ? targetId.substring(colon + 1) : targetId;
+}
+
+/**
+ * chrome.windows / CDP reject combining non-normal state with geometry.
+ * Fail closed with a clear error rather than letting Chrome drop the size.
+ */
+function assertWindowGeometryCompatible(opts: {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  state?: WindowState;
+}): void {
+  const state = opts.state;
+  if (!state || state === 'normal') return;
+  if (!WINDOW_STATES.has(state)) {
+    throw new Error(
+      `window state must be one of ${[...WINDOW_STATES].join('|')} (got ${JSON.stringify(state)})`
+    );
+  }
+  const hasGeometry =
+    opts.left !== undefined ||
+    opts.top !== undefined ||
+    opts.width !== undefined ||
+    opts.height !== undefined;
+  if (hasGeometry) {
+    throw new Error(
+      `window state '${state}' cannot be combined with left/top/width/height (chrome.windows + CDP both reject the mix)`
+    );
+  }
+}
+
+function isRawWindowBoundsFields(value: unknown): value is RawWindowBoundsFields {
+  return value !== null && typeof value === 'object';
+}
+
+function normalizeWindowBounds(raw: unknown): WindowBounds {
+  const obj: RawWindowBoundsFields = isRawWindowBoundsFields(raw) ? raw : {};
+  const stateRaw = obj.windowState ?? obj.state;
+  const state: WindowState =
+    typeof stateRaw === 'string' && WINDOW_STATES.has(stateRaw)
+      ? (stateRaw as WindowState)
+      : 'normal';
+  return {
+    left: numOr(obj.left, 0),
+    top: numOr(obj.top, 0),
+    width: numOr(obj.width, 0),
+    height: numOr(obj.height, 0),
+    state,
+  };
+}
+
+function numOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }

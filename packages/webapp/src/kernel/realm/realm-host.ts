@@ -16,6 +16,7 @@ import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import type { OpenWindowOptions, WindowBoundsInput } from '../../cdp/types.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
@@ -1198,6 +1199,20 @@ async function dispatchBrowser(
       const options = (args[1] as { matchUrl?: string } | undefined) ?? {};
       return ensureTab(browser, url, options);
     }
+    case 'openWindow': {
+      const url = args[0] as string;
+      const options = (args[1] as OpenWindowOptions | undefined) ?? {};
+      return openWindow(browser, url, options);
+    }
+    case 'windowBounds': {
+      const targetId = args[0] as string;
+      return browser.getWindowBounds(targetId);
+    }
+    case 'setWindowBounds': {
+      const targetId = args[0] as string;
+      const bounds = (args[1] as WindowBoundsInput | undefined) ?? {};
+      return browser.setWindowBounds(targetId, bounds);
+    }
     case 'eval': {
       const targetId = args[0] as string;
       const code = args[1] as string;
@@ -1403,6 +1418,18 @@ async function ensureTab(
   // listPages round-trip. Title may still be empty (the page hasn't
   // loaded yet) but `url` matches what the caller asked for.
   return { targetId, url, title: '' };
+}
+
+async function openWindow(
+  browser: BrowserAPI,
+  url: string,
+  options: OpenWindowOptions
+): Promise<TabHandle> {
+  if (typeof browser.openWindow !== 'function') {
+    throw new Error('browser.openWindow is not available in this runtime');
+  }
+  const targetId = await browser.openWindow(url, options);
+  return { targetId, url: url || 'about:blank', title: '' };
 }
 
 async function evalInTab(

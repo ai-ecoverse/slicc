@@ -169,6 +169,29 @@ export interface SprinkleBrowserFetchOptions extends Omit<BrowserFetchOptions, '
 export interface SprinkleBrowserApi {
   findTab(query: { domain?: string; urlMatch?: string }): Promise<unknown>;
   ensureTab(url: string, options?: { matchUrl?: string }): Promise<unknown>;
+  openWindow(
+    url: string,
+    options?: {
+      width?: number;
+      height?: number;
+      left?: number;
+      top?: number;
+      state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+      decorated?: boolean;
+      focus?: boolean;
+    }
+  ): Promise<unknown>;
+  windowBounds(tab: unknown): Promise<unknown>;
+  setWindowBounds(
+    tab: unknown,
+    bounds: {
+      left?: number;
+      top?: number;
+      width?: number;
+      height?: number;
+      state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+    }
+  ): Promise<unknown>;
   eval(tab: unknown, code: string): Promise<unknown>;
   evalAsync(tab: unknown, code: string): Promise<unknown>;
   cookie(tab: unknown, name: string): Promise<string | null>;
@@ -1326,6 +1349,11 @@ export class SprinkleBridge {
       browser: {
         findTab: (query) => this.jshDispatch('browser', ['findTab', query]),
         ensureTab: (url, options) => this.jshDispatch('browser', ['ensureTab', url, options ?? {}]),
+        openWindow: (url, options) =>
+          this.jshDispatch('browser', ['openWindow', url, options ?? {}]),
+        windowBounds: (tab) => this.jshDispatch('browser', ['windowBounds', tab]),
+        setWindowBounds: (tab, bounds) =>
+          this.jshDispatch('browser', ['setWindowBounds', tab, bounds]),
         eval: (tab, code) => this.jshDispatch('browser', ['eval', tab, code]),
         evalAsync: (tab, code) => this.jshDispatch('browser', ['evalAsync', tab, code]),
         cookie: (tab, name) =>

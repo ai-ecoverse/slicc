@@ -126,6 +126,54 @@ export function createBrowserBridge(rpc: RealmRpcClient) {
       rpc.call('browser', 'findTab', [normalizeUrlMatchQuery(query)]),
     ensureTab: (url: string, options: { matchUrl?: string | RegExp } = {}): Promise<TabHandle> =>
       rpc.call('browser', 'ensureTab', [url, normalizeMatchUrl(options)]),
+    /**
+     * Open a sized (frame DIP) window. Returns a `TabHandle` that composes with
+     * `eval` / `fetch` / etc. Geometry is **frame** size, not content area.
+     */
+    openWindow: (
+      url: string,
+      options: {
+        width?: number;
+        height?: number;
+        left?: number;
+        top?: number;
+        state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+        decorated?: boolean;
+        focus?: boolean;
+      } = {}
+    ): Promise<TabHandle> => rpc.call('browser', 'openWindow', [url, options]),
+    /** Read frame bounds + devicePixelRatio for the window owning `tab`. */
+    windowBounds: (
+      tab: TabHandle | string
+    ): Promise<{
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      state: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+      dpr: number;
+    }> => rpc.call('browser', 'windowBounds', [resolveTargetId(tab)]),
+    /**
+     * Set frame bounds / window state and return the **achieved** bounds
+     * (Chrome clamps silently).
+     */
+    setWindowBounds: (
+      tab: TabHandle | string,
+      bounds: {
+        left?: number;
+        top?: number;
+        width?: number;
+        height?: number;
+        state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+      }
+    ): Promise<{
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      state: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+      dpr: number;
+    }> => rpc.call('browser', 'setWindowBounds', [resolveTargetId(tab), bounds]),
     eval: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>
       rpc.call('browser', 'eval', [resolveTargetId(tab), serializeEvalSource(fnOrCode, false)]),
     evalAsync: (tab: TabHandle | string, fnOrCode: ((..._args: unknown[]) => unknown) | string) =>

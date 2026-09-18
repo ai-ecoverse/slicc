@@ -115,6 +115,63 @@ export interface BoundingBox {
   height: number;
 }
 
+/**
+ * Browser window state shared by CDP `Browser.Bounds.windowState` and
+ * `chrome.windows` `state`. `minimized` / `maximized` / `fullscreen` cannot
+ * be combined with geometry (left/top/width/height) on either backend.
+ */
+export type WindowState = 'normal' | 'minimized' | 'maximized' | 'fullscreen';
+
+/**
+ * Frame geometry for a browser window. Units are **frame** DIP pixels
+ * (including chrome), matching CDP `Target.createTarget` / `Browser.Bounds`
+ * and `chrome.windows.create` — not the content-area sizes `window.open`
+ * accepts.
+ */
+export interface WindowBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  state: WindowState;
+}
+
+/** Partial frame geometry accepted by `setWindowBounds` / `openWindow`. */
+export interface WindowBoundsInput {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  state?: WindowState;
+}
+
+/**
+ * Options for {@link BrowserAPI.openWindow}. Opens a sized (and by default
+ * decorated) window in one call — the combination page-context `window.open`
+ * cannot obtain.
+ */
+export interface OpenWindowOptions {
+  width?: number;
+  height?: number;
+  left?: number;
+  top?: number;
+  state?: WindowState;
+  /**
+   * Prefer a fully decorated window (`true`, default) vs minimal-chrome popup
+   * (`false`). Extension maps this to `chrome.windows` `type` `normal`|`popup`.
+   * CDP `Target.createTarget` with `newWindow` always yields a decorated
+   * window — `false` is a no-op there.
+   */
+  decorated?: boolean;
+  /** Focus the new window. Default `true`. */
+  focus?: boolean;
+}
+
+/** Achieved frame bounds plus device pixel ratio (for capture sizing). */
+export interface WindowBoundsInfo extends WindowBounds {
+  dpr: number;
+}
+
 /** Frame info returned by BrowserAPI.getFrameTree(). */
 export interface FrameInfo {
   frameId: string;
