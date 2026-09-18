@@ -411,11 +411,24 @@ A record that survives into the next boot is proof of an interrupted turn:
 - **Nothing lost** (the turn finished; only the final delete never landed):
   the record is cleared.
 
-Two persistence changes make the classification sound: a `user` message is
-flushed immediately (not after the 1 s checkpoint debounce), and the history
-is flushed at every `tool_execution_start`, so the issuing assistant message
-is durable before the tool can have effects. A deliberate stop, error, abort,
-or `dispose()` clears the record — only a dead page leaves one behind.
+Ordering makes the classification sound:
+
+- A `user` message is flushed immediately (not after the 1 s checkpoint
+  debounce) — it is the request recovery repeats.
+- **Durability barrier before a tool runs.** The `tool_execution_start`
+  listener returns a promise (pi awaits listeners before executing the call)
+  that settles only once the history holding the issuing assistant message
+  AND the journal entry naming the call are stored. Without it, a reload in
+  that window would look like a lost model request and re-issue a call that
+  already ran. Bounded by `TOOL_DURABILITY_WAIT_MS` (2 s) so a stuck store
+  delays a tool but never wedges it.
+- A call leaves the journal only after its `toolResult` message is stored
+  (flushed on its `message_end`), never at `tool_execution_end` — otherwise a
+  reload in between would find a finished call with no result and misreport
+  it as lost.
+
+A deliberate stop, error, abort, or `dispose()` clears the record — only a
+dead page leaves one behind.
 
 Tests: `tests/scoops/interrupted-work-recovery.test.ts`,
 `tests/scoops/scoop-context/turn-journal.test.ts`,

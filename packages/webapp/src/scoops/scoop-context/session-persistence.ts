@@ -116,23 +116,36 @@ export class SessionPersistence {
    * consistent prefix of the final history.
    */
   persistNow(fallbackMessages?: AgentMessage[]): void {
+    void this.flush(fallbackMessages);
+  }
+
+  /**
+   * {@link persistNow}, awaitable: resolves once the write has landed (or
+   * failed — the failure is logged, never thrown). Reload recovery uses it as
+   * a durability barrier: a tool call must not run before the message that
+   * issued it is stored.
+   */
+  flush(fallbackMessages?: AgentMessage[]): Promise<void> {
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     const persistMessages = this.deps.getMessages() ?? fallbackMessages ?? [];
-    if (persistMessages.length === 0) return;
+    if (persistMessages.length === 0) return Promise.resolve();
     const canonical = this.deps.canonical;
-    if (!canonical) return;
+    if (!canonical) return Promise.resolve();
     if (!this.createdAt) this.createdAt = Date.now();
-    void canonical.store
+    return canonical.store
       .syncAgentMessages(canonical.identity, persistMessages, { createdAt: this.createdAt })
-      .catch((err) => {
-        log.error('Failed to save the canonical conversation record', {
-          folder: this.deps.folder,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          log.error('Failed to save the canonical conversation record', {
+            folder: this.deps.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      );
   }
 
   /**

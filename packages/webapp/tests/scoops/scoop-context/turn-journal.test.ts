@@ -14,7 +14,7 @@ describe('TurnJournal', () => {
     const dbName = `turn-journal-test-${++dbCounter}`;
     const before = new TurnJournal({ dbName });
     before.begin('cone_1', 'cone', 0, [{ requester: 'guest-1' }]);
-    before.toolStarted('cone_1', 'call-a', 'bash', { command: 'sleep 60' });
+    void before.toolStarted('cone_1', 'call-a', 'bash', { command: 'sleep 60' });
     await before.flush();
 
     // A fresh instance over the same database is the next page life.
@@ -33,9 +33,9 @@ describe('TurnJournal', () => {
   it('drops a finished tool call and deletes the record when the turn settles', async () => {
     const journal = freshJournal();
     journal.begin('cone_1', 'cone');
-    journal.toolStarted('cone_1', 'call-a', 'bash', {});
-    journal.toolStarted('cone_1', 'call-a', 'bash', {}); // duplicate start is ignored
-    journal.toolStarted('cone_1', 'call-b', 'read_file', {});
+    void journal.toolStarted('cone_1', 'call-a', 'bash', {});
+    void journal.toolStarted('cone_1', 'call-a', 'bash', {}); // duplicate start is ignored
+    void journal.toolStarted('cone_1', 'call-b', 'read_file', {});
     journal.toolEnded('cone_1', 'call-a');
     journal.toolEnded('cone_1', 'unknown'); // no-op
     await journal.flush();
@@ -48,9 +48,22 @@ describe('TurnJournal', () => {
     expect(journal.isLive('cone_1')).toBe(false);
   });
 
+  it('toolStarted resolves once the record naming the call has landed', async () => {
+    const dbName = `turn-journal-test-${++dbCounter}`;
+    const journal = new TurnJournal({ dbName });
+    journal.begin('cone_1', 'cone');
+    await journal.toolStarted('cone_1', 'call-a', 'bash', {});
+    // No flush: the resolved promise alone must mean "on disk".
+    const [row] = await new TurnJournal({ dbName }).readAll();
+    expect(row?.tools.map((t) => t.toolCallId)).toEqual(['call-a']);
+    // A repeat start waits for the same writes instead of queueing another.
+    await expect(journal.toolStarted('cone_1', 'call-a', 'bash', {})).resolves.toBeUndefined();
+    await expect(journal.toolStarted('nobody', 'x', 'bash', {})).resolves.toBeUndefined();
+  });
+
   it('ignores tool and gate updates for a unit with no running turn', async () => {
     const journal = freshJournal();
-    journal.toolStarted('cone_1', 'call-a', 'bash', {});
+    void journal.toolStarted('cone_1', 'call-a', 'bash', {});
     journal.toolEnded('cone_1', 'call-a');
     journal.setGuestGates('cone_1', [{ requester: 'x' }]);
     await journal.flush();

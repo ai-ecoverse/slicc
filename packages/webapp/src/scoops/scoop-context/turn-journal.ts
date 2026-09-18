@@ -91,7 +91,7 @@ export class TurnJournal {
       guestGates: [...guestGates],
     };
     this.live.set(jid, turn);
-    this.write(jid, turn);
+    void this.write(jid, turn);
   }
 
   /** A prompt queued into the running turn widened its guest gates. */
@@ -100,14 +100,17 @@ export class TurnJournal {
     if (!turn) return;
     turn.guestGates = [...guestGates];
     turn.updatedAt = Date.now();
-    this.write(jid, turn);
+    void this.write(jid, turn);
   }
 
-  /** A tool call started inside the unit's running turn. */
-  toolStarted(jid: string, toolCallId: string, toolName: string, args: unknown): void {
+  /**
+   * A tool call started inside the unit's running turn. Resolves once the
+   * record naming it has landed, so the caller can hold the tool until then.
+   */
+  toolStarted(jid: string, toolCallId: string, toolName: string, args: unknown): Promise<void> {
     const turn = this.live.get(jid);
-    if (!turn) return;
-    if (turn.tools.some((t) => t.toolCallId === toolCallId)) return;
+    if (!turn) return Promise.resolve();
+    if (turn.tools.some((t) => t.toolCallId === toolCallId)) return this.settled(jid);
     turn.tools.push({
       toolCallId,
       toolName,
@@ -115,10 +118,14 @@ export class TurnJournal {
       startedAt: Date.now(),
     });
     turn.updatedAt = Date.now();
-    this.write(jid, turn);
+    return this.write(jid, turn);
   }
 
-  /** A tool call reported its result. */
+  /**
+   * A tool call's result is durably in the conversation — only then may the
+   * journal let go of it, or a reload in between would find a call with no
+   * result and no journal entry, and misreport a finished call as lost.
+   */
   toolEnded(jid: string, toolCallId: string): void {
     const turn = this.live.get(jid);
     if (!turn) return;
@@ -126,7 +133,7 @@ export class TurnJournal {
     turn.tools = turn.tools.filter((t) => t.toolCallId !== toolCallId);
     if (turn.tools.length === before) return;
     turn.updatedAt = Date.now();
-    this.write(jid, turn);
+    void this.write(jid, turn);
   }
 
   /** The unit's turn settled, one way or another: nothing to recover. */
@@ -134,7 +141,7 @@ export class TurnJournal {
     // Only a turn begun in THIS page life is ours to clear; a record left
     // over from before the reload belongs to recovery, which clears it.
     if (!this.live.delete(jid)) return;
-    this.write(jid, null);
+    void this.write(jid, null);
   }
 
   /** Whether a turn begun in THIS page life currently owns the unit's record. */
@@ -145,8 +152,7 @@ export class TurnJournal {
   /** Forget a record left over from before the reload. */
   async clear(jid: string): Promise<void> {
     this.live.delete(jid);
-    this.write(jid, null);
-    await this.chains.get(jid);
+    await this.write(jid, null);
   }
 
   /** Every record on disk — the turns a previous page life left running. */
@@ -172,7 +178,12 @@ export class TurnJournal {
     await Promise.all([...this.chains.values()]);
   }
 
-  private write(jid: string, turn: InFlightTurn | null): void {
+  /** Resolves once every write queued for the unit so far has landed. */
+  private settled(jid: string): Promise<void> {
+    return this.chains.get(jid) ?? Promise.resolve();
+  }
+
+  private write(jid: string, turn: InFlightTurn | null): Promise<void> {
     const snapshot = turn ? structuredClone(turn) : null;
     const prev = this.chains.get(jid) ?? Promise.resolve();
     const next = prev
@@ -184,6 +195,7 @@ export class TurnJournal {
     void next.then(() => {
       if (this.chains.get(jid) === next) this.chains.delete(jid);
     });
+    return next;
   }
 
   private async persist(jid: string, turn: InFlightTurn | null): Promise<void> {

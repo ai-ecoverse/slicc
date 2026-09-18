@@ -92,6 +92,9 @@ import type { RegisteredScoop } from './types.js';
 
 const log = createLogger('scoop-context');
 
+/** Longest a tool waits for its reload-recovery evidence to be stored. */
+export const TOOL_DURABILITY_WAIT_MS = 2_000;
+
 export type { ScoopContextCallbacks } from './scoop-context/callbacks.js';
 export {
   abortableSleep,
@@ -193,26 +196,16 @@ export class ScoopContext {
       this.callbacks.onResponse(delta, true);
     },
     toolStart: (toolName, args, toolCallId) => {
-      // The assistant message that issued this call must be durable BEFORE
-      // the tool can have side effects: after a reload, an unanswered call in
-      // the restored history is what tells recovery "a tool was cut off"
-      // (report it, never re-run it) from "a model request was cut off"
-      // (repeat it).
-      this.sessions.persistNow();
-      if (toolCallId) this.turnJournal?.toolStarted(this.scoop.jid, toolCallId, toolName, args);
       this.callbacks.onToolStart?.(toolName, args, toolCallId);
+      return this.makeToolCallDurable(toolName, args, toolCallId);
     },
     toolUI: (toolName, requestId, html) => this.callbacks.onToolUI?.(toolName, requestId, html),
     toolUIDone: (requestId) => this.callbacks.onToolUIDone?.(requestId),
     toolProgress: (toolName, progress, toolCallId) =>
       this.callbacks.onToolProgress?.(toolName, progress, toolCallId),
-    toolResult: (toolName, text, isError, toolCallId) => {
-      if (toolCallId) this.turnJournal?.toolEnded(this.scoop.jid, toolCallId);
-      this.callbacks.onToolEnd?.(toolName, text, isError, toolCallId);
-    },
-    // A user message is flushed at once: it is the request a reload recovery
-    // repeats, and the debounce would leave a one-second window to lose it.
-    checkpoint: (immediate) => (immediate ? this.sessions.persistNow() : this.sessions.schedule()),
+    toolResult: (toolName, text, isError, toolCallId) =>
+      this.callbacks.onToolEnd?.(toolName, text, isError, toolCallId),
+    checkpoint: (message) => this.checkpoint(message),
     assistantMessageEnd: (message) => this.handleAssistantMessageEnd(message),
     turnStart: () => this.runBounds.enforceOnTurnStart(),
     turnCompleted: () => this.runBounds.recordCompletedTurn(),
@@ -939,10 +932,68 @@ export class ScoopContext {
     this.fs = null;
   }
 
-  /** The agent subscription: drop events after dispose, else route them. */
-  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): void {
+  /**
+   * The agent subscription: drop events after dispose, else route them. A
+   * returned promise holds the agent loop until it settles (tool start).
+   */
+  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): Promise<void> | void {
     if (this.disposed) return;
-    routeAgentEvent(event, this.eventSink, abortSignal);
+    return routeAgentEvent(event, this.eventSink, abortSignal);
+  }
+
+  /**
+   * Durability barrier before a tool runs. After a reload, recovery tells "a
+   * tool was cut off" (report it, never re-run it) from "a model request was
+   * cut off" (repeat it) by the unanswered call in the restored history and
+   * the journal entry naming it — so both must be stored BEFORE the tool can
+   * have side effects, or a reload in that window would repeat the request
+   * and re-issue a call that already ran. Bounded: a store that never answers
+   * delays the tool by {@link TOOL_DURABILITY_WAIT_MS}, never wedges it.
+   */
+  private async makeToolCallDurable(
+    toolName: string,
+    args: unknown,
+    toolCallId: string | undefined
+  ): Promise<void> {
+    const writes = Promise.all([
+      this.sessions.flush(),
+      toolCallId ? this.turnJournal?.toolStarted(this.scoop.jid, toolCallId, toolName, args) : null,
+    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), TOOL_DURABILITY_WAIT_MS);
+    });
+    try {
+      if ((await Promise.race([writes, deadline])) === 'timeout') {
+        log.warn('Tool call not yet durable; running it anyway', {
+          folder: this.scoop.folder,
+          toolName,
+        });
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Persist on a completed message. Two kinds are flushed at once instead of
+   * debounced, because reload recovery reads them: a user message is the
+   * request recovery repeats, and a tool result is what lets the journal
+   * forget its call — only once the result is stored, or a reload in between
+   * would find a finished call with no result and misreport it as lost.
+   */
+  private checkpoint(message?: AgentMessage): void {
+    const role = (message as { role?: unknown } | undefined)?.role;
+    if (role === 'user') {
+      this.sessions.persistNow();
+    } else if (role === 'toolResult') {
+      const { toolCallId } = message as ToolResultMessage;
+      void this.sessions
+        .flush()
+        .then(() => this.turnJournal?.toolEnded(this.scoop.jid, toolCallId));
+    } else {
+      this.sessions.schedule();
+    }
   }
 
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {

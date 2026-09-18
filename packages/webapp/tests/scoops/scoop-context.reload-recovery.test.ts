@@ -8,7 +8,11 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TurnJournal } from '../../src/scoops/scoop-context/turn-journal.js';
-import { ScoopContext, type ScoopContextCallbacks } from '../../src/scoops/scoop-context.js';
+import {
+  ScoopContext,
+  type ScoopContextCallbacks,
+  TOOL_DURABILITY_WAIT_MS,
+} from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 const cone: RegisteredScoop = {
@@ -39,7 +43,7 @@ function callbacks(): ScoopContextCallbacks {
 function journalSpy() {
   return {
     begin: vi.fn(),
-    toolStarted: vi.fn(),
+    toolStarted: vi.fn(async () => {}),
     toolEnded: vi.fn(),
     setGuestGates: vi.fn(),
     end: vi.fn(),
@@ -140,15 +144,62 @@ describe('ScoopContext turn journal', () => {
     await running;
   });
 
-  it('journals tool calls and makes the issuing message durable before the tool runs', () => {
+  it('holds the tool until the issuing message and its journal entry are stored', async () => {
     const { journal, canonical, emit, cb } = setup({
       messages: [{ role: 'user', content: 'go', timestamp: 1 }],
     });
-    emit({ type: 'tool_execution_start', toolName: 'bash', args: { c: 1 }, toolCallId: 'a' });
-    expect(canonical.syncAgentMessages).toHaveBeenCalledTimes(1);
-    expect(journal.toolStarted).toHaveBeenCalledWith('cone_1', 'a', 'bash', { c: 1 });
-    expect(cb.onToolStart).toHaveBeenCalledWith('bash', { c: 1 }, 'a');
+    let landConversation!: () => void;
+    canonical.syncAgentMessages.mockReturnValueOnce(
+      new Promise((resolve) => {
+        landConversation = () => resolve(null);
+      })
+    );
+    let landJournal!: () => void;
+    journal.toolStarted.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        landJournal = resolve;
+      })
+    );
 
+    let released = false;
+    const barrier = Promise.resolve(
+      emit({ type: 'tool_execution_start', toolName: 'bash', args: { c: 1 }, toolCallId: 'a' })
+    ).then(() => {
+      released = true;
+    });
+    expect(cb.onToolStart).toHaveBeenCalledWith('bash', { c: 1 }, 'a');
+    expect(journal.toolStarted).toHaveBeenCalledWith('cone_1', 'a', 'bash', { c: 1 });
+    expect(canonical.syncAgentMessages).toHaveBeenCalledTimes(1);
+
+    landConversation();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(released).toBe(false); // the journal entry is still in flight
+    landJournal();
+    await barrier;
+    expect(released).toBe(true);
+  });
+
+  it('a store that never answers delays the tool, never wedges it', async () => {
+    vi.useFakeTimers();
+    const { journal, emit } = setup({ messages: [{ role: 'user', content: 'go', timestamp: 1 }] });
+    journal.toolStarted.mockReturnValueOnce(new Promise<void>(() => {}));
+    let released = false;
+    void Promise.resolve(
+      emit({ type: 'tool_execution_start', toolName: 'bash', args: {}, toolCallId: 'a' })
+    ).then(() => {
+      released = true;
+    });
+    await vi.advanceTimersByTimeAsync(TOOL_DURABILITY_WAIT_MS - 1);
+    expect(released).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(released).toBe(true);
+  });
+
+  it('forgets a journaled call only once its result is stored', async () => {
+    const { journal, canonical, emit, cb } = setup({
+      messages: [{ role: 'user', content: 'go', timestamp: 1 }],
+    });
     emit({
       type: 'tool_execution_end',
       toolName: 'bash',
@@ -156,8 +207,29 @@ describe('ScoopContext turn journal', () => {
       isError: false,
       result: { content: [{ type: 'text', text: 'ok' }] },
     });
-    expect(journal.toolEnded).toHaveBeenCalledWith('cone_1', 'a');
     expect(cb.onToolEnd).toHaveBeenCalledWith('bash', 'ok', false, 'a');
+    // The result message is not in the history yet — nothing to release.
+    expect(journal.toolEnded).not.toHaveBeenCalled();
+
+    let landResult!: () => void;
+    canonical.syncAgentMessages.mockReturnValueOnce(
+      new Promise((resolve) => {
+        landResult = () => resolve(null);
+      })
+    );
+    const result = {
+      role: 'toolResult',
+      toolCallId: 'a',
+      toolName: 'bash',
+      content: [],
+      isError: false,
+      timestamp: 2,
+    };
+    emit({ type: 'message_end', message: result });
+    await Promise.resolve();
+    expect(journal.toolEnded).not.toHaveBeenCalled();
+    landResult();
+    await vi.waitFor(() => expect(journal.toolEnded).toHaveBeenCalledWith('cone_1', 'a'));
   });
 
   it('tool events without a call id are surfaced but not journaled', () => {
@@ -168,7 +240,7 @@ describe('ScoopContext turn journal', () => {
     expect(journal.toolEnded).not.toHaveBeenCalled();
   });
 
-  it('flushes a user message at once but debounces everything else', () => {
+  it('flushes a user message at once but debounces an assistant message', () => {
     vi.useFakeTimers();
     const { canonical, emit } = setup({ messages: [{ role: 'user', content: 'x', timestamp: 1 }] });
     emit({ type: 'message_end', message: { role: 'user', content: 'x', timestamp: 1 } });
@@ -176,7 +248,7 @@ describe('ScoopContext turn journal', () => {
 
     emit({
       type: 'message_end',
-      message: { role: 'toolResult', toolCallId: 'a', content: [], isError: false, timestamp: 2 },
+      message: { role: 'assistant', content: [], stopReason: 'stop', timestamp: 2 },
     });
     expect(canonical.syncAgentMessages).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1_500);
