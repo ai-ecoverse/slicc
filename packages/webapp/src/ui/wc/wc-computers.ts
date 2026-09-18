@@ -43,6 +43,8 @@ interface BoundComputerRow {
   toolCallId: string;
   computerId: string | null;
   watchToken: number | null;
+  loadGen: number;
+  frozenKey: string | null;
 }
 
 interface OverlayLike extends HTMLElement {
@@ -170,7 +172,14 @@ function onRowBind(event: Event): void {
     .detail;
   const computerId = parseComputerIdFromCommand(detail.command ?? el.command ?? '');
   const toolCallId = detail.toolCallId || el.toolCallId;
-  const row: BoundComputerRow = { el, toolCallId, computerId, watchToken: null };
+  const row: BoundComputerRow = {
+    el,
+    toolCallId,
+    computerId,
+    watchToken: null,
+    loadGen: 0,
+    frozenKey: null,
+  };
   ensureRuntime().bound.set(el, row);
   el.addEventListener('computer-row-unbind', onRowUnbind);
   if (computerId && toolCallId) getComputersStore().recordInvocation(computerId, toolCallId);
@@ -226,12 +235,24 @@ function refreshRow(row: BoundComputerRow): void {
   });
   row.el.frameMode = mode;
   syncRowWatch(row, shouldWatch);
+  const output = row.el.output ?? '';
   if (mode === 'live' && liveFrame) {
+    row.loadGen += 1;
+    row.frozenKey = null;
     row.el.frameSrc = frameToDataUrl(liveFrame);
     return;
   }
-  if (mode === 'frozen') void applyFrozenFrame(row, row.el.output ?? '');
-  else row.el.frameSrc = null;
+  if (mode === 'frozen') {
+    const key = frozenLoadKey(output);
+    if (row.frozenKey === key) return;
+    row.frozenKey = key;
+    row.loadGen += 1;
+    void applyFrozenFrame(row, output, row.loadGen);
+    return;
+  }
+  row.loadGen += 1;
+  row.frozenKey = null;
+  row.el.frameSrc = null;
 }
 
 function syncRowWatch(row: BoundComputerRow, shouldWatch: boolean): void {
@@ -245,16 +266,24 @@ function syncRowWatch(row: BoundComputerRow, shouldWatch: boolean): void {
   }
 }
 
-async function applyFrozenFrame(row: BoundComputerRow, output: string): Promise<void> {
+function frozenLoadKey(output: string): string {
+  return `${parseFrozenScreenPath(output) ?? ''}\n${parseFrozenImgSrc(output) ?? ''}`;
+}
+
+function frozenLoadStillValid(row: BoundComputerRow, gen: number, output: string): boolean {
+  if (runtime?.bound.get(row.el) !== row) return false;
+  if (row.loadGen !== gen) return false;
+  if (row.el.frameMode !== 'frozen') return false;
+  return frozenLoadKey(row.el.output ?? '') === frozenLoadKey(output);
+}
+
+async function applyFrozenFrame(row: BoundComputerRow, output: string, gen: number): Promise<void> {
   const path = parseFrozenScreenPath(output);
-  if (path) {
-    const src = await readFrozenPath(path);
-    if (src) {
-      row.el.frameSrc = src;
-      return;
-    }
-  }
-  row.el.frameSrc = parseFrozenImgSrc(output);
+  let src: string | null = null;
+  if (path) src = await readFrozenPath(path);
+  if (!src) src = parseFrozenImgSrc(output);
+  if (!frozenLoadStillValid(row, gen, output)) return;
+  row.el.frameSrc = src;
 }
 
 async function readFrozenPath(path: string): Promise<string | null> {

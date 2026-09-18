@@ -297,6 +297,44 @@ describe('wc-computers wiring', () => {
     await vi.waitFor(() => expect(missingOnly.frameSrc).toBeNull());
   });
 
+  it('does not paint a frozen file that resolves after the row goes live', async () => {
+    const store = getComputersStore();
+    store.setSender(() => undefined);
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    installWcComputers({
+      log,
+      openFs: async () => ({
+        readFile: async () => {
+          await gate;
+          return DECODABLE_PNG;
+        },
+      }),
+    });
+
+    const el = document.createElement('slicc-bash-renderer-computer');
+    el.command = 'computer -c jsh:fake screenshot';
+    el.toolCallId = 'call-1';
+    el.output = 'screen: /tmp/a.jpg';
+    document.body.append(el);
+    await vi.waitFor(() => expect(el.frameMode).toBe('frozen'));
+
+    applyFrame('jsh:fake');
+    await vi.waitFor(() => expect(el.frameMode).toBe('live'));
+    const liveSrc = el.frameSrc;
+    expect(liveSrc?.startsWith('data:image/jpeg;base64,')).toBe(true);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(el.frameMode).toBe('live');
+    expect(el.frameSrc).toBe(liveSrc);
+    expect(el.frameSrc?.startsWith('data:image/png;base64,')).toBe(false);
+  });
+
   it('keeps a frozen still until a pushed frame arrives, then shows LIVE', async () => {
     const store = getComputersStore();
     const sent: Array<{ type: string; id: string }> = [];
