@@ -18,21 +18,41 @@ export function isAuthExpiredError(content: string | null | undefined): boolean 
   return content.toLowerCase().includes('please log in again');
 }
 
-export interface QuotaExceededDetail {
+export interface ExhaustedBudgetDetail {
   message: string;
 
   resetsAt: string | null;
 }
 
-const QUOTA_ERROR_TYPE = 'quota_exceeded';
+const ADOBE_QUOTA_ERROR_TYPE = 'quota_exceeded';
 
-const QUOTA_FALLBACK_MESSAGE = 'The usage budget for this provider has been fully used.';
+const GROK_RESOURCE_MARKERS = [
+  'run out of available resources',
+  'ran out of available resources',
+  'run out of credits',
+  'ran out of credits',
+] as const;
+const GROK_SUBSCRIPTION_MARKERS = [
+  'active grok subscription',
+  'need a grok subscription',
+  'needs a grok subscription',
+] as const;
+
+const ADOBE_QUOTA_FALLBACK_MESSAGE = 'The usage budget for this provider has been fully used.';
+
+const GROK_EXHAUSTED_MESSAGE =
+  'Your Grok account has run out of credits or does not have an active subscription.';
 
 const QUOTA_CONNECT_CTA_RE = /\s*You can (?:also )?connect your own LLM provider\.?\s*$/i;
 
-export function isQuotaExceededError(content: string | null | undefined): boolean {
+export function isExhaustedBudgetError(content: string | null | undefined): boolean {
   if (typeof content !== 'string' || !content) return false;
-  return content.toLowerCase().includes(QUOTA_ERROR_TYPE);
+  const lower = content.toLowerCase();
+  if (lower.includes(ADOBE_QUOTA_ERROR_TYPE)) return true;
+  return (
+    GROK_RESOURCE_MARKERS.some((marker) => lower.includes(marker)) &&
+    GROK_SUBSCRIPTION_MARKERS.some((marker) => lower.includes(marker))
+  );
 }
 
 interface QuotaEnvelope {
@@ -52,18 +72,21 @@ function embeddedJsonObject(content: string): QuotaEnvelope | null {
   }
 }
 
-export function parseQuotaExceededError(
+export function parseExhaustedBudgetError(
   content: string | null | undefined
-): QuotaExceededDetail | null {
-  if (!isQuotaExceededError(content)) return null;
-  const envelope = embeddedJsonObject(content as string);
+): ExhaustedBudgetDetail | null {
+  if (typeof content !== 'string' || !isExhaustedBudgetError(content)) return null;
+  if (!content.toLowerCase().includes(ADOBE_QUOTA_ERROR_TYPE)) {
+    return { message: GROK_EXHAUSTED_MESSAGE, resetsAt: null };
+  }
+  const envelope = embeddedJsonObject(content);
   const raw = typeof envelope?.error?.message === 'string' ? envelope.error.message : '';
   const message = raw.replace(QUOTA_CONNECT_CTA_RE, '').trim();
   const resetsAt =
     typeof envelope?.error?.resets_at === 'string' && envelope.error.resets_at.length > 0
       ? envelope.error.resets_at
       : null;
-  return { message: message || QUOTA_FALLBACK_MESSAGE, resetsAt };
+  return { message: message || ADOBE_QUOTA_FALLBACK_MESSAGE, resetsAt };
 }
 
 export function isUserFixableError(content: string | null | undefined): boolean {
@@ -71,6 +94,6 @@ export function isUserFixableError(content: string | null | undefined): boolean 
     isNoApiKeyError(content) ||
     isInvalidModelError(content) ||
     isAuthExpiredError(content) ||
-    isQuotaExceededError(content)
+    isExhaustedBudgetError(content)
   );
 }

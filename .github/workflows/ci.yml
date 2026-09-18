@@ -3,7 +3,7 @@ run-name: staging-mutation-queue · CI · ${{ github.event.pull_request.number |
 
 on:
   pull_request:
-    branches: [main]
+    branches-ignore: [no-comment]
   push:
     branches: [automation/planning-artifact-cleanup]
   merge_group:
@@ -52,6 +52,7 @@ jobs:
       native-root-config: ${{ steps.filter.outputs.native-root-config }}
       speech: ${{ steps.filter.outputs.speech }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
+      is-stacked: ${{ steps.stacked.outputs.stacked }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
@@ -260,6 +261,34 @@ jobs:
             echo "leader=false" >> "$GITHUB_OUTPUT"
             echo "Queue position: $POSITION (skipping expensive jobs)"
           fi
+
+      - name: Detect stacked pull request
+        id: stacked
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "main" ]; then
+            echo "stacked=true" >> "$GITHUB_OUTPUT"
+            echo "Stacked PR (base: $BASE_REF); skipping ios-app-tests"
+          else
+            echo "stacked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate stacked output
+        if: always()
+        env:
+          STACKED: ${{ steps.stacked.outputs.stacked }}
+        run: |
+          set -euo pipefail
+          case "${STACKED}" in
+            true|false) ;;
+            *)
+              echo "::error::is-stacked must be exactly true or false, got: ${STACKED-}"
+              exit 1
+              ;;
+          esac
 
   lint:
     runs-on: ubuntu-latest
@@ -724,7 +753,7 @@ jobs:
       actions: read
       contents: read
     env:
-      RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}
+      RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') && needs.changes.outputs.is-stacked == 'false' }}
 
     timeout-minutes: 45
     steps:
@@ -1742,9 +1771,11 @@ jobs:
 
   ios-app-tests:
     needs: [changes, lint]
+
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
+      needs.changes.outputs.is-stacked == 'false' &&
       (needs.changes.outputs.ios-app == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
@@ -1968,6 +1999,7 @@ jobs:
         run: npm run bundle-size
 
   ci:
+    name: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && 'ci-stack' || 'ci' }}
     if: always()
     needs:
       [

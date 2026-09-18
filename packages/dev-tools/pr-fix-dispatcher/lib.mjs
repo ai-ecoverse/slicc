@@ -263,8 +263,10 @@ function bareCheckName(jobName) {
     .toLowerCase();
 }
 
+const CI_AGGREGATOR_JOBS = new Set(['ci', 'ci-stack']);
+
 export function isCiAggregatorJob(jobName) {
-  return bareCheckName(jobName) === 'ci';
+  return CI_AGGREGATOR_JOBS.has(bareCheckName(jobName));
 }
 
 function isCiAggregatorNoise(jobName, logExcerpt) {
@@ -281,6 +283,7 @@ export const CODE_WORKFLOW_NAME = 'CI';
 
 const NON_CODE_JOBS = new Set([
   'ci',
+  'ci-stack',
 
   'changes',
 ]);

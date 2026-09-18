@@ -201,6 +201,10 @@ describe('telemetry', () => {
       'llm',
       '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14.","resets_at":"2026-09-14T00:00:00.000Z"}}'
     );
+    trackError(
+      'llm',
+      '403 {"error":"You have either run out of available resources or do not have an active Grok subscription."}'
+    );
 
     const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
     expect(errorCalls).toHaveLength(0);
@@ -422,6 +426,10 @@ describe('telemetry', () => {
 
     trackError('llm', {
       error: { type: 'quota_exceeded', message: 'Weekly budget has been fully used.' },
+    });
+    trackError('llm', {
+      error:
+        'You have either run out of available resources or do not have an active Grok subscription.',
     });
     trackError('llm', { message: 'No API key configured for provider "anthropic".' });
     const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');

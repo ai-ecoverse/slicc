@@ -29,6 +29,27 @@ function filterPaths(name, nextName) {
   return [...workflow.slice(start, end).matchAll(/- '([^']+)'/g)].map((match) => match[1]);
 }
 
+function cloudflareWorkerSteps(job) {
+  const start = job.indexOf('\n    steps:\n');
+  expect(start, 'cloudflare-worker should have steps').toBeGreaterThanOrEqual(0);
+  return job
+    .slice(start + '\n    steps:\n'.length)
+    .split(/\n(?= {6}- )/)
+    .filter((chunk) => chunk.startsWith('      - '))
+    .map((step) => {
+      const name = step.match(/^ {6}- name: (.+)$/m)?.[1] ?? '';
+      const runInline = step.match(/^ {8}run: ([^\n|].*)$/m)?.[1] ?? '';
+      const runBlock = step.match(/^ {8}run: [|>]-?\n((?: {10}.*\n?)*)/m)?.[1] ?? '';
+      const run = `${runInline}\n${runBlock}`;
+      const ifInline = step.match(/^ {8}if: ([^\n|>].*)$/m)?.[1] ?? '';
+      const ifBlock = step.match(/^ {8}if: [|>]-?\n((?: {10}.*\n?)*)/m)?.[1] ?? '';
+      const secrets = [...step.matchAll(/\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/g)].map(
+        (match) => match[1]
+      );
+      return { name, run, if: `${ifInline}\n${ifBlock}`, secrets };
+    });
+}
+
 function workerStagingFilterPaths(name, nextMarker) {
   const filters = workerStagingWorkflow.indexOf('          filters: |');
   const start = workerStagingWorkflow.indexOf(`            ${name}:`, filters);
@@ -124,7 +145,7 @@ describe('CI critical-path routing', () => {
     expect(header).not.toContain('\n    if:');
 
     expect(header).toContain(
-      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}"
+      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') && needs.changes.outputs.is-stacked == 'false' }}"
     );
     expect(header).not.toContain('worker-staging-e2b-slicc-staging');
     expect(workerStagingWorkflow).not.toContain('worker-staging-e2b-slicc-staging');
@@ -175,6 +196,66 @@ describe('CI critical-path routing', () => {
     expect(workerStagingWorkflow).toContain(
       "SLICC_ARCHIVE_SMOKE: ${{ (steps.changes.outputs.r2 == 'true' || steps.changes.outputs.archive-smoke == 'true') && '1' || '' }}"
     );
+  });
+
+  it('runs stacked PRs without minting a required ci check or the simulator matrix', () => {
+    expect(workflow).toContain('branches-ignore: [no-comment]');
+    expect(workflow).not.toMatch(/pull_request:\n {4}branches: \[main\]/);
+    expect(workflow).toContain('is-stacked: ${{ steps.stacked.outputs.stacked }}');
+    expect(workflow).toContain('id: stacked');
+    const stacked = stepBody(jobBody('changes', 'lint'), 'Detect stacked pull request');
+    expect(stacked).toContain('EVENT_NAME: ${{ github.event_name }}');
+    expect(stacked).toContain('BASE_REF: ${{ github.base_ref }}');
+    expect(stacked).toContain(
+      'if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "main" ]; then'
+    );
+    expect(stacked).not.toContain('${{ github.event_name }}"');
+    expect(stacked).not.toContain('${{ github.base_ref }}"');
+
+    expect(stacked).toContain('set -euo pipefail');
+    const stackedValidate = stepBody(jobBody('changes', 'lint'), 'Validate stacked output');
+    expect(stackedValidate).toContain('if: always()');
+    expect(stackedValidate).toContain('true|false');
+
+    expect(worker.slice(0, worker.indexOf('    steps:'))).toContain(
+      "needs.changes.outputs.is-stacked == 'false'"
+    );
+
+    const iosTests = jobBody('ios-app-tests', 'global-install');
+    expect(iosTests).toContain("needs.changes.outputs.is-stacked == 'false'");
+    expect(iosTests).toContain("needs.changes.outputs.is-queue-leader == 'true'");
+
+    const swiftFollower = jobBody('swift-trayfollower', 'swift-widgetkit');
+    expect(swiftFollower).toContain("needs.changes.outputs.is-queue-leader == 'true'");
+    expect(swiftFollower).not.toContain('is-stacked');
+
+    const iosLint = jobBody('ios-app', 'ios-app-tests');
+    expect(iosLint).toContain("needs.changes.outputs.is-queue-leader == 'true'");
+    expect(iosLint).not.toContain('is-stacked');
+
+    const aggregate = workflow.slice(workflow.lastIndexOf('\n  ci:'));
+    expect(aggregate).toContain(
+      "name: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main') && 'ci-stack' || 'ci' }}"
+    );
+    expect(aggregate).toContain('if: always()');
+    expect(aggregate).toContain("contains(needs.*.result, 'failure')");
+    expect(aggregate).toContain("contains(needs.*.result, 'cancelled')");
+    expect(workflow).not.toMatch(/pull_request:\n {4}types:/);
+  });
+
+  it('gates every mutating cloudflare-worker step on RUN_CLOUDFLARE_STAGING', () => {
+    const mutating = cloudflareWorkerSteps(worker).filter((step) => {
+      const hasForeignSecret = step.secrets.some((name) => name !== 'GITHUB_TOKEN');
+      const runForMatch = step.run.replace(/--job\s+"[^"]*"/g, '');
+      const looksMutating = /deploy|wrangler|R2|secrets|smoke|preview/i.test(
+        `${step.name}\n${runForMatch}`
+      );
+      return hasForeignSecret || looksMutating;
+    });
+    expect(mutating.length, 'expected at least one mutating step').toBeGreaterThan(0);
+    for (const step of mutating) {
+      expect(step.if, step.name || '(unnamed)').toContain("env.RUN_CLOUDFLARE_STAGING == 'true'");
+    }
   });
 
   it('publishes phase timing summaries for both Cloudflare staging paths', () => {

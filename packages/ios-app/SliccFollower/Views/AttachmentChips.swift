@@ -97,16 +97,17 @@ struct AttachmentChips: View {
 
 
 
-
 struct ErrorCard: View {
     let message: ChatMessage
 
     
-    private var quota: QuotaExceededDetail? { QuotaExceededDetail(content: message.content) }
+    private var exhaustedBudget: ExhaustedBudgetDetail? {
+        ExhaustedBudgetDetail(content: message.content)
+    }
 
     
     private var headerLabel: String {
-        quota == nil ? "Something went wrong" : QuotaExceededDetail.label
+        exhaustedBudget == nil ? "Something went wrong" : ExhaustedBudgetDetail.label
     }
 
     private let cardBackground = Color(red: 0x3A / 255, green: 0x14 / 255, blue: 0x18 / 255)
@@ -123,7 +124,7 @@ struct ErrorCard: View {
             }
             .foregroundStyle(Color(red: 0xF8 / 255, green: 0x71 / 255, blue: 0x71 / 255))
 
-            Text(quota?.body ?? message.content)
+            Text(exhaustedBudget?.body ?? message.content)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.white.opacity(0.9))
                 .textSelection(.enabled)

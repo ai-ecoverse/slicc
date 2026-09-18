@@ -12,8 +12,7 @@ import Foundation
 
 
 
-
-struct QuotaExceededDetail: Equatable {
+struct ExhaustedBudgetDetail: Equatable {
     
     
     let message: String
@@ -27,10 +26,21 @@ struct QuotaExceededDetail: Equatable {
     static let fallbackMessage = "The usage budget for this provider has been fully used."
 
     
+    private static let adobeTypeToken = "quota_exceeded"
+
     
     
     
-    private static let typeToken = "quota_exceeded"
+    private static let grokResourceMarkers = [
+        "run out of available resources", "ran out of available resources",
+        "run out of credits", "ran out of credits",
+    ]
+    private static let grokSubscriptionMarkers = [
+        "active grok subscription", "need a grok subscription",
+        "needs a grok subscription",
+    ]
+    private static let grokMessage =
+        "Your Grok account has run out of credits or does not have an active subscription."
 
     
     private static let connectCtaPattern = #"\s*You can (also )?connect your own LLM provider\.?\s*$"#
@@ -38,9 +48,18 @@ struct QuotaExceededDetail: Equatable {
     
     
     
-    
     init?(content: String) {
-        guard content.lowercased().contains(Self.typeToken) else { return nil }
+        let lower = content.lowercased()
+        let isAdobe = lower.contains(Self.adobeTypeToken)
+        let isGrok =
+            Self.grokResourceMarkers.contains(where: lower.contains)
+            && Self.grokSubscriptionMarkers.contains(where: lower.contains)
+        guard isAdobe || isGrok else { return nil }
+        guard isAdobe else {
+            message = Self.grokMessage
+            resetsAt = nil
+            return
+        }
         let error = Self.errorEnvelope(in: content)
         let raw = error?["message"] as? String ?? ""
         let stripped = raw.replacingOccurrences(

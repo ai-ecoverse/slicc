@@ -13,7 +13,9 @@ export function shouldMutateCloudflareStaging({
   isForkPr = false,
   isDependabot = false,
   isQueueLeader = true,
-}) {
+  isStacked,
+} = {}) {
+  if (isStacked !== false && isStacked !== 'false') return false;
   const trusted = eventName !== 'pull_request' || (!isForkPr && !isDependabot);
   if (!trusted) return false;
   if (eventName === 'merge_group') return isQueueLeader === true;

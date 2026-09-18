@@ -1,3 +1,5 @@
+import { isExhaustedBudgetError } from '../../core/error-families.js';
+
 export function isImageProcessingError(msg: string): boolean {
   return (
     /image exceeds.*maximum/i.test(msg) ||
@@ -8,6 +10,7 @@ export function isImageProcessingError(msg: string): boolean {
 }
 
 export function isNonRetryableError(msg: string): boolean {
+  if (isExhaustedBudgetError(msg)) return true;
   return (
     /\b(401|403|404|405|410|422)\b/.test(msg) ||
     /unauthorized|forbidden|authentication.*failed|invalid.*api.?key/i.test(msg) ||
@@ -22,6 +25,7 @@ export function isNonRetryableError(msg: string): boolean {
 }
 
 export function isRetryableError(msg: string): boolean {
+  if (isExhaustedBudgetError(msg)) return false;
   return (
     /\b429\b|rate.*limit|too.*many.*requests|quota.*exceeded/i.test(msg) ||
     /\b(500|502|503|504)\b|internal.*server|bad.*gateway|service.*unavailable|gateway.*timeout/i.test(

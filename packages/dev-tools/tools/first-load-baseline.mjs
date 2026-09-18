@@ -250,6 +250,24 @@ function run(cmd, args, opts = {}) {
   return (res.stdout ?? '').trim();
 }
 
+const BASE_REF_NAME = /^[A-Za-z0-9._/-]+$/;
+
+export function resolveBaselineRef({ args = [], env = {} } = {}) {
+  const flagged = args.find((a) => typeof a === 'string' && a.startsWith('--baseline='));
+  if (flagged !== undefined) return flagged.slice('--baseline='.length);
+
+  if (env.GITHUB_EVENT_NAME === 'pull_request') {
+    const name = String(env.GITHUB_BASE_REF ?? '');
+    if (!name || name.includes('..') || !BASE_REF_NAME.test(name)) {
+      throw new Error(
+        `GITHUB_BASE_REF must be a safe branch name so the per-change delta can be measured; got ${JSON.stringify(name)}`
+      );
+    }
+    return `origin/${name}`;
+  }
+  return 'origin/main';
+}
+
 export function resolveMergeBase(repoRoot, ref) {
   const opts = { cwd: repoRoot };
   if (run('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], opts) === null) {

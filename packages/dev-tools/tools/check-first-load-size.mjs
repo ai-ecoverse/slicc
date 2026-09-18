@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { measureMergeBase } from './first-load-baseline.mjs';
+import { measureMergeBase, resolveBaselineRef } from './first-load-baseline.mjs';
 import {
   bytesToKb,
   checkFirstLoad,
@@ -19,9 +19,16 @@ const WORKER_ENTRY_PREFIX = 'kernel-worker-';
 
 const args = process.argv.slice(2);
 const jsonOnly = args.includes('--json');
-const baselineRef = (
-  args.find((a) => a.startsWith('--baseline=')) ?? '--baseline=origin/main'
-).slice('--baseline='.length);
+function fail(message) {
+  console.error(`check-first-load-size: ${message}`);
+  process.exit(1);
+}
+let baselineRef;
+try {
+  baselineRef = resolveBaselineRef({ args, env: process.env });
+} catch (err) {
+  fail(err.message);
+}
 
 const isMergeGroup = process.env.GITHUB_EVENT_NAME === 'merge_group';
 const isCiPullRequest = process.env.GITHUB_EVENT_NAME === 'pull_request';
@@ -29,11 +36,6 @@ const MERGE_GROUP_NOTE =
   'merge_group: a queue batch is cumulative (every PR up to its position), so the per-change ' +
   'delta does not apply here — the absolute ceilings are the queue-stage check. The per-change ' +
   'delta is enforced on the pull_request run, which fails outright if it cannot measure.';
-
-function fail(message) {
-  console.error(`check-first-load-size: ${message}`);
-  process.exit(1);
-}
 
 function measureUiDir(uiDir) {
   const assetsDir = resolve(uiDir, 'assets');

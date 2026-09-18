@@ -849,11 +849,13 @@ describe('isNoApiKeyError + errorCardEl', () => {
   });
 });
 
-describe('quota-exceeded errorCardEl', () => {
+describe('exhausted-budget errorCardEl', () => {
   const ADOBE_429 =
     '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14. You can also connect your own LLM provider.","resets_at":"2026-09-14T00:00:00.000Z"}}';
+  const GROK_403 =
+    '403 {"error":"You have either run out of available resources or do not have an active Grok subscription. Manage your subscription at https://grok.com/?_s=usage."}';
 
-  function quotaCard(content = ADOBE_429): HTMLElement {
+  function budgetCard(content = ADOBE_429): HTMLElement {
     const [card] = messageEls({
       id: 'err-q',
       role: 'assistant',
@@ -870,7 +872,7 @@ describe('quota-exceeded errorCardEl', () => {
   });
 
   it('replaces the raw JSON envelope and the generic header', () => {
-    const card = quotaCard();
+    const card = budgetCard();
     expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
     expect(card.getAttribute('label')).toBe('Out of AI budget');
     expect(card.getAttribute('message')).toBe(
@@ -880,8 +882,18 @@ describe('quota-exceeded errorCardEl', () => {
     expect(card.getAttribute('message-id')).toBe('err-q');
   });
 
+  it('renders the Grok credit refusal as provider-appropriate budget copy', () => {
+    const card = budgetCard(GROK_403);
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+    expect(card.getAttribute('message')).toBe(
+      'Your Grok account has run out of credits or does not have an active subscription.'
+    );
+    expect(card.getAttribute('message')).not.toContain('403');
+    expect(card.getAttribute('message')).not.toContain('grok.com');
+  });
+
   it('offers only "Add a provider" when no other provider is connected', () => {
-    const card = quotaCard();
+    const card = budgetCard(GROK_403);
 
     expect(card.getAttribute('action')).toBe('settings');
     expect(card.getAttribute('button-label')).toBe('Add a provider');
@@ -890,7 +902,7 @@ describe('quota-exceeded errorCardEl', () => {
 
   it('leads with "Switch provider and try again" when another provider is connected', () => {
     accountStore.getAlternativeModelProviders.mockReturnValue(['openai']);
-    const card = quotaCard();
+    const card = budgetCard();
     expect(card.getAttribute('action')).toBe('change-model');
     expect(card.getAttribute('button-label')).toBe('Switch provider and try again');
     expect(card.getAttribute('secondary-action')).toBe('settings');
@@ -899,7 +911,7 @@ describe('quota-exceeded errorCardEl', () => {
 
   it('excludes the failing provider when asking for alternatives', () => {
     accountStore.getSelectedProvider.mockReturnValue('adobe');
-    quotaCard();
+    budgetCard();
     expect(accountStore.getAlternativeModelProviders).toHaveBeenCalledWith('adobe');
   });
 
@@ -907,20 +919,20 @@ describe('quota-exceeded errorCardEl', () => {
     accountStore.getSelectedProvider.mockImplementation(() => {
       throw new Error('localStorage unavailable');
     });
-    const card = quotaCard();
+    const card = budgetCard();
     expect(card.getAttribute('action')).toBe('settings');
     expect(card.getAttribute('label')).toBe('Out of AI budget');
   });
 
   it('spells out a reset instant the provider prose omits', () => {
-    const card = quotaCard(
+    const card = budgetCard(
       '429 {"error":{"type":"quota_exceeded","message":"Your budget is used up.","resets_at":"2026-09-14T00:00:00.000Z"}}'
     );
     expect(card.getAttribute('message')).toMatch(/^Your budget is used up\. Resets on .+\.$/);
   });
 
   it('never states the reset twice when the prose already names it', () => {
-    const card = quotaCard();
+    const card = budgetCard();
     expect(card.getAttribute('message')?.match(/Resets on/g)).toHaveLength(1);
   });
 
@@ -937,6 +949,24 @@ describe('quota-exceeded errorCardEl', () => {
     expect(card.getAttribute('label')).toBe('Out of AI budget');
     expect(card.getAttribute('message')).toBe(
       'Weekly budget has been fully used. Resets on 2026-09-14.'
+    );
+  });
+
+  it('keeps a wrapped Grok scoop error readable in a read-only transcript', () => {
+    const [card] = messageEls(
+      {
+        id: 'err-grok',
+        role: 'assistant',
+        content: `Scoop "digest" failed with unrecoverable error: ${GROK_403}`,
+        timestamp: 1,
+        error: true,
+      },
+      { readOnly: true }
+    );
+    expect(card.hasAttribute('no-action')).toBe(true);
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+    expect(card.getAttribute('message')).toBe(
+      'Your Grok account has run out of credits or does not have an active subscription.'
     );
   });
 });

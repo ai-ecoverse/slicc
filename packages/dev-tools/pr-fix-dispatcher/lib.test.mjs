@@ -451,6 +451,24 @@ describe('classifyFailures', () => {
     expect(out.reason).not.toMatch(/aggregator/i);
   });
 
+  it('does not promote ci-stack through the unknown-fallback path', () => {
+    const stacked = classifyFailures([{ name: 'ci-stack', logExcerpt: AGGREGATOR_EXCERPT }]);
+    expect(stacked.kind).toBe('unknown');
+    expect(stacked.reason).toMatch(/aggregator/i);
+
+    const prefixed = classifyFailures([
+      { name: 'CI / ci-stack', logExcerpt: AGGREGATOR_EXCERPT },
+      { name: 'lint', logExcerpt: '' },
+    ]);
+    expect(prefixed.kind).toBe('code');
+    expect(prefixed.category).toBe('lint');
+    expect(prefixed.reason).not.toMatch(/ci-stack/i);
+
+    const empty = classifyFailures([{ name: 'CI / ci-stack', logExcerpt: '' }]);
+    expect(empty.kind).toBe('unknown');
+    expect(empty.category).toBeNull();
+  });
+
   it('promotes a well-known code job with an empty excerpt to dispatch', () => {
     for (const name of ['webapp', 'e2e', 'chrome-extension', 'node-matrix-tests', 'bundle-size']) {
       expect(
@@ -475,6 +493,9 @@ describe('aggregator job helpers', () => {
     expect(isCiAggregatorJob('ci')).toBe(true);
     expect(isCiAggregatorJob('CI')).toBe(true);
     expect(isCiAggregatorJob('CI / ci')).toBe(true);
+    expect(isCiAggregatorJob('ci-stack')).toBe(true);
+    expect(isCiAggregatorJob('CI / ci-stack')).toBe(true);
+    expect(isCiAggregatorJob('CI / CI-STACK')).toBe(true);
     expect(isCiAggregatorJob('lint')).toBe(false);
     expect(isCiAggregatorJob('CI / lint')).toBe(false);
   });
@@ -491,7 +512,7 @@ describe('aggregator job helpers', () => {
   });
 
   it('returns null for the jobs that evaluate no code', () => {
-    for (const name of ['ci', 'CI / ci', 'changes', '', '   ']) {
+    for (const name of ['ci', 'CI / ci', 'ci-stack', 'CI / ci-stack', 'changes', '', '   ']) {
       expect(wellKnownCodeCategory(name), name).toBeNull();
     }
   });
@@ -504,11 +525,21 @@ describe('aggregator job helpers', () => {
     expect(wellKnownCodeCategory('swift-server (macos-15)')).toBe('build');
 
     expect(wellKnownCodeCategory('ci (merge_group)')).toBeNull();
+    expect(wellKnownCodeCategory('ci-stack (pull_request)')).toBeNull();
   });
 
   it('fetches non-aggregator jobs before the ci aggregator', () => {
     const ordered = prioritizeLogFetch([{ name: 'ci' }, { name: 'lint' }, { name: 'mystery' }]);
     expect(ordered.map((f) => f.name)).toEqual(['lint', 'mystery', 'ci']);
+  });
+
+  it('fetches non-aggregator jobs before ci-stack', () => {
+    const ordered = prioritizeLogFetch([
+      { name: 'CI / ci-stack' },
+      { name: 'lint' },
+      { name: 'mystery' },
+    ]);
+    expect(ordered.map((f) => f.name)).toEqual(['lint', 'mystery', 'CI / ci-stack']);
   });
 });
 

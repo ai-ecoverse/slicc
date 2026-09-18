@@ -15,6 +15,7 @@ describe('shouldMutateCloudflareStaging', () => {
         eventName: 'pull_request',
         isForkPr: false,
         isQueueLeader: false,
+        isStacked: false,
       })
     ).toBe(true);
   });
@@ -45,6 +46,7 @@ describe('shouldMutateCloudflareStaging', () => {
       shouldMutateCloudflareStaging({
         eventName: 'merge_group',
         isQueueLeader: true,
+        isStacked: false,
       })
     ).toBe(true);
     expect(
@@ -56,7 +58,40 @@ describe('shouldMutateCloudflareStaging', () => {
   });
 
   it('runs for ordinary push events', () => {
-    expect(shouldMutateCloudflareStaging({ eventName: 'push' })).toBe(true);
+    expect(shouldMutateCloudflareStaging({ eventName: 'push', isStacked: false })).toBe(true);
+  });
+
+  it('skips stacked pull requests', () => {
+    expect(
+      shouldMutateCloudflareStaging({
+        eventName: 'pull_request',
+        isForkPr: false,
+        isStacked: true,
+        isQueueLeader: true,
+      })
+    ).toBe(false);
+    expect(
+      shouldMutateCloudflareStaging({
+        eventName: 'pull_request',
+        isForkPr: false,
+        isStacked: 'true',
+        isQueueLeader: true,
+      })
+    ).toBe(false);
+  });
+
+  it('skips mutation when the stacked output is missing, empty, or garbage', () => {
+    const trusted = {
+      eventName: 'pull_request',
+      isForkPr: false,
+      isQueueLeader: true,
+    };
+    expect(shouldMutateCloudflareStaging(trusted)).toBe(false);
+    expect(shouldMutateCloudflareStaging({ ...trusted, isStacked: undefined })).toBe(false);
+    expect(shouldMutateCloudflareStaging({ ...trusted, isStacked: '' })).toBe(false);
+    expect(shouldMutateCloudflareStaging({ ...trusted, isStacked: 'garbage' })).toBe(false);
+    expect(shouldMutateCloudflareStaging({ ...trusted, isStacked: 'FALSE' })).toBe(false);
+    expect(shouldMutateCloudflareStaging({ ...trusted, isStacked: 'false' })).toBe(true);
   });
 });
 

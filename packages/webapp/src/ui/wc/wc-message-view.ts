@@ -21,12 +21,12 @@ import { GELATIERE_SPRINKLE_NAME } from '../../base/gelatiere-constants.js';
 import { describeGelatiereLick } from '../../base/gelatiere-store.js';
 import { isLickChannel } from '../../base/lick-channels.js';
 import {
+  type ExhaustedBudgetDetail,
   isAuthExpiredError,
   isInvalidModelError,
   isNoApiKeyError,
   NO_API_KEY_ERROR_PREFIX,
-  parseQuotaExceededError,
-  type QuotaExceededDetail,
+  parseExhaustedBudgetError,
 } from '../../core/error-families.js';
 import { trackImageView } from '../../kernel/telemetry.js';
 import {
@@ -1080,7 +1080,7 @@ function delegationEls(message: ChatMessage): HTMLElement[] {
   return [line, bubble];
 }
 
-const QUOTA_ERROR_LABEL = 'Out of AI budget';
+const EXHAUSTED_BUDGET_LABEL = 'Out of AI budget';
 
 function alternativeProviders(): string[] {
   try {
@@ -1090,14 +1090,14 @@ function alternativeProviders(): string[] {
   }
 }
 
-function quotaBody(detail: QuotaExceededDetail): string {
+function exhaustedBudgetBody(detail: ExhaustedBudgetDetail): string {
   if (detail.resetsAt === null || /reset/i.test(detail.message)) return detail.message;
   const when = new Date(detail.resetsAt);
   if (Number.isNaN(when.getTime())) return detail.message;
   return `${detail.message} Resets on ${when.toLocaleDateString(undefined, { dateStyle: 'long' })}.`;
 }
 
-function quotaCtaAttrs(): Record<string, string> {
+function exhaustedBudgetCtaAttrs(): Record<string, string> {
   if (alternativeProviders().length === 0) {
     return { action: 'settings', 'button-label': 'Add a provider' };
   }
@@ -1115,17 +1115,17 @@ function errorCardEl(message: ChatMessage, readOnly: boolean): HTMLElement {
     'message-id': message.id,
   };
 
-  const quota = parseQuotaExceededError(message.content);
-  if (quota) {
-    attrs.label = QUOTA_ERROR_LABEL;
-    attrs.message = quotaBody(quota);
+  const budget = parseExhaustedBudgetError(message.content);
+  if (budget) {
+    attrs.label = EXHAUSTED_BUDGET_LABEL;
+    attrs.message = exhaustedBudgetBody(budget);
   }
 
   if (readOnly) {
     attrs['no-action'] = '';
     return el('slicc-error-card', attrs);
   }
-  if (quota) return el('slicc-error-card', { ...attrs, ...quotaCtaAttrs() });
+  if (budget) return el('slicc-error-card', { ...attrs, ...exhaustedBudgetCtaAttrs() });
   if (isNoApiKeyError(message.content)) attrs.action = 'settings';
   else if (isInvalidModelError(message.content)) attrs.action = 'change-model';
   else if (isAuthExpiredError(message.content)) attrs.action = 'login';
