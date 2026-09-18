@@ -56,19 +56,21 @@ export function isAuthExpiredError(content: string | null | undefined): boolean 
 }
 
 /**
- * Structured detail parsed out of a provider quota refusal. The Adobe proxy
- * answers an exhausted budget with
+ * Provider-neutral detail parsed out of an exhausted AI budget. The Adobe
+ * proxy answers an exhausted budget with
  * `429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been
  * fully used. Resets on 2026-09-14. You can also connect your own LLM
  * provider.","resets_at":"2026-09-14T00:00:00.000Z"}}` — the whole envelope
- * reaches the error card verbatim, which is why the card parses it instead of
- * showing raw JSON under a generic header.
+ * reaches the error card verbatim. Grok answers the same user state as a 403
+ * explaining that the account ran out of resources or has no active Grok
+ * subscription. Both become this shape so rendering, retries, transcripts,
+ * and telemetry agree despite the providers' different status codes.
  */
-export interface QuotaExceededDetail {
+export interface ExhaustedBudgetDetail {
   /**
-   * The provider's own explanation, with the trailing "connect your own LLM
-   * provider" sentence dropped: the card's CTAs now DO that, so leaving the
-   * prose in would tell the user to go find an affordance they are looking at.
+   * Provider-appropriate explanation, with any trailing "connect your own LLM
+   * provider" sentence dropped: the card's CTAs now DO that, so leaving it in
+   * would tell the user to find an affordance they are already looking at.
    */
   message: string;
   /** ISO-8601 instant the budget refills, when the provider sent one. */
@@ -76,26 +78,52 @@ export interface QuotaExceededDetail {
 }
 
 /** The `error.type` the Adobe proxy stamps on an exhausted-budget refusal. */
-const QUOTA_ERROR_TYPE = 'quota_exceeded';
+const ADOBE_QUOTA_ERROR_TYPE = 'quota_exceeded';
+
+/** Stable halves of Grok's 403 credit/subscription refusal. */
+const GROK_RESOURCE_MARKERS = [
+  'run out of available resources',
+  'ran out of available resources',
+  'run out of credits',
+  'ran out of credits',
+] as const;
+const GROK_SUBSCRIPTION_MARKERS = [
+  'active grok subscription',
+  'need a grok subscription',
+  'needs a grok subscription',
+  'need a subscription',
+  'needs a subscription',
+] as const;
 
 /**
  * Fallback body for a `quota_exceeded` envelope whose `message` is missing or
  * empty — the type alone still tells the user what happened.
  */
-const QUOTA_FALLBACK_MESSAGE = 'The usage budget for this provider has been fully used.';
+const ADOBE_QUOTA_FALLBACK_MESSAGE = 'The usage budget for this provider has been fully used.';
+
+/** Readable copy for Grok's status-prefixed or JSON-wrapped 403 body. */
+const GROK_EXHAUSTED_MESSAGE =
+  'Your Grok account has run out of credits or does not have an active subscription.';
 
 /** Trailing self-service sentence the card's CTAs replace. */
 const QUOTA_CONNECT_CTA_RE = /\s*You can (?:also )?connect your own LLM provider\.?\s*$/i;
 
 /**
- * Detect a cone failure caused by an exhausted provider budget (the Adobe
- * rate-limit family). Matched on the machine-readable `error.type` rather than
- * the prose, so re-worded proxy copy or a `Scoop … failed with unrecoverable
- * error: ` wrapper never drops it out of detection.
+ * Detect a cone failure caused by an exhausted provider budget. Adobe is
+ * matched on its machine-readable `error.type`; Grok is matched on the two
+ * independently meaningful halves of its 403 refusal. Matching the complete
+ * Grok condition keeps ordinary permission failures and transient 429 rate
+ * limits outside this family. Substring matching also survives a `Scoop …
+ * failed with unrecoverable error: ` wrapper.
  */
-export function isQuotaExceededError(content: string | null | undefined): boolean {
+export function isExhaustedBudgetError(content: string | null | undefined): boolean {
   if (typeof content !== 'string' || !content) return false;
-  return content.toLowerCase().includes(QUOTA_ERROR_TYPE);
+  const lower = content.toLowerCase();
+  if (lower.includes(ADOBE_QUOTA_ERROR_TYPE)) return true;
+  return (
+    GROK_RESOURCE_MARKERS.some((marker) => lower.includes(marker)) &&
+    GROK_SUBSCRIPTION_MARKERS.some((marker) => lower.includes(marker))
+  );
 }
 
 /** Envelope shape read out of a `quota_exceeded` body — every field unverified. */
@@ -123,25 +151,27 @@ function embeddedJsonObject(content: string): QuotaEnvelope | null {
 }
 
 /**
- * Parse a `quota_exceeded` failure into the pieces the error card renders.
- * Returns `null` for anything that is not that family, so callers can use it
- * as the detect-and-parse step in one call. A malformed or truncated envelope
- * still yields a detail — the family is established by
- * {@link isQuotaExceededError}, and a parse miss must not fall back to
- * dumping JSON at the user.
+ * Parse an exhausted-budget failure into the pieces the error card renders.
+ * Returns `null` for anything outside that family, so callers can use it as
+ * the detect-and-parse step in one call. A malformed or truncated Adobe
+ * envelope still yields a detail; a Grok refusal gets stable provider-specific
+ * prose instead of exposing an adapter prefix or management URL.
  */
-export function parseQuotaExceededError(
+export function parseExhaustedBudgetError(
   content: string | null | undefined
-): QuotaExceededDetail | null {
-  if (!isQuotaExceededError(content)) return null;
-  const envelope = embeddedJsonObject(content as string);
+): ExhaustedBudgetDetail | null {
+  if (typeof content !== 'string' || !isExhaustedBudgetError(content)) return null;
+  if (!content.toLowerCase().includes(ADOBE_QUOTA_ERROR_TYPE)) {
+    return { message: GROK_EXHAUSTED_MESSAGE, resetsAt: null };
+  }
+  const envelope = embeddedJsonObject(content);
   const raw = typeof envelope?.error?.message === 'string' ? envelope.error.message : '';
   const message = raw.replace(QUOTA_CONNECT_CTA_RE, '').trim();
   const resetsAt =
     typeof envelope?.error?.resets_at === 'string' && envelope.error.resets_at.length > 0
       ? envelope.error.resets_at
       : null;
-  return { message: message || QUOTA_FALLBACK_MESSAGE, resetsAt };
+  return { message: message || ADOBE_QUOTA_FALLBACK_MESSAGE, resetsAt };
 }
 
 /** Whether an error belongs to one of the four user-fixable families. */
@@ -150,6 +180,6 @@ export function isUserFixableError(content: string | null | undefined): boolean 
     isNoApiKeyError(content) ||
     isInvalidModelError(content) ||
     isAuthExpiredError(content) ||
-    isQuotaExceededError(content)
+    isExhaustedBudgetError(content)
   );
 }

@@ -313,8 +313,8 @@ function isViteDevFrame(line: string): boolean {
 function sanitizeErrorTarget(details: unknown): string | null | undefined {
   const raw = errorDetailsToRawString(details);
   if (raw === undefined) return details === undefined || details === null ? undefined : null;
-  // Match the raw envelope first so a `429 {"error":{"type":"quota_exceeded"}}`
-  // body still drops even after we unwrap to the inner `message`.
+  // Match the raw provider refusal first so Adobe's `quota_exceeded` token or
+  // Grok's credit/subscription pair survives any structured-message unwrap.
   if (isUserFixableError(raw)) return null;
   const formatted = formatErrorDetails(details) ?? unwrapStructuredErrorMessage(raw);
   if (isUserFixableError(formatted)) return null;

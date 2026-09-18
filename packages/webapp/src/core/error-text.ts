@@ -10,7 +10,7 @@
  * render path so those families stay countable.
  *
  * Objects are never `JSON.stringify`'d: only allowlisted `message` /
- * `error.message` (and `error.type` for the user-fixable filter) are
+ * `error.message` / `error` (and `error.type` for the user-fixable filter) are
  * extracted. Unknown bags are dropped rather than beaconed.
  *
  * @see https://github.com/ai-ecoverse/slicc/issues/3035
@@ -66,8 +66,9 @@ function formatErrorInstance(error: Error): string {
 
 /**
  * Allowlisted fields only. Combining `error.type` with `message` keeps
- * `quota_exceeded` visible to `isUserFixableError` without serializing the
- * rest of the bag.
+ * Adobe's `quota_exceeded` visible to `isUserFixableError` without serializing
+ * the rest of the bag. A string-valued `error` likewise preserves Grok's
+ * credit/subscription refusal through the same filter.
  */
 function objectErrorText(obj: object): string | undefined {
   const message = messageFromUnknown(obj);

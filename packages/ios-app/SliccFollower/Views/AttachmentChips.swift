@@ -87,10 +87,9 @@ struct AttachmentChips: View {
 ///
 /// Mirrors `slicc-error-card.ts`: a red-tinted card with an uppercase
 /// "Something went wrong" header over the raw error text. The exhausted-budget
-/// family is the one exception the leader also makes: its envelope is parsed
-/// into prose under an "Out of AI budget" header (`QuotaExceededDetail`),
-/// because a raw `429 {"error":{"type":"quota_exceeded",…}}` line tells the
-/// reader nothing they can use.
+/// family is the one exception the leader also makes: Adobe's quota envelope
+/// and Grok's credit/subscription refusal are parsed into provider-appropriate
+/// prose under an "Out of AI budget" header (`ExhaustedBudgetDetail`).
 ///
 /// The web card also offers a contextual action (`Try again`, `Open Settings`,
 /// `Change model`, `Log in again`, and the quota card's "Switch provider and
@@ -102,11 +101,13 @@ struct ErrorCard: View {
     let message: ChatMessage
 
     /// Non-nil when this failure is the exhausted-provider-budget family.
-    private var quota: QuotaExceededDetail? { QuotaExceededDetail(content: message.content) }
+    private var exhaustedBudget: ExhaustedBudgetDetail? {
+        ExhaustedBudgetDetail(content: message.content)
+    }
 
     /// Header copy: the budget family names itself, everything else stays generic.
     private var headerLabel: String {
-        quota == nil ? "Something went wrong" : QuotaExceededDetail.label
+        exhaustedBudget == nil ? "Something went wrong" : ExhaustedBudgetDetail.label
     }
 
     private let cardBackground = Color(red: 0x3A / 255, green: 0x14 / 255, blue: 0x18 / 255)
@@ -123,7 +124,7 @@ struct ErrorCard: View {
             }
             .foregroundStyle(Color(red: 0xF8 / 255, green: 0x71 / 255, blue: 0x71 / 255))
 
-            Text(quota?.body ?? message.content)
+            Text(exhaustedBudget?.body ?? message.content)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.white.opacity(0.9))
                 .textSelection(.enabled)

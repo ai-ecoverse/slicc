@@ -105,6 +105,9 @@ Invariants a reviewer must catch; mechanism in the linked docs.
 - **Provider quirks** (`docs/pitfalls.md`): attach the Adobe proxy's `X-Session-Id` at the call
   site; Claude Bedrock capability shims live in `providers/claude-model-version.ts`, not the call
   site; OpenRouter (Free) is `providers/openrouter-free.ts` (`docs/oauth-intercept.md`).
+- **Provider budget failures** (`docs/webapp-details.md`): `core/error-families.ts` is the shared
+  Adobe/Grok exhausted-budget classifier for retries, cards, transcripts, and telemetry; plain 429
+  rate limits stay transient. Keep the iOS mirror in `Models/ErrorFamilies.swift` case-for-case.
 - **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` removes only
   `localStorage['slicc_cloud_managed']` providers (not user-added); `?connect=1` is login-only.
 

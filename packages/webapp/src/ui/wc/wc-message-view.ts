@@ -32,12 +32,12 @@ import { GELATIERE_SPRINKLE_NAME } from '../../base/gelatiere-constants.js';
 import { describeGelatiereLick } from '../../base/gelatiere-store.js';
 import { isLickChannel } from '../../base/lick-channels.js';
 import {
+  type ExhaustedBudgetDetail,
   isAuthExpiredError,
   isInvalidModelError,
   isNoApiKeyError,
   NO_API_KEY_ERROR_PREFIX,
-  parseQuotaExceededError,
-  type QuotaExceededDetail,
+  parseExhaustedBudgetError,
 } from '../../core/error-families.js';
 import { trackImageView } from '../../kernel/telemetry.js';
 import {
@@ -1301,7 +1301,7 @@ function delegationEls(message: ChatMessage): HTMLElement[] {
 }
 
 /** Header label for the exhausted-provider-budget card. */
-const QUOTA_ERROR_LABEL = 'Out of AI budget';
+const EXHAUSTED_BUDGET_LABEL = 'Out of AI budget';
 
 /**
  * Providers, other than the one that just failed, the user could switch to
@@ -1320,12 +1320,12 @@ function alternativeProviders(): string[] {
 }
 
 /**
- * Card body for a parsed quota refusal. The provider's own prose already names
- * the reset date in the Adobe envelope, so the structured `resets_at` is only
+ * Card body for a parsed budget refusal. The provider's own prose already names
+ * the reset date in Adobe's envelope, so the structured `resets_at` is only
  * spelled out when the message does NOT mention a reset — otherwise the card
  * would say it twice, in two formats.
  */
-function quotaBody(detail: QuotaExceededDetail): string {
+function exhaustedBudgetBody(detail: ExhaustedBudgetDetail): string {
   if (detail.resetsAt === null || /reset/i.test(detail.message)) return detail.message;
   const when = new Date(detail.resetsAt);
   if (Number.isNaN(when.getTime())) return detail.message;
@@ -1333,9 +1333,9 @@ function quotaBody(detail: QuotaExceededDetail): string {
 }
 
 /**
- * CTAs for the exhausted-budget card. "Try again" cannot work — the budget is
- * gone until it resets — so the affordances become the two remediations that
- * DO work:
+ * CTAs for the exhausted-budget card. Plain retry cannot work until the
+ * allowance resets or the account changes, so offer the two immediate
+ * remediations:
  * - Another connected provider exists → primary "Switch provider and try
  *   again" (`change-model`, which `wireWcNav` routes to the composer model
  *   picker and which auto-replays this turn once a model is picked), with
@@ -1344,7 +1344,7 @@ function quotaBody(detail: QuotaExceededDetail): string {
  *   (`settings`), because a model picker holding only the exhausted account
  *   would be a dead end.
  */
-function quotaCtaAttrs(): Record<string, string> {
+function exhaustedBudgetCtaAttrs(): Record<string, string> {
   if (alternativeProviders().length === 0) {
     return { action: 'settings', 'button-label': 'Add a provider' };
   }
@@ -1370,7 +1370,7 @@ function quotaCtaAttrs(): Record<string, string> {
  * - Auth-expired errors → `action="login"`, fires `slicc-error-login`; routed
  *   to the connected provider's OAuth window by `wireWcNav` since the retry
  *   path would just re-hit the same expired session.
- * - Exhausted-budget errors → see {@link quotaCtaAttrs}. The only family that
+ * - Exhausted-budget errors → see {@link exhaustedBudgetCtaAttrs}. The only family that
  *   also rewrites the label and body, and it does that even in a read-only
  *   transcript: a reader who cannot act is still owed readable text instead of
  *   a raw JSON envelope.
@@ -1380,11 +1380,11 @@ function errorCardEl(message: ChatMessage, readOnly: boolean): HTMLElement {
     message: message.content,
     'message-id': message.id,
   };
-  // Detect-and-parse in one call: a non-null detail IS the quota family.
-  const quota = parseQuotaExceededError(message.content);
-  if (quota) {
-    attrs.label = QUOTA_ERROR_LABEL;
-    attrs.message = quotaBody(quota);
+  // Detect-and-parse in one call: a non-null detail IS the budget family.
+  const budget = parseExhaustedBudgetError(message.content);
+  if (budget) {
+    attrs.label = EXHAUSTED_BUDGET_LABEL;
+    attrs.message = exhaustedBudgetBody(budget);
   }
   // A read-only transcript (a scoop, #2312) shows WHAT failed but offers no
   // CTA: retry, settings, sign-in and "Change model" all act on behalf of a
@@ -1395,7 +1395,7 @@ function errorCardEl(message: ChatMessage, readOnly: boolean): HTMLElement {
     attrs['no-action'] = '';
     return el('slicc-error-card', attrs);
   }
-  if (quota) return el('slicc-error-card', { ...attrs, ...quotaCtaAttrs() });
+  if (budget) return el('slicc-error-card', { ...attrs, ...exhaustedBudgetCtaAttrs() });
   if (isNoApiKeyError(message.content)) attrs.action = 'settings';
   else if (isInvalidModelError(message.content)) attrs.action = 'change-model';
   else if (isAuthExpiredError(message.content)) attrs.action = 'login';

@@ -269,6 +269,26 @@ down. Three providers report one:
 - **`cost --json` is an envelope**: `{ "budget": <window|null>, "scoops": [ … ] }`, and it is now
   parseable in the no-data case too (it used to answer with prose).
 
+### Exhausted provider budgets
+
+An exhausted allowance is a user-remediable state, not a transient transport failure.
+`core/error-families.ts` owns the provider-neutral classification and detail shape used by the
+retry loop, chat card, read-only transcript, and telemetry filter:
+
+- Adobe's structured `429` is exhausted only when its envelope contains
+  `error.type: "quota_exceeded"`; its message and optional `resets_at` are preserved.
+- Grok's `403` is exhausted only when the body contains both the out-of-resources/credits phrase
+  and the active-subscription phrase. A generic 403 is still an authorization failure.
+- A plain `429 Too Many Requests` or ordinary rate-limit message is transient and keeps the
+  bounded retry policy.
+
+`scoops/scoop-context/error-classification.ts` consults this family before status-based retry
+rules. `ui/wc/wc-message-view.ts` renders **Out of AI budget** with switch/add-provider actions,
+never plain Retry; read-only transcripts keep the readable body and omit actions. The same family
+is intentionally dropped from RUM because it already has dedicated remediation. The iOS follower
+mirrors the response cases and copy in `Models/ErrorFamilies.swift`, while remaining actionless
+because provider changes are leader-side state.
+
 ## Context Compaction
 
 - Path: `packages/webapp/src/core/context-compaction.ts`. `scoop-context.ts` passes `model.contextWindow`; compaction fires at window minus reserve (200K fallback when absent/zero). Cone memory appends to `/workspace/CLAUDE.md`; agentic budget covers the whole file, legacy restructuring only `## Auto-extracted`. `agentic-memory` on → compaction builds no memory (#2003); the curator owns it.

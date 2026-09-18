@@ -288,6 +288,11 @@ To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your ow
 
 The other providers are in YMMV territory. Please file an issue if you find them working or broken.
 
+When a provider's longer-lived AI allowance is exhausted, SLICC stops automatic retries and
+offers to switch or add a provider instead. Adobe weekly-budget responses preserve their reset
+date, while Grok credit/subscription refusals use the same **Out of AI budget** treatment. Brief
+429 rate limits remain retryable.
+
 ## Secrets
 
 SLICC can safely manage API keys, tokens, and credentials with domain-scoped injection. The agent never sees real secret values — only masked placeholders — and secrets are only injected into requests destined for authorized domains. This protects against prompt-injection attacks that try to exfiltrate credentials.

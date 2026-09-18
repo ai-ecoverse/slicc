@@ -1283,9 +1283,9 @@ export class WcChatController {
     // so `messageEls` routes it to the card instead of the plain bubble.
     // `event.error` is typed `string` on the wire but production OpTel
     // shows non-strings arriving here (#3035) — coerce those so the card
-    // never renders `[object Object]`. Leave strings intact: quota
-    // envelopes (`429 {"error":{"type":"quota_exceeded",…}}`) must still
-    // reach `errorCardEl` so it can detect the family and read `resets_at`.
+    // never renders `[object Object]`. Leave strings intact: provider budget
+    // refusals must still reach `errorCardEl` so it can identify Adobe/Grok
+    // and preserve Adobe's optional `resets_at` metadata.
     // Notice-only cards (`endTurn: false`) still get the retry affordance,
     // but they must not clear a mid-turn / mid-`scoop_wait` processing state
     // on the owner that received a child fatal report (#3262).
@@ -1302,7 +1302,7 @@ export class WcChatController {
   /**
    * Best-effort RUM beacon for user-visible error cards that have NO dedicated
    * handler (the default "Try again" variant). The handled families — no-api-key,
-   * invalid-model, auth-expired, quota-exceeded — own remediation UX and are
+   * invalid-model, auth-expired, exhausted-budget — own remediation UX and are
    * user-fixable known states, so beaconing them would only add triage noise;
    * `isUserFixableError` is the single list all three skip sites share. A
    * distinct `'error-card'` source lets the nightly triage distinguish these
