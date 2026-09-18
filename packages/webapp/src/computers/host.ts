@@ -19,6 +19,7 @@ import type {
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { KernelTransport } from '../kernel/transport.js';
 import type { ComputerBackend } from './backend.js';
+import { fitComputerFrame } from './encode-frame.js';
 import { coerceComputerFrameBytes } from './frame-bytes.js';
 import { installComputerRegistry } from './registry.js';
 
@@ -70,17 +71,27 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
   const offChange = registry.onChange(pushList);
 
   const pushFrame = (id: string, frame: ComputerFrame, generation: number): void => {
+    void emitFittedFrame(id, frame, generation);
+  };
+
+  const emitFittedFrame = async (
+    id: string,
+    frame: ComputerFrame,
+    generation: number
+  ): Promise<void> => {
     const watcher = watchers.get(id);
     if (!watcher || watcher.generation !== generation) return;
-    const copy = coerceComputerFrameBytes(frame.bytes);
+    const fitted = await fitComputerFrame(frame, watcher.maxWidth);
+    if (watcher.generation !== generation) return;
+    const copy = coerceComputerFrameBytes(fitted.bytes);
     send(
       {
         type: 'computer-frame',
         id,
-        seq: frame.seq,
-        mime: frame.mime,
-        width: frame.width,
-        height: frame.height,
+        seq: fitted.seq,
+        mime: fitted.mime,
+        width: fitted.width,
+        height: fitted.height,
         bytes: copy,
       },
       [copy.buffer]
@@ -113,8 +124,10 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
     };
     watchers.set(msg.id, watcher);
     if (backend.subscribe) {
-      watcher.unsub = backend.subscribe(fps, (frame) =>
-        pushFrame(msg.id, frame, watcher.generation)
+      watcher.unsub = backend.subscribe(
+        fps,
+        (frame) => pushFrame(msg.id, frame, watcher.generation),
+        maxWidth
       );
       return;
     }

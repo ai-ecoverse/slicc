@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { jpegSize, MINIMAL_JPEG, pngBytesToJpeg } from '../../src/computers/encode-frame.js';
+import {
+  fitComputerFrame,
+  jpegSize,
+  MINIMAL_JPEG,
+  pngBytesToJpeg,
+} from '../../src/computers/encode-frame.js';
 import { frozenFrameLine, frozenFramePath, writeFrozenFrame } from '../../src/computers/frames.js';
 
 describe('encode-frame', () => {
@@ -19,6 +24,36 @@ describe('encode-frame', () => {
     expect(jpegSize(jpeg)).toEqual({ width: 1, height: 1 });
     expect(jpeg[0]).toBe(0xff);
     expect(jpeg[1]).toBe(0xd8);
+  });
+
+  it('caps a 640-wide JPEG at maxWidth 480', async () => {
+    const wide = Uint8Array.of(
+      0xff,
+      0xd8,
+      0xff,
+      0xc0,
+      0x00,
+      0x0b,
+      0x08,
+      0x01,
+      0x90,
+      0x02,
+      0x80,
+      0x01,
+      0x01,
+      0x11,
+      0x00,
+      0xff,
+      0xd9
+    );
+    expect(jpegSize(wide)).toEqual({ width: 640, height: 400 });
+    const fitted = await fitComputerFrame(
+      { seq: 1, mime: 'image/jpeg', width: 640, height: 400, bytes: wide },
+      480
+    );
+    expect(fitted.width).toBe(480);
+    expect(fitted.height).toBe(300);
+    expect(jpegSize(fitted.bytes)).toEqual({ width: 480, height: 300 });
   });
 });
 

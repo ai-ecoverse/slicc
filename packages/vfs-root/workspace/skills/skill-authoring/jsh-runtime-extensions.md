@@ -498,7 +498,7 @@ computer.register({
   async screenshot() {
     return { seq: 1, mime: 'image/png', width: 640, height: 400, bytes };
   },
-  subscribe(fps, onFrame) {
+  subscribe(fps, onFrame, maxWidth) {
     const timer = setInterval(() => {
       void onFrame({ seq: 1, mime: 'image/png', width: 640, height: 400, bytes });
     }, 1000 / fps);
@@ -513,7 +513,7 @@ computer.register({
 });
 ```
 
-Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh` (640×400 clock, frame counter, click marker; OffscreenCanvas JPEG or stored-deflate PNG). The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
+Handlers: required `id`, `capabilities`, `screenshot`, `input`; optional `title`, `size`, `softKeys`, `text`, `exec`, `subscribe(fps, onFrame, maxWidth)` (return an unsubscribe). Example: `/workspace/skills/jshd/examples/fake-computer.jsh` (640×400 clock, frame counter, click marker; OffscreenCanvas JPEG or stored-deflate PNG). The real ADB `screenrecord` / `phone-view` consumer lives in the skills repo, not this tree.
 
 ## Reaching these from sprinkles & dips
 

@@ -3,7 +3,7 @@
  * subscribes to host `computer-call` events (keep-alive via `onEvent`)
  * and answers screenshot/input/subscribe over the `computer` RPC channel.
  *
- * `handlers.subscribe(fps, onFrame)` is the push path. Frames go back
+ * `handlers.subscribe(fps, onFrame, maxWidth)` is the push path. Frames go back
  * with `computer.frame`; `unsubscribe` and unregister tear the stream
  * down. Screenshot on the host returns the last cached frame while the
  * stream is live.
@@ -31,7 +31,7 @@ export interface RealmComputerHandlers {
   text?: () => Promise<string | null>;
   input: (events: ComputerInputEvent[]) => Promise<void>;
   exec?: (command: string) => Promise<ComputerExecResult>;
-  subscribe?(fps: number, onFrame: (frame: ComputerFrame) => void): () => void;
+  subscribe?(fps: number, onFrame: (frame: ComputerFrame) => void, maxWidth?: number): () => void;
 }
 
 export interface RealmComputerApi {
@@ -130,7 +130,13 @@ async function invoke(
       if (!handlers.exec) throw new Error('exec is not supported');
       return handlers.exec(String(payload.args[0] ?? ''));
     case 'subscribe':
-      return startStream(rpc, handlers, Number(payload.args[0]) || 2, stream);
+      return startStream(
+        rpc,
+        handlers,
+        Number(payload.args[0]) || 2,
+        Number(payload.args[1]) || undefined,
+        stream
+      );
     case 'unsubscribe':
       stream.getStop()?.();
       stream.setStop(null);
@@ -146,15 +152,20 @@ function startStream(
   rpc: RealmRpcClient,
   handlers: RealmComputerHandlers,
   fps: number,
+  maxWidth: number | undefined,
   stream: StreamSlot
 ): { ok: true } {
   stream.getStop()?.();
   if (!handlers.subscribe) throw new Error('subscribe is not supported');
-  const stop = handlers.subscribe(fps, (frame) => {
-    void rpc.call('computer', 'frame', [handlers.id, frame]).catch(() => {
-      /* realm already gone */
-    });
-  });
+  const stop = handlers.subscribe(
+    fps,
+    (frame) => {
+      void rpc.call('computer', 'frame', [handlers.id, frame]).catch(() => {
+        /* realm already gone */
+      });
+    },
+    maxWidth
+  );
   stream.setStop(() => {
     try {
       stop();

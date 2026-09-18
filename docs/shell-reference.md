@@ -2250,7 +2250,7 @@ Runs inside the tab's origin, so session cookies and same-origin headers are aut
 
 #### `sliccy:computer` — jsh-hosted computer backends
 
-`require('sliccy:computer').register(handlers)` registers a computer the `computer` shell command can screenshot and poke. `register()` subscribes to host `computer-call` events (keep-alive via `onEvent`); the disposer unregisters. Optional `handlers.subscribe(fps, onFrame)` pushes frames over `computer.frame`; `unsubscribe` and unregister tear the stream down. Companion: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
+`require('sliccy:computer').register(handlers)` registers a computer the `computer` shell command can screenshot and poke. `register()` subscribes to host `computer-call` events (keep-alive via `onEvent`); the disposer unregisters. Optional `handlers.subscribe(fps, onFrame, maxWidth)` pushes frames over `computer.frame`; `unsubscribe` and unregister tear the stream down. Companion: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`. Example: `/workspace/skills/jshd/examples/fake-computer.jsh`.
 
 #### `sliccy:skill` — skill-root paths, config, tokens
 
