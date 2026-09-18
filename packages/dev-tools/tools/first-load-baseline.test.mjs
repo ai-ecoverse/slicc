@@ -14,7 +14,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveBaselineRef } from './check-first-load-size.mjs';
 import {
   dependencyDrift,
   discoverWorkspacePackages,
@@ -22,6 +21,7 @@ import {
   materializeLinkedParents,
   prerequisiteWorkspaceBuilds,
   realignDriftedDependencies,
+  resolveBaselineRef,
   resolveMergeBase,
 } from './first-load-baseline.mjs';
 

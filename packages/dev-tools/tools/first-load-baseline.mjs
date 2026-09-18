@@ -55,6 +55,7 @@
  * zero measurement noise.
  *
  * IO lives here; the pure grading logic is in `first-load-size-lib.mjs`.
+ * `resolveBaselineRef` is also here so the CLI can stay a top-level script.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -534,6 +535,37 @@ function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, { encoding: 'utf8', ...opts });
   if (res.status !== 0) return null;
   return (res.stdout ?? '').trim();
+}
+
+/** Conservative branch-name check for `GITHUB_BASE_REF`. `..` is rejected separately. */
+const BASE_REF_NAME = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Resolve the first-load comparison ref.
+ *
+ * An explicit `--baseline=<ref>` always wins (including `none`). On a
+ * `pull_request` with no flag, use `origin/${GITHUB_BASE_REF}` so a stacked
+ * child is measured against its parent, not `main`. A missing or hostile
+ * base name fails — a PR run must not silently fall back to `origin/main`.
+ * Every other event (local, push, merge_group) keeps `origin/main`.
+ *
+ * @param {{ args?: string[], env?: NodeJS.ProcessEnv | Record<string, string | undefined> }} opts
+ * @returns {string}
+ */
+export function resolveBaselineRef({ args = [], env = {} } = {}) {
+  const flagged = args.find((a) => typeof a === 'string' && a.startsWith('--baseline='));
+  if (flagged !== undefined) return flagged.slice('--baseline='.length);
+
+  if (env.GITHUB_EVENT_NAME === 'pull_request') {
+    const name = String(env.GITHUB_BASE_REF ?? '');
+    if (!name || name.includes('..') || !BASE_REF_NAME.test(name)) {
+      throw new Error(
+        `GITHUB_BASE_REF must be a safe branch name so the per-change delta can be measured; got ${JSON.stringify(name)}`
+      );
+    }
+    return `origin/${name}`;
+  }
+  return 'origin/main';
 }
 
 /**
