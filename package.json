@@ -148,6 +148,13 @@
     "vite": "8.2.2",
     "vitest": "4.1.11"
   },
+  "overrides": {
+    "kokoro-js": {
+      "@huggingface/transformers": {
+        "sharp": "$sharp"
+      }
+    }
+  },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css}": [
       "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
