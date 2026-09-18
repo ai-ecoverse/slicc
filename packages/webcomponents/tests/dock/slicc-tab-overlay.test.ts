@@ -558,6 +558,35 @@ describe('slicc-tab-overlay', () => {
       copy.softKeys![0].label = 'mutated';
       expect(el.tabs[0].softKeys![0].label).toBe('Home');
     });
+
+    it('patches a screenshot without replacing the card or its buttons', async () => {
+      const el = mount((o) => {
+        o.tabs = [COMPUTER];
+      });
+      el.show();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const card = cards(el)[0];
+      const img = card.querySelector('img.shot');
+      const home = card.querySelector<HTMLButtonElement>('.softkey');
+      home?.focus();
+      expect(el.patchTabScreenshot(COMPUTER.id, 'data:image/png;base64,BBBB')).toBe(true);
+      expect(cards(el)[0]).toBe(card);
+      expect(card.querySelector('img.shot')).toBe(img);
+      expect(img?.getAttribute('src')).toBe('data:image/png;base64,BBBB');
+      expect(el.shadowRoot?.activeElement).toBe(home);
+    });
+
+    it('restores a focused soft-key after a full tabs remesh', async () => {
+      const el = mount((o) => {
+        o.tabs = [COMPUTER];
+      });
+      el.show();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      cards(el)[0].querySelector<HTMLButtonElement>('.softkey')?.focus();
+      el.tabs = [{ ...COMPUTER, screenshot: 'data:image/png;base64,BBBB' }];
+      const restored = cards(el)[0].querySelector<HTMLButtonElement>('[data-keysym="Home"]');
+      expect(el.shadowRoot?.activeElement).toBe(restored);
+    });
   });
 
   it('lays the scrim out fixed and full-viewport (real Chromium)', () => {

@@ -174,6 +174,28 @@ describe('wc-computers wiring', () => {
     expect(store.isWatching('jsh:fake')).toBe(false);
   });
 
+  it('patches overlay thumbnails in place so a focused soft-key survives a new frame', async () => {
+    const store = getComputersStore();
+    store.setSender(() => undefined);
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    applyFrame('jsh:fake', 1);
+    installWcComputers({ log });
+    const overlay = document.createElement('slicc-tab-overlay') as HTMLElement & {
+      tabs: ReturnType<typeof mergeOverlayTabs>;
+    };
+    document.body.append(overlay);
+    bindComputerOverlay(overlay, log);
+    overlay.setAttribute('open', '');
+    await vi.waitFor(() => expect(overlay.shadowRoot?.querySelector('img.shot')).toBeTruthy());
+    const img = overlay.shadowRoot?.querySelector('img.shot');
+    const home = overlay.shadowRoot?.querySelector<HTMLButtonElement>('.softkey');
+    home?.focus();
+    expect(overlay.shadowRoot?.activeElement).toBe(home);
+    applyFrame('jsh:fake', 2);
+    expect(overlay.shadowRoot?.querySelector('img.shot')).toBe(img);
+    expect(overlay.shadowRoot?.activeElement).toBe(home);
+  });
+
   it('upgrades overlay 2 fps/480 to lightbox 4 fps/768 without dropping the overlay watch', async () => {
     const store = getComputersStore();
     const sent: Array<{ type: string; id: string; fps?: number; maxWidth?: number }> = [];

@@ -50,6 +50,7 @@ interface BoundComputerRow {
 
 interface OverlayLike extends HTMLElement {
   tabs: TabDescriptor[];
+  patchTabScreenshot?(id: string, src: string): boolean;
 }
 
 interface ComputersRuntime {
@@ -435,6 +436,14 @@ function remeshOverlay(overlay: OverlayLike): void {
   overlay.tabs = mergeOverlayTabs(overlay.tabs);
 }
 
+function paintOverlayFrame(overlay: OverlayLike, id: string, frame: ComputerFrame): void {
+  syncOverlayWatches(overlay);
+  if (!overlay.hasAttribute('open')) return;
+  const src = frameToDataUrl(frame);
+  if (src && overlay.patchTabScreenshot?.(computerOverlayId(id), src)) return;
+  overlay.tabs = mergeOverlayTabs(overlay.tabs);
+}
+
 /**
  * Overlay cards only get thumbnails from `store.lastFrame`, and that map
  * fills from `computer-frame` pushes. Watch every registered computer
@@ -516,7 +525,7 @@ export function bindComputerOverlay(overlay: OverlayLike, log?: BootStageLogger)
   const mo = new MutationObserver(() => remeshOverlay(overlay));
   mo.observe(overlay, { attributes: true, attributeFilter: ['open'] });
   const offList = store.onList(() => remeshOverlay(overlay));
-  const offFrame = store.onFrame(() => remeshOverlay(overlay));
+  const offFrame = store.onFrame((id, frame) => paintOverlayFrame(overlay, id, frame));
   remeshOverlay(overlay);
   return () => {
     overlay.removeEventListener('tab-activate', onActivate);

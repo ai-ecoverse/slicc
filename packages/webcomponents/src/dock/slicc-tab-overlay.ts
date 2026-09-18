@@ -389,6 +389,22 @@ export class SliccTabOverlay extends HTMLElement {
     }
   }
 
+  /**
+   * Swap a card's screenshot without rebuilding the overlay. Returns false
+   * when the card is missing or still showing the placeholder, so the caller
+   * can remesh.
+   */
+  patchTabScreenshot(id: string, src: string): boolean {
+    const card = this.#overlay?.querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
+    if (!card) return false;
+    const img = card.querySelector('img.shot');
+    if (!(img instanceof HTMLImageElement)) return false;
+    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    const tab = this.#tabs.find((t) => t.id === id);
+    if (tab) tab.screenshot = src;
+    return true;
+  }
+
   /** Open the overlay (no-op if already open). */
   show(): void {
     if (!this.open) this.open = true;
@@ -546,6 +562,7 @@ export class SliccTabOverlay extends HTMLElement {
 
   /** Rebuild the overlay shell + the current card grid (or the empty state). */
   #render(): void {
+    const restore = this.#captureOverlayFocus();
     const bar = h(
       'div',
       { class: 'bar', part: 'bar' },
@@ -572,6 +589,37 @@ export class SliccTabOverlay extends HTMLElement {
       if (e.target === this.#overlay) this.#close('backdrop');
     });
     this.#root.replaceChildren(this.#overlay);
+    this.#restoreOverlayFocus(restore);
+  }
+
+  #captureOverlayFocus(): { tabId: string; keysym: string | null; close: boolean } | null {
+    const active = this.shadowRoot?.activeElement as HTMLElement | null;
+    if (!active) return null;
+    if (active.classList.contains('close')) return { tabId: '', keysym: null, close: true };
+    const card = active.closest('[data-tab-id]');
+    const tabId = card?.getAttribute('data-tab-id');
+    if (!tabId) return null;
+    const keysym = active.classList.contains('softkey') ? active.getAttribute('data-keysym') : null;
+    return { tabId, keysym, close: false };
+  }
+
+  #restoreOverlayFocus(
+    restore: { tabId: string; keysym: string | null; close: boolean } | null
+  ): void {
+    if (!restore) return;
+    if (restore.close) {
+      this.#overlay?.querySelector<HTMLElement>('.close')?.focus();
+      return;
+    }
+    const card = this.#overlay?.querySelector(`[data-tab-id="${CSS.escape(restore.tabId)}"]`);
+    if (!card) return;
+    if (restore.keysym) {
+      card
+        .querySelector<HTMLElement>(`.softkey[data-keysym="${CSS.escape(restore.keysym)}"]`)
+        ?.focus();
+      return;
+    }
+    (card as HTMLElement).focus();
   }
 
   /** Manage open-state focus + the document key listener. */
