@@ -203,10 +203,10 @@ describe('url probe and backend', () => {
       return ac.signal;
     });
     try {
-      const stall: UrlComputerFetch = async (_url, init) => {
+      const stall: UrlComputerFetch = (_url, init) => {
         const signal = init?.signal;
-        if (!signal) throw new Error('missing abort signal');
-        await new Promise<never>((_resolve, reject) => {
+        if (!signal) return Promise.reject(new Error('missing abort signal'));
+        return new Promise((_resolve, reject) => {
           signal.addEventListener(
             'abort',
             () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
