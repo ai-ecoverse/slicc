@@ -30,7 +30,12 @@ export interface ComputerCommandDeps {
   /** Injected in tests; production lazy-wraps `createProxiedFetch`. */
   urlFetch?: (
     url: string,
-    init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }
+    init?: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string | Uint8Array;
+      signal?: AbortSignal;
+    }
   ) => Promise<{
     status: number;
     headers: Headers | Record<string, string>;

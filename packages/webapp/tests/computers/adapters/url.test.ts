@@ -5,6 +5,7 @@ import {
   normalizeComputerBase,
   parseRemoteDescriptor,
   probeUrlComputer,
+  URL_REQUEST_TIMEOUT_MS,
   UrlComputerBackend,
   type UrlComputerFetch,
   urlComputerId,
@@ -191,6 +192,71 @@ describe('url probe and backend', () => {
     await expect(probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710')).rejects.toThrow(
       'GET /computer returned 503'
     );
+  });
+
+  it('aborts stalled probe/screenshot/text/input when the request timeout fires', async () => {
+    const timeouts: AbortController[] = [];
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      expect(ms).toBe(URL_REQUEST_TIMEOUT_MS);
+      const ac = new AbortController();
+      timeouts.push(ac);
+      return ac.signal;
+    });
+    try {
+      const stall: UrlComputerFetch = async (_url, init) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error('missing abort signal');
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            { once: true }
+          );
+        });
+      };
+      const probe = probeUrlComputer(stall, 'http://127.0.0.1:5710');
+      expect(timeoutSpy).toHaveBeenCalledWith(URL_REQUEST_TIMEOUT_MS);
+      timeouts.at(-1)?.abort();
+      await expect(probe).rejects.toMatchObject({ name: 'AbortError' });
+
+      const live = mockFetch({});
+      const desc = await probeUrlComputer(live, 'http://127.0.0.1:5710');
+      const backend = new UrlComputerBackend(stall, 'http://127.0.0.1:5710', desc);
+      const shot = backend.screenshot({ format: 'jpeg' });
+      const text = backend.text();
+      const input = backend.input([{ type: 'text', text: 'x' }]);
+      expect(timeouts.length).toBe(5);
+      for (const ac of timeouts.slice(-3)) ac.abort();
+      await expect(shot).rejects.toMatchObject({ name: 'AbortError' });
+      await expect(text).rejects.toMatchObject({ name: 'AbortError' });
+      await expect(input).rejects.toMatchObject({ name: 'AbortError' });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('cancels an in-flight screenshot when the polling host aborts', async () => {
+    const fetchImpl = mockFetch({});
+    const desc = await probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710');
+    let seen: AbortSignal | undefined;
+    const stall: UrlComputerFetch = (_url, init) => {
+      seen = init?.signal;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          { once: true }
+        );
+      });
+    };
+    const backend = new UrlComputerBackend(stall, 'http://127.0.0.1:5710', desc);
+    const ac = new AbortController();
+    const pending = backend.screenshot({ format: 'jpeg', signal: ac.signal });
+    expect(seen).toBeDefined();
+    expect(seen?.aborted).toBe(false);
+    ac.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(seen?.aborted).toBe(true);
   });
 
   it('binds a native WebSocket only when the remote advertises push frames', async () => {

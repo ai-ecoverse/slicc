@@ -635,13 +635,15 @@ async function writePostActionFrame(
   registry: ComputerRegistry
 ): Promise<CmdResult> {
   const maxWidth = target.descriptor.lastShot?.width ?? 768;
+  const abort = new AbortController();
   let frame;
   try {
     frame = await raceTimeout(
-      target.backend.screenshot({ format: 'jpeg', maxWidth }),
+      target.backend.screenshot({ format: 'jpeg', maxWidth, signal: abort.signal }),
       POST_ACTION_TIMEOUT_MS
     );
   } catch (err) {
+    abort.abort();
     return fail(
       `screenshot failed after input: ${err instanceof Error ? err.message : String(err)}`
     );

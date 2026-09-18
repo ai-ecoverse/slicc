@@ -18,12 +18,25 @@ import { fitComputerFrame, jpegSize, pngSize } from '../encode-frame.js';
 
 export type UrlComputerFetch = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string | Uint8Array;
+    signal?: AbortSignal;
+  }
 ) => Promise<{
   status: number;
   headers: Headers | Record<string, string>;
   body: Uint8Array;
 }>;
+
+/** Bound every URL-adapter HTTP call so probe/screenshot/text/input cannot hang. */
+export const URL_REQUEST_TIMEOUT_MS = 8_000;
+
+export function urlComputerSignal(extra?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(URL_REQUEST_TIMEOUT_MS);
+  return extra ? AbortSignal.any([timeout, extra]) : timeout;
+}
 
 const DEFAULT_CAPS: ComputerCapabilities = {
   screenshot: true,
@@ -162,7 +175,7 @@ export async function probeUrlComputer(
 ): Promise<ComputerDescriptor> {
   const normalized = normalizeComputerBase(base);
   const id = urlComputerId(normalized);
-  const res = await fetchImpl(`${normalized}/computer`);
+  const res = await fetchImpl(`${normalized}/computer`, { signal: urlComputerSignal() });
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`GET /computer returned ${res.status}`);
   }
@@ -197,7 +210,9 @@ export class UrlComputerBackend implements ComputerBackend {
     const params = new URLSearchParams();
     params.set('format', opts.format);
     if (opts.maxWidth) params.set('maxWidth', String(opts.maxWidth));
-    const res = await this.fetchImpl(`${this.base}/computer/screenshot?${params.toString()}`);
+    const res = await this.fetchImpl(`${this.base}/computer/screenshot?${params.toString()}`, {
+      signal: urlComputerSignal(opts.signal),
+    });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`GET /computer/screenshot returned ${res.status}`);
     }
@@ -221,7 +236,9 @@ export class UrlComputerBackend implements ComputerBackend {
 
   async text(): Promise<string | null> {
     if (!this.descriptor.capabilities.text) return null;
-    const res = await this.fetchImpl(`${this.base}/computer/text`);
+    const res = await this.fetchImpl(`${this.base}/computer/text`, {
+      signal: urlComputerSignal(),
+    });
     if (res.status === 404) return null;
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`GET /computer/text returned ${res.status}`);
@@ -235,6 +252,7 @@ export class UrlComputerBackend implements ComputerBackend {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(events),
+      signal: urlComputerSignal(),
     });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`POST /computer/input returned ${res.status}`);

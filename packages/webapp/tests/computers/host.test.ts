@@ -33,6 +33,7 @@ class FakeBackend implements ComputerBackend {
   shots = 0;
   hang: Promise<ComputerFrame> | null = null;
   received: ComputerInputEvent[] = [];
+  lastSignal: AbortSignal | undefined;
 
   constructor(readonly id = 'fake') {}
 
@@ -57,9 +58,19 @@ class FakeBackend implements ComputerBackend {
     };
   }
 
-  async screenshot(): Promise<ComputerFrame> {
+  async screenshot(opts?: { signal?: AbortSignal }): Promise<ComputerFrame> {
     this.shots += 1;
-    if (this.hang !== null) return this.hang;
+    this.lastSignal = opts?.signal;
+    if (this.hang !== null) {
+      return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new Error('aborted'));
+        opts?.signal?.addEventListener('abort', onAbort, { once: true });
+        void this.hang?.then((frame) => {
+          opts?.signal?.removeEventListener('abort', onAbort);
+          resolve(frame);
+        }, reject);
+      });
+    }
     return {
       seq: this.shots,
       mime: 'image/jpeg',
@@ -308,6 +319,7 @@ describe('computers host watch transport', () => {
       await vi.advanceTimersByTimeAsync(30);
       await vi.advanceTimersByTimeAsync(100);
       expect(backend.shots).toBeGreaterThanOrEqual(1);
+      expect(backend.lastSignal?.aborted).toBe(true);
       host.stop();
     } finally {
       vi.useRealTimers();

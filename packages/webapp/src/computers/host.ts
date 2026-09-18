@@ -183,14 +183,20 @@ async function pollOnce(
   if (watcher.inFlight) return;
   watcher.inFlight = true;
   const generation = watcher.generation;
+  const abort = new AbortController();
   try {
     const frame = await raceTimeout(
-      backend.screenshot({ format: 'jpeg', maxWidth: watcher.maxWidth }),
+      backend.screenshot({
+        format: 'jpeg',
+        maxWidth: watcher.maxWidth,
+        signal: abort.signal,
+      }),
       timeoutMs
     );
     if (watcher.generation !== generation) return;
     onFrame(frame);
   } catch {
+    abort.abort();
     /* skip a missed or timed-out poll */
   } finally {
     if (watcher.generation === generation) watcher.inFlight = false;
