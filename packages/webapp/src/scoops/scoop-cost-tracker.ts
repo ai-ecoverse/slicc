@@ -12,8 +12,10 @@
  */
 
 import type { AssistantMessage } from '../core/types.js';
+import { canonicalModelId, representativeModelId } from '../providers/claude-model-version.js';
 import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.js';
 import { isRootUnit } from '../work-unit/policy.js';
+import { modelIdFor, modelProviderFor } from '../work-unit/record.js';
 import type { ScoopContext } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
@@ -26,6 +28,43 @@ export const BURN_RATE_MIN_SESSION_DURATION_MS = 60 * 1000;
 export const BURN_RATE_RECENT_WEIGHT = 0.5;
 export const BURN_RATE_MEDIUM_WEIGHT = 0.3;
 export const BURN_RATE_SESSION_WEIGHT = 0.2;
+
+/** Spellings of one model seen while folding usage, plus that model's cost. */
+interface ModelSpellings {
+  ids: string[];
+  cost: number;
+}
+
+function addModelSpelling(
+  buckets: Map<string, ModelSpellings>,
+  modelId: string,
+  cost: number
+): void {
+  const key = canonicalModelId(modelId);
+  const bucket = buckets.get(key);
+  if (!bucket) {
+    buckets.set(key, { ids: [modelId], cost });
+    return;
+  }
+  if (!bucket.ids.includes(modelId)) bucket.ids.push(modelId);
+  bucket.cost += cost;
+}
+
+/**
+ * Distinct models, most expensive first. `currentRaw` is the id in use now;
+ * its entry keeps that spelling so the scalar and the set agree.
+ */
+function reportModelSpellings(
+  buckets: Map<string, ModelSpellings>,
+  currentRaw: string
+): { current: string; models: string[] } {
+  const models = [...buckets.values()]
+    .sort((a, b) => b.cost - a.cost || (a.ids[0] ?? '').localeCompare(b.ids[0] ?? ''))
+    .map((bucket) => representativeModelId(bucket.ids, currentRaw));
+  const currentBucket = buckets.get(canonicalModelId(currentRaw));
+  const current = currentBucket ? representativeModelId(currentBucket.ids, currentRaw) : currentRaw;
+  return { current, models };
+}
 
 export interface ModelCostData {
   model: string;
@@ -52,9 +91,38 @@ export interface CostScopeOptions {
  * Build cost data for a single scoop from its context's assistant messages.
  * Returns `null` when the scoop has no usage yet (no assistant turns).
  *
+ * `model` is the model in use now — a provider-qualified pin, or the latest
+ * assistant turn when the record has no pin. A provider-less legacy pin is
+ * used only when it names the same model as that latest turn; otherwise the
+ * turn wins, because `resolveModelForInit` may already have fallen off a
+ * stale pre-#2195 id. Not the model with the most turns. `models` lists each
+ * distinct model once: a bare Claude alias and a Bedrock region- or
+ * version-qualified spelling of that same model collapse, and the entry for
+ * the model in use now keeps the current spelling. A suffixed variant
+ * (`-fast`) stays its own entry.
+ *
  * Active time is rounded up to 15-minute intervals so a long-idle scoop with
  * a handful of turns doesn't read as "zero minutes" in the `cost` table.
  */
+/**
+ * Id to report as "in use now".
+ *
+ * A provider-qualified pin is the model the unit was told to run, including
+ * a switch that has not written a turn yet. A provider-less legacy pin
+ * (`config.modelId` with no provider, pre-#2195) may be an id the selected
+ * provider no longer serves; init then runs the resolved model, which the
+ * latest assistant turn records. When that turn names a different model,
+ * the turn is what is actually in use.
+ */
+function modelInUseNow(scoop: RegisteredScoop, latestModel: string): string {
+  const pinned = modelIdFor(scoop);
+  if (!pinned) return latestModel;
+  if (!modelProviderFor(scoop) && canonicalModelId(latestModel) !== canonicalModelId(pinned)) {
+    return latestModel;
+  }
+  return pinned;
+}
+
 export function buildScoopCost(
   scoop: RegisteredScoop,
   context: ScoopContext,
@@ -72,8 +140,7 @@ export function buildScoopCost(
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
-  const modelCounts = new Map<string, number>();
-  const modelCosts = new Map<string, number>();
+  const buckets = new Map<string, ModelSpellings>();
   for (const msg of assistantMsgs) {
     aggregated.input += msg.usage.input;
     aggregated.output += msg.usage.output;
@@ -85,18 +152,14 @@ export function buildScoopCost(
     aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
     aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
     aggregated.cost.total += msg.usage.cost.total;
-    modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
-    modelCosts.set(msg.model, (modelCosts.get(msg.model) ?? 0) + msg.usage.cost.total);
+    addModelSpelling(buckets, msg.model, msg.usage.cost.total);
   }
 
-  let topModel = '';
-  let topCount = 0;
-  for (const [model, count] of modelCounts) {
-    if (count > topCount) {
-      topModel = model;
-      topCount = count;
-    }
-  }
+  const latest = assistantMsgs.reduce((best, msg) =>
+    msg.timestamp >= best.timestamp ? msg : best
+  );
+  const currentRaw = modelInUseNow(scoop, latest.model);
+  const reported = reportModelSpellings(buckets, currentRaw);
 
   const timestamps = assistantMsgs.map((m) => m.timestamp).sort((a, b) => a - b);
   const firstActivity = timestamps[0];
@@ -109,10 +172,8 @@ export function buildScoopCost(
   return {
     name: scoop.assistantLabel,
     type: isRootUnit(scoop) ? 'cone' : 'scoop',
-    model: topModel,
-    models: [...modelCosts.entries()]
-      .sort(([, costA], [, costB]) => costB - costA)
-      .map(([model]) => model),
+    model: reported.current,
+    models: reported.models,
     source,
     usage: aggregated,
     turns: assistantMsgs.length,
@@ -223,19 +284,25 @@ export class ScoopCostTracker {
    */
   getModelCosts(options: CostScopeOptions = {}): ModelCostData[] {
     const modelMap = new Map<string, ModelCostData>();
+    const spellings = new Map<string, ModelSpellings>();
 
     // Aggregate live scoops
     const contexts = this.deps.getContexts();
     for (const context of contexts.values()) {
       const messages = context.getAgentMessages();
       const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
-      this.aggregateMessages(assistantMsgs, modelMap);
+      this.aggregateMessages(assistantMsgs, modelMap, spellings);
     }
 
     if (options.includeDropped) {
       for (const messages of this.droppedMessages) {
-        this.aggregateMessages(messages, modelMap);
+        this.aggregateMessages(messages, modelMap, spellings);
       }
+    }
+
+    for (const [key, bucket] of spellings) {
+      const row = modelMap.get(key);
+      if (row) row.model = representativeModelId(bucket.ids);
     }
 
     // Convert to array and sort by cost descending
@@ -245,10 +312,13 @@ export class ScoopCostTracker {
   /** Helper to aggregate messages into the model map. */
   private aggregateMessages(
     messages: AssistantMessage[],
-    modelMap: Map<string, ModelCostData>
+    modelMap: Map<string, ModelCostData>,
+    spellings: Map<string, ModelSpellings>
   ): void {
     for (const msg of messages) {
-      const existing = modelMap.get(msg.model);
+      const key = canonicalModelId(msg.model);
+      addModelSpelling(spellings, msg.model, msg.usage.cost.total);
+      const existing = modelMap.get(key);
       if (existing) {
         existing.input += msg.usage.input;
         existing.output += msg.usage.output;
@@ -257,7 +327,7 @@ export class ScoopCostTracker {
         existing.cost += msg.usage.cost.total;
         existing.turns += 1;
       } else {
-        modelMap.set(msg.model, {
+        modelMap.set(key, {
           model: msg.model,
           input: msg.usage.input,
           output: msg.usage.output,
