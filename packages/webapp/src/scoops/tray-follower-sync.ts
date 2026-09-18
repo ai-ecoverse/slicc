@@ -587,11 +587,13 @@ export class FollowerSyncManager implements AgentHandle {
       case 'scoops.list':
         this.handleScoopsList(message.scoops, message.activeScoopJid);
         break;
-      // Wire-only this phase (#3246): no follower computer UI yet. Older
-      // followers that lack these cases already drop them via
-      // `unhandledProtocolMessage`.
+      // Wire: computers.list / computer.frame feed follower UI (#3248). Native
+      // capture (`computer.native.*`) is for macOS followers only.
       case 'computers.list':
       case 'computer.frame':
+      case 'computer.native.capture':
+      case 'computer.native.unwatch':
+      case 'computer.native.input':
         break;
       case 'models.list':
         this.options.onModelsList?.(message.models);

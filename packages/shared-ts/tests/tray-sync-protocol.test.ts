@@ -11,8 +11,10 @@ import {
   isCherrySliccEventMessage,
   reassembleCDPResponse,
   reassembleComputerFrame,
+  reassembleComputerNativeFrame,
   sendCDPResponse,
   sendComputerFrame,
+  sendComputerNativeFrame,
   TRAY_SEND_HIGH_WATER_BYTES,
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
@@ -469,6 +471,81 @@ describe('tray-sync-protocol', () => {
       });
       expect(ok).toBe(false);
       expect(sent).toEqual([]);
+    });
+  });
+
+  describe('sendComputerNativeFrame', () => {
+    it('sends a small native frame as a single computer.native.frame', () => {
+      const sent: TraySyncMessage[] = [];
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
+      sendComputerNativeFrame(channel, {
+        requestId: 'cap-1',
+        seq: 1,
+        mime: 'image/jpeg',
+        width: 8,
+        height: 8,
+        nativeWidth: 1440,
+        nativeHeight: 900,
+        data: 'QUJD',
+      });
+      expect(sent).toEqual([
+        {
+          type: 'computer.native.frame',
+          requestId: 'cap-1',
+          seq: 1,
+          mime: 'image/jpeg',
+          width: 8,
+          height: 8,
+          nativeWidth: 1440,
+          nativeHeight: 900,
+          data: 'QUJD',
+        },
+      ]);
+    });
+
+    it('chunks an oversize native frame and reassembles it', () => {
+      const sent: TraySyncMessage[] = [];
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
+      const data = 'x'.repeat(CDP_CHUNK_THRESHOLD + 10);
+      sendComputerNativeFrame(channel, {
+        requestId: 'cap-1',
+        seq: 2,
+        mime: 'image/jpeg',
+        width: 16,
+        height: 16,
+        nativeWidth: 1440,
+        nativeHeight: 900,
+        data,
+      });
+      expect(sent.length).toBeGreaterThan(1);
+      expect(sent.every((m) => m.type === 'computer.native.frame')).toBe(true);
+      const buffers = new Map();
+      let assembled: ReturnType<typeof reassembleComputerNativeFrame> = null;
+      for (const msg of sent) {
+        if (msg.type !== 'computer.native.frame') continue;
+        assembled = reassembleComputerNativeFrame(buffers, msg);
+      }
+      expect(assembled).toEqual({
+        type: 'computer.native.frame',
+        requestId: 'cap-1',
+        seq: 2,
+        mime: 'image/jpeg',
+        width: 16,
+        height: 16,
+        nativeWidth: 1440,
+        nativeHeight: 900,
+        data,
+      });
     });
   });
 });

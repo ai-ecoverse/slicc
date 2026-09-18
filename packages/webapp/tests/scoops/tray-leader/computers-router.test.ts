@@ -1,4 +1,4 @@
-import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
+import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../src/base/logger.js';
 import {
@@ -190,5 +190,42 @@ describe('ComputersRouter', () => {
     router.handleWatch('a', 'jsh:fake');
     harness.emitList([]);
     expect(harness.unwatched).toEqual(['jsh:fake']);
+  });
+
+  it('forwards computer.input to the store and drops biscotto', async () => {
+    const events: ComputerInputEvent[] = [{ type: 'key', keysym: 'Home' }];
+    const received: { id: string; events: ComputerInputEvent[] }[] = [];
+    const harness = createSource([descriptor()]);
+    harness.source.input = (id, ev) => {
+      received.push({ id, events: ev });
+    };
+    const { router, addFollower } = createHarness(harness.source);
+    addFollower('full');
+    addFollower('guest', 'biscotto');
+    router.handleInput('full', 'jsh:fake', events);
+    router.handleInput('guest', 'jsh:fake', events);
+    await vi.waitFor(() => expect(received).toEqual([{ id: 'jsh:fake', events }]));
+  });
+
+  it('fans computer.native messages to listeners', () => {
+    const { router, addFollower } = createHarness();
+    addFollower('full');
+    const seen: string[] = [];
+    const stop = router.onNative((_id, message) => {
+      seen.push(message.type);
+    });
+    router.handleNative('full', {
+      type: 'computer.native.error',
+      requestId: 'cap-1',
+      error: 'denied',
+    });
+    expect(seen).toEqual(['computer.native.error']);
+    stop();
+    router.handleNative('full', {
+      type: 'computer.native.error',
+      requestId: 'cap-2',
+      error: 'later',
+    });
+    expect(seen).toEqual(['computer.native.error']);
   });
 });

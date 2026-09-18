@@ -3,6 +3,8 @@ import {
   COMPUTER_TRAY_MAX_WIDTH,
   type ComputerDescriptor,
   type ComputerFrame,
+  type ComputerInputEvent,
+  type FollowerToLeaderMessage,
   sendComputerFrame,
   uint8ToBase64,
 } from '@slicc/shared-ts';
@@ -20,14 +22,16 @@ export interface TrayComputersSource {
   lastFrame(id: string): ComputerFrame | null;
   watch(id: string, fps?: number, maxWidth?: number): number;
   unwatch(id: string, token?: number): void;
+  /** Drive a computer from a follower (iOS soft keys). */
+  input?(id: string, events: ComputerInputEvent[]): Promise<void> | void;
 }
 
 const TRAY_FRAME_MIN_INTERVAL_MS = 1000 / COMPUTER_TRAY_MAX_FPS;
 
 /**
  * Fans `computers.list` / `computer.frame` to full-trust followers and answers
- * `computer.watch` / `computer.unwatch`. Caps the tray stream at 2 fps / 480 px.
- * Wire-only this phase — no follower UI.
+ * `computer.watch` / `computer.unwatch` / `computer.input`. Caps the tray
+ * stream at 2 fps / 480 px. Native capture frames fan out via `onNative`.
  */
 export class ComputersRouter {
   /** Computer ids each follower is watching. */
@@ -38,6 +42,15 @@ export class ComputersRouter {
   private readonly storeWatchTokens = new Map<string, number>();
   /** Last successful frame send per follower+computer, for the 2 fps cap. */
   private readonly lastSentAt = new Map<string, number>();
+  private readonly nativeListeners = new Set<
+    (
+      bootstrapId: string,
+      message: Extract<
+        FollowerToLeaderMessage,
+        { type: 'computer.native.frame' | 'computer.native.error' }
+      >
+    ) => void
+  >();
   private unsubList: (() => void) | null = null;
   private unsubFrame: (() => void) | null = null;
 
@@ -119,6 +132,59 @@ export class ComputersRouter {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  handleInput(bootstrapId: string, id: string, events: ComputerInputEvent[]): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower || follower.trust === 'biscotto') return;
+    const src = this.source();
+    if (!src?.input) {
+      this.context.log.warn('computer.input dropped — no store handler', { bootstrapId, id });
+      return;
+    }
+    void Promise.resolve(src.input(id, events)).catch((err: unknown) => {
+      this.context.log.warn('computer.input failed', {
+        bootstrapId,
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  handleNative(
+    bootstrapId: string,
+    message: Extract<
+      FollowerToLeaderMessage,
+      { type: 'computer.native.frame' | 'computer.native.error' }
+    >
+  ): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower || follower.trust === 'biscotto') return;
+    this.nativeListeners.forEach((listener) => {
+      try {
+        listener(bootstrapId, message);
+      } catch (err) {
+        this.context.log.warn('computer.native listener failed', {
+          bootstrapId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  }
+
+  onNative(
+    listener: (
+      bootstrapId: string,
+      message: Extract<
+        FollowerToLeaderMessage,
+        { type: 'computer.native.frame' | 'computer.native.error' }
+      >
+    ) => void
+  ): () => void {
+    this.nativeListeners.add(listener);
+    return () => {
+      this.nativeListeners.delete(listener);
+    };
   }
 
   removeFollower(bootstrapId: string): void {

@@ -106,6 +106,8 @@ class AppState: ObservableObject {
     // Multi-scoop awareness
     /// All scoops the leader has registered (cone first), updated via `scoops.list`.
     @Published var scoops: [ScoopSummary] = []
+    /// Leader `computers.list` roster. Viewer only — iOS never captures.
+    @Published var computers: [ComputerDescriptor] = []
     /// JID of the scoop this follower is currently viewing (independent from leader's selection).
     @Published var selectedScoopJid: String?
     /// JID of the leader's currently active scoop (informational; used to mark the active row).
@@ -493,6 +495,7 @@ class AppState: ObservableObject {
         fileMentionResolver.reset()
         TranscriptInlineCache.shared.clear()
         scoops = []
+        computers = []
         selectedScoopJid = nil
         leaderActiveScoopJid = nil
         leaderProtocolVersion = nil
@@ -942,6 +945,10 @@ class AppState: ObservableObject {
                     refreshModels()
                 }
             }
+
+        case .computersList, .computerFrame, .computerNativeCapture, .computerNativeUnwatch,
+            .computerNativeInput:
+            handleComputerLeaderMessage(msg)
 
         case .modelsList(let models):
             guard supportsModelControls else {

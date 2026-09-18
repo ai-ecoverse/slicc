@@ -48,7 +48,10 @@ export interface FollowerDispatchCollaborators {
   >;
   sudoDelegation: Pick<SudoDelegation, 'handleResponse' | 'handleFollowerReady'>;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
-  computersRouter?: Pick<ComputersRouter, 'handleWatch' | 'handleUnwatch'>;
+  computersRouter?: Pick<
+    ComputersRouter,
+    'handleWatch' | 'handleUnwatch' | 'handleInput' | 'handleNative'
+  >;
   requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
   /** Holds a guest's message until its seat's approver says yes. */
   biscottoReview: Pick<BiscottoReview, 'submit'>;
@@ -69,9 +72,10 @@ export class FollowerDispatch {
   dispatch(bootstrapId: string, message: FollowerToLeaderMessage): void {
     if (!this.acceptFromPeer(bootstrapId, message)) return;
     this.noteLegacyPeer(bootstrapId, message);
-    const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter } = this.collaborators;
-    const { teleportPool, transcriptExport, cherryRouter, tabTeleportRouter } = this.collaborators;
-    const { oauthPopupDelegation } = this.collaborators;
+    const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter, teleportPool } =
+      this.collaborators;
+    const { transcriptExport, cherryRouter, tabTeleportRouter, oauthPopupDelegation } =
+      this.collaborators;
 
     switch (message.type) {
       case 'user_message':
@@ -100,7 +104,10 @@ export class FollowerDispatch {
         break;
       case 'computer.watch':
       case 'computer.unwatch':
-        this.routeComputerWatch(bootstrapId, message);
+      case 'computer.input':
+      case 'computer.native.frame':
+      case 'computer.native.error':
+        this.routeComputerFollowerMessage(bootstrapId, message);
         break;
       case 'models.request':
         broadcast.sendModelCatalogToFollower(bootstrapId);
@@ -212,30 +219,52 @@ export class FollowerDispatch {
       case 'hello':
         this.handleFollowerHello(bootstrapId, message);
         break;
-      default: {
-        const unknown = unhandledProtocolMessage(message);
-        this.context.log.warn('Unknown follower message type — skewed follower?', {
-          bootstrapId,
-          type: unknown.type,
-        });
-      }
+      default:
+        this.warnUnknownFollowerMessage(bootstrapId, message);
     }
   }
 
-  private routeComputerWatch(
+  private routeComputerFollowerMessage(
     bootstrapId: string,
-    message: Extract<FollowerToLeaderMessage, { type: 'computer.watch' | 'computer.unwatch' }>
+    message: Extract<
+      FollowerToLeaderMessage,
+      {
+        type:
+          | 'computer.watch'
+          | 'computer.unwatch'
+          | 'computer.input'
+          | 'computer.native.frame'
+          | 'computer.native.error';
+      }
+    >
   ): void {
-    if (message.type === 'computer.watch') {
-      this.collaborators.computersRouter?.handleWatch(
-        bootstrapId,
-        message.id,
-        message.fps,
-        message.maxWidth
-      );
-      return;
+    switch (message.type) {
+      case 'computer.watch':
+        this.collaborators.computersRouter?.handleWatch(
+          bootstrapId,
+          message.id,
+          message.fps,
+          message.maxWidth
+        );
+        return;
+      case 'computer.unwatch':
+        this.collaborators.computersRouter?.handleUnwatch(bootstrapId, message.id);
+        return;
+      case 'computer.input':
+        this.collaborators.computersRouter?.handleInput?.(bootstrapId, message.id, message.events);
+        return;
+      case 'computer.native.frame':
+      case 'computer.native.error':
+        this.collaborators.computersRouter?.handleNative?.(bootstrapId, message);
     }
-    this.collaborators.computersRouter?.handleUnwatch(bootstrapId, message.id);
+  }
+
+  private warnUnknownFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
+    const unknown = unhandledProtocolMessage(message);
+    this.context.log.warn('Unknown follower message type — skewed follower?', {
+      bootstrapId,
+      type: unknown.type,
+    });
   }
 
   private routeKeepalive(bootstrapId: string, type: 'ping' | 'pong'): void {
