@@ -8,12 +8,18 @@
  * is the only switch left.
  */
 import 'fake-indexeddb/auto';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   enabledFlags: new Set<string>(),
   settings: { idleMinutes: 1, minTokens: 1000 },
+  completeSimple: vi.fn(),
 }));
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
+  const actual = (await importOriginal()) as object;
+  return { ...actual, completeSimple: (...args: unknown[]) => mocks.completeSimple(...args) };
+});
 vi.mock('../../src/core/feature-flags.js', () => ({
   isFeatureEnabled: (id: string) => mocks.enabledFlags.has(id),
 }));
@@ -22,6 +28,7 @@ vi.mock('../../src/core/idle-compaction-settings.js', () => ({
   readIdleCompactionSettings: () => mocks.settings,
 }));
 
+import { createCompactContext } from '../../src/core/context-compaction.js';
 import type { Agent, AgentMessage } from '../../src/core/index.js';
 import {
   IdleCompaction,
@@ -29,9 +36,13 @@ import {
 } from '../../src/scoops/scoop-context/idle-compaction.js';
 import { ScoopContext, type ScoopContextCallbacks } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
+import { toAgentMessages } from '../../src/work-unit/conversation/derive.js';
+import { conversationIdentityFor } from '../../src/work-unit/conversation/key.js';
+import { WorkUnitConversationStore } from '../../src/work-unit/conversation/store.js';
 
 /** The node test environment has no `localStorage`; ScoopContext boot paths may touch it. */
 const storage = new Map<string, string>();
+let dbCounter = 0;
 beforeAll(() => {
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -51,6 +62,16 @@ const bigUser = (): AgentMessage =>
   }) as AgentMessage;
 const summary = (): AgentMessage =>
   ({ role: 'user', content: [{ type: 'text', text: '[summary]' }], timestamp: 2 }) as AgentMessage;
+
+function llmResponse(text: string) {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    stopReason: 'stop',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+    timestamp: 0,
+  };
+}
 
 function fakeAgent(messages: AgentMessage[]) {
   return {
@@ -97,6 +118,7 @@ describe('IdleCompaction', () => {
       force: true,
       trigger: 'idle',
       roundId: expect.any(String),
+      allowNaiveDrop: false,
       deferMemoryExtraction: expect.any(Function),
     });
     expect(agent.state.messages).toEqual([summary()]);
@@ -228,8 +250,12 @@ describe('IdleCompaction', () => {
   it('reports no-progress and failure without touching the history', async () => {
     const same = deps();
     same.deps.getCompactFn = () => async (messages) => [...messages];
-    expect(await new IdleCompaction(same.deps).runNow()).toBe('no-progress');
+    const sameIdle = new IdleCompaction(same.deps);
+    expect(await sameIdle.runNow()).toBe('no-progress');
     expect(same.agent.state.messages).toHaveLength(2);
+    // Preserved failure must schedule another idle window (#3264).
+    expect(sameIdle.isArmed).toBe(true);
+    sameIdle.disarm();
 
     const failing = deps();
     failing.deps.getCompactFn = () => async () => {
@@ -239,6 +265,26 @@ describe('IdleCompaction', () => {
     expect(await idle.runNow()).toBe('failed');
     expect(idle.isRunning).toBe(false);
     expect(failing.agent.state.messages).toHaveLength(2);
+    expect(idle.isArmed).toBe(true);
+    idle.disarm();
+  });
+
+  it('re-arms after a preserved timer-fired failure so a later window can retry', async () => {
+    const { deps: d } = deps();
+    let rounds = 0;
+    d.getCompactFn = () => async (messages) => {
+      rounds += 1;
+      return [...messages];
+    };
+    const idle = new IdleCompaction(d);
+    idle.arm();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(rounds).toBe(1);
+    expect(idle.isArmed).toBe(true);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(rounds).toBe(2);
+    expect(idle.isArmed).toBe(true);
+    idle.disarm();
   });
 
   // The notice the round's `summarizing` state put in the transcript has to
@@ -427,10 +473,11 @@ describe('ScoopContext wiring', () => {
 
   function inject(
     ctx: ScoopContext,
-    compactFn: (m: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>
+    compactFn: (m: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>,
+    messages: AgentMessage[] = [bigUser(), bigUser()]
   ) {
     const internals = ctx as unknown as Internals;
-    const agent = fakeAgent([bigUser(), bigUser()]);
+    const agent = fakeAgent(messages);
     internals.agent = agent;
     internals.compactFn = compactFn;
     internals.getCompactionApiKey = () => 'key';
@@ -442,6 +489,7 @@ describe('ScoopContext wiring', () => {
     mocks.enabledFlags.clear();
     mocks.enabledFlags.add('compact-on-idle');
     mocks.settings = { idleMinutes: 1, minTokens: 1000 };
+    mocks.completeSimple.mockReset();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -458,6 +506,68 @@ describe('ScoopContext wiring', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(compactFn).toHaveBeenCalledTimes(1);
     expect(agent.state.messages).toEqual([summary()]);
+  });
+
+  it('leaves live identity/content and canonical persistence unchanged on a failed summary', async () => {
+    // fake-indexeddb's transactions settle on real tasks; this assertion is
+    // about persistence, so do not strand them behind the suite's timer fake.
+    vi.useRealTimers();
+    const states: Array<{ state: string; failure?: string }> = [];
+    const cb = callbacks();
+    cb.onCompactionStateChange = (state, detail) =>
+      states.push({ state, ...(detail.failure ? { failure: detail.failure } : {}) });
+    const store = new WorkUnitConversationStore({
+      dbName: `idle-failure-canonical-3264-${dbCounter++}`,
+    });
+    const identity = conversationIdentityFor(cone);
+    const messages = [bigUser(), bigUser()];
+    const contentBefore = structuredClone(messages);
+    await store.syncAgentMessages(identity, messages, { createdAt: 10, now: 20 });
+    const canonicalBefore = await store.load(identity.key);
+    const sync = vi.spyOn(store, 'syncAgentMessages');
+    sync.mockClear();
+
+    mocks.completeSimple.mockRejectedValueOnce(
+      Object.assign(new Error('Too many requests'), { status: 429 })
+    );
+    const snapshot = vi.fn(async () => ({ transcriptPath: '/sessions/live-cone.md' }));
+    const compact = createCompactContext({
+      model: { id: 'test-model' } as unknown as Model<Api>,
+      getApiKey: () => 'key',
+      contextWindow: 2000,
+      reserveTokens: 500,
+      keepRecentTokens: 600,
+      onBeforeCompaction: snapshot,
+      onCompactionStateChange: cb.onCompactionStateChange,
+    });
+    const ctx = new ScoopContext(
+      cone,
+      cb,
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      store
+    );
+    const { internals, agent } = inject(ctx, compact, messages);
+    const liveIdentity = agent.state.messages;
+
+    internals.setStatus('ready');
+    await settled(internals);
+    expect(await internals.idleCompaction?.runNow()).toBe('no-progress');
+
+    expect(agent.state.messages).toBe(liveIdentity);
+    expect(agent.state.messages).toEqual(contentBefore);
+    expect(sync).not.toHaveBeenCalled();
+    const canonicalAfter = await store.load(identity.key);
+    expect(canonicalAfter).toEqual(canonicalBefore);
+    expect(toAgentMessages(canonicalAfter)).toEqual(contentBefore);
+    expect(snapshot).toHaveBeenCalledWith(expect.any(Array), 'idle');
+    expect(states).not.toContainEqual(expect.objectContaining({ state: 'fallback' }));
+    expect(states).toContainEqual({ state: 'cancelled', failure: 'rate-limit' });
+    ctx.dispose();
   });
 
   it('never loads for a scoop or with the kill switch off; processing disarms; dispose disarms', async () => {

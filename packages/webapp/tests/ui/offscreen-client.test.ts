@@ -1360,10 +1360,14 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     const events = collect();
 
     phase('summarizing', { trigger: 'idle' });
-    phase('cancelled', { trigger: 'idle' });
+    phase('cancelled', { trigger: 'idle', failure: 'rate-limit' });
 
     expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'discarded']);
     expect(events[1].messageId).toBe(events[0].messageId);
+    expect(callbacks.onCompactionStateChange).toHaveBeenLastCalledWith('cone_123', 'cancelled', {
+      trigger: 'idle',
+      failure: 'rate-limit',
+    });
   });
 
   // A round whose opening phase never reached this panel (the tab attached

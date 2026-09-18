@@ -194,6 +194,15 @@ export class IdleCompaction {
         });
       }
     }
+    // A preserved failure (`no-progress` from allowNaiveDrop:false, or an
+    // unexpected throw) clears the timer when it fires and never transitions
+    // status back through `ready`, so without a re-arm the cone would stay
+    // idle forever and the documented later retry would never run (#3264).
+    // Cancelled / thread-moved mean the user came back — leave the window
+    // disarmed until the next ready transition.
+    if (outcome === 'no-progress' || outcome === 'failed') {
+      this.arm();
+    }
     return outcome;
   }
 
@@ -221,6 +230,10 @@ export class IdleCompaction {
         force: true,
         trigger: 'idle',
         roundId,
+        // Idle maintenance is speculative: no user turn is blocked, so a
+        // provider failure must preserve the exact live/canonical history.
+        // Overflow recovery keeps the compactor's default emergency drop.
+        allowNaiveDrop: false,
         deferMemoryExtraction: (extract) => {
           extractMemories = extract;
         },

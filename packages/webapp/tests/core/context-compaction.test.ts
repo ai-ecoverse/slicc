@@ -1439,3 +1439,196 @@ describe('createCompactContext abort (#2843)', () => {
     expect(firstText(result[0])).toContain('compacted to save context space');
   });
 });
+
+describe('createCompactContext non-destructive idle failures (#3264)', () => {
+  const model = { id: 'test-model' } as unknown as Model<Api>;
+  const overThreshold = () => [
+    createMessage('user', 'x'.repeat(10_000)),
+    createMessage('assistant', 'prior answer'),
+    createMessage('user', 'recent question'),
+  ];
+  const baseConfig = {
+    model,
+    getApiKey: () => 'test-key' as string | undefined,
+    contextWindow: 2000,
+    reserveTokens: 500,
+    keepRecentTokens: 600,
+  };
+
+  beforeEach(() => mockCompleteSimple.mockReset());
+
+  it.each([
+    {
+      name: 'rate limit',
+      error: Object.assign(new Error('Too many requests'), { status: 429 }),
+      failure: 'rate-limit',
+    },
+    {
+      name: 'exhausted quota',
+      error: new Error('Weekly budget exhausted'),
+      failure: 'quota-exhausted',
+    },
+    {
+      name: 'authentication refusal',
+      error: Object.assign(new Error('Unauthorized'), { status: 401 }),
+      failure: 'authentication',
+    },
+    {
+      name: 'provider outage',
+      error: Object.assign(new Error('Service unavailable'), { status: 503 }),
+      failure: 'provider-unavailable',
+    },
+  ] as const)('preserves identity and content after a $name', async ({ error, failure }) => {
+    mockCompleteSimple.mockRejectedValueOnce(error);
+    const states: Array<{ state: string; failure?: string }> = [];
+    const snapshot = vi.fn(async () => ({ transcriptPath: '/sessions/live-cone.md' }));
+    const compact = createCompactContext({
+      ...baseConfig,
+      onBeforeCompaction: snapshot,
+      onCompactionStateChange: (state, detail) =>
+        states.push({ state, ...(detail.failure ? { failure: detail.failure } : {}) }),
+    });
+    const messages = overThreshold();
+    const before = structuredClone(messages);
+
+    const result = await compact(messages, undefined, {
+      force: true,
+      trigger: 'idle',
+      allowNaiveDrop: false,
+    });
+
+    expect(result).toBe(messages);
+    expect(result).toEqual(before);
+    expect(hasCompactionProgress(messages, result)).toBe(false);
+    expect(result.some((message) => firstText(message).includes('Earlier conversation'))).toBe(
+      false
+    );
+    expect(states.map(({ state }) => state)).toEqual(['summarizing', 'cancelled', 'idle']);
+    expect(states.slice(-2)).toEqual([
+      { state: 'cancelled', failure },
+      { state: 'idle', failure },
+    ]);
+    expect(snapshot).toHaveBeenCalledWith(messages, 'idle');
+  });
+
+  it.each([
+    {
+      name: 'empty summary',
+      response: llmResponse('   '),
+      failure: 'empty-response',
+    },
+    {
+      name: 'invalid response envelope',
+      response: { stopReason: 'stop', content: 'not-an-array' },
+      failure: 'invalid-response',
+    },
+    {
+      name: 'invalid text block',
+      response: { ...llmResponse('ignored'), content: [{ type: 'text', text: 42 }] },
+      failure: 'invalid-response',
+    },
+  ] as const)('preserves history for an $name', async ({ response, failure }) => {
+    mockCompleteSimple.mockResolvedValueOnce(response);
+    const failures: string[] = [];
+    const compact = createCompactContext({
+      ...baseConfig,
+      onCompactionStateChange: (state, detail) => {
+        if (state === 'cancelled' && detail.failure) failures.push(detail.failure);
+      },
+    });
+    const messages = overThreshold();
+
+    const result = await compact(messages, undefined, {
+      force: true,
+      trigger: 'idle',
+      allowNaiveDrop: false,
+    });
+
+    expect(result).toBe(messages);
+    expect(failures).toEqual([failure]);
+  });
+
+  it('keeps the snapshot and can retry the same untouched history later', async () => {
+    mockCompleteSimple
+      .mockRejectedValueOnce(Object.assign(new Error('Too many requests'), { status: 429 }))
+      .mockResolvedValueOnce(llmResponse('Recovered summary'));
+    const snapshot = vi.fn(async () => ({ transcriptPath: '/sessions/live-cone.md' }));
+    const compact = createCompactContext({ ...baseConfig, onBeforeCompaction: snapshot });
+    const messages = overThreshold();
+    const options = { force: true, trigger: 'idle' as const, allowNaiveDrop: false };
+
+    const failed = await compact(messages, undefined, options);
+    const retried = await compact(failed, undefined, options);
+
+    expect(failed).toBe(messages);
+    expect(firstText(retried[0])).toContain('<context-summary>');
+    expect(firstText(retried[0])).toContain('/sessions/live-cone.md');
+    expect(snapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves overflow recovery on the emergency naive-drop policy', async () => {
+    mockCompleteSimple.mockRejectedValueOnce(new Error('provider unavailable'));
+    const states: string[] = [];
+    const compact = createCompactContext({
+      ...baseConfig,
+      onCompactionStateChange: (state) => states.push(state),
+    });
+    const messages = overThreshold();
+
+    const result = await compact(messages, undefined, { force: true, trigger: 'overflow' });
+
+    expect(result).not.toBe(messages);
+    expect(firstText(result[0])).toContain('Earlier conversation');
+    expect(states).toContain('fallback');
+  });
+
+  it('preserves history when idle has no API key', async () => {
+    const failures: string[] = [];
+    const compact = createCompactContext({
+      ...baseConfig,
+      getApiKey: () => undefined,
+      onCompactionStateChange: (state, detail) => {
+        if (state === 'cancelled' && detail.failure) failures.push(detail.failure);
+      },
+    });
+    const messages = overThreshold();
+
+    const result = await compact(messages, undefined, {
+      force: true,
+      trigger: 'idle',
+      allowNaiveDrop: false,
+    });
+
+    expect(result).toBe(messages);
+    expect(failures).toEqual(['authentication']);
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+  });
+
+  it('skips destructive hopeless elision when idle forbids naive drop', async () => {
+    const failures: string[] = [];
+    const compact = createCompactContext({
+      ...baseConfig,
+      contextWindow: 2000,
+      hopelessMultiplier: 2,
+      onCompactionStateChange: (state, detail) => {
+        if (state === 'cancelled' && detail.failure) failures.push(detail.failure);
+      },
+    });
+    // Far past window×multiplier so applyHopelessElision takes the early return.
+    const messages = [
+      createMessage('user', 'x'.repeat(50_000)),
+      createMessage('assistant', 'y'.repeat(50_000)),
+      createMessage('user', 'recent'),
+    ];
+
+    const result = await compact(messages, undefined, {
+      force: true,
+      trigger: 'idle',
+      allowNaiveDrop: false,
+    });
+
+    expect(result).toBe(messages);
+    expect(failures).toEqual(['context-too-large']);
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+  });
+});

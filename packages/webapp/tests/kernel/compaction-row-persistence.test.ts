@@ -209,6 +209,23 @@ describe('kernel compaction-row persistence', () => {
     ]);
   });
 
+  it('forwards only the safe failure class when a preserved round is retracted', async () => {
+    phase('summarizing', { roundId: 'idle-failed' });
+    phase('cancelled', { roundId: 'idle-failed', failure: 'rate-limit' });
+
+    const emitted = sentMessages
+      .map(
+        (message) =>
+          (
+            message as {
+              payload: { type: string; state?: string; failure?: string };
+            }
+          ).payload
+      )
+      .filter((payload) => payload.type === 'compaction-state');
+    expect(emitted.at(-1)).toMatchObject({ state: 'cancelled', failure: 'rate-limit' });
+  });
+
   it('retracts a round that kept nothing, from the record AND the buffer', async () => {
     // A real conversation under the seam, so the retraction is visibly a
     // splice rather than an emptied buffer.

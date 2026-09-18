@@ -10,7 +10,7 @@
 
 import { createLogger } from '../base/logger.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import type { CompactionState } from '../core/context-compaction.js';
+import type { CompactionFailureClass, CompactionState } from '../core/context-compaction.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type {
   AgentEventMsg,
@@ -119,6 +119,8 @@ export interface SessionStats {
 export interface CompactionNoticeDetail {
   trigger: 'threshold' | 'overflow' | 'idle';
   transcriptPath?: string;
+  /** Safe provider-failure category; never raw provider text. */
+  failure?: CompactionFailureClass;
   /** Set only by a round whose adoption is decided after it returns. */
   roundId?: string;
 }
@@ -1424,6 +1426,7 @@ export class OffscreenClient implements KernelClientFacade {
     const detail: CompactionNoticeDetail = {
       trigger: msg.trigger ?? 'threshold',
       ...(msg.transcriptPath ? { transcriptPath: msg.transcriptPath } : {}),
+      ...(msg.failure ? { failure: msg.failure } : {}),
       ...(msg.roundId ? { roundId: msg.roundId } : {}),
     };
     this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state, detail);

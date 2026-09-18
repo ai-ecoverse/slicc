@@ -1161,6 +1161,16 @@ export interface CompactionStateMsg {
   trigger?: 'threshold' | 'overflow' | 'idle';
   /** `/sessions` path of the pre-compaction transcript snapshot, once written. */
   transcriptPath?: string;
+  /** Safe failure class for a non-destructive preservation-policy round. */
+  failure?:
+    | 'rate-limit'
+    | 'quota-exhausted'
+    | 'authentication'
+    | 'provider-unavailable'
+    | 'empty-response'
+    | 'invalid-response'
+    | 'context-too-large'
+    | 'unknown';
   /**
    * Opaque id of the round, present only for a round whose caller decides
    * adoption after the compactor returns (the idle timer). It lets a late
