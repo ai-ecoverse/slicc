@@ -38,4 +38,10 @@ final class TrayChunkFramingTests: XCTestCase {
             chunkData: "oops")
         XCTAssertEqual(reassembler.accept(bad).rejection, .malformed)
     }
+
+    func testReassemblyByteCeilingMatchesSharedTs() {
+        XCTAssertEqual(TrayChunkLimits.maxReassemblyBytes, 32 * 1024 * 1024)
+        XCTAssertEqual(TrayChunkLimits.maxChunkCount, 8192)
+        XCTAssertEqual(TrayChunkLimits.maxPending, 8)
+    }
 }

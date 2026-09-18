@@ -23,6 +23,9 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertEqual(trayFollowerCapabilities.sudoApproval, true)
         XCTAssertNil(trayFollowerCapabilities.biometric)
         XCTAssertEqual(makeTrayFollowerCapabilities(deviceOwnerAuth: true).biometric, true)
+        // iOS is viewer-only: it never advertises native capture/input.
+        XCTAssertNil(trayFollowerCapabilities.computer)
+        XCTAssertNil(makeTrayFollowerCapabilities(deviceOwnerAuth: true).computer)
     }
 
     // MARK: - Enums
@@ -165,6 +168,13 @@ final class ProtocolValueTypesTests: XCTestCase {
     func testTraySyncCapabilitiesRoundTrip() throws {
         let caps = TraySyncCapabilities(exec: false, browser: true, oauthPopup: false)
         XCTAssertEqual(try WireCodec.roundTrip(caps), caps)
+    }
+
+    func testTraySyncCapabilitiesComputerFlagRoundTrip() throws {
+        let caps = TraySyncCapabilities(exec: true, computer: true)
+        XCTAssertEqual(try WireCodec.roundTrip(caps).computer, true)
+        let json = try WireCodec.jsonString(caps)
+        XCTAssertTrue(json.contains("\"computer\":true"))
     }
 
     // MARK: - Targets
