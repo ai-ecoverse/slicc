@@ -306,4 +306,92 @@ describe('url probe and backend', () => {
     await vi.waitFor(() => expect(frames).toEqual([1]));
     stop?.();
   });
+
+  it('falls back to screenshot polling when the push socket errors', async () => {
+    const sockets: Array<{ emit: (type: string) => void }> = [];
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        binaryType = 'arraybuffer';
+        private readonly listeners = new Map<string, Set<() => void>>();
+        constructor() {
+          sockets.push(this);
+        }
+        addEventListener(type: string, fn: () => void): void {
+          const set = this.listeners.get(type) ?? new Set();
+          set.add(fn);
+          this.listeners.set(type, set);
+        }
+        removeEventListener(type: string, fn: () => void): void {
+          this.listeners.get(type)?.delete(fn);
+        }
+        emit(type: string): void {
+          for (const fn of this.listeners.get(type) ?? []) fn();
+        }
+        close(): void {}
+      }
+    );
+    const fetchImpl = mockFetch({
+      computer: {
+        status: 200,
+        body: encodeJson({
+          ...LIVE,
+          capabilities: { ...LIVE.capabilities, frames: 'push' },
+        }),
+      },
+    });
+    const desc = await probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710');
+    const backend = new UrlComputerBackend(fetchImpl, 'http://127.0.0.1:5710', desc);
+    const frames: ComputerFrame[] = [];
+    const stop = backend.subscribe?.(4, (frame) => {
+      frames.push(frame);
+    });
+    sockets[0]?.emit('error');
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+    stop?.();
+  });
+
+  it('falls back to screenshot polling when the push socket closes', async () => {
+    const sockets: Array<{ emit: (type: string) => void }> = [];
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        binaryType = 'arraybuffer';
+        private readonly listeners = new Map<string, Set<() => void>>();
+        constructor() {
+          sockets.push(this);
+        }
+        addEventListener(type: string, fn: () => void): void {
+          const set = this.listeners.get(type) ?? new Set();
+          set.add(fn);
+          this.listeners.set(type, set);
+        }
+        removeEventListener(type: string, fn: () => void): void {
+          this.listeners.get(type)?.delete(fn);
+        }
+        emit(type: string): void {
+          for (const fn of this.listeners.get(type) ?? []) fn();
+        }
+        close(): void {}
+      }
+    );
+    const fetchImpl = mockFetch({
+      computer: {
+        status: 200,
+        body: encodeJson({
+          ...LIVE,
+          capabilities: { ...LIVE.capabilities, frames: 'push' },
+        }),
+      },
+    });
+    const desc = await probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710');
+    const backend = new UrlComputerBackend(fetchImpl, 'http://127.0.0.1:5710', desc);
+    const frames: ComputerFrame[] = [];
+    const stop = backend.subscribe?.(4, (frame) => {
+      frames.push(frame);
+    });
+    sockets[0]?.emit('close');
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+    stop?.();
+  });
 });

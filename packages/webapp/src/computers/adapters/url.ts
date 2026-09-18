@@ -1,8 +1,8 @@
 /**
  * HTTP remote computer. All requests go through an injected fetch
  * (`createProxiedFetch` in production) so CLI and extension share a path.
- * Optional `WS /computer/frames` is native WebSocket; missing or failed
- * sockets leave `subscribe` unset and the registry polls `screenshot`.
+ * Optional `WS /computer/frames` is native WebSocket; a failed or closed
+ * socket falls back to screenshot polling so the host still receives frames.
  */
 
 import type {
@@ -268,18 +268,54 @@ export class UrlComputerBackend implements ComputerBackend {
     onFrame: (frame: ComputerFrame) => void,
     maxWidth?: number
   ): () => void {
-    if (typeof WebSocket === 'undefined') return () => {};
+    let closed = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const startPoll = (): void => {
+      if (closed || timer) return;
+      const interval = Math.round(1000 / Math.max(1, fps));
+      const poll = (): void => {
+        if (closed) return;
+        void this.screenshot({ format: 'jpeg', maxWidth }).then(onFrame, () => {
+          /* keep polling after a missed shot */
+        });
+      };
+      timer = setInterval(poll, interval);
+      poll();
+    };
+    const stop = (): void => {
+      closed = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+    };
+    if (typeof WebSocket === 'undefined') {
+      startPoll();
+      return stop;
+    }
     const wsBase = this.base.replace(/^http/u, 'ws');
     const params = new URLSearchParams({ fps: String(fps) });
     if (maxWidth) params.set('maxWidth', String(maxWidth));
-    const ws = new WebSocket(`${wsBase}/computer/frames?${params.toString()}`);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`${wsBase}/computer/frames?${params.toString()}`);
+    } catch {
+      startPoll();
+      return stop;
+    }
     ws.binaryType = 'arraybuffer';
     const onMessage = (event: MessageEvent<ArrayBuffer | Blob | string>): void => {
       void this.dispatchWsFrame(event.data, onFrame);
     };
+    const onFail = (): void => {
+      startPoll();
+    };
     ws.addEventListener('message', onMessage);
+    ws.addEventListener('error', onFail);
+    ws.addEventListener('close', onFail);
     return () => {
+      stop();
       ws.removeEventListener('message', onMessage);
+      ws.removeEventListener('error', onFail);
+      ws.removeEventListener('close', onFail);
       ws.close();
     };
   }

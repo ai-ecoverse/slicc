@@ -110,7 +110,7 @@ computer text
 computer type hello
 ```
 
-The remote must answer `GET /computer` with a `ComputerDescriptor`. Screenshots are `GET /computer/screenshot`; optional `GET /computer/text` (404 means none); input is `POST /computer/input`. A trailing `/computer` on the base is stripped. Live frames use `WS /computer/frames` only when the descriptor advertises `frames: "push"`; otherwise `computer watch` polls. The in-tree reference is node-server `--computer-demo` (same port as the `/cdp` bridge).
+The remote must answer `GET /computer` with a `ComputerDescriptor`. Screenshots are `GET /computer/screenshot`; optional `GET /computer/text` (404 means none); input is `POST /computer/input`. A trailing `/computer` on the base is stripped. Live frames use `WS /computer/frames` only when the descriptor advertises `frames: "push"`; a failed or closed socket falls back to screenshot polling. Otherwise `computer watch` polls. The in-tree reference is node-server `--computer-demo` (same port as the `/cdp` bridge).
 
 ## jsh-hosted backend
 
