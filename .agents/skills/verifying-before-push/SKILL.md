@@ -343,9 +343,12 @@ What runs on a stack:
 - **Not** `ios-app-tests` (the 4-way simulator matrix). Those 15–38 min cells
   stay `main`-only so a stack does not burn simulator minutes or wait for a
   macOS runner. After you retarget to `main`, they run there.
-- **Not** `worker-staging.yml`, `ios-screenshots.yml`, or
-  `storybook-screenshots.yml` — those stay `branches: [main]`. Stacks must
-  never deploy staging or take screenshot minutes.
+- **Not** staging mutation. The deploy lives in `ci.yml`'s
+  `cloudflare-worker` job (`RUN_CLOUDFLARE_STAGING`), not only in
+  `worker-staging.yml`. Stacked runs still build, dry-run, typecheck, and
+  coverage-gate the Worker; they skip turnstyle, R2 archive, deploy,
+  secrets, and smoke. `worker-staging.yml`, `ios-screenshots.yml`, and
+  `storybook-screenshots.yml` stay `branches: [main]`.
 
 The aggregate job reports as **`ci-stack`**, not `ci`. The ruleset on `main`
 requires exactly one context, `ci`. A skipped-or-green check named `ci` counts

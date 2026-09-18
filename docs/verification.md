@@ -16,13 +16,19 @@ topic-branch stacks, runs the workflow from the PR's merge commit.
 
 ### What runs
 
-| Surface                                                       | On a stack              | On a `main`-based PR / merge queue             |
-| ------------------------------------------------------------- | ----------------------- | ---------------------------------------------- |
-| Path-filtered ubuntu jobs (lint, typecheck, coverage, builds) | yes                     | yes                                            |
-| Cheap macOS `swift-*` + `ios-app` (lint / format / coverage)  | yes                     | yes (queue leader only)                        |
-| `ios-app-tests` (4-way simulator matrix)                      | no                      | yes (queue leader only, when iOS paths change) |
-| Aggregate check name                                          | `ci-stack`              | `ci`                                           |
-| `worker-staging.yml` / screenshot workflows                   | no (`branches: [main]`) | yes, when their paths match                    |
+| Surface                                                        | On a stack              | On a `main`-based PR / merge queue             |
+| -------------------------------------------------------------- | ----------------------- | ---------------------------------------------- |
+| Path-filtered ubuntu jobs (lint, typecheck, coverage, builds)  | yes                     | yes                                            |
+| Cheap macOS `swift-*` + `ios-app` (lint / format / coverage)   | yes                     | yes (queue leader only)                        |
+| `ios-app-tests` (4-way simulator matrix)                       | no                      | yes (queue leader only, when iOS paths change) |
+| Aggregate check name                                           | `ci-stack`              | `ci`                                           |
+| `ci.yml` `cloudflare-worker` local gates (build/dry-run/tests) | yes                     | yes                                            |
+| Staging mutation (R2 / deploy / secrets / smoke)               | no                      | yes (trusted PRs; queue leader only)           |
+| `worker-staging.yml` / screenshot workflows                    | no (`branches: [main]`) | yes, when their paths match                    |
+
+Stacked runs never mutate staging. The deploy lives in `ci.yml`'s
+`cloudflare-worker` job (`RUN_CLOUDFLARE_STAGING`), not only in
+`worker-staging.yml`.
 
 The aggregate must not be named `ci` on a stacked commit. A job skipped by
 `if:` still creates a check run that **counts as passing** for a required

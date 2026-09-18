@@ -58,6 +58,17 @@ describe('shouldMutateCloudflareStaging', () => {
   it('runs for ordinary push events', () => {
     expect(shouldMutateCloudflareStaging({ eventName: 'push' })).toBe(true);
   });
+
+  it('skips stacked pull requests', () => {
+    expect(
+      shouldMutateCloudflareStaging({
+        eventName: 'pull_request',
+        isForkPr: false,
+        isStacked: true,
+        isQueueLeader: true,
+      })
+    ).toBe(false);
+  });
 });
 
 describe('parseMergeQueueEntryCount', () => {

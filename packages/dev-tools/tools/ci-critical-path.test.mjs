@@ -125,7 +125,7 @@ describe('CI critical-path routing', () => {
     // Forks and Dependabot-triggered runs get no repository secrets, so both
     // skip every Cloudflare step instead of failing its credential check.
     expect(header).toContain(
-      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') }}"
+      "RUN_CLOUDFLARE_STAGING: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]')) && (github.event_name != 'merge_group' || needs.changes.outputs.is-queue-leader == 'true') && needs.changes.outputs.is-stacked != 'true' }}"
     );
     expect(header).not.toContain('worker-staging-e2b-slicc-staging');
     expect(workerStagingWorkflow).not.toContain('worker-staging-e2b-slicc-staging');
@@ -191,6 +191,10 @@ describe('CI critical-path routing', () => {
     );
     expect(stacked).not.toContain('${{ github.event_name }}"');
     expect(stacked).not.toContain('${{ github.base_ref }}"');
+
+    expect(worker.slice(0, worker.indexOf('    steps:'))).toContain(
+      "needs.changes.outputs.is-stacked != 'true'"
+    );
 
     const iosTests = jobBody('ios-app-tests', 'global-install');
     expect(iosTests).toContain("needs.changes.outputs.is-stacked != 'true'");
