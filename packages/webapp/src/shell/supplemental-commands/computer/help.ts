@@ -30,7 +30,8 @@ Look:
   watch [--fps N] [--stop]   live frames to the page (phase 2 UI)
   record [-V|--duration SEC] [--fps N] [file]
                              timed clip (screen: live session; other kinds:
-                             JPEG stills through ffmpeg -f image2pipe, max 60s)
+                             JPEG stills through ffmpeg -f image2pipe, max 60s,
+                             --fps ≤10, streamed into the encoder)
 
 Poke (xdotool; every verb ends with a frozen-frame line):
   mousemove <x> <y> [--relative]

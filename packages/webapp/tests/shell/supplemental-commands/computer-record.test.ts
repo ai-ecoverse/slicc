@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
 import {
+  COMPUTER_RECORD_MAX_BYTES,
+  COMPUTER_RECORD_MAX_FPS,
+  COMPUTER_RECORD_MAX_FRAMES,
   collectPolledFrames,
   concatFrameBytes,
   encodeFramesWithFfmpeg,
+  recordPolledClip,
 } from '../../../src/shell/supplemental-commands/computer/record.js';
 
 const { mockRunFfmpeg } = vi.hoisted(() => ({
@@ -19,6 +23,16 @@ interface EncodeCtx {
   fs: { writeFile: (path: string, data: Uint8Array) => Promise<void> };
 }
 
+function jpegFrame(seq: number, bytes: Uint8Array = MINIMAL_JPEG) {
+  return {
+    seq,
+    mime: 'image/jpeg' as const,
+    width: 8,
+    height: 4,
+    bytes,
+  };
+}
+
 describe('collectPolledFrames', () => {
   it('grabs one still when the duration is shorter than the interval', async () => {
     let shots = 0;
@@ -31,17 +45,11 @@ describe('collectPolledFrames', () => {
       },
       screenshot: async () => {
         shots += 1;
-        return {
-          seq: shots,
-          mime: 'image/jpeg',
-          width: 8,
-          height: 4,
-          bytes: MINIMAL_JPEG,
-        };
+        return jpegFrame(shots);
       },
     });
     expect(shots).toBe(1);
-    expect(collected.frames).toHaveLength(1);
+    expect(collected.frameCount).toBe(1);
     expect(collected.width).toBe(8);
     expect(collected.height).toBe(4);
   });
@@ -49,6 +57,7 @@ describe('collectPolledFrames', () => {
   it('polls at fps until duration elapses', async () => {
     let t = 0;
     let shots = 0;
+    const streamed: Uint8Array[] = [];
     const collected = await collectPolledFrames({
       durationMs: 1000,
       fps: 4,
@@ -58,17 +67,74 @@ describe('collectPolledFrames', () => {
       },
       screenshot: async () => {
         shots += 1;
-        return {
-          seq: shots,
-          mime: 'image/jpeg',
-          width: 16,
-          height: 8,
-          bytes: MINIMAL_JPEG,
-        };
+        return jpegFrame(shots);
+      },
+      onFrame: (bytes) => {
+        streamed.push(bytes);
       },
     });
-    expect(collected.frames).toHaveLength(4);
-    expect(concatFrameBytes(collected.frames).byteLength).toBe(MINIMAL_JPEG.byteLength * 4);
+    expect(collected.frameCount).toBe(4);
+    expect(concatFrameBytes(streamed).byteLength).toBe(MINIMAL_JPEG.byteLength * 4);
+  });
+
+  it('clamps fps above 10', async () => {
+    let t = 0;
+    const sleeps: number[] = [];
+    await collectPolledFrames({
+      durationMs: 300,
+      fps: 60,
+      now: () => t,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        t += ms;
+      },
+      screenshot: async () => jpegFrame(1),
+    });
+    expect(sleeps[0]).toBe(Math.round(1000 / COMPUTER_RECORD_MAX_FPS));
+  });
+
+  it('stops at the frame cap', async () => {
+    let t = 0;
+    const collected = await collectPolledFrames({
+      durationMs: 60_000,
+      fps: 10,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      screenshot: async () => jpegFrame(1),
+    });
+    expect(collected.frameCount).toBe(COMPUTER_RECORD_MAX_FRAMES);
+  });
+
+  it('stops at the aggregate JPEG byte cap', async () => {
+    const chunk = new Uint8Array(COMPUTER_RECORD_MAX_BYTES / 2);
+    const collected = await collectPolledFrames({
+      durationMs: 60_000,
+      fps: 10,
+      now: () => 0,
+      sleep: async () => undefined,
+      screenshot: async () => jpegFrame(1, chunk),
+    });
+    expect(collected.frameCount).toBe(2);
+    expect(collected.byteLength).toBe(chunk.byteLength * 2);
+  });
+
+  it('yields between polls so the event loop can run', async () => {
+    let ticks = 0;
+    const id = setInterval(() => {
+      ticks += 1;
+    }, 5);
+    try {
+      await collectPolledFrames({
+        durationMs: 250,
+        fps: 10,
+        screenshot: async () => jpegFrame(1),
+      });
+      expect(ticks).toBeGreaterThan(0);
+    } finally {
+      clearInterval(id);
+    }
   });
 });
 
@@ -140,5 +206,52 @@ describe('encodeFramesWithFfmpeg', () => {
         ctx: ctx as never,
       })
     ).rejects.toThrow('ffmpeg: encoder not found');
+  });
+});
+
+describe('recordPolledClip', () => {
+  it('streams JPEGs into the encoder instead of retaining the array', async () => {
+    const written = new Map<string, Uint8Array>();
+    const ctx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      fs: {
+        resolvePath: (_base: string, path: string) => path,
+        mkdir: async () => undefined,
+        writeFile: async (path: string, data: Uint8Array) => {
+          written.set(path, data);
+        },
+        readFile: async (path: string) => written.get(path) ?? new Uint8Array(0),
+        appendFile: async (path: string, data: Uint8Array) => {
+          const prev = written.get(path) ?? new Uint8Array(0);
+          const next = new Uint8Array(prev.byteLength + data.byteLength);
+          next.set(prev, 0);
+          next.set(data, prev.byteLength);
+          written.set(path, next);
+        },
+      },
+    };
+    let encodeFrames: Uint8Array[] | undefined;
+    let t = 0;
+    const clip = await recordPolledClip({
+      durationMs: 1000,
+      fps: 4,
+      dest: '/clip.webm',
+      ctx: ctx as never,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      screenshot: async () => jpegFrame(1),
+      encode: async (args) => {
+        encodeFrames = args.frames;
+        expect(args.sourcePath).toBeTruthy();
+        await args.ctx.fs.writeFile(args.dest, Uint8Array.of(1, 2));
+        return { mime: 'video/webm' };
+      },
+    });
+    expect(encodeFrames).toEqual([]);
+    expect(written.get('/tmp/computer-record-frames.mjpeg')?.byteLength).toBeGreaterThan(0);
+    expect(clip.mime).toBe('video/webm');
   });
 });

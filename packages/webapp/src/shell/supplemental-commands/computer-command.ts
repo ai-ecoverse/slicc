@@ -53,6 +53,7 @@ export interface ComputerCommandDeps {
     height: number;
     durationMs: number;
     ctx: CommandContext;
+    sourcePath?: string;
   }) => Promise<{ mime: string }>;
   /** Injected in tests; production lazy-wraps `createProxiedFetch`. */
   urlFetch?: (

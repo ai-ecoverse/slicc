@@ -57,6 +57,7 @@ import {
 } from './parse.js';
 import {
   COMPUTER_RECORD_DEFAULT_FPS,
+  COMPUTER_RECORD_MAX_FPS,
   COMPUTER_RECORD_MAX_WIDTH,
   recordPolledClip,
 } from './record.js';
@@ -664,6 +665,9 @@ async function verbRecord(
     return fail(err instanceof Error ? err.message : String(err));
   }
   if (fps <= 0) return fail('--fps requires a positive number');
+  if (fps > COMPUTER_RECORD_MAX_FPS) {
+    return fail(`--fps exceeds ${COMPUTER_RECORD_MAX_FPS}`);
+  }
   const durationMs = clampVideoDurationMs(seconds * 1000);
   const file = positionals(args)[0] ?? 'clip.webm';
   const dest = ctx.fs.resolvePath(ctx.cwd, file);

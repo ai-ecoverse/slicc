@@ -444,8 +444,8 @@ describe('computer command', () => {
     const encoded = Uint8Array.of(9, 9, 9);
     const otherCmd = createComputerCommand({
       registry: other,
-      encodeRecordedFrames: async ({ frames, dest, ctx: encodeCtx }) => {
-        expect(frames.length).toBeGreaterThan(0);
+      encodeRecordedFrames: async ({ frames, dest, ctx: encodeCtx, sourcePath }) => {
+        expect(sourcePath || frames.length > 0).toBeTruthy();
         await encodeCtx.fs.writeFile(dest, encoded);
         return { mime: 'video/webm' };
       },
@@ -455,6 +455,16 @@ describe('computer command', () => {
     expect(worker.exitCode).toBe(0);
     expect(worker.stdout).toContain('recorded 100ms');
     expect(polled.written.get('/jsh.webm')).toEqual(encoded);
+  });
+
+  it('record rejects --fps above 10', async () => {
+    const registry = new ComputerRegistry(null);
+    registry.register(new FakeBackend());
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const rec = await cmd.execute(['record', '--fps', '11', '-V', '1'], ctx);
+    expect(rec.exitCode).toBe(1);
+    expect(rec.stderr).toContain('--fps exceeds 10');
   });
 
   it('watch and --stop drive kernel start/stop control', async () => {
