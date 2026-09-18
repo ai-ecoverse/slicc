@@ -34,6 +34,33 @@ export function parseClaudeVersion(modelId: string, modelName?: string): ClaudeV
   return null;
 }
 
+const SAME_CLAUDE_MODEL_RE = new RegExp(
+  `^(?:(?:us|eu|global|apac|au|jp)\\.)?(?:anthropic[./])?` +
+    `claude-(${CLAUDE_FAMILIES.join('|')})-(\\d{1,2})(?:-(\\d{1,2}))?` +
+    `(?:-\\d{8}-v\\d+(?::\\d+)?)?$`,
+  'i'
+);
+
+export function canonicalModelId(modelId: string): string {
+  const match = SAME_CLAUDE_MODEL_RE.exec(modelId);
+  if (!match) return modelId;
+  const family = (match[1] ?? '').toLowerCase();
+  const major = match[2] ?? '';
+  const minor = match[3];
+  const base = `claude-${family}-${major}`;
+  return minor === undefined || minor === '0' ? base : `${base}-${minor}`;
+}
+
+export function representativeModelId(ids: readonly string[], preferred?: string): string {
+  if (ids.length === 0) return preferred ?? '';
+  const key = canonicalModelId(ids[0] ?? '');
+  if (preferred && canonicalModelId(preferred) === key) return preferred;
+  if (ids.includes(key)) return key;
+  return ids.reduce((best, id) =>
+    id.length < best.length || (id.length === best.length && id < best) ? id : best
+  );
+}
+
 function compareVersion(
   a: { major: number; minor: number },
   b: { major: number; minor: number }

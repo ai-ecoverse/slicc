@@ -95,6 +95,7 @@ describe('cost command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('cost');
     expect(result.stdout).toContain('--all');
+    expect(result.stdout).toContain('running now');
   });
 
   it('shows help with -h', async () => {
@@ -292,6 +293,26 @@ describe('cost command', () => {
     const row = result.stdout.split('\n').find((line) => line.includes('aggregate-only')) ?? '';
     expect(row).toContain('    - /     -');
     expect(row).not.toContain('<0.01');
+  });
+
+  it('collapses alias spellings in a frozen session', () => {
+    const frozen = frozenSessionToCostData({
+      filename: 'aliases.md',
+      title: 'aliases',
+      frozenAt: '2026-07-01T12:00:00.000Z',
+      messageCount: 4,
+      cost: { input: 0.1, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.2 },
+      models: [
+        { model: 'claude-opus-5', cost: 0.05, turns: 1, tokens: 100 },
+        { model: 'global.anthropic.claude-opus-5', cost: 0.1, turns: 2, tokens: 200 },
+        { model: 'presto', cost: 0.05, turns: 1, tokens: 50 },
+      ],
+    });
+
+    expect(frozen.model).toBe('claude-opus-5');
+    expect(frozen.models).toEqual(['claude-opus-5', 'presto']);
+    expect(frozen.turns).toBe(4);
+    expect(frozen.usage.totalTokens).toBe(350);
   });
 });
 

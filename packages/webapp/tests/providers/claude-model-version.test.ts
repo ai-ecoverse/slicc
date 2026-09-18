@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canonicalModelId,
   claudeRejectsTemperature,
   claudeSupportsAdaptiveThinking,
   claudeSupportsMaxEffort,
   claudeSupportsNativeXhighEffort,
   claudeSupportsPromptCaching,
   parseClaudeVersion,
+  representativeModelId,
 } from '../../src/providers/claude-model-version.js';
 
 describe('parseClaudeVersion', () => {
@@ -196,5 +198,39 @@ describe('claudeRejectsTemperature', () => {
     ['gpt-4o'],
   ])('returns false for %s', (id) => {
     expect(claudeRejectsTemperature(id)).toBe(false);
+  });
+});
+
+describe('canonicalModelId', () => {
+  it.each([
+    ['claude-opus-5', 'claude-opus-5'],
+    ['global.anthropic.claude-opus-5', 'claude-opus-5'],
+    ['claude-haiku-4-5', 'claude-haiku-4-5'],
+    ['anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5'],
+    ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5'],
+    ['claude-opus-4-6', 'claude-opus-4-6'],
+    ['anthropic/claude-opus-5', 'claude-opus-5'],
+    ['claude-sonnet-5-0', 'claude-sonnet-5'],
+    ['presto', 'presto'],
+    ['grok-4.6', 'grok-4.6'],
+    ['anthropic/claude-opus-5-fast', 'anthropic/claude-opus-5-fast'],
+    ['claude-opus-5-fast', 'claude-opus-5-fast'],
+  ])('maps %s to %s', (id, expected) => {
+    expect(canonicalModelId(id)).toBe(expected);
+  });
+
+  it('keeps the spelling in use when it names the same model', () => {
+    expect(
+      representativeModelId(
+        ['claude-opus-5', 'global.anthropic.claude-opus-5'],
+        'global.anthropic.claude-opus-5'
+      )
+    ).toBe('global.anthropic.claude-opus-5');
+  });
+
+  it('falls back to the bare alias when nothing is pinned', () => {
+    expect(representativeModelId(['global.anthropic.claude-opus-5', 'claude-opus-5'])).toBe(
+      'claude-opus-5'
+    );
   });
 });
