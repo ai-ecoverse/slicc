@@ -63,7 +63,7 @@ computer key Return
 computer record -V 5 guest.webm
 ```
 
-`computer rm` unregisters `v86:<name>` and does **not** power the guest off. `v86 stop` / `kill <pid>` still does.
+`computer rm` unregisters `v86:<name>` and does **not** power the guest off. `v86 stop` / `kill <pid>` still does. `v86 serve` is retired — use `computer watch -c v86:<name>`.
 
 ## Browser tab
 
@@ -100,7 +100,7 @@ computer click 1 --at 100,80 type hello
 computer add ssh mac-follower --sim UDID-1 --allow-input   # iOS Simulator
 ```
 
-Probes at add: `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec. `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
+Probes at add: native ScreenCaptureKit/CGEvent when the follower advertises `capabilities.computer` (Swift launcher `sliccstart-computer`); else `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec (or `computer.native.frame` when native). `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
 
 ## HTTP remote (`url`)
 

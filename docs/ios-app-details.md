@@ -40,6 +40,10 @@ Display is `ICloudSessionList.recentRows`: trays the live iCloud list already sh
 
 `InMemoryTerminalSession` + `TerminalClient` exec against the leader shell (`hello.capabilities.exec`); one virtual shell per connection, Ctrl-C → `SIGINT` until `exec.response`.
 
+## Computers (viewer)
+
+iOS is never a driven computer: `hello` omits `capabilities.computer`, and `computer.native.*` decode-and-ignore. `computers.list` fills the Browser tab carousel (`ComputerCard`); `computer.frame` updates one `@Published` JPEG per id (`ComputerLiveFrame`). Watch is visibility-refcounted at 2 fps / 480 px while a card or `ComputerLiveView` is on screen. Soft keys send `computer.input`. `-uiTestComputersFixture` / `-uiTestComputerLive` seed the screenshot screens `dock-browser-computers` and `dock-browser-computer-live`.
+
 ## Push to talk
 
 Hold the empty composer to dictate (`PttController` + `SFSpeechRecognizer`); release calls `InputBar.submit(_:dictated:)`. Only dictated replies speak (English → Kokoro, else `AVSpeechSynthesizer`; typed turns stay silent). `AudioSessionCoordinator` solely owns `AVAudioSession`. UI-test hooks `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.

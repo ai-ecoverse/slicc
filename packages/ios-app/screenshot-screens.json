@@ -236,6 +236,8 @@
         "YES"
       ]
     },
+    {
+      "name": "dock-browser-remote",
       "description": "Browser surface with federated remote-tab preview cards",
       "args": [
         "-uiTestConnectionState",
