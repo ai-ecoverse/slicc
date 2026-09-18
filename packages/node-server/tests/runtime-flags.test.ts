@@ -57,6 +57,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -82,6 +83,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -115,6 +117,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -142,6 +145,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -167,6 +171,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -192,6 +197,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -217,6 +223,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -242,6 +249,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -292,6 +300,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -317,6 +326,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -385,10 +395,17 @@ describe('parseCliRuntimeFlags', () => {
     });
   });
 
+  it('parses the computer-demo flag', () => {
+    expect(parseCliRuntimeFlags(['--computer-demo'])).toMatchObject({
+      computerDemo: true,
+    });
+  });
+
   it('parses the install-cli flag', () => {
     expect(parseCliRuntimeFlags(['--install-cli'])).toMatchObject({
       installCli: true,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });
@@ -408,6 +425,7 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['--install-dir', '--install-cli'])).toMatchObject({
       installCli: true,
       installDir: null,
+      computerDemo: false,
       mounts: [],
     });
   });

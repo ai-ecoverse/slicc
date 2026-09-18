@@ -4,8 +4,9 @@ description: |
   Use this when looking at and poking a screen with SLICC's `computer`
   shell command (xdotool grammar). Covers v86 guests (`v86:<name>`),
   browser tabs (`tab:<id>`), display share (`screen:<handle>`), follower
-  desktops (`ssh:<runtimeId>`), jsh-hosted backends, screenshot-space
-  coordinates, frozen JPEG frames, and chaining click/type/key.
+  desktops (`ssh:<runtimeId>`), HTTP remotes (`url:<host>`), jsh-hosted
+  backends, screenshot-space coordinates, frozen JPEG frames, and chaining
+  click/type/key.
 allowed-tools: bash
 ---
 
@@ -99,6 +100,17 @@ computer add ssh mac-follower --sim UDID-1 --allow-input   # iOS Simulator
 ```
 
 Probes at add: `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec. `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
+
+## HTTP remote (`url`)
+
+```bash
+computer add url http://127.0.0.1:5710 -n demo
+computer screenshot
+computer text
+computer type hello
+```
+
+The remote must answer `GET /computer` with a `ComputerDescriptor`. Screenshots are `GET /computer/screenshot`; optional `GET /computer/text` (404 means none); input is `POST /computer/input`. A trailing `/computer` on the base is stripped. Live frames use `WS /computer/frames` only when the descriptor advertises `frames: "push"`; otherwise `computer watch` polls. The in-tree reference is node-server `--computer-demo` (same port as the `/cdp` bridge).
 
 ## jsh-hosted backend
 

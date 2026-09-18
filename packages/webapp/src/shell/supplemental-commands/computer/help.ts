@@ -15,6 +15,10 @@ Lifecycle:
                              follower desktop (or iOS Simulator on a Mac).
                              --allow-input needs sudo (phone can Face ID).
                              The iOS follower itself is never a computer.
+  add url <http(s)://base> [-n name]
+                             HTTP remote computer (GET /computer). Trailing
+                             /computer is stripped. node-server --computer-demo
+                             is the in-tree reference.
   rm [id]                    unregister (stops a live screen share)
   use <id>                   set the default computer
   info                       descriptor for the current target

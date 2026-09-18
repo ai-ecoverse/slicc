@@ -95,6 +95,7 @@ describe('computer command', () => {
     expect(help.stdout).toContain('xdotool');
     expect(help.stdout).toContain('left_click');
     expect(help.stdout).toContain('add ssh');
+    expect(help.stdout).toContain('add url');
   });
 
   it('answers click --help without dispatching input', async () => {
@@ -656,5 +657,75 @@ describe('computer parse', () => {
     const added = await cmd.execute(['add', 'ssh', 'iphone-1'], ctx);
     expect(added.exitCode).toBe(1);
     expect(added.stderr).toContain('iOS follower');
+  });
+
+  it('add url probes GET /computer through the injected fetch', async () => {
+    const jpeg = MINIMAL_JPEG;
+    const urlFetch = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === '/computer') {
+        return {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode(
+            JSON.stringify({
+              kind: 'vnc',
+              title: 'computer-demo',
+              size: { width: 1, height: 1 },
+              state: 'live',
+              capabilities: {
+                screenshot: true,
+                text: true,
+                frames: 'poll',
+                keyboard: true,
+                mouse: 'absolute',
+                scroll: true,
+                exec: false,
+                inputAllowed: true,
+              },
+            })
+          ),
+        };
+      }
+      if (path === '/computer/screenshot') {
+        return { status: 200, headers: { 'content-type': 'image/jpeg' }, body: jpeg };
+      }
+      if (path === '/computer/text') {
+        return { status: 200, headers: {}, body: new TextEncoder().encode('demo\n') };
+      }
+      if (path === '/computer/input') {
+        return { status: 200, headers: {}, body: new TextEncoder().encode('{"ok":true}') };
+      }
+      return { status: 404, headers: {}, body: new Uint8Array() };
+    });
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({ registry, urlFetch });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(
+      ['add', 'url', 'http://127.0.0.1:5710/computer', '-n', 'demo'],
+      ctx
+    );
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('url:127.0.0.1:5710');
+    expect(added.stdout).toContain('demo');
+    const ls = await cmd.execute(['ls'], ctx);
+    expect(ls.stdout).toContain('url');
+    const text = await cmd.execute(['text'], ctx);
+    expect(text.exitCode).toBe(0);
+    expect(text.stdout).toContain('demo');
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(0);
+    expect(urlFetch.mock.calls.some((c) => String(c[0]).includes('/computer/input'))).toBe(true);
+  });
+
+  it('add url refuses a non-http base', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      urlFetch: vi.fn(),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'url', 'ws://127.0.0.1:5710'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('only http(s) bases');
   });
 });

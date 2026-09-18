@@ -25,6 +25,8 @@ export interface CliRuntimeFlags {
   installCli: boolean;
   /** Target directory for --install-cli (default: OS-idiomatic, see install-cli.ts) */
   installDir: string | null;
+  /** Mount GET/POST `/computer` + optional WS `/computer/frames` (URL adapter reference). */
+  computerDemo: boolean;
   /**
    * Mount table: OS-folder → SLICC-target mappings served over the local
    * host-FS bridge (`/api/hostfs`) and auto-mounted by the webapp at boot,
@@ -141,6 +143,7 @@ function createDefaultFlags(): CliRuntimeFlags {
     hosted: false,
     installCli: false,
     installDir: null,
+    computerDemo: false,
     mounts: [],
   };
 }
@@ -171,6 +174,10 @@ function applySimpleFlag(flags: CliRuntimeFlags, arg: string): boolean {
   }
   if (arg === '--install-cli') {
     flags.installCli = true;
+    return true;
+  }
+  if (arg === '--computer-demo') {
+    flags.computerDemo = true;
     return true;
   }
   return false;

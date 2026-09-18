@@ -16,7 +16,7 @@ export function resolveComputerId(
   if (list.length === 0) {
     return {
       error:
-        'no computers registered — `computer add tab <id>`, `computer add screen`, `computer add ssh <follower>`, or `v86 start`',
+        'no computers registered — `computer add tab <id>`, `computer add screen`, `computer add ssh <follower>`, `computer add url <http(s)://base>`, or `v86 start`',
     };
   }
   const ids = list.map((c) => c.id).join(', ');
@@ -33,7 +33,8 @@ function matchQuery(list: ComputerDescriptor[], query: string): { id: string } |
       c.id === `v86:${query}` ||
       c.id === `tab:${query}` ||
       c.id === `screen:${query}` ||
-      c.id === `ssh:${query}`
+      c.id === `ssh:${query}` ||
+      c.id === `url:${query}`
   );
   if (hits.length === 1) return { id: hits[0].id };
   if (hits.length > 1) {

@@ -170,7 +170,7 @@ export default defineConfig({
       // `SLICC_BRIDGE_TOKEN` arms the `/cdp`
       // upgrade gate + cross-origin `/api` token check; `BRIDGE_DEV_ALLOWED_ORIGINS`
       // allowlists the wrangler leader origin so its cross-origin requests pass.
-      command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only --cdp-port=${CDP_PORT}`,
+      command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only --computer-demo --cdp-port=${CDP_PORT}`,
       port: BRIDGE_PORT,
       reuseExistingServer: !process.env['CI'],
       env: {

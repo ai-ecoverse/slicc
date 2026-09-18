@@ -69,6 +69,12 @@ import { runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
 import { registerCloudStatusEndpoint } from './cloud-status.js';
 import {
+  ComputerDemoState,
+  createComputerDemoFrameServer,
+  handleComputerDemoUpgrade,
+  registerComputerDemoRoutes,
+} from './computer-demo.js';
+import {
   ElectronAppAlreadyRunningError,
   ElectronOverlayInjector,
   launchElectronApp,
@@ -739,13 +745,16 @@ function rejectUpgradeUnauthorized(socket: import('node:stream').Duplex, reason:
  * `Sec-WebSocket-Protocol` token = socket destroyed before
  * `wss.emit('connection', ...)` ever fires. Legacy modes (dev / electron /
  * serve-only / hosted) pass `null` to keep same-origin behavior unchanged.
- * `/licks-ws` is loopback-only and stays ungated.
+ * `/licks-ws` is loopback-only and stays ungated. When `--computer-demo` is
+ * on, `/computer/frames` is the optional push socket for the URL adapter
+ * reference server (HTTP poll still works without the upgrade).
  */
 function attachCdpUpgradeRouting(
   server: HttpServer,
   wss: WebSocketServer,
   lickWss: WebSocketServer,
-  bridgeToken: string | null
+  bridgeToken: string | null,
+  computerDemoWss: WebSocketServer | null = null
 ): void {
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
@@ -769,6 +778,8 @@ function attachCdpUpgradeRouting(
       lickWss.handleUpgrade(request, socket, head, (ws) => {
         lickWss.emit('connection', ws, request);
       });
+    } else if (computerDemoWss) {
+      handleComputerDemoUpgrade(pathname, request, socket, head, computerDemoWss);
     }
   });
 }
@@ -1524,6 +1535,9 @@ async function main() {
   // an approval. Loopback-only; selects a backend by environment at call time.
   registerSudoApproveEndpoint(app);
 
+  const computerDemo = RUNTIME_FLAGS.computerDemo ? new ComputerDemoState() : null;
+  if (computerDemo) registerComputerDemoRoutes(app, computerDemo);
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS,
   // injecting/unmasking secrets and streaming the response with a UTF-8-safe scrub.
   registerFetchProxyRoute(app, { secretProxy });
@@ -1537,7 +1551,8 @@ async function main() {
   // 4. CDP WebSocket proxy at /cdp — noServer mode so we own the upgrade
   //    handler routing for /cdp and /licks-ws.
   const wss = createCdpWebSocketServer(state.bridgeToken);
-  attachCdpUpgradeRouting(server, wss, lickWss, state.bridgeToken);
+  const computerDemoWss = computerDemo ? createComputerDemoFrameServer(computerDemo) : null;
+  attachCdpUpgradeRouting(server, wss, lickWss, state.bridgeToken, computerDemoWss);
   const cdpCtx: CdpProxyContext = {
     wss,
     secretProxy,

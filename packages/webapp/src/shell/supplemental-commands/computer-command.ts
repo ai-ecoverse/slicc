@@ -27,6 +27,15 @@ export interface ComputerCommandDeps {
     command: string,
     timeoutMs?: number
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** Injected in tests; production lazy-wraps `createProxiedFetch`. */
+  urlFetch?: (
+    url: string,
+    init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }
+  ) => Promise<{
+    status: number;
+    headers: Headers | Record<string, string>;
+    body: Uint8Array;
+  }>;
 }
 
 export function createComputerCommand(deps: ComputerCommandDeps = {}): Command {

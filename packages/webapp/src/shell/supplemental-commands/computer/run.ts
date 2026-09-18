@@ -239,9 +239,61 @@ async function verbAdd(
   if (kind === 'tab') return verbAddTab(args, ctx, deps, registry);
   if (kind === 'screen') return verbAddScreen(args, ctx, deps, registry);
   if (kind === 'ssh') return verbAddSsh(args, ctx, deps, registry);
+  if (kind === 'url') return verbAddUrl(args, ctx, deps, registry);
   return fail(
-    `add: unknown kind '${kind ?? ''}' — phase 3 supports \`computer add tab\`, \`computer add screen\`, and \`computer add ssh\``
+    `add: unknown kind '${kind ?? ''}' — phase 3 supports \`computer add tab\`, \`computer add screen\`, \`computer add ssh\`, and \`computer add url\``
   );
+}
+
+async function resolveUrlFetch(
+  deps: ComputerCommandDeps
+): Promise<NonNullable<ComputerCommandDeps['urlFetch']>> {
+  if (deps.urlFetch) return deps.urlFetch;
+  const { createProxiedFetch } = await import('../../proxied-fetch.js');
+  const sf = createProxiedFetch();
+  return async (url, init) => {
+    const res = await sf(url, {
+      method: init?.method,
+      headers: init?.headers,
+      body: typeof init?.body === 'string' ? init.body : undefined,
+    });
+    return { status: res.status, headers: res.headers, body: res.body };
+  };
+}
+
+async function verbAddUrl(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const name = flagValue(args, ['-n', '--name']);
+  const spec = positionals(args).slice(1)[0];
+  if (!spec) return fail('add url: requires <http(s)://base>');
+  const { UrlComputerBackend, probeUrlComputer, normalizeComputerBase } = await import(
+    '../../../computers/adapters/url.js'
+  );
+  let base: string;
+  try {
+    base = normalizeComputerBase(spec);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return fail(`add url: ${msg}`);
+  }
+  const fetchImpl = await resolveUrlFetch(deps);
+  let desc;
+  try {
+    desc = await probeUrlComputer(fetchImpl, base);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return fail(msg.startsWith('add url:') ? msg : `add url: ${msg}`);
+  }
+  if (name) desc = { ...desc, title: name };
+  const backend = new UrlComputerBackend(fetchImpl, base, desc);
+  const registered = registry.register(backend);
+  registry.use(registered.id);
+  void ctx;
+  return ok(`registered ${registered.id} (${registered.title})\n`);
 }
 
 async function verbAddSsh(
