@@ -95,6 +95,9 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
   const tempPath = args.ctx.fs.resolvePath(args.ctx.cwd, tmp);
   await args.ctx.fs.mkdir(tempPath.slice(0, tempPath.lastIndexOf('/')), { recursive: true });
   await args.ctx.fs.writeFile(tempPath, concatFrameBytes(args.frames));
+  if (!args.ctx.limits) {
+    throw new Error('computer record: ffmpeg encode needs a shell runtime context');
+  }
   const result = await runFfmpeg(
     [
       '-y',
@@ -119,7 +122,7 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
       'yuv420p',
       args.dest,
     ],
-    { ...args.ctx, env: wasmEngineEnv(args.ctx.env) }
+    { ...args.ctx, env: wasmEngineEnv(args.ctx.env), limits: args.ctx.limits }
   );
   if (result.exitCode !== 0) {
     const detail = result.stderr.trim() || 'ffmpeg failed';
@@ -128,9 +131,10 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
   return { mime: 'video/webm' };
 }
 
-async function readClipBytes(ctx: CommandContext, dest: string): Promise<Uint8Array> {
-  const raw = await ctx.fs.readFile(dest, { encoding: 'binary' });
-  return raw instanceof Uint8Array ? raw : new Uint8Array(0);
+async function readClipBytes(ctx: CommandContext, dest: string): Promise<Uint8Array<ArrayBuffer>> {
+  const raw = (await ctx.fs.readFile(dest, { encoding: 'binary' })) as unknown;
+  if (!(raw instanceof Uint8Array)) return new Uint8Array();
+  return Uint8Array.from(raw);
 }
 
 export async function recordPolledClip(opts: {

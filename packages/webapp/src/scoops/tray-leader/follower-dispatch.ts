@@ -259,7 +259,7 @@ export class FollowerDispatch {
     }
   }
 
-  private warnUnknownFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
+  private warnUnknownFollowerMessage(bootstrapId: string, message: never): void {
     const unknown = unhandledProtocolMessage(message);
     this.context.log.warn('Unknown follower message type — skewed follower?', {
       bootstrapId,

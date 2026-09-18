@@ -230,7 +230,7 @@ describe('ssh backend', () => {
       mouse: 'absolute',
       scroll: true,
     });
-    const frame = await backend.screenshot({ maxWidth: 480 });
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 480 });
     expect(frame).toMatchObject({ mime: 'image/jpeg', width: 480, height: 270 });
     expect(capture).toHaveBeenCalledWith({ fps: 2, maxWidth: 480, watch: false });
     expect(exec).not.toHaveBeenCalled();
