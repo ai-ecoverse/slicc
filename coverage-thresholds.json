@@ -2,9 +2,9 @@
   "typescript": {
     "cloudflare-worker": {
       "lines": 91,
-      "statements": 89,
+      "statements": 90,
       "functions": 94,
-      "branches": 82,
+      "branches": 83,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -68,7 +68,7 @@
     "webapp": {
       "lines": 85,
       "statements": 83,
-      "functions": 83,
+      "functions": 84,
       "branches": 75,
       "coverageExclude": [
         "**/node_modules/**",
