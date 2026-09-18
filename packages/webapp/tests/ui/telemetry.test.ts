@@ -207,11 +207,15 @@ describe('telemetry', () => {
       'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
     );
     trackError('llm', 'Adobe session expired — please log in again');
-    // The Adobe rate-limit family: the exhausted-budget card owns its own
-    // switch-provider / add-provider remediation, so it is not a regression.
+    // Exhausted provider budgets own switch-provider / add-provider
+    // remediation, so neither provider shape is a regression beacon.
     trackError(
       'llm',
       '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14.","resets_at":"2026-09-14T00:00:00.000Z"}}'
+    );
+    trackError(
+      'llm',
+      '403 {"error":"You have either run out of available resources or do not have an active Grok subscription."}'
     );
 
     const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
@@ -441,6 +445,10 @@ describe('telemetry', () => {
 
     trackError('llm', {
       error: { type: 'quota_exceeded', message: 'Weekly budget has been fully used.' },
+    });
+    trackError('llm', {
+      error:
+        'You have either run out of available resources or do not have an active Grok subscription.',
     });
     trackError('llm', { message: 'No API key configured for provider "anthropic".' });
     const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');

@@ -41,6 +41,11 @@ const testScoop: RegisteredScoop = {
   addedAt: new Date().toISOString(),
 };
 
+const ADOBE_EXHAUSTED_BUDGET =
+  '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used.","resets_at":"2026-09-21T00:00:00.000Z"}}';
+const GROK_EXHAUSTED_BUDGET =
+  '403 {"error":"You have either run out of available resources or do not have an active Grok subscription."}';
+
 function createMockCallbacks(): ScoopContextCallbacks {
   return {
     onResponse: vi.fn(),
@@ -682,6 +687,13 @@ describe('isNonRetryableError', () => {
     expect(isNonRetryableError('account suspended')).toBe(true);
   });
 
+  it.each([ADOBE_EXHAUSTED_BUDGET, GROK_EXHAUSTED_BUDGET])(
+    'treats exhausted provider budgets as non-retryable regardless of status',
+    (error) => {
+      expect(isNonRetryableError(error)).toBe(true);
+    }
+  );
+
   it('matches malformed request errors', () => {
     expect(isNonRetryableError('invalid request body')).toBe(true);
     expect(isNonRetryableError('malformed JSON')).toBe(true);
@@ -732,6 +744,13 @@ describe('isRetryableError', () => {
     expect(isRetryableError('too many requests, please slow down')).toBe(true);
     expect(isRetryableError('quota exceeded, try again later')).toBe(true);
   });
+
+  it.each([ADOBE_EXHAUSTED_BUDGET, GROK_EXHAUSTED_BUDGET])(
+    'does not retry exhausted provider budgets',
+    (error) => {
+      expect(isRetryableError(error)).toBe(false);
+    }
+  );
 
   it('matches 5xx server errors', () => {
     expect(isRetryableError('500 Internal Server Error')).toBe(true);
@@ -854,6 +873,31 @@ describe('ScoopContext stream error retries', () => {
   beforeEach(() => {
     callbacks = createMockCallbacks();
     ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it.each([
+    ['Adobe', ADOBE_EXHAUSTED_BUDGET],
+    ['Grok', GROK_EXHAUSTED_BUDGET],
+  ])('surfaces an exhausted %s budget after one attempt', async (_provider, errorMessage) => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      (ctx as any).handleAgentEvent({
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            content: [],
+            errorMessage,
+          },
+        ],
+      });
+    });
+
+    await ctx.prompt('hello');
+
+    expect(attempts).toBe(1);
+    expect(callbacks.onFatalError).toHaveBeenCalledWith(expect.stringContaining(errorMessage));
   });
 
   it('retries retryable agent_end stream errors before surfacing them', async () => {

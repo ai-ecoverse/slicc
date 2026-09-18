@@ -11,6 +11,8 @@
  * `turn-runner.ts`.
  */
 
+import { isExhaustedBudgetError } from '../../core/error-families.js';
+
 /** Detect API errors caused by invalid/oversized images. */
 export function isImageProcessingError(msg: string): boolean {
   return (
@@ -26,6 +28,7 @@ export function isImageProcessingError(msg: string): boolean {
  * These include authentication failures, invalid model IDs, and permanent API errors.
  */
 export function isNonRetryableError(msg: string): boolean {
+  if (isExhaustedBudgetError(msg)) return true;
   return (
     // HTTP 4xx errors (except 429 rate limit which is retryable)
     /\b(401|403|404|405|410|422)\b/.test(msg) ||
@@ -51,6 +54,9 @@ export function isNonRetryableError(msg: string): boolean {
  * Includes rate limits, server errors, and network issues.
  */
 export function isRetryableError(msg: string): boolean {
+  // An exhausted allowance can arrive as Adobe's 429, but waiting a few
+  // seconds cannot refill it. Keep it separate from a transient 429.
+  if (isExhaustedBudgetError(msg)) return false;
   return (
     // Rate limiting
     /\b429\b|rate.*limit|too.*many.*requests|quota.*exceeded/i.test(msg) ||
