@@ -171,16 +171,23 @@ function readLockPackages(tree) {
 }
 
 /**
- * True when some ancestor package of a nested `node_modules` path also
- * changed version. `linkNodeModules` borrows the parent as one symlink, and
- * `realignDriftedDependencies` replaces that parent wholesale, so the nested
- * copy is not an independent hole.
+ * True when some ancestor package of a nested `node_modules` path exists on
+ * BOTH sides and changed version.
+ *
+ * A parent VERSION bump is replaced wholesale via `npm pack`, and the nested
+ * tree is treated as travelling with that swap (the knip/`oxc-parser`
+ * approximation). A parent REMOVAL is different: `npm pack` of the restored
+ * parent only ships the published tarball — not the parent's installed
+ * `node_modules/` — so nested copies must still be realigned on their own.
+ * Specimen: `@cantoo/pdf-lib` 2.9 → 2.11 drops `@pdf-lib/upng`, whose nested
+ * `pako@1.0.11` must be restored or the baseline resolves to hoisted
+ * `pako@3` and fails `MISSING_EXPORT` on the default import.
  *
  * @param {string} path lockfile path starting with `node_modules/`
  * @param {Record<string, {version?: string}>} base
  * @param {Record<string, {version?: string}>} head
  */
-function ancestorPackageChanged(path, base, head) {
+function ancestorPackageVersionBumped(path, base, head) {
   let rest = path;
   while (rest.includes('/node_modules/')) {
     const idx = rest.lastIndexOf('/node_modules/');
@@ -189,7 +196,9 @@ function ancestorPackageChanged(path, base, head) {
     const from = base[rest]?.version;
     if (!from) continue;
     const to = head[rest]?.version ?? null;
-    if (to !== from) return true;
+    // `to === null` means the parent was removed by HEAD — nested is NOT
+    // covered by restoring the parent tarball (see header).
+    if (to !== null && to !== from) return true;
   }
   return false;
 }
@@ -228,7 +237,7 @@ function isDefinitelyTypedPackage(installName) {
  * @param {Record<string, {version?: string, dev?: boolean}>} head
  */
 function nestedCopyIsCovered(path, entry, base, head) {
-  if (ancestorPackageChanged(path, base, head)) return true;
+  if (ancestorPackageVersionBumped(path, base, head)) return true;
   if (isDefinitelyTypedPackage(path.slice('node_modules/'.length))) return true;
   const headEntry = head[path];
   return entry.dev === true && (headEntry == null || headEntry.dev === true);
@@ -279,12 +288,13 @@ function registryName(path, entry) {
  * `materializeLinkedParents` can split that parent so `installBaseVersion`
  * swaps the nested entry independently. They now go to `changed`/`missing`
  * (specimen: Dependabot PR #3200, `node_modules/glob/node_modules/brace-expansion`
- * 2.0.2 -> 2.1.7). A nested copy whose ancestor package also changed is NOT
- * an independent hole: the parent is already in `changed`/`missing` and gets
- * replaced wholesale, so the nested tree travels with it (the same
- * "transitives stay borrowed from HEAD" approximation as
- * `realignDriftedDependencies`). Knip 6.33.0 is the specimen: `oxc-parser`
- * 0.143 -> 0.147 nests a matching `@oxc-project/types`.
+ * 2.0.2 -> 2.1.7). A nested copy whose ancestor package VERSION-BUMPED (present
+ * on both sides) is NOT an independent hole: the parent is already in
+ * `changed` and gets replaced wholesale (knip/`oxc-parser` 0.143 → 0.147
+ * nesting `@oxc-project/types` is the specimen). A nested copy under a parent
+ * HEAD removed is an independent hole: `npm pack` of the restored parent does
+ * not carry installed nested deps (`@cantoo/pdf-lib` 2.9 → 2.11 dropping
+ * `@pdf-lib/upng` + its nested `pako@1.0.11` is the specimen).
  *
  * Nested copies that exist only in the dev tree (`dev: true` on both sides,
  * or removed from HEAD while still `dev: true` on the base) are also not
@@ -488,11 +498,16 @@ export function realignDriftedDependencies(tree, drift, log = () => {}) {
   }
   const staging = mkdtempSync(join(tmpdir(), 'slicc-first-load-pack-'));
   try {
-    for (const entry of changed) {
+    // Parents before nested children: a restored package's nested
+    // `node_modules/<dep>` path is only writable once the parent directory
+    // exists (see nested copies under a removed parent in `dependencyDrift`).
+    const byDepth = (a, b) =>
+      a.path.split('/node_modules/').length - b.path.split('/node_modules/').length;
+    for (const entry of [...changed].sort(byDepth)) {
       if (!installBaseVersion(tree, staging, entry, log)) return false;
       log(`realigned ${entry.name} to the base version ${entry.from} (HEAD has ${entry.to})`);
     }
-    for (const entry of missing) {
+    for (const entry of [...missing].sort(byDepth)) {
       if (installBaseVersion(tree, staging, entry, log)) {
         log(`restored ${entry.name}@${entry.from}, which this change removes`);
       } else {

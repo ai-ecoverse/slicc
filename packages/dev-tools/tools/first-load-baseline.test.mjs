@@ -381,7 +381,10 @@ describe('dependencyDrift', () => {
     ]);
   });
 
-  it('does not flag a nested copy under a parent the change removes', () => {
+  it('flags a nested copy under a parent the change removes', () => {
+    // npm pack of the restored parent does not ship nested node_modules, so
+    // the nested production copy must be realigned on its own (pdf-lib 2.11
+    // dropping @pdf-lib/upng + nested pako@1 is the live specimen).
     lock(repo, {});
     lock(tree, {
       'node_modules/a': { version: '1.0.0' },
@@ -389,7 +392,10 @@ describe('dependencyDrift', () => {
     });
     const drift = dependencyDrift(repo, tree);
     expect(drift.unrealignable).toEqual([]);
-    expect(drift.missing).toEqual([{ path: 'node_modules/a', name: 'a', from: '1.0.0', to: null }]);
+    expect(drift.missing).toEqual([
+      { path: 'node_modules/a', name: 'a', from: '1.0.0', to: null },
+      { path: 'node_modules/a/node_modules/b', name: 'b', from: '1.0.0', to: null },
+    ]);
   });
 
   it('does not flag a deeply nested copy whose grandparent changed', () => {
