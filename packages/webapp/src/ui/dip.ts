@@ -1567,6 +1567,12 @@ export async function handleDipPickerAction(
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
   const filters = dipPickerFiltersFromData(msg.data);
+  // Screen share uses the leader-tab getDisplayMedia surface in every
+  // float — do not send it through picker-popup.html (not a PickerKind).
+  if (msg.picker === 'screenshare') {
+    await runScreensharePicker(msg.action, onLick);
+    return;
+  }
   // Extension mode routes pickers through `chrome.windows.create` because
   // the side panel cannot host system choosers (TCC + `requestDevice`
   // both misbehave there). The popup runs the picker on its own button
@@ -1738,6 +1744,37 @@ function dispatchPickerDenial(
     return;
   }
   onLick(action, { error: denial.message ?? 'unknown error' });
+}
+
+async function runScreensharePicker(
+  action: string,
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  const result = await requestPickerFromSurface('screenshare', {
+    constraints: { video: true },
+  });
+  if (!result) {
+    onLick(action, { error: 'screen capture is not available' });
+    return;
+  }
+  if (!result.ok) {
+    dispatchPickerDenial(action, result, 'screen capture is not available', onLick);
+    return;
+  }
+  const grant = result.grant as Extract<PermissionGrant, { kind: 'screenshare' }>;
+  const { adoptDisplayStream } = await import(
+    '../shell/supplemental-commands/screencapture-media.js'
+  );
+  try {
+    const adopted = await adoptDisplayStream(grant.stream);
+    if (!adopted.handle) {
+      onLick(action, { error: 'screen share produced no handle' });
+      return;
+    }
+    onLick(action, { granted: true, handle: adopted.handle });
+  } catch (err: unknown) {
+    onLick(action, { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 async function runDirectoryPicker(

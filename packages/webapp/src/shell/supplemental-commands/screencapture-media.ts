@@ -194,6 +194,15 @@ async function startDisplaySession(): Promise<DisplayCaptureResult> {
   } catch (err) {
     throw new Error(describeDisplayCaptureError(err));
   }
+  return adoptDisplayStream(stream);
+}
+
+/**
+ * Adopt an already-granted display MediaStream into the session store.
+ * Used by the panel terminal after `requestPermission('screenshare')` so
+ * the OS picker does not run twice.
+ */
+export async function adoptDisplayStream(stream: MediaStream): Promise<DisplayCaptureResult> {
   let video: HTMLVideoElement;
   try {
     video = await attachVideoElement(stream);

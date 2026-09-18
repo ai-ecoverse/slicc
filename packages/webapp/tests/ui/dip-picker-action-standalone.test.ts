@@ -67,12 +67,26 @@ vi.mock('../../src/kernel/serial-port-registry.js', () => ({
   getNavigatorSerial: vi.fn(),
 }));
 
+const screenMod = vi.hoisted(() => ({
+  adoptDisplayStream: vi.fn(async () => ({
+    bytes: new Uint8Array(0),
+    mimeType: 'application/octet-stream',
+    width: 1280,
+    height: 720,
+    handle: 'screen1',
+  })),
+}));
+vi.mock('../../src/shell/supplemental-commands/screencapture-media.js', () => ({
+  adoptDisplayStream: screenMod.adoptDisplayStream,
+}));
+
 const { handleDipPickerAction } = await import('../../src/ui/dip.js');
 
 beforeEach(() => {
   surfaceMock.request.mockReset();
   surfaceMock.addEventListener.mockReset();
   surfaceMock.removeEventListener.mockReset();
+  screenMod.adoptDisplayStream.mockClear();
 });
 
 afterEach(() => {
@@ -214,5 +228,23 @@ describe('handleDipPickerAction (standalone) — routes pickers through <slicc-p
     expect(onLick).toHaveBeenCalledWith('approve', {
       error: 'File System Access API not available',
     });
+  });
+
+  it('screenshare: surface grant → adoptDisplayStream → { granted, handle }', async () => {
+    const stream = { id: 'display' };
+    surfaceMock.request.mockResolvedValueOnce({
+      kind: 'screenshare',
+      stream,
+    });
+    const onLick = vi.fn();
+    await handleDipPickerAction(
+      { type: 'dip-picker-action', action: 'approve', picker: 'screenshare' },
+      onLick
+    );
+    expect(surfaceMock.request).toHaveBeenCalledWith('screenshare', {
+      constraints: { video: true },
+    });
+    expect(screenMod.adoptDisplayStream).toHaveBeenCalledWith(stream);
+    expect(onLick).toHaveBeenCalledWith('approve', { granted: true, handle: 'screen1' });
   });
 });

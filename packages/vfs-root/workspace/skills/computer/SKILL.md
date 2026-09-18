@@ -3,7 +3,7 @@ name: computer
 description: |
   Use this when looking at and poking a screen with SLICC's `computer`
   shell command (xdotool grammar). Covers v86 guests (`v86:<name>`),
-  browser tabs (`tab:<id>`), jsh-hosted backends, screenshot-space
+  browser tabs (`tab:<id>`), display share (`screen:<handle>`), jsh-hosted backends, screenshot-space
   coordinates, frozen JPEG frames, and chaining click/type/key.
 allowed-tools: bash
 ---
@@ -72,6 +72,19 @@ computer click 1 --at 100,80 type hello
 ```
 
 `computer add tab` refuses SLICC app tabs (`sliccy.ai` leader, `?slicc=`, extension pages). Pass a URL or a CDP target id.
+
+## Display share (`screen`)
+
+```bash
+computer add screen -n desk          # panel terminal or cone approval card
+computer screenshot -c screen:screen1
+computer record -V 10 clip.webm      # timed clip from the live session
+computer rm screen:screen1           # stops the getDisplayMedia tracks
+```
+
+`computer add screen` needs a real user gesture (`getDisplayMedia`). Type it in the panel terminal, or run it from a cone tool call so an approval card can open the picker. `computer ls` marks a live share with `[display slot]`. Input (keyboard/mouse) is not supported. Screen share cannot come back after `jshd --enable` restore — there is no gesture at boot.
+
+`computer record` is screen-only in this phase; other kinds fail with a phase-4 message.
 
 ## jsh-hosted backend
 

@@ -471,10 +471,10 @@ export class RemoteTerminalView {
 
   /**
    * Run a gesture-gated device picker for the pre-intercept commands
-   * (`mount /<path>`, `usb|hid|serial request`, `esptool`). Returns true
-   * when a picker handled the line, false for an ordinary command. Only
-   * called for real typed input (see `processLine`) because the pickers
-   * require the Enter-keystroke user activation.
+   * (`mount /<path>`, `usb|hid|serial request`, `esptool`, `computer add
+   * screen`). Returns true when a picker handled the line, false for an
+   * ordinary command. Only called for real typed input (see `processLine`)
+   * because the pickers require the Enter-keystroke user activation.
    */
   private async tryRunPicker(command: string): Promise<boolean> {
     const mountTarget = parseLocalMountTarget(command);
@@ -500,6 +500,11 @@ export class RemoteTerminalView {
     const esptoolFilters = parseEsptoolPickerCommand(command);
     if (esptoolFilters) {
       await this.runRemoteWithEsptoolPicker(command, esptoolFilters);
+      return true;
+    }
+    const screenAdd = parseComputerAddScreenCommand(command);
+    if (screenAdd) {
+      await this.runRemoteWithScreenShare(screenAdd.name);
       return true;
     }
     return false;
@@ -838,6 +843,43 @@ export class RemoteTerminalView {
   }
 
   /**
+   * Run getDisplayMedia through the centralized screenshare permission
+   * surface on the Enter-keystroke gesture, adopt the stream into the
+   * page-side session store, then forward `computer add screen --__resolved
+   * <handle>` so the worker registers a `screen:` computer without a
+   * second picker.
+   */
+  private async runRemoteWithScreenShare(name: string | undefined): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const result = await this.requestPermission('screenshare', {
+        constraints: { video: true },
+      });
+      if (!result.ok) {
+        this.writePickerDenial(
+          'computer',
+          result,
+          'screen capture is not available in this browser'
+        );
+        return;
+      }
+      const grant = result.grant as Extract<PermissionGrant, { kind: 'screenshare' }>;
+      const { adoptDisplayStream } = await import(
+        '../shell/supplemental-commands/screencapture-media.js'
+      );
+      const adopted = await adoptDisplayStream(grant.stream);
+      if (!adopted.handle) {
+        this.terminal?.writeln('computer: screen share produced no handle');
+        return;
+      }
+      const nameFlag = name ? ` -n ${name}` : '';
+      await this.client.exec(`computer add screen --__resolved ${adopted.handle}${nameFlag}`);
+    } finally {
+      this.isExecuting = false;
+    }
+  }
+
+  /**
    * Pre-pick a local directory through the centralized permission surface
    * before forwarding the `mount` command to the worker. Runs
    * `showDirectoryPicker` on the keystroke activation chain. Cancellation
@@ -986,6 +1028,22 @@ export function parseLocalMountTarget(line: string): string | null {
  */
 export function localMountIdbKey(target: string): string {
   return `pendingMount:term:${target}`;
+}
+
+/**
+ * Parse a typed command line and return a match when it is a
+ * gesture-requiring `computer add screen` (no `--__resolved` handle and
+ * no help flag). Returns `null` for anything else so the worker handles it.
+ */
+export function parseComputerAddScreenCommand(line: string): { name?: string } | null {
+  const tokens = line.trim().split(/\s+/);
+  if (tokens[0] !== 'computer' || tokens[1] !== 'add' || tokens[2] !== 'screen') return null;
+  if (tokens.includes('--__resolved') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  const nameIdx = tokens.findIndex((t) => t === '-n' || t === '--name');
+  const name = nameIdx !== -1 ? tokens[nameIdx + 1] : undefined;
+  return name ? { name } : {};
 }
 
 /**

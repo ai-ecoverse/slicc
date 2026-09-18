@@ -6,6 +6,7 @@
 import type { ComputerDescriptor, ComputerInputEvent, ComputerMouseButton } from '@slicc/shared-ts';
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
+import { getToolExecutionContext } from '../../../base/tool-execution-context.js';
 import {
   BridgedTabComputerBackend,
   LocalTabComputerBackend,
@@ -37,6 +38,7 @@ import type { PanelRpcClient } from '../../../kernel/panel-rpc.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 import type { ProcessManager } from '../../../kernel/process-manager.js';
 import type { ComputerCommandDeps } from '../computer-command.js';
+import { clampVideoDurationMs } from '../screencapture-media-shared.js';
 import { isHelpRequest, subcommandHelpText } from '../subcommand-help.js';
 import { COMPUTER_HELP, COMPUTER_VALUE_FLAGS } from './help.js';
 import {
@@ -49,6 +51,7 @@ import {
   positionals,
   type VerbCall,
 } from './parse.js';
+import { runScreenShareApproval } from './screen-approval.js';
 import { resolveComputerId } from './target.js';
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
@@ -145,6 +148,8 @@ async function runVerb(
       return verbText(globals, ctx, registry);
     case 'watch':
       return verbWatch(call.args, globals, ctx, registry, deps);
+    case 'record':
+      return verbRecord(call.args, globals, ctx, registry);
     case 'exec':
       return verbExec(call.args, globals, ctx, registry);
     default:
@@ -156,9 +161,10 @@ function verbLs(registry: ComputerRegistry, json: boolean): CmdResult {
   const list = registry.list();
   if (json) return ok(`${JSON.stringify(list)}\n`);
   if (list.length === 0) return ok('no computers registered\n');
-  const lines = ['ID                   KIND  STATE     TITLE'];
+  const lines = ['ID                   KIND   STATE     TITLE'];
   for (const c of list) {
-    lines.push(`${c.id.padEnd(20)} ${c.kind.padEnd(5)} ${c.state.padEnd(9)} ${c.title}`);
+    const slot = c.kind === 'screen' ? ' [display slot]' : '';
+    lines.push(`${c.id.padEnd(20)} ${c.kind.padEnd(6)} ${c.state.padEnd(9)} ${c.title}${slot}`);
   }
   return ok(`${lines.join('\n')}\n`);
 }
@@ -170,9 +176,19 @@ async function verbAdd(
   registry: ComputerRegistry
 ): Promise<CmdResult> {
   const kind = args[0];
-  if (kind !== 'tab') {
-    return fail(`add: unknown kind '${kind ?? ''}' — phase 1 supports \`computer add tab\``);
-  }
+  if (kind === 'tab') return verbAddTab(args, ctx, deps, registry);
+  if (kind === 'screen') return verbAddScreen(args, ctx, deps, registry);
+  return fail(
+    `add: unknown kind '${kind ?? ''}' — phase 3 supports \`computer add tab\` and \`computer add screen\``
+  );
+}
+
+async function verbAddTab(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
   const name = flagValue(args, ['-n', '--name']);
   const spec = positionals(args).slice(1)[0];
   if (!spec) return fail('add tab: requires <targetId|url>');
@@ -192,6 +208,39 @@ async function verbAdd(
   const backend = rpc
     ? new BridgedTabComputerBackend(rpc, page.targetId, info)
     : new LocalTabComputerBackend(browser, page.targetId, info);
+  const desc = registry.register(backend);
+  registry.use(desc.id);
+  void ctx;
+  return ok(`registered ${desc.id} (${desc.title})\n`);
+}
+
+async function verbAddScreen(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const name = flagValue(args, ['-n', '--name']);
+  const resolved = flagValue(args, ['--__resolved']);
+  let handle = resolved;
+  if (!handle) {
+    if (!getToolExecutionContext()) {
+      return fail(
+        'add screen: needs a user gesture — type `computer add screen` in the panel terminal, or run it from a cone tool call so an approval card can open the picker'
+      );
+    }
+    try {
+      handle = (await runScreenShareApproval()).handle;
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
+  }
+  const rpc = lookupRpc(deps);
+  if (!rpc) return fail('add screen: no panel RPC in this float');
+  const { BridgedScreenComputerBackend } = await import('../../../computers/adapters/screen.js');
+  const backend = new BridgedScreenComputerBackend(rpc, handle, {
+    title: name ?? 'Display',
+  });
   const desc = registry.register(backend);
   registry.use(desc.id);
   void ctx;
@@ -306,6 +355,62 @@ async function verbWatch(
   const maxWidth = parseSizeSpec(flagValue(args, ['--size']));
   host.watch(target.id, fps, maxWidth);
   return ok(`watching ${target.id} at ${fps} fps\n`);
+}
+
+interface ScreenClipper {
+  recordClip(durationMs: number): Promise<{
+    bytes: Uint8Array;
+    mime: string;
+    width: number;
+    height: number;
+    durationMs?: number;
+  }>;
+}
+
+function hasRecordClip(backend: ComputerBackend): backend is ComputerBackend & ScreenClipper {
+  return 'recordClip' in backend && typeof (backend as ScreenClipper).recordClip === 'function';
+}
+
+function durationSeconds(args: string[]): number {
+  const raw = flagValue(args, ['-V', '--duration']);
+  if (raw === undefined) return 5;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error('-V/--duration requires a positive number of seconds');
+  }
+  return n;
+}
+
+async function verbRecord(
+  args: string[],
+  globals: { computer: string | undefined; json: boolean },
+  ctx: CommandContext,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const target = requireTarget(registry, globals.computer, ctx);
+  if ('exitCode' in target) return target;
+  const kind = target.descriptor.kind;
+  if (kind !== 'screen' || !hasRecordClip(target.backend)) {
+    return fail(`record: not supported for '${kind}' yet (phase 4)`);
+  }
+  let seconds: number;
+  try {
+    seconds = durationSeconds(args);
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err));
+  }
+  const durationMs = clampVideoDurationMs(seconds * 1000);
+  const clip = await target.backend.recordClip(durationMs);
+  const file = positionals(args)[0] ?? 'clip.webm';
+  const dest = ctx.fs.resolvePath(ctx.cwd, file);
+  await ctx.fs.writeFile(dest, clip.bytes);
+  const elapsed = clip.durationMs ?? durationMs;
+  if (globals.json) {
+    return ok(
+      `${JSON.stringify({ id: target.id, path: dest, durationMs: elapsed, mime: clip.mime })}\n`
+    );
+  }
+  return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height} → ${dest}\n`);
 }
 
 function resolveWatchControl(deps: ComputerCommandDeps): {

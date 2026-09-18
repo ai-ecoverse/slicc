@@ -11,7 +11,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { localMountIdbKey, parseLocalMountTarget } from '../../src/kernel/remote-terminal-view.js';
+import {
+  localMountIdbKey,
+  parseComputerAddScreenCommand,
+  parseLocalMountTarget,
+} from '../../src/kernel/remote-terminal-view.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -82,6 +86,22 @@ describe('parseLocalMountTarget', () => {
   it('handles --no-probe and other flags between mount and target', () => {
     // `mount --no-probe /mnt/x` should still be a local-mount target.
     expect(parseLocalMountTarget('mount --no-probe /mnt/x')).toBe('/mnt/x');
+  });
+});
+
+describe('parseComputerAddScreenCommand', () => {
+  it('matches computer add screen and optional -n', () => {
+    expect(parseComputerAddScreenCommand('computer add screen')).toEqual({});
+    expect(parseComputerAddScreenCommand('computer add screen -n Desk')).toEqual({ name: 'Desk' });
+    expect(parseComputerAddScreenCommand('computer add screen --name Desk')).toEqual({
+      name: 'Desk',
+    });
+  });
+
+  it('returns null once the picker already resolved or for help', () => {
+    expect(parseComputerAddScreenCommand('computer add screen --__resolved screen1')).toBeNull();
+    expect(parseComputerAddScreenCommand('computer add screen --help')).toBeNull();
+    expect(parseComputerAddScreenCommand('computer add tab T1')).toBeNull();
   });
 });
 

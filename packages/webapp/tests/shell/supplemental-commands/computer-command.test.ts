@@ -333,6 +333,117 @@ describe('computer command', () => {
     expect(browser.withTab).not.toHaveBeenCalled();
   });
 
+  it('add screen --__resolved registers a bridged backend', async () => {
+    const jpeg = new ArrayBuffer(MINIMAL_JPEG.byteLength);
+    new Uint8Array(jpeg).set(MINIMAL_JPEG);
+    const call = vi.fn(async (_op: string, payload: { session?: string }) => {
+      if (payload.session === 'frame') {
+        return { bytes: jpeg, width: 640, height: 360, mimeType: 'image/jpeg' };
+      }
+      if (payload.session === 'stop') {
+        return {
+          bytes: new ArrayBuffer(0),
+          width: 0,
+          height: 0,
+          mimeType: 'application/octet-stream',
+        };
+      }
+      return {
+        bytes: new ArrayBuffer(0),
+        width: 0,
+        height: 0,
+        mimeType: 'application/octet-stream',
+      };
+    });
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      panelRpc: { call } as never,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(
+      ['add', 'screen', '--__resolved', 'screen1', '-n', 'Desk'],
+      ctx
+    );
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('screen:screen1');
+    expect(registry.get('screen:screen1')).toBeTruthy();
+    const ls = await cmd.execute(['ls'], ctx);
+    expect(ls.stdout).toContain('screen');
+    expect(ls.stdout).toContain('[display slot]');
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(call).toHaveBeenCalledWith(
+      'screencapture',
+      expect.objectContaining({ session: 'frame', handle: 'screen1' })
+    );
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(1);
+    expect(typed.stderr).toContain('input is not allowed');
+  });
+
+  it('add screen without a gesture or --__resolved fails', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      panelRpc: { call: vi.fn() } as never,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'screen'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('needs a user gesture');
+  });
+
+  it('record writes a clip for screen and refuses other kinds', async () => {
+    const webm = Uint8Array.of(1, 2, 3);
+    class ScreenBackend extends FakeBackend {
+      constructor() {
+        super('screen:screen1');
+      }
+      describe(): ComputerDescriptor {
+        return {
+          ...super.describe(),
+          id: 'screen:screen1',
+          kind: 'screen',
+          title: 'Desk',
+          capabilities: {
+            screenshot: true,
+            text: false,
+            frames: 'poll',
+            keyboard: false,
+            mouse: 'none',
+            scroll: false,
+            exec: false,
+            inputAllowed: false,
+          },
+        };
+      }
+      async recordClip(durationMs: number) {
+        return {
+          bytes: webm,
+          mime: 'video/webm',
+          width: 10,
+          height: 10,
+          durationMs,
+        };
+      }
+    }
+    const registry = new ComputerRegistry(null);
+    registry.register(new ScreenBackend());
+    const cmd = createComputerCommand({ registry });
+    const { ctx, written } = makeCtx();
+    const rec = await cmd.execute(['record', '-V', '2', 'out.webm'], ctx);
+    expect(rec.exitCode).toBe(0);
+    expect(rec.stdout).toContain('recorded 2000ms');
+    expect(written.get('/out.webm')).toEqual(webm);
+
+    const other = new ComputerRegistry(null);
+    other.register(new FakeBackend());
+    const otherCmd = createComputerCommand({ registry: other });
+    const refused = await otherCmd.execute(['record'], makeCtx().ctx);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("not supported for 'jsh' yet (phase 4)");
+  });
+
   it('watch and --stop drive kernel start/stop control', async () => {
     const backend = new FakeBackend();
     const registry = new ComputerRegistry(null);
@@ -451,5 +562,11 @@ describe('computer parse', () => {
     expect(chainVerbs(['click', 'left', '100', '200'])[0].args).toEqual(['left', '100', '200']);
     expect(chainVerbs(['mousedown', '100', '200'])[0].args).toEqual(['100', '200']);
     expect(chainVerbs(['mouseup', '2', '50', '60'])[0].args).toEqual(['2', '50', '60']);
+  });
+
+  it('parses record -V as a value flag, not a positional', () => {
+    const [call] = chainVerbs(['record', '-V', '10', 'clip.webm']);
+    expect(call.verb).toBe('record');
+    expect(call.args).toEqual(['-V', '10', 'clip.webm']);
   });
 });
