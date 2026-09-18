@@ -1646,6 +1646,7 @@ describe('ScoopContext — process manager wiring', () => {
       const proc = pm.list()[0];
       expect(proc.status).toBe('exited');
       expect(proc.exitCode).toBe(1);
+      expect(callbacks.onFatalError).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

@@ -431,7 +431,6 @@ export class Orchestrator implements ConeApprovalRouter {
         approveDirectedOrUser: (request) => this.approveDirectedOrUser(request),
         listPendingSudoRequests: (approverJid) => this.listPendingSudoRequests(approverJid),
       },
-      handleMessage: (msg) => this.handleMessage(msg),
     });
   }
 
