@@ -10,8 +10,13 @@
  * next to the compaction seam (#2992).
  */
 
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentMessage } from '../../src/core/index.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
+import { toAgentMessages } from '../../src/work-unit/conversation/derive.js';
+import { conversationIdentityFor } from '../../src/work-unit/conversation/key.js';
+import { WorkUnitConversationStore } from '../../src/work-unit/conversation/store.js';
 import type { ConversationMarker } from '../../src/work-unit/conversation/types.js';
 
 const messageListeners: Array<(message: unknown) => void> = [];
@@ -61,6 +66,54 @@ const CONE = {
   assistantLabel: 'sliccy',
   addedAt: '2026-01-04T10:00:00.000Z',
 };
+
+const DELEGATED_SCOOP = {
+  ...CONE,
+  jid: 'scoop_gelatiere',
+  name: 'Gelatiere',
+  folder: 'gelatiere',
+  parentJid: CONE.jid,
+  assistantLabel: 'gelatiere',
+};
+
+let realDbCounter = 0;
+
+function terminalPiMessages(): AgentMessage[] {
+  return [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: 'finish the job' }],
+      timestamp: 1000,
+    },
+    {
+      role: 'assistant',
+      content: [],
+      timestamp: 2000,
+      stopReason: 'error',
+      errorMessage: 'raw provider failure request-secret-123',
+    },
+  ] as AgentMessage[];
+}
+
+function newRealStore(): WorkUnitConversationStore {
+  realDbCounter++;
+  return new WorkUnitConversationStore({ dbName: `test-error-markers-${realDbCounter}` });
+}
+
+async function bindRealBridge(store: WorkUnitConversationStore) {
+  const next = new Bridge();
+  await next.bind({
+    getScoops: () => [CONE, DELEGATED_SCOOP],
+    getScoopContext: () => undefined,
+    getConversationStore: () => store,
+    getQueuedMessageIds: () => [],
+  } as never);
+  return { bridge: next, callbacks: Bridge.createCallbacks(next) };
+}
+
+function bufferFor(target: InstanceType<typeof Bridge>, jid: string): ChatMessage[] {
+  return (target as { getBuffer: (targetJid: string) => ChatMessage[] }).getBuffer(jid);
+}
 
 /**
  * In-memory canonical store: Pi history plus markers. `exists: false` models
@@ -283,5 +336,106 @@ describe('kernel error-card persistence', () => {
     ) as { payload: { messages: ChatMessage[] } } | undefined;
     expect(replaced?.payload.messages.find((m) => m.id === 'err-snap')?.error).toBe(true);
     expect(saved).toEqual([]);
+  });
+});
+
+describe('kernel error-card IndexedDB durability (#3263)', () => {
+  it('keeps a root failure separate from Pi history across a reload and rebuild', async () => {
+    const store = newRealStore();
+    const identity = conversationIdentityFor(CONE);
+    const piMessages = terminalPiMessages();
+    await store.syncAgentMessages(identity, piMessages);
+    const { callbacks } = await bindRealBridge(store);
+
+    const visibleFailure = 'Scoop "Cone" failed after 3 attempts: provider unavailable';
+    callbacks.onError?.(CONE.jid, visibleFailure);
+
+    await vi.waitFor(async () => {
+      expect((await store.load(identity.key))?.markers).toEqual([
+        expect.objectContaining({ kind: 'error', text: visibleFailure }),
+      ]);
+    });
+    const durable = await store.load(identity.key);
+    // The empty Pi assistant error remains model history. The presentation
+    // marker is not injected into that history and therefore cannot make the
+    // model respond to its own failure on the next turn.
+    expect(toAgentMessages(durable)).toEqual(piMessages);
+    expect(JSON.stringify(toAgentMessages(durable))).not.toContain(visibleFailure);
+
+    const { bridge: reloaded } = await bindRealBridge(store);
+    await reloaded.hydrateBuffersFromRecords();
+    expect(bufferFor(reloaded, CONE.jid).filter((message) => message.error)).toEqual([
+      expect.objectContaining({ content: visibleFailure, error: true }),
+    ]);
+
+    // A second rebuild is a read, not another presentation write.
+    await reloaded.hydrateBuffersFromRecords();
+    expect(bufferFor(reloaded, CONE.jid).filter((message) => message.error)).toHaveLength(1);
+    expect((await store.load(identity.key))?.markers).toHaveLength(1);
+  });
+
+  it('creates and reloads a marker-only record for a delegated fatal failure', async () => {
+    const store = newRealStore();
+    const identity = conversationIdentityFor(DELEGATED_SCOOP);
+    const { callbacks } = await bindRealBridge(store);
+
+    const fatalNotification = 'Scoop "Gelatiere" failed with unrecoverable error: quota exhausted';
+    callbacks.onError?.(DELEGATED_SCOOP.jid, fatalNotification);
+
+    await vi.waitFor(async () => {
+      expect(await store.load(identity.key)).toMatchObject({
+        workUnitId: DELEGATED_SCOOP.jid,
+        workspaceId: '/scoops/gelatiere/workspace',
+        entries: [],
+        markers: [expect.objectContaining({ kind: 'error', text: fatalNotification })],
+      });
+    });
+    expect(await store.load(conversationIdentityFor(CONE).key)).toBeNull();
+
+    const { bridge: reloaded } = await bindRealBridge(store);
+    await reloaded.hydrateBuffersFromRecords();
+    expect(bufferFor(reloaded, DELEGATED_SCOOP.jid).filter((message) => message.error)).toEqual([
+      expect.objectContaining({ content: fatalNotification, error: true }),
+    ]);
+  });
+
+  it('retries a failed marker-only write at terminal error with one stable id', async () => {
+    const store = newRealStore();
+    const identity = conversationIdentityFor(DELEGATED_SCOOP);
+    const writeMarker = store.putMarker.bind(store);
+    const markerWrites = vi.spyOn(store, 'putMarker');
+    markerWrites
+      .mockImplementationOnce(async () => false)
+      .mockImplementation((key, marker, options) => writeMarker(key, marker, options));
+    const { callbacks } = await bindRealBridge(store);
+
+    callbacks.onError?.(DELEGATED_SCOOP.jid, 'provider unavailable');
+    // This is the real terminal ordering: lifecycle emits `error` immediately
+    // after onError, before recordErrorCard's first IndexedDB await settles.
+    callbacks.onStatusChange?.(DELEGATED_SCOOP.jid, 'error');
+    // A repeated state sync may overlap the first retry. Stable marker ids
+    // make every write an upsert rather than another card.
+    callbacks.onStatusChange?.(DELEGATED_SCOOP.jid, 'error');
+
+    await vi.waitFor(async () => {
+      expect((await store.load(identity.key))?.markers).toEqual([
+        expect.objectContaining({ kind: 'error', text: 'provider unavailable' }),
+      ]);
+    });
+    expect(markerWrites.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    const writesAfterRecovery = markerWrites.mock.calls.length;
+    callbacks.onResponseDone?.(DELEGATED_SCOOP.jid);
+    callbacks.onStatusChange?.(DELEGATED_SCOOP.jid, 'ready');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(markerWrites).toHaveBeenCalledTimes(writesAfterRecovery);
+
+    const { bridge: reloaded } = await bindRealBridge(store);
+    await reloaded.hydrateBuffersFromRecords();
+    expect(
+      bufferFor(reloaded, DELEGATED_SCOOP.jid).filter((message) => message.error)
+    ).toHaveLength(1);
+    expect((await store.load(identity.key))?.markers).toHaveLength(1);
   });
 });
