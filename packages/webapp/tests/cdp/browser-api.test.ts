@@ -411,6 +411,28 @@ describe('BrowserAPI', () => {
       });
       expect(send).toHaveBeenCalledWith('Browser.getWindowBounds', { windowId: 9 });
     });
+
+    it('setWindowBounds restores maximized windows before applying geometry', async () => {
+      const send = mockClient.send as ReturnType<typeof vi.fn>;
+      send
+        .mockResolvedValueOnce({
+          windowId: 9,
+          bounds: { left: 0, top: 0, width: 1920, height: 1080, windowState: 'maximized' },
+        })
+        .mockResolvedValueOnce({}) // restore to normal
+        .mockResolvedValueOnce({}) // apply geometry
+        .mockResolvedValueOnce({
+          bounds: { left: 10, top: 20, width: 800, height: 600, windowState: 'normal' },
+        });
+      vi.spyOn(api, 'withTab').mockResolvedValueOnce(1 as never);
+
+      const achieved = await api.setWindowBounds('target-1', { width: 800, height: 600 });
+      expect(achieved).toMatchObject({ width: 800, height: 600, state: 'normal' });
+      expect(send.mock.calls.filter((c) => c[0] === 'Browser.setWindowBounds')).toEqual([
+        ['Browser.setWindowBounds', { windowId: 9, bounds: { windowState: 'normal' } }],
+        ['Browser.setWindowBounds', { windowId: 9, bounds: { width: 800, height: 600 } }],
+      ]);
+    });
   });
 
   describe('listPages', () => {

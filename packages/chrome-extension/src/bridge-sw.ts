@@ -446,6 +446,52 @@ export async function writeStoredLeaderTabIdToSession(tabId: number): Promise<vo
   }
 }
 
+/** Drop undefined keys so chrome.windows.create/update see a sparse options bag. */
+export function pickDefinedWindowFields<T extends object>(
+  fields: T
+): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  const out = {} as { [K in keyof T]?: Exclude<T[K], undefined> };
+  for (const key of Object.keys(fields) as Array<keyof T>) {
+    const value = fields[key];
+    if (value !== undefined) {
+      out[key] = value as Exclude<(typeof fields)[typeof key], undefined>;
+    }
+  }
+  return out;
+}
+
+/** Normalize a chrome.windows.Window (create/get/update) into BridgeChromeWindowInfo. */
+export function chromeWindowInfoFromChrome(
+  win: {
+    id?: number;
+    left?: number;
+    top?: number;
+    width?: number;
+    height?: number;
+    state?: string;
+    tabs?: Array<{ id?: number }>;
+  },
+  label: string,
+  tabIdFallback?: number
+): BridgeChromeWindowInfo {
+  if (typeof win.id !== 'number') {
+    throw new Error(`${label} did not return a window id`);
+  }
+  const tabId = win.tabs?.[0]?.id;
+  if (tabIdFallback === undefined && typeof tabId !== 'number') {
+    throw new Error(`${label} did not return windowId/tabId`);
+  }
+  return {
+    windowId: win.id,
+    tabId: typeof tabId === 'number' ? tabId : (tabIdFallback as number),
+    left: win.left ?? 0,
+    top: win.top ?? 0,
+    width: win.width ?? 0,
+    height: win.height ?? 0,
+    state: win.state ?? 'normal',
+  };
+}
+
 /**
  * Default deps wired against the real chrome.* APIs. Provided as a factory
  * so the SW can override `attachDebugger` / `detachDebugger` etc. to share
@@ -502,64 +548,33 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
         url: opts.url,
         type: opts.type,
         focused: opts.focused,
-        ...(opts.width !== undefined ? { width: opts.width } : {}),
-        ...(opts.height !== undefined ? { height: opts.height } : {}),
-        ...(opts.left !== undefined ? { left: opts.left } : {}),
-        ...(opts.top !== undefined ? { top: opts.top } : {}),
-        ...(opts.state !== undefined ? { state: opts.state } : {}),
+        ...pickDefinedWindowFields({
+          width: opts.width,
+          height: opts.height,
+          left: opts.left,
+          top: opts.top,
+          state: opts.state,
+        }),
       });
-      const windowId = created.id;
-      const tabId = created.tabs?.[0]?.id;
-      if (typeof windowId !== 'number' || typeof tabId !== 'number') {
-        throw new Error('chrome.windows.create did not return windowId/tabId');
-      }
-      return {
-        windowId,
-        tabId,
-        left: created.left ?? 0,
-        top: created.top ?? 0,
-        width: created.width ?? 0,
-        height: created.height ?? 0,
-        state: created.state ?? 'normal',
-      };
+      return chromeWindowInfoFromChrome(created, 'chrome.windows.create');
     },
     getWindow: async (windowId) => {
       const win = await chrome.windows.get(windowId, { populate: true });
-      const tabId = win.tabs?.[0]?.id;
-      if (typeof win.id !== 'number') {
-        throw new Error(`chrome.windows.get: missing id for window ${windowId}`);
-      }
-      return {
-        windowId: win.id,
-        tabId: typeof tabId === 'number' ? tabId : -1,
-        left: win.left ?? 0,
-        top: win.top ?? 0,
-        width: win.width ?? 0,
-        height: win.height ?? 0,
-        state: win.state ?? 'normal',
-      };
+      return chromeWindowInfoFromChrome(win, `chrome.windows.get(${windowId})`, -1);
     },
     updateWindow: async (windowId, props) => {
-      const updated = await chrome.windows.update(windowId, {
-        ...(props.left !== undefined ? { left: props.left } : {}),
-        ...(props.top !== undefined ? { top: props.top } : {}),
-        ...(props.width !== undefined ? { width: props.width } : {}),
-        ...(props.height !== undefined ? { height: props.height } : {}),
-        ...(props.state !== undefined ? { state: props.state } : {}),
-        ...(props.focused !== undefined ? { focused: props.focused } : {}),
-      });
-      if (typeof updated.id !== 'number') {
-        throw new Error(`chrome.windows.update: missing id for window ${windowId}`);
-      }
-      return {
-        windowId: updated.id,
-        tabId: -1,
-        left: updated.left ?? 0,
-        top: updated.top ?? 0,
-        width: updated.width ?? 0,
-        height: updated.height ?? 0,
-        state: updated.state ?? 'normal',
-      };
+      const updated = await chrome.windows.update(
+        windowId,
+        pickDefinedWindowFields({
+          left: props.left,
+          top: props.top,
+          width: props.width,
+          height: props.height,
+          state: props.state,
+          focused: props.focused,
+        })
+      );
+      return chromeWindowInfoFromChrome(updated, `chrome.windows.update(${windowId})`, -1);
     },
     removeTab: (tabId) => chrome.tabs.remove(tabId),
     activateTab: async (tabId) => {
@@ -913,33 +928,26 @@ async function cdpCreateTarget(
   deps: BridgeSwDeps
 ): Promise<BridgeTargetCreateResult> {
   const url = readCreateTargetUrl(params);
-  // `newWindow: true` is the CDP switch that makes width/height/left/top
-  // effective. Map it onto chrome.windows.create so extension floats get the
-  // same sized+decorated window contract as standalone CDP (issue #3271).
-  if (params['newWindow'] === true) {
-    const state = readOptionalWindowState(params['windowState']);
-    const decorated = params['decorated'] !== false;
-    const focus = params['background'] !== true;
-    const opts: BridgeCreateWindowOptions = {
-      url,
-      type: decorated ? 'normal' : 'popup',
-      focused: focus,
-    };
-    // chrome.windows rejects combining non-normal state with geometry.
-    if (state && state !== 'normal') {
-      opts.state = state;
-    } else {
-      if (typeof params['width'] === 'number') opts.width = params['width'];
-      if (typeof params['height'] === 'number') opts.height = params['height'];
-      if (typeof params['left'] === 'number') opts.left = params['left'];
-      if (typeof params['top'] === 'number') opts.top = params['top'];
-      if (state) opts.state = state;
-    }
-    const created = await deps.createWindow(opts);
-    return { targetId: String(created.tabId) };
+  // `newWindow: true` → chrome.windows.create so sized+decorated windows match
+  // standalone CDP (issue #3271). chrome.debugger cannot run Browser.*.
+  if (params['newWindow'] !== true) {
+    const tabId = await deps.createTab(url);
+    return { targetId: String(tabId) };
   }
-  const tabId = await deps.createTab(url);
-  return { targetId: String(tabId) };
+  const state = readOptionalWindowState(params['windowState']);
+  const opts: BridgeCreateWindowOptions = {
+    url,
+    type: params['decorated'] === false ? 'popup' : 'normal',
+    focused: params['background'] !== true,
+  };
+  if (state && state !== 'normal') {
+    opts.state = state;
+  } else {
+    copyNumericFields(params as CdpBoundsBag, opts, GEOMETRY_KEYS);
+    if (state) opts.state = state;
+  }
+  const created = await deps.createWindow(opts);
+  return { targetId: String(created.tabId) };
 }
 
 async function cdpGetWindowForTarget(
@@ -980,31 +988,31 @@ async function cdpSetWindowBounds(params: CDPPayload, deps: BridgeSwDeps): Promi
     throw new Error(`Invalid windowId: ${String(windowId)}`);
   }
   const rawBounds = readCdpBoundsFields(params['bounds']);
-  const state = readOptionalWindowState(rawBounds.windowState ?? rawBounds.state);
-  const props: {
-    left?: number;
-    top?: number;
-    width?: number;
-    height?: number;
-    state?: string;
-  } = {};
+  const state = readOptionalWindowState(rawBounds['windowState'] ?? rawBounds['state']);
+  const props: BridgeWindowUpdateProps = {};
   if (state && state !== 'normal') {
     props.state = state;
   } else {
-    if (typeof rawBounds.left === 'number') props.left = rawBounds.left;
-    if (typeof rawBounds.top === 'number') props.top = rawBounds.top;
-    if (typeof rawBounds.width === 'number') props.width = rawBounds.width;
-    if (typeof rawBounds.height === 'number') props.height = rawBounds.height;
+    copyNumericFields(rawBounds, props, GEOMETRY_KEYS);
     if (state) props.state = state;
   }
   await deps.updateWindow(windowId, props);
-  // CDP Browser.setWindowBounds returns an empty object; the BrowserAPI layer
-  // always follows with getWindowBounds to read the achieved size.
   return {};
 }
 
-/** Loose bounds object from a Browser.setWindowBounds CDP params bag. */
-interface CdpBoundsFields {
+const GEOMETRY_KEYS = ['left', 'top', 'width', 'height'] as const;
+const WINDOW_STATES = new Set(['normal', 'minimized', 'maximized', 'fullscreen']);
+
+interface BridgeWindowUpdateProps {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  state?: string;
+}
+
+/** Loose CDP bounds bag before numeric/state narrowing. */
+interface CdpBoundsBag {
   left?: unknown;
   top?: unknown;
   width?: unknown;
@@ -1013,11 +1021,20 @@ interface CdpBoundsFields {
   state?: unknown;
 }
 
-function readCdpBoundsFields(value: unknown): CdpBoundsFields {
-  if (value !== null && typeof value === 'object') {
-    return value as CdpBoundsFields;
+/** Copy finite number fields from a loose CDP/chrome bag onto a typed target. */
+function copyNumericFields(
+  source: CdpBoundsBag,
+  target: { [K in (typeof GEOMETRY_KEYS)[number]]?: number },
+  keys: readonly (typeof GEOMETRY_KEYS)[number][]
+): void {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'number') target[key] = value;
   }
-  return {};
+}
+
+function readCdpBoundsFields(value: unknown): CdpBoundsBag {
+  return value !== null && typeof value === 'object' ? (value as CdpBoundsBag) : {};
 }
 
 function chromeWindowToCdpBounds(win: BridgeChromeWindowInfo): BridgeWindowBounds {
@@ -1033,13 +1050,8 @@ function chromeWindowToCdpBounds(win: BridgeChromeWindowInfo): BridgeWindowBound
 function readOptionalWindowState(
   value: unknown
 ): 'normal' | 'minimized' | 'maximized' | 'fullscreen' | undefined {
-  if (
-    value === 'normal' ||
-    value === 'minimized' ||
-    value === 'maximized' ||
-    value === 'fullscreen'
-  ) {
-    return value;
+  if (typeof value === 'string' && WINDOW_STATES.has(value)) {
+    return value as 'normal' | 'minimized' | 'maximized' | 'fullscreen';
   }
   return undefined;
 }

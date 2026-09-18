@@ -1134,8 +1134,22 @@ export class BrowserAPI implements TabHost {
     if (typeof windowId !== 'number') {
       throw new Error('Browser.getWindowForTarget did not return a windowId');
     }
-    const cdpBounds: CdpBoundsPatch = {};
+    const current = normalizeWindowBounds(forTarget['bounds']);
     const state = bounds.state;
+    const applyingGeometry =
+      bounds.left !== undefined ||
+      bounds.top !== undefined ||
+      bounds.width !== undefined ||
+      bounds.height !== undefined;
+    // CDP + chrome.windows reject geometry while minimized/maximized/fullscreen.
+    // Restore to normal first when the caller supplies only (or also) geometry.
+    if (applyingGeometry && current.state !== 'normal') {
+      await transport.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: { windowState: 'normal' } as unknown as CdpPayload,
+      });
+    }
+    const cdpBounds: CdpBoundsPatch = {};
     if (state && state !== 'normal') {
       cdpBounds.windowState = state;
     } else {
