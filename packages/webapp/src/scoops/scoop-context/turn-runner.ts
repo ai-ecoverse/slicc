@@ -29,18 +29,13 @@ export interface TurnRunnerDeps {
 export class TurnRunner {
   constructor(private readonly deps: TurnRunnerDeps) {}
 
-  async run(
-    agent: Agent,
-    text: string,
-    images: ImageContent[],
-    abortSignal: AbortSignal
-  ): Promise<Error | null> {
+  async run(start: () => Promise<void>, abortSignal: AbortSignal): Promise<Error | null> {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       if (this.deps.isDisposed() || abortSignal.aborted) return null;
 
-      const error = await this.tryAgentPrompt(agent, text, images, abortSignal);
+      const error = await this.tryAttempt(start, abortSignal);
       if (!error) return null;
 
       if (this.deps.isDisposed() || abortSignal.aborted) return null;
@@ -66,15 +61,13 @@ export class TurnRunner {
     );
   }
 
-  private async tryAgentPrompt(
-    agent: Agent,
-    text: string,
-    images: ImageContent[],
+  private async tryAttempt(
+    start: () => Promise<void>,
     abortSignal: AbortSignal
   ): Promise<Error | null> {
     this.deps.beginAttempt();
     try {
-      await agent.prompt(text, images);
+      await start();
       if (this.deps.isDisposed() || abortSignal.aborted) return null;
 
       const recovery = this.deps.overflow.pendingRecovery;

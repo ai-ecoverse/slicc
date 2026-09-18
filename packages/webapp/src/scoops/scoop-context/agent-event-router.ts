@@ -11,13 +11,14 @@ import { PROGRESS_CONTENT_TYPE, type ToolProgressEvent } from '../../shell/progr
 
 export interface AgentEventSink {
   textDelta(delta: string): void;
-  toolStart(toolName: string, args: unknown, toolCallId?: string): void;
+
+  toolStart(toolName: string, args: unknown, toolCallId?: string): Promise<void> | void;
   toolUI(toolName: string, requestId: string, html: string): void;
   toolUIDone(requestId: string): void;
   toolProgress(toolName: string, progress: ToolProgressEvent, toolCallId?: string): void;
   toolResult(toolName: string, text: string, isError: boolean, toolCallId?: string): void;
 
-  checkpoint(): void;
+  checkpoint(message?: AgentMessage): void;
   assistantMessageEnd(message: AssistantMessage): void;
 
   turnStart(): void;
@@ -32,7 +33,7 @@ export function routeAgentEvent(
   event: CoreAgentEvent,
   sink: AgentEventSink,
   abortSignal?: AbortSignal
-): void {
+): Promise<void> | void {
   switch (event.type) {
     case 'message_update': {
       const ame = event.assistantMessageEvent as AssistantMessageEvent;
@@ -41,8 +42,7 @@ export function routeAgentEvent(
     }
 
     case 'tool_execution_start': {
-      sink.toolStart(event.toolName, event.args, event.toolCallId);
-      break;
+      return sink.toolStart(event.toolName, event.args, event.toolCallId);
     }
 
     case 'tool_execution_update': {
@@ -60,7 +60,7 @@ export function routeAgentEvent(
       if (event.message.role === 'assistant') {
         sink.assistantMessageEnd(event.message as AssistantMessage);
       }
-      sink.checkpoint();
+      sink.checkpoint(event.message);
       break;
     }
 

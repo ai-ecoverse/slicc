@@ -58,6 +58,7 @@ import {
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
+import type { RecoveryOutcome } from './interrupted-work-recovery.js';
 import { isExternalLickChannel } from './lick-formatting.js';
 import {
   buildActiveLicksError,
@@ -73,6 +74,7 @@ import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
+import type { InFlightTurn, TurnJournal } from './scoop-context/turn-journal.js';
 import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { ScoopCostTracker } from './scoop-cost-tracker.js';
 import { ScoopIdleTimers } from './scoop-idle-timers.js';
@@ -188,6 +190,10 @@ export class Orchestrator implements ConeApprovalRouter {
   private sessionStore: SessionStore | null = null;
 
   private conversationStore: WorkUnitConversationStore | null = null;
+
+  private turnJournal: TurnJournal | null = null;
+
+  private interruptedTurns: InFlightTurn[] | null = null;
   private fsWatcher: FsWatcher | null = null;
 
   private sudoManager: SudoManager | null = null;
@@ -292,6 +298,7 @@ export class Orchestrator implements ConeApprovalRouter {
       getProcessManager: () => this.processManager,
       getSudoManager: () => this.sudoManager,
       getCapabilityBroker: () => this.capabilityBroker,
+      getTurnJournal: () => this.turnJournal,
       callbacks: this.callbacks,
       idleTimers: this.idleTimers,
       completionService: this.completionService,
@@ -396,6 +403,10 @@ export class Orchestrator implements ConeApprovalRouter {
     );
     this.sessionStore = new SessionStore();
     this.conversationStore = new WorkUnitConversationStore();
+
+    const { TurnJournal } = await import('./scoop-context/turn-journal.js');
+    this.turnJournal = new TurnJournal();
+    this.interruptedTurns = await this.turnJournal.readAll();
 
     this.fsWatcher = new FsWatcher();
     this.sharedFs.setWatcher(this.fsWatcher);
@@ -967,6 +978,22 @@ export class Orchestrator implements ConeApprovalRouter {
 
   async getMessagesForScoop(jid: string): Promise<ChannelMessage[]> {
     return db.getMessagesForScoop(jid);
+  }
+
+  async recoverInterruptedWork(emitLick: (event: LickEvent) => void): Promise<RecoveryOutcome[]> {
+    const turns = this.interruptedTurns;
+    this.interruptedTurns = null;
+    const journal = this.turnJournal;
+    if (!turns || turns.length === 0 || !journal) return [];
+    const { recoverInterruptedWork } = await import('./interrupted-work-recovery.js');
+    return recoverInterruptedWork(turns, {
+      journal,
+      getScoop: (jid) => this.scoops.get(jid),
+      getUnit: (jid) => this.lifecycle.getContext(jid),
+      resumeTurn: (jid, resumeCount, guestGates) =>
+        this.lifecycle.resumeTurn(jid, resumeCount, guestGates),
+      emitLick,
+    });
   }
 
   sendPrompt(

@@ -13,7 +13,7 @@ import { setMountCapabilityBroker } from '../fs/mount/capability-broker.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
-import { formatLickEventForCone } from '../scoops/lick-formatting.js';
+import { formatLickEventForCone, sessionReloadReason } from '../scoops/lick-formatting.js';
 import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
 import { scoopCanBrowse } from '../scoops/llms-txt-ignore.js';
 import type {
@@ -140,7 +140,7 @@ function resolveLickEventName(event: LickEvent): string | undefined {
     case 'upgrade':
       return `${event.upgradeFromVersion ?? 'unknown'}→${event.upgradeToVersion ?? 'unknown'}`;
     case 'session-reload':
-      return 'mount-recovery';
+      return sessionReloadReason(event);
     case 'workflow':
       return event.workflowName ?? event.workflowRunId ?? 'workflow';
     case 'bash':
@@ -603,6 +603,21 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
   };
 }
 
+async function recoverInterruptedWorkForHost(
+  orchestrator: OrchestratorType,
+  lickManager: LickManager,
+  log: KernelHostLogger
+): Promise<void> {
+  try {
+    const outcomes = await orchestrator.recoverInterruptedWork((event) =>
+      lickManager.emitEvent(event)
+    );
+    if (outcomes.length > 0) log.info('Recovered work interrupted by a reload', { outcomes });
+  } catch (err) {
+    log.warn('Reload recovery failed', err);
+  }
+}
+
 async function restoreMountsThenJshd(
   sharedFs: VirtualFS | null | undefined,
   processManager: ProcessManager,
@@ -854,6 +869,8 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     await bootstrapCone(orchestrator);
   }
   progress('cone-bootstrapped');
+
+  void recoverInterruptedWorkForHost(orchestrator, lickManager, log);
 
   if (sharedFs) {
     scheduleUpgradeDetection(lickManager, log);

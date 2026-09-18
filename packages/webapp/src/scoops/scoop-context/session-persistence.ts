@@ -69,23 +69,30 @@ export class SessionPersistence {
   }
 
   persistNow(fallbackMessages?: AgentMessage[]): void {
+    void this.flush(fallbackMessages);
+  }
+
+  flush(fallbackMessages?: AgentMessage[]): Promise<void> {
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     const persistMessages = this.deps.getMessages() ?? fallbackMessages ?? [];
-    if (persistMessages.length === 0) return;
+    if (persistMessages.length === 0) return Promise.resolve();
     const canonical = this.deps.canonical;
-    if (!canonical) return;
+    if (!canonical) return Promise.resolve();
     if (!this.createdAt) this.createdAt = Date.now();
-    void canonical.store
+    return canonical.store
       .syncAgentMessages(canonical.identity, persistMessages, { createdAt: this.createdAt })
-      .catch((err) => {
-        log.error('Failed to save the canonical conversation record', {
-          folder: this.deps.folder,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          log.error('Failed to save the canonical conversation record', {
+            folder: this.deps.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      );
   }
 
   async clear(): Promise<void> {

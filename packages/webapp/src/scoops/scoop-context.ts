@@ -14,6 +14,7 @@ import type {
   AgentEvent as CoreAgentEvent,
   ImageContent,
   TextContent,
+  ToolResultMessage,
 } from '../core/index.js';
 import { createLogger } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
@@ -48,6 +49,7 @@ import { buildScoopRuntime } from './scoop-context/runtime-init.js';
 import { SessionPersistence } from './scoop-context/session-persistence.js';
 import { ownLickTargetFor } from './scoop-context/shell-env.js';
 import { getLockedEffortLevel } from './scoop-context/thinking-level.js';
+import type { TurnJournal } from './scoop-context/turn-journal.js';
 import {
   finishTurnProcess,
   signalTurnProcess,
@@ -57,6 +59,8 @@ import { queuePromptIfBusy, TurnRunner } from './scoop-context/turn-runner.js';
 import type { RegisteredScoop } from './types.js';
 
 const log = createLogger('scoop-context');
+
+export const TOOL_DURABILITY_WAIT_MS = 2_000;
 
 export type { ScoopContextCallbacks } from './scoop-context/callbacks.js';
 export {
@@ -119,20 +123,24 @@ export class ScoopContext {
   private sessionGeneration = 0;
   private readonly turnRunner: TurnRunner;
 
+  private readonly turnJournal: TurnJournal | null;
+
   private readonly eventSink: AgentEventSink = {
     textDelta: (delta) => {
       this.didStreamDeltas = true;
       this.callbacks.onResponse(delta, true);
     },
-    toolStart: (toolName, args, toolCallId) =>
-      this.callbacks.onToolStart?.(toolName, args, toolCallId),
+    toolStart: (toolName, args, toolCallId) => {
+      this.callbacks.onToolStart?.(toolName, args, toolCallId);
+      return this.makeToolCallDurable(toolName, args, toolCallId);
+    },
     toolUI: (toolName, requestId, html) => this.callbacks.onToolUI?.(toolName, requestId, html),
     toolUIDone: (requestId) => this.callbacks.onToolUIDone?.(requestId),
     toolProgress: (toolName, progress, toolCallId) =>
       this.callbacks.onToolProgress?.(toolName, progress, toolCallId),
     toolResult: (toolName, text, isError, toolCallId) =>
       this.callbacks.onToolEnd?.(toolName, text, isError, toolCallId),
-    checkpoint: () => this.sessions.schedule(),
+    checkpoint: (message) => this.checkpoint(message),
     assistantMessageEnd: (message) => this.handleAssistantMessageEnd(message),
     turnStart: () => this.runBounds.enforceOnTurnStart(),
     turnCompleted: () => this.runBounds.recordCompletedTurn(),
@@ -150,7 +158,8 @@ export class ScoopContext {
     processManager?: ProcessManager,
     sudoManager?: SudoManager | null,
     conversationStore?: WorkUnitConversationStore | null,
-    capabilityBroker?: CapabilityBroker | null
+    capabilityBroker?: CapabilityBroker | null,
+    turnJournal?: TurnJournal | null
   ) {
     this.scoop = scoop;
     this.unit = toDescriptor(scoop);
@@ -162,6 +171,7 @@ export class ScoopContext {
     this.processManager = processManager ?? null;
     this.sudoManager = sudoManager ?? null;
     this.capabilityBroker = capabilityBroker ?? null;
+    this.turnJournal = turnJournal ?? null;
 
     this.sessions = new SessionPersistence({
       store: sessionStore ?? null,
@@ -337,6 +347,8 @@ export class ScoopContext {
       this.sessions.persistNow();
     }
     this.isProcessing = false;
+
+    this.turnJournal?.end(this.scoop.jid);
     if (!this.disposed && this.status === 'processing') {
       this.setStatus('ready');
     }
@@ -375,7 +387,61 @@ export class ScoopContext {
     this.turnGuestGates = [...incoming];
 
     const agent = this.agent!;
+    await this.runTurn(text, 0, () => agent.prompt(text, images));
+  }
 
+  async resumeTurn(resumeCount: number, guestGates: TurnGuestGate[] = []): Promise<void> {
+    if (!(await this.ensureAgentReady())) return;
+    if (this.isBusy) return;
+    this.turnGuestGates = [...guestGates];
+    const agent = this.agent!;
+    await this.runTurn('(resumed after reload)', resumeCount, () => {
+      const messages = agent.state.messages;
+      const last = messages[messages.length - 1] as Partial<AssistantMessage> | undefined;
+      if (
+        last?.role === 'assistant' &&
+        (last.stopReason === 'error' || last.stopReason === 'aborted')
+      ) {
+        agent.state.messages = messages.slice(0, -1);
+      }
+      return agent.continue();
+    });
+  }
+
+  settleInterruptedToolCalls(
+    calls: ReadonlyArray<{ toolCallId: string; toolName: string; text: string }>
+  ): void {
+    const agent = this.agent;
+    if (!agent || calls.length === 0) return;
+    const now = Date.now();
+    const results: ToolResultMessage[] = calls.map((call) => ({
+      role: 'toolResult',
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      content: [{ type: 'text', text: call.text }],
+      isError: true,
+      timestamp: now,
+    }));
+    agent.state.messages = [...agent.state.messages, ...results];
+    this.sessions.persistNow();
+    for (const call of calls) {
+      this.callbacks.onToolEnd?.(call.toolName, call.text, true, call.toolCallId);
+    }
+  }
+
+  reportError(message: string): void {
+    this.callbacks.onError(message);
+  }
+
+  hasAgent(): boolean {
+    return this.agent !== null;
+  }
+
+  private async runTurn(
+    text: string,
+    resumeCount: number,
+    start: () => Promise<void>
+  ): Promise<void> {
     this.promptAbortController?.abort();
     const abortController = new AbortController();
     this.promptAbortController = abortController;
@@ -393,10 +459,11 @@ export class ScoopContext {
     });
     this.currentTurnProcess = turnProcess;
     this.runBounds.arm();
+    this.turnJournal?.begin(this.scoop.jid, this.scoop.folder, resumeCount, this.turnGuestGates);
 
     let lastError: Error | null = null;
     try {
-      lastError = await this.turnRunner.run(agent, text, images, abortSignal);
+      lastError = await this.turnRunner.run(start, abortSignal);
 
       if (lastError && !this.disposed && !abortSignal.aborted) {
         this.turnRunner.reportExhausted(lastError);
@@ -415,6 +482,7 @@ export class ScoopContext {
     const key = JSON.stringify(gate);
     if (this.turnGuestGates.some((existing) => JSON.stringify(existing) === key)) return;
     this.turnGuestGates.push(gate);
+    this.turnJournal?.setGuestGates(this.scoop.jid, this.turnGuestGates);
   }
 
   stop(): void {
@@ -586,6 +654,8 @@ export class ScoopContext {
 
   dispose(): void {
     this.sessions.persistNow();
+
+    this.turnJournal?.end(this.scoop.jid);
     this.disposed = true;
     this.idleCompaction?.cancel();
 
@@ -612,9 +682,48 @@ export class ScoopContext {
     this.fs = null;
   }
 
-  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): void {
+  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): Promise<void> | void {
     if (this.disposed) return;
-    routeAgentEvent(event, this.eventSink, abortSignal);
+    return routeAgentEvent(event, this.eventSink, abortSignal);
+  }
+
+  private async makeToolCallDurable(
+    toolName: string,
+    args: unknown,
+    toolCallId: string | undefined
+  ): Promise<void> {
+    const writes = Promise.all([
+      this.sessions.flush(),
+      toolCallId ? this.turnJournal?.toolStarted(this.scoop.jid, toolCallId, toolName, args) : null,
+    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), TOOL_DURABILITY_WAIT_MS);
+    });
+    try {
+      if ((await Promise.race([writes, deadline])) === 'timeout') {
+        log.warn('Tool call not yet durable; running it anyway', {
+          folder: this.scoop.folder,
+          toolName,
+        });
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private checkpoint(message?: AgentMessage): void {
+    const role = (message as { role?: unknown } | undefined)?.role;
+    if (role === 'user') {
+      this.sessions.persistNow();
+    } else if (role === 'toolResult') {
+      const { toolCallId } = message as ToolResultMessage;
+      void this.sessions
+        .flush()
+        .then(() => this.turnJournal?.toolEnded(this.scoop.jid, toolCallId));
+    } else {
+      this.sessions.schedule();
+    }
   }
 
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {
