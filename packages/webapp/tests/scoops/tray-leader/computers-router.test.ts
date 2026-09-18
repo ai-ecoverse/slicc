@@ -98,12 +98,17 @@ function createHarness(computers?: TrayComputersSource) {
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as Logger;
   const followers = new FollowerRegistry({ log, onMessage: vi.fn() });
   const sent = new Map<string, LeaderToFollowerMessage[]>();
-  const addFollower = (bootstrapId: string, trust: 'full' | 'biscotto' = 'full'): void => {
+  const addFollower = (
+    bootstrapId: string,
+    trust: 'full' | 'biscotto' = 'full',
+    caps: { computer?: boolean } = {}
+  ): void => {
     const messages: LeaderToFollowerMessage[] = [];
     sent.set(bootstrapId, messages);
     followers.followers.set(bootstrapId, {
       bootstrapId,
       trust,
+      peerCapabilities: caps.computer ? { computer: true } : undefined,
       sync: {
         send: vi.fn((message: LeaderToFollowerMessage) => {
           messages.push(message);
@@ -227,5 +232,79 @@ describe('ComputersRouter', () => {
       error: 'later',
     });
     expect(seen).toEqual(['computer.native.error']);
+  });
+
+  it('resolves captureNative when the follower returns a JPEG frame', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.captureNative('mac', { maxWidth: 480, timeoutMs: 5_000 });
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    expect(capture).toMatchObject({
+      type: 'computer.native.capture',
+      maxWidth: 480,
+      watch: false,
+    });
+    if (capture?.type !== 'computer.native.capture') {
+      throw new Error('missing native capture');
+    }
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 480,
+      height: 270,
+      nativeWidth: 1920,
+      nativeHeight: 1080,
+      data: 'abc',
+    });
+    await expect(pending).resolves.toEqual({
+      jpeg: 'abc',
+      mime: 'image/jpeg',
+      width: 480,
+      height: 270,
+      nativeWidth: 1920,
+      nativeHeight: 1080,
+    });
+  });
+
+  it('rejects captureNative on follower error and missing computer cap', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('plain');
+    await expect(router.captureNative('plain')).rejects.toThrow('does not advertise computer');
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.captureNative('mac', { timeoutMs: 5_000 });
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') {
+      throw new Error('missing native capture');
+    }
+    router.handleNative('mac', {
+      type: 'computer.native.error',
+      requestId: capture.requestId,
+      error: 'Screen Recording is off — open System Settings',
+    });
+    await expect(pending).rejects.toThrow('System Settings');
+    addFollower('guest', 'biscotto', { computer: true });
+    await expect(router.captureNative('guest')).rejects.toThrow('cannot drive computer.native');
+  });
+
+  it('times out captureNative when no frame arrives', async () => {
+    const { router, addFollower } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    await expect(router.captureNative('mac', { timeoutMs: 20 })).rejects.toThrow('timed out');
+  });
+
+  it('sends computer.native.input and unwatch to a computer follower', () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    router.inputNative('mac', [{ type: 'key', keysym: 'Return' }]);
+    router.unwatchNative('mac');
+    expect(sent.get('mac')).toEqual([
+      expect.objectContaining({
+        type: 'computer.native.input',
+        events: [{ type: 'key', keysym: 'Return' }],
+      }),
+      { type: 'computer.native.unwatch' },
+    ]);
   });
 });

@@ -354,6 +354,20 @@ export type PanelRpcRequest =
       payload: { execToken: string };
     }
   | {
+      // One-shot ScreenCaptureKit / CGEvent hop to a computer-capable follower
+      // (`capabilities.computer`). The kernel `computer add ssh` command
+      // bridges here because native frames live on the page's tray channel.
+      op: 'tray-computer-native';
+      payload: {
+        runtimeId: string;
+        action: 'capture' | 'unwatch' | 'input';
+        fps?: number;
+        maxWidth?: number;
+        watch?: boolean;
+        events?: ComputerInputEvent[];
+      };
+    }
+  | {
       // --- `slicc` sidecar client ops (scoops/tray-sidecar.ts) -------------
       // The mirror image of `tray-exec`: those ops drive followers of OUR tray,
       // these drive a connection to SOMEONE ELSE'S leader while we keep leading
@@ -890,6 +904,15 @@ export interface PanelRpcResults {
   'tray-join': { joinUrl: string };
   'tray-exec': { stdout: string; stderr: string; exitCode: number; error?: string };
   'tray-exec-signal': { ok: true };
+  'tray-computer-native': {
+    ok: true;
+    jpeg?: string;
+    mime?: string;
+    width?: number;
+    height?: number;
+    nativeWidth?: number;
+    nativeHeight?: number;
+  };
   'slicc-attach': SidecarAttachmentInfo;
   'slicc-detach': { detached: boolean };
   'slicc-list': { attachments: SidecarAttachmentInfo[] };

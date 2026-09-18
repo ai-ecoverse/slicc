@@ -659,6 +659,103 @@ describe('computer parse', () => {
     expect(added.stderr).toContain('iOS follower');
   });
 
+  it('add ssh uses a computer-only follower without probing tray-exec', async () => {
+    const sshExec = vi.fn();
+    const capture = vi.fn(async () => ({
+      bytes: MINIMAL_JPEG,
+      mime: 'image/jpeg' as const,
+      width: 1,
+      height: 1,
+      nativeWidth: 1920,
+      nativeHeight: 1080,
+    }));
+    const input = vi.fn();
+    const unwatch = vi.fn();
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec,
+      nativeComputer: () => ({ capture, input, unwatch }),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '-n', 'desk'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(sshExec).not.toHaveBeenCalled();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(capture).toHaveBeenCalled();
+  });
+
+  it('add ssh --allow-input on a computer follower does not need cliclick', async () => {
+    const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
+    const input = vi.fn();
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => ({
+          bytes: MINIMAL_JPEG,
+          mime: 'image/jpeg' as const,
+          width: 1,
+          height: 1,
+          nativeWidth: 1,
+          nativeHeight: 1,
+        }),
+        input,
+        unwatch: vi.fn(),
+      }),
+      sudoBroker: { requestApproval },
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--allow-input'], ctx);
+    expect(added.exitCode).toBe(0);
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(0);
+    expect(input).toHaveBeenCalled();
+  });
+
+  it('add ssh --sim refuses a computer-only follower', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => {
+          throw new Error('unused');
+        },
+        input: vi.fn(),
+        unwatch: vi.fn(),
+      }),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--sim', 'UDID'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('--sim needs an exec-capable');
+  });
+
   it('add url probes GET /computer through the injected fetch', async () => {
     const jpeg = MINIMAL_JPEG;
     const urlFetch = vi.fn(async (url: string) => {

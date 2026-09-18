@@ -37,6 +37,7 @@ describe('WC tray connected follower mapping', () => {
     const handle = {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['browser-1']),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(['browser-1']),
         getTeleportEligibleBootstrapIds: () => new Set(['browser-1']),
         getFollowerMotds: () => new Map([['browser-1', 'remote browser']]),
@@ -98,6 +99,7 @@ describe('WC tray connected follower mapping', () => {
         peerState: 'connected',
         exec: true,
         cdp: true,
+        computer: false,
         teleportEligible: true,
         motd: 'remote browser',
       },
@@ -114,6 +116,7 @@ describe('WC tray connected follower mapping', () => {
         peerState: 'connected',
         exec: false,
         cdp: false,
+        computer: false,
         // Exec-only CLI follower: never a teleport destination.
         teleportEligible: false,
         motd: undefined,
@@ -187,6 +190,7 @@ describe('WC tray connected follower mapping', () => {
     const handle = {
       sync: {
         getExecCapableBootstrapIds: () => new Set(),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
@@ -246,6 +250,7 @@ describe('WC tray connected follower mapping', () => {
     const handle = {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['cli-1']),
+        getComputerCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),

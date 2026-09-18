@@ -7,6 +7,7 @@ import type { ComputerDescriptor, ComputerInputEvent, ComputerMouseButton } from
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { getToolExecutionContext } from '../../../base/tool-execution-context.js';
+import type { SshProbe } from '../../../computers/adapters/ssh.js';
 import {
   BridgedTabComputerBackend,
   LocalTabComputerBackend,
@@ -91,8 +92,99 @@ function lookupSudo(deps: ComputerCommandDeps): SudoBroker | null {
   return hook ?? null;
 }
 
+function nativeChannelFromRpc(
+  deps: ComputerCommandDeps,
+  runtimeId: string
+): ReturnType<NonNullable<ComputerCommandDeps['nativeComputer']>> | undefined {
+  const rpc = lookupRpc(deps);
+  if (!rpc) return undefined;
+  return {
+    async capture(opts) {
+      const result = await rpc.call(
+        'tray-computer-native',
+        {
+          runtimeId,
+          action: 'capture',
+          fps: opts.fps,
+          maxWidth: opts.maxWidth,
+          watch: opts.watch,
+        },
+        { timeoutMs: 60_000 }
+      );
+      if (!result.jpeg) throw new Error('empty native screenshot from follower');
+      const { bytesFromBase64 } = await import('../../../computers/encode-frame.js');
+      return {
+        bytes: bytesFromBase64(result.jpeg),
+        mime: 'image/jpeg' as const,
+        width: result.width ?? 0,
+        height: result.height ?? 0,
+        nativeWidth: result.nativeWidth ?? result.width ?? 0,
+        nativeHeight: result.nativeHeight ?? result.height ?? 0,
+      };
+    },
+    unwatch() {
+      void rpc.call('tray-computer-native', { runtimeId, action: 'unwatch' }).catch(() => {});
+    },
+    async input(events) {
+      await rpc.call('tray-computer-native', { runtimeId, action: 'input', events });
+    },
+  };
+}
+
 function listFollowers(deps: ComputerCommandDeps): ConnectedFollowerInfo[] {
   return deps.listFollowers?.() ?? getConnectedFollowersWithFallback();
+}
+
+const NATIVE_FALLBACK_PROBE: SshProbe = {
+  platform: 'darwin',
+  tools: [],
+  capture: null,
+  input: 'none',
+};
+
+type SshExecFn = (
+  command: string,
+  opts?: { timeoutMs?: number }
+) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+async function probeForSshAdd(
+  exec: SshExecFn,
+  sim: string | undefined,
+  hasExec: boolean,
+  native: boolean,
+  probeSsh: (exec: SshExecFn, sim?: string) => Promise<SshProbe>
+): Promise<SshProbe | { error: string }> {
+  if (!hasExec) return NATIVE_FALLBACK_PROBE;
+  try {
+    return await probeSsh(exec, sim);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (native) return NATIVE_FALLBACK_PROBE;
+    return { error: msg.startsWith('add ssh:') ? msg : `add ssh: ${msg}` };
+  }
+}
+
+async function gateSshAllowInput(
+  deps: ComputerCommandDeps,
+  follower: ConnectedFollowerInfo,
+  sim: string | undefined,
+  native: boolean,
+  probeInput: string
+): Promise<CmdResult | null> {
+  if (probeInput === 'none' && !native) {
+    return fail(
+      'add ssh: --allow-input needs cliclick, xdotool, ydotool, or idb on the follower (screenshot-only otherwise)'
+    );
+  }
+  const broker = lookupSudo(deps);
+  if (!broker) return fail('add ssh: --allow-input needs sudo approval (not configured)');
+  const decision = await broker.requestApproval({
+    kind: 'command',
+    detail: `computer add ssh ${follower.runtimeId}${sim ? ` --sim ${sim}` : ''} --allow-input`,
+    reason: 'grant pointer and keyboard control of the follower desktop',
+  });
+  if (decision.decision === 'deny') return fail(sudoRefusalMessage('add ssh', decision));
+  return null;
 }
 
 async function execOnFollower(
@@ -123,14 +215,14 @@ function resolveSshFollower(
   query: string,
   followers: ConnectedFollowerInfo[]
 ): ConnectedFollowerInfo | { error: string } {
-  const capable = followers.filter((f) => f.exec);
+  const capable = followers.filter((f) => f.exec || f.computer);
   const exact = capable.find((f) => f.runtimeId === query);
   if (exact) return exact;
   const hits = capable.filter((f) => f.runtimeId.endsWith(query) || f.runtimeId.includes(query));
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
   return {
-    error: `add ssh: no exec-capable follower '${query}' — try \`ssh --list\``,
+    error: `add ssh: no exec-capable or computer-capable follower '${query}' — try \`ssh --list\``,
   };
 }
 
@@ -308,32 +400,24 @@ async function verbAddSsh(
       'add ssh: the iOS follower itself is not a driven computer (a real iPhone is out of scope; pass --sim <udid> on a Mac follower)'
     );
   }
+  if (sim && !follower.exec) {
+    return fail('add ssh: --sim needs an exec-capable Mac follower');
+  }
   const { SshComputerBackend, probeSsh } = await import('../../../computers/adapters/ssh.js');
-  const exec = (command: string, opts?: { timeoutMs?: number }) =>
-    execOnFollower(deps, follower.runtimeId, command, opts?.timeoutMs);
-  let probe;
-  try {
-    probe = await probeSsh(exec, sim);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return fail(msg.startsWith('add ssh:') ? msg : `add ssh: ${msg}`);
-  }
-  if (allowInput && probe.input === 'none') {
-    return fail(
-      'add ssh: --allow-input needs cliclick, xdotool, ydotool, or idb on the follower (screenshot-only otherwise)'
-    );
-  }
+  const native = follower.computer
+    ? (deps.nativeComputer?.(follower.runtimeId) ?? nativeChannelFromRpc(deps, follower.runtimeId))
+    : undefined;
+  const exec = follower.exec
+    ? (command: string, opts?: { timeoutMs?: number }) =>
+        execOnFollower(deps, follower.runtimeId, command, opts?.timeoutMs)
+    : async () => {
+        throw new Error('follower has no exec capability');
+      };
+  const probe = await probeForSshAdd(exec, sim, Boolean(follower.exec), Boolean(native), probeSsh);
+  if ('error' in probe) return fail(probe.error);
   if (allowInput) {
-    const broker = lookupSudo(deps);
-    if (!broker) return fail('add ssh: --allow-input needs sudo approval (not configured)');
-    const decision = await broker.requestApproval({
-      kind: 'command',
-      detail: `computer add ssh ${follower.runtimeId}${sim ? ` --sim ${sim}` : ''} --allow-input`,
-      reason: 'grant pointer and keyboard control of the follower desktop',
-    });
-    if (decision.decision === 'deny') {
-      return fail(sudoRefusalMessage('add ssh', decision));
-    }
+    const blocked = await gateSshAllowInput(deps, follower, sim, Boolean(native), probe.input);
+    if (blocked) return blocked;
   }
   const title = name ?? (sim ? `${follower.runtimeId} sim ${sim}` : follower.runtimeId);
   const backend = new SshComputerBackend(exec, {
@@ -342,6 +426,7 @@ async function verbAddSsh(
     probe,
     inputAllowed: allowInput,
     sim,
+    native,
   });
   const desc = registry.register(backend);
   registry.use(desc.id);

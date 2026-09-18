@@ -26,6 +26,8 @@ export interface ConnectedFollowerInfo {
   peerState?: 'connecting' | 'connected';
   /** True when the follower advertised `exec` capability (a `slicc … follow` CLI) — reach it with `ssh`. */
   exec?: boolean;
+  /** True when the follower advertised `capabilities.computer` (native screen capture). */
+  computer?: boolean;
   /** True when the follower advertised browser targets — reach its tabs with `playwright-cli`. */
   cdp?: boolean;
   /** One-line description the follower advertised on `hello.motd` (exec targets). */

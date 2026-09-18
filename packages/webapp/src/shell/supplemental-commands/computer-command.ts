@@ -3,6 +3,7 @@
  * `./computer/run.ts` so they stay out of the worker first-load graph.
  */
 
+import type { ComputerInputEvent } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ComputerRegistry } from '../../computers/registry.js';
@@ -27,6 +28,19 @@ export interface ComputerCommandDeps {
     command: string,
     timeoutMs?: number
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** Injected native capture for a `capabilities.computer` follower. */
+  nativeComputer?: (runtimeId: string) => {
+    capture(opts: { fps?: number; maxWidth?: number; watch?: boolean }): Promise<{
+      bytes: Uint8Array;
+      mime: 'image/jpeg';
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+    }>;
+    unwatch(): void;
+    input(events: ComputerInputEvent[]): Promise<void> | void;
+  };
   /** Injected in tests; production lazy-wraps `createProxiedFetch`. */
   urlFetch?: (
     url: string,

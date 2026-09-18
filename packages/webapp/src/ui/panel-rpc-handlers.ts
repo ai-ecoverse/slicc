@@ -189,6 +189,13 @@ export interface StandalonePanelRpcHandlerOptions {
     timeoutMs?: number;
     stdin?: string;
   }) => Promise<{ stdout: string; stderr: string; exitCode: number; error?: string }>;
+  /**
+   * Drive `computer.native.*` on a ScreenCaptureKit follower. Wired to
+   * `LeaderSyncManager.captureNativeComputer` / `inputNativeComputer`.
+   */
+  computerNative?: (
+    payload: PanelRpcPayloadFor<'tray-computer-native'>
+  ) => Promise<PanelRpcResults['tray-computer-native']>;
   /** Cancel an in-flight {@link StandalonePanelRpcHandlerOptions.execOnRemote}, keyed by execToken. */
   /**
    * The page-side `slicc` sidecar registry — attachments to OTHER SLICC
@@ -855,6 +862,13 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
     'tray-exec-signal': ({ execToken }) => {
       options.signalRemoteExec?.({ execToken });
       return { ok: true };
+    },
+
+    'tray-computer-native': async (payload) => {
+      if (!options.computerNative) {
+        throw new Error('computer native: no active leader tray in this environment');
+      }
+      return await options.computerNative(payload);
     },
 
     'oauth-extras-set': ({ providerId, domains }) => {

@@ -4,11 +4,22 @@ import {
   type ComputerDescriptor,
   type ComputerFrame,
   type ComputerInputEvent,
+  type ComputerNativeFrameMessage,
   type FollowerToLeaderMessage,
+  reassembleComputerNativeFrame,
   sendComputerFrame,
   uint8ToBase64,
 } from '@slicc/shared-ts';
 import type { LeaderSyncContext } from './context.js';
+
+export interface NativeComputerCaptureResult {
+  jpeg: string;
+  mime: string;
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+}
 
 /**
  * Page-side computer roster the tray leader can subscribe to. Filled from
@@ -50,6 +61,18 @@ export class ComputersRouter {
         { type: 'computer.native.frame' | 'computer.native.error' }
       >
     ) => void
+  >();
+  private readonly nativeChunks = new Map<
+    string,
+    { chunks: string[]; received: number; totalChunks: number }
+  >();
+  private readonly pendingNative = new Map<
+    string,
+    {
+      resolve: (frame: NativeComputerCaptureResult) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
   private unsubList: (() => void) | null = null;
   private unsubFrame: (() => void) | null = null;
@@ -151,6 +174,50 @@ export class ComputersRouter {
     });
   }
 
+  async captureNative(
+    runtimeId: string,
+    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+  ): Promise<NativeComputerCaptureResult> {
+    const follower = this.requireComputerFollower(runtimeId);
+    const requestId = `ncap-${crypto.randomUUID()}`;
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    return await new Promise<NativeComputerCaptureResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingNative.delete(requestId);
+        reject(new Error(`computer.native.capture timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingNative.set(requestId, { resolve, reject, timer });
+      const sent = follower.sync.send({
+        type: 'computer.native.capture',
+        requestId,
+        fps: opts.fps,
+        maxWidth: opts.maxWidth,
+        watch: opts.watch ?? false,
+      });
+      if (!sent) {
+        this.pendingNative.delete(requestId);
+        clearTimeout(timer);
+        reject(new Error(`Failed to send computer.native.capture to '${runtimeId}'`));
+      }
+    });
+  }
+
+  inputNative(runtimeId: string, events: ComputerInputEvent[]): void {
+    const follower = this.requireComputerFollower(runtimeId);
+    const requestId = `nin-${crypto.randomUUID()}`;
+    const sent = follower.sync.send({
+      type: 'computer.native.input',
+      requestId,
+      events,
+    });
+    if (!sent) throw new Error(`Failed to send computer.native.input to '${runtimeId}'`);
+  }
+
+  unwatchNative(runtimeId: string): void {
+    const follower = this.requireComputerFollower(runtimeId);
+    follower.sync.send({ type: 'computer.native.unwatch' });
+  }
+
   handleNative(
     bootstrapId: string,
     message: Extract<
@@ -160,6 +227,7 @@ export class ComputersRouter {
   ): void {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower || follower.trust === 'biscotto') return;
+    this.settleNative(message);
     this.nativeListeners.forEach((listener) => {
       try {
         listener(bootstrapId, message);
@@ -234,6 +302,51 @@ export class ComputersRouter {
 
   private frameKey(bootstrapId: string, id: string): string {
     return `${bootstrapId}:${id}`;
+  }
+
+  private requireComputerFollower(runtimeId: string) {
+    const resolved = this.context.followers.resolveFollowerByRuntimeId(runtimeId);
+    if (!resolved) throw new Error(`No connected follower for '${runtimeId}'`);
+    if (resolved.follower.trust === 'biscotto') {
+      throw new Error(`Follower '${runtimeId}' cannot drive computer.native.*`);
+    }
+    if (resolved.follower.peerCapabilities?.computer !== true) {
+      throw new Error(`Follower '${runtimeId}' does not advertise computer capture`);
+    }
+    return resolved.follower;
+  }
+
+  private settleNative(
+    message: Extract<
+      FollowerToLeaderMessage,
+      { type: 'computer.native.frame' | 'computer.native.error' }
+    >
+  ): void {
+    if (message.type === 'computer.native.error') {
+      const pending = this.pendingNative.get(message.requestId);
+      if (!pending) return;
+      this.pendingNative.delete(message.requestId);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message.error));
+      return;
+    }
+    const assembled = reassembleComputerNativeFrame(
+      this.nativeChunks,
+      message as ComputerNativeFrameMessage
+    );
+    if (!assembled?.data) return;
+    const pending = this.pendingNative.get(assembled.requestId);
+    if (!pending) return;
+    this.pendingNative.delete(assembled.requestId);
+    clearTimeout(pending.timer);
+    pending.resolve({
+      jpeg: assembled.data,
+      mime: assembled.mime,
+      width: assembled.width,
+      height: assembled.height,
+      nativeWidth: assembled.nativeWidth,
+      nativeHeight: assembled.nativeHeight,
+    });
   }
 
   private source(): TrayComputersSource | undefined {

@@ -76,11 +76,25 @@ describe('leader follower capability + motd getters (feed host / ssh --list)', (
       motd: 'slicc-cli exec target · alice@box · runner: sh -c',
     });
     expect(manager.getExecCapableBootstrapIds().has('b1')).toBe(true);
+    expect(manager.getComputerCapableBootstrapIds().has('b1')).toBe(false);
     expect(manager.getFollowerMotds().get('b1')).toBe(
       'slicc-cli exec target · alice@box · runner: sh -c'
     );
     // exec-only: never advertised browser targets.
     expect(manager.getBrowserCapableBootstrapIds().has('b1')).toBe(false);
+  });
+
+  it('marks a ScreenCaptureKit follower computer-capable from hello', () => {
+    const manager = createManager();
+    const ch = new FakeChannel();
+    manager.addFollower('comp', ch);
+    ch.simulateMessage({
+      type: 'hello',
+      protocolVersion: 1,
+      capabilities: { computer: true },
+    });
+    expect(manager.getComputerCapableBootstrapIds().has('comp')).toBe(true);
+    expect(manager.getExecCapableBootstrapIds().has('comp')).toBe(false);
   });
 
   it('marks a follower browser-capable (playwright) once it advertises targets', () => {
