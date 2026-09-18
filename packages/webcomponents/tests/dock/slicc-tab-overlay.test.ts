@@ -521,6 +521,23 @@ describe('slicc-tab-overlay', () => {
       expect(keys).toEqual([{ id: 'computer:jsh:fake', keysym: 'Home', label: 'Home' }]);
     });
 
+    it('does not activate the card when Enter or Space is pressed on a soft-key', () => {
+      const el = mount((o) => {
+        o.tabs = [COMPUTER];
+      });
+      const activations: string[] = [];
+      el.addEventListener('tab-activate', (e) =>
+        activations.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      const home = cards(el)[0].querySelector<HTMLButtonElement>('.softkey');
+      expect(home).toBeTruthy();
+      home?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      home?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+      expect(activations).toEqual([]);
+      cards(el)[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(activations).toEqual(['computer:jsh:fake']);
+    });
+
     it('does not render a close button on computer cards', () => {
       const el = mount((o) => {
         o.tabs = [TABS[0], COMPUTER];

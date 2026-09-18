@@ -138,7 +138,9 @@ string[])` marks leaves as pinned (runtime-only — never serialized by
 full-screen card grid. `TabDescriptor.kind` is `'tab'` (default) or
 `'computer'`. Computer cards paint a kind badge, an optional live dot, and
 `softKeys` buttons that emit `computer-softkey` (they do not activate the
-card). Activating a computer is a host concern — the overlay still fires
+card). Enter/Space on a focused soft-key stays on the button; the card
+keyboard handler only activates when `event.target` is the card itself.
+Activating a computer is a host concern — the overlay still fires
 `tab-activate`. The page host (`ui/wc/wc-computers.ts`) merges computers
 after browser tabs and opens `<slicc-image-preview>` live via `setSrc()`.
 

@@ -451,7 +451,7 @@ export class SliccTabOverlay extends HTMLElement {
     );
   }
 
-  /** Soft-key row; clicks stay on the button so they do not activate the card. */
+  /** Soft-key row; click and Enter/Space stay on the button, not the card. */
   #softKeysEl(tab: TabDescriptor): HTMLElement | null {
     if (tab.kind !== 'computer' || !tab.softKeys?.length) return null;
     const row = h('div', { class: 'softkeys', part: 'softkeys' });
@@ -535,6 +535,7 @@ export class SliccTabOverlay extends HTMLElement {
     );
     card.addEventListener('click', () => this.#activate(tab.id));
     card.addEventListener('keydown', (e) => {
+      if (e.target !== card) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         this.#activate(tab.id);
