@@ -214,7 +214,7 @@ export class UrlComputerBackend implements ComputerBackend {
     if (opts.maxWidth) frame = await fitComputerFrame(frame, opts.maxWidth);
     this.descriptor = {
       ...this.descriptor,
-      size: { width: frame.width, height: frame.height },
+      size: { width: sniffed.width, height: sniffed.height },
     };
     return frame;
   }

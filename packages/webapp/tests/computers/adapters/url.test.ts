@@ -1,4 +1,4 @@
-import type { ComputerDescriptor } from '@slicc/shared-ts';
+import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   headerGet,
@@ -10,6 +10,25 @@ import {
   urlComputerId,
 } from '../../../src/computers/adapters/url.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
+import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
+
+vi.mock('../../../src/computers/encode-frame.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/computers/encode-frame.js')>();
+  return {
+    ...actual,
+    async fitComputerFrame(frame: ComputerFrame, maxWidth: number) {
+      if (!maxWidth || frame.width <= maxWidth) return frame;
+      const scale = maxWidth / frame.width;
+      return {
+        seq: frame.seq,
+        mime: frame.mime,
+        width: Math.max(1, Math.round(frame.width * scale)),
+        height: Math.max(1, Math.round(frame.height * scale)),
+        bytes: frame.bytes,
+      };
+    },
+  };
+});
 
 const LIVE: ComputerDescriptor = {
   id: 'ignored',
@@ -32,6 +51,15 @@ const LIVE: ComputerDescriptor = {
 
 function encodeJson(value: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(value));
+}
+
+function jpegWithSize(width: number, height: number): Uint8Array {
+  const bytes = MINIMAL_JPEG.slice();
+  bytes[7] = (height >> 8) & 0xff;
+  bytes[8] = height & 0xff;
+  bytes[9] = (width >> 8) & 0xff;
+  bytes[10] = width & 0xff;
+  return bytes;
 }
 
 function mockFetch(routes: {
@@ -120,6 +148,23 @@ describe('url probe and backend', () => {
     expect(await backend.text()).toBe('demo\n');
     await backend.input([{ type: 'text', text: 'hi' }]);
     await backend.close();
+  });
+
+  it('keeps native 1920×1080 after a 768-wide encode so lastShot remaps', async () => {
+    const jpeg = jpegWithSize(1920, 1080);
+    const fetchImpl = mockFetch({ screenshot: { status: 200, body: jpeg } });
+    const desc = await probeUrlComputer(fetchImpl, 'http://127.0.0.1:5710');
+    const backend = new UrlComputerBackend(fetchImpl, 'http://127.0.0.1:5710', desc);
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    expect(frame.width).toBe(768);
+    expect(frame.height).toBe(432);
+    expect(backend.describe().size).toEqual({ width: 1920, height: 1080 });
+    const mapping = scaleFromEncoded(backend.describe().size!, {
+      width: frame.width,
+      height: frame.height,
+    });
+    expect(mapping.scale).toBeCloseTo(768 / 1920);
+    expect(mapPoint(384, 216, toLastShot(mapping, 1), false)).toEqual({ x: 960, y: 540 });
   });
 
   it('treats text 404 as unsupported and refuses input when the remote says so', async () => {

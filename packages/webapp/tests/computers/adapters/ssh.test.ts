@@ -1,3 +1,4 @@
+import type { ComputerFrame } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   parseSshProbe,
@@ -12,9 +13,41 @@ import {
 import { sshInputCommands } from '../../../src/computers/adapters/ssh-input.js';
 import { base64FromBytes } from '../../../src/computers/encode-frame.js';
 import { DECODABLE_PNG } from '../../../src/computers/frame-bytes.js';
+import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
+
+vi.mock('../../../src/computers/encode-frame.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/computers/encode-frame.js')>();
+  return {
+    ...actual,
+    async fitComputerFrame(frame: ComputerFrame, maxWidth: number) {
+      if (!maxWidth || frame.width <= maxWidth) return frame;
+      const scale = maxWidth / frame.width;
+      return {
+        seq: frame.seq,
+        mime: frame.mime,
+        width: Math.max(1, Math.round(frame.width * scale)),
+        height: Math.max(1, Math.round(frame.height * scale)),
+        bytes: frame.bytes,
+      };
+    },
+  };
+});
 
 function ok(stdout: string) {
   return { stdout, stderr: '', exitCode: 0 };
+}
+
+function pngWithSize(width: number, height: number): Uint8Array {
+  const bytes = DECODABLE_PNG.slice();
+  bytes[16] = (width >>> 24) & 0xff;
+  bytes[17] = (width >>> 16) & 0xff;
+  bytes[18] = (width >>> 8) & 0xff;
+  bytes[19] = width & 0xff;
+  bytes[20] = (height >>> 24) & 0xff;
+  bytes[21] = (height >>> 16) & 0xff;
+  bytes[22] = (height >>> 8) & 0xff;
+  bytes[23] = height & 0xff;
+  return bytes;
 }
 
 describe('ssh adapter helpers', () => {
@@ -135,6 +168,40 @@ describe('ssh backend', () => {
     });
     await backend.input([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
     expect(exec).toHaveBeenCalledWith('cliclick c:10,20', { timeoutMs: 15_000 });
+  });
+
+  it('keeps native 1920×1080 after a 768-wide encode so lastShot remaps', async () => {
+    const png = pngWithSize(1920, 1080);
+    const b64 = base64FromBytes(png);
+    const exec = vi.fn(async (command: string) => {
+      if (command.includes('screencapture') || command.includes('SLICC_SSH_B64')) {
+        return ok(`SLICC_SSH_B64 ${b64.length}\n`);
+      }
+      if (command.startsWith('dd ')) return ok(b64);
+      if (command.startsWith('rm ')) return ok('');
+      return ok('');
+    });
+    const backend = new SshComputerBackend(exec, {
+      runtimeId: 'follower-abc',
+      title: 'desk',
+      probe: {
+        platform: 'darwin',
+        tools: ['screencapture', 'cliclick'],
+        capture: 'screencapture',
+        input: 'cliclick',
+      },
+      inputAllowed: true,
+    });
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    expect(frame.width).toBe(768);
+    expect(frame.height).toBe(432);
+    expect(backend.describe().size).toEqual({ width: 1920, height: 1080 });
+    const mapping = scaleFromEncoded(backend.describe().size!, {
+      width: frame.width,
+      height: frame.height,
+    });
+    expect(mapping.scale).toBeCloseTo(768 / 1920);
+    expect(mapPoint(384, 216, toLastShot(mapping, 1), false)).toEqual({ x: 960, y: 540 });
   });
 });
 

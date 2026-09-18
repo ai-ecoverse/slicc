@@ -269,7 +269,7 @@ export class SshComputerBackend implements ComputerBackend {
       bytes,
     };
     if (opts.maxWidth) frame = await fitComputerFrame(frame, opts.maxWidth);
-    this.size = { width: frame.width, height: frame.height };
+    this.size = { width: native.width, height: native.height };
     return frame;
   }
 
