@@ -250,8 +250,12 @@ describe('IdleCompaction', () => {
   it('reports no-progress and failure without touching the history', async () => {
     const same = deps();
     same.deps.getCompactFn = () => async (messages) => [...messages];
-    expect(await new IdleCompaction(same.deps).runNow()).toBe('no-progress');
+    const sameIdle = new IdleCompaction(same.deps);
+    expect(await sameIdle.runNow()).toBe('no-progress');
     expect(same.agent.state.messages).toHaveLength(2);
+    // Preserved failure must schedule another idle window (#3264).
+    expect(sameIdle.isArmed).toBe(true);
+    sameIdle.disarm();
 
     const failing = deps();
     failing.deps.getCompactFn = () => async () => {
@@ -261,6 +265,26 @@ describe('IdleCompaction', () => {
     expect(await idle.runNow()).toBe('failed');
     expect(idle.isRunning).toBe(false);
     expect(failing.agent.state.messages).toHaveLength(2);
+    expect(idle.isArmed).toBe(true);
+    idle.disarm();
+  });
+
+  it('re-arms after a preserved timer-fired failure so a later window can retry', async () => {
+    const { deps: d } = deps();
+    let rounds = 0;
+    d.getCompactFn = () => async (messages) => {
+      rounds += 1;
+      return [...messages];
+    };
+    const idle = new IdleCompaction(d);
+    idle.arm();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(rounds).toBe(1);
+    expect(idle.isArmed).toBe(true);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(rounds).toBe(2);
+    expect(idle.isArmed).toBe(true);
+    idle.disarm();
   });
 
   // The notice the round's `summarizing` state put in the transcript has to
