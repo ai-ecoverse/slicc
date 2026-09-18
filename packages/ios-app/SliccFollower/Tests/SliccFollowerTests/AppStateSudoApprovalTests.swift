@@ -72,6 +72,7 @@ final class AppStateSudoApprovalTests: XCTestCase {
         let caps = state.followerCapabilities()
         XCTAssertTrue(caps.exec)
         XCTAssertEqual(caps.sudoApproval, true)
+        XCTAssertNil(caps.computer)
         // The simulator has no passcode unless configured; either way the
         // flag must mirror the device-owner policy probe.
         XCTAssertEqual(caps.biometric, AppState.deviceOwnerAuthAvailable() ? true : nil)

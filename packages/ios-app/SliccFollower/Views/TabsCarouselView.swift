@@ -43,11 +43,21 @@ struct TabsCarouselView: View {
         return appState.cdpTargets.first { $0.id == id }
     }
 
+    private var viewingComputer: ComputerDescriptor? {
+        guard let id = appState.viewingComputerId else { return nil }
+        return appState.computers.first { $0.id == id }
+    }
+
     var body: some View {
         Group {
-            if let target = viewingTarget {
+            if let computer = viewingComputer {
+                ComputerLiveView(
+                    computer: computer, frame: appState.liveFrame(forComputerId: computer.id))
+            } else if let target = viewingTarget {
                 browsingView(target)
-            } else if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty {
+            } else if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty
+                && appState.computers.isEmpty
+            {
                 emptyState
             } else {
                 tabOverview
@@ -211,6 +221,20 @@ struct TabsCarouselView: View {
                         }
                     } header: {
                         gridHeader("Elsewhere in the tray")
+                    }
+                }
+                if !appState.computers.isEmpty {
+                    Section {
+                        ForEach(appState.computers) { computer in
+                            ComputerCard(
+                                computer: computer,
+                                frame: appState.liveFrame(forComputerId: computer.id)
+                            ) {
+                                appState.viewingComputerId = computer.id
+                            }
+                        }
+                    } header: {
+                        gridHeader("Computers")
                     }
                 }
             }

@@ -211,7 +211,31 @@
       ]
     },
     {
-      "name": "dock-browser-remote",
+      "name": "dock-browser-computers",
+      "description": "Browser surface with leader computer cards (live JPEG + kind chip)",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "browser",
+        "-uiTestComputersFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "dock-browser-computer-live",
+      "description": "Full-screen live computer with a Home soft key",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "browser",
+        "-uiTestComputersFixture",
+        "YES",
+        "-uiTestComputerLive",
+        "YES"
+      ]
+    },
       "description": "Browser surface with federated remote-tab preview cards",
       "args": [
         "-uiTestConnectionState",

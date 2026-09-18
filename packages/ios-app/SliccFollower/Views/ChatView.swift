@@ -107,6 +107,18 @@ struct ChatView: View {
                 if let targets = UITestHooks.remoteTargetsFixture() {
                     appState.remoteTargets = targets
                 }
+                if let computers = UITestHooks.computersFixture() {
+                    appState.computers = computers
+                    for computer in computers {
+                        if let image = UITestHooks.computerPreviewFixtureImage() {
+                            appState.liveFrame(forComputerId: computer.id).apply(
+                                image: image, seq: 1, width: 480, height: 270)
+                        }
+                    }
+                    if UserDefaults.standard.bool(forKey: "uiTestComputerLive") {
+                        appState.viewingComputerId = computers.first?.id
+                    }
+                }
                 if let inboundURL = UITestHooks.inboundOpenURL {
                     _ = inboundActions.receive(url: inboundURL, needsConfirmation: true)
                 }
@@ -468,7 +480,8 @@ struct ChatView: View {
     /// window — no rail, no navigation bar (Safari-shaped). The way back is
     /// the tab-overview button in the browser's own bottom bar.
     private var isBrowserFullScreen: Bool {
-        presentation.activeSurface == .browser && appState.browserViewingTabId != nil
+        presentation.activeSurface == .browser
+            && (appState.browserViewingTabId != nil || appState.viewingComputerId != nil)
     }
 
     /// The phone shell stays structurally unchanged: the rail remains outside
