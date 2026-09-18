@@ -514,3 +514,61 @@ export function formatModifiers(mods: KeyModifiers): string {
   if (mods.meta) parts.push('super');
   return parts.join('+');
 }
+
+/** Browser `KeyboardEvent.key` → xdotool token. Escape is omitted (lightbox release). */
+const EVENT_KEY_TO_KEYSYM: Record<string, string> = {
+  Enter: 'Return',
+  ' ': 'space',
+  Tab: 'Tab',
+  Backspace: 'Backspace',
+  Delete: 'Delete',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'Page_Up',
+  PageDown: 'Page_Down',
+  Insert: 'Insert',
+  ContextMenu: 'Menu',
+  F1: 'F1',
+  F2: 'F2',
+  F3: 'F3',
+  F4: 'F4',
+  F5: 'F5',
+  F6: 'F6',
+  F7: 'F7',
+  F8: 'F8',
+  F9: 'F9',
+  F10: 'F10',
+  F11: 'F11',
+  F12: 'F12',
+};
+
+const MODIFIER_ONLY_KEYS = new Set(['Control', 'Alt', 'Shift', 'Meta', 'Escape']);
+
+/** Subset of KeyboardEvent used to rebuild an xdotool chord (DOM-free). */
+export interface KeyEventLike {
+  key: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+}
+
+/**
+ * Lightbox / HITL: turn a browser key event into an xdotool keysym.
+ * Returns null for Escape, bare modifiers, and unnamed keys.
+ */
+export function keysymFromKeyEvent(event: KeyEventLike): string | null {
+  if (MODIFIER_ONLY_KEYS.has(event.key)) return null;
+  const token = EVENT_KEY_TO_KEYSYM[event.key] ?? (event.key.length === 1 ? event.key : null);
+  if (!token) return null;
+  const mods: string[] = [];
+  if (event.ctrlKey) mods.push('ctrl');
+  if (event.altKey) mods.push('alt');
+  if (event.metaKey) mods.push('super');
+  if (event.shiftKey && event.key.length !== 1) mods.push('shift');
+  return [...mods, token].join('+');
+}

@@ -458,6 +458,7 @@ describe('wc-computers wiring', () => {
     expect(preview?.hasAttribute('open')).toBe(true);
     expect(sent).toEqual([]);
     expect(store.isWatching('jsh:fake')).toBe(false);
+    expect(preview?.hasAttribute('drive')).toBe(false);
   });
 
   it('drops watchers when the thread rebuild disposes the install', async () => {
@@ -473,5 +474,135 @@ describe('wc-computers wiring', () => {
     await vi.waitFor(() => expect(store.isWatching('jsh:fake')).toBe(true));
     disposeWcComputersForTests();
     expect(store.isWatching('jsh:fake')).toBe(false);
+  });
+
+  it('enables lightbox drive on a live inputAllowed frame and maps clicks to native', () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string; id?: string; events?: unknown[] }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    applyFrame('jsh:fake');
+    installWcComputers({ log });
+    const overlay = document.createElement('slicc-tab-overlay') as HTMLElement & {
+      tabs: ReturnType<typeof mergeOverlayTabs>;
+    };
+    document.body.append(overlay);
+    overlay.tabs = mergeOverlayTabs([]);
+    bindComputerOverlay(overlay, log);
+    overlay.dispatchEvent(
+      new CustomEvent('tab-activate', { detail: { id: computerOverlayId('jsh:fake') } })
+    );
+    const preview = document.querySelector('slicc-image-preview');
+    expect(preview?.hasAttribute('drive')).toBe(true);
+
+    preview?.dispatchEvent(
+      new CustomEvent('slicc-image-preview-input', {
+        bubbles: true,
+        detail: { kind: 'click', button: 1, x: 50, y: 25, width: 100, height: 50 },
+      })
+    );
+    preview?.dispatchEvent(
+      new CustomEvent('slicc-image-preview-input', {
+        bubbles: true,
+        detail: {
+          kind: 'key',
+          key: 'a',
+          code: 'KeyA',
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+          metaKey: false,
+        },
+      })
+    );
+    preview?.dispatchEvent(
+      new CustomEvent('slicc-image-preview-input', {
+        bubbles: true,
+        detail: {
+          kind: 'key',
+          key: 'Escape',
+          code: 'Escape',
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+          metaKey: false,
+        },
+      })
+    );
+    const inputs = sent.filter((m) => m.type === 'computer-input');
+    expect(inputs).toEqual([
+      {
+        type: 'computer-input',
+        id: 'jsh:fake',
+        events: [{ type: 'click', button: 1, count: 1, x: 4, y: 4 }],
+      },
+      { type: 'computer-input', id: 'jsh:fake', events: [{ type: 'key', keysym: 'a' }] },
+    ]);
+  });
+
+  it('does not drive a view-only lightbox or a frozen bash-row still', async () => {
+    const store = getComputersStore();
+    const sent: Array<{ type: string }> = [];
+    store.setSender((msg) => sent.push(msg));
+    store.applyList({
+      type: 'computers',
+      computers: [
+        {
+          ...descriptor(),
+          capabilities: { ...descriptor().capabilities, inputAllowed: false },
+        },
+      ],
+    });
+    applyFrame('jsh:fake');
+    installWcComputers({ log });
+    const overlay = document.createElement('slicc-tab-overlay') as HTMLElement & {
+      tabs: ReturnType<typeof mergeOverlayTabs>;
+    };
+    document.body.append(overlay);
+    bindComputerOverlay(overlay, log);
+    overlay.dispatchEvent(
+      new CustomEvent('tab-activate', { detail: { id: computerOverlayId('jsh:fake') } })
+    );
+    const livePreview = document.querySelector('slicc-image-preview');
+    expect(livePreview?.hasAttribute('drive')).toBe(false);
+    livePreview?.dispatchEvent(
+      new CustomEvent('slicc-image-preview-input', {
+        bubbles: true,
+        detail: { kind: 'click', button: 1, x: 1, y: 1, width: 8, height: 8 },
+      })
+    );
+    expect(sent.filter((m) => m.type === 'computer-input')).toEqual([]);
+    livePreview?.dispatchEvent(new CustomEvent('slicc-image-preview-close', { bubbles: true }));
+
+    store.applyList({ type: 'computers', computers: [descriptor()] });
+    const frozen = document.createElement('slicc-bash-renderer-computer');
+    frozen.command = 'computer -c jsh:fake screenshot';
+    frozen.toolCallId = 'call-frozen';
+    frozen.output = 'screen: /tmp/a.jpg';
+    document.body.append(frozen);
+    const live = document.createElement('slicc-bash-renderer-computer');
+    live.command = 'computer -c jsh:fake key Return';
+    live.toolCallId = 'call-live';
+    live.output = 'screen: /tmp/b.jpg';
+    document.body.append(live);
+    await vi.waitFor(() => expect(live.frameMode).toBe('live'));
+    await vi.waitFor(() => expect(frozen.frameMode).toBe('frozen'));
+    sent.length = 0;
+    frozen.dispatchEvent(
+      new CustomEvent('computer-frame-click', {
+        detail: { src: 'data:image/jpeg;base64,QUJD' },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    const frozenPreview = document.querySelector('slicc-image-preview');
+    expect(frozenPreview?.hasAttribute('drive')).toBe(false);
+    frozenPreview?.dispatchEvent(
+      new CustomEvent('slicc-image-preview-input', {
+        bubbles: true,
+        detail: { kind: 'click', button: 1, x: 1, y: 1, width: 8, height: 8 },
+      })
+    );
+    expect(sent.filter((m) => m.type === 'computer-input')).toEqual([]);
   });
 });

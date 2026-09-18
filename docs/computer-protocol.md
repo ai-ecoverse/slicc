@@ -28,6 +28,8 @@ Presets (`packages/webapp/src/computers/scale.ts`): `low` 256, `medium` 768 (def
 
 Every poke writes a frozen JPEG to `$TMPDIR/computer/<name>/<seq>.jpg` and prints `screen: <path>`. Successful look/act verbs also prepend `target: <id>` (the resolved computer) so bash-row UI can watch without `-c` on the command line. `ls` / `add` / `rm` / `use` and `--json` omit the stamp.
 
+Human-in-the-loop: a live lightbox with `inputAllowed` sets `<slicc-image-preview drive>` and forwards clicks/scroll/keys as `computer-input` in **native** pixels (`mapDisplayedToNative`; the kernel does not remap). Escape and the backdrop release. Frozen bash-row stills never forward input.
+
 ## Registry and host
 
 `packages/webapp/src/computers/` is unranked in the layer stack (same band as UI minus a half-step). Shell, kernel, and CDP may import it. Importing `ui/` from `computers/` is a back-edge — the computers store lives in `ui/`.

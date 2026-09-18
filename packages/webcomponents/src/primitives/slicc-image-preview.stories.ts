@@ -145,6 +145,46 @@ export const LiveSwap: Story = {
   },
 };
 
+/** Drive mode: clicks/keys go to the computer; Escape and backdrop still release. */
+export const Driving: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'padding:40px;font-family:var(--ui,system-ui,sans-serif);color:var(--ink);';
+
+    const caption = document.createElement('p');
+    caption.textContent =
+      'Drive mode: the chip says driving. Click/scroll/type on the image; Escape or the backdrop releases.';
+    caption.style.cssText = 'margin:0 0 16px;font-size:13px;color:var(--txt-2,#737373);';
+    wrap.appendChild(caption);
+
+    const log = document.createElement('pre');
+    log.style.cssText =
+      'margin:16px 0 0;font:12px/1.4 ui-monospace,monospace;color:var(--txt-2,#737373);';
+    log.textContent = 'events:';
+    wrap.appendChild(log);
+
+    const thumb = document.createElement('img');
+    thumb.src = SAMPLE_SRC;
+    thumb.alt = 'Drive origin';
+    thumb.style.cssText =
+      'width:96px;height:60px;object-fit:cover;border-radius:6px;cursor:zoom-in;' +
+      'border:1px solid var(--line,#e5e5e5);display:block;';
+    wrap.insertBefore(thumb, log);
+
+    const preview = document.createElement('slicc-image-preview') as SliccImagePreview;
+    wrap.appendChild(preview);
+    preview.drive = true;
+    preview.addEventListener('slicc-image-preview-input', (event) => {
+      const detail = (event as CustomEvent).detail as { kind: string };
+      log.textContent += `\n${JSON.stringify(detail)}`;
+    });
+    thumb.addEventListener('click', () => preview.open(SAMPLE_SRC, thumb));
+    requestAnimationFrame(() => preview.open(SAMPLE_SRC, thumb));
+    return wrap;
+  },
+};
+
 /** The static `SliccImagePreview.show(src, originEl)` helper, mirroring `showImagePreview`. */
 export const StaticHelper: Story = {
   args: {},

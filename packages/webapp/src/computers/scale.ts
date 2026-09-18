@@ -109,3 +109,22 @@ export function roundTrip(x: number, y: number, scale: number): { x: number; y: 
   const shotY = Math.round(y * scale);
   return { x: Math.round(shotX / scale), y: Math.round(shotY / scale) };
 }
+
+/**
+ * Map a click on a displayed JPEG (CSS pixels) onto native computer pixels.
+ * Used by lightbox HITL so the human's pointer lands where they clicked.
+ */
+export function mapDisplayedToNative(
+  x: number,
+  y: number,
+  displayed: ComputerSize,
+  native: ComputerSize
+): { x: number; y: number } {
+  if (displayed.width <= 0 || displayed.height <= 0) return { x: 0, y: 0 };
+  const nx = native.width > 0 ? native.width : displayed.width;
+  const ny = native.height > 0 ? native.height : displayed.height;
+  return {
+    x: Math.max(0, Math.min(nx - 1, Math.round((x / displayed.width) * nx))),
+    y: Math.max(0, Math.min(ny - 1, Math.round((y / displayed.height) * ny))),
+  };
+}

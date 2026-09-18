@@ -34,7 +34,7 @@ computer screenshot --size high out.jpg
 computer text                       # text-mode dump when the backend supports it
 ```
 
-`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last screenshot unless `--native`.
+`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last screenshot unless `--native`. A human can also click, scroll, and type in the live lightbox when the computer allows input; Escape releases. Frozen stills in the transcript never forward.
 
 ## Poke (xdotool; chainable)
 

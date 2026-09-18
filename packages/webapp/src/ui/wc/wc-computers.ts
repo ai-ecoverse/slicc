@@ -1,15 +1,17 @@
 /**
  * Page wiring for `computer` UI: overlay cards after browser tabs, live
- * lightbox watch/unwatch, and bash-row live vs frozen frames.
+ * lightbox watch/unwatch, HITL drive on live inputAllowed frames, and
+ * bash-row live vs frozen frames.
  *
  * Overlay merge is consumed by `wireWcBrowser`; row/lightbox install is
  * called from the workbench boot so transcript rebuilds still bind.
  */
 
-import type { ComputerDescriptor, ComputerFrame } from '@slicc/shared-ts';
+import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import {
   decideComputerFrameMode,
+  type ImagePreviewInputDetail,
   type SliccBashRendererComputer,
   type SliccImagePreview,
   setComputerOutputRenderer,
@@ -17,6 +19,8 @@ import {
 } from '@slicc/webcomponents';
 import { classifyImageMarkers } from '../../base/image-markers.js';
 import { coerceComputerFrameBytes, sniffFrameMime } from '../../computers/frame-bytes.js';
+import { keysymFromKeyEvent } from '../../computers/keys.js';
+import { mapDisplayedToNative } from '../../computers/scale.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import { ansiToDom } from '../ansi-to-dom.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -61,6 +65,8 @@ interface ComputersRuntime {
   lightboxId: string | null;
   lightboxWatchToken: number | null;
   lightboxOrigin: HTMLElement | null;
+  /** True once a live `computer-frame` has painted into the open lightbox. */
+  lightboxLive: boolean;
   preview: SliccImagePreview | null;
   installed: boolean;
 }
@@ -184,6 +190,7 @@ function ensureRuntime(deps?: Partial<WcComputersDeps>): ComputersRuntime {
     lightboxId: null,
     lightboxWatchToken: null,
     lightboxOrigin: null,
+    lightboxLive: false,
     preview: null,
     installed: false,
   };
@@ -261,7 +268,8 @@ function onRowFrameClick(event: Event): void {
   const row = runtime?.bound.get(el);
   const src = (event as CustomEvent<{ src: string }>).detail?.src;
   if (!src) return;
-  openComputerLightbox(row?.computerId ?? null, src, el);
+  const live = el.frameMode === 'live';
+  openComputerLightbox(live ? (row?.computerId ?? null) : null, src, el);
 }
 
 function refreshAllRows(): void {
@@ -358,7 +366,9 @@ function onStoreFrame(id: string, frame: ComputerFrame): void {
   const src = frameToDataUrl(frame);
   const rt = ensureRuntime();
   if (rt.lightboxId === id) {
+    rt.lightboxLive = true;
     const preview = ensurePreview();
+    syncLightboxDrive(rt);
     if (preview.isOpen) preview.setSrc(src);
     else preview.open(src, rt.lightboxOrigin ?? preview);
   }
@@ -372,8 +382,57 @@ function ensurePreview(): SliccImagePreview {
   host.setAttribute('data-computer-live', '');
   document.body.append(host);
   host.addEventListener('slicc-image-preview-close', () => closeComputerLightbox());
+  host.addEventListener('slicc-image-preview-input', onLightboxInput);
   rt.preview = host;
   return host;
+}
+
+function lightboxAllowsInput(id: string | null): boolean {
+  if (!id) return false;
+  return Boolean(getComputersStore().get(id)?.capabilities.inputAllowed);
+}
+
+function syncLightboxDrive(rt: ComputersRuntime): void {
+  const preview = rt.preview;
+  if (!preview) return;
+  preview.drive = Boolean(rt.lightboxLive && lightboxAllowsInput(rt.lightboxId));
+}
+
+function onLightboxInput(event: Event): void {
+  const rt = runtime;
+  if (!rt?.lightboxId || !rt.lightboxLive) return;
+  const computer = getComputersStore().get(rt.lightboxId);
+  if (!computer?.capabilities.inputAllowed) return;
+  const detail = (event as CustomEvent<ImagePreviewInputDetail>).detail;
+  if (!detail) return;
+  const native = computer.size ?? getComputersStore().lastFrame(rt.lightboxId);
+  if (!native) return;
+  try {
+    const events = eventsFromPreviewInput(detail, native);
+    if (events.length) getComputersStore().input(rt.lightboxId, events);
+  } catch (err) {
+    rt.deps.log.warn('WC computers: lightbox input failed', err);
+  }
+}
+
+function eventsFromPreviewInput(
+  detail: ImagePreviewInputDetail,
+  native: { width: number; height: number }
+): ComputerInputEvent[] {
+  if (detail.kind === 'key') {
+    const keysym = keysymFromKeyEvent(detail);
+    return keysym ? [{ type: 'key', keysym }] : [];
+  }
+  const point = mapDisplayedToNative(
+    detail.x,
+    detail.y,
+    { width: detail.width, height: detail.height },
+    native
+  );
+  if (detail.kind === 'scroll') {
+    return [{ type: 'scroll', dx: detail.dx, dy: detail.dy, x: point.x, y: point.y }];
+  }
+  return [{ type: 'click', button: detail.button, count: 1, x: point.x, y: point.y }];
 }
 
 function openComputerLightbox(computerId: string | null, src: string, origin: HTMLElement): void {
@@ -396,6 +455,8 @@ function openComputerLightbox(computerId: string | null, src: string, origin: HT
   rt.lightboxOrigin = origin;
   const preview = ensurePreview();
   const live = computerId ? store.lastFrame(computerId) : null;
+  rt.lightboxLive = Boolean(live);
+  syncLightboxDrive(rt);
   const nextSrc = live ? frameToDataUrl(live) : src;
   if (!nextSrc) return;
   if (preview.isOpen) preview.setSrc(nextSrc);
@@ -404,8 +465,8 @@ function openComputerLightbox(computerId: string | null, src: string, origin: HT
 
 function closeComputerLightbox(): void {
   const rt = runtime;
-  if (!rt?.lightboxId) return;
-  if (rt.lightboxWatchToken !== null) {
+  if (!rt) return;
+  if (rt.lightboxWatchToken !== null && rt.lightboxId) {
     try {
       getComputersStore().unwatch(rt.lightboxId, rt.lightboxWatchToken);
     } catch (err) {
@@ -415,6 +476,8 @@ function closeComputerLightbox(): void {
   }
   rt.lightboxId = null;
   rt.lightboxOrigin = null;
+  rt.lightboxLive = false;
+  if (rt.preview) rt.preview.drive = false;
 }
 
 function overlayCardOrigin(overlay: OverlayLike, tabId: string): HTMLElement {
