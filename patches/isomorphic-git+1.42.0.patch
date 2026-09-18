@@ -1,5 +1,5 @@
 diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
-index bbdc7f0..c1abc93 100644
+index 4bfba9d..770bdc0 100644
 --- a/node_modules/isomorphic-git/index.js
 +++ b/node_modules/isomorphic-git/index.js
 @@ -3576,6 +3576,64 @@ async function shasumRange(
