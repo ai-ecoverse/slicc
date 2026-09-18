@@ -88,8 +88,8 @@ async function appendBytes(
   let existing = new Uint8Array(0);
   if (typeof anyFs.readFile === 'function') {
     try {
-      const raw = await anyFs.readFile(path, { encoding: 'binary' });
-      if (raw instanceof Uint8Array) existing = raw;
+      const raw: unknown = await anyFs.readFile(path, { encoding: 'binary' });
+      if (raw instanceof Uint8Array) existing = Uint8Array.from(raw);
     } catch {
       /* first frame */
     }
