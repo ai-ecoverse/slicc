@@ -5,7 +5,7 @@ Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage
 
-Bound external calls and surface errors. Cap preload copies globally; cancel queued work on failure and drain active copies. Test OPFS reloads/async fallbacks; reject live wipes.
+Bound external calls and surface errors. Cap preload copies; cancel queues and drain active copies on failure. Test OPFS reloads/fallbacks; reject live wipes.
 
 ## 2. Cross-runtime parity
 
@@ -33,6 +33,8 @@ entitlements. Avoid `keychain-access-groups` without an appex-specific Developer
 Model ID/metadata changes: verify reasoning, input, cost, thinking through
 discovery→enrichment→storage→API. OpenRouter (Free): all pricing dims zero;
 stream refuses IDs not in the live free catalog.
+Ordinary scoops freeze model at creation; Gelatiere alone follows
+`modelFor(leadingRootOf(roster))` on boot/run/leader changes, never global selection.
 
 ## 7. Tests
 
@@ -47,10 +49,9 @@ boot paths; preserve shared fallbacks; prefer capability checks to float names.
 
 ## 9. Origin / bridge routing contract
 
-Thin-bridge UI and API origins differ. Flag same-origin `/api/` assumptions, hardcoded
-origins, and comparisons without slash normalization. Also flag iframe/channel/relay
-messages or UI activation paths that lose routing ownership. Capture owner at the opening
-interaction, not later focus; test shell-open, rail-open, and attention promotion.
+Thin-bridge UI/API origins differ. Flag same-origin `/api/`, hardcoded origins, and
+unnormalized comparisons. Iframe/channel/relay messages and UI activation must retain
+the owner captured at opening, not later focus.
 
 ## 10. Layer import direction
 
@@ -60,10 +61,8 @@ CI-gated (`lint:layer-back-edges`; never grow baselines): webapp `fs/base → sh
 
 Flag new `Record<string, unknown>` in source. Require a named type,
 boundary validation, or a justified suppression; never grow the frozen baseline.
-Cone and scoop are roles over one `WorkUnit` (#1666); the record carries no role
-field — route on the unit's policy / `isRootUnit` / `getWorkUnits()`. `isCone` exists
-only on the tray wire, write-only and stripped for peers at protocol v8+ (#2358);
-flag any read of it — the compiler cannot catch it yet.
+Cone/scoop are roles over one `WorkUnit`; records have no role field. Route on policy /
+`isRootUnit` / `getWorkUnits()`. `isCone` is tray-wire write-only; flag every read.
 
 ## 12. Agent skill freshness
 

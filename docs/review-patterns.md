@@ -202,6 +202,10 @@ on a Developer ID appex unless a profile for _that_ bundle id is embedded.
 - Changes to the thinking/effort pipeline (`PI_FROM_META`, `resolveThinkingLevel`,
   `thinkingLevelToEffort`, `clampXhighEffort`, `effortOverride`) without verifying
   end-to-end mapping for all 6 UI levels on the affected models.
+- Changes to work-unit inheritance that treat the system Gelatiere like an ordinary child. Ordinary
+  scoops freeze their creation-time copy; Gelatiere must persist and re-resolve the current
+  `modelFor(leadingRootOf(roster))` on boot, before runs, and after leader/model changes, with no
+  `selected-model` fallback.
 
 **Historical precedent** — **PR #1399** (`fix(adobe): enable thinking for Sonnet 5`):
 `getModelIds` forwarded only `{ id, name }` from cached models, silently discarding
@@ -212,7 +216,8 @@ SLICC's `max` UI level was collapsed into pi-ai's `xhigh`.
 **Remediation** — follow the "New Claude model release checklist" in `docs/pitfalls.md`.
 Verify `getModelIds` forwards all metadata fields from cached models. Check
 `parseClaudeVersion` handles the new ID format. Test the full effort mapping chain
-(UI → pi-ai → API) for all 6 levels.
+(UI → pi-ai → API) for all 6 levels. For work-unit inheritance, cover creation, stale restore,
+leading and non-leading changes, leader removal, pre-run repair and the global-fallback refusal.
 
 ### 7. Test-coverage blind spots
 

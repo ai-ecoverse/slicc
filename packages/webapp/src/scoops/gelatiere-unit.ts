@@ -31,7 +31,7 @@ import { GELATIERE_BASE_ALLOWED_COMMANDS } from '../base/gelatiere-store.js';
 import { createLogger } from '../base/logger.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { modelFor } from '../work-unit/record.js';
+import { leadingRootOf, modelFor } from '../work-unit/record.js';
 import type { CronTaskEntry } from './lick-manager.js';
 import type { RegisteredScoop, ScoopTabState } from './types.js';
 
@@ -140,6 +140,8 @@ export interface GelatiereOrchestrator {
    * live context, which is the boot case.
    */
   reinitLiveUnit(jid: string): Promise<void>;
+  /** Persist and hot-resolve the gelatiere from the canonical leading cone. */
+  syncGelatiereModel(): Promise<boolean>;
   /** Live tab state, for the `processing` probe that protects a pass in flight. */
   getScoopTabState(jid: string): { status: ScoopTabState['status'] } | undefined;
 }
@@ -256,6 +258,7 @@ export async function ensureGelatiereUnit(
   const existing = orchestrator.getScoops();
   const found = findGelatiereUnit(existing);
   if (found) {
+    await orchestrator.syncGelatiereModel();
     const allowList = await syncAllowedCommands(orchestrator, found, allowedCommands);
     return { folder: found.folder, jid: found.jid, created: false, allowList };
   }
@@ -264,8 +267,8 @@ export async function ensureGelatiereUnit(
   // and every later boot would mint another. Refuse instead.
   const holder = existing.find((s) => s.folder === GELATIERE_FOLDER);
   if (holder) throw new GelatiereFolderTakenError(holder);
-  const defaultRoot = rootsOf(existing)[0];
-  const inheritedModel = defaultRoot ? modelFor(defaultRoot) : undefined;
+  const leadingRoot = leadingRootOf(existing);
+  const inheritedModel = leadingRoot ? modelFor(leadingRoot) : undefined;
   const record: RegisteredScoop = {
     ...buildWorkUnitRecord({
       parentId: GELATIERE_OWNER_JID,
