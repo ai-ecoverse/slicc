@@ -60,6 +60,7 @@ const VALUE_FLAGS = new Set([
   '--__resolved',
   '-V',
   '--duration',
+  '--sim',
 ]);
 
 export interface ParsedGlobals {

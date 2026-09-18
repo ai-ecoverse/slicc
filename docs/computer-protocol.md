@@ -1,10 +1,10 @@
 # Computer protocol
 
-Every screen the agent can look at and poke — a v86 guest, a browser tab, a jsh-hosted backend, a persistent display share, later `ssh` / `url` — is a **computer**. Wire types live in `packages/shared-ts/src/computer-protocol.ts` so a descriptor that crosses the tray channel is the same shape the kernel registry emits.
+Every screen the agent can look at and poke — a v86 guest, a browser tab, a jsh-hosted backend, a persistent display share, a follower desktop (`ssh`), later `url` — is a **computer**. Wire types live in `packages/shared-ts/src/computer-protocol.ts` so a descriptor that crosses the tray channel is the same shape the kernel registry emits.
 
 Agent loop: [`packages/vfs-root/workspace/skills/computer/SKILL.md`](../packages/vfs-root/workspace/skills/computer/SKILL.md). Shell surface: [`shell-reference.md`](./shell-reference.md) (`computer`).
 
-Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` adapters, and `sliccy:computer`. UI (#3246) ships overlay cards, a live lightbox, bash-row frames, and additive tray wire (`computers.list` / `computer.frame` / `computer.watch` / `computer.unwatch`) — page wiring in `docs/webapp-details.md`, components in `docs/webcomponents-details.md`. Phase 3 (#3247) adds the `screen` adapter (persistent `getDisplayMedia` session). `ssh` / `url` follow in the same issue.
+Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` adapters, and `sliccy:computer`. UI (#3246) ships overlay cards, a live lightbox, bash-row frames, and additive tray wire (`computers.list` / `computer.frame` / `computer.watch` / `computer.unwatch`) — page wiring in `docs/webapp-details.md`, components in `docs/webcomponents-details.md`. Phase 3 (#3247) adds the `screen` adapter (persistent `getDisplayMedia` session) and the `ssh` adapter (follower desktop / iOS Simulator). `url` follows in the same issue.
 
 ## Types
 
@@ -16,7 +16,7 @@ Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` 
 | `ComputerFrame`        | `seq`, `mime` (`image/jpeg` or `image/png`), `width`, `height`, `bytes`, optional `overCap` when encoded pixels exceed the requested maxWidth                 |
 | `ComputerLastShot`     | screenshot-space size + scale of the last frame the model saw                                                                                                 |
 
-Kinds on the wire: `'v86' | 'tab' | 'screen' | 'ssh' | 'url' | 'vnc' | 'jsh'`. Ids are namespaced (`v86:<name>`, `tab:<targetId>`, `screen:<handle>`, `jsh:<name>`).
+Kinds on the wire: `'v86' | 'tab' | 'screen' | 'ssh' | 'url' | 'vnc' | 'jsh'`. Ids are namespaced (`v86:<name>`, `tab:<targetId>`, `screen:<handle>`, `ssh:<runtimeId>`, `ssh:<runtimeId>:sim:<udid>`, `jsh:<name>`).
 
 Buttons: xdotool 1 / 2 / 3 = left / middle / right.
 
@@ -47,6 +47,7 @@ The kernel worker lazy-loads `startComputersHost` so computers stay out of the f
 | `tab`    | `computers/adapters/tab.ts`                                           | Absolute mouse. Injected `browser` without `panelRpc` → Local (CLI page handlers); both present → Bridged (kernel worker). Refuses `isSliccAppUrl` at add, screenshot, and input                                                                                                                                                                                                                                                                                        |
 | `jsh`    | `computers/adapters/jsh.ts` + `kernel/realm/realm-computer-bridge.ts` | Realm `require('sliccy:computer').register(handlers)` subscribes to `computer-call` (keep-alive via `onEvent`) and answers over the `computer` RPC channel (`register` / `unregister` / `reply` / `frame`). Optional `handlers.subscribe(fps, onFrame, maxWidth)` is the push path; the host caches frames, resamples wider than the watch cap (or marks `overCap`), and times out a silent stream                                                                      |
 | `screen` | `computers/adapters/screen.ts`                                        | Always bridged. Persistent `getDisplayMedia` session (`screencapture` RPC `mode: 'session'`). Keyboard/mouse off. `computer add screen` needs a user gesture (panel terminal `requestPermission('screenshare')` or cone approval card `data-picker="screenshare"`). `computer ls` suffixes `[display slot]`. `computer rm` / kill / page unload stop tracks. `computer record -V` records from the live session. Cannot restore on `jshd --enable` (no gesture at boot) |
+| `ssh`    | `computers/adapters/ssh.ts`                                           | Follower desktop over tray-exec. Probe at add: `screencapture`+`cliclick` (macOS), `grim`/`scrot`/`import`+`xdotool`/`ydotool` (Linux), `xcrun simctl`+`idb` (`--sim`). Frames return as base64 in ≤3 MiB chunks. View-only unless `--allow-input` (sudo `kind: 'command'` once at add; `ls` / overlay badge `[input]` vs `[view-only]`). iOS follower is never a computer; `--sim` is a Mac follower's Simulator. Adapter takes injected `SshExec` (lazy import).      |
 
 ## Shell
 

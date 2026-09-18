@@ -16,6 +16,7 @@ import { getComputersStore, resetComputersStoreForTests } from '../../../src/ui/
 import {
   bindComputerOverlay,
   computerOverlayId,
+  computerToTab,
   disposeWcComputersForTests,
   installWcComputers,
   mergeOverlayTabs,
@@ -111,6 +112,29 @@ describe('wc-computers helpers', () => {
       softKeys: [{ label: 'Enter', keysym: 'Return' }],
     });
     expect(tabs[1]?.screenshot?.startsWith('data:image/jpeg;base64,')).toBe(true);
+  });
+
+  it('badges ssh overlay titles as input or view-only', () => {
+    const view = computerToTab(
+      {
+        ...descriptor('ssh:follower-abc', 'live'),
+        kind: 'ssh',
+        title: 'desk',
+        capabilities: { ...descriptor().capabilities, inputAllowed: false, keyboard: false },
+      },
+      null
+    );
+    expect(view.title).toBe('desk [view-only]');
+    const poke = computerToTab(
+      {
+        ...descriptor('ssh:follower-abc', 'live'),
+        kind: 'ssh',
+        title: 'desk',
+        capabilities: { ...descriptor().capabilities, inputAllowed: true },
+      },
+      null
+    );
+    expect(poke.title).toBe('desk [input]');
   });
 });
 

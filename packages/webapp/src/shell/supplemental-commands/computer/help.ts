@@ -11,6 +11,10 @@ Lifecycle:
   add tab <targetId|url> [-n name]
                              register a browser tab (refuses SLICC app tabs)
   add screen [-n name]       share this display (needs a user gesture)
+  add ssh <follower> [--sim <udid>] [--allow-input] [-n name]
+                             follower desktop (or iOS Simulator on a Mac).
+                             --allow-input needs sudo (phone can Face ID).
+                             The iOS follower itself is never a computer.
   rm [id]                    unregister (stops a live screen share)
   use <id>                   set the default computer
   info                       descriptor for the current target
@@ -61,4 +65,5 @@ export const COMPUTER_VALUE_FLAGS = [
   '--__resolved',
   '-V',
   '--duration',
+  '--sim',
 ] as const;

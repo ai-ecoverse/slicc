@@ -94,6 +94,7 @@ describe('computer command', () => {
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('xdotool');
     expect(help.stdout).toContain('left_click');
+    expect(help.stdout).toContain('add ssh');
   });
 
   it('answers click --help without dispatching input', async () => {
@@ -568,5 +569,92 @@ describe('computer parse', () => {
     const [call] = chainVerbs(['record', '-V', '10', 'clip.webm']);
     expect(call.verb).toBe('record');
     expect(call.args).toEqual(['-V', '10', 'clip.webm']);
+  });
+
+  it('add ssh registers a view-only follower desktop', async () => {
+    const sshExec = vi.fn(async (_runtimeId: string, command: string) => {
+      if (command.includes('SLICC_SSH_PROBE')) {
+        return {
+          stdout: 'SLICC_SSH_PROBE Darwin screencapture cliclick xcrun \n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [{ runtimeId: 'follower-abc', exec: true, floatType: 'standalone' }],
+      sshExec,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'follower-abc', '-n', 'desk'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('ssh:follower-abc');
+    const ls = await cmd.execute(['ls'], ctx);
+    expect(ls.stdout).toContain('[view-only]');
+    const typed = await cmd.execute(['type', 'hi'], ctx);
+    expect(typed.exitCode).toBe(1);
+    expect(typed.stderr).toContain('input is not allowed');
+  });
+
+  it('add ssh --allow-input rides sudo and shows the input badge', async () => {
+    const sshExec = vi.fn(async (_runtimeId: string, command: string) => {
+      if (command.includes('SLICC_SSH_PROBE')) {
+        return {
+          stdout: 'SLICC_SSH_PROBE Darwin screencapture cliclick \n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [{ runtimeId: 'follower-abc', exec: true, floatType: 'standalone' }],
+      sshExec,
+      sudoBroker: { requestApproval },
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'follower-abc', '--allow-input'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'command', detail: expect.stringContaining('--allow-input') })
+    );
+    const ls = await cmd.execute(['ls'], ctx);
+    expect(ls.stdout).toContain('[input]');
+  });
+
+  it('add ssh --allow-input fails closed when sudo denies', async () => {
+    const sshExec = vi.fn(async () => ({
+      stdout: 'SLICC_SSH_PROBE Darwin screencapture cliclick \n',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [{ runtimeId: 'follower-abc', exec: true, floatType: 'standalone' }],
+      sshExec,
+      sudoBroker: { requestApproval: async () => ({ decision: 'deny' }) },
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'follower-abc', '--allow-input'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('approval denied');
+  });
+
+  it('add ssh refuses an iOS follower as the computer', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [{ runtimeId: 'iphone-1', exec: true, floatType: 'ios' }],
+      sshExec: vi.fn(),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'iphone-1'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('iOS follower');
   });
 });

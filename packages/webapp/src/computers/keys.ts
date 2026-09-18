@@ -354,6 +354,120 @@ export function toCliclickToken(
   return `${prefix}:${body}`;
 }
 
+const XDOTOOL_NAMED: Record<string, string> = {
+  Enter: 'Return',
+  Escape: 'Escape',
+  ' ': 'space',
+  Backspace: 'BackSpace',
+  Delete: 'Delete',
+  Tab: 'Tab',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'Page_Up',
+  PageDown: 'Page_Down',
+  Insert: 'Insert',
+};
+
+/** xdotool chord (`ctrl+alt+Delete`, `Return`). */
+export function toXdotoolKey(parsed: ParsedKey): string {
+  const key =
+    parsed.native ??
+    (parsed.key.length === 1 ? parsed.key : (XDOTOOL_NAMED[parsed.key] ?? parsed.keysym));
+  const mods = formatModifiers(parsed.modifiers);
+  return mods ? `${mods}+${key}` : key;
+}
+
+/** Linux evdev codes for ydotool `KEY:1 KEY:0` sequences. */
+const YDOTOOL_NAMED: Record<string, number> = {
+  Escape: 1,
+  Digit1: 2,
+  Digit2: 3,
+  Digit3: 4,
+  Digit4: 5,
+  Digit5: 6,
+  Digit6: 7,
+  Digit7: 8,
+  Digit8: 9,
+  Digit9: 10,
+  Digit0: 11,
+  Backspace: 14,
+  Tab: 15,
+  Enter: 28,
+  Control: 29,
+  Shift: 42,
+  Space: 57,
+  Alt: 56,
+  F1: 59,
+  F2: 60,
+  F3: 61,
+  F4: 62,
+  F5: 63,
+  F6: 64,
+  F7: 65,
+  F8: 66,
+  F9: 67,
+  F10: 68,
+  F11: 87,
+  F12: 88,
+  Home: 102,
+  ArrowUp: 103,
+  PageUp: 104,
+  ArrowLeft: 105,
+  ArrowRight: 106,
+  End: 107,
+  ArrowDown: 108,
+  PageDown: 109,
+  Insert: 110,
+  Delete: 111,
+  Meta: 125,
+};
+
+const YDOTOOL_LETTERS = 'qwertyuiopasdfghjklzxcvbnm';
+const YDOTOOL_LETTER_CODES = [
+  16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48,
+  49, 50,
+];
+
+function ydotoolKeycode(parsed: ParsedKey): number | null {
+  if (parsed.key.length === 1) {
+    const letter = YDOTOOL_LETTERS.indexOf(parsed.key.toLowerCase());
+    if (letter !== -1) return YDOTOOL_LETTER_CODES[letter];
+    if (parsed.key >= '1' && parsed.key <= '9') return 2 + (parsed.key.charCodeAt(0) - 49);
+    if (parsed.key === '0') return 11;
+  }
+  return YDOTOOL_NAMED[parsed.code] ?? YDOTOOL_NAMED[parsed.key] ?? null;
+}
+
+function ydotoolTok(code: number, down: boolean): string {
+  return `${code}:${down ? 1 : 0}`;
+}
+
+/** ydotool `29:1 28:1 28:0 29:0` press/release sequence. */
+export function toYdotoolKey(parsed: ParsedKey, phase: 'press' | 'down' | 'up' = 'press'): string {
+  const code = ydotoolKeycode(parsed);
+  if (code == null) return '';
+  const mods: number[] = [];
+  if (parsed.modifiers.ctrl) mods.push(29);
+  if (parsed.modifiers.shift) mods.push(42);
+  if (parsed.modifiers.alt) mods.push(56);
+  if (parsed.modifiers.meta) mods.push(125);
+  if (phase === 'down') {
+    return [...mods.map((m) => ydotoolTok(m, true)), ydotoolTok(code, true)].join(' ');
+  }
+  if (phase === 'up') {
+    return [ydotoolTok(code, false), ...[...mods].reverse().map((m) => ydotoolTok(m, false))].join(
+      ' '
+    );
+  }
+  const down = [...mods.map((m) => ydotoolTok(m, true)), ydotoolTok(code, true)];
+  const up = [ydotoolTok(code, false), ...[...mods].reverse().map((m) => ydotoolTok(m, false))];
+  return [...down, ...up].join(' ');
+}
+
 export type TouchAction =
   | { kind: 'tap'; x: number; y: number }
   | { kind: 'long-press'; x: number; y: number; holdMs: number }

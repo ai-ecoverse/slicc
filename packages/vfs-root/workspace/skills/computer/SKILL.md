@@ -3,7 +3,8 @@ name: computer
 description: |
   Use this when looking at and poking a screen with SLICC's `computer`
   shell command (xdotool grammar). Covers v86 guests (`v86:<name>`),
-  browser tabs (`tab:<id>`), display share (`screen:<handle>`), jsh-hosted backends, screenshot-space
+  browser tabs (`tab:<id>`), display share (`screen:<handle>`), follower
+  desktops (`ssh:<runtimeId>`), jsh-hosted backends, screenshot-space
   coordinates, frozen JPEG frames, and chaining click/type/key.
 allowed-tools: bash
 ---
@@ -85,6 +86,19 @@ computer rm screen:screen1           # stops the getDisplayMedia tracks
 `computer add screen` needs a real user gesture (`getDisplayMedia`). Type it in the panel terminal, or run it from a cone tool call so an approval card can open the picker. `computer ls` marks a live share with `[display slot]`. Input (keyboard/mouse) is not supported. Screen share cannot come back after `jshd --enable` restore — there is no gesture at boot.
 
 `computer record` is screen-only in this phase; other kinds fail with a phase-4 message.
+
+## Follower desktop (`ssh`)
+
+```bash
+ssh --list                                 # exec-capable tray followers
+computer add ssh follower-abc -n desk      # view-only
+computer screenshot
+computer add ssh follower-abc --allow-input
+computer click 1 --at 100,80 type hello
+computer add ssh mac-follower --sim UDID-1 --allow-input   # iOS Simulator
+```
+
+Probes at add: `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec. `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
 
 ## jsh-hosted backend
 

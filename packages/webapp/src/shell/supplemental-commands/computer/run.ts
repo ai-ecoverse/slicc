@@ -35,9 +35,12 @@ import {
 } from '../../../computers/scale.js';
 import type { BrowserAPI } from '../../../kernel/browser-api.js';
 import type { PanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
+import { getPanelRpcClient, PANEL_RPC_DEFAULT_TIMEOUT_MS } from '../../../kernel/panel-rpc.js';
 import type { ProcessManager } from '../../../kernel/process-manager.js';
+import { sudoRefusalMessage } from '../../../sudo/approval-timeout.js';
+import type { SudoBroker } from '../../../sudo/types.js';
 import type { ComputerCommandDeps } from '../computer-command.js';
+import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from '../host-command.js';
 import { clampVideoDurationMs } from '../screencapture-media-shared.js';
 import { isHelpRequest, subcommandHelpText } from '../subcommand-help.js';
 import { COMPUTER_HELP, COMPUTER_VALUE_FLAGS } from './help.js';
@@ -80,6 +83,62 @@ function lookupBrowser(deps: ComputerCommandDeps): BrowserAPI | null {
 
 function lookupRpc(deps: ComputerCommandDeps): PanelRpcClient | null {
   return deps.panelRpc ?? (globalThis as KernelGlobals).__slicc_panelRpc ?? getPanelRpcClient();
+}
+
+function lookupSudo(deps: ComputerCommandDeps): SudoBroker | null {
+  if (deps.sudoBroker) return deps.sudoBroker;
+  const hook = (globalThis as { __slicc_sudo?: SudoBroker }).__slicc_sudo;
+  return hook ?? null;
+}
+
+function listFollowers(deps: ComputerCommandDeps): ConnectedFollowerInfo[] {
+  return deps.listFollowers?.() ?? getConnectedFollowersWithFallback();
+}
+
+async function execOnFollower(
+  deps: ComputerCommandDeps,
+  runtimeId: string,
+  command: string,
+  timeoutMs?: number
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  if (deps.sshExec) return deps.sshExec(runtimeId, command, timeoutMs);
+  const rpc = lookupRpc(deps);
+  if (!rpc) throw new Error('no panel RPC in this float');
+  const timeout = timeoutMs ?? 30_000;
+  const result = await rpc.call(
+    'tray-exec',
+    {
+      runtimeId,
+      command,
+      execToken: `computer-ssh-${Date.now().toString(36)}`,
+      timeoutMs: timeout,
+    },
+    { timeoutMs: timeout + PANEL_RPC_DEFAULT_TIMEOUT_MS }
+  );
+  if (result.error) throw new Error(result.error);
+  return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+}
+
+function resolveSshFollower(
+  query: string,
+  followers: ConnectedFollowerInfo[]
+): ConnectedFollowerInfo | { error: string } {
+  const capable = followers.filter((f) => f.exec);
+  const exact = capable.find((f) => f.runtimeId === query);
+  if (exact) return exact;
+  const hits = capable.filter((f) => f.runtimeId.endsWith(query) || f.runtimeId.includes(query));
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
+  return {
+    error: `add ssh: no exec-capable follower '${query}' — try \`ssh --list\``,
+  };
+}
+
+function lsExtras(c: ComputerDescriptor): string {
+  const bits: string[] = [];
+  if (c.kind === 'screen') bits.push('display slot');
+  if (c.kind === 'ssh') bits.push(c.capabilities.inputAllowed ? 'input' : 'view-only');
+  return bits.length > 0 ? ` [${bits.join(', ')}]` : '';
 }
 
 function registryOf(deps: ComputerCommandDeps): ComputerRegistry {
@@ -163,8 +222,9 @@ function verbLs(registry: ComputerRegistry, json: boolean): CmdResult {
   if (list.length === 0) return ok('no computers registered\n');
   const lines = ['ID                   KIND   STATE     TITLE'];
   for (const c of list) {
-    const slot = c.kind === 'screen' ? ' [display slot]' : '';
-    lines.push(`${c.id.padEnd(20)} ${c.kind.padEnd(6)} ${c.state.padEnd(9)} ${c.title}${slot}`);
+    lines.push(
+      `${c.id.padEnd(20)} ${c.kind.padEnd(6)} ${c.state.padEnd(9)} ${c.title}${lsExtras(c)}`
+    );
   }
   return ok(`${lines.join('\n')}\n`);
 }
@@ -178,9 +238,69 @@ async function verbAdd(
   const kind = args[0];
   if (kind === 'tab') return verbAddTab(args, ctx, deps, registry);
   if (kind === 'screen') return verbAddScreen(args, ctx, deps, registry);
+  if (kind === 'ssh') return verbAddSsh(args, ctx, deps, registry);
   return fail(
-    `add: unknown kind '${kind ?? ''}' — phase 3 supports \`computer add tab\` and \`computer add screen\``
+    `add: unknown kind '${kind ?? ''}' — phase 3 supports \`computer add tab\`, \`computer add screen\`, and \`computer add ssh\``
   );
+}
+
+async function verbAddSsh(
+  args: string[],
+  ctx: CommandContext,
+  deps: ComputerCommandDeps,
+  registry: ComputerRegistry
+): Promise<CmdResult> {
+  const name = flagValue(args, ['-n', '--name']);
+  const sim = flagValue(args, ['--sim']);
+  const allowInput = hasFlag(args, '--allow-input');
+  const query = positionals(args).slice(1)[0];
+  if (!query) return fail('add ssh: requires <follower>');
+  const follower = resolveSshFollower(query, listFollowers(deps));
+  if ('error' in follower) return fail(follower.error);
+  if (follower.floatType === 'ios') {
+    return fail(
+      'add ssh: the iOS follower itself is not a driven computer (a real iPhone is out of scope; pass --sim <udid> on a Mac follower)'
+    );
+  }
+  const { SshComputerBackend, probeSsh } = await import('../../../computers/adapters/ssh.js');
+  const exec = (command: string, opts?: { timeoutMs?: number }) =>
+    execOnFollower(deps, follower.runtimeId, command, opts?.timeoutMs);
+  let probe;
+  try {
+    probe = await probeSsh(exec, sim);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return fail(msg.startsWith('add ssh:') ? msg : `add ssh: ${msg}`);
+  }
+  if (allowInput && probe.input === 'none') {
+    return fail(
+      'add ssh: --allow-input needs cliclick, xdotool, ydotool, or idb on the follower (screenshot-only otherwise)'
+    );
+  }
+  if (allowInput) {
+    const broker = lookupSudo(deps);
+    if (!broker) return fail('add ssh: --allow-input needs sudo approval (not configured)');
+    const decision = await broker.requestApproval({
+      kind: 'command',
+      detail: `computer add ssh ${follower.runtimeId}${sim ? ` --sim ${sim}` : ''} --allow-input`,
+      reason: 'grant pointer and keyboard control of the follower desktop',
+    });
+    if (decision.decision === 'deny') {
+      return fail(sudoRefusalMessage('add ssh', decision));
+    }
+  }
+  const title = name ?? (sim ? `${follower.runtimeId} sim ${sim}` : follower.runtimeId);
+  const backend = new SshComputerBackend(exec, {
+    runtimeId: follower.runtimeId,
+    title,
+    probe,
+    inputAllowed: allowInput,
+    sim,
+  });
+  const desc = registry.register(backend);
+  registry.use(desc.id);
+  void ctx;
+  return ok(`registered ${desc.id} (${desc.title})\n`);
 }
 
 async function verbAddTab(

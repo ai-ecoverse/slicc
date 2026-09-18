@@ -757,6 +757,8 @@ handler. The kernel worker that hosts shell commands has no `window`, so these
 APIs cannot run there directly. The panel terminal bridges the gesture; agent
 `bash` calls fall back to an in-chat approval dip (`mount`) or fail with a
 clear "needs a real user gesture" message (`usb`/`serial`/`hid`/`esptool`/`computer add screen`).
+`--allow-input` on `computer add ssh` is **sudo**, not a browser picker: it rides
+`sudo.approve.request` (`kind: 'command'`) so a tray phone can answer with Face ID.
 
 ### Single gesture entry — `<slicc-permissions>`
 
@@ -933,6 +935,8 @@ outcome. ✅ = pass, ⚠️ = noted asymmetry, ❌ = regression — fix before m
 | `hear` (mic capture)                                                               | Panel terminal       | First capture: SLICC Allow/Cancel then the browser mic prompt; later captures skip the in-app dialog and transcribe                                                                                                    |
 | `computer add screen`                                                              | Panel terminal       | `<slicc-permissions>` screenshare chooser → `computer ls` shows `screen:<handle> [display slot]`                                                                                                                       |
 | Agent issues `computer add screen`                                                 | Cone-driven approval | Chat card "Share this display" → click → getDisplayMedia in the leader tab → handle returned (`data-picker="screenshare"`, not a PickerKind popup)                                                                     |
+| `computer add ssh <follower> --allow-input`                                        | Sudo                 | `sudo.approve.request` (`kind: command`) — Allow/Always/Deny (Face ID on a tray phone). `computer ls` shows `[input]`                                                                                                  |
+| `computer add ssh <follower> --allow-input` denied                                 | Sudo                 | stderr `computer: add ssh: approval denied` (or timeout copy); computer is not registered                                                                                                                              |
 
 Cancel / deny on each row to confirm the surface emits `slicc-permission-deny`
 with `reason: 'cancelled'`; the picker dip should not stay open.
