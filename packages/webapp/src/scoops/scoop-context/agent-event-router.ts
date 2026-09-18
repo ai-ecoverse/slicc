@@ -25,7 +25,12 @@ import { PROGRESS_CONTENT_TYPE, type ToolProgressEvent } from '../../shell/progr
 export interface AgentEventSink {
   /** A streaming text delta from the assistant. */
   textDelta(delta: string): void;
-  toolStart(toolName: string, args: unknown, toolCallId?: string): void;
+  /**
+   * A tool is about to run. A returned promise HOLDS the tool until it
+   * settles (pi awaits listeners before executing the call) — the durability
+   * barrier reload recovery depends on.
+   */
+  toolStart(toolName: string, args: unknown, toolCallId?: string): Promise<void> | void;
   toolUI(toolName: string, requestId: string, html: string): void;
   toolUIDone(requestId: string): void;
   toolProgress(toolName: string, progress: ToolProgressEvent, toolCallId?: string): void;
@@ -33,8 +38,11 @@ export interface AgentEventSink {
   /**
    * A completed message or tool result exists — durable-worthy the moment it
    * does, since that is exactly what an abnormal turn death loses (#1987).
+   * `message` is the completed message on `message_end` (absent on
+   * `tool_execution_end`), so the sink can persist the ones reload recovery
+   * depends on without waiting out the debounce.
    */
-  checkpoint(): void;
+  checkpoint(message?: AgentMessage): void;
   assistantMessageEnd(message: AssistantMessage): void;
   /** `turn_start`; the run-bound ceiling is enforced here (#1972). */
   turnStart(): void;
@@ -49,7 +57,7 @@ export function routeAgentEvent(
   event: CoreAgentEvent,
   sink: AgentEventSink,
   abortSignal?: AbortSignal
-): void {
+): Promise<void> | void {
   switch (event.type) {
     case 'message_update': {
       const ame = event.assistantMessageEvent as AssistantMessageEvent;
@@ -58,8 +66,7 @@ export function routeAgentEvent(
     }
 
     case 'tool_execution_start': {
-      sink.toolStart(event.toolName, event.args, event.toolCallId);
-      break;
+      return sink.toolStart(event.toolName, event.args, event.toolCallId);
     }
 
     case 'tool_execution_update': {
@@ -77,7 +84,7 @@ export function routeAgentEvent(
       if (event.message.role === 'assistant') {
         sink.assistantMessageEnd(event.message as AssistantMessage);
       }
-      sink.checkpoint();
+      sink.checkpoint(event.message);
       break;
     }
 

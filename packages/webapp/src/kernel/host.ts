@@ -69,7 +69,7 @@ import { setMountCapabilityBroker } from '../fs/mount/capability-broker.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
-import { formatLickEventForCone } from '../scoops/lick-formatting.js';
+import { formatLickEventForCone, sessionReloadReason } from '../scoops/lick-formatting.js';
 import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
 import { scoopCanBrowse } from '../scoops/llms-txt-ignore.js';
 import type {
@@ -299,7 +299,7 @@ function resolveLickEventName(event: LickEvent): string | undefined {
     case 'upgrade':
       return `${event.upgradeFromVersion ?? 'unknown'}→${event.upgradeToVersion ?? 'unknown'}`;
     case 'session-reload':
-      return 'mount-recovery';
+      return sessionReloadReason(event);
     case 'workflow':
       return event.workflowName ?? event.workflowRunId ?? 'workflow';
     case 'bash':
@@ -920,6 +920,28 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
 }
 
 /**
+ * Step 10b: repeat a model request the previous page life cut off, or hand its
+ * lost tool calls to the agent as a `session-reload` lick. Runs after cone
+ * bootstrap so every unit (and the lick route) is live; never awaited — a
+ * resumed turn runs as long as the model takes. Best-effort: a failure leaves
+ * the units idle, exactly as before recovery existed.
+ */
+async function recoverInterruptedWorkForHost(
+  orchestrator: OrchestratorType,
+  lickManager: LickManager,
+  log: KernelHostLogger
+): Promise<void> {
+  try {
+    const outcomes = await orchestrator.recoverInterruptedWork((event) =>
+      lickManager.emitEvent(event)
+    );
+    if (outcomes.length > 0) log.info('Recovered work interrupted by a reload', { outcomes });
+  } catch (err) {
+    log.warn('Reload recovery failed', err);
+  }
+}
+
+/**
  * Step 9: restore persisted mounts. MUST run AFTER `setEventHandler` so the
  * `session-reload` lick this may emit routes through the installed handler.
  * The caller gates on `sharedFs` being present and awaits this before jshd
@@ -1300,6 +1322,9 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     await bootstrapCone(orchestrator);
   }
   progress('cone-bootstrapped');
+
+  // 10b. Reload recovery (see `recoverInterruptedWorkForHost`). Not awaited.
+  void recoverInterruptedWorkForHost(orchestrator, lickManager, log);
 
   // 11. Upgrade detection. Must run after cone bootstrap so an upgrade
   //     lick has a routable target.

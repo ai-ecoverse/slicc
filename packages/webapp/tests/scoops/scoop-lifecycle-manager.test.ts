@@ -11,6 +11,11 @@ import type { RegisteredScoop } from '../../src/scoops/types.js';
 vi.mock('../../src/scoops/scoop-context.js', () => ({
   ScoopContext: class {
     disposed = false;
+    isBusy = false;
+    resumed: Array<[number, unknown]> = [];
+    async resumeTurn(resumeCount: number, gates: unknown): Promise<void> {
+      this.resumed.push([resumeCount, gates]);
+    }
     constructor(
       readonly scoop: RegisteredScoop,
       readonly callbacks: {
@@ -101,6 +106,43 @@ describe('ScoopLifecycleManager', () => {
 
     await expect(manager.createTab(scoop.jid)).resolves.toBeUndefined();
     expect(flushOnIdle).toHaveBeenCalledOnce();
+  });
+
+  it('resumes an interrupted turn as an ordinary processing turn', async () => {
+    const onStatusChange = vi.fn();
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => new Map([[scoop.jid, scoop]]),
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getConversationStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getTurnJournal: () => null,
+      callbacks: { onStatusChange },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      completionService: { clearResponse: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+    } as unknown as ScoopLifecycleDeps);
+    await manager.createTab(scoop.jid);
+    const context = manager.getContext(scoop.jid) as unknown as {
+      isBusy: boolean;
+      resumed: Array<[number, unknown]>;
+    };
+
+    const gates = [{ requester: 'guest-1' }];
+    await manager.resumeTurn(scoop.jid, 1, gates);
+    expect(context.resumed).toEqual([[1, gates]]);
+    expect(onStatusChange).toHaveBeenLastCalledWith(scoop.jid, 'processing');
+
+    // Busy (or unknown) units are left alone.
+    context.isBusy = true;
+    await manager.resumeTurn(scoop.jid, 2, []);
+    await manager.resumeTurn('nobody', 1, []);
+    expect(context.resumed).toHaveLength(1);
   });
 
   it('never unregisters the last cone', async () => {

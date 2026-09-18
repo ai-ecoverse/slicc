@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EXTERNAL_LICK_CHANNELS,
   formatLickEventForCone,
+  sessionReloadReason,
 } from '../../src/scoops/lick-formatting.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
@@ -491,5 +492,45 @@ describe('webhook lick preview attribution', () => {
     } as never);
     expect(formatted!.label).toBe('Webhook Event');
     expect(formatted!.content).toContain('[Webhook Event: my-hook]');
+  });
+});
+
+describe('session-reload · tool-call-interrupted', () => {
+  const event = (tools: unknown[], lickId?: string) =>
+    ({
+      type: 'session-reload',
+      timestamp: '2026-09-18T10:00:00.000Z',
+      ...(lickId ? { lickId } : {}),
+      body: { reason: 'tool-call-interrupted', tools },
+    }) as unknown as LickEvent;
+
+  it('names each lost call and says it was not re-run', () => {
+    const out = formatLickEventForCone(
+      event([{ toolName: 'bash', toolCallId: 'a', args: '{"command":"sleep 60"}' }], 'lick-9')
+    );
+    expect(out!.label).toBe('Session Reload');
+    expect(out!.content).toContain('[Session Reload: tool-call-interrupted]');
+    expect(out!.content).toContain('A tool call was still in flight');
+    expect(out!.content).toContain('- `bash` {"command":"sleep 60"}');
+    expect(out!.content).toContain('NOT re-run automatically');
+    expect(out!.content).toContain('Lick ID: lick-9');
+    expect(out!.content).toContain('lick_dismiss');
+  });
+
+  it('pluralizes, tolerates missing fields, and omits guidance without a lick id', () => {
+    const out = formatLickEventForCone(event([{ toolName: 'bash' }, {}]));
+    expect(out!.content).toContain('2 tool calls were still in flight');
+    expect(out!.content).toContain('their results were lost');
+    expect(out!.content).toContain('- `unknown`');
+    expect(out!.content).not.toContain('Lick ID:');
+    expect(formatLickEventForCone(event(null as never))!.content).toContain('0 tool calls');
+  });
+
+  it('sessionReloadReason reads body.reason, defaulting to mount-recovery', () => {
+    expect(sessionReloadReason(event([]))).toBe('tool-call-interrupted');
+    expect(sessionReloadReason({ type: 'session-reload', body: {} } as never)).toBe(
+      'mount-recovery'
+    );
+    expect(sessionReloadReason({ type: 'session-reload' } as never)).toBe('mount-recovery');
   });
 });

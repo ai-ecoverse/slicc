@@ -69,6 +69,7 @@ import {
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
+import type { RecoveryOutcome } from './interrupted-work-recovery.js';
 import { isExternalLickChannel } from './lick-formatting.js';
 import {
   buildActiveLicksError,
@@ -84,6 +85,7 @@ import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
+import type { InFlightTurn, TurnJournal } from './scoop-context/turn-journal.js';
 import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { ScoopCostTracker } from './scoop-cost-tracker.js';
 import { ScoopIdleTimers } from './scoop-idle-timers.js';
@@ -238,6 +240,14 @@ export class Orchestrator implements ConeApprovalRouter {
    * read-old/write-new window is open.
    */
   private conversationStore: WorkUnitConversationStore | null = null;
+  /** In-flight turn journal (reload recovery). Created in {@link init}. */
+  private turnJournal: TurnJournal | null = null;
+  /**
+   * The journal as it stood at boot, before any unit could start a turn:
+   * what the previous page life left running. Consumed once by
+   * {@link recoverInterruptedWork}.
+   */
+  private interruptedTurns: InFlightTurn[] | null = null;
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
@@ -392,6 +402,7 @@ export class Orchestrator implements ConeApprovalRouter {
       getProcessManager: () => this.processManager,
       getSudoManager: () => this.sudoManager,
       getCapabilityBroker: () => this.capabilityBroker,
+      getTurnJournal: () => this.turnJournal,
       callbacks: this.callbacks,
       idleTimers: this.idleTimers,
       completionService: this.completionService,
@@ -559,6 +570,12 @@ export class Orchestrator implements ConeApprovalRouter {
     );
     this.sessionStore = new SessionStore();
     this.conversationStore = new WorkUnitConversationStore();
+    // Snapshot the journal NOW, before any context exists to start a turn
+    // and overwrite a record the previous page life left behind. Lazy: the
+    // worker's eager first-load closure is budgeted.
+    const { TurnJournal } = await import('./scoop-context/turn-journal.js');
+    this.turnJournal = new TurnJournal();
+    this.interruptedTurns = await this.turnJournal.readAll();
 
     // Create and attach file system watcher
     this.fsWatcher = new FsWatcher();
@@ -1543,6 +1560,28 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Get all messages for a scoop */
   async getMessagesForScoop(jid: string): Promise<ChannelMessage[]> {
     return db.getMessagesForScoop(jid);
+  }
+
+  /**
+   * Recover the turns a page reload cut off (see
+   * `interrupted-work-recovery.ts`): repeat a lost model request, or hand
+   * lost tool calls to the agent through `emitLick`. Runs once per boot,
+   * after every unit is initialized; later calls are no-ops.
+   */
+  async recoverInterruptedWork(emitLick: (event: LickEvent) => void): Promise<RecoveryOutcome[]> {
+    const turns = this.interruptedTurns;
+    this.interruptedTurns = null;
+    const journal = this.turnJournal;
+    if (!turns || turns.length === 0 || !journal) return [];
+    const { recoverInterruptedWork } = await import('./interrupted-work-recovery.js');
+    return recoverInterruptedWork(turns, {
+      journal,
+      getScoop: (jid) => this.scoops.get(jid),
+      getUnit: (jid) => this.lifecycle.getContext(jid),
+      resumeTurn: (jid, resumeCount, guestGates) =>
+        this.lifecycle.resumeTurn(jid, resumeCount, guestGates),
+      emitLick,
+    });
   }
 
   /** Send a prompt to a scoop. Delegates to {@link ScoopLifecycleManager}. */

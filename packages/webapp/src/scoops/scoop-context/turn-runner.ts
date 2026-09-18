@@ -50,19 +50,20 @@ export interface TurnRunnerDeps {
 export class TurnRunner {
   constructor(private readonly deps: TurnRunnerDeps) {}
 
-  /** Run agent prompt with retry loop. Returns the last error if any. */
-  async run(
-    agent: Agent,
-    text: string,
-    images: ImageContent[],
-    abortSignal: AbortSignal
-  ): Promise<Error | null> {
+  /**
+   * Run one turn with the retry loop. Returns the last error if any.
+   *
+   * `start` issues one attempt against the agent — `agent.prompt(text)` for a
+   * fresh turn, `agent.continue()` for a turn resumed after a reload — and is
+   * called again for each retry.
+   */
+  async run(start: () => Promise<void>, abortSignal: AbortSignal): Promise<Error | null> {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       if (this.deps.isDisposed() || abortSignal.aborted) return null;
 
-      const error = await this.tryAgentPrompt(agent, text, images, abortSignal);
+      const error = await this.tryAttempt(start, abortSignal);
       if (!error) return null;
 
       if (this.deps.isDisposed() || abortSignal.aborted) return null;
@@ -89,16 +90,14 @@ export class TurnRunner {
     );
   }
 
-  /** Try a single agent prompt attempt. Returns error or null on success. */
-  private async tryAgentPrompt(
-    agent: Agent,
-    text: string,
-    images: ImageContent[],
+  /** Try a single attempt. Returns error or null on success. */
+  private async tryAttempt(
+    start: () => Promise<void>,
     abortSignal: AbortSignal
   ): Promise<Error | null> {
     this.deps.beginAttempt();
     try {
-      await agent.prompt(text, images);
+      await start();
       if (this.deps.isDisposed() || abortSignal.aborted) return null;
 
       const recovery = this.deps.overflow.pendingRecovery;

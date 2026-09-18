@@ -19,6 +19,7 @@
  * - `scoop-context/idle-compaction.ts` — compact-on-idle timer + adoption gate
  * - `scoop-context/image-recovery.ts` — rejected-image recovery
  * - `scoop-context/session-persistence.ts` — durable history (#1987)
+ * - `scoop-context/turn-journal.ts` — in-flight turn/tool record for reload recovery
  * - `scoop-context/bash-job-reaper.ts` — detached job pids (#1166)
  * - `scoop-context/live-updates.ts` — hot-swaps onto a running agent
  * - `scoop-context/shell-and-skills.ts`, `tools.ts`, `agent-factory.ts`,
@@ -45,6 +46,7 @@ import type {
   AgentEvent as CoreAgentEvent,
   ImageContent,
   TextContent,
+  ToolResultMessage,
 } from '../core/index.js';
 import { createLogger } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
@@ -79,6 +81,7 @@ import { buildScoopRuntime } from './scoop-context/runtime-init.js';
 import { SessionPersistence } from './scoop-context/session-persistence.js';
 import { ownLickTargetFor } from './scoop-context/shell-env.js';
 import { getLockedEffortLevel } from './scoop-context/thinking-level.js';
+import type { TurnJournal } from './scoop-context/turn-journal.js';
 import {
   finishTurnProcess,
   signalTurnProcess,
@@ -88,6 +91,9 @@ import { queuePromptIfBusy, TurnRunner } from './scoop-context/turn-runner.js';
 import type { RegisteredScoop } from './types.js';
 
 const log = createLogger('scoop-context');
+
+/** Longest a tool waits for its reload-recovery evidence to be stored. */
+export const TOOL_DURABILITY_WAIT_MS = 2_000;
 
 export type { ScoopContextCallbacks } from './scoop-context/callbacks.js';
 export {
@@ -173,6 +179,11 @@ export class ScoopContext {
    */
   private sessionGeneration = 0;
   private readonly turnRunner: TurnRunner;
+  /**
+   * In-flight record of the running turn (reload recovery). `null` when the
+   * owner wired none (tests, the inline path): nothing is journaled.
+   */
+  private readonly turnJournal: TurnJournal | null;
 
   /**
    * Translation of agent events into this context's state and the owner's
@@ -184,15 +195,17 @@ export class ScoopContext {
       this.didStreamDeltas = true;
       this.callbacks.onResponse(delta, true);
     },
-    toolStart: (toolName, args, toolCallId) =>
-      this.callbacks.onToolStart?.(toolName, args, toolCallId),
+    toolStart: (toolName, args, toolCallId) => {
+      this.callbacks.onToolStart?.(toolName, args, toolCallId);
+      return this.makeToolCallDurable(toolName, args, toolCallId);
+    },
     toolUI: (toolName, requestId, html) => this.callbacks.onToolUI?.(toolName, requestId, html),
     toolUIDone: (requestId) => this.callbacks.onToolUIDone?.(requestId),
     toolProgress: (toolName, progress, toolCallId) =>
       this.callbacks.onToolProgress?.(toolName, progress, toolCallId),
     toolResult: (toolName, text, isError, toolCallId) =>
       this.callbacks.onToolEnd?.(toolName, text, isError, toolCallId),
-    checkpoint: () => this.sessions.schedule(),
+    checkpoint: (message) => this.checkpoint(message),
     assistantMessageEnd: (message) => this.handleAssistantMessageEnd(message),
     turnStart: () => this.runBounds.enforceOnTurnStart(),
     turnCompleted: () => this.runBounds.recordCompletedTurn(),
@@ -210,7 +223,8 @@ export class ScoopContext {
     processManager?: ProcessManager,
     sudoManager?: SudoManager | null,
     conversationStore?: WorkUnitConversationStore | null,
-    capabilityBroker?: CapabilityBroker | null
+    capabilityBroker?: CapabilityBroker | null,
+    turnJournal?: TurnJournal | null
   ) {
     this.scoop = scoop;
     this.unit = toDescriptor(scoop);
@@ -222,6 +236,7 @@ export class ScoopContext {
     this.processManager = processManager ?? null;
     this.sudoManager = sudoManager ?? null;
     this.capabilityBroker = capabilityBroker ?? null;
+    this.turnJournal = turnJournal ?? null;
 
     this.sessions = new SessionPersistence({
       store: sessionStore ?? null,
@@ -432,6 +447,9 @@ export class ScoopContext {
       this.sessions.persistNow();
     }
     this.isProcessing = false;
+    // The turn settled in THIS page life — success, error or abort — so
+    // there is nothing for a reload to recover.
+    this.turnJournal?.end(this.scoop.jid);
     if (!this.disposed && this.status === 'processing') {
       this.setStatus('ready');
     }
@@ -498,7 +516,89 @@ export class ScoopContext {
     this.turnGuestGates = [...incoming];
 
     const agent = this.agent!;
+    await this.runTurn(text, 0, () => agent.prompt(text, images));
+  }
 
+  /**
+   * Re-issue the model request a page reload cut off: the restored history
+   * already ends in the user message (or tool result) that request answered,
+   * so the turn continues from it instead of re-sending a prompt. Called by
+   * boot-time recovery only (`interrupted-work-recovery.ts`), with the guest
+   * gates the interrupted turn was journaled under — a guest's turn must not
+   * come back from a reload un-gated.
+   *
+   * `resumeCount` is how many times in a row this turn has now been resumed;
+   * it rides the new journal record so recovery can stop replaying a turn
+   * that keeps dying.
+   */
+  async resumeTurn(resumeCount: number, guestGates: TurnGuestGate[] = []): Promise<void> {
+    if (!(await this.ensureAgentReady())) return;
+    if (this.isBusy) return;
+    this.turnGuestGates = [...guestGates];
+    const agent = this.agent!;
+    await this.runTurn('(resumed after reload)', resumeCount, () => {
+      // A failed attempt leaves its errored assistant message at the tail,
+      // and `continue()` refuses to run from an assistant message.
+      const messages = agent.state.messages;
+      const last = messages[messages.length - 1] as Partial<AssistantMessage> | undefined;
+      if (
+        last?.role === 'assistant' &&
+        (last.stopReason === 'error' || last.stopReason === 'aborted')
+      ) {
+        agent.state.messages = messages.slice(0, -1);
+      }
+      return agent.continue();
+    });
+  }
+
+  /**
+   * Close tool calls a page reload cut off: each gets an error result saying
+   * the call was interrupted and NOT re-run, so the history stays well-formed
+   * (every tool call answered) and the model is told the truth about it. The
+   * results are persisted at once and surfaced like any tool result.
+   */
+  settleInterruptedToolCalls(
+    calls: ReadonlyArray<{ toolCallId: string; toolName: string; text: string }>
+  ): void {
+    const agent = this.agent;
+    if (!agent || calls.length === 0) return;
+    const now = Date.now();
+    const results: ToolResultMessage[] = calls.map((call) => ({
+      role: 'toolResult',
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      content: [{ type: 'text', text: call.text }],
+      isError: true,
+      timestamp: now,
+    }));
+    agent.state.messages = [...agent.state.messages, ...results];
+    this.sessions.persistNow();
+    for (const call of calls) {
+      this.callbacks.onToolEnd?.(call.toolName, call.text, true, call.toolCallId);
+    }
+  }
+
+  /** Surface a message on this unit's error channel. */
+  reportError(message: string): void {
+    this.callbacks.onError(message);
+  }
+
+  /** Whether the unit has a live agent (a model it can run on). */
+  hasAgent(): boolean {
+    return this.agent !== null;
+  }
+
+  /**
+   * One turn, from `processing` to settled: the abort controller, the kernel
+   * pid, the run bounds, the in-flight journal record, and the retry loop
+   * around `start` (one attempt against the agent).
+   */
+  private async runTurn(
+    /** Excerpt shown as the turn process's argv. */
+    text: string,
+    resumeCount: number,
+    start: () => Promise<void>
+  ): Promise<void> {
     this.promptAbortController?.abort();
     const abortController = new AbortController();
     this.promptAbortController = abortController;
@@ -516,12 +616,13 @@ export class ScoopContext {
     });
     this.currentTurnProcess = turnProcess;
     this.runBounds.arm();
+    this.turnJournal?.begin(this.scoop.jid, this.scoop.folder, resumeCount, this.turnGuestGates);
 
     // Hoisted so the `finally` can thread it into cleanupPromptState, which uses
     // it to set the turn process exit code (1 on failure, 0 on clean completion).
     let lastError: Error | null = null;
     try {
-      lastError = await this.turnRunner.run(agent, text, images, abortSignal);
+      lastError = await this.turnRunner.run(start, abortSignal);
 
       if (lastError && !this.disposed && !abortSignal.aborted) {
         this.turnRunner.reportExhausted(lastError);
@@ -546,6 +647,7 @@ export class ScoopContext {
     const key = JSON.stringify(gate);
     if (this.turnGuestGates.some((existing) => JSON.stringify(existing) === key)) return;
     this.turnGuestGates.push(gate);
+    this.turnJournal?.setGuestGates(this.scoop.jid, this.turnGuestGates);
   }
 
   /** Stop the current agent operation and clear any queued prompts */
@@ -792,6 +894,8 @@ export class ScoopContext {
     // reference is dropped — dispose mid-turn must not lose completed
     // messages a pending debounce hadn't flushed yet (#1987).
     this.sessions.persistNow();
+    // A deliberate teardown (drop, clear, shutdown) is not an interruption.
+    this.turnJournal?.end(this.scoop.jid);
     this.disposed = true;
     this.idleCompaction?.cancel();
     // Clear the run-bound wall-clock timer symmetrically with
@@ -828,10 +932,68 @@ export class ScoopContext {
     this.fs = null;
   }
 
-  /** The agent subscription: drop events after dispose, else route them. */
-  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): void {
+  /**
+   * The agent subscription: drop events after dispose, else route them. A
+   * returned promise holds the agent loop until it settles (tool start).
+   */
+  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): Promise<void> | void {
     if (this.disposed) return;
-    routeAgentEvent(event, this.eventSink, abortSignal);
+    return routeAgentEvent(event, this.eventSink, abortSignal);
+  }
+
+  /**
+   * Durability barrier before a tool runs. After a reload, recovery tells "a
+   * tool was cut off" (report it, never re-run it) from "a model request was
+   * cut off" (repeat it) by the unanswered call in the restored history and
+   * the journal entry naming it — so both must be stored BEFORE the tool can
+   * have side effects, or a reload in that window would repeat the request
+   * and re-issue a call that already ran. Bounded: a store that never answers
+   * delays the tool by {@link TOOL_DURABILITY_WAIT_MS}, never wedges it.
+   */
+  private async makeToolCallDurable(
+    toolName: string,
+    args: unknown,
+    toolCallId: string | undefined
+  ): Promise<void> {
+    const writes = Promise.all([
+      this.sessions.flush(),
+      toolCallId ? this.turnJournal?.toolStarted(this.scoop.jid, toolCallId, toolName, args) : null,
+    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), TOOL_DURABILITY_WAIT_MS);
+    });
+    try {
+      if ((await Promise.race([writes, deadline])) === 'timeout') {
+        log.warn('Tool call not yet durable; running it anyway', {
+          folder: this.scoop.folder,
+          toolName,
+        });
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Persist on a completed message. Two kinds are flushed at once instead of
+   * debounced, because reload recovery reads them: a user message is the
+   * request recovery repeats, and a tool result is what lets the journal
+   * forget its call — only once the result is stored, or a reload in between
+   * would find a finished call with no result and misreport it as lost.
+   */
+  private checkpoint(message?: AgentMessage): void {
+    const role = (message as { role?: unknown } | undefined)?.role;
+    if (role === 'user') {
+      this.sessions.persistNow();
+    } else if (role === 'toolResult') {
+      const { toolCallId } = message as ToolResultMessage;
+      void this.sessions
+        .flush()
+        .then(() => this.turnJournal?.toolEnded(this.scoop.jid, toolCallId));
+    } else {
+      this.sessions.schedule();
+    }
   }
 
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {

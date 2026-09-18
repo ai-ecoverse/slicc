@@ -84,7 +84,7 @@ function resolveLickEventName(event: LickEvent): string | undefined {
     case 'fswatch':
       return (event as { fswatchName?: string }).fswatchName;
     case 'session-reload':
-      return 'mount-recovery';
+      return sessionReloadReason(event);
     case 'navigate':
       return (event as { navigateUrl?: string }).navigateUrl;
     case 'upgrade':
@@ -112,6 +112,47 @@ function resolveLickEventName(event: LickEvent): string | undefined {
 }
 
 /**
+ * What a `session-reload` lick is about: `body.reason` (`mount-recovery`,
+ * `tool-call-interrupted`, `lick-ws-bridge-down`, …), defaulting to
+ * `mount-recovery` for bodies that predate the field.
+ */
+export function sessionReloadReason(event: LickEvent): string {
+  const reason = (event.body as { reason?: unknown } | null | undefined)?.reason;
+  return typeof reason === 'string' && reason ? reason : 'mount-recovery';
+}
+
+interface InterruptedToolCallBody {
+  toolName?: string;
+  toolCallId?: string;
+  args?: string;
+}
+
+/**
+ * Tool calls a page reload cut off (`interrupted-work-recovery.ts`). Tool
+ * calls can have side effects, so recovery never re-runs them; this lick is
+ * how the agent learns they happened, with enough of each call to check
+ * whether it landed before deciding to run it again.
+ */
+function formatToolCallInterruptedPrompt(event: LickEvent): string {
+  const body = event.body as { tools?: InterruptedToolCallBody[] } | null | undefined;
+  const tools = Array.isArray(body?.tools) ? body.tools : [];
+  const lines = tools.map((tool) => {
+    const args = tool.args ? ` ${tool.args}` : '';
+    return `- \`${tool.toolName ?? 'unknown'}\`${args}`;
+  });
+  const count = tools.length === 1 ? 'A tool call was' : `${tools.length} tool calls were`;
+  return (
+    `[Session Reload: tool-call-interrupted]\n` +
+    `The page reloaded while your last turn was running. ${count} still in flight, ` +
+    `so ${tools.length === 1 ? 'its result was' : 'their results were'} lost:\n` +
+    `${lines.join('\n')}\n\n` +
+    `They were NOT re-run automatically, because tool calls can have side effects — ` +
+    `each may or may not have completed. Check the current state (files, tabs, processes) ` +
+    `before deciding whether to run any of them again, then continue the task.`
+  );
+}
+
+/**
  * Session-reload formatting. Session-reload licks are agent-actionable: the
  * orchestrator (`registerSessionReloadLick`) mints a `lickId` for every one,
  * so — following the `formatUpgradeLick` / `formatNavigateLick` pattern — the
@@ -127,6 +168,13 @@ function resolveLickEventName(event: LickEvent): string | undefined {
 function formatSessionReloadLick(event: LickEvent, label: string): FormattedLick | null {
   const body = event.body as { reason?: string; mounts?: MountRecoveryEntry[] } | null | undefined;
   const lickId = event.lickId;
+  if (body?.reason === 'tool-call-interrupted') {
+    const guidance = lickId
+      ? `\n\nLick ID: ${lickId}\n` +
+        `Call \`lick_dismiss\` with this lick id once you have dealt with it.`
+      : '';
+    return { label, content: `${formatToolCallInterruptedPrompt(event)}${guidance}` };
+  }
   if (body?.reason === 'mount-recovery') {
     const prompt = formatMountRecoveryPrompt(body.mounts ?? []);
     if (prompt === null) return null; // empty list — drop the lick
