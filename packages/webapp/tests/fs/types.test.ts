@@ -6,6 +6,7 @@ describe('FsError extended codes', () => {
     ['EBUSY', '412 conflict — concurrent write'],
     ['EFBIG', 'body too large'],
     ['EBADF', 'mount closed'],
+    ['EXDEV', 'cross-device symlink'],
     ['EIO', 'network failure'],
   ] as const)('constructs FsError with code %s', (code, msg) => {
     const err = new FsError(code, msg, '/mnt/r2/foo');
