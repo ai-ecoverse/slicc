@@ -9,6 +9,7 @@ import {
   discoverJshCommands,
   formatJshCommandCollisions,
   type JshDiscoveryFS,
+  jshScanRootsFromPath,
   pathToScanRoots,
   withJshCommandCollisions,
 } from '../../src/shell/jsh-discovery.js';
@@ -61,6 +62,12 @@ describe('pathToScanRoots', () => {
   it('returns no roots for undefined or empty PATH', () => {
     expect(pathToScanRoots(undefined)).toEqual([]);
     expect(pathToScanRoots('')).toEqual([]);
+  });
+
+  it('jshScanRootsFromPath keeps undefined as default-roots sentinel', () => {
+    expect(jshScanRootsFromPath(undefined)).toBeUndefined();
+    expect(jshScanRootsFromPath('')).toEqual([]);
+    expect(jshScanRootsFromPath('/usr/bin:/workspace/skills')).toEqual(['/workspace/skills']);
   });
 });
 
@@ -204,6 +211,24 @@ describe('discoverJshCommands', () => {
     expect(warned.stderr).toBe('skill: 1 command name collision — see listing\n');
     expect(warned.stdout).toContain('listing');
     expect(warned.stdout).toContain('Command collisions:');
+  });
+
+  it('does not label a built-in name as live when two skills ship that command', () => {
+    const text = formatJshCommandCollisions(
+      [
+        {
+          name: 'cat',
+          winnerPath: '/workspace/skills/a/cat.jsh',
+          shadowedPaths: ['/workspace/skills/b/cat.jsh'],
+          reason: 'first-scan',
+        },
+      ],
+      { builtinNames: new Set(['cat']) }
+    );
+    expect(text).toContain('shadowed by built-in cat');
+    expect(text).not.toMatch(/cat\s+live/);
+    expect(text).toContain('/workspace/skills/a/cat.jsh');
+    expect(text).toContain('/workspace/skills/b/cat.jsh');
   });
 
   it('an earlier root wins a basename conflict (PATH precedence)', async () => {

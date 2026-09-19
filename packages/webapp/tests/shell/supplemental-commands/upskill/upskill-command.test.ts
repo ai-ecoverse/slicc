@@ -73,6 +73,31 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stderr).toContain('command name collision');
   });
 
+  it('skill list collision scan follows the live PATH, not the default roots', async () => {
+    await fs.mkdir('/workspace/skills/wiki', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/wiki/SKILL.md',
+      '---\nname: wiki\ndescription: Bundled wiki\n---\n# wiki\n'
+    );
+    await fs.writeFile('/workspace/skills/wiki/wiki.jsh', 'console.log("stale");');
+    await fs.mkdir('/workspace/skills/llm-wiki', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/llm-wiki/SKILL.md',
+      '---\nname: llm-wiki\ndescription: Installed wiki\n---\n# llm-wiki\n'
+    );
+    await fs.writeFile('/workspace/skills/llm-wiki/wiki.jsh', 'console.log("live");');
+
+    const ctx = createMockCtx();
+    ctx.env.set('PATH', '/usr/bin');
+    const result = await createSkillCommand(fs).execute(['list'], ctx as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('wiki');
+    expect(result.stdout).toContain('llm-wiki');
+    expect(result.stdout).not.toContain('Command collisions:');
+    expect(result.stderr).toBe('');
+  });
+
   it('skill list shows source and description for both native and compatibility skills', async () => {
     await fs.mkdir('/workspace/skills/native-skill', { recursive: true });
     await fs.writeFile(

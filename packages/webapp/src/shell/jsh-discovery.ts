@@ -88,6 +88,15 @@ export function pathToScanRoots(pathValue: string | undefined): string[] {
 }
 
 /**
+ * Scan roots for `.jsh` discovery from a live `$PATH`. `undefined` means the
+ * caller has no env (tests, cold construction) and the default roots apply.
+ * An explicit empty PATH yields no scan roots.
+ */
+export function jshScanRootsFromPath(pathValue: string | undefined): readonly string[] | undefined {
+  return pathValue === undefined ? undefined : pathToScanRoots(pathValue);
+}
+
+/**
  * Discover `.jsh` files under the given search roots and return the live
  * command map plus same-root basename collisions.
  *
@@ -124,18 +133,34 @@ export async function discoverJshCommands(
   return (await discoverJshCommandIndex(fs, roots)).commands;
 }
 
+export interface FormatJshCollisionsOptions {
+  /** Names that beat every `.jsh` at dispatch (just-bash built-ins). */
+  builtinNames?: ReadonlySet<string>;
+}
+
 /** Human listing of same-root `.jsh` collisions for `skill list` / `upskill list`. */
-export function formatJshCommandCollisions(collisions: readonly JshCommandCollision[]): string {
+export function formatJshCommandCollisions(
+  collisions: readonly JshCommandCollision[],
+  options: FormatJshCollisionsOptions = {}
+): string {
   if (collisions.length === 0) return '';
   const lines = ['Command collisions:'];
   for (const collision of collisions) {
+    if (options.builtinNames?.has(collision.name)) {
+      lines.push(`  ${collision.name}  shadowed by built-in ${collision.name}`);
+      lines.push(`          ${collision.winnerPath}`);
+      for (const shadowed of collision.shadowedPaths) {
+        lines.push(`          ${shadowed}`);
+      }
+      continue;
+    }
     lines.push(`  ${collision.name}  live     ${collision.winnerPath}  (${collision.reason})`);
     for (const shadowed of collision.shadowedPaths) {
       lines.push(`          shadowed ${shadowed}`);
     }
   }
   lines.push(
-    'Resolution: a skill with .upskill provenance wins over a bundled copy; newer .upskill installed timestamp wins among provenanced skills; otherwise the first scan hit wins.'
+    'Resolution: a skill with .upskill provenance wins over a bundled copy; newer .upskill installed timestamp wins among provenanced skills; otherwise the first scan hit wins. A built-in of the same name still takes precedence at dispatch.'
   );
   return `${lines.join('\n')}\n`;
 }
@@ -144,12 +169,13 @@ export function formatJshCommandCollisions(collisions: readonly JshCommandCollis
 export function withJshCommandCollisions(
   commandName: string,
   stdout: string,
-  collisions: readonly JshCommandCollision[]
+  collisions: readonly JshCommandCollision[],
+  options: FormatJshCollisionsOptions = {}
 ): { stdout: string; stderr: string } {
   if (collisions.length === 0) return { stdout, stderr: '' };
   const noun = collisions.length === 1 ? 'command name collision' : 'command name collisions';
   return {
-    stdout: `${stdout}\n${formatJshCommandCollisions(collisions)}`,
+    stdout: `${stdout}\n${formatJshCommandCollisions(collisions, options)}`,
     stderr: `${commandName}: ${collisions.length} ${noun} — see listing\n`,
   };
 }

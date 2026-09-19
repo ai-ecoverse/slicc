@@ -5,7 +5,7 @@ import {
   discoverJshCommandIndex,
   type JshCommandCollision,
   type JshCommandIndex,
-  pathToScanRoots,
+  jshScanRootsFromPath,
 } from '../jsh-discovery.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { discoverWorkflowCommands, type WorkflowCommandEntry } from '../workflow-discovery.js';
@@ -36,7 +36,7 @@ async function getJshIndex(
   opts: WhichCommandOptions,
   pathValue: string | undefined
 ): Promise<JshCommandIndex> {
-  const roots = pathValue === undefined ? undefined : pathToScanRoots(pathValue);
+  const roots = jshScanRootsFromPath(pathValue);
   if (opts.scriptCatalog) return opts.scriptCatalog.getJshIndex(roots);
   if (opts.fs) return discoverJshCommandIndex(opts.fs, roots);
   return EMPTY_JSH_INDEX;
@@ -64,6 +64,10 @@ function resolveCommandPath(
   if (staticBuiltins.has(name)) {
     const lines = [`/usr/bin/${name}`];
     if (jshPath || wf) lines.push(`  (shadowed by built-in ${name})`);
+    if (jshPath) {
+      const shadowedJsh = collision ? [jshPath, ...collision.shadowedPaths] : [jshPath];
+      for (const path of shadowedJsh) lines.push(`  (shadowed ${path})`);
+    }
     return { lines, found: true };
   }
   if (jshPath) {

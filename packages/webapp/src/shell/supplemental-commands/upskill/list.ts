@@ -9,8 +9,13 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import { getCommandNames } from 'just-bash';
 import type { VirtualFS } from '../../../fs/index.js';
-import { discoverJshCommandIndex, withJshCommandCollisions } from '../../jsh-discovery.js';
+import {
+  discoverJshCommandIndex,
+  jshScanRootsFromPath,
+  withJshCommandCollisions,
+} from '../../jsh-discovery.js';
 import { formatDiscoveredSkills, formatDiscoveryScope } from './help.js';
 import { collectSkillUpdateResults, type SkillUpdateResult } from './update.js';
 
@@ -72,11 +77,12 @@ function formatOutdatedHuman(results: SkillUpdateResult[], skipped: string[]): s
 
 async function listDiscoverable(
   fs: VirtualFS,
-  json: boolean
+  json: boolean,
+  pathValue: string | undefined
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const skills = await import('../../../skills/index.js');
   const discovered = await skills.discoverSkills(fs);
-  const { collisions } = await discoverJshCommandIndex(fs);
+  const { collisions } = await discoverJshCommandIndex(fs, jshScanRootsFromPath(pathValue));
   if (json) {
     return {
       stdout: `${JSON.stringify({ ok: true, skills: discovered, commandCollisions: collisions })}\n`,
@@ -94,7 +100,8 @@ async function listDiscoverable(
   const listed = withJshCommandCollisions(
     'upskill',
     formatDiscoveredSkills(discovered, 'Discoverable local skills'),
-    collisions
+    collisions,
+    { builtinNames: new Set(getCommandNames()) }
   );
   return { ...listed, exitCode: 0 };
 }
@@ -139,7 +146,8 @@ async function listOutdated(
 export async function handleUpskillList(
   args: string[],
   fs: VirtualFS,
-  fetchFn: SecureFetch
+  fetchFn: SecureFetch,
+  pathValue?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const parsed = parseListArgs(args);
   if (parsed.error) {
@@ -147,5 +155,5 @@ export async function handleUpskillList(
   }
   return parsed.outdated
     ? listOutdated(fs, fetchFn, parsed.json)
-    : listDiscoverable(fs, parsed.json);
+    : listDiscoverable(fs, parsed.json, pathValue);
 }
