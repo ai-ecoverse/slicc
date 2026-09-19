@@ -1201,11 +1201,11 @@ Skill package manager. Installs into `/workspace/skills/<name>/` from three regi
 
 ### `upskill list [--outdated] [--json]`
 
-Lists discoverable local skills (native `/workspace/skills` plus compatibility roots). Default output is the "what can I use right now" table, including provenance-less runtime-bundled skills.
+Lists discoverable local skills (native `/workspace/skills` plus compatibility roots). Default output is the "what can I use right now" table, including provenance-less runtime-bundled skills. Two skills that ship the same `.jsh` command name are both listed, plus a **Command collisions** footer naming the live path and each shadowed copy (`skill list` does the same). `--json` includes `commandCollisions`.
 
 `--outdated` restricts the listing to the subset a bare `upskill update` would actually change. It reuses the `update --dry-run` classification (sha short-circuit, then per-path `unchanged` / `updated` / `added` / `removed` / `kept-local`). Skills with no `.upskill` record cannot be assessed and are omitted, with a one-line footer count — they are not printed as current. Exit code is 0 whether or not anything is stale. A skill whose check itself failed (network, missing upstream path) is not stale-vs-current information: it is reported, `ok` is false, and the exit code is 1 — the same contract as `update --dry-run`.
 
-`--json` emits `{ ok, skills[] }` for the default listing, or `{ ok, results[], skipped[] }` under `--outdated` (`results` is the stale skills plus any check failures; `skipped` is the name-sorted unattributed list). Unknown flags exit non-zero and name the offending flag.
+`--json` emits `{ ok, skills[], commandCollisions[] }` for the default listing, or `{ ok, results[], skipped[] }` under `--outdated` (`results` is the stale skills plus any check failures; `skipped` is the name-sorted unattributed list). Unknown flags exit non-zero and name the offending flag.
 
 ### `upskill update|upgrade [<skill>…] [--dry-run] [--branch <ref>] [--from <owner>/<repo>] [--path <dir>] [--json]`
 
@@ -2414,21 +2414,23 @@ echo "Line 1\nLine 2"
 
 ### Priority Roots
 
-Scan order (first wins):
+Scan order follows the shell `$PATH` (default `/usr/bin:/workspace/skills:/workspace/.mcp/aliases:/workspace/bin:/shared/bin`). Earlier roots win a basename conflict across PATH entries. Lookup is those roots only — not a full-VFS walk. Extend with `export PATH="$PATH:/my/tools"` (interactive or in `~/.profile`).
 
-1. `/workspace/skills/` — Skill scripts, highest priority
-2. `/` — Full filesystem walk
+### Basename collisions
 
-### Basename Rule
+When two `.jsh` files under the **same** PATH root share a basename (two skills both shipping `wiki`):
 
-When multiple `.jsh` files have the same basename:
+1. A skill with a `.upskill` provenance record wins over a bundled copy with none.
+2. Among provenanced skills, the newer `.upskill` `installed` timestamp wins.
+3. Otherwise the first scan hit wins.
+
+The collision is never silent: `skill list` / `upskill list` append a **Command collisions** section (and a stderr warning), `which wiki` prints the live path then each shadowed copy, and jsh registration logs the loser. `which` still exits 0 when the command exists.
 
 ```
-/workspace/skills/my-skill/build.jsh     ← Chosen
-/tools/scripts/build.jsh                 ← Ignored (same basename)
+$ which wiki
+/workspace/skills/llm-wiki/wiki.jsh
+  (shadowed /workspace/skills/wiki/wiki.jsh)
 ```
-
-First occurrence by priority root wins.
 
 ### Dynamic Registration
 

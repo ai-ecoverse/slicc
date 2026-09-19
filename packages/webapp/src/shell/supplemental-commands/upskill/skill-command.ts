@@ -7,14 +7,20 @@
  */
 
 import type { Command, CommandContext } from 'just-bash';
-import { defineCommand } from 'just-bash';
+import { defineCommand, getCommandNames } from 'just-bash';
 import type { VirtualFS } from '../../../fs/index.js';
+import {
+  discoverJshCommandIndex,
+  jshScanRootsFromPath,
+  withJshCommandCollisions,
+} from '../../jsh-discovery.js';
 import { formatDiscoveredSkills, formatDiscoveryScope, formatSkillInfo } from './help.js';
 
 async function handleSkillList(
   args: string[],
   fs: VirtualFS,
-  skills: typeof import('../../../skills/index.js')
+  skills: typeof import('../../../skills/index.js'),
+  pathValue: string | undefined
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const unknown = args.slice(1).find((token) => token.startsWith('-'));
   if (unknown) {
@@ -32,11 +38,14 @@ async function handleSkillList(
       exitCode: 0,
     };
   }
-  return {
-    stdout: formatDiscoveredSkills(discovered, 'Discoverable skills'),
-    stderr: '',
-    exitCode: 0,
-  };
+  const { collisions } = await discoverJshCommandIndex(fs, jshScanRootsFromPath(pathValue));
+  const listed = withJshCommandCollisions(
+    'skill',
+    formatDiscoveredSkills(discovered, 'Discoverable skills'),
+    collisions,
+    { builtinNames: new Set(getCommandNames()) }
+  );
+  return { ...listed, exitCode: 0 };
 }
 
 /**
@@ -77,7 +86,7 @@ Examples:
     try {
       switch (subcommand) {
         case 'list':
-          return handleSkillList(args, fs, skills);
+          return handleSkillList(args, fs, skills, _ctx.env.get('PATH'));
 
         case 'info': {
           const name = args[1];
