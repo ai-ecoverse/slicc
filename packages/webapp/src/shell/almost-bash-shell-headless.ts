@@ -861,7 +861,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private async doSyncJshCommands(): Promise<void> {
     try {
-      const jshMap = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
+      const jshIndex = await this.scriptCatalog.getJshIndex(this.currentScanRoots());
+      const jshMap = jshIndex.commands;
+      for (const collision of jshIndex.collisions) {
+        log.warn(
+          `jsh command '${collision.name}' is provided by more than one skill; using ${collision.winnerPath} (${collision.reason}), shadowed ${collision.shadowedPaths.join(', ')}`
+        );
+      }
       const wfMap = await this.getFilteredWorkflowCommands();
 
       for (const [name, scriptPath] of jshMap) {

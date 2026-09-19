@@ -21,6 +21,9 @@ struct ChatView: View {
     
     
     @StateObject var transcriptActions = TranscriptActionModel()
+    
+    
+    @StateObject private var threadList = ThreadListModel()
     @State private var showSettings = false
     @State private var hasAppeared = false
     
@@ -54,15 +57,34 @@ struct ChatView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            switch ShellLayout.mode(
+            let mode = ShellLayout.mode(
                 horizontalSizeClass: horizontalSizeClass,
-                availableWidth: geometry.size.width
-            ) {
-            case .compactOverlay:
-                compactShell
-            case .regularSplit:
-                regularShell
+                availableWidth: geometry.size.width)
+            let threadListPresentation = ThreadListLayout.presentation(
+                shellMode: mode, availableWidth: geometry.size.width,
+                workbenchOpen: presentation.activeSurface != nil)
+            Group {
+                switch mode {
+                case .compactOverlay:
+                    compactShell
+                case .regularSplit:
+                    regularShell(threadListPresentation: threadListPresentation)
+                }
             }
+            .overlay {
+                if threadListPresentation == .overlay, showsThreadList {
+                    ThreadListOverlay(
+                        edge: threadListEdge, availableWidth: geometry.size.width)
+                }
+            }
+            .environment(\.threadListPresentation, threadListPresentation)
+            .onChange(of: threadListPresentation) { _, shape in
+                threadList.presentationChanged(to: shape)
+            }
+        }
+        .environmentObject(threadList)
+        .onReceive(appState.$scoops.combineLatest(appState.$selectedScoopJid)) { scoops, selected in
+            threadList.sync(scoops: scoops, selectedJid: selected)
         }
         
         
@@ -125,6 +147,8 @@ struct ChatView: View {
                 
                 
                 scheduleConnectionBlip()
+                UITestHooks.scheduleThreadListTurns(into: appState)
+                if UITestHooks.opensThreadList { threadList.isOverlayOpen = true }
                 if UITestHooks.scriptCompletedTurn(into: appState) {
                     return
                 }
@@ -574,7 +598,7 @@ struct ChatView: View {
     
     
     
-    private var regularShell: some View {
+    private func regularShell(threadListPresentation: ThreadListPresentation) -> some View {
         HStack(spacing: 0) {
             if leftHandedDock {
                 if !isBrowserFullScreen {
@@ -583,6 +607,9 @@ struct ChatView: View {
                 regularWorkbench
             }
 
+            if !leftHandedDock, showsThreadSidebar(threadListPresentation) {
+                ThreadListSidebar(edge: .leading)
+            }
             conversation
                 .frame(maxWidth: isBrowserFullScreen ? 0 : .infinity)
                 .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
@@ -590,6 +617,10 @@ struct ChatView: View {
                 .allowsHitTesting(!isBrowserFullScreen)
                 .accessibilityHidden(isBrowserFullScreen)
                 .clipped()
+
+            if leftHandedDock, showsThreadSidebar(threadListPresentation) {
+                ThreadListSidebar(edge: .trailing)
+            }
 
             if !leftHandedDock {
                 regularWorkbench
@@ -665,6 +696,24 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+    }
+
+    
+    
+    private var threadListEdge: HorizontalEdge {
+        leftHandedDock ? .trailing : .leading
+    }
+
+    
+    
+    
+    private var showsThreadList: Bool {
+        appState.scoops.count > 1 && appState.openFrozen == nil && !isBrowserFullScreen
+            && !fixtureMode
+    }
+
+    private func showsThreadSidebar(_ shape: ThreadListPresentation) -> Bool {
+        shape == .sidebar && showsThreadList && !threadList.isSidebarCollapsed
     }
 
     private var dockRail: some View {
@@ -1150,82 +1199,6 @@ private func arbitratedScoopSwipeGesture(
 
 
 
-struct ScoopSwitcher: View {
-    @EnvironmentObject var appState: AppState
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        if appState.scoops.count > 1 {
-            Menu {
-                ForEach(appState.scoops) { scoop in
-                    Button {
-                        appState.selectScoop(jid: scoop.jid)
-                    } label: {
-                        Label(
-                            menuTitle(for: scoop),
-                            systemImage: scoop.jid == appState.selectedScoopJid
-                                ? "checkmark" : "circle")
-                    }
-                    .accessibilityLabel(menuTitle(for: scoop))
-                    .accessibilityIdentifier("scoop-switch-\(scoop.jid)")
-                }
-            } label: {
-                identityLabel
-            }
-            .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
-            .accessibilityHint("Switch scoop")
-            .accessibilityIdentifier("scoop-switcher")
-            
-            
-            .sliccEntityAnnotation(SliccConversationEntity.self, id: appState.selectedScoopJid)
-        } else {
-            identityLabel
-                .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
-                .accessibilityIdentifier("scoop-switcher")
-                .sliccEntityAnnotation(
-                    SliccConversationEntity.self, id: appState.selectedScoopJid)
-        }
-    }
-
-    
-    
-    
-    
-    private var identityLabel: some View {
-        HStack(spacing: 5) {
-            Text(appState.selectedScoop?.assistantLabel ?? "Sliccy")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(palette.ink)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 120, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-            if appState.scoops.count > 1 {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(palette.ink.opacity(0.5))
-            }
-        }
-    }
-
-    
-    
-    
-    private func menuTitle(for scoop: ScoopSummary) -> String {
-        let kind = scoop.isRootUnit ? "cone" : "scoop"
-        let status = scoop.status.accessibilityPhrase(label: scoop.assistantLabel)
-        return scoop.jid == appState.leaderActiveScoopJid
-            ? "\(status) · \(kind) · active"
-            : "\(status) · \(kind)"
-    }
-}
-
-
-
-
-
-
-
 struct SessionControlsCluster: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -1308,23 +1281,6 @@ struct SessionControlsCluster: View {
         }
         .accessibilityLabel("Past Sessions")
         .accessibilityIdentifier("frozen-rail-button")
-    }
-}
-
-
-
-private struct ScoopStatusAvatar: View {
-    let avatar: SliccAgentAvatarGeometry
-    let accessibilityLabel: String
-    var expression: AvatarExpressionEngine?
-
-    var body: some View {
-        ZStack {
-            SliccAgentAvatarView(avatar: avatar, expression: expression)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityIdentifier("scoop-avatar")
     }
 }
 

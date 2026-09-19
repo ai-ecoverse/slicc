@@ -1,4 +1,4 @@
-import type { CommandContext } from 'just-bash';
+import { Bash, type CommandContext } from 'just-bash';
 import { expect, test, vi } from 'vitest';
 import {
   clampSyncExecTimeout,
@@ -131,6 +131,51 @@ test('a caller env replaces the child environment', async () => {
   });
   expect(calls[0]?.opts.env).toEqual({ MARKER: 'x' });
   expect(calls[0]?.opts.replaceEnv).toBe(true);
+});
+
+test('a live just-bash exec keeps env on a direct binary and on sh/bash -c (#3285)', async () => {
+  const bash = new Bash({ cwd: '/' });
+  const token = mintSyncFsToken({
+    fs: bash.fs as CommandContext['fs'],
+    exec: ((cmd, opts) => bash.exec(cmd, opts)) as CommandContext['exec'],
+    cwd: '/',
+  });
+  try {
+    const env = { MARKER: 'YES' };
+    const direct = await dispatchSyncExec({
+      token,
+      channel: SYNC_EXEC_CHANNEL,
+      command: ['printenv', 'MARKER'],
+      env,
+    });
+    expect(direct.ok).toBe(true);
+    if (direct.ok && direct.kind === 'json') {
+      expect((direct.json as { stdout: string }).stdout.trim()).toBe('YES');
+    }
+    const sh = await dispatchSyncExec({
+      token,
+      channel: SYNC_EXEC_CHANNEL,
+      command: ['sh', '-c', 'printenv MARKER'],
+      env,
+    });
+    expect(sh.ok).toBe(true);
+    if (sh.ok && sh.kind === 'json') {
+      expect((sh.json as { stdout: string; exitCode: number }).exitCode).toBe(0);
+      expect((sh.json as { stdout: string }).stdout.trim()).toBe('YES');
+    }
+    const nested = await dispatchSyncExec({
+      token,
+      channel: SYNC_EXEC_CHANNEL,
+      command: ['bash', '-c', 'echo [$MARKER]'],
+      env,
+    });
+    expect(nested.ok).toBe(true);
+    if (nested.ok && nested.kind === 'json') {
+      expect((nested.json as { stdout: string }).stdout.trim()).toBe('[YES]');
+    }
+  } finally {
+    revokeSyncFsToken(token);
+  }
 });
 
 test('a missing cwd fails closed with ENOENT and never reaches exec', async () => {

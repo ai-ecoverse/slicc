@@ -499,7 +499,8 @@ async function dispatchSubcommand(
   args: string[],
   fs: VirtualFS,
   fetchFn: SecureFetch,
-  browser?: TabsBrowser
+  browser?: TabsBrowser,
+  pathValue?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
   switch (args[0]) {
     case 'tabs':
@@ -510,7 +511,7 @@ async function dispatchSubcommand(
     case 'upgrade':
       return handleUpskillUpdate(args.slice(1), fs, fetchFn);
     case 'list':
-      return handleUpskillList(args.slice(1), fs, fetchFn);
+      return handleUpskillList(args.slice(1), fs, fetchFn, pathValue);
     case 'info':
     case 'read':
       return handleUpskillInfoRead(args[0], args[1], fs);
@@ -531,7 +532,7 @@ export function createUpskillCommand(
       return upskillHelp();
     }
 
-    const subcommand = await dispatchSubcommand(args, fs, fetchFn, browser);
+    const subcommand = await dispatchSubcommand(args, fs, fetchFn, browser, _ctx.env.get('PATH'));
     if (subcommand) return subcommand;
 
     const parsed = parseUpskillFlags(args);

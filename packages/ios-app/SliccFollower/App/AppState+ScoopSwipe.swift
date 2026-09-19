@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 
 
@@ -7,7 +8,13 @@ import Foundation
 
 extension AppState {
     
+    private var swipeOrder: [ScoopSummary] {
+        ThreadListOrder.entries(scoops).map(\.scoop)
+    }
+
+    
     func swipeToNextScoop() {
+        let scoops = swipeOrder
         guard !scoops.isEmpty else { return }
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
         let nextIndex = (currentIndex + 1) % scoops.count
@@ -17,6 +24,7 @@ extension AppState {
     
     
     func swipeToPreviousScoop() {
+        let scoops = swipeOrder
         guard !scoops.isEmpty else { return }
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
         if currentIndex > 0 {

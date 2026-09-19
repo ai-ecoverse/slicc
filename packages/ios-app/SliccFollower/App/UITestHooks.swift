@@ -86,6 +86,9 @@ import UIKit
         
         @MainActor
         static func applyUnitRoleFixture(into appState: AppState) -> Bool {
+            
+            
+            if applyThreadListFixture(into: appState) { return true }
             guard let variant = UserDefaults.standard.string(forKey: "uiTestUnitRoleFixture"),
                 !variant.isEmpty, variant != "NO"
             else {

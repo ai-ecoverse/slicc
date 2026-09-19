@@ -145,9 +145,10 @@ final class ScoopStatusUITests: XCTestCase {
     }
 
     private func select(jid: String, in app: XCUIApplication) {
-        let switcher = app.buttons["scoop-switcher"]
-        switcher.tap()
+        
+        
         let option = app.buttons["scoop-switch-\(jid)"]
+        if !option.exists { app.buttons["scoop-switcher"].tap() }
         XCTAssertTrue(option.waitForExistence(timeout: 10), "Fixture scoop \(jid) should be selectable")
         option.tap()
     }
