@@ -6,10 +6,12 @@ import XCTest
 final class ThreadSyncPlannerTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_000)
 
-    private func unit(_ jid: String, parent: String? = nil, state: String = "idle") -> ScoopSummary {
+    private func unit(
+        _ jid: String, parent: String? = nil, state: String = "idle", turns: Double? = nil
+    ) -> ScoopSummary {
         ScoopSummary(
             jid: jid, name: jid, folder: "/\(jid)", isCone: parent == nil, assistantLabel: jid,
-            trigger: nil, state: state, fill: 10, parentId: parent)
+            trigger: nil, state: state, fill: 10, parentId: parent, turns: turns)
     }
 
     private var roster: [ScoopSummary] {
@@ -65,6 +67,53 @@ final class ThreadSyncPlannerTests: XCTestCase {
 
         planner.rosterChanged(from: working, to: roster, selectedJid: "a")
         XCTAssertEqual(planner.next(roster: roster, selectedJid: "a", leaderVersion: 9, now: start), "b")
+    }
+
+    /// The turn started and ended inside one coalescing window: both rosters
+    /// say `idle`, and only the counter moved.
+    func testATurnHiddenByCoalescingIsCaughtByTheCounter() {
+        var planner = ThreadSyncPlanner()
+        planner.snapshotArrived(for: "b")
+        let before = [unit("a"), unit("b", turns: 3)]
+        planner.rosterChanged(from: [], to: before, selectedJid: "a")
+        XCTAssertTrue(planner.synced.contains("b"), "the first sighting is a baseline, not news")
+
+        planner.rosterChanged(from: before, to: [unit("a"), unit("b", turns: 4)], selectedJid: "a")
+        XCTAssertFalse(planner.synced.contains("b"))
+    }
+
+    func testAnUnchangedCounterKeepsTheBuffer() {
+        var planner = ThreadSyncPlanner()
+        planner.snapshotArrived(for: "b")
+        let roster = [unit("a"), unit("b", turns: 3)]
+        planner.rosterChanged(from: [], to: roster, selectedJid: "a")
+        planner.rosterChanged(from: roster, to: roster, selectedJid: "a")
+        XCTAssertTrue(planner.synced.contains("b"))
+    }
+
+    /// A leader reload restarts every counter at 0: refetch, then measure
+    /// from the new value rather than waiting for it to pass the old one.
+    func testADecreasingCounterRebaselinesAndRefetches() {
+        var planner = ThreadSyncPlanner()
+        planner.snapshotArrived(for: "b")
+        let old = [unit("a"), unit("b", turns: 7)]
+        planner.rosterChanged(from: [], to: old, selectedJid: "a")
+        let reloaded = [unit("a"), unit("b", turns: 0)]
+        planner.rosterChanged(from: old, to: reloaded, selectedJid: "a")
+        XCTAssertFalse(planner.synced.contains("b"))
+
+        planner.snapshotArrived(for: "b")
+        planner.rosterChanged(from: reloaded, to: [unit("a"), unit("b", turns: 1)], selectedJid: "a")
+        XCTAssertFalse(planner.synced.contains("b"), "the new baseline is 0, so 1 is a turn")
+    }
+
+    func testTheSelectedUnitsCounterDoesNotInvalidateIt() {
+        var planner = ThreadSyncPlanner()
+        planner.snapshotArrived(for: "b")
+        planner.rosterChanged(from: [], to: [unit("b", turns: 1)], selectedJid: "b")
+        planner.rosterChanged(
+            from: [unit("b", turns: 1)], to: [unit("b", turns: 2)], selectedJid: "b")
+        XCTAssertTrue(planner.synced.contains("b"))
     }
 
     func testTheSelectedUnitsOwnTurnDoesNotInvalidateIt() {

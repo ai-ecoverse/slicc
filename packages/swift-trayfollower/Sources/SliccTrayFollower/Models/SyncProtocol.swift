@@ -229,6 +229,11 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let activity: String?
     /// Context-window fullness on the browser agent tabs' 0...100 scale.
     public let fill: Double?
+    /// Completed-turn counter (#2948), read as a VERSION: an increase since
+    /// the last value seen is that many finished turns, a decrease is a leader
+    /// reload. Survives the leader's 50ms roster coalescing, which a
+    /// `working → idle` edge does not. `nil` from leaders that predate it.
+    public let turns: Double?
     /// The model THIS unit runs on (#2310). Model selection is per cone on
     /// the leader's work-unit record, so a follower shows (and can change)
     /// the model of the cone it is looking at. `nil` from leaders that
@@ -253,6 +258,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         activity: String? = nil,
         fill: Double? = nil,
         parentId: String? = nil,
+        turns: Double? = nil,
         model: ScoopSummaryModel? = nil
     ) {
         self.jid = jid
@@ -265,6 +271,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         self.state = state
         self.activity = activity
         self.fill = fill
+        self.turns = turns
         self.model = model
     }
 }

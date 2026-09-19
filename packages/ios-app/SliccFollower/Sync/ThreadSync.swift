@@ -33,6 +33,9 @@ struct ThreadSyncPlanner {
     private(set) var synced: Set<String> = []
     private var abandoned: Set<String> = []
     private(set) var inFlight: (jid: String, since: Date)?
+    /// The last `ScoopSummary.turns` seen per unit — the baseline a change is
+    /// measured against.
+    private var turnsSeen: [String: Double] = [:]
 
     /// A new connection: the leader may have cleared, frozen or dropped any
     /// unit meanwhile. The buffers stay (they still paint instantly) but every
@@ -41,6 +44,7 @@ struct ThreadSyncPlanner {
         synced.removeAll()
         abandoned.removeAll()
         inFlight = nil
+        turnsSeen.removeAll()
     }
 
     /// A snapshot for `jid` landed, whoever asked for it.
@@ -51,20 +55,29 @@ struct ThreadSyncPlanner {
 
     /// Units that finished a turn off screen since `previous`. The leader
     /// streams only the unit it is displaying and the units a follower has
-    /// selected, so every other buffer goes stale the moment its unit works —
-    /// and the roster's `working → not working` edge is the one signal that
-    /// says so.
+    /// selected, so every other buffer goes stale the moment its unit works.
+    ///
+    /// Two signals say so. `turns` is the reliable one: a turn that starts and
+    /// ends inside one 50ms coalescing window (or whose `working` frame was
+    /// lost) still moves the counter. A decrease is a leader reload, which
+    /// re-baselines and refetches too. The `working → not working` edge is the
+    /// fallback for leaders that do not send `turns`.
     mutating func rosterChanged(
         from previous: [ScoopSummary], to current: [ScoopSummary], selectedJid: String?
     ) {
         let wasWorking = Set(previous.filter { $0.state == "working" }.map(\.jid))
         let present = Set(current.map(\.jid))
-        for unit in current
-        where unit.jid != selectedJid && unit.state != "working" && wasWorking.contains(unit.jid) {
-            synced.remove(unit.jid)
+        for unit in current {
+            var finishedATurn = unit.state != "working" && wasWorking.contains(unit.jid)
+            if let turns = unit.turns {
+                if let seen = turnsSeen[unit.jid], seen != turns { finishedATurn = true }
+                turnsSeen[unit.jid] = turns
+            }
+            if finishedATurn && unit.jid != selectedJid { synced.remove(unit.jid) }
         }
         synced.formIntersection(present)
         abandoned.formIntersection(present)
+        turnsSeen = turnsSeen.filter { present.contains($0.key) }
     }
 
     /// The unit to request now, or `nil` when there is nothing to do or a

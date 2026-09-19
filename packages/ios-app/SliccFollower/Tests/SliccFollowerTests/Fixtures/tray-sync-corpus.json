@@ -1524,11 +1524,11 @@
         "name",
         "parentId",
         "state",
-        "trigger"
+        "trigger",
+        "turns"
       ],
       "dropped": [
-        "addedAt",
-        "turns"
+        "addedAt"
       ],
       "sample": {
         "jid": "reviewer",
