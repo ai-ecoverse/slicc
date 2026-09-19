@@ -12,6 +12,8 @@ struct ThreadListColumn: View {
     /// False while the slide-over is being dragged away: the touch that
     /// started on a row lifts over it, and a dismissal must not be a pick.
     var picksEnabled = true
+    /// The side the column sits on, so the fold glyph points at its own edge.
+    var edge: HorizontalEdge = .leading
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var threadList: ThreadListModel
     @Environment(\.palette) private var palette
@@ -69,7 +71,7 @@ struct ThreadListColumn: View {
                     threadList.dismiss(in: presentation)
                 }
             } label: {
-                Image(systemName: presentation == .sidebar ? "sidebar.left" : "xmark")
+                Image(systemName: ThreadListLayout.dismissGlyph(presentation, onTrailingEdge: edge == .trailing))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(palette.ink.opacity(0.6))
                     .frame(width: 36, height: 36)
@@ -276,7 +278,7 @@ struct ThreadListSidebar: View {
     var body: some View {
         HStack(spacing: 0) {
             if edge == .trailing { Divider() }
-            ThreadListColumn(presentation: .sidebar)
+            ThreadListColumn(presentation: .sidebar, edge: edge)
                 .frame(width: ThreadListLayout.sidebarWidth)
             if edge == .leading { Divider() }
         }

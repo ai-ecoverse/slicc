@@ -248,6 +248,13 @@ enum ThreadListPresentation: Equatable, Sendable {
 /// shrinks the width under us; both land on the right shape here.
 enum ThreadListLayout {
     static let sidebarWidth: CGFloat = 280
+
+    /// The header's dismiss control: a sidebar folds toward the edge it sits
+    /// on (trailing under `leftHandedDock`); a slide-over closes.
+    static func dismissGlyph(_ presentation: ThreadListPresentation, onTrailingEdge: Bool) -> String {
+        guard presentation == .sidebar else { return "xmark" }
+        return onTrailingEdge ? "sidebar.right" : "sidebar.left"
+    }
     static let overlayMaxWidth: CGFloat = 320
     /// The dock rail's fixed width (`DockRail`).
     static let railWidth: CGFloat = 48

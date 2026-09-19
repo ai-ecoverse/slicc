@@ -167,6 +167,12 @@ final class ThreadUnreadLedgerTests: XCTestCase {
 }
 
 final class ThreadListLayoutTests: XCTestCase {
+    func testTheSidebarFoldGlyphPointsAtItsOwnEdge() {
+        XCTAssertEqual(ThreadListLayout.dismissGlyph(.sidebar, onTrailingEdge: false), "sidebar.left")
+        XCTAssertEqual(ThreadListLayout.dismissGlyph(.sidebar, onTrailingEdge: true), "sidebar.right")
+        XCTAssertEqual(ThreadListLayout.dismissGlyph(.overlay, onTrailingEdge: true), "xmark")
+    }
+
     func testCompactIsAlwaysAnOverlay() {
         XCTAssertEqual(
             ThreadListLayout.presentation(
