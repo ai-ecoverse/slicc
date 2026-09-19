@@ -74,12 +74,10 @@ struct InputBar: View {
     }
 
     var body: some View {
+        // No band and no separator: the composer FLOATS over the transcript as
+        // glass pills (see `floatingGlass`). An opaque band also stopped at the
+        // safe area, so the canvas showed through as a light strip beneath it.
         VStack(spacing: 0) {
-            // Top separator
-            Rectangle()
-                .fill(palette.line)
-                .frame(height: 0.5)
-
             if !stagedAttachments.isEmpty {
                 StagedAttachmentsRow(attachments: stagedAttachments) { removed in
                     stagedAttachments.removeAll { $0.id == removed.id }
@@ -97,7 +95,6 @@ struct InputBar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-        .background(palette.surface)
         // Deliberately NOT `.disabled(!isComposable)`. Disabling this band
         // disables the `TextEditor` inside it, and a disabled editor resigns
         // first responder — so a connection blip pulled the keyboard out from
@@ -320,12 +317,8 @@ struct InputBar: View {
                 // tap restores focus through the `quickTap` event.
                 .allowsHitTesting(!pttArmed)
         }
-        .background(palette.field)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(palette.ink.opacity(0.12), lineWidth: 0.5)
-        )
+        .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+        .floatingGlass(in: RoundedRectangle(cornerRadius: 19, style: .continuous))
         .overlay {
             // Hold-to-talk arms ONLY from an empty composer (web parity:
             // once text is present a press is editing it, so the surface
