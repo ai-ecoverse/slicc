@@ -102,15 +102,31 @@ import UIKit
                 isCone: false, assistantLabel: "reviewer", trigger: nil, state: "working",
                 fill: 40, parentId: "fixture-cone")
             appState.scoops = [cone, scoop]
+            // `-uiTestTranscriptRepeat <n>` gives the cone a long transcript
+            // beside the scoop's single row: switching between two units of
+            // very different lengths is what blanked a reused scroll view.
+            let repeats = UserDefaults.standard.integer(forKey: "uiTestTranscriptRepeat")
+            let coneMessages =
+                repeats > 0
+                ? repeatedTranscript(ChatFixture.makeMessages(), times: repeats)
+                : [reply(id: "fixture-cone-reply", text: "Sent the review to a scoop.")]
+            // The scoop then gets a shorter (but still long) one under its own
+            // ids, so the cone's bottom offset lies past the scoop's end.
+            let scoopReply = reply(
+                id: "fixture-scoop-reply",
+                text: "Reviewed 14 files. Two findings, both in the follower.")
+            let scoopMessages =
+                repeats > 0
+                ? repeatedTranscript(ChatFixture.makeMessages(), times: max(repeats / 6, 2))
+                    .map { message in
+                        ChatMessage(
+                            id: "s-\(message.id)", role: message.role, content: message.content,
+                            timestamp: message.timestamp)
+                    } + [scoopReply]
+                : [scoopReply]
             appState.messagesByScoop = [
-                cone.jid: [
-                    reply(id: "fixture-cone-reply", text: "Sent the review to a scoop.")
-                ],
-                scoop.jid: [
-                    reply(
-                        id: "fixture-scoop-reply",
-                        text: "Reviewed 14 files. Two findings, both in the follower.")
-                ],
+                cone.jid: coneMessages,
+                scoop.jid: scoopMessages,
             ]
             let selected = variant == "scoop" ? scoop : cone
             appState.selectedScoopJid = selected.jid
