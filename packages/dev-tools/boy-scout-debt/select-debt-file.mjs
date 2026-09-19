@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 /*
  * Boy Scout Debt Dispatcher — CLI (I/O).
  *
- * Enumerates the six boy-scout debt lists, resolves each entry to a concrete
+ * Enumerates the remaining boy-scout debt lists, resolves each entry to a concrete
  * tracked file, drops files already claimed by an open pull request, picks the
  * smallest lowest-risk remaining candidate, and writes the choice plus the
  * composed fixer brief to `$GITHUB_OUTPUT`. Pure logic lives in `lib.mjs`
@@ -69,7 +69,7 @@ function readJson(path) {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     // A missing or broken baseline degrades to "no debt list for that ratchet"
-    // rather than aborting the run over the other five lists.
+    // rather than aborting the run.
     return null;
   }
 }

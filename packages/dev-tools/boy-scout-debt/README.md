@@ -11,26 +11,17 @@ qualitative debt, this pays down debt the repo already tracks mechanically.
 Layout mirrors `codebase-sins/`: pure logic + CLI + co-located tests run by the
 `dev-tools` vitest project.
 
-## The six debt lists
+## The remaining debt list
 
 Authoritative procedure:
 [`.agents/skills/verifying-before-push/SKILL.md`](../../../.agents/skills/verifying-before-push/SKILL.md).
 Gate: [`../tools/check-touched-exemptions.mjs`](../tools/check-touched-exemptions.mjs).
 
-| Category id             | Source                                                                                                                                                                  |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `function-size`         | `biome.json` override → `complexity.noExcessiveLinesPerFunction: "off"`                                                                                                 |
-| `cognitive-complexity`  | `biome.json` override → `complexity.noExcessiveCognitiveComplexity: "off"`                                                                                              |
-| `floating-promise`      | `biome.json` override → `nursery.noFloatingPromises: "off"`                                                                                                             |
-| `misused-promise`       | `biome.json` override → `nursery.noMisusedPromises: "off"`                                                                                                              |
-| `layer-back-edge`       | [`../tools/layer-back-edge-baseline.json`](../tools/layer-back-edge-baseline.json) (+ `layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`) |
-| `record-string-unknown` | [`../tools/record-string-unknown-baseline.json`](../tools/record-string-unknown-baseline.json)                                                                          |
+| Category id       | Source                                                                                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `layer-back-edge` | [`../tools/layer-back-edge-baseline.json`](../tools/layer-back-edge-baseline.json) (+ `layer-back-edge-baseline-{node-server,chrome-extension,cloudflare-worker}.json`) |
 
-Biome globs are parsed with `extractExemptionGlobsFor` from
-[`../tools/size-exemption-lib.mjs`](../tools/size-exemption-lib.mjs), which by
-construction matches only overrides whose **sole** rule customization is the one
-named rule set to `"off"`. The multi-rule test-file-wide override is blanket
-policy, not boy-scout debt, and is therefore never a candidate.
+Paid down to zero and **retired from this dispatcher** (the empty ratchets stay in `check-touched-exemptions.mjs` so they cannot grow again): `function-size`, `cognitive-complexity`, `floating-promise`, `misused-promise`, `record-string-unknown`.
 
 ## Selection rules
 
@@ -53,15 +44,15 @@ policy, not boy-scout debt, and is therefore never a candidate.
 
 ## Files
 
-- `lib.mjs` — pure logic: `DEBT_CATEGORIES` (the six descriptors, each carrying
-  the exact remediation instruction), `resolveGlobToSingleFile`, `buildDebtMap`,
-  `isExcludedPath`, `scoreCandidate`, `buildCandidates`, `slugForFile`,
-  `selectDebtFile`, and `buildPrompt`. No I/O; unit-tested in `lib.test.mjs`.
-- `select-debt-file.mjs` — CLI (I/O only): reads `biome.json` and both
-  baselines, resolves globs against `git ls-files`, stats file sizes, fetches
-  the claimed-file set from open PRs over the REST API, then writes
-  `has_candidate`, `file`, `categories`, `slug`, and the multi-line `prompt` to
-  `$GITHUB_OUTPUT` (plus a job-summary table).
+- `lib.mjs` — pure logic: `DEBT_CATEGORIES` / `RETIRED_DEBT_CATEGORIES`,
+  `resolveGlobToSingleFile`, `buildDebtMap`, `isExcludedPath`, `scoreCandidate`,
+  `buildCandidates`, `slugForFile`, `selectDebtFile`, and `buildPrompt`. No I/O;
+  unit-tested in `lib.test.mjs`.
+- `select-debt-file.mjs` — CLI (I/O only): reads the layer-back-edge baselines,
+  resolves keys against `git ls-files`, stats file sizes, fetches the
+  claimed-file set from open PRs over the REST API, then writes `has_candidate`,
+  `file`, `categories`, `slug`, and the multi-line `prompt` to `$GITHUB_OUTPUT`
+  (plus a job-summary table).
 
 Driven by
 [`.github/workflows/boy-scout-debt-dispatcher.yml`](../../../.github/workflows/boy-scout-debt-dispatcher.yml)

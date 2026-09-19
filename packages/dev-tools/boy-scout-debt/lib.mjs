@@ -5,24 +5,19 @@
  * lists and hands a focused refactor brief to claude-code-action, which pays
  * that file's debt down and opens the PR itself.
  *
- * The six debt lists (authoritative procedure:
+ * The remaining debt list (authoritative procedure:
  * `.agents/skills/verifying-before-push/SKILL.md`, enforced by
- * `packages/dev-tools/tools/check-touched-exemptions.mjs`):
- *   - four single-rule `biome.json` exemption overrides, and
- *   - the two ratchet baselines (layer back-edges, `Record<string, unknown>`).
+ * `packages/dev-tools/tools/check-touched-exemptions.mjs`) is layer-stack
+ * back-edges. The four biome exemption lists and `Record<string, unknown>`
+ * paid down to zero entries and are retired from this dispatcher; the
+ * empty ratchets still live in `check-touched-exemptions.mjs` /
+ * `check-record-string-unknown.mjs` so nobody can grow them again.
  *
  * This module is intentionally free of I/O so it can be unit-tested in
  * isolation — the `git`/REST calls and `$GITHUB_OUTPUT` writes live in
  * `select-debt-file.mjs`. Mirrors `packages/dev-tools/codebase-sins/sins.mjs`.
  */
-import {
-  COMPLEXITY_RULE_KEY,
-  extractExemptionGlobsFor,
-  FLOATING_PROMISE_RULE_KEY,
-  globToRegex,
-  MISUSED_PROMISE_RULE_KEY,
-  SIZE_RULE_KEY,
-} from '../tools/size-exemption-lib.mjs';
+import { globToRegex } from '../tools/size-exemption-lib.mjs';
 
 /** Branch prefix every dispatched cleanup PR is authored on. */
 export const BRANCH_PREFIX = 'automation/boy-scout';
@@ -31,70 +26,27 @@ export const BRANCH_PREFIX = 'automation/boy-scout';
 export const PR_LABEL = 'boy-scout-debt';
 
 /**
- * The six debt categories, in report order. `kind` selects how a category's
- * file list is derived: `biome` categories are parsed out of `biome.json`
- * `overrides` (via `extractExemptionGlobsFor`, which by construction ignores
- * the multi-rule test-file-wide block — that is policy, not debt), `baseline`
- * categories come from the two ratchet baseline JSON maps.
- *
+ * Categories that paid down to zero entries and are no longer dispatched.
+ * The empty biome overrides / `record-string-unknown-baseline.json` remain
+ * as one-way ratchets in `check-touched-exemptions.mjs`.
+ * @type {ReadonlyArray<string>}
+ */
+export const RETIRED_DEBT_CATEGORIES = [
+  'function-size',
+  'cognitive-complexity',
+  'floating-promise',
+  'misused-promise',
+  'record-string-unknown',
+];
+
+/**
+ * Active debt categories, in report order. Only lists that still have (or
+ * can still grow via a new package baseline) per-file entries are dispatched.
  * `remediation` is the exact instruction handed to the fixer for that
  * category; it is the only place those commands are spelled out.
- * @type {ReadonlyArray<{id: string, label: string, source: string, kind: 'biome'|'baseline', ruleGroup?: string, ruleKey?: string, baseline?: 'layer'|'record', remediation: string}>}
+ * @type {ReadonlyArray<{id: string, label: string, source: string, kind: 'baseline', baseline: 'layer', remediation: string}>}
  */
 export const DEBT_CATEGORIES = [
-  {
-    id: 'function-size',
-    label: 'over-long functions',
-    source: 'biome.json `overrides` → complexity.noExcessiveLinesPerFunction = off',
-    kind: 'biome',
-    ruleGroup: 'complexity',
-    ruleKey: SIZE_RULE_KEY,
-    remediation:
-      'Split the over-long functions until every function in the file is under the ' +
-      'configured biome cap (complexity.noExcessiveLinesPerFunction.maxLines, currently ' +
-      '150 lines), then DELETE the file from the `includes` array of the ' +
-      'single-rule `complexity.noExcessiveLinesPerFunction: "off"` override in biome.json.',
-  },
-  {
-    id: 'cognitive-complexity',
-    label: 'excessive cognitive complexity',
-    source: 'biome.json `overrides` → complexity.noExcessiveCognitiveComplexity = off',
-    kind: 'biome',
-    ruleGroup: 'complexity',
-    ruleKey: COMPLEXITY_RULE_KEY,
-    remediation:
-      "Reduce every function's cognitive complexity under the configured biome cap " +
-      '(complexity.noExcessiveCognitiveComplexity.maxAllowedComplexity, currently 25) by ' +
-      'extracting helpers and flattening nesting, then DELETE the file from the `includes` ' +
-      'array of the single-rule `complexity.noExcessiveCognitiveComplexity: "off"` override ' +
-      'in biome.json.',
-  },
-  {
-    id: 'floating-promise',
-    label: 'floating promises',
-    source: 'biome.json `overrides` → nursery.noFloatingPromises = off',
-    kind: 'biome',
-    ruleGroup: 'nursery',
-    ruleKey: FLOATING_PROMISE_RULE_KEY,
-    remediation:
-      'Await, return, or explicitly handle every promise in the file (an intentional ' +
-      'fire-and-forget gets a real `.catch()`, never a bare `void`-and-forget that drops ' +
-      'the error), then DELETE the file from the `includes` array of the single-rule ' +
-      '`nursery.noFloatingPromises: "off"` override in biome.json.',
-  },
-  {
-    id: 'misused-promise',
-    label: 'misused promises',
-    source: 'biome.json `overrides` → nursery.noMisusedPromises = off',
-    kind: 'biome',
-    ruleGroup: 'nursery',
-    ruleKey: MISUSED_PROMISE_RULE_KEY,
-    remediation:
-      'Keep promises out of synchronous callback and conditional positions — adapt the ' +
-      'callback or the condition so the async work is awaited where it belongs — then ' +
-      'DELETE the file from the `includes` array of the single-rule ' +
-      '`nursery.noMisusedPromises: "off"` override in biome.json.',
-  },
   {
     id: 'layer-back-edge',
     label: 'layer-stack back-edges',
@@ -111,21 +63,6 @@ export const DEBT_CATEGORIES = [
       'docs/review-patterns.md § Layer-stack import direction), then ratchet the baseline with ' +
       'the supported command: `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`. ' +
       'Never hand-edit layer-back-edge-baseline.json or the per-package baseline files.',
-  },
-  {
-    id: 'record-string-unknown',
-    label: 'untyped string-keyed bags',
-    source: 'packages/dev-tools/tools/record-string-unknown-baseline.json',
-    kind: 'baseline',
-    baseline: 'record',
-    remediation:
-      'Replace every `Record<string, unknown>` in the file with a named type for the shape ' +
-      'you actually accept (see docs/review-patterns.md § Untyped string-keyed bags); only ' +
-      'a genuinely untyped external payload may take a ' +
-      '`// biome-ignore lint/plugin: <reason>` line. Then ratchet the baseline with the ' +
-      'supported command: ' +
-      '`node packages/dev-tools/tools/check-record-string-unknown.mjs --update`. ' +
-      'Never hand-edit record-string-unknown-baseline.json.',
   },
 ];
 
@@ -197,16 +134,12 @@ export function resolveGlobToSingleFile(glob, repoFiles) {
  * The raw file list for one debt category, already resolved to concrete
  * tracked files.
  * @param {(typeof DEBT_CATEGORIES)[number]} category
- * @param {{biomeConfig: unknown, layerBaseline: unknown, recordBaseline: unknown, repoFiles: ReadonlySet<string>}} sources
+ * @param {{layerBaseline: unknown, repoFiles: ReadonlySet<string>}} sources
  * @returns {string[]}
  */
 function filesForCategory(category, sources) {
-  const { biomeConfig, layerBaseline, recordBaseline, repoFiles } = sources;
-  if (category.kind === 'biome') {
-    const globs = extractExemptionGlobsFor(biomeConfig, category.ruleKey, category.ruleGroup);
-    return globs.map((g) => resolveGlobToSingleFile(g, repoFiles)).filter((f) => f !== null);
-  }
-  const baseline = category.baseline === 'layer' ? layerBaseline : recordBaseline;
+  const { layerBaseline, repoFiles } = sources;
+  const baseline = category.baseline === 'layer' ? layerBaseline : null;
   const keys = baseline && typeof baseline === 'object' ? Object.keys(baseline) : [];
   // Baseline keys are already concrete repo-relative paths; keep only the ones
   // that still exist, so a stale key never becomes a candidate.
@@ -216,8 +149,8 @@ function filesForCategory(category, sources) {
 /**
  * Build the debt index: every concrete file currently on at least one debt
  * list, mapped to the ids of the categories it appears on (in
- * `DEBT_CATEGORIES` order). Pure — all four data sources arrive pre-parsed.
- * @param {{biomeConfig: unknown, layerBaseline: unknown, recordBaseline: unknown, repoFiles: Iterable<string>}} input
+ * `DEBT_CATEGORIES` order). Pure — sources arrive pre-parsed.
+ * @param {{layerBaseline: unknown, repoFiles: Iterable<string>, biomeConfig?: unknown, recordBaseline?: unknown}} input
  * @returns {Map<string, string[]>}
  */
 export function buildDebtMap({ biomeConfig, layerBaseline, recordBaseline, repoFiles }) {
@@ -327,7 +260,7 @@ export function selectDebtFile({ candidates, claimedFiles, override } = {}) {
   if (pool.length === 0) {
     return {
       candidate: null,
-      reason: 'no tractable per-file debt entries remain on any of the six debt lists',
+      reason: 'no tractable per-file debt entries remain on the boy-scout debt lists',
       claimedSkipped: 0,
       overridden: false,
     };
