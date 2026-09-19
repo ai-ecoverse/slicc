@@ -834,6 +834,8 @@ struct ConversationView: View {
         .navigationTitle(appState.openFrozen?.entry.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
+        // The bar is only a place for the pills to sit; the glass is theirs.
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar {
             if !toolbarSuppressed {
                 identityGroup
@@ -909,7 +911,7 @@ struct ConversationView: View {
         ScoopSwitcher()
             .padding(.horizontal, 12)
             .frame(height: 36)
-            .background(.regularMaterial, in: Capsule())
+            .floatingGlass(in: Capsule(), interactive: true)
     }
 
     private var selectedAvatarView: some View {
@@ -1010,6 +1012,14 @@ struct ConversationView: View {
                 appState.sendSprinkleLick("inline", body: body, targetScoop: target)
             }
         )
+        // One scroll view PER UNIT. Swapping another unit's rows into the same
+        // scroll view kept the old unit's (estimated) content offset, which
+        // for a thread of a different length points past the end of the
+        // content: after a few switches the transcript came back blank until
+        // a nudge forced a layout pass. A new identity starts at the bottom
+        // anchor, which is where a thread you just opened belongs. The
+        // composer sits outside it, so a draft and its focus survive a switch.
+        .id(appState.selectedScoopJid)
         .transcriptSwipeGesture(
             state: horizontalScrollGestureState,
             onAction: handleTranscriptSwipe
@@ -1240,7 +1250,7 @@ struct SessionControlsCluster: View {
                     .frame(width: 36, height: 36)
             }
         }
-        .background(.regularMaterial, in: Capsule())
+        .floatingGlass(in: Capsule())
     }
 
     private var newChatButton: some View {
@@ -1250,12 +1260,15 @@ struct SessionControlsCluster: View {
                 to: nil, from: nil, for: nil)
             showNewSessionDialog = true
         } label: {
-            if appState.newSessionInFlight {
-                ProgressView()
-            } else {
-                Image(systemName: "square.and.pencil")
-                    .foregroundStyle(palette.ink.opacity(0.7))
+            Group {
+                if appState.newSessionInFlight {
+                    ProgressView()
+                } else {
+                    Image(systemName: "square.and.pencil")
+                        .foregroundStyle(palette.ink.opacity(0.7))
+                }
             }
+            .sessionControlHitArea()
         }
         // RAW health, unlike the composer: `requestNewSession` returns without
         // a word when the channel cannot be written, so a button left live
@@ -1278,6 +1291,7 @@ struct SessionControlsCluster: View {
         } label: {
             Image(systemName: "gearshape")
                 .foregroundStyle(palette.ink.opacity(0.7))
+                .sessionControlHitArea()
         }
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("settings-button")
@@ -1289,9 +1303,21 @@ struct SessionControlsCluster: View {
         } label: {
             Image(systemName: "snowflake")
                 .foregroundStyle(palette.ink.opacity(0.7))
+                .sessionControlHitArea()
         }
         .accessibilityLabel("Past Sessions")
         .accessibilityIdentifier("frozen-rail-button")
+    }
+}
+
+extension View {
+    /// The whole 36pt slot is the button, not just its glyph. With the
+    /// cluster in Liquid Glass, iOS 26 left each button only its ~18pt
+    /// glyph, and XCUITest's synthesized tap on the snowflake stopped opening
+    /// the freezer (`FrozenSessionsUITests`) even though a touch still did.
+    /// A full-slot hit area fixes both and is the bigger target anyway.
+    fileprivate func sessionControlHitArea() -> some View {
+        frame(width: 36, height: 36).contentShape(Rectangle())
     }
 }
 

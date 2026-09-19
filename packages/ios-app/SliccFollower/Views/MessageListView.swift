@@ -268,6 +268,9 @@ struct MessageListView: View {
         // acts for a reader who was already at the bottom.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .alignment)
+        // The nav-bar pills and the composer float as glass over the rows;
+        // a soft edge fades the rows under them instead of cutting a band.
+        .scrollEdgeEffectStyle(.soft, for: .vertical)
     }
 
     /// Scroll to the newest content, but never over a reader who has moved
