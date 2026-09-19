@@ -93,11 +93,12 @@ final class ReadOnlyScoopUITests: XCTestCase {
         variant: String = "cone", extraArguments: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += [
-            "-joinUrl", "", "-uiTestConnectionState", "connected",
-            "-uiTestUnitRoleFixture", variant,
-            "-uiTestReduceMotion", "YES",
-        ] + extraArguments
+        app.launchArguments +=
+            [
+                "-joinUrl", "", "-uiTestConnectionState", "connected",
+                "-uiTestUnitRoleFixture", variant,
+                "-uiTestReduceMotion", "YES",
+            ] + extraArguments
         app.launch()
         XCTAssertTrue(app.buttons["scoop-switcher"].waitForExistence(timeout: 60))
         return app
