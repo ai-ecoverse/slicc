@@ -1,5 +1,4 @@
-import { extractBearer } from './preview-routes.js';
-import { jsonResponse } from './shared.js';
+import { extractBearer, jsonResponse } from './shared.js';
 
 const MAX_BODY_BYTES = 8 * 1024;
 const BODY_TIMEOUT_MS = 10_000;

@@ -1,4 +1,3 @@
 {
-  "packages/cloudflare-worker/src/flags.ts": 1,
-  "packages/cloudflare-worker/src/preview-transfer-route.ts": 1
+  "packages/cloudflare-worker/src/flags.ts": 1
 }

@@ -1,70 +1,18 @@
-import {
-  COMPLEXITY_RULE_KEY,
-  extractExemptionGlobsFor,
-  FLOATING_PROMISE_RULE_KEY,
-  globToRegex,
-  MISUSED_PROMISE_RULE_KEY,
-  SIZE_RULE_KEY,
-} from '../tools/size-exemption-lib.mjs';
+import { globToRegex } from '../tools/size-exemption-lib.mjs';
 
 export const BRANCH_PREFIX = 'automation/boy-scout';
 
 export const PR_LABEL = 'boy-scout-debt';
 
+export const RETIRED_DEBT_CATEGORIES = [
+  'function-size',
+  'cognitive-complexity',
+  'floating-promise',
+  'misused-promise',
+  'record-string-unknown',
+];
+
 export const DEBT_CATEGORIES = [
-  {
-    id: 'function-size',
-    label: 'over-long functions',
-    source: 'biome.json `overrides` → complexity.noExcessiveLinesPerFunction = off',
-    kind: 'biome',
-    ruleGroup: 'complexity',
-    ruleKey: SIZE_RULE_KEY,
-    remediation:
-      'Split the over-long functions until every function in the file is under the ' +
-      'configured biome cap (complexity.noExcessiveLinesPerFunction.maxLines, currently ' +
-      '150 lines), then DELETE the file from the `includes` array of the ' +
-      'single-rule `complexity.noExcessiveLinesPerFunction: "off"` override in biome.json.',
-  },
-  {
-    id: 'cognitive-complexity',
-    label: 'excessive cognitive complexity',
-    source: 'biome.json `overrides` → complexity.noExcessiveCognitiveComplexity = off',
-    kind: 'biome',
-    ruleGroup: 'complexity',
-    ruleKey: COMPLEXITY_RULE_KEY,
-    remediation:
-      "Reduce every function's cognitive complexity under the configured biome cap " +
-      '(complexity.noExcessiveCognitiveComplexity.maxAllowedComplexity, currently 25) by ' +
-      'extracting helpers and flattening nesting, then DELETE the file from the `includes` ' +
-      'array of the single-rule `complexity.noExcessiveCognitiveComplexity: "off"` override ' +
-      'in biome.json.',
-  },
-  {
-    id: 'floating-promise',
-    label: 'floating promises',
-    source: 'biome.json `overrides` → nursery.noFloatingPromises = off',
-    kind: 'biome',
-    ruleGroup: 'nursery',
-    ruleKey: FLOATING_PROMISE_RULE_KEY,
-    remediation:
-      'Await, return, or explicitly handle every promise in the file (an intentional ' +
-      'fire-and-forget gets a real `.catch()`, never a bare `void`-and-forget that drops ' +
-      'the error), then DELETE the file from the `includes` array of the single-rule ' +
-      '`nursery.noFloatingPromises: "off"` override in biome.json.',
-  },
-  {
-    id: 'misused-promise',
-    label: 'misused promises',
-    source: 'biome.json `overrides` → nursery.noMisusedPromises = off',
-    kind: 'biome',
-    ruleGroup: 'nursery',
-    ruleKey: MISUSED_PROMISE_RULE_KEY,
-    remediation:
-      'Keep promises out of synchronous callback and conditional positions — adapt the ' +
-      'callback or the condition so the async work is awaited where it belongs — then ' +
-      'DELETE the file from the `includes` array of the single-rule ' +
-      '`nursery.noMisusedPromises: "off"` override in biome.json.',
-  },
   {
     id: 'layer-back-edge',
     label: 'layer-stack back-edges',
@@ -81,21 +29,6 @@ export const DEBT_CATEGORIES = [
       'docs/review-patterns.md § Layer-stack import direction), then ratchet the baseline with ' +
       'the supported command: `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`. ' +
       'Never hand-edit layer-back-edge-baseline.json or the per-package baseline files.',
-  },
-  {
-    id: 'record-string-unknown',
-    label: 'untyped string-keyed bags',
-    source: 'packages/dev-tools/tools/record-string-unknown-baseline.json',
-    kind: 'baseline',
-    baseline: 'record',
-    remediation:
-      'Replace every `Record<string, unknown>` in the file with a named type for the shape ' +
-      'you actually accept (see docs/review-patterns.md § Untyped string-keyed bags); only ' +
-      'a genuinely untyped external payload may take a ' +
-      '`// biome-ignore lint/plugin: <reason>` line. Then ratchet the baseline with the ' +
-      'supported command: ' +
-      '`node packages/dev-tools/tools/check-record-string-unknown.mjs --update`. ' +
-      'Never hand-edit record-string-unknown-baseline.json.',
   },
 ];
 
@@ -137,12 +70,8 @@ export function resolveGlobToSingleFile(glob, repoFiles) {
 }
 
 function filesForCategory(category, sources) {
-  const { biomeConfig, layerBaseline, recordBaseline, repoFiles } = sources;
-  if (category.kind === 'biome') {
-    const globs = extractExemptionGlobsFor(biomeConfig, category.ruleKey, category.ruleGroup);
-    return globs.map((g) => resolveGlobToSingleFile(g, repoFiles)).filter((f) => f !== null);
-  }
-  const baseline = category.baseline === 'layer' ? layerBaseline : recordBaseline;
+  const { layerBaseline, repoFiles } = sources;
+  const baseline = category.baseline === 'layer' ? layerBaseline : null;
   const keys = baseline && typeof baseline === 'object' ? Object.keys(baseline) : [];
 
   return keys.filter((k) => repoFiles.has(k));
@@ -221,7 +150,7 @@ export function selectDebtFile({ candidates, claimedFiles, override } = {}) {
   if (pool.length === 0) {
     return {
       candidate: null,
-      reason: 'no tractable per-file debt entries remain on any of the six debt lists',
+      reason: 'no tractable per-file debt entries remain on the boy-scout debt lists',
       claimedSkipped: 0,
       overridden: false,
     };

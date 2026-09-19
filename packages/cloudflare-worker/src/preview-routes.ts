@@ -2,17 +2,10 @@ import {
   MAX_PREVIEW_FILE_BYTES,
   normalizePreviewArchivePath,
 } from './persistent-preview-storage.js';
-import { jsonResponse } from './shared.js';
+import { extractBearer, jsonResponse } from './shared.js';
 
 interface TrayStub {
   fetch(request: Request): Promise<Response>;
-}
-
-export function extractBearer(request: Request): string | null {
-  const auth = request.headers.get('authorization') ?? '';
-  if (!auth.startsWith('Bearer ')) return null;
-  const token = auth.slice('Bearer '.length).trim();
-  return token.length > 0 ? token : null;
 }
 
 class PreviewUploadTooLargeError extends Error {}

@@ -253,6 +253,13 @@ export function wantsJSON(request: Request): boolean {
   return url.searchParams.get('json') === 'true';
 }
 
+export function extractBearer(request: Request): string | null {
+  const auth = request.headers.get('authorization') ?? '';
+  if (!auth.startsWith('Bearer ')) return null;
+  const token = auth.slice('Bearer '.length).trim();
+  return token.length > 0 ? token : null;
+}
+
 export function jsonResponse(payload: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(payload, null, 2), {
     status,

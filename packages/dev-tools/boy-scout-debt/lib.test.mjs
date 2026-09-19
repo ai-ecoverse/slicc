@@ -8,46 +8,12 @@ import {
   DEBT_CATEGORIES,
   isExcludedPath,
   PR_LABEL,
+  RETIRED_DEBT_CATEGORIES,
   resolveGlobToSingleFile,
   scoreCandidate,
   selectDebtFile,
   slugForFile,
 } from './lib.mjs';
-
-function biomeFixture() {
-  return {
-    overrides: [
-      {
-        includes: ['**/*.test.ts', 'packages/webapp/tests/**'],
-        linter: {
-          rules: {
-            suspicious: { noExplicitAny: 'off' },
-            complexity: {
-              noExcessiveCognitiveComplexity: 'off',
-              noExcessiveLinesPerFunction: 'off',
-            },
-          },
-        },
-      },
-      {
-        includes: ['pkg/a.ts', 'pkg/big.ts'],
-        linter: { rules: { complexity: { noExcessiveLinesPerFunction: 'off' } } },
-      },
-      {
-        includes: ['pkg/a.ts'],
-        linter: { rules: { complexity: { noExcessiveCognitiveComplexity: 'off' } } },
-      },
-      {
-        includes: ['pkg/b.ts', 'pkg/**/*.gen.ts'],
-        linter: { rules: { nursery: { noFloatingPromises: 'off' } } },
-      },
-      {
-        includes: ['pkg/c.ts'],
-        linter: { rules: { nursery: { noMisusedPromises: 'off' } } },
-      },
-    ],
-  };
-}
 
 const REPO_FILES = [
   'pkg/a.ts',
@@ -65,39 +31,39 @@ const REPO_FILES = [
 
 function debtMapFixture(overrides = {}) {
   return buildDebtMap({
-    biomeConfig: biomeFixture(),
-    layerBaseline: { 'pkg/a.ts': 2, 'pkg/gone.ts': 1 },
-    recordBaseline: { 'pkg/a.ts': 5, 'pkg/only.ts': 1 },
+    layerBaseline: { 'pkg/a.ts': 2, 'pkg/c.ts': 1, 'pkg/gone.ts': 1 },
     repoFiles: REPO_FILES,
     ...overrides,
   });
 }
 
 describe('DEBT_CATEGORIES', () => {
-  it('describes all six debt lists with a source and a remediation', () => {
-    expect(DEBT_CATEGORIES).toHaveLength(6);
-    expect(DEBT_CATEGORIES.map((c) => c.id)).toEqual([
+  it('dispatches only the lists that still have per-file entries', () => {
+    expect(DEBT_CATEGORIES.map((c) => c.id)).toEqual(['layer-back-edge']);
+    for (const c of DEBT_CATEGORIES) {
+      expect(c.source.length).toBeGreaterThan(0);
+      expect(c.remediation.length).toBeGreaterThan(0);
+      expect(c.kind).toBe('baseline');
+      expect(c.baseline).toBe('layer');
+    }
+  });
+
+  it('keeps paid-down categories retired rather than dispatching empty lists', () => {
+    expect(RETIRED_DEBT_CATEGORIES).toEqual([
       'function-size',
       'cognitive-complexity',
       'floating-promise',
       'misused-promise',
-      'layer-back-edge',
       'record-string-unknown',
     ]);
-    for (const c of DEBT_CATEGORIES) {
-      expect(c.source.length).toBeGreaterThan(0);
-      expect(c.remediation.length).toBeGreaterThan(0);
-      if (c.kind === 'biome') expect(c.ruleKey).toBeTruthy();
-      else expect(['layer', 'record']).toContain(c.baseline);
+    for (const id of RETIRED_DEBT_CATEGORIES) {
+      expect(categoryById(id)).toBeUndefined();
     }
   });
 
-  it('cites the supported --update command for each baseline category', () => {
+  it('cites the supported --update command for the remaining baseline category', () => {
     expect(categoryById('layer-back-edge').remediation).toContain(
       'node packages/dev-tools/tools/check-layer-back-edges.mjs --update'
-    );
-    expect(categoryById('record-string-unknown').remediation).toContain(
-      'node packages/dev-tools/tools/check-record-string-unknown.mjs --update'
     );
   });
 
@@ -133,40 +99,37 @@ describe('resolveGlobToSingleFile', () => {
 describe('buildDebtMap', () => {
   const map = debtMapFixture();
 
-  it('excludes the multi-rule test-file-wide override block', () => {
-    expect(map.has('packages/webapp/tests/thing.test.ts')).toBe(false);
-
-    for (const ids of map.values()) {
-      expect(ids.every((id) => typeof id === 'string')).toBe(true);
-    }
+  it('indexes files still on the layer-back-edge baseline', () => {
+    expect(map.get('pkg/a.ts')).toEqual(['layer-back-edge']);
+    expect(map.get('pkg/c.ts')).toEqual(['layer-back-edge']);
   });
 
-  it('detects a file that appears on biome AND both baselines', () => {
-    expect(map.get('pkg/a.ts')).toEqual([
-      'function-size',
-      'cognitive-complexity',
-      'layer-back-edge',
-      'record-string-unknown',
-    ]);
+  it('ignores retired biome / record-string-unknown lists even if sources are passed', () => {
+    const mixed = buildDebtMap({
+      biomeConfig: {
+        overrides: [
+          {
+            includes: ['pkg/b.ts'],
+            linter: { rules: { nursery: { noFloatingPromises: 'off' } } },
+          },
+        ],
+      },
+      layerBaseline: { 'pkg/a.ts': 1 },
+      recordBaseline: { 'pkg/only.ts': 1 },
+      repoFiles: REPO_FILES,
+    });
+    expect(mixed.get('pkg/a.ts')).toEqual(['layer-back-edge']);
+    expect(mixed.has('pkg/b.ts')).toBe(false);
+    expect(mixed.has('pkg/only.ts')).toBe(false);
   });
 
-  it('keeps single-category files', () => {
-    expect(map.get('pkg/b.ts')).toEqual(['floating-promise']);
-    expect(map.get('pkg/c.ts')).toEqual(['misused-promise']);
-    expect(map.get('pkg/only.ts')).toEqual(['record-string-unknown']);
-  });
-
-  it('drops multi-match globs and baseline keys for files that no longer exist', () => {
-    expect(map.has('pkg/one.gen.ts')).toBe(false);
-    expect(map.has('pkg/two.gen.ts')).toBe(false);
+  it('drops baseline keys for files that no longer exist', () => {
     expect(map.has('pkg/gone.ts')).toBe(false);
   });
 
-  it('tolerates missing/malformed baselines and an empty biome config', () => {
+  it('tolerates a missing layer baseline', () => {
     const empty = buildDebtMap({
-      biomeConfig: {},
       layerBaseline: null,
-      recordBaseline: undefined,
       repoFiles: REPO_FILES,
     });
     expect(empty.size).toBe(0);
@@ -245,13 +208,12 @@ describe('scoreCandidate / buildCandidates', () => {
     expect(candidates.map((c) => c.file)).toEqual(['pkg/a.ts', 'pkg/z.ts']);
   });
 
-  it('works end-to-end from the biome + baseline fixture', () => {
+  it('works end-to-end from the remaining layer baseline', () => {
     const candidates = buildCandidates({
       debtMap: debtMapFixture(),
-      fileSizes: { 'pkg/a.ts': 1000, 'pkg/b.ts': 500, 'pkg/big.ts': 80_000, 'pkg/c.ts': 400 },
+      fileSizes: { 'pkg/a.ts': 1000, 'pkg/c.ts': 400 },
     });
-    expect(candidates[0].file).toBe('pkg/c.ts');
-    expect(candidates.map((c) => c.file)).not.toContain('packages/webapp/tests/thing.test.ts');
+    expect(candidates.map((c) => c.file)).toEqual(['pkg/c.ts', 'pkg/a.ts']);
   });
 });
 
@@ -335,25 +297,21 @@ describe('selectDebtFile', () => {
 
 describe('buildPrompt', () => {
   const candidate = {
-    file: 'packages/webapp/src/net/link-header.ts',
-    categories: ['cognitive-complexity', 'layer-back-edge', 'record-string-unknown'],
+    file: 'packages/cloudflare-worker/src/flags.ts',
+    categories: ['layer-back-edge'],
     bytes: 14_483,
-    slug: 'webapp-src-net-link-header-ts',
+    slug: 'cloudflare-worker-src-flags-ts',
   };
   const prompt = buildPrompt(candidate);
 
   it('names the target file, its debt lists, and the working branch', () => {
     expect(prompt).toContain(candidate.file);
-    expect(prompt).toContain('cognitive-complexity');
+    expect(prompt).toContain('layer-back-edge');
     expect(prompt).toContain(`${BRANCH_PREFIX}/${candidate.slug}`);
   });
 
-  it('includes the remediation for every applicable category and no others', () => {
-    expect(prompt).toContain('noExcessiveCognitiveComplexity');
+  it('includes the remediation for the remaining category', () => {
     expect(prompt).toContain('node packages/dev-tools/tools/check-layer-back-edges.mjs --update');
-    expect(prompt).toContain(
-      'node packages/dev-tools/tools/check-record-string-unknown.mjs --update'
-    );
     expect(prompt).not.toContain('noMisusedPromises');
   });
 
