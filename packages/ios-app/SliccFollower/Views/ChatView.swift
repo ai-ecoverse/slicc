@@ -834,6 +834,8 @@ struct ConversationView: View {
         .navigationTitle(appState.openFrozen?.entry.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
+        // The bar is only a place for the pills to sit; the glass is theirs.
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar {
             if !toolbarSuppressed {
                 identityGroup
@@ -909,7 +911,7 @@ struct ConversationView: View {
         ScoopSwitcher()
             .padding(.horizontal, 12)
             .frame(height: 36)
-            .background(.regularMaterial, in: Capsule())
+            .floatingGlass(in: Capsule(), interactive: true)
     }
 
     private var selectedAvatarView: some View {
@@ -1010,6 +1012,14 @@ struct ConversationView: View {
                 appState.sendSprinkleLick("inline", body: body, targetScoop: target)
             }
         )
+        // One scroll view PER UNIT. Swapping another unit's rows into the same
+        // scroll view kept the old unit's (estimated) content offset, which
+        // for a thread of a different length points past the end of the
+        // content: after a few switches the transcript came back blank until
+        // a nudge forced a layout pass. A new identity starts at the bottom
+        // anchor, which is where a thread you just opened belongs. The
+        // composer sits outside it, so a draft and its focus survive a switch.
+        .id(appState.selectedScoopJid)
         .transcriptSwipeGesture(
             state: horizontalScrollGestureState,
             onAction: handleTranscriptSwipe
@@ -1240,7 +1250,7 @@ struct SessionControlsCluster: View {
                     .frame(width: 36, height: 36)
             }
         }
-        .background(.regularMaterial, in: Capsule())
+        .floatingGlass(in: Capsule())
     }
 
     private var newChatButton: some View {
