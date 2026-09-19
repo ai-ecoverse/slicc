@@ -77,6 +77,13 @@ struct MessageListView: View {
     /// the stable alternative to reading a lazy stack's (estimated) offset.
     @State private var isAtBottom = true
 
+    /// `isAtBottom` as it stood when the keyboard ANNOUNCED itself. Sampled
+    /// then because the keyboard's inset moves the rows before it has landed,
+    /// and that movement rewrites `isAtBottom` — by the time there is a
+    /// settled viewport to scroll in, the live value describes the
+    /// displacement, not the reader.
+    @State private var wasFollowingBeforeKeyboard = false
+
     var body: some View {
         Group {
             if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty
@@ -217,6 +224,16 @@ struct MessageListView: View {
         .onChange(of: toolUICards.count) { _, _ in followBottom(proxy) }
         .onChange(of: openApprovals.count) { _, _ in followBottom(proxy) }
         .onChange(of: sudoApprovals.count) { _, _ in followBottom(proxy) }
+        // The composer and keyboard arrive as a bottom inset (see
+        // `ConversationView.liveConversation`), which keeps the rows on screen
+        // but does not keep the NEWEST one above the keyboard when that row is
+        // taller than the viewport. A reader who was following is put back on
+        // it once the keyboard has landed — a one-shot scroll action, so
+        // nothing is stored across the resize (#2072).
+        .onReceive(Self.keyboardWillShow) { _ in wasFollowingBeforeKeyboard = isAtBottom }
+        .onReceive(Self.keyboardDidShow) { _ in
+            followBottom(proxy, force: wasFollowingBeforeKeyboard)
+        }
         // A layout rule, NOT a stored offset — this is the whole of #2072.
         //
         // The transcript used to carry `.scrollPosition($binding)` plus five
@@ -314,6 +331,11 @@ struct MessageListView: View {
 
         return groups
     }
+
+    private static let keyboardWillShow = NotificationCenter.default.publisher(
+        for: UIResponder.keyboardWillShowNotification)
+    private static let keyboardDidShow = NotificationCenter.default.publisher(
+        for: UIResponder.keyboardDidShowNotification)
 
     /// The invisible bottom row's id. It is both the `scrollTo` target and the
     /// "is the reader at the bottom" probe.

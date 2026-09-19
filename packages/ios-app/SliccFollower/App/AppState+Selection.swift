@@ -18,6 +18,23 @@ extension AppState {
         .requestSnapshot(scoopJid: selectedScoopJid)
     }
 
+    /// Select a specific scoop to view. Independent of the leader's selection.
+    func selectScoop(jid: String) {
+        guard jid != selectedScoopJid else { return }
+        guard scoops.contains(where: { $0.jid == jid }) else { return }
+        selectedScoopJid = jid
+        // Show whatever we already have buffered, then request a fresh snapshot.
+        let cached = messagesByScoop[jid] ?? []
+        messages = cached
+        isStreaming = cached.last?.isStreaming == true
+        streamingMessageId = isStreaming ? cached.last?.id : nil
+        // `scoops.select` changes only this follower's view on the leader. It
+        // also updates the leader's per-follower selected scoop, which is the
+        // authority used to validate a later thinking.set.
+        sendToLeader(.scoopsSelect(scoopJid: jid))
+        refreshModels()
+    }
+
     /// The summary for the currently-viewed scoop, if any.
     var selectedScoop: ScoopSummary? {
         scoops.first(where: { $0.jid == selectedScoopJid })

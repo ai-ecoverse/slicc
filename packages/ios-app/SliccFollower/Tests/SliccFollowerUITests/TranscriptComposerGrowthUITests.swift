@@ -191,6 +191,61 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             "the scheduled incoming message should have reached the transcript")
     }
 
+    // MARK: - Blank transcript on focus
+
+    /// A LONG transcript went blank when the keyboard landed: the reader was
+    /// pinned to the bottom, tapped the composer, and the whole list vanished
+    /// until a keystroke forced another layout pass. The plain fixture is too
+    /// short to show it — almost all of it is materialized, so there is no
+    /// estimate for the resize to resolve against. A live cone carries
+    /// thousands of rows, which is what `-uiTestTranscriptRepeat` stands in for.
+    func testALongTranscriptSurvivesTheKeyboardLanding() throws {
+        let app = launchWithTranscript(repeatCount: 60)
+        waitForSeededTranscript(app)
+        XCTAssertGreaterThan(visibleRowCount(app), 0, "precondition: rows on screen at launch")
+
+        _ = focusedComposer(app)
+        Thread.sleep(forTimeInterval: 1.5)
+        attach(app, name: "long-transcript-keyboard-up")
+        XCTAssertGreaterThan(
+            visibleRowCount(app), 0,
+            "the transcript went blank when the keyboard claimed its space")
+    }
+
+    /// The same blank, met from the other side: with the keyboard already up,
+    /// SENDING re-laid the list out and it vanished again, so the message you
+    /// had just sent was nowhere to be seen — which read as a sync failure,
+    /// though the message had been delivered and was in the model.
+    func testASentMessageIsVisibleInALongTranscript() throws {
+        let app = launchWithTranscript(repeatCount: 60)
+        waitForSeededTranscript(app)
+
+        let composer = focusedComposer(app)
+        let sent = "is my own message on screen"
+        type(sent, into: composer, app: app)
+        tapSend(app)
+
+        let sentBubble = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", sent)
+        ).firstMatch
+        XCTAssertTrue(
+            sentBubble.waitForExistence(timeout: 10),
+            "the sent message should be materialized, not lost in a blank transcript")
+        attach(app, name: "long-transcript-sent")
+        XCTAssertTrue(sentBubble.isHittable, "the sent message must be on screen")
+    }
+
+    /// Rows with a real frame inside the window. A blank transcript still has
+    /// a scroll view; what it lacks is any materialized row.
+    private func visibleRowCount(_ app: XCUIApplication) -> Int {
+        let window = app.windows.firstMatch.frame
+        return app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-"))
+            .allElementsBoundByIndex
+            .filter { $0.frame.height > 0 && window.intersects($0.frame) }
+            .count
+    }
+
     // MARK: - Helpers
 
     /// Prints the measured drift so a run reports the NUMBER, not just a
@@ -326,13 +381,20 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     /// `-uiTestFixtureRoute` cannot stand in: that route has no composer, and
     /// every assertion here needs a transcript and a composer sharing the
     /// screen.
-    private func launchWithTranscript(appendAfterSeconds: Double? = nil) -> XCUIApplication {
+    private func launchWithTranscript(
+        appendAfterSeconds: Double? = nil, repeatCount: Int? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-joinUrl", "",
             "-uiTestConnectionState", "connected",
             "-uiTestTranscriptFixture", "YES",
         ]
+        if let repeatCount {
+            app.launchArguments += [
+                "-uiTestTranscriptRepeat", String(repeatCount), "-uiTestTranscriptTallTail", "YES",
+            ]
+        }
         if let appendAfterSeconds {
             app.launchArguments += [
                 "-uiTestTranscriptAppendAfter", String(appendAfterSeconds),
