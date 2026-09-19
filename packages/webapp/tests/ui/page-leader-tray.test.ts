@@ -478,6 +478,28 @@ describe('startPageLeaderTray', () => {
     expect(capturedHandler).toBeUndefined();
   });
 
+  it('forwards background unit events under their own unit, and unsubscribes on stop', async () => {
+    const { fetchImpl, webSocketFactory } = makeLeaderFetch();
+    let captured: ((scoopJid: string, event: AgentEvent) => void) | undefined;
+
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      onBackgroundUnitEvent: (h) => {
+        captured = h;
+        return () => {
+          captured = undefined;
+        };
+      },
+    });
+
+    const spy = vi.spyOn(handle.sync, 'broadcastEvent');
+    captured!('cone_b', { type: 'turn_end', messageId: 'msg-b' });
+    expect(spy).toHaveBeenCalledWith({ type: 'turn_end', messageId: 'msg-b' }, 'cone_b');
+
+    handle.stop();
+    expect(captured).toBeUndefined();
+  });
+
   it('refreshLeaderTargets logs at error level (not warn) exactly once across many quick failures', async () => {
     const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
     let rejectionCounter = 0;

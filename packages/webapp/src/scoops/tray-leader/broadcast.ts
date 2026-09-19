@@ -53,10 +53,12 @@ export function scoopsListForPeer(
 export class BroadcastManager {
   constructor(private readonly context: LeaderSyncContext) {}
 
-  broadcastEvent(event: AgentEvent): void {
+  broadcastEvent(event: AgentEvent, backgroundScoopJid?: string): void {
     if (this.context.followers.followers.size === 0) return;
-    const scoopJid = this.context.options.getScoopJid();
-    const failed = this.context.followers.broadcastToAllFollowers({
+
+    const displayed = this.context.options.getScoopJid();
+    const scoopJid = backgroundScoopJid ?? displayed;
+    const failed = this.context.followers.broadcastUnitTraffic(scoopJid, displayed, {
       type: 'agent_event',
       event,
       scoopJid,

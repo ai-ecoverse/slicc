@@ -730,6 +730,7 @@ export function createLeaderOptionsFactory(
     sendWebhookEvent: (webhookId, headers, body) =>
       client.sendWebhookEvent(webhookId, headers, body),
     onAgentEvent: (handler) => deps.agentHandle.onEvent(handler),
+    onBackgroundUnitEvent: (handler) => client.onBackgroundUnitEvent(handler),
 
     execInShell: (command, execOpts) => execSessions.run({ command, ...execOpts }),
     closeExecShell: (sessionId) => execSessions.close(sessionId),

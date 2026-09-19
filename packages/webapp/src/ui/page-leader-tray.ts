@@ -100,6 +100,8 @@ export interface StartPageLeaderTrayOptions {
 
   onAgentEvent: (handler: (event: AgentEvent) => void) => () => void;
 
+  onBackgroundUnitEvent?: (handler: (scoopJid: string, event: AgentEvent) => void) => () => void;
+
   browserAPI: BrowserAPI;
   browserTransport?: CDPTransport;
   vfs?: VirtualFS;
@@ -461,6 +463,9 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   leader = buildLeaderManager(options, peers, sync, fetchImpl, updateUrlBar, () => leader);
 
   const unsubscribeAgent = options.onAgentEvent((event) => sync.broadcastEvent(event));
+  const unsubscribeBackground = options.onBackgroundUnitEvent?.((scoopJid, event) =>
+    sync.broadcastEvent(event, scoopJid)
+  );
 
   const intervals: ReturnType<typeof setInterval>[] = [];
   const refreshLeaderTargets = createRefreshLeaderTargets(options, sync);
@@ -492,6 +497,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       if (scoopBroadcastTimer !== null) clearTimeout(scoopBroadcastTimer);
       scoopBroadcastTimer = null;
       unsubscribeAgent();
+      unsubscribeBackground?.();
       for (const id of intervals) clearInterval(id);
       sync.stop();
       peers.stop();

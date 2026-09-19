@@ -327,10 +327,31 @@ export class FollowerRegistry {
     return this.broadcastPerFollower(() => message);
   }
 
-  broadcastPerFollower(build: (follower: ConnectedFollower) => LeaderToFollowerMessage): string[] {
+  broadcastUnitTraffic(
+    scoopJid: string,
+    displayedScoopJid: string,
+    message: LeaderToFollowerMessage
+  ): string[] {
+    return this.broadcastPerFollower(
+      () => message,
+      (follower) => {
+        const reading =
+          follower.trust === 'biscotto'
+            ? displayedScoopJid
+            : (follower.selectedScoopJid ?? displayedScoopJid);
+        return reading === scoopJid;
+      }
+    );
+  }
+
+  broadcastPerFollower(
+    build: (follower: ConnectedFollower) => LeaderToFollowerMessage,
+    include: (follower: ConnectedFollower) => boolean = () => true
+  ): string[] {
     const now = performance.now();
     const failed: string[] = [];
     for (const [bootstrapId, follower] of this.followers) {
+      if (!include(follower)) continue;
       let sent = false;
       let thrown: unknown;
       let message: LeaderToFollowerMessage | undefined;

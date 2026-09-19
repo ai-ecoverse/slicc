@@ -347,8 +347,8 @@ export class LeaderSyncManager {
     this.followerRegistry.removeFollower(bootstrapId);
   }
 
-  broadcastEvent(event: AgentEvent): void {
-    this.broadcast.broadcastEvent(event);
+  broadcastEvent(event: AgentEvent, backgroundScoopJid?: string): void {
+    this.broadcast.broadcastEvent(event, backgroundScoopJid);
   }
 
   broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {

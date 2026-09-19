@@ -135,6 +135,10 @@ export type ScoopBusyPhase = 'thinking' | 'tool';
 
 export class OffscreenClient implements KernelClientFacade {
   private eventListeners = new Set<(event: UIAgentEvent) => void>();
+
+  private backgroundEventListeners = new Set<(scoopJid: string, event: UIAgentEvent) => void>();
+
+  private backgroundMessageId = new Map<string, string>();
   private callbacks: OffscreenClientCallbacks;
   private scoops: RegisteredScoop[] = [];
   private scoopStatuses = new Map<string, ScoopTabState['status']>();
@@ -193,6 +197,7 @@ export class OffscreenClient implements KernelClientFacade {
 
   setSelectedScoopJid(jid: string | null): void {
     if (this._selectedScoopJid === jid) return;
+    this.handOverOpenMessages(this._selectedScoopJid, jid);
     this._selectedScoopJid = jid;
     if (jid === null) return;
     for (const fn of this.scoopSelectedListeners) {
@@ -932,41 +937,58 @@ export class OffscreenClient implements KernelClientFacade {
     }
 
     const displayJid = msg.displayScoopJid ?? msg.scoopJid;
-    if (displayJid !== this.selectedScoopJid) return;
+    if (displayJid !== this.selectedScoopJid) {
+      this.translateTranscriptEvent(msg, this.backgroundMessageId, (event) =>
+        this.emitBackground(msg.scoopJid, event)
+      );
+      return;
+    }
 
     switch (msg.eventType) {
-      case 'text_delta': {
-        let msgId = this.currentMessageId.get(msg.scoopJid);
-        if (!msgId) {
-          msgId = `scoop-${msg.scoopJid}-${uid()}`;
-          this.currentMessageId.set(msg.scoopJid, msgId);
-          this.emitToUI({ type: 'message_start', messageId: msgId });
-        }
-        this.emitToUI({ type: 'content_delta', messageId: msgId, text: msg.text ?? '' });
+      case 'tool_ui':
+      case 'tool_ui_done':
+      case 'tool_progress':
+        this.handleToolUiAgentEvent(msg);
         break;
-      }
+      default:
+        this.translateTranscriptEvent(msg, this.currentMessageId, (event) => this.emitToUI(event));
+    }
+  }
 
-      case 'tool_start': {
-        let msgId = this.currentMessageId.get(msg.scoopJid);
-        if (!msgId) {
-          msgId = `scoop-${msg.scoopJid}-${uid()}`;
-          this.currentMessageId.set(msg.scoopJid, msgId);
-          this.emitToUI({ type: 'message_start', messageId: msgId });
-        }
-        this.emitToUI({
+  private translateTranscriptEvent(
+    msg: AgentEventMsg,
+    ids: Map<string, string>,
+    emit: (event: UIAgentEvent) => void
+  ): void {
+    const openMessage = (): string => {
+      let msgId = ids.get(msg.scoopJid);
+      if (!msgId) {
+        msgId = `scoop-${msg.scoopJid}-${uid()}`;
+        ids.set(msg.scoopJid, msgId);
+        emit({ type: 'message_start', messageId: msgId });
+      }
+      return msgId;
+    };
+
+    switch (msg.eventType) {
+      case 'text_delta':
+        emit({ type: 'content_delta', messageId: openMessage(), text: msg.text ?? '' });
+        break;
+
+      case 'tool_start':
+        emit({
           type: 'tool_use_start',
-          messageId: msgId,
+          messageId: openMessage(),
           toolName: msg.toolName ?? '',
           toolInput: msg.toolInput,
           toolCallId: msg.toolCallId,
         });
         break;
-      }
 
       case 'tool_end': {
-        const msgId = this.currentMessageId.get(msg.scoopJid);
+        const msgId = ids.get(msg.scoopJid);
         if (msgId) {
-          this.emitToUI({
+          emit({
             type: 'tool_result',
             messageId: msgId,
             toolName: msg.toolName ?? '',
@@ -978,31 +1000,48 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
-      case 'tool_ui':
-      case 'tool_ui_done':
-      case 'tool_progress':
-        this.handleToolUiAgentEvent(msg);
-        break;
-
       case 'response_done': {
-        const msgId = this.currentMessageId.get(msg.scoopJid);
+        const msgId = ids.get(msg.scoopJid);
         if (msgId) {
-          this.emitToUI({
-            type: 'content_done',
-            messageId: msgId,
-            model: msg.model,
-            usage: msg.usage,
-          });
-          this.currentMessageId.delete(msg.scoopJid);
+          emit({ type: 'content_done', messageId: msgId, model: msg.model, usage: msg.usage });
+          ids.delete(msg.scoopJid);
         }
         break;
       }
 
       case 'turn_end': {
-        const msgId = this.currentMessageId.get(msg.scoopJid) ?? `done-${msg.scoopJid}-${uid()}`;
-        this.currentMessageId.delete(msg.scoopJid);
-        this.emitToUI({ type: 'turn_end', messageId: msgId });
+        const msgId = ids.get(msg.scoopJid) ?? `done-${msg.scoopJid}-${uid()}`;
+        ids.delete(msg.scoopJid);
+        emit({ type: 'turn_end', messageId: msgId });
         break;
+      }
+    }
+  }
+
+  private handOverOpenMessages(previous: string | null, next: string | null): void {
+    const close = (scoopJid: string, messageId: string | undefined): void => {
+      if (messageId) this.emitBackground(scoopJid, { type: 'content_done', messageId });
+    };
+    if (previous) close(previous, this.currentMessageId.get(previous));
+    if (next) {
+      close(next, this.backgroundMessageId.get(next));
+      this.backgroundMessageId.delete(next);
+    }
+  }
+
+  onBackgroundUnitEvent(listener: (scoopJid: string, event: UIAgentEvent) => void): () => void {
+    this.backgroundEventListeners.add(listener);
+    return () => this.backgroundEventListeners.delete(listener);
+  }
+
+  private emitBackground(scoopJid: string, event: UIAgentEvent): void {
+    for (const listener of this.backgroundEventListeners) {
+      try {
+        listener(scoopJid, event);
+      } catch (err) {
+        log.error('Background listener error', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
@@ -1143,13 +1182,13 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleError(msg: ErrorMsg): void {
-    if (msg.scoopJid === this.selectedScoopJid) {
-      this.emitToUI({
-        type: 'error',
-        error: msg.error,
-        ...(msg.endTurn === false ? { endTurn: false } : {}),
-      });
-    }
+    const event: UIAgentEvent = {
+      type: 'error',
+      error: msg.error,
+      ...(msg.endTurn === false ? { endTurn: false } : {}),
+    };
+    if (msg.scoopJid === this.selectedScoopJid) this.emitToUI(event);
+    else if (msg.scoopJid) this.emitBackground(msg.scoopJid, event);
   }
 
   private handleIncomingMessage(msg: IncomingMessageMsg): void {

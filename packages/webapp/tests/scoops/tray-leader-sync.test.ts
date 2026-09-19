@@ -640,6 +640,82 @@ describe('LeaderSyncManager', () => {
     });
   });
 
+  it('forwards a background unit’s event only to the followers reading that unit', () => {
+    const { manager } = createManager({
+      getScoops: () =>
+        ['cone', 'cone_b'].map((jid) => ({
+          jid,
+          name: jid,
+          folder: `/${jid}`,
+          isCone: true,
+          assistantLabel: jid,
+        })),
+    });
+    const reader = new FakeChannel();
+    const elsewhere = new FakeChannel();
+    const guest = new FakeChannel();
+    manager.addFollower('reader', reader);
+    manager.addFollower('elsewhere', elsewhere);
+    manager.addFollower('guest', guest, {
+      trust: 'biscotto',
+      biscotto: {
+        id: 'seat-1',
+        label: 'Anna',
+        gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
+      },
+    });
+    reader.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    const counts = [reader, elsewhere, guest].map((ch) => ch.parseSent().length);
+
+    const event = { type: 'content_delta', messageId: 'm1', text: 'pong' } as const;
+    manager.broadcastEvent(event, 'cone_b');
+
+    expect(reader.parseSent().slice(counts[0])).toEqual([
+      { type: 'agent_event', event, scoopJid: 'cone_b' },
+    ]);
+
+    expect(elsewhere.parseSent().slice(counts[1])).toEqual([]);
+    expect(guest.parseSent().slice(counts[2])).toEqual([]);
+  });
+
+  it('sends the displayed unit’s events to its readers, to guests, and to peers with no selection', async () => {
+    const { manager } = createManager({
+      getScoops: () =>
+        ['cone', 'cone_b'].map((jid) => ({
+          jid,
+          name: jid,
+          folder: `/${jid}`,
+          isCone: true,
+          assistantLabel: jid,
+        })),
+    });
+    const onDisplayed = new FakeChannel();
+    const elsewhere = new FakeChannel();
+    const guest = new FakeChannel();
+    manager.addFollower('onDisplayed', onDisplayed);
+    manager.addFollower('elsewhere', elsewhere);
+    manager.addFollower('guest', guest, {
+      trust: 'biscotto',
+      biscotto: {
+        id: 'seat-1',
+        label: 'Anna',
+        gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
+      },
+    });
+    elsewhere.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    await Promise.resolve();
+    const counts = [onDisplayed, elsewhere, guest].map((ch) => ch.parseSent().length);
+
+    const event = { type: 'content_delta', messageId: 'm1', text: 'hi' } as const;
+    manager.broadcastEvent(event);
+
+    const expected = [{ type: 'agent_event', event, scoopJid: 'cone' }];
+    expect(onDisplayed.parseSent().slice(counts[0])).toEqual(expected);
+    expect(guest.parseSent().slice(counts[2])).toEqual(expected);
+
+    expect(elsewhere.parseSent().slice(counts[1])).toEqual([]);
+  });
+
   it('does not broadcast user_message_echo when no followers', () => {
     const { manager } = createManager();
 
