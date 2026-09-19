@@ -684,6 +684,67 @@ describe('LeaderSyncManager', () => {
     });
   });
 
+  it('forwards a background unit’s event only to the followers reading that unit', () => {
+    const { manager } = createManager({
+      getScoops: () =>
+        ['cone', 'cone_b'].map((jid) => ({
+          jid,
+          name: jid,
+          folder: `/${jid}`,
+          isCone: true,
+          assistantLabel: jid,
+        })),
+    });
+    const reader = new FakeChannel();
+    const elsewhere = new FakeChannel();
+    const guest = new FakeChannel();
+    manager.addFollower('reader', reader);
+    manager.addFollower('elsewhere', elsewhere);
+    manager.addFollower('guest', guest, {
+      trust: 'biscotto',
+      biscotto: {
+        id: 'seat-1',
+        label: 'Anna',
+        gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
+      },
+    });
+    reader.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    const counts = [reader, elsewhere, guest].map((ch) => ch.parseSent().length);
+
+    // The leader displays `cone`; this turn is running in `cone_b`.
+    const event = { type: 'content_delta', messageId: 'm1', text: 'pong' } as const;
+    manager.broadcastEvent(event, 'cone_b');
+
+    expect(reader.parseSent().slice(counts[0])).toEqual([
+      { type: 'agent_event', event, scoopJid: 'cone_b' },
+    ]);
+    // A follower that did not ask for the unit — the CLI's `prompt` among them
+    // — must not have another cone's turn written into its output.
+    expect(elsewhere.parseSent().slice(counts[1])).toEqual([]);
+    expect(guest.parseSent().slice(counts[2])).toEqual([]);
+  });
+
+  it('still sends the displayed unit’s events to everyone, guests included', () => {
+    const { manager } = createManager();
+    const guest = new FakeChannel();
+    manager.addFollower('guest', guest, {
+      trust: 'biscotto',
+      biscotto: {
+        id: 'seat-1',
+        label: 'Anna',
+        gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
+      },
+    });
+    const before = guest.parseSent().length;
+
+    const event = { type: 'content_delta', messageId: 'm1', text: 'hi' } as const;
+    manager.broadcastEvent(event);
+
+    expect(guest.parseSent().slice(before)).toEqual([
+      { type: 'agent_event', event, scoopJid: 'cone' },
+    ]);
+  });
+
   it('does not broadcast user_message_echo when no followers', () => {
     const { manager } = createManager();
     // Should not throw

@@ -163,6 +163,13 @@ export interface StartPageLeaderTrayOptions {
    * Wired to `agentHandle.onEvent` by the caller.
    */
   onAgentEvent: (handler: (event: AgentEvent) => void) => () => void;
+  /**
+   * Subscribe to agent events of units this page is NOT displaying, each named
+   * by its unit. Forwarded to the full-trust followers READING that unit, so a
+   * follower reading cone B keeps a live transcript while this leader shows
+   * cone A. Optional: a float with a single thread has no such units.
+   */
+  onBackgroundUnitEvent?: (handler: (scoopJid: string, event: AgentEvent) => void) => () => void;
 
   // --- BrowserAPI + VFS for shared targets and sprinkle reads ---
   browserAPI: BrowserAPI;
@@ -619,6 +626,9 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   // this subscription (and unsubscribes on stop) so the caller doesn't
   // have to track it.
   const unsubscribeAgent = options.onAgentEvent((event) => sync.broadcastEvent(event));
+  const unsubscribeBackground = options.onBackgroundUnitEvent?.((scoopJid, event) =>
+    sync.broadcastEvent(event, scoopJid)
+  );
 
   // --- Periodic refreshes. Each fires every `refreshIntervalMs` (5s
   // default) so a single missed update on the data channel doesn't
@@ -661,6 +671,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       if (scoopBroadcastTimer !== null) clearTimeout(scoopBroadcastTimer);
       scoopBroadcastTimer = null;
       unsubscribeAgent();
+      unsubscribeBackground?.();
       for (const id of intervals) clearInterval(id);
       sync.stop();
       peers.stop();

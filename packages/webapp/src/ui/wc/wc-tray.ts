@@ -949,6 +949,7 @@ export function createLeaderOptionsFactory(
     sendWebhookEvent: (webhookId, headers, body) =>
       client.sendWebhookEvent(webhookId, headers, body),
     onAgentEvent: (handler) => deps.agentHandle.onEvent(handler),
+    onBackgroundUnitEvent: (handler) => client.onBackgroundUnitEvent(handler),
     // Run a CLI follower's `slicc … exec` in the leader's own shell, streaming
     // output back over the tray. Uses a headless terminal session against the
     // kernel worker (same surface as the panel terminals).

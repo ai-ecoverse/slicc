@@ -382,6 +382,24 @@ export class FollowerRegistry {
   }
 
   /**
+   * {@link broadcastToAllFollowers}, narrowed to the full-trust followers that
+   * SELECTED `scoopJid`. For traffic about a unit the leader is not displaying.
+   *
+   * Narrowed twice, for different reasons. Guests, because a biscotto was
+   * shared ONE thread and the wire allowlist cannot tell one unit's
+   * `agent_event` from another's. And everyone who did not select the unit,
+   * because not every follower routes an event by the unit it names: the CLI's
+   * `prompt` prints any `content_delta` and exits on any `turn_end`, so an
+   * unrequested unit's turn would end up in its output.
+   */
+  broadcastToFollowersReading(scoopJid: string, message: LeaderToFollowerMessage): string[] {
+    return this.broadcastPerFollower(
+      () => message,
+      (follower) => follower.trust !== 'biscotto' && follower.selectedScoopJid === scoopJid
+    );
+  }
+
+  /**
    * {@link broadcastToAllFollowers} for a payload that DIFFERS per follower —
    * same fan-out, same failure reporting and throttling, one message built per
    * peer.
@@ -393,10 +411,16 @@ export class FollowerRegistry {
    *
    * @returns bootstrapIds of followers whose send failed.
    */
-  broadcastPerFollower(build: (follower: ConnectedFollower) => LeaderToFollowerMessage): string[] {
+  broadcastPerFollower(
+    build: (follower: ConnectedFollower) => LeaderToFollowerMessage,
+    include: (follower: ConnectedFollower) => boolean = () => true
+  ): string[] {
     const now = performance.now();
     const failed: string[] = [];
     for (const [bootstrapId, follower] of this.followers) {
+      // A peer this message is not FOR is skipped, not failed: nothing was
+      // attempted, so there is nothing for the caller to degrade or retry.
+      if (!include(follower)) continue;
       let sent = false;
       let thrown: unknown;
       let message: LeaderToFollowerMessage | undefined;
