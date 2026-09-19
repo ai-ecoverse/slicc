@@ -213,6 +213,17 @@ The inset keeps rows on screen but does not by itself keep the _newest_ row abov
 
 The bottom anchor applies only to `.initialOffset` and `.alignment`, never to `.sizeChanges`. Once the composer is an inset, the keyboard reaches the scroll view as a viewport size change, and a size-change anchor re-pinned a reader who had scrolled back: 338pt of drift on iPad landscape, iOS 26 (`testHistoryStaysPutInLandscape`). New content is followed by `followBottom`, which only moves a reader who was at the bottom.
 
+### Background thread sync
+
+Switching units paints `messagesByScoop[jid]` at once and revalidates with the `scoops.select` snapshot — but a unit nobody visited this connection has no buffer, so the first switch to a busy cone waited on a multi-megabyte chunked snapshot. `Sync/ThreadSync.swift` (`ThreadSyncPlanner`, a value type with no I/O) fills those buffers ahead of the switch; `AppState+ThreadSync` does the sending. It is the iOS counterpart of the web's `RemoteWorkUnitClient.lastSnapshots`. Rules:
+
+- **`request_snapshot.peek`, leader ≥ 9 only.** A plain snapshot request for another unit re-points this follower's selection on the leader, which routes its prompts and `abort`. Below 9 nothing is prefetched.
+- **One request in flight**, roots before scoops, the selected unit skipped (its own `scoops.select` syncs it), capped at `maxUnits`. An unanswered request gives way after `requestTimeout` and is not retried until the next connection. The pump runs on every roster and every snapshot; the leader's periodic roster refresh is what retires a stuck request.
+- **Staleness.** The leader streams only the unit it displays and the units a follower selected, so any other buffer goes stale when its unit works. The roster's `working → not working` edge un-syncs that unit and it is fetched again. `reset()` on `dataChannelOpened` refetches everything (buffers are kept — they still paint instantly).
+- **A background snapshot is not the viewed unit's.** In `ingestSnapshot` it must not clear `toolUICards` (the viewed cone's approvals) and an EMPTY one must not settle `newSessionInFlight` — an untouched cone is empty too. An identical snapshot for the viewed unit does not republish `messages`, so revalidating a warm buffer rebuilds no rows.
+
+Known cost: every snapshot is still decoded on the main actor. Moving that off-main needs an ordered decode pipeline (a snapshot must not overtake the agent events behind it) and is not done.
+
 ### A snapshot must not erase an unconfirmed send
 
 A snapshot replaces a unit's buffer wholesale and describes the moment the leader **built** it. A large thread's snapshot is read asynchronously and chunked, so a snapshot built before a prompt reached the leader can land after the prompt was appended locally — switch to a busy cone and send straight away, or send across a reconnect — and the sender's own message vanished from its own screen. `Sync/LocalSendLedger.swift` holds each send until a snapshot contains it; `ingestSnapshot` runs every snapshot through `reconcile`, which puts back what is missing, in send order. Entries expire after `confirmationWindow` (a prompt the leader never recorded must not be re-asserted forever) and the ledger is emptied by a new session and by a full reset, but **not** by `handleDisconnect` — surviving the reconnect is the point.
