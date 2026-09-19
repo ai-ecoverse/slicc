@@ -105,6 +105,25 @@ describe('which command', () => {
     expect(result.stdout).toBe('/workspace/skills/test-skill/hello.jsh\n');
   });
 
+  it('lists shadowed copies when two skills register the same command', async () => {
+    const mockVfs = createMockVfs([
+      '/workspace/skills/wiki/wiki.jsh',
+      '/workspace/skills/llm-wiki/wiki.jsh',
+    ]);
+
+    const cmd = createWhichCommand(mockVfs);
+    const result = await cmd.execute(
+      ['wiki'],
+      createMockCtx({
+        registeredCommands: ['ls', 'cat'],
+      })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      '/workspace/skills/wiki/wiki.jsh\n  (shadowed /workspace/skills/llm-wiki/wiki.jsh)\n'
+    );
+  });
+
   it('resolves a saved workflow to its path labeled (workflow)', async () => {
     const fs = await VirtualFS.create({
       dbName: `which-wf-${Math.random()}`,

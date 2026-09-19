@@ -1,7 +1,12 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import { discoverJshCommands, pathToScanRoots } from '../jsh-discovery.js';
+import {
+  discoverJshCommandIndex,
+  type JshCommandCollision,
+  type JshCommandIndex,
+  pathToScanRoots,
+} from '../jsh-discovery.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { discoverWorkflowCommands, type WorkflowCommandEntry } from '../workflow-discovery.js';
 import { parseKnownFlags } from './subcommand-flags.js';
@@ -20,19 +25,21 @@ export interface WhichCommandOptions {
   getScriptRegisteredNames?: () => string[];
 }
 
+const EMPTY_JSH_INDEX: JshCommandIndex = { commands: new Map(), collisions: [] };
+
 /**
  * Discovers .jsh commands from catalog or direct FS scan. Lookup follows
  * the caller's `$PATH` (#2085) so `which` and dispatch answer from the
  * same root set; without an env, the default roots apply.
  */
-async function getJshMap(
+async function getJshIndex(
   opts: WhichCommandOptions,
   pathValue: string | undefined
-): Promise<Map<string, string>> {
+): Promise<JshCommandIndex> {
   const roots = pathValue === undefined ? undefined : pathToScanRoots(pathValue);
-  if (opts.scriptCatalog) return opts.scriptCatalog.getJshCommands(roots);
-  if (opts.fs) return discoverJshCommands(opts.fs, roots);
-  return new Map();
+  if (opts.scriptCatalog) return opts.scriptCatalog.getJshIndex(roots);
+  if (opts.fs) return discoverJshCommandIndex(opts.fs, roots);
+  return EMPTY_JSH_INDEX;
 }
 
 /** Discovers workflow commands from catalog or direct FS scan. */
@@ -48,6 +55,7 @@ async function getWorkflowMap(
 function resolveCommandPath(
   name: string,
   jshPath: string | undefined,
+  collision: JshCommandCollision | undefined,
   wf: WorkflowCommandEntry | undefined,
   staticBuiltins: Set<string>,
   builtinSet: Set<string>,
@@ -60,6 +68,11 @@ function resolveCommandPath(
   }
   if (jshPath) {
     const lines = [jshPath];
+    if (collision) {
+      for (const shadowed of collision.shadowedPaths) {
+        lines.push(`  (shadowed ${shadowed})`);
+      }
+    }
     if (wf) lines.push(`  ${wf.path} (workflow, shadowed by .jsh)`);
     return { lines, found: true };
   }
@@ -91,6 +104,7 @@ Usage: which <command> [command...]
 Prints the path of the given command(s).
   - Built-in commands resolve to /usr/bin/<name>
   - .jsh scripts resolve to their actual VFS path
+  - Duplicate .jsh names print the live path first, then each shadowed copy
 
 Exit code 0 if all commands found, 1 if any not found.
 `;
@@ -116,7 +130,9 @@ Exit code 0 if all commands found, 1 if any not found.
     const registeredCommands = ctx.getRegisteredCommands?.() ?? [];
     const builtinSet = new Set(registeredCommands);
 
-    const jshCommands = await getJshMap(resolvedOptions, ctx.env.get('PATH'));
+    const jshIndex = await getJshIndex(resolvedOptions, ctx.env.get('PATH'));
+    const jshCommands = jshIndex.commands;
+    const jshCollisions = new Map(jshIndex.collisions.map((c) => [c.name, c]));
     const workflowCommands = await getWorkflowMap(resolvedOptions);
 
     // Static built-ins (echo, ls, …) win over any same-named script. Falls back to the
@@ -137,6 +153,7 @@ Exit code 0 if all commands found, 1 if any not found.
       const result = resolveCommandPath(
         name,
         jshPath,
+        jshCollisions.get(name),
         wf,
         staticBuiltins,
         builtinSet,

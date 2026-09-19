@@ -9,6 +9,7 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../../fs/index.js';
+import { discoverJshCommandIndex, withJshCommandCollisions } from '../../jsh-discovery.js';
 import { formatDiscoveredSkills, formatDiscoveryScope, formatSkillInfo } from './help.js';
 
 async function handleSkillList(
@@ -32,11 +33,13 @@ async function handleSkillList(
       exitCode: 0,
     };
   }
-  return {
-    stdout: formatDiscoveredSkills(discovered, 'Discoverable skills'),
-    stderr: '',
-    exitCode: 0,
-  };
+  const { collisions } = await discoverJshCommandIndex(fs);
+  const listed = withJshCommandCollisions(
+    'skill',
+    formatDiscoveredSkills(discovered, 'Discoverable skills'),
+    collisions
+  );
+  return { ...listed, exitCode: 0 };
 }
 
 /**

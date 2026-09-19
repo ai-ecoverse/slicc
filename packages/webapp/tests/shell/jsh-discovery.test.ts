@@ -5,9 +5,42 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   DEFAULT_JSH_SEARCH_ROOTS,
   DEFAULT_SHELL_PATH,
+  discoverJshCommandIndex,
   discoverJshCommands,
+  formatJshCommandCollisions,
+  type JshDiscoveryFS,
   pathToScanRoots,
+  withJshCommandCollisions,
 } from '../../src/shell/jsh-discovery.js';
+
+function upskillRecord(skill: string, installed: string): string {
+  return `${JSON.stringify({
+    version: 1,
+    kind: 'github',
+    source: 'ai-ecoverse/skills',
+    skill,
+    installed,
+  })}\n`;
+}
+
+function mockDiscoveryFs(files: Record<string, string>): JshDiscoveryFS {
+  const paths = Object.keys(files);
+  return {
+    exists: async (path) =>
+      paths.some((p) => p === path || p.startsWith(path.endsWith('/') ? path : `${path}/`)),
+    walk: async function* (root) {
+      const prefix = root.endsWith('/') ? root : `${root}/`;
+      for (const p of paths) {
+        if (p.startsWith(prefix) || p === root) yield p;
+      }
+    },
+    readFile: async (path) => {
+      const content = files[path];
+      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+      return content;
+    },
+  };
+}
 
 describe('pathToScanRoots', () => {
   it('derives scan roots from a PATH value, preserving order', () => {
@@ -73,6 +106,104 @@ describe('discoverJshCommands', () => {
     expect(result.has('deploy')).toBe(true);
     const path = result.get('deploy')!;
     expect(path).toMatch(/\/deploy\.jsh$/);
+  });
+
+  it('records a collision when two unattributed skills ship the same command', async () => {
+    await vfs.writeFile('/workspace/skills/wiki/wiki.jsh', 'echo stale');
+    await vfs.writeFile('/workspace/skills/llm-wiki/wiki.jsh', 'echo live');
+    const index = await discoverJshCommandIndex(vfs);
+    expect(index.commands.has('wiki')).toBe(true);
+    expect(index.collisions).toHaveLength(1);
+    const collision = index.collisions[0];
+    expect(collision.name).toBe('wiki');
+    expect(collision.reason).toBe('first-scan');
+    expect([collision.winnerPath, ...collision.shadowedPaths].sort()).toEqual([
+      '/workspace/skills/llm-wiki/wiki.jsh',
+      '/workspace/skills/wiki/wiki.jsh',
+    ]);
+    expect(collision.shadowedPaths).not.toContain(collision.winnerPath);
+  });
+
+  it('prefers a .upskill provenance record over a bundled copy of the same command', async () => {
+    const fs = mockDiscoveryFs({
+      '/workspace/skills/wiki/wiki.jsh': 'echo stale',
+      '/workspace/skills/llm-wiki/wiki.jsh': 'echo live',
+      '/workspace/skills/llm-wiki/.upskill': upskillRecord('llm-wiki', '2026-09-01T00:00:00.000Z'),
+    });
+    const index = await discoverJshCommandIndex(fs);
+    expect(index.commands.get('wiki')).toBe('/workspace/skills/llm-wiki/wiki.jsh');
+    expect(index.collisions).toEqual([
+      {
+        name: 'wiki',
+        winnerPath: '/workspace/skills/llm-wiki/wiki.jsh',
+        shadowedPaths: ['/workspace/skills/wiki/wiki.jsh'],
+        reason: 'upskill-provenance',
+      },
+    ]);
+  });
+
+  it('prefers the newer .upskill installed timestamp when both skills are provenanced', async () => {
+    const fs = mockDiscoveryFs({
+      '/workspace/skills/wiki/wiki.jsh': 'echo old',
+      '/workspace/skills/wiki/.upskill': upskillRecord('wiki', '2026-01-01T00:00:00.000Z'),
+      '/workspace/skills/llm-wiki/wiki.jsh': 'echo new',
+      '/workspace/skills/llm-wiki/.upskill': upskillRecord('llm-wiki', '2026-09-01T00:00:00.000Z'),
+    });
+    const index = await discoverJshCommandIndex(fs);
+    expect(index.commands.get('wiki')).toBe('/workspace/skills/llm-wiki/wiki.jsh');
+    expect(index.collisions[0]?.reason).toBe('newer-upskill');
+    expect(index.collisions[0]?.shadowedPaths).toEqual(['/workspace/skills/wiki/wiki.jsh']);
+  });
+
+  it('keeps the first scan hit when neither skill has provenance, and still reports the loser', async () => {
+    const fs = mockDiscoveryFs({
+      '/workspace/skills/wiki/wiki.jsh': 'echo first',
+      '/workspace/skills/llm-wiki/wiki.jsh': 'echo second',
+    });
+    const index = await discoverJshCommandIndex(fs);
+    expect(index.commands.get('wiki')).toBe('/workspace/skills/wiki/wiki.jsh');
+    expect(index.collisions[0]).toEqual({
+      name: 'wiki',
+      winnerPath: '/workspace/skills/wiki/wiki.jsh',
+      shadowedPaths: ['/workspace/skills/llm-wiki/wiki.jsh'],
+      reason: 'first-scan',
+    });
+  });
+
+  it('does not let a later PATH root steal a name already claimed by an earlier root', async () => {
+    const fs = mockDiscoveryFs({
+      '/workspace/skills/wiki/wiki.jsh': 'echo skills',
+      '/workspace/bin/wiki.jsh': 'echo bin',
+    });
+    const index = await discoverJshCommandIndex(fs);
+    expect(index.commands.get('wiki')).toBe('/workspace/skills/wiki/wiki.jsh');
+    expect(index.collisions).toEqual([]);
+  });
+
+  it('formats collisions for skill list / which consumers', () => {
+    const text = formatJshCommandCollisions([
+      {
+        name: 'wiki',
+        winnerPath: '/workspace/skills/llm-wiki/wiki.jsh',
+        shadowedPaths: ['/workspace/skills/wiki/wiki.jsh'],
+        reason: 'upskill-provenance',
+      },
+    ]);
+    expect(text).toContain('Command collisions:');
+    expect(text).toContain('live     /workspace/skills/llm-wiki/wiki.jsh');
+    expect(text).toContain('shadowed /workspace/skills/wiki/wiki.jsh');
+    expect(text).toContain('.upskill provenance');
+    const warned = withJshCommandCollisions('skill', 'listing\n', [
+      {
+        name: 'wiki',
+        winnerPath: '/workspace/skills/llm-wiki/wiki.jsh',
+        shadowedPaths: ['/workspace/skills/wiki/wiki.jsh'],
+        reason: 'upskill-provenance',
+      },
+    ]);
+    expect(warned.stderr).toBe('skill: 1 command name collision — see listing\n');
+    expect(warned.stdout).toContain('listing');
+    expect(warned.stdout).toContain('Command collisions:');
   });
 
   it('an earlier root wins a basename conflict (PATH precedence)', async () => {

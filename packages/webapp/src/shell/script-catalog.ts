@@ -7,7 +7,8 @@ import {
 } from './bsh-discovery.js';
 import {
   DEFAULT_JSH_SEARCH_ROOTS,
-  discoverJshCommands,
+  discoverJshCommandIndex,
+  type JshCommandIndex,
   type JshDiscoveryFS,
 } from './jsh-discovery.js';
 import {
@@ -34,6 +35,18 @@ export interface ScriptCatalogOptions {
 
 function cloneJshCommands(commands: Map<string, string>): Map<string, string> {
   return new Map(commands);
+}
+
+function cloneJshIndex(index: JshCommandIndex): JshCommandIndex {
+  return {
+    commands: cloneJshCommands(index.commands),
+    collisions: index.collisions.map((collision) => ({
+      name: collision.name,
+      winnerPath: collision.winnerPath,
+      shadowedPaths: [...collision.shadowedPaths],
+      reason: collision.reason,
+    })),
+  };
 }
 
 function cloneWorkflowCommands(
@@ -107,7 +120,7 @@ export class ScriptCatalog {
   // One cache per distinct root set: shells share this catalog but can have
   // different $PATH values (cone vs scoops vs a user-extended PATH). The map
   // stays tiny in practice — a handful of PATH shapes per instance.
-  private readonly jshByRoots = new Map<string, CachedSource<Map<string, string>>>();
+  private readonly jshByRoots = new Map<string, CachedSource<JshCommandIndex>>();
   private readonly bsh: CachedSource<BshEntry[]> = createCachedSource();
   private readonly workflow: CachedSource<Map<string, WorkflowCommandEntry>> = createCachedSource();
 
@@ -168,11 +181,14 @@ export class ScriptCatalog {
     bumpGeneration(this.workflow);
   }
 
+  async getJshIndex(roots: readonly string[] = DEFAULT_JSH_SEARCH_ROOTS): Promise<JshCommandIndex> {
+    return cloneJshIndex(await this.loadJshIndex(roots));
+  }
+
   async getJshCommands(
     roots: readonly string[] = DEFAULT_JSH_SEARCH_ROOTS
   ): Promise<Map<string, string>> {
-    const commands = await this.loadJshCommands(roots);
-    return cloneJshCommands(commands);
+    return (await this.getJshIndex(roots)).commands;
   }
 
   async getJshCommandNames(roots?: readonly string[]): Promise<string[]> {
@@ -244,7 +260,7 @@ export class ScriptCatalog {
     return src.inflight;
   }
 
-  private loadJshCommands(roots: readonly string[]): Promise<Map<string, string>> {
+  private loadJshIndex(roots: readonly string[]): Promise<JshCommandIndex> {
     const key = roots.join(':');
     let src = this.jshByRoots.get(key);
     if (!src) {
@@ -255,8 +271,8 @@ export class ScriptCatalog {
     return this.loadCached(
       src,
       this.shouldCacheJsh(frozenRoots),
-      () => discoverJshCommands(this.jshFs, frozenRoots),
-      cloneJshCommands
+      () => discoverJshCommandIndex(this.jshFs, frozenRoots),
+      cloneJshIndex
     );
   }
 

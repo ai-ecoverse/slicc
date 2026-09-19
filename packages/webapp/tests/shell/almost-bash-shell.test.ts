@@ -549,6 +549,28 @@ describe('AlmostBashShellHeadless .jsh command registration', () => {
     await fs.dispose();
   });
 
+  it('dispatches the provenanced skill when two skills register the same command', async () => {
+    await fs.writeFile('/workspace/skills/wiki/wiki.jsh', 'console.log("stale");');
+    await fs.writeFile('/workspace/skills/llm-wiki/wiki.jsh', 'console.log("live");');
+    await fs.writeFile(
+      '/workspace/skills/llm-wiki/.upskill',
+      `${JSON.stringify({
+        version: 1,
+        kind: 'github',
+        source: 'ai-ecoverse/skills',
+        skill: 'llm-wiki',
+        installed: '2026-09-01T00:00:00.000Z',
+      })}\n`
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    const result = await shell.executeCommand('wiki');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('live');
+    expect(result.stdout).not.toContain('stale');
+  });
+
   it('registers .jsh commands as first-class bash commands available in pipelines', async () => {
     // Create a .jsh script that outputs text
     await fs.writeFile(

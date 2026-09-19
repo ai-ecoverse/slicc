@@ -10,6 +10,7 @@
 
 import type { SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../../fs/index.js';
+import { discoverJshCommandIndex, withJshCommandCollisions } from '../../jsh-discovery.js';
 import { formatDiscoveredSkills, formatDiscoveryScope } from './help.js';
 import { collectSkillUpdateResults, type SkillUpdateResult } from './update.js';
 
@@ -75,9 +76,10 @@ async function listDiscoverable(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const skills = await import('../../../skills/index.js');
   const discovered = await skills.discoverSkills(fs);
+  const { collisions } = await discoverJshCommandIndex(fs);
   if (json) {
     return {
-      stdout: `${JSON.stringify({ ok: true, skills: discovered })}\n`,
+      stdout: `${JSON.stringify({ ok: true, skills: discovered, commandCollisions: collisions })}\n`,
       stderr: '',
       exitCode: 0,
     };
@@ -89,11 +91,12 @@ async function listDiscoverable(
       exitCode: 0,
     };
   }
-  return {
-    stdout: formatDiscoveredSkills(discovered, 'Discoverable local skills'),
-    stderr: '',
-    exitCode: 0,
-  };
+  const listed = withJshCommandCollisions(
+    'upskill',
+    formatDiscoveredSkills(discovered, 'Discoverable local skills'),
+    collisions
+  );
+  return { ...listed, exitCode: 0 };
 }
 
 async function listOutdated(
