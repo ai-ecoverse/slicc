@@ -85,7 +85,10 @@ struct MessageListView: View {
     @State private var wasFollowingBeforeKeyboard = false
 
     var body: some View {
-        Group {
+        // A ZStack, not a Group: a Group hands the caller's modifiers to each
+        // branch, so the composer `.safeAreaInset` would be rebuilt when the
+        // first message flips empty → list, losing its focus and state.
+        ZStack {
             if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty
                 && sudoApprovals.isEmpty
             {
