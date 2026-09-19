@@ -51,7 +51,9 @@ Anthropic aliases (same verbs):
   left_click right_click middle_click double_click triple_click
   left_click_drag mouse_move scroll key type screenshot wait
 
-Coordinates are screenshot-space of the last shot unless --native.
+Coordinates are screenshot-space of the last shot unless --native
+(the pixel space the descriptor advertises). Tab computers convert
+that native space to CSS pixels with the tab's devicePixelRatio.
 Buttons: 1 left, 2 middle, 3 right. Chain verbs: computer click 1 type hello
 
 v86 guests register as v86:<name> on \`v86 start\`. Prefer this command;

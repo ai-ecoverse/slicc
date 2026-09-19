@@ -372,6 +372,77 @@ describe('computer command', () => {
     expect(text.stdout).toContain('login:');
   });
 
+  it('maps tab screenshot-space clicks through lastShot scale then DPR to CSS', async () => {
+    function pngHeader(width: number, height: number): Uint8Array {
+      const bytes = new Uint8Array(24);
+      bytes[0] = 0x89;
+      bytes[1] = 0x50;
+      bytes[2] = 0x4e;
+      bytes[3] = 0x47;
+      bytes[16] = (width >>> 24) & 255;
+      bytes[17] = (width >>> 16) & 255;
+      bytes[18] = (width >>> 8) & 255;
+      bytes[19] = width & 255;
+      bytes[20] = (height >>> 24) & 255;
+      bytes[21] = (height >>> 16) & 255;
+      bytes[22] = (height >>> 8) & 255;
+      bytes[23] = height & 255;
+      return bytes;
+    }
+    const sent: Array<{ method: string; params: unknown }> = [];
+    const tab = {
+      send: vi.fn(async (method: string, params?: unknown) => {
+        sent.push({ method, params });
+        return {};
+      }),
+      screenshot: vi.fn(async (opts: { format?: string; maxWidth?: number } = {}) => {
+        const size =
+          opts.maxWidth && opts.maxWidth < 5120
+            ? { width: 614, height: 324 }
+            : { width: 5120, height: 2704 };
+        return uint8ToBase64(pngHeader(size.width, size.height));
+      }),
+      evaluate: vi.fn(async () => 2.5),
+    };
+    const browser = {
+      listAllTargets: vi.fn(async () => [
+        { targetId: 'T1', title: 'Probe', url: 'https://example.test/' },
+      ]),
+      withTab: vi.fn(async (_id: string, fn: (t: typeof tab) => Promise<unknown>) => fn(tab)),
+    };
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({ registry, browser: browser as never });
+    const { ctx } = makeCtx();
+    expect((await cmd.execute(['add', 'tab', 'T1'], ctx)).exitCode).toBe(0);
+    const shot = await cmd.execute(['screenshot', '--size', '614'], ctx);
+    expect(shot.exitCode).toBe(0);
+    const info = await cmd.execute(['info', '--json'], ctx);
+    const descriptor = JSON.parse(info.stdout) as {
+      size: { width: number; height: number };
+      lastShot: { width: number; height: number; scale: number };
+    };
+    expect(descriptor.size).toEqual({ width: 5120, height: 2704 });
+    expect(descriptor.lastShot.width).toBe(614);
+    expect(descriptor.lastShot.scale).toBeCloseTo(614 / 5120);
+    const click = await cmd.execute(['click', '1', '--at', '132,96'], ctx);
+    expect(click.exitCode).toBe(0);
+    const pressed = sent.find(
+      (s) =>
+        s.method === 'Input.dispatchMouseEvent' &&
+        (s.params as { type?: string }).type === 'mousePressed'
+    );
+    expect(pressed?.params).toMatchObject({ x: 440, y: 320 });
+    sent.length = 0;
+    const native = await cmd.execute(['--native', 'click', '1', '--at', '1100,800'], ctx);
+    expect(native.exitCode).toBe(0);
+    const nativePressed = sent.find(
+      (s) =>
+        s.method === 'Input.dispatchMouseEvent' &&
+        (s.params as { type?: string }).type === 'mousePressed'
+    );
+    expect(nativePressed?.params).toMatchObject({ x: 440, y: 320 });
+  });
+
   it('add tab uses a local backend when browser is injected without panelRpc', async () => {
     const jpeg = uint8ToBase64(MINIMAL_JPEG);
     const tab = {

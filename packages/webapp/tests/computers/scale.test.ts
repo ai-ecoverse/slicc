@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatScaleLine,
   mapDisplayedToNative,
+  mapNativeToCss,
   mapPoint,
   parseSizeSpec,
   roundTrip,
@@ -43,6 +44,25 @@ describe('computer scale', () => {
     const lastShot = toLastShot(scaleFromNative({ width: 1000, height: 500 }, 500), 1);
     expect(mapPoint(100, 50, lastShot, false)).toEqual({ x: 200, y: 100 });
     expect(mapPoint(100, 50, lastShot, true)).toEqual({ x: 100, y: 50 });
+  });
+
+  it('maps tab device pixels to CSS using devicePixelRatio', () => {
+    expect(mapNativeToCss(1100, 800, 2.5)).toEqual({ x: 440, y: 320 });
+    expect(mapNativeToCss(1101, 801, 2.5)).toEqual({ x: 440, y: 320 });
+    expect(mapNativeToCss(1100, 800, 1)).toEqual({ x: 1100, y: 800 });
+    expect(mapNativeToCss(1100, 800, 0)).toEqual({ x: 1100, y: 800 });
+    expect(mapNativeToCss(1100, 800, Number.NaN)).toEqual({ x: 1100, y: 800 });
+  });
+
+  it('keeps lastShot scale in advertised native space so DPR conversion is not baked in', () => {
+    const mapping = scaleFromEncoded({ width: 5120, height: 2704 }, { width: 614, height: 324 });
+    const lastShot = toLastShot(mapping, 1);
+    expect(lastShot.scale).toBeCloseTo(614 / 5120);
+    const native = mapPoint(132, 96, lastShot, false);
+    expect(native).toEqual({ x: 1101, y: 801 });
+    expect(mapNativeToCss(native.x, native.y, 2.5)).toEqual({ x: 440, y: 320 });
+    expect(mapPoint(1100, 800, lastShot, true)).toEqual({ x: 1100, y: 800 });
+    expect(mapNativeToCss(1100, 800, 2.5)).toEqual({ x: 440, y: 320 });
   });
 
   it('round-trips native points through the shot scale', () => {
