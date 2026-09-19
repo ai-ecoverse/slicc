@@ -17,6 +17,7 @@ import {
   ComputerRegistry,
   resetComputerRegistryForTests,
 } from '../../../src/computers/registry.js';
+import { mapPoint, scaleFromEncoded, toLastShot } from '../../../src/computers/scale.js';
 
 const JPEG_B64 = uint8ToBase64(MINIMAL_JPEG);
 
@@ -30,7 +31,24 @@ afterEach(() => {
   resetComputerRegistryForTests();
 });
 
-function makeTab() {
+function pngHeader(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(24);
+  bytes[0] = 0x89;
+  bytes[1] = 0x50;
+  bytes[2] = 0x4e;
+  bytes[3] = 0x47;
+  bytes[16] = (width >>> 24) & 255;
+  bytes[17] = (width >>> 16) & 255;
+  bytes[18] = (width >>> 8) & 255;
+  bytes[19] = width & 255;
+  bytes[20] = (height >>> 24) & 255;
+  bytes[21] = (height >>> 16) & 255;
+  bytes[22] = (height >>> 8) & 255;
+  bytes[23] = height & 255;
+  return bytes;
+}
+
+function makeTab(dpr = 1) {
   const sent: Array<{ method: string; params: unknown }> = [];
   const tab = {
     send: vi.fn(async (method: string, params?: unknown) => {
@@ -38,6 +56,7 @@ function makeTab() {
       return {};
     }),
     screenshot: vi.fn(async (_opts: { format?: string; maxWidth?: number } = {}) => JPEG_B64),
+    evaluate: vi.fn(async () => dpr),
   };
   return { tab: tab as unknown as TabPage, raw: tab, sent };
 }
@@ -127,6 +146,38 @@ describe('dispatchTabEvent', () => {
     );
     expect(click?.params).toMatchObject({ x: 100, y: 80 });
   });
+
+  it('divides device-pixel clicks by DPR so CDP receives CSS pixels', async () => {
+    const { tab, sent } = makeTab(2.5);
+    await dispatchTabEvent(tab, { type: 'click', button: 1, count: 1, x: 1100, y: 800 });
+    const click = sent.find(
+      (s) =>
+        s.method === 'Input.dispatchMouseEvent' &&
+        (s.params as { type?: string }).type === 'mousePressed'
+    );
+    expect(click?.params).toMatchObject({ x: 440, y: 320 });
+  });
+
+  it('leaves DPR 1 clicks in CSS pixels unchanged', async () => {
+    const { tab, sent } = makeTab(1);
+    await dispatchTabEvent(tab, { type: 'click', button: 1, count: 1, x: 440, y: 320 });
+    const click = sent.find(
+      (s) =>
+        s.method === 'Input.dispatchMouseEvent' &&
+        (s.params as { type?: string }).type === 'mousePressed'
+    );
+    expect(click?.params).toMatchObject({ x: 440, y: 320 });
+  });
+
+  it('treats a missing or invalid page DPR as 1', async () => {
+    const { tab, sent, raw } = makeTab();
+    raw.evaluate.mockRejectedValueOnce(new Error('no runtime'));
+    await dispatchTabEvent(tab, { type: 'click', button: 1, count: 1, x: 440, y: 320 });
+    expect(sent[0]?.params).toMatchObject({ x: 440, y: 320 });
+    raw.evaluate.mockResolvedValueOnce(0);
+    await dispatchTabEvent(tab, { type: 'click', button: 1, count: 1, x: 440, y: 320 });
+    expect(sent[2]?.params).toMatchObject({ x: 440, y: 320 });
+  });
 });
 
 describe('LocalTabComputerBackend', () => {
@@ -212,22 +263,6 @@ describe('page-side screenshotTab / inputTab', () => {
   });
 
   it('returns JPEG bytes when jpeg is requested on the downscale path', async () => {
-    function pngHeader(width: number, height: number): Uint8Array {
-      const bytes = new Uint8Array(24);
-      bytes[0] = 0x89;
-      bytes[1] = 0x50;
-      bytes[2] = 0x4e;
-      bytes[3] = 0x47;
-      bytes[16] = (width >>> 24) & 255;
-      bytes[17] = (width >>> 16) & 255;
-      bytes[18] = (width >>> 8) & 255;
-      bytes[19] = width & 255;
-      bytes[20] = (height >>> 24) & 255;
-      bytes[21] = (height >>> 16) & 255;
-      bytes[22] = (height >>> 8) & 255;
-      bytes[23] = height & 255;
-      return bytes;
-    }
     const tab = {
       send: vi.fn(async () => ({})),
       screenshot: vi.fn(async (opts: { format?: string; maxWidth?: number } = {}) => {
@@ -263,5 +298,80 @@ describe('computer registry + tab backend', () => {
     const desc = registry.register(new LocalTabComputerBackend(browser as never, 'T1', EXAMPLE));
     expect(desc.id).toBe('tab:T1');
     expect(desc.pid).toBeNull();
+  });
+});
+
+describe('tab screenshot-space vs CSS input', () => {
+  const NATIVE = { width: 5120, height: 2704 };
+  const SHOT = { width: 614, height: 324 };
+
+  function makeHiDpiTab(dpr: number) {
+    const sent: Array<{ method: string; params: unknown }> = [];
+    const tab = {
+      send: vi.fn(async (method: string, params?: unknown) => {
+        sent.push({ method, params });
+        return {};
+      }),
+      screenshot: vi.fn(async (opts: { format?: string; maxWidth?: number } = {}) => {
+        const size = opts.maxWidth && opts.maxWidth < NATIVE.width ? SHOT : NATIVE;
+        return uint8ToBase64(pngHeader(size.width, size.height));
+      }),
+      evaluate: vi.fn(async () => dpr),
+    };
+    return { tab: tab as unknown as TabPage, sent };
+  }
+
+  function pressed(sent: Array<{ method: string; params: unknown }>) {
+    return sent.find(
+      (s) =>
+        s.method === 'Input.dispatchMouseEvent' &&
+        (s.params as { type?: string }).type === 'mousePressed'
+    );
+  }
+
+  it('lands a screenshot-space click on the CSS target when DPR is 2.5', async () => {
+    const { tab, sent } = makeHiDpiTab(2.5);
+    const browser = makeBrowser([EXAMPLE], tab);
+    const backend = new LocalTabComputerBackend(browser as never, 'T1', EXAMPLE);
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 614 });
+    const lastShot = toLastShot(
+      scaleFromEncoded(backend.describe().size ?? NATIVE, {
+        width: frame.width,
+        height: frame.height,
+      }),
+      1
+    );
+    expect(backend.describe().size).toEqual(NATIVE);
+    expect(lastShot.scale).toBeCloseTo(SHOT.width / NATIVE.width);
+    const at = mapPoint(132, 96, lastShot, false);
+    await backend.input([{ type: 'click', button: 1, count: 1, x: at.x, y: at.y }]);
+    expect(pressed(sent)?.params).toMatchObject({ x: 440, y: 320 });
+  });
+
+  it('lands a --native device-pixel click on the CSS target when DPR is 2.5', async () => {
+    const { tab, sent } = makeHiDpiTab(2.5);
+    const browser = makeBrowser([EXAMPLE], tab);
+    const backend = new LocalTabComputerBackend(browser as never, 'T1', EXAMPLE);
+    await backend.screenshot({ format: 'jpeg', maxWidth: 614 });
+    await backend.input([{ type: 'click', button: 1, count: 1, x: 1100, y: 800 }]);
+    expect(pressed(sent)?.params).toMatchObject({ x: 440, y: 320 });
+  });
+
+  it('does not rescale screenshot-space clicks when DPR is 1', async () => {
+    const { tab, sent } = makeHiDpiTab(1);
+    const browser = makeBrowser([EXAMPLE], tab);
+    const backend = new LocalTabComputerBackend(browser as never, 'T1', EXAMPLE);
+    const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 614 });
+    const lastShot = toLastShot(
+      scaleFromEncoded(backend.describe().size ?? NATIVE, {
+        width: frame.width,
+        height: frame.height,
+      }),
+      1
+    );
+    const at = mapPoint(132, 96, lastShot, false);
+    await backend.input([{ type: 'click', button: 1, count: 1, x: at.x, y: at.y }]);
+    expect(at).toEqual({ x: 1101, y: 801 });
+    expect(pressed(sent)?.params).toMatchObject({ x: 1101, y: 801 });
   });
 });

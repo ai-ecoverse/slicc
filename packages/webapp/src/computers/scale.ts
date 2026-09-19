@@ -85,6 +85,19 @@ export function mapPoint(
   };
 }
 
+export function mapNativeToCss(
+  x: number,
+  y: number,
+  devicePixelRatio: number
+): { x: number; y: number } {
+  const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  if (dpr === 1) return { x, y };
+  return {
+    x: Math.round(x / dpr),
+    y: Math.round(y / dpr),
+  };
+}
+
 export function roundTrip(x: number, y: number, scale: number): { x: number; y: number } {
   if (scale === 0) return { x, y };
   const shotX = Math.round(x * scale);

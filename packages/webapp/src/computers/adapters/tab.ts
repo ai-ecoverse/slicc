@@ -20,6 +20,7 @@ import {
 } from '../encode-frame.js';
 import { parseKeysym, toCdpKeyEvents } from '../keys.js';
 import { applyPointerToEvents, createPointer, resolvePointer } from '../pointer.js';
+import { mapNativeToCss } from '../scale.js';
 
 export function tabComputerId(targetId: string): string {
   return `tab:${targetId}`;
@@ -97,7 +98,8 @@ export class LocalTabComputerBackend implements ComputerBackend {
     await this.refreshInfo();
     refuseSliccAppTab({ url: this.url, title: this.title });
     await this.browser.withTab(this.targetId, async (tab) => {
-      for (const event of events) await dispatchTabEvent(tab, event, this.pointer);
+      const dpr = await readTabDevicePixelRatio(tab);
+      for (const event of events) await dispatchTabEvent(tab, event, this.pointer, dpr);
     });
   }
 
@@ -219,11 +221,13 @@ export class BridgedTabComputerBackend implements ComputerBackend {
 export async function dispatchTabEvent(
   tab: TabPage,
   event: ComputerInputEvent,
-  pointer = createPointer()
+  pointer = createPointer(),
+  dpr?: number
 ): Promise<void> {
+  const ratio = dpr ?? (await readTabDevicePixelRatio(tab));
   switch (event.type) {
     case 'mousemove': {
-      const p = resolvePointer(pointer, event);
+      const p = cssPointer(pointer, event, ratio);
       await tab.send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
         x: p.x,
@@ -232,16 +236,16 @@ export async function dispatchTabEvent(
       return;
     }
     case 'button':
-      await dispatchButton(tab, event, pointer);
+      await dispatchButton(tab, event, pointer, ratio);
       return;
     case 'click':
-      await dispatchClick(tab, event, pointer);
+      await dispatchClick(tab, event, pointer, ratio);
       return;
     case 'drag':
-      await dispatchDrag(tab, event, pointer);
+      await dispatchDrag(tab, event, pointer, ratio);
       return;
     case 'scroll': {
-      const p = resolvePointer(pointer, event);
+      const p = cssPointer(pointer, event, ratio);
       await tab.send('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
         x: p.x,
@@ -270,9 +274,10 @@ export async function dispatchTabEvent(
 async function dispatchButton(
   tab: TabPage,
   event: Extract<ComputerInputEvent, { type: 'button' }>,
-  pointer: ReturnType<typeof createPointer>
+  pointer: ReturnType<typeof createPointer>,
+  dpr: number
 ): Promise<void> {
-  const p = resolvePointer(pointer, event);
+  const p = cssPointer(pointer, event, dpr);
   await tab.send('Input.dispatchMouseEvent', {
     type: event.down ? 'mousePressed' : 'mouseReleased',
     x: p.x,
@@ -285,9 +290,10 @@ async function dispatchButton(
 async function dispatchClick(
   tab: TabPage,
   event: Extract<ComputerInputEvent, { type: 'click' }>,
-  pointer: ReturnType<typeof createPointer>
+  pointer: ReturnType<typeof createPointer>,
+  dpr: number
 ): Promise<void> {
-  const p = resolvePointer(pointer, event);
+  const p = cssPointer(pointer, event, dpr);
   const count = Math.max(1, event.count);
   for (let i = 1; i <= count; i++) {
     await tab.send('Input.dispatchMouseEvent', {
@@ -311,19 +317,22 @@ async function dispatchClick(
 async function dispatchDrag(
   tab: TabPage,
   event: Extract<ComputerInputEvent, { type: 'drag' }>,
-  pointer: ReturnType<typeof createPointer>
+  pointer: ReturnType<typeof createPointer>,
+  dpr: number
 ): Promise<void> {
-  await dispatchTabEvent(tab, { type: 'mousemove', x: event.x1, y: event.y1 }, pointer);
+  await dispatchTabEvent(tab, { type: 'mousemove', x: event.x1, y: event.y1 }, pointer, dpr);
   await dispatchTabEvent(
     tab,
     { type: 'button', button: 1, down: true, x: event.x1, y: event.y1 },
-    pointer
+    pointer,
+    dpr
   );
-  await dispatchTabEvent(tab, { type: 'mousemove', x: event.x2, y: event.y2 }, pointer);
+  await dispatchTabEvent(tab, { type: 'mousemove', x: event.x2, y: event.y2 }, pointer, dpr);
   await dispatchTabEvent(
     tab,
     { type: 'button', button: 1, down: false, x: event.x2, y: event.y2 },
-    pointer
+    pointer,
+    dpr
   );
 }
 
@@ -379,8 +388,27 @@ export async function inputTab(
   refuseSliccAppTab(info);
   const pointer = createPointer();
   await browser.withTab(targetId, async (tab) => {
-    for (const event of events) await dispatchTabEvent(tab, event, pointer);
+    const dpr = await readTabDevicePixelRatio(tab);
+    for (const event of events) await dispatchTabEvent(tab, event, pointer, dpr);
   });
+}
+
+function cssPointer(
+  pointer: ReturnType<typeof createPointer>,
+  coords: { x?: number; y?: number },
+  dpr: number
+): { x: number; y: number } {
+  const p = resolvePointer(pointer, coords);
+  return mapNativeToCss(p.x, p.y, dpr);
+}
+
+async function readTabDevicePixelRatio(tab: TabPage): Promise<number> {
+  try {
+    const value = await tab.evaluate('window.devicePixelRatio');
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
+  } catch {
+    return 1;
+  }
 }
 
 export function resolveTabPage(pages: PageInfo[], spec: string): PageInfo | { error: string } {
