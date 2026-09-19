@@ -1624,13 +1624,16 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleError(msg: ErrorMsg): void {
-    if (msg.scoopJid === this.selectedScoopJid) {
-      this.emitToUI({
-        type: 'error',
-        error: msg.error,
-        ...(msg.endTurn === false ? { endTurn: false } : {}),
-      });
-    }
+    const event: UIAgentEvent = {
+      type: 'error',
+      error: msg.error,
+      ...(msg.endTurn === false ? { endTurn: false } : {}),
+    };
+    if (msg.scoopJid === this.selectedScoopJid) this.emitToUI(event);
+    // A failure is not an `agent-event`, so the background translation never
+    // sees it. Without this a follower reading the unit got `ready` and no
+    // error card: its prompt looked finished with no answer at all.
+    else if (msg.scoopJid) this.emitBackground(msg.scoopJid, event);
   }
 
   private handleIncomingMessage(msg: IncomingMessageMsg): void {

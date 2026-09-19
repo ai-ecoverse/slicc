@@ -103,15 +103,16 @@ export class BroadcastManager {
    */
   broadcastEvent(event: AgentEvent, backgroundScoopJid?: string): void {
     if (this.context.followers.followers.size === 0) return;
-    // `backgroundScoopJid` names a unit this leader is NOT displaying. Its
-    // events go only to the followers reading it — see
-    // `broadcastToFollowersReading` for why not to everyone.
-    const scoopJid = backgroundScoopJid ?? this.context.options.getScoopJid();
-    const message = { type: 'agent_event', event, scoopJid } as const;
-    const failed =
-      backgroundScoopJid === undefined
-        ? this.context.followers.broadcastToAllFollowers(message)
-        : this.context.followers.broadcastToFollowersReading(backgroundScoopJid, message);
+    // `backgroundScoopJid` names a unit this leader is NOT displaying. Either
+    // way the event goes to the followers READING its unit, not to everyone —
+    // see `broadcastUnitTraffic` for who reads what.
+    const displayed = this.context.options.getScoopJid();
+    const scoopJid = backgroundScoopJid ?? displayed;
+    const failed = this.context.followers.broadcastUnitTraffic(scoopJid, displayed, {
+      type: 'agent_event',
+      event,
+      scoopJid,
+    });
     if (failed.length === 0) return;
     const degraded = degradeOversizeAgentEvent(event);
     if (!degraded) return;

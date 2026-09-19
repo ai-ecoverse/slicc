@@ -240,6 +240,24 @@ describe('OffscreenClient', () => {
       expect(ui[2].messageId).not.toBe(backgroundId);
     });
 
+    it('forwards a non-displayed unit’s failure, keeping endTurn', () => {
+      client.setSelectedScoopJid('cone_a');
+      const ui: unknown[] = [];
+      client.createAgentHandle().onEvent((e) => ui.push(e));
+      const seen = background();
+
+      simulateMessage('offscreen', {
+        type: 'error',
+        scoopJid: 'cone_b',
+        error: 'rate limited',
+        endTurn: false,
+      });
+      simulateMessage('offscreen', { type: 'error', scoopJid: 'cone_a', error: 'boom' });
+
+      expect(seen).toEqual([['cone_b', { type: 'error', error: 'rate limited', endTurn: false }]]);
+      expect(ui).toEqual([{ type: 'error', error: 'boom' }]);
+    });
+
     it('stops delivering once unsubscribed', () => {
       client.setSelectedScoopJid('cone_a');
       const seen: unknown[] = [];

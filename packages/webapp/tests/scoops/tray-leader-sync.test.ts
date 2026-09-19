@@ -724,9 +724,22 @@ describe('LeaderSyncManager', () => {
     expect(guest.parseSent().slice(counts[2])).toEqual([]);
   });
 
-  it('still sends the displayed unit’s events to everyone, guests included', () => {
-    const { manager } = createManager();
+  it('sends the displayed unit’s events to its readers, to guests, and to peers with no selection', async () => {
+    const { manager } = createManager({
+      getScoops: () =>
+        ['cone', 'cone_b'].map((jid) => ({
+          jid,
+          name: jid,
+          folder: `/${jid}`,
+          isCone: true,
+          assistantLabel: jid,
+        })),
+    });
+    const onDisplayed = new FakeChannel();
+    const elsewhere = new FakeChannel();
     const guest = new FakeChannel();
+    manager.addFollower('onDisplayed', onDisplayed);
+    manager.addFollower('elsewhere', elsewhere);
     manager.addFollower('guest', guest, {
       trust: 'biscotto',
       biscotto: {
@@ -735,14 +748,19 @@ describe('LeaderSyncManager', () => {
         gates: { message: { approver: 'user' }, tool: { approver: 'user' } },
       },
     });
-    const before = guest.parseSent().length;
+    elsewhere.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    await Promise.resolve();
+    const counts = [onDisplayed, elsewhere, guest].map((ch) => ch.parseSent().length);
 
     const event = { type: 'content_delta', messageId: 'm1', text: 'hi' } as const;
     manager.broadcastEvent(event);
 
-    expect(guest.parseSent().slice(before)).toEqual([
-      { type: 'agent_event', event, scoopJid: 'cone' },
-    ]);
+    const expected = [{ type: 'agent_event', event, scoopJid: 'cone' }];
+    expect(onDisplayed.parseSent().slice(counts[0])).toEqual(expected);
+    expect(guest.parseSent().slice(counts[2])).toEqual(expected);
+    // Reading cone_b: the displayed unit's turn is not part of that transcript,
+    // and a follower that does not route by unit would merge the two.
+    expect(elsewhere.parseSent().slice(counts[1])).toEqual([]);
   });
 
   it('does not broadcast user_message_echo when no followers', () => {

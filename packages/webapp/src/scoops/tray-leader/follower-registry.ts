@@ -382,20 +382,35 @@ export class FollowerRegistry {
   }
 
   /**
-   * {@link broadcastToAllFollowers}, narrowed to the full-trust followers that
-   * SELECTED `scoopJid`. For traffic about a unit the leader is not displaying.
+   * Send one unit's traffic to the followers that unit's traffic is FOR.
    *
-   * Narrowed twice, for different reasons. Guests, because a biscotto was
-   * shared ONE thread and the wire allowlist cannot tell one unit's
-   * `agent_event` from another's. And everyone who did not select the unit,
-   * because not every follower routes an event by the unit it names: the CLI's
-   * `prompt` prints any `content_delta` and exits on any `turn_end`, so an
-   * unrequested unit's turn would end up in its output.
+   * Not every follower routes an `agent_event` by the unit it names — the web
+   * follower and the CLI's `prompt` render or print whatever arrives — so the
+   * leader decides, per peer, which unit's stream it gets:
+   *
+   * - a full-trust follower that selected a unit gets THAT unit, displayed by
+   *   the leader or not. Sending it the displayed unit as well merged two
+   *   concurrent turns into one transcript;
+   * - a peer with no selection keeps the historical default, the unit the
+   *   leader is displaying;
+   * - a biscotto gets the displayed unit and nothing else: a guest is shared
+   *   ONE thread, its snapshot is pinned to the displayed unit, and the wire
+   *   allowlist cannot tell one unit's `agent_event` from another's.
    */
-  broadcastToFollowersReading(scoopJid: string, message: LeaderToFollowerMessage): string[] {
+  broadcastUnitTraffic(
+    scoopJid: string,
+    displayedScoopJid: string,
+    message: LeaderToFollowerMessage
+  ): string[] {
     return this.broadcastPerFollower(
       () => message,
-      (follower) => follower.trust !== 'biscotto' && follower.selectedScoopJid === scoopJid
+      (follower) => {
+        const reading =
+          follower.trust === 'biscotto'
+            ? displayedScoopJid
+            : (follower.selectedScoopJid ?? displayedScoopJid);
+        return reading === scoopJid;
+      }
     );
   }
 
