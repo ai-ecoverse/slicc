@@ -180,6 +180,38 @@ describe('computer command', () => {
     expect(jpgs).toHaveLength(3);
   });
 
+  it('keeps the coordinate space fixed across repeated pokes (issue #3297)', async () => {
+    class DecayBackend extends FakeBackend {
+      async screenshot(opts: ComputerScreenshotOpts = { format: 'jpeg' }): Promise<ComputerFrame> {
+        this.shots += 1;
+        const max = opts.maxWidth ?? 768;
+        const shot = Math.round(max * 0.8);
+        return {
+          seq: this.shots,
+          mime: 'image/jpeg',
+          width: shot,
+          height: Math.round(shot / 2),
+          bytes: MINIMAL_JPEG,
+        };
+      }
+    }
+    const backend = new DecayBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    await cmd.execute(['screenshot'], ctx);
+    for (let i = 0; i < 4; i++) {
+      await cmd.execute(['click', '1', '--at', '100,100'], ctx);
+    }
+    const clicks = backend.events.filter((e) => e.type === 'click');
+    expect(clicks).toHaveLength(4);
+    const first = clicks[0];
+    for (const click of clicks) {
+      expect(click).toEqual(first);
+    }
+  });
+
   it('maps Anthropic left_click coords and --native opt-out', async () => {
     const backend = new FakeBackend();
     const registry = new ComputerRegistry(null);

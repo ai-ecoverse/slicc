@@ -73,6 +73,14 @@ export class ComputerRegistry {
     this.emitChange();
   }
 
+  rememberFrame(id: string, frame: ComputerFrame): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.lastFrame = frame;
+    entry.seq = frame.seq;
+    this.emitChange();
+  }
+
   nextSeq(id: string): number {
     const entry = this.entries.get(id);
     if (!entry) return 1;

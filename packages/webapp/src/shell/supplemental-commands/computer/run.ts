@@ -783,11 +783,10 @@ async function writePostActionFrame(
       `screenshot failed after input: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  const native = target.backend.describe().size ?? { width: frame.width, height: frame.height };
-  const mapping = scaleFromEncoded(native, { width: frame.width, height: frame.height });
   const seq = registry.nextSeq(target.id);
   const stamped = { ...frame, seq };
-  registry.rememberShot(target.id, toLastShot(mapping, Date.now()), stamped);
+
+  registry.rememberFrame(target.id, stamped);
   const path = await writeFrozenFrame({
     fs: ctx.fs,
     cwd: ctx.cwd,
