@@ -91,8 +91,9 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         let plainObject = try XCTUnwrap(try JSONSerialization.jsonObject(with: plain) as? [String: Any])
         XCTAssertNil(plainObject["peek"], "an ordinary snapshot request stays byte-identical")
 
-        guard case .requestSnapshot(let scoopJid, let peek) = try roundTrip(
-            .requestSnapshot(scoopJid: "s2", peek: true))
+        guard
+            case .requestSnapshot(let scoopJid, let peek) = try roundTrip(
+                .requestSnapshot(scoopJid: "s2", peek: true))
         else {
             XCTFail("expected requestSnapshot")
             return
