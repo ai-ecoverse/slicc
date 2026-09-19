@@ -261,18 +261,24 @@ export async function runComputer(
   }
   const registry = registryOf(deps);
   const chunks: string[] = [];
+  const warnings: string[] = [];
   for (const call of calls) {
     try {
       const result = await runVerb(call, globals, ctx, deps, registry);
       if (result.exitCode !== 0) return result;
       if (result.stdout) chunks.push(result.stdout.replace(/\n$/u, ''));
+      if (result.stderr) warnings.push(result.stderr.replace(/\n$/u, ''));
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
   }
   const text = chunks.filter(Boolean).join('\n');
   const stamped = stampTargetLine(text, calls, registry, globals.computer, ctx, globals.json);
-  return ok(stamped ? `${stamped}\n` : '');
+  return {
+    stdout: stamped ? `${stamped}\n` : '',
+    stderr: warnings.length ? `${warnings.join('\n')}\n` : '',
+    exitCode: 0,
+  };
 }
 
 async function runVerb(
@@ -305,7 +311,7 @@ async function runVerb(
     case 'exec':
       return verbExec(call.args, globals, ctx, registry);
     default:
-      return verbInput(call, globals, ctx, registry);
+      return verbInput(call, globals, ctx, registry, deps);
   }
 }
 
@@ -747,7 +753,8 @@ async function verbInput(
   call: VerbCall,
   globals: { computer: string | undefined; native: boolean },
   ctx: CommandContext,
-  registry: ComputerRegistry
+  registry: ComputerRegistry,
+  deps: ComputerCommandDeps
 ): Promise<CmdResult> {
   const target = requireTarget(registry, globals.computer, ctx);
   if ('exitCode' in target) return target;
@@ -759,29 +766,65 @@ async function verbInput(
   } catch (err) {
     return fail(`${call.verb}: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return writePostActionFrame(target, ctx, registry);
+  return writePostActionFrame(target, ctx, registry, deps);
 }
 
 const POST_ACTION_TIMEOUT_MS = 5_000;
 
+function isComputerWatching(id: string, deps: ComputerCommandDeps): boolean {
+  if (deps.isWatching) return deps.isWatching(id);
+  return getComputersHost()?.isWatching(id) ?? false;
+}
+
+function pullScreenshot(
+  target: { backend: ComputerBackend; descriptor: ComputerDescriptor },
+  maxWidth: number
+) {
+  const push = target.descriptor.capabilities.frames === 'push';
+  return target.backend.screenshot({
+    format: 'jpeg',
+    maxWidth,
+    ...(push ? { pull: true } : {}),
+  });
+}
+
+async function capturePostActionFrame(
+  target: { id: string; backend: ComputerBackend; descriptor: ComputerDescriptor },
+  maxWidth: number,
+  deps: ComputerCommandDeps
+) {
+  const push = target.descriptor.capabilities.frames === 'push';
+  const watching = push && isComputerWatching(target.id, deps);
+  if (!watching) return pullScreenshot(target, maxWidth);
+  const abort = new AbortController();
+  const timeoutMs = deps.postActionTimeoutMs ?? POST_ACTION_TIMEOUT_MS;
+  try {
+    return await raceTimeout(
+      target.backend.screenshot({ format: 'jpeg', maxWidth, signal: abort.signal }),
+      timeoutMs
+    );
+  } catch {
+    abort.abort();
+    return pullScreenshot(target, maxWidth);
+  }
+}
+
 async function writePostActionFrame(
   target: { id: string; backend: ComputerBackend; descriptor: ComputerDescriptor },
   ctx: CommandContext,
-  registry: ComputerRegistry
+  registry: ComputerRegistry,
+  deps: ComputerCommandDeps
 ): Promise<CmdResult> {
   const maxWidth = target.descriptor.lastShot?.width ?? 768;
-  const abort = new AbortController();
   let frame;
   try {
-    frame = await raceTimeout(
-      target.backend.screenshot({ format: 'jpeg', maxWidth, signal: abort.signal }),
-      POST_ACTION_TIMEOUT_MS
-    );
+    frame = await capturePostActionFrame(target, maxWidth, deps);
   } catch (err) {
-    abort.abort();
-    return fail(
-      `screenshot failed after input: ${err instanceof Error ? err.message : String(err)}`
-    );
+    return {
+      stdout: '',
+      stderr: `computer: screenshot failed after input: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 0,
+    };
   }
   const seq = registry.nextSeq(target.id);
   const stamped = { ...frame, seq };

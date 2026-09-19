@@ -15,6 +15,9 @@ export interface ComputerCommandDeps {
   panelRpc?: PanelRpcClient;
   watch?: (id: string, fps: number, maxWidth: number) => void;
   unwatch?: (id: string) => void;
+  isWatching?: (id: string) => boolean;
+
+  postActionTimeoutMs?: number;
 
   sudoBroker?: SudoBroker;
   listFollowers?: () => ConnectedFollowerInfo[];

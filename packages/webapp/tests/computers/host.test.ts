@@ -230,6 +230,7 @@ describe('computers host watch transport', () => {
     const { transport, sent } = mockTransport();
     const host = startComputersHost({ transport, processManager: null });
     host.watch('wide', 2, 480);
+    expect(host.isWatching('wide')).toBe(true);
     expect(backend.subscribed).toEqual([{ fps: 2, maxWidth: 480 }]);
     backend.emitWide();
     await vi.waitFor(() => {
@@ -246,6 +247,8 @@ describe('computers host watch transport', () => {
     if (frame && frame.type === 'computer-frame') {
       expect(jpegSize(frame.bytes)).toEqual({ width: 640, height: 400 });
     }
+    host.unwatch('wide');
+    expect(host.isWatching('wide')).toBe(false);
     host.stop();
   });
 

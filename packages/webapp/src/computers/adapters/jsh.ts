@@ -72,11 +72,13 @@ export class JshComputerBackend implements ComputerBackend {
   }
 
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
-    if (this.subscribed) {
+    if (this.subscribed && !opts.pull) {
       if (this.lastFrame) return this.lastFrame;
       return this.waitForCachedFrame();
     }
-    return (await this.call('screenshot', [opts])) as ComputerFrame;
+    return (await this.call('screenshot', [
+      { format: opts.format, maxWidth: opts.maxWidth, signal: opts.signal },
+    ])) as ComputerFrame;
   }
 
   async text(): Promise<string | null> {

@@ -3,10 +3,12 @@ import type {
   ComputerExecResult,
   ComputerFrame,
   ComputerInputEvent,
-  ComputerScreenshotOpts,
+  ComputerScreenshotOpts as SharedComputerScreenshotOpts,
 } from '@slicc/shared-ts';
 
-export type { ComputerScreenshotOpts };
+export interface ComputerScreenshotOpts extends SharedComputerScreenshotOpts {
+  pull?: boolean;
+}
 
 export interface ComputerBackend {
   describe(): ComputerDescriptor;
