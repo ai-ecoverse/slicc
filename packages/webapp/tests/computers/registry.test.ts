@@ -143,4 +143,41 @@ describe('ComputerRegistry', () => {
     expect(registry.use('b')?.id).toBe('b');
     expect(registry.lastUsedId()).toBe('b');
   });
+
+  it('rememberFrame updates the still and seq but leaves lastShot untouched', () => {
+    const registry = installComputerRegistry(null);
+    registry.register(new FakeBackend('fake'));
+    registry.rememberShot('fake', { width: 500, height: 250, scale: 0.5, at: 1 });
+    const frame: ComputerFrame = {
+      seq: 7,
+      mime: 'image/jpeg',
+      width: 400,
+      height: 200,
+      bytes: MINIMAL_JPEG,
+    };
+    registry.rememberFrame('fake', frame);
+    expect(registry.lastFrame('fake')).toBe(frame);
+    // The coordinate space is still the model-facing screenshot, not the frame.
+    expect(registry.getEntry('fake')?.descriptor.lastShot).toEqual({
+      width: 500,
+      height: 250,
+      scale: 0.5,
+      at: 1,
+    });
+    expect(registry.nextSeq('fake')).toBe(8);
+  });
+
+  it('rememberFrame is a no-op for an unknown id', () => {
+    const registry = installComputerRegistry(null);
+    expect(() =>
+      registry.rememberFrame('missing', {
+        seq: 1,
+        mime: 'image/jpeg',
+        width: 1,
+        height: 1,
+        bytes: MINIMAL_JPEG,
+      })
+    ).not.toThrow();
+    expect(registry.lastFrame('missing')).toBeNull();
+  });
 });

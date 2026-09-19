@@ -83,6 +83,19 @@ export class ComputerRegistry {
     this.emitChange();
   }
 
+  /**
+   * Update the stored transcript frame WITHOUT touching `lastShot`. The
+   * post-input frozen frame is a side effect the model never sees as a
+   * reference, so it must not redefine the coordinate space (issue #3297).
+   */
+  rememberFrame(id: string, frame: ComputerFrame): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.lastFrame = frame;
+    entry.seq = frame.seq;
+    this.emitChange();
+  }
+
   nextSeq(id: string): number {
     const entry = this.entries.get(id);
     if (!entry) return 1;
