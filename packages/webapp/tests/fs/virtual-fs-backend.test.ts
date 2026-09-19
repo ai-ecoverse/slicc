@@ -74,6 +74,7 @@ describe('VirtualFS — ZenFS ErrnoError → FsError mapping', () => {
     'EBUSY',
     'EFBIG',
     'EBADF',
+    'EXDEV',
     'EIO',
   ];
 

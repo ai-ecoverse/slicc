@@ -2811,6 +2811,37 @@ export class VirtualFS {
     return splitPath(normalizePath(path)).base;
   }
 
+  /**
+   * Lexical absolute path of a symlink target relative to the link's directory.
+   * Does not follow existing links — we only need to know whether the stored
+   * target string lands on a mount.
+   */
+  private resolveSymlinkTargetPath(target: string, linkPath: string): string {
+    return target.startsWith('/')
+      ? normalizePath(target)
+      : normalizePath(joinPath(splitPath(linkPath).dir, target));
+  }
+
+  /**
+   * Refuse a symlink whose link or target is on a mount. Mount backends have
+   * no symlink inode; `mount()` plants an empty LightningFS directory as the
+   * placeholder, so a "successful" VFS link to `/mnt/…` follows into that
+   * empty dir (exit 0, `drwxr-xr-x`, later writes diverge — #3311).
+   */
+  private assertSymlinkCreateAllowed(target: string, linkPath: string): void {
+    if (this.findMount(linkPath)) {
+      throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', linkPath);
+    }
+    const absoluteTarget = this.resolveSymlinkTargetPath(target, linkPath);
+    if (this.findMount(absoluteTarget)) {
+      throw new FsError(
+        'EXDEV',
+        `cannot create a symlink across a mount boundary to '${absoluteTarget}'`,
+        linkPath
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Symlink support
   // ---------------------------------------------------------------------------
@@ -2819,17 +2850,12 @@ export class VirtualFS {
    * Create a symbolic link at `linkPath` pointing to `target`.
    * Target can be absolute or relative (relative to the directory containing the link).
    * @throws FsError EEXIST if linkPath already exists
+   * @throws FsError EINVAL if linkPath is on a mounted filesystem
+   * @throws FsError EXDEV if target resolves onto a mounted filesystem
    */
   async symlink(target: string, linkPath: string): Promise<void> {
     const normalizedLinkPath = normalizePath(linkPath);
-    const mount = this.findMount(normalizedLinkPath);
-    if (mount) {
-      throw new FsError(
-        'EINVAL',
-        'symlinks not supported on mounted filesystems',
-        normalizedLinkPath
-      );
-    }
+    this.assertSymlinkCreateAllowed(target, normalizedLinkPath);
     // Ensure the parent directory exists and create the link as ONE critical
     // section under the write lock — same ZenFS concurrent-checkout race as
     // writeFile (see withWriteLock).

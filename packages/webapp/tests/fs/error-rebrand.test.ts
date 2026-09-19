@@ -25,12 +25,18 @@ describe('convertError', () => {
     ['ELOOP: too many symbolic links', 'ELOOP'],
     ['EOPNOTSUPP: operation not supported', 'EOPNOTSUPP'],
     ['ENOTSUP: operation not supported', 'EOPNOTSUPP'],
+    ['EXDEV: cross-device link', 'EXDEV'],
   ])('falls back to substring matching for LightningFS-style %s', (message, expected) => {
     expect(convertError(new Error(message), '/p').code).toBe(expected);
   });
 
-  it('treats a structured code outside the known set as an unknown error', () => {
+  it('maps a structured EXDEV code to FsError', () => {
     const err = Object.assign(new Error('cross-device'), { code: 'EXDEV' });
+    expect(convertError(err, '/p').code).toBe('EXDEV');
+  });
+
+  it('treats a structured code outside the known set as an unknown error', () => {
+    const err = Object.assign(new Error('read-only'), { code: 'EROFS' });
     expect(convertError(err, '/p').code).toBe('EINVAL');
   });
 
