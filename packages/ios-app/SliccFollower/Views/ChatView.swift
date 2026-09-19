@@ -988,59 +988,67 @@ struct ConversationView: View {
         }
     }
 
-    @ViewBuilder
+    /// The composer is a bottom SAFE-AREA INSET of the transcript, not a
+    /// sibling stacked under it. Stacked, the keyboard shrank the scroll
+    /// view's frame, and a lazy stack whose newest row is taller than what was
+    /// left resolved its bottom anchor past the end of the content: the
+    /// transcript went blank until a keystroke forced another layout pass.
+    /// As an inset the scroll view keeps its frame and the keyboard only moves
+    /// its content inset, which is the resize a scroll view handles natively.
     private var liveConversation: some View {
-        Group {
-            MessageListView(
-                messages: appState.messages,
-                isStreaming: appState.isStreaming,
-                toolProgress: appState.toolProgress,
-                toolUICards: appState.visibleToolUICards,
-                openApprovals: appState.openApprovals,
-                onOpenApprovalDecision: appState.resolveOpenApproval,
-                sudoApprovals: appState.sudoApprovals,
-                sudoAllowAlways: AppState.deviceOwnerAuthAvailable(),
-                onSudoApprovalDecision: appState.resolveSudoApproval,
-                onInlineSprinkleLick: { body, target in
-                    appState.sendSprinkleLick("inline", body: body, targetScoop: target)
-                }
-            )
-            .transcriptSwipeGesture(
-                state: horizontalScrollGestureState,
-                onAction: handleTranscriptSwipe)
-
-            // A scoop is read-only (#2367): the composer band is not
-            // rendered at all, so nothing is reserved and the transcript
-            // grows into the freed space — read-only means the composer
-            // does not exist, not that it is merely disabled. Send,
-            // dictation and attachment affordances all live inside it and
-            // leave with it.
-            if !appState.selectedUnitIsReadOnly {
-                InputBar(
-                    text: $inputText,
-                    isStreaming: appState.isStreaming,
-                    isConnected: appState.settledConnection.state == .connected,
-                    // A message typed during a stall would be accepted into
-                    // the composer and lost, so block sending — but say why,
-                    // rather than claiming the follower is disconnected.
-                    isStalled: appState.settledConnection.isStalled,
-                    steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
-                    ptt: ptt,
-                    onSend: { text, attachments, dictated in
-                        appState.sendMessage(
-                            text, attachments: attachments, dictated: dictated)
-                        inputText = ""
-                    },
-                    onAbort: {
-                        appState.abort()
-                    },
-                    onSteer: { text, attachments in
-                        appState.sendMessage(text, steer: true, attachments: attachments)
-                        inputText = ""
-                    },
-                    stagedAttachments: $stagedAttachments
-                )
+        MessageListView(
+            messages: appState.messages,
+            isStreaming: appState.isStreaming,
+            toolProgress: appState.toolProgress,
+            toolUICards: appState.visibleToolUICards,
+            openApprovals: appState.openApprovals,
+            onOpenApprovalDecision: appState.resolveOpenApproval,
+            sudoApprovals: appState.sudoApprovals,
+            sudoAllowAlways: AppState.deviceOwnerAuthAvailable(),
+            onSudoApprovalDecision: appState.resolveSudoApproval,
+            onInlineSprinkleLick: { body, target in
+                appState.sendSprinkleLick("inline", body: body, targetScoop: target)
             }
+        )
+        .transcriptSwipeGesture(
+            state: horizontalScrollGestureState,
+            onAction: handleTranscriptSwipe
+        )
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+    }
+
+    // A scoop is read-only (#2367): the composer band is not rendered at
+    // all, so nothing is reserved and the transcript grows into the freed
+    // space — read-only means the composer does not exist, not that it is
+    // merely disabled. Send, dictation and attachment affordances all live
+    // inside it and leave with it.
+    @ViewBuilder
+    private var composer: some View {
+        if !appState.selectedUnitIsReadOnly {
+            InputBar(
+                text: $inputText,
+                isStreaming: appState.isStreaming,
+                isConnected: appState.settledConnection.state == .connected,
+                // A message typed during a stall would be accepted into
+                // the composer and lost, so block sending — but say why,
+                // rather than claiming the follower is disconnected.
+                isStalled: appState.settledConnection.isStalled,
+                steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
+                ptt: ptt,
+                onSend: { text, attachments, dictated in
+                    appState.sendMessage(
+                        text, attachments: attachments, dictated: dictated)
+                    inputText = ""
+                },
+                onAbort: {
+                    appState.abort()
+                },
+                onSteer: { text, attachments in
+                    appState.sendMessage(text, steer: true, attachments: attachments)
+                    inputText = ""
+                },
+                stagedAttachments: $stagedAttachments
+            )
         }
     }
 

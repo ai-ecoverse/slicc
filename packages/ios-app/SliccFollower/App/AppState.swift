@@ -136,6 +136,8 @@ class AppState: ObservableObject {
     /// Internal (not private) so the delivery extension can flag a failed
     /// send in the buffer too.
     var messagesByScoop: [String: [ChatMessage]] = [:]
+    /// This device's sends no snapshot has confirmed yet — see `LocalSendLedger`.
+    var localSends = LocalSendLedger()
     /// Live tool-call progress units, keyed by the tool row's id (see
     /// `AppState.toolRowId`). Only in-flight calls appear here — a `tool_result`
     /// or a `phase == .end` tick removes the entry, the turn that owns a row
@@ -352,8 +354,9 @@ class AppState: ObservableObject {
     /// Reassembles oversize messages arriving as transport chunk frames.
     private var chunkReassembler = TrayChunkReassembler()
 
-    /// ID of the message currently being streamed.
-    private(set) var streamingMessageId: String?
+    /// ID of the message currently being streamed. Settable from the
+    /// `AppState+Selection` extension, which swaps it along with the transcript.
+    var streamingMessageId: String?
 
     /// Coalesces high-frequency `messages` republishes during streaming so a
     /// burst of contentDeltas doesn't peg the SwiftUI render loop and starve
@@ -506,6 +509,7 @@ class AppState: ObservableObject {
         modelCatalog = []
         modelSelectionState = nil
         messagesByScoop.removeAll()
+        localSends.removeAll()
         toolProgress.removeAll()
         sprinkles = []
         sprinkleContents.removeAll()
@@ -591,6 +595,7 @@ class AppState: ObservableObject {
         if let jid = selectedScoopJid {
             messagesByScoop[jid, default: []].append(message)
         }
+        localSends.record(message, scoopJid: selectedScoopJid)
 
         let msg = FollowerToLeaderMessage.userMessage(
             text: trimmed, messageId: messageId, steer: steer, attachments: attached)
@@ -891,7 +896,7 @@ class AppState: ObservableObject {
         case .userMessageEcho(let text, let messageId, let scoopJid, let attachments):
             logger.debug("User message echo: id=\(messageId)")
             var buffer = messagesByScoop[scoopJid] ?? []
-            if !buffer.contains(where: { $0.id == messageId }) {
+            if !localSends.owns(messageId), !buffer.contains(where: { $0.id == messageId }) {
                 let msg = ChatMessage(
                     id: messageId,
                     role: .user,
@@ -1243,7 +1248,11 @@ class AppState: ObservableObject {
             // marks whose replies belong to the transcript just cleared.
             VoiceReply.shared.reset()
             DictationPriming.reset()
+            localSends.removeAll()
         }
+        // A snapshot built before a prompt reached the leader can land after
+        // the prompt was appended here; put this device's unconfirmed sends back.
+        let chatMessages = localSends.reconcile(snapshot: chatMessages, scoopJid: scoopJid)
         pruneToolProgress(replacing: messagesByScoop[scoopJid] ?? [], with: chatMessages)
         messagesByScoop[scoopJid] = chatMessages
         // A snapshot is the leader re-describing the world. Any approval
@@ -1672,27 +1681,6 @@ extension AppState {
         credentialStore.clear()
         activeJoinUrl = ""
         activeDisplayName = nil
-    }
-}
-
-// MARK: - Scoop selection
-
-extension AppState {
-    /// Select a specific scoop to view. Independent of the leader's selection.
-    func selectScoop(jid: String) {
-        guard jid != selectedScoopJid else { return }
-        guard scoops.contains(where: { $0.jid == jid }) else { return }
-        selectedScoopJid = jid
-        // Show whatever we already have buffered, then request a fresh snapshot.
-        let cached = messagesByScoop[jid] ?? []
-        messages = cached
-        isStreaming = cached.last?.isStreaming == true
-        streamingMessageId = isStreaming ? cached.last?.id : nil
-        // `scoops.select` changes only this follower's view on the leader. It
-        // also updates the leader's per-follower selected scoop, which is the
-        // authority used to validate a later thinking.set.
-        sendToLeader(.scoopsSelect(scoopJid: jid))
-        refreshModels()
     }
 }
 

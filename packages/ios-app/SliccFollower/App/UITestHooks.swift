@@ -187,9 +187,42 @@ import UIKit
             guard UserDefaults.standard.bool(forKey: "uiTestTranscriptFixture") else { return }
             let scoopJid = "ui-test-cone"
             appState.selectedScoopJid = scoopJid
-            let messages = ChatFixture.makeMessages()
+            let messages = repeatedTranscript(
+                ChatFixture.makeMessages(),
+                times: UserDefaults.standard.integer(forKey: "uiTestTranscriptRepeat"))
             appState.messagesByScoop[scoopJid] = messages
             appState.messages = messages
+        }
+
+        /// The fixture conversation `times` over (`-uiTestTranscriptRepeat <n>`),
+        /// each pass under its own id prefix. A lazy stack only ESTIMATES the
+        /// rows it has not materialized, so how the transcript survives a
+        /// viewport resize depends on how much of it is estimate — a live cone
+        /// carries thousands of rows, the plain fixture a few dozen. The LAST
+        /// pass keeps the fixture's own ids, so tests that name a row still
+        /// find it near the bottom.
+        static func repeatedTranscript(_ base: [ChatMessage], times: Int) -> [ChatMessage] {
+            var result: [ChatMessage] = []
+            for pass in 1..<max(times, 1) {
+                result += base.map { message in
+                    ChatMessage(
+                        id: "r\(pass)-\(message.id)", role: message.role,
+                        content: message.content, timestamp: message.timestamp)
+                }
+            }
+            result += base
+            if UserDefaults.standard.bool(forKey: "uiTestTranscriptTallTail") {
+                let paragraph =
+                    "One thing I want to flag about my own reporting. I read an "
+                    + "implementation and quoted a constant from it, and it was the "
+                    + "implementation that was not running. `which` would have taken a second."
+                result.append(
+                    ChatMessage(
+                        id: "fx-tall-tail", role: .assistant,
+                        content: (1...14).map { "\($0). \(paragraph)" }.joined(separator: "\n\n"),
+                        timestamp: base.last?.timestamp ?? 0))
+            }
+            return result
         }
 
         /// Fill the real chat surface with the short-action transcript

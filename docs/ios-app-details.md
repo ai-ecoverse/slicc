@@ -203,6 +203,22 @@ Two gotchas if you touch that test: the anchor row is offscreen at launch, so `e
 
 Full measurement write-up, including the rejected UIKit port: [`docs/research/ios-transcript-uikit.md`](research/ios-transcript-uikit.md).
 
+### The composer is a bottom inset, not a sibling
+
+`ConversationView.liveConversation` mounts `InputBar` with `.safeAreaInset(edge: .bottom)` on the transcript. It used to be a `VStack` sibling, so the keyboard **shrank the scroll view's frame** — and with a long transcript whose newest row was taller than what was left, the bottom anchor resolved _past the end of the content_: every materialized row sat above the viewport and the transcript read as blank until a keystroke forced another layout pass. As an inset the scroll view keeps its frame and the keyboard only moves its content inset, which is the resize a scroll view handles natively. Do not move the composer back into a stack with the list.
+
+The inset keeps rows on screen but does not by itself keep the _newest_ row above the keyboard when that row is taller than the viewport, so `MessageListView` samples `isAtBottom` at `keyboardWillShow` (the inset's own row movement rewrites it before the keyboard lands) and issues one `scrollTo` at `keyboardDidShow` for a reader who was following. An action, never a stored offset — the #2072 rule holds.
+
+`testALongTranscriptSurvivesTheKeyboardLanding` is the gate. The plain fixture cannot show this (nearly all of it is materialized, so there is no estimate for the resize to resolve against): `-uiTestTranscriptRepeat <n>` repeats the fixture under per-pass id prefixes and `-uiTestTranscriptTallTail YES` appends a row taller than a phone viewport. The test fails on the stacked layout and passes on the inset.
+
+The bottom anchor applies only to `.initialOffset` and `.alignment`, never to `.sizeChanges`. Once the composer is an inset, the keyboard reaches the scroll view as a viewport size change, and a size-change anchor re-pinned a reader who had scrolled back: 338pt of drift on iPad landscape, iOS 26 (`testHistoryStaysPutInLandscape`). New content is followed by `followBottom`, which only moves a reader who was at the bottom.
+
+### A snapshot must not erase an unconfirmed send
+
+A snapshot replaces a unit's buffer wholesale and describes the moment the leader **built** it. A large thread's snapshot is read asynchronously and chunked, so a snapshot built before a prompt reached the leader can land after the prompt was appended locally — switch to a busy cone and send straight away, or send across a reconnect — and the sender's own message vanished from its own screen. `Sync/LocalSendLedger.swift` holds each send until a snapshot contains it; `ingestSnapshot` runs every snapshot through `reconcile`, which puts back what is missing, in send order. Entries expire after `confirmationWindow` (a prompt the leader never recorded must not be re-asserted forever) and the ledger is emptied by a new session and by a full reset, but **not** by `handleDisconnect` — surviving the reconnect is the point.
+
+The ledger also settles `user_message_echo`: an echo of a send this device still holds is dropped whatever unit it names, because a leader older than the delivered-unit tag labels a follower's prompt with the unit the _leader_ is displaying, which appended a prompt typed under cone B to cone A's buffer.
+
 ## Transcript per-render cost
 
 The transcript re-evaluates its rows constantly, so everything a row does per body evaluation is paid many times over. Measured on an 18-message fixture: **871 `MessageBubble` body evaluations and 227 full markdown re-parses just to scroll back two screens**, and 360 body evaluations to type one sentence.

@@ -380,8 +380,9 @@ describe('WC tray follower message routing (#2382)', () => {
     // message that is not its own.
     expect(sends).toEqual([{ id: 'cone_b', text: 'hi from B', messageId: 'fm1' }]);
     expect(addUserMessage).not.toHaveBeenCalled();
-    // The echo still goes out: followers reading B need to see it.
-    expect(broadcastUserMessage).toHaveBeenCalledWith('hi from B', 'fm1', undefined);
+    // The echo still goes out, and names B: followers reading B need to see
+    // it, and followers reading A — the unit on this screen — must not.
+    expect(broadcastUserMessage).toHaveBeenCalledWith('hi from B', 'fm1', undefined, 'cone_b');
   });
 
   it('still renders the bubble when the follower is reading what the leader shows', async () => {

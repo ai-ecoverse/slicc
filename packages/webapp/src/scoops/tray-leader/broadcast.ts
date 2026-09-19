@@ -123,7 +123,19 @@ export class BroadcastManager {
     }
   }
 
-  broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
+  /**
+   * Echo one user message to every follower. `scoopJid` names the unit the
+   * message was DELIVERED to; omitted, the leader's currently displayed unit —
+   * right for a prompt typed on the leader, wrong for a follower's prompt,
+   * which goes to the unit that follower selected. Tagged with the displayed
+   * unit, a prompt for cone B showed up in every other follower's cone A.
+   */
+  broadcastUserMessage(
+    text: string,
+    messageId: string,
+    attachments?: MessageAttachment[],
+    scoopJid?: string
+  ): void {
     if (this.context.followers.followers.size === 0) return;
     const safeAttachments = attachments?.length
       ? stripLocalPathsForRemote(attachments)
@@ -132,7 +144,7 @@ export class BroadcastManager {
       type: 'user_message_echo',
       text,
       messageId,
-      scoopJid: this.context.options.getScoopJid(),
+      scoopJid: scoopJid ?? this.context.options.getScoopJid(),
       attachments: safeAttachments,
     });
   }

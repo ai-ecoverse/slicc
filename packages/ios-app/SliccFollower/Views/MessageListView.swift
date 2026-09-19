@@ -77,8 +77,18 @@ struct MessageListView: View {
     /// the stable alternative to reading a lazy stack's (estimated) offset.
     @State private var isAtBottom = true
 
+    /// `isAtBottom` as it stood when the keyboard ANNOUNCED itself. Sampled
+    /// then because the keyboard's inset moves the rows before it has landed,
+    /// and that movement rewrites `isAtBottom` — by the time there is a
+    /// settled viewport to scroll in, the live value describes the
+    /// displacement, not the reader.
+    @State private var wasFollowingBeforeKeyboard = false
+
     var body: some View {
-        Group {
+        // A ZStack, not a Group: a Group hands the caller's modifiers to each
+        // branch, so the composer `.safeAreaInset` would be rebuilt when the
+        // first message flips empty → list, losing its focus and state.
+        ZStack {
             if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty
                 && sudoApprovals.isEmpty
             {
@@ -217,6 +227,16 @@ struct MessageListView: View {
         .onChange(of: toolUICards.count) { _, _ in followBottom(proxy) }
         .onChange(of: openApprovals.count) { _, _ in followBottom(proxy) }
         .onChange(of: sudoApprovals.count) { _, _ in followBottom(proxy) }
+        // The composer and keyboard arrive as a bottom inset (see
+        // `ConversationView.liveConversation`), which keeps the rows on screen
+        // but does not keep the NEWEST one above the keyboard when that row is
+        // taller than the viewport. A reader who was following is put back on
+        // it once the keyboard has landed — a one-shot scroll action, so
+        // nothing is stored across the resize (#2072).
+        .onReceive(Self.keyboardWillShow) { _ in wasFollowingBeforeKeyboard = isAtBottom }
+        .onReceive(Self.keyboardDidShow) { _ in
+            followBottom(proxy, force: wasFollowingBeforeKeyboard)
+        }
         // A layout rule, NOT a stored offset — this is the whole of #2072.
         //
         // The transcript used to carry `.scrollPosition($binding)` plus five
@@ -239,7 +259,15 @@ struct MessageListView: View {
         //
         // Measured, iPhone 17e / iOS 26.5: 258pt of drift before, 0pt after.
         // `TranscriptComposerGrowthUITests` asserts that drift directly.
-        .defaultScrollAnchor(.bottom)
+        //
+        // NOT for `.sizeChanges`. With the composer riding a bottom inset,
+        // the keyboard reaches the scroll view as a viewport size change, and
+        // a size-change anchor re-pins it to the bottom — which threw a
+        // reader who had scrolled back 338pt on iPad landscape (iOS 26).
+        // Following new content is `followBottom`'s job (below), and it only
+        // acts for a reader who was already at the bottom.
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
     }
 
     /// Scroll to the newest content, but never over a reader who has moved
@@ -314,6 +342,11 @@ struct MessageListView: View {
 
         return groups
     }
+
+    private static let keyboardWillShow = NotificationCenter.default.publisher(
+        for: UIResponder.keyboardWillShowNotification)
+    private static let keyboardDidShow = NotificationCenter.default.publisher(
+        for: UIResponder.keyboardDidShowNotification)
 
     /// The invisible bottom row's id. It is both the `scrollTo` target and the
     /// "is the reader at the bottom" probe.
