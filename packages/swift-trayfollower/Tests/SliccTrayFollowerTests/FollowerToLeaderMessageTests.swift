@@ -72,17 +72,34 @@ final class FollowerToLeaderMessageTests: XCTestCase {
     }
 
     func testRequestSnapshotWithAndWithoutScoop() throws {
-        guard case .requestSnapshot(let scoopJid) = try roundTrip(.requestSnapshot(scoopJid: "s1")) else {
+        guard case .requestSnapshot(let scoopJid, let peek) = try roundTrip(.requestSnapshot(scoopJid: "s1")) else {
             XCTFail("expected requestSnapshot")
             return
         }
         XCTAssertEqual(scoopJid, "s1")
+        XCTAssertFalse(peek)
 
-        guard case .requestSnapshot(let none) = try roundTrip(.requestSnapshot(scoopJid: nil)) else {
+        guard case .requestSnapshot(let none, _) = try roundTrip(.requestSnapshot(scoopJid: nil)) else {
             XCTFail("expected requestSnapshot")
             return
         }
         XCTAssertNil(none)
+    }
+
+    func testPeekIsOmittedUnlessSetAndSurvivesARoundTrip() throws {
+        let plain = try JSONEncoder().encode(FollowerToLeaderMessage.requestSnapshot(scoopJid: "s1"))
+        let plainObject = try XCTUnwrap(try JSONSerialization.jsonObject(with: plain) as? [String: Any])
+        XCTAssertNil(plainObject["peek"], "an ordinary snapshot request stays byte-identical")
+
+        guard
+            case .requestSnapshot(let scoopJid, let peek) = try roundTrip(
+                .requestSnapshot(scoopJid: "s2", peek: true))
+        else {
+            XCTFail("expected requestSnapshot")
+            return
+        }
+        XCTAssertEqual(scoopJid, "s2")
+        XCTAssertTrue(peek)
     }
 
     func testScoopsSelectRoundTrip() throws {

@@ -664,7 +664,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   },
   request_snapshot: {
     ios: 'decoded',
-    message: { type: 'request_snapshot', scoopJid: 'cone' },
+    message: { type: 'request_snapshot', scoopJid: 'cone', peek: true },
   },
   'scoops.select': { ios: 'decoded', message: { type: 'scoops.select', scoopJid: 'cone' } },
   'computer.watch': {
@@ -1242,10 +1242,11 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     state: 'mirrored',
     activity: 'mirrored',
     fill: 'mirrored',
-    // Completed-turn counter for the web follower's unread dot (#2948). iOS
-    // shows no unread indicator and has no Swift field for it, so the leader
-    // sends it and the app drops it — the `addedAt` arrangement exactly.
-    turns: 'dropped',
+    // Completed-turn counter (#2948). iOS reads it to invalidate a
+    // prefetched transcript (`ThreadSyncPlanner`): a turn that starts and
+    // ends inside one 50ms coalescing window leaves no `working` edge, but it
+    // does leave its increment here.
+    turns: 'mirrored',
     model: 'mirrored',
   },
   sample: {

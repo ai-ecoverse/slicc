@@ -23,7 +23,11 @@ import "encoding/json"
 // projecting it for us (#2358). Safe to announce unconditionally here: the CLI
 // is exec-only and decodes no `ScoopSummary` at all — it has neither field, so
 // the roster shape cannot reach it. Bookkeeping again, not new surface.
-const TraySyncProtocolVersion = 8
+//
+// v9 is a LEADER capability (`request_snapshot.peek`, a snapshot that does not
+// move the peer's selection). The CLI never requests a snapshot of a unit it is
+// not using, so this is bookkeeping a third time.
+const TraySyncProtocolVersion = 9
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"

@@ -138,6 +138,7 @@ class AppState: ObservableObject {
     var messagesByScoop: [String: [ChatMessage]] = [:]
     /// This device's sends no snapshot has confirmed yet — see `LocalSendLedger`.
     var localSends = LocalSendLedger()
+    var threadSync = ThreadSyncPlanner()
     /// Live tool-call progress units, keyed by the tool row's id (see
     /// `AppState.toolRowId`). Only in-flight calls appear here — a `tool_result`
     /// or a `phase == .end` tick removes the entry, the turn that owns a row
@@ -771,6 +772,7 @@ class AppState: ObservableObject {
         leaderProtocolVersion = nil
         leaderCapabilities = nil
         leaderMotd = nil
+        threadSync.reset()
         modelCatalog = []
         modelSelectionState = nil
         let credentialsSaved = persistTrayCredentials(connectedAt: connectedAt)
@@ -930,6 +932,7 @@ class AppState: ObservableObject {
 
         case .scoopsList(let scoops, let activeScoopJid):
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
+            let previousRoster = self.scoops
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
             publishWidgetSnapshot()
@@ -954,6 +957,7 @@ class AppState: ObservableObject {
                     refreshModels()
                 }
             }
+            threadRosterChanged(from: previousRoster)
 
         case .computersList, .computerFrame, .computerNativeCapture, .computerNativeUnwatch,
             .computerNativeInput:
@@ -1240,7 +1244,8 @@ class AppState: ObservableObject {
         // single-flights and would silently drop a second request the
         // re-enabled button could send. Only an empty snapshot counts; the
         // 120s backstop covers a leader whose reset broadcast is nonempty.
-        if newSessionInFlight && chatMessages.isEmpty {
+        let isViewed = selectedScoopJid == nil || scoopJid == selectedScoopJid
+        if newSessionInFlight && chatMessages.isEmpty && isViewed {
             newSessionInFlight = false
             newSessionTimeout?.cancel()
             // A new session in place keeps the connection but starts a new
@@ -1259,10 +1264,13 @@ class AppState: ObservableObject {
         // placeholder we are still holding predates it and can no longer be
         // confirmed, so it would otherwise hang around forever — the leader
         // only ever clears one via the matching `tool_ui_done`.
-        toolUICards.removeAll()
+        if isViewed { toolUICards.removeAll() }
         if selectedScoopJid == nil { selectedScoopJid = scoopJid }
+        threadSnapshotArrived(for: scoopJid)
         if scoopJid == selectedScoopJid {
-            messages = chatMessages
+            // An identical snapshot (the revalidation of a warm buffer) must not
+            // republish: every row would be rebuilt for nothing.
+            if messages != chatMessages { messages = chatMessages }
             isStreaming = chatMessages.last?.isStreaming == true
             streamingMessageId = isStreaming ? chatMessages.last?.id : nil
         }
