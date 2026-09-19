@@ -1260,12 +1260,15 @@ struct SessionControlsCluster: View {
                 to: nil, from: nil, for: nil)
             showNewSessionDialog = true
         } label: {
-            if appState.newSessionInFlight {
-                ProgressView()
-            } else {
-                Image(systemName: "square.and.pencil")
-                    .foregroundStyle(palette.ink.opacity(0.7))
+            Group {
+                if appState.newSessionInFlight {
+                    ProgressView()
+                } else {
+                    Image(systemName: "square.and.pencil")
+                        .foregroundStyle(palette.ink.opacity(0.7))
+                }
             }
+            .sessionControlHitArea()
         }
         // RAW health, unlike the composer: `requestNewSession` returns without
         // a word when the channel cannot be written, so a button left live
@@ -1288,6 +1291,7 @@ struct SessionControlsCluster: View {
         } label: {
             Image(systemName: "gearshape")
                 .foregroundStyle(palette.ink.opacity(0.7))
+                .sessionControlHitArea()
         }
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("settings-button")
@@ -1299,9 +1303,21 @@ struct SessionControlsCluster: View {
         } label: {
             Image(systemName: "snowflake")
                 .foregroundStyle(palette.ink.opacity(0.7))
+                .sessionControlHitArea()
         }
         .accessibilityLabel("Past Sessions")
         .accessibilityIdentifier("frozen-rail-button")
+    }
+}
+
+extension View {
+    /// The whole 36pt slot is the button, not just its glyph. With the
+    /// cluster in Liquid Glass, iOS 26 left each button only its ~18pt
+    /// glyph, and XCUITest's synthesized tap on the snowflake stopped opening
+    /// the freezer (`FrozenSessionsUITests`) even though a touch still did.
+    /// A full-slot hit area fixes both and is the bigger target anyway.
+    fileprivate func sessionControlHitArea() -> some View {
+        frame(width: 36, height: 36).contentShape(Rectangle())
     }
 }
 
