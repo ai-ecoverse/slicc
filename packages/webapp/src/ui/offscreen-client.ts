@@ -198,6 +198,15 @@ export type ScoopBusyPhase = 'thinking' | 'tool';
 
 export class OffscreenClient implements KernelClientFacade {
   private eventListeners = new Set<(event: UIAgentEvent) => void>();
+  /**
+   * Transcript events of units this page is NOT displaying. The thread on this
+   * screen has no use for them, but a tray follower reading one of those units
+   * does: without them its transcript froze the moment this leader looked at
+   * another cone, and a prompt it sent never showed a reply.
+   */
+  private backgroundEventListeners = new Set<(scoopJid: string, event: UIAgentEvent) => void>();
+  /** The open assistant message per BACKGROUND unit — the mirror of `currentMessageId`. */
+  private backgroundMessageId = new Map<string, string>();
   private callbacks: OffscreenClientCallbacks;
   private scoops: RegisteredScoop[] = [];
   private scoopStatuses = new Map<string, ScoopTabState['status']>();
@@ -303,6 +312,7 @@ export class OffscreenClient implements KernelClientFacade {
    */
   setSelectedScoopJid(jid: string | null): void {
     if (this._selectedScoopJid === jid) return;
+    this.handOverOpenMessages(this._selectedScoopJid, jid);
     this._selectedScoopJid = jid;
     if (jid === null) return;
     for (const fn of this.scoopSelectedListeners) {
@@ -1305,41 +1315,66 @@ export class OffscreenClient implements KernelClientFacade {
     // gate follows where it is DISPLAYED, not where it came from. Every other
     // event type leaves `displayScoopJid` unset, so this is a no-op for them.
     const displayJid = msg.displayScoopJid ?? msg.scoopJid;
-    if (displayJid !== this.selectedScoopJid) return;
+    if (displayJid !== this.selectedScoopJid) {
+      // Interactive cards and progress ticks stay with the displayed unit: a
+      // follower holds them per connection, not per unit.
+      this.translateTranscriptEvent(msg, this.backgroundMessageId, (event) =>
+        this.emitBackground(msg.scoopJid, event)
+      );
+      return;
+    }
 
     switch (msg.eventType) {
-      case 'text_delta': {
-        let msgId = this.currentMessageId.get(msg.scoopJid);
-        if (!msgId) {
-          msgId = `scoop-${msg.scoopJid}-${uid()}`;
-          this.currentMessageId.set(msg.scoopJid, msgId);
-          this.emitToUI({ type: 'message_start', messageId: msgId });
-        }
-        this.emitToUI({ type: 'content_delta', messageId: msgId, text: msg.text ?? '' });
+      case 'tool_ui':
+      case 'tool_ui_done':
+      case 'tool_progress':
+        this.handleToolUiAgentEvent(msg);
         break;
-      }
+      default:
+        this.translateTranscriptEvent(msg, this.currentMessageId, (event) => this.emitToUI(event));
+    }
+  }
 
-      case 'tool_start': {
-        let msgId = this.currentMessageId.get(msg.scoopJid);
-        if (!msgId) {
-          msgId = `scoop-${msg.scoopJid}-${uid()}`;
-          this.currentMessageId.set(msg.scoopJid, msgId);
-          this.emitToUI({ type: 'message_start', messageId: msgId });
-        }
-        this.emitToUI({
+  /**
+   * Turn one kernel agent event into the transcript events a thread renders.
+   * `ids` holds the open assistant message per unit and `emit` is where the
+   * result goes — the displayed thread, or the followers mirroring a unit this
+   * page is not displaying. One translation, so the two cannot drift.
+   */
+  private translateTranscriptEvent(
+    msg: AgentEventMsg,
+    ids: Map<string, string>,
+    emit: (event: UIAgentEvent) => void
+  ): void {
+    const openMessage = (): string => {
+      let msgId = ids.get(msg.scoopJid);
+      if (!msgId) {
+        msgId = `scoop-${msg.scoopJid}-${uid()}`;
+        ids.set(msg.scoopJid, msgId);
+        emit({ type: 'message_start', messageId: msgId });
+      }
+      return msgId;
+    };
+
+    switch (msg.eventType) {
+      case 'text_delta':
+        emit({ type: 'content_delta', messageId: openMessage(), text: msg.text ?? '' });
+        break;
+
+      case 'tool_start':
+        emit({
           type: 'tool_use_start',
-          messageId: msgId,
+          messageId: openMessage(),
           toolName: msg.toolName ?? '',
           toolInput: msg.toolInput,
           toolCallId: msg.toolCallId,
         });
         break;
-      }
 
       case 'tool_end': {
-        const msgId = this.currentMessageId.get(msg.scoopJid);
+        const msgId = ids.get(msg.scoopJid);
         if (msgId) {
-          this.emitToUI({
+          emit({
             type: 'tool_result',
             messageId: msgId,
             toolName: msg.toolName ?? '',
@@ -1351,31 +1386,55 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
-      case 'tool_ui':
-      case 'tool_ui_done':
-      case 'tool_progress':
-        this.handleToolUiAgentEvent(msg);
-        break;
-
       case 'response_done': {
-        const msgId = this.currentMessageId.get(msg.scoopJid);
+        const msgId = ids.get(msg.scoopJid);
         if (msgId) {
-          this.emitToUI({
-            type: 'content_done',
-            messageId: msgId,
-            model: msg.model,
-            usage: msg.usage,
-          });
-          this.currentMessageId.delete(msg.scoopJid);
+          emit({ type: 'content_done', messageId: msgId, model: msg.model, usage: msg.usage });
+          ids.delete(msg.scoopJid);
         }
         break;
       }
 
       case 'turn_end': {
-        const msgId = this.currentMessageId.get(msg.scoopJid) ?? `done-${msg.scoopJid}-${uid()}`;
-        this.currentMessageId.delete(msg.scoopJid);
-        this.emitToUI({ type: 'turn_end', messageId: msgId });
+        const msgId = ids.get(msg.scoopJid) ?? `done-${msg.scoopJid}-${uid()}`;
+        ids.delete(msg.scoopJid);
+        emit({ type: 'turn_end', messageId: msgId });
         break;
+      }
+    }
+  }
+
+  /**
+   * A unit changes sink when the selection moves, mid-turn included. Each sink
+   * opens its own assistant message, so the one the OTHER sink left open has to
+   * be closed for the followers, or they keep a bubble streaming forever beside
+   * the one the new sink is about to open.
+   */
+  private handOverOpenMessages(previous: string | null, next: string | null): void {
+    const close = (scoopJid: string, messageId: string | undefined): void => {
+      if (messageId) this.emitBackground(scoopJid, { type: 'content_done', messageId });
+    };
+    if (previous) close(previous, this.currentMessageId.get(previous));
+    if (next) {
+      close(next, this.backgroundMessageId.get(next));
+      this.backgroundMessageId.delete(next);
+    }
+  }
+
+  /** Subscribe to transcript events of units this page is not displaying. */
+  onBackgroundUnitEvent(listener: (scoopJid: string, event: UIAgentEvent) => void): () => void {
+    this.backgroundEventListeners.add(listener);
+    return () => this.backgroundEventListeners.delete(listener);
+  }
+
+  private emitBackground(scoopJid: string, event: UIAgentEvent): void {
+    for (const listener of this.backgroundEventListeners) {
+      try {
+        listener(scoopJid, event);
+      } catch (err) {
+        log.error('Background listener error', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
@@ -1565,13 +1624,16 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleError(msg: ErrorMsg): void {
-    if (msg.scoopJid === this.selectedScoopJid) {
-      this.emitToUI({
-        type: 'error',
-        error: msg.error,
-        ...(msg.endTurn === false ? { endTurn: false } : {}),
-      });
-    }
+    const event: UIAgentEvent = {
+      type: 'error',
+      error: msg.error,
+      ...(msg.endTurn === false ? { endTurn: false } : {}),
+    };
+    if (msg.scoopJid === this.selectedScoopJid) this.emitToUI(event);
+    // A failure is not an `agent-event`, so the background translation never
+    // sees it. Without this a follower reading the unit got `ready` and no
+    // error card: its prompt looked finished with no answer at all.
+    else if (msg.scoopJid) this.emitBackground(msg.scoopJid, event);
   }
 
   private handleIncomingMessage(msg: IncomingMessageMsg): void {

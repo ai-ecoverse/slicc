@@ -382,6 +382,39 @@ export class FollowerRegistry {
   }
 
   /**
+   * Send one unit's traffic to the followers that unit's traffic is FOR.
+   *
+   * Not every follower routes an `agent_event` by the unit it names — the web
+   * follower and the CLI's `prompt` render or print whatever arrives — so the
+   * leader decides, per peer, which unit's stream it gets:
+   *
+   * - a full-trust follower that selected a unit gets THAT unit, displayed by
+   *   the leader or not. Sending it the displayed unit as well merged two
+   *   concurrent turns into one transcript;
+   * - a peer with no selection keeps the historical default, the unit the
+   *   leader is displaying;
+   * - a biscotto gets the displayed unit and nothing else: a guest is shared
+   *   ONE thread, its snapshot is pinned to the displayed unit, and the wire
+   *   allowlist cannot tell one unit's `agent_event` from another's.
+   */
+  broadcastUnitTraffic(
+    scoopJid: string,
+    displayedScoopJid: string,
+    message: LeaderToFollowerMessage
+  ): string[] {
+    return this.broadcastPerFollower(
+      () => message,
+      (follower) => {
+        const reading =
+          follower.trust === 'biscotto'
+            ? displayedScoopJid
+            : (follower.selectedScoopJid ?? displayedScoopJid);
+        return reading === scoopJid;
+      }
+    );
+  }
+
+  /**
    * {@link broadcastToAllFollowers} for a payload that DIFFERS per follower —
    * same fan-out, same failure reporting and throttling, one message built per
    * peer.
@@ -393,10 +426,16 @@ export class FollowerRegistry {
    *
    * @returns bootstrapIds of followers whose send failed.
    */
-  broadcastPerFollower(build: (follower: ConnectedFollower) => LeaderToFollowerMessage): string[] {
+  broadcastPerFollower(
+    build: (follower: ConnectedFollower) => LeaderToFollowerMessage,
+    include: (follower: ConnectedFollower) => boolean = () => true
+  ): string[] {
     const now = performance.now();
     const failed: string[] = [];
     for (const [bootstrapId, follower] of this.followers) {
+      // A peer this message is not FOR is skipped, not failed: nothing was
+      // attempted, so there is nothing for the caller to degrade or retry.
+      if (!include(follower)) continue;
       let sent = false;
       let thrown: unknown;
       let message: LeaderToFollowerMessage | undefined;

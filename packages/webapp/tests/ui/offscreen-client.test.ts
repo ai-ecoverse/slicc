@@ -162,6 +162,114 @@ describe('OffscreenClient', () => {
     expect(events.length).toBe(0);
   });
 
+  describe('background unit events', () => {
+    const background = (): Array<[string, any]> => {
+      const seen: Array<[string, any]> = [];
+      client.onBackgroundUnitEvent((scoopJid, event) => seen.push([scoopJid, event]));
+      return seen;
+    };
+    const deliver = (scoopJid: string, eventType: string, extra: object = {}): void =>
+      simulateMessage('offscreen', { type: 'agent-event', scoopJid, eventType, ...extra });
+
+    it('translates a non-displayed unit’s turn for the followers mirroring it', () => {
+      client.setSelectedScoopJid('cone_a');
+      const ui: unknown[] = [];
+      client.createAgentHandle().onEvent((e) => ui.push(e));
+      const seen = background();
+
+      deliver('cone_b', 'text_delta', { text: 'po' });
+      deliver('cone_b', 'text_delta', { text: 'ng' });
+      deliver('cone_b', 'response_done');
+      deliver('cone_b', 'turn_end');
+
+      expect(ui).toEqual([]);
+      expect(seen.map(([jid, e]) => [jid, e.type])).toEqual([
+        ['cone_b', 'message_start'],
+        ['cone_b', 'content_delta'],
+        ['cone_b', 'content_delta'],
+        ['cone_b', 'content_done'],
+        ['cone_b', 'turn_end'],
+      ]);
+      // One assistant message, opened once.
+      const ids = new Set(seen.slice(0, 4).map(([, e]) => e.messageId));
+      expect(ids.size).toBe(1);
+    });
+
+    it('keeps the displayed unit’s events off the background sink', () => {
+      client.setSelectedScoopJid('cone_a');
+      const seen = background();
+
+      deliver('cone_a', 'text_delta', { text: 'hi' });
+
+      expect(seen).toEqual([]);
+    });
+
+    it('keeps cards and progress ticks with the displayed unit', () => {
+      client.setSelectedScoopJid('cone_a');
+      const seen = background();
+
+      for (const eventType of ['tool_ui', 'tool_ui_done', 'tool_progress']) {
+        deliver('cone_b', eventType, { requestId: 'r1', toolName: 'bash' });
+      }
+
+      expect(seen).toEqual([]);
+    });
+
+    it('closes the message the other sink left open when the selection moves mid-turn', () => {
+      client.setSelectedScoopJid('cone_a');
+      const ui: any[] = [];
+      client.createAgentHandle().onEvent((e) => ui.push(e));
+      const seen = background();
+
+      // B streams in the background, A on screen; then the leader looks at B.
+      deliver('cone_b', 'text_delta', { text: 'b1' });
+      deliver('cone_a', 'text_delta', { text: 'a1' });
+      const backgroundId = seen[0][1].messageId;
+      const displayedId = ui[0].messageId;
+      client.setSelectedScoopJid('cone_b');
+
+      expect(seen.slice(2)).toEqual([
+        // A's on-screen message is closed for followers still reading A…
+        ['cone_a', { type: 'content_done', messageId: displayedId }],
+        // …and so is B's background one, before the displayed sink reopens it.
+        ['cone_b', { type: 'content_done', messageId: backgroundId }],
+      ]);
+
+      deliver('cone_b', 'text_delta', { text: 'b2' });
+      expect(ui.slice(2).map((e) => e.type)).toEqual(['message_start', 'content_delta']);
+      expect(ui[2].messageId).not.toBe(backgroundId);
+    });
+
+    it('forwards a non-displayed unit’s failure, keeping endTurn', () => {
+      client.setSelectedScoopJid('cone_a');
+      const ui: unknown[] = [];
+      client.createAgentHandle().onEvent((e) => ui.push(e));
+      const seen = background();
+
+      simulateMessage('offscreen', {
+        type: 'error',
+        scoopJid: 'cone_b',
+        error: 'rate limited',
+        endTurn: false,
+      });
+      simulateMessage('offscreen', { type: 'error', scoopJid: 'cone_a', error: 'boom' });
+
+      expect(seen).toEqual([['cone_b', { type: 'error', error: 'rate limited', endTurn: false }]]);
+      expect(ui).toEqual([{ type: 'error', error: 'boom' }]);
+    });
+
+    it('stops delivering once unsubscribed', () => {
+      client.setSelectedScoopJid('cone_a');
+      const seen: unknown[] = [];
+      const off = client.onBackgroundUnitEvent((jid, e) => seen.push([jid, e]));
+      off();
+
+      deliver('cone_b', 'text_delta', { text: 'x' });
+
+      expect(seen).toEqual([]);
+    });
+  });
+
   it('fires onScoopActivity for non-selected scoop agent events while not rendering them', () => {
     // The navbar eyes follow the actively-streaming scoop even when it is
     // not the selected one; the thread itself must NOT render those events.

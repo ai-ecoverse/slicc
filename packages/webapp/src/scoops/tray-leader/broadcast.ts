@@ -89,6 +89,11 @@ export class BroadcastManager {
   /**
    * Broadcast an agent event to all connected followers.
    *
+   * Without `backgroundScoopJid` the event belongs to the unit this leader is
+   * displaying. With it, to a unit a follower may be reading while the leader
+   * looks elsewhere — which used to receive nothing at all, so that follower's
+   * transcript froze and a prompt it sent never showed a reply.
+   *
    * Events are chunked transparently by `TraySyncChannel`, so the ordinary
    * oversize case — an `open --view --size high` screenshot inlined into shell
    * stdout, or a large untruncated `tool_result` — now arrives intact. A send
@@ -96,10 +101,14 @@ export class BroadcastManager {
    * followers get a marker event instead, so the transcript shows a gap rather
    * than hiding one (#1700).
    */
-  broadcastEvent(event: AgentEvent): void {
+  broadcastEvent(event: AgentEvent, backgroundScoopJid?: string): void {
     if (this.context.followers.followers.size === 0) return;
-    const scoopJid = this.context.options.getScoopJid();
-    const failed = this.context.followers.broadcastToAllFollowers({
+    // `backgroundScoopJid` names a unit this leader is NOT displaying. Either
+    // way the event goes to the followers READING its unit, not to everyone —
+    // see `broadcastUnitTraffic` for who reads what.
+    const displayed = this.context.options.getScoopJid();
+    const scoopJid = backgroundScoopJid ?? displayed;
+    const failed = this.context.followers.broadcastUnitTraffic(scoopJid, displayed, {
       type: 'agent_event',
       event,
       scoopJid,
