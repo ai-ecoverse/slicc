@@ -716,6 +716,21 @@ describe('LeaderSyncManager', () => {
     expect(elsewhere.parseSent().slice(counts[1])).toEqual([]);
   });
 
+  it('tags the echo with the unit the message was delivered to', () => {
+    const { manager } = createManager();
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    manager.broadcastUserMessage('for B', 'msg-b', undefined, 'cone_b');
+
+    expect(ch.parseSent()[1]).toEqual({
+      type: 'user_message_echo',
+      text: 'for B',
+      messageId: 'msg-b',
+      scoopJid: 'cone_b',
+    });
+  });
+
   it('does not broadcast user_message_echo when no followers', () => {
     const { manager } = createManager();
 

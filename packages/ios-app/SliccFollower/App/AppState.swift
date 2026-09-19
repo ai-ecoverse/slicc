@@ -137,6 +137,8 @@ class AppState: ObservableObject {
     
     var messagesByScoop: [String: [ChatMessage]] = [:]
     
+    var localSends = LocalSendLedger()
+    
     
     
     
@@ -353,7 +355,8 @@ class AppState: ObservableObject {
     private var chunkReassembler = TrayChunkReassembler()
 
     
-    private(set) var streamingMessageId: String?
+    
+    var streamingMessageId: String?
 
     
     
@@ -506,6 +509,7 @@ class AppState: ObservableObject {
         modelCatalog = []
         modelSelectionState = nil
         messagesByScoop.removeAll()
+        localSends.removeAll()
         toolProgress.removeAll()
         sprinkles = []
         sprinkleContents.removeAll()
@@ -591,6 +595,7 @@ class AppState: ObservableObject {
         if let jid = selectedScoopJid {
             messagesByScoop[jid, default: []].append(message)
         }
+        localSends.record(message, scoopJid: selectedScoopJid)
 
         let msg = FollowerToLeaderMessage.userMessage(
             text: trimmed, messageId: messageId, steer: steer, attachments: attached)
@@ -891,7 +896,7 @@ class AppState: ObservableObject {
         case .userMessageEcho(let text, let messageId, let scoopJid, let attachments):
             logger.debug("User message echo: id=\(messageId)")
             var buffer = messagesByScoop[scoopJid] ?? []
-            if !buffer.contains(where: { $0.id == messageId }) {
+            if !localSends.owns(messageId), !buffer.contains(where: { $0.id == messageId }) {
                 let msg = ChatMessage(
                     id: messageId,
                     role: .user,
@@ -1243,7 +1248,11 @@ class AppState: ObservableObject {
             
             VoiceReply.shared.reset()
             DictationPriming.reset()
+            localSends.removeAll()
         }
+        
+        
+        let chatMessages = localSends.reconcile(snapshot: chatMessages, scoopJid: scoopJid)
         pruneToolProgress(replacing: messagesByScoop[scoopJid] ?? [], with: chatMessages)
         messagesByScoop[scoopJid] = chatMessages
         
@@ -1672,27 +1681,6 @@ extension AppState {
         credentialStore.clear()
         activeJoinUrl = ""
         activeDisplayName = nil
-    }
-}
-
-
-
-extension AppState {
-    
-    func selectScoop(jid: String) {
-        guard jid != selectedScoopJid else { return }
-        guard scoops.contains(where: { $0.jid == jid }) else { return }
-        selectedScoopJid = jid
-        
-        let cached = messagesByScoop[jid] ?? []
-        messages = cached
-        isStreaming = cached.last?.isStreaming == true
-        streamingMessageId = isStreaming ? cached.last?.id : nil
-        
-        
-        
-        sendToLeader(.scoopsSelect(scoopJid: jid))
-        refreshModels()
     }
 }
 

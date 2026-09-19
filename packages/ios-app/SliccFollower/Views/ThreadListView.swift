@@ -16,6 +16,7 @@ struct ThreadListColumn: View {
     var edge: HorizontalEdge = .leading
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var threadList: ThreadListModel
+    @EnvironmentObject var summaries: ThreadSummaryStore
     @Environment(\.palette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -41,10 +42,11 @@ struct ThreadListColumn: View {
                                 threadList.didSelect(in: presentation)
                             }
                         } label: {
-                            ThreadListRowView(row: row)
+                            ThreadListRowView(row: row, summary: summaries.lines[row.jid])
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(row.accessibilityLabel)
+                        .accessibilityValue(summaries.lines[row.jid] ?? "")
                         .accessibilityAddTraits(row.isSelected ? .isSelected : [])
                         .accessibilityIdentifier("scoop-switch-\(row.jid)")
                     }
@@ -55,6 +57,17 @@ struct ThreadListColumn: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .background(palette.surface.ignoresSafeArea())
+        
+        
+        
+        .onAppear { summaries.refresh(buffers: appState.messagesByScoop) }
+        .onDisappear { summaries.suspend() }
+        .onChange(of: appState.scoops) { _, _ in
+            summaries.refresh(buffers: appState.messagesByScoop)
+        }
+        .onChange(of: appState.messages.last?.id) { _, _ in
+            summaries.refresh(buffers: appState.messagesByScoop)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("thread-list")
     }
@@ -92,8 +105,12 @@ struct ThreadListColumn: View {
 
 
 
+
 struct ThreadListRowView: View {
     let row: ThreadListRow
+    
+    
+    var summary: String?
     @Environment(\.palette) private var palette
 
     var body: some View {
@@ -109,19 +126,19 @@ struct ThreadListRowView: View {
             .frame(width: 32, height: 32)
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text(row.label)
-                        .font(.system(size: 15, weight: row.isSelected ? .semibold : .medium))
-                        .foregroundStyle(palette.ink)
+                Text(row.label)
+                    .font(.system(size: 15, weight: row.isSelected ? .semibold : .medium))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let summary {
+                    Text(summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(palette.inkSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    if row.isReadOnly {
-                        Image(systemName: "eye")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(palette.inkTertiary)
-                    }
+                        .accessibilityIdentifier("thread-summary-\(row.jid)")
                 }
-                detailLine
             }
             Spacer(minLength: 4)
             trailingMarkers
@@ -129,46 +146,12 @@ struct ThreadListRowView: View {
         .padding(.vertical, 6)
         .padding(.leading, 8 + CGFloat(min(row.depth, 4)) * 18)
         .padding(.trailing, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(row.isSelected ? palette.ink.opacity(0.08) : .clear)
         )
         .contentShape(Rectangle())
-    }
-
-    
-    
-    
-    
-    private var detailLine: some View {
-        ViewThatFits(in: .horizontal) {
-            if let model = row.modelId {
-                Text("\(statusText) · \(model)")
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            statusText
-        }
-        .font(.system(size: 12))
-        .foregroundStyle(palette.inkSecondary)
-        .lineLimit(1)
-    }
-
-    
-    
-    private var statusText: Text {
-        var text = Text(row.role.rawValue)
-        if let fill = row.fillText {
-            let styled = Text(fill).foregroundStyle(
-                row.status.isNearLimit ? Color.orange : palette.inkSecondary)
-            text = Text("\(text) · \(styled)")
-        }
-        if let phrase = row.activityPhrase {
-            let styled = Text(phrase).foregroundStyle(
-                row.status.lifecycle == .broken ? Color.red : palette.inkSecondary)
-            text = Text("\(text) · \(styled)")
-        }
-        return text
     }
 
     @ViewBuilder

@@ -19,6 +19,23 @@ extension AppState {
     }
 
     
+    func selectScoop(jid: String) {
+        guard jid != selectedScoopJid else { return }
+        guard scoops.contains(where: { $0.jid == jid }) else { return }
+        selectedScoopJid = jid
+        
+        let cached = messagesByScoop[jid] ?? []
+        messages = cached
+        isStreaming = cached.last?.isStreaming == true
+        streamingMessageId = isStreaming ? cached.last?.id : nil
+        
+        
+        
+        sendToLeader(.scoopsSelect(scoopJid: jid))
+        refreshModels()
+    }
+
+    
     var selectedScoop: ScoopSummary? {
         scoops.first(where: { $0.jid == selectedScoopJid })
     }

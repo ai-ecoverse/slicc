@@ -73,7 +73,12 @@ export class BroadcastManager {
     }
   }
 
-  broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
+  broadcastUserMessage(
+    text: string,
+    messageId: string,
+    attachments?: MessageAttachment[],
+    scoopJid?: string
+  ): void {
     if (this.context.followers.followers.size === 0) return;
     const safeAttachments = attachments?.length
       ? stripLocalPathsForRemote(attachments)
@@ -82,7 +87,7 @@ export class BroadcastManager {
       type: 'user_message_echo',
       text,
       messageId,
-      scoopJid: this.context.options.getScoopJid(),
+      scoopJid: scoopJid ?? this.context.options.getScoopJid(),
       attachments: safeAttachments,
     });
   }

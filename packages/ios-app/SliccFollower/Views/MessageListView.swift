@@ -77,8 +77,18 @@ struct MessageListView: View {
     
     @State private var isAtBottom = true
 
+    
+    
+    
+    
+    
+    @State private var wasFollowingBeforeKeyboard = false
+
     var body: some View {
-        Group {
+        
+        
+        
+        ZStack {
             if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty
                 && sudoApprovals.isEmpty
             {
@@ -223,6 +233,10 @@ struct MessageListView: View {
         
         
         
+        .onReceive(Self.keyboardWillShow) { _ in wasFollowingBeforeKeyboard = isAtBottom }
+        .onReceive(Self.keyboardDidShow) { _ in
+            followBottom(proxy, force: wasFollowingBeforeKeyboard)
+        }
         
         
         
@@ -239,7 +253,21 @@ struct MessageListView: View {
         
         
         
-        .defaultScrollAnchor(.bottom)
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
     }
 
     
@@ -314,6 +342,11 @@ struct MessageListView: View {
 
         return groups
     }
+
+    private static let keyboardWillShow = NotificationCenter.default.publisher(
+        for: UIResponder.keyboardWillShowNotification)
+    private static let keyboardDidShow = NotificationCenter.default.publisher(
+        for: UIResponder.keyboardDidShowNotification)
 
     
     

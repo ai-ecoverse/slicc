@@ -368,7 +368,7 @@ describe('WC tray follower message routing (#2382)', () => {
     expect(sends).toEqual([{ id: 'cone_b', text: 'hi from B', messageId: 'fm1' }]);
     expect(addUserMessage).not.toHaveBeenCalled();
 
-    expect(broadcastUserMessage).toHaveBeenCalledWith('hi from B', 'fm1', undefined);
+    expect(broadcastUserMessage).toHaveBeenCalledWith('hi from B', 'fm1', undefined, 'cone_b');
   });
 
   it('still renders the bubble when the follower is reading what the leader shows', async () => {

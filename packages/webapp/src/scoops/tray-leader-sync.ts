@@ -351,8 +351,13 @@ export class LeaderSyncManager {
     this.broadcast.broadcastEvent(event, backgroundScoopJid);
   }
 
-  broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
-    this.broadcast.broadcastUserMessage(text, messageId, attachments);
+  broadcastUserMessage(
+    text: string,
+    messageId: string,
+    attachments?: MessageAttachment[],
+    scoopJid?: string
+  ): void {
+    this.broadcast.broadcastUserMessage(text, messageId, attachments, scoopJid);
   }
 
   broadcastStatus(status: string, scoopJid?: string): void {

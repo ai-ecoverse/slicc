@@ -634,7 +634,7 @@ function deliverFollowerMessage(
   } else {
     deps.agentHandle.sendMessage(forAgent, messageId, attachments, options);
   }
-  state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments);
+  state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments, target ?? undefined);
 
   if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
 }

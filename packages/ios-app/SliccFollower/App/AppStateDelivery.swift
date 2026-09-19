@@ -10,6 +10,7 @@ extension AppState {
     
     
     func markUndelivered(_ messageId: String) {
+        localSends.flagUndelivered(messageId)
         if let index = messages.firstIndex(where: { $0.id == messageId }) {
             messages[index].error = true
         }

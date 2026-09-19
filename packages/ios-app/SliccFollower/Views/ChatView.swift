@@ -24,6 +24,8 @@ struct ChatView: View {
     
     
     @StateObject private var threadList = ThreadListModel()
+    
+    @StateObject private var threadSummaries = ThreadSummaryStore()
     @State private var showSettings = false
     @State private var hasAppeared = false
     
@@ -83,6 +85,7 @@ struct ChatView: View {
             }
         }
         .environmentObject(threadList)
+        .environmentObject(threadSummaries)
         .onReceive(appState.$scoops.combineLatest(appState.$selectedScoopJid)) { scoops, selected in
             threadList.sync(scoops: scoops, selectedJid: selected)
         }
@@ -985,59 +988,67 @@ struct ConversationView: View {
         }
     }
 
-    @ViewBuilder
+    
+    
+    
+    
+    
+    
+    
     private var liveConversation: some View {
-        Group {
-            MessageListView(
-                messages: appState.messages,
-                isStreaming: appState.isStreaming,
-                toolProgress: appState.toolProgress,
-                toolUICards: appState.visibleToolUICards,
-                openApprovals: appState.openApprovals,
-                onOpenApprovalDecision: appState.resolveOpenApproval,
-                sudoApprovals: appState.sudoApprovals,
-                sudoAllowAlways: AppState.deviceOwnerAuthAvailable(),
-                onSudoApprovalDecision: appState.resolveSudoApproval,
-                onInlineSprinkleLick: { body, target in
-                    appState.sendSprinkleLick("inline", body: body, targetScoop: target)
-                }
-            )
-            .transcriptSwipeGesture(
-                state: horizontalScrollGestureState,
-                onAction: handleTranscriptSwipe)
-
-            
-            
-            
-            
-            
-            
-            if !appState.selectedUnitIsReadOnly {
-                InputBar(
-                    text: $inputText,
-                    isStreaming: appState.isStreaming,
-                    isConnected: appState.settledConnection.state == .connected,
-                    
-                    
-                    
-                    isStalled: appState.settledConnection.isStalled,
-                    steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
-                    ptt: ptt,
-                    onSend: { text, attachments, dictated in
-                        appState.sendMessage(
-                            text, attachments: attachments, dictated: dictated)
-                        inputText = ""
-                    },
-                    onAbort: {
-                        appState.abort()
-                    },
-                    onSteer: { text, attachments in
-                        appState.sendMessage(text, steer: true, attachments: attachments)
-                        inputText = ""
-                    },
-                    stagedAttachments: $stagedAttachments
-                )
+        MessageListView(
+            messages: appState.messages,
+            isStreaming: appState.isStreaming,
+            toolProgress: appState.toolProgress,
+            toolUICards: appState.visibleToolUICards,
+            openApprovals: appState.openApprovals,
+            onOpenApprovalDecision: appState.resolveOpenApproval,
+            sudoApprovals: appState.sudoApprovals,
+            sudoAllowAlways: AppState.deviceOwnerAuthAvailable(),
+            onSudoApprovalDecision: appState.resolveSudoApproval,
+            onInlineSprinkleLick: { body, target in
+                appState.sendSprinkleLick("inline", body: body, targetScoop: target)
             }
+        )
+        .transcriptSwipeGesture(
+            state: horizontalScrollGestureState,
+            onAction: handleTranscriptSwipe
+        )
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+    }
+
+    
+    
+    
+    
+    
+    @ViewBuilder
+    private var composer: some View {
+        if !appState.selectedUnitIsReadOnly {
+            InputBar(
+                text: $inputText,
+                isStreaming: appState.isStreaming,
+                isConnected: appState.settledConnection.state == .connected,
+                
+                
+                
+                isStalled: appState.settledConnection.isStalled,
+                steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
+                ptt: ptt,
+                onSend: { text, attachments, dictated in
+                    appState.sendMessage(
+                        text, attachments: attachments, dictated: dictated)
+                    inputText = ""
+                },
+                onAbort: {
+                    appState.abort()
+                },
+                onSteer: { text, attachments in
+                    appState.sendMessage(text, steer: true, attachments: attachments)
+                    inputText = ""
+                },
+                stagedAttachments: $stagedAttachments
+            )
         }
     }
 
