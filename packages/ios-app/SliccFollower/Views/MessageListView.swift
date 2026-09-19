@@ -259,7 +259,15 @@ struct MessageListView: View {
         //
         // Measured, iPhone 17e / iOS 26.5: 258pt of drift before, 0pt after.
         // `TranscriptComposerGrowthUITests` asserts that drift directly.
-        .defaultScrollAnchor(.bottom)
+        //
+        // NOT for `.sizeChanges`. With the composer riding a bottom inset,
+        // the keyboard reaches the scroll view as a viewport size change, and
+        // a size-change anchor re-pins it to the bottom — which threw a
+        // reader who had scrolled back 338pt on iPad landscape (iOS 26).
+        // Following new content is `followBottom`'s job (below), and it only
+        // acts for a reader who was already at the bottom.
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
     }
 
     /// Scroll to the newest content, but never over a reader who has moved
