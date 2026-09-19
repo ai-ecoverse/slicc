@@ -834,6 +834,8 @@ struct ConversationView: View {
         .navigationTitle(appState.openFrozen?.entry.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
+        
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar {
             if !toolbarSuppressed {
                 identityGroup
@@ -909,7 +911,7 @@ struct ConversationView: View {
         ScoopSwitcher()
             .padding(.horizontal, 12)
             .frame(height: 36)
-            .background(.regularMaterial, in: Capsule())
+            .floatingGlass(in: Capsule(), interactive: true)
     }
 
     private var selectedAvatarView: some View {
@@ -1010,6 +1012,14 @@ struct ConversationView: View {
                 appState.sendSprinkleLick("inline", body: body, targetScoop: target)
             }
         )
+        
+        
+        
+        
+        
+        
+        
+        .id(appState.selectedScoopJid)
         .transcriptSwipeGesture(
             state: horizontalScrollGestureState,
             onAction: handleTranscriptSwipe
@@ -1240,7 +1250,7 @@ struct SessionControlsCluster: View {
                     .frame(width: 36, height: 36)
             }
         }
-        .background(.regularMaterial, in: Capsule())
+        .floatingGlass(in: Capsule())
     }
 
     private var newChatButton: some View {
@@ -1250,12 +1260,15 @@ struct SessionControlsCluster: View {
                 to: nil, from: nil, for: nil)
             showNewSessionDialog = true
         } label: {
-            if appState.newSessionInFlight {
-                ProgressView()
-            } else {
-                Image(systemName: "square.and.pencil")
-                    .foregroundStyle(palette.ink.opacity(0.7))
+            Group {
+                if appState.newSessionInFlight {
+                    ProgressView()
+                } else {
+                    Image(systemName: "square.and.pencil")
+                        .foregroundStyle(palette.ink.opacity(0.7))
+                }
             }
+            .sessionControlHitArea()
         }
         
         
@@ -1278,6 +1291,7 @@ struct SessionControlsCluster: View {
         } label: {
             Image(systemName: "gearshape")
                 .foregroundStyle(palette.ink.opacity(0.7))
+                .sessionControlHitArea()
         }
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("settings-button")
@@ -1289,9 +1303,21 @@ struct SessionControlsCluster: View {
         } label: {
             Image(systemName: "snowflake")
                 .foregroundStyle(palette.ink.opacity(0.7))
+                .sessionControlHitArea()
         }
         .accessibilityLabel("Past Sessions")
         .accessibilityIdentifier("frozen-rail-button")
+    }
+}
+
+extension View {
+    
+    
+    
+    
+    
+    fileprivate func sessionControlHitArea() -> some View {
+        frame(width: 36, height: 36).contentShape(Rectangle())
     }
 }
 

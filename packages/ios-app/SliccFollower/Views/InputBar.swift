@@ -74,12 +74,10 @@ struct InputBar: View {
     }
 
     var body: some View {
+        
+        
+        
         VStack(spacing: 0) {
-            
-            Rectangle()
-                .fill(palette.line)
-                .frame(height: 0.5)
-
             if !stagedAttachments.isEmpty {
                 StagedAttachmentsRow(attachments: stagedAttachments) { removed in
                     stagedAttachments.removeAll { $0.id == removed.id }
@@ -97,7 +95,6 @@ struct InputBar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-        .background(palette.surface)
         
         
         
@@ -320,12 +317,8 @@ struct InputBar: View {
                 
                 .allowsHitTesting(!pttArmed)
         }
-        .background(palette.field)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(palette.ink.opacity(0.12), lineWidth: 0.5)
-        )
+        .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+        .floatingGlass(in: RoundedRectangle(cornerRadius: 19, style: .continuous))
         .overlay {
             
             

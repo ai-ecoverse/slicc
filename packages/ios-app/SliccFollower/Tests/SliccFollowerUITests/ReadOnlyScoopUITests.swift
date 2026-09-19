@@ -52,13 +52,53 @@ final class ReadOnlyScoopUITests: XCTestCase {
         XCTAssertFalse(app.buttons["attach-menu"].exists)
     }
 
-    private func launchUnitRoleApp(variant: String = "cone") -> XCUIApplication {
+    
+    
+    
+    func testALongThreadIsStillOnScreenAfterSwitchingBackAndForth() {
+        let app = launchUnitRoleApp(extraArguments: [
+            "-uiTestTranscriptRepeat", "60", "-uiTestTranscriptTallTail", "YES",
+        ])
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-fx-"))
+                .firstMatch.waitForExistence(timeout: 30),
+            "the long cone transcript should have seeded")
+
+        for round in 1...4 {
+            select(jid: "fixture-owned-scoop", in: app)
+            Thread.sleep(forTimeInterval: 0.8)
+            XCTAssertGreaterThan(
+                visibleRowCount(app), 0, "round \(round): the scoop opened blank")
+            select(jid: "fixture-cone", in: app)
+            Thread.sleep(forTimeInterval: 0.8)
+            XCTAssertGreaterThan(
+                visibleRowCount(app), 0, "round \(round): the cone came back blank")
+        }
+        attach(app.screenshot(), named: "cone-after-switching")
+    }
+
+    
+    
+    private func visibleRowCount(_ app: XCUIApplication) -> Int {
+        let window = app.windows.firstMatch.frame
+        return app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-"))
+            .allElementsBoundByIndex
+            .filter { $0.frame.height > 0 && window.intersects($0.frame) }
+            .count
+    }
+
+    private func launchUnitRoleApp(
+        variant: String = "cone", extraArguments: [String] = []
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += [
-            "-joinUrl", "", "-uiTestConnectionState", "connected",
-            "-uiTestUnitRoleFixture", variant,
-            "-uiTestReduceMotion", "YES",
-        ]
+        app.launchArguments +=
+            [
+                "-joinUrl", "", "-uiTestConnectionState", "connected",
+                "-uiTestUnitRoleFixture", variant,
+                "-uiTestReduceMotion", "YES",
+            ] + extraArguments
         app.launch()
         XCTAssertTrue(app.buttons["scoop-switcher"].waitForExistence(timeout: 60))
         return app

@@ -268,6 +268,9 @@ struct MessageListView: View {
         
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .alignment)
+        
+        
+        .scrollEdgeEffectStyle(.soft, for: .vertical)
     }
 
     
