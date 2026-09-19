@@ -34,6 +34,7 @@ export interface ComputersHostOptions {
 export interface ComputersHostHandle {
   watch: (id: string, fps: number, maxWidth: number) => void;
   unwatch: (id: string) => void;
+  isWatching: (id: string) => boolean;
   stop: () => void;
 }
 
@@ -163,6 +164,7 @@ export function startComputersHost(options: ComputersHostOptions): ComputersHost
   const handle: ComputersHostHandle = {
     watch: (id, fps, maxWidth) => startWatch({ type: 'computer-watch', id, fps, maxWidth }),
     unwatch: stopWatch,
+    isWatching: (id) => watchers.has(id),
     stop: () => {
       unsubscribe();
       offChange();

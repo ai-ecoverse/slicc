@@ -20,6 +20,9 @@ export interface ComputerCommandDeps {
   panelRpc?: PanelRpcClient;
   watch?: (id: string, fps: number, maxWidth: number) => void;
   unwatch?: (id: string) => void;
+  isWatching?: (id: string) => boolean;
+  /** Injected in tests; production waits 5s for a live push frame after input. */
+  postActionTimeoutMs?: number;
   /** Same broker the rest of the shell uses — `--allow-input` rides it. */
   sudoBroker?: SudoBroker;
   listFollowers?: () => ConnectedFollowerInfo[];

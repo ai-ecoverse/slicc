@@ -64,6 +64,88 @@ class FakeBackend implements ComputerBackend {
   async close(): Promise<void> {}
 }
 
+const PULL_JPEG = Uint8Array.of(0xff, 0xd8, 0x01, 0xd9);
+const PUSH_JPEG = Uint8Array.of(0xff, 0xd8, 0x02, 0xd9);
+
+class FakePushBackend implements ComputerBackend {
+  events: ComputerInputEvent[] = [];
+  pullShots = 0;
+  cachedShots = 0;
+  private sink: ((frame: ComputerFrame) => void) | null = null;
+  private lastPushed: ComputerFrame | null = null;
+  watching = false;
+
+  constructor(readonly id = 'push') {}
+
+  describe(): ComputerDescriptor {
+    return {
+      id: this.id,
+      kind: 'jsh',
+      title: this.id,
+      size: { width: 640, height: 400 },
+      state: 'live',
+      capabilities: {
+        screenshot: true,
+        text: true,
+        frames: 'push',
+        keyboard: true,
+        mouse: 'absolute',
+        scroll: false,
+        exec: false,
+        inputAllowed: true,
+      },
+      pid: null,
+    };
+  }
+
+  subscribe(_fps: number, onFrame: (frame: ComputerFrame) => void, _maxWidth?: number): () => void {
+    this.watching = true;
+    this.sink = onFrame;
+    if (this.lastPushed) onFrame(this.lastPushed);
+    return () => {
+      this.watching = false;
+      this.sink = null;
+    };
+  }
+
+  emit(seq: number): ComputerFrame {
+    const frame: ComputerFrame = {
+      seq,
+      mime: 'image/jpeg',
+      width: 640,
+      height: 400,
+      bytes: PUSH_JPEG,
+    };
+    this.lastPushed = frame;
+    this.sink?.(frame);
+    return frame;
+  }
+
+  async screenshot(opts: ComputerScreenshotOpts = { format: 'jpeg' }): Promise<ComputerFrame> {
+    if (!opts.pull && this.watching) {
+      this.cachedShots += 1;
+      if (this.lastPushed) return this.lastPushed;
+      return new Promise(() => {
+        /* wait for a pushed frame — tests time this out */
+      });
+    }
+    this.pullShots += 1;
+    return {
+      seq: 99,
+      mime: 'image/jpeg',
+      width: 640,
+      height: 400,
+      bytes: PULL_JPEG,
+    };
+  }
+
+  async input(events: ComputerInputEvent[]): Promise<void> {
+    this.events.push(...events);
+  }
+
+  async close(): Promise<void> {}
+}
+
 function makeCtx(env = new Map<string, string>()) {
   const written = new Map<string, Uint8Array | string>();
   return {
@@ -580,6 +662,106 @@ describe('computer command', () => {
     expect(backend.shots).toBeGreaterThan(1);
     const after = [...written.keys()].filter((p) => !before.includes(p));
     expect(after.some((p) => p.endsWith('.jpg'))).toBe(true);
+  });
+
+  it('push backend without a watch still exits 0 after click', async () => {
+    const backend = new FakePushBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx, written } = makeCtx();
+    const result = await cmd.execute(['click', '1', '--at', '100,50'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(backend.events).toEqual([{ type: 'click', button: 1, count: 1, x: 100, y: 50 }]);
+    expect(backend.pullShots).toBe(1);
+    expect(backend.cachedShots).toBe(0);
+    expect(result.stdout).toContain('screen: ');
+    expect([...written.values()].some((data) => data === PULL_JPEG)).toBe(true);
+  });
+
+  it('watch path still uses a pushed frame after click', async () => {
+    const backend = new FakePushBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    let stop: (() => void) | undefined;
+    const cmd = createComputerCommand({
+      registry,
+      watch: () => {
+        stop = backend.subscribe(4, () => {});
+      },
+      unwatch: () => {
+        stop?.();
+      },
+      isWatching: () => backend.watching,
+    });
+    const { ctx, written } = makeCtx();
+    const watch = await cmd.execute(['watch', '--fps', '4'], ctx);
+    expect(watch.exitCode).toBe(0);
+    backend.emit(7);
+    const result = await cmd.execute(['click', '1', '--at', '111,122'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(backend.events).toEqual([{ type: 'click', button: 1, count: 1, x: 111, y: 122 }]);
+    expect(backend.cachedShots).toBe(1);
+    expect(backend.pullShots).toBe(0);
+    expect(result.stdout).toContain('screen: ');
+    expect([...written.values()].some((data) => data === PUSH_JPEG)).toBe(true);
+  });
+
+  it('falls back to on-demand screenshot when a live watch never pushes', async () => {
+    const backend = new FakePushBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    let stop: (() => void) | undefined;
+    const cmd = createComputerCommand({
+      registry,
+      watch: () => {
+        stop = backend.subscribe(4, () => {});
+      },
+      unwatch: () => {
+        stop?.();
+      },
+      isWatching: () => backend.watching,
+      postActionTimeoutMs: 20,
+    });
+    const { ctx, written } = makeCtx();
+    await cmd.execute(['watch', '--fps', '4'], ctx);
+    const result = await cmd.execute(['click', '1', '--at', '10,20'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(backend.events).toHaveLength(1);
+    expect(backend.cachedShots).toBe(1);
+    expect(backend.pullShots).toBe(1);
+    expect(result.stdout).toContain('screen: ');
+    expect([...written.values()].some((data) => data === PULL_JPEG)).toBe(true);
+  });
+
+  it('on-demand screenshot still works on a push backend', async () => {
+    const backend = new FakePushBackend();
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx, written } = makeCtx();
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(shot.stdout).toContain('640x400');
+    expect(shot.stdout).toContain('screen: ');
+    expect(backend.pullShots).toBe(1);
+    expect([...written.values()].some((data) => data === PULL_JPEG)).toBe(true);
+  });
+
+  it('does not fail a landed poke when the frozen frame cannot be captured', async () => {
+    const backend = new FakeBackend();
+    backend.screenshot = async () => {
+      throw new Error('capture exploded');
+    };
+    const registry = new ComputerRegistry(null);
+    registry.register(backend);
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const result = await cmd.execute(['type', 'hi'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(backend.events).toEqual([{ type: 'text', text: 'hi' }]);
+    expect(result.stderr).toContain('screenshot failed after input: capture exploded');
+    expect(result.stdout).toContain('target: fake');
   });
 });
 

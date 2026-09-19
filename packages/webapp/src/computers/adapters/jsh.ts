@@ -5,7 +5,7 @@
  *
  * Push backends (`subscribe`) cache the last frame. `screenshot` returns
  * that cache while a stream is live and only waits out a timeout when no
- * frame has arrived yet.
+ * frame has arrived yet. `pull: true` skips the cache and captures now.
  */
 
 import type {
@@ -84,11 +84,13 @@ export class JshComputerBackend implements ComputerBackend {
   }
 
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
-    if (this.subscribed) {
+    if (this.subscribed && !opts.pull) {
       if (this.lastFrame) return this.lastFrame;
       return this.waitForCachedFrame();
     }
-    return (await this.call('screenshot', [opts])) as ComputerFrame;
+    return (await this.call('screenshot', [
+      { format: opts.format, maxWidth: opts.maxWidth, signal: opts.signal },
+    ])) as ComputerFrame;
   }
 
   async text(): Promise<string | null> {
