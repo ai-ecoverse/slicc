@@ -40,9 +40,9 @@
     },
     "chrome-extension": {
       "lines": 88,
-      "statements": 86,
+      "statements": 87,
       "functions": 80,
-      "branches": 76,
+      "branches": 79,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -152,7 +152,7 @@
     "swift-launcher": {
       "lines": 80,
       "functions": 71,
-      "regions": 72
+      "regions": 73
     },
     "swift-optel": {
       "lines": 75,
@@ -165,9 +165,9 @@
       "regions": 87
     },
     "swift-trayfollower": {
-      "lines": 70,
-      "functions": 56,
-      "regions": 78
+      "lines": 73,
+      "functions": 58,
+      "regions": 80
     },
     "swift-traykit": {
       "lines": 60,
