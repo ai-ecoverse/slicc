@@ -22,8 +22,9 @@ struct LocalSendLedger {
     static let confirmationWindow: TimeInterval = 60
 
     private struct Entry {
-        let scoopJid: String
-        let message: ChatMessage
+        /// `nil` for a send made before any unit was selected — see `record`.
+        var scoopJid: String?
+        var message: ChatMessage
         let sentAt: Date
     }
 
@@ -32,8 +33,20 @@ struct LocalSendLedger {
     /// Whether `messageId` is a send this device still holds unconfirmed.
     func owns(_ messageId: String) -> Bool { entries[messageId] != nil }
 
-    mutating func record(_ message: ChatMessage, scoopJid: String, now: Date = Date()) {
+    /// `scoopJid` is `nil` in the window after the channel opens and before
+    /// the first snapshot or roster names a unit: the composer already works,
+    /// and the leader delivers such a prompt to the unit it is displaying —
+    /// which is the unit its first snapshot describes. The entry is held
+    /// unscoped and adopted by the first snapshot to arrive.
+    mutating func record(_ message: ChatMessage, scoopJid: String?, now: Date = Date()) {
         entries[message.id] = Entry(scoopJid: scoopJid, message: message, sentAt: now)
+    }
+
+    /// The transport refused this send. It stays in the ledger — the bubble
+    /// keeps its content — but as the flagged copy, so a snapshot that puts it
+    /// back cannot quietly turn "Not delivered" into a delivered-looking prompt.
+    mutating func flagUndelivered(_ messageId: String) {
+        entries[messageId]?.message.error = true
     }
 
     mutating func removeAll() { entries.removeAll() }
@@ -50,8 +63,13 @@ struct LocalSendLedger {
         for (id, entry) in entries {
             if now.timeIntervalSince(entry.sentAt) > Self.confirmationWindow {
                 entries[id] = nil
-            } else if entry.scoopJid == scoopJid {
-                if confirmed.contains(id) { entries[id] = nil } else { missing.append(entry) }
+            } else if entry.scoopJid == nil || entry.scoopJid == scoopJid {
+                if confirmed.contains(id) {
+                    entries[id] = nil
+                } else {
+                    entries[id]?.scoopJid = scoopJid
+                    missing.append(entry)
+                }
             }
         }
         guard !missing.isEmpty else { return snapshot }

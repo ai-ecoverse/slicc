@@ -594,8 +594,8 @@ class AppState: ObservableObject {
         // Mirror into the per-scoop buffer so swipe-back retains the message.
         if let jid = selectedScoopJid {
             messagesByScoop[jid, default: []].append(message)
-            localSends.record(message, scoopJid: jid)
         }
+        localSends.record(message, scoopJid: selectedScoopJid)
 
         let msg = FollowerToLeaderMessage.userMessage(
             text: trimmed, messageId: messageId, steer: steer, attachments: attached)

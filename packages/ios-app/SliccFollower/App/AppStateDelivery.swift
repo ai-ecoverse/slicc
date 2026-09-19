@@ -10,6 +10,7 @@ extension AppState {
     /// the message — the user bubble renders a "Not delivered" note and
     /// keeps its content — and surfaced in the transport banner.
     func markUndelivered(_ messageId: String) {
+        localSends.flagUndelivered(messageId)
         if let index = messages.firstIndex(where: { $0.id == messageId }) {
             messages[index].error = true
         }

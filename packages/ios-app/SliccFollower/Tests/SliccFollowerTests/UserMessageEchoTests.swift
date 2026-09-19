@@ -56,6 +56,29 @@ final class UserMessageEchoTests: XCTestCase {
         XCTAssertEqual(state.messagesByScoop["cone-b"]?.map(\.id), ["a1", "a2", id])
     }
 
+    func testAPromptSentBeforeTheFirstSnapshotSurvivesIt() throws {
+        // Channel open, composer live, no unit named yet.
+        let state = AppState()
+        state.sendMessage("hello already")
+        let id = try XCTUnwrap(state.messages.last?.id)
+
+        state.handleDataChannelMessage(snapshot("cone-a", ids: ["a1"]))
+
+        XCTAssertEqual(state.selectedScoopJid, "cone-a")
+        XCTAssertEqual(state.messages.map(\.id), ["a1", id])
+    }
+
+    func testARefusedSendKeepsItsNotDeliveredFlagThroughASnapshot() throws {
+        // No channel behind this AppState, so the transport refuses the send.
+        let (state, id) = try stateAfterSending("into the void", under: "cone-b")
+        XCTAssertEqual(state.messages.last?.error, true, "precondition: flagged undelivered")
+
+        state.handleDataChannelMessage(snapshot("cone-b", ids: ["a1"]))
+
+        XCTAssertEqual(state.messages.map(\.id), ["a1", id])
+        XCTAssertEqual(state.messages.last?.error, true)
+    }
+
     func testASnapshotThatContainsThePromptConfirmsItOnce() throws {
         let (state, id) = try stateAfterSending("confirmed", under: "cone-b")
 

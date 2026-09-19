@@ -41,6 +41,30 @@ final class LocalSendLedgerTests: XCTestCase {
         XCTAssertFalse(ledger.owns("lost"))
     }
 
+    func testASendRefusedByTheTransportComesBackStillFlagged() throws {
+        var ledger = LocalSendLedger()
+        ledger.record(message("refused"), scoopJid: "b", now: start)
+        ledger.flagUndelivered("refused")
+
+        let merged = ledger.reconcile(snapshot: [message("old")], scoopJid: "b", now: start)
+
+        XCTAssertEqual(merged.map(\.id), ["old", "refused"])
+        XCTAssertEqual(try XCTUnwrap(merged.last).error, true, "still 'Not delivered'")
+    }
+
+    func testASendMadeBeforeAnyUnitWasSelectedIsAdoptedByTheFirstSnapshot() {
+        var ledger = LocalSendLedger()
+        ledger.record(message("early"), scoopJid: nil, now: start)
+
+        let first = ledger.reconcile(snapshot: [message("old")], scoopJid: "cone", now: start)
+        XCTAssertEqual(first.map(\.id), ["old", "early"])
+
+        // Adopted means scoped: another unit's snapshot does not inherit it.
+        XCTAssertEqual(ledger.reconcile(snapshot: [], scoopJid: "other", now: start).map(\.id), [])
+        XCTAssertEqual(
+            ledger.reconcile(snapshot: [], scoopJid: "cone", now: start).map(\.id), ["early"])
+    }
+
     func testRemoveAllReleasesEveryEntry() {
         var ledger = LocalSendLedger()
         ledger.record(message("m1"), scoopJid: "b", now: start)
