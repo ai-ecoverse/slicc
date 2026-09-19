@@ -1,5 +1,5 @@
 {
-  "traySyncProtocolVersion": 8,
+  "traySyncProtocolVersion": 9,
   "leaderVariantCount": 47,
   "followerVariantCount": 43,
   "agentEventVariantCount": 13,
@@ -898,7 +898,8 @@
       "ios": "decoded",
       "message": {
         "type": "request_snapshot",
-        "scoopJid": "cone"
+        "scoopJid": "cone",
+        "peek": true
       }
     },
     {
@@ -1523,11 +1524,11 @@
         "name",
         "parentId",
         "state",
-        "trigger"
+        "trigger",
+        "turns"
       ],
       "dropped": [
-        "addedAt",
-        "turns"
+        "addedAt"
       ],
       "sample": {
         "jid": "reviewer",

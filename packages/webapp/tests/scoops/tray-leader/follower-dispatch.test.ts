@@ -340,7 +340,14 @@ describe('FollowerDispatch', () => {
     };
 
     const snapshot = { type: 'request_snapshot', scoopJid: 'scoop' } as const;
-    route(snapshot, c.broadcast.sendSnapshotToFollower, 'follower', 'scoop');
+    route(snapshot, c.broadcast.sendSnapshotToFollower, 'follower', 'scoop', false);
+    route(
+      { ...snapshot, peek: true },
+      c.broadcast.sendSnapshotToFollower,
+      'follower',
+      'scoop',
+      true
+    );
     route({ type: 'sprinkles.refresh' }, c.broadcast.sendSprinklesListToFollower, 'follower');
     route(
       { type: 'sprinkle.fetch', requestId: 'fetch', sprinkleName: 'status' },

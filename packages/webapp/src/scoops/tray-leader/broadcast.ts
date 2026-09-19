@@ -163,7 +163,16 @@ export class BroadcastManager {
     });
   }
 
-  async sendSnapshotToFollower(bootstrapId: string, scoopJid?: string): Promise<void> {
+  /**
+   * @param peek answer with `scoopJid`'s transcript WITHOUT recording it as
+   *   this peer's selection — a follower warming its cache of other units must
+   *   not have its prompts and `abort` re-routed to the unit it merely read.
+   */
+  async sendSnapshotToFollower(
+    bootstrapId: string,
+    scoopJid?: string,
+    peek = false
+  ): Promise<void> {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
 
@@ -205,7 +214,7 @@ export class BroadcastManager {
       messages = options.getMessages();
     }
 
-    follower.selectedScoopJid = targetJid;
+    if (!peek) follower.selectedScoopJid = targetJid;
     sendSnapshot(follower.sync, messages, targetJid);
     this.context.log.debug('Snapshot sent to follower', {
       bootstrapId,

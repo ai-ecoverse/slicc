@@ -68,13 +68,19 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  *
  * Version history (only what a peer must branch on):
  *
+ * - **9** — this leader honours `request_snapshot.peek`: a snapshot of a unit
+ *   is returned WITHOUT recording that unit as the peer's selection. An older
+ *   leader ignores the flag and re-points the peer's selection at the requested
+ *   unit — which is what routes its `abort`, its prompts and its
+ *   `thinking.set` — so a follower must not prefetch other units' transcripts
+ *   from a leader below 9.
  * - **8** — this peer derives a unit's role from {@link ScoopSummary.parentId}
  *   alone and does NOT need {@link ScoopSummary.isCone}. A leader may therefore
  *   omit the flag when talking to a peer at 8 or above; it keeps sending it to
  *   anything older, which includes every native follower shipped before the
  *   optional-decode build ([#2358](https://github.com/ai-ecoverse/slicc/issues/2358)).
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 8;
+export const TRAY_SYNC_PROTOCOL_VERSION = 9;
 
 /**
  * An opaque Chrome DevTools Protocol payload — a `params` or `result` bag.
@@ -576,7 +582,17 @@ export type FollowerToLeaderMessage =
     }
   | { type: 'abort' }
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
-  | { type: 'request_snapshot'; scoopJid?: string }
+  | {
+      type: 'request_snapshot';
+      scoopJid?: string;
+      /**
+       * Read `scoopJid`'s transcript without selecting it (protocol 9). For a
+       * follower keeping other units' transcripts warm in the background: the
+       * leader's record of what this peer is LOOKING AT must not move, because
+       * it routes the peer's prompts, `abort` and `thinking.set`.
+       */
+      peek?: boolean;
+    }
   | { type: 'scoops.select'; scoopJid: string }
   | { type: 'computer.watch'; id: string; fps?: number; maxWidth?: number }
   | { type: 'computer.unwatch'; id: string }

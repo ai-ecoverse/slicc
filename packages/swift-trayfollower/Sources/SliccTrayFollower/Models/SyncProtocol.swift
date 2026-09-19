@@ -15,7 +15,10 @@ public enum NewSessionAction: String, Codable {
 /// projecting it for us (#2358). Announcing 8 is only safe because
 /// `ScoopSummary.isCone` is OPTIONAL here — a build that decoded it as a
 /// required `Bool` would fail to decode the whole `scoops.list` it asked for.
-public let traySyncProtocolVersion = 8
+///
+/// Version 9 is a LEADER capability: it honours `request_snapshot.peek`. A
+/// follower reads it off the leader's `hello` before prefetching other units.
+public let traySyncProtocolVersion = 9
 
 // MARK: - AgentEvent
 
@@ -226,6 +229,11 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let activity: String?
     /// Context-window fullness on the browser agent tabs' 0...100 scale.
     public let fill: Double?
+    /// Completed-turn counter (#2948), read as a VERSION: an increase since
+    /// the last value seen is that many finished turns, a decrease is a leader
+    /// reload. Survives the leader's 50ms roster coalescing, which a
+    /// `working → idle` edge does not. `nil` from leaders that predate it.
+    public let turns: Double?
     /// The model THIS unit runs on (#2310). Model selection is per cone on
     /// the leader's work-unit record, so a follower shows (and can change)
     /// the model of the cone it is looking at. `nil` from leaders that
@@ -250,6 +258,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         activity: String? = nil,
         fill: Double? = nil,
         parentId: String? = nil,
+        turns: Double? = nil,
         model: ScoopSummaryModel? = nil
     ) {
         self.jid = jid
@@ -262,6 +271,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         self.state = state
         self.activity = activity
         self.fill = fill
+        self.turns = turns
         self.model = model
     }
 }
@@ -1119,7 +1129,11 @@ public enum FollowerToLeaderMessage: Codable {
     /// save (enriched freeze), skip (quick freeze), erase (discard).
     case newSession(action: NewSessionAction)
     case abort
-    case requestSnapshot(scoopJid: String?)
+    /// `peek` (protocol 9) reads `scoopJid`'s transcript WITHOUT making it this
+    /// follower's selection on the leader, which routes prompts, `abort` and
+    /// `thinking.set`. Omitted from the wire when false. A leader below 9
+    /// ignores it and re-points the selection, so never peek at one.
+    case requestSnapshot(scoopJid: String?, peek: Bool = false)
     case scoopsSelect(scoopJid: String)
     case computerWatch(id: String, fps: Double?, maxWidth: Double?)
     case computerUnwatch(id: String)
@@ -1202,7 +1216,7 @@ public enum FollowerToLeaderMessage: Codable {
     case pong
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, messageId, scoopJid, action, steer, attachments
+        case type, text, messageId, scoopJid, action, steer, attachments, peek
         case modelId, thinkingLevel, effortOverride
         case event, capabilities, motd
         case requestId, sprinkleName, body, targetScoop
@@ -1233,7 +1247,8 @@ public enum FollowerToLeaderMessage: Codable {
             self = .abort
         case "request_snapshot":
             self = .requestSnapshot(
-                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
+                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid),
+                peek: try container.decodeIfPresent(Bool.self, forKey: .peek) ?? false)
         case "scoops.select":
             self = .scoopsSelect(scoopJid: try container.decode(String.self, forKey: .scoopJid))
         case "computer.watch":
@@ -1410,9 +1425,10 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode(action, forKey: .action)
         case .abort:
             try container.encode("abort", forKey: .type)
-        case .requestSnapshot(let scoopJid):
+        case .requestSnapshot(let scoopJid, let peek):
             try container.encode("request_snapshot", forKey: .type)
             try container.encodeIfPresent(scoopJid, forKey: .scoopJid)
+            if peek { try container.encode(true, forKey: .peek) }
         case .scoopsSelect(let scoopJid):
             try container.encode("scoops.select", forKey: .type)
             try container.encode(scoopJid, forKey: .scoopJid)
