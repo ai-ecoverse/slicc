@@ -61,6 +61,7 @@ struct ThreadListColumn: View {
         // on the two things that move a transcript's tail: a roster push (a
         // unit finished a turn) and the viewed thread's newest row.
         .onAppear { summaries.refresh(buffers: appState.messagesByScoop) }
+        .onDisappear { summaries.suspend() }
         .onChange(of: appState.scoops) { _, _ in
             summaries.refresh(buffers: appState.messagesByScoop)
         }

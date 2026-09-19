@@ -120,6 +120,8 @@ final class ThreadSummaryStore: ObservableObject {
     private var keys: [String: String] = [:]
     private var queue: [(jid: String, key: String, text: String)] = []
     private var worker: Task<Void, Never>?
+    /// The unit the model is summarizing right now, so `suspend` can forget it.
+    private var inFlight: String?
 
     init(generator: ThreadSummaryGenerating? = OnDeviceThreadSummarizer.make()) {
         self.generator = generator
@@ -128,11 +130,15 @@ final class ThreadSummaryStore: ObservableObject {
     /// Fold the current buffers in. Cheap when nothing changed — this runs on
     /// every roster push while the list is on screen.
     func refresh(buffers: [String: [ChatMessage]]) {
-        for jid in keys.keys where buffers[jid] == nil {
-            keys[jid] = nil
-            lines[jid] = nil
-        }
+        for jid in keys.keys where buffers[jid] == nil { forget(jid) }
         for (jid, messages) in buffers {
+            // A reset thread (New Session's empty snapshot) says nothing yet:
+            // the old conversation's line must go, and so must any job still
+            // queued for it. A streaming tail is NOT this — it keeps its line.
+            if ThreadSummaryExcerpt.preview(from: messages) == nil {
+                forget(jid)
+                continue
+            }
             guard let excerpt = ThreadSummaryExcerpt.make(from: messages), keys[jid] != excerpt.key
             else { continue }
             keys[jid] = excerpt.key
@@ -148,23 +154,45 @@ final class ThreadSummaryStore: ObservableObject {
         startWorkerIfNeeded()
     }
 
+    /// The list left the screen: stop making lines nobody can see. Lines
+    /// already shown stay; work not finished is forgotten, so the next
+    /// `refresh` (the list coming back) queues it again.
+    func suspend() {
+        worker?.cancel()
+        worker = nil
+        for job in queue { keys[job.jid] = nil }
+        queue.removeAll()
+        if let inFlight { keys[inFlight] = nil }
+        inFlight = nil
+    }
+
+    private func forget(_ jid: String) {
+        keys[jid] = nil
+        lines[jid] = nil
+        queue.removeAll { $0.jid == jid }
+    }
+
     /// One summary at a time: the model is a shared, serial resource, and the
     /// list is decoration — it must never compete with the transcript.
     private func startWorkerIfNeeded() {
         guard worker == nil, let generator, !queue.isEmpty else { return }
         worker = Task { [weak self] in
-            while let self, let job = self.queue.first {
+            while !Task.isCancelled, let self, let job = self.queue.first {
                 self.queue.removeFirst()
+                self.inFlight = job.jid
                 let line = await generator.summarize(job.text)
-                // The thread moved on while the model was thinking.
+                // Suspended, or the thread moved on, while the model was thinking.
+                guard !Task.isCancelled else { return }
+                self.inFlight = nil
                 if let line, self.keys[job.jid] == job.key { self.lines[job.jid] = line }
             }
-            self?.worker = nil
+            if !Task.isCancelled { self?.worker = nil }
         }
     }
 
     #if DEBUG
         /// Lets a test wait for the queue to drain.
         func waitUntilIdle() async { await worker?.value }
+        var pendingJobs: Int { queue.count }
     #endif
 }

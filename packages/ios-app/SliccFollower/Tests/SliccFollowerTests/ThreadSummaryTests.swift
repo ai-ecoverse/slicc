@@ -77,6 +77,40 @@ final class ThreadSummaryStoreTests: XCTestCase {
         XCTAssertEqual(store.lines["a"], "summary 2")
     }
 
+    func testAResetThreadDropsItsLineAndItsQueuedJob() async {
+        let model = ScriptedSummarizer()
+        let store = ThreadSummaryStore(generator: model)
+        store.refresh(buffers: ["a": [message("1", "old conversation")]])
+        // New Session: the same unit comes back empty before the model ran.
+        store.refresh(buffers: ["a": []])
+        XCTAssertNil(store.lines["a"])
+        await store.waitUntilIdle()
+        XCTAssertNil(store.lines["a"], "a job queued for the old conversation must not publish")
+    }
+
+    func testAStreamingTailKeepsTheLineItHas() {
+        let store = ThreadSummaryStore(generator: nil)
+        store.refresh(buffers: ["a": [message("1", "settled")]])
+        store.refresh(buffers: ["a": [message("1", "settled"), message("2", "half", streaming: true)]])
+        XCTAssertEqual(store.lines["a"], "settled")
+    }
+
+    func testSuspendingStopsTheWorkAndTheNextRefreshResumesIt() async {
+        let model = ScriptedSummarizer(delay: .seconds(5))
+        let store = ThreadSummaryStore(generator: model)
+        let buffers = ["a": [message("1", "one")], "b": [message("1", "two")]]
+        store.refresh(buffers: buffers)
+        store.suspend()
+        XCTAssertEqual(store.pendingJobs, 0)
+        await store.waitUntilIdle()
+        XCTAssertEqual(store.lines["a"], "one", "the preview stays; no model line lands off screen")
+        XCTAssertEqual(store.lines["b"], "two")
+
+        store.refresh(buffers: buffers)
+        XCTAssertEqual(store.pendingJobs, 2, "forgotten work is queued again when the list returns")
+        store.suspend()
+    }
+
     func testAGoneUnitLosesItsLine() {
         let store = ThreadSummaryStore(generator: nil)
         store.refresh(buffers: ["a": [message("1", "x")]])
@@ -87,9 +121,13 @@ final class ThreadSummaryStoreTests: XCTestCase {
 
 private actor ScriptedSummarizer: ThreadSummaryGenerating {
     private(set) var calls = 0
+    private let delay: Duration?
+
+    init(delay: Duration? = nil) { self.delay = delay }
 
     func summarize(_ excerpt: String) async -> String? {
         calls += 1
+        if let delay { try? await Task.sleep(for: delay) }
         return "summary \(calls)"
     }
 }
