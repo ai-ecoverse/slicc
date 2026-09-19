@@ -215,7 +215,7 @@ The bottom anchor applies only to `.initialOffset` and `.alignment`, never to `.
 
 **The composer and the nav-bar pills float.** They are Liquid Glass (`Views/GlassChrome.swift`, `floatingGlass`) over the rows, with no band behind them: the nav bar's background is hidden and the transcript uses a `.soft` scroll edge. The opaque band the composer used to have stopped at the safe area, so the canvas showed through beneath it as a light strip. `MessageListView`'s body is a `ZStack`, not a `Group`. A `Group` hands the inset to each branch, so the composer was rebuilt (losing its state) when the first message turned the empty state into the list.
 
-**One scroll view per unit.** The transcript carries `.id(selectedScoopJid)`. When one scroll view was reused across units, it kept the previous unit's estimated offset, which pointed past the end of a thread of a different length, so the thread came back blank after a few switches until a small scroll forced a layout pass. The composer sits outside the id, so a draft survives a switch.
+**One scroll view per unit.** The transcript carries `.id(selectedScoopJid)`. When one scroll view was reused across units, it kept the previous unit's offset. After a longer thread, that offset lay past the end of a shorter one, so the shorter thread opened blank until a small scroll forced a layout pass. The composer sits outside the id, so a draft survives a switch. `ReadOnlyScoopUITests.testALongThreadIsStillOnScreenAfterSwitchingBackAndForth` is the gate: with `-uiTestTranscriptRepeat <n>`, `-uiTestUnitRoleFixture` gives the cone the long transcript and the scoop one sixth of it under its own ids. Without the id, the scoop opens blank on the first switch.
 
 ### A snapshot must not erase an unconfirmed send
 
