@@ -15,7 +15,10 @@ public enum NewSessionAction: String, Codable {
 
 
 
-public let traySyncProtocolVersion = 8
+
+
+
+public let traySyncProtocolVersion = 9
 
 
 
@@ -230,6 +233,11 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     
     
     
+    public let turns: Double?
+    
+    
+    
+    
     public let model: ScoopSummaryModel?
 
     public var id: String { jid }
@@ -250,6 +258,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         activity: String? = nil,
         fill: Double? = nil,
         parentId: String? = nil,
+        turns: Double? = nil,
         model: ScoopSummaryModel? = nil
     ) {
         self.jid = jid
@@ -262,6 +271,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         self.state = state
         self.activity = activity
         self.fill = fill
+        self.turns = turns
         self.model = model
     }
 }
@@ -1119,7 +1129,11 @@ public enum FollowerToLeaderMessage: Codable {
     
     case newSession(action: NewSessionAction)
     case abort
-    case requestSnapshot(scoopJid: String?)
+    
+    
+    
+    
+    case requestSnapshot(scoopJid: String?, peek: Bool = false)
     case scoopsSelect(scoopJid: String)
     case computerWatch(id: String, fps: Double?, maxWidth: Double?)
     case computerUnwatch(id: String)
@@ -1202,7 +1216,7 @@ public enum FollowerToLeaderMessage: Codable {
     case pong
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, messageId, scoopJid, action, steer, attachments
+        case type, text, messageId, scoopJid, action, steer, attachments, peek
         case modelId, thinkingLevel, effortOverride
         case event, capabilities, motd
         case requestId, sprinkleName, body, targetScoop
@@ -1233,7 +1247,8 @@ public enum FollowerToLeaderMessage: Codable {
             self = .abort
         case "request_snapshot":
             self = .requestSnapshot(
-                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
+                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid),
+                peek: try container.decodeIfPresent(Bool.self, forKey: .peek) ?? false)
         case "scoops.select":
             self = .scoopsSelect(scoopJid: try container.decode(String.self, forKey: .scoopJid))
         case "computer.watch":
@@ -1410,9 +1425,10 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode(action, forKey: .action)
         case .abort:
             try container.encode("abort", forKey: .type)
-        case .requestSnapshot(let scoopJid):
+        case .requestSnapshot(let scoopJid, let peek):
             try container.encode("request_snapshot", forKey: .type)
             try container.encodeIfPresent(scoopJid, forKey: .scoopJid)
+            if peek { try container.encode(true, forKey: .peek) }
         case .scoopsSelect(let scoopJid):
             try container.encode("scoops.select", forKey: .type)
             try container.encode(scoopJid, forKey: .scoopJid)

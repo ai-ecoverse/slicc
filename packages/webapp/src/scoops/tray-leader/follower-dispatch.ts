@@ -94,7 +94,7 @@ export class FollowerDispatch {
           bootstrapId,
           scoopJid: message.scoopJid,
         });
-        void broadcast.sendSnapshotToFollower(bootstrapId, message.scoopJid);
+        void broadcast.sendSnapshotToFollower(bootstrapId, message.scoopJid, message.peek === true);
         break;
       case 'scoops.select':
         this.handleScoopSelection(bootstrapId, message.scoopJid);

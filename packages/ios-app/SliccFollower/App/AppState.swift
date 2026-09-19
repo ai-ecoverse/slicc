@@ -138,6 +138,7 @@ class AppState: ObservableObject {
     var messagesByScoop: [String: [ChatMessage]] = [:]
     
     var localSends = LocalSendLedger()
+    var threadSync = ThreadSyncPlanner()
     
     
     
@@ -771,6 +772,7 @@ class AppState: ObservableObject {
         leaderProtocolVersion = nil
         leaderCapabilities = nil
         leaderMotd = nil
+        threadSync.reset()
         modelCatalog = []
         modelSelectionState = nil
         let credentialsSaved = persistTrayCredentials(connectedAt: connectedAt)
@@ -930,6 +932,7 @@ class AppState: ObservableObject {
 
         case .scoopsList(let scoops, let activeScoopJid):
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
+            let previousRoster = self.scoops
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
             publishWidgetSnapshot()
@@ -954,6 +957,7 @@ class AppState: ObservableObject {
                     refreshModels()
                 }
             }
+            threadRosterChanged(from: previousRoster)
 
         case .computersList, .computerFrame, .computerNativeCapture, .computerNativeUnwatch,
             .computerNativeInput:
@@ -1240,7 +1244,8 @@ class AppState: ObservableObject {
         
         
         
-        if newSessionInFlight && chatMessages.isEmpty {
+        let isViewed = selectedScoopJid == nil || scoopJid == selectedScoopJid
+        if newSessionInFlight && chatMessages.isEmpty && isViewed {
             newSessionInFlight = false
             newSessionTimeout?.cancel()
             
@@ -1259,10 +1264,13 @@ class AppState: ObservableObject {
         
         
         
-        toolUICards.removeAll()
+        if isViewed { toolUICards.removeAll() }
         if selectedScoopJid == nil { selectedScoopJid = scoopJid }
+        threadSnapshotArrived(for: scoopJid)
         if scoopJid == selectedScoopJid {
-            messages = chatMessages
+            
+            
+            if messages != chatMessages { messages = chatMessages }
             isStreaming = chatMessages.last?.isStreaming == true
             streamingMessageId = isStreaming ? chatMessages.last?.id : nil
         }

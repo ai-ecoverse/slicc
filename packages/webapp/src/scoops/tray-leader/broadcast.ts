@@ -101,7 +101,11 @@ export class BroadcastManager {
     });
   }
 
-  async sendSnapshotToFollower(bootstrapId: string, scoopJid?: string): Promise<void> {
+  async sendSnapshotToFollower(
+    bootstrapId: string,
+    scoopJid?: string,
+    peek = false
+  ): Promise<void> {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
 
@@ -137,7 +141,7 @@ export class BroadcastManager {
       messages = options.getMessages();
     }
 
-    follower.selectedScoopJid = targetJid;
+    if (!peek) follower.selectedScoopJid = targetJid;
     sendSnapshot(follower.sync, messages, targetJid);
     this.context.log.debug('Snapshot sent to follower', {
       bootstrapId,

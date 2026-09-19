@@ -11,7 +11,7 @@ final class ProtocolValueTypesTests: XCTestCase {
     
 
     func testProtocolVersionMatchesSharedTs() {
-        XCTAssertEqual(traySyncProtocolVersion, 8)
+        XCTAssertEqual(traySyncProtocolVersion, 9)
     }
 
     func testAdvertisedFollowerCapabilities() {

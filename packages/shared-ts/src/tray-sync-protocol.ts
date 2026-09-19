@@ -8,7 +8,7 @@ import type { TranscriptExportErrorCode } from './transcript-export.js';
 
 export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
 
-export const TRAY_SYNC_PROTOCOL_VERSION = 8;
+export const TRAY_SYNC_PROTOCOL_VERSION = 9;
 
 // biome-ignore lint/plugin: CDP params/result are per-method and open-ended; the tray relays them without inspecting fields.
 export type CDPPayload = Record<string, unknown>;
@@ -253,7 +253,12 @@ export type FollowerToLeaderMessage =
     }
   | { type: 'abort' }
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
-  | { type: 'request_snapshot'; scoopJid?: string }
+  | {
+      type: 'request_snapshot';
+      scoopJid?: string;
+
+      peek?: boolean;
+    }
   | { type: 'scoops.select'; scoopJid: string }
   | { type: 'computer.watch'; id: string; fps?: number; maxWidth?: number }
   | { type: 'computer.unwatch'; id: string }

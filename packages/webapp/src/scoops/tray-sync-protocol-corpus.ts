@@ -572,7 +572,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   },
   request_snapshot: {
     ios: 'decoded',
-    message: { type: 'request_snapshot', scoopJid: 'cone' },
+    message: { type: 'request_snapshot', scoopJid: 'cone', peek: true },
   },
   'scoops.select': { ios: 'decoded', message: { type: 'scoops.select', scoopJid: 'cone' } },
   'computer.watch': {
@@ -1109,7 +1109,7 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     activity: 'mirrored',
     fill: 'mirrored',
 
-    turns: 'dropped',
+    turns: 'mirrored',
     model: 'mirrored',
   },
   sample: {

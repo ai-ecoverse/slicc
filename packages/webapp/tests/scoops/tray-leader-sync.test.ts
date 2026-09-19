@@ -731,6 +731,52 @@ describe('LeaderSyncManager', () => {
     });
   });
 
+  describe('request_snapshot.peek', () => {
+    const twoUnits = () =>
+      createManager({
+        getScoops: () =>
+          ['cone', 'cone_b'].map((jid) => ({
+            jid,
+            name: jid,
+            folder: `/${jid}`,
+            isCone: true,
+            assistantLabel: jid,
+          })),
+        getMessagesForScoop: (jid: string) => [makeChatMessage(`${jid}-1`, 'assistant', jid)],
+      });
+
+    it('returns the unit’s transcript without moving the peer’s selection', async () => {
+      const { manager, onFollowerAbort } = twoUnits();
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch);
+      ch.simulateMessage({ type: 'scoops.select', scoopJid: 'cone' });
+      await Promise.resolve();
+      const before = ch.parseSent().length;
+
+      ch.simulateMessage({ type: 'request_snapshot', scoopJid: 'cone_b', peek: true });
+      await vi.waitFor(() => expect(ch.parseSent().length).toBeGreaterThan(before));
+
+      const snapshot = ch.parseSent().at(-1);
+      expect(snapshot).toMatchObject({ type: 'snapshot', scoopJid: 'cone_b' });
+
+      ch.simulateMessage({ type: 'abort' });
+      expect(onFollowerAbort).toHaveBeenCalledWith('cone');
+    });
+
+    it('without peek, a snapshot request still selects the unit', async () => {
+      const { manager, onFollowerAbort } = twoUnits();
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch);
+      const before = ch.parseSent().length;
+
+      ch.simulateMessage({ type: 'request_snapshot', scoopJid: 'cone_b' });
+      await vi.waitFor(() => expect(ch.parseSent().length).toBeGreaterThan(before));
+
+      ch.simulateMessage({ type: 'abort' });
+      expect(onFollowerAbort).toHaveBeenCalledWith('cone_b');
+    });
+  });
+
   it('does not broadcast user_message_echo when no followers', () => {
     const { manager } = createManager();
 
