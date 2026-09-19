@@ -788,11 +788,13 @@ async function writePostActionFrame(
       `screenshot failed after input: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  const native = target.backend.describe().size ?? { width: frame.width, height: frame.height };
-  const mapping = scaleFromEncoded(native, { width: frame.width, height: frame.height });
   const seq = registry.nextSeq(target.id);
   const stamped = { ...frame, seq };
-  registry.rememberShot(target.id, toLastShot(mapping, Date.now()), stamped);
+  // The frozen frame is a transcript side effect the model never sees as a
+  // reference image, so it must not redefine `lastShot` (the coordinate
+  // space). Only a model-facing screenshot / `--view` output does that,
+  // otherwise coordinates drift each poke (issue #3297).
+  registry.rememberFrame(target.id, stamped);
   const path = await writeFrozenFrame({
     fs: ctx.fs,
     cwd: ctx.cwd,
