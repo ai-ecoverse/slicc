@@ -86,6 +86,9 @@ import UIKit
         /// non-empty value starts on the cone.
         @MainActor
         static func applyUnitRoleFixture(into appState: AppState) -> Bool {
+            // The thread-list roster is the richer unit-role fixture; it rides
+            // this seam so `AppState` needs no second call site.
+            if applyThreadListFixture(into: appState) { return true }
             guard let variant = UserDefaults.standard.string(forKey: "uiTestUnitRoleFixture"),
                 !variant.isEmpty, variant != "NO"
             else {

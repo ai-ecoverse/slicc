@@ -21,6 +21,9 @@ struct ChatView: View {
     /// once at the shell: a sheet owned by a bubble would be torn down
     /// mid-present every time the transcript re-renders, which is constantly.
     @StateObject var transcriptActions = TranscriptActionModel()
+    /// Thread list open/collapsed + unread counts, above both shells so a
+    /// size-class swap keeps them.
+    @StateObject private var threadList = ThreadListModel()
     @State private var showSettings = false
     @State private var hasAppeared = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).
@@ -54,15 +57,34 @@ struct ChatView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            switch ShellLayout.mode(
+            let mode = ShellLayout.mode(
                 horizontalSizeClass: horizontalSizeClass,
-                availableWidth: geometry.size.width
-            ) {
-            case .compactOverlay:
-                compactShell
-            case .regularSplit:
-                regularShell
+                availableWidth: geometry.size.width)
+            let threadListPresentation = ThreadListLayout.presentation(
+                shellMode: mode, availableWidth: geometry.size.width,
+                workbenchOpen: presentation.activeSurface != nil)
+            Group {
+                switch mode {
+                case .compactOverlay:
+                    compactShell
+                case .regularSplit:
+                    regularShell(threadListPresentation: threadListPresentation)
+                }
             }
+            .overlay {
+                if threadListPresentation == .overlay, showsThreadList {
+                    ThreadListOverlay(
+                        edge: threadListEdge, availableWidth: geometry.size.width)
+                }
+            }
+            .environment(\.threadListPresentation, threadListPresentation)
+            .onChange(of: threadListPresentation) { _, shape in
+                threadList.presentationChanged(to: shape)
+            }
+        }
+        .environmentObject(threadList)
+        .onReceive(appState.$scoops.combineLatest(appState.$selectedScoopJid)) { scoops, selected in
+            threadList.sync(scoops: scoops, selectedJid: selected)
         }
         // Inside the palette environment, not outside it: a sheet's content
         // inherits the environment at the position the modifier sits in the
@@ -125,6 +147,8 @@ struct ChatView: View {
                 // Armed before the early returns below: a blip is staged on
                 // top of whichever start state those apply.
                 scheduleConnectionBlip()
+                UITestHooks.scheduleThreadListTurns(into: appState)
+                if UITestHooks.opensThreadList { threadList.isOverlayOpen = true }
                 if UITestHooks.scriptCompletedTurn(into: appState) {
                     return
                 }
@@ -574,7 +598,7 @@ struct ChatView: View {
     /// conversation column. With no selected surface, conversation fills the
     /// space beside the rail. A foregrounded browser tab expands the same
     /// workbench to fill the window, keeping its stacked terminal alive.
-    private var regularShell: some View {
+    private func regularShell(threadListPresentation: ThreadListPresentation) -> some View {
         HStack(spacing: 0) {
             if leftHandedDock {
                 if !isBrowserFullScreen {
@@ -583,6 +607,9 @@ struct ChatView: View {
                 regularWorkbench
             }
 
+            if !leftHandedDock, showsThreadSidebar(threadListPresentation) {
+                ThreadListSidebar(edge: .leading)
+            }
             conversation
                 .frame(maxWidth: isBrowserFullScreen ? 0 : .infinity)
                 .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
@@ -590,6 +617,10 @@ struct ChatView: View {
                 .allowsHitTesting(!isBrowserFullScreen)
                 .accessibilityHidden(isBrowserFullScreen)
                 .clipped()
+
+            if leftHandedDock, showsThreadSidebar(threadListPresentation) {
+                ThreadListSidebar(edge: .trailing)
+            }
 
             if !leftHandedDock {
                 regularWorkbench
@@ -665,6 +696,24 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+    }
+
+    /// The thread list lives on the switcher pill's side: leading, or
+    /// trailing when the dock (and so the pill's mirror) is left-handed.
+    private var threadListEdge: HorizontalEdge {
+        leftHandedDock ? .trailing : .leading
+    }
+
+    /// One unit has nothing to switch to, and a frozen session or a
+    /// full-screen tab has no live conversation to switch — the pill that
+    /// opens the list is gone in all three.
+    private var showsThreadList: Bool {
+        appState.scoops.count > 1 && appState.openFrozen == nil && !isBrowserFullScreen
+            && !fixtureMode
+    }
+
+    private func showsThreadSidebar(_ shape: ThreadListPresentation) -> Bool {
+        shape == .sidebar && showsThreadList && !threadList.isSidebarCollapsed
     }
 
     private var dockRail: some View {
@@ -1144,82 +1193,6 @@ private func arbitratedScoopSwipeGesture(
     }
 }
 
-// MARK: - ScoopSwitcher
-
-/// The nav-bar cone/scoop switcher. Replaces the old full-width header row:
-/// the same identity (label + leader-active dot) in a nav-bar-sized
-/// control, and a menu that jumps straight to a scoop instead of cycling
-/// one chevron tap at a time. Swipe still cycles.
-struct ScoopSwitcher: View {
-    @EnvironmentObject var appState: AppState
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        if appState.scoops.count > 1 {
-            Menu {
-                ForEach(appState.scoops) { scoop in
-                    Button {
-                        appState.selectScoop(jid: scoop.jid)
-                    } label: {
-                        Label(
-                            menuTitle(for: scoop),
-                            systemImage: scoop.jid == appState.selectedScoopJid
-                                ? "checkmark" : "circle")
-                    }
-                    .accessibilityLabel(menuTitle(for: scoop))
-                    .accessibilityIdentifier("scoop-switch-\(scoop.jid)")
-                }
-            } label: {
-                identityLabel
-            }
-            .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
-            .accessibilityHint("Switch scoop")
-            .accessibilityIdentifier("scoop-switcher")
-            // The header names the conversation on screen, which is what
-            // "this conversation" refers to.
-            .sliccEntityAnnotation(SliccConversationEntity.self, id: appState.selectedScoopJid)
-        } else {
-            identityLabel
-                .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
-                .accessibilityIdentifier("scoop-switcher")
-                .sliccEntityAnnotation(
-                    SliccConversationEntity.self, id: appState.selectedScoopJid)
-        }
-    }
-
-    /// The dropdown's face: label + chevron only. The bound lives INSIDE
-    /// the label because a Menu never compresses its label view — an outer
-    /// frame makes long text overflow the pill instead of truncating.
-    /// Leader-active is spoken in the menu rows, not as a dot here.
-    private var identityLabel: some View {
-        HStack(spacing: 5) {
-            Text(appState.selectedScoop?.assistantLabel ?? "Sliccy")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(palette.ink)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 120, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-            if appState.scoops.count > 1 {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(palette.ink.opacity(0.5))
-            }
-        }
-    }
-
-    /// The leader's active scoop is marked in the menu too — the dot on the
-    /// closed control only speaks about the one you are looking at. State and
-    /// fullness stay textual because native Menu rows cannot host the avatar.
-    private func menuTitle(for scoop: ScoopSummary) -> String {
-        let kind = scoop.isRootUnit ? "cone" : "scoop"
-        let status = scoop.status.accessibilityPhrase(label: scoop.assistantLabel)
-        return scoop.jid == appState.leaderActiveScoopJid
-            ? "\(status) · \(kind) · active"
-            : "\(status) · \(kind)"
-    }
-}
-
 // MARK: - SessionControlsCluster
 
 /// The session cluster as shell chrome, not toolbar content: the
@@ -1308,23 +1281,6 @@ struct SessionControlsCluster: View {
         }
         .accessibilityLabel("Past Sessions")
         .accessibilityIdentifier("frozen-rail-button")
-    }
-}
-
-/// The selected avatar sits beside the switcher. Fullness is already encoded in
-/// its pupil size; lifecycle and the exact fill remain available to VoiceOver.
-private struct ScoopStatusAvatar: View {
-    let avatar: SliccAgentAvatarGeometry
-    let accessibilityLabel: String
-    var expression: AvatarExpressionEngine?
-
-    var body: some View {
-        ZStack {
-            SliccAgentAvatarView(avatar: avatar, expression: expression)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityIdentifier("scoop-avatar")
     }
 }
 
