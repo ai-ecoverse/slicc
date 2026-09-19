@@ -2129,10 +2129,10 @@ sync forms (`execSync` / `execFileSync` / `spawnSync`) run on the blocking
 sync-XHR bridge and follow Node's return/throw contracts; they need a
 controlling Service Worker, so on a float without one they throw an error
 naming the async escape hatch. `{ cwd }` and `{ env }` are honoured on both
-the sync and async forms (`env` replaces the child environment; a missing
-`cwd` is `ENOENT`). `fork` always throws — no long-lived process
-model. `.bsh` scripts run in the target page (no shell bridge), so
-`child_process` is unavailable there.
+the sync and async forms (`env` replaces the child environment, including
+when the spawned file is `sh`/`bash -c`; a missing `cwd` is `ENOENT`).
+`fork` always throws — no long-lived process model. `.bsh` scripts run in
+the target page (no shell bridge), so `child_process` is unavailable there.
 
 #### require / module / exports
 

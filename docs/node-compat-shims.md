@@ -139,10 +139,10 @@ Sync forms (backed by the blocking sync-XHR bridge — see
 and reports on `.status` / `.error`. `opts.timeout` bounds the command (capped
 at 10 minutes); `opts.input` supplies stdin. `opts.cwd` is the child's working
 directory (a missing path is `ENOENT`, not the parent cwd). `opts.env` **replaces**
-the child's environment (Node semantics — spread `process.env` to extend).
-Invalid `cwd`/`env` types throw `ERR_INVALID_ARG_TYPE` instead of being dropped.
-The same `cwd`/`env` options apply to the async `exec` / `execFile` / `spawn`
-forms.
+the child's environment (Node semantics — spread `process.env` to extend), including
+when the spawned file is `sh`/`bash` with `-c`. Invalid `cwd`/`env` types throw
+`ERR_INVALID_ARG_TYPE` instead of being dropped. The same `cwd`/`env` options apply
+to the async `exec` / `execFile` / `spawn` forms.
 
 These need a controlling Service Worker to block the realm worker on a host
 round-trip. On a float without one (extension follower, boot before SW control)

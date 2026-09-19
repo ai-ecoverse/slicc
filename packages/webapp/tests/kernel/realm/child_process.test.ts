@@ -425,8 +425,10 @@ describe('child_process unit: sync forms', () => {
 });
 
 /**
- * Issue #3156: the live `pwd` / `MARKER` contract, against a bridge that
- * actually honours `cwd`/`env` the way just-bash does once they arrive.
+ * Issue #3156 / leftover #3285: the live `pwd` / `MARKER` contract, against a
+ * bridge that actually honours `cwd`/`env` the way just-bash does once they
+ * arrive. Nested `sh -c` / `bash -c` inherit env is covered on a real Bash in
+ * `just-bash-replace-env-exported.test.ts` and `sync-exec-dispatch.test.ts`.
  */
 function makeHonoringSyncBridge() {
   const dirs = new Set(['/shared', '/workspace', '/tmp']);
@@ -448,7 +450,7 @@ function makeHonoringSyncBridge() {
       if (file === 'pwd') return { stdout: `${cwd}\n`, stderr: '', exitCode: 0 };
       if (file === 'printenv')
         return { stdout: `${env[rest[0] ?? ''] ?? ''}\n`, stderr: '', exitCode: 0 };
-      if (file === 'sh' && rest[0] === '-c') {
+      if ((file === 'sh' || file === 'bash') && rest[0] === '-c') {
         const script = rest.slice(1).join(' ');
         if (script.includes('MARKER')) {
           return { stdout: `${env.MARKER ?? ''}\n`, stderr: '', exitCode: 0 };
@@ -477,6 +479,12 @@ describe('child_process unit: cwd and env (#3156)', () => {
     });
     expect(r.status).toBe(0);
     expect(String(r.stdout).trim()).toBe('x');
+    const bash = cp.spawnSync('bash', ['-c', 'echo "$MARKER"'], {
+      env: { MARKER: 'x' },
+      encoding: 'utf8',
+    });
+    expect(bash.status).toBe(0);
+    expect(String(bash.stdout).trim()).toBe('x');
   });
 
   it('execSync and execFileSync honour the same cwd and env', () => {
