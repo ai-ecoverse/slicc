@@ -1932,16 +1932,29 @@ export class VirtualFS {
     return splitPath(normalizePath(path)).base;
   }
 
-  async symlink(target: string, linkPath: string): Promise<void> {
-    const normalizedLinkPath = normalizePath(linkPath);
-    const mount = this.findMount(normalizedLinkPath);
-    if (mount) {
+  private resolveSymlinkTargetPath(target: string, linkPath: string): string {
+    return target.startsWith('/')
+      ? normalizePath(target)
+      : normalizePath(joinPath(splitPath(linkPath).dir, target));
+  }
+
+  private assertSymlinkCreateAllowed(target: string, linkPath: string): void {
+    if (this.findMount(linkPath)) {
+      throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', linkPath);
+    }
+    const absoluteTarget = this.resolveSymlinkTargetPath(target, linkPath);
+    if (this.findMount(absoluteTarget)) {
       throw new FsError(
-        'EINVAL',
-        'symlinks not supported on mounted filesystems',
-        normalizedLinkPath
+        'EXDEV',
+        `cannot create a symlink across a mount boundary to '${absoluteTarget}'`,
+        linkPath
       );
     }
+  }
+
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const normalizedLinkPath = normalizePath(linkPath);
+    this.assertSymlinkCreateAllowed(target, normalizedLinkPath);
 
     const { dir } = splitPath(normalizedLinkPath);
     await this.withWriteLock(async () => {

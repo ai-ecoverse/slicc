@@ -103,6 +103,7 @@ export type FsErrorCode =
   | 'EBADF'
   | 'ENOSYS'
   | 'EOPNOTSUPP'
+  | 'EXDEV'
   | 'EIO';
 
 export interface FsStatsLike {

@@ -178,6 +178,7 @@ On an AEM (Source Bus) mount there are no ETags — the API exposes only `last-m
 | `EBUSY: remote modified since last read — re-read and retry`                             | Concurrent writer changed the file. Re-read with `read_file` and retry the edit.                                                                                      |
 | `EFBIG: body exceeds maxBodyBytes`                                                       | File is over the per-mount size limit (S3 25 MB, DA/AEM 5 MB). Use shell tools (`aws s3 cp`) for very large files instead, or pass `--max-body-mb <n>` at mount time. |
 | `mount: cannot mount local directories from a scoop (no UI).`                            | Local mounts need a user gesture. Either ask the cone to mount, or use S3/DA which work in scoops.                                                                    |
+| `EXDEV: cannot create a symlink across a mount boundary`                                 | `ln -s /mnt/… <vfs-path>` cannot create a real link (mount backends have no symlink inode). Use the mount path, or copy. Do not retry — it will not become a link.    |
 
 ## When asked to "explore" a mounted DA or S3 source
 
@@ -195,3 +196,4 @@ For AEM: listings _do_ carry size and mtime, so `ls -l` costs one listing and no
 - Don't work around a `could not determine the content source` failure by switching to `--no-probe` — that flag doesn't skip the content-source probe, and the failure is telling you the login is missing.
 - Don't fall back to a local mount if the user mentioned a remote service. Default to clarifying which remote backend, not which directory to pick.
 - Don't rename a file to change only case or Unicode form until `mount info` says the volume is byte-exact. On an insensitive mount that is the #3107 truncate.
+- Don't `ln -s` a mounted path onto `/tmp`, `/shared`, or any other VFS path to alias it. That is `EXDEV` (#3311); use the mount path or copy.

@@ -27,6 +27,7 @@ const KNOWN_CODES: FsErrorCode[] = [
   'EBADF',
   'ENOSYS',
   'EOPNOTSUPP',
+  'EXDEV',
   'EIO',
 ];
 
@@ -86,6 +87,9 @@ export function convertError(err: unknown, path: string): FsError {
   }
   if (msg.includes('EOPNOTSUPP') || msg.includes('ENOTSUP')) {
     return new FsError('EOPNOTSUPP', 'operation not supported', path);
+  }
+  if (msg.includes('EXDEV')) {
+    return new FsError('EXDEV', 'cross-device link', path);
   }
 
   return new FsError('EINVAL', msg, path);

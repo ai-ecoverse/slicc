@@ -169,7 +169,7 @@ ls -la /workspace/                                # Shows symlinks with -> targe
 
 `cat`, `read_file`, `write_file` etc. follow symlinks automatically.
 
-**Mount points must be empty.** Mounting over existing files is blocked so built-in skills and scripts stay discoverable. `ln -s` mounted files into the place where you need them.
+**Mount points must be empty.** Mounting over existing files is blocked so built-in skills and scripts stay discoverable. Do not `ln -s` a `/mnt/…` path onto VFS — mount backends cannot host a real symlink, and the call fails with `EXDEV`. Use the mount path directly, or copy.
 
 ## Don't
 
