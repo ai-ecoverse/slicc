@@ -86,6 +86,8 @@ describe('JshComputerBackend', () => {
     expect(seen).toEqual([7]);
     expect(await backend.screenshot({ format: 'jpeg' })).toMatchObject({ seq: 7 });
     expect(call.mock.calls.map((c) => c[0])).not.toContain('screenshot');
+    expect(await backend.screenshot({ format: 'jpeg', pull: true })).toMatchObject({ seq: 99 });
+    expect(call.mock.calls.map((c) => c[0])).toContain('screenshot');
 
     stop();
     await vi.waitFor(() => {
