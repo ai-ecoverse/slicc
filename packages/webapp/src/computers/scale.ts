@@ -88,6 +88,9 @@ export function toLastShot(mapping: ScaleMapping, at: number): ComputerLastShot 
 /**
  * Map a screenshot-space point back to native pixels. `--native` skips this.
  * Missing lastShot (no screenshot yet) treats coordinates as native 1:1.
+ *
+ * Tab computers advertise capture (device) pixels as native. CDP mouse
+ * events still need {@link mapNativeToCss} before dispatch.
  */
 export function mapPoint(
   x: number,
@@ -99,6 +102,23 @@ export function mapPoint(
   return {
     x: Math.round(x / lastShot.scale),
     y: Math.round(y / lastShot.scale),
+  };
+}
+
+/**
+ * Tab screenshots are device pixels; CDP `Input.dispatchMouseEvent` is CSS
+ * pixels. Divide by the tab's `devicePixelRatio`. Invalid DPR is 1.
+ */
+export function mapNativeToCss(
+  x: number,
+  y: number,
+  devicePixelRatio: number
+): { x: number; y: number } {
+  const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  if (dpr === 1) return { x, y };
+  return {
+    x: Math.round(x / dpr),
+    y: Math.round(y / dpr),
   };
 }
 

@@ -34,7 +34,7 @@ computer screenshot --size high out.jpg
 computer text                       # text-mode dump when the backend supports it
 ```
 
-`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last `computer screenshot` (the last model-facing shot) unless `--native` — a poke's frozen frame does not update that space. A human can also click, scroll, and type in the live lightbox when the computer allows input; Escape releases. Frozen stills in the transcript never forward.
+`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last `computer screenshot` (the last model-facing shot) unless `--native` — a poke's frozen frame does not update that space. `--native` is the pixel space `computer info --json` advertises (`size` / lastShot). Tab computers screenshot in device pixels; clicks are converted to CSS pixels with the tab's `devicePixelRatio` before they hit the page. A human can also click, scroll, and type in the live lightbox when the computer allows input; Escape releases. Frozen stills in the transcript never forward.
 
 ## Poke (xdotool; chainable)
 
@@ -74,7 +74,7 @@ computer screenshot -c tab:<targetId>
 computer click 1 --at 100,80 type hello
 ```
 
-`computer add tab` refuses SLICC app tabs (`sliccy.ai` leader, `?slicc=`, extension pages). Pass a URL or a CDP target id.
+`computer add tab` refuses SLICC app tabs (`sliccy.ai` leader, `?slicc=`, extension pages). Pass a URL or a CDP target id. Look at the screenshot and click what you see — screenshot-space `--at` lands on the visual target even when `devicePixelRatio` is not 1.
 
 ## Display share (`screen`)
 
