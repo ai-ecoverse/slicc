@@ -145,9 +145,10 @@ final class ScoopStatusUITests: XCTestCase {
     }
 
     private func select(jid: String, in app: XCUIApplication) {
-        let switcher = app.buttons["scoop-switcher"]
-        switcher.tap()
+        // A regular-width sidebar is already open, and tapping the pill
+        // would fold it; the slide-over has to be opened first.
         let option = app.buttons["scoop-switch-\(jid)"]
+        if !option.exists { app.buttons["scoop-switcher"].tap() }
         XCTAssertTrue(option.waitForExistence(timeout: 10), "Fixture scoop \(jid) should be selectable")
         option.tap()
     }

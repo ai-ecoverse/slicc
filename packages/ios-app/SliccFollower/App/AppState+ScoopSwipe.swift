@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 // MARK: - Scoop swipe navigation
 //
@@ -6,8 +7,14 @@ import Foundation
 // `file_length` ceiling; the swipe arbitration itself is in the views.
 
 extension AppState {
+    /// The order a swipe walks: the thread list's, so "next" is the row below.
+    private var swipeOrder: [ScoopSummary] {
+        ThreadListOrder.entries(scoops).map(\.scoop)
+    }
+
     /// Swipe left → next scoop in the list. Wraps around to the first when at end.
     func swipeToNextScoop() {
+        let scoops = swipeOrder
         guard !scoops.isEmpty else { return }
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
         let nextIndex = (currentIndex + 1) % scoops.count
@@ -17,6 +24,7 @@ extension AppState {
     /// Swipe right → previous scoop. Falls back to the cone if we'd otherwise
     /// underflow (matches the user's "or cone if no more are left" expectation).
     func swipeToPreviousScoop() {
+        let scoops = swipeOrder
         guard !scoops.isEmpty else { return }
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
         if currentIndex > 0 {
