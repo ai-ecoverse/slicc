@@ -40,7 +40,6 @@ import {
 import { handlePreviewRequest } from './preview-handler.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
-  extractBearer,
   handlePreviewFinalize,
   handlePreviewList,
   handlePreviewMint,
@@ -56,6 +55,7 @@ import {
   type CreateTrayRequest,
   createCapabilityToken,
   type DurableObjectNamespaceLike,
+  extractBearer,
   jsonResponse,
   parseCapabilityToken,
   wantsJSON,
