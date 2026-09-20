@@ -1068,6 +1068,9 @@ export async function bootFollowerFloat(
   // then broadcasts the cleared snapshot back so this follower's chat updates.
   for (const action of ['save', 'skip', 'erase'] as const) {
     boot.refs.freezer.addEventListener(`new-chat-${action}`, () => {
+      // A new session keeps the connection but starts a new conversation, so
+      // unconfirmed local sends belong to the transcript just cleared.
+      workUnits.forgetLocalSends();
       follower.currentSync?.requestNewSession(action);
     });
   }
