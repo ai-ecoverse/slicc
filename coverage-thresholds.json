@@ -166,7 +166,7 @@
     "swift-trayfollower": {
       "lines": 73,
       "functions": 58,
-      "regions": 80
+      "regions": 81
     },
     "swift-traykit": {
       "lines": 60,
@@ -180,8 +180,8 @@
     },
     "ios-app": {
       "lines": 75,
-      "functions": 75,
-      "regions": 71
+      "functions": 76,
+      "regions": 73
     }
   }
 }
