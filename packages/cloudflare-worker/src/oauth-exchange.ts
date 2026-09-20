@@ -8,22 +8,9 @@
 
 import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { OAUTH_PROVIDERS, type OAuthProviderDef } from './oauth-registry.js';
-import { jsonResponse } from './shared.js';
+import { isAllowedOrigin, jsonResponse } from './shared.js';
 
 // ── CORS helper ────────────────────────────────────────────────────
-
-const ALLOWED_ORIGINS = [
-  SLICC_HOSTED_ORIGIN,
-  'https://sliccy.ai',
-  /^https:\/\/slicc-tray-hub[^.]*\.minivelos\.workers\.dev$/,
-  /^http:\/\/localhost:\d+$/,
-];
-
-export function isAllowedOrigin(origin: string): boolean {
-  return ALLOWED_ORIGINS.some((allowed) =>
-    typeof allowed === 'string' ? allowed === origin : allowed.test(origin)
-  );
-}
 
 function oauthCorsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get('Origin');
