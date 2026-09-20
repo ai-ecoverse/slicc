@@ -3,8 +3,22 @@ import type {
   TrayBootstrapFailure,
   TrayBootstrapState,
 } from '@slicc/shared-ts';
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 
 export type TrayKind = 'desktop' | 'hosted';
+
+const ALLOWED_ORIGINS = [
+  SLICC_HOSTED_ORIGIN,
+  'https://sliccy.ai',
+  /^https:\/\/slicc-tray-hub[^.]*\.minivelos\.workers\.dev$/,
+  /^http:\/\/localhost:\d+$/,
+];
+
+export function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.some((allowed) =>
+    typeof allowed === 'string' ? allowed === origin : allowed.test(origin)
+  );
+}
 
 export interface TrayBootstrapRecord {
   controllerId: string;
