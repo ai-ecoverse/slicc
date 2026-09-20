@@ -442,6 +442,131 @@ final class FsClientTests: XCTestCase {
         XCTAssertTrue(refusal.error?.contains("/etc/x") == true)
     }
 
+    func testExistsAndStatDecodePayloadsAndRejectWrongShapes() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let exists = Task { try await client.exists("/maybe") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId()!, response: .success(.exists(true)))
+        let existsResult = try await exists.value
+        XCTAssertTrue(existsResult)
+
+        let stat = Task { try await client.stat("/maybe") }
+        await waitForInFlight(client)
+        client.handleResponse(
+            requestId: wire.requestId(at: 1)!,
+            response: .success(.stat(TrayFsStat(type: .file, size: 4, mtime: 2, ctime: 1))))
+        let statResult = try await stat.value
+        XCTAssertEqual(statResult.size, 4)
+
+        let wrongExists = Task { try await client.exists("/maybe") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId(at: 2)!, response: .success(.void))
+        await assertThrowsFsError(.unexpectedPayload(expected: "exists", got: "void")) {
+            _ = try await wrongExists.value
+        }
+
+        let wrongStat = Task { try await client.stat("/maybe") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId(at: 3)!, response: .success(.void))
+        await assertThrowsFsError(.unexpectedPayload(expected: "stat", got: "void")) {
+            _ = try await wrongStat.value
+        }
+
+        let wrongFile = Task { try await client.readFile("/a.txt") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId(at: 4)!, response: .success(.void))
+        await assertThrowsFsError(.unexpectedPayload(expected: "file", got: "void")) {
+            _ = try await wrongFile.value
+        }
+
+        let wrongBinary = Task { try await client.readBinaryFile("/a.bin") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId(at: 5)!, response: .success(.void))
+        await assertThrowsFsError(.unexpectedPayload(expected: "file", got: "void")) {
+            _ = try await wrongBinary.value
+        }
+    }
+
+    func testOkResponseWithoutDataAndNonFileChunksFailLoudly() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let missing = Task { try await client.readFile("/a.txt") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId()!, response: TrayFsResponse(ok: true))
+        await assertThrowsFsError(.malformedChunking("ok response carried no data")) {
+            _ = try await missing.value
+        }
+
+        let chunked = Task { try await client.readFile("/a.txt") }
+        await waitForInFlight(client)
+        client.handleResponse(
+            requestId: wire.requestId(at: 1)!,
+            response: TrayFsResponse(
+                ok: true, data: .void, chunkIndex: 0, totalChunks: 2))
+        await assertThrowsFsError(.malformedChunking("only file payloads chunk")) {
+            _ = try await chunked.value
+        }
+
+        let zero = Task { try await client.readFile("/a.txt") }
+        await waitForInFlight(client)
+        client.handleResponse(
+            requestId: wire.requestId(at: 2)!,
+            response: TrayFsResponse(
+                ok: true, data: .file(content: "x", encoding: .utf8), chunkIndex: 0, totalChunks: 0))
+        await assertThrowsFsError(.malformedChunking("totalChunks was 0")) {
+            _ = try await zero.value
+        }
+    }
+
+    func testErrorDescriptionsAndWireTypesCoverEveryCase() {
+        XCTAssertEqual(
+            FsClient.FsError.leader(message: "missing", code: "ENOENT").errorDescription,
+            "missing (ENOENT)")
+        XCTAssertEqual(FsClient.FsError.leader(message: "missing", code: nil).errorDescription, "missing")
+        XCTAssertEqual(
+            FsClient.FsError.timedOut(op: "stat", path: "/slow").errorDescription,
+            "Timed out waiting for stat /slow")
+        XCTAssertEqual(FsClient.FsError.disconnected.errorDescription, "Disconnected from the leader")
+        XCTAssertEqual(
+            FsClient.FsError.unexpectedPayload(expected: "file", got: "void").errorDescription,
+            "Expected file from the leader, got void")
+        XCTAssertEqual(
+            FsClient.FsError.malformedChunking("bad").errorDescription,
+            "Malformed chunked response: bad")
+
+        XCTAssertEqual(TrayFsResponseData.file(content: "x", encoding: .utf8).wireType, "file")
+        XCTAssertEqual(
+            TrayFsResponseData.stat(TrayFsStat(type: .file, size: 1, mtime: 1, ctime: 1)).wireType,
+            "stat")
+        XCTAssertEqual(TrayFsResponseData.dirEntries([]).wireType, "dirEntries")
+        XCTAssertEqual(TrayFsResponseData.exists(false).wireType, "exists")
+        XCTAssertEqual(TrayFsResponseData.paths(["/a"]).wireType, "paths")
+        XCTAssertEqual(TrayFsResponseData.void.wireType, "void")
+    }
+
+    func testCancelAllCanUseACustomReason() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire, timeout: 60)
+        let task = Task { try await client.readFile("/a.txt") }
+        await waitForInFlight(client)
+        client.cancelAll(.timedOut(op: "readFile", path: "/a.txt"))
+        await assertThrowsFsError(.timedOut(op: "readFile", path: "/a.txt")) {
+            _ = try await task.value
+        }
+    }
+
+    func testLeaderErrorWithoutCodeStillFails() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let task = Task { try await client.readFile("/missing") }
+        await waitForInFlight(client)
+        client.handleResponse(requestId: wire.requestId()!, response: .failure("no such file"))
+        await assertThrowsFsError(.leader(message: "no such file", code: nil)) {
+            _ = try await task.value
+        }
+    }
+
     
 
     private func assertThrowsFsError(

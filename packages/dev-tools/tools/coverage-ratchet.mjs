@@ -9,6 +9,7 @@ import {
   parseVitestSummary,
   readThresholds,
   repoRoot,
+  SWIFT_BUNDLES,
   SWIFT_METRICS,
   writeThresholds,
 } from './coverage-ratchet-lib.mjs';
@@ -20,16 +21,6 @@ const write = !flags.has('--no-write');
 
 const onlyArg = process.argv.slice(2).find((a) => a.startsWith('--only='));
 const only = onlyArg ? onlyArg.slice('--only='.length) : null;
-
-const SWIFT_BUNDLES = {
-  'swift-server': 'SliccServerPackageTests',
-  'swift-optel': 'SwiftOptelPackageTests',
-  'swift-traysession': 'SliccTraySessionPackageTests',
-  'swift-trayfollower': 'SliccTrayFollowerPackageTests',
-  'swift-launcher': 'SliccstartPackageTests',
-
-  'ios-app': { bundle: 'SliccFollower', xcodebuildScheme: 'SliccFollower' },
-};
 
 const TS_CONFIG_OVERRIDES = {
   webcomponents: 'packages/webcomponents/vitest.config.ts',

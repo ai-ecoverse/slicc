@@ -1,9 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   applyRatchet,
   nextFloor,
   parseVitestSummary,
   ratchetPackage,
+  readThresholds,
+  SWIFT_BUNDLES,
+  thresholdsPath,
 } from './coverage-ratchet-lib.mjs';
 
 describe('nextFloor', () => {
@@ -113,5 +117,16 @@ describe('parseVitestSummary', () => {
       functions: 70.56,
       branches: 60.5,
     });
+  });
+});
+
+describe('SWIFT_BUNDLES', () => {
+  it('covers every Swift package that has a coverage floor', () => {
+    const floors = readThresholds().swift ?? {};
+    const missing = Object.keys(floors).filter((pkg) => SWIFT_BUNDLES[pkg] == null);
+    expect(missing, 'add the package to SWIFT_BUNDLES or the nightly ratchet skips it').toEqual([]);
+
+    const disk = JSON.parse(readFileSync(thresholdsPath, 'utf8')).swift ?? {};
+    expect(Object.keys(disk).sort()).toEqual(Object.keys(floors).sort());
   });
 });

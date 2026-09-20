@@ -165,7 +165,7 @@ final class AppGroupFileSecretStore: TrayCredentialKeychain {
     }
 }
 
-private final class SystemTrayCredentialKeychain: TrayCredentialKeychain {
+final class SystemTrayCredentialKeychain: TrayCredentialKeychain {
     private static let service = "ai.sliccy.follower.tray"
     private static let account = "join-url"
     private let accessGroup: String

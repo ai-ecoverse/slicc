@@ -8,6 +8,18 @@ export const thresholdsPath = resolve(repoRoot, 'coverage-thresholds.json');
 export const TS_METRICS = ['lines', 'statements', 'functions', 'branches'];
 export const SWIFT_METRICS = ['lines', 'functions', 'regions'];
 
+export const SWIFT_BUNDLES = {
+  'swift-server': 'SliccServerPackageTests',
+  'swift-optel': 'SwiftOptelPackageTests',
+  'swift-traysession': 'SliccTraySessionPackageTests',
+  'swift-trayfollower': 'SliccTrayFollowerPackageTests',
+  'swift-traykit': 'SliccTrayVFSPackageTests',
+  'swift-widgetkit': 'SliccWidgetKitPackageTests',
+  'swift-launcher': 'SliccstartPackageTests',
+
+  'ios-app': { bundle: 'SliccFollower', xcodebuildScheme: 'SliccFollower' },
+};
+
 export const MARGIN = 0.5;
 
 export function nextFloor(currentFloor, actualPct) {
