@@ -41,7 +41,7 @@ Each bold gate is an `npm run` script unless the raw command is shown.
 - **deadcode:production-files**: `knip --production --include files`; `knip.json`. [details](../../docs/dev-tools-details.md#knip-production-suffix-discipline).
 - **Debt boy-scout gate**: `node tools/check-touched-exemptions.mjs [base-ref]` (+ `size-exemption-lib.mjs`) — `biome.json` overrides + the three baseline ratchets. [verify](../../.agents/skills/verifying-before-push/SKILL.md).
 - **Coverage gate + ratchet**: `tools/coverage-gate.mjs` + `coverage-ratchet.mjs` (`coverage-thresholds.json`); Swift `swift-coverage-check.sh` + `-runner-retry.sh`. [retry](../../docs/dev-tools-details.md#swift-coverage-retry).
-- **First-load size** (in `npm run size -w @slicc/webapp`): `tools/check-first-load-size.mjs` (+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`); ceilings `first-load-budget.json`. [details](../../docs/dev-tools-details.md#first-load-size-gate).
+- **First-load size** (in `npm run size -w @slicc/webapp`): `tools/check-first-load-size.mjs` (+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`); ceilings `packages/webapp/first-load-budget.json`. [details](../../docs/dev-tools-details.md#first-load-size-gate).
 
 **Baseline ratchets** (each `tools/check-*.mjs` + a `*-baseline.json`, `--update`):
 
