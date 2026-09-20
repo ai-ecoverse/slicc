@@ -7,7 +7,9 @@
  * the small state machine `wc-follower.ts` runs (the last roster, the
  * selected unit) moves behind the protocol. Cherry and hosted followers ride
  * this unchanged — they are the same follower path — and no wire field
- * changes, so iOS is untouched.
+ * changes, so iOS is untouched. Unconfirmed local sends are reconciled onto
+ * inbound snapshots (#3320) so a late wholesale replace cannot drop the
+ * sender's own bubble.
  */
 
 import type { FollowerSyncManager } from '../../scoops/tray-follower-sync.js';
@@ -28,6 +30,7 @@ import type {
 import { qualifiedModelId } from '../../work-unit/record.js';
 import type { ChatMessage } from '../types.js';
 import { summaryToWorkUnit } from '../wc/wc-tray-scoops.js';
+import { LocalSendLedger } from './local-send-ledger.js';
 
 /** How long to wait for the leader's snapshot before answering with what we have. */
 const SNAPSHOT_TIMEOUT_MS = 10000;
@@ -60,6 +63,12 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     WorkUnitId,
     Set<(snapshot: WorkUnitSnapshot) => void>
   >();
+  /**
+   * This device's sends no leader snapshot has confirmed yet. Survives
+   * {@link resetSelection}: a reconnect is why the ledger exists. Emptied by
+   * {@link forgetLocalSends} (new session) and by confirmation / expiry.
+   */
+  private readonly localSends = new LocalSendLedger();
 
   constructor(private readonly deps: RemoteWorkUnitClientDeps) {}
 
@@ -83,7 +92,8 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     // unit that is not the leader's active one — so a subscriber attaching off
     // the roster would be SEEDED with the previous session's transcript, which
     // the leader may since have frozen or cleared with a new session. A
-    // reconnect is a fresh bootstrap; nothing the old channel said survives it.
+    // reconnect is a fresh bootstrap; nothing the old channel said survives it
+    // except unconfirmed local sends (see below).
     // The roster too: it describes units of the session that ended, and a
     // reader asking "what model does this unit run on" would be answered from
     // a leader that is gone.
@@ -93,6 +103,18 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     // leaving them would make the next `subscribe` think a fetch is in flight
     // and skip its own seed forever.
     this.pendingSnapshots.clear();
+    // Deliberately not `localSends.removeAll()`: a snapshot built before the
+    // prompt reached the leader can land after reconnect, which is the race
+    // the ledger exists to close (#3320).
+  }
+
+  /**
+   * Drop every unconfirmed local send. A new session keeps the connection
+   * but starts a new conversation, so those prompts belong to the transcript
+   * just cleared and must not be re-asserted onto the empty snapshot.
+   */
+  forgetLocalSends(): void {
+    this.localSends.removeAll();
   }
 
   /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
@@ -169,7 +191,10 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
         // new session is never judged against the previous one's unit.
         if (this.selectedId !== null && this.selectedId !== scoopJid) return;
         this.selectedId = scoopJid;
-        const transcript = messages as unknown as readonly WorkUnitChatMessage[];
+        const transcript = this.localSends.reconcile(
+          messages as unknown as readonly WorkUnitChatMessage[],
+          scoopJid
+        );
         const summary = this.summaryOf(scoopJid);
         // Published whether or not the roster describes the unit. It often will
         // not: a leader sends the initial transcript AHEAD of `scoops.list`,
@@ -182,7 +207,7 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
           messages: transcript,
           ...(summary ? { summary } : {}),
         });
-        base.onSnapshot?.(messages, scoopJid);
+        base.onSnapshot?.(transcript as unknown as ChatMessage[], scoopJid);
       },
       onStatus: (scoopStatus: string, scoopJid?: string) => {
         // The leader's status frame may omit the unit; `shouldApplyFollowerStatus`
@@ -254,7 +279,17 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     // snapshot in flight, so they still get their seed, which for them is
     // often the only one that unit will ever have.
     const known = this.lastSnapshots.get(id);
-    if (known && !this.pendingSnapshots.has(id)) listener({ snapshot: known, type: 'snapshot' });
+    if (known && !this.pendingSnapshots.has(id)) {
+      // Overlay without confirming: `lastSnapshots` is this client's cache
+      // and may already include a previously restored send. Treating it as a
+      // leader snapshot would drop the ledger entry so a later stale frame
+      // could erase the bubble (#3320).
+      const messages = this.localSends.withUnconfirmed(known.messages, id);
+      listener({
+        snapshot: messages === known.messages ? known : { ...known, messages },
+        type: 'snapshot',
+      });
+    }
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);
@@ -314,17 +349,33 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
       this.selectedId = id;
       sync.selectScoop(id);
     }
+    // The caller's id when it has one: the controller already rendered the
+    // bubble under it, and a snapshot confirms by that id. Minting here only
+    // for a caller that never has to name the message again.
+    const messageId =
+      input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const message: WorkUnitChatMessage = {
+      id: messageId,
+      role: 'user',
+      content: input.text,
+      timestamp: Date.now(),
+    };
+    if (input.attachments) message.attachments = input.attachments;
+    this.localSends.record(message, id);
     // The channel's own answer, not a hope: `TraySyncChannel.send` refuses a
     // closed or closing data channel, and resolving anyway would report a
     // delivered send for a message that never left the device — after the
     // controller had already rendered its bubble and cleared the input.
     const accepted = sync.sendMessage(
       input.text,
-      input.messageId,
+      messageId,
       input.attachments as Parameters<FollowerSyncManager['sendMessage']>[2],
       input.steer ? { steer: true } : undefined
     );
-    if (!accepted) return Promise.reject(new Error('the leader channel refused the message'));
+    if (!accepted) {
+      this.localSends.flagUndelivered(messageId);
+      return Promise.reject(new Error('the leader channel refused the message'));
+    }
     return Promise.resolve();
   }
 

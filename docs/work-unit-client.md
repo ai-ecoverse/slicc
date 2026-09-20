@@ -403,6 +403,19 @@ Cherry and hosted followers ride this adapter unchanged — they are the same
 follower path. iOS is untouched: it speaks the tray wire directly, and this
 change adds no wire fields.
 
+**A snapshot must not erase an unconfirmed send** (#3320, iOS counterpart
+#3302). `createTranscriptWatch` / `createUnitWatcher` apply every snapshot
+wholesale through `loadMessages`. A snapshot describes the moment the leader
+**built** it, and a large thread's snapshot is read asynchronously / chunked,
+so one built before this device's prompt arrived can land after the follower
+optimistically rendered it. `LocalSendLedger` (`ui/work-unit-client/local-send-ledger.ts`)
+holds each `send` until a snapshot contains it; `onSnapshot` runs
+`reconcile` before publishing. Entries expire after 60 s, and the ledger is
+emptied by a new session (`forgetLocalSends`) but **not** by `resetSelection`
+— surviving the reconnect is the point. Seeding a subscriber from
+`lastSnapshots` overlays missing sends without confirming them, because that
+cache is not the leader.
+
 ## Conformance
 
 `tests/work-unit/client/conformance.ts` — one suite, run against both adapters
