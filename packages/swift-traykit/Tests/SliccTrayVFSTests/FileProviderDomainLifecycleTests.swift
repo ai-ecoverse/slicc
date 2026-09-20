@@ -95,6 +95,41 @@ final class FileProviderDomainLifecycleTests: XCTestCase {
         XCTAssertFalse(registrar.addedDomains[0].supportsSyncingTrash)
     }
 
+    func testDefaultLifecycleSkipsRegistrationWithoutCredentials() {
+        FileProviderDomainLifecycle().registerIfCredentialsAvailable(false)
+    }
+
+    func testSystemRegistrarGetDomainsIsInvoked() {
+        SystemFileProviderDomainRegistrar().getDomains { _, _ in }
+    }
+
+    func testRemoveSuccessAndKnownDomainsAreRecorded() {
+        let registrar = RecordingRegistrar()
+        registrar.knownDomains = [FileProviderDomainLifecycle.makeDomain()]
+        let defaults = UserDefaults(suiteName: "fileprovider.lifecycle.tests.\(UUID().uuidString)")
+        let lifecycle = FileProviderDomainLifecycle(registrar: registrar, defaults: defaults)
+
+        lifecycle.removeDomain()
+
+        XCTAssertEqual(registrar.removedDomains.count, 1)
+        XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "remove-succeeded")
+        XCTAssertNil(defaults?.object(forKey: "fileProvider.domainError"))
+        let names = defaults?.stringArray(forKey: "fileProvider.knownDomains") ?? []
+        XCTAssertEqual(names.count, 1)
+        XCTAssertTrue(names[0].contains("slicc-vfs"))
+        XCTAssertTrue(names[0].contains("userEnabled="))
+    }
+
+    func testNilDefaultsAndGetDomainsErrorAreHarmless() {
+        let registrar = RecordingRegistrar()
+        registrar.error = NSFileProviderError(.providerNotFound)
+        let lifecycle = FileProviderDomainLifecycle(registrar: registrar, defaults: nil)
+        lifecycle.registerIfCredentialsAvailable(true)
+        lifecycle.removeDomain()
+        XCTAssertEqual(registrar.addedDomains.count, 1)
+        XCTAssertEqual(registrar.removedDomains.count, 1)
+    }
+
     func testDuplicateRegistrationAndAbsentRemovalAreHarmless() {
         let registrar = RecordingRegistrar()
         registrar.error = NSFileProviderError(.providerNotFound)

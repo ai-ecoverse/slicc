@@ -426,6 +426,9 @@ Both arguments are **required**:
   packages/swift-server SliccServerPackageTests
 
 ./packages/dev-tools/tools/swift-coverage-check.sh \
+  packages/swift-traykit SliccTrayVFSPackageTests
+
+./packages/dev-tools/tools/swift-coverage-check.sh \
   packages/swift-launcher SliccstartPackageTests
 ```
 

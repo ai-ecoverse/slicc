@@ -26,6 +26,8 @@ npm run lint -w @slicc/swift-traykit
 ```
 
 CI: `swift-traykit` job (lint, format, macOS + iOS Simulator build, coverage gate).
+The nightly coverage ratchet measures this package through `SWIFT_BUNDLES` in
+`packages/dev-tools/tools/coverage-ratchet-lib.mjs` (`SliccTrayVFSPackageTests`).
 
 ## Caveats
 

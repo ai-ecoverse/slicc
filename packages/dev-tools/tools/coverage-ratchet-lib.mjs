@@ -14,6 +14,23 @@ export const thresholdsPath = resolve(repoRoot, 'coverage-thresholds.json');
 export const TS_METRICS = ['lines', 'statements', 'functions', 'branches'];
 export const SWIFT_METRICS = ['lines', 'functions', 'regions'];
 
+// Maps coverage-thresholds.json swift keys to the test bundle (and optional
+// xcodebuild scheme) that swift-coverage-check.sh measures. Every Swift floor
+// must have an entry here or the nightly ratchet silently skips it.
+export const SWIFT_BUNDLES = {
+  'swift-server': 'SliccServerPackageTests',
+  'swift-optel': 'SwiftOptelPackageTests',
+  'swift-traysession': 'SliccTraySessionPackageTests',
+  'swift-trayfollower': 'SliccTrayFollowerPackageTests',
+  'swift-traykit': 'SliccTrayVFSPackageTests',
+  'swift-widgetkit': 'SliccWidgetKitPackageTests',
+  'swift-launcher': 'SliccstartPackageTests',
+  // ios-app cannot run `swift test` (iOS-only WebRTC dependency), so it is
+  // measured through the coverage script's --xcodebuild simulator mode. The
+  // bundle there is the app target carrying the code under test.
+  'ios-app': { bundle: 'SliccFollower', xcodebuildScheme: 'SliccFollower' },
+};
+
 // Half-point safety margin subtracted before flooring, so a measurement
 // like 63.06% won't ratchet a floor to 63 (which a 0.1pp jitter on the
 // next run could miss). With MARGIN = 0.5 the effective headroom below
