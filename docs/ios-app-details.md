@@ -34,11 +34,36 @@ The hop is named three times: as the 308's `Location`, as an RFC 5829 `Link: <re
 
 iCloud discovery only covers what the macOS launcher advertises, so a join URL pasted into a phone was invisible to every other device. `RecentJoinStore` closes that: each device writes the URLs that **connected** under its own KVS key and reads the union. Recording happens in `dataChannelOpened`, not in `connect` — a dial that never lands must not sync itself to the household — and after `SupersedeRedirect` has moved `activeJoinUrl`, so what syncs is the URL that works.
 
-Display is `ICloudSessionList.recentRows`: trays the live iCloud list already shows are filtered out by the shared one-way id (one tray, one row), then `RecentJoinStore.rank` sorts reachable-first, newest-connected second, and caps at five — the cap after the ranking, so a session that still answers can displace a fresher dead one. Rows render the label, or the host when a pasted URL has none; the path carries the session secret and never reaches the screen. Swipe-to-Remove and Clear Stored Data clear only this device's key, so a row another device recorded can sync back. Both lists probe on `onAppear` **and** on store change: iCloud can push a row in while the sheet is open, and an unprobed id counts as presumed-reachable, so it would sort above known-live rows and hide its "not responding" note until the sheet was reopened.
+Display is `ICloudSessionList.recentRows`: trays the live iCloud list already shows are filtered out by the shared one-way id (one tray, one row), then `RecentJoinStore.rank` sorts reachable-first, newest-connected second, and caps at five — the cap after the ranking, so a session that still answers can displace a fresher dead one. Rows render the label, or the host when a pasted URL has none; the path carries the session secret and never reaches the screen. Swipe-to-Remove and Clear Stored Data clear only this device's key, so a row another device recorded can sync back. Both lists probe on `onAppear` **and** on store change: iCloud can push a row in while the sheet is open, and an unprobed id counts as presumed-reachable, so it would sort above known-live rows and hide its "not responding" note until the sheet was reopened. UI tests seed the list off `-uiTestRecentJoinsFixture` / `-uiTestRecentJoinsFixtureEmpty` launch-argument hooks.
 
 ## Terminal
 
 `InMemoryTerminalSession` + `TerminalClient` exec against the leader shell (`hello.capabilities.exec`); one virtual shell per connection, Ctrl-C → `SIGINT` until `exec.response`.
+
+## iCloud sessions and joins
+
+`AppState.sessionStore` (from **`packages/swift-traysession`**) discovers trays: the launcher publishes, `SettingsView` joins, and liveness needs a connected leader. The shared KVS key `S8LB56P782.ai.sliccy.trays` MUST match macOS or the two never see the same trays; `SLICC_IOS_NO_ICLOUD=1` omits iCloud entirely. A join URL carries the session secret and must **never** reach the screen or a widget. Reconnect attach loops follow `TRAY_SUPERSEDED` / `SupersedeRedirect` — see [iCloud tray supersede chain](#icloud-tray-supersede-chain).
+
+`FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts` and opens a saved transcript read-only; UI-test hooks `-uiTestFrozenFixture` / `-uiTestFrozenEmpty`.
+
+## Protocol mirror (iOS-local messages)
+
+`SliccTrayFollower/Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts`; the `docs/architecture.md` matrix is canonical. The iOS-local message handling:
+
+- `preview.open` → `CDPBridge.handleTabOpen`, acks `tab.opened`. iOS never originates transcript export (prompts decode `.unknown` / `undecodable`).
+- `sudo.approve.request` / `.cancel` → `SudoApprovalController` (SliccTrayKit/Sudo): Allow/Always gate on `LAContext` `.deviceOwnerAuthentication`, Deny never does; `hello` advertises `sudoApproval` / `biometric`, `push.register` carries the APNs token — see [Sudo approval and push](#sudo-approval-and-push).
+- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, scoped-approval gated — see [Exec capability](#exec-capability) and [x-callback exec](#x-callback-exec).
+- `computers.list` / `computer.frame` → cards + live JPEG (`AppState+Computers`). iOS never advertises `capabilities.computer` and ignores `computer.native.*`; soft keys send `computer.input`, watch is visibility-refcounted — see [Computers (viewer)](#computers-viewer).
+
+Adding a variant is a fixed six-step order: [Protocol variant checklist](#protocol-variant-checklist).
+
+## Inbound entry points
+
+`SliccFollower/App/` hosts `SliccFollowerApp` (+ `SliccAppDelegate` for APNs) and the `@MainActor AppState` (`AppState+SudoApproval` = Face ID gate + push). The inbound coordinator plus `SliccShareExtension/` funnel every external entry into the app: `slicc://open|prompt` (and its `x-callback-url` form), `sliccy.ai/app/*` universal links, and App Intents + share URLs carried through the `group.ai.sliccy.follower` app group. Deep links always confirm via a card (fail-closed). App Intents entities/schemas are in [App Intents entities and schemas](#app-intents-entities-and-schemas).
+
+## Chat view chrome
+
+`SliccFollower/Views/` holds chat, sprinkles (`.shtml`), the dock (48pt rail), `TerminalView`, `TabsCarouselView`, `ToolProgressChrome`, and the thread list. Chrome gotchas: the compact workbench sets `toolbarSuppressed`; http(s) links open in-app unless `openLinksInBuiltInBrowser` is off; full-screen viewing hides the rail via `browserViewingTabId` / `viewingComputerId`; computer cards watch at 2 fps / 480 px only while visible. Thread-list layout (`ScoopSwitcher` → `ThreadListView`) is covered under [Thread list](#thread-list) and [Thread decoration parity](#thread-decoration-parity).
 
 ## Computers (viewer)
 
@@ -212,10 +237,6 @@ The inset keeps rows on screen but does not by itself keep the _newest_ row abov
 `testALongTranscriptSurvivesTheKeyboardLanding` is the gate. The plain fixture cannot show this (nearly all of it is materialized, so there is no estimate for the resize to resolve against): `-uiTestTranscriptRepeat <n>` repeats the fixture under per-pass id prefixes and `-uiTestTranscriptTallTail YES` appends a row taller than a phone viewport. The test fails on the stacked layout and passes on the inset.
 
 The bottom anchor applies only to `.initialOffset` and `.alignment`, never to `.sizeChanges`. Once the composer is an inset, the keyboard reaches the scroll view as a viewport size change, and a size-change anchor re-pinned a reader who had scrolled back: 338pt of drift on iPad landscape, iOS 26 (`testHistoryStaysPutInLandscape`). New content is followed by `followBottom`, which only moves a reader who was at the bottom.
-
-**The composer and the nav-bar pills float.** They are Liquid Glass (`Views/GlassChrome.swift`, `floatingGlass`) over the rows, with no band behind them: the nav bar's background is hidden and the transcript uses a `.soft` scroll edge. The opaque band the composer used to have stopped at the safe area, so the canvas showed through beneath it as a light strip. `MessageListView`'s body is a `ZStack`, not a `Group`. A `Group` hands the inset to each branch, so the composer was rebuilt (losing its state) when the first message turned the empty state into the list. Each button in the controls pill takes the full 36pt slot as its hit area (`sessionControlHitArea`): under the glass, iOS 26 left a button only its ~18pt glyph, and XCUITest's tap on the snowflake stopped opening the freezer (`FrozenSessionsUITests`) though a real touch still worked.
-
-**One scroll view per unit.** The transcript carries `.id(selectedScoopJid)`. When one scroll view was reused across units, it kept the previous unit's offset. After a longer thread, that offset lay past the end of a shorter one, so the shorter thread opened blank until a small scroll forced a layout pass. The composer sits outside the id, so a draft survives a switch. `ReadOnlyScoopUITests.testALongThreadIsStillOnScreenAfterSwitchingBackAndForth` is the gate: with `-uiTestTranscriptRepeat <n>`, `-uiTestUnitRoleFixture` gives the cone the long transcript and the scoop one sixth of it under its own ids. Without the id, the scoop opens blank on the first switch.
 
 ### Background thread sync
 

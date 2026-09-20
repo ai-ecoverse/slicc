@@ -1070,3 +1070,28 @@ a note. The absolute `*EagerCeilingKb` values in
 `packages/webapp/first-load-budget.json` are the backstop against many
 small under-threshold changes creeping upward — human-owned, not
 numbers to nudge when a build goes red.
+
+## agent-merch-grid
+
+`packages/dev-tools/tools/agent-merch.mjs` (+ `agent-merch-lib.mjs`)
+renders a hash-stable sparse grid of `<slicc-agent-avatar>` faces plus a
+tagline, via Playwright, to transparent 300-dpi light/dark PNGs in
+`dist/merch/`. Build `@slicc/webcomponents` first; `--help` lists the
+knobs (`--seed`/`--grid`/`--rows`/…). `--rows` < `--grid` widens the
+output (the square grid is locked at 1:1.595; DTG printing wants
+1:1.333).
+
+## release-gating
+
+`packages/dev-tools/tools/release-plan.mjs` (Linux preflight) +
+`release-native.mjs` gate macOS/iOS packaging, the `slicc` Go CLI
+(`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store / worker
+publish, and `@ai-ecoverse/biome-jsh`.
+
+`tools/merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`) defers Release
+while the default-branch merge queue has entries, so the queue never
+waits on Release.
+
+`tools/release-publish.mjs` wraps `npx semantic-release` and exits 0 when
+the version-commit push is rejected because `main` moved during prepare
+(`fetch first`); a later push or the schedule catch-up publishes.

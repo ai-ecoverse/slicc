@@ -45,6 +45,12 @@ node dist/node-server/index.js --electron-app=/Applications/Slack.app --kill
    - evaluates the overlay bootstrap script immediately. The bootstrap always points the overlay iframe at the **hosted-leader thin-bridge URL** (`https://www.sliccy.ai/electron?bridge=…&bridgeToken=…&role=leader|follower`); the legacy bundled-UI overlay served from the local serve port was retired. Without a per-process bridge token the injector fails fast rather than serving a bundled overlay.
 5. That keeps the SLICC launcher/overlay available across page navigations.
 
+### node-server internals
+
+- **Thin-bridge is the only overlay path**: `ElectronOverlayInjector.create` requires a `thinBridge` config; `resolveOverlayThinBridge` defaults the origin to production, so only a missing bridge token is unresolvable (`startOverlayInjector` fails fast). Bootstrap `window.__SLICC_ELECTRON_OVERLAY__` reads the stable `dist/ui/electron-overlay-entry.js` (`getElectronOverlayEntryDistPath`), produced by `@ai-ecoverse/spoon` and mirrored there by the webapp build.
+- **CSP-strip escalation** (`Fetch.enable` → `handleFetchRequestPaused`) re-issues intercepted **document** requests through Node http/https, forwarding POST bodies byte-exact via `decodeCdpRequestPostBody` (`Fetch.failRequest` rather than corrupt an unreconstructable body). Swift twin: `OverlayPostBody.swift`.
+- `electron-controller.ts` / `electron-runtime.ts` / `electron-main.ts` own launch and per-target leader/follower URL minting. First attached target is `role=leader`; the controller re-elects on disappearance. `index.ts` makes the bridge reachable once CDP is up so each page reconnects over the same `/cdp` WebSocket.
+
 ## Verification checklist
 
 - Start Electron mode against a real Electron app path.

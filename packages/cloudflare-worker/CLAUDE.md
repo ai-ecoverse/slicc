@@ -1,16 +1,14 @@
 # CLAUDE.md
 
-Tray hub worker: tray session coordination, capability-token routing, TURN lookup,
-leader/follower signaling for tray-connected runtimes; also serves the built webapp as static
-assets. Full route/protocol/asset detail:
+Tray hub worker: tray session coordination, capability-token routing, TURN lookup, leader/follower
+signaling for tray-connected runtimes; also serves the built webapp as static assets. Full detail:
 [`docs/cloudflare-worker-details.md`](../../docs/cloudflare-worker-details.md).
 
 ## Layer stack
 
-Import direction is `shared/links/auth → routes → entry` (`src/index.ts` is the
-composition root), enforced by `npm run lint:layer-back-edges`
-(`layer-back-edge-baseline-cloudflare-worker.json`). Route modules must not import
-each other sideways; helpers (`shared.ts`, `links.ts`, `auth/`, `session-tray-*`)
+Import direction `shared/links/auth → routes → entry` (`src/index.ts` = composition root), enforced
+by `npm run lint:layer-back-edges` (`layer-back-edge-baseline-cloudflare-worker.json`). Route modules
+must not import each other sideways; helpers (`shared.ts`, `links.ts`, `auth/`, `session-tray-*`)
 must not import routes or `index.ts`.
 
 ## Main Files
@@ -18,109 +16,101 @@ must not import routes or `index.ts`.
 - `src/index.ts` — entry + public HTTP routing
 - `src/session-tray.ts` — `SessionTrayDurableObject`: controller WS (leader), follower WebRTC
   signaling, preview bridge WS
-- `src/preview-continuity.ts` — dual-controller preview transfer across roves (durable retry
-  receipts, unchanged R2 expiry)
+- `src/preview-continuity.ts` — dual-controller preview transfer across roves (durable receipts)
 - `src/webhook-home.ts` — `WebhookHomeDurableObject`: cone-scoped webhook indirection keyed by
   `coneId`
-- `src/turn-credentials.ts` — TURN fetcher; `src/shared.ts` — capability tokens,
-  `reclaimMsForTray`
+- `src/turn-credentials.ts` — TURN fetcher; `src/shared.ts` — cap tokens, `reclaimMsForTray`
 - `src/links.ts` — `applySliccLinks` (RFC 8288 `Link` rel set on every response)
 - Static-page/OAuth-relay handlers under `src/` (`handoff-page.ts`, `install-cli.ts`,
   `oauth-exchange.ts`, `auth/cloud-callback.ts`, …)
 - `wrangler.jsonc` — bindings (`TRAY_HUB`, `CLOUD_SESSIONS`, `ASSETS`, `ASSET_ARCHIVE`,
   `CF_VERSION_METADATA`), staging env, flags
-- `src/cloud/*` — `/api/cloud/*` handlers, `CloudSessionsDurableObject`, IMS auth,
-  `checkCapsForRun` cone caps, DO-backed `Registry`, Adobe `/v1/config` sync, rate limit + error
-  envelopes. Sandbox lifecycle lives in `@slicc/cloud-core`; this is glue.
+- `src/cloud/*` — `/api/cloud/*` glue (see [Cloud Cones](#cloud-cones-sliccyaicloud)); sandbox
+  lifecycle lives in `@slicc/cloud-core`
 
 ## Tray Hub Architecture
 
-`TRAY_HUB` maps each tray to one `SessionTrayDurableObject` (capabilities, leader/follower
-state, reconnect windows, cached ICE).
+`TRAY_HUB` maps each tray to one `SessionTrayDurableObject` (capabilities, leader/follower state,
+reconnect windows, ICE cache).
 
 ### Public Routes
 
-Full inventory + per-route semantics:
-[docs § Public Routes](../../docs/cloudflare-worker-details.md#public-routes).
+Full inventory + semantics: [docs § Public Routes](../../docs/cloudflare-worker-details.md#public-routes).
 
-**Routes-mirror rule:** every new route MUST appear in all three or CI fails — the
-`src/index.ts` routes array (the default `GET /` body) and the routes-list assertions in
-`tests/index.test.ts` + `tests/deployed.test.ts`.
+**Routes-mirror rule:** every new route MUST appear in all three or CI fails — the `src/index.ts`
+routes array (default `GET /` body), and routes-list assertions in `tests/index.test.ts` +
+`tests/deployed.test.ts`.
 
 ### Feature Flag Configuration
 
-`FEATURE_FLAGS` (`wrangler.jsonc`) JSON var: `{ base, floats }` (per-float maps overlaying
-`base`); invalid profiles → `{ float: "default", flags: base }`. Keep prod and `env.staging`
-aligned; 5-min cache, changes need deploy. Keys must be in the webapp `FeatureFlagId`
-registry; `lint:dead-flags` fails undeclared ones. Lifecycle: [`docs/feature-flags.md`](../../docs/feature-flags.md).
+`FEATURE_FLAGS` (`wrangler.jsonc`) JSON var: `{ base, floats }` (per-float maps overlay `base`);
+invalid profiles → `{ float: "default", flags: base }`. Keep prod + `env.staging` aligned; 5-min
+cache, changes need deploy. Keys must be in the webapp `FeatureFlagId` registry (`lint:dead-flags`
+fails undeclared). [`docs/feature-flags.md`](../../docs/feature-flags.md).
 
 ### Signaling Model
 
-Leader attaches via controller capability + WS to the DO. **Last-key-holder-wins reconnect** —
-a matching-credential reconnect closes the stale socket; rejecting deadlocks on workerd's
-unreliable `webSocketClose`. Followers attach via the join capability (HTTP-poll bootstrap);
-bridge tabs (`serve --bridge`) via `/__slicc/bridge` WS, relaying CDP keyed by `connId`.
-Ghost-leader analysis: [docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
+Leader attaches via controller capability + WS to the DO. **Last-key-holder-wins reconnect** — a
+matching-credential reconnect closes the stale socket; rejecting deadlocks on workerd's unreliable
+`webSocketClose`. Followers attach via join capability (HTTP-poll bootstrap); bridge tabs
+(`serve --bridge`) via `/__slicc/bridge` WS, relaying CDP keyed by `connId`.
+[docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
 
 ### Supersede (redirect semantics)
 
 A superseded tray answers `308` + `Location` on **both** `/join/:token` and
-`/webhook/:token/:webhookId`, both dispatching **before** the DO's `ensureTrayIsActive()` gate.
-**Only a FULL follower is redirected on `/join`:** `handleJoin` answers a `biscotto` guest
-terminal `410 TRAY_EXPIRED` (no `Location`/link/`joinUrl`) instead — forwarding the successor's
-full join token would silently promote a guest. Copy/opt-out flags:
-[docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
+`/webhook/:token/:webhookId`, dispatching **before** the DO's `ensureTrayIsActive()` gate.
+**Only a FULL follower is redirected on `/join`:** a `biscotto` guest instead gets a terminal
+`410 TRAY_EXPIRED` (no `Location`/link/`joinUrl`) — forwarding the successor's join token would
+silently promote a guest.
 
 ### Webhook homes (session-lineage-stable)
 
-Webhook URLs survive roves, not per-WorkUnit. `/wh/<coneId>.<secret>/<id>` routes to
-`WEBHOOK_HOMES.idFromName(coneId)` — a `WebhookHomeDurableObject` that verifies the secret and
-INTERNAL-FORWARDS to the current tray (`/internal/webhook/:id`), invisible to sender. Invariants:
+Webhook URLs survive roves. `/wh/<coneId>.<secret>/<id>` → `WEBHOOK_HOMES.idFromName(coneId)`, a
+`WebhookHomeDurableObject` that verifies the secret and INTERNAL-FORWARDS to the current tray
+(`/internal/webhook/:id`), invisible to sender. Invariants:
 
-- **Rebind is two-factor** — the home's rebind secret AND the target tray confirming the
-  controller token (`/internal/confirm-controller`): a leaked coneId cannot steer deliveries.
-  The leader resends once-minted secrets on each `POST /tray` to REBIND, never remint.
-- **Home record** stores secret HASHES only, in DO storage never KV (the read matters the
-  instant after a rebind, when KV would still serve the dead tray). `WEBHOOK_HOME_TTL_MS` (90d)
-  self-expiry; `revoke` → permanent 410. New DO class needs binding `WEBHOOK_HOMES` + migration
-  tag `v3-webhook-homes` (`new_sqlite_classes`); keep prod + staging aligned.
+- **Rebind is two-factor** — home's rebind secret AND target tray confirming the controller token
+  (`/internal/confirm-controller`): a leaked coneId cannot steer deliveries. Leader resends secrets
+  on each `POST /tray` to rebind, never remint.
+- **Home record** stores secret HASHES only, in DO storage never KV (KV would still serve the dead
+  tray the instant after a rebind). `WEBHOOK_HOME_TTL_MS` (90d) self-expiry; `revoke` → permanent 410. New DO class needs binding `WEBHOOK_HOMES` + migration tag `v3-webhook-homes`
+  (`new_sqlite_classes`); prod + staging aligned.
 
-Delivery/replay/limits, legacy `/webhook/<trayId>` (`supersededByWebhookUrl` 308), secret
-rotation, schema: [docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
+Delivery/replay/limits, legacy `/webhook/<trayId>` (`supersededByWebhookUrl` 308), rotation, schema:
+[docs](../../docs/cloudflare-worker-details.md#signaling).
 
 ### Biscotti (guest seats)
 
-`TrayRecord.biscotti` holds revocable guest seats. `resolveJoinCapability` (`src/shared.ts`)
-is the **single default-deny point** for `/join/:token`: `{ trust: 'full' }` for the tray join
-token, `{ trust: 'biscotto' }` for a live seat, `null` otherwise (revoked/expired seats compared
-before filtering, so existence does not leak by timing). Mint/revoke/list
-(`src/session-tray-biscotto.ts`) are gated on the **controller** token — a seat never issues.
-**Trust travels on the controller socket, never the peer's `hello`:** the DO stamps `trust` +
-`biscotto` onto `follower.join_requested` (leader-only); client-supplied `controllerId` mismatch
-vs stored `ControllerRecord.biscottoId` → `409 JOIN_CAPABILITY_MISMATCH`. What a seat may _send_
-is enforced leader-side by `packages/webapp/src/scoops/tray-leader/biscotto-gate.ts`.
+`TrayRecord.biscotti` holds revocable guest seats. `resolveJoinCapability` (`src/shared.ts`) is
+the **single default-deny point** for `/join/:token`: `{ trust: 'full' }` for the tray join token,
+`{ trust: 'biscotto' }` for a live seat, `null` otherwise (revoked/expired seats compared before
+filtering, so existence never leaks by timing). Mint/revoke/list (`src/session-tray-biscotto.ts`)
+gated on the **controller** token. **Trust travels on the controller socket, never the peer's
+`hello`:** the DO stamps `trust` + `biscotto` onto `follower.join_requested` (leader-only); client
+`controllerId` mismatch vs stored `ControllerRecord.biscottoId` → `409 JOIN_CAPABILITY_MISMATCH`.
+What a seat may _send_ is gated leader-side by `packages/webapp/src/scoops/tray-leader/biscotto-gate.ts`.
 
 ### TURN Credentials & Follower Push
 
 TURN uses `CLOUDFLARE_TURN_KEY_ID` + `CLOUDFLARE_TURN_API_TOKEN`. APNS push (`src/apns.ts`) fans
-out leader `push.send` (metadata only). **Provider JWTs are minted by exactly one DO**
+out leader `push.send` (metadata only). **Provider JWTs minted by exactly one DO**
 (`src/apns-provider-token.ts`, `idFromName('__apns_provider_token')`) — Apple throttles token
-creation per team+key, so per-tray minting broke its 20-min floor. Secrets, token cap, event
-kinds: [docs § TURN & Push](../../docs/cloudflare-worker-details.md#turn-push).
+creation per team+key, so per-tray minting broke its floor. Secrets, cap, events:
+[docs § TURN & Push](../../docs/cloudflare-worker-details.md#turn-push).
 
 ### Tray Kind (desktop / hosted)
 
-`TrayRecord.kind` is `'desktop' | 'hosted'` (default `'desktop'`). Reclaim TTL branches via
-`reclaimMsForTray(tray)` (`shared.ts`): `HOSTED_TRAY_RECLAIM_TTL_MS` = 30 days,
-`TRAY_RECLAIM_TTL_MS` = 1 hour.
+`TrayRecord.kind` is `'desktop' | 'hosted'` (default `'desktop'`). Reclaim TTL via
+`reclaimMsForTray(tray)` (`shared.ts`): hosted = 30 days (`HOSTED_TRAY_RECLAIM_TTL_MS`), desktop =
+1 hour (`TRAY_RECLAIM_TTL_MS`).
 
 ### Static Assets & R2
 
 Worker serves `dist/ui/` via Static Assets (`ASSETS`); `?json=true`/POST/WS → API, else SPA.
 `frame-ancestors`/isolation headers branch on cherry (`?cherry=1`) vs electron vs plain SPA.
 **25 MiB per-asset cap** (CI `wrangler deploy --dry-run` gates it). `ASSET_ARCHIVE` (R2) retains
-hashed `/assets/*` across deploys (`serveAssetWithArchiveFallback`; 14-day GC).
-[docs § Static Assets](../../docs/cloudflare-worker-details.md#static-assets).
+hashed `/assets/*` across deploys (14-day GC). [docs](../../docs/cloudflare-worker-details.md#static-assets).
 
 ## Commands
 
@@ -137,34 +127,32 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 ## CI and Deployment
 
 `release-native.mjs --gate=worker` gates production. Hub + preview configs deploy as a pair
-(shared DO/token format); asset-changing deploys archive R2 first; routes-only failures
-non-fatal. The
-read-only `verify-preview-lifecycle.mjs` gate fails deployment if `sliccy-now-basic-storage`
-lacks a safe `previews/` object-age lifecycle rule, and never mutates policy. TTL math, token
-scopes (`CLOUDFLARE_API_TOKEN`), retries, staging deploy, `serve --bridge`, operator setup:
-[deploying-tray-worker](../../.agents/skills/deploying-tray-worker/SKILL.md). Extension testing:
-`npm run start:extension`.
+(shared DO/token format); asset-changing deploys archive R2 first; routes-only failures non-fatal.
+The `verify-preview-lifecycle.mjs` gate (above) blocks deployment when `sliccy-now-basic-storage`
+lacks a `previews/` object-age lifecycle rule. TTL math, token scopes, retries, staging deploy,
+`serve --bridge`, operator setup:
+[deploying-tray-worker](../../.agents/skills/deploying-tray-worker/SKILL.md). Extension: `npm run start:extension`.
 
 ## Operational Notes
 
 - Worker is coordination infrastructure, not a canonical session store.
 - `GET /status`: unauthenticated liveness probe; body is exactly
-  `{ status, service, timestamp, version }` (`version` from `CF_VERSION_METADATA`, `unknown`
-  when unbound), never config/binding names. Signals:
-  [`docs/operational-telemetry.md`](../../docs/operational-telemetry.md).
-- `/handoff` is stateless; every response is wrapped by `applySliccLinks` (`src/links.ts`).
+  `{ status, service, timestamp, version }` (`version` from `CF_VERSION_METADATA`, `unknown` when
+  unbound), never config/binding names. [Signals](../../docs/operational-telemetry.md).
+- `/handoff` is stateless; every response wrapped by `applySliccLinks` (`src/links.ts`).
 - Keep signaling protocol changes aligned with `packages/webapp/src/scoops/`.
 
 ## Cloud Cones (sliccy.ai/cloud)
 
 All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route to
-`env.CLOUD_SESSIONS.idFromName(userId)` (per-user state).
+`env.CLOUD_SESSIONS.idFromName(userId)` (per-user): IMS auth, `checkCapsForRun` cone caps, DO-backed
+`Registry`, Adobe `/v1/config` sync, rate limit + error envelopes.
 [Route table](../../docs/cloudflare-worker-details.md#cloud-routes).
 
 ### Cone Configuration
 
 `ConeConfig` = `{ model, accounts[], secrets[] }` (`@slicc/cloud-core/cone-config`);
-`src/cloud/cone-config-bridge.ts` bridges start/resume into the sandbox. Safety invariant:
+`cone-config-bridge.ts` bridges start/resume into the sandbox. Safety invariant:
 `CloudSessionsDurableObject` persists a **names-only** `coneConfigIndex`, never values.
 [Flow](../../docs/cloudflare-worker-details.md#cone-configuration).
 
@@ -172,9 +160,8 @@ All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route 
 
 Vars: `ADOBE_PROXY_ENDPOINT`; `ALLOWED_EMAIL_DOMAIN` (CSV, default `adobe.com`, `*` = any);
 `BLOCKED_EMAILS` (CSV); `REQUIRE_OWNER_ORG` (`true` → ownerOrg-holders);
-`CONE_CAP_RUNNING`/`CONE_CAP_PAUSED` (default 1/5); `ADMIN_USER_IDS` (CSV of IMS userIds).
-Secret: `E2B_API_KEY`. **v1 → v2:** put `REQUIRE_OWNER_ORG=true`, set `ALLOWED_EMAIL_DOMAIN="*"`,
-then `wrangler deploy`.
+`CONE_CAP_RUNNING`/`CONE_CAP_PAUSED` (default 1/5); `ADMIN_USER_IDS` (CSV IMS userIds). Secret:
+`E2B_API_KEY`. **v1 → v2:** `REQUIRE_OWNER_ORG=true`, `ALLOWED_EMAIL_DOMAIN="*"`, deploy.
 
 ### Stable API Contract (worker ↔ sandbox)
 
