@@ -22,6 +22,7 @@ import {
   parseVitestSummary,
   readThresholds,
   repoRoot,
+  SWIFT_BUNDLES,
   SWIFT_METRICS,
   writeThresholds,
 } from './coverage-ratchet-lib.mjs';
@@ -34,18 +35,6 @@ const write = !flags.has('--no-write');
 // verifying one package's coverage path without re-measuring the whole repo).
 const onlyArg = process.argv.slice(2).find((a) => a.startsWith('--only='));
 const only = onlyArg ? onlyArg.slice('--only='.length) : null;
-
-const SWIFT_BUNDLES = {
-  'swift-server': 'SliccServerPackageTests',
-  'swift-optel': 'SwiftOptelPackageTests',
-  'swift-traysession': 'SliccTraySessionPackageTests',
-  'swift-trayfollower': 'SliccTrayFollowerPackageTests',
-  'swift-launcher': 'SliccstartPackageTests',
-  // ios-app cannot run `swift test` at all (iOS-only WebRTC dependency), so it
-  // is measured through the coverage script's --xcodebuild simulator mode. The
-  // "bundle" there is the app target carrying the code under test.
-  'ios-app': { bundle: 'SliccFollower', xcodebuildScheme: 'SliccFollower' },
-};
 
 // Packages whose coverage is produced by a dedicated vitest config (e.g.
 // browser-mode packages) rather than a root `--project`. Measured with that

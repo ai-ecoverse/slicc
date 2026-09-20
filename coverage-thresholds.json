@@ -170,9 +170,9 @@
       "regions": 81
     },
     "swift-traykit": {
-      "lines": 60,
-      "functions": 55,
-      "regions": 58
+      "lines": 97,
+      "functions": 93,
+      "regions": 94
     },
     "swift-widgetkit": {
       "lines": 94,

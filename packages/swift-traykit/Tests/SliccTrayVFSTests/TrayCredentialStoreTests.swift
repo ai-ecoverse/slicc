@@ -178,6 +178,96 @@ final class TrayCredentialStoreTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
+    func testEmptyTrayIDIsRejectedAndEmptyDisplayNameClearsMetadata() throws {
+        let keychain = MemoryKeychain()
+        let store = TrayCredentialStore(defaults: defaults, keychain: keychain)
+        let joinURL = try XCTUnwrap(URL(string: "https://tray.example/join/secret"))
+
+        XCTAssertFalse(store.save(joinURL: joinURL, trayID: "", displayName: "x"))
+        XCTAssertNil(keychain.data)
+
+        XCTAssertTrue(store.save(joinURL: joinURL, trayID: "tray", displayName: ""))
+        XCTAssertNil(store.load()?.displayName)
+        XCTAssertNil(defaults.string(forKey: "trayCredential.displayName"))
+    }
+
+    func testLoadRejectsInvalidSecretAndIncompleteMetadata() throws {
+        let keychain = MemoryKeychain()
+        let store = TrayCredentialStore(defaults: defaults, keychain: keychain)
+        keychain.data = Data([0xFF, 0xFE])
+        defaults.set("tray", forKey: "trayCredential.trayID")
+        defaults.set(Date(), forKey: "trayCredential.lastConnectedAt")
+        XCTAssertNil(store.load())
+
+        keychain.data = Data()
+        XCTAssertNil(store.load())
+
+        keychain.data = Data("https://tray.example/join/ok".utf8)
+        defaults.removeObject(forKey: "trayCredential.trayID")
+        XCTAssertNil(store.load())
+
+        defaults.set("tray", forKey: "trayCredential.trayID")
+        defaults.removeObject(forKey: "trayCredential.lastConnectedAt")
+        XCTAssertNil(store.load())
+    }
+
+    func testDefaultStoreIsConstructible() {
+        // The convenience init talks to the real app-group container, which may
+        // already hold a join URL on a developer machine. Do not save or clear.
+        _ = TrayCredentialStore()
+    }
+
+    func testSystemKeychainWriteReadAndClear() {
+        let keychain = SystemTrayCredentialKeychain(
+            accessGroup: "slicc.traykit.tests.\(UUID().uuidString)")
+        let payload = Data("https://tray.example/join/keychain".utf8)
+        let wrote = keychain.write(payload)
+        if wrote {
+            XCTAssertEqual(keychain.read(), payload)
+            XCTAssertTrue(keychain.write(payload))
+            XCTAssertEqual(keychain.read(), payload)
+            keychain.clear()
+            XCTAssertNil(keychain.read())
+        } else {
+            // Random access group is not an entitlement of `swift test` on
+            // macOS, so Security fails. Still assert a consistent contract.
+            XCTAssertNil(keychain.read())
+            keychain.clear()
+            XCTAssertNil(keychain.read())
+            XCTAssertFalse(keychain.write(payload))
+            XCTAssertNil(keychain.read())
+        }
+    }
+
+    func testCredentialConfigurationUsesPlatformIdentifiers() {
+        XCTAssertFalse(TrayCredentialConfiguration.appGroupIdentifier.isEmpty)
+        XCTAssertFalse(TrayCredentialConfiguration.keychainAccessGroup.isEmpty)
+        XCTAssertEqual(TrayCredentialStore.appGroupIdentifier, TrayCredentialConfiguration.appGroupIdentifier)
+        XCTAssertEqual(
+            TrayCredentialStore.keychainAccessGroup, TrayCredentialConfiguration.keychainAccessGroup)
+        #if os(macOS)
+            XCTAssertEqual(
+                TrayCredentialConfiguration.appGroupIdentifier,
+                "S8LB56P782.com.slicc.sliccstart.fileprovider")
+            XCTAssertEqual(TrayCredentialConfiguration.fileProviderRuntime, "slicc-macos-file-provider")
+        #else
+            XCTAssertEqual(TrayCredentialConfiguration.appGroupIdentifier, "group.ai.sliccy.follower")
+            XCTAssertEqual(TrayCredentialConfiguration.fileProviderRuntime, "slicc-ios-file-provider")
+        #endif
+    }
+
+    func testAppGroupFileStoreOverwritesExistingFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TrayCredentialFileStore.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppGroupFileSecretStore(directory: directory)
+        let first = Data("https://tray.example/join/first".utf8)
+        let second = Data("https://tray.example/join/second".utf8)
+        XCTAssertTrue(store.write(first))
+        XCTAssertTrue(store.write(second))
+        XCTAssertEqual(store.read(), second)
+    }
+
     func testKeychainUpdateFailurePreservesPreviousCredential() throws {
         let keychain = MemoryKeychain()
         let store = TrayCredentialStore(defaults: defaults, keychain: keychain)

@@ -320,6 +320,7 @@ Swift coverage floors come from the same `coverage-thresholds.json` as the TypeS
 ```bash
 ./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-server SliccServerPackageTests
 ./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-optel SwiftOptelPackageTests
+./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-traykit SliccTrayVFSPackageTests
 ./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-launcher SliccstartPackageTests
 ./packages/dev-tools/tools/swift-coverage-check.sh --xcodebuild SliccFollower packages/ios-app SliccFollower
 ```

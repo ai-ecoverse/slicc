@@ -28,6 +28,7 @@ let package = Package(
             dependencies: [
                 "SliccTrayVFS",
                 .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
+                .product(name: "WebRTC", package: "WebRTC"),
             ],
             path: "Tests/SliccTrayVFSTests"
         ),
