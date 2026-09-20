@@ -8,8 +8,7 @@
  */
 
 import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
-import { isAllowedOrigin } from './oauth-exchange.js';
-import { jsonResponse } from './shared.js';
+import { isAllowedOrigin, jsonResponse } from './shared.js';
 
 const FLAGS_CACHE_TTL_SECONDS = 300;
 const DEFAULT_FLOAT = 'default';

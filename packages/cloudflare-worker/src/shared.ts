@@ -3,8 +3,27 @@ import type {
   TrayBootstrapFailure,
   TrayBootstrapState,
 } from '@slicc/shared-ts';
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 
 export type TrayKind = 'desktop' | 'hosted';
+
+/**
+ * Origins allowed to read cross-origin worker responses (OAuth exchange,
+ * feature flags). Lives in this shared layer so both `routes` handlers and the
+ * `flags` config surface can consult it without a back-edge up the stack.
+ */
+const ALLOWED_ORIGINS = [
+  SLICC_HOSTED_ORIGIN,
+  'https://sliccy.ai',
+  /^https:\/\/slicc-tray-hub[^.]*\.minivelos\.workers\.dev$/,
+  /^http:\/\/localhost:\d+$/,
+];
+
+export function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.some((allowed) =>
+    typeof allowed === 'string' ? allowed === origin : allowed.test(origin)
+  );
+}
 
 /**
  * Worker-internal persisted bootstrap record (stored in `TrayRecord.bootstraps`).
