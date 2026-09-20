@@ -221,11 +221,22 @@ final class TrayCredentialStoreTests: XCTestCase {
         let keychain = SystemTrayCredentialKeychain(
             accessGroup: "slicc.traykit.tests.\(UUID().uuidString)")
         let payload = Data("https://tray.example/join/keychain".utf8)
-        _ = keychain.write(payload)
-        _ = keychain.write(payload)
-        _ = keychain.read()
-        keychain.clear()
-        _ = keychain.read()
+        let wrote = keychain.write(payload)
+        if wrote {
+            XCTAssertEqual(keychain.read(), payload)
+            XCTAssertTrue(keychain.write(payload))
+            XCTAssertEqual(keychain.read(), payload)
+            keychain.clear()
+            XCTAssertNil(keychain.read())
+        } else {
+            // Random access group is not an entitlement of `swift test` on
+            // macOS, so Security fails. Still assert a consistent contract.
+            XCTAssertNil(keychain.read())
+            keychain.clear()
+            XCTAssertNil(keychain.read())
+            XCTAssertFalse(keychain.write(payload))
+            XCTAssertNil(keychain.read())
+        }
     }
 
     func testCredentialConfigurationUsesPlatformIdentifiers() {
