@@ -692,6 +692,7 @@ export async function bootFollowerFloat(
 
   for (const action of ['save', 'skip', 'erase'] as const) {
     boot.refs.freezer.addEventListener(`new-chat-${action}`, () => {
+      workUnits.forgetLocalSends();
       follower.currentSync?.requestNewSession(action);
     });
   }

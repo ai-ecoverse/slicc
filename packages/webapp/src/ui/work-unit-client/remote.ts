@@ -16,6 +16,7 @@ import type {
 import { qualifiedModelId } from '../../work-unit/record.js';
 import type { ChatMessage } from '../types.js';
 import { summaryToWorkUnit } from '../wc/wc-tray-scoops.js';
+import { LocalSendLedger } from './local-send-ledger.js';
 
 const SNAPSHOT_TIMEOUT_MS = 10000;
 
@@ -41,6 +42,8 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     Set<(snapshot: WorkUnitSnapshot) => void>
   >();
 
+  private readonly localSends = new LocalSendLedger();
+
   constructor(private readonly deps: RemoteWorkUnitClientDeps) {}
 
   get selectedUnitId(): WorkUnitId | null {
@@ -54,6 +57,10 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     this.lastSnapshots.clear();
 
     this.pendingSnapshots.clear();
+  }
+
+  forgetLocalSends(): void {
+    this.localSends.removeAll();
   }
 
   private forgetWaiter(id: WorkUnitId, resolve: (snapshot: WorkUnitSnapshot) => void): void {
@@ -101,14 +108,17 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
       onSnapshot: (messages: ChatMessage[], scoopJid: string) => {
         if (this.selectedId !== null && this.selectedId !== scoopJid) return;
         this.selectedId = scoopJid;
-        const transcript = messages as unknown as readonly WorkUnitChatMessage[];
+        const transcript = this.localSends.reconcile(
+          messages as unknown as readonly WorkUnitChatMessage[],
+          scoopJid
+        );
         const summary = this.summaryOf(scoopJid);
 
         this.publishSnapshot(scoopJid, {
           messages: transcript,
           ...(summary ? { summary } : {}),
         });
-        base.onSnapshot?.(messages, scoopJid);
+        base.onSnapshot?.(transcript as unknown as ChatMessage[], scoopJid);
       },
       onStatus: (scoopStatus: string, scoopJid?: string) => {
         const target = scoopJid ?? this.selectedId;
@@ -155,7 +165,13 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     this.unitListeners.set(id, listeners);
 
     const known = this.lastSnapshots.get(id);
-    if (known && !this.pendingSnapshots.has(id)) listener({ snapshot: known, type: 'snapshot' });
+    if (known && !this.pendingSnapshots.has(id)) {
+      const messages = this.localSends.withUnconfirmed(known.messages, id);
+      listener({
+        snapshot: messages === known.messages ? known : { ...known, messages },
+        type: 'snapshot',
+      });
+    }
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);
@@ -200,13 +216,27 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
       sync.selectScoop(id);
     }
 
+    const messageId =
+      input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const message: WorkUnitChatMessage = {
+      id: messageId,
+      role: 'user',
+      content: input.text,
+      timestamp: Date.now(),
+    };
+    if (input.attachments) message.attachments = input.attachments;
+    this.localSends.record(message, id);
+
     const accepted = sync.sendMessage(
       input.text,
-      input.messageId,
+      messageId,
       input.attachments as Parameters<FollowerSyncManager['sendMessage']>[2],
       input.steer ? { steer: true } : undefined
     );
-    if (!accepted) return Promise.reject(new Error('the leader channel refused the message'));
+    if (!accepted) {
+      this.localSends.flagUndelivered(messageId);
+      return Promise.reject(new Error('the leader channel refused the message'));
+    }
     return Promise.resolve();
   }
 
