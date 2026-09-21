@@ -316,7 +316,6 @@ export function buildEsptoolHandlers(options: StandalonePanelRpcHandlerOptions) 
 }
 
 /** Shared page-side WebUSB registry (lazy singleton). */
-/** Shared page-side WebUSB registry (lazy singleton). */
 export function usbRegistry() {
   return getSharedUsbRegistry();
 }
