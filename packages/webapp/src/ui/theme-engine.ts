@@ -300,6 +300,10 @@ export function deriveTokens(
 
 const STORAGE_THEMES = 'slicc-themes';
 const STORAGE_ACTIVE = 'slicc-active-theme';
+/** Up to two theme ids. When present, the active theme follows Light/Dark. */
+const STORAGE_PAIR = 'slicc-theme-pair';
+/** Same key as `ThemePreference` in theme.ts. Read here to avoid a cycle. */
+const STORAGE_SCHEME = 'slicc-theme';
 const STYLE_ID = 'slicc-theme-overrides';
 
 function storage(): Storage | null {
@@ -312,15 +316,75 @@ function storage(): Storage | null {
   }
 }
 
+/** Theme ids the user picked, in selection order. Empty, one, or two. */
+export function getSelectedThemeIds(): string[] {
+  const raw = storage()?.getItem(STORAGE_PAIR);
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const ids = parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+        if (ids.length > 0) return ids.slice(0, 2);
+      }
+    } catch {
+      // A corrupt pair falls through to the single active id.
+    }
+  }
+  const single = storage()?.getItem(STORAGE_ACTIVE);
+  return single ? [single] : [];
+}
+
+export function setSelectedThemeIds(ids: string[]): void {
+  const unique = [...new Set(ids.filter((id) => id.length > 0))].slice(0, 2);
+  const store = storage();
+  if (!store) return;
+  if (unique.length === 0) {
+    store.removeItem(STORAGE_PAIR);
+    store.removeItem(STORAGE_ACTIVE);
+    return;
+  }
+  if (unique.length === 1) {
+    store.removeItem(STORAGE_PAIR);
+    store.setItem(STORAGE_ACTIVE, unique[0]);
+    return;
+  }
+  store.setItem(STORAGE_PAIR, JSON.stringify(unique));
+  const resolved = resolvePairedThemeId(unique);
+  if (resolved) store.setItem(STORAGE_ACTIVE, resolved);
+}
+
+/**
+ * Add or remove a theme from the selection. A third pick replaces the older
+ * of the two so the pair stays the two most recently chosen.
+ */
+export function toggleSelectedTheme(id: string): void {
+  const current = getSelectedThemeIds();
+  if (current.includes(id)) {
+    setSelectedThemeIds(current.filter((existing) => existing !== id));
+    return;
+  }
+  if (current.length < 2) {
+    setSelectedThemeIds([...current, id]);
+    return;
+  }
+  setSelectedThemeIds([current[1], id]);
+}
+
+/** The theme applied right now. A pair resolves to the darker or brighter one. */
 export function getActiveThemeId(): string | null {
-  return storage()?.getItem(STORAGE_ACTIVE) || null;
+  const ids = getSelectedThemeIds();
+  if (ids.length === 0) return null;
+  if (ids.length === 1) return ids[0];
+  return resolvePairedThemeId(ids);
 }
 
 export function setActiveTheme(id: string): void {
+  storage()?.removeItem(STORAGE_PAIR);
   storage()?.setItem(STORAGE_ACTIVE, id);
 }
 
 export function clearActiveTheme(): void {
+  storage()?.removeItem(STORAGE_PAIR);
   storage()?.removeItem(STORAGE_ACTIVE);
 }
 
@@ -341,11 +405,77 @@ export function saveCustomTheme(theme: SliccTheme): void {
 export function deleteCustomTheme(id: string): void {
   const themes = getCustomThemes().filter((t) => t.id !== id);
   storage()?.setItem(STORAGE_THEMES, JSON.stringify(themes));
-  if (getActiveThemeId() === id) clearActiveTheme();
+  const selected = getSelectedThemeIds();
+  if (selected.includes(id)) setSelectedThemeIds(selected.filter((existing) => existing !== id));
 }
 
 function resolveTheme(id: string): SliccTheme | undefined {
   return PRESETS.find((p) => p.id === id) ?? getCustomThemes().find((t) => t.id === id);
+}
+
+/** True when Light is the appearance the pair should follow. */
+function wantsLightAppearance(): boolean {
+  const pref = storage()?.getItem(STORAGE_SCHEME);
+  if (pref === 'light') return true;
+  if (pref === 'dark') return false;
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
+}
+
+function backgroundLuminance(theme: SliccTheme): number | null {
+  const raw =
+    theme.tokens['--canvas'] ||
+    theme.tokens['--s2-bg-base'] ||
+    theme.tokens['--s2-gray-25'] ||
+    theme.tokens['--bg'];
+  if (!raw) return null;
+  const hex = raw.trim();
+  const match = /^#([\da-fA-F]{3}|[\da-fA-F]{6})$/.exec(hex);
+  if (!match) return null;
+  const body = match[1];
+  const expanded =
+    body.length === 3
+      ? body
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : body;
+  const channels = [0, 2, 4].map((i) => Number.parseInt(expanded.slice(i, i + 2), 16) / 255);
+  const linear = channels.map((s) => (s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+/** Lower score is darker. Missing colors fall back to the theme base. */
+function brightnessScore(theme: SliccTheme): number {
+  return backgroundLuminance(theme) ?? (theme.base === 'light' ? 1 : 0);
+}
+
+function orderByBrightness(themes: SliccTheme[]): [SliccTheme, SliccTheme] {
+  const [a, b] = themes;
+  return brightnessScore(a) <= brightnessScore(b) ? [a, b] : [b, a];
+}
+
+function resolvePairedThemeId(ids: string[]): string | null {
+  const themes = ids
+    .map((id) => resolveTheme(id))
+    .filter((theme): theme is SliccTheme => theme !== undefined);
+  if (themes.length === 0) return null;
+  if (themes.length === 1) return themes[0].id;
+  const [darker, brighter] = orderByBrightness([themes[0], themes[1]]);
+  return wantsLightAppearance() ? brighter.id : darker.id;
+}
+
+/** Which side of a selected pair this theme is, when two are selected. */
+export function pairedThemeRole(id: string): 'darker' | 'brighter' | null {
+  const ids = getSelectedThemeIds();
+  if (ids.length !== 2 || !ids.includes(id)) return null;
+  const themes = ids
+    .map((existing) => resolveTheme(existing))
+    .filter((theme): theme is SliccTheme => theme !== undefined);
+  if (themes.length !== 2) return null;
+  const [darker, brighter] = orderByBrightness(themes);
+  if (darker.id === id) return 'darker';
+  if (brighter.id === id) return 'brighter';
+  return null;
 }
 
 /** The active theme serialized for the wire, or null when unthemed (or the
@@ -471,7 +601,9 @@ export function applyThemeOverrides(): void {
   injectThemeStyle(buildThemeCss(theme));
   setShaderVisibility(!theme.disableShader);
   syncNavAccent(theme);
-  syncBodyThemeMode(theme.base);
+  // A pair follows Light/Dark. One theme still pins the body to its own base.
+  const paired = getSelectedThemeIds().length === 2;
+  syncBodyThemeMode(paired ? (wantsLightAppearance() ? 'light' : 'dark') : theme.base);
   nudgeThemeObservers();
   notifyThemeChanged(theme);
 }

@@ -10,7 +10,7 @@ allowed-tools: bash, read_file, write_file, edit
 
 # Theme Personalization
 
-SLICC supports full UI theming via the `theme` shell command and the Theme settings dialog (avatar menu → "Theme settings…").
+SLICC supports full UI theming via the `theme` shell command and the Theme settings dialog (avatar menu → "Theme settings…"). In that dialog, select two themes and SLICC applies the darker one in Dark and the brighter one in Light. One selected theme stays on all the time. A third pick replaces the older of the two.
 
 ## Shell Command (preferred for agent use)
 
@@ -384,5 +384,6 @@ Note: accent red is ONLY in `--ctx`/`--waffle`/`--s2-accent`. Bubble is neutral 
 ## Storage
 
 - Active theme ID: `localStorage['slicc-active-theme']`
+- Two selected themes: `localStorage['slicc-theme-pair']` (JSON array of two ids). The active id is the darker or brighter one for the current Light/Dark setting.
 - Custom themes: `localStorage['slicc-themes']` (JSON array)
 - Presets are bundled in code
