@@ -165,5 +165,6 @@ describe('release workflow', () => {
     expect(workflow).toContain('node packages/dev-tools/tools/release-alert.mjs fail');
     expect(workflow).toContain('node packages/dev-tools/tools/release-alert.mjs recover');
     expect(workflow).toContain("steps.publish.outputs.deferred != 'true'");
+    expect(workflow).toContain('Checkout never produced a worktree');
   });
 });

@@ -446,7 +446,21 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RELEASE_SHA: ${{ github.sha }}
-        run: node packages/dev-tools/tools/release-alert.mjs fail
+        run: |
+          set -euo pipefail
+          if [ -f packages/dev-tools/tools/release-alert.mjs ]; then
+            node packages/dev-tools/tools/release-alert.mjs fail
+            exit 0
+          fi
+          # Checkout never produced a worktree; keep the tracker without Node.
+          TITLE="Release pipeline is red"
+          BODY="[Release run](${RELEASE_RUN_URL}) failed on \`${RELEASE_SHA}\`. Everything merged since the last green release is unshipped until this is fixed."
+          EXISTING=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title \"$TITLE\"" --json number,title --jq "[.[] | select(.title==\"$TITLE\")][0].number // empty")
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "${GITHUB_REPOSITORY}" --body "$BODY"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "$TITLE" --body "$BODY" --label bug
+          fi
 
       # Close the tracking issue only after a completed publish (or a no-op
       # because the tag already exists). A stale-push deferral writes
