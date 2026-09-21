@@ -62,6 +62,8 @@ extension Optel {
 
 private var optelPreviousUncaughtExceptionHandler: (@convention(c) (NSException) -> Void)?
 
+private func optelTestingNoopUncaughtHandler(_ exception: NSException) {}
+
 
 
 
@@ -109,5 +111,15 @@ public enum OptelUncaughtExceptionHook {
         lock.lock()
         installed = false
         lock.unlock()
+    }
+
+    
+    
+    
+    internal static func _testing_invokeTrampoline(_ exception: NSException) {
+        let saved = optelPreviousUncaughtExceptionHandler
+        optelPreviousUncaughtExceptionHandler = optelTestingNoopUncaughtHandler
+        optelUncaughtExceptionTrampoline(exception)
+        optelPreviousUncaughtExceptionHandler = saved
     }
 }

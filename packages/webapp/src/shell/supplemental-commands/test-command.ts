@@ -22,6 +22,9 @@ Notes:
   - Default glob: **/*.test.{js,ts}, walked from the current cwd.
   - .ts files are transpiled via the bundled typescript package.
   - Each file runs in its own realm (same engine as 'node').
+  - require('fs') / require('path') / require('sliccy:*') and ipk
+    packages resolve through the realm require shim; relative
+    './…' imports are inlined from the VFS.
 `;
 
 const DEFAULT_GLOBS = ['**/*.test.{js,ts}'];
@@ -302,8 +305,11 @@ function buildRunnerScript(
   const factories = `{${factoryEntries.join(',\n')}}`;
   const entryEdges = edgeRewrites.get(entryPath) ?? new Map<string, string>();
   const rewiredEntry = rewireUserRequires(userCjs, entryEdges);
+
   return `"use strict";
 ${harness}
+const __realmRequire = require;
+const { createRequire: __createRequire } = __realmRequire("module");
 const __tstReq = (id) => {
   if (id === "tst") return __tst_module_exports;
   if (id === "tst/assert") return __tst_assert_exports;
@@ -311,18 +317,27 @@ const __tstReq = (id) => {
 };
 const __localFactories = ${factories};
 const __localCache = Object.create(null);
+const __bridgeRequire = (realmReq, id) => {
+  if (id === "tst" || id === "tst/assert") return __tstReq(id);
+  if (Object.prototype.hasOwnProperty.call(__localFactories, id)) {
+    return __localReq(id);
+  }
+  return realmReq(id);
+};
+const __userRequire = (id) => __bridgeRequire(__realmRequire, id);
 const __localReq = (absPath) => {
   if (absPath in __localCache) return __localCache[absPath].exports;
   const factory = __localFactories[absPath];
   if (!factory) throw new Error("tst: local module not bundled: " + absPath);
   const module = { exports: {} };
   __localCache[absPath] = module;
-  factory(module, module.exports, __localReq);
+  const scoped = __createRequire(absPath);
+  factory(module, module.exports, (id) => __bridgeRequire(scoped, id));
   return module.exports;
 };
 await (async function (require) {
 ${rewiredEntry}
-})(__tstReq);
+})(__userRequire);
 const __state = await __tst.run({ format: ${JSON.stringify(format)} });
 // EXT6 (F-C03): for an explicit single-file run under the default tap
 // reporter, run()'s promise can resolve before a thrown test's rejection

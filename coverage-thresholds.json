@@ -154,9 +154,9 @@
       "regions": 73
     },
     "swift-optel": {
-      "lines": 75,
-      "functions": 70,
-      "regions": 79
+      "lines": 97,
+      "functions": 92,
+      "regions": 93
     },
     "swift-traysession": {
       "lines": 92,

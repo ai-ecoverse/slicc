@@ -217,15 +217,18 @@
         }
 
         public var body: some View {
-            Button(
-                action: {
-                    OptelButton<Label>.performTap(
-                        identifier: identifier,
-                        label: accessibilityLabel,
-                        context: context
-                    )
-                    action()
-                }, label: labelBuilder)
+            Button(action: activate, label: labelBuilder)
+        }
+
+        
+        
+        func activate() {
+            Self.performTap(
+                identifier: identifier,
+                label: accessibilityLabel,
+                context: context
+            )
+            action()
         }
 
         

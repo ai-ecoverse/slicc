@@ -166,6 +166,18 @@ final class OptelTransportTests: XCTestCase {
         transport.send(sampleEvent(), collectBaseURL: baseURL)
     }
 
+    func testDebugLoggingRecordsHTTPStatusOnSuccess() {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SucceedingURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let transport = URLSessionOptelTransport(
+            session: session, timeout: 1, debugLogging: true)
+        let done = expectation(description: "beacon response")
+        SucceedingURLProtocol.onFinish = { done.fulfill() }
+        transport.send(sampleEvent(), collectBaseURL: baseURL)
+        wait(for: [done], timeout: 1)
+    }
+
     func testLoggerSubsystemAndCategoryAreStable() {
         
         
@@ -182,6 +194,23 @@ private final class FailingURLProtocol: URLProtocol {
     override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+    }
+    override func stopLoading() {}
+}
+
+
+private final class SucceedingURLProtocol: URLProtocol {
+    static var onFinish: (() -> Void)?
+    override static func canInit(with request: URLRequest) -> Bool { true }
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url ?? URL(string: "https://rum.hlx.page/")!,
+            statusCode: 204, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data())
+        client?.urlProtocolDidFinishLoading(self)
+        SucceedingURLProtocol.onFinish?()
     }
     override func stopLoading() {}
 }
