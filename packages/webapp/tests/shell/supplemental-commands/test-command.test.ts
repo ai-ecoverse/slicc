@@ -428,6 +428,34 @@ test('local dep reaches realm path', ({ is }) => {
     expect(result.stdout).toContain('ok 1 - local dep reaches realm path');
   }, 20_000);
 
+  it('scopes a nested local helper require via createRequire(absPath)', async () => {
+    // Codex P2: inlined factories must not reuse the entry-scoped realm
+    // require — a helper under /workspace/lib/ gets createRequire(absPath)
+    // so nearer node_modules resolve from the helper, not the test entry.
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/lib/helper.js',
+      `const path = require('path');
+module.exports.join = (...parts) => path.join(...parts);
+`
+    );
+    await ctx.fs.writeFile(
+      '/workspace/scoped-local.test.js',
+      `import test from 'tst';
+const { join } = require('./lib/helper.js');
+test('nested local helper reaches path via scoped require', ({ is }) => {
+  is(join('/workspace', 'lib', 'x'), '/workspace/lib/x');
+});
+`
+    );
+    const result = await cmd.execute(['scoped-local.test.js'], ctx);
+    expect(result.stderr || '').not.toMatch(/cannot require|local module not bundled/);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ok 1 - nested local helper reaches path via scoped require');
+  }, 20_000);
+
   it('returns exit 1 when no test files match', async () => {
     const cmd = createTestCommand();
     const ctx = createMockCtx();

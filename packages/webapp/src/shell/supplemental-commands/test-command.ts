@@ -421,11 +421,13 @@ function buildRunnerScript(
   // entry IIFE shadows the name. `__userRequire` serves three roles:
   // inlined `tst`, pre-bundled local VFS modules, and fallthrough to
   // the realm shim for `fs` / `path` / `sliccy:*` / ipk packages.
-  // Earlier builds passed `__tstReq` as the IIFE `require`, which
-  // closed the island and broke every bare specifier.
+  // Local factories get a per-module require via `createRequire(absPath)`
+  // so a helper under `/workspace/lib/` resolves packages from its own
+  // nearer `node_modules`, not the entry test file's directory.
   return `"use strict";
 ${harness}
 const __realmRequire = require;
+const { createRequire: __createRequire } = __realmRequire("module");
 const __tstReq = (id) => {
   if (id === "tst") return __tst_module_exports;
   if (id === "tst/assert") return __tst_assert_exports;
@@ -433,20 +435,22 @@ const __tstReq = (id) => {
 };
 const __localFactories = ${factories};
 const __localCache = Object.create(null);
-const __userRequire = (id) => {
+const __bridgeRequire = (realmReq, id) => {
   if (id === "tst" || id === "tst/assert") return __tstReq(id);
   if (Object.prototype.hasOwnProperty.call(__localFactories, id)) {
     return __localReq(id);
   }
-  return __realmRequire(id);
+  return realmReq(id);
 };
+const __userRequire = (id) => __bridgeRequire(__realmRequire, id);
 const __localReq = (absPath) => {
   if (absPath in __localCache) return __localCache[absPath].exports;
   const factory = __localFactories[absPath];
   if (!factory) throw new Error("tst: local module not bundled: " + absPath);
   const module = { exports: {} };
   __localCache[absPath] = module;
-  factory(module, module.exports, __userRequire);
+  const scoped = __createRequire(absPath);
+  factory(module, module.exports, (id) => __bridgeRequire(scoped, id));
   return module.exports;
 };
 await (async function (require) {
