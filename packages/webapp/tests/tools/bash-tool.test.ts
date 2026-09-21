@@ -228,6 +228,39 @@ describe('Bash Tool', () => {
     const result = await bash.execute({ command: 'cat /data.txt | grep banana' });
     expect(result.content).toContain('banana');
     expect(result.content).not.toContain('apple');
+    expect(result.content).not.toContain('pipeline:');
+  });
+
+  it('keeps last-stage exit and annotates a mixed pipeline', async () => {
+    const hidden = await bash.execute({ command: 'false | echo ok' });
+    expect(hidden.isError).toBeFalsy();
+    expect(hidden.content).toContain('ok');
+    expect(hidden.content).toContain('pipeline: 1 0');
+
+    const lastFails = await bash.execute({ command: 'echo ok | false' });
+    expect(lastFails.isError).toBe(true);
+    expect(lastFails.content).toContain('pipeline: 0 1');
+  });
+
+  it('does not annotate a single-command failure', async () => {
+    const result = await bash.execute({ command: 'false' });
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('pipeline:');
+  });
+
+  it('preserves a command that ends in a trailing backslash', async () => {
+    const result = await bash.execute({ command: 'echo hi \\' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi \\');
+    expect(result.content).not.toContain('pipeline:');
+  });
+
+  it('does not leak PIPESTATUS capture vars into the next command', async () => {
+    await bash.execute({ command: 'false | echo ok' });
+    const env = await bash.execute({
+      command: 'echo "x${__SLICC_PIPESTATUS-}y${__SLICC_PIPESTATUS_EX-}z"',
+    });
+    expect(env.content.trim()).toBe('xyz');
   });
 
   it('does not report grep no-match searches as errors', async () => {
@@ -237,6 +270,7 @@ describe('Bash Tool', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('exit code: 1');
+    expect(result.content).toContain('pipeline: 0 1');
   });
 
   it('does not report rg no-match searches as errors', async () => {
