@@ -14,6 +14,10 @@ final class TerminalViewModel: ObservableObject {
 
     static let prompt = "slicc$ "
     static let inputEchoBatchLimit = 4 * 1_024
+    
+    static let surfaceBackgroundHex = "0c0c0e"
+    static let surfaceForegroundHex = "e7e7ea"
+    static let defaultAccentHex = "7155FA"
     private static let transcriptLimit = 64 * 1_024
 
     let terminal = TerminalViewState()
@@ -98,17 +102,12 @@ final class TerminalViewModel: ObservableObject {
         }
     }
 
-    func applyTheme(_ theme: SliccTheme?, systemScheme: ColorScheme) {
-        let defaults =
-            systemScheme == .dark
-            ? (background: "0F0F1A", foreground: "FFFFFF", accent: "7155FA")
-            : (background: "FFFFFF", foreground: "0A0A0A", accent: "7155FA")
-        let background = hexToken("--canvas", from: theme) ?? defaults.background
-        let foreground = hexToken("--ink", from: theme) ?? defaults.foreground
-        let accent = hexToken("--ctx", from: theme) ?? defaults.accent
+    func applyTheme(_ theme: SliccTheme?, systemScheme _: ColorScheme) {
+        
+        let accent = hexToken("--ctx", from: theme) ?? Self.defaultAccentHex
         let configuration = TerminalConfiguration { builder in
-            builder.withBackground(background)
-            builder.withForeground(foreground)
+            builder.withBackground(Self.surfaceBackgroundHex)
+            builder.withForeground(Self.surfaceForegroundHex)
             builder.withCursorColor(accent)
             builder.withSelectionBackground(accent)
             builder.withWindowPaddingX(8)
