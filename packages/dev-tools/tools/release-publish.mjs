@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Run semantic-release, deferring when the version-commit push loses the race.
+ * Run semantic-release, treating two known non-product failures as a green job.
  *
  * `@semantic-release/git` pushes `HEAD:main` only after prepare (build, native
  * packaging, TestFlight), which can take most of the job. A merge that lands
@@ -10,6 +10,12 @@
  * Release run; the half-hourly schedule catches a tip that did not (for
  * example a `[skip ci]` commit). A green deferral does not open the
  * red-release tracking issue.
+ *
+ * `@semantic-release/github` success comments parse `#NNNN` in commit
+ * messages as slicc issues. A CSS hex such as `#141414` ("pre-fix #141414")
+ * or a foreign tracker number then GraphQL-looks up a missing issue and
+ * fails the job after npm and GitHub Release publish already succeeded.
+ * That missing-issue success failure also exits 0.
  *
  * Env and extra CLI args are forwarded to `npx --no-install semantic-release`.
  */
@@ -21,6 +27,11 @@ import { fileURLToPath } from 'node:url';
 const DEFER_MESSAGE =
   '[release-publish] main moved during prepare; the version-commit push was rejected. ' +
   'Deferring — the push that moved main, or the schedule catch-up, publishes from the new tip.';
+
+const MISSING_ISSUE_MESSAGE =
+  '[release-publish] @semantic-release/github success could not resolve a referenced ' +
+  'GitHub issue after publish already completed. Treating the job as successful so a ' +
+  'phantom #NNNN cannot red the pipeline.';
 
 /**
  * True only for the semantic-release git plugin's non-fast-forward push.
@@ -42,13 +53,33 @@ export function isStaleReleasePush(output) {
 }
 
 /**
+ * True only for `@semantic-release/github` success looking up a missing
+ * issue/PR after publish. A publish-step GitHub failure (release assets,
+ * tag) must still fail the job.
+ *
+ * @param {string} output Combined stdout and stderr.
+ */
+export function isMissingGithubIssueSuccess(output) {
+  const text = String(output ?? '');
+  const successFailed = text.includes('Failed step "success" of plugin "@semantic-release/github"');
+  if (!successFailed) return false;
+  return (
+    /Could not resolve to an issue or pull request with the number of \d+/i.test(text) ||
+    (/NOT_FOUND/.test(text) && /issue\d+/.test(text))
+  );
+}
+
+/**
  * @param {number | null} code
  * @param {string} output
- * @returns {{ code: number, deferred: boolean }}
+ * @returns {{ code: number, deferred: boolean, missingIssue?: boolean }}
  */
 export function classifyReleaseExit(code, output) {
   if (code === 0) return { code: 0, deferred: false };
   if (code === 1 && isStaleReleasePush(output)) return { code: 0, deferred: true };
+  if (code === 1 && isMissingGithubIssueSuccess(output)) {
+    return { code: 0, deferred: false, missingIssue: true };
+  }
   return { code: code ?? 1, deferred: false };
 }
 
@@ -122,6 +153,8 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (result.deferred) {
     console.error(DEFER_MESSAGE);
+  } else if (result.missingIssue) {
+    console.error(MISSING_ISSUE_MESSAGE);
   }
   process.exitCode = result.code;
   return result;

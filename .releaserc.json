@@ -24,6 +24,8 @@
         "failComment": false,
         "failTitle": false,
         "labels": false,
+        "successCommentCondition": false,
+        "releasedLabels": false,
         "assets": [
           "artifacts/release/*.zip",
           "artifacts/release/*.tgz",

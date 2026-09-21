@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   classifyReleaseExit,
+  isMissingGithubIssueSuccess,
   isStaleReleasePush,
   main,
   publishRelease,
@@ -41,6 +42,32 @@ describe('isStaleReleasePush', () => {
   });
 });
 
+const MISSING_ISSUE_SUCCESS = `
+[semantic-release] › ✘  Failed step "success" of plugin "@semantic-release/github"
+An error occurred while running semantic-release: Error: Could not resolve to an issue or pull request with the number of 141414.
+type: 'NOT_FOUND', path: [ 'repository', 'issue141414' ]
+pluginName: '@semantic-release/github'
+`;
+
+describe('isMissingGithubIssueSuccess', () => {
+  it('matches the github success GraphQL lookup of a missing issue', () => {
+    expect(isMissingGithubIssueSuccess(MISSING_ISSUE_SUCCESS)).toBe(true);
+  });
+
+  it('does not swallow a github publish-step failure', () => {
+    expect(
+      isMissingGithubIssueSuccess(
+        'Failed step "publish" of plugin "@semantic-release/github"\n' +
+          'Could not resolve to an issue or pull request with the number of 141414.'
+      )
+    ).toBe(false);
+  });
+
+  it('does not swallow an npm publish failure that mentions NOT_FOUND', () => {
+    expect(isMissingGithubIssueSuccess('npm publish failed: NOT_FOUND issue141414')).toBe(false);
+  });
+});
+
 describe('classifyReleaseExit', () => {
   it('keeps a successful publish', () => {
     expect(classifyReleaseExit(0, STALE_PUSH)).toEqual({ code: 0, deferred: false });
@@ -50,9 +77,24 @@ describe('classifyReleaseExit', () => {
     expect(classifyReleaseExit(1, STALE_PUSH)).toEqual({ code: 0, deferred: true });
   });
 
+  it('treats a missing github issue on success as a completed publish', () => {
+    expect(classifyReleaseExit(1, MISSING_ISSUE_SUCCESS)).toEqual({
+      code: 0,
+      deferred: false,
+      missingIssue: true,
+    });
+  });
+
   it('preserves any other semantic-release failure', () => {
     expect(classifyReleaseExit(1, 'npm publish failed')).toEqual({ code: 1, deferred: false });
     expect(classifyReleaseExit(null, STALE_PUSH)).toEqual({ code: 1, deferred: false });
+    expect(
+      classifyReleaseExit(
+        1,
+        'Failed step "publish" of plugin "@semantic-release/github"\n' +
+          'Could not resolve to an issue or pull request with the number of 141414.'
+      )
+    ).toEqual({ code: 1, deferred: false });
   });
 });
 
@@ -109,6 +151,23 @@ describe('main', () => {
       error.mockRestore();
     }
   });
+
+  it('sets a zero exit code when github success misses a phantom issue', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const previous = process.exitCode;
+    try {
+      await main([], {
+        spawn: () => fakeSpawn([1, null], MISSING_ISSUE_SUCCESS),
+        stderr: { write: vi.fn() },
+        stdout: { write: vi.fn() },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('phantom #NNNN'));
+    } finally {
+      process.exitCode = previous;
+      error.mockRestore();
+    }
+  });
 });
 
 describe('release workflow', () => {
@@ -119,5 +178,21 @@ describe('release workflow', () => {
     );
     expect(workflow).toContain('node packages/dev-tools/tools/release-publish.mjs');
     expect(workflow).not.toMatch(/^\s*run: npx semantic-release\s*$/m);
+  });
+
+  it('skips github success comments so a phantom issue cannot fail after publish', () => {
+    const releaserc = JSON.parse(
+      readFileSync(new URL('../../../.releaserc.json', import.meta.url), 'utf8')
+    );
+    const github = releaserc.plugins.find(
+      (plugin) => Array.isArray(plugin) && plugin[0] === '@semantic-release/github'
+    );
+    expect(github?.[1]).toMatchObject({
+      successCommentCondition: false,
+      releasedLabels: false,
+      failComment: false,
+      failTitle: false,
+      labels: false,
+    });
   });
 });
