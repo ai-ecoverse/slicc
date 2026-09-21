@@ -1094,4 +1094,9 @@ waits on Release.
 
 `tools/release-publish.mjs` wraps `npx semantic-release` and exits 0 when
 the version-commit push is rejected because `main` moved during prepare
-(`fetch first`); a later push or the schedule catch-up publishes.
+(`fetch first`); a later push or the schedule catch-up publishes. It also
+exits 0 when `@semantic-release/github` success fails looking up a missing
+issue after publish (v6.173.4: commit `c3bba29ca` wrote "pre-fix #141414"
+for a CSS color; GraphQL `issue141414` is `NOT_FOUND`). `.releaserc.json`
+sets `successCommentCondition` and `releasedLabels` to `false` so success
+does not GraphQL-resolve `#NNNN` from commit messages.
