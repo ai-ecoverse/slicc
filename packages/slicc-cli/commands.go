@@ -533,13 +533,20 @@ func (n *nativeComputer) Stop() {
 // survived, never fatal: this CLI is already connected to the new leader, and
 // dropping the whole session because the screen half could not follow would be
 // a worse outcome than exec-only.
+//
+// In the background, because this runs on the CLI's own dial path (the
+// supersede hop) and a relaunch now waits for the launcher to attach — holding
+// the CLI's reconnect hostage to the screen half would invert their priority.
+// Session.Retarget serialises overlapping hops itself.
 func (n *nativeComputer) retarget(ctx context.Context, console *ui.Console, joinURL string) {
 	if n == nil || n.session == nil {
 		return
 	}
-	if err := n.session.Retarget(ctx, joinURL); err != nil {
-		console.Line(ui.KindWarn, "native screen capture did not follow the tray move: %s", err)
-	}
+	go func() {
+		if err := n.session.Retarget(ctx, joinURL); err != nil && ctx.Err() == nil {
+			console.Line(ui.KindWarn, "native screen capture did not follow the tray move: %s", err)
+		}
+	}()
 }
 
 // startComputerFollower brings up the Sliccstart half of `--computer`.
@@ -583,10 +590,18 @@ func startComputerFollower(
 		JoinURL: joinURL,
 		PairID:  pairID,
 		Logf:    debugLogf,
+		OnExit: func(reason string) {
+			// Past startup, so never fatal even under =require: the exec half is
+			// still serving the leader and killing it would lose more than the
+			// screen. Say so, rather than let the capability vanish silently.
+			console.Line(ui.KindWarn, "native screen capture stopped (%s) — continuing without it", reason)
+		},
 	})
 	if err != nil {
 		return nil, computerUnavailable(console, fa.computer, err)
 	}
+	// Start only returns once the launcher reports it has reached the leader,
+	// so "attached" here is a fact, not a hope.
 	console.Line(ui.KindOk, "native screen capture attached — drive it with: computer add ssh <this follower>")
 	return &nativeComputer{pairID: pairID, session: session}, 0
 }

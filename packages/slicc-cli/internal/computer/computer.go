@@ -118,4 +118,8 @@ type Options struct {
 	PairID string
 	// Logf receives debug lines (the CLI's --debug logger). Optional.
 	Logf func(format string, args ...any)
+	// OnExit is called, from a background goroutine, when the launcher goes
+	// away after attaching without being asked to — it gave up reconnecting,
+	// or crashed. Not called for Stop or Retarget. Optional.
+	OnExit func(reason string)
 }

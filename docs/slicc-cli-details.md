@@ -55,14 +55,24 @@ outlives both. With no runner there is no `exec` peer to fold into, so the
 launcher keeps its own entry and stays addressable; that is `--computer` in ui
 mode working as intended, not a missed fold.
 
-**Handshake.** An older Sliccstart ignores an unknown flag and boots its GUI,
-which never exits and would look like a healthy child forever. So the headless
-mode prints `SLICC_COMPUTER_FOLLOW_READY` on stdout as its first line and the
-CLI waits 30 s for it; anything else — silence, an early exit, a parse error —
-is reported as "update Sliccstart". The line is read by a line-scanning
-`io.Writer` on `cmd.Stdout` rather than a `StdoutPipe`, because `os/exec` closes
-a pipe as soon as `Wait` sees the process exit and a reader racing `Wait` can
-lose exactly that line.
+**Handshake — two facts, kept apart.** The launcher's stdout carries three
+protocol lines, and the CLI waits for two separate things:
+
+| line                                    | means                                                                         | if it never comes                                  |
+| --------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------- |
+| `SLICC_COMPUTER_FOLLOW_READY`           | "I understand `--computer-follow`" — printed at once, before any network work | 30 s → "update Sliccstart" (`ErrOutdatedLauncher`) |
+| `SLICC_COMPUTER_FOLLOW_ATTACHED`        | channel open **and** `hello` sent: the leader can now reach the screen        | 60 s → `ErrAttachFailed`                           |
+| `SLICC_COMPUTER_FOLLOW_FAILED <reason>` | attaching failed for good; the launcher exits next                            | — surfaces as `ErrAttachFailed: <reason>`          |
+
+Ready alone is not success. An older Sliccstart ignores an unknown flag and boots
+its GUI (never exiting, so it would pass for a healthy child forever) — that is
+what ready distinguishes. But the first version of this PR also _returned_ on
+ready, so a launcher that could not reach the leader was reported as attached and
+`--computer=require` carried on without a screen. Attach is now its own wait, and
+an unreachable leader is never misdiagnosed as an outdated launcher. Lines are
+read by a line-scanning `io.Writer` on `cmd.Stdout` rather than a `StdoutPipe`,
+because `os/exec` closes a pipe as soon as `Wait` sees the process exit and a
+reader racing `Wait` can lose exactly the `FAILED` line that explains why.
 
 **Permissions are raised at startup, not lazily.** `follow --computer` runs
 `Sliccstart --computer-preflight --json` before connecting and prints the grant
@@ -74,11 +84,15 @@ next capture. `--allow-input` and the leader's sudo approval hop still gate
 input; `--computer` only makes capture _available_.
 
 **Lifecycle.** The launcher is SIGTERM'd (then killed after 5 s) when the CLI
-exits, so quitting never leaves a headless Sliccstart attached. A leader drop
-and reconnect needs nothing — the launcher's own connector reconnects. A
-superseded tray does: `Retarget` restarts the launcher on the replacement join
-URL, because the CLI would otherwise follow the new leader while its screen half
-sat on a tray that no longer exists.
+exits normally. That deferred stop never runs if the CLI is SIGKILLed or
+crashes, so the launcher also watches its **parent pid** (a kqueue process
+source) and exits when it goes — otherwise the leader could keep capturing the
+screen after the user believes the session ended. A leader drop and reconnect
+needs nothing — the launcher's own connector reconnects; if it gives up, it
+prints `FAILED`, exits, and the CLI says so (`Options.OnExit`) rather than
+letting the capability vanish. A superseded tray does need action: `Retarget`
+restarts the launcher on the replacement join URL, in the background so the
+CLI's own reconnect never waits on the screen half's attach.
 
 **Failure policy.** Plain `--computer` is a request: a Mac without Sliccstart
 reports one line and follows on as an ordinary exec target.

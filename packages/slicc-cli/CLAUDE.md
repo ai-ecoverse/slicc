@@ -66,21 +66,25 @@ same way `internal/cloud` does: `Sliccstart --computer-follow <url> --pair
 - **One roster entry.** Both peers send the same `hello.pairId`; the leader
   folds them (`webapp/src/scoops/tray-leader/follower-pairing.ts`) so
   `ssh --list` shows one machine holding `exec` + `computer` and
-  `computer add ssh` picks ScreenCaptureKit over `screencapture`, not the
-  terminal-attributed `screencapture` shell-out. Token is minted per process —
+  `computer add ssh` picks ScreenCaptureKit over the terminal-attributed
+  `screencapture` shell-out. Token is minted per process —
   a bootstrap id doesn't exist yet and changes on reconnect. **With no runner
   there is no exec peer to fold into**, so the launcher keeps its own entry.
-- **Version handshake.** An old Sliccstart ignores the flag and boots its GUI
-  (never exits), so the headless mode must print `SLICC_COMPUTER_FOLLOW_READY`
-  within 30 s or the CLI reports "update Sliccstart". Read via a line-scanning
-  `cmd.Stdout` writer — **not `StdoutPipe`**, which races `Wait` and can drop
-  that exact line.
+- **Handshake: ready ≠ attached.** `SLICC_COMPUTER_FOLLOW_READY` (30 s) only
+  means "understands the flag" — an old Sliccstart ignores it and boots its GUI,
+  never exiting. `Start` then waits for `SLICC_COMPUTER_FOLLOW_ATTACHED` (60 s);
+  `SLICC_COMPUTER_FOLLOW_FAILED <reason>` → `ErrAttachFailed`. **Never return on
+  ready alone** — that let `--computer=require` continue without a screen. Read
+  via a line-scanning `cmd.Stdout` writer — **not `StdoutPipe`**, which races
+  `Wait` and can drop the `FAILED` line.
 - **Prompts up front.** `Sliccstart --computer-preflight --json` runs before
   connecting; a lazy first prompt would land mid-turn. A partial grant warns,
   never aborts. Input still needs `--allow-input` + the sudo hop.
-- **Lifecycle.** SIGTERM + 5 s grace on CLI exit; reconnects need nothing
-  (the launcher dials itself); `TRAY_SUPERSEDED` **does** — `Retarget`
-  restarts it on the replacement URL.
+- **Lifecycle.** SIGTERM + 5 s grace on CLI exit; a SIGKILLed/crashed CLI is
+  covered by the launcher's own **parent-pid watch**. Reconnects need nothing;
+  a launcher that gives up exits and `OnExit` warns. `TRAY_SUPERSEDED` **does**
+  need action — `Retarget` restarts it on the replacement URL, **in the
+  background** (it now waits for attach; never block the dial path on it).
 - **Failure policy.** `--computer` warns and follows on; `--computer=require`
   exits non-zero. Off macOS: `ErrUnsupported`, never an unknown-option error.
 

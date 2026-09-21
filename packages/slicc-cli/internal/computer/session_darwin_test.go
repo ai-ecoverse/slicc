@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// A launcher that understands the flag, attaches, and then stays up — the
+// happy path every lifecycle test starts from.
+const healthyLauncher = "echo " + readyLine + "\necho " + attachedLine + "\nwhile :; do sleep 1; done\n"
+
 // fakeLauncher writes a shell script that stands in for the Sliccstart bundle
 // and points SLICCSTART_APP at it, which is the override LocateExecutable
 // already honours for `--list-sessions`. It records its argv so a test can
@@ -39,8 +43,26 @@ func readArgv(t *testing.T, path string) []string {
 	return strings.Fields(string(data))
 }
 
+// shortStartTimeout / shortAttachTimeout keep the hang-case tests fast. Only
+// the phase under test is shortened: spawning a shell under -race can take
+// longer than a hang-test budget, and a too-short *start* timeout would turn an
+// attach test into a false "outdated launcher".
+func shortStartTimeout(t *testing.T) {
+	t.Helper()
+	prev := startTimeout
+	startTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { startTimeout = prev })
+}
+
+func shortAttachTimeout(t *testing.T) {
+	t.Helper()
+	prev := attachTimeout
+	attachTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { attachTimeout = prev })
+}
+
 func TestStartPassesTheJoinUrlAndPairTokenToTheLauncher(t *testing.T) {
-	argvPath := fakeLauncher(t, "echo "+readyLine+"\nwhile :; do sleep 1; done\n")
+	argvPath := fakeLauncher(t, healthyLauncher)
 
 	session, err := Start(context.Background(), Options{
 		JoinURL: "https://tray.test/join/abc",
@@ -59,7 +81,7 @@ func TestStartPassesTheJoinUrlAndPairTokenToTheLauncher(t *testing.T) {
 }
 
 func TestStartWithoutAPairTokenOmitsTheFlag(t *testing.T) {
-	argvPath := fakeLauncher(t, "echo "+readyLine+"\nwhile :; do sleep 1; done\n")
+	argvPath := fakeLauncher(t, healthyLauncher)
 
 	session, err := Start(context.Background(), Options{JoinURL: "https://tray.test/join/abc"})
 	if err != nil {
@@ -80,8 +102,7 @@ func TestStartRejectsALauncherThatNeverReportsReady(t *testing.T) {
 	// The real symptom of an outdated Sliccstart: it ignores the unknown flag,
 	// boots its GUI, and sits there forever looking like a healthy child.
 	fakeLauncher(t, "while :; do sleep 1; done\n")
-	startTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { startTimeout = 30 * time.Second })
+	shortStartTimeout(t)
 
 	_, err := Start(context.Background(), Options{JoinURL: "https://tray.test/join/abc"})
 	if !errors.Is(err, ErrOutdatedLauncher) {
@@ -102,14 +123,107 @@ func TestStartRejectsALauncherThatExitsWithoutReporting(t *testing.T) {
 	}
 }
 
+// The first version treated "understood the flag" as success, so a launcher
+// that could not reach the leader still let `--computer=require` continue
+// without a screen (#3339 review). Ready is necessary, not sufficient.
+func TestStartFailsWhenTheLauncherUnderstandsButCannotAttach(t *testing.T) {
+	fakeLauncher(t, "echo "+readyLine+"\necho '"+failedPrefix+" signaling returned 404'\nexit 1\n")
+
+	_, err := Start(context.Background(), Options{JoinURL: "https://tray.test/join/abc"})
+	if !errors.Is(err, ErrAttachFailed) {
+		t.Fatalf("Start error = %v, want ErrAttachFailed", err)
+	}
+	// An unreachable leader is NOT an outdated launcher — telling the user to
+	// update a current Sliccstart would send them the wrong way.
+	if errors.Is(err, ErrOutdatedLauncher) {
+		t.Fatalf("attach failure misreported as an outdated launcher: %v", err)
+	}
+	if !strings.Contains(err.Error(), "signaling returned 404") {
+		t.Errorf("error %q should carry the launcher's reason", err)
+	}
+}
+
+func TestStartFailsWhenTheLauncherExitsAfterReadyWithoutAReason(t *testing.T) {
+	fakeLauncher(t, "echo "+readyLine+"\nexit 1\n")
+
+	_, err := Start(context.Background(), Options{JoinURL: "https://tray.test/join/abc"})
+	if !errors.Is(err, ErrAttachFailed) {
+		t.Fatalf("Start error = %v, want ErrAttachFailed", err)
+	}
+}
+
+func TestStartGivesUpOnALauncherThatNeverAttaches(t *testing.T) {
+	fakeLauncher(t, "echo "+readyLine+"\nwhile :; do sleep 1; done\n")
+	shortAttachTimeout(t)
+
+	_, err := Start(context.Background(), Options{JoinURL: "https://tray.test/join/abc"})
+	if !errors.Is(err, ErrAttachFailed) {
+		t.Fatalf("Start error = %v, want ErrAttachFailed", err)
+	}
+}
+
 func TestStartRequiresAJoinUrl(t *testing.T) {
 	if _, err := Start(context.Background(), Options{}); err == nil {
 		t.Fatal("Start with no join URL should fail")
 	}
 }
 
+// A launcher that gives up reconnecting after a leader drop, or crashes, must
+// not vanish from the session in silence.
+func TestAnUnexpectedExitAfterAttachingIsReported(t *testing.T) {
+	fakeLauncher(t, "echo "+readyLine+"\necho "+attachedLine+"\nsleep 0.2\necho '"+failedPrefix+" ICE failed'\nexit 1\n")
+
+	reasons := make(chan string, 1)
+	session, err := Start(context.Background(), Options{
+		JoinURL: "https://tray.test/join/abc",
+		OnExit:  func(reason string) { reasons <- reason },
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer session.Stop()
+
+	select {
+	case reason := <-reasons:
+		if reason != "ICE failed" {
+			t.Errorf("OnExit reason = %q, want the launcher's own", reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnExit was never called for a launcher that went away")
+	}
+}
+
+func TestStopAndRetargetAreNotReportedAsExits(t *testing.T) {
+	fakeLauncher(t, healthyLauncher)
+
+	var mu sync.Mutex
+	var reasons []string
+	session, err := Start(context.Background(), Options{
+		JoinURL: "https://tray.test/join/old",
+		OnExit: func(reason string) {
+			mu.Lock()
+			reasons = append(reasons, reason)
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := session.Retarget(context.Background(), "https://tray.test/join/new"); err != nil {
+		t.Fatalf("Retarget: %v", err)
+	}
+	session.Stop()
+	time.Sleep(200 * time.Millisecond) // let any stray watcher run
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reasons) != 0 {
+		t.Errorf("OnExit fired for exits this side asked for: %v", reasons)
+	}
+}
+
 func TestRetargetRestartsTheLauncherOnTheReplacementTray(t *testing.T) {
-	argvPath := fakeLauncher(t, "echo "+readyLine+"\nwhile :; do sleep 1; done\n")
+	argvPath := fakeLauncher(t, healthyLauncher)
 
 	session, err := Start(context.Background(), Options{
 		JoinURL: "https://tray.test/join/old",
@@ -139,7 +253,7 @@ func TestRetargetRestartsTheLauncherOnTheReplacementTray(t *testing.T) {
 }
 
 func TestStopIsIdempotentAndSafeAfterRetarget(t *testing.T) {
-	fakeLauncher(t, "echo "+readyLine+"\nwhile :; do sleep 1; done\n")
+	fakeLauncher(t, healthyLauncher)
 
 	session, err := Start(context.Background(), Options{JoinURL: "https://tray.test/join/abc"})
 	if err != nil {
@@ -180,8 +294,8 @@ func TestPreflightReportsAnOutdatedLauncherThatPrintsNoJson(t *testing.T) {
 	}
 }
 
-func TestReadyWatcherDetectsTheLineAcrossWriteBoundaries(t *testing.T) {
-	w := newReadyWatcher(func(string, ...any) {})
+func TestWatcherDetectsLinesAcrossWriteBoundaries(t *testing.T) {
+	w := newLauncherWatcher(func(string, ...any) {})
 	// The launcher's stdout is a pipe: nothing guarantees one write per line.
 	mustWrite(t, w, "booting\nSLICC_COMPUTER")
 	select {
@@ -189,41 +303,68 @@ func TestReadyWatcherDetectsTheLineAcrossWriteBoundaries(t *testing.T) {
 		t.Fatal("a partial line must not count as ready")
 	default:
 	}
-	mustWrite(t, w, "_FOLLOW_READY\nattached\n")
+	mustWrite(t, w, "_FOLLOW_READY\nSLICC_COMPUTER_FOLLOW_ATT")
 	select {
 	case <-w.ready:
 	default:
 		t.Fatal("the reassembled line should have signalled ready")
 	}
+	mustWrite(t, w, "ACHED\n")
+	select {
+	case <-w.attached:
+	default:
+		t.Fatal("the reassembled attached line should have signalled")
+	}
 	// Still consuming afterwards, so a chatty launcher cannot fill the pipe.
 	mustWrite(t, w, "more output\n")
 }
 
-func TestReadyWatcherAwaitPrefersALateReadyOverTheExitSignal(t *testing.T) {
-	w := newReadyWatcher(func(string, ...any) {})
+func TestWatcherAwaitReadyPrefersALateReadyOverTheExitSignal(t *testing.T) {
+	w := newLauncherWatcher(func(string, ...any) {})
 	exited := make(chan struct{})
 	mustWrite(t, w, readyLine+"\n")
 	close(exited)
 	// Wait has returned, so the stdout copy is complete: a ready line in the
-	// final write is a successful start, not a dead launcher.
-	if err := w.await(exited); err != nil {
-		t.Fatalf("await = %v, want nil", err)
+	// final write is a launcher that understood, not one that did not.
+	if err := w.awaitReady(exited); err != nil {
+		t.Fatalf("awaitReady = %v, want nil", err)
 	}
 }
 
-func TestReadyWatcherAwaitReportsALauncherThatDiedSilently(t *testing.T) {
-	w := newReadyWatcher(func(string, ...any) {})
+func TestWatcherAwaitReadyReportsALauncherThatDiedSilently(t *testing.T) {
+	w := newLauncherWatcher(func(string, ...any) {})
 	exited := make(chan struct{})
 	close(exited)
-	if err := w.await(exited); !errors.Is(err, ErrOutdatedLauncher) {
-		t.Fatalf("await = %v, want ErrOutdatedLauncher", err)
+	if err := w.awaitReady(exited); !errors.Is(err, ErrOutdatedLauncher) {
+		t.Fatalf("awaitReady = %v, want ErrOutdatedLauncher", err)
 	}
 }
 
-func TestReadyWatcherLogsEveryLineOnce(t *testing.T) {
+// Only the exact prefix, followed by a space or nothing, is a failure line — a
+// log line that merely starts with the same letters must not end the session.
+func TestWatcherOnlyTreatsTheExactFailurePrefixAsFailure(t *testing.T) {
+	w := newLauncherWatcher(func(string, ...any) {})
+	mustWrite(t, w, failedPrefix+"_NOT_REALLY\n")
+	select {
+	case <-w.failed:
+		t.Fatal("a lookalike line was taken as a failure")
+	default:
+	}
+	mustWrite(t, w, failedPrefix+"\n")
+	select {
+	case <-w.failed:
+	default:
+		t.Fatal("the bare prefix is a failure with no reason")
+	}
+	if got := w.failureOr("fallback"); got != "fallback" {
+		t.Errorf("failureOr = %q, want the fallback for a reasonless failure", got)
+	}
+}
+
+func TestWatcherLogsEveryLineOnce(t *testing.T) {
 	var mu sync.Mutex
 	var lines []string
-	w := newReadyWatcher(func(_ string, args ...any) {
+	w := newLauncherWatcher(func(_ string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
 		lines = append(lines, args[0].(string))
@@ -236,7 +377,7 @@ func TestReadyWatcherLogsEveryLineOnce(t *testing.T) {
 	}
 }
 
-func mustWrite(t *testing.T, w *readyWatcher, s string) {
+func mustWrite(t *testing.T, w *launcherWatcher, s string) {
 	t.Helper()
 	n, err := w.Write([]byte(s))
 	if err != nil || n != len(s) {

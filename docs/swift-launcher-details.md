@@ -126,11 +126,18 @@ terminal that launched it rather than to SLICC (issue #3260).
   `ComputerTrayFollower` against that URL: no menu bar, no widget observer, no
   window. `NSApplication` is set to `.accessory` — still a GUI app as far as TCC
   and ScreenCaptureKit are concerned, but with no Dock tile; `.prohibited` would
-  suppress the very prompts this detour exists for. It prints
-  `SLICC_COMPUTER_FOLLOW_READY` on stdout once attached, which is how the CLI
-  tells this build from one too old to know the flag (an older launcher ignores
-  the argument and boots its GUI, which never exits). SIGTERM/SIGINT stop the
-  follower so the leader sees a clean departure instead of a dead roster entry.
+  suppress the very prompts this detour exists for. Its stdout is a protocol
+  the CLI reads line by line: `SLICC_COMPUTER_FOLLOW_READY` **at once** (this
+  build knows the flag — an older launcher ignores it and boots its GUI, never
+  exiting), `SLICC_COMPUTER_FOLLOW_ATTACHED` once the channel is open and
+  `hello` sent (from `ComputerTrayFollower.onConnected`), or
+  `SLICC_COMPUTER_FOLLOW_FAILED <reason>` and exit 1 when attaching fails for
+  good (`onGaveUp`: the first `start()` does not retry; a later drop ends in
+  `didGiveUp`). Ready is deliberately not attached — conflating them first
+  reported a launcher as healthy before it had reached anyone. SIGTERM/SIGINT
+  stop the follower so the leader sees a clean departure; a **kqueue watch on
+  the parent pid** ends it too, because a SIGKILLed or crashed CLI never sends
+  that SIGTERM and closing stdout does not stop a process that never writes.
 - `--pair <token>` rides to the leader on `hello.pairId`, which folds this
   follower and the CLI into one roster entry carrying both `exec` and
   `computer`. Menu-bar launches send no token and stand on their own.

@@ -147,6 +147,30 @@ final class ComputerFollowCLITests: XCTestCase {
         XCTAssertEqual(accessibilityPrompts.count, 1, "a missing grant must be asked for")
     }
 
+    func testPreflightWritesTheReportAndReturnsTheGrantStatus() {
+        var out = Data()
+        var err = Data()
+        let partial = ComputerFollowCLI.preflight(
+            using: ComputerPermissionProbe(
+                screenRecordingGranted: { true }, requestScreenRecording: { true },
+                accessibilityGranted: { false }, requestAccessibility: { false }),
+            json: true, writeOut: { out.append($0) }, writeErr: { err.append($0) })
+
+        XCTAssertEqual(partial, 3, "a partial grant is a distinct, scriptable status")
+        XCTAssertEqual(
+            String(decoding: out, as: UTF8.self),
+            #"{"accessibility":false,"screenRecording":true}"# + "\n")
+        XCTAssertTrue(err.isEmpty)
+
+        out = Data()
+        XCTAssertEqual(
+            ComputerFollowCLI.preflight(
+                using: .alwaysGranted, json: false,
+                writeOut: { out.append($0) }, writeErr: { err.append($0) }),
+            0)
+        XCTAssertTrue(String(decoding: out, as: UTF8.self).contains("Screen Recording: granted"))
+    }
+
     func testReportEmitsJsonOrProseAndAlwaysEndsWithANewline() throws {
         let grants = ComputerFollowCLI.Grants(screenRecording: true, accessibility: false)
 
@@ -159,10 +183,57 @@ final class ComputerFollowCLITests: XCTestCase {
         XCTAssertTrue(prose.hasSuffix("\n"))
     }
 
+    // MARK: - attach reporting
+
+    func testFirstConnectReportsAttachedOnceAndReconnectsStayQuiet() {
+        var reporter = ComputerFollowCLI.AttachReporter()
+        XCTAssertEqual(reporter.connected(), .print(ComputerFollowCLI.attachedLine))
+        XCTAssertTrue(reporter.attached)
+        // A leader drop and reconnect is routine, not a second start.
+        XCTAssertEqual(reporter.connected(), .none)
+    }
+
+    /// Both before and after the first attach: a launcher no leader can reach
+    /// must not linger holding Screen Recording for nobody.
+    func testGivingUpAlwaysExitsWithTheReason() {
+        var fresh = ComputerFollowCLI.AttachReporter()
+        XCTAssertEqual(
+            fresh.gaveUp("signaling returned 404"),
+            .printAndExit("SLICC_COMPUTER_FOLLOW_FAILED signaling returned 404", 1))
+
+        var attached = ComputerFollowCLI.AttachReporter()
+        _ = attached.connected()
+        XCTAssertEqual(
+            attached.gaveUp("ICE failed"),
+            .printAndExit("SLICC_COMPUTER_FOLLOW_FAILED ICE failed", 1))
+    }
+
+    /// The CLI reads stdout line by line — a multi-line error must not split
+    /// into a truncated reason plus stray lines.
+    func testTheFailureReasonIsFlattenedToOneLine() {
+        XCTAssertEqual(
+            ComputerFollowCLI.failedLine(reason: "first\nsecond\r\nthird"),
+            "SLICC_COMPUTER_FOLLOW_FAILED first second third")
+        XCTAssertEqual(
+            ComputerFollowCLI.failedLine(reason: "  \n "), ComputerFollowCLI.failedPrefix)
+    }
+
+    // MARK: - parent liveness
+
+    /// launchd (pid 1) adopting us means the CLI that owned this process is
+    /// already dead, possibly before the exit watch could be armed.
+    func testAParentPidOfLaunchdMeansTheOwnerIsGone() {
+        XCTAssertTrue(ComputerFollowCLI.parentIsGone(parentPid: 1))
+        XCTAssertTrue(ComputerFollowCLI.parentIsGone(parentPid: 0))
+        XCTAssertFalse(ComputerFollowCLI.parentIsGone(parentPid: 4242))
+    }
+
     /// The Go CLI decides "this launcher understands the flag" by matching this
     /// exact line; the two constants are the contract.
-    func testTheReadyLineIsTheAgreedHandshakeToken() {
+    func testTheHandshakeLinesAreTheAgreedTokens() {
         XCTAssertEqual(ComputerFollowCLI.readyLine, "SLICC_COMPUTER_FOLLOW_READY")
+        XCTAssertEqual(ComputerFollowCLI.attachedLine, "SLICC_COMPUTER_FOLLOW_ATTACHED")
+        XCTAssertEqual(ComputerFollowCLI.failedPrefix, "SLICC_COMPUTER_FOLLOW_FAILED")
     }
 }
 

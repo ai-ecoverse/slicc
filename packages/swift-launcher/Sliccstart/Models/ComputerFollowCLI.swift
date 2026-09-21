@@ -32,14 +32,79 @@ enum ComputerFollowCLI {
     static let preflightFlag = "--computer-preflight"
     static let jsonFlag = "--json"
 
-    /// First line `--computer-follow` prints on stdout once it is attached.
+    /// First line `--computer-follow` prints on stdout: "I understand this
+    /// flag". It is printed at once, before any network work.
     ///
     /// Load-bearing, not a log: an older Sliccstart ignores unknown arguments
     /// and boots its GUI, which never exits, so "did it print this?" is the
     /// only way the CLI can tell a launcher that understands the flag from one
-    /// that silently did something else. Mirrored as `readyLine` in
+    /// that silently did something else. It deliberately does NOT mean
+    /// attached — that is ``attachedLine`` — so an unreachable leader is never
+    /// misreported as an outdated launcher.
+    ///
+    /// All three lines are mirrored in
     /// `packages/slicc-cli/internal/computer/session_darwin.go`.
     static let readyLine = "SLICC_COMPUTER_FOLLOW_READY"
+
+    /// Printed once, when the data channel is open and `hello` has gone out —
+    /// the first moment the leader can actually reach this Mac's screen.
+    /// `slicc follow --computer=require` waits for this line, not for
+    /// ``readyLine``, before it treats the screen as present.
+    static let attachedLine = "SLICC_COMPUTER_FOLLOW_ATTACHED"
+
+    /// Prefix of the line printed right before exiting because attaching
+    /// failed for good. The rest of the line is the reason, for the CLI to show.
+    static let failedPrefix = "SLICC_COMPUTER_FOLLOW_FAILED"
+
+    /// One line, whatever the reason contains: the CLI reads stdout line by
+    /// line, and a multi-line error would split into a truncated reason plus
+    /// stray log lines.
+    static func failedLine(reason: String) -> String {
+        let flattened = reason.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        return flattened.isEmpty ? failedPrefix : "\(failedPrefix) \(flattened)"
+    }
+
+    /// Turns the follower's connect / give-up callbacks into what the headless
+    /// process says and does. A value type so the one-shot rules are tested
+    /// without a leader.
+    struct AttachReporter: Equatable {
+        enum Action: Equatable {
+            case none
+            case print(String)
+            /// Print, then exit with this status.
+            case printAndExit(String, Int32)
+        }
+
+        private(set) var attached = false
+
+        /// Only the first open is news. A later reconnect after a leader drop
+        /// is routine, and repeating the line would read to the CLI as noise.
+        mutating func connected() -> Action {
+            guard !attached else { return .none }
+            attached = true
+            return .print(ComputerFollowCLI.attachedLine)
+        }
+
+        /// Giving up always ends the process, before or after the first attach.
+        /// Before it, the CLI is waiting and needs the reason. After it, the
+        /// launcher is a dead peer nobody can reach, and lingering would only
+        /// keep a process around that owns Screen Recording for no one.
+        mutating func gaveUp(_ reason: String) -> Action {
+            .printAndExit(ComputerFollowCLI.failedLine(reason: reason), 1)
+        }
+    }
+
+    // MARK: - Parent liveness
+
+    /// Whether the process that spawned this one is already gone.
+    ///
+    /// A launcher that outlives its CLI keeps a leader able to capture this
+    /// screen after the user believes the session ended — the CLI's deferred
+    /// SIGTERM never runs if it was SIGKILLed or crashed. macOS reparents an
+    /// orphan to launchd (pid 1), so a parent pid of 1 (or an impossible 0)
+    /// means the owner already died, possibly before a watch could be armed.
+    static func parentIsGone(parentPid: Int32) -> Bool { parentPid <= 1 }
 
     enum ParseError: Error, Equatable {
         case missingJoinUrl
@@ -122,6 +187,25 @@ enum ComputerFollowCLI {
         Grants(
             screenRecording: probe.screenRecordingGranted() || probe.requestScreenRecording(),
             accessibility: probe.accessibilityGranted() || probe.requestAccessibility())
+    }
+
+    /// The whole of `--computer-preflight` after `NSApplication` is up: ask,
+    /// write the report, return the exit status. The streams are injected so
+    /// the one untestable step left in the runner is the activation policy.
+    static func preflight(
+        using probe: ComputerPermissionProbe,
+        json: Bool,
+        writeOut: (Data) -> Void,
+        writeErr: (Data) -> Void
+    ) -> Int32 {
+        let grants = resolveGrants(using: probe)
+        do {
+            writeOut(try report(grants, json: json))
+        } catch {
+            writeErr(Data("Sliccstart: failed to encode permission state\n".utf8))
+            return 1
+        }
+        return exitCode(for: grants)
     }
 
     /// The exact bytes `--computer-preflight` writes to stdout.

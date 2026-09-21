@@ -65,6 +65,60 @@ final class ComputerTrayFollowerTests: XCTestCase {
             "the menu-bar follower has no CLI to be folded with and must not claim a pair")
     }
 
+    /// The headless `--computer-follow` mode reports "attached" off this hook,
+    /// and `--computer=require` trusts that line — so it must fire only once
+    /// `hello` has told the leader this peer can capture (#3260 review).
+    func testConnectedFiresAfterHelloHasBeenSent() throws {
+        let (follower, _, _) = makeFollower()
+        var sentAtConnect = -1
+        var sent: [Data] = []
+        follower.onConnected = { sentAtConnect = sent.count }
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        let settled = expectation(description: "connect handled")
+        Task { @MainActor in settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        XCTAssertEqual(sentAtConnect, 1, "hello must be on the wire before attach is reported")
+    }
+
+    /// `start()` does not retry, so a first attach that throws is final — the
+    /// headless mode must hear about it instead of idling forever.
+    func testAFailedFirstAttachIsReportedAsGivingUp() async throws {
+        let connector = RecordingConnector()
+        connector.startError = URLError(.cannotConnectToHost)
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in connector },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink())
+        var reasons: [String] = []
+        follower.onGaveUp = { reasons.append($0) }
+
+        follower.leaderChanged(joinUrl: "https://tray.test/join/x")
+        await follower._testing_settle()
+
+        XCTAssertEqual(reasons.count, 1)
+        XCTAssertFalse(reasons[0].isEmpty, "the CLI shows this reason to the user")
+    }
+
+    func testTheReconnectLoopGivingUpIsReported() throws {
+        let (follower, _, _) = makeFollower()
+        var reasons: [String] = []
+        follower.onGaveUp = { reasons.append($0) }
+
+        follower.connector(connectorStandIn(), didGiveUp: "ICE failed")
+        let settled = expectation(description: "give-up handled")
+        Task { @MainActor in settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        XCTAssertEqual(reasons, ["ICE failed"])
+    }
+
     /// `slicc … follow --computer` passes its token through
     /// `Sliccstart --computer-follow --pair <id>`; it has to reach the leader
     /// on `hello`, or the Mac keeps showing up as two separate followers
