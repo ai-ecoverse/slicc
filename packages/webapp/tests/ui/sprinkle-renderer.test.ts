@@ -31,6 +31,7 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     close: vi.fn(),
     minimize: vi.fn(),
     stopCone: vi.fn(),
+    selectScoop: vi.fn().mockResolvedValue(false),
     attachImage: vi.fn(),
     captureScreen: vi.fn(),
     exec,
@@ -406,6 +407,7 @@ describe('full document rendering', () => {
     // exec/agent bridge methods are wired into the srcdoc bridge script
     expect(srcdoc).toContain('sprinkle-exec');
     expect(srcdoc).toContain('sprinkle-agent');
+    expect(srcdoc).toContain('sprinkle-select-scoop');
     // Dual copy of slicc.screenshot() — keep in lockstep with sprinkle-screenshot.ts.
     expect(srcdoc).toContain('Element has zero dimensions');
     expect(srcdoc).toContain('image decode failed');
@@ -470,6 +472,53 @@ describe('full document rendering', () => {
       data: { id: 42 },
       target: 'cone-reviewer',
     });
+  });
+
+  it('posts sprinkle-select-scoop from the full-document iframe', async () => {
+    const renderer = new SprinkleRenderer(container, makeBridge('full-doc'));
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const srcdoc = container.querySelector('iframe')!.srcdoc;
+    const frameDom = new JSDOM(srcdoc, { runScripts: 'dangerously' });
+    const postMessage = vi.spyOn(frameDom.window, 'postMessage').mockImplementation(() => {});
+
+    void (frameDom.window as unknown as { slicc: SprinkleBridgeAPI }).slicc.selectScoop(
+      'scoop:issue-triage-1'
+    );
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'sprinkle-select-scoop',
+        target: 'scoop:issue-triage-1',
+      }),
+      '*'
+    );
+  });
+
+  it('forwards an inbound sprinkle-select-scoop to the bridge API', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.selectScoop as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const iframe = container.querySelector('iframe')!;
+
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent('message', {
+        data: {
+          type: 'sprinkle-select-scoop',
+          id: 'sel-1',
+          target: 'scoop:issue-triage-1',
+        },
+        source: iframe.contentWindow,
+      })
+    );
+
+    expect(bridge.selectScoop).toHaveBeenCalledWith('scoop:issue-triage-1');
   });
 
   it('handles bridge calls posted while the iframe is being appended', async () => {

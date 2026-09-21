@@ -71,6 +71,27 @@ export function unitForContext(
 }
 
 /**
+ * Switch the shell to the unit named by `ctx` (`scoop:<name>`, `cone:<folder>`,
+ * or a bare context that {@link unitForContext} maps to the default root).
+ *
+ * Returns `true` when the target resolved against `units`, including when
+ * that unit is already selected (the view is already where the caller asked
+ * to go). Returns `false` when nothing in the roster matches, so a panel
+ * can fall back to emitting a lick. Never throws.
+ */
+export function selectScoopForContext(
+  units: readonly WorkUnitSummary[],
+  ctx: string,
+  selectedId: string | null | undefined,
+  select: (unit: WorkUnitSummary) => void
+): boolean {
+  const unit = unitForContext(units, ctx);
+  if (!unit) return false;
+  if (unit.id !== selectedId) select(unit);
+  return true;
+}
+
+/**
  * The primary root when present, else the oldest root.
  *
  * "Oldest" is the STRIP's rule (`orderRoots`: `addedAt` ascending when every

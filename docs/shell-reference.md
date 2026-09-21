@@ -2456,6 +2456,12 @@ The agent can dynamically discover new scripts via `commands`, then invoke them 
 
 **Files**: `packages/webapp/src/ui/sprinkle-bridge.ts` (sprinkles), `packages/webapp/src/ui/dip.ts` (dips). In the thin extension these run in the hosted leader tab / `?cherry=1` follower on the `sliccy.ai` origin, not an extension sandbox.
 
+### View switch
+
+| Method                      | Returns            | Notes                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slicc.selectScoop(target)` | `Promise<boolean>` | Switch the app's view to an already-running scoop or cone (same as a switcher-chip click). `target` is `'scoop:<name>'` or `'cone:<folder>'` — the same vocabulary as `?ctx=`. Resolves `true` when the target matched the live roster (including when that unit is already selected); `false` — never thrown — when nothing matches. |
+
 ### Shell & agent surface
 
 | Method                       | Returns                               | Notes                                                                                                                                                                                                                                                               |

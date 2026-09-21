@@ -21,6 +21,7 @@ import {
   type CaptureScreenResult,
   SprinkleBridge,
   type SprinkleExecHandler,
+  type SprinkleSelectScoopHandler,
 } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
@@ -288,6 +289,12 @@ export interface SprinkleManagerOptions {
   execHandler?: SprinkleExecHandler;
   /** Resolve the opening shell's lick alias against the live page roster. */
   resolveLickOriginUnitId?: (target: string) => string | undefined;
+  /**
+   * Switch the app's view to a running scoop/cone. Wired by the WC shell to
+   * `unitForContext` + `boot.selectScoop`. Unset, `slicc.selectScoop` returns
+   * `false` (the panel can fall back to a lick).
+   */
+  selectScoopHandler?: SprinkleSelectScoopHandler;
 }
 
 /**
@@ -463,7 +470,8 @@ export class SprinkleManager implements SprinkleManagerHandle {
       (name, channel, payload) => {
         const entry = this.openSprinkles.get(name);
         entry?.renderer.pushDeviceEvent(channel, payload);
-      }
+      },
+      options.selectScoopHandler
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';

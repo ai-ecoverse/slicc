@@ -19,7 +19,7 @@
 import { createLogger } from '../base/logger.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
-import type { SprinkleBridgeAPI, SprinkleUsbApi } from './sprinkle-bridge.js';
+import type { SprinkleBridgeAPI, SprinkleBrowserApi, SprinkleUsbApi } from './sprinkle-bridge.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 
@@ -74,6 +74,12 @@ export interface SprinkleFollowerControllerOptions {
    * 404s; the follower passes a guard that only opens absolute URLs.
    */
   open?: (path: string) => void;
+  /**
+   * Switch this follower's view to a running scoop/cone. Same call a
+   * switcher-chip click makes (`boot.selectScoop`). Unset, `slicc.selectScoop`
+   * returns `false` so a panel can fall back to a lick.
+   */
+  selectScoop?: (target: string) => boolean | Promise<boolean>;
 }
 
 interface OpenEntry {
@@ -92,6 +98,23 @@ type UpdateCallback = (data: unknown) => void;
  * surface inside the sprinkle as "api.usb.transferIn is not a function"
  * instead of a clear rejection.
  */
+function followerBrowserApi(): SprinkleBrowserApi {
+  const unsupported = () =>
+    Promise.reject(new Error('browser not supported in follower-rendered sprinkle'));
+  return {
+    findTab: unsupported,
+    ensureTab: unsupported,
+    openWindow: unsupported,
+    windowBounds: unsupported,
+    setWindowBounds: unsupported,
+    eval: unsupported,
+    evalAsync: unsupported,
+    cookie: unsupported,
+    localStorage: unsupported,
+    fetch: unsupported,
+  };
+}
+
 function followerUsbApi(): SprinkleUsbApi {
   const unsupported = () =>
     Promise.reject(new Error('usb not supported in follower-rendered sprinkle'));
@@ -120,6 +143,7 @@ export class SprinkleFollowerController {
   private readonly removeSprinkle: SprinkleFollowerControllerOptions['removeSprinkle'];
   private readonly zone?: string;
   private readonly openPath?: SprinkleFollowerControllerOptions['open'];
+  private readonly selectScoopHandler?: SprinkleFollowerControllerOptions['selectScoop'];
 
   private readonly open = new Map<string, OpenEntry>();
   /** Sprinkle names with an in-flight open, used to dedupe rapid `updateAvailable` calls. */
@@ -157,6 +181,7 @@ export class SprinkleFollowerController {
     this.removeSprinkle = options.removeSprinkle;
     this.zone = options.zone;
     this.openPath = options.open;
+    this.selectScoopHandler = options.selectScoop;
   }
 
   /**
@@ -575,15 +600,14 @@ export class SprinkleFollowerController {
         window.open(url, '_blank');
       },
       close: () => this.closeLocally(sprinkleName),
-      minimize: () => {
-        // Follower-rendered sprinkles don't have a managed rail — minimize
-        // is a local UI operation on the leader. No-op on the follower side.
-      },
+      // Follower-rendered sprinkles have no managed rail; minimize is a leader-local UI op.
+      minimize: () => undefined,
       stopCone: () => {
         // Special-case action that the leader's lick router maps to "abort
         // the cone agent." Matches iOS `SprinkleWebView` `case "stopCone"`.
         this.sync.sendSprinkleLick(sprinkleName, { action: '__stopCone__' });
       },
+      selectScoop: (target) => this.selectScoopOnFollower(target),
       attachImage: () => {
         // No-op on follower — the follower doesn't own the chat input.
       },
@@ -625,28 +649,7 @@ export class SprinkleFollowerController {
           return { get: reject, post: reject, put: reject, patch: reject, delete: reject };
         },
       },
-      browser: {
-        findTab: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        ensureTab: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        openWindow: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        windowBounds: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        setWindowBounds: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        eval: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        evalAsync: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        cookie: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        localStorage: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        fetch: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-      },
+      browser: followerBrowserApi(),
       // The page-side device registries live on the leader and aren't
       // addressable from a follower. Reject every call with a clean
       // error rather than silently no-op so follower sprinkles surface
@@ -686,5 +689,17 @@ export class SprinkleFollowerController {
         Promise.reject(new Error('device ops not supported in follower-rendered sprinkle')),
     };
     return api;
+  }
+
+  /**
+   * A follower panel should move THIS follower's view, the same way a chip
+   * click does — `boot.selectScoop` also asks the leader to mirror the unit
+   * (`client.snapshot` → `scoops.select`). Unwired (tests, surfaces without
+   * a shell) answers false so the panel can fall back to a lick rather than
+   * throwing.
+   */
+  private async selectScoopOnFollower(target: string): Promise<boolean> {
+    if (!this.selectScoopHandler) return false;
+    return Boolean(await this.selectScoopHandler(target));
   }
 }
