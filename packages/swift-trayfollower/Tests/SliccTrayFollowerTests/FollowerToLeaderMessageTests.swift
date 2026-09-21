@@ -385,8 +385,8 @@ final class FollowerToLeaderMessageTests: XCTestCase {
 
     func testHelloRoundTrip() throws {
         guard
-            case .hello(let version, let runtime, let capabilities, let motd) =
-                try roundTrip(.hello(protocolVersion: 6, runtime: "slicc-ios", capabilities: trayFollowerCapabilities, motd: nil))
+            case .hello(let version, let runtime, let capabilities, let motd, let pairId) =
+                try roundTrip(.hello(protocolVersion: 6, runtime: "slicc-ios", capabilities: trayFollowerCapabilities, motd: nil, pairId: nil))
         else {
             XCTFail("expected hello")
             return
@@ -395,6 +395,34 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertEqual(runtime, "slicc-ios")
         XCTAssertEqual(capabilities, trayFollowerCapabilities)
         XCTAssertNil(motd)
+        XCTAssertNil(pairId)
+    }
+
+    
+    
+    
+    func testHelloCarriesThePairingToken() throws {
+        let sent = FollowerToLeaderMessage.hello(
+            protocolVersion: traySyncProtocolVersion, runtime: "sliccstart-computer",
+            capabilities: TraySyncCapabilities(exec: false, computer: true),
+            motd: "Native screen capture on mac.local", pairId: "pair-abc123")
+        guard case .hello(_, _, _, _, let pairId) = try roundTrip(sent) else {
+            XCTFail("expected hello")
+            return
+        }
+        XCTAssertEqual(pairId, "pair-abc123")
+
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try JSONEncoder().encode(sent)) as? [String: Any])
+        XCTAssertEqual(json["pairId"] as? String, "pair-abc123")
+
+        let withoutPair = FollowerToLeaderMessage.hello(
+            protocolVersion: traySyncProtocolVersion, runtime: "slicc-ios",
+            capabilities: nil, motd: nil, pairId: nil)
+        let bare = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try JSONEncoder().encode(withoutPair))
+                as? [String: Any])
+        XCTAssertFalse(bare.keys.contains("pairId"))
     }
 
     func testPingPongRoundTrip() throws {

@@ -820,7 +820,8 @@
           "sudoApproval": true,
           "biometric": true
         },
-        "motd": "SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open"
+        "motd": "SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open",
+        "pairId": "pair-0123456789abcdef"
       }
     },
     {

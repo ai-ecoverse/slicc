@@ -113,7 +113,7 @@ final class ElectronTrayFollowerTests: XCTestCase {
             return true
         }
 
-        guard case .hello(let version, let runtime, _, _) = box.messages.first else {
+        guard case .hello(let version, let runtime, _, _, _) = box.messages.first else {
             return XCTFail("expected hello on channel open")
         }
         XCTAssertEqual(version, traySyncProtocolVersion)

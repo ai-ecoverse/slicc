@@ -481,14 +481,34 @@ describe('FollowerDispatch', () => {
     expect(c.fsRouter.executeLocalFs).toHaveBeenCalledWith('fs', request, 'follower');
   });
 
+  it("drops a guest seat's pairing token along with its capabilities", () => {
+    const { dispatch, followers } = createHarness();
+    const follower = followers.followers.get('follower');
+    if (!follower) throw new Error('missing fixture follower');
+    follower.trust = 'biscotto';
+
+    dispatch.dispatch('follower', {
+      type: 'hello',
+      protocolVersion: 3,
+      capabilities: { computer: true },
+      pairId: 'pair-a',
+    });
+
+    expect(follower.peerCapabilities).toEqual({});
+    expect(follower.peerPairId).toBeUndefined();
+  });
+
   it('handles direct control and lifecycle variants without changing semantics', () => {
     const { collaborators: c, dispatch, followers, keepalive, options, send } = createHarness();
     dispatch.dispatch('follower', {
       type: 'hello',
       protocolVersion: 3,
       capabilities: { exec: true },
+      pairId: 'pair-a',
     });
     expect(followers.followers.get('follower')?.peerCapabilities).toEqual({ exec: true });
+
+    expect(followers.followers.get('follower')?.peerPairId).toBe('pair-a');
     expect(options.onFollowerCountChanged).toHaveBeenCalledWith(1);
 
     const activityBefore = followers.followers.get('follower')?.lastActivity ?? 0;

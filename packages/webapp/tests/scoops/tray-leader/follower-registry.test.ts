@@ -122,6 +122,43 @@ describe('FollowerRegistry', () => {
     registry.removeFollower('computer');
   });
 
+  it("lends a paired launcher's computer capability to the CLI and hides the launcher", () => {
+    const registry = createRegistry();
+    const cli = registry.addFollower('cli', new FakeChannel());
+    const launcher = registry.addFollower('launcher', new FakeChannel());
+    cli.peerCapabilities = { exec: true };
+    cli.peerPairId = 'pair-a';
+    launcher.peerCapabilities = { computer: true };
+    launcher.peerPairId = 'pair-a';
+
+    expect(registry.getExecCapableBootstrapIds()).toEqual(new Set(['cli']));
+    expect(registry.getComputerCapableBootstrapIds()).toEqual(new Set(['cli', 'launcher']));
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set(['launcher']));
+    expect(registry.resolveComputerBootstrapId('cli')).toBe('launcher');
+
+    expect(registry.resolveComputerBootstrapId('launcher')).toBe('launcher');
+
+    registry.removeFollower('cli');
+    registry.removeFollower('launcher');
+  });
+
+  it('stops folding as soon as the paired CLI disconnects', () => {
+    const registry = createRegistry();
+    const cli = registry.addFollower('cli', new FakeChannel());
+    const launcher = registry.addFollower('launcher', new FakeChannel());
+    cli.peerCapabilities = { exec: true };
+    cli.peerPairId = 'pair-a';
+    launcher.peerCapabilities = { computer: true };
+    launcher.peerPairId = 'pair-a';
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set(['launcher']));
+
+    registry.removeFollower('cli');
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set());
+    expect(registry.getComputerCapableBootstrapIds()).toEqual(new Set(['launcher']));
+
+    registry.removeFollower('launcher');
+  });
+
   it('exposes follower metadata and live keepalive health through a read snapshot', () => {
     const registry = createRegistry();
     const follower = registry.addFollower('b1', new FakeChannel(), {

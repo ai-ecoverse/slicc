@@ -321,10 +321,19 @@ export class ComputersRouter {
     if (resolved.follower.trust === 'biscotto') {
       throw new Error(`Follower '${runtimeId}' cannot drive computer.native.*`);
     }
-    if (resolved.follower.peerCapabilities?.computer !== true) {
+
+    const target = this.pairedComputerFollower(resolved.bootstrapId) ?? resolved.follower;
+    if (target.peerCapabilities?.computer !== true) {
       throw new Error(`Follower '${runtimeId}' does not advertise computer capture`);
     }
-    return resolved.follower;
+    return target;
+  }
+
+  private pairedComputerFollower(bootstrapId: string) {
+    const partnerId = this.context.followers.resolveComputerBootstrapId(bootstrapId);
+    if (partnerId === bootstrapId) return null;
+    const partner = this.context.followers.followers.get(partnerId);
+    return partner?.trust === 'biscotto' ? null : (partner ?? null);
   }
 
   private settleNativeInput(requestId: string, error?: string): void {

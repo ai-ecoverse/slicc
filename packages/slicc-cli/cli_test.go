@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/computer"
 	"github.com/ai-ecoverse/slicc-cli/internal/logging"
 	"github.com/ai-ecoverse/slicc-cli/internal/ui"
 )
@@ -96,6 +97,16 @@ func TestParseFollowArgs(t *testing.T) {
 		{"plain strips flag", []string{"--plain", "sh", "-c"}, followArgs{runner: []string{"sh", "-c"}, showBanner: true, plain: true}},
 		{"plain composes with the others", []string{"--no-banner", "--plain", "--eval", "python", "-i"}, followArgs{runner: []string{"python", "-i"}, plain: true, eval: true}},
 		{"a runner named --plain survives the terminator", []string{"--", "--plain"}, followArgs{runner: []string{"--plain"}, showBanner: true}},
+		
+		{"computer with no runner is ui mode", []string{"--computer"}, followArgs{runner: []string{}, showBanner: true, computer: computer.ModeBestEffort}},
+		{"computer composes with a shell runner", []string{"--computer", "bash", "-c"}, followArgs{runner: []string{"bash", "-c"}, showBanner: true, computer: computer.ModeBestEffort}},
+		{"computer composes with eval", []string{"--computer", "--eval", "python", "-i"}, followArgs{runner: []string{"python", "-i"}, showBanner: true, eval: true, computer: computer.ModeBestEffort}},
+		{"computer require", []string{"--computer=require", "sh", "-c"}, followArgs{runner: []string{"sh", "-c"}, showBanner: true, computer: computer.ModeRequire}},
+		
+		
+		{"an unusable computer value is recorded", []string{"--computer=maybe", "sh", "-c"}, followArgs{runner: []string{"sh", "-c"}, showBanner: true, badComputerArg: "--computer=maybe"}},
+		
+		{"a runner named --computer survives the terminator", []string{"--", "--computer"}, followArgs{runner: []string{"--computer"}, showBanner: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

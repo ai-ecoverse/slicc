@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/computer"
 	"github.com/ai-ecoverse/slicc-cli/internal/execrun"
 	"github.com/ai-ecoverse/slicc-cli/internal/follow"
 	"github.com/ai-ecoverse/slicc-cli/internal/logging"
@@ -503,7 +504,125 @@ func truncateOneLine(s string, limit int) string {
 
 
 
+
+
+
+
+type nativeComputer struct {
+	pairID  string
+	session *computer.Session
+}
+
+
+
+func (n *nativeComputer) pair() string {
+	if n == nil {
+		return ""
+	}
+	return n.pairID
+}
+
+func (n *nativeComputer) Stop() {
+	if n == nil || n.session == nil {
+		return
+	}
+	n.session.Stop()
+}
+
+
+
+
+
+
+
+
+
+
+func (n *nativeComputer) retarget(ctx context.Context, console *ui.Console, joinURL string) {
+	if n == nil || n.session == nil {
+		return
+	}
+	go func() {
+		if err := n.session.Retarget(ctx, joinURL); err != nil && ctx.Err() == nil {
+			console.Line(ui.KindWarn, "native screen capture did not follow the tray move: %s", err)
+		}
+	}()
+}
+
+
+
+
+
+
+func startComputerFollower(
+	ctx context.Context,
+	console *ui.Console,
+	joinURL string,
+	fa followArgs,
+) (*nativeComputer, int) {
+	if fa.computer == computer.ModeOff {
+		return nil, 0
+	}
+	pairID, err := computer.NewPairID()
+	if err != nil {
+		return nil, computerUnavailable(console, fa.computer, err)
+	}
+
+	
+	
+	
+	
+	console.Line(ui.KindInfo, "starting native screen capture via Sliccstart…")
+	grants, err := computer.Preflight(ctx)
+	if err != nil {
+		return nil, computerUnavailable(console, fa.computer, err)
+	}
+	console.Line(ui.KindInfo, "macOS permissions — %s", grants.Summary())
+	if !grants.Complete() {
+		
+		
+		
+		console.Line(ui.KindWarn,
+			"grant the missing permission to Sliccstart in System Settings ▸ Privacy & Security, then retry the failing action")
+	}
+
+	session, err := computer.Start(ctx, computer.Options{
+		JoinURL: joinURL,
+		PairID:  pairID,
+		Logf:    debugLogf,
+		OnExit: func(reason string) {
+			
+			
+			
+			console.Line(ui.KindWarn, "native screen capture stopped (%s) — continuing without it", reason)
+		},
+	})
+	if err != nil {
+		return nil, computerUnavailable(console, fa.computer, err)
+	}
+	
+	
+	console.Line(ui.KindOk, "native screen capture attached — drive it with: computer add ssh <this follower>")
+	return &nativeComputer{pairID: pairID, session: session}, 0
+}
+
+func computerUnavailable(console *ui.Console, mode computer.Mode, err error) int {
+	if mode == computer.ModeRequire {
+		console.Line(ui.KindError, "--computer=require: %s", err)
+		return 1
+	}
+	console.Line(ui.KindWarn, "continuing without native screen capture: %s", err)
+	return 0
+}
+
+
+
+
 func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
+	if fa.badComputerArg != "" {
+		errLine("follow", "unknown --computer value %q (use --computer or --computer=require)", fa.badComputerArg)
+		return 2
+	}
 	
 	
 	
@@ -526,6 +645,18 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 	console.Update(func(s *ui.Status) { s.Peer = followPeer(console.Mode(), fa.runner) })
 	console.Start()
 	defer printSessionSummary(console)
+
+	
+	
+	
+	native, code := startComputerFollower(ctx, console, joinURL, fa)
+	if code != 0 {
+		return code
+	}
+	if native != nil {
+		defer native.Stop()
+	}
+
 	join := newJoinURLState(joinURL)
 	backoff := time.Second
 	failures := 0
@@ -535,7 +666,14 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 		}
 		join.beginAttempt()
 		console.Update(func(s *ui.Status) { s.State = ui.StateConnecting; s.Attempt = failures })
-		connected, err := followOnce(ctx, join.current(), fa.runner, eval, console, join.onTrayJoinURLChanged)
+		onJoinURLChanged := func(next string) {
+			join.onTrayJoinURLChanged(next)
+			
+			
+			
+			native.retarget(ctx, console, next)
+		}
+		connected, err := followOnce(ctx, join.current(), fa.runner, native.pair(), eval, console, onJoinURLChanged)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -570,6 +708,7 @@ func followOnce(
 	ctx context.Context,
 	joinURL string,
 	runner []string,
+	pairID string,
 	eval *execrun.EvalSession,
 	console *ui.Console,
 	onJoinURLChanged func(string),
@@ -590,6 +729,7 @@ func followOnce(
 	conn, dialErr := tray.Dial(connCtx, joinURL, tray.Options{
 		Capabilities:     caps,
 		Motd:             followMotd(runner, eval != nil),
+		PairID:           pairID,
 		Logf:             debugLogf,
 		LogWanted:        diagLogger.EnabledAt,
 		OnActivity:       console.Beat,

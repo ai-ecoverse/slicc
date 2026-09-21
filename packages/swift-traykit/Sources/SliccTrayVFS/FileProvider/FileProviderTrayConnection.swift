@@ -319,7 +319,8 @@ extension TrayFileProviderConnection: TrayFollowerConnectorDelegate {
                         protocolVersion: traySyncProtocolVersion,
                         runtime: TrayCredentialConfiguration.fileProviderRuntime,
                         capabilities: trayFollowerCapabilities,
-                        motd: nil))
+                        motd: nil,
+                        pairId: nil))
             else {
                 self.resumeConnect(.failure(VFSProviderError.serverUnreachable))
                 return

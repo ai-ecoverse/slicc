@@ -447,6 +447,10 @@ export class LeaderSyncManager {
     return this.followerRegistry.getComputerCapableBootstrapIds();
   }
 
+  getAbsorbedBootstrapIds(): Set<string> {
+    return this.followerRegistry.getAbsorbedBootstrapIds();
+  }
+
   getBrowserCapableBootstrapIds(): Set<string> {
     return this.followerRegistry.getBrowserCapableBootstrapIds();
   }

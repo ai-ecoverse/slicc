@@ -24,6 +24,8 @@ export interface TraySyncHelloMessage {
   capabilities?: TraySyncCapabilities;
 
   motd?: string;
+
+  pairId?: string;
 }
 
 export interface TraySyncCapabilities {

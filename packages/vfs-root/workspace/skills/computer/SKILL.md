@@ -100,7 +100,9 @@ computer click 1 --at 100,80 type hello
 computer add ssh mac-follower --sim UDID-1 --allow-input   # iOS Simulator
 ```
 
-Probes at add: native ScreenCaptureKit/CGEvent when the follower advertises `capabilities.computer` (Swift launcher `sliccstart-computer`); else `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`). Frames come back base64 in ≤3 MiB chunks over tray-exec (or `computer.native.frame` when native). `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
+Probes at add: native ScreenCaptureKit/CGEvent when the follower advertises `capabilities.computer` (Swift launcher `sliccstart-computer`); else `screencapture` + `cliclick` (macOS), `grim`/`scrot`/`import` + `xdotool`/`ydotool` (Linux), `xcrun simctl io <udid> screenshot` + `idb ui` (`--sim`).
+
+A Mac started with `slicc <join-url> follow --computer` shows as **one** entry in `ssh --list` holding both exec and native capture — the CLI and the headless Sliccstart it spawned are folded by a shared `hello.pairId`. Point `computer add ssh` at that one id and it picks ScreenCaptureKit automatically. Without `--computer` the same Mac may appear twice (a `follower-…` with exec and a `sliccstart-computer` with capture); either works, but only the native one captures under SLICC's own screen-recording permission. Frames come back base64 in ≤3 MiB chunks over tray-exec (or `computer.native.frame` when native). `--allow-input` is a sudo hop (`kind: command`) so a phone can answer with Face ID; `computer ls` shows `[input]` or `[view-only]`. The iOS follower itself is never a driven computer (a real iPhone is out of scope).
 
 ## HTTP remote (`url`)
 

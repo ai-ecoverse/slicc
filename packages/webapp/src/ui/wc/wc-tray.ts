@@ -173,25 +173,29 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
   const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
-  return getLeaderFollowerStates(handle.peers, handle.sync).map((follower) => {
-    return {
-      runtimeId: canonicalRuntimeId(follower.bootstrapId),
-      bootstrapId: follower.bootstrapId,
-      runtime: follower.runtime,
-      connectedAt: follower.connectedAt,
-      lastActivity: follower.lastActivity,
-      floatType: follower.floatType,
-      hostOrigin: follower.hostOrigin,
-      selectedScoopJid: follower.selectedScoopJid,
-      health: follower.health,
-      peerState: follower.peerState,
-      exec: execIds.has(follower.bootstrapId),
-      cdp: cdpIds.has(follower.bootstrapId),
-      computer: computerIds.has(follower.bootstrapId),
-      teleportEligible: teleportIds.has(follower.bootstrapId),
-      motd: motds.get(follower.bootstrapId),
-    };
-  });
+
+  const absorbed = handle.sync.getAbsorbedBootstrapIds();
+  return getLeaderFollowerStates(handle.peers, handle.sync)
+    .filter((follower) => !absorbed.has(follower.bootstrapId))
+    .map((follower) => {
+      return {
+        runtimeId: canonicalRuntimeId(follower.bootstrapId),
+        bootstrapId: follower.bootstrapId,
+        runtime: follower.runtime,
+        connectedAt: follower.connectedAt,
+        lastActivity: follower.lastActivity,
+        floatType: follower.floatType,
+        hostOrigin: follower.hostOrigin,
+        selectedScoopJid: follower.selectedScoopJid,
+        health: follower.health,
+        peerState: follower.peerState,
+        exec: execIds.has(follower.bootstrapId),
+        cdp: cdpIds.has(follower.bootstrapId),
+        computer: computerIds.has(follower.bootstrapId),
+        teleportEligible: teleportIds.has(follower.bootstrapId),
+        motd: motds.get(follower.bootstrapId),
+      };
+    });
 }
 
 function modelCatalogForTray(): TrayModelCatalogEntry[] {

@@ -791,6 +791,8 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       runtime: 'slicc-ios',
       capabilities: { exec: true, browser: true, sudoApproval: true, biometric: true },
       motd: 'SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open',
+
+      pairId: 'pair-0123456789abcdef',
     },
   },
   ping: { ios: 'decoded', message: { type: 'ping' } },

@@ -597,10 +597,13 @@ export class FollowerDispatch {
       if (follower.trust === 'biscotto') {
         follower.peerCapabilities = {};
         follower.peerMotd = undefined;
+
+        follower.peerPairId = undefined;
         this.context.followers.notifyFollowerCountChanged();
       } else {
         follower.peerCapabilities = message.capabilities;
         follower.peerMotd = message.motd;
+        follower.peerPairId = message.pairId;
         this.context.followers.notifyFollowerCountChanged();
 
         this.collaborators.sudoDelegation.handleFollowerReady(bootstrapId);

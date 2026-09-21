@@ -72,6 +72,10 @@ type Options struct {
 	Motd string
 	
 	
+	
+	PairID string
+	
+	
 	OnMessage func(msgType string, raw []byte)
 	
 	
@@ -629,6 +633,7 @@ func (c *Conn) sendHello() error {
 		Runtime:         c.opts.Runtime,
 		Capabilities:    c.opts.Capabilities,
 		Motd:            c.opts.Motd,
+		PairID:          c.opts.PairID,
 	})
 }
 

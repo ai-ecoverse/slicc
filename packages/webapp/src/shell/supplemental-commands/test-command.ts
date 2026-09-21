@@ -4,6 +4,7 @@ import assertSource from 'tst/assert.js?raw';
 import tstSource from 'tst/tst.js?raw';
 import { normalizePath } from '../../fs/path-utils.js';
 import { executeJsCode } from '../jsh-executor.js';
+import type { StatementMap } from './coverage-instrument.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
 import { createIpkContextFromCtx } from './tsc-command.js';
 
@@ -16,6 +17,8 @@ Usage:
 
 Options:
   --reporter=<name>     tap (default) | spec
+  --coverage            statement coverage of executed files (see Notes)
+  --coverage-dir=<dir>  write lcov + json here (default: <cwd>/coverage)
   -h, --help            Show this help
 
 Notes:
@@ -25,6 +28,10 @@ Notes:
   - require('fs') / require('path') / require('sliccy:*') and ipk
     packages resolve through the realm require shim; relative
     './…' imports are inlined from the VFS.
+  - --coverage instruments the test file and its relative require() graph
+    with statement counters. nyc/c8 cannot wrap this runner: it is not a
+    Node child. Istanbul/Babel are not bundled (webapp size-limit); the
+    TypeScript AST already in process does the rewrite.
 `;
 
 const DEFAULT_GLOBS = ['**/*.test.{js,ts}'];
@@ -33,33 +40,67 @@ export interface ParsedTestArgs {
   globs: string[];
   reporter: 'tap' | 'spec';
   showHelp: boolean;
+  coverage: boolean;
+  coverageDir: string;
+}
+
+function parseReporterFlag(
+  arg: string,
+  next: string | undefined
+): { reporter: 'tap' | 'spec'; consumed: 1 | 2 } | null {
+  let raw: string | undefined;
+  let consumed: 1 | 2 = 1;
+  if (arg === '--reporter') {
+    raw = next;
+    consumed = 2;
+  } else if (arg.startsWith('--reporter=')) {
+    raw = arg.slice('--reporter='.length);
+  } else {
+    return null;
+  }
+  if (raw !== 'tap' && raw !== 'spec') {
+    throw new Error('tst: --reporter must be tap or spec');
+  }
+  return { reporter: raw, consumed };
+}
+
+function parseCoverageFlag(
+  arg: string,
+  next: string | undefined
+): { coverageDir?: string; consumed: 1 | 2 } | null {
+  if (arg === '--coverage') return { consumed: 1 };
+  if (arg === '--coverage-dir' && next !== undefined) {
+    return { coverageDir: next, consumed: 2 };
+  }
+  if (arg.startsWith('--coverage-dir=')) {
+    return { coverageDir: arg.slice('--coverage-dir='.length), consumed: 1 };
+  }
+  return null;
 }
 
 export function parseTestArgs(args: string[]): ParsedTestArgs {
   const globs: string[] = [];
   let reporter: 'tap' | 'spec' = 'tap';
   let showHelp = false;
+  let coverage = false;
+  let coverageDir = '';
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '-h' || arg === '--help') {
       showHelp = true;
       continue;
     }
-    if (arg === '--reporter') {
-      const v = args[i + 1];
-      if (v !== 'tap' && v !== 'spec') {
-        throw new Error('tst: --reporter must be tap or spec');
-      }
-      reporter = v;
-      i += 1;
+    const reporterFlag = parseReporterFlag(arg, args[i + 1]);
+    if (reporterFlag) {
+      reporter = reporterFlag.reporter;
+      if (reporterFlag.consumed === 2) i += 1;
       continue;
     }
-    if (arg.startsWith('--reporter=')) {
-      const v = arg.slice('--reporter='.length);
-      if (v !== 'tap' && v !== 'spec') {
-        throw new Error('tst: --reporter must be tap or spec');
-      }
-      reporter = v;
+    const cov = parseCoverageFlag(arg, args[i + 1]);
+    if (cov) {
+      coverage = true;
+      if (cov.coverageDir !== undefined) coverageDir = cov.coverageDir;
+      if (cov.consumed === 2) i += 1;
       continue;
     }
     if (arg.startsWith('-')) {
@@ -71,6 +112,8 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
     globs: globs.length > 0 ? globs : [...DEFAULT_GLOBS],
     reporter,
     showHelp,
+    coverage,
+    coverageDir,
   };
 }
 
@@ -253,7 +296,8 @@ async function collectLocalDependencies(
   ts: TypeScriptModule,
   entryPath: string,
   entryCjs: string,
-  userOpts: import('typescript-js').CompilerOptions
+  userOpts: import('typescript-js').CompilerOptions,
+  instrument?: (source: string, path: string) => string
 ): Promise<{
   modules: Map<string, string>;
   edgeRewrites: Map<string, Map<string, string>>;
@@ -271,7 +315,8 @@ async function collectLocalDependencies(
       if (!resolved) continue;
       edges.set(spec, resolved);
       if (modules.has(resolved)) continue;
-      const source = await fs.readFile(resolved);
+      let source = await fs.readFile(resolved);
+      if (instrument) source = instrument(source, resolved);
       const depCjs = ts.transpileModule(source, {
         compilerOptions: userOpts,
         fileName: resolved,
@@ -290,7 +335,9 @@ function buildRunnerScript(
   userCjs: string,
   reporter: 'tap' | 'spec',
   localModules: Map<string, string>,
-  edgeRewrites: Map<string, Map<string, string>>
+  edgeRewrites: Map<string, Map<string, string>>,
+  coveragePrelude = '',
+  coverageEpilogue = ''
 ): string {
   const format = reporter === 'spec' ? 'pretty' : 'tap';
 
@@ -306,8 +353,10 @@ function buildRunnerScript(
   const entryEdges = edgeRewrites.get(entryPath) ?? new Map<string, string>();
   const rewiredEntry = rewireUserRequires(userCjs, entryEdges);
 
+  const coverageRuntime = coveragePrelude;
+  const coverageDump = coverageEpilogue;
   return `"use strict";
-${harness}
+${coverageRuntime}${harness}
 const __realmRequire = require;
 const { createRequire: __createRequire } = __realmRequire("module");
 const __tstReq = (id) => {
@@ -347,6 +396,7 @@ const __state = await __tst.run({ format: ${JSON.stringify(format)} });
 // enough async work to settle first, which is why only this path swallowed.
 await Promise.resolve();
 await new Promise((resolve) => setTimeout(resolve));
+${coverageDump}
 if (__state && __state.failed && __state.failed.length > 0) process.exit(1);
 `;
 }
@@ -373,12 +423,17 @@ function buildUserOpts(ts: TypeScriptModule): UserCompilerOptions {
   } as UserCompilerOptions;
 }
 
+type CoverageMod = typeof import('./coverage-instrument.js');
+
 interface TestRunSetup {
   parsed: ParsedTestArgs;
   files: string[];
   ts: TypeScriptModule;
   harness: string;
   userOpts: UserCompilerOptions;
+  coverageMaps: Record<string, StatementMap>;
+  coverageCounts: Record<string, number[]>;
+  coverageMod: CoverageMod | null;
 }
 
 async function prepareTestRun(
@@ -423,7 +478,17 @@ async function prepareTestRun(
     };
   }
   const harness = await prepareTstHarness(ts);
-  return { parsed, files, ts, harness, userOpts: buildUserOpts(ts) };
+  const coverageMod = parsed.coverage ? await import('./coverage-instrument.js') : null;
+  return {
+    parsed,
+    files,
+    ts,
+    harness,
+    userOpts: buildUserOpts(ts),
+    coverageMaps: {},
+    coverageCounts: {},
+    coverageMod,
+  };
 }
 
 interface OneFileResult {
@@ -443,6 +508,14 @@ async function runOneTestFile(
   prefixWithFilename: boolean
 ): Promise<OneFileResult> {
   const { ts, harness, userOpts, parsed } = setup;
+  const cov = setup.coverageMod;
+  const instrument = cov
+    ? (src: string, path: string) => {
+        const { source: next, map } = cov.instrumentSource(ts, src, path);
+        setup.coverageMaps[path] = map;
+        return next;
+      }
+    : undefined;
   let source: string;
   try {
     source = await ctx.fs.readFile(file);
@@ -453,6 +526,7 @@ async function runOneTestFile(
       failed: true,
     };
   }
+  if (instrument) source = instrument(source, file);
   let userCjs: string;
   try {
     userCjs = ts.transpileModule(source, { compilerOptions: userOpts, fileName: file }).outputText;
@@ -471,7 +545,8 @@ async function runOneTestFile(
       ts,
       file,
       userCjs,
-      userOpts
+      userOpts,
+      instrument
     ));
   } catch (err) {
     return {
@@ -486,14 +561,22 @@ async function runOneTestFile(
     userCjs,
     parsed.reporter,
     localModules,
-    edgeRewrites
+    edgeRewrites,
+    cov ? `${cov.coverageRuntimeSource()}\n` : '',
+    cov ? `\n${cov.coverageDumpSource()}` : ''
   );
   const result = await executeJsCode(runner, ['node', file], ctx, undefined, { filename: file });
+  let stdout = result.stdout;
+  if (cov) {
+    const extracted = cov.extractCoverageCounts(stdout);
+    stdout = extracted.stdout;
+    cov.mergeCounts(setup.coverageCounts, extracted.counts);
+  }
   return {
-    stdout: prefixWithFilename ? `# ${file}\n${result.stdout}` : result.stdout,
+    stdout: prefixWithFilename ? `# ${file}\n${stdout}` : stdout,
     stderr: result.stderr,
 
-    failed: result.exitCode !== 0 || hasTstFailureMarker(result.stdout),
+    failed: result.exitCode !== 0 || hasTstFailureMarker(stdout),
   };
 }
 
@@ -511,6 +594,28 @@ export function createTestCommand(): Command {
       stdout += r.stdout;
       stderr += r.stderr;
       if (r.failed) anyFailed = true;
+    }
+    if (prep.coverageMod) {
+      const dir = prep.coverageMod.resolveCoverageDir(
+        ctx.cwd,
+        prep.parsed.coverageDir,
+        (base, path) => ctx.fs.resolvePath(base, path)
+      );
+      const json = JSON.stringify(
+        { counts: prep.coverageCounts, maps: prep.coverageMaps },
+        null,
+        2
+      );
+      const lcov = prep.coverageMod.toLcov(prep.coverageCounts, prep.coverageMaps);
+      const summary = prep.coverageMod.coverageSummary(prep.coverageCounts, prep.coverageMaps);
+      try {
+        await ctx.fs.writeFile(`${dir}/coverage.json`, json);
+        await ctx.fs.writeFile(`${dir}/coverage.lcov`, lcov);
+      } catch (err) {
+        stderr += `tst: writing coverage to ${dir}: ${err instanceof Error ? err.message : String(err)}\n`;
+        anyFailed = true;
+      }
+      stdout += `\n${summary}`;
     }
     return { stdout, stderr, exitCode: anyFailed ? 1 : 0 };
   });

@@ -151,6 +151,15 @@ describe('parseTestArgs', () => {
     expect(() => parseTestArgs(['--reporter=junit'])).toThrow(/reporter/);
     expect(() => parseTestArgs(['--unknown'])).toThrow(/unknown option/);
   });
+
+  it('accepts --coverage and --coverage-dir', () => {
+    expect(parseTestArgs([]).coverage).toBe(false);
+    expect(parseTestArgs(['--coverage']).coverage).toBe(true);
+    const parsed = parseTestArgs(['--coverage-dir=/tmp/cov', 'a.test.js']);
+    expect(parsed.coverage).toBe(true);
+    expect(parsed.coverageDir).toBe('/tmp/cov');
+    expect(parsed.globs).toEqual(['a.test.js']);
+  });
 });
 
 describe('expandBraces / globToRegExp', () => {
@@ -349,6 +358,69 @@ test('uses local add', ({ is }) => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('ok 1 - uses local add');
     expect(result.stdout).toContain('# pass 1');
+  }, 20_000);
+
+  it('writes statement coverage for the entry file and a local helper', async () => {
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/add.js',
+      `function add(a, b) {
+  return a + b;
+}
+function unused(x) {
+  return x;
+}
+module.exports = { add, unused };
+`
+    );
+    await ctx.fs.writeFile(
+      '/workspace/cov.test.js',
+      `import test from 'tst';
+const { add } = require('./add.js');
+test('covers add, not unused', ({ is }) => {
+  is(add(2, 3), 5);
+});
+`
+    );
+    const result = await cmd.execute(['--coverage', '--coverage-dir=/workspace/coverage'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ok 1 - covers add, not unused');
+    expect(result.stdout).not.toContain('__SLICC_COVERAGE__');
+    expect(result.stdout).toMatch(/coverage statements /);
+    const json = JSON.parse(await ctx.fs.readFile('/workspace/coverage/coverage.json'));
+    expect(json.counts['/workspace/add.js']).toBeTruthy();
+    const unusedHits = json.maps['/workspace/add.js']
+      .filter((s: { line: number; id: number }) => s.line === 5)
+      .map((s: { line: number; id: number }) => json.counts['/workspace/add.js'][s.id]);
+    expect(unusedHits.some((n: number) => n === 0)).toBe(true);
+    const lcov = await ctx.fs.readFile('/workspace/coverage/coverage.lcov');
+    expect(lcov).toContain('SF:/workspace/add.js');
+    expect(lcov).toContain('DA:5,0');
+  }, 20_000);
+
+  it('coverage probes survive a user binding named globalThis', async () => {
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/shadow.test.js',
+      `import test from 'tst';
+const globalThis = { shadowed: true };
+test('still runs', ({ is }) => {
+  is(globalThis.shadowed, true);
+});
+`
+    );
+    const result = await cmd.execute(
+      ['--coverage', '--coverage-dir=cov-out', 'shadow.test.js'],
+      ctx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('# pass 1');
+    const json = JSON.parse(await ctx.fs.readFile('/workspace/cov-out/coverage.json'));
+    expect(json.counts['/workspace/shadow.test.js']).toBeTruthy();
   }, 20_000);
 
   it('falls through bare require(fs/path/sliccy) to the realm shim', async () => {

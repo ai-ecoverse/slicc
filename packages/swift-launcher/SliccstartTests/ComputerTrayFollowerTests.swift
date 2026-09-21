@@ -19,7 +19,8 @@ final class ComputerTrayFollowerTests: XCTestCase {
     private func makeFollower(
         capturer: StubCapturer? = nil,
         permissions: ComputerPermissions = ComputerPermissions(probe: .alwaysGranted),
-        sink: RecordingEventSink? = nil
+        sink: RecordingEventSink? = nil,
+        pairId: String? = nil
     ) -> (ComputerTrayFollower, StubCapturer, RecordingEventSink) {
         let capturer = capturer ?? StubCapturer()
         let sink = sink ?? RecordingEventSink()
@@ -27,7 +28,8 @@ final class ComputerTrayFollowerTests: XCTestCase {
             makeConnector: { _ in RecordingConnector() },
             makeCapturer: { capturer },
             permissions: permissions,
-            eventSink: sink)
+            eventSink: sink,
+            pairId: pairId)
         return (follower, capturer, sink)
     }
 
@@ -58,6 +60,81 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(caps?["computer"] as? Bool, true)
         XCTAssertEqual(caps?["exec"] as? Bool, false)
         XCTAssertEqual(decoded["protocolVersion"] as? Int, traySyncProtocolVersion)
+        XCTAssertNil(
+            decoded["pairId"],
+            "the menu-bar follower has no CLI to be folded with and must not claim a pair")
+    }
+
+    
+    
+    
+    func testConnectedFiresAfterHelloHasBeenSent() throws {
+        let (follower, _, _) = makeFollower()
+        var sentAtConnect = -1
+        var sent: [Data] = []
+        follower.onConnected = { sentAtConnect = sent.count }
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        let settled = expectation(description: "connect handled")
+        Task { @MainActor in settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        XCTAssertEqual(sentAtConnect, 1, "hello must be on the wire before attach is reported")
+    }
+
+    
+    
+    func testAFailedFirstAttachIsReportedAsGivingUp() async throws {
+        let connector = RecordingConnector()
+        connector.startError = URLError(.cannotConnectToHost)
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in connector },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink())
+        var reasons: [String] = []
+        follower.onGaveUp = { reasons.append($0) }
+
+        follower.leaderChanged(joinUrl: "https://tray.test/join/x")
+        await follower._testing_settle()
+
+        XCTAssertEqual(reasons.count, 1)
+        XCTAssertFalse(reasons[0].isEmpty, "the CLI shows this reason to the user")
+    }
+
+    func testTheReconnectLoopGivingUpIsReported() throws {
+        let (follower, _, _) = makeFollower()
+        var reasons: [String] = []
+        follower.onGaveUp = { reasons.append($0) }
+
+        follower.connector(connectorStandIn(), didGiveUp: "ICE failed")
+        let settled = expectation(description: "give-up handled")
+        Task { @MainActor in settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        XCTAssertEqual(reasons, ["ICE failed"])
+    }
+
+    
+    
+    
+    
+    func testThePairTokenIsAdvertisedOnHello() throws {
+        let (follower, _, _) = makeFollower(pairId: "pair-abc123")
+        let sent = try connect(follower)
+        let decoded = try XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: XCTUnwrap(sent.first)) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["pairId"] as? String, "pair-abc123")
+        
+        
+        let caps = decoded["capabilities"] as? [String: Any]
+        XCTAssertEqual(caps?["exec"] as? Bool, false)
+        XCTAssertEqual(caps?["computer"] as? Bool, true)
     }
 
     func testCaptureSendsAJpegNativeFrameHonouringMaxWidth() async throws {

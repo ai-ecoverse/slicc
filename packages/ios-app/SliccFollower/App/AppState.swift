@@ -827,7 +827,8 @@ class AppState: ObservableObject {
                 protocolVersion: traySyncProtocolVersion,
                 runtime: "slicc-ios",
                 capabilities: followerCapabilities(),
-                motd: trayFollowerMotd))
+                motd: trayFollowerMotd,
+                pairId: nil))
         openApprovalController.transportAvailable()
         startPushRegistration()
 

@@ -12,6 +12,7 @@ import {
 } from '../tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../tray-webrtc.js';
 import { isMessageSendableToTrust } from './biscotto-gate.js';
+import { type FollowerPairing, resolveFollowerPairs } from './follower-pairing.js';
 
 export type { FloatType };
 
@@ -68,6 +69,8 @@ export interface ConnectedFollower {
   legacyPeerLogged?: boolean;
   peerCapabilities?: TraySyncCapabilities;
   peerMotd?: string;
+
+  peerPairId?: string;
 
   sprinkleInstances?: string[];
 }
@@ -282,11 +285,32 @@ export class FollowerRegistry {
     return ids;
   }
 
+  followerPairing(): FollowerPairing {
+    return resolveFollowerPairs(
+      [...this.followers.values()].map((follower) => ({
+        bootstrapId: follower.bootstrapId,
+        exec: follower.peerCapabilities?.exec === true,
+        computer: follower.peerCapabilities?.computer === true,
+        pairId: follower.peerPairId,
+      }))
+    );
+  }
+
+  getAbsorbedBootstrapIds(): Set<string> {
+    return new Set(this.followerPairing().absorbedBy.keys());
+  }
+
+  resolveComputerBootstrapId(bootstrapId: string): string {
+    return this.followerPairing().computerPartner.get(bootstrapId) ?? bootstrapId;
+  }
+
   getComputerCapableBootstrapIds(): Set<string> {
     const ids = new Set<string>();
     for (const [bootstrapId, follower] of this.followers) {
       if (follower.peerCapabilities?.computer) ids.add(bootstrapId);
     }
+
+    for (const primary of this.followerPairing().computerPartner.keys()) ids.add(primary);
     return ids;
   }
 

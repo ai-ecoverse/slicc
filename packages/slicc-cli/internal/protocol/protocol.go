@@ -64,6 +64,15 @@ type Hello struct {
 	
 	
 	Motd string `json:"motd,omitempty"`
+	
+	
+	
+	
+	
+	
+	
+	
+	PairID string `json:"pairId,omitempty"`
 }
 
 

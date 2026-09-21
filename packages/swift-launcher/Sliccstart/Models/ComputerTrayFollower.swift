@@ -20,6 +20,21 @@ final class ComputerTrayFollower: NSObject {
     private let makeCapturer: () -> ComputerCapturing
     private var permissions: ComputerPermissions
     private let eventSink: ComputerEventSink
+    
+    
+    
+    
+    private let pairId: String?
+    
+    
+    
+    
+    var onConnected: (() -> Void)?
+    
+    
+    
+    
+    var onGaveUp: ((String) -> Void)?
 
     private var connector: TrayFollowerConnecting?
     private var startTask: Task<Void, Never>?
@@ -41,12 +56,14 @@ final class ComputerTrayFollower: NSObject {
         },
         makeCapturer: (() -> ComputerCapturing)? = nil,
         permissions: ComputerPermissions = ComputerPermissions(),
-        eventSink: ComputerEventSink = LiveCGEventSink()
+        eventSink: ComputerEventSink = LiveCGEventSink(),
+        pairId: String? = nil
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
         self.permissions = permissions
         self.eventSink = eventSink
+        self.pairId = pairId
         super.init()
     }
 
@@ -108,6 +125,7 @@ final class ComputerTrayFollower: NSObject {
         } catch {
             log.error("Computer tray follower could not attach: \(String(describing: error))")
             if self.connector === connector { self.connector = nil }
+            onGaveUp?(error.localizedDescription)
         }
     }
 
@@ -244,7 +262,11 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
                     protocolVersion: traySyncProtocolVersion,
                     runtime: ComputerTrayFollower.runtime,
                     capabilities: TraySyncCapabilities(exec: false, computer: true),
-                    motd: "Native screen capture on \(host)"))
+                    motd: "Native screen capture on \(host)",
+                    pairId: pairId))
+            
+            
+            onConnected?()
         }
     }
 
@@ -261,6 +283,7 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
     nonisolated func connector(_ connector: TrayFollowerConnector, didGiveUp lastError: String) {
         Task { @MainActor [weak self] in
             self?.teardownConnection()
+            self?.onGaveUp?(lastError)
         }
     }
 
