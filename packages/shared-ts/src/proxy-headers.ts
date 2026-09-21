@@ -70,8 +70,18 @@ export function decodeForbiddenRequestHeaders(
 }
 
 /**
+ * Proxy-set response header carrying the upstream `WWW-Authenticate` value.
+ * The browser-facing hop strips `www-authenticate` so Chrome does not put up
+ * a native HTTP-auth dialog; MCP OAuth still needs `resource_metadata` from
+ * the challenge, so the proxy relays it here (same pattern as
+ * `X-Proxy-Set-Cookie`).
+ */
+export const PROXY_WWW_AUTHENTICATE_HEADER = 'X-Proxy-Www-Authenticate';
+
+/**
  * Decode response headers that the proxy transported under non-forbidden names.
  * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
+ * X-Proxy-Www-Authenticate → www-authenticate
  */
 export function decodeForbiddenResponseHeaders(
   headers: Record<string, string>
@@ -83,6 +93,8 @@ export function decodeForbiddenResponseHeaders(
       // Value is a JSON array of Set-Cookie strings from the proxy.
       // Keep as JSON array string since Record<string,string> can only hold one value.
       result['set-cookie'] = value;
+    } else if (lower === PROXY_WWW_AUTHENTICATE_HEADER.toLowerCase()) {
+      result['www-authenticate'] = value;
     } else {
       result[key] = value;
     }

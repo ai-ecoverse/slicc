@@ -105,6 +105,7 @@ export const FETCH_PROXY_BASE_EXPOSE_HEADERS: readonly string[] = [
   'X-Proxy-Error',
   'X-Proxy-Set-Cookie',
   FETCH_PROXY_CONTENT_LENGTH_HEADER,
+  'X-Proxy-Www-Authenticate',
   'Mcp-Session-Id',
   'MCP-Protocol-Version',
   'Cache-Control',

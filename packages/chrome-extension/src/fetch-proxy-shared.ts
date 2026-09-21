@@ -4,6 +4,7 @@ import {
   type FetchProxyRequestMsg,
   type FetchProxyResponseMsg,
   HMAC_SIGN_HEADER,
+  PROXY_WWW_AUTHENTICATE_HEADER,
   type SecretsPipeline,
   uint8ToBase64,
 } from '@slicc/shared-ts';
@@ -28,10 +29,13 @@ function extractSetCookies(headers: Headers): string[] {
 
 /**
  * Build the response-head headers map the way the CLI proxy does:
- *   - drop `set-cookie` and any `x-proxy-*` from the scrubbed map
+ *   - drop `set-cookie`, `www-authenticate`, and any `x-proxy-*` from the
+ *     scrubbed map (Chrome would otherwise put up a native HTTP-auth dialog)
  *   - if there were any `set-cookie` values, repack them as a JSON array
  *     under `X-Proxy-Set-Cookie` so the page side can recover them via
  *     `decodeForbiddenResponseHeaders`.
+ *   - relay `WWW-Authenticate` as `X-Proxy-Www-Authenticate` so MCP OAuth
+ *     can still read RFC 9728 `resource_metadata`.
  */
 function buildResponseHeaders(
   scrubbed: Record<string, string>,
@@ -41,12 +45,18 @@ function buildResponseHeaders(
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(scrubbed)) {
     const lower = k.toLowerCase();
-    if (lower === 'set-cookie' || lower.startsWith('x-proxy-')) continue;
+    if (lower === 'set-cookie' || lower === 'www-authenticate' || lower.startsWith('x-proxy-')) {
+      continue;
+    }
     out[k] = v;
   }
   const setCookies = extractSetCookies(upstream);
   if (setCookies.length > 0) {
     out['X-Proxy-Set-Cookie'] = pipeline.scrubResponse(JSON.stringify(setCookies));
+  }
+  const wwwAuthenticate = upstream.get('www-authenticate');
+  if (wwwAuthenticate) {
+    out[PROXY_WWW_AUTHENTICATE_HEADER] = pipeline.scrubResponse(wwwAuthenticate);
   }
   return out;
 }
