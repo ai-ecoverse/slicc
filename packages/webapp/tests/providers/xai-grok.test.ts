@@ -30,6 +30,8 @@ import {
   resetApiProviders,
 } from '@earendil-works/pi-ai/compat';
 import { config, register } from '../../providers/xai-grok.js';
+import { getProviderModels } from '../../src/providers/account-store.js';
+import { registerProviderConfig } from '../../src/providers/index.js';
 
 const XAI_API = 'xai-grok-openai' as Api;
 const XAI_BASE_URL = 'https://api.x.ai/v1';
@@ -264,6 +266,7 @@ describe('xai-grok provider', () => {
           xhigh: 'xhigh',
           max: null,
         },
+        cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
       })
     );
     expect(models.find((model) => model.id === 'grok-4.5')).toEqual(
@@ -369,6 +372,22 @@ describe('xai-grok provider', () => {
       })
     );
     expect(forwardedOptions).not.toHaveProperty('onPayload');
+  });
+
+  it('prices the composed Grok 4.7 model instead of the synthetic $0 default', () => {
+    registerProviderConfig(config);
+
+    const model = getProviderModels('xai-grok').find((candidate) => candidate.id === 'grok-4.7');
+
+    expect(model).toMatchObject({
+      id: 'grok-4.7',
+      name: 'Grok 4.7',
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      inputCost: 2,
+      outputCost: 6,
+      cacheReadCost: 0.5,
+      cacheWriteCost: 0,
+    });
   });
 
   it('streams Grok 4.7 through the Responses API using the overlay', async () => {

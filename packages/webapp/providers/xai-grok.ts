@@ -137,6 +137,10 @@ function toModelMetadata(model: Model<Api>) {
     max_tokens: model.maxTokens,
     compat: model.compat,
     thinkingLevelMap: model.thinkingLevelMap,
+    // getProviderModels() synthesizes a $0 model when pi-ai has no row for
+    // the id. Forward cost so that path replaces the zeroes; the stream
+    // resolver already prices from the native model.
+    cost: model.cost,
   };
 }
 
