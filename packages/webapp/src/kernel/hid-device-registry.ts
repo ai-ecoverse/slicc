@@ -10,7 +10,7 @@
  * Mirrors `usb-device-registry.ts`. The registry is a per-realm
  * singleton (`getSharedHidRegistry`) so the gesture-bridge code in
  * `remote-terminal-view.ts` and the panel-RPC handlers in
- * `ui/panel-rpc-handlers.ts` share one map.
+ * `ui/panel-rpc/device-handlers.ts` share one map.
  *
  * Minimal WebHID types are declared here because `lib.dom.d.ts` does
  * not ship them; only the surface the `hid` command uses is modeled.

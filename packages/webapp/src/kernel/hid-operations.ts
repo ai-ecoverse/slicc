@@ -1,7 +1,7 @@
 /**
  * Pure WebHID operations over a {@link HidDeviceHandleRegistry}.
  *
- * Shared by the page-side panel-RPC handlers (`ui/panel-rpc-handlers.ts`)
+ * Shared by the page-side panel-RPC handlers (`ui/panel-rpc/device-handlers.ts`)
  * and the local-DOM backend of the `hid` shell command so both code
  * paths apply identical handle resolution, the 4 MiB report cap, and
  * the same serializable result shapes. Report payloads are exchanged as

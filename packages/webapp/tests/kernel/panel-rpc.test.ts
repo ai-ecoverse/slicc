@@ -227,7 +227,7 @@ describe('panel-rpc', () => {
    * `oauth-domain` writes route through here to reach real page
    * localStorage. Unit tests cover each side in isolation; this case
    * locks the wire contract by exercising the REAL page handler from
-   * `panel-rpc-handlers.ts` against the REAL worker client. If the
+   * `panel-rpc-handlers.ts` composition root against the REAL worker client. If the
    * variant's name, payload shape, or `storeAfter` field is renamed
    * on only one side, this assertion fails.
    */
