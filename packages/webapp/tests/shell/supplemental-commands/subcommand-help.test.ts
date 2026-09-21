@@ -130,6 +130,8 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'host', source: 'host-command.ts', verbs: 'source' },
   { command: 'ipk', source: 'ipk-command.ts', verbs: 'source' },
   { command: 'local-llm', source: 'local-llm-command.ts', verbs: 'source' },
+  { command: 'kev', source: 'kev-command.ts', verbs: 'source' },
+  { command: 'cua-s1', source: 'cua-s1-command.ts', verbs: 'source' },
   { command: 'oauth-domain', source: 'oauth-domain-command.ts', verbs: 'source' },
   { command: 'secret', source: 'secret-command.ts', verbs: 'source' },
   { command: 'serial', source: 'serial-command.ts', verbs: 'source' },

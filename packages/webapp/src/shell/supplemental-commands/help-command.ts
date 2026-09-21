@@ -73,6 +73,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
     ],
   ],
   ['Audio', ['say', 'hear', 'afplay', 'chime']],
+  ['Decisions', ['kev', 'cua-s1']],
   [
     'Environment & shell',
     [

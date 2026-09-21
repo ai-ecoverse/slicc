@@ -29,6 +29,26 @@ Do it yourself when:
 - Single quick lookup (one page, one API call).
 - Real-time adaptation needed (navigating broken URLs).
 - Overhead of spawning exceeds benefit.
+- The work is a typed judgment or a form fill from a document you already have. Run `kev` or `cua-s1` (see [Local decision models](#local-decision-models)).
+
+## Local decision models
+
+`kev` and `cua-s1` score a fixed set of options in one forward pass and print the answer. They are shell commands, not scoops. When the text or the form is already in hand, run them yourself. Spawning a scoop to "decide if this is billing" or to map each field spends a model turn on a job these commands finish locally.
+
+- **`kev ask`** — yes/no, a choice among names you supply, or a rating on a scale you supply. The text can be a file, a pipe, `computer text`, or a snapshot. Default model is Kev-0.8B (about 822 MB on first ask). `--model 4b` and `--model 9b` are the multi-gigabyte ones.
+- **`cua-s1`** — fill a browser form from a document of `Label: value` lines. `playwright-cli snapshot` the tab, `cua-s1 plan`, read the plan, then run the `playwright-cli` lines that `cua-s1 commands` prints. Submit stays off unless you pass `--allow-submit`. The graph is 3.3 MB. Links, radios, and selects are left out.
+
+```bash
+computer text | kev ask billing:noul:Is this about billing? tone:choice:What tone?::calm|frustrated
+
+playwright-cli snapshot --tab=E9A3F --filename=/tmp/form.txt
+cua-s1 plan --snapshot /tmp/form.txt --document /tmp/intake.txt --json > /tmp/plan.json
+cua-s1 commands --plan /tmp/plan.json --tab E9A3F
+```
+
+Still delegate when the page, the document, or the question has to be found first, when the plan is low-confidence and someone has to look and adapt, or when the work after the decision is a multi-step change. A scoop you do send at a form needs `kev` and `cua-s1` on `allowedCommands`, plus `playwright-cli` when it will apply the plan.
+
+Both commands need `ipk add onnxruntime-web` once (the same package `say` and `hear` use). Details: `/workspace/skills/kev/SKILL.md` and `/workspace/skills/cua-s1/SKILL.md`.
 
 ## Brief for authority, not for execution
 

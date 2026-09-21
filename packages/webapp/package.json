@@ -18,6 +18,8 @@
   ],
   "dependencies": {
     "@adobe/helix-rum-js": "2.15.3",
+    "@ai-ecoverse/cua-s1.js": "0.1.1",
+    "@ai-ecoverse/kev.js": "0.2.0",
     "@ai-ecoverse/spoon": "*",
     "@cantoo/pdf-lib": "2.11.0",
     "@codemirror/commands": "6.11.0",
@@ -60,6 +62,7 @@
     "minisearch": "7.2.0",
     "mri": "1.2.0",
     "nanotar": "0.3.0",
+    "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
     "openai": "7.5.0",
     "pako": "3.0.1",
     "semver": "7.8.5",

@@ -20,6 +20,7 @@ import { createComputerCommand } from './computer-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { type CrontaskCommandOptions, createCrontaskCommand } from './crontask-command.js';
+import { createCuaS1Command } from './cua-s1-command.js';
 import { createCurlwrightCommand } from './curlwright-command.js';
 import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDiCommand } from './di-command.js';
@@ -42,6 +43,7 @@ import { createImgcatCommand } from './imgcat-command.js';
 import { createIpkCommand } from './ipk-command.js';
 import { createIpxCommand } from './ipx-command.js';
 import { createJshdCommand } from './jshd-command.js';
+import { createKevCommand } from './kev-command.js';
 import { createKillCommand } from './kill-command.js';
 import { createLayoutCommand } from './layout-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
@@ -322,6 +324,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createClipboardAutoCommand('xsel'),
     createSayCommand(),
     createHearCommand(),
+    createKevCommand(),
+    createCuaS1Command(),
     createAfplayCommand(),
     createChimeCommand(),
     createModelsCommand(options.fs),

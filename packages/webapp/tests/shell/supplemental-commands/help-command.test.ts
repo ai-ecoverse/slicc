@@ -152,6 +152,8 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'umount',
   'fswatch',
   'agent',
+  'kev',
+  'cua-s1',
   'mcp',
   'webhook',
   'crontask',
