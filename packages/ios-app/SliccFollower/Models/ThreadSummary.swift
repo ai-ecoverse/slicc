@@ -206,3 +206,20 @@ final class ThreadSummaryStore: ObservableObject {
         var pendingJobs: Int { queue.count }
     #endif
 }
+
+/// What the shell owns. `@StateObject` builds this once — its wrapped value is
+/// an autoclosure — and the host never publishes, so a line arriving redraws
+/// the rows that read `store` and not the shell. Holding the store in `@State`
+/// directly would rebuild it on every `ChatView` init.
+@MainActor
+final class ThreadSummaryHost: ObservableObject {
+    let store: ThreadSummaryStore
+
+    init(store: ThreadSummaryStore) {
+        self.store = store
+    }
+
+    convenience init() {
+        self.init(store: ThreadSummaryStore())
+    }
+}
