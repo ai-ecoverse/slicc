@@ -65,3 +65,40 @@ func TestHelloMotdRoundTrip(t *testing.T) {
 		t.Fatalf("empty motd must be omitted: %s", plain)
 	}
 }
+
+// TestHelloPairIDRoundTrip covers the additive `hello.pairId` that ties a
+// `follow --computer` CLI to the headless Sliccstart it spawned, so the leader
+// lists the Mac once instead of twice (#3260).
+func TestHelloPairIDRoundTrip(t *testing.T) {
+	h := Hello{
+		Type:            TypeHello,
+		ProtocolVersion: TraySyncProtocolVersion,
+		Capabilities:    &Capabilities{Exec: true},
+		PairID:          "pair-0123456789abcdef",
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"pairId":"pair-0123456789abcdef"`) {
+		t.Fatalf("pairId was dropped on the wire: %s", b)
+	}
+
+	var back Hello
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.PairID != h.PairID {
+		t.Fatalf("pairId round-trip: got %q, want %q", back.PairID, h.PairID)
+	}
+
+	// Omitted when unset: an empty token reaching the leader would group every
+	// follower that never asked to be paired.
+	bare, err := json.Marshal(Hello{Type: TypeHello, ProtocolVersion: TraySyncProtocolVersion})
+	if err != nil {
+		t.Fatalf("marshal bare: %v", err)
+	}
+	if strings.Contains(string(bare), "pairId") {
+		t.Fatalf("an unset pairId must not be sent: %s", bare)
+	}
+}

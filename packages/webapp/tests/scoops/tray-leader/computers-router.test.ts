@@ -101,14 +101,18 @@ function createHarness(computers?: TrayComputersSource) {
   const addFollower = (
     bootstrapId: string,
     trust: 'full' | 'biscotto' = 'full',
-    caps: { computer?: boolean } = {}
+    caps: { computer?: boolean; exec?: boolean; pairId?: string } = {}
   ): void => {
     const messages: LeaderToFollowerMessage[] = [];
     sent.set(bootstrapId, messages);
     followers.followers.set(bootstrapId, {
       bootstrapId,
       trust,
-      peerCapabilities: caps.computer ? { computer: true } : undefined,
+      peerPairId: caps.pairId,
+      peerCapabilities:
+        caps.computer || caps.exec
+          ? { ...(caps.computer ? { computer: true } : {}), ...(caps.exec ? { exec: true } : {}) }
+          : undefined,
       sync: {
         send: vi.fn((message: LeaderToFollowerMessage) => {
           messages.push(message);
@@ -286,6 +290,52 @@ describe('ComputersRouter', () => {
     await expect(pending).rejects.toThrow('System Settings');
     addFollower('guest', 'biscotto', { computer: true });
     await expect(router.captureNative('guest')).rejects.toThrow('cannot drive computer.native');
+  });
+
+  it('routes native capture and input at a paired CLI to its launcher', async () => {
+    // `slicc … follow --computer`: the agent addresses the CLI, which captures
+    // nothing itself — the frames have to come from the Sliccstart it spawned
+    // (#3260).
+    const { router, addFollower, sent } = createHarness();
+    addFollower('cli', 'full', { exec: true, pairId: 'pair-a' });
+    addFollower('mac', 'full', { computer: true, pairId: 'pair-a' });
+
+    const pending = router.captureNative('cli', { timeoutMs: 5_000 });
+    expect(sent.get('cli')).toEqual([]);
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') {
+      throw new Error('capture was not routed to the paired launcher');
+    }
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 4,
+      height: 2,
+      nativeWidth: 8,
+      nativeHeight: 4,
+      data: 'abc',
+    });
+    await expect(pending).resolves.toMatchObject({ jpeg: 'abc' });
+
+    router.unwatchNative('cli');
+    expect(sent.get('mac')?.some((m) => m.type === 'computer.native.unwatch')).toBe(true);
+  });
+
+  it('still refuses an exec follower with no paired launcher', async () => {
+    const { router, addFollower } = createHarness();
+    addFollower('cli', 'full', { exec: true, pairId: 'pair-a' });
+    await expect(router.captureNative('cli')).rejects.toThrow('does not advertise computer');
+  });
+
+  it('never folds a guest seat into a paired entry', async () => {
+    // A biscotto that echoed the owner's token would otherwise take over the
+    // roster entry native capture is routed to.
+    const { router, addFollower } = createHarness();
+    addFollower('cli', 'full', { exec: true, pairId: 'pair-a' });
+    addFollower('guest', 'biscotto', { computer: true, pairId: 'pair-a' });
+    await expect(router.captureNative('cli')).rejects.toThrow('does not advertise computer');
   });
 
   it('times out captureNative when no frame arrives', async () => {

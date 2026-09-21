@@ -19,7 +19,8 @@ final class ComputerTrayFollowerTests: XCTestCase {
     private func makeFollower(
         capturer: StubCapturer? = nil,
         permissions: ComputerPermissions = ComputerPermissions(probe: .alwaysGranted),
-        sink: RecordingEventSink? = nil
+        sink: RecordingEventSink? = nil,
+        pairId: String? = nil
     ) -> (ComputerTrayFollower, StubCapturer, RecordingEventSink) {
         let capturer = capturer ?? StubCapturer()
         let sink = sink ?? RecordingEventSink()
@@ -27,7 +28,8 @@ final class ComputerTrayFollowerTests: XCTestCase {
             makeConnector: { _ in RecordingConnector() },
             makeCapturer: { capturer },
             permissions: permissions,
-            eventSink: sink)
+            eventSink: sink,
+            pairId: pairId)
         return (follower, capturer, sink)
     }
 
@@ -58,6 +60,27 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(caps?["computer"] as? Bool, true)
         XCTAssertEqual(caps?["exec"] as? Bool, false)
         XCTAssertEqual(decoded["protocolVersion"] as? Int, traySyncProtocolVersion)
+        XCTAssertNil(
+            decoded["pairId"],
+            "the menu-bar follower has no CLI to be folded with and must not claim a pair")
+    }
+
+    /// `slicc … follow --computer` passes its token through
+    /// `Sliccstart --computer-follow --pair <id>`; it has to reach the leader
+    /// on `hello`, or the Mac keeps showing up as two separate followers
+    /// (#3260).
+    func testThePairTokenIsAdvertisedOnHello() throws {
+        let (follower, _, _) = makeFollower(pairId: "pair-abc123")
+        let sent = try connect(follower)
+        let decoded = try XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: XCTUnwrap(sent.first)) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["pairId"] as? String, "pair-abc123")
+        // Still computer-only: pairing lends this Mac's screen to the CLI's
+        // roster entry, it does not give the launcher a shell.
+        let caps = decoded["capabilities"] as? [String: Any]
+        XCTAssertEqual(caps?["exec"] as? Bool, false)
+        XCTAssertEqual(caps?["computer"] as? Bool, true)
     }
 
     func testCaptureSendsAJpegNativeFrameHonouringMaxWidth() async throws {

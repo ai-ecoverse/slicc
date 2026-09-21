@@ -70,6 +70,10 @@ type Options struct {
 	// Motd is an optional one-line description advertised on hello; the leader
 	// surfaces it to the agent (e.g. `ssh --list`). Empty → field omitted.
 	Motd string
+	// PairID marks this peer and the headless Sliccstart `follow --computer`
+	// spawned as the same machine, so the leader folds them into ONE roster
+	// entry (#3260). Empty → field omitted, and nothing is folded.
+	PairID string
 	// OnMessage receives every inbound message except ping/pong (auto-handled).
 	// It runs on the data-channel read goroutine; keep it non-blocking.
 	OnMessage func(msgType string, raw []byte)
@@ -629,6 +633,7 @@ func (c *Conn) sendHello() error {
 		Runtime:         c.opts.Runtime,
 		Capabilities:    c.opts.Capabilities,
 		Motd:            c.opts.Motd,
+		PairID:          c.opts.PairID,
 	})
 }
 

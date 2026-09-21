@@ -38,6 +38,7 @@ describe('WC tray connected follower mapping', () => {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['browser-1']),
         getComputerCapableBootstrapIds: () => new Set(),
+        getAbsorbedBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(['browser-1']),
         getTeleportEligibleBootstrapIds: () => new Set(['browser-1']),
         getFollowerMotds: () => new Map([['browser-1', 'remote browser']]),
@@ -124,6 +125,61 @@ describe('WC tray connected follower mapping', () => {
     ]);
   });
 
+  it('shows a --computer Mac as one entry holding exec and native capture', () => {
+    // `slicc <url> follow --computer` dials twice. The CLI keeps the roster
+    // entry, the launcher lends it `computer`, and the launcher itself drops
+    // off so `computer add ssh` has one unambiguous target (#3260).
+    const peer = (bootstrapId: string, runtime: string) => ({
+      controllerId: `controller-${bootstrapId}`,
+      bootstrapId,
+      attempt: 1,
+      state: 'connected' as const,
+      connectedAt: '2026-09-21T08:00:00.000Z',
+      runtime,
+    });
+    const handle = {
+      sync: {
+        getExecCapableBootstrapIds: () => new Set(['cli-1']),
+        getComputerCapableBootstrapIds: () => new Set(['cli-1', 'mac-1']),
+        getAbsorbedBootstrapIds: () => new Set(['mac-1']),
+        getBrowserCapableBootstrapIds: () => new Set(),
+        getTeleportEligibleBootstrapIds: () => new Set(),
+        getFollowerMotds: () => new Map([['cli-1', 'slicc-cli exec target']]),
+        getSprinkleInstances: () => [],
+        getFollowerDetails: () => [
+          {
+            bootstrapId: 'cli-1',
+            runtime: 'slicc-cli',
+            connectedAt: '2026-09-21T08:00:00.000Z',
+            lastActivity: 2,
+            floatType: 'unknown' as const,
+            health: 'live' as const,
+          },
+          {
+            bootstrapId: 'mac-1',
+            runtime: 'sliccstart-computer',
+            connectedAt: '2026-09-21T08:00:01.000Z',
+            lastActivity: 3,
+            floatType: 'unknown' as const,
+            health: 'live' as const,
+          },
+        ],
+      },
+      peers: {
+        getPeers: () => [peer('cli-1', 'slicc-cli'), peer('mac-1', 'sliccstart-computer')],
+      },
+    } as unknown as PageLeaderTrayHandle;
+
+    const followers = getLeaderConnectedFollowers(handle);
+    expect(followers.map((f) => f.bootstrapId)).toEqual(['cli-1']);
+    expect(followers[0]).toMatchObject({
+      runtimeId: 'follower-cli-1',
+      exec: true,
+      computer: true,
+      motd: 'slicc-cli exec target',
+    });
+  });
+
   it('keeps connecting rows uncounted through connect and death', () => {
     let floatbarCount = 0;
     let peerState: 'connecting' | 'connected' = 'connecting';
@@ -191,6 +247,7 @@ describe('WC tray connected follower mapping', () => {
       sync: {
         getExecCapableBootstrapIds: () => new Set(),
         getComputerCapableBootstrapIds: () => new Set(),
+        getAbsorbedBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
@@ -251,6 +308,7 @@ describe('WC tray connected follower mapping', () => {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['cli-1']),
         getComputerCapableBootstrapIds: () => new Set(),
+        getAbsorbedBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),

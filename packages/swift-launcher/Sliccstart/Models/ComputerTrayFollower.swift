@@ -20,6 +20,11 @@ final class ComputerTrayFollower: NSObject {
     private let makeCapturer: () -> ComputerCapturing
     private var permissions: ComputerPermissions
     private let eventSink: ComputerEventSink
+    /// "Same machine" token from `slicc … follow --computer --pair <id>`, put on
+    /// `hello` so the leader folds this follower and that CLI into ONE roster
+    /// entry carrying both `exec` and `computer` (#3260). Nil for the menu-bar
+    /// app, which has no CLI to be folded with and stands on its own.
+    private let pairId: String?
 
     private var connector: TrayFollowerConnecting?
     private var startTask: Task<Void, Never>?
@@ -41,12 +46,14 @@ final class ComputerTrayFollower: NSObject {
         },
         makeCapturer: (() -> ComputerCapturing)? = nil,
         permissions: ComputerPermissions = ComputerPermissions(),
-        eventSink: ComputerEventSink = LiveCGEventSink()
+        eventSink: ComputerEventSink = LiveCGEventSink(),
+        pairId: String? = nil
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
         self.permissions = permissions
         self.eventSink = eventSink
+        self.pairId = pairId
         super.init()
     }
 
@@ -244,7 +251,8 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
                     protocolVersion: traySyncProtocolVersion,
                     runtime: ComputerTrayFollower.runtime,
                     capabilities: TraySyncCapabilities(exec: false, computer: true),
-                    motd: "Native screen capture on \(host)"))
+                    motd: "Native screen capture on \(host)",
+                    pairId: pairId))
         }
     }
 

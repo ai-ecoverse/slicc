@@ -561,6 +561,11 @@ export class LeaderSyncManager {
     return this.followerRegistry.getComputerCapableBootstrapIds();
   }
 
+  /** Followers folded into a `hello.pairId` partner — off the roster (#3260). */
+  getAbsorbedBootstrapIds(): Set<string> {
+    return this.followerRegistry.getAbsorbedBootstrapIds();
+  }
+
   getBrowserCapableBootstrapIds(): Set<string> {
     return this.followerRegistry.getBrowserCapableBootstrapIds();
   }

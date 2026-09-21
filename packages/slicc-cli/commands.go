@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/computer"
 	"github.com/ai-ecoverse/slicc-cli/internal/execrun"
 	"github.com/ai-ecoverse/slicc-cli/internal/follow"
 	"github.com/ai-ecoverse/slicc-cli/internal/logging"
@@ -500,10 +501,113 @@ func truncateOneLine(s string, limit int) string {
 	return string(r[:limit]) + "…"
 }
 
+// nativeComputer is the launcher half of `follow --computer`: the headless
+// Sliccstart holding this Mac's screen, plus the token that tells the leader it
+// and this CLI are one machine.
+//
+// Every method tolerates a nil receiver, so the follow loop calls them
+// unconditionally instead of guarding each site — the common case is that no
+// launcher was asked for at all.
+type nativeComputer struct {
+	pairID  string
+	session *computer.Session
+}
+
+// pair is the `hello.pairId` this CLI advertises; empty when no launcher runs,
+// which leaves the leader nothing to fold.
+func (n *nativeComputer) pair() string {
+	if n == nil {
+		return ""
+	}
+	return n.pairID
+}
+
+func (n *nativeComputer) Stop() {
+	if n == nil || n.session == nil {
+		return
+	}
+	n.session.Stop()
+}
+
+// retarget moves the launcher to a replacement tray. A failure is reported and
+// survived, never fatal: this CLI is already connected to the new leader, and
+// dropping the whole session because the screen half could not follow would be
+// a worse outcome than exec-only.
+func (n *nativeComputer) retarget(ctx context.Context, console *ui.Console, joinURL string) {
+	if n == nil || n.session == nil {
+		return
+	}
+	if err := n.session.Retarget(ctx, joinURL); err != nil {
+		console.Line(ui.KindWarn, "native screen capture did not follow the tray move: %s", err)
+	}
+}
+
+// startComputerFollower brings up the Sliccstart half of `--computer`.
+//
+// The returned code is non-zero only for `--computer=require`: plain
+// `--computer` is a request, not a precondition, so a Mac without the launcher
+// still follows as an ordinary exec target rather than refusing to connect.
+func startComputerFollower(
+	ctx context.Context,
+	console *ui.Console,
+	joinURL string,
+	fa followArgs,
+) (*nativeComputer, int) {
+	if fa.computer == computer.ModeOff {
+		return nil, 0
+	}
+	pairID, err := computer.NewPairID()
+	if err != nil {
+		return nil, computerUnavailable(console, fa.computer, err)
+	}
+
+	// Ask for both TCC grants now, while the human is still watching the
+	// terminal. Left lazy, the first prompt lands on whichever
+	// `computer screenshot` the agent runs, and the turn stalls on a dialog
+	// nobody is looking at.
+	console.Line(ui.KindInfo, "starting native screen capture via Sliccstart…")
+	grants, err := computer.Preflight(ctx)
+	if err != nil {
+		return nil, computerUnavailable(console, fa.computer, err)
+	}
+	console.Line(ui.KindInfo, "macOS permissions — %s", grants.Summary())
+	if !grants.Complete() {
+		// Not fatal even under =require: the grant can be given from System
+		// Settings while this session runs, and the follower re-asks on its
+		// next capture. Refusing here would strand a session over a checkbox.
+		console.Line(ui.KindWarn,
+			"grant the missing permission to Sliccstart in System Settings ▸ Privacy & Security, then retry the failing action")
+	}
+
+	session, err := computer.Start(ctx, computer.Options{
+		JoinURL: joinURL,
+		PairID:  pairID,
+		Logf:    debugLogf,
+	})
+	if err != nil {
+		return nil, computerUnavailable(console, fa.computer, err)
+	}
+	console.Line(ui.KindOk, "native screen capture attached — drive it with: computer add ssh <this follower>")
+	return &nativeComputer{pairID: pairID, session: session}, 0
+}
+
+func computerUnavailable(console *ui.Console, mode computer.Mode, err error) int {
+	if mode == computer.ModeRequire {
+		console.Line(ui.KindError, "--computer=require: %s", err)
+		return 1
+	}
+	console.Line(ui.KindWarn, "continuing without native screen capture: %s", err)
+	return 0
+}
+
 // cmdFollow stays connected and runs leader-issued commands locally through the
 // given runner argv, reconnecting with backoff. An empty runner means the leader
 // gets no exec on this box.
 func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
+	if fa.badComputerArg != "" {
+		errLine("follow", "unknown --computer value %q (use --computer or --computer=require)", fa.badComputerArg)
+		return 2
+	}
 	// Eval mode: spawn the REPL ONCE, before connecting, so a missing binary
 	// fails fast. The session outlives individual connections — REPL state
 	// survives reconnects.
@@ -526,6 +630,18 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 	console.Update(func(s *ui.Status) { s.Peer = followPeer(console.Mode(), fa.runner) })
 	console.Start()
 	defer printSessionSummary(console)
+
+	// The launcher comes up BEFORE the first dial so both halves of the pair
+	// reach the leader together — a follower that appears mid-turn is a roster
+	// change the agent has already read past.
+	native, code := startComputerFollower(ctx, console, joinURL, fa)
+	if code != 0 {
+		return code
+	}
+	if native != nil {
+		defer native.Stop()
+	}
+
 	join := newJoinURLState(joinURL)
 	backoff := time.Second
 	failures := 0
@@ -535,7 +651,14 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 		}
 		join.beginAttempt()
 		console.Update(func(s *ui.Status) { s.State = ui.StateConnecting; s.Attempt = failures })
-		connected, err := followOnce(ctx, join.current(), fa.runner, eval, console, join.onTrayJoinURLChanged)
+		onJoinURLChanged := func(next string) {
+			join.onTrayJoinURLChanged(next)
+			// The launcher holds the OLD join URL, so a superseded tray would
+			// strand it on a leader that no longer exists while this CLI
+			// happily follows the replacement.
+			native.retarget(ctx, console, next)
+		}
+		connected, err := followOnce(ctx, join.current(), fa.runner, native.pair(), eval, console, onJoinURLChanged)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -570,6 +693,7 @@ func followOnce(
 	ctx context.Context,
 	joinURL string,
 	runner []string,
+	pairID string,
 	eval *execrun.EvalSession,
 	console *ui.Console,
 	onJoinURLChanged func(string),
@@ -590,6 +714,7 @@ func followOnce(
 	conn, dialErr := tray.Dial(connCtx, joinURL, tray.Options{
 		Capabilities:     caps,
 		Motd:             followMotd(runner, eval != nil),
+		PairID:           pairID,
 		Logf:             debugLogf,
 		LogWanted:        diagLogger.EnabledAt,
 		OnActivity:       console.Beat,

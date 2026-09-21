@@ -12,6 +12,7 @@ slicc <join-url> watch [--plain] [scoop]        Tail the leader's live agent out
 slicc <join-url> follow [--no-banner] [--plain] [runner]
                                                 Stay connected; run leader commands via <runner>
 slicc <join-url> follow --eval [repl]           Same, into ONE persistent REPL
+slicc <join-url> follow --computer[=require]    macOS: also bring this Mac's screen + input
 slicc update [--check]                          Self-update to the newest released CLI binary
 slicc list-sessions [--json]                    List iCloud tray sessions (macOS; no join URLs)
 slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL from iCloud, run <verb>
@@ -54,6 +55,37 @@ Pure logic (`ParseSessions`/`ParseSelector`/`Select`/`FormatTable`) is
 platform-independent + unit-tested; darwin-only exec/locate lives in
 `resolve_darwin.go` (`cloudList` seam overridden in tests).
 
+## `follow --computer` (native macOS screen + input, #3260)
+
+macOS only, composes with every follow mode (ui / shell / `--eval`). The CLI
+cannot capture a screen (`CGO_ENABLED=0`, and TCC would attribute a bare
+binary's grant to the **terminal**), so `internal/computer` **shells out** the
+same way `internal/cloud` does: `Sliccstart --computer-follow <url> --pair
+<token>`, headless and `.accessory`, reusing `LocateExecutable`.
+
+- **One roster entry.** Both peers send the same `hello.pairId`; the leader
+  folds them (`webapp/src/scoops/tray-leader/follower-pairing.ts`) so
+  `ssh --list` shows one machine holding `exec` + `computer` and
+  `computer add ssh` picks ScreenCaptureKit over `screencapture`, not the
+  terminal-attributed `screencapture` shell-out. Token is minted per process —
+  a bootstrap id doesn't exist yet and changes on reconnect. **With no runner
+  there is no exec peer to fold into**, so the launcher keeps its own entry.
+- **Version handshake.** An old Sliccstart ignores the flag and boots its GUI
+  (never exits), so the headless mode must print `SLICC_COMPUTER_FOLLOW_READY`
+  within 30 s or the CLI reports "update Sliccstart". Read via a line-scanning
+  `cmd.Stdout` writer — **not `StdoutPipe`**, which races `Wait` and can drop
+  that exact line.
+- **Prompts up front.** `Sliccstart --computer-preflight --json` runs before
+  connecting; a lazy first prompt would land mid-turn. A partial grant warns,
+  never aborts. Input still needs `--allow-input` + the sudo hop.
+- **Lifecycle.** SIGTERM + 5 s grace on CLI exit; reconnects need nothing
+  (the launcher dials itself); `TRAY_SUPERSEDED` **does** — `Retarget`
+  restarts it on the replacement URL.
+- **Failure policy.** `--computer` warns and follows on; `--computer=require`
+  exits non-zero. Off macOS: `ErrUnsupported`, never an unknown-option error.
+
+[Details](../../docs/slicc-cli-details.md#follow---computer-native-macos-screen--input)
+
 ## Why Go + pion
 
 `github.com/pion/webrtc/v4` is pure Go — the follower cross-compiles to a single
@@ -64,7 +96,7 @@ target), interoperating with browser leaders + Cloudflare TURN.
 
 `main.go` (argv + dispatch), `commands.go` (`prompt`/`exec`/`follow`),
 `cloud.go` (`list-sessions` + `<verb>-cloud`), `update.go`, `telemetry.go`,
-`internal/{protocol,signaling,tray,cloud,execrun,update,logging,ui}/`. Per-file
+`internal/{protocol,signaling,tray,cloud,computer,execrun,update,logging,ui}/`. Per-file
 map: [details](../../docs/slicc-cli-details.md#layout).
 
 ## Protocol parity

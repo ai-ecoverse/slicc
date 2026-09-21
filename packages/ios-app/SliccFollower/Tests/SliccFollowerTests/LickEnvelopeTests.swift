@@ -90,7 +90,7 @@ final class LickEnvelopeTests: XCTestCase {
         let json = try encode(
             .hello(
                 protocolVersion: traySyncProtocolVersion, runtime: "slicc-ios",
-                capabilities: trayFollowerCapabilities, motd: "test motd"))
+                capabilities: trayFollowerCapabilities, motd: "test motd", pairId: nil))
         XCTAssertEqual(json["runtime"] as? String, "slicc-ios")
         let capabilities = try XCTUnwrap(json["capabilities"] as? [String: Any])
         XCTAssertEqual(capabilities["exec"] as? Bool, true)

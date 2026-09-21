@@ -1210,8 +1210,14 @@ public enum FollowerToLeaderMessage: Codable {
     /// Register this device's APNs token so the hub can wake it (v7, #2062).
     case pushRegister(platform: String, token: String, environment: String)
     /// Additive version handshake (`hello`) — iOS sends it first on channel open.
+    ///
+    /// `pairId` is the "same machine" token `slicc follow --computer` mints and
+    /// shares with the headless launcher it spawns, so the leader lists the Mac
+    /// once with both `exec` and `computer` instead of twice (#3260). Every
+    /// other follower sends nil.
     case hello(
-        protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
+        protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?,
+        motd: String?, pairId: String?)
     case ping
     case pong
 
@@ -1227,6 +1233,7 @@ public enum FollowerToLeaderMessage: Codable {
         case command, cwd, env, stream, data, exitCode, signal, stdin
         case decision, pattern, attestation, platform, token, environment
         case id, fps, maxWidth, events, seq, mime, width, height, nativeWidth, nativeHeight
+        case pairId
     }
 
     public init(from decoder: Decoder) throws {
@@ -1394,7 +1401,8 @@ public enum FollowerToLeaderMessage: Codable {
                 runtime: try container.decodeIfPresent(String.self, forKey: .runtime),
                 capabilities: try container.decodeIfPresent(
                     TraySyncCapabilities.self, forKey: .capabilities),
-                motd: try container.decodeIfPresent(String.self, forKey: .motd))
+                motd: try container.decodeIfPresent(String.self, forKey: .motd),
+                pairId: try container.decodeIfPresent(String.self, forKey: .pairId))
         case "ping":
             self = .ping
         case "pong":
@@ -1544,12 +1552,13 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode(platform, forKey: .platform)
             try container.encode(token, forKey: .token)
             try container.encode(environment, forKey: .environment)
-        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
+        case .hello(let protocolVersion, let runtime, let capabilities, let motd, let pairId):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
             try container.encodeIfPresent(runtime, forKey: .runtime)
             try container.encodeIfPresent(capabilities, forKey: .capabilities)
             try container.encodeIfPresent(motd, forKey: .motd)
+            try container.encodeIfPresent(pairId, forKey: .pairId)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:

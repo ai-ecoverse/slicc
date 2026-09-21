@@ -488,14 +488,37 @@ describe('FollowerDispatch', () => {
     expect(c.fsRouter.executeLocalFs).toHaveBeenCalledWith('fs', request, 'follower');
   });
 
+  it("drops a guest seat's pairing token along with its capabilities", () => {
+    // Capabilities and pairing are both self-reported. A biscotto that echoed
+    // the owner's token would be folded into the owner's roster entry and take
+    // over where `computer.native.*` is routed (#3260).
+    const { dispatch, followers } = createHarness();
+    const follower = followers.followers.get('follower');
+    if (!follower) throw new Error('missing fixture follower');
+    follower.trust = 'biscotto';
+
+    dispatch.dispatch('follower', {
+      type: 'hello',
+      protocolVersion: 3,
+      capabilities: { computer: true },
+      pairId: 'pair-a',
+    });
+
+    expect(follower.peerCapabilities).toEqual({});
+    expect(follower.peerPairId).toBeUndefined();
+  });
+
   it('handles direct control and lifecycle variants without changing semantics', () => {
     const { collaborators: c, dispatch, followers, keepalive, options, send } = createHarness();
     dispatch.dispatch('follower', {
       type: 'hello',
       protocolVersion: 3,
       capabilities: { exec: true },
+      pairId: 'pair-a',
     });
     expect(followers.followers.get('follower')?.peerCapabilities).toEqual({ exec: true });
+    // The pairing token has to be recorded, or nothing can be folded (#3260).
+    expect(followers.followers.get('follower')?.peerPairId).toBe('pair-a');
     expect(options.onFollowerCountChanged).toHaveBeenCalledWith(1);
 
     const activityBefore = followers.followers.get('follower')?.lastActivity ?? 0;
