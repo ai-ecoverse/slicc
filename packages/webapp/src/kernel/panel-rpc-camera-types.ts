@@ -1,7 +1,7 @@
 /**
  * Wire types for the `capture-camera` panel-RPC op. These live at the
  * kernel layer so both the worker-side op surface (`panel-rpc.ts`) and
- * the page-side handler (`ui/panel-rpc-handlers.ts`) — plus shell
+ * the page-side handler (`ui/panel-rpc/media-handlers.ts`) — plus shell
  * commands like `ffmpeg` — can share one definition without the kernel
  * bundle depending back on `ui/`.
  */

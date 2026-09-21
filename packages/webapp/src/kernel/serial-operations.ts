@@ -1,7 +1,7 @@
 /**
  * Pure Web Serial operations over a {@link SerialPortRegistry}.
  *
- * Shared by the page-side panel-RPC handlers (`ui/panel-rpc-handlers.ts`)
+ * Shared by the page-side panel-RPC handlers (`ui/panel-rpc/device-handlers.ts`)
  * and the local-DOM backend of the `serial` shell command so both code
  * paths apply identical handle resolution, the 4 MiB transfer cap, and
  * the same serializable result shapes. Reads stream the port's

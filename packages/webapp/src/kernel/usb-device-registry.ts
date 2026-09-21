@@ -9,7 +9,7 @@
  *
  * The registry is a per-realm singleton (`getSharedUsbRegistry`) so the
  * gesture-bridge code in `remote-terminal-view.ts` and the panel-RPC
- * handlers in `ui/panel-rpc-handlers.ts` share one map.
+ * handlers in `ui/panel-rpc/device-handlers.ts` share one map.
  *
  * Interface claims are exclusive per `(handle, interfaceNumber)`. A second
  * consumer is refused (or queued with `wait`) with the current holder named

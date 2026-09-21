@@ -905,7 +905,7 @@ for the API and HTML conventions.
 | `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks                                                                              |
 | `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                                                                                                    |
 | `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                                                                                               |
-| `packages/webapp/src/ui/panel-rpc-handlers.ts`                       | `permission-request` panel-RPC op (worker → surface → registry handle)                                                                              |
+| `packages/webapp/src/ui/panel-rpc/misc-handlers.ts`                  | `permission-request` panel-RPC op (worker → surface → registry handle)                                                                              |
 
 ### Manual smoke checklist — `:8787` wrangler harness
 
