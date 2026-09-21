@@ -23,7 +23,10 @@ let package = Package(
         ),
         .testTarget(
             name: "SliccTrayFollowerTests",
-            dependencies: ["SliccTrayFollower"],
+            dependencies: [
+                "SliccTrayFollower",
+                .product(name: "WebRTC", package: "WebRTC"),
+            ],
             path: "Tests/SliccTrayFollowerTests"
         ),
     ]

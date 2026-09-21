@@ -165,13 +165,15 @@ public class WebRTCManager: NSObject {
 
     deinit {
         close()
-        RTCCleanupSSL()
+        // SSL is process-global. Cleaning it up here races any other
+        // peer still alive in this process (tests run two live peers; a
+        // follower reconnect also overlaps teardown with a new manager).
     }
 }
 
 // MARK: - WebRTCError
 
-enum WebRTCError: LocalizedError {
+enum WebRTCError: LocalizedError, Equatable {
     case notConfigured
 
     var errorDescription: String? {

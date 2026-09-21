@@ -165,9 +165,9 @@
       "regions": 87
     },
     "swift-trayfollower": {
-      "lines": 73,
-      "functions": 58,
-      "regions": 81
+      "lines": 90,
+      "functions": 83,
+      "regions": 91
     },
     "swift-traykit": {
       "lines": 97,
