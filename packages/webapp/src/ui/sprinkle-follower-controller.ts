@@ -1,7 +1,7 @@
 import { createLogger } from '../base/logger.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
-import type { SprinkleBridgeAPI, SprinkleUsbApi } from './sprinkle-bridge.js';
+import type { SprinkleBridgeAPI, SprinkleBrowserApi, SprinkleUsbApi } from './sprinkle-bridge.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 
@@ -31,6 +31,8 @@ export interface SprinkleFollowerControllerOptions {
   zone?: string;
 
   open?: (path: string) => void;
+
+  selectScoop?: (target: string) => boolean | Promise<boolean>;
 }
 
 interface OpenEntry {
@@ -39,6 +41,23 @@ interface OpenEntry {
 }
 
 type UpdateCallback = (data: unknown) => void;
+
+function followerBrowserApi(): SprinkleBrowserApi {
+  const unsupported = () =>
+    Promise.reject(new Error('browser not supported in follower-rendered sprinkle'));
+  return {
+    findTab: unsupported,
+    ensureTab: unsupported,
+    openWindow: unsupported,
+    windowBounds: unsupported,
+    setWindowBounds: unsupported,
+    eval: unsupported,
+    evalAsync: unsupported,
+    cookie: unsupported,
+    localStorage: unsupported,
+    fetch: unsupported,
+  };
+}
 
 function followerUsbApi(): SprinkleUsbApi {
   const unsupported = () =>
@@ -68,6 +87,7 @@ export class SprinkleFollowerController {
   private readonly removeSprinkle: SprinkleFollowerControllerOptions['removeSprinkle'];
   private readonly zone?: string;
   private readonly openPath?: SprinkleFollowerControllerOptions['open'];
+  private readonly selectScoopHandler?: SprinkleFollowerControllerOptions['selectScoop'];
 
   private readonly open = new Map<string, OpenEntry>();
 
@@ -86,6 +106,7 @@ export class SprinkleFollowerController {
     this.removeSprinkle = options.removeSprinkle;
     this.zone = options.zone;
     this.openPath = options.open;
+    this.selectScoopHandler = options.selectScoop;
   }
 
   async updateAvailable(sprinkles: SprinkleSummary[]): Promise<void> {
@@ -400,10 +421,12 @@ export class SprinkleFollowerController {
         window.open(url, '_blank');
       },
       close: () => this.closeLocally(sprinkleName),
-      minimize: () => {},
+
+      minimize: () => undefined,
       stopCone: () => {
         this.sync.sendSprinkleLick(sprinkleName, { action: '__stopCone__' });
       },
+      selectScoop: (target) => this.selectScoopOnFollower(target),
       attachImage: () => {},
       captureScreen: () =>
         Promise.reject(new Error('captureScreen not supported in follower-rendered sprinkle')),
@@ -438,28 +461,7 @@ export class SprinkleFollowerController {
           return { get: reject, post: reject, put: reject, patch: reject, delete: reject };
         },
       },
-      browser: {
-        findTab: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        ensureTab: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        openWindow: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        windowBounds: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        setWindowBounds: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        eval: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        evalAsync: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        cookie: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        localStorage: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-        fetch: () =>
-          Promise.reject(new Error('browser not supported in follower-rendered sprinkle')),
-      },
+      browser: followerBrowserApi(),
 
       hid: {
         list: () => Promise.reject(new Error('hid not supported in follower-rendered sprinkle')),
@@ -492,5 +494,10 @@ export class SprinkleFollowerController {
         Promise.reject(new Error('device ops not supported in follower-rendered sprinkle')),
     };
     return api;
+  }
+
+  private async selectScoopOnFollower(target: string): Promise<boolean> {
+    if (!this.selectScoopHandler) return false;
+    return Boolean(await this.selectScoopHandler(target));
   }
 }

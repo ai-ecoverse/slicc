@@ -349,6 +349,8 @@ export function iframeFetchResponseSource(): string {
 
 export type SprinkleExecHandler = (cmd: string) => Promise<SprinkleExecResult>;
 
+export type SprinkleSelectScoopHandler = (target: string) => boolean | Promise<boolean>;
+
 export interface SprinkleLickRequest {
   action: string;
   data?: unknown;
@@ -392,6 +394,8 @@ export interface SprinkleBridgeAPI {
   minimize(): void;
 
   stopCone(): void;
+
+  selectScoop(target: string): Promise<boolean>;
 
   attachImage(base64: string, name?: string, mimeType?: string): void;
 
@@ -446,6 +450,7 @@ export class SprinkleBridge {
   private closeHandler: (name: string) => void;
   private minimizeHandler: (name: string) => void;
   private stopConeHandler: () => void;
+  private selectScoopHandler: SprinkleSelectScoopHandler;
   private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
   private captureScreenHandler: () => Promise<CaptureScreenResult>;
   private execHandler: SprinkleExecHandler | undefined;
@@ -464,13 +469,15 @@ export class SprinkleBridge {
     attachImageHandler: (base64: string, name?: string, mimeType?: string) => void,
     captureScreenHandler: () => Promise<CaptureScreenResult>,
     execHandler?: SprinkleExecHandler,
-    iframePusher?: SprinkleIframePusher
+    iframePusher?: SprinkleIframePusher,
+    selectScoopHandler?: SprinkleSelectScoopHandler
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
     this.minimizeHandler = minimizeHandler;
     this.stopConeHandler = stopConeHandler;
+    this.selectScoopHandler = selectScoopHandler ?? (() => false);
     this.attachImageHandler = attachImageHandler;
     this.captureScreenHandler = captureScreenHandler;
     this.execHandler = execHandler;
@@ -1035,6 +1042,7 @@ export class SprinkleBridge {
       close: () => this.closeHandler(sprinkleName),
       minimize: () => this.minimizeHandler(sprinkleName),
       stopCone: () => this.stopConeHandler(),
+      selectScoop: async (target: string) => Boolean(await this.selectScoopHandler(target)),
       attachImage: (base64: string, name?: string, mimeType?: string) =>
         this.attachImageHandler(base64, name, mimeType),
       captureScreen: () => this.captureScreenHandler(),

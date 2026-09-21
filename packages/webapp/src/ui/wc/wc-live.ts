@@ -942,6 +942,7 @@ export function attachWcWorkbench(
         client,
         getUnits: () => workUnits.currentUnits(),
         getSelected: () => boot.getSelected(),
+        selectScoop: (unit) => boot.selectScoop(unit),
 
         interceptWelcomeLick: (event) => welcomeHolder.intercept?.(event) ?? false,
         fs: createRemoteSprinkleVfs({ reader, writer }),

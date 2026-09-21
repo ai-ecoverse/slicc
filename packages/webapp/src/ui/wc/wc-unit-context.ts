@@ -43,6 +43,26 @@ export function unitForContext(
   return defaultRootOf(units);
 }
 
+function isSelectScoopTarget(ctx: string): boolean {
+  if (ctx === 'cone') return true;
+  if (ctx.startsWith('scoop:') && ctx.length > 'scoop:'.length) return true;
+  if (ctx.startsWith('cone:') && ctx.length > 'cone:'.length) return true;
+  return false;
+}
+
+export function selectScoopForContext(
+  units: readonly WorkUnitSummary[],
+  ctx: string,
+  selectedId: string | null | undefined,
+  select: (unit: WorkUnitSummary) => void
+): boolean {
+  if (!isSelectScoopTarget(ctx)) return false;
+  const unit = unitForContext(units, ctx);
+  if (!unit) return false;
+  if (unit.id !== selectedId) select(unit);
+  return true;
+}
+
 export function defaultRootOf(units: readonly WorkUnitSummary[]): WorkUnitSummary | undefined {
   const roots = orderRoots(units.filter(isRootSummary));
   return roots.find(isPrimaryRootSummary) ?? roots[0];

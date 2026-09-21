@@ -290,6 +290,48 @@ describe('SprinkleBridge', () => {
     expect(stopConeHandlerMock).toHaveBeenCalledTimes(1);
   });
 
+  it('selectScoop() returns false when no handler is wired', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    await expect(api.selectScoop('scoop:issue-triage-1')).resolves.toBe(false);
+  });
+
+  it('selectScoop() delegates to the injected handler and returns its boolean', async () => {
+    const selectScoopHandler = vi.fn().mockResolvedValue(true);
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      undefined,
+      undefined,
+      selectScoopHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    await expect(api.selectScoop('scoop:issue-triage-1')).resolves.toBe(true);
+    expect(selectScoopHandler).toHaveBeenCalledWith('scoop:issue-triage-1');
+  });
+
+  it('selectScoop() returns false rather than throwing when the handler declines', async () => {
+    const selectScoopHandler = vi.fn().mockReturnValue(false);
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      captureScreenHandlerMock,
+      undefined,
+      undefined,
+      selectScoopHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    await expect(api.selectScoop('scoop:missing')).resolves.toBe(false);
+  });
+
   it('attachImage() calls the attach-image handler with all args', () => {
     const api = bridge.createAPI('test-sprinkle');
     api.attachImage('abc123', 'test.png', 'image/png');

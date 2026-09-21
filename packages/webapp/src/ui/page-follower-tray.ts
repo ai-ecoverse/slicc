@@ -159,6 +159,8 @@ export interface StartPageFollowerTrayOptions {
 
   onOpen?: (path: string) => void;
 
+  onSelectScoop?: (target: string) => boolean | Promise<boolean>;
+
   _fetchImpl?: typeof fetch;
 
   _peerConnectionFactory?: TrayPeerConnectionFactory;
@@ -264,6 +266,7 @@ export function startPageFollowerTray(
         addSprinkle: options.addSprinkle,
         removeSprinkle: options.removeSprinkle,
         open: options.onOpen,
+        selectScoop: options.onSelectScoop,
       });
       activeSprinkleController = sprinkleController;
     }
