@@ -217,6 +217,23 @@
             XCTAssertEqual(clicks.first?.event.pingData.source, "checkout button#submit")
         }
 
+        func testOptelButtonActivateRunsActionAndEmits() {
+            OptelClickCoordinator._testing_reset()
+            let transport = configureRecordingOptel()
+            var ran = false
+            let button = OptelButton(
+                identifier: "go", accessibilityLabel: "Go", context: "bar"
+            ) {
+                ran = true
+            } label: {
+                Text("Go")
+            }
+            button.activate()
+            XCTAssertTrue(ran)
+            let clicks = transport.sent.filter { $0.event.checkpoint.rawValue == "click" }
+            XCTAssertEqual(clicks.first?.event.pingData.source, "bar button#go")
+        }
+
         #if os(macOS)
             func testRefinedTapAndMonitorTogetherProduceExactlyOneBeacon() {
                 // End-to-end dedupe regression: a refined `.optelTap` fires *and* the

@@ -217,15 +217,18 @@
         }
 
         public var body: some View {
-            Button(
-                action: {
-                    OptelButton<Label>.performTap(
-                        identifier: identifier,
-                        label: accessibilityLabel,
-                        context: context
-                    )
-                    action()
-                }, label: labelBuilder)
+            Button(action: activate, label: labelBuilder)
+        }
+
+        /// Same work as the button's `action` closure. Tests call this directly so
+        /// the emit + caller-action sequence is covered without driving SwiftUI.
+        func activate() {
+            Self.performTap(
+                identifier: identifier,
+                label: accessibilityLabel,
+                context: context
+            )
+            action()
         }
 
         /// Testable seam mirroring the button's action body. Derives the refined

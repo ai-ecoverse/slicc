@@ -62,6 +62,8 @@ extension Optel {
 /// previous handler in a closure and must reach it via this file-scope `var`.
 private var optelPreviousUncaughtExceptionHandler: (@convention(c) (NSException) -> Void)?
 
+private func optelTestingNoopUncaughtHandler(_ exception: NSException) {}
+
 /// File-scope C trampoline registered with `NSSetUncaughtExceptionHandler`.
 /// Emits an `error` checkpoint on the shared ``Optel`` and then chains to the
 /// previously-installed handler so crash reporters keep working.
@@ -109,5 +111,15 @@ public enum OptelUncaughtExceptionHook {
         lock.lock()
         installed = false
         lock.unlock()
+    }
+
+    /// Test-only: run the C trampoline without raising. The previous-handler
+    /// slot is swapped for a no-op so AppKit's default handler cannot crash
+    /// the suite on a synthetic `NSException`.
+    internal static func _testing_invokeTrampoline(_ exception: NSException) {
+        let saved = optelPreviousUncaughtExceptionHandler
+        optelPreviousUncaughtExceptionHandler = optelTestingNoopUncaughtHandler
+        optelUncaughtExceptionTrampoline(exception)
+        optelPreviousUncaughtExceptionHandler = saved
     }
 }
