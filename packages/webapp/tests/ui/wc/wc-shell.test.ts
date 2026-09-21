@@ -358,7 +358,7 @@ describe('mountWcUiPreview', () => {
     const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';
 
     expect(css).toContain('.wcui-term{');
-    expect(css).toContain('background:#141414');
+    expect(css).toContain('background:var(--term-bg,#0c0c0e)');
 
     expect(css).toContain('.terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}');
 

@@ -74,6 +74,26 @@ describe('slicc-panel', () => {
     expect(panel.shadowRoot).toBeNull();
   });
 
+  it('applies always-dark chrome to a floating terminal panel', () => {
+    document.documentElement.style.setProperty('--canvas', '#fffdf8');
+    document.documentElement.style.setProperty('--line', '#d4cbbf');
+    document.documentElement.style.setProperty('--term-bg', '#0c0c0e');
+    document.documentElement.style.setProperty('--term-border', '#232329');
+
+    const host = document.createElement('div');
+    host.style.cssText = 'position:relative;display:flex;width:600px;height:400px;';
+    const panel = document.createElement('slicc-panel') as SliccPanel;
+    panel.setAttribute('panel-id', 'term');
+    panel.presentation = 'floating';
+    host.appendChild(panel);
+    document.body.appendChild(host);
+
+    const style = getComputedStyle(panel);
+
+    expect(style.backgroundColor).toBe('rgb(12, 12, 14)');
+    expect(style.borderTopColor).toBe('rgb(35, 35, 41)');
+  });
+
   it('marks itself so the shared stylesheet applies to every subclass tag', () => {
     const panel = mount('probe-panel');
     expect(panel.hasAttribute(PANEL_MARKER_ATTR)).toBe(true);

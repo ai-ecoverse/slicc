@@ -63,6 +63,10 @@
       "types": "./src/audio/soundscape-cues.ts",
       "default": "./src/audio/soundscape-cues.ts"
     },
+    "./workbench/terminal-theme": {
+      "types": "./src/workbench/terminal-theme.ts",
+      "default": "./src/workbench/terminal-theme.ts"
+    },
     "./src/*": "./src/*"
   },
   "files": [

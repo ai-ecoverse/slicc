@@ -1839,12 +1839,14 @@ describe('slicc-dock-tree', () => {
         ?.closest('.dock-tree__tile') as HTMLElement;
       expect(chatTile.classList.contains('dock-tree__tile--chrome')).toBe(false);
       expect(termTile.classList.contains('dock-tree__tile--chrome')).toBe(true);
+      expect(termTile.classList.contains('dock-tree__tile--chrome-dark')).toBe(true);
 
       const cs = getComputedStyle(termTile);
       expect(cs.borderTopLeftRadius).toBe('14px');
       expect(cs.overflow).toBe('hidden');
       expect(cs.borderTopWidth).toBe('1px');
       expect(cs.marginLeft).toBe('12px');
+      expect(cs.backgroundColor).toBe('rgb(12, 12, 14)');
 
       const chatCs = getComputedStyle(chatTile);
       expect(chatCs.borderTopLeftRadius).toBe('0px');

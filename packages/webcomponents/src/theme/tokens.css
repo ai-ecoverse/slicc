@@ -27,6 +27,12 @@
   --shadow-pane: rgba(10, 10, 10, 0.06) 0 8px 26px -10px;
   --barh: 36px;
   --ctl-h: 30px;
+
+  --term-bg: #0c0c0e;
+  --term-fg: #e7e7ea;
+  --term-border: #232329;
+  --term-cursor: var(--ctx);
+  --term-selection: color-mix(in srgb, var(--ctx) 30%, transparent);
 }
 
 .dark,

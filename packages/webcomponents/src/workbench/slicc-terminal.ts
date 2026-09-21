@@ -5,31 +5,12 @@ import XTERM_CSS from '@xterm/xterm/css/xterm.css?raw';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { resolveTerminalTheme, watchTerminalThemeScope } from './terminal-theme.js';
 
-const TERMINAL_THEME: ITheme = {
-  background: '#0c0c0e',
-  foreground: '#e7e7ea',
-  cursor: '#e7e7ea',
-  cursorAccent: '#0c0c0e',
-  selectionBackground: '#8b5cf64d',
-  selectionForeground: '#ffffff',
-  black: '#0c0c0e',
-  red: '#f43f5e',
-  green: '#5bd17b',
-  yellow: '#f59e0b',
-  blue: '#3b82f6',
-  magenta: '#8b5cf6',
-  cyan: '#06b6d4',
-  white: '#e7e7ea',
-  brightBlack: '#8a8a93',
-  brightRed: '#fb7185',
-  brightGreen: '#86efac',
-  brightYellow: '#fbbf24',
-  brightBlue: '#60a5fa',
-  brightMagenta: '#a78bfa',
-  brightCyan: '#22d3ee',
-  brightWhite: '#ffffff',
-};
+function currentTerminalTheme(scope: Element): ITheme {
+  const { border: _border, ...theme } = resolveTerminalTheme(scope);
+  return theme;
+}
 
 const STYLE = `
 :host {
@@ -40,7 +21,7 @@ const STYLE = `
   min-width: 0;
   height: 320px;
   font-family: var(--ui);
-  background: #0c0c0e;
+  background: var(--term-bg, #0c0c0e);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -53,8 +34,8 @@ const STYLE = `
   flex: 0 0 auto;
   padding: 8px 12px;
   color: #c9c9d2;
-  background: #141418;
-  border-bottom: 1px solid #232329;
+  background: color-mix(in srgb, var(--term-bg, #0c0c0e) 88%, #ffffff);
+  border-bottom: 1px solid var(--term-border, #232329);
   font: 500 12px var(--ui, ui-sans-serif, system-ui, sans-serif);
   user-select: none;
 }
@@ -67,7 +48,7 @@ const STYLE = `
   min-height: 0;
   min-width: 0;
   padding: 8px 0 8px 10px;
-  background: #0c0c0e;
+  background: var(--term-bg, #0c0c0e);
 }
 /* xterm.js wants its container to size the canvas; let it fill. */
 .host .xterm { height: 100%; }
@@ -88,6 +69,8 @@ export class SliccTerminal extends HTMLElement {
   #term: TerminalType | null = null;
   #fit: FitAddonType | null = null;
   #ro: ResizeObserver | null = null;
+
+  #unwatchTheme: (() => void) | null = null;
 
   #pending: string[] = [];
 
@@ -189,7 +172,7 @@ export class SliccTerminal extends HTMLElement {
       fontSize: 12,
       lineHeight: 1.25,
       fontFamily: "'IBM Plex Mono', 'Source Code Pro', 'JetBrains Mono', ui-monospace, monospace",
-      theme: TERMINAL_THEME,
+      theme: currentTerminalTheme(this),
       convertEol: true,
       scrollback: 2000,
     });
@@ -205,6 +188,7 @@ export class SliccTerminal extends HTMLElement {
 
     this.#term = term;
     this.#fit = fit;
+    this.#watchTheme();
 
     fit.fit();
     if (this.#pending.length) {
@@ -220,12 +204,22 @@ export class SliccTerminal extends HTMLElement {
 
   #teardown(): void {
     this.#disposed = true;
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = null;
     this.#ro?.disconnect();
     this.#ro = null;
     this.#term?.dispose();
     this.#term = null;
     this.#fit = null;
     this.#pending.length = 0;
+  }
+
+  #watchTheme(): void {
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = watchTerminalThemeScope(this, () => {
+      if (!this.#term) return;
+      this.#term.options.theme = currentTerminalTheme(this);
+    });
   }
 }
 

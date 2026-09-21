@@ -1,0 +1,391 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
+import { createStandalonePanelRpcHandlers } from '../../../src/ui/panel-rpc-handlers.js';
+
+function leaderStatus(): LeaderTrayRuntimeStatus {
+  return {
+    state: 'leader',
+    session: {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-new',
+      createdAt: '2026-05-17T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/controller-1',
+      joinUrl: 'https://tray.example.com/join/tray-new',
+      webhookUrl: 'https://tray.example.com/webhooks/tray-new',
+      leaderKey: 'leader-key',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws',
+      runtime: 'slicc-standalone',
+    },
+    error: null,
+  };
+}
+
+describe('createStandalonePanelRpcHandlers — webhook revocation', () => {
+  it('forwards only the registration ID and acknowledges completion', async () => {
+    const revokeWebhook = vi.fn().mockResolvedValue(undefined);
+    const handlers = createStandalonePanelRpcHandlers({ revokeWebhook });
+    expect(await handlers['tray-webhook-revoke']!({ webhookId: 'wh-1' })).toEqual({ ok: true });
+    expect(revokeWebhook).toHaveBeenCalledWith('wh-1');
+  });
+
+  it('refuses without a trusted manager and propagates failures', async () => {
+    const missing = createStandalonePanelRpcHandlers({});
+    await expect(missing['tray-webhook-revoke']!({ webhookId: 'wh-1' })).rejects.toThrow();
+    const failed = createStandalonePanelRpcHandlers({
+      revokeWebhook: async () => {
+        throw new Error('unavailable');
+      },
+    });
+    await expect(failed['tray-webhook-revoke']!({ webhookId: 'wh-1' })).rejects.toThrow(
+      'unavailable'
+    );
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — tray-reset', () => {
+  it('calls the resetTray callback and returns its result', async () => {
+    let invocations = 0;
+    const expected = leaderStatus();
+    const handlers = createStandalonePanelRpcHandlers({
+      resetTray: async () => {
+        invocations += 1;
+        return expected;
+      },
+    });
+    const trayReset = handlers['tray-reset'];
+    expect(trayReset).toBeTypeOf('function');
+    const result = await trayReset!(undefined);
+    expect(invocations).toBe(1);
+    expect(result).toEqual(expected);
+  });
+
+  it('rejects with a clear error when no resetTray callback is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(handlers['tray-reset']!(undefined)).rejects.toThrow(/no active tray session/i);
+  });
+
+  it('propagates a failure from the resetTray callback', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      resetTray: async () => {
+        throw new Error('tray worker unreachable');
+      },
+    });
+    await expect(handlers['tray-reset']!(undefined)).rejects.toThrow(/tray worker unreachable/);
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — tray-open-preview', () => {
+  it('calls mintPreview and returns its result', async () => {
+    const received: unknown[] = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      mintPreview: async (payload) => {
+        received.push(payload);
+        return { url: 'https://abc--def.sliccy.now/', pushed: 2, previewToken: 't.tok' };
+      },
+    });
+    const result = await handlers['tray-open-preview']!({
+      entryPath: '/workspace/dist/index.html',
+      servedRoot: '/workspace/dist',
+      bridge: false,
+      noBridge: false,
+    });
+    expect(result).toEqual({
+      url: 'https://abc--def.sliccy.now/',
+      pushed: 2,
+      previewToken: 't.tok',
+    });
+    expect(received).toEqual([
+      {
+        entryPath: '/workspace/dist/index.html',
+        servedRoot: '/workspace/dist',
+        bridge: false,
+        noBridge: false,
+      },
+    ]);
+  });
+
+  it('rejects with a clear error when no mintPreview is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(
+      handlers['tray-open-preview']!({
+        entryPath: '/w/i.html',
+        servedRoot: '/w',
+        bridge: false,
+        noBridge: false,
+      })
+    ).rejects.toThrow(/no active leader tray/i);
+  });
+
+  it('propagates failures from the mintPreview callback', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      mintPreview: async () => {
+        throw new Error('Preview mint failed: 403');
+      },
+    });
+    await expect(
+      handlers['tray-open-preview']!({
+        entryPath: '/w/i.html',
+        servedRoot: '/w',
+        bridge: false,
+        noBridge: false,
+      })
+    ).rejects.toThrow(/Preview mint failed: 403/);
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — preview lifecycle diagnostics', () => {
+  it('forwards logs and truncate to the page-side leader callbacks', async () => {
+    const getPreviewLifecycleRecords = vi.fn(() => ({
+      lifecycleRecords: [
+        {
+          timestamp: '2026-08-01T00:00:00.000Z',
+          lifecycle: 'connected' as const,
+          connId: 'conn-1',
+          previewToken: 'site-a',
+          announced: false,
+        },
+      ],
+    }));
+    const truncatePreviewLifecycleRecords = vi.fn(() => ({ cleared: 1, rearmed: 1 }));
+    const handlers = createStandalonePanelRpcHandlers({
+      getPreviewLifecycleRecords,
+      truncatePreviewLifecycleRecords,
+    });
+
+    const logs = await handlers['tray-preview-logs']!({ previewToken: 'site-a' });
+    const truncated = await handlers['tray-preview-truncate']!({ previewToken: 'site-a' });
+
+    expect(logs.lifecycleRecords).toHaveLength(1);
+    expect(truncated).toEqual({ cleared: 1, rearmed: 1 });
+    expect(getPreviewLifecycleRecords).toHaveBeenCalledWith('site-a');
+    expect(truncatePreviewLifecycleRecords).toHaveBeenCalledWith('site-a');
+  });
+
+  it('rejects diagnostics when no leader callbacks are wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+
+    await expect(handlers['tray-preview-logs']!({})).rejects.toThrow(/no active leader tray/i);
+    await expect(handlers['tray-preview-truncate']!({})).rejects.toThrow(/no active leader tray/i);
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — tray-leave', () => {
+  it('forwards the payload to the leaveTray callback and returns its result', async () => {
+    const calls: Array<{ workerBaseUrl: string | null; requestId?: string }> = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      leaveTray: async (opts) => {
+        calls.push(opts);
+        return { kind: 'left', previousMode: 'leader' };
+      },
+    });
+    const result = await handlers['tray-leave']!({
+      workerBaseUrl: 'https://new.example',
+      requestId: 'req-1',
+    });
+    expect(calls).toEqual([{ workerBaseUrl: 'https://new.example', requestId: 'req-1' }]);
+    expect(result).toEqual({ kind: 'left', previousMode: 'leader' });
+  });
+
+  it('forwards an undefined requestId without populating the opts shape', async () => {
+    let captured: { workerBaseUrl: string | null; requestId?: string } | undefined;
+    const handlers = createStandalonePanelRpcHandlers({
+      leaveTray: async (opts) => {
+        captured = opts;
+        return { kind: 'noop' };
+      },
+    });
+    await handlers['tray-leave']!({ workerBaseUrl: null });
+    expect(captured).toEqual({ workerBaseUrl: null, requestId: undefined });
+  });
+
+  it('rejects with a clear error when no leaveTray callback is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(handlers['tray-leave']!({ workerBaseUrl: null })).rejects.toThrow(
+      /not available in this environment/i
+    );
+  });
+
+  it('propagates a failure from the leaveTray callback (half-state on startLeader)', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      leaveTray: async () => {
+        throw new Error('worker unreachable');
+      },
+    });
+    await expect(handlers['tray-leave']!({ workerBaseUrl: 'https://x' })).rejects.toThrow(
+      /worker unreachable/
+    );
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — cherry-emit', () => {
+  it('forwards runtimeId/name/detail and reports delivered when the follower is connected', async () => {
+    const calls: Array<{ runtimeId: string; name: string; detail?: unknown }> = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      emitCherrySliccEvent: (runtimeId, name, detail) => {
+        calls.push({ runtimeId, name, detail });
+        return true;
+      },
+    });
+    const result = await handlers['cherry-emit']!({
+      runtimeId: 'follower-abc',
+      name: 'build.done',
+      detail: { ok: true },
+    });
+    expect(calls).toEqual([
+      { runtimeId: 'follower-abc', name: 'build.done', detail: { ok: true } },
+    ]);
+    expect(result).toEqual({ delivered: true });
+  });
+
+  it('reports delivered:false when the owning follower is not connected', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      emitCherrySliccEvent: () => false,
+    });
+    const result = await handlers['cherry-emit']!({ runtimeId: 'gone', name: 'noop' });
+    expect(result).toEqual({ delivered: false });
+  });
+
+  it('rejects with a clear error when no emitCherrySliccEvent callback is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(handlers['cherry-emit']!({ runtimeId: 'x', name: 'noop' })).rejects.toThrow(
+      /not available in this environment/i
+    );
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — oauth-extras-set', () => {
+  let lsData: Record<string, string>;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalLocalStorage = globalThis.localStorage;
+    lsData = {};
+    (globalThis as { localStorage: Storage }).localStorage = {
+      get length(): number {
+        return Object.keys(lsData).length;
+      },
+      key: (i: number) => Object.keys(lsData)[i] ?? null,
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { localStorage: Storage }).localStorage = originalLocalStorage;
+  });
+
+  it('writes the extras through to localStorage and returns the merged store', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const handler = handlers['oauth-extras-set'];
+    expect(handler).toBeTypeOf('function');
+    const result = await handler!({
+      providerId: 'adobe',
+      domains: ['admin.hlx.page', '*.aem.page'],
+    });
+    expect(result).toEqual({ storeAfter: { adobe: ['admin.hlx.page', '*.aem.page'] } });
+
+    expect(lsData.slicc_oauth_extra_domains).toBe(
+      JSON.stringify({ adobe: ['admin.hlx.page', '*.aem.page'] })
+    );
+  });
+
+  it('preserves other providers and overwrites the targeted one', async () => {
+    lsData.slicc_oauth_extra_domains = JSON.stringify({
+      adobe: ['old.example.com'],
+      github: ['hub.example.com'],
+    });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['oauth-extras-set']!({
+      providerId: 'adobe',
+      domains: ['new.example.com'],
+    });
+    expect(result.storeAfter).toEqual({
+      adobe: ['new.example.com'],
+      github: ['hub.example.com'],
+    });
+  });
+
+  it('empty domains array drops the provider entry', async () => {
+    lsData.slicc_oauth_extra_domains = JSON.stringify({
+      adobe: ['admin.hlx.page'],
+      github: ['hub.example.com'],
+    });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['oauth-extras-set']!({
+      providerId: 'adobe',
+      domains: [],
+    });
+    expect(result.storeAfter).toEqual({ github: ['hub.example.com'] });
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — save-oauth-accounts', () => {
+  let lsData: Record<string, string>;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalLocalStorage = globalThis.localStorage;
+    lsData = {};
+    (globalThis as { localStorage: Storage }).localStorage = {
+      get length(): number {
+        return Object.keys(lsData).length;
+      },
+      key: (i: number) => Object.keys(lsData)[i] ?? null,
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { localStorage: Storage }).localStorage = originalLocalStorage;
+  });
+
+  it('writes the serialized accounts JSON to localStorage and returns the stored value', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const handler = handlers['save-oauth-accounts'];
+    expect(handler).toBeTypeOf('function');
+    const accounts = [
+      {
+        providerId: 'mcp:secrets',
+        apiKey: '',
+        accessToken: 'tok-1',
+        refreshToken: 'rt-1',
+        tokenExpiresAt: 9_999_999_999_999,
+      },
+    ];
+    const accountsJson = JSON.stringify(accounts);
+    const result = await handler!({ accountsJson });
+    expect(result).toEqual({ storedJson: accountsJson });
+
+    expect(lsData.slicc_accounts).toBe(accountsJson);
+  });
+
+  it('overwrites any previously stored accounts array', async () => {
+    lsData.slicc_accounts = JSON.stringify([{ providerId: 'github', apiKey: 'gh' }]);
+    const handlers = createStandalonePanelRpcHandlers({});
+    const next = JSON.stringify([
+      { providerId: 'github', apiKey: 'gh' },
+      { providerId: 'mcp:foo', apiKey: '', accessToken: 'tok' },
+    ]);
+    const result = await handlers['save-oauth-accounts']!({ accountsJson: next });
+    expect(result.storedJson).toBe(next);
+    expect(lsData.slicc_accounts).toBe(next);
+  });
+});

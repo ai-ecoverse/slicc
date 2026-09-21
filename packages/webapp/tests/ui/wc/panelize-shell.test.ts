@@ -367,6 +367,14 @@ describe('panelizeShell', () => {
       );
     });
 
+    it('keeps floating terminal panels on always-dark chrome', () => {
+      panelizeShell(makeShellRefs());
+      const css = panelizeCss();
+      expect(css).toContain('slicc-panel[panel-id="term"][presentation="floating"]');
+      expect(css).toContain('background:var(--term-bg,#0c0c0e)');
+      expect(css).toContain('border-color:var(--term-border,#232329)');
+    });
+
     it('locks the three standard docks in the DEFAULT DOCUMENT, not just in CSS', () => {
       for (const dock of DEFAULT_LAYOUT_DOC.base.docks ?? []) {
         expect(dock.locked).toBe(true);

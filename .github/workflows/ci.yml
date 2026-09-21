@@ -230,6 +230,7 @@ jobs:
               - 'packages/webapp/src/speech/**'
               - 'packages/webapp/src/shell/supplemental-commands/say-command.ts'
               - 'packages/webapp/src/ui/panel-rpc-handlers.ts'
+              - 'packages/webapp/src/ui/panel-rpc/**'
               - 'packages/webapp/src/kernel/panel-rpc.ts'
               - 'packages/webapp/src/kernel/remote-terminal-view.ts'
               - 'packages/webapp/src/kernel/terminal-session-client.ts'

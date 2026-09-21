@@ -165,13 +165,15 @@ public class WebRTCManager: NSObject {
 
     deinit {
         close()
-        RTCCleanupSSL()
+        
+        
+        
     }
 }
 
 
 
-enum WebRTCError: LocalizedError {
+enum WebRTCError: LocalizedError, Equatable {
     case notConfigured
 
     var errorDescription: String? {

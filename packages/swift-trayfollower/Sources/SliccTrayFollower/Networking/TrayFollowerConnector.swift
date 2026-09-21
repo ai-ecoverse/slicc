@@ -72,9 +72,19 @@ public class TrayFollowerConnector: NSObject {
 
     public weak var delegate: TrayFollowerConnectorDelegate?
 
-    public init(joinUrl: URL) {
+    
+    
+    typealias SignalingFactory = @Sendable (URL) -> TraySignalingClient
+    private let makeSignaling: SignalingFactory
+
+    public convenience init(joinUrl: URL) {
+        self.init(joinUrl: joinUrl, makeSignaling: { TraySignalingClient(joinUrl: $0) })
+    }
+
+    init(joinUrl: URL, makeSignaling: @escaping SignalingFactory) {
         self.joinUrl = joinUrl
         self.currentJoinUrl = joinUrl
+        self.makeSignaling = makeSignaling
         super.init()
     }
 
@@ -86,7 +96,7 @@ public class TrayFollowerConnector: NSObject {
         reconnecting = false
         controllerId = UUID().uuidString
         currentJoinUrl = joinUrl
-        signaling = TraySignalingClient(joinUrl: currentJoinUrl)
+        signaling = makeSignaling(currentJoinUrl)
 
         try await connectOnce()
     }
@@ -144,7 +154,7 @@ public class TrayFollowerConnector: NSObject {
                 
                 currentJoinUrl = replacement
                 controllerId = UUID().uuidString
-                signaling = TraySignalingClient(joinUrl: replacement)
+                signaling = makeSignaling(replacement)
                 self.signaling = signaling
                 try await Task.sleep(
                     nanoseconds: UInt64(SupersedeRedirect.delaySeconds * 1_000_000_000))
@@ -327,7 +337,7 @@ public class TrayFollowerConnector: NSObject {
             
             do {
                 controllerId = UUID().uuidString
-                signaling = TraySignalingClient(joinUrl: currentJoinUrl)
+                signaling = makeSignaling(currentJoinUrl)
                 try await connectOnce()
 
                 

@@ -57,6 +57,10 @@ const CSS = [
 
   'padding-right:var(--avatar-strip-w, 96px);}',
   'slicc-panel[panel-id="scoop-switcher"],slicc-panel[panel-id="floatbar"]{flex-direction:row;}',
+
+  'slicc-panel[panel-id="term"][presentation="floating"]{',
+  'background:var(--term-bg,#0c0c0e);border-color:var(--term-border,#232329);',
+  'box-shadow:rgba(0,0,0,.35) 0 14px 36px -12px,rgba(0,0,0,.2) 0 4px 10px -4px;}',
 ].join('');
 
 function ensurePanelizeStyles(doc: Document): void {

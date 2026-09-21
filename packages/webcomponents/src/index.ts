@@ -289,6 +289,7 @@ export {
   type DockTreeSpec,
   labelForSurface,
   SliccDockTree,
+  TERM_SURFACE_ID,
   type ZoneName as DockZoneName,
 } from './workbench/slicc-dock-tree.js';
 export { SliccFileTree } from './workbench/slicc-file-tree.js';
@@ -309,3 +310,10 @@ export {
 } from './workbench/slicc-monitor.js';
 export { SliccSurface } from './workbench/slicc-surface.js';
 export { SliccTerminal } from './workbench/slicc-terminal.js';
+export {
+  buildTerminalTheme,
+  resolveTerminalTheme,
+  TERMINAL_THEME_DEFAULTS,
+  type TerminalXtermTheme,
+  watchTerminalThemeScope,
+} from './workbench/terminal-theme.js';

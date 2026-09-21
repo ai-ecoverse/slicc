@@ -106,7 +106,7 @@ const CSS = [
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
 
   '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 4px 8px 10px;',
-  'box-sizing:border-box;background:#141414;}',
+  'box-sizing:border-box;background:var(--term-bg,#0c0c0e);}',
   '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}',
   '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
 
