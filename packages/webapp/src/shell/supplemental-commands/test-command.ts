@@ -17,7 +17,9 @@
  * each test file's runner script as IIFEs. User imports of `tst`
  * are rewired to that inline module via a per-file `__tstReq`
  * shim — that also keeps the realm's `require()` from looking up
- * the tst specifier in the host-built ipk module graph.
+ * the tst specifier in the host-built ipk module graph. Bare /
+ * `node:` / `sliccy:` / package `require()`s stay on the realm
+ * shim via `__userRequire` fallthrough.
  *
  * Reporters map to tst's built-in formats: `tap` (default) →
  * tst `tap`, `--reporter=spec` → tst `pretty`.
@@ -48,6 +50,9 @@ Notes:
   - Default glob: **/*.test.{js,ts}, walked from the current cwd.
   - .ts files are transpiled via the bundled typescript package.
   - Each file runs in its own realm (same engine as 'node').
+  - require('fs') / require('path') / require('sliccy:*') and ipk
+    packages resolve through the realm require shim; relative
+    './…' imports are inlined from the VFS.
 `;
 
 const DEFAULT_GLOBS = ['**/*.test.{js,ts}'];
@@ -267,10 +272,12 @@ __tst.manual = true;
  * Three buckets:
  *   - `tst` / `tst/tst.js` / `tst/assert(.js)?` → `__tstReq(...)`
  *   - any local specifier in `localModules`    → `__localReq(<abs>)`
- *   - everything else (bare specifiers) is left to the realm's
- *     `require()` shim, which resolves it from the ipk-built CJS
- *     module graph (a missing package surfaces the canonical
- *     `ipk install <name>` hint, no CDN fallback).
+ *   - everything else (bare / `node:` / `sliccy:` / ipk packages) is
+ *     left as `require(...)`. The runner binds that name to
+ *     `__userRequire`, which falls through to the realm's `require()`
+ *     shim (served builtins, capability bridges, ipk CJS graph — a
+ *     missing package surfaces the canonical `ipk install <name>`
+ *     hint, no CDN fallback).
  *
  * The regex anchors on a word boundary before `require` so it skips
  * identifier suffixes like `myrequire(...)` or `req.requireLike(...)`
@@ -343,11 +350,11 @@ async function resolveLocalSpecifier(
  * VFS paths to their transpiled CJS sources so the runner can stitch
  * them in as IIFE-wrapped modules.
  *
- * Only relative specifiers (`./` or `../`) are followed. Bare
- * specifiers fall through to the realm's `require()` shim, which
- * resolves them from the host-built CJS module graph rooted in the
- * ipk `node_modules` tree. Cycles are guarded by `modules`
- * (path-keyed) — we re-enter only for unseen paths.
+ * Only relative specifiers (`./` or `../`) are followed. Bare /
+ * `node:` / `sliccy:` / package specifiers stay as `require(...)` and
+ * are resolved at runtime by `__userRequire` → the realm shim
+ * (builtins, capability bridges, ipk graph). Cycles are guarded by
+ * `modules` (path-keyed) — we re-enter only for unseen paths.
  */
 async function collectLocalDependencies(
   fs: CommandContext['fs'],
@@ -410,8 +417,15 @@ function buildRunnerScript(
   const factories = `{${factoryEntries.join(',\n')}}`;
   const entryEdges = edgeRewrites.get(entryPath) ?? new Map<string, string>();
   const rewiredEntry = rewireUserRequires(userCjs, entryEdges);
+  // Capture the realm's `require` (AsyncFunction param) before the
+  // entry IIFE shadows the name. `__userRequire` serves three roles:
+  // inlined `tst`, pre-bundled local VFS modules, and fallthrough to
+  // the realm shim for `fs` / `path` / `sliccy:*` / ipk packages.
+  // Earlier builds passed `__tstReq` as the IIFE `require`, which
+  // closed the island and broke every bare specifier.
   return `"use strict";
 ${harness}
+const __realmRequire = require;
 const __tstReq = (id) => {
   if (id === "tst") return __tst_module_exports;
   if (id === "tst/assert") return __tst_assert_exports;
@@ -419,18 +433,25 @@ const __tstReq = (id) => {
 };
 const __localFactories = ${factories};
 const __localCache = Object.create(null);
+const __userRequire = (id) => {
+  if (id === "tst" || id === "tst/assert") return __tstReq(id);
+  if (Object.prototype.hasOwnProperty.call(__localFactories, id)) {
+    return __localReq(id);
+  }
+  return __realmRequire(id);
+};
 const __localReq = (absPath) => {
   if (absPath in __localCache) return __localCache[absPath].exports;
   const factory = __localFactories[absPath];
   if (!factory) throw new Error("tst: local module not bundled: " + absPath);
   const module = { exports: {} };
   __localCache[absPath] = module;
-  factory(module, module.exports, __localReq);
+  factory(module, module.exports, __userRequire);
   return module.exports;
 };
 await (async function (require) {
 ${rewiredEntry}
-})(__tstReq);
+})(__userRequire);
 const __state = await __tst.run({ format: ${JSON.stringify(format)} });
 // EXT6 (F-C03): for an explicit single-file run under the default tap
 // reporter, run()'s promise can resolve before a thrown test's rejection
