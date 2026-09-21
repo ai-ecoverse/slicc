@@ -1099,4 +1099,7 @@ exits 0 when `@semantic-release/github` success fails looking up a missing
 issue after publish (v6.173.4: commit `c3bba29ca` wrote "pre-fix #141414"
 for a CSS color; GraphQL `issue141414` is `NOT_FOUND`). `.releaserc.json`
 sets `successCommentCondition` and `releasedLabels` to `false` so success
-does not GraphQL-resolve `#NNNN` from commit messages.
+does not GraphQL-resolve `#NNNN` from commit messages. It writes
+`deferred=true|false` to `$GITHUB_OUTPUT`. `tools/release-alert.mjs` opens
+(or comments on) the "Release pipeline is red" tracking issue on a failed
+publish, and closes it on a green non-deferred publish.

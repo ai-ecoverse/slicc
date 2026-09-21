@@ -372,6 +372,7 @@ jobs:
           fi
 
       - name: Publish release
+        id: publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -442,21 +443,23 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # A red release is unshipped product — the 2026-08-02 provisioning
-          # regression ran 16 consecutive silent failures before a missing UI
-          # change exposed it. Keep one open tracking issue current instead
-          # of relying on someone watching the Actions tab.
-          TITLE="Release pipeline is red"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          BODY="[Release run](${RUN_URL}) failed on \`${{ github.sha }}\`. Everything merged since the last green release is unshipped until this is fixed."
-          EXISTING=$(gh issue list --repo "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
-          else
-            # No dedicated "ops" label in this repo; use bug so create succeeds.
-            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY" --label bug
-          fi
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: node packages/dev-tools/tools/release-alert.mjs fail
+
+      # Close the tracking issue only after a completed publish (or a no-op
+      # because the tag already exists). A stale-push deferral writes
+      # deferred=true and must leave the issue open — that run did not ship.
+      - name: Close red-release tracking issue
+        if: success() && steps.publish.outputs.deferred != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: node packages/dev-tools/tools/release-alert.mjs recover
 
       - name: Cleanup keychain
         if: always()
