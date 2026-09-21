@@ -354,6 +354,60 @@ describe('panel-rpc', () => {
     stop();
   });
 
+  it('rejects call() when the AbortSignal is already aborted', async () => {
+    const stop = installPanelRpcHandler({
+      instanceId: 'pf-aborted',
+      handlers: {
+        'proxied-fetch': () => {
+          throw new Error('handler should not run');
+        },
+      },
+    });
+    const client = createPanelRpcClient({ instanceId: 'pf-aborted' });
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      client.call(
+        'proxied-fetch',
+        { url: 'https://example.com/', method: 'GET', headers: {} },
+        { signal: ac.signal }
+      )
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    client.dispose();
+    stop();
+  });
+
+  it('rejects an in-flight call() when the AbortSignal aborts', async () => {
+    let release: (() => void) | undefined;
+    const hang = new Promise<{
+      head: { status: number; statusText: string; headers: Record<string, string> };
+      body: ArrayBuffer;
+    }>((resolve) => {
+      release = () =>
+        resolve({
+          head: { status: 200, statusText: 'OK', headers: {} },
+          body: new ArrayBuffer(0),
+        });
+    });
+    const stop = installPanelRpcHandler({
+      instanceId: 'pf-abort-inflight',
+      handlers: { 'proxied-fetch': () => hang },
+    });
+    const client = createPanelRpcClient({ instanceId: 'pf-abort-inflight' });
+    const ac = new AbortController();
+    const pending = client.call(
+      'proxied-fetch',
+      { url: 'https://example.com/', method: 'GET', headers: {} },
+      { signal: ac.signal, timeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    ac.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    release?.();
+    client.dispose();
+    stop();
+  });
+
   it('dispatches a remote-cdp-event push to the registered target', async () => {
     const client = createPanelRpcClient({ instanceId: 'rcdp-push' });
     const received: Array<{ method: string }> = [];

@@ -1197,7 +1197,7 @@ export interface PanelRpcClient {
   call<O extends PanelRpcOp>(
     op: O,
     payload: PanelRpcPayloadFor<O>,
-    opts?: { timeoutMs?: number }
+    opts?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<PanelRpcResultFor<O>>;
   /**
    * Subscribe to page-emitted events on a named channel. Returns an
@@ -1305,17 +1305,33 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
   function call<O extends PanelRpcOp>(
     op: O,
     payload: PanelRpcPayloadFor<O>,
-    opts: { timeoutMs?: number } = {}
+    opts: { timeoutMs?: number; signal?: AbortSignal } = {}
   ): Promise<PanelRpcResultFor<O>> {
     const id = newRequestId();
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const signal = opts.signal;
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    }
     return new Promise<PanelRpcResultFor<O>>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
+        signal?.removeEventListener('abort', onAbort);
         reject(new Error(`panel-rpc: op '${op}' timed out after ${timeoutMs}ms`));
       }, timeoutMs);
+      const onAbort = () => {
+        const waiter = pending.get(id);
+        if (!waiter) return;
+        pending.delete(id);
+        clearTimeout(waiter.timer);
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       pending.set(id, {
-        resolve: resolve as (v: unknown) => void,
+        resolve: (v: unknown) => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve(v as PanelRpcResultFor<O>);
+        },
         reject,
         timer,
       });
