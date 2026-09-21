@@ -33,6 +33,16 @@ import { normalizePath } from '../../fs/path-utils.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
 import { createIpkContextFromCtx } from './tsc-command.js';
+import {
+  coverageDumpSource,
+  coverageRuntimeSource,
+  coverageSummary,
+  extractCoverageCounts,
+  instrumentSource,
+  mergeCounts,
+  toLcov,
+  type StatementMap,
+} from './coverage-instrument.js';
 
 /** Shell name. Must not collide with POSIX `test` / `[` (just-bash builtins). */
 export const TST_COMMAND_NAME = 'tst';
@@ -44,6 +54,8 @@ Usage:
 
 Options:
   --reporter=<name>     tap (default) | spec
+  --coverage            statement coverage of executed files (see Notes)
+  --coverage-dir=<dir>  write lcov + json here (default: <cwd>/coverage)
   -h, --help            Show this help
 
 Notes:
@@ -53,6 +65,10 @@ Notes:
   - require('fs') / require('path') / require('sliccy:*') and ipk
     packages resolve through the realm require shim; relative
     './…' imports are inlined from the VFS.
+  - --coverage instruments the test file and its relative require() graph
+    with statement counters. nyc/c8 cannot wrap this runner: it is not a
+    Node child. Istanbul/Babel are not bundled (webapp size-limit); the
+    TypeScript AST already in process does the rewrite.
 `;
 
 const DEFAULT_GLOBS = ['**/*.test.{js,ts}'];
@@ -61,12 +77,16 @@ export interface ParsedTestArgs {
   globs: string[];
   reporter: 'tap' | 'spec';
   showHelp: boolean;
+  coverage: boolean;
+  coverageDir: string;
 }
 
 export function parseTestArgs(args: string[]): ParsedTestArgs {
   const globs: string[] = [];
   let reporter: 'tap' | 'spec' = 'tap';
   let showHelp = false;
+  let coverage = false;
+  let coverageDir = '';
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '-h' || arg === '--help') {
@@ -90,6 +110,20 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
       reporter = v;
       continue;
     }
+    if (arg === '--coverage') {
+      coverage = true;
+      continue;
+    }
+    if (arg === '--coverage-dir' && args[i + 1]) {
+      coverageDir = args[++i];
+      coverage = true;
+      continue;
+    }
+    if (arg.startsWith('--coverage-dir=')) {
+      coverageDir = arg.slice('--coverage-dir='.length);
+      coverage = true;
+      continue;
+    }
     if (arg.startsWith('-')) {
       throw new Error(`tst: unknown option: ${arg}`);
     }
@@ -99,6 +133,8 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
     globs: globs.length > 0 ? globs : [...DEFAULT_GLOBS],
     reporter,
     showHelp,
+    coverage,
+    coverageDir,
   };
 }
 
@@ -361,7 +397,8 @@ async function collectLocalDependencies(
   ts: TypeScriptModule,
   entryPath: string,
   entryCjs: string,
-  userOpts: import('typescript-js').CompilerOptions
+  userOpts: import('typescript-js').CompilerOptions,
+  instrument?: (source: string, path: string) => string
 ): Promise<{
   modules: Map<string, string>;
   edgeRewrites: Map<string, Map<string, string>>;
@@ -379,7 +416,8 @@ async function collectLocalDependencies(
       if (!resolved) continue;
       edges.set(spec, resolved);
       if (modules.has(resolved)) continue;
-      const source = await fs.readFile(resolved);
+      let source = await fs.readFile(resolved);
+      if (instrument) source = instrument(source, resolved);
       const depCjs = ts.transpileModule(source, {
         compilerOptions: userOpts,
         fileName: resolved,
@@ -398,7 +436,8 @@ function buildRunnerScript(
   userCjs: string,
   reporter: 'tap' | 'spec',
   localModules: Map<string, string>,
-  edgeRewrites: Map<string, Map<string, string>>
+  edgeRewrites: Map<string, Map<string, string>>,
+  coverage = false
 ): string {
   const format = reporter === 'spec' ? 'pretty' : 'tap';
   // Inline every transitive local module as a lazy IIFE factory.
@@ -424,8 +463,10 @@ function buildRunnerScript(
   // Local factories get a per-module require via `createRequire(absPath)`
   // so a helper under `/workspace/lib/` resolves packages from its own
   // nearer `node_modules`, not the entry test file's directory.
+  const coverageRuntime = coverage ? `${coverageRuntimeSource()}\n` : '';
+  const coverageDump = coverage ? `\n${coverageDumpSource()}` : '';
   return `"use strict";
-${harness}
+${coverageRuntime}${harness}
 const __realmRequire = require;
 const { createRequire: __createRequire } = __realmRequire("module");
 const __tstReq = (id) => {
@@ -465,6 +506,7 @@ const __state = await __tst.run({ format: ${JSON.stringify(format)} });
 // enough async work to settle first, which is why only this path swallowed.
 await Promise.resolve();
 await new Promise((resolve) => setTimeout(resolve));
+${coverageDump}
 if (__state && __state.failed && __state.failed.length > 0) process.exit(1);
 `;
 }
@@ -498,6 +540,8 @@ interface TestRunSetup {
   ts: TypeScriptModule;
   harness: string;
   userOpts: UserCompilerOptions;
+  coverageMaps: Record<string, StatementMap>;
+  coverageCounts: Record<string, number[]>;
 }
 
 /**
@@ -551,7 +595,15 @@ async function prepareTestRun(
     };
   }
   const harness = await prepareTstHarness(ts);
-  return { parsed, files, ts, harness, userOpts: buildUserOpts(ts) };
+  return {
+    parsed,
+    files,
+    ts,
+    harness,
+    userOpts: buildUserOpts(ts),
+    coverageMaps: {},
+    coverageCounts: {},
+  };
 }
 
 interface OneFileResult {
@@ -588,6 +640,14 @@ async function runOneTestFile(
   prefixWithFilename: boolean
 ): Promise<OneFileResult> {
   const { ts, harness, userOpts, parsed } = setup;
+  const instrument =
+    parsed.coverage
+      ? (src: string, path: string) => {
+          const { source: next, map } = instrumentSource(ts, src, path);
+          setup.coverageMaps[path] = map;
+          return next;
+        }
+      : undefined;
   let source: string;
   try {
     source = await ctx.fs.readFile(file);
@@ -598,6 +658,7 @@ async function runOneTestFile(
       failed: true,
     };
   }
+  if (instrument) source = instrument(source, file);
   let userCjs: string;
   try {
     userCjs = ts.transpileModule(source, { compilerOptions: userOpts, fileName: file }).outputText;
@@ -616,7 +677,8 @@ async function runOneTestFile(
       ts,
       file,
       userCjs,
-      userOpts
+      userOpts,
+      instrument
     ));
   } catch (err) {
     return {
@@ -631,15 +693,22 @@ async function runOneTestFile(
     userCjs,
     parsed.reporter,
     localModules,
-    edgeRewrites
+    edgeRewrites,
+    parsed.coverage
   );
   const result = await executeJsCode(runner, ['node', file], ctx, undefined, { filename: file });
+  let stdout = result.stdout;
+  if (parsed.coverage) {
+    const extracted = extractCoverageCounts(stdout);
+    stdout = extracted.stdout;
+    mergeCounts(setup.coverageCounts, extracted.counts);
+  }
   return {
-    stdout: prefixWithFilename ? `# ${file}\n${result.stdout}` : result.stdout,
+    stdout: prefixWithFilename ? `# ${file}\n${stdout}` : stdout,
     stderr: result.stderr,
     // Fold in the stdout marker so a failing test propagates non-zero even
     // if the realm exit code was swallowed at the realm-host boundary.
-    failed: result.exitCode !== 0 || hasTstFailureMarker(result.stdout),
+    failed: result.exitCode !== 0 || hasTstFailureMarker(stdout),
   };
 }
 
@@ -657,6 +726,24 @@ export function createTestCommand(): Command {
       stdout += r.stdout;
       stderr += r.stderr;
       if (r.failed) anyFailed = true;
+    }
+    if (prep.parsed.coverage) {
+      const dir = prep.parsed.coverageDir || `${ctx.cwd.replace(/\/$/, '')}/coverage`;
+      const json = JSON.stringify(
+        { counts: prep.coverageCounts, maps: prep.coverageMaps },
+        null,
+        2
+      );
+      const lcov = toLcov(prep.coverageCounts, prep.coverageMaps);
+      const summary = coverageSummary(prep.coverageCounts, prep.coverageMaps);
+      try {
+        await ctx.fs.writeFile(`${dir}/coverage.json`, json);
+        await ctx.fs.writeFile(`${dir}/coverage.lcov`, lcov);
+      } catch (err) {
+        stderr += `tst: writing coverage to ${dir}: ${err instanceof Error ? err.message : String(err)}\n`;
+        anyFailed = true;
+      }
+      stdout += `\n${summary}`;
     }
     return { stdout, stderr, exitCode: anyFailed ? 1 : 0 };
   });
