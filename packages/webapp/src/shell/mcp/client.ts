@@ -220,7 +220,10 @@ function parseRpcError(text: string, expectedId: number): McpRpcError | undefine
  * True when a `server/discover` rejection means "this server wants the legacy
  * `initialize` handshake first" rather than a genuine failure.
  *
- * Two shapes qualify:
+ * Three shapes qualify:
+ * - `McpTimeoutError` — a Streamable-HTTP server that never answers
+ *   `server/discover` (hangs until the per-request timeout) is treated as
+ *   legacy; 401 auth challenges are not timeouts and still surface.
  * - `-32601` Method not found — the server has no `server/discover` route.
  * - `-32000` + HTTP 400 + a missing-session message — servers built on
  *   Cloudflare's `agents` SDK reject any non-initialization request that
@@ -228,6 +231,7 @@ function parseRpcError(text: string, expectedId: number): McpRpcError | undefine
  *   message and status are both required to keep the signal narrow.
  */
 function isLegacyHandshakeSignal(err: unknown, rpcError: McpRpcError | undefined): boolean {
+  if (err instanceof McpTimeoutError) return true;
   if (!rpcError) return false;
   const httpStatus = err instanceof McpHttpError ? err.status : undefined;
   if (rpcError.code === -32601) {
