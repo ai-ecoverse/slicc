@@ -1,5 +1,8 @@
 import { define } from '../internal/define.js';
 import { iconEl } from '../internal/icons.js';
+import { TERM_SURFACE_ID } from './terminal-theme.js';
+
+export { TERM_SURFACE_ID } from './terminal-theme.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-dock-tree>`. Light-DOM hosts
@@ -152,6 +155,15 @@ slicc-dock-tree .dock-tree__tile--chrome {
   box-shadow:
     rgba(0, 0, 0, 0.45) 0 14px 36px -12px,
     rgba(0, 0, 0, 0.3) 0 4px 10px -4px;
+}
+/* Terminal leaf: same floating geometry, but always-dark chrome so a light
+   page theme (vanilla) does not paint a cream card border around xterm. */
+slicc-dock-tree .dock-tree__tile--chrome-dark {
+  background: var(--term-bg, #0c0c0e);
+  border-color: var(--term-border, #232329);
+  box-shadow:
+    rgba(0, 0, 0, 0.35) 0 14px 36px -12px,
+    rgba(0, 0, 0, 0.2) 0 4px 10px -4px;
 }
 /* Slide-in for a NEWLY PLACED tool tile — the prototype workbench's .38s
    cubic-bezier(.4,0,.2,1) open, re-homed as an entrance animation because the
@@ -1341,10 +1353,13 @@ export class SliccDockTree extends HTMLElement {
     tile.className = 'dock-tree__tile';
     // Tool tiles get the floating rounded pane chrome; the reserved chat
     // column renders flat (see the .dock-tree__tile--chrome CSS above).
-    // A tool tile that this render NEWLY placed slides in from the right —
-    // re-renders with an unchanged placed set (divider drags) never replay it.
+    // The terminal leaf uses dark chrome so light page themes don't wrap
+    // xterm in a cream card border. A tool tile that this render NEWLY
+    // placed slides in from the right — re-renders with an unchanged
+    // placed set (divider drags) never replay it.
     if (surfaceId !== CHAT_SURFACE_ID) {
       tile.classList.add('dock-tree__tile--chrome');
+      if (surfaceId === TERM_SURFACE_ID) tile.classList.add('dock-tree__tile--chrome-dark');
       if (!this.#prevPlaced.has(surfaceId)) tile.classList.add('dock-tree__tile--enter');
     }
     if (this.tilesMovable && !this.#isLockedNode(node, zone)) {

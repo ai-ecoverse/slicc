@@ -1898,14 +1898,18 @@ describe('slicc-dock-tree', () => {
         ?.closest('.dock-tree__tile') as HTMLElement;
       expect(chatTile.classList.contains('dock-tree__tile--chrome')).toBe(false);
       expect(termTile.classList.contains('dock-tree__tile--chrome')).toBe(true);
+      expect(termTile.classList.contains('dock-tree__tile--chrome-dark')).toBe(true);
       // The chrome is the old floating workbench-pane card (the deleted
       // `<slicc-workbench-pane>` → `<slicc-pane elevated>` chain): rounded,
-      // bordered, clipped to the radius, floated off the edges.
+      // bordered, clipped to the radius, floated off the edges — but for the
+      // terminal leaf the fill stays always-dark so light page themes don't
+      // paint a cream card around xterm.
       const cs = getComputedStyle(termTile);
       expect(cs.borderTopLeftRadius).toBe('14px');
       expect(cs.overflow).toBe('hidden');
       expect(cs.borderTopWidth).toBe('1px');
       expect(cs.marginLeft).toBe('12px');
+      expect(cs.backgroundColor).toBe('rgb(12, 12, 14)'); // --term-bg #0c0c0e
       // The chat column keeps the prototype's flat full-bleed treatment.
       const chatCs = getComputedStyle(chatTile);
       expect(chatCs.borderTopLeftRadius).toBe('0px');
