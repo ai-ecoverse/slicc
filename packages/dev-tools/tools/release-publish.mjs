@@ -8,6 +8,11 @@ const DEFER_MESSAGE =
   '[release-publish] main moved during prepare; the version-commit push was rejected. ' +
   'Deferring — the push that moved main, or the schedule catch-up, publishes from the new tip.';
 
+const MISSING_ISSUE_MESSAGE =
+  '[release-publish] @semantic-release/github success could not resolve a referenced ' +
+  'GitHub issue after publish already completed. Treating the job as successful so a ' +
+  'phantom #NNNN cannot red the pipeline.';
+
 export function isStaleReleasePush(output) {
   const text = String(output ?? '');
   const gitPluginFailed =
@@ -20,9 +25,22 @@ export function isStaleReleasePush(output) {
   return gitPluginFailed && rejected;
 }
 
+export function isMissingGithubIssueSuccess(output) {
+  const text = String(output ?? '');
+  const successFailed = text.includes('Failed step "success" of plugin "@semantic-release/github"');
+  if (!successFailed) return false;
+  return (
+    /Could not resolve to an issue or pull request with the number of \d+/i.test(text) ||
+    (/NOT_FOUND/.test(text) && /issue\d+/.test(text))
+  );
+}
+
 export function classifyReleaseExit(code, output) {
   if (code === 0) return { code: 0, deferred: false };
   if (code === 1 && isStaleReleasePush(output)) return { code: 0, deferred: true };
+  if (code === 1 && isMissingGithubIssueSuccess(output)) {
+    return { code: 0, deferred: false, missingIssue: true };
+  }
   return { code: code ?? 1, deferred: false };
 }
 
@@ -85,6 +103,8 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (result.deferred) {
     console.error(DEFER_MESSAGE);
+  } else if (result.missingIssue) {
+    console.error(MISSING_ISSUE_MESSAGE);
   }
   process.exitCode = result.code;
   return result;
