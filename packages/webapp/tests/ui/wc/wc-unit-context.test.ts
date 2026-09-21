@@ -122,6 +122,25 @@ describe('wc-unit-context', () => {
     expect(select).not.toHaveBeenCalled();
   });
 
+  it('selectScoopForContext rejects strings outside scoop:/cone: grammar', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    // unitForContext would map these to the default root; selectScoop must not.
+    expect(selectScoopForContext(all, 'typo', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, '', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'whatever', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'scoop:', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'cone:', primary.id, select)).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('selectScoopForContext accepts a bare cone as the default root', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectScoopForContext(all, 'cone', helper.id, select)).toBe(true);
+    expect(select).toHaveBeenCalledWith(primary);
+  });
+
   it('selectScoopForContext returns true without switching when already selected', () => {
     const all = [worker, research, primary, helper];
     const select = vi.fn();

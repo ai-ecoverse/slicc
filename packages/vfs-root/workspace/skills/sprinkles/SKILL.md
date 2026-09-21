@@ -320,7 +320,7 @@ Available as `slicc` in `<script>` tags and `onclick` attributes:
 - `slicc.close()` — close the sprinkle.
 - `slicc.minimize()` — collapse the sprinkle panel (rail icon stays visible; user can click to reopen). Does not close or destroy the sprinkle.
 - `slicc.stopCone()` — stop the cone agent.
-- `slicc.selectScoop(target)` — switch the app's view to an already-running scoop or cone (the same thing a switcher-chip click does). `target` is `'scoop:<name>'` or `'cone:<folder>'` — the same vocabulary as `?ctx=`. Returns `Promise<boolean>`: `true` when the target matched the live roster (including when that unit is already selected); `false` — never thrown — when nothing matches, so the panel can fall back to emitting a lick. Ungated: a panel is agent-authored code in the user's own session.
+- `slicc.selectScoop(target)` — switch the app's view to an already-running scoop or cone (the same thing a switcher-chip click does). `target` is `'scoop:<name>'`, `'cone:<folder>'`, or a bare `'cone'`. Returns `Promise<boolean>`: `true` when the target matched the live roster (including when that unit is already selected); `false` — never thrown — when the string is outside that grammar (a typo, empty, unprefixed name) or nothing matches, so the panel can fall back to emitting a lick. Ungated: a panel is agent-authored code in the user's own session. Sprinkle-only — trusted dips do not expose this method.
 - `slicc.readFile(path)` — read a VFS file (returns `Promise<string>`).
 - `slicc.writeFile(path, content)` — write text content to a VFS file.
 - `slicc.readDir(path)` — list directory entries (returns `Promise<Array<{name, type}>>`).

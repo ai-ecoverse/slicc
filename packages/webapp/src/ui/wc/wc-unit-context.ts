@@ -71,13 +71,28 @@ export function unitForContext(
 }
 
 /**
+ * Documented `slicc.selectScoop` grammar: `'scoop:<name>'`, `'cone:<folder>'`,
+ * or a bare `'cone'` (the default root). {@link unitForContext} also maps
+ * every other string to the default root for URL `?ctx=` fallbacks — that
+ * is the wrong answer here, because a typo would switch to the cone and
+ * skip the lick fallback.
+ */
+function isSelectScoopTarget(ctx: string): boolean {
+  if (ctx === 'cone') return true;
+  if (ctx.startsWith('scoop:') && ctx.length > 'scoop:'.length) return true;
+  if (ctx.startsWith('cone:') && ctx.length > 'cone:'.length) return true;
+  return false;
+}
+
+/**
  * Switch the shell to the unit named by `ctx` (`scoop:<name>`, `cone:<folder>`,
- * or a bare context that {@link unitForContext} maps to the default root).
+ * or a bare `'cone'` for the default root).
  *
  * Returns `true` when the target resolved against `units`, including when
  * that unit is already selected (the view is already where the caller asked
- * to go). Returns `false` when nothing in the roster matches, so a panel
- * can fall back to emitting a lick. Never throws.
+ * to go). Returns `false` when the string is outside that grammar or nothing
+ * in the roster matches, so a panel can fall back to emitting a lick. Never
+ * throws.
  */
 export function selectScoopForContext(
   units: readonly WorkUnitSummary[],
@@ -85,6 +100,7 @@ export function selectScoopForContext(
   selectedId: string | null | undefined,
   select: (unit: WorkUnitSummary) => void
 ): boolean {
+  if (!isSelectScoopTarget(ctx)) return false;
   const unit = unitForContext(units, ctx);
   if (!unit) return false;
   if (unit.id !== selectedId) select(unit);

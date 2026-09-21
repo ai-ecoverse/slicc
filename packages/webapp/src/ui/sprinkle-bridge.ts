@@ -545,12 +545,14 @@ export interface SprinkleBridgeAPI {
    * Switch the app's view to an already-running scoop or cone — the same
    * thing a click on a switcher chip does.
    *
-   * `target` uses the same vocabulary as `?ctx=`: `'scoop:<name>'` or
-   * `'cone:<folder>'` (a bare `'cone'` maps to the default root). Resolves
-   * `true` when the target matched the live roster, including when that
-   * unit is already selected (the view is already where the caller asked
-   * to go). Resolves `false` — never throws — when nothing in the roster
-   * matches, so a panel can fall back to emitting a lick.
+   * `target` is `'scoop:<name>'`, `'cone:<folder>'`, or a bare `'cone'`
+   * (the default root). Other strings — including URL-context fallbacks
+   * such as a typo — resolve `false` rather than switching to the default
+   * root. Resolves `true` when the target matched the live roster,
+   * including when that unit is already selected (the view is already
+   * where the caller asked to go). Resolves `false` — never throws —
+   * when the grammar does not match or nothing in the roster matches, so
+   * a panel can fall back to emitting a lick.
    */
   selectScoop(target: string): Promise<boolean>;
   /** Push an image into the chat input as a pending attachment (no agent turn). */
