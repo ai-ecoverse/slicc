@@ -9,7 +9,9 @@
  * wrapper exits 0 instead. The push that moved `main` already started a new
  * Release run; the half-hourly schedule catches a tip that did not (for
  * example a `[skip ci]` commit). A green deferral does not open the
- * red-release tracking issue.
+ * red-release tracking issue. A green publish writes `deferred=false` to
+ * `$GITHUB_OUTPUT` so the workflow can close that tracking issue; a
+ * deferral writes `deferred=true` and leaves the issue open.
  *
  * `@semantic-release/github` success comments parse `#NNNN` in commit
  * messages as slicc issues. A CSS hex such as `#141414` ("pre-fix #141414")
@@ -21,7 +23,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { appendFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const DEFER_MESSAGE =
@@ -81,6 +83,22 @@ export function classifyReleaseExit(code, output) {
     return { code: 0, deferred: false, missingIssue: true };
   }
   return { code: code ?? 1, deferred: false };
+}
+
+/**
+ * Tell the Release workflow whether this run deferred, so it can close the
+ * red-release tracking issue only after a real publish (or a no-op already
+ * tagged). A stale-push deferral leaves the issue open.
+ *
+ * @param {boolean} deferred
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function writeDeferredOutput(deferred, env = process.env) {
+  const line = `deferred=${deferred ? 'true' : 'false'}\n`;
+  if (env.GITHUB_OUTPUT) {
+    appendFileSync(env.GITHUB_OUTPUT, line);
+  }
+  return line;
 }
 
 /**
@@ -156,6 +174,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   } else if (result.missingIssue) {
     console.error(MISSING_ISSUE_MESSAGE);
   }
+  writeDeferredOutput(result.deferred === true, options.env ?? process.env);
   process.exitCode = result.code;
   return result;
 }

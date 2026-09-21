@@ -57,7 +57,7 @@ Each bold gate is an `npm run` script unless the raw command is shown.
 - **Agent merch grid**: `tools/agent-merch.mjs` (+ `agent-merch-lib.mjs`) — hash-stable `<slicc-agent-avatar>` grid → 300-dpi PNGs in `dist/merch/` (Playwright; build `@slicc/webcomponents` first, `--help`). [details](../../docs/dev-tools-details.md#agent-merch-grid).
 - **CI phase timings**: `tools/ci-job-timing.mjs` (+ `-lib.mjs`) — step timestamps → Markdown summary + JSON artifact; both Cloudflare staging workflows.
 - **Preflight deps check**: `tools/preflight-deps.mjs` (via `pretypecheck`/`pretest`).
-- **Release gating**: `tools/release-plan.mjs` (Linux preflight) + `release-native.mjs`, `tools/merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`), `tools/release-publish.mjs` (wraps `npx semantic-release`). [details](../../docs/dev-tools-details.md#release-gating).
+- **Release gating**: `tools/release-plan.mjs` (Linux preflight) + `release-native.mjs`, `tools/merge-queue-busy.mjs` (+ `merge-queue-lib.mjs`), `tools/release-publish.mjs` (wraps `npx semantic-release`), `tools/release-alert.mjs` (open/close the red-release tracking issue). [details](../../docs/dev-tools-details.md#release-gating).
 - **Optional-binary guard**: `tools/run-if-installed.mjs <binary> [args…]` — runs iff on `PATH`, else exits 0; used by `lint-staged` Swift/Go globs.
 
 ### CDP tooling
