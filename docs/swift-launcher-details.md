@@ -113,6 +113,54 @@ macOS Finder integration mirrors the iOS Files.app mount: `SliccFileProvider.app
 
 The iCloud store is readable only by this signed, iCloud-entitled binary, so the Go `slicc` CLI shells out to a subcommand parsed in `main.swift` before the SwiftUI app boots (`TraySessionCLI.parse` returns `nil` for a normal launch). `--list-sessions` prints active sessions as JSON, metadata only (`joinUrl` redacted). `--reveal-urls` adds `joinUrl` behind a consent gate: a remembered "Always" (`UserDefaults`, keyed by caller code-signing id / path) wins; else an `NSAlert` (Deny / Allow Once / Always Allow / Always Deny) shows in a GUI session and a headless/SSH caller is denied (exit 3). Pure logic in `Models/TraySessionCLI.swift` is unit-tested (`TraySessionCLITests`); untestable glue (NSAlert, `getppid`/`proc_pidpath`/`SecCode`, store read) sits in `TraySessionCLIRunner`. Caller identity is spoofable, so redaction-by-default is the real control and the dialog a speed bump.
 
+### Headless CLI (`Sliccstart --computer-follow` / `--computer-preflight`)
+
+Parsed in `main.swift` right after the `--list-sessions` check and before the
+SwiftUI app boots (`ComputerFollowCLI.parse` returns `nil` for a normal launch).
+It exists because `slicc <join-url> follow --computer` needs this Mac's screen
+and the Go CLI cannot take it — `CGO_ENABLED=0` puts ScreenCaptureKit and
+CGEvent out of reach, and TCC would attribute a bare binary's grant to the
+terminal that launched it rather than to SLICC (issue #3260).
+
+- `--computer-follow <join-url> [--pair <token>]` runs **only**
+  `ComputerTrayFollower` against that URL: no menu bar, no widget observer, no
+  window. `NSApplication` is set to `.accessory` — still a GUI app as far as TCC
+  and ScreenCaptureKit are concerned, but with no Dock tile; `.prohibited` would
+  suppress the very prompts this detour exists for. Its stdout is a protocol
+  the CLI reads line by line: `SLICC_COMPUTER_FOLLOW_READY` **at once** (this
+  build knows the flag — an older launcher ignores it and boots its GUI, never
+  exiting), `SLICC_COMPUTER_FOLLOW_ATTACHED` once the channel is open and
+  `hello` sent (from `ComputerTrayFollower.onConnected`), or
+  `SLICC_COMPUTER_FOLLOW_FAILED <reason>` and exit 1 when attaching fails for
+  good (`onGaveUp`: the first `start()` does not retry; a later drop ends in
+  `didGiveUp`). Ready is deliberately not attached — conflating them first
+  reported a launcher as healthy before it had reached anyone. SIGTERM/SIGINT
+  stop the follower so the leader sees a clean departure; a **kqueue watch on
+  the parent pid** ends it too, because a SIGKILLed or crashed CLI never sends
+  that SIGTERM and closing stdout does not stop a process that never writes.
+- `--pair <token>` rides to the leader on `hello.pairId`, which folds this
+  follower and the CLI into one roster entry carrying both `exec` and
+  `computer`. Menu-bar launches send no token and stand on their own.
+- `--computer-preflight [--json]` raises both TCC prompts up front and reports
+  the grant state (`{"accessibility":…,"screenRecording":…}` with `--json`,
+  which is what `internal/computer.Grants` decodes). Exit 0 when both are
+  granted, 3 otherwise. The CLI runs it at `follow --computer` startup so the
+  first prompt lands while the human is still at the terminal rather than
+  mid-turn.
+- A malformed invocation **exits** (code 2) rather than falling through to the
+  GUI: booting the menu-bar app would be indistinguishable, from the CLI's side,
+  from an outdated launcher, and the user would be told to update a Sliccstart
+  that is already current. Only `http(s)` join URLs are accepted — a launcher
+  whose whole job is granting screen access should not dial an arbitrary string.
+
+Pure logic in `Models/ComputerFollowCLI.swift` is unit-tested
+(`ComputerFollowCLITests`); the untestable glue (NSApplication, the run loop,
+the live permission probes) sits in `ComputerFollowCLIRunner`.
+
+**Dev-build caveat:** TCC keys a grant to the code signature, so an ad-hoc
+re-signed local build re-prompts on every rebuild. Released, Developer
+ID-signed Sliccstart builds keep the grant across CLI restarts and updates.
+
 ## updates
 
 `Models/UpdateCheckStatus.swift` is the footer's report on the last check (`idle`, `checking`, `upToDate`, `noInstallableRelease`, `translocated`, `failed(message)`). `AppUpdater` hands every failure to a callback and otherwise only publishes a downloaded bundle, so without this a rate-limited or asset-less check was indistinguishable from "never checked" and the footer just kept offering "Check for Updates". `AUError.cancelled` maps to `upToDate` (that is how `findViableUpdate` says "nothing newer"); `AppUpdater.Error.noValidUpdate` to `noInstallableRelease`.

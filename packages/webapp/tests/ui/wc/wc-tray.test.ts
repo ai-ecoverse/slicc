@@ -44,6 +44,7 @@ vi.mock('../../../src/ui/page-leader-tray.js', () => ({
         getSprinkleInstances: () => [],
         getExecCapableBootstrapIds: () => new Set(),
         getComputerCapableBootstrapIds: () => new Set(),
+        getAbsorbedBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),

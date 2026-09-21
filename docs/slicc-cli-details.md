@@ -14,6 +14,7 @@ authoritative command list, safety rules, env-var and Makefile references.
 | `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry)        |
 | `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine                     |
 | `internal/cloud/`     | iCloud tray-session parse/select/format + darwin `Sliccstart --list-sessions` reader |
+| `internal/computer/`  | `follow --computer`: mode/pair-token parsing + darwin headless-Sliccstart lifecycle  |
 | `cloud.go`            | `list-sessions` + `<verb>-cloud` family                                              |
 | `internal/execrun/`   | Cross-platform runner backing `follow` + `EvalSession` (`--eval`)                    |
 | `update.go`           | `cmdUpdate` + on-launch update-notice hook                                           |
@@ -21,6 +22,84 @@ authoritative command list, safety rules, env-var and Makefile references.
 | `internal/update/`    | Release discovery (sparse scan) + self-update apply + cached notice                  |
 | `internal/logging/`   | `log/slog` diagnostic logger + `Logf` adapter for the `tray` seam + pion factory     |
 | `internal/ui/`        | Terminal presentation: capability detection, event lines, sticky status bar          |
+
+## `follow --computer` (native macOS screen + input)
+
+`--computer` composes with every follow mode — `follow --computer`,
+`follow --computer bash -c`, `follow --computer --eval python` — and brings
+this Mac's screen and input along so the leader can drive it with
+`computer add ssh <this follower>`.
+
+**Why it shells out.** The CLI cannot capture a screen. It builds
+`CGO_ENABLED=0`, so ScreenCaptureKit and CGEvent are unreachable, and a cgo
+build would still be the wrong asker: macOS attributes a TCC grant to the
+_responsible_ process, which for a bare binary is the terminal that launched it.
+So `internal/computer` starts the signed Sliccstart bundle in a headless mode —
+the same `LocateExecutable` path (`$SLICCSTART_APP` → `mdfind` → `/Applications`
+→ `~/Applications`) that `--list-sessions` already uses — and the Screen
+Recording / Accessibility prompts name SLICC instead of Terminal.
+
+```
+slicc <url> follow --computer bash -c
+  └─ Sliccstart --computer-follow <url> --pair <token>    (headless, .accessory)
+```
+
+**One machine, one roster entry.** Both peers put the same `hello.pairId` on the
+wire and the leader folds them (`scoops/tray-leader/follower-pairing.ts`): the
+CLI keeps the entry, the launcher's `computer` capability is lent to it, and the
+launcher drops off `ssh --list` / `host` / `computer add ssh`. The token is
+minted per CLI process (`NewPairID`, 128 random bits) rather than reusing the
+runtime id, because a bootstrap id does not exist until the first attach and
+changes on every reconnect — while the launcher is spawned before either and
+outlives both. With no runner there is no `exec` peer to fold into, so the
+launcher keeps its own entry and stays addressable; that is `--computer` in ui
+mode working as intended, not a missed fold.
+
+**Handshake — two facts, kept apart.** The launcher's stdout carries three
+protocol lines, and the CLI waits for two separate things:
+
+| line                                    | means                                                                         | if it never comes                                  |
+| --------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------- |
+| `SLICC_COMPUTER_FOLLOW_READY`           | "I understand `--computer-follow`" — printed at once, before any network work | 30 s → "update Sliccstart" (`ErrOutdatedLauncher`) |
+| `SLICC_COMPUTER_FOLLOW_ATTACHED`        | channel open **and** `hello` sent: the leader can now reach the screen        | 60 s → `ErrAttachFailed`                           |
+| `SLICC_COMPUTER_FOLLOW_FAILED <reason>` | attaching failed for good; the launcher exits next                            | — surfaces as `ErrAttachFailed: <reason>`          |
+
+Ready alone is not success. An older Sliccstart ignores an unknown flag and boots
+its GUI (never exiting, so it would pass for a healthy child forever) — that is
+what ready distinguishes. But the first version of this PR also _returned_ on
+ready, so a launcher that could not reach the leader was reported as attached and
+`--computer=require` carried on without a screen. Attach is now its own wait, and
+an unreachable leader is never misdiagnosed as an outdated launcher. Lines are
+read by a line-scanning `io.Writer` on `cmd.Stdout` rather than a `StdoutPipe`,
+because `os/exec` closes a pipe as soon as `Wait` sees the process exit and a
+reader racing `Wait` can lose exactly the `FAILED` line that explains why.
+
+**Permissions are raised at startup, not lazily.** `follow --computer` runs
+`Sliccstart --computer-preflight --json` before connecting and prints the grant
+state. Left lazy, the first TCC dialog lands mid-turn on whichever
+`computer screenshot` the agent happened to run, and the turn stalls on a prompt
+nobody is watching. A partial grant is a warning, never fatal: the box can be
+ticked in System Settings while the session runs and the follower re-asks on its
+next capture. `--allow-input` and the leader's sudo approval hop still gate
+input; `--computer` only makes capture _available_.
+
+**Lifecycle.** The launcher is SIGTERM'd (then killed after 5 s) when the CLI
+exits normally. That deferred stop never runs if the CLI is SIGKILLed or
+crashes, so the launcher also watches its **parent pid** (a kqueue process
+source) and exits when it goes — otherwise the leader could keep capturing the
+screen after the user believes the session ended. A leader drop and reconnect
+needs nothing — the launcher's own connector reconnects; if it gives up, it
+prints `FAILED`, exits, and the CLI says so (`Options.OnExit`) rather than
+letting the capability vanish. A superseded tray does need action: `Retarget`
+restarts the launcher on the replacement join URL, in the background so the
+CLI's own reconnect never waits on the screen half's attach.
+
+**Failure policy.** Plain `--computer` is a request: a Mac without Sliccstart
+reports one line and follows on as an ordinary exec target.
+`--computer=require` makes it a precondition and exits non-zero instead, so a
+script that needs a screen does not silently connect without one. Off macOS both
+forms report `ErrUnsupported` — the flag parses and dispatches everywhere rather
+than failing as an unknown option.
 
 ## `watch` rendering
 

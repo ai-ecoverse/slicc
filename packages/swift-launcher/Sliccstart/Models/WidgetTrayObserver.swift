@@ -299,7 +299,8 @@ extension WidgetTrayObserver: TrayFollowerConnectorDelegate {
                     protocolVersion: traySyncProtocolVersion,
                     runtime: "sliccstart-widget",
                     capabilities: nil,
-                    motd: nil))
+                    motd: nil,
+                    pairId: nil))
             publish()
         }
     }

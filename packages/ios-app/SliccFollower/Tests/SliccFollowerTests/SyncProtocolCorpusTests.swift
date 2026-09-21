@@ -331,7 +331,7 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let fixture = try XCTUnwrap(corpus.followerToLeader.first { $0.type == "hello" })
         let decoded = try JSONDecoder().decode(
             FollowerToLeaderMessage.self, from: fixture.messageData)
-        guard case .hello(_, _, let capabilities, _) = decoded else {
+        guard case .hello(_, _, let capabilities, _, _) = decoded else {
             return XCTFail("followerToLeader 'hello' fixture decoded to a different case")
         }
         XCTAssertEqual(

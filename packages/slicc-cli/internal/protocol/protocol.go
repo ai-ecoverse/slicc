@@ -64,6 +64,15 @@ type Hello struct {
 	// Motd is an optional one-line description the leader surfaces to the agent
 	// (e.g. `ssh --list`) — who/what the exec target is. Additive + optional.
 	Motd string `json:"motd,omitempty"`
+	// PairID marks this peer and the headless Sliccstart `follow --computer`
+	// spawned as the SAME machine, so the leader lists one roster entry holding
+	// both `exec` and `computer` instead of the Mac twice (#3260).
+	//
+	// Minted per CLI process (`internal/computer.NewPairID`) rather than taken
+	// from the runtime id: the bootstrap id does not exist until the first
+	// attach and changes on every reconnect, while the launcher is spawned
+	// before either happens.
+	PairID string `json:"pairId,omitempty"`
 }
 
 // ExecRequest asks the receiving peer to run a shell command.

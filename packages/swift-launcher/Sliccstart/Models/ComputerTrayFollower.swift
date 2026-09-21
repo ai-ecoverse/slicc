@@ -20,6 +20,21 @@ final class ComputerTrayFollower: NSObject {
     private let makeCapturer: () -> ComputerCapturing
     private var permissions: ComputerPermissions
     private let eventSink: ComputerEventSink
+    /// "Same machine" token from `slicc … follow --computer --pair <id>`, put on
+    /// `hello` so the leader folds this follower and that CLI into ONE roster
+    /// entry carrying both `exec` and `computer` (#3260). Nil for the menu-bar
+    /// app, which has no CLI to be folded with and stands on its own.
+    private let pairId: String?
+    /// Fires each time the data channel opens. The headless
+    /// `Sliccstart --computer-follow` reports its FIRST call to the CLI as
+    /// "attached" — the only point at which native capture is actually
+    /// reachable from the leader (#3260).
+    var onConnected: (() -> Void)?
+    /// Fires when attaching failed for good: the first `start()` threw (it does
+    /// not retry), or the reconnect loop gave up after a drop. The menu-bar app
+    /// ignores it and re-dials on the next leader change; the headless mode
+    /// exits, because a launcher nobody can reach should not outlive its use.
+    var onGaveUp: ((String) -> Void)?
 
     private var connector: TrayFollowerConnecting?
     private var startTask: Task<Void, Never>?
@@ -41,12 +56,14 @@ final class ComputerTrayFollower: NSObject {
         },
         makeCapturer: (() -> ComputerCapturing)? = nil,
         permissions: ComputerPermissions = ComputerPermissions(),
-        eventSink: ComputerEventSink = LiveCGEventSink()
+        eventSink: ComputerEventSink = LiveCGEventSink(),
+        pairId: String? = nil
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
         self.permissions = permissions
         self.eventSink = eventSink
+        self.pairId = pairId
         super.init()
     }
 
@@ -108,6 +125,7 @@ final class ComputerTrayFollower: NSObject {
         } catch {
             log.error("Computer tray follower could not attach: \(String(describing: error))")
             if self.connector === connector { self.connector = nil }
+            onGaveUp?(error.localizedDescription)
         }
     }
 
@@ -244,7 +262,11 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
                     protocolVersion: traySyncProtocolVersion,
                     runtime: ComputerTrayFollower.runtime,
                     capabilities: TraySyncCapabilities(exec: false, computer: true),
-                    motd: "Native screen capture on \(host)"))
+                    motd: "Native screen capture on \(host)",
+                    pairId: pairId))
+            // After `hello`, not before: "attached" has to mean the leader now
+            // knows this peer can capture, not merely that a channel opened.
+            onConnected?()
         }
     }
 
@@ -261,6 +283,7 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
     nonisolated func connector(_ connector: TrayFollowerConnector, didGiveUp lastError: String) {
         Task { @MainActor [weak self] in
             self?.teardownConnection()
+            self?.onGaveUp?(lastError)
         }
     }
 

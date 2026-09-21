@@ -12,6 +12,7 @@ import {
 } from '../tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../tray-webrtc.js';
 import { isMessageSendableToTrust } from './biscotto-gate.js';
+import { type FollowerPairing, resolveFollowerPairs } from './follower-pairing.js';
 
 // Declared in `base/tray-role.ts` (below the shell) and re-exported here
 // under its established name — see #2537.
@@ -82,6 +83,11 @@ export interface ConnectedFollower {
   legacyPeerLogged?: boolean;
   peerCapabilities?: TraySyncCapabilities;
   peerMotd?: string;
+  /**
+   * `hello.pairId` — the "same machine" token `slicc follow --computer` mints
+   * and shares with the Sliccstart it spawns (#3260). See `follower-pairing.ts`.
+   */
+  peerPairId?: string;
   /**
    * Sprinkles this follower reported as RENDERED (`sprinkle.instances`).
    * Absent until the follower reports — an iOS follower never does, so its
@@ -319,11 +325,51 @@ export class FollowerRegistry {
     return ids;
   }
 
+  /**
+   * Current `hello.pairId` folding (#3260). Recomputed per call rather than
+   * cached: a `hello` can land at any time and a stale map would either hide a
+   * live follower or route native capture at a peer that already left. There
+   * are single-digit followers, and every caller here is a roster read.
+   */
+  followerPairing(): FollowerPairing {
+    return resolveFollowerPairs(
+      [...this.followers.values()].map((follower) => ({
+        bootstrapId: follower.bootstrapId,
+        exec: follower.peerCapabilities?.exec === true,
+        computer: follower.peerCapabilities?.computer === true,
+        pairId: follower.peerPairId,
+      }))
+    );
+  }
+
+  /**
+   * Followers folded into a paired primary, which the agent-facing roster
+   * (`ssh --list`, `host`, `computer add ssh`) leaves out so one machine reads
+   * as one target. The UI's follower rail still shows them — each is a real
+   * transport peer, and hiding a live connection there would be a lie.
+   */
+  getAbsorbedBootstrapIds(): Set<string> {
+    return new Set(this.followerPairing().absorbedBy.keys());
+  }
+
+  /**
+   * The follower that actually serves `computer.native.*` for `bootstrapId` —
+   * its paired launcher when it has one, otherwise itself.
+   */
+  resolveComputerBootstrapId(bootstrapId: string): string {
+    return this.followerPairing().computerPartner.get(bootstrapId) ?? bootstrapId;
+  }
+
   getComputerCapableBootstrapIds(): Set<string> {
     const ids = new Set<string>();
     for (const [bootstrapId, follower] of this.followers) {
       if (follower.peerCapabilities?.computer) ids.add(bootstrapId);
     }
+    // A paired primary can drive this Mac's screen through its partner, so it
+    // has to read as computer-capable — that is what makes `computer add ssh
+    // <the CLI>` pick ScreenCaptureKit instead of shelling out to
+    // `screencapture` under the terminal's TCC identity.
+    for (const primary of this.followerPairing().computerPartner.keys()) ids.add(primary);
     return ids;
   }
 

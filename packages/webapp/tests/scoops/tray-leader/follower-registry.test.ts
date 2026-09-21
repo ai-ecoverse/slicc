@@ -122,6 +122,47 @@ describe('FollowerRegistry', () => {
     registry.removeFollower('computer');
   });
 
+  it("lends a paired launcher's computer capability to the CLI and hides the launcher", () => {
+    // One Mac running `slicc … follow --computer` dials twice; the agent must
+    // see one target holding both capabilities (#3260).
+    const registry = createRegistry();
+    const cli = registry.addFollower('cli', new FakeChannel());
+    const launcher = registry.addFollower('launcher', new FakeChannel());
+    cli.peerCapabilities = { exec: true };
+    cli.peerPairId = 'pair-a';
+    launcher.peerCapabilities = { computer: true };
+    launcher.peerPairId = 'pair-a';
+
+    expect(registry.getExecCapableBootstrapIds()).toEqual(new Set(['cli']));
+    expect(registry.getComputerCapableBootstrapIds()).toEqual(new Set(['cli', 'launcher']));
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set(['launcher']));
+    expect(registry.resolveComputerBootstrapId('cli')).toBe('launcher');
+    // An unpaired peer resolves to itself, so every caller can ask blindly.
+    expect(registry.resolveComputerBootstrapId('launcher')).toBe('launcher');
+
+    registry.removeFollower('cli');
+    registry.removeFollower('launcher');
+  });
+
+  it('stops folding as soon as the paired CLI disconnects', () => {
+    // The launcher outlives a crashed CLI; if it stayed absorbed it would be
+    // invisible on every roster with nothing left to be folded into.
+    const registry = createRegistry();
+    const cli = registry.addFollower('cli', new FakeChannel());
+    const launcher = registry.addFollower('launcher', new FakeChannel());
+    cli.peerCapabilities = { exec: true };
+    cli.peerPairId = 'pair-a';
+    launcher.peerCapabilities = { computer: true };
+    launcher.peerPairId = 'pair-a';
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set(['launcher']));
+
+    registry.removeFollower('cli');
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set());
+    expect(registry.getComputerCapableBootstrapIds()).toEqual(new Set(['launcher']));
+
+    registry.removeFollower('launcher');
+  });
+
   it('exposes follower metadata and live keepalive health through a read snapshot', () => {
     const registry = createRegistry();
     const follower = registry.addFollower('b1', new FakeChannel(), {

@@ -644,10 +644,15 @@ export class FollowerDispatch {
         // no MOTD, which is only shown for exec-capable peers anyway.
         follower.peerCapabilities = {};
         follower.peerMotd = undefined;
+        // Same reasoning for the pairing token: folding is a claim about
+        // whose machine this is, and a guest that echoed the owner's `pairId`
+        // would take over the roster entry native capture is routed to.
+        follower.peerPairId = undefined;
         this.context.followers.notifyFollowerCountChanged();
       } else {
         follower.peerCapabilities = message.capabilities;
         follower.peerMotd = message.motd;
+        follower.peerPairId = message.pairId;
         this.context.followers.notifyFollowerCountChanged();
         // A sudo-capable follower just arrived — hand it any prompt a headless
         // leader parked while no one could answer (issue #2062).

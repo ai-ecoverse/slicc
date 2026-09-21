@@ -21,6 +21,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/computer"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=…".
@@ -165,6 +167,20 @@ Usage:
                                         follow --eval python -i
                                         follow --eval node -i
                                         follow --eval clojure
+  slicc <join-url> follow --computer[=require] [runner...]
+                                      macOS: also bring THIS Mac's screen and input
+                                      along, so the leader can look at it and click on
+                                      it (computer add ssh <this follower>). Composes
+                                      with every mode above, including no runner at all:
+                                        follow --computer                 view + input only
+                                        follow --computer bash -c         plus exec
+                                        follow --computer --eval python   plus a REPL
+                                      Capture runs in the signed Sliccstart launcher, so
+                                      the macOS permission prompts name SLICC rather than
+                                      your terminal — install it first. Screen Recording
+                                      and Accessibility are asked for once, at startup.
+                                      Plain --computer follows on without a screen if the
+                                      launcher can't be started; =require fails instead.
   slicc update [--check]              Self-update to the newest released CLI binary
                                       (--check only reports; SLICC_NO_UPDATE_CHECK=1
                                       disables the once-a-day launch check)
@@ -246,6 +262,14 @@ type followArgs struct {
 	// evalQuiet overrides the output-quiescence window ending each eval
 	// response (0 = execrun.DefaultEvalQuiet).
 	evalQuiet time.Duration
+	// computer brings native macOS screen capture + input along by starting a
+	// headless Sliccstart beside this process (#3260). Composes with every
+	// follow mode — ui (no runner), shell, and --eval.
+	computer computer.Mode
+	// badComputerArg holds an unusable `--computer=…` value so cmdFollow can
+	// name it. Parsing cannot print: `follow`'s argv is also a runner's, and a
+	// parser that guessed would hand `--computer=maybe` to bash instead.
+	badComputerArg string
 }
 
 // parseFollowArgs consumes slicc's own leading `follow` options (`--no-banner`,
@@ -270,6 +294,14 @@ func parseFollowArgs(rest []string) followArgs {
 			continue
 		case rest[0] == "--eval":
 			fa.eval = true
+			rest = rest[1:]
+			continue
+		case rest[0] == "--computer" || strings.HasPrefix(rest[0], "--computer="):
+			mode, ok := computer.ParseMode(rest[0])
+			if !ok {
+				fa.badComputerArg = rest[0]
+			}
+			fa.computer = mode
 			rest = rest[1:]
 			continue
 		case strings.HasPrefix(rest[0], "--eval-quiet="):

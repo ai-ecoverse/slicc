@@ -245,7 +245,7 @@ extension ElectronTrayFollower: TrayFollowerConnectorDelegate {
         sendToLeader(
             .hello(
                 protocolVersion: traySyncProtocolVersion, runtime: electronFollowerRuntimeTag,
-                capabilities: nil, motd: nil))
+                capabilities: nil, motd: nil, pairId: nil))
         Task { [weak self] in
             guard let self = self else { return }
             let targets = await self.listTargets()

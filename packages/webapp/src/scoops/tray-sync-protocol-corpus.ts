@@ -891,6 +891,10 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       runtime: 'slicc-ios',
       capabilities: { exec: true, browser: true, sudoApproval: true, biometric: true },
       motd: 'SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open',
+      // Not what iOS sends (it has no launcher to pair with) — carried here so
+      // the Go and Swift mirrors are pinned to decoding the `--computer`
+      // pairing token rather than dropping it silently (#3260).
+      pairId: 'pair-0123456789abcdef',
     },
   },
   ping: { ios: 'decoded', message: { type: 'ping' } },

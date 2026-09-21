@@ -332,10 +332,22 @@ export class ComputersRouter {
     if (resolved.follower.trust === 'biscotto') {
       throw new Error(`Follower '${runtimeId}' cannot drive computer.native.*`);
     }
-    if (resolved.follower.peerCapabilities?.computer !== true) {
+    // `slicc follow --computer` names the CLI, which runs with CGO disabled and
+    // captures nothing itself; the Sliccstart it spawned holds the screen. Hop
+    // to that partner so the agent addresses one machine by one id (#3260).
+    const target = this.pairedComputerFollower(resolved.bootstrapId) ?? resolved.follower;
+    if (target.peerCapabilities?.computer !== true) {
       throw new Error(`Follower '${runtimeId}' does not advertise computer capture`);
     }
-    return resolved.follower;
+    return target;
+  }
+
+  /** The launcher folded into `bootstrapId`, when one is connected. */
+  private pairedComputerFollower(bootstrapId: string) {
+    const partnerId = this.context.followers.resolveComputerBootstrapId(bootstrapId);
+    if (partnerId === bootstrapId) return null;
+    const partner = this.context.followers.followers.get(partnerId);
+    return partner?.trust === 'biscotto' ? null : (partner ?? null);
   }
 
   private settleNativeInput(requestId: string, error?: string): void {

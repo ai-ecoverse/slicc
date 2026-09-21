@@ -130,6 +130,25 @@ export interface TraySyncHelloMessage {
    * it to the agent through `ssh --list`. Legacy and browser peers omit it.
    */
   motd?: string;
+  /**
+   * Opaque "these two peers are the same machine" token (additive, #3260).
+   *
+   * `slicc <url> follow --computer` mints one per CLI process, sends it here,
+   * and hands the same value to the headless `Sliccstart --computer-follow
+   * --pair <token>` it spawns. The leader folds the pair into ONE roster entry
+   * carrying both `exec` (the CLI) and `computer` (the launcher) instead of
+   * showing the Mac twice — see `follower-pairing.ts`.
+   *
+   * A CLI-minted token rather than the issue's "the CLI's runtime id": the
+   * CLI's bootstrap id is assigned by the hub at attach time and changes on
+   * every reconnect, so it cannot be handed to a child that is spawned before
+   * the first connection and outlives it.
+   *
+   * It is a correlation key, not a credential: both peers already hold the
+   * join URL, which is the real bearer secret. Legacy peers omit it and are
+   * never folded.
+   */
+  pairId?: string;
 }
 
 /** Peer capability advertisement carried on `hello`. */
