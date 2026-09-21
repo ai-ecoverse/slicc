@@ -123,20 +123,38 @@ final class ThemePaletteTests: XCTestCase {
     func testSprinkleCSSFollowsTheDeviceWhenTheThemeBaseDiffers() {
         let css = theme(
             base: .dark,
-            tokens: ["--canvas": "#0c1510", "--ink": "#e8f2ec", "--ctx": "#34d399"]
+            tokens: [
+                "--canvas": "#0c1510",
+                "--ink": "#e8f2ec",
+                "--ctx": "#34d399",
+                "--s2-positive": "#00ff00",
+                "--s2-negative": "#ff0000",
+                "--waffle": "#abcdef",
+            ]
         ).sprinkleCSSOverrides(for: .light)
-        XCTAssertFalse(css.contains("--canvas"))
-        XCTAssertFalse(css.contains("--ink"))
-        XCTAssertFalse(css.contains("--s-text-primary"))
+        XCTAssertFalse(css.contains("#0c1510"))
+        XCTAssertFalse(css.contains("#e8f2ec"))
+        XCTAssertFalse(css.contains("#00ff00"))
+        XCTAssertFalse(css.contains("#ff0000"))
+        XCTAssertFalse(css.contains("--waffle"))
+        XCTAssertTrue(css.contains("--canvas: #ffffff;"))
+        XCTAssertTrue(css.contains("--s-bg-card: #f4f4f6;"))
+        XCTAssertTrue(css.contains("--s-text-primary: #0a0a0a;"))
         XCTAssertTrue(css.contains("--ctx: #34d399;"))
         XCTAssertTrue(css.contains("--s-accent: #34d399;"))
+        XCTAssertTrue(css.contains("background: var(--canvas)"))
+        XCTAssertTrue(css.contains("color: var(--ink)"))
         XCTAssertTrue(css.contains("color-scheme: light"))
         XCTAssertFalse(css.contains("color-scheme: dark"))
     }
 
-    func testBareThemeOnTheOtherAppearanceDeclaresTheDeviceScheme() {
+    func testBareThemeOnTheOtherAppearancePaintsDeviceSurfaces() {
         let css = theme(base: .light).sprinkleCSSOverrides(for: .dark)
-        XCTAssertEqual(css, "html { color-scheme: dark; }")
+        XCTAssertTrue(css.contains("--canvas: #0f0f1a;"))
+        XCTAssertTrue(css.contains("--s-text-primary: #ffffff;"))
+        XCTAssertTrue(css.contains("background: var(--canvas)"))
+        XCTAssertTrue(css.contains("color-scheme: dark"))
+        XCTAssertFalse(css.contains("--ctx"))
     }
 
     // MARK: Bubble contrast

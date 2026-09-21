@@ -198,73 +198,109 @@ extension EnvironmentValues {
 }
 
 extension SliccTheme {
-    /// Accent and semantic names that stay when the theme's base disagrees
-    /// with the device. Surface names (`--canvas`, `--ink`, …) are omitted
-    /// in that case so a dark theme cannot paint a light phone's sprinkles.
-    private static let accentTokenNames: Set<String> = [
-        "--ctx",
-        "--waffle",
-        "--s2-accent",
-        "--s2-accent-hover",
-        "--s2-accent-down",
-        "--slicc-accent",
-        "--slicc-cone",
-        "--slicc-scoop-blue",
-        "--slicc-scoop-purple",
-        "--slicc-scoop-teal",
-        "--amber",
-        "--violet",
-        "--cyan",
-        "--rose",
-        "--rainbow",
-        "--s2-positive",
-        "--s2-negative",
-        "--s2-informative",
-        "--s2-notice",
-        "--s2-border-focus",
+    /// Device surfaces for a sprinkle whose leader theme was authored for
+    /// the other appearance. Hexes match `ThemePalette.light` / `.dark`
+    /// (and the inline card steps the dark stylesheet already ships) so a
+    /// dark theme cannot leave `--s-*` and `html, body` painted dark.
+    private static let lightDeviceSurfaces: [(String, String)] = [
+        ("--canvas", "#ffffff"),
+        ("--bg", "#f4f4f6"),
+        ("--ghost", "#ececef"),
+        ("--ink", "#0a0a0a"),
+        ("--txt-2", "#737373"),
+        ("--txt-3", "#a1a1a1"),
+        ("--line", "#e5e5e5"),
+        ("--s-bg-card", "#f4f4f6"),
+        ("--s-bg-card-soft", "#ececef"),
+        ("--s-bg-elevated", "#ececef"),
+        ("--s-text-primary", "#0a0a0a"),
+        ("--s-text-secondary", "#737373"),
+        ("--s-text-muted", "#a1a1a1"),
+    ]
+
+    private static let darkDeviceSurfaces: [(String, String)] = [
+        ("--canvas", "#0f0f1a"),
+        ("--bg", "#1c1c2e"),
+        ("--ghost", "#1f1f38"),
+        ("--ink", "#ffffff"),
+        ("--txt-2", "#b3b3b3"),
+        ("--txt-3", "#808080"),
+        ("--line", "#2e2e3a"),
+        ("--s-bg-card", "#1c1c2e"),
+        ("--s-bg-card-soft", "#1f1f38"),
+        ("--s-bg-elevated", "#25254a"),
+        ("--s-text-primary", "#ffffff"),
+        ("--s-text-secondary", "#b3b3b3"),
+        ("--s-text-muted", "#808080"),
     ]
 
     /// CSS injected into sprinkle WKWebViews. When `scheme` matches `base`,
     /// the raw token map goes in verbatim (full sprinkle documents read the
     /// webapp names like `--canvas`) plus the `--s-*` mappings iOS's own
-    /// inline-sprinkle wrapper CSS reads. When it does not, only accent
-    /// tokens are injected and `color-scheme` follows the device. Values
+    /// inline-sprinkle wrapper CSS reads. When it does not, the device's
+    /// surface and text tokens replace the wrapper's dark defaults, and the
+    /// only leader color kept is `--ctx` (copied to `--s-accent`). Values
     /// come off the wire, so both names and values pass a strict character
     /// allowlist — a token can never close the style block or smuggle
     /// markup. Raw theme `css` deliberately never crosses this boundary.
     func sprinkleCSSOverrides(for scheme: ColorScheme) -> String {
         let deviceBase: Base = scheme == .light ? .light : .dark
-        let full = deviceBase == base
+        if deviceBase == base {
+            return fullSprinkleCSS(colorScheme: deviceBase)
+        }
+        return deviceSprinkleCSS(colorScheme: deviceBase)
+    }
+
+    private func fullSprinkleCSS(colorScheme: Base) -> String {
         var lines: [String] = []
         for (name, value) in tokens.sorted(by: { $0.key < $1.key })
-        where Self.isSafeCSSName(name) && Self.isSafeCSSValue(value)
-            && (full || Self.accentTokenNames.contains(name))
-        {
+        where Self.isSafeCSSName(name) && Self.isSafeCSSValue(value) {
             lines.append("  \(name): \(value);")
         }
-        let sMappings: [(String, String)] =
-            full
-            ? [
-                ("--s-bg-card", "--bg"),
-                ("--s-bg-card-soft", "--ghost"),
-                ("--s-bg-elevated", "--ghost"),
-                ("--s-text-primary", "--ink"),
-                ("--s-text-secondary", "--txt-2"),
-                ("--s-text-muted", "--txt-3"),
-                ("--s-accent", "--ctx"),
-            ]
-            : [("--s-accent", "--ctx")]
+        let sMappings: [(String, String)] = [
+            ("--s-bg-card", "--bg"),
+            ("--s-bg-card-soft", "--ghost"),
+            ("--s-bg-elevated", "--ghost"),
+            ("--s-text-primary", "--ink"),
+            ("--s-text-secondary", "--txt-2"),
+            ("--s-text-muted", "--txt-3"),
+            ("--s-accent", "--ctx"),
+        ]
         for (sVar, source) in sMappings {
             if let value = tokens[source], Self.isSafeCSSValue(value) {
                 lines.append("  \(sVar): \(value);")
             }
         }
-        let schemeName = deviceBase.rawValue
+        return Self.sprinkleCSSBlock(lines: lines, colorScheme: colorScheme, paintBody: false)
+    }
+
+    /// Surfaces from the device palette. Leader tokens other than a safe
+    /// `--ctx` are dropped, including semantic colors tuned for the other base.
+    private func deviceSprinkleCSS(colorScheme: Base) -> String {
+        let surfaces = colorScheme == .light ? Self.lightDeviceSurfaces : Self.darkDeviceSurfaces
+        var lines = surfaces.map { "  \($0.0): \($0.1);" }
+        if let ctx = tokens["--ctx"], Self.isSafeCSSValue(ctx) {
+            lines.append("  --ctx: \(ctx);")
+            lines.append("  --s-accent: \(ctx);")
+        }
+        return Self.sprinkleCSSBlock(lines: lines, colorScheme: colorScheme, paintBody: true)
+    }
+
+    /// `paintBody` overrides SprinkleWebView's literal `background:#0F0F1A`.
+    /// `color-scheme` alone does not replace that declaration.
+    private static func sprinkleCSSBlock(
+        lines: [String], colorScheme: Base, paintBody: Bool
+    ) -> String {
+        let schemeName = colorScheme.rawValue
+        let bodyRule =
+            paintBody
+            ? "html, body { background: var(--canvas); color: var(--ink); }\n"
+            : ""
         guard !lines.isEmpty else {
-            return "html { color-scheme: \(schemeName); }"
+            return bodyRule + "html { color-scheme: \(schemeName); }"
         }
         return ":root {\n" + lines.joined(separator: "\n")
-            + "\n}\nhtml { color-scheme: \(schemeName); }"
+            + "\n}\n" + bodyRule + "html { color-scheme: \(schemeName); }"
     }
 
     private static func isSafeCSSName(_ name: String) -> Bool {
