@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { appendFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const DEFER_MESSAGE =
@@ -42,6 +42,14 @@ export function classifyReleaseExit(code, output) {
     return { code: 0, deferred: false, missingIssue: true };
   }
   return { code: code ?? 1, deferred: false };
+}
+
+export function writeDeferredOutput(deferred, env = process.env) {
+  const line = `deferred=${deferred ? 'true' : 'false'}\n`;
+  if (env.GITHUB_OUTPUT) {
+    appendFileSync(env.GITHUB_OUTPUT, line);
+  }
+  return line;
 }
 
 export async function publishRelease({
@@ -106,6 +114,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   } else if (result.missingIssue) {
     console.error(MISSING_ISSUE_MESSAGE);
   }
+  writeDeferredOutput(result.deferred === true, options.env ?? process.env);
   process.exitCode = result.code;
   return result;
 }

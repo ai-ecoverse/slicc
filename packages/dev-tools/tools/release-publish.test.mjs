@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   classifyReleaseExit,
@@ -7,6 +9,7 @@ import {
   isStaleReleasePush,
   main,
   publishRelease,
+  writeDeferredOutput,
 } from './release-publish.mjs';
 
 const STALE_PUSH = `
@@ -134,38 +137,81 @@ describe('publishRelease', () => {
   });
 });
 
+describe('writeDeferredOutput', () => {
+  it('appends deferred=true|false to GITHUB_OUTPUT', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'release-publish-'));
+    const file = join(dir, 'out');
+    try {
+      expect(writeDeferredOutput(true, { GITHUB_OUTPUT: file })).toBe('deferred=true\n');
+      expect(writeDeferredOutput(false, { GITHUB_OUTPUT: file })).toBe('deferred=false\n');
+      expect(readFileSync(file, 'utf8')).toBe('deferred=true\ndeferred=false\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('main', () => {
   it('sets a zero exit code and explains the deferral', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const previous = process.exitCode;
+    const dir = mkdtempSync(join(tmpdir(), 'release-publish-'));
+    const file = join(dir, 'out');
     try {
       await main([], {
         spawn: () => fakeSpawn([1, null], STALE_PUSH),
         stderr: { write: vi.fn() },
         stdout: { write: vi.fn() },
+        env: { GITHUB_OUTPUT: file },
       });
       expect(process.exitCode).toBe(0);
       expect(error).toHaveBeenCalledWith(expect.stringContaining('Deferring'));
+      expect(readFileSync(file, 'utf8')).toBe('deferred=true\n');
     } finally {
       process.exitCode = previous;
       error.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes deferred=false after a completed publish', async () => {
+    const previous = process.exitCode;
+    const dir = mkdtempSync(join(tmpdir(), 'release-publish-'));
+    const file = join(dir, 'out');
+    try {
+      await main([], {
+        spawn: () => fakeSpawn([0, null], 'Published release 6.173.4'),
+        stderr: { write: vi.fn() },
+        stdout: { write: vi.fn() },
+        env: { GITHUB_OUTPUT: file },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(readFileSync(file, 'utf8')).toBe('deferred=false\n');
+    } finally {
+      process.exitCode = previous;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it('sets a zero exit code when github success misses a phantom issue', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const previous = process.exitCode;
+    const dir = mkdtempSync(join(tmpdir(), 'release-publish-'));
+    const file = join(dir, 'out');
     try {
       await main([], {
         spawn: () => fakeSpawn([1, null], MISSING_ISSUE_SUCCESS),
         stderr: { write: vi.fn() },
         stdout: { write: vi.fn() },
+        env: { GITHUB_OUTPUT: file },
       });
       expect(process.exitCode).toBe(0);
       expect(error).toHaveBeenCalledWith(expect.stringContaining('phantom #NNNN'));
+      expect(readFileSync(file, 'utf8')).toBe('deferred=false\n');
     } finally {
       process.exitCode = previous;
       error.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
@@ -178,6 +224,8 @@ describe('release workflow', () => {
     );
     expect(workflow).toContain('node packages/dev-tools/tools/release-publish.mjs');
     expect(workflow).not.toMatch(/^\s*run: npx semantic-release\s*$/m);
+    expect(workflow).toContain('id: publish');
+    expect(workflow).toContain('node packages/dev-tools/tools/release-alert.mjs recover');
   });
 
   it('skips github success comments so a phantom issue cannot fail after publish', () => {
