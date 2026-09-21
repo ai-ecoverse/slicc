@@ -128,18 +128,26 @@ function configureOrt(ort: OrtEnv): void {
   if (typeof crossOriginIsolated === 'boolean' && !crossOriginIsolated) wasm.numThreads = 1;
 }
 
+/**
+ * The speech stack already ships one onnxruntime-web. Importing the package
+ * here would add a second wasm build and a WebGPU build to dist/ui (the
+ * bundle-size gate counts every JS file, lazy chunks included). The staged
+ * package's own bundles are what `ipk add` puts on the preview path.
+ */
+const ORT_BUNDLE: Record<'wasm' | 'webgpu', string> = {
+  wasm: 'ort.wasm.bundle.min.mjs',
+  webgpu: 'ort.webgpu.bundle.min.mjs',
+};
+
 async function loadOrt(entry: 'wasm' | 'webgpu'): Promise<OrtEnv> {
+  const url = toPreviewUrl(`${ORT_DIST_VFS_PATH}${ORT_BUNDLE[entry]}`);
   try {
-    const ort = (
-      entry === 'webgpu'
-        ? await import('onnxruntime-web/webgpu')
-        : await import('onnxruntime-web/wasm')
-    ) as OrtEnv;
+    // Vite must not bundle this. The file exists only after `ipk add`.
+    const ort = (await import(/* @vite-ignore */ url)) as OrtEnv;
     configureOrt(ort);
     return ort;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`${INSTALL_HINT}\n${message}`);
+    throw new Error(explainDecisionError(err));
   }
 }
 
