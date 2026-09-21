@@ -137,6 +137,12 @@ const CSS = [
   // plus breathing space so the cost pill and the panels button don't crowd.
   'padding-right:var(--avatar-strip-w, 96px);}',
   'slicc-panel[panel-id="scoop-switcher"],slicc-panel[panel-id="floatbar"]{flex-direction:row;}',
+  // Always-dark chrome for a floating terminal panel (parity with dock-tree
+  // `.dock-tree__tile--chrome-dark`). Belt-and-braces with the shared rule in
+  // slicc-panel.ts — panelize styles load after panel styles in the shell.
+  'slicc-panel[panel-id="term"][presentation="floating"]{',
+  'background:var(--term-bg,#0c0c0e);border-color:var(--term-border,#232329);',
+  'box-shadow:rgba(0,0,0,.35) 0 14px 36px -12px,rgba(0,0,0,.2) 0 4px 10px -4px;}',
 ].join('');
 
 function ensurePanelizeStyles(doc: Document): void {

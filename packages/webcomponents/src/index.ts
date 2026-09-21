@@ -322,4 +322,5 @@ export {
   resolveTerminalTheme,
   TERMINAL_THEME_DEFAULTS,
   type TerminalXtermTheme,
+  watchTerminalThemeScope,
 } from './workbench/terminal-theme.js';

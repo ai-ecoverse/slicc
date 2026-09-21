@@ -9,16 +9,17 @@ import XTERM_CSS from '@xterm/xterm/css/xterm.css?raw';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
-import { resolveTerminalTheme } from './terminal-theme.js';
+import { resolveTerminalTheme, watchTerminalThemeScope } from './terminal-theme.js';
 
 /**
- * Dark xterm theme resolved from theme CSS variables. Background / foreground
- * stay locked to the dark terminal surface in BOTH page themes; ANSI / cursor
- * colors follow `--rose` / `--cyan` / `--ctx` etc. so active theme preferences
+ * Dark xterm theme resolved from theme CSS variables on `scope`. Background /
+ * foreground stay locked to the dark terminal surface in BOTH page themes;
+ * ANSI / cursor colors follow `--rose` / `--cyan` / `--ctx` etc. so active
+ * theme preferences (including scoop/freezer `--ctx` on `.wcui-frame`)
  * propagate. See `terminal-theme.ts`.
  */
-function currentTerminalTheme(): ITheme {
-  const { border: _border, ...theme } = resolveTerminalTheme();
+function currentTerminalTheme(scope: Element): ITheme {
+  const { border: _border, ...theme } = resolveTerminalTheme(scope);
   return theme;
 }
 
@@ -112,8 +113,8 @@ export class SliccTerminal extends HTMLElement {
   #term: TerminalType | null = null;
   #fit: FitAddonType | null = null;
   #ro: ResizeObserver | null = null;
-  /** Watches html class / body theme flips so ANSI accents re-resolve. */
-  #themeObserver: MutationObserver | null = null;
+  /** Disconnects theme-scope observers (html / body / `.wcui-frame`). */
+  #unwatchTheme: (() => void) | null = null;
   /** Buffered writes issued before xterm finished loading (async import). */
   #pending: string[] = [];
   /** Guards against a late async open after the element has disconnected. */
@@ -231,7 +232,7 @@ export class SliccTerminal extends HTMLElement {
       fontSize: 12,
       lineHeight: 1.25,
       fontFamily: "'IBM Plex Mono', 'Source Code Pro', 'JetBrains Mono', ui-monospace, monospace",
-      theme: currentTerminalTheme(),
+      theme: currentTerminalTheme(this),
       convertEol: true,
       scrollback: 2000,
     });
@@ -267,8 +268,8 @@ export class SliccTerminal extends HTMLElement {
   /** Dispose the terminal, addon, and observer (idempotent). */
   #teardown(): void {
     this.#disposed = true;
-    this.#themeObserver?.disconnect();
-    this.#themeObserver = null;
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = null;
     this.#ro?.disconnect();
     this.#ro = null;
     this.#term?.dispose();
@@ -278,27 +279,15 @@ export class SliccTerminal extends HTMLElement {
   }
 
   /**
-   * Re-resolve ANSI accents when the page theme flips. `nudgeThemeObservers`
-   * toggles `slicc-theme-applied` on `<html>`; body `dark` / `data-theme` also
-   * change. Background stays dark either way.
+   * Re-resolve ANSI accents when the page theme flips or the shell frame's
+   * scoped `--ctx` changes (`applyShellContext`). Background stays dark.
    */
   #watchTheme(): void {
-    this.#themeObserver?.disconnect();
-    if (typeof MutationObserver !== 'function' || typeof document === 'undefined') return;
-    this.#themeObserver = new MutationObserver(() => {
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = watchTerminalThemeScope(this, () => {
       if (!this.#term) return;
-      this.#term.options.theme = currentTerminalTheme();
+      this.#term.options.theme = currentTerminalTheme(this);
     });
-    this.#themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'data-theme', 'style'],
-    });
-    if (document.body) {
-      this.#themeObserver.observe(document.body, {
-        attributes: true,
-        attributeFilter: ['class', 'data-theme'],
-      });
-    }
   }
 }
 

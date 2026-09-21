@@ -128,3 +128,33 @@ export function resolveTerminalTheme(el?: Element | null): TerminalXtermTheme & 
   const border = firstColor(read, ['--term-border'], TERMINAL_THEME_DEFAULTS.border);
   return { ...theme, border };
 }
+
+/**
+ * Watch theme flips and scoped shell-context overrides (e.g. `applyShellContext`
+ * setting `--ctx` on `.wcui-frame`). Returns a disconnect function.
+ */
+export function watchTerminalThemeScope(el: Element, onChange: () => void): () => void {
+  if (typeof MutationObserver !== 'function' || typeof document === 'undefined') {
+    return () => {};
+  }
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class', 'data-theme', 'style'],
+  });
+  if (document.body) {
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme'],
+    });
+  }
+  // Scoop / freezer accents land on the shell frame, not <html>.
+  const frame = el.closest('.wcui-frame');
+  if (frame) {
+    observer.observe(frame, {
+      attributes: true,
+      attributeFilter: ['style', 'class', 'data-theme'],
+    });
+  }
+  return () => observer.disconnect();
+}

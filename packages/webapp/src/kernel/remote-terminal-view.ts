@@ -39,7 +39,12 @@ import type {
   PermissionKind,
   PermissionRequestOptions,
 } from '@slicc/webcomponents';
-import { resolveTerminalTheme } from '@slicc/webcomponents';
+// Deep import — the package barrel constructs CSSStyleSheet at load time and
+// breaks Node vitest (no CSSStyleSheet). This module is DOM-free.
+import {
+  resolveTerminalTheme,
+  watchTerminalThemeScope,
+} from '@slicc/webcomponents/workbench/terminal-theme';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { Readline } from 'xterm-readline';
@@ -82,9 +87,9 @@ export interface RemoteTerminalViewOptions {
   env?: Record<string, string>;
 }
 
-/** Always-dark xterm theme; ANSI accents follow the active page theme. */
-function resolvePanelTerminalTheme() {
-  const { border: _border, ...theme } = resolveTerminalTheme();
+/** Always-dark xterm theme; ANSI accents follow the active scope's CSS vars. */
+function resolvePanelTerminalTheme(scope?: Element | null) {
+  const { border: _border, ...theme } = resolveTerminalTheme(scope);
   return theme;
 }
 
@@ -119,7 +124,9 @@ export class RemoteTerminalView {
   private hasPreview = false;
   private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private themeObserver: MutationObserver | null = null;
+  private unwatchTheme: (() => void) | null = null;
+  /** Mount container — theme resolution / observation scope. */
+  private mountRoot: HTMLElement | null = null;
 
   // Line editor — the xterm-readline addon owns the buffer, cursor, and
   // history (including wrap-aware ←/→ navigation across visual rows).
@@ -165,30 +172,22 @@ export class RemoteTerminalView {
     const { Readline } = await import('xterm-readline');
     await import('@xterm/xterm/css/xterm.css');
 
+    this.mountRoot = container;
     this.terminal = new Terminal({
       cursorBlink: true,
       fontSize: 11,
       fontFamily: "'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      theme: resolvePanelTerminalTheme(),
+      theme: resolvePanelTerminalTheme(container),
       convertEol: true,
     });
 
-    this.themeObserver = new MutationObserver(() => {
+    this.unwatchTheme?.();
+    this.unwatchTheme = watchTerminalThemeScope(container, () => {
       if (!this.terminal) return;
-      // Always dark bg / light text; only ANSI accents track the page theme
-      // (nudgeThemeObservers toggles `slicc-theme-applied` on <html>).
-      this.terminal.options.theme = resolvePanelTerminalTheme();
+      // Always dark bg / light text; ANSI accents track the scoped theme
+      // (page presets on <html>, scoop/freezer --ctx on .wcui-frame).
+      this.terminal.options.theme = resolvePanelTerminalTheme(this.mountRoot);
     });
-    this.themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'data-theme', 'style'],
-    });
-    if (document.body) {
-      this.themeObserver.observe(document.body, {
-        attributes: true,
-        attributeFilter: ['class', 'data-theme'],
-      });
-    }
 
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
@@ -265,8 +264,9 @@ export class RemoteTerminalView {
     this.abortPromptLoop?.(new Error('terminal disposed'));
     this.abortPromptLoop = null;
     this.clearMediaPreview();
-    this.themeObserver?.disconnect();
-    this.themeObserver = null;
+    this.unwatchTheme?.();
+    this.unwatchTheme = null;
+    this.mountRoot = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.terminal?.dispose();
