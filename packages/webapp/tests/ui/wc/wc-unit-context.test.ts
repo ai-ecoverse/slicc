@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   defaultRootOf,
   isReadOnlyRole,
@@ -6,6 +6,7 @@ import {
   rootFolderForContext,
   rootForConeFolder,
   rootForSelection,
+  selectScoopForContext,
   switcherLabelFor,
   threadContextFor,
   unitForContext,
@@ -101,6 +102,50 @@ describe('wc-unit-context', () => {
     expect(unitForContext(all, 'scoop:cone')).toBeUndefined();
     // an unknown plain context falls back to the default root
     expect(unitForContext(all, 'whatever')?.id).toBe('cone_1');
+  });
+
+  it('selectScoopForContext switches on scoop: and cone: forms', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectScoopForContext(all, 'scoop:helper', primary.id, select)).toBe(true);
+    expect(select).toHaveBeenCalledWith(helper);
+    select.mockClear();
+    expect(selectScoopForContext(all, 'cone:cone-research', primary.id, select)).toBe(true);
+    expect(select).toHaveBeenCalledWith(research);
+  });
+
+  it('selectScoopForContext returns false for an unresolvable target', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectScoopForContext(all, 'scoop:missing', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'cone:nope', primary.id, select)).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('selectScoopForContext rejects strings outside scoop:/cone: grammar', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    // unitForContext would map these to the default root; selectScoop must not.
+    expect(selectScoopForContext(all, 'typo', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, '', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'whatever', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'scoop:', primary.id, select)).toBe(false);
+    expect(selectScoopForContext(all, 'cone:', primary.id, select)).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('selectScoopForContext accepts a bare cone as the default root', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectScoopForContext(all, 'cone', helper.id, select)).toBe(true);
+    expect(select).toHaveBeenCalledWith(primary);
+  });
+
+  it('selectScoopForContext returns true without switching when already selected', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectScoopForContext(all, 'scoop:helper', helper.id, select)).toBe(true);
+    expect(select).not.toHaveBeenCalled();
   });
 
   it('prefers the primary root, else the oldest root, as default', () => {

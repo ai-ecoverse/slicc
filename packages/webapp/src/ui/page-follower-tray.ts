@@ -325,6 +325,12 @@ export interface StartPageFollowerTrayOptions {
    * followers (with a kernel/VFS) leave it unset and use the default.
    */
   onOpen?: (path: string) => void;
+  /**
+   * Switch this follower's view to a running scoop/cone (`slicc.selectScoop`).
+   * The WC follower wires this to `unitForContext` + `boot.selectScoop`.
+   * Unset, the follower sprinkle bridge returns `false`.
+   */
+  onSelectScoop?: (target: string) => boolean | Promise<boolean>;
 
   // --- Test hooks ---
   /** @internal Override fetch (defaults to plain `fetch`). */
@@ -458,6 +464,7 @@ export function startPageFollowerTray(
         addSprinkle: options.addSprinkle,
         removeSprinkle: options.removeSprinkle,
         open: options.onOpen,
+        selectScoop: options.onSelectScoop,
       });
       activeSprinkleController = sprinkleController;
     }

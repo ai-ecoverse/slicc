@@ -1360,6 +1360,7 @@ export function attachWcWorkbench(
         client,
         getUnits: () => workUnits.currentUnits(),
         getSelected: () => boot.getSelected(),
+        selectScoop: (unit) => boot.selectScoop(unit),
         // The panel-hosted gelatiere stream (`suggestions` under Memory v2)
         // must settle its card clicks page-side like the inline dip does.
         interceptWelcomeLick: (event) => welcomeHolder.intercept?.(event) ?? false,

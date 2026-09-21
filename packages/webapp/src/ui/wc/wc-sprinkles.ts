@@ -20,7 +20,7 @@ import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
 import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
 import type { WcShellRefs } from './wc-shell.js';
-import { defaultRootOf, rootForSelection } from './wc-unit-context.js';
+import { defaultRootOf, rootForSelection, selectScoopForContext } from './wc-unit-context.js';
 
 const SPRINKLE_PREFIX = 'sprinkle:';
 
@@ -460,6 +460,12 @@ export interface WireWcSprinklesDeps {
   getUnits(): readonly WorkUnitSummary[];
   /** The transcript selected when the user activates a sprinkle from the rail. */
   getSelected(): WorkUnitSummary | null;
+  /**
+   * Switch the shell to a running unit. Same call a switcher-chip click
+   * makes (`boot.selectScoop`). Optional so tests that don't exercise
+   * `slicc.selectScoop` can omit it — the bridge then returns `false`.
+   */
+  selectScoop?(unit: WorkUnitSummary): void;
   fs: import('../../fs/virtual-fs.js').VirtualFS;
   /**
    * Standalone kernel-worker id; enables the worker→panel sprinkle-ops
@@ -618,6 +624,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
 
   const isExtension = isExtensionRealm();
   const execHandler = createSprinkleExecHandler(client);
+  const selectScoop = deps.selectScoop;
   const manager = new SprinkleManager(
     fs,
     makeSprinkleLickHandler(client, deps.interceptWelcomeLick),
@@ -638,6 +645,12 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       execHandler,
       onAttachImage: onAttachImage ?? (() => {}),
       resolveLickOriginUnitId: (target) => matchLickTargetAlias(deps.getUnits(), target)?.id,
+      ...(selectScoop
+        ? {
+            selectScoopHandler: (target: string) =>
+              selectScoopForContext(deps.getUnits(), target, deps.getSelected()?.id, selectScoop),
+          }
+        : {}),
     }
   );
   (window as unknown as SprinkleManagerGlobal).__slicc_sprinkleManager = manager;

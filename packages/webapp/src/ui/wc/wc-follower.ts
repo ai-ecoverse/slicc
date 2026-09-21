@@ -36,6 +36,7 @@ import {
   WELCOME_HANDOFF_CARD_CLASS,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
+import { selectScoopForContext } from './wc-unit-context.js';
 
 const log = createLogger('wc-follower');
 
@@ -1033,6 +1034,14 @@ export async function bootFollowerFloat(
         if (/^https?:\/\//.test(path)) window.open(path, '_blank', 'noopener');
         else log.warn('follower sprinkle open() of a local path is unavailable', { path });
       },
+      // Same as a switcher-chip click: resolve against this follower's roster
+      // and call `boot.selectScoop`, which also asks the leader to mirror
+      // the unit. Answering false (unresolvable) lets the panel fall back
+      // to a lick rather than throwing.
+      onSelectScoop: (target) =>
+        selectScoopForContext(workUnits.currentUnits(), target, boot.getSelected()?.id, (unit) =>
+          boot.selectScoop(unit)
+        ),
       onScoopsList: (scoops, activeScoopJid) => {
         // Either frame can be the first of a session, so neither may be the
         // only door out of the un-addressable window.

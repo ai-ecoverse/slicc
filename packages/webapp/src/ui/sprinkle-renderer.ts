@@ -144,6 +144,7 @@ interface SprinkleIframeResponseBody {
   height?: number;
   mimeType?: string;
   result?: unknown;
+  ok?: boolean;
 }
 
 /** A handler for one inbound message type. */
@@ -211,6 +212,14 @@ function createSharedBridgeHandlers(
     'sprinkle-close': () => bridge.close(),
     'sprinkle-minimize': () => bridge.minimize(),
     'sprinkle-stop-cone': () => bridge.stopCone(),
+    'sprinkle-select-scoop': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-select-scoop-response',
+        msg.id,
+        bridge.selectScoop(typeof msg.target === 'string' ? msg.target : ''),
+        (ok) => ({ ok })
+      ),
     'sprinkle-attach-image': (_iframe, msg) =>
       bridge.attachImage(msg.base64 as string, msg.name as string, msg.mimeType as string),
     'sprinkle-readfile': (iframe, msg) =>
@@ -685,6 +694,9 @@ export class SprinkleRenderer {
     close: function() { parent.postMessage({ type: 'sprinkle-close' }, '*'); },
     minimize: function() { parent.postMessage({ type: 'sprinkle-minimize' }, '*'); },
     stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
+    selectScoop: function(target) {
+      return _vfsCall('sprinkle-select-scoop', { target: target }, function(m) { return !!m.ok; });
+    },
     attachImage: function(base64, name, mimeType) { parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*'); },
     captureScreen: function() {
       return _vfsCall('sprinkle-capture-screen', {}, function(m) {

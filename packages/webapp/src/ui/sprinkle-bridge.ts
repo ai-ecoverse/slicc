@@ -488,6 +488,15 @@ export function iframeFetchResponseSource(): string {
  */
 export type SprinkleExecHandler = (cmd: string) => Promise<SprinkleExecResult>;
 
+/**
+ * Page-side callback that resolves a `scoop:<name>` / `cone:<folder>` target
+ * against the live roster and performs the view switch. Injected the same
+ * way as {@link SprinkleBridge}'s close / minimize / stop-cone handlers.
+ * Unset in tests and environments without a shell: {@link SprinkleBridgeAPI.selectScoop}
+ * then resolves `false`.
+ */
+export type SprinkleSelectScoopHandler = (target: string) => boolean | Promise<boolean>;
+
 export interface SprinkleLickRequest {
   action: string;
   data?: unknown;
@@ -532,6 +541,20 @@ export interface SprinkleBridgeAPI {
   minimize(): void;
   /** Stop the cone agent */
   stopCone(): void;
+  /**
+   * Switch the app's view to an already-running scoop or cone — the same
+   * thing a click on a switcher chip does.
+   *
+   * `target` is `'scoop:<name>'`, `'cone:<folder>'`, or a bare `'cone'`
+   * (the default root). Other strings — including URL-context fallbacks
+   * such as a typo — resolve `false` rather than switching to the default
+   * root. Resolves `true` when the target matched the live roster,
+   * including when that unit is already selected (the view is already
+   * where the caller asked to go). Resolves `false` — never throws —
+   * when the grammar does not match or nothing in the roster matches, so
+   * a panel can fall back to emitting a lick.
+   */
+  selectScoop(target: string): Promise<boolean>;
   /** Push an image into the chat input as a pending attachment (no agent turn). */
   attachImage(base64: string, name?: string, mimeType?: string): void;
   /** Capture a screen/window/tab via Chrome's native picker. Returns base64 PNG + metadata. */
@@ -634,6 +657,7 @@ export class SprinkleBridge {
   private closeHandler: (name: string) => void;
   private minimizeHandler: (name: string) => void;
   private stopConeHandler: () => void;
+  private selectScoopHandler: SprinkleSelectScoopHandler;
   private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
   private captureScreenHandler: () => Promise<CaptureScreenResult>;
   private execHandler: SprinkleExecHandler | undefined;
@@ -657,13 +681,15 @@ export class SprinkleBridge {
     attachImageHandler: (base64: string, name?: string, mimeType?: string) => void,
     captureScreenHandler: () => Promise<CaptureScreenResult>,
     execHandler?: SprinkleExecHandler,
-    iframePusher?: SprinkleIframePusher
+    iframePusher?: SprinkleIframePusher,
+    selectScoopHandler?: SprinkleSelectScoopHandler
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
     this.minimizeHandler = minimizeHandler;
     this.stopConeHandler = stopConeHandler;
+    this.selectScoopHandler = selectScoopHandler ?? (() => false);
     this.attachImageHandler = attachImageHandler;
     this.captureScreenHandler = captureScreenHandler;
     this.execHandler = execHandler;
@@ -1333,6 +1359,7 @@ export class SprinkleBridge {
       close: () => this.closeHandler(sprinkleName),
       minimize: () => this.minimizeHandler(sprinkleName),
       stopCone: () => this.stopConeHandler(),
+      selectScoop: async (target: string) => Boolean(await this.selectScoopHandler(target)),
       attachImage: (base64: string, name?: string, mimeType?: string) =>
         this.attachImageHandler(base64, name, mimeType),
       captureScreen: () => this.captureScreenHandler(),
