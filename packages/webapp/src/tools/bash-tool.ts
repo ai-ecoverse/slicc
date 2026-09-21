@@ -16,6 +16,7 @@ import { classifyImageMarkers } from '../base/image-markers.js';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
+import { appendPipelineStatus } from '../shell/pipe-status.js';
 import type {
   BashJobHost,
   BashJobProcess,
@@ -303,6 +304,7 @@ interface ShellRunResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  pipeStatus?: number[];
 }
 
 /** Terminal state of a shell run, normalized so neither race branch rejects. */
@@ -412,7 +414,9 @@ function buildDescription(defaultBackgroundAfter: number): string {
     }KB of images per command reaches you as pictures, not base64. ` +
     `A command still running after background_after seconds (default ${defaultBackgroundAfter}) is ` +
     'detached: you get a job id at once and a Background Command lick delivers its exit code and ' +
-    'output later, so a stuck command never wedges the turn.'
+    'output later, so a stuck command never wedges the turn. ' +
+    "A pipeline reports the last stage's exit (bash default); when any stage is non-zero the " +
+    "result includes `pipeline: 1 0` with each stage's code."
   );
 }
 
@@ -524,6 +528,7 @@ function startRun(
   // the SIGKILL below reach it.
   const settled: Promise<SettledRun> = ctx.shell
     .executeCommand(command, controller.signal, job?.pid, undefined, {
+      capturePipeStatus: true,
       onOutput: (chunk) => {
         teedChunks.push(chunk);
         persistTeed();
@@ -716,9 +721,11 @@ async function deliverBackgroundJob(
     const body = teed.endsWith('\n') || teed.length === 0 ? teed : `${teed}\n`;
     raw = `${body}${killTrailer(timeoutSeconds, exitCode)}`;
   } else if (settled.ok) {
-    raw =
+    raw = appendPipelineStatus(
       [settled.result.stdout, settled.result.stderr].filter(Boolean).join('') ||
-      `(exit code: ${settled.result.exitCode})`;
+        `(exit code: ${settled.result.exitCode})`,
+      settled.result.pipeStatus
+    );
     exitCode = settled.result.exitCode;
   } else {
     // Thrown error (e.g. external `kill <pid>` → "aborted"): keep any teed
@@ -838,6 +845,7 @@ async function foregroundResult(
   if (result.stdout) output += result.stdout;
   if (result.stderr) output += result.stderr;
   if (!output) output = `(exit code: ${result.exitCode})`;
+  output = appendPipelineStatus(output, result.pipeStatus);
 
   return {
     content: await boundBashOutput(output, ctx.fs, ctx.tempDir, ctx.nextOutputSeq),

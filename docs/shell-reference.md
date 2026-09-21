@@ -29,6 +29,8 @@ WASM enters only for specific runtime-heavy commands, which fetch and cache thei
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
+The agent `bash` tool leaves pipeline exit as last-stage-wins (just-bash default, `pipefail` off). When any stage is non-zero it appends `pipeline: 1 0` from `PIPESTATUS` so an upstream failure is visible even if `tail` succeeded. The human terminal does not add that line.
+
 ### Shared `/tmp` scratch space and `$TMPDIR`
 
 The virtual `/tmp` directory is shared, disposable scratch space for the cone and scoops; it is not the host operating system's temporary directory. It stays readable and writable by every unit.

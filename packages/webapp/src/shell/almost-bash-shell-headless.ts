@@ -66,6 +66,13 @@ import { executeJsCode, executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES, stdinAsText } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import {
+  applyCapturedPipeStatus,
+  attachPipeStatus,
+  PIPESTATUS_ENV,
+  PIPESTATUS_EXIT_ENV,
+  scriptForPipeStatusCapture,
+} from './pipe-status.js';
+import {
   createFetchProgressObserver,
   makeSleepWithProgress,
   ProgressEmitter,
@@ -227,11 +234,24 @@ export interface HeadlessShellLike {
     shellPid?: number,
     stdin?: ByteString,
     options?: ExecuteCommandOptions
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  ): Promise<ShellCommandResult>;
   executeScriptFile(
     scriptPath: string,
     args?: string[]
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+}
+
+/** Result of {@link HeadlessShellLike.executeCommand}. */
+export interface ShellCommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  /**
+   * Per-stage codes from the last pipeline (`PIPESTATUS`). Present only when
+   * {@link ExecuteCommandOptions.capturePipeStatus} was set and the capture
+   * trailer ran (skipped on `set -e` abort or a bare `exit`).
+   */
+  pipeStatus?: number[];
 }
 
 /** Optional knobs for {@link HeadlessShellLike.executeCommand}. */
@@ -243,6 +263,11 @@ export interface ExecuteCommandOptions {
    * (#2415). Concurrent runs on one shell are demuxed via an internal env tag.
    */
   onOutput?: (chunk: string) => void;
+  /**
+   * Record PIPESTATUS for this run (agent `bash` tool). The last-stage exit
+   * code is unchanged; `pipeStatus` is returned separately.
+   */
+  capturePipeStatus?: boolean;
 }
 
 export type { BashExecResult };
@@ -328,13 +353,21 @@ function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined
 
 /** Copy of `env` without the internal per-run tags. */
 function stripRunPid(env: Record<string, string>): Record<string, string> {
-  if (!(RUN_PID_ENV in env) && !(OUTPUT_TEE_ENV in env) && !(SUDO_REASON_ENV in env)) {
+  if (
+    !(RUN_PID_ENV in env) &&
+    !(OUTPUT_TEE_ENV in env) &&
+    !(SUDO_REASON_ENV in env) &&
+    !(PIPESTATUS_ENV in env) &&
+    !(PIPESTATUS_EXIT_ENV in env)
+  ) {
     return { ...env };
   }
   const {
     [RUN_PID_ENV]: _runPid,
     [OUTPUT_TEE_ENV]: _tee,
     [SUDO_REASON_ENV]: _reason,
+    [PIPESTATUS_ENV]: _pipeStatus,
+    [PIPESTATUS_EXIT_ENV]: _pipeExit,
     ...rest
   } = env;
   return rest;
@@ -826,7 +859,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     shellPid?: number,
     stdin: ByteString = EMPTY_BYTES,
     options?: ExecuteCommandOptions
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  ): Promise<ShellCommandResult> {
     const previousShellPid = this.activeShellPid;
     if (shellPid !== undefined) this.activeShellPid = shellPid;
     const teeId = options?.onOutput ? `tee-${(this.nextOutputTeeId += 1)}` : undefined;
@@ -835,11 +868,19 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       // `shellPid` also rides this run's env, so a run that outlives the call
       // (the bash tool's detached jobs) still parents its realm children
       // correctly once `activeShellPid` has moved on to a later command.
-      const result = await this.runCommand(command, signal, shellPid, stdin, teeId);
+      const result = await this.runCommand(
+        command,
+        signal,
+        shellPid,
+        stdin,
+        teeId,
+        options?.capturePipeStatus
+      );
       return {
         stdout: result.stdout,
         stderr: result.stderr,
         exitCode: result.exitCode,
+        ...(result.pipeStatus !== undefined ? { pipeStatus: result.pipeStatus } : {}),
       };
     } finally {
       this.activeShellPid = previousShellPid;
@@ -1023,8 +1064,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     signal?: AbortSignal,
     runPid?: number,
     stdin: ByteString = EMPTY_BYTES,
-    outputTeeId?: string
-  ): Promise<BashExecResult> {
+    outputTeeId?: string,
+    capturePipeStatus = false
+  ): Promise<BashExecResult & { pipeStatus?: number[] }> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
 
@@ -1083,9 +1125,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const pathBeforeExec = this.lastEnv.PATH;
     this.activeRunSignal = signal;
     const scriptRun = this.beginScriptRun(command);
-    let result: BashExecResult;
+    let result: BashExecResult & { pipeStatus?: number[] };
     try {
-      result = await this.bash.exec(command, execOptions);
+      result = await this.bash.exec(
+        scriptForPipeStatusCapture(command, capturePipeStatus),
+        execOptions
+      );
     } finally {
       if (this.activeRunSignal === signal) this.activeRunSignal = undefined;
       this.endScriptRun(scriptRun);
@@ -1093,6 +1138,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
     await this.flushPendingCommandGrants();
+    result = applyCapturedPipeStatus(result, capturePipeStatus);
     if (result.env) {
       // Drop the per-run tag: it belongs to the run that just finished, and a
       // later untagged run must not inherit its pid.
@@ -1135,7 +1181,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
     if (result.exitCode !== 0 && result.stderr.includes('Permission denied')) {
       const { withShebangExecHint } = await import('./shebang-exec-hint.js');
-      return withShebangExecHint(result, this.cwd, this.vfsAdapter);
+      return attachPipeStatus(
+        await withShebangExecHint(result, this.cwd, this.vfsAdapter),
+        result.pipeStatus
+      );
     }
     return result;
   }

@@ -201,6 +201,7 @@ fallback is `DEFAULT_BASH_BACKGROUND_AFTER_SECONDS`.
 
 - Most non-zero shell exit codes are returned as `isError: true`
 - Expected no-match `grep`/`egrep`/`fgrep`/`rg` exits (`1` with empty stderr) stay non-errors so agents can check absence without retrying
+- A pipeline's exit is the last stage (bash / POSIX default; `set -o pipefail` is off). When any stage is non-zero the result appends `pipeline: 1 0` (the `PIPESTATUS` vector) so an upstream failure is visible even when `tail` or `wc` exited 0. `isError` still follows the last stage.
 
 **Examples**:
 
