@@ -69,7 +69,7 @@ const XAI_OAUTH_SCOPE = 'openid profile email offline_access grok-cli:access api
 const XAI_REDIRECT_URI = 'http://127.0.0.1:56121/callback';
 const XAI_REDIRECT_PATTERN = 'http://127.0.0.1:56121/*';
 const XAI_API_BASE_URL = 'https://api.x.ai/v1';
-const XAI_DEFAULT_MODEL_ID = 'grok-4.5';
+const XAI_DEFAULT_MODEL_ID = 'grok-4.7';
 // The api slicc tags each model with after `provider-settings.ts` rewrites
 // `api: 'openai'` from `getModelIds()` to `${providerId}-${apiType}`.
 // We register our streams under this name so the agent loop routes Grok
@@ -81,8 +81,47 @@ const XAI_API: Api = `${PROVIDER_ID}-openai` as Api;
 
 type NativeXaiModel = Model<'openai-completions'> | Model<'openai-responses'>;
 
+/**
+ * pi-ai's xAI catalog still stops at grok-4.6 (pin 0.84.4, and 0.87.0).
+ * Grok 4.7 is already on api.x.ai: same $2 / $6 / $0.50 cached rates as
+ * grok-4.6, 500k context, Responses API, reasoning low through xhigh.
+ * Clone the newest catalog sibling for compat and image limits, then
+ * override the published 4.7 fields. The clone is skipped once
+ * `getModels('xai')` lists this id, so a later pi-ai bump wins on its own.
+ */
+function catalogWithDefaultOverlay(nativeModels: Model<Api>[]): Model<Api>[] {
+  if (nativeModels.some((model) => model.id === XAI_DEFAULT_MODEL_ID)) return nativeModels;
+  const sibling =
+    nativeModels.find((model) => model.id === 'grok-4.6') ??
+    nativeModels.find((model) => model.api === 'openai-responses') ??
+    nativeModels[0];
+  if (!sibling) return nativeModels;
+  const overlay: Model<Api> = {
+    ...sibling,
+    id: XAI_DEFAULT_MODEL_ID,
+    name: 'Grok 4.7',
+    api: 'openai-responses',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    contextWindow: 500_000,
+    maxTokens: 500_000,
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: null,
+    },
+  };
+  return [overlay, ...nativeModels];
+}
+
+/** pi-ai's xAI catalog, plus the Grok 4.7 overlay when the pin predates it. */
 function getNativeXaiModels(): Model<Api>[] {
-  return getModels('xai') as Model<Api>[];
+  return catalogWithDefaultOverlay(getModels('xai') as Model<Api>[]);
 }
 
 type ApiProviderRegistration = Parameters<typeof registerApiProvider>[0];
@@ -363,7 +402,7 @@ export const config: ProviderConfig = {
   id: PROVIDER_ID,
   name: 'xAI Grok (SuperGrok OAuth)',
   description:
-    'Grok via xAI OAuth — uses your SuperGrok subscription, no API key needed. Default model is Grok 4.5.',
+    'Grok via xAI OAuth — uses your SuperGrok subscription, no API key needed. Default model is Grok 4.7.',
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
