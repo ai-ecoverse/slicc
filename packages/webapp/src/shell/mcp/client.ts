@@ -220,7 +220,10 @@ function parseRpcError(text: string, expectedId: number): McpRpcError | undefine
  * True when a `server/discover` rejection means "this server wants the legacy
  * `initialize` handshake first" rather than a genuine failure.
  *
- * Two shapes qualify:
+ * Three shapes qualify:
+ * - `McpTimeoutError` — a Streamable-HTTP server that never answers
+ *   `server/discover` (hangs until the per-request timeout) is treated as
+ *   legacy; 401 auth challenges are not timeouts and still surface.
  * - `-32601` Method not found — the server has no `server/discover` route.
  * - `-32000` + HTTP 400 + a missing-session message — servers built on
  *   Cloudflare's `agents` SDK reject any non-initialization request that
@@ -228,6 +231,7 @@ function parseRpcError(text: string, expectedId: number): McpRpcError | undefine
  *   message and status are both required to keep the signal narrow.
  */
 function isLegacyHandshakeSignal(err: unknown, rpcError: McpRpcError | undefined): boolean {
+  if (err instanceof McpTimeoutError) return true;
   if (!rpcError) return false;
   const httpStatus = err instanceof McpHttpError ? err.status : undefined;
   if (rpcError.code === -32601) {
@@ -248,14 +252,33 @@ function advertisedVersions(error: McpRpcError): string[] {
     : [];
 }
 
-async function defaultFetchImpl(): Promise<McpFetchLike> {
-  const { createProxiedFetch } = await import('../proxied-fetch.js');
-  const fn = createProxiedFetch();
+/**
+ * Adapt a SecureFetch-shaped function to {@link McpFetchLike}, forwarding
+ * `AbortSignal` so `McpClient`'s per-request timeout can cancel the proxy
+ * hop. `createProxiedFetch`'s CLI path already honors `options.signal`.
+ */
+export function wrapProxiedFetchAsMcpFetch(
+  fn: (
+    url: string,
+    init?: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      signal?: AbortSignal;
+    }
+  ) => Promise<{
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    body: Uint8Array;
+  }>
+): McpFetchLike {
   return async (url, init) => {
     const res = await fn(url, {
       method: init?.method,
       headers: init?.headers,
       body: init?.body,
+      signal: init?.signal,
     });
     return {
       status: res.status,
@@ -264,6 +287,11 @@ async function defaultFetchImpl(): Promise<McpFetchLike> {
       body: res.body,
     };
   };
+}
+
+async function defaultFetchImpl(): Promise<McpFetchLike> {
+  const { createProxiedFetch } = await import('../proxied-fetch.js');
+  return wrapProxiedFetchAsMcpFetch(createProxiedFetch());
 }
 
 /** JSON-RPC over Streamable HTTP client for a single MCP server. */

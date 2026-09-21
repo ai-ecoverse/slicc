@@ -444,6 +444,16 @@ async function buildPortRequest(options?: ProxyRequestOptions): Promise<Prepared
  * real extension page (`chrome.runtime.connect({ name })`) and the thin-bridge
  * leader page (`chrome.runtime.connect(extensionId, { name })`).
  */
+function requestAbortSignal(
+  options?: ProxyRequestOptions | Parameters<SecureFetch>[1]
+): AbortSignal | undefined {
+  return (options as { signal?: AbortSignal } | undefined)?.signal;
+}
+
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted.', 'AbortError');
+}
+
 async function collectViaPort(
   connect: () => FetchProxyPort,
   url: string,
@@ -452,6 +462,8 @@ async function collectViaPort(
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const { method, transportHeaders, bodyBase64, requestBodyTooLarge } =
     await buildPortRequest(options);
+  const signal = requestAbortSignal(options);
+  if (signal?.aborted) throw abortError();
   const port = connect();
 
   return new Promise((resolve, reject) => {
@@ -466,9 +478,12 @@ async function collectViaPort(
     const fail = (err: Error) => {
       ended = true;
       chunks.length = 0;
+      signal?.removeEventListener('abort', onAbort);
       reject(err);
       port.disconnect();
     };
+    const onAbort = () => fail(abortError());
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     const onHead = (msg: Extract<FetchProxyResponseMsg, { type: 'response-head' }>) => {
       headInfo = { status: msg.status, statusText: msg.statusText, headers: msg.headers };
@@ -493,6 +508,7 @@ async function collectViaPort(
     const onEnd = () => {
       if (ended) return;
       ended = true;
+      signal?.removeEventListener('abort', onAbort);
       if (!headInfo) {
         reject(new Error('fetch-proxy: response-end before response-head'));
         return;
@@ -669,8 +685,9 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
             body: exactBody,
           },
           // Generous timeout — multi-MB wasm / package downloads outlast the
-          // panel-RPC default 15s.
-          { timeoutMs: 120_000 }
+          // panel-RPC default 15s. Honor the caller's AbortSignal so an MCP
+          // per-request timeout does not leave this hop running to 120s.
+          { timeoutMs: 120_000, signal: requestAbortSignal(options) }
         )
       );
       return finalizeProxyResponse(head, new Uint8Array(body), url);

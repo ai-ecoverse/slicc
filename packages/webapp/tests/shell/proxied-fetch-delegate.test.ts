@@ -126,7 +126,57 @@ describe('createProxiedFetch — thin-bridge extension delegate', () => {
       headers: { 'x-test': '1' },
       body: 'req-body',
     });
-    expect(opts).toEqual({ timeoutMs: 120_000 });
+    expect(opts).toEqual({ timeoutMs: 120_000, signal: undefined });
+  });
+
+  it('page realm disconnects the Port when the request AbortSignal aborts', async () => {
+    const msgListeners: ((m: unknown) => void)[] = [];
+    const port = makePort(msgListeners);
+    const connect = vi.fn(() => port);
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect } };
+
+    const { createProxiedFetch, setExtensionDelegateId } = await import(
+      '../../src/shell/proxied-fetch.js'
+    );
+    setExtensionDelegateId('abc-ext-id');
+    const ac = new AbortController();
+    const fetchPromise = createProxiedFetch()('https://example.com/pkg', {
+      signal: ac.signal,
+    } as never);
+    await new Promise((r) => setTimeout(r, 0));
+    ac.abort();
+    await expect(fetchPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(port.disconnect).toHaveBeenCalled();
+  });
+
+  it('worker realm forwards AbortSignal into panel-RPC call opts', async () => {
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    const call = vi.fn(async () => ({
+      head: { status: 200, statusText: 'OK', headers: {} },
+      body: new ArrayBuffer(0),
+    }));
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call,
+      onEvent: () => () => {},
+      registerPushTarget: () => {},
+      unregisterPushTarget: () => {},
+      dispose: () => {},
+    };
+    const { createProxiedFetch, setExtensionDelegateId } = await import(
+      '../../src/shell/proxied-fetch.js'
+    );
+    setExtensionDelegateId('abc-ext-id');
+    const ac = new AbortController();
+    await createProxiedFetch()('https://example.com/wasm', {
+      method: 'GET',
+      signal: ac.signal,
+    } as never);
+    const opts = (call.mock.calls[0] as unknown[])[2] as {
+      timeoutMs: number;
+      signal?: AbortSignal;
+    };
+    expect(opts.timeoutMs).toBe(120_000);
+    expect(opts.signal).toBe(ac.signal);
   });
 
   it('falls back to the CLI branch when no delegate id is set and no chrome', async () => {
