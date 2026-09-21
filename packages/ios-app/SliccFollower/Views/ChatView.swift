@@ -24,8 +24,8 @@ struct ChatView: View {
     /// Thread list open/collapsed + unread counts, above both shells so a
     /// size-class swap keeps them.
     @StateObject private var threadList = ThreadListModel()
-    /// One-line thread summaries for the list; beside `threadList` for the same reason.
-    @StateObject private var threadSummaries = ThreadSummaryStore()
+    /// Summaries. The host is built once and never publishes, so rows redraw alone.
+    @StateObject private var threadSummaries = ThreadSummaryHost()
     @State private var showSettings = false
     @State private var hasAppeared = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).
@@ -85,7 +85,7 @@ struct ChatView: View {
             }
         }
         .environmentObject(threadList)
-        .environmentObject(threadSummaries)
+        .environmentObject(threadSummaries.store)
         .onReceive(appState.$scoops.combineLatest(appState.$selectedScoopJid)) { scoops, selected in
             threadList.sync(scoops: scoops, selectedJid: selected)
         }

@@ -25,6 +25,21 @@ import SliccTrayKit
             UserDefaults.standard.bool(forKey: "uiTestThreadListOpen")
         }
 
+        /// `-uiTestThreadSummaryDelay <milliseconds>` stands in for Apple's
+        /// on-device model. The preview is still immediate; this long later
+        /// every visible row receives the same short line, so a test can
+        /// sample frames across the swap. Absent or zero keeps the real model.
+        static var threadSummaryDelay: Duration? {
+            let ms = UserDefaults.standard.integer(forKey: "uiTestThreadSummaryDelay")
+            guard ms > 0 else { return nil }
+            return .milliseconds(ms)
+        }
+
+        static func threadSummaryGenerator() -> ThreadSummaryGenerating? {
+            guard let threadSummaryDelay else { return nil }
+            return ScriptedThreadSummarizer(delay: threadSummaryDelay, line: "Pinned label")
+        }
+
         /// `-uiTestShellWidth <pt>` pins the shell to a narrower window than
         /// the simulator's — the stand-in for an iPad Split View / Slide Over
         /// pane (and a foldable's side-by-side apps), which `simctl` cannot
@@ -114,6 +129,30 @@ import SliccTrayKit
                     isCone: false, assistantLabel: "tester", state: "initializing", fill: nil,
                     parentId: threadListDeployCone),
             ]
+        }
+    }
+
+    /// A stand-in for `FoundationModelSummarizer`. The line is deliberately
+    /// shorter than any fixture preview and carries descenders the preview
+    /// lacks, so a row that sizes itself to the string would move. The delay
+    /// is paid once: the store summarizes serially, and a per-row sleep would
+    /// land the lines several seconds apart.
+    private actor ScriptedThreadSummarizer: ThreadSummaryGenerating {
+        let delay: Duration
+        let line: String
+        private var hasSlept = false
+
+        init(delay: Duration, line: String) {
+            self.delay = delay
+            self.line = line
+        }
+
+        func summarize(_ excerpt: String) async -> String? {
+            if !hasSlept {
+                hasSlept = true
+                try? await Task.sleep(for: delay)
+            }
+            return line
         }
     }
 #endif

@@ -76,6 +76,16 @@ protocol ThreadSummaryGenerating: Sendable {
 /// third party. Unavailable (older hardware, Apple Intelligence off, model
 /// still downloading) means `make()` returns `nil` and rows keep the preview.
 enum OnDeviceThreadSummarizer {
+    /// The real model, unless a UI test passed `-uiTestThreadSummaryDelay`.
+    /// Not on the store: that type is `@MainActor`, and a default argument
+    /// is evaluated outside the actor.
+    static func resolved() -> ThreadSummaryGenerating? {
+        #if DEBUG
+            if let scripted = UITestHooks.threadSummaryGenerator() { return scripted }
+        #endif
+        return make()
+    }
+
     static func make() -> ThreadSummaryGenerating? {
         #if canImport(FoundationModels)
             guard case .available = SystemLanguageModel.default.availability else { return nil }
@@ -123,7 +133,7 @@ final class ThreadSummaryStore: ObservableObject {
     /// The unit the model is summarizing right now, so `suspend` can forget it.
     private var inFlight: String?
 
-    init(generator: ThreadSummaryGenerating? = OnDeviceThreadSummarizer.make()) {
+    init(generator: ThreadSummaryGenerating? = OnDeviceThreadSummarizer.resolved()) {
         self.generator = generator
     }
 
@@ -195,4 +205,21 @@ final class ThreadSummaryStore: ObservableObject {
         func waitUntilIdle() async { await worker?.value }
         var pendingJobs: Int { queue.count }
     #endif
+}
+
+/// What the shell owns. `@StateObject` builds this once — its wrapped value is
+/// an autoclosure — and the host never publishes, so a line arriving redraws
+/// the rows that read `store` and not the shell. Holding the store in `@State`
+/// directly would rebuild it on every `ChatView` init.
+@MainActor
+final class ThreadSummaryHost: ObservableObject {
+    let store: ThreadSummaryStore
+
+    init(store: ThreadSummaryStore) {
+        self.store = store
+    }
+
+    convenience init() {
+        self.init(store: ThreadSummaryStore())
+    }
 }
