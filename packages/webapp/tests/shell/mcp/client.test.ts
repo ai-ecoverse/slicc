@@ -7,6 +7,7 @@ import {
   McpTimeoutError,
   parseResourceMetadataUrl,
   selectSseResponseFrame,
+  wrapProxiedFetchAsMcpFetch,
 } from '../../../src/shell/mcp/client.js';
 import type { McpFetchLike } from '../../../src/shell/mcp/types.js';
 
@@ -691,5 +692,23 @@ describe('McpClient: tools/call and apps/list', () => {
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
     const apps = await c.appsList();
     expect(apps).toEqual([]);
+  });
+});
+
+describe('wrapProxiedFetchAsMcpFetch', () => {
+  it('forwards AbortSignal into the proxied fetch', async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const wrapped = wrapProxiedFetchAsMcpFetch(async (_url, init) => {
+      seen = init?.signal;
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'application/json' },
+        body: bodyToBytes('{}'),
+      };
+    });
+    await wrapped('https://mcp.example/rpc', { method: 'POST', signal: ac.signal });
+    expect(seen).toBe(ac.signal);
   });
 });
