@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import GhosttyTerminal
+import SwiftUI
 import XCTest
 
 @testable import SliccFollower
@@ -353,5 +354,77 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertFalse(
             TerminalView.shouldExposeTerminalAccessibility(
                 connectionAvailable: true, isActive: false))
+    }
+
+    func testApplyThemeKeepsDarkSurfaceUnderLightSchemeAndLightPageTokens() {
+        let model = model(Recorder())
+        let vanilla = SliccTheme(
+            id: "vanilla",
+            name: "Vanilla",
+            base: .light,
+            tokens: [
+                "--canvas": "#fffdf8",
+                "--ink": "#1a1008",
+                "--ctx": "#a0522d",
+            ]
+        )
+
+        model.applyTheme(vanilla, systemScheme: .light)
+        assertAlwaysDarkSurface(model, accent: "a0522d")
+
+        model.applyTheme(nil, systemScheme: .light)
+        assertAlwaysDarkSurface(model, accent: TerminalViewModel.defaultAccentHex)
+    }
+
+    func testApplyThemeKeepsDarkSurfaceWhenSystemSchemeFlips() {
+        let model = model(Recorder())
+        let themed = SliccTheme(
+            id: "t",
+            name: "Test",
+            base: .dark,
+            tokens: [
+                "--canvas": "#ffffff",
+                "--ink": "#0a0a0a",
+                "--ctx": "#34d399",
+            ]
+        )
+
+        model.applyTheme(themed, systemScheme: .dark)
+        assertAlwaysDarkSurface(model, accent: "34d399")
+        model.applyTheme(themed, systemScheme: .light)
+        assertAlwaysDarkSurface(model, accent: "34d399")
+    }
+
+    func testApplyThemeFallsBackWhenAccentTokenIsUnparseable() {
+        let model = model(Recorder())
+        let theme = SliccTheme(
+            id: "t",
+            name: "Test",
+            base: .light,
+            tokens: ["--ctx": "var(--nope)", "--canvas": "#fffdf8"]
+        )
+        model.applyTheme(theme, systemScheme: .light)
+        assertAlwaysDarkSurface(model, accent: TerminalViewModel.defaultAccentHex)
+    }
+
+    private func assertAlwaysDarkSurface(_ model: TerminalViewModel, accent: String) {
+        for rendered in [model.terminal.theme.light.rendered, model.terminal.theme.dark.rendered] {
+            XCTAssertTrue(
+                rendered.contains("background = \(TerminalViewModel.surfaceBackgroundHex)"),
+                "expected dark background in:\n\(rendered)")
+            XCTAssertTrue(
+                rendered.contains("foreground = \(TerminalViewModel.surfaceForegroundHex)"),
+                "expected dark-surface foreground in:\n\(rendered)")
+            XCTAssertTrue(
+                rendered.contains("cursor-color = \(accent)"),
+                "expected themed cursor in:\n\(rendered)")
+            XCTAssertTrue(
+                rendered.contains("selection-background = \(accent)"),
+                "expected themed selection in:\n\(rendered)")
+            XCTAssertFalse(rendered.contains("background = FFFFFF"))
+            XCTAssertFalse(rendered.contains("background = fffdf8"))
+            XCTAssertFalse(rendered.contains("foreground = 0A0A0A"))
+            XCTAssertFalse(rendered.contains("foreground = 1a1008"))
+        }
     }
 }

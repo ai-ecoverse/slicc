@@ -38,7 +38,7 @@ Display is `ICloudSessionList.recentRows`: trays the live iCloud list already sh
 
 ## Terminal
 
-`InMemoryTerminalSession` + `TerminalClient` exec against the leader shell (`hello.capabilities.exec`); one virtual shell per connection, Ctrl-C → `SIGINT` until `exec.response`.
+`InMemoryTerminalSession` + `TerminalClient` exec against the leader shell (`hello.capabilities.exec`); one virtual shell per connection, Ctrl-C → `SIGINT` until `exec.response`. The Ghostty surface stays always-dark (`#0c0c0e` / `#e7e7ea`, matching web `TERMINAL_THEME_DEFAULTS`); only the cursor/selection accent follows leader `--ctx`.
 
 ## iCloud sessions and joins
 
