@@ -3,16 +3,18 @@ import SwiftUI
 /// The resolved native palette views render from, injected through the
 /// SwiftUI environment (`\.palette`) so no view hardcodes hex again.
 ///
-/// Three sources, in precedence order:
-/// 1. A leader theme (`theme.apply`) — token map + `base`, mirroring what
-///    the browser follower applies. Raw `css` and per-component overrides
-///    are deliberately ignored: injecting arbitrary CSS into native views
-///    is not meaningful, and the web side sanitizes it precisely because
-///    it is dangerous.
-/// 2. Unthemed dark — the app's existing hand-tuned dark look, unchanged.
-/// 3. Unthemed light — the webapp's canonical light tokens
-///    (`packages/webcomponents/src/theme/tokens.css`), so an unthemed
-///    phone follows the system scheme like the unthemed webapp shell.
+/// The device owns light and dark. A leader theme (`theme.apply`) still
+/// supplies color, in this order:
+/// 1. Theme `base` matches the device — token map + `base`. Raw `css` and
+///    per-component overrides are ignored: injecting arbitrary CSS into
+///    native views is not meaningful, and the web side sanitizes it
+///    precisely because it is dangerous.
+/// 2. Theme `base` is the other appearance — the device's surfaces, with
+///    the theme's `--ctx` accent kept. A dark theme must not paint a
+///    light phone dark.
+/// 3. No theme — the device's light or dark default. Dark is the app's
+///    existing hand-tuned look; light is the webapp's canonical tokens
+///    (`packages/webcomponents/src/theme/tokens.css`).
 struct ThemePalette: Equatable {
     /// Window/page background (`--canvas`).
     let canvas: Color
@@ -107,11 +109,40 @@ struct ThemePalette: Equatable {
         )
     }
 
-    /// The palette for the current state: leader theme when active,
-    /// otherwise the default matching the effective system scheme.
+    /// Device surfaces plus the leader accent. `--ctx` wins when it parses;
+    /// an unparseable or missing accent keeps the device default.
+    func withLeaderAccent(_ theme: SliccTheme) -> ThemePalette {
+        let nextAccent: Color
+        if let raw = theme.tokens["--ctx"], let parsed = Color(hexToken: raw) {
+            nextAccent = parsed
+        } else {
+            nextAccent = accent
+        }
+        return ThemePalette(
+            canvas: canvas,
+            surface: surface,
+            field: field,
+            ink: ink,
+            inkSecondary: inkSecondary,
+            inkTertiary: inkTertiary,
+            line: line,
+            accent: nextAccent,
+            bubble: bubble,
+            bubbleText: bubbleText,
+            isLeaderTheme: true
+        )
+    }
+
+    /// The palette for the current state. Light/dark follows the device.
+    /// A leader theme contributes its full token palette when `base`
+    /// matches that appearance, and only its accent otherwise.
     static func resolve(theme: SliccTheme?, systemScheme: ColorScheme) -> ThemePalette {
-        if let theme { return fromTheme(theme) }
-        return systemScheme == .light ? light : dark
+        let device = systemScheme == .light ? light : dark
+        guard let theme else { return device }
+        let themeIsLight = theme.base == .light
+        let deviceIsLight = systemScheme == .light
+        if themeIsLight == deviceIsLight { return fromTheme(theme) }
+        return device.withLeaderAccent(theme)
     }
 }
 
@@ -167,38 +198,73 @@ extension EnvironmentValues {
 }
 
 extension SliccTheme {
-    /// CSS injected into sprinkle WKWebViews so web-rendered sprinkle
-    /// content follows the leader theme: the raw token map verbatim (full
-    /// sprinkle documents read the webapp names like `--canvas`) plus the
-    /// `--s-*` mappings iOS's own inline-sprinkle wrapper CSS reads. Values
+    /// Accent and semantic names that stay when the theme's base disagrees
+    /// with the device. Surface names (`--canvas`, `--ink`, …) are omitted
+    /// in that case so a dark theme cannot paint a light phone's sprinkles.
+    private static let accentTokenNames: Set<String> = [
+        "--ctx",
+        "--waffle",
+        "--s2-accent",
+        "--s2-accent-hover",
+        "--s2-accent-down",
+        "--slicc-accent",
+        "--slicc-cone",
+        "--slicc-scoop-blue",
+        "--slicc-scoop-purple",
+        "--slicc-scoop-teal",
+        "--amber",
+        "--violet",
+        "--cyan",
+        "--rose",
+        "--rainbow",
+        "--s2-positive",
+        "--s2-negative",
+        "--s2-informative",
+        "--s2-notice",
+        "--s2-border-focus",
+    ]
+
+    /// CSS injected into sprinkle WKWebViews. When `scheme` matches `base`,
+    /// the raw token map goes in verbatim (full sprinkle documents read the
+    /// webapp names like `--canvas`) plus the `--s-*` mappings iOS's own
+    /// inline-sprinkle wrapper CSS reads. When it does not, only accent
+    /// tokens are injected and `color-scheme` follows the device. Values
     /// come off the wire, so both names and values pass a strict character
     /// allowlist — a token can never close the style block or smuggle
     /// markup. Raw theme `css` deliberately never crosses this boundary.
-    var sprinkleCSSOverrides: String {
+    func sprinkleCSSOverrides(for scheme: ColorScheme) -> String {
+        let deviceBase: Base = scheme == .light ? .light : .dark
+        let full = deviceBase == base
         var lines: [String] = []
         for (name, value) in tokens.sorted(by: { $0.key < $1.key })
-        where Self.isSafeCSSName(name) && Self.isSafeCSSValue(value) {
+        where Self.isSafeCSSName(name) && Self.isSafeCSSValue(value)
+            && (full || Self.accentTokenNames.contains(name))
+        {
             lines.append("  \(name): \(value);")
         }
-        let sMappings: [(String, String)] = [
-            ("--s-bg-card", "--bg"),
-            ("--s-bg-card-soft", "--ghost"),
-            ("--s-bg-elevated", "--ghost"),
-            ("--s-text-primary", "--ink"),
-            ("--s-text-secondary", "--txt-2"),
-            ("--s-text-muted", "--txt-3"),
-            ("--s-accent", "--ctx"),
-        ]
+        let sMappings: [(String, String)] =
+            full
+            ? [
+                ("--s-bg-card", "--bg"),
+                ("--s-bg-card-soft", "--ghost"),
+                ("--s-bg-elevated", "--ghost"),
+                ("--s-text-primary", "--ink"),
+                ("--s-text-secondary", "--txt-2"),
+                ("--s-text-muted", "--txt-3"),
+                ("--s-accent", "--ctx"),
+            ]
+            : [("--s-accent", "--ctx")]
         for (sVar, source) in sMappings {
             if let value = tokens[source], Self.isSafeCSSValue(value) {
                 lines.append("  \(sVar): \(value);")
             }
         }
+        let schemeName = deviceBase.rawValue
         guard !lines.isEmpty else {
-            return "html { color-scheme: \(base.rawValue); }"
+            return "html { color-scheme: \(schemeName); }"
         }
         return ":root {\n" + lines.joined(separator: "\n")
-            + "\n}\nhtml { color-scheme: \(base.rawValue); }"
+            + "\n}\nhtml { color-scheme: \(schemeName); }"
     }
 
     private static func isSafeCSSName(_ name: String) -> Bool {

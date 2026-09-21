@@ -40,12 +40,35 @@ final class ThemePaletteTests: XCTestCase {
             ThemePalette.resolve(theme: nil, systemScheme: .light), ThemePalette.light)
     }
 
-    func testThemedIgnoresTheSystemScheme() {
-        let light = theme(base: .light)
+    func testMatchingSchemeAppliesTheFullTheme() {
+        let light = theme(base: .light, tokens: ["--canvas": "#fff8f0"])
         XCTAssertEqual(
-            ThemePalette.resolve(theme: light, systemScheme: .dark),
+            ThemePalette.resolve(theme: light, systemScheme: .light),
             ThemePalette.fromTheme(light),
-            "a leader theme pins the palette regardless of the OS setting")
+            "a theme authored for the device appearance paints its tokens")
+    }
+
+    func testMismatchedSchemeKeepsTheAccentAndTheDeviceSurfaces() {
+        let darkTheme = theme(
+            base: .dark,
+            tokens: [
+                "--canvas": "#112233",
+                "--ink": "#eeeeee",
+                "--ctx": "#34d399",
+            ])
+        let resolved = ThemePalette.resolve(theme: darkTheme, systemScheme: .light)
+        XCTAssertEqual(resolved.canvas, ThemePalette.light.canvas)
+        XCTAssertEqual(resolved.ink, ThemePalette.light.ink)
+        XCTAssertEqual(resolved.bubble, ThemePalette.light.bubble)
+        XCTAssertEqual(resolved.bubbleText, ThemePalette.light.bubbleText)
+        XCTAssertEqual(resolved.accent, Color(hexToken: "#34d399"))
+        XCTAssertTrue(resolved.isLeaderTheme)
+
+        let lightTheme = theme(base: .light, tokens: ["--canvas": "#fff8f0"])
+        let darkDevice = ThemePalette.resolve(theme: lightTheme, systemScheme: .dark)
+        XCTAssertEqual(darkDevice.canvas, ThemePalette.dark.canvas)
+        XCTAssertEqual(darkDevice.accent, ThemePalette.dark.accent)
+        XCTAssertTrue(darkDevice.isLeaderTheme)
     }
 
     func testTokensOverrideAndSparseMapsFallBackPerSlot() {
@@ -70,7 +93,7 @@ final class ThemePaletteTests: XCTestCase {
         let css = theme(
             base: .dark,
             tokens: ["--canvas": "#0c1510", "--ink": "#e8f2ec", "--ctx": "#34d399"]
-        ).sprinkleCSSOverrides
+        ).sprinkleCSSOverrides(for: .dark)
         XCTAssertTrue(css.contains("--canvas: #0c1510;"))
         XCTAssertTrue(css.contains("--s-text-primary: #e8f2ec;"))
         XCTAssertTrue(css.contains("--s-accent: #34d399;"))
@@ -85,7 +108,7 @@ final class ThemePaletteTests: XCTestCase {
                 "not-a-var": "#ffffff",
                 "--ok": "#ffffff",
             ]
-        ).sprinkleCSSOverrides
+        ).sprinkleCSSOverrides(for: .dark)
         XCTAssertFalse(css.contains("script"), "injection attempts never reach the style block")
         XCTAssertFalse(css.contains("--evil"))
         XCTAssertFalse(css.contains("not-a-var"))
@@ -93,8 +116,27 @@ final class ThemePaletteTests: XCTestCase {
     }
 
     func testBareBaseThemeStillDeclaresColorScheme() {
-        let css = theme(base: .light).sprinkleCSSOverrides
+        let css = theme(base: .light).sprinkleCSSOverrides(for: .light)
         XCTAssertEqual(css, "html { color-scheme: light; }")
+    }
+
+    func testSprinkleCSSFollowsTheDeviceWhenTheThemeBaseDiffers() {
+        let css = theme(
+            base: .dark,
+            tokens: ["--canvas": "#0c1510", "--ink": "#e8f2ec", "--ctx": "#34d399"]
+        ).sprinkleCSSOverrides(for: .light)
+        XCTAssertFalse(css.contains("--canvas"))
+        XCTAssertFalse(css.contains("--ink"))
+        XCTAssertFalse(css.contains("--s-text-primary"))
+        XCTAssertTrue(css.contains("--ctx: #34d399;"))
+        XCTAssertTrue(css.contains("--s-accent: #34d399;"))
+        XCTAssertTrue(css.contains("color-scheme: light"))
+        XCTAssertFalse(css.contains("color-scheme: dark"))
+    }
+
+    func testBareThemeOnTheOtherAppearanceDeclaresTheDeviceScheme() {
+        let css = theme(base: .light).sprinkleCSSOverrides(for: .dark)
+        XCTAssertEqual(css, "html { color-scheme: dark; }")
     }
 
     // MARK: Bubble contrast

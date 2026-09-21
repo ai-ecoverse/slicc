@@ -702,8 +702,9 @@ import UIKit
         /// Apply a canned leader theme on launch
         /// (`-uiTestThemeFixture light|forest`): `light` is a bare
         /// light-base theme (default light tokens), `forest` a custom token
-        /// map, so screenshots and UI tests cover both the base flip and
-        /// token-driven colors without a leader.
+        /// map. Light/dark still comes from the device, so a `light`
+        /// screenshot has to launch a light simulator (and `forest` a dark
+        /// one) or the fixture's surfaces will not show.
         static func themeFixtureJson() -> String? {
             switch UserDefaults.standard.string(forKey: "uiTestThemeFixture") {
             case "light":

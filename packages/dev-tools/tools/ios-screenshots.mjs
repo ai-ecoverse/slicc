@@ -131,6 +131,12 @@ try {
 
 mkdirSync(args.out, { recursive: true });
 const hashes = {};
+let previousAppearance = '';
+try {
+  previousAppearance = simctl('ui', udid, 'appearance').trim().toLowerCase();
+} catch {
+  // Restoring is best-effort; capture still pins each screen below.
+}
 for (const screen of screens) {
   const settle = screen.settleSeconds ?? DEFAULT_SETTLE_SECONDS;
   console.log(`==> ${screen.name} (settle ${settle}s)`);
@@ -138,6 +144,15 @@ for (const screen of screens) {
     simctl('terminate', udid, BUNDLE_ID);
   } catch {
     // Not running — fine.
+  }
+  // Unspecified screens stay dark so a light theme capture cannot leak
+  // into the next shot. The app follows the device, so theme-light has
+  // to ask for a light simulator or its palette will not show.
+  const appearance = screen.appearance === 'light' ? 'light' : 'dark';
+  try {
+    simctl('ui', udid, 'appearance', appearance);
+  } catch {
+    console.warn(`::warning::simctl ui appearance ${appearance} failed for ${screen.name}`);
   }
   simctl('launch', udid, BUNDLE_ID, ...screen.args);
   await sleep(settle);
@@ -154,6 +169,13 @@ try {
   simctl('status_bar', udid, 'clear');
 } catch {
   // Best-effort; the override is harmless to leave on a CI simulator.
+}
+if (previousAppearance === 'light' || previousAppearance === 'dark') {
+  try {
+    simctl('ui', udid, 'appearance', previousAppearance);
+  } catch {
+    // Best-effort; a leftover dark simulator is the capture default anyway.
+  }
 }
 
 const manifest = buildManifest(screens, hashes, { device: deviceName });

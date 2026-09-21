@@ -204,8 +204,9 @@ class AppState: ObservableObject {
     /// signaling attempt, an exhausted reconnect. Kept apart from `leaderError`
     /// so a network blip and a cone failure do not read identically.
     @Published var lastError: String?
-    /// The leader's active theme (`theme.apply`), nil when unthemed — the
-    /// phone then follows the system scheme like the unthemed webapp shell.
+    /// The leader's active theme (`theme.apply`), nil when unthemed.
+    /// Light/dark always follows the device. A theme supplies its full
+    /// palette when `base` matches that appearance, and its accent otherwise.
     @Published var leaderTheme: SliccTheme?
 
     /// Last error reported *by the leader's agent*. A cone problem, not a
