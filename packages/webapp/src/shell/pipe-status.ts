@@ -25,12 +25,25 @@ const EXIT_CODE_RE = /^(0|[1-9]\d*)$/;
  * the captured `$?`.
  */
 export function wrapCommandForPipeStatus(command: string): string {
-  const body = command.trimEnd();
+  const body = closeOpenLineContinuation(command.trimEnd());
   if (!body) return command;
   return `{
 ${body}
 }
 ${PIPESTATUS_EXIT_ENV}=$? ${PIPESTATUS_ENV}="\${PIPESTATUS[*]}"`;
+}
+
+/**
+ * An odd number of trailing backslashes is an open line continuation: the
+ * newline we insert before `}` would be swallowed and the group would not
+ * parse. Pairing it makes the backslash a literal, matching `echo hi \` at
+ * EOF, so the wrapper newline is a real terminator.
+ */
+function closeOpenLineContinuation(body: string): string {
+  let n = 0;
+  for (let i = body.length - 1; i >= 0 && body[i] === '\\'; i--) n += 1;
+  if (n % 2 === 0) return body;
+  return `${body}\\`;
 }
 
 /** Parse a `PIPESTATUS[*]` string into integer exit codes; `[]` if malformed. */

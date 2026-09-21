@@ -24,6 +24,12 @@ describe('wrapCommandForPipeStatus', () => {
     expect(wrapCommandForPipeStatus('')).toBe('');
     expect(wrapCommandForPipeStatus('   \n')).toBe('   \n');
   });
+
+  it('pairs a trailing unquoted backslash so the wrapper newline is not a continuation', () => {
+    expect(wrapCommandForPipeStatus('echo hi \\')).toContain('{\necho hi \\\\\n}');
+    expect(wrapCommandForPipeStatus('echo hi \\\\')).toContain('{\necho hi \\\\\n}');
+    expect(wrapCommandForPipeStatus('false | echo hi \\')).toContain('{\nfalse | echo hi \\\\\n}');
+  });
 });
 
 describe('parsePipeStatus', () => {

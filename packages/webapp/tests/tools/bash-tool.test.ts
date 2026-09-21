@@ -248,6 +248,13 @@ describe('Bash Tool', () => {
     expect(result.content).not.toContain('pipeline:');
   });
 
+  it('preserves a command that ends in a trailing backslash', async () => {
+    const result = await bash.execute({ command: 'echo hi \\' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi \\');
+    expect(result.content).not.toContain('pipeline:');
+  });
+
   it('does not leak PIPESTATUS capture vars into the next command', async () => {
     await bash.execute({ command: 'false | echo ok' });
     const env = await bash.execute({
