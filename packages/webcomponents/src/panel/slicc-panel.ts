@@ -75,6 +75,17 @@ const STYLE = `
 [data-slicc-panel][presentation="floating"][anchor="center"] {
   top: 50%; left: 50%; transform: translate(-50%, -50%);
 }
+/* Terminal tool panel: always-dark chrome (matches dock-tree --chrome-dark).
+   panelizeShell reparents the term surface into a <slicc-panel>; floating
+   panels otherwise paint var(--canvas)/var(--line) and recreate the cream
+   frame under light themes. */
+[data-slicc-panel][panel-id="term"][presentation="floating"] {
+  background: var(--term-bg, #0c0c0e);
+  border-color: var(--term-border, #232329);
+  box-shadow:
+    rgba(0, 0, 0, 0.35) 0 14px 36px -12px,
+    rgba(0, 0, 0, 0.2) 0 4px 10px -4px;
+}
 `;
 
 const STYLE_ID = 'slicc-panel-style';

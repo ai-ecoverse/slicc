@@ -368,9 +368,9 @@ describe('mountWcUiPreview', () => {
   it('styles the terminal surface black and lets the file tree fill its pane', () => {
     mount();
     const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';
-    // One uniform black: the pane matches xterm's dark background…
+    // Always-dark terminal pane (matches --term-bg / xterm), not page --canvas.
     expect(css).toContain('.wcui-term{');
-    expect(css).toContain('background:#141414');
+    expect(css).toContain('background:var(--term-bg,#0c0c0e)');
     // …and the (legacy-stylesheet-less) xterm host flexes to full height.
     expect(css).toContain('.terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}');
     // The files surface is just the tree — no dead preview column.

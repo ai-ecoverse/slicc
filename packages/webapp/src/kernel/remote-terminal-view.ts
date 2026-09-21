@@ -39,6 +39,12 @@ import type {
   PermissionKind,
   PermissionRequestOptions,
 } from '@slicc/webcomponents';
+// Deep import — the package barrel constructs CSSStyleSheet at load time and
+// breaks Node vitest (no CSSStyleSheet). This module is DOM-free.
+import {
+  resolveTerminalTheme,
+  watchTerminalThemeScope,
+} from '@slicc/webcomponents/workbench/terminal-theme';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { Readline } from 'xterm-readline';
@@ -81,55 +87,11 @@ export interface RemoteTerminalViewOptions {
   env?: Record<string, string>;
 }
 
-const DARK_THEME = {
-  background: '#141414',
-  // Near-white body text — #cfcfcf read muddy on the black pane.
-  foreground: '#f2f2f2',
-  cursor: '#3562ff',
-  cursorAccent: '#141414',
-  selectionBackground: '#3562ff40',
-  selectionForeground: '#ffffff',
-  black: '#1a1a1a',
-  red: '#e34850',
-  green: '#2d9d78',
-  yellow: '#e68619',
-  blue: '#3562ff',
-  magenta: '#a962e8',
-  cyan: '#2db9be',
-  white: '#f2f2f2',
-  brightBlack: '#5a5a5a',
-  brightRed: '#e34850',
-  brightGreen: '#2d9d78',
-  brightYellow: '#e68619',
-  brightBlue: '#4a75ff',
-  brightMagenta: '#a962e8',
-  brightCyan: '#2db9be',
-  brightWhite: '#ffffff',
-};
-const LIGHT_THEME = {
-  background: '#f0f0f0',
-  foreground: '#1a1a1a',
-  cursor: '#2b54db',
-  cursorAccent: '#f0f0f0',
-  selectionBackground: '#2b54db30',
-  selectionForeground: '#000000',
-  black: '#1a1a1a',
-  red: '#d73220',
-  green: '#268e6c',
-  yellow: '#d17a00',
-  blue: '#2b54db',
-  magenta: '#8839ef',
-  cyan: '#1a9088',
-  white: '#e8e8e8',
-  brightBlack: '#6e6e6e',
-  brightRed: '#d73220',
-  brightGreen: '#268e6c',
-  brightYellow: '#d17a00',
-  brightBlue: '#1e44c4',
-  brightMagenta: '#8839ef',
-  brightCyan: '#1a9088',
-  brightWhite: '#ffffff',
-};
+/** Always-dark xterm theme; ANSI accents follow the active scope's CSS vars. */
+function resolvePanelTerminalTheme(scope?: Element | null) {
+  const { border: _border, ...theme } = resolveTerminalTheme(scope);
+  return theme;
+}
 
 const PROMPT = '\x1b[34m/\x1b[0m \x1b[90m$\x1b[0m ';
 
@@ -162,7 +124,9 @@ export class RemoteTerminalView {
   private hasPreview = false;
   private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private themeObserver: MutationObserver | null = null;
+  private unwatchTheme: (() => void) | null = null;
+  /** Mount container — theme resolution / observation scope. */
+  private mountRoot: HTMLElement | null = null;
 
   // Line editor — the xterm-readline addon owns the buffer, cursor, and
   // history (including wrap-aware ←/→ navigation across visual rows).
@@ -208,24 +172,21 @@ export class RemoteTerminalView {
     const { Readline } = await import('xterm-readline');
     await import('@xterm/xterm/css/xterm.css');
 
-    const isDark = !document.documentElement.classList.contains('theme-light');
-
+    this.mountRoot = container;
     this.terminal = new Terminal({
       cursorBlink: true,
       fontSize: 11,
       fontFamily: "'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      theme: isDark ? DARK_THEME : LIGHT_THEME,
+      theme: resolvePanelTerminalTheme(container),
       convertEol: true,
     });
 
-    this.themeObserver = new MutationObserver(() => {
+    this.unwatchTheme?.();
+    this.unwatchTheme = watchTerminalThemeScope(container, () => {
       if (!this.terminal) return;
-      const isLight = document.documentElement.classList.contains('theme-light');
-      this.terminal.options.theme = isLight ? LIGHT_THEME : DARK_THEME;
-    });
-    this.themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
+      // Always dark bg / light text; ANSI accents track the scoped theme
+      // (page presets on <html>, scoop/freezer --ctx on .wcui-frame).
+      this.terminal.options.theme = resolvePanelTerminalTheme(this.mountRoot);
     });
 
     this.fitAddon = new FitAddon();
@@ -303,8 +264,9 @@ export class RemoteTerminalView {
     this.abortPromptLoop?.(new Error('terminal disposed'));
     this.abortPromptLoop = null;
     this.clearMediaPreview();
-    this.themeObserver?.disconnect();
-    this.themeObserver = null;
+    this.unwatchTheme?.();
+    this.unwatchTheme = null;
+    this.mountRoot = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.terminal?.dispose();

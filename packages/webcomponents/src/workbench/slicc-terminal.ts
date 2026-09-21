@@ -9,40 +9,19 @@ import XTERM_CSS from '@xterm/xterm/css/xterm.css?raw';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { resolveTerminalTheme, watchTerminalThemeScope } from './terminal-theme.js';
 
 /**
- * Dark xterm theme matching the prototype's one dark terminal surface
- * (`proto/StellarRubySwift.html` `.term`): `#0c0c0e` canvas, light `#e7e7ea`
- * foreground, the prototype's rose prompt / green-ok / muted accents, and the
- * brand-ish ANSI palette (rose `--rose`, cyan `--cyan`, violet `--violet`,
- * amber `--amber`). Kept a literal `ITheme` (not token-driven) because the
- * terminal surface is dark by design in BOTH page themes, exactly like the
- * prototype's `.term`, and xterm needs concrete colors, not CSS vars.
+ * Dark xterm theme resolved from theme CSS variables on `scope`. Background /
+ * foreground stay locked to the dark terminal surface in BOTH page themes;
+ * ANSI / cursor colors follow `--rose` / `--cyan` / `--ctx` etc. so active
+ * theme preferences (including scoop/freezer `--ctx` on `.wcui-frame`)
+ * propagate. See `terminal-theme.ts`.
  */
-const TERMINAL_THEME: ITheme = {
-  background: '#0c0c0e',
-  foreground: '#e7e7ea',
-  cursor: '#e7e7ea',
-  cursorAccent: '#0c0c0e',
-  selectionBackground: '#8b5cf64d',
-  selectionForeground: '#ffffff',
-  black: '#0c0c0e',
-  red: '#f43f5e', // --rose
-  green: '#5bd17b', // prototype `.term .ok`
-  yellow: '#f59e0b', // --amber
-  blue: '#3b82f6',
-  magenta: '#8b5cf6', // --violet
-  cyan: '#06b6d4', // --cyan
-  white: '#e7e7ea',
-  brightBlack: '#8a8a93', // prototype `.term .mut`
-  brightRed: '#fb7185',
-  brightGreen: '#86efac',
-  brightYellow: '#fbbf24',
-  brightBlue: '#60a5fa',
-  brightMagenta: '#a78bfa',
-  brightCyan: '#22d3ee',
-  brightWhite: '#ffffff',
-};
+function currentTerminalTheme(scope: Element): ITheme {
+  const { border: _border, ...theme } = resolveTerminalTheme(scope);
+  return theme;
+}
 
 /** Component chrome (shadow root) — frame + header + the xterm mount host. */
 const STYLE = `
@@ -54,7 +33,7 @@ const STYLE = `
   min-width: 0;
   height: 320px;
   font-family: var(--ui);
-  background: #0c0c0e;
+  background: var(--term-bg, #0c0c0e);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -67,8 +46,8 @@ const STYLE = `
   flex: 0 0 auto;
   padding: 8px 12px;
   color: #c9c9d2;
-  background: #141418;
-  border-bottom: 1px solid #232329;
+  background: color-mix(in srgb, var(--term-bg, #0c0c0e) 88%, #ffffff);
+  border-bottom: 1px solid var(--term-border, #232329);
   font: 500 12px var(--ui, ui-sans-serif, system-ui, sans-serif);
   user-select: none;
 }
@@ -81,7 +60,7 @@ const STYLE = `
   min-height: 0;
   min-width: 0;
   padding: 8px 0 8px 10px;
-  background: #0c0c0e;
+  background: var(--term-bg, #0c0c0e);
 }
 /* xterm.js wants its container to size the canvas; let it fill. */
 .host .xterm { height: 100%; }
@@ -134,6 +113,8 @@ export class SliccTerminal extends HTMLElement {
   #term: TerminalType | null = null;
   #fit: FitAddonType | null = null;
   #ro: ResizeObserver | null = null;
+  /** Disconnects theme-scope observers (html / body / `.wcui-frame`). */
+  #unwatchTheme: (() => void) | null = null;
   /** Buffered writes issued before xterm finished loading (async import). */
   #pending: string[] = [];
   /** Guards against a late async open after the element has disconnected. */
@@ -251,7 +232,7 @@ export class SliccTerminal extends HTMLElement {
       fontSize: 12,
       lineHeight: 1.25,
       fontFamily: "'IBM Plex Mono', 'Source Code Pro', 'JetBrains Mono', ui-monospace, monospace",
-      theme: TERMINAL_THEME,
+      theme: currentTerminalTheme(this),
       convertEol: true,
       scrollback: 2000,
     });
@@ -269,6 +250,7 @@ export class SliccTerminal extends HTMLElement {
 
     this.#term = term;
     this.#fit = fit;
+    this.#watchTheme();
 
     // Initial fit, then flush any writes buffered before the async load.
     fit.fit();
@@ -286,12 +268,26 @@ export class SliccTerminal extends HTMLElement {
   /** Dispose the terminal, addon, and observer (idempotent). */
   #teardown(): void {
     this.#disposed = true;
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = null;
     this.#ro?.disconnect();
     this.#ro = null;
     this.#term?.dispose();
     this.#term = null;
     this.#fit = null;
     this.#pending.length = 0;
+  }
+
+  /**
+   * Re-resolve ANSI accents when the page theme flips or the shell frame's
+   * scoped `--ctx` changes (`applyShellContext`). Background stays dark.
+   */
+  #watchTheme(): void {
+    this.#unwatchTheme?.();
+    this.#unwatchTheme = watchTerminalThemeScope(this, () => {
+      if (!this.#term) return;
+      this.#term.options.theme = currentTerminalTheme(this);
+    });
   }
 }
 

@@ -294,6 +294,7 @@ export {
   type DockTreeSpec,
   labelForSurface,
   SliccDockTree,
+  TERM_SURFACE_ID,
   // Aliased: the panel system exports the plain `ZoneName` now. This is the
   // dock-tree's own zone vocabulary, which happens to use the same five words.
   type ZoneName as DockZoneName,
@@ -316,3 +317,10 @@ export {
 } from './workbench/slicc-monitor.js';
 export { SliccSurface } from './workbench/slicc-surface.js';
 export { SliccTerminal } from './workbench/slicc-terminal.js';
+export {
+  buildTerminalTheme,
+  resolveTerminalTheme,
+  TERMINAL_THEME_DEFAULTS,
+  type TerminalXtermTheme,
+  watchTerminalThemeScope,
+} from './workbench/terminal-theme.js';
