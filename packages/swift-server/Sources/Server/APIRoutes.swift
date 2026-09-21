@@ -1155,6 +1155,7 @@ private func makeStreamingProxyResponse(
 ) throws -> Response {
     // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
+    let wwwAuthenticate = response.headers["www-authenticate"].first.map { String($0) }
 
     var headers = HTTPFields(response.headers)
     for header in proxyBlockedResponseHeaders {
@@ -1186,6 +1187,9 @@ private func makeStreamingProxyResponse(
     {
         headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
     }
+    if let wwwAuthenticate {
+        headers[HTTPField.Name("X-Proxy-Www-Authenticate")!] = secretInjector.scrub(text: wwwAuthenticate)
+    }
 
     // Scrub real secret values from response headers (one-shot — header
     // values are always small so per-chunk semantics don't apply).
@@ -1209,6 +1213,7 @@ private func makeStreamingProxyResponse(
         "Link",
         "X-Proxy-Error",
         "X-Proxy-Set-Cookie",
+        "X-Proxy-Www-Authenticate",
         "Mcp-Session-Id",
         "MCP-Protocol-Version",
         "Cache-Control",

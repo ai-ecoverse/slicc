@@ -394,6 +394,57 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testFetchProxyRelaysWwwAuthenticateAsXProxyHeader() async throws {
+        let challenge =
+            "Bearer resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource/v2/mcp\""
+        let upstreamRouter = Router()
+        upstreamRouter.get("/mcp") { _, _ in
+            Response(
+                status: .unauthorized,
+                headers: [HTTPField.Name("WWW-Authenticate")!: challenge],
+                body: .init()
+            )
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port)
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/mcp"
+                        ]
+                    ) { response in
+                        XCTAssertEqual(response.status, .unauthorized)
+                        XCTAssertNil(response.headers[HTTPField.Name("WWW-Authenticate")!])
+                        XCTAssertEqual(
+                            response.headers[HTTPField.Name("X-Proxy-Www-Authenticate")!],
+                            challenge
+                        )
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+    }
+
     /// JPEG SOI + high bytes (`FF D8 FF 98 00 41 7F 80 FE`) must reach
     /// upstream unchanged — the UTF-8 expansion (`C3 BF C3 98 …`) is the
     /// jsh fetch regression. Covers an explicit image type and a missing

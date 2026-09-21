@@ -123,8 +123,9 @@ const CORS_BASE_ALLOW_HEADERS = [
  * Response headers the browser is allowed to read after a cross-origin
  * /api call — must include the proxy's infrastructure-error marker
  * (`isProxyError` reads `X-Proxy-Error`) and the forbidden-response
- * bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie`). MCP
- * clients also read protocol negotiation/session headers from proxy responses.
+ * bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie` and
+ * `X-Proxy-Www-Authenticate`). MCP clients also read protocol
+ * negotiation/session headers from proxy responses.
  *
  * `/api/fetch-proxy` overrides this per-response with the union of this base
  * set and every forwarded upstream header name (see
@@ -133,7 +134,7 @@ const CORS_BASE_ALLOW_HEADERS = [
  * static list.
  */
 const CORS_EXPOSE_HEADERS =
-  'Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Content-Length, Mcp-Session-Id, MCP-Protocol-Version';
+  'Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Content-Length, X-Proxy-Www-Authenticate, Mcp-Session-Id, MCP-Protocol-Version';
 
 /**
  * Methods exposed to the hosted leader. Must cover the FULL `/api/fetch-proxy`

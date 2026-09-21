@@ -207,8 +207,10 @@ function unmaskRequestBody(
 
 /**
  * Forward the upstream status + response headers, stripping hop-by-hop and
- * www-authenticate (so the browser shows no native Basic Auth dialog) and
- * relaying Set-Cookie out-of-band as X-Proxy-Set-Cookie. Upstream
+ * www-authenticate (so the browser shows no native HTTP-auth dialog) and
+ * relaying Set-Cookie out-of-band as X-Proxy-Set-Cookie and WWW-Authenticate
+ * as X-Proxy-Www-Authenticate (MCP OAuth reads `resource_metadata` from the
+ * challenge). Upstream
  * `access-control-*` headers are also dropped so the bridge's CORS
  * middleware remains the sole authority on the browser→bridge hop —
  * see `FETCH_PROXY_SKIP_RESPONSE_HEADERS` / `..._PREFIXES`. All header
@@ -240,6 +242,10 @@ function forwardUpstreamHeaders(
   });
   if (setCookieValues.length > 0) {
     res.setHeader('X-Proxy-Set-Cookie', secretProxy.scrubResponse(JSON.stringify(setCookieValues)));
+  }
+  const wwwAuthenticate = upstream.headers.get('www-authenticate');
+  if (wwwAuthenticate) {
+    res.setHeader('X-Proxy-Www-Authenticate', secretProxy.scrubResponse(wwwAuthenticate));
   }
   // Byte-progress hint for the webapp's bash progress overlay (`curl`/`wget`
   // bars). The real `content-length` is dropped above because the scrub

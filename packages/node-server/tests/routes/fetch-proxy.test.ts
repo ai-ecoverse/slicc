@@ -294,6 +294,7 @@ describe('registerFetchProxyRoute', () => {
     expect(res.headers.get('www-authenticate')).toBeNull();
     expect(res.headers.get('set-cookie')).toBeNull();
     expect(res.headers.get('x-proxy-set-cookie')).toContain('a=1');
+    expect(res.headers.get('x-proxy-www-authenticate')).toBe('Basic realm="x"');
   });
 
   it('unmasks a masked token in the request body before forwarding upstream', async () => {

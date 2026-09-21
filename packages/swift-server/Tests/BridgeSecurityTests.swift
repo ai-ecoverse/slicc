@@ -168,7 +168,7 @@ final class BridgeSecurityTests: XCTestCase {
         let headers = BridgeSecurity.buildCorsHeaders(origin: "https://www.sliccy.ai")
         XCTAssertEqual(
             headers?[HTTPField.Name("Access-Control-Expose-Headers")!],
-            "Link, X-Proxy-Error, X-Proxy-Set-Cookie, Mcp-Session-Id, MCP-Protocol-Version"
+            "Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Www-Authenticate, Mcp-Session-Id, MCP-Protocol-Version"
         )
     }
 

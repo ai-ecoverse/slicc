@@ -325,7 +325,8 @@ export const encodeForbiddenRequestHeaders = _encodeForbiddenRequestHeaders;
 
 /**
  * Decode response headers that the proxy transported under non-forbidden names.
- * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
+ * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string);
+ * X-Proxy-Www-Authenticate → www-authenticate.
  */
 export const decodeForbiddenResponseHeaders = _decodeForbiddenResponseHeaders;
 
