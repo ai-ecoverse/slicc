@@ -1155,7 +1155,10 @@ private func makeStreamingProxyResponse(
 ) throws -> Response {
     // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
-    let wwwAuthenticate = response.headers["www-authenticate"].first.map { String($0) }
+    // Fetch `Headers.get()` concatenates repeated fields with ", ". Keep every
+    // WWW-Authenticate challenge (Basic then Bearer resource_metadata, etc.).
+    let wwwAuthenticateValues = response.headers[canonicalForm: "www-authenticate"].map { String($0) }
+    let wwwAuthenticate = wwwAuthenticateValues.isEmpty ? nil : wwwAuthenticateValues.joined(separator: ", ")
 
     var headers = HTTPFields(response.headers)
     for header in proxyBlockedResponseHeaders {

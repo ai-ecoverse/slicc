@@ -395,13 +395,17 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testFetchProxyRelaysWwwAuthenticateAsXProxyHeader() async throws {
-        let challenge =
+        let basic = "Basic realm=\"x\""
+        let bearer =
             "Bearer resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource/v2/mcp\""
         let upstreamRouter = Router()
         upstreamRouter.get("/mcp") { _, _ in
-            Response(
+            var authHeaders = HTTPFields()
+            authHeaders.append(HTTPField(name: HTTPField.Name("WWW-Authenticate")!, value: basic))
+            authHeaders.append(HTTPField(name: HTTPField.Name("WWW-Authenticate")!, value: bearer))
+            return Response(
                 status: .unauthorized,
-                headers: [HTTPField.Name("WWW-Authenticate")!: challenge],
+                headers: authHeaders,
                 body: .init()
             )
         }
@@ -431,7 +435,7 @@ final class APIRoutesTests: XCTestCase {
                         XCTAssertNil(response.headers[HTTPField.Name("WWW-Authenticate")!])
                         XCTAssertEqual(
                             response.headers[HTTPField.Name("X-Proxy-Www-Authenticate")!],
-                            challenge
+                            "\(basic), \(bearer)"
                         )
                     }
                 }

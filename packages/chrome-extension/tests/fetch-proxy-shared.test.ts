@@ -108,6 +108,32 @@ describe('handleFetchProxyConnection', () => {
     );
   });
 
+  it('joins repeated WWW-Authenticate challenges onto X-Proxy-Www-Authenticate', async () => {
+    const headers = new Headers();
+    headers.append('WWW-Authenticate', 'Basic realm="x"');
+    headers.append(
+      'WWW-Authenticate',
+      'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"'
+    );
+    (globalThis as { fetch?: typeof fetch }).fetch = vi.fn(
+      async () => new Response('', { status: 401, statusText: 'Unauthorized', headers })
+    );
+    const posts: Array<{ type?: string; headers?: Record<string, string> }> = [];
+    const port = makePort((m) => posts.push(m as (typeof posts)[number]));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://api.github.com/mcp',
+      method: 'POST',
+      headers: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    const head = posts.find((p) => p.type === 'response-head');
+    expect(head?.headers?.['X-Proxy-Www-Authenticate']).toBe(
+      'Basic realm="x", Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"'
+    );
+  });
+
   it('aborts upstream fetch on port disconnect', async () => {
     const ac = new AbortController();
     (globalThis as any).fetch = vi.fn(async (_url: string, init: { signal?: AbortSignal }) => {

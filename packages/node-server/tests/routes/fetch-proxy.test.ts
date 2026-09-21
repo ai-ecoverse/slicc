@@ -297,6 +297,24 @@ describe('registerFetchProxyRoute', () => {
     expect(res.headers.get('x-proxy-www-authenticate')).toBe('Basic realm="x"');
   });
 
+  it('joins repeated WWW-Authenticate challenges onto X-Proxy-Www-Authenticate', async () => {
+    await setup((_req, res) => {
+      res.statusCode = 401;
+      res.setHeader('www-authenticate', [
+        'Basic realm="x"',
+        'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"',
+      ]);
+      res.end();
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.headers.get('www-authenticate')).toBeNull();
+    expect(res.headers.get('x-proxy-www-authenticate')).toBe(
+      'Basic realm="x", Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"'
+    );
+  });
+
   it('unmasks a masked token in the request body before forwarding upstream', async () => {
     let received = '';
     await setup((req, res) => {
