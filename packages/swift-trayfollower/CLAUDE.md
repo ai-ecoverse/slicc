@@ -33,7 +33,7 @@ npm run lint -w @slicc/swift-trayfollower   # SwiftLint (if a package.json scrip
 
 CI (`swift-trayfollower` job) runs SwiftLint, `swift format lint --strict`, a release build, an **iOS Simulator build** (`SliccTrayFollower` scheme — catches AppKit/UIKit imports and macOS-only Foundation API; WebRTC ships simulator slices), the coverage gate against the `swift-trayfollower` floors in `coverage-thresholds.json`, and an informational Periphery scan. The `swift-server` and `ios-app` jobs also trigger on changes here, since both consume this package.
 
-**Coverage** is measured by `swift test` over the pure-logic surface: the `Codable` protocol mirror, chunk framing, `SupersedeRedirect`, and the payload types. The live WebRTC (`WebRTCManager`), the connection loop (`TrayFollowerConnector`), and live HTTP (`TraySignalingClient`) need a real peer/server and are not unit-tested, so the floor reflects the testable surface.
+**Coverage** is measured by `swift test`. The `Codable` protocol mirror, chunk framing, and supersede policy are pure-logic. Live WebRTC is exercised in-process: a leader `RTCPeerConnection` creates the data channel and offer, `WebRTCManager` answers, and ICE uses host candidates plus STUN. `TrayFollowerConnector` is driven through the signaling `Transport` seam against that same live peer (see `WebRTCLoopbackTests` / `TrayFollowerConnectorLiveTests`).
 
 ## Linting and Formatting
 
