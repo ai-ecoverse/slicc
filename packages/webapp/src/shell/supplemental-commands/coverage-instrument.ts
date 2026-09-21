@@ -145,9 +145,18 @@ export function instrumentSource(
     const rewriteFor = (node: import('typescript-js').ForStatement) =>
       f.updateForStatement(
         node,
-        node.initializer ? ts.visitNode(node.initializer, visit) : undefined,
-        node.condition ? ts.visitNode(node.condition, visit) : undefined,
-        node.incrementor ? ts.visitNode(node.incrementor, visit) : undefined,
+        node.initializer
+          ? ((ts.visitNode(node.initializer, visit) ??
+              node.initializer) as import('typescript-js').ForInitializer)
+          : undefined,
+        node.condition
+          ? ((ts.visitNode(node.condition, visit) ??
+              node.condition) as import('typescript-js').Expression)
+          : undefined,
+        node.incrementor
+          ? ((ts.visitNode(node.incrementor, visit) ??
+              node.incrementor) as import('typescript-js').Expression)
+          : undefined,
         wrapBody(node.statement)
       ) as import('typescript-js').Node;
 

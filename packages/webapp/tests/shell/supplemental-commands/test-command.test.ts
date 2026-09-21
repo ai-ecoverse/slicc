@@ -411,9 +411,9 @@ test('covers add, not unused', ({ is }) => {
     const json = JSON.parse(await ctx.fs.readFile('/workspace/coverage/coverage.json'));
     expect(json.counts['/workspace/add.js']).toBeTruthy();
     const unusedHits = json.maps['/workspace/add.js']
-      .filter((s) => s.line === 5)
-      .map((s) => json.counts['/workspace/add.js'][s.id]);
-    expect(unusedHits.some((n) => n === 0)).toBe(true);
+      .filter((s: { line: number; id: number }) => s.line === 5)
+      .map((s: { line: number; id: number }) => json.counts['/workspace/add.js'][s.id]);
+    expect(unusedHits.some((n: number) => n === 0)).toBe(true);
     const lcov = await ctx.fs.readFile('/workspace/coverage/coverage.lcov');
     expect(lcov).toContain('SF:/workspace/add.js');
     expect(lcov).toContain('DA:5,0');

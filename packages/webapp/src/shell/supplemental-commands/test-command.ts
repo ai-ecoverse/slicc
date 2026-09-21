@@ -31,17 +31,7 @@ import assertSource from 'tst/assert.js?raw';
 import tstSource from 'tst/tst.js?raw';
 import { normalizePath } from '../../fs/path-utils.js';
 import { executeJsCode } from '../jsh-executor.js';
-import {
-  coverageDumpSource,
-  coverageRuntimeSource,
-  coverageSummary,
-  extractCoverageCounts,
-  instrumentSource,
-  mergeCounts,
-  resolveCoverageDir,
-  type StatementMap,
-  toLcov,
-} from './coverage-instrument.js';
+import type { StatementMap } from './coverage-instrument.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
 import { createIpkContextFromCtx } from './tsc-command.js';
 
@@ -454,7 +444,8 @@ function buildRunnerScript(
   reporter: 'tap' | 'spec',
   localModules: Map<string, string>,
   edgeRewrites: Map<string, Map<string, string>>,
-  coverage = false
+  coveragePrelude = '',
+  coverageEpilogue = ''
 ): string {
   const format = reporter === 'spec' ? 'pretty' : 'tap';
   // Inline every transitive local module as a lazy IIFE factory.
@@ -480,8 +471,8 @@ function buildRunnerScript(
   // Local factories get a per-module require via `createRequire(absPath)`
   // so a helper under `/workspace/lib/` resolves packages from its own
   // nearer `node_modules`, not the entry test file's directory.
-  const coverageRuntime = coverage ? `${coverageRuntimeSource()}\n` : '';
-  const coverageDump = coverage ? `\n${coverageDumpSource()}` : '';
+  const coverageRuntime = coveragePrelude;
+  const coverageDump = coverageEpilogue;
   return `"use strict";
 ${coverageRuntime}${harness}
 const __realmRequire = require;
@@ -551,6 +542,8 @@ function buildUserOpts(ts: TypeScriptModule): UserCompilerOptions {
   } as UserCompilerOptions;
 }
 
+type CoverageMod = typeof import('./coverage-instrument.js');
+
 interface TestRunSetup {
   parsed: ParsedTestArgs;
   files: string[];
@@ -559,6 +552,7 @@ interface TestRunSetup {
   userOpts: UserCompilerOptions;
   coverageMaps: Record<string, StatementMap>;
   coverageCounts: Record<string, number[]>;
+  coverageMod: CoverageMod | null;
 }
 
 /**
@@ -612,6 +606,7 @@ async function prepareTestRun(
     };
   }
   const harness = await prepareTstHarness(ts);
+  const coverageMod = parsed.coverage ? await import('./coverage-instrument.js') : null;
   return {
     parsed,
     files,
@@ -620,6 +615,7 @@ async function prepareTestRun(
     userOpts: buildUserOpts(ts),
     coverageMaps: {},
     coverageCounts: {},
+    coverageMod,
   };
 }
 
@@ -657,9 +653,10 @@ async function runOneTestFile(
   prefixWithFilename: boolean
 ): Promise<OneFileResult> {
   const { ts, harness, userOpts, parsed } = setup;
-  const instrument = parsed.coverage
+  const cov = setup.coverageMod;
+  const instrument = cov
     ? (src: string, path: string) => {
-        const { source: next, map } = instrumentSource(ts, src, path);
+        const { source: next, map } = cov.instrumentSource(ts, src, path);
         setup.coverageMaps[path] = map;
         return next;
       }
@@ -710,14 +707,15 @@ async function runOneTestFile(
     parsed.reporter,
     localModules,
     edgeRewrites,
-    parsed.coverage
+    cov ? `${cov.coverageRuntimeSource()}\n` : '',
+    cov ? `\n${cov.coverageDumpSource()}` : ''
   );
   const result = await executeJsCode(runner, ['node', file], ctx, undefined, { filename: file });
   let stdout = result.stdout;
-  if (parsed.coverage) {
-    const extracted = extractCoverageCounts(stdout);
+  if (cov) {
+    const extracted = cov.extractCoverageCounts(stdout);
     stdout = extracted.stdout;
-    mergeCounts(setup.coverageCounts, extracted.counts);
+    cov.mergeCounts(setup.coverageCounts, extracted.counts);
   }
   return {
     stdout: prefixWithFilename ? `# ${file}\n${stdout}` : stdout,
@@ -743,17 +741,19 @@ export function createTestCommand(): Command {
       stderr += r.stderr;
       if (r.failed) anyFailed = true;
     }
-    if (prep.parsed.coverage) {
-      const dir = resolveCoverageDir(ctx.cwd, prep.parsed.coverageDir, (base, path) =>
-        ctx.fs.resolvePath(base, path)
+    if (prep.coverageMod) {
+      const dir = prep.coverageMod.resolveCoverageDir(
+        ctx.cwd,
+        prep.parsed.coverageDir,
+        (base, path) => ctx.fs.resolvePath(base, path)
       );
       const json = JSON.stringify(
         { counts: prep.coverageCounts, maps: prep.coverageMaps },
         null,
         2
       );
-      const lcov = toLcov(prep.coverageCounts, prep.coverageMaps);
-      const summary = coverageSummary(prep.coverageCounts, prep.coverageMaps);
+      const lcov = prep.coverageMod.toLcov(prep.coverageCounts, prep.coverageMaps);
+      const summary = prep.coverageMod.coverageSummary(prep.coverageCounts, prep.coverageMaps);
       try {
         await ctx.fs.writeFile(`${dir}/coverage.json`, json);
         await ctx.fs.writeFile(`${dir}/coverage.lcov`, lcov);
