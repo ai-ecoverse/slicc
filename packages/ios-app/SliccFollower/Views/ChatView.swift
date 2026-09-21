@@ -25,7 +25,7 @@ struct ChatView: View {
     
     @StateObject private var threadList = ThreadListModel()
     
-    @StateObject private var threadSummaries = ThreadSummaryStore()
+    @StateObject private var threadSummaries = ThreadSummaryHost()
     @State private var showSettings = false
     @State private var hasAppeared = false
     
@@ -85,7 +85,7 @@ struct ChatView: View {
             }
         }
         .environmentObject(threadList)
-        .environmentObject(threadSummaries)
+        .environmentObject(threadSummaries.store)
         .onReceive(appState.$scoops.combineLatest(appState.$selectedScoopJid)) { scoops, selected in
             threadList.sync(scoops: scoops, selectedJid: selected)
         }

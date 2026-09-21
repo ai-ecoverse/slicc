@@ -84,6 +84,56 @@ final class ThreadListUITests: XCTestCase {
         XCTAssertEqual(app.buttons["scoop-switcher"].label, "sliccy", "A drag is not a pick")
     }
 
+    
+    
+    
+    
+    func testAModelSummaryReplacingThePreviewDoesNotMoveTheListOrTheTranscript() {
+        
+        
+        
+        let app = launch(summaryDelayMs: 20_000, openList: true)
+        let summaryIds = [
+            "fixture-cone-main", "fixture-scoop-researcher", "fixture-scoop-summarizer",
+            "fixture-scoop-reviewer", "fixture-cone-deploy", "fixture-scoop-tester",
+        ]
+        
+        
+        let mainRow = app.buttons["scoop-switch-fixture-cone-main"]
+        
+        
+        let previewShown = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Transcript of cone."), object: mainRow)
+        let previewResult = XCTWaiter().wait(for: [previewShown], timeout: 15)
+        XCTAssertEqual(
+            previewResult, .completed,
+            "preview value=\(mainRow.value ?? "nil") label=\(mainRow.label)")
+
+        
+        
+        var anchors = summaryIds.map { "scoop-switch-\($0)" } + ["thread-list-close"]
+        for extra in ["scoop-switcher", "message-fixture-cone-main-reply", "composer-placeholder"]
+        where app.descendants(matching: .any)[extra].exists {
+            anchors.append(extra)
+        }
+        let before = frames(of: anchors, in: app)
+        attach(app, named: "summary-preview")
+
+        for id in summaryIds {
+            let row = app.buttons["scoop-switch-\(id)"]
+            expectation(for: NSPredicate(format: "value == %@", "Pinned label"), evaluatedWith: row)
+        }
+        waitForExpectations(timeout: 25)
+        let after = frames(of: anchors, in: app)
+        attach(app, named: "summary-model-line")
+
+        for anchor in anchors {
+            assertSameFrame(
+                before[anchor], after[anchor],
+                "\(anchor) moved when the model line replaced the preview")
+        }
+    }
+
     func testLeftHandedSlideOverComesFromTheTrailingEdge() {
         let app = launch(width: 390, leftHanded: true)
         app.buttons["scoop-switcher"].tap()
@@ -121,7 +171,9 @@ final class ThreadListUITests: XCTestCase {
         attach(app, named: "regular-sidebar-landscape")
     }
 
-    private func launch(width: Int? = nil, leftHanded: Bool = false) -> XCUIApplication {
+    private func launch(
+        width: Int? = nil, leftHanded: Bool = false, summaryDelayMs: Int? = nil, openList: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-joinUrl", "", "-uiTestConnectionState", "connected",
@@ -130,9 +182,34 @@ final class ThreadListUITests: XCTestCase {
             "-leftHandedDock", leftHanded ? "YES" : "NO",
             "-uiTestShellWidth", width.map(String.init) ?? "0",
         ]
+        if let summaryDelayMs {
+            app.launchArguments += ["-uiTestThreadSummaryDelay", String(summaryDelayMs)]
+        }
+        if openList {
+            app.launchArguments += ["-uiTestThreadListOpen", "YES"]
+        }
         app.launch()
-        XCTAssertTrue(app.buttons["scoop-switcher"].waitForExistence(timeout: 60))
+        let ready = openList ? app.descendants(matching: .any)["thread-list"] : app.buttons["scoop-switcher"]
+        XCTAssertTrue(ready.waitForExistence(timeout: 60))
         return app
+    }
+
+    private func frames(of identifiers: [String], in app: XCUIApplication) -> [String: CGRect] {
+        Dictionary(
+            uniqueKeysWithValues: identifiers.map { id in
+                
+                
+                let element = app.descendants(matching: .any).matching(identifier: id).firstMatch
+                XCTAssertTrue(element.waitForExistence(timeout: 5), id)
+                return (id, element.frame)
+            })
+    }
+
+    private func assertSameFrame(_ before: CGRect?, _ after: CGRect?, _ message: String) {
+        XCTAssertEqual(after?.origin.x ?? -1, before?.origin.x ?? -2, accuracy: 0.5, message)
+        XCTAssertEqual(after?.origin.y ?? -1, before?.origin.y ?? -2, accuracy: 0.5, message)
+        XCTAssertEqual(after?.width ?? -1, before?.width ?? -2, accuracy: 0.5, message)
+        XCTAssertEqual(after?.height ?? -1, before?.height ?? -2, accuracy: 0.5, message)
     }
 
     private func waitForDisappearance(of element: XCUIElement) -> Bool {

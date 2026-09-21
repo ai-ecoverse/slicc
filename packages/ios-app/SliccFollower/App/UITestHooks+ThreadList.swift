@@ -29,6 +29,21 @@ import SliccTrayKit
         
         
         
+        static var threadSummaryDelay: Duration? {
+            let ms = UserDefaults.standard.integer(forKey: "uiTestThreadSummaryDelay")
+            guard ms > 0 else { return nil }
+            return .milliseconds(ms)
+        }
+
+        static func threadSummaryGenerator() -> ThreadSummaryGenerating? {
+            guard let threadSummaryDelay else { return nil }
+            return ScriptedThreadSummarizer(delay: threadSummaryDelay, line: "Pinned label")
+        }
+
+        
+        
+        
+        
         
         static var shellWidthOverride: CGFloat? {
             let width = UserDefaults.standard.double(forKey: "uiTestShellWidth")
@@ -114,6 +129,30 @@ import SliccTrayKit
                     isCone: false, assistantLabel: "tester", state: "initializing", fill: nil,
                     parentId: threadListDeployCone),
             ]
+        }
+    }
+
+    
+    
+    
+    
+    
+    private actor ScriptedThreadSummarizer: ThreadSummaryGenerating {
+        let delay: Duration
+        let line: String
+        private var hasSlept = false
+
+        init(delay: Duration, line: String) {
+            self.delay = delay
+            self.line = line
+        }
+
+        func summarize(_ excerpt: String) async -> String? {
+            if !hasSlept {
+                hasSlept = true
+                try? await Task.sleep(for: delay)
+            }
+            return line
         }
     }
 #endif

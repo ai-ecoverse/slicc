@@ -1,3 +1,4 @@
+import Combine
 import SliccTrayKit
 import XCTest
 
@@ -109,6 +110,18 @@ final class ThreadSummaryStoreTests: XCTestCase {
         store.refresh(buffers: buffers)
         XCTAssertEqual(store.pendingJobs, 2, "forgotten work is queued again when the list returns")
         store.suspend()
+    }
+
+    func testTheHostStaysQuietWhenALineArrives() async {
+        let model = ScriptedSummarizer()
+        let host = ThreadSummaryHost(store: ThreadSummaryStore(generator: model))
+        var publishes = 0
+        let subscription = host.objectWillChange.sink { publishes += 1 }
+        host.store.refresh(buffers: ["a": [message("1", "hello there")]])
+        await host.store.waitUntilIdle()
+        XCTAssertEqual(host.store.lines["a"], "summary 1")
+        XCTAssertEqual(publishes, 0, "a summary must not redraw the shell that owns the host")
+        subscription.cancel()
     }
 
     func testAGoneUnitLosesItsLine() {

@@ -1,5 +1,6 @@
 import SliccTrayKit
 import SwiftUI
+import UIKit
 
 
 
@@ -105,9 +106,19 @@ struct ThreadListColumn: View {
 
 
 
+private enum ThreadListRowMetrics {
+    static let labelHeight = UIFont.systemFont(ofSize: 15, weight: .semibold).lineHeight
+    static let summaryHeight = UIFont.systemFont(ofSize: 12).lineHeight
+}
+
+
+
+
 
 struct ThreadListRowView: View {
     let row: ThreadListRow
+    
+    
     
     
     var summary: String?
@@ -131,16 +142,24 @@ struct ThreadListRowView: View {
                     .foregroundStyle(palette.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if let summary {
-                    Text(summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(palette.inkSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .accessibilityIdentifier("thread-summary-\(row.jid)")
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: ThreadListRowMetrics.labelHeight, alignment: .leading)
+                
+                
+                
+                Text(summary ?? "")
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.inkSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: ThreadListRowMetrics.summaryHeight, alignment: .leading)
+                    .opacity(summary == nil ? 0 : 1)
+                    .accessibilityIdentifier("thread-summary-\(row.jid)")
+                    .accessibilityHidden(summary == nil)
+                    .contentTransition(.identity)
             }
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             trailingMarkers
         }
         .padding(.vertical, 6)
@@ -152,6 +171,9 @@ struct ThreadListRowView: View {
                 .fill(row.isSelected ? palette.ink.opacity(0.08) : .clear)
         )
         .contentShape(Rectangle())
+        
+        
+        .animation(nil, value: summary)
     }
 
     @ViewBuilder

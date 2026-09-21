@@ -76,6 +76,16 @@ protocol ThreadSummaryGenerating: Sendable {
 
 
 enum OnDeviceThreadSummarizer {
+    
+    
+    
+    static func resolved() -> ThreadSummaryGenerating? {
+        #if DEBUG
+            if let scripted = UITestHooks.threadSummaryGenerator() { return scripted }
+        #endif
+        return make()
+    }
+
     static func make() -> ThreadSummaryGenerating? {
         #if canImport(FoundationModels)
             guard case .available = SystemLanguageModel.default.availability else { return nil }
@@ -123,7 +133,7 @@ final class ThreadSummaryStore: ObservableObject {
     
     private var inFlight: String?
 
-    init(generator: ThreadSummaryGenerating? = OnDeviceThreadSummarizer.make()) {
+    init(generator: ThreadSummaryGenerating? = OnDeviceThreadSummarizer.resolved()) {
         self.generator = generator
     }
 
@@ -195,4 +205,21 @@ final class ThreadSummaryStore: ObservableObject {
         func waitUntilIdle() async { await worker?.value }
         var pendingJobs: Int { queue.count }
     #endif
+}
+
+
+
+
+
+@MainActor
+final class ThreadSummaryHost: ObservableObject {
+    let store: ThreadSummaryStore
+
+    init(store: ThreadSummaryStore) {
+        self.store = store
+    }
+
+    convenience init() {
+        self.init(store: ThreadSummaryStore())
+    }
 }
