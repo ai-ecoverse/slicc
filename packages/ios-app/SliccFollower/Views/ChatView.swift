@@ -24,8 +24,8 @@ struct ChatView: View {
     /// Thread list open/collapsed + unread counts, above both shells so a
     /// size-class swap keeps them.
     @StateObject private var threadList = ThreadListModel()
-    /// One-line thread summaries for the list; beside `threadList` for the same reason.
-    @StateObject private var threadSummaries = ThreadSummaryStore()
+    /// One-line thread summaries. `@State` so a model line does not redraw this shell.
+    @State private var threadSummaries = ThreadSummaryStore()
     @State private var showSettings = false
     @State private var hasAppeared = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).

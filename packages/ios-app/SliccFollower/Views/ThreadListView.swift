@@ -1,5 +1,6 @@
 import SliccTrayKit
 import SwiftUI
+import UIKit
 
 // MARK: - ThreadListColumn
 
@@ -102,6 +103,14 @@ struct ThreadListColumn: View {
 
 // MARK: - ThreadListRowView
 
+/// Line heights pinned to the fonts the row actually draws. A summary that
+/// arrives later — or a shorter on-device line replacing the preview — must
+/// not change either number, or the rows under it jump.
+private enum ThreadListRowMetrics {
+    static let labelHeight = UIFont.systemFont(ofSize: 15, weight: .semibold).lineHeight
+    static let summaryHeight = UIFont.systemFont(ofSize: 12).lineHeight
+}
+
 /// One unit: the real status avatar, its label, and one line saying what the
 /// thread is about. State, fill and cone-vs-scoop are NOT spelled out: the
 /// avatar's eyes, pupils and hue already say them, and the indent says who
@@ -109,7 +118,9 @@ struct ThreadListColumn: View {
 struct ThreadListRowView: View {
     let row: ThreadListRow
     /// What the thread is about — see `ThreadSummaryStore`. Absent until the
-    /// unit's transcript has been seen this session.
+    /// unit's transcript has been seen this session. The slot is reserved
+    /// either way: inserting the line, or swapping the preview for the model's
+    /// words, must not move this row or the ones below it.
     var summary: String?
     @Environment(\.palette) private var palette
 
@@ -131,16 +142,24 @@ struct ThreadListRowView: View {
                     .foregroundStyle(palette.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if let summary {
-                    Text(summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(palette.inkSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .accessibilityIdentifier("thread-summary-\(row.jid)")
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: ThreadListRowMetrics.labelHeight, alignment: .leading)
+                // Always in the tree. A conditional `Text` is a structural
+                // insert, and that insert is what shifts the list when the
+                // model finally answers.
+                Text(summary ?? "")
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.inkSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: ThreadListRowMetrics.summaryHeight, alignment: .leading)
+                    .opacity(summary == nil ? 0 : 1)
+                    .accessibilityIdentifier("thread-summary-\(row.jid)")
+                    .accessibilityHidden(summary == nil)
+                    .contentTransition(.identity)
             }
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             trailingMarkers
         }
         .padding(.vertical, 6)
@@ -152,6 +171,9 @@ struct ThreadListRowView: View {
                 .fill(row.isSelected ? palette.ink.opacity(0.08) : .clear)
         )
         .contentShape(Rectangle())
+        // The swap is a string replacement, not a resize. An inherited
+        // animation would interpolate the row's frame across it.
+        .animation(nil, value: summary)
     }
 
     @ViewBuilder
