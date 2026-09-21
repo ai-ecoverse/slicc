@@ -370,6 +370,92 @@ test('uses local add', ({ is }) => {
     expect(result.stdout).toContain('# pass 1');
   }, 20_000);
 
+  it('falls through bare require(fs/path/sliccy) to the realm shim', async () => {
+    // Regression: the harness used to bind the entry IIFE's `require` to
+    // `__tstReq`, which only knew `tst` / `tst/assert` — so `require('fs')`
+    // threw `tst: cannot require fs` even though the realm serves those
+    // builtins. `__userRequire` now falls through to the realm shim.
+    // Prefer async fs here: the vitest in-process realm has no sync-fs SW
+    // bridge (ENOSYNC on readFileSync).
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/fixture.txt', 'hello-realm');
+    await ctx.fs.writeFile(
+      '/workspace/realm-require.test.js',
+      `import test from 'tst';
+const fs = require('fs');
+const path = require('path');
+const fmt = require('sliccy:fmt');
+test('fs/path/sliccy resolve in the tst harness', async ({ is }) => {
+  is(typeof fs.readFile, 'function');
+  is(await fs.readFile('/workspace/fixture.txt', 'utf8'), 'hello-realm');
+  is(path.join('/a', 'b'), '/a/b');
+  is(typeof fmt.trunc, 'function');
+  is(fmt.trunc('abcdef', 4), 'abc…');
+});
+`
+    );
+    const result = await cmd.execute(['realm-require.test.js'], ctx);
+    expect(result.stderr || '').not.toMatch(/cannot require|local module not bundled/);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ok 1 - fs/path/sliccy resolve in the tst harness');
+    expect(result.stdout).toContain('# pass 1');
+  }, 20_000);
+
+  it('lets a local module require(path) via the same fallthrough', async () => {
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/paths.js',
+      `const path = require('path');
+module.exports.join = (...parts) => path.join(...parts);
+`
+    );
+    await ctx.fs.writeFile(
+      '/workspace/local-path.test.js',
+      `import test from 'tst';
+const { join } = require('./paths.js');
+test('local dep reaches realm path', ({ is }) => {
+  is(join('/workspace', 'x'), '/workspace/x');
+});
+`
+    );
+    const result = await cmd.execute(['local-path.test.js'], ctx);
+    expect(result.stderr || '').not.toMatch(/cannot require|local module not bundled/);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ok 1 - local dep reaches realm path');
+  }, 20_000);
+
+  it('scopes a nested local helper require via createRequire(absPath)', async () => {
+    // Codex P2: inlined factories must not reuse the entry-scoped realm
+    // require — a helper under /workspace/lib/ gets createRequire(absPath)
+    // so nearer node_modules resolve from the helper, not the test entry.
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/lib/helper.js',
+      `const path = require('path');
+module.exports.join = (...parts) => path.join(...parts);
+`
+    );
+    await ctx.fs.writeFile(
+      '/workspace/scoped-local.test.js',
+      `import test from 'tst';
+const { join } = require('./lib/helper.js');
+test('nested local helper reaches path via scoped require', ({ is }) => {
+  is(join('/workspace', 'lib', 'x'), '/workspace/lib/x');
+});
+`
+    );
+    const result = await cmd.execute(['scoped-local.test.js'], ctx);
+    expect(result.stderr || '').not.toMatch(/cannot require|local module not bundled/);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ok 1 - nested local helper reaches path via scoped require');
+  }, 20_000);
+
   it('returns exit 1 when no test files match', async () => {
     const cmd = createTestCommand();
     const ctx = createMockCtx();
