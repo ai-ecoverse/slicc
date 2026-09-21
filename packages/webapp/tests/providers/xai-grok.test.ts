@@ -30,6 +30,8 @@ import {
   resetApiProviders,
 } from '@earendil-works/pi-ai/compat';
 import { config, register } from '../../providers/xai-grok.js';
+import { getProviderModels } from '../../src/providers/account-store.js';
+import { registerProviderConfig } from '../../src/providers/index.js';
 
 const XAI_API = 'xai-grok-openai' as Api;
 const XAI_BASE_URL = 'https://api.x.ai/v1';
@@ -242,8 +244,31 @@ describe('xai-grok provider', () => {
     const models = config.getModelIds!();
 
     expect(mocks.getModels).toHaveBeenCalledWith('xai');
-    expect(models.map((model) => model.id)).toEqual(['grok-4.3', 'grok-4.5', 'grok-build-0.1']);
+    expect(models.map((model) => model.id)).toEqual([
+      'grok-4.7',
+      'grok-4.3',
+      'grok-4.5',
+      'grok-build-0.1',
+    ]);
     expect(models.every((model) => model.api === 'openai')).toBe(true);
+    expect(models.find((model) => model.id === 'grok-4.7')).toEqual(
+      expect.objectContaining({
+        name: 'Grok 4.7',
+        context_window: 500_000,
+        max_tokens: 500_000,
+        compat: { supportsLongCacheRetention: false },
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: 'low',
+          medium: 'medium',
+          high: 'high',
+          xhigh: 'xhigh',
+          max: null,
+        },
+        cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      })
+    );
     expect(models.find((model) => model.id === 'grok-4.5')).toEqual(
       expect.objectContaining({
         context_window: 500_000,
@@ -267,13 +292,50 @@ describe('xai-grok provider', () => {
     const ids = (getModels('xai') as Model<Api>[]).map((model) => model.id);
 
     expect(ids).toContain('grok-4.6');
-    expect(ids).toContain(config.defaultModelId);
+    // grok-4.7 is overlaid until a pi-ai catalog bump lists it. The pin must
+    // still ship grok-4.6, the sibling that overlay copies compat from.
+    expect(config.defaultModelId).toBe('grok-4.7');
   });
 
-  it('defaults to Grok 4.5 without the retired Grok Heavy copy', () => {
-    expect(config.defaultModelId).toBe('grok-4.5');
-    expect(config.description).toContain('Default model is Grok 4.5');
+  it('defaults to Grok 4.7 without the retired Grok Heavy copy', () => {
+    expect(config.defaultModelId).toBe('grok-4.7');
+    expect(config.description).toContain('Default model is Grok 4.7');
     expect(config.description).not.toContain('Grok Heavy');
+  });
+
+  it('keeps a pi-ai grok-4.7 row instead of duplicating the overlay', () => {
+    const shipped = {
+      ...nativeModels[1],
+      id: 'grok-4.7',
+      name: 'Grok 4.7 from pi-ai',
+      contextWindow: 111_111,
+    };
+    mocks.getModels.mockImplementation((provider: string) =>
+      provider === 'xai' ? [shipped, ...nativeModels] : []
+    );
+
+    const models = config.getModelIds!();
+
+    expect(models.filter((model) => model.id === 'grok-4.7')).toHaveLength(1);
+    expect(models.find((model) => model.id === 'grok-4.7')).toEqual(
+      expect.objectContaining({ name: 'Grok 4.7 from pi-ai', context_window: 111_111 })
+    );
+  });
+
+  it('copies grok-4.6 compat when that sibling is in the catalog', () => {
+    const grok46 = {
+      ...nativeModels[1],
+      id: 'grok-4.6',
+      name: 'Grok 4.6',
+      compat: { supportsLongCacheRetention: false, marker: 'from-46' },
+    } as Model<Api>;
+    mocks.getModels.mockImplementation((provider: string) =>
+      provider === 'xai' ? [...nativeModels, grok46] : []
+    );
+
+    const overlay = config.getModelIds!().find((model) => model.id === 'grok-4.7');
+
+    expect(overlay?.compat).toEqual({ supportsLongCacheRetention: false, marker: 'from-46' });
   });
 
   it('dispatches Responses models with native xAI identity while preserving slicc routing', async () => {
@@ -312,7 +374,46 @@ describe('xai-grok provider', () => {
     expect(forwardedOptions).not.toHaveProperty('onPayload');
   });
 
-  it('falls back to Grok 4.5 when a stored model id is retired', async () => {
+  it('prices the composed Grok 4.7 model instead of the synthetic $0 default', () => {
+    registerProviderConfig(config);
+
+    const model = getProviderModels('xai-grok').find((candidate) => candidate.id === 'grok-4.7');
+
+    expect(model).toMatchObject({
+      id: 'grok-4.7',
+      name: 'Grok 4.7',
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      inputCost: 2,
+      outputCost: 6,
+      cacheReadCost: 0.5,
+      cacheWriteCost: 0,
+    });
+  });
+
+  it('streams Grok 4.7 through the Responses API using the overlay', async () => {
+    const provider = getApiProvider(XAI_API)!;
+    const listed = config.getModelIds!().find((model) => model.id === 'grok-4.7')!;
+    const model = { ...listed, provider: 'xai-grok', api: XAI_API } as Model<Api>;
+
+    await drain(provider.stream(model, context, {}));
+
+    expect(mocks.streamOpenAIResponses).toHaveBeenCalledOnce();
+    expect(mocks.streamOpenAICompletions).not.toHaveBeenCalled();
+    expect(mocks.streamOpenAIResponses.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        id: 'grok-4.7',
+        name: 'Grok 4.7',
+        api: 'openai-responses',
+        provider: 'xai',
+        baseUrl: XAI_BASE_URL,
+        contextWindow: 500_000,
+        maxTokens: 500_000,
+        cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      })
+    );
+  });
+
+  it('falls back to Grok 4.7 when a stored model id is retired', async () => {
     const provider = getApiProvider(XAI_API)!;
     const model = { ...routedModel('grok-4.3'), id: 'grok-3-mini', name: 'Grok 3 Mini' };
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -322,11 +423,11 @@ describe('xai-grok provider', () => {
 
       expect(warnSpy).toHaveBeenCalledOnce();
       expect(warnSpy).toHaveBeenCalledWith(
-        'xAI model "grok-3-mini" is no longer in the pi-ai catalog; falling back to default "grok-4.5"'
+        'xAI model "grok-3-mini" is no longer in the pi-ai catalog; falling back to default "grok-4.7"'
       );
       expect(mocks.streamOpenAIResponses).toHaveBeenCalledOnce();
       expect(mocks.streamOpenAIResponses.mock.calls[0][0]).toEqual(
-        expect.objectContaining({ id: 'grok-4.5', provider: 'xai', api: 'openai-responses' })
+        expect.objectContaining({ id: 'grok-4.7', provider: 'xai', api: 'openai-responses' })
       );
       expect(mocks.streamOpenAICompletions).not.toHaveBeenCalled();
     } finally {
