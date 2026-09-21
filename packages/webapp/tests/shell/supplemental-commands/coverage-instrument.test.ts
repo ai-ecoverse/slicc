@@ -4,8 +4,9 @@ import {
   extractCoverageCounts,
   instrumentSource,
   mergeCounts,
-  toLcov,
+  resolveCoverageDir,
   type StatementMap,
+  toLcov,
 } from '../../../src/shell/supplemental-commands/coverage-instrument.js';
 import {
   getTypeScript,
@@ -32,8 +33,8 @@ describe('instrumentSource', () => {
       '',
     ].join('\n');
     const { source, map } = instrumentSource(ts, src, '/workspace/add.js');
-    expect(source).toContain('__sliccCov.init("/workspace/add.js"');
-    expect(source).toContain('__sliccCov.hit("/workspace/add.js"');
+    expect(source).toContain('__slicc_cov.init("/workspace/add.js"');
+    expect(source).toContain('__slicc_cov.hit("/workspace/add.js"');
     expect(map.length).toBeGreaterThanOrEqual(3);
     const lines = new Set(map.map((s) => s.line));
     expect(lines.has(1)).toBe(true);
@@ -47,6 +48,15 @@ describe('instrumentSource', () => {
     const { source, map } = instrumentSource(ts, src, '/workspace/t.js');
     expect(map.every((s) => s.line !== 1)).toBe(true);
     expect(source).toContain("import test from 'tst'");
+  });
+
+  it('wraps an unbraced if-body so the skipped arm gets a counter', () => {
+    const src = 'if (false)\n  missed();\ntaken();\n';
+    const { source, map } = instrumentSource(ts, src, '/workspace/branch.js');
+    expect(source).toContain('{');
+    expect(map.some((s) => s.line === 2)).toBe(true);
+    expect(source).toContain('__slicc_cov.hit("/workspace/branch.js"');
+    expect(source).not.toContain('globalThis.__sliccCov');
   });
 });
 
@@ -80,6 +90,15 @@ describe('extractCoverageCounts / lcov / summary', () => {
     expect(lcov).toContain('DA:4,0');
     expect(lcov).toContain('LH:2');
     expect(lcov).toContain('LF:3');
+  });
+
+  it('resolves a relative coverage dir against cwd', () => {
+    const resolvePath = (base: string, path: string) => `${base.replace(/\/$/, '')}/${path}`;
+    expect(resolveCoverageDir('/workspace/project', 'reports', resolvePath)).toBe(
+      '/workspace/project/reports'
+    );
+    expect(resolveCoverageDir('/workspace/project', '/abs/cov', resolvePath)).toBe('/abs/cov');
+    expect(resolveCoverageDir('/workspace', '', resolvePath)).toBe('/workspace/coverage');
   });
 
   it('summarises statement percentages', () => {

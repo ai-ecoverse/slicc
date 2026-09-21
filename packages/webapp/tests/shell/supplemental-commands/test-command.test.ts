@@ -419,6 +419,29 @@ test('covers add, not unused', ({ is }) => {
     expect(lcov).toContain('DA:5,0');
   }, 20_000);
 
+  it('coverage probes survive a user binding named globalThis', async () => {
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/shadow.test.js',
+      `import test from 'tst';
+const globalThis = { shadowed: true };
+test('still runs', ({ is }) => {
+  is(globalThis.shadowed, true);
+});
+`
+    );
+    const result = await cmd.execute(
+      ['--coverage', '--coverage-dir=cov-out', 'shadow.test.js'],
+      ctx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('# pass 1');
+    const json = JSON.parse(await ctx.fs.readFile('/workspace/cov-out/coverage.json'));
+    expect(json.counts['/workspace/shadow.test.js']).toBeTruthy();
+  }, 20_000);
+
   it('falls through bare require(fs/path/sliccy) to the realm shim', async () => {
     // Regression: the harness used to bind the entry IIFE's `require` to
     // `__tstReq`, which only knew `tst` / `tst/assert` — so `require('fs')`

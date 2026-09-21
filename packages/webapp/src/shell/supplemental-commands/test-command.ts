@@ -31,8 +31,6 @@ import assertSource from 'tst/assert.js?raw';
 import tstSource from 'tst/tst.js?raw';
 import { normalizePath } from '../../fs/path-utils.js';
 import { executeJsCode } from '../jsh-executor.js';
-import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
-import { createIpkContextFromCtx } from './tsc-command.js';
 import {
   coverageDumpSource,
   coverageRuntimeSource,
@@ -40,9 +38,12 @@ import {
   extractCoverageCounts,
   instrumentSource,
   mergeCounts,
-  toLcov,
+  resolveCoverageDir,
   type StatementMap,
+  toLcov,
 } from './coverage-instrument.js';
+import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
+import { createIpkContextFromCtx } from './tsc-command.js';
 
 /** Shell name. Must not collide with POSIX `test` / `[` (just-bash builtins). */
 export const TST_COMMAND_NAME = 'tst';
@@ -81,6 +82,40 @@ export interface ParsedTestArgs {
   coverageDir: string;
 }
 
+function parseReporterFlag(
+  arg: string,
+  next: string | undefined
+): { reporter: 'tap' | 'spec'; consumed: 1 | 2 } | null {
+  let raw: string | undefined;
+  let consumed: 1 | 2 = 1;
+  if (arg === '--reporter') {
+    raw = next;
+    consumed = 2;
+  } else if (arg.startsWith('--reporter=')) {
+    raw = arg.slice('--reporter='.length);
+  } else {
+    return null;
+  }
+  if (raw !== 'tap' && raw !== 'spec') {
+    throw new Error('tst: --reporter must be tap or spec');
+  }
+  return { reporter: raw, consumed };
+}
+
+function parseCoverageFlag(
+  arg: string,
+  next: string | undefined
+): { coverageDir?: string; consumed: 1 | 2 } | null {
+  if (arg === '--coverage') return { consumed: 1 };
+  if (arg === '--coverage-dir' && next !== undefined) {
+    return { coverageDir: next, consumed: 2 };
+  }
+  if (arg.startsWith('--coverage-dir=')) {
+    return { coverageDir: arg.slice('--coverage-dir='.length), consumed: 1 };
+  }
+  return null;
+}
+
 export function parseTestArgs(args: string[]): ParsedTestArgs {
   const globs: string[] = [];
   let reporter: 'tap' | 'spec' = 'tap';
@@ -93,35 +128,17 @@ export function parseTestArgs(args: string[]): ParsedTestArgs {
       showHelp = true;
       continue;
     }
-    if (arg === '--reporter') {
-      const v = args[i + 1];
-      if (v !== 'tap' && v !== 'spec') {
-        throw new Error('tst: --reporter must be tap or spec');
-      }
-      reporter = v;
-      i += 1;
+    const reporterFlag = parseReporterFlag(arg, args[i + 1]);
+    if (reporterFlag) {
+      reporter = reporterFlag.reporter;
+      if (reporterFlag.consumed === 2) i += 1;
       continue;
     }
-    if (arg.startsWith('--reporter=')) {
-      const v = arg.slice('--reporter='.length);
-      if (v !== 'tap' && v !== 'spec') {
-        throw new Error('tst: --reporter must be tap or spec');
-      }
-      reporter = v;
-      continue;
-    }
-    if (arg === '--coverage') {
+    const cov = parseCoverageFlag(arg, args[i + 1]);
+    if (cov) {
       coverage = true;
-      continue;
-    }
-    if (arg === '--coverage-dir' && args[i + 1]) {
-      coverageDir = args[++i];
-      coverage = true;
-      continue;
-    }
-    if (arg.startsWith('--coverage-dir=')) {
-      coverageDir = arg.slice('--coverage-dir='.length);
-      coverage = true;
+      if (cov.coverageDir !== undefined) coverageDir = cov.coverageDir;
+      if (cov.consumed === 2) i += 1;
       continue;
     }
     if (arg.startsWith('-')) {
@@ -640,14 +657,13 @@ async function runOneTestFile(
   prefixWithFilename: boolean
 ): Promise<OneFileResult> {
   const { ts, harness, userOpts, parsed } = setup;
-  const instrument =
-    parsed.coverage
-      ? (src: string, path: string) => {
-          const { source: next, map } = instrumentSource(ts, src, path);
-          setup.coverageMaps[path] = map;
-          return next;
-        }
-      : undefined;
+  const instrument = parsed.coverage
+    ? (src: string, path: string) => {
+        const { source: next, map } = instrumentSource(ts, src, path);
+        setup.coverageMaps[path] = map;
+        return next;
+      }
+    : undefined;
   let source: string;
   try {
     source = await ctx.fs.readFile(file);
@@ -728,7 +744,9 @@ export function createTestCommand(): Command {
       if (r.failed) anyFailed = true;
     }
     if (prep.parsed.coverage) {
-      const dir = prep.parsed.coverageDir || `${ctx.cwd.replace(/\/$/, '')}/coverage`;
+      const dir = resolveCoverageDir(ctx.cwd, prep.parsed.coverageDir, (base, path) =>
+        ctx.fs.resolvePath(base, path)
+      );
       const json = JSON.stringify(
         { counts: prep.coverageCounts, maps: prep.coverageMaps },
         null,
