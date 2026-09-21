@@ -116,4 +116,32 @@ describe('createProxiedFetch — extension branch (Port-based)', () => {
     });
     await expect(fetchPromise).rejects.toThrow(/forbidden/);
   });
+
+  it('disconnects the Port when the request AbortSignal aborts', async () => {
+    const port: {
+      postMessage: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+      onMessage: { addListener: ReturnType<typeof vi.fn> };
+      onDisconnect: { addListener: ReturnType<typeof vi.fn> };
+    } = {
+      postMessage: vi.fn(),
+      disconnect: vi.fn(),
+      onMessage: { addListener: vi.fn() },
+      onDisconnect: { addListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: { connect: vi.fn(() => port), id: 'test-id' },
+    };
+
+    const { createProxiedFetch } = await import('../../src/shell/proxied-fetch.js');
+    const proxiedFetch = createProxiedFetch();
+    const ac = new AbortController();
+    const fetchPromise = proxiedFetch('https://api.github.com/user', {
+      signal: ac.signal,
+    } as never);
+    await new Promise((r) => setTimeout(r, 0));
+    ac.abort();
+    await expect(fetchPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(port.disconnect).toHaveBeenCalled();
+  });
 });

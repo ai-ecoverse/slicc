@@ -7,6 +7,7 @@ import {
   McpTimeoutError,
   parseResourceMetadataUrl,
   selectSseResponseFrame,
+  wrapProxiedFetchAsMcpFetch,
 } from '../../../src/shell/mcp/client.js';
 import type { McpFetchLike } from '../../../src/shell/mcp/types.js';
 
@@ -239,6 +240,26 @@ describe('McpClient: protocol negotiation', () => {
     expect(c.getSessionId()).toBe('minted-session');
   });
 
+  it('does not treat a 401 on server/discover as a legacy handshake', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { method: string };
+      return sent.method === 'server/discover'
+        ? {
+            status: 401,
+            statusText: 'Unauthorized',
+            headers: {
+              'WWW-Authenticate':
+                'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"',
+            },
+            body: '',
+          }
+        : { body: jsonRpc(1, { protocolVersion: '2025-06-18' }) };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+    await expect(c.initialize()).rejects.toBeInstanceOf(McpAuthRequiredError);
+    expect(calls).toHaveLength(1);
+  });
+
   it('does not fall back on an unrelated -32000 server error', async () => {
     const { fetchImpl, calls } = stubFetch((_url, init) => {
       const sent = JSON.parse(init?.body ?? '{}') as { id: number };
@@ -432,23 +453,32 @@ describe('McpClient: protocol negotiation', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('does not fall back when discovery times out', async () => {
+  it('falls back to legacy initialize when server/discover times out', async () => {
     vi.useFakeTimers();
     try {
-      let callCount = 0;
+      const methods: string[] = [];
       const fetchImpl: McpFetchLike = (_url, init) => {
-        callCount++;
-        return new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+        methods.push(sent.method);
+        if (sent.method === 'server/discover') {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          });
+        }
+        return Promise.resolve({
+          status: 200,
+          statusText: 'OK',
+          headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'legacy-session' },
+          body: bodyToBytes(jsonRpc(sent.id, { protocolVersion: '2025-06-18' })),
         });
       };
       const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl, timeoutMs: 50 });
       const pending = c.initialize();
-      const assertion = expect(pending).rejects.toBeInstanceOf(McpTimeoutError);
-
       await vi.advanceTimersByTimeAsync(60);
-      await assertion;
-      expect(callCount).toBe(1);
+      await pending;
+      expect(methods).toEqual(['server/discover', 'initialize']);
+      expect(c.getNegotiatedProtocolVersion()).toBe('2025-06-18');
+      expect(c.getSessionId()).toBe('legacy-session');
     } finally {
       vi.useRealTimers();
     }
@@ -641,5 +671,23 @@ describe('McpClient: tools/call and apps/list', () => {
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
     const apps = await c.appsList();
     expect(apps).toEqual([]);
+  });
+});
+
+describe('wrapProxiedFetchAsMcpFetch', () => {
+  it('forwards AbortSignal into the proxied fetch', async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const wrapped = wrapProxiedFetchAsMcpFetch(async (_url, init) => {
+      seen = init?.signal;
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'application/json' },
+        body: bodyToBytes('{}'),
+      };
+    });
+    await wrapped('https://mcp.example/rpc', { method: 'POST', signal: ac.signal });
+    expect(seen).toBe(ac.signal);
   });
 });
