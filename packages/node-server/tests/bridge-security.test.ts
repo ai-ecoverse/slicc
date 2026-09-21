@@ -210,6 +210,7 @@ describe('buildCorsHeaders', () => {
     expect(headers!['Access-Control-Allow-Headers']).toContain('X-Proxy-Cookie');
     expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Error');
     expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Set-Cookie');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Www-Authenticate');
     expect(headers!['Access-Control-Expose-Headers']).toContain('Mcp-Session-Id');
     expect(headers!['Access-Control-Expose-Headers']).toContain('MCP-Protocol-Version');
     expect(headers!.Vary).toBe('Origin, Access-Control-Request-Headers');

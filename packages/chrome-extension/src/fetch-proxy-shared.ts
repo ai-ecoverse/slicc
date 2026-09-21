@@ -4,6 +4,7 @@ import {
   type FetchProxyRequestMsg,
   type FetchProxyResponseMsg,
   HMAC_SIGN_HEADER,
+  PROXY_WWW_AUTHENTICATE_HEADER,
   type SecretsPipeline,
   uint8ToBase64,
 } from '@slicc/shared-ts';
@@ -27,12 +28,18 @@ function buildResponseHeaders(
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(scrubbed)) {
     const lower = k.toLowerCase();
-    if (lower === 'set-cookie' || lower.startsWith('x-proxy-')) continue;
+    if (lower === 'set-cookie' || lower === 'www-authenticate' || lower.startsWith('x-proxy-')) {
+      continue;
+    }
     out[k] = v;
   }
   const setCookies = extractSetCookies(upstream);
   if (setCookies.length > 0) {
     out['X-Proxy-Set-Cookie'] = pipeline.scrubResponse(JSON.stringify(setCookies));
+  }
+  const wwwAuthenticate = upstream.get('www-authenticate');
+  if (wwwAuthenticate) {
+    out[PROXY_WWW_AUTHENTICATE_HEADER] = pipeline.scrubResponse(wwwAuthenticate);
   }
   return out;
 }

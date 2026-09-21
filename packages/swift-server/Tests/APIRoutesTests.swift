@@ -394,6 +394,61 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testFetchProxyRelaysWwwAuthenticateAsXProxyHeader() async throws {
+        let basic = "Basic realm=\"x\""
+        let bearer =
+            "Bearer resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource/v2/mcp\""
+        let upstreamRouter = Router()
+        upstreamRouter.get("/mcp") { _, _ in
+            var authHeaders = HTTPFields()
+            authHeaders.append(HTTPField(name: HTTPField.Name("WWW-Authenticate")!, value: basic))
+            authHeaders.append(HTTPField(name: HTTPField.Name("WWW-Authenticate")!, value: bearer))
+            return Response(
+                status: .unauthorized,
+                headers: authHeaders,
+                body: .init()
+            )
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port)
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/mcp"
+                        ]
+                    ) { response in
+                        XCTAssertEqual(response.status, .unauthorized)
+                        XCTAssertNil(response.headers[HTTPField.Name("WWW-Authenticate")!])
+                        XCTAssertEqual(
+                            response.headers[HTTPField.Name("X-Proxy-Www-Authenticate")!],
+                            "\(basic), \(bearer)"
+                        )
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+    }
+
     
     
     

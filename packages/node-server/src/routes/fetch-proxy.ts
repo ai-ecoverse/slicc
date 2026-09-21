@@ -178,6 +178,10 @@ function forwardUpstreamHeaders(
   if (setCookieValues.length > 0) {
     res.setHeader('X-Proxy-Set-Cookie', secretProxy.scrubResponse(JSON.stringify(setCookieValues)));
   }
+  const wwwAuthenticate = upstream.headers.get('www-authenticate');
+  if (wwwAuthenticate) {
+    res.setHeader('X-Proxy-Www-Authenticate', secretProxy.scrubResponse(wwwAuthenticate));
+  }
 
   const upstreamLength = upstream.headers.get('content-length');
   if (upstreamLength && !upstream.headers.get('content-encoding') && /^\d+$/.test(upstreamLength)) {

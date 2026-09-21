@@ -113,8 +113,9 @@ enum BridgeSecurity {
     
     
     
+    
     static let corsExposeHeaders =
-        "Link, X-Proxy-Error, X-Proxy-Set-Cookie, Mcp-Session-Id, MCP-Protocol-Version"
+        "Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Www-Authenticate, Mcp-Session-Id, MCP-Protocol-Version"
 
     
     

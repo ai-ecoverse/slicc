@@ -78,6 +78,26 @@ describe('decodeForbiddenResponseHeaders', () => {
     });
   });
 
+  it('decodes X-Proxy-Www-Authenticate to www-authenticate', () => {
+    expect(
+      decodeForbiddenResponseHeaders({
+        'X-Proxy-Www-Authenticate':
+          'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"',
+        'Content-Type': 'application/json',
+      })
+    ).toEqual({
+      'www-authenticate':
+        'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/v2/mcp"',
+      'Content-Type': 'application/json',
+    });
+  });
+
+  it('is case-insensitive on X-Proxy-Www-Authenticate', () => {
+    expect(
+      decodeForbiddenResponseHeaders({ 'x-proxy-www-authenticate': 'Bearer realm="x"' })
+    ).toEqual({ 'www-authenticate': 'Bearer realm="x"' });
+  });
+
   it('leaves unrelated headers untouched', () => {
     expect(decodeForbiddenResponseHeaders({ 'Content-Type': 'text/html' })).toEqual({
       'Content-Type': 'text/html',

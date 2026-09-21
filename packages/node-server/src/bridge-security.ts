@@ -64,7 +64,7 @@ const CORS_BASE_ALLOW_HEADERS = [
 ];
 
 const CORS_EXPOSE_HEADERS =
-  'Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Content-Length, Mcp-Session-Id, MCP-Protocol-Version';
+  'Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Content-Length, X-Proxy-Www-Authenticate, Mcp-Session-Id, MCP-Protocol-Version';
 
 const CORS_ALLOW_METHODS =
   'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK';

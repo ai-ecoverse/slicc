@@ -1155,6 +1155,10 @@ private func makeStreamingProxyResponse(
 ) throws -> Response {
     
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
+    
+    
+    let wwwAuthenticateValues = response.headers[canonicalForm: "www-authenticate"].map { String($0) }
+    let wwwAuthenticate = wwwAuthenticateValues.isEmpty ? nil : wwwAuthenticateValues.joined(separator: ", ")
 
     var headers = HTTPFields(response.headers)
     for header in proxyBlockedResponseHeaders {
@@ -1186,6 +1190,9 @@ private func makeStreamingProxyResponse(
     {
         headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
     }
+    if let wwwAuthenticate {
+        headers[HTTPField.Name("X-Proxy-Www-Authenticate")!] = secretInjector.scrub(text: wwwAuthenticate)
+    }
 
     
     
@@ -1209,6 +1216,7 @@ private func makeStreamingProxyResponse(
         "Link",
         "X-Proxy-Error",
         "X-Proxy-Set-Cookie",
+        "X-Proxy-Www-Authenticate",
         "Mcp-Session-Id",
         "MCP-Protocol-Version",
         "Cache-Control",

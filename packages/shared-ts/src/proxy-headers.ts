@@ -41,6 +41,8 @@ export function decodeForbiddenRequestHeaders(
   return result;
 }
 
+export const PROXY_WWW_AUTHENTICATE_HEADER = 'X-Proxy-Www-Authenticate';
+
 export function decodeForbiddenResponseHeaders(
   headers: Record<string, string>
 ): Record<string, string> {
@@ -49,6 +51,8 @@ export function decodeForbiddenResponseHeaders(
     const lower = key.toLowerCase();
     if (lower === 'x-proxy-set-cookie') {
       result['set-cookie'] = value;
+    } else if (lower === PROXY_WWW_AUTHENTICATE_HEADER.toLowerCase()) {
+      result['www-authenticate'] = value;
     } else {
       result[key] = value;
     }
