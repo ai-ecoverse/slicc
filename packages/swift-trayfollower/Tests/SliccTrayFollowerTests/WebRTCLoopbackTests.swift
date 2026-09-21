@@ -5,19 +5,39 @@ import XCTest
 @testable import SliccTrayFollower
 
 /// A process-local leader peer: creates the data channel and offer, then
-/// answers ICE from a live `WebRTCManager`. No TURN, host candidates only.
+/// answers ICE from a live `WebRTCManager`. Host candidates plus STUN.
 final class LoopbackLeader: NSObject {
     private let factory: RTCPeerConnectionFactory
     private var peerConnection: RTCPeerConnection!
     private var channel: RTCDataChannel!
     private var remoteDescriptionSet = false
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
+    private var localCandidates: [RTCIceCandidate] = []
+    private var isChannelOpen = false
     private let lock = NSLock()
 
-    private(set) var localCandidates: [RTCIceCandidate] = []
     var onLocalCandidate: ((RTCIceCandidate) -> Void)?
     var onMessage: ((Data) -> Void)?
-    var onOpen: (() -> Void)?
+    var onOpen: (() -> Void)? {
+        didSet {
+            lock.lock()
+            let open = isChannelOpen
+            lock.unlock()
+            if open { onOpen?() }
+        }
+    }
+
+    func snapshotLocalCandidates() -> [RTCIceCandidate] {
+        lock.lock()
+        defer { lock.unlock() }
+        return localCandidates
+    }
+
+    var hasLocalCandidates: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !localCandidates.isEmpty
+    }
 
     override init() {
         RTCInitializeSSL()
@@ -50,7 +70,7 @@ final class LoopbackLeader: NSObject {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let offer = try await peerConnection.offer(for: constraints)
         try await peerConnection.setLocalDescription(offer)
-        for _ in 0..<40 where localCandidates.isEmpty {
+        for _ in 0..<40 where !hasLocalCandidates {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         return peerConnection.localDescription?.sdp ?? offer.sdp
@@ -107,7 +127,12 @@ extension LoopbackLeader: RTCPeerConnectionDelegate {
 
 extension LoopbackLeader: RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
-        if dataChannel.readyState == .open { onOpen?() }
+        guard dataChannel.readyState == .open else { return }
+        lock.lock()
+        isChannelOpen = true
+        let callback = onOpen
+        lock.unlock()
+        callback?()
     }
 
     func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
@@ -208,11 +233,10 @@ final class WebRTCLoopbackTests: XCTestCase {
                 sdpMid: candidate.sdpMid,
                 sdpMLineIndex: candidate.sdpMLineIndex)
         }
-        try await leader.acceptAnswer(answer.sdp)
-
         let leaderOpen = expectation(description: "leader data channel opened")
         leaderOpen.assertForOverFulfill = false
         leader.onOpen = { leaderOpen.fulfill() }
+        try await leader.acceptAnswer(answer.sdp)
         await fulfillment(of: [delegate.opened, leaderOpen], timeout: 15)
         XCTAssertTrue(follower.isConnected)
 

@@ -25,7 +25,7 @@ final class LoopbackTrayHub: @unchecked Sendable {
         leader.onLocalCandidate = { [weak self] candidate in
             self?.enqueue(candidate)
         }
-        for candidate in leader.localCandidates { enqueue(candidate) }
+        for candidate in leader.snapshotLocalCandidates() { enqueue(candidate) }
     }
 
     func close() { leader.close() }
