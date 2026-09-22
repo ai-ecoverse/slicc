@@ -627,9 +627,11 @@ preloaded every shard of an 8.8 GB tree allocated each body twice (the
 `Uint8Array` plus the OPFS snapshot) and died with `NotReadableError`, then
 `Array buffer allocation failed`, before the kernel worker posted ready.
 `readdir` / `stat` still see those paths. A sync read of the mirror throws
-rather than returning zeros; async reads hit the backend. The realm snapshot
-already stores them as `truncated` / `ENOSYNC` and bridges `readFileSync` to a
-live read.
+rather than returning zeros. A later rename moves that guard with the inode,
+an unlink or rmdir drops it, and a write collapses the fictional size and
+then stores the new bytes, so the path can be read again. Async reads hit
+the backend. The realm snapshot already stores them as `truncated` /
+`ENOSYNC` and bridges `readFileSync` to a live read.
 
 Run the [standalone browser reproduction](../packages/webapp/tests/e2e/zenfs-preload/README.md).
 `tests/fs/zenfs-preload-concurrency.test.ts` in `packages/webapp` guards the global
