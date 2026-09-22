@@ -5,6 +5,7 @@ import { createComputerNativeBridge } from '../../../src/ui/boot/setup-standalon
 type CaptureOpts = {
   watch?: boolean;
   display?: number;
+  onEnd?: (error: Error) => void;
   onFrame?: (frame: {
     jpeg: string;
     mime: string;
@@ -33,7 +34,7 @@ function fakeLeader() {
       return frame;
     }),
     inputNativeComputer: vi.fn(async () => {}),
-    unwatchNativeComputer: vi.fn((runtimeId: string) => {
+    unwatchNativeComputer: vi.fn((runtimeId: string, _opts?: { display?: number }) => {
       unwatched.push(runtimeId);
     }),
   };
@@ -69,8 +70,20 @@ describe('createComputerNativeBridge', () => {
       nativeWidth: 5120,
       nativeHeight: 2880,
     });
-    expect(emitted.map((f) => f.jpeg)).toEqual(['AAA', 'BBB']);
-    expect(emitted.every((f) => f.runtimeId === 'sliccstart-computer-1')).toBe(true);
+    expect(emitted.map((f) => (f.ended ? null : f.jpeg))).toEqual(['AAA', 'BBB']);
+    // Runtime AND display: one follower may stream several screens at once.
+    expect(emitted.every((f) => f.runtimeId === 'sliccstart-computer-1' && f.display === 3)).toBe(
+      true
+    );
+    // The stream dying after its first frame is pushed too, so the worker-side
+    // backend stops serving its last frame as live.
+    leader.captures[0].onEnd?.(new Error('computer follower disconnected'));
+    expect(emitted.at(-1)).toEqual({
+      runtimeId: 'sliccstart-computer-1',
+      display: 3,
+      ended: true,
+      error: 'computer follower disconnected',
+    });
   });
 
   it('attaches no frame sink to a one-shot capture', async () => {
@@ -85,8 +98,9 @@ describe('createComputerNativeBridge', () => {
   it('routes unwatch and input, and refuses without a leader tray', async () => {
     const leader = fakeLeader();
     const bridge = createComputerNativeBridge(leader.getLeader, () => {});
-    expect(await bridge({ runtimeId: 'mac', action: 'unwatch' })).toEqual({ ok: true });
+    expect(await bridge({ runtimeId: 'mac', action: 'unwatch', display: 4 })).toEqual({ ok: true });
     expect(leader.unwatched).toEqual(['mac']);
+    expect(leader.sync.unwatchNativeComputer).toHaveBeenCalledWith('mac', { display: 4 });
     expect(
       await bridge({ runtimeId: 'mac', action: 'input', events: [{ type: 'key', keysym: 'a' }] })
     ).toEqual({ ok: true });

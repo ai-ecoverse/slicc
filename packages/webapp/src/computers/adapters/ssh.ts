@@ -27,6 +27,13 @@ export const SSH_B64_CHUNK = 3 * 1024 * 1024;
 /** How long `screenshot` waits for a live stream's first frame. */
 export const SSH_NATIVE_FRAME_TIMEOUT_MS = 8_000;
 
+/**
+ * How long a post-input `screenshot` waits for a frame newer than the input.
+ * `SCStream` emits only when the screen changes, so an input with no visible
+ * effect produces no frame, and past this window the cached frame IS current.
+ */
+export const SSH_POST_INPUT_FRAME_MS = 2_000;
+
 export type SshExecResult = { stdout: string; stderr: string; exitCode: number };
 export type SshExec = (command: string, opts?: { timeoutMs?: number }) => Promise<SshExecResult>;
 
@@ -50,12 +57,17 @@ export interface NativeComputerChannel {
     watch?: boolean;
   }): Promise<NativeComputerShot>;
   /**
-   * Every frame of a live `watch: true` capture, including the one that
-   * resolved `capture`. Absent on a channel that cannot push (an older
-   * bridge), which leaves this backend polled — see {@link SshComputerBackend}.
+   * Every frame of a live `watch: true` capture of `display`, including the
+   * one that resolved `capture`. `onEnd` fires if that stream dies after its
+   * first frame. Absent on a channel that cannot push (an older bridge), which
+   * leaves this backend polled — see {@link SshComputerBackend}.
    */
-  onFrame?(listener: (shot: NativeComputerShot) => void): () => void;
-  unwatch(): void;
+  onFrame?(
+    listener: (shot: NativeComputerShot) => void,
+    opts?: { display?: number; onEnd?: (error: Error) => void }
+  ): () => void;
+  /** Stop the stream of `display` (absent = the main display) and only that one. */
+  unwatch(opts?: { display?: number }): void;
   /** `display` names the screen the events target — the same index `capture` used. */
   input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
 }
@@ -239,6 +251,9 @@ function parseB64Length(stdout: string): number {
   return match ? Number(match[1]) : Number.NaN;
 }
 
+type StreamSink = { onFrame: (frame: ComputerFrame) => void; fps: number; maxWidth?: number };
+type StreamWaiter = { settle: (frame: ComputerFrame | null, error?: Error) => void };
+
 export class SshComputerBackend implements ComputerBackend {
   private seq = 0;
   private size: { width: number; height: number } | null = null;
@@ -257,16 +272,26 @@ export class SshComputerBackend implements ComputerBackend {
     onFrame: (frame: ComputerFrame) => void,
     maxWidth?: number
   ) => () => void;
+  readonly screenshotServesStream: boolean;
   private readonly probe: SshProbe;
   private readonly inputAllowed: boolean;
   private readonly title: string;
   private readonly native?: NativeComputerChannel;
   private readonly frameTimeoutMs: number;
-  private readonly sinks = new Set<(frame: ComputerFrame) => void>();
-  private readonly waiters = new Set<(frame: ComputerFrame) => void>();
+  /** Each subscriber with what it asked for; the stream serves the maximum. */
+  private readonly sinks = new Set<StreamSink>();
+  private readonly waiters = new Set<StreamWaiter>();
   private offNativeFrame: (() => void) | null = null;
   private lastFrame: ComputerFrame | null = null;
-  private streaming = false;
+  /** The live stream; `gen` fences callbacks of a stream since replaced. */
+  private stream: { gen: number; fps: number; maxWidth?: number } | null = null;
+  private streamGen = 0;
+  /**
+   * The next `screenshot` must be newer than `afterSeq` — set after input (the
+   * cached frame predates it) and after a stream restart. `fallback` lets a
+   * post-input wait settle for the cached frame once no newer one comes.
+   */
+  private freshness: { afterSeq: number; fallback: boolean } | null = null;
 
   constructor(
     private readonly sshExec: SshExec,
@@ -281,7 +306,8 @@ export class SshComputerBackend implements ComputerBackend {
     this.title = opts.title;
     this.frameTimeoutMs = opts.frameTimeoutMs ?? SSH_NATIVE_FRAME_TIMEOUT_MS;
     this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim, opts.display));
-    if (opts.native?.onFrame) {
+    this.screenshotServesStream = !!opts.native?.onFrame;
+    if (this.screenshotServesStream) {
       this.subscribe = (fps, onFrame, maxWidth) => this.bindSubscribe(fps, onFrame, maxWidth);
     }
   }
@@ -302,41 +328,95 @@ export class SshComputerBackend implements ComputerBackend {
 
   /**
    * Refcounted sinks over ONE `SCStream`: the last unsubscribe stops capture,
-   * an earlier one leaves the survivors streaming.
+   * an earlier one leaves the survivors streaming. A subscriber that needs
+   * more fps or width than the live stream restarts it at the new maximum.
    */
   private bindSubscribe(
     fps: number,
     onFrame: (frame: ComputerFrame) => void,
     maxWidth?: number
   ): () => void {
-    this.sinks.add(onFrame);
+    const sink: StreamSink = { onFrame, fps, maxWidth };
+    this.sinks.add(sink);
     if (this.lastFrame) onFrame(this.lastFrame);
-    if (!this.streaming) this.startStream(fps, maxWidth);
+    this.ensureStream();
     return () => {
-      this.sinks.delete(onFrame);
+      this.sinks.delete(sink);
       if (this.sinks.size === 0) this.stopStream();
     };
+  }
+
+  private demand(): { fps: number; maxWidth?: number } {
+    let fps = 0;
+    let maxWidth: number | undefined = 0;
+    for (const sink of this.sinks) {
+      fps = Math.max(fps, sink.fps);
+      // No cap on any one subscriber means full native width for the stream.
+      maxWidth =
+        maxWidth === undefined || sink.maxWidth === undefined
+          ? undefined
+          : Math.max(maxWidth, sink.maxWidth);
+    }
+    return { fps, maxWidth };
+  }
+
+  private ensureStream(): void {
+    if (this.sinks.size === 0) return;
+    const want = this.demand();
+    const live = this.stream;
+    if (live) {
+      const widthOk =
+        live.maxWidth === undefined ||
+        (want.maxWidth !== undefined && live.maxWidth >= want.maxWidth);
+      if (live.fps >= want.fps && widthOk) return;
+      this.detachStream(true);
+    }
+    this.startStream(want.fps, want.maxWidth);
   }
 
   private startStream(fps: number, maxWidth?: number): void {
     const native = this.native;
     if (!native?.onFrame) return;
-    this.streaming = true;
-    this.offNativeFrame = native.onFrame((shot) => this.pushNativeFrame(shot));
+    const gen = ++this.streamGen;
+    this.stream = { gen, fps, maxWidth };
+    this.offNativeFrame = native.onFrame(
+      (shot) => {
+        if (this.stream?.gen === gen) this.pushNativeFrame(shot);
+      },
+      {
+        display: this.display,
+        // The follower is gone or its capture failed: stop serving the last
+        // frame as if it were live. Sinks stay, so the next screenshot or
+        // subscribe starts a fresh stream (e.g. once the follower reconnects).
+        onEnd: (error) => {
+          if (this.stream?.gen === gen) this.stopStream(error, { unwatch: false });
+        },
+      }
+    );
     // `capture` resolves on the stream's FIRST frame, which `onFrame` has
     // already delivered — so only a failure is acted on here.
     void native
       .capture({ fps, maxWidth, display: this.display, watch: true })
-      .catch(() => this.stopStream());
+      .catch((err: unknown) => {
+        if (this.stream?.gen !== gen) return;
+        this.stopStream(err instanceof Error ? err : new Error(String(err)));
+      });
   }
 
-  private stopStream(): void {
-    if (!this.streaming) return;
-    this.streaming = false;
+  private detachStream(unwatch: boolean): void {
+    this.stream = null;
     this.offNativeFrame?.();
     this.offNativeFrame = null;
-    this.waiters.clear();
-    this.native?.unwatch();
+    if (unwatch) this.native?.unwatch({ display: this.display });
+  }
+
+  /** Parked screenshots fail NOW with the real reason, not at their timeout. */
+  private stopStream(error?: Error, opts: { unwatch?: boolean } = {}): void {
+    if (!this.stream) return;
+    this.detachStream(opts.unwatch ?? true);
+    this.freshness = { afterSeq: this.seq, fallback: false };
+    const reason = error ?? new Error('native computer stream stopped');
+    for (const waiter of [...this.waiters]) waiter.settle(null, reason);
   }
 
   private pushNativeFrame(shot: NativeComputerShot): void {
@@ -350,33 +430,62 @@ export class SshComputerBackend implements ComputerBackend {
     };
     this.size = { width: shot.nativeWidth, height: shot.nativeHeight };
     this.lastFrame = frame;
-    for (const sink of [...this.sinks]) sink(frame);
-    for (const waiter of [...this.waiters]) waiter(frame);
-    this.waiters.clear();
+    if (this.freshness && frame.seq > this.freshness.afterSeq) this.freshness = null;
+    for (const sink of [...this.sinks]) sink.onFrame(frame);
+    for (const waiter of [...this.waiters]) waiter.settle(frame);
   }
 
-  private waitForStreamFrame(): Promise<ComputerFrame> {
+  /**
+   * The next stream frame, or on timeout `fallback` when there is one (a
+   * post-input wait on a screen that did not change) and an error otherwise.
+   */
+  private waitForStreamFrame(
+    timeoutMs: number,
+    fallback: ComputerFrame | null,
+    signal?: AbortSignal
+  ): Promise<ComputerFrame> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiters.delete(onFrame);
-        reject(new Error('native computer frame timed out'));
-      }, this.frameTimeoutMs);
-      const onFrame = (frame: ComputerFrame): void => {
-        clearTimeout(timer);
-        this.waiters.delete(onFrame);
-        resolve(frame);
+      const waiter: StreamWaiter = {
+        settle: (frame, error) => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          this.waiters.delete(waiter);
+          if (frame) resolve(frame);
+          else reject(error ?? new Error('native computer frame timed out'));
+        },
       };
-      this.waiters.add(onFrame);
+      const timer = setTimeout(() => waiter.settle(fallback), timeoutMs);
+      const onAbort = (): void => waiter.settle(null, new Error('screenshot aborted'));
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
+      this.waiters.add(waiter);
     });
   }
 
-  async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
-    // A one-shot capture REPLACES the follower's live capturer, so while a
-    // stream is up the stream is the only safe source — `pull` included, or
-    // the poll would kill the very stream it reads.
-    if (this.streaming) {
-      return this.lastFrame ?? (await this.waitForStreamFrame());
+  private async streamScreenshot(signal?: AbortSignal): Promise<ComputerFrame> {
+    const last = this.lastFrame;
+    const need = this.freshness;
+    if (last && (!need || last.seq > need.afterSeq)) return last;
+    if (last && need?.fallback) {
+      return await this.waitForStreamFrame(
+        Math.min(this.frameTimeoutMs, SSH_POST_INPUT_FRAME_MS),
+        last,
+        signal
+      );
     }
+    return await this.waitForStreamFrame(this.frameTimeoutMs, null, signal);
+  }
+
+  async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
+    // While a stream is up it is the only source — `pull` included — because
+    // on an older follower a one-shot REPLACES the live capturer and would kill
+    // the very stream it reads. A stream that ended under live subscribers is
+    // restarted here, so a reconnected follower streams again.
+    if (!this.stream && this.sinks.size > 0) this.ensureStream();
+    if (this.stream) return await this.streamScreenshot(opts.signal);
     if (this.native) {
       const shot = await this.native.capture({
         fps: 2,
@@ -445,6 +554,9 @@ export class SshComputerBackend implements ComputerBackend {
     const filled = applyPointerToEvents(this.pointer, events);
     if (this.native) {
       await this.native.input(filled, { display: this.display });
+      // The cached stream frame predates this input; a screenshot now must
+      // show its effect, or the agent loops on an action it already took.
+      if (this.stream) this.freshness = { afterSeq: this.seq, fallback: true };
       return;
     }
     for (const event of filled) {
@@ -460,8 +572,8 @@ export class SshComputerBackend implements ComputerBackend {
 
   async close(): Promise<void> {
     this.sinks.clear();
-    if (this.streaming) this.stopStream();
-    else this.native?.unwatch();
+    if (this.stream) this.stopStream(new Error('computer closed'));
+    else this.native?.unwatch({ display: this.display });
     if (!this.probe.capture) return;
     try {
       await this.sshExec(

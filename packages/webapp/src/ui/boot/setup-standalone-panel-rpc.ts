@@ -197,7 +197,7 @@ export function createComputerNativeBridge(
     const sync = getLeader()?.currentLeaderSync;
     if (!sync) throw new Error('computer native: no active leader tray');
     if (payload.action === 'capture') {
-      const runtimeId = payload.runtimeId;
+      const { runtimeId, display } = payload;
       const frame = await sync.captureNativeComputer(runtimeId, {
         fps: payload.fps,
         maxWidth: payload.maxWidth,
@@ -208,7 +208,10 @@ export function createComputerNativeBridge(
         // to (#3386). Mirrors `hid-input-report`.
         ...(payload.watch
           ? {
-              onFrame: (pushed: NativeComputerCaptureResult) => emitFrame({ runtimeId, ...pushed }),
+              onFrame: (pushed: NativeComputerCaptureResult) =>
+                emitFrame({ runtimeId, display, ...pushed }),
+              onEnd: (error: Error) =>
+                emitFrame({ runtimeId, display, ended: true, error: error.message }),
             }
           : {}),
       });
@@ -220,7 +223,7 @@ export function createComputerNativeBridge(
       });
       return { ok: true as const };
     }
-    sync.unwatchNativeComputer(payload.runtimeId);
+    sync.unwatchNativeComputer(payload.runtimeId, { display: payload.display });
     return { ok: true as const };
   };
 }

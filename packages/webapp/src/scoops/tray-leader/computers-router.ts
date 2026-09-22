@@ -40,6 +40,21 @@ export interface TrayComputersSource {
 
 const TRAY_FRAME_MIN_INTERVAL_MS = 1000 / COMPUTER_TRAY_MAX_FPS;
 
+/**
+ * The roster entry a native request was addressed through and the follower
+ * that actually holds the screen — the same peer, or a `slicc follow --computer`
+ * CLI and the Sliccstart it spawned (#3260). Either one leaving ends the request.
+ */
+type NativeFollowerIds = { via: string; target: string };
+
+type NativeWatch = {
+  runtimeId: string;
+  display: number | undefined;
+  followers: NativeFollowerIds;
+  onFrame: (frame: NativeComputerCaptureResult) => void;
+  onEnd?: (error: Error) => void;
+};
+
 type NativeFanoutMessage = Extract<
   FollowerToLeaderMessage,
   { type: 'computer.native.frame' | 'computer.native.error' }
@@ -78,6 +93,7 @@ export class ComputersRouter {
       resolve: (frame: NativeComputerCaptureResult) => void;
       reject: (err: Error) => void;
       timer: ReturnType<typeof setTimeout>;
+      followers: NativeFollowerIds;
     }
   >();
   private readonly pendingInput = new Map<
@@ -86,17 +102,16 @@ export class ComputersRouter {
       resolve: () => void;
       reject: (err: Error) => void;
       timer: ReturnType<typeof setTimeout>;
+      followers: NativeFollowerIds;
     }
   >();
   /**
    * Live `watch: true` captures. The follower reuses one requestId for every
    * frame of a stream, so this outlives the `pendingNative` slot the first
-   * frame settles.
+   * frame settles. `display` is kept because one runtime can stream several
+   * screens at once, and `unwatchNative` must stop only the one asked for.
    */
-  private readonly nativeWatches = new Map<
-    string,
-    { runtimeId: string; onFrame: (frame: NativeComputerCaptureResult) => void }
-  >();
+  private readonly nativeWatches = new Map<string, NativeWatch>();
   private unsubList: (() => void) | null = null;
   private unsubFrame: (() => void) | null = null;
 
@@ -211,13 +226,25 @@ export class ComputersRouter {
        * one included. Ignored for a one-shot capture.
        */
       onFrame?: (frame: NativeComputerCaptureResult) => void;
+      /**
+       * Called once if a `watch: true` stream dies after its first frame — the
+       * follower reported an error or disconnected — so a consumer never keeps
+       * serving a stream that no longer exists.
+       */
+      onEnd?: (error: Error) => void;
     } = {}
   ): Promise<NativeComputerCaptureResult> {
-    const follower = this.requireComputerFollower(runtimeId);
+    const { follower, followers } = this.resolveComputerTarget(runtimeId);
     const requestId = `ncap-${crypto.randomUUID()}`;
     const timeoutMs = opts.timeoutMs ?? 30_000;
     if (opts.watch && opts.onFrame) {
-      this.nativeWatches.set(requestId, { runtimeId, onFrame: opts.onFrame });
+      this.nativeWatches.set(requestId, {
+        runtimeId,
+        display: opts.display,
+        followers,
+        onFrame: opts.onFrame,
+        onEnd: opts.onEnd,
+      });
     }
     return await new Promise<NativeComputerCaptureResult>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -225,7 +252,7 @@ export class ComputersRouter {
         this.nativeWatches.delete(requestId);
         reject(new Error(`computer.native.capture timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      this.pendingNative.set(requestId, { resolve, reject, timer });
+      this.pendingNative.set(requestId, { resolve, reject, timer, followers });
       const sent = follower.sync.send({
         type: 'computer.native.capture',
         requestId,
@@ -252,7 +279,7 @@ export class ComputersRouter {
       display?: number;
     } = {}
   ): Promise<void> {
-    const follower = this.requireComputerFollower(runtimeId);
+    const { follower, followers } = this.resolveComputerTarget(runtimeId);
     const requestId = `nin-${crypto.randomUUID()}`;
     const timeoutMs = opts.timeoutMs ?? 30_000;
     await new Promise<void>((resolve, reject) => {
@@ -260,7 +287,7 @@ export class ComputersRouter {
         this.pendingInput.delete(requestId);
         reject(new Error(`computer.native.input timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      this.pendingInput.set(requestId, { resolve, reject, timer });
+      this.pendingInput.set(requestId, { resolve, reject, timer, followers });
       const sent = follower.sync.send({
         type: 'computer.native.input',
         requestId,
@@ -275,15 +302,27 @@ export class ComputersRouter {
     });
   }
 
-  unwatchNative(runtimeId: string): void {
-    // Drop the sink FIRST: a follower that dropped off makes
+  /**
+   * Stop this runtime's stream of `display` (undefined = the main display)
+   * and ONLY that one: a bare `computer.native.unwatch` stops every capture on
+   * the follower, which would kill a sibling display's stream.
+   */
+  unwatchNative(runtimeId: string, opts: { display?: number } = {}): void {
+    // Drop the sinks FIRST: a follower that dropped off makes
     // `requireComputerFollower` throw, and a stale sink would then outlive the
     // stream it belongs to.
+    const requestIds: string[] = [];
     for (const [requestId, watch] of this.nativeWatches) {
-      if (watch.runtimeId === runtimeId) this.nativeWatches.delete(requestId);
+      if (watch.runtimeId === runtimeId && watch.display === opts.display) {
+        this.nativeWatches.delete(requestId);
+        requestIds.push(requestId);
+      }
     }
+    if (requestIds.length === 0) return;
     const follower = this.requireComputerFollower(runtimeId);
-    follower.sync.send({ type: 'computer.native.unwatch' });
+    for (const requestId of requestIds) {
+      follower.sync.send({ type: 'computer.native.unwatch', requestId });
+    }
   }
 
   handleNative(bootstrapId: string, message: NativeWireMessage): void {
@@ -296,10 +335,13 @@ export class ComputersRouter {
     if (message.type === 'computer.native.error') {
       this.settleNativeInput(message.requestId, message.error);
     }
-    this.settleNative(message);
+    // Listeners see whole frames only: a chunk on its own is not a frame, and
+    // at full display resolution nearly every frame is chunked.
+    const complete = this.settleNative(message);
+    if (!complete) return;
     this.nativeListeners.forEach((listener) => {
       try {
-        listener(bootstrapId, message);
+        listener(bootstrapId, complete);
       } catch (err) {
         this.context.log.warn('computer.native listener failed', {
           bootstrapId,
@@ -318,6 +360,7 @@ export class ComputersRouter {
 
   removeFollower(bootstrapId: string): void {
     this.nativeChunks.clear();
+    this.endNativeFor(bootstrapId);
     const ids = this.watches.get(bootstrapId);
     if (!ids) return;
     for (const id of [...ids]) this.handleUnwatch(bootstrapId, id);
@@ -367,6 +410,10 @@ export class ComputersRouter {
   }
 
   private requireComputerFollower(runtimeId: string) {
+    return this.resolveComputerTarget(runtimeId).follower;
+  }
+
+  private resolveComputerTarget(runtimeId: string) {
     const resolved = this.context.followers.resolveFollowerByRuntimeId(runtimeId);
     if (!resolved) throw new Error(`No connected follower for '${runtimeId}'`);
     if (resolved.follower.trust === 'biscotto') {
@@ -375,11 +422,16 @@ export class ComputersRouter {
     // `slicc follow --computer` names the CLI, which runs with CGO disabled and
     // captures nothing itself; the Sliccstart it spawned holds the screen. Hop
     // to that partner so the agent addresses one machine by one id (#3260).
-    const target = this.pairedComputerFollower(resolved.bootstrapId) ?? resolved.follower;
-    if (target.peerCapabilities?.computer !== true) {
+    const partner = this.pairedComputerFollower(resolved.bootstrapId);
+    const follower = partner?.follower ?? resolved.follower;
+    if (follower.peerCapabilities?.computer !== true) {
       throw new Error(`Follower '${runtimeId}' does not advertise computer capture`);
     }
-    return target;
+    const followers: NativeFollowerIds = {
+      via: resolved.bootstrapId,
+      target: partner?.bootstrapId ?? resolved.bootstrapId,
+    };
+    return { follower, followers };
   }
 
   /** The launcher folded into `bootstrapId`, when one is connected. */
@@ -387,7 +439,48 @@ export class ComputersRouter {
     const partnerId = this.context.followers.resolveComputerBootstrapId(bootstrapId);
     if (partnerId === bootstrapId) return null;
     const partner = this.context.followers.followers.get(partnerId);
-    return partner?.trust === 'biscotto' ? null : (partner ?? null);
+    return partner && partner.trust !== 'biscotto'
+      ? { follower: partner, bootstrapId: partnerId }
+      : null;
+  }
+
+  /**
+   * A departed follower answers nothing: fail its in-flight captures and
+   * inputs now rather than at their timeouts, and end its streams so the
+   * consumer stops serving a cached last frame as if it were live.
+   */
+  private endNativeFor(bootstrapId: string): void {
+    const gone = (ids: NativeFollowerIds) => ids.via === bootstrapId || ids.target === bootstrapId;
+    const error = new Error('computer follower disconnected');
+    for (const [requestId, watch] of this.nativeWatches) {
+      if (!gone(watch.followers)) continue;
+      this.nativeWatches.delete(requestId);
+      // Before its first frame the capture promise still carries the reason.
+      if (!this.pendingNative.has(requestId)) this.notifyWatchEnd(watch, error);
+    }
+    for (const [requestId, pending] of this.pendingNative) {
+      if (!gone(pending.followers)) continue;
+      this.pendingNative.delete(requestId);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    for (const [requestId, pending] of this.pendingInput) {
+      if (!gone(pending.followers)) continue;
+      this.pendingInput.delete(requestId);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  private notifyWatchEnd(watch: NativeWatch, error: Error): void {
+    try {
+      watch.onEnd?.(error);
+    } catch (err) {
+      this.context.log.warn('computer.native watch end sink failed', {
+        runtimeId: watch.runtimeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private settleNativeInput(requestId: string, error?: string): void {
@@ -399,21 +492,27 @@ export class ComputersRouter {
     else pending.resolve();
   }
 
-  private settleNative(message: NativeFanoutMessage): void {
+  /** Returns the message once it is whole (errors always are), else null. */
+  private settleNative(message: NativeFanoutMessage): NativeFanoutMessage | null {
     if (message.type === 'computer.native.error') {
+      const watch = this.nativeWatches.get(message.requestId);
       this.nativeWatches.delete(message.requestId);
       const pending = this.pendingNative.get(message.requestId);
-      if (!pending) return;
-      this.pendingNative.delete(message.requestId);
-      clearTimeout(pending.timer);
-      pending.reject(new Error(message.error));
-      return;
+      if (pending) {
+        this.pendingNative.delete(message.requestId);
+        clearTimeout(pending.timer);
+        pending.reject(new Error(message.error));
+      } else if (watch) {
+        // Past the first frame nothing awaits the capture promise any more.
+        this.notifyWatchEnd(watch, new Error(message.error));
+      }
+      return message;
     }
     const assembled = reassembleComputerNativeFrame(
       this.nativeChunks,
       message as ComputerNativeFrameMessage
     );
-    if (!assembled?.data) return;
+    if (!assembled?.data) return null;
     const frame: NativeComputerCaptureResult = {
       jpeg: assembled.data,
       mime: assembled.mime,
@@ -434,10 +533,12 @@ export class ComputersRouter {
       }
     }
     const pending = this.pendingNative.get(assembled.requestId);
-    if (!pending) return;
-    this.pendingNative.delete(assembled.requestId);
-    clearTimeout(pending.timer);
-    pending.resolve(frame);
+    if (pending) {
+      this.pendingNative.delete(assembled.requestId);
+      clearTimeout(pending.timer);
+      pending.resolve(frame);
+    }
+    return assembled;
   }
 
   private source(): TrayComputersSource | undefined {

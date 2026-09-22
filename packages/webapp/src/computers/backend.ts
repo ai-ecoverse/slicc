@@ -34,5 +34,11 @@ export interface ComputerBackend {
    * watch cap.
    */
   subscribe?(fps: number, onFrame: (frame: ComputerFrame) => void, maxWidth?: number): () => void;
+  /**
+   * True when `screenshot` serves the open `subscribe` stream's cache. Only
+   * then is holding a subscription open worth it for a polling consumer such
+   * as `computer record`; otherwise it is a second, unused capture stream.
+   */
+  readonly screenshotServesStream?: boolean;
   close(): Promise<void>;
 }

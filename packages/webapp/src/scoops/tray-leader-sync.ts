@@ -548,6 +548,8 @@ export class LeaderSyncManager {
       timeoutMs?: number;
       /** Sink for every frame of a `watch: true` stream. */
       onFrame?: (frame: NativeComputerCaptureResult) => void;
+      /** Called once when that stream dies after its first frame. */
+      onEnd?: (error: Error) => void;
     } = {}
   ): Promise<NativeComputerCaptureResult> {
     return this.computersRouter.captureNative(runtimeId, opts);
@@ -561,8 +563,8 @@ export class LeaderSyncManager {
     return this.computersRouter.inputNative(runtimeId, events, opts);
   }
 
-  unwatchNativeComputer(runtimeId: string): void {
-    this.computersRouter.unwatchNative(runtimeId);
+  unwatchNativeComputer(runtimeId: string, opts: { display?: number } = {}): void {
+    this.computersRouter.unwatchNative(runtimeId, opts);
   }
 
   getExecCapableBootstrapIds(): Set<string> {

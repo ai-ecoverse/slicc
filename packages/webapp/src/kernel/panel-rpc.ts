@@ -1135,19 +1135,28 @@ export const COMPUTER_NATIVE_FRAME_CHANNEL = 'computer-native-frame';
 
 /**
  * Payload pushed on the `computer-native-frame` event channel for each frame
- * of a live `tray-computer-native` watch. `runtimeId` names the follower the
- * frame came from, because one leader can stream several at once. `jpeg` is
- * base64 (the wire form, already reassembled from its chunks).
+ * of a live `tray-computer-native` watch. `runtimeId` AND `display` name the
+ * stream the frame came from: one leader can stream several followers, and
+ * one follower several displays. `jpeg` is base64 (the wire form, already
+ * reassembled from its chunks). An `ended` payload says that stream died —
+ * the follower errored or disconnected — and carries no frame.
  */
-export interface ComputerNativeFramePayload {
+export type ComputerNativeFramePayload = {
   runtimeId: string;
-  jpeg: string;
-  mime: string;
-  width: number;
-  height: number;
-  nativeWidth: number;
-  nativeHeight: number;
-}
+  /** Absent for the follower's main display, as in `tray-computer-native`. */
+  display?: number;
+} & (
+  | {
+      ended?: undefined;
+      jpeg: string;
+      mime: string;
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+    }
+  | { ended: true; error: string }
+);
 
 /**
  * Payload pushed on the `usb-claim-event` channel when a force close/reset
