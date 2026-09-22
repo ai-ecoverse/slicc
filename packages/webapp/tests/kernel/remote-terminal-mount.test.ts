@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { shadowedPendingMountKeys } from '../../src/fs/auto-mount-table.js';
 import {
   buildComputerAddScreenResolvedCommand,
   finishAdoptedScreenRegistration,
@@ -33,6 +34,10 @@ describe('localMountIdbKey', () => {
     // If you change this format, update the worker simultaneously.
     const target = '/mnt/kb';
     expect(localMountIdbKey(target)).toBe(`pendingMount:term:${target}`);
+  });
+
+  it('is the key a config-owned host mount clears when it shadows a picker', () => {
+    expect(shadowedPendingMountKeys(['/mnt/kb'])).toContain(localMountIdbKey('/mnt/kb'));
   });
 });
 

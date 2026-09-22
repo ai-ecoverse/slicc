@@ -6,8 +6,9 @@
  * named in the mount table (`--mount=<os-path>:<slicc-path>`, or Sliccstart's
  * Settings → Mounts). Because the server owns the OS access, these mounts
  * need no File System Access handle, no picker, and no Chrome permission —
- * they are mounted fully automatically at kernel boot (`host.ts` →
- * `mountConfiguredHostMounts`) and are NOT persisted to the mount table
+ * they are mounted fully automatically once the shared filesystem exists
+ * (`Orchestrator.init` → `applyConfiguredHostMounts`, retried from
+ * `host.ts`) and are NOT persisted to the mount table
  * store: the launcher config is their single source of truth on every boot.
  *
  * Requests address the mount by its SLICC target (`/mnt/project`) plus a
