@@ -218,6 +218,8 @@ export type PanelRpcRequest =
         action: 'capture' | 'unwatch' | 'input';
         fps?: number;
         maxWidth?: number;
+
+        display?: number;
         watch?: boolean;
         events?: ComputerInputEvent[];
       };

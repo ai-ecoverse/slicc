@@ -174,10 +174,17 @@ export type LeaderToFollowerMessage =
       requestId: string;
       fps?: number;
       maxWidth?: number;
+
+      display?: number;
       watch?: boolean;
     }
   | { type: 'computer.native.unwatch'; requestId?: string }
-  | { type: 'computer.native.input'; requestId: string; events: ComputerInputEvent[] }
+  | {
+      type: 'computer.native.input';
+      requestId: string;
+      events: ComputerInputEvent[];
+      display?: number;
+    }
   | { type: 'models.list'; models: TrayModelCatalogEntry[] }
   | { type: 'model.state'; state: TrayModelSelectionState }
   | { type: 'sprinkles.list'; sprinkles: SprinkleSummary[] }

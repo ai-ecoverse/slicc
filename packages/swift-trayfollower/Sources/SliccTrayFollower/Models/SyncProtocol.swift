@@ -596,9 +596,16 @@ public enum LeaderToFollowerMessage: Codable {
         chunkData: String?, chunkIndex: Int?, totalChunks: Int?)
     
     
-    case computerNativeCapture(requestId: String, fps: Double?, maxWidth: Double?, watch: Bool?)
+    
+    
+    case computerNativeCapture(
+        requestId: String, fps: Double?, maxWidth: Double?, display: Double?, watch: Bool?)
+    
     case computerNativeUnwatch(requestId: String?)
-    case computerNativeInput(requestId: String, events: [ComputerInputEvent])
+    
+    
+    case computerNativeInput(
+        requestId: String, events: [ComputerInputEvent], display: Double? = nil)
     case modelsList(models: [TrayModelCatalogEntry])
     case modelState(state: TrayModelSelectionState)
     case sprinklesList(sprinkles: [SprinkleSummary])
@@ -688,7 +695,7 @@ public enum LeaderToFollowerMessage: Codable {
         case capabilities, motd
         case command, cwd, env, stream, exitCode, signal, stdin
         case kind, requester, suggestedPattern, reason, scoopName, expiresAt
-        case computers, id, seq, mime, width, height, fps, maxWidth, watch, events
+        case computers, id, seq, mime, width, height, fps, maxWidth, display, watch, events
         case nativeWidth, nativeHeight
     }
 
@@ -752,6 +759,7 @@ public enum LeaderToFollowerMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 fps: try container.decodeIfPresent(Double.self, forKey: .fps),
                 maxWidth: try container.decodeIfPresent(Double.self, forKey: .maxWidth),
+                display: try container.decodeIfPresent(Double.self, forKey: .display),
                 watch: try container.decodeIfPresent(Bool.self, forKey: .watch))
         case "computer.native.unwatch":
             self = .computerNativeUnwatch(
@@ -759,7 +767,8 @@ public enum LeaderToFollowerMessage: Codable {
         case "computer.native.input":
             self = .computerNativeInput(
                 requestId: try container.decode(String.self, forKey: .requestId),
-                events: (try? container.decode([ComputerInputEvent].self, forKey: .events)) ?? [])
+                events: (try? container.decode([ComputerInputEvent].self, forKey: .events)) ?? [],
+                display: try container.decodeIfPresent(Double.self, forKey: .display))
         case "models.list":
             self = .modelsList(
                 models: try container.decode([TrayModelCatalogEntry].self, forKey: .models))
@@ -955,19 +964,21 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encodeIfPresent(chunkData, forKey: .chunkData)
             try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
             try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
-        case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch):
+        case .computerNativeCapture(let requestId, let fps, let maxWidth, let display, let watch):
             try container.encode("computer.native.capture", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encodeIfPresent(fps, forKey: .fps)
             try container.encodeIfPresent(maxWidth, forKey: .maxWidth)
+            try container.encodeIfPresent(display, forKey: .display)
             try container.encodeIfPresent(watch, forKey: .watch)
         case .computerNativeUnwatch(let requestId):
             try container.encode("computer.native.unwatch", forKey: .type)
             try container.encodeIfPresent(requestId, forKey: .requestId)
-        case .computerNativeInput(let requestId, let events):
+        case .computerNativeInput(let requestId, let events, let display):
             try container.encode("computer.native.input", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(events, forKey: .events)
+            try container.encodeIfPresent(display, forKey: .display)
         case .modelsList(let models):
             try container.encode("models.list", forKey: .type)
             try container.encode(models, forKey: .models)

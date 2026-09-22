@@ -28,7 +28,13 @@ export interface ComputerCommandDeps {
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
   nativeComputer?: (runtimeId: string) => {
-    capture(opts: { fps?: number; maxWidth?: number; watch?: boolean }): Promise<{
+    capture(opts: {
+      fps?: number;
+      maxWidth?: number;
+
+      display?: number;
+      watch?: boolean;
+    }): Promise<{
       bytes: Uint8Array;
       mime: 'image/jpeg';
       width: number;
@@ -37,7 +43,7 @@ export interface ComputerCommandDeps {
       nativeHeight: number;
     }>;
     unwatch(): void;
-    input(events: ComputerInputEvent[]): Promise<void> | void;
+    input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
   };
 
   encodeRecordedFrames?: (args: {

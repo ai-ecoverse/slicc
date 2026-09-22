@@ -232,12 +232,58 @@ describe('ssh backend', () => {
     });
     const frame = await backend.screenshot({ format: 'jpeg', maxWidth: 480 });
     expect(frame).toMatchObject({ mime: 'image/jpeg', width: 480, height: 270 });
-    expect(capture).toHaveBeenCalledWith({ fps: 2, maxWidth: 480, watch: false });
+    expect(capture).toHaveBeenCalledWith({
+      fps: 2,
+      maxWidth: 480,
+      display: undefined,
+      watch: false,
+    });
     expect(exec).not.toHaveBeenCalled();
     await backend.input([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
-    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
+    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }], {
+      display: undefined,
+    });
     await backend.close();
     expect(unwatch).toHaveBeenCalled();
+  });
+
+  it('carries the picked display into every native capture and into the id', async () => {
+    const input = vi.fn();
+    const capture = vi.fn(async () => ({
+      bytes: new Uint8Array([1, 2, 3]),
+      mime: 'image/jpeg' as const,
+      width: 768,
+      height: 1365,
+
+      nativeWidth: 2880,
+      nativeHeight: 5120,
+    }));
+    const backend = new SshComputerBackend(
+      vi.fn(async () => ok('')),
+      {
+        runtimeId: 'sliccstart-computer-1',
+        title: 'desk display 3',
+        probe: { platform: 'darwin', tools: [], capture: null, input: 'none' },
+        inputAllowed: true,
+        display: 3,
+        native: { capture, input, unwatch: vi.fn() },
+      }
+    );
+    expect(backend.describe().id).toBe('ssh:sliccstart-computer-1:display:3');
+    await backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    expect(capture).toHaveBeenCalledWith({ fps: 2, maxWidth: 768, display: 3, watch: false });
+    expect(backend.describe().size).toEqual({ width: 2880, height: 5120 });
+
+    await backend.input([{ type: 'click', button: 1, count: 1, x: 5, y: 5 }]);
+    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 5, y: 5 }], {
+      display: 3,
+    });
+  });
+
+  it('keeps the plain id for the default display so one registration is unchanged', () => {
+    expect(sshComputerId('rt')).toBe('ssh:rt');
+    expect(sshComputerId('rt', undefined, 2)).toBe('ssh:rt:display:2');
+    expect(sshComputerId('rt', 'UDID', 2)).toBe('ssh:rt:sim:UDID');
   });
 });
 

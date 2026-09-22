@@ -97,6 +97,7 @@
         "requestId": "cap-1",
         "fps": 4,
         "maxWidth": 768,
+        "display": 3,
         "watch": true
       }
     },
@@ -114,7 +115,8 @@
             "x": 10,
             "y": 20
           }
-        ]
+        ],
+        "display": 3
       }
     },
     {

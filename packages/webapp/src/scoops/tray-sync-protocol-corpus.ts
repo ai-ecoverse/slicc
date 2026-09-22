@@ -302,6 +302,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       requestId: 'cap-1',
       fps: 4,
       maxWidth: 768,
+      display: 3,
       watch: true,
     },
   },
@@ -315,6 +316,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       type: 'computer.native.input',
       requestId: 'in-1',
       events: [{ type: 'click', button: 1, count: 1, x: 10, y: 20 }],
+      display: 3,
     },
   },
   'models.list': {

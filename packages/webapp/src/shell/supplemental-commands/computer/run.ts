@@ -108,6 +108,7 @@ function nativeChannelFromRpc(
           action: 'capture',
           fps: opts.fps,
           maxWidth: opts.maxWidth,
+          display: opts.display,
           watch: opts.watch,
         },
         { timeoutMs: 60_000 }
@@ -126,8 +127,13 @@ function nativeChannelFromRpc(
     unwatch() {
       void rpc.call('tray-computer-native', { runtimeId, action: 'unwatch' }).catch(() => {});
     },
-    async input(events) {
-      await rpc.call('tray-computer-native', { runtimeId, action: 'input', events });
+    async input(events, opts) {
+      await rpc.call('tray-computer-native', {
+        runtimeId,
+        action: 'input',
+        events,
+        display: opts?.display,
+      });
     },
   };
 }
@@ -135,6 +141,8 @@ function nativeChannelFromRpc(
 function listFollowers(deps: ComputerCommandDeps): ConnectedFollowerInfo[] {
   return deps.listFollowers?.() ?? getConnectedFollowersWithFallback();
 }
+
+const MAX_NATIVE_DISPLAY = 64;
 
 const NATIVE_FALLBACK_PROBE: SshProbe = {
   platform: 'darwin',
@@ -406,8 +414,18 @@ async function verbAddSsh(
   const name = flagValue(args, ['-n', '--name']);
   const sim = flagValue(args, ['--sim']);
   const allowInput = hasFlag(args, '--allow-input');
+  const rawDisplay = flagValue(args, ['--display']);
   const query = positionals(args).slice(1)[0];
   if (!query) return fail('add ssh: requires <follower>');
+  let display: number | undefined;
+  if (rawDisplay !== undefined) {
+    display = Number(rawDisplay);
+
+    if (!Number.isSafeInteger(display) || display < 1 || display > MAX_NATIVE_DISPLAY) {
+      return fail(`add ssh: --display takes a 1-based display number, got '${rawDisplay}'`);
+    }
+    if (sim) return fail('add ssh: --display and --sim are exclusive');
+  }
   const follower = resolveSshFollower(query, listFollowers(deps));
   if ('error' in follower) return fail(follower.error);
   if (follower.floatType === 'ios') {
@@ -434,13 +452,23 @@ async function verbAddSsh(
     const blocked = await gateSshAllowInput(deps, follower, sim, Boolean(native), probe.input);
     if (blocked) return blocked;
   }
-  const title = name ?? (sim ? `${follower.runtimeId} sim ${sim}` : follower.runtimeId);
+  if (display !== undefined && !native) {
+    return fail('add ssh: --display needs a native-capture (computer-capable) Mac follower');
+  }
+  const title =
+    name ??
+    (sim
+      ? `${follower.runtimeId} sim ${sim}`
+      : display
+        ? `${follower.runtimeId} display ${display}`
+        : follower.runtimeId);
   const backend = new SshComputerBackend(exec, {
     runtimeId: follower.runtimeId,
     title,
     probe,
     inputAllowed: allowInput,
     sim,
+    display,
     native,
   });
   const desc = registry.register(backend, { name });

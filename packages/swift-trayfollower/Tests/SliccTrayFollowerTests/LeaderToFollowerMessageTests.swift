@@ -551,10 +551,11 @@ final class LeaderToFollowerMessageTests: XCTestCase {
 
     func testComputerNativeLeaderMessagesRoundTrip() throws {
         guard
-            case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch) =
+            case .computerNativeCapture(
+                let requestId, let fps, let maxWidth, let display, let watch) =
                 try roundTrip(
                     .computerNativeCapture(
-                        requestId: "cap-1", fps: 2, maxWidth: 480, watch: true))
+                        requestId: "cap-1", fps: 2, maxWidth: 480, display: 3, watch: true))
         else {
             XCTFail("expected computer.native.capture")
             return
@@ -562,6 +563,7 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(requestId, "cap-1")
         XCTAssertEqual(fps, 2)
         XCTAssertEqual(maxWidth, 480)
+        XCTAssertEqual(display, 3)
         XCTAssertEqual(watch, true)
 
         guard
@@ -575,17 +577,18 @@ final class LeaderToFollowerMessageTests: XCTestCase {
 
         let events: [ComputerInputEvent] = [.click(button: 1, count: 1, holdMs: nil, x: 10, y: 20)]
         guard
-            case .computerNativeInput(let inputId, let decoded) = try roundTrip(
-                .computerNativeInput(requestId: "in-1", events: events))
+            case .computerNativeInput(let inputId, let decoded, let display) = try roundTrip(
+                .computerNativeInput(requestId: "in-1", events: events, display: 3))
         else {
             XCTFail("expected computer.native.input")
             return
         }
         XCTAssertEqual(inputId, "in-1")
         XCTAssertEqual(decoded, events)
+        XCTAssertEqual(display, 3)
 
         guard
-            case .computerNativeInput(_, let empty) = try WireCodec.decode(
+            case .computerNativeInput(_, let empty, let noDisplay) = try WireCodec.decode(
                 LeaderToFollowerMessage.self,
                 from: #"{"type":"computer.native.input","requestId":"in-2"}"#)
         else {
@@ -593,5 +596,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
             return
         }
         XCTAssertTrue(empty.isEmpty)
+        XCTAssertNil(noDisplay, "an older leader sends no display; the follower maps via main")
     }
 }

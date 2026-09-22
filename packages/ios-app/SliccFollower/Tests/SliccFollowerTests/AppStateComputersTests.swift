@@ -168,7 +168,7 @@ final class AppStateComputersTests: XCTestCase {
         let state = AppState()
         try send(.computersList(computers: [descriptor()]), to: state)
         try send(
-            .computerNativeCapture(requestId: "n1", fps: 2, maxWidth: 480, watch: true), to: state)
+            .computerNativeCapture(requestId: "n1", fps: 2, maxWidth: 480, display: nil, watch: true), to: state)
         XCTAssertEqual(state.computers.count, 1)
         XCTAssertNil(state.liveFrame(forComputerId: "jsh:clock").image)
     }
