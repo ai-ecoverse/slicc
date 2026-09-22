@@ -185,6 +185,9 @@ async function writeSnapshot(
     live: true,
     liveThrough,
     compactions,
+    // A later round rewrites the file from scratch; keep the curator cursor
+    // or the next slice would mine the transcript again.
+    ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
   };
   const entry: FrozenSessionIndexEntry = {
     filename,
@@ -197,6 +200,8 @@ async function writeSnapshot(
     live: true,
     liveThrough,
     compactions,
+    ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
+    ...(existing?.memoryFailed ? { memoryFailed: existing.memoryFailed } : {}),
   };
 
   await ensureSessionsDir(deps.vfs, sessionsDir);

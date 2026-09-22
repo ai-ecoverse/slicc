@@ -7,6 +7,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsError } from '../../src/fs/types.js';
+import type { AgentSpawnOptions } from '../../src/scoops/agent-bridge.js';
 import type { SessionStore } from '../../src/scoops/chat-session-store.js';
 import { snapshotLiveSession } from '../../src/scoops/live-session-snapshot.js';
 import {
@@ -22,7 +23,15 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   runOneOffCompactionCall: (...args: unknown[]) => mockRunOneOffCompactionCall(...args),
 }));
 
-import { enrichPendingSession, freezeConeSession } from '../../src/ui/session-freezer.js';
+import {
+  advanceCuratedThrough,
+  liveDeltaArchivePath,
+} from '../../src/scoops/live-session-curation.js';
+import {
+  curateFrozenSessionMemories,
+  enrichPendingSession,
+  freezeConeSession,
+} from '../../src/ui/session-freezer.js';
 
 function makeFakeVfs() {
   const files = new Map<string, string>();
@@ -231,5 +240,75 @@ describe('freezeConeSession over a live snapshot', () => {
     for (const path of new Set(pathMatches)) {
       expect(vfs.files.has(path)).toBe(true);
     }
+  });
+});
+
+describe('finalize after incremental curation', () => {
+  async function seedFull(vfs: FakeVfs) {
+    const result = await snapshotLiveSession({
+      vfs,
+      cone: { folder: 'cone', label: 'sliccy' },
+      messages: session.messages.map((message) =>
+        agentText(message.role, message.content, message.timestamp)
+      ),
+      trigger: 'idle',
+    });
+    if (!result) throw new Error('snapshot skipped');
+    return result;
+  }
+
+  it('mines only the tail "New chat" has not already curated', async () => {
+    const vfs = makeFakeVfs();
+    const live = await seedFull(vfs);
+    await advanceCuratedThrough(vfs, live.entry.filename, 2);
+    const spawn = vi.fn(async (_options: AgentSpawnOptions) => ({
+      finalText: 'tail',
+      exitCode: 0,
+    }));
+    const options = {
+      sessionStore: store,
+      vfs,
+      mode: 'quick' as const,
+      agenticMemorySpawn: spawn,
+    };
+
+    const frozen = await freezeConeSession(options);
+    expect(frozen?.curatedThrough).toBe(2);
+    const updated = await curateFrozenSessionMemories(options, frozen!);
+
+    expect(spawn).toHaveBeenCalledOnce();
+    const sessionId = frozen?.sessionId;
+    if (!sessionId) throw new Error('missing session id');
+    const deltaPath = liveDeltaArchivePath(sessionId, 2, 5);
+    const call = spawn.mock.calls[0];
+    if (!call) throw new Error('expected a curator spawn');
+    expect(call[0].prompt).toContain(deltaPath);
+    expect(
+      parseFrozenArchive(vfs.files.get(deltaPath)!).messages.map((message) => message.content)
+    ).toEqual(['second question', 'second answer', 'third question']);
+    expect(updated?.memoryPending).toBeUndefined();
+    expect(updated?.memoryCuratedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(updated?.curatedThrough).toBe(5);
+  });
+
+  it('does not spawn when the cursor already covers the frozen chat', async () => {
+    const vfs = makeFakeVfs();
+    const live = await seedFull(vfs);
+    await advanceCuratedThrough(vfs, live.entry.filename, 5);
+    const spawn = vi.fn(async () => ({ finalText: 'nope', exitCode: 0 }));
+    const options = {
+      sessionStore: store,
+      vfs,
+      mode: 'quick' as const,
+      agenticMemorySpawn: spawn,
+    };
+
+    const frozen = await freezeConeSession(options);
+    const updated = await curateFrozenSessionMemories(options, frozen!);
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(updated?.memoryPending).toBeUndefined();
+    expect(updated?.curatedThrough).toBe(5);
+    expect(updated?.memoryCuratedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

@@ -130,6 +130,7 @@ export async function loadFrozenArchive(
     | 'live'
     | 'liveThrough'
     | 'compactions'
+    | 'curatedThrough'
   > & { id?: string; sidecar?: string }
 > {
   const parsed = parseFrozenArchive(markdown);

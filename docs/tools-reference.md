@@ -772,6 +772,19 @@ snapshot re-checks the unit's session generation inside that transaction so a cl
 it writes nothing. The cursor (`liveThrough`) and round count also ride the archive frontmatter, so
 a corrupt-index rebuild restores them.
 
+With `memory-v2` and `agentic-memory` both on, a cone round also schedules a
+curator pass over the live archive's uncurated delta (`scoops/live-session-curation.ts`).
+`curatedThrough` is that cursor, parallel to `liveThrough`, and it rides the
+index row and the archive frontmatter. Each pass mines one bounded slice (oldest
+uncurated messages, capped so a multi-week transcript is not one context) under
+the curator's existing budget, timeout, and dreamer rival guard. The receipt is
+keyed by session id and the slice's timestamp range (`/sessions/.curated/<id>-<from>-<to>.md`),
+not by the live filename, so a later "New chat" mines only messages newer than
+the cursor — a range a receipt already proves is skipped without another pass.
+Compaction itself still does not extract memories. `memory dream` runs one such
+slice before the dreamer. Scoop snapshots are not mined; they are not a cone's
+memory file.
+
 Behind the `memory-v2` feature flag (off by default), scoops get the same pre-compaction snapshot +
 pointer treatment, written under `/scoops/<folder>/sessions/<jid>/` with a per-sandbox index lock.
 The JID segment isolates lifetimes: `drop_scoop` preserves `/scoops/<folder>/`

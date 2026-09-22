@@ -1181,8 +1181,10 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
   double-runs.
 - `dream` spawns a `memory-dreamer` scoop per target cone that consolidates the memory file itself
   (merge duplicates, drop superseded and stale facts, move over-budget reference knowledge into
-  the shared wiki at `/shared/wiki/`, land under budget) — no session archive is
-  read. Instructions come from the same user-editable `/etc/MEMORY.md` as curation (the runtime
+  the shared wiki at `/shared/wiki/`, land under budget). Before that, when `agentic-memory` is
+  also on, it mines one uncurated slice of the cone's live transcript (`curatedThrough` on the
+  live archive) so a chat that never hits "New chat" still reaches memory. The dreamer itself
+  still reads no archive. Instructions come from the same user-editable `/etc/MEMORY.md` as curation (the runtime
   fills `{{TASK}}` with which pass it is; `dreamTimeoutSeconds` bounds it); the pass uses the same staged
   base/draft snapshot and three-way merge as curation, keyed `dream-<date>-<folder>.md`, with the
   outcome in that key's `/sessions/.curation/…/status.json`. Default is detached; `--wait` blocks

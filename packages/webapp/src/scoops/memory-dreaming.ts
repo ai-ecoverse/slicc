@@ -13,6 +13,7 @@
  * `__slicc_memory` seam.
  */
 
+import { createLogger } from '../base/logger.js';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import {
   type AgenticMemoryPassResult,
@@ -23,10 +24,17 @@ import {
   type RunAgenticMemoryPassOptions,
   runAgenticMemoryPass,
 } from './agentic-memory.js';
+import {
+  curateLiveSessionDelta,
+  type LiveCurationVfs,
+  liveDeltaCurationEnabled,
+} from './live-session-curation.js';
 
 // Defined beside `curatorAgentName` so each pass can name the other as its
 // rival without a module cycle; re-exported here for callers and tests.
 export { dreamerAgentName };
+
+const log = createLogger('memory-dreaming');
 
 export const DREAMER_INSTRUCTIONS: MemoryPassInstructions = {
   kind: 'dream',
@@ -59,11 +67,12 @@ export interface RunMemoryDreamPassOptions {
   signal?: AbortSignal;
 }
 
-export function runMemoryDreamPass(
+export async function runMemoryDreamPass(
   opts: RunMemoryDreamPassOptions
 ): Promise<AgenticMemoryPassResult> {
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
   const folder = opts.cone?.folder ?? PRIMARY_CONE_FOLDER;
+  await curateLiveDeltaBeforeDream(opts, folder);
   return runAgenticMemoryPass({
     spawn: opts.spawn,
     vfs: opts.vfs,
@@ -74,4 +83,30 @@ export function runMemoryDreamPass(
     ...(opts.cone ? { cone: opts.cone } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
+}
+
+/**
+ * One live-archive slice before the dreamer, so a cone that never hits
+ * "New chat" still folds new transcript into memory. A failure here does
+ * not skip the dream: the slice stays uncurated and the next night retries.
+ * Off unless both memory flags are on — see {@link liveDeltaCurationEnabled}.
+ */
+async function curateLiveDeltaBeforeDream(
+  opts: RunMemoryDreamPassOptions,
+  folder: string
+): Promise<void> {
+  if (!liveDeltaCurationEnabled()) return;
+  try {
+    await curateLiveSessionDelta({
+      vfs: opts.vfs as LiveCurationVfs,
+      cone: opts.cone ?? { folder },
+      spawn: opts.spawn,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+  } catch (error) {
+    log.warn('Live transcript curation before dream failed', {
+      cone: folder,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
