@@ -1,5 +1,6 @@
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
+import { iframeFocusGuardSource } from './iframe-focus-guard.js';
 import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
   iframeFetchResponseSource,
@@ -445,6 +446,7 @@ export class SprinkleRenderer {
   var _state = null;
   var _cbId = 0;
   var _callbacks = {};
+  ${iframeFocusGuardSource}
   ${iframeThemeBridgeSource}
 
   window.addEventListener('message', function(event) {

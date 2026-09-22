@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { withFocusPreserved } from '../internal/focus.js';
 import { iconEl } from '../internal/icons.js';
 import { TERM_SURFACE_ID } from './terminal-theme.js';
 
@@ -797,6 +798,10 @@ export class SliccDockTree extends HTMLElement {
   }
 
   #render(): void {
+    withFocusPreserved(this, () => this.#rebuild());
+  }
+
+  #rebuild(): void {
     const tree = this.#tree;
     const pool = this.#collectSurfacePool();
     const usedIds = new Set(this.getSurfaceIds());

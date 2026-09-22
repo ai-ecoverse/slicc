@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { withFocusPreserved } from '../internal/focus.js';
 import { liveArrangement } from './center-ops.js';
 import { INTERACTION_CSS, LayoutInteraction } from './layout-interaction.js';
 import {
@@ -241,6 +242,10 @@ export class SliccLayout extends HTMLElement {
   }
 
   #render(reason: LayoutChangeDetail['reason'] = 'set', opts?: { silent?: boolean }): void {
+    withFocusPreserved(this, () => this.#rebuild(reason, opts));
+  }
+
+  #rebuild(reason: LayoutChangeDetail['reason'], opts?: { silent?: boolean }): void {
     const resolved = resolveLayout(this.#doc, this.environment());
     this.#rendering = resolved;
     const pool = this.#collectPanels();

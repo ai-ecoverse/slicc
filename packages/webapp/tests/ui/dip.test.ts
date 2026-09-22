@@ -530,6 +530,13 @@ describe('stacked action-card spacing', () => {
     container.remove();
   });
 
+  it('guards programmatic focus before the authored content runs', () => {
+    mountDip(container, '<input autofocus id="dip-field">', vi.fn());
+    const srcdoc = container.querySelector('iframe')!.srcdoc;
+    expect(srcdoc).toContain('_focusAllowed');
+    expect(srcdoc.indexOf('_focusAllowed')).toBeLessThan(srcdoc.indexOf('id="dip-field"'));
+  });
+
   it('host sheet gaps adjacent action cards without margining the single-card case', () => {
     const inst = mountDip(container, '<div class="sprinkle-action-card">x</div>', vi.fn());
     const iframe = container.querySelector('iframe')!;

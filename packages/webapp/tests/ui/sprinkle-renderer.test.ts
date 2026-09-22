@@ -402,6 +402,9 @@ describe('full document rendering', () => {
     expect(srcdoc).toContain('sprinkle-select-scoop');
     expect(srcdoc).toContain('sprinkle-selected-scoop');
 
+    expect(srcdoc).toContain('_focusAllowed');
+    expect(srcdoc.indexOf('_focusAllowed')).toBeLessThan(srcdoc.indexOf('<p>Hello</p>'));
+
     expect(srcdoc).toContain('Element has zero dimensions');
     expect(srcdoc).toContain('image decode failed');
     expect(srcdoc).toContain('XMLSerializer threw');
