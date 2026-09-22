@@ -24,6 +24,10 @@ import {
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
 } from '../../base/leader-runtime-query.js';
+import {
+  CdpBridgeRejectedError,
+  classifyCdpConnectFailure,
+} from '../../cdp/cdp-reconnect-policy.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { hasChromeRuntimeConnect } from '../../core/runtime-env.js';
@@ -40,10 +44,10 @@ import {
   setExtensionDelegateId,
   setLocalApiBaseUrl,
 } from '../../shell/proxied-fetch.js';
-import { showCdpSupersededBanner } from '../cdp-superseded-banner.js';
+import { showCdpBridgeRejectedBanner, showCdpSupersededBanner } from '../cdp-superseded-banner.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
-import { parseBridgeLaunchParams } from './bridge-launch-params.js';
+import { type BridgeLaunchParams, parseBridgeLaunchParams } from './bridge-launch-params.js';
 import { setupSudoStandalone } from './setup-sudo.js';
 import type { BootStageLogger } from './types.js';
 
@@ -199,6 +203,12 @@ export async function connectWithBoundedRetry(
       return;
     } catch (err) {
       lastError = err;
+      if (err instanceof CdpBridgeRejectedError) {
+        // The bridge answered, and the token is not the one it minted.
+        // The remaining delays would only repeat the same rejection.
+        log.error('CDP bridge rejected the session token; stopped reconnecting', err.message);
+        return;
+      }
       if (i < delays.length) {
         const delay = delays[i] ?? 0;
         await sleep(delay);
@@ -293,6 +303,62 @@ async function createExtensionLeaderBrowser(
   );
   await connectWithBoundedRetry(browser, undefined, log);
   return { browser, attachLickForwardingClient };
+}
+
+/**
+ * Dial (or prime) the standalone `/cdp` bridge and install the reconnect
+ * policy: exponential backoff, and a hard stop when the bridge rejects the
+ * token. Kept out of `setupStandalonePrelude` so that function stays under
+ * the line cap.
+ */
+async function connectStandaloneCdp(options: {
+  browser: BrowserAPI;
+  bridge: BridgeLaunchParams | null;
+  log: BootStageLogger;
+  document: Document;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const { browser, bridge, log, document, sleep } = options;
+  // Probe `GET /api/status` after a failed handshake so a stale bridge
+  // token stops the reconnect loop. The default classifier treats every
+  // failure as transient, which is what the unit tests rely on.
+  browser.setCdpConnectFailureClassifier(classifyCdpConnectFailure);
+  browser.setCdpBridgeRejectedHandler(() => showCdpBridgeRejectedBanner(document));
+  if (bridge) {
+    log.info('Routing CDP through local standalone bridge', {
+      url: bridge.url,
+      role: bridge.role ?? '(unset)',
+    });
+  }
+  const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
+  // Overlay followers (Electron auto-follow tabs) MUST NOT dial /cdp —
+  // that capability belongs to the pinned leader tab. Skip the eager
+  // connect so multiple overlay tabs don't all race to drive Chrome.
+  if (bridge?.role === 'follower') {
+    log.info('Skipping CDP connect for follower overlay tab');
+    // Prime (but don't dial) the bridge connect options. The follower
+    // overlay stays off the single-client `/cdp` slot at boot, but if it
+    // later acts as a tray follower its target federation runs
+    // `BrowserAPI.listPages()` → `ensureConnected()`. Without these options
+    // captured, that lazy connect falls back to `getDefaultCdpUrl()` (the
+    // hosted-leader origin, which has no `/cdp`) and the listing fails, so
+    // the follower's local pages never reach the leader's `list-tabs`.
+    // `connectOpts` is always defined here (a follower role implies a bridge).
+    browser.primeConnectOptions(connectOpts);
+    return;
+  }
+  // Bounded retry — the packaged CLI launches Chrome before the local
+  // /cdp bridge has finished `server.listen()` in some races, so the
+  // very first connect can lose to the bridge by a few hundred ms.
+  // Retry with capped backoff so we recover from the boot race without
+  // hanging boot if the bridge truly never comes up.
+  await connectWithBoundedRetry(browser, connectOpts, log, undefined, sleep);
+  // If another SLICC tab/window later seizes the single CDP proxy slot, the
+  // reconnect guard stops this tab from re-dialing (which would restart the
+  // eviction war). Surface that to the user with a banner rather than letting
+  // browser automation fail silently here. Standalone-only — the page realm
+  // owns the real `/cdp` client; cherry/extension floats never supersede.
+  browser.setCdpSupersededHandler(() => showCdpSupersededBanner(document));
 }
 
 export async function setupStandalonePrelude(
@@ -397,44 +463,15 @@ export async function setupStandalonePrelude(
     setExtensionDelegateId(extLeader.extensionId);
   } else {
     browser = new BrowserAPI();
-    // `bridge` (parsed up front, before the runtime-config fetch) carries the
-    // local node-server origin + token already wired into `setLocalApiBaseUrl`
-    // / `setBridgeToken` above. Here we only need its CDP-routing fields.
-    if (bridge) {
-      log.info('Routing CDP through local standalone bridge', {
-        url: bridge.url,
-        role: bridge.role ?? '(unset)',
-      });
-    }
-    const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
-    // Overlay followers (Electron auto-follow tabs) MUST NOT dial /cdp —
-    // that capability belongs to the pinned leader tab. Skip the eager
-    // connect so multiple overlay tabs don't all race to drive Chrome.
-    if (bridge?.role === 'follower') {
-      log.info('Skipping CDP connect for follower overlay tab');
-      // Prime (but don't dial) the bridge connect options. The follower
-      // overlay stays off the single-client `/cdp` slot at boot, but if it
-      // later acts as a tray follower its target federation runs
-      // `BrowserAPI.listPages()` → `ensureConnected()`. Without these options
-      // captured, that lazy connect falls back to `getDefaultCdpUrl()` (the
-      // hosted-leader origin, which has no `/cdp`) and the listing fails, so
-      // the follower's local pages never reach the leader's `list-tabs`.
-      // `connectOpts` is always defined here (a follower role implies a bridge).
-      browser.primeConnectOptions(connectOpts);
-    } else {
-      // Bounded retry — the packaged CLI launches Chrome before the local
-      // /cdp bridge has finished `server.listen()` in some races, so the
-      // very first connect can lose to the bridge by a few hundred ms.
-      // Retry with capped backoff so we recover from the boot race without
-      // hanging boot if the bridge truly never comes up.
-      await connectWithBoundedRetry(browser, connectOpts, log, undefined, sleep);
-      // If another SLICC tab/window later seizes the single CDP proxy slot, the
-      // reconnect guard stops this tab from re-dialing (which would restart the
-      // eviction war). Surface that to the user with a banner rather than letting
-      // browser automation fail silently here. Standalone-only — the page realm
-      // owns the real `/cdp` client; cherry/extension floats never supersede.
-      browser.setCdpSupersededHandler(() => showCdpSupersededBanner(win.document));
-    }
+    // `bridge` was parsed up front, before the runtime-config fetch, and its
+    // origin + token are already in `setLocalApiBaseUrl` / `setBridgeToken`.
+    await connectStandaloneCdp({
+      browser,
+      bridge,
+      log,
+      document: win.document,
+      sleep,
+    });
   }
   const realCdpTransport = browser.getUnderlyingTransport();
 

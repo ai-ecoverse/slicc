@@ -11,6 +11,11 @@
  */
 
 import { createLogger } from '../../base/logger.js';
+import {
+  BridgeTokenRequiredError,
+  bridgeRefreshBlocked,
+  noteBridgeTokenRequired,
+} from '../../providers/bridge-token-required.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../../providers/pkce.js';
 
 const log = createLogger('mcp-oauth');
@@ -421,6 +426,7 @@ export interface RefreshTokenOptions {
 
 /** Rotate an access token using a refresh_token grant (RFC 6749 §6). */
 export async function refreshAccessToken(opts: RefreshTokenOptions): Promise<TokenResponse> {
+  if (bridgeRefreshBlocked()) throw new BridgeTokenRequiredError();
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: opts.refreshToken,
@@ -436,6 +442,9 @@ export async function refreshAccessToken(opts: RefreshTokenOptions): Promise<Tok
     body: body.toString(),
   });
   const raw = (await res.json()) as RawTokenResponse;
+  if (noteBridgeTokenRequired(res.status, JSON.stringify(raw))) {
+    throw new BridgeTokenRequiredError();
+  }
   if (!res.ok && !raw.access_token) {
     throw new Error(
       `Token refresh failed: ${res.status} ${res.statusText}${raw.error ? ` (${raw.error})` : ''}`
