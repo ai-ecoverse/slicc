@@ -1511,7 +1511,10 @@ export class Orchestrator implements ConeApprovalRouter {
 
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */
   async resetFilesystem(): Promise<void> {
-    // Destroy all scoop contexts (they hold references to the old VFS)
+    // Background child restores still hold the current filesystem. Let them
+    // finish, then detach, so a late `context.init()` cannot mark a tab ready
+    // against the filesystem this method is about to replace.
+    await this.bootRestoreTail;
     this.lifecycle.stopAndClearAllContexts();
     // Re-create the VFS with wipe: true
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });

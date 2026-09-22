@@ -494,9 +494,10 @@ export class ScoopLifecycleManager {
     unit.attachContext(context, contextId);
 
     await context.init();
-    // `shutdown` (or `destroyTab`) may have dropped this unit while `init`
-    // was awaiting. Do not mark a torn-down unit ready.
-    if (this.units.get(jid) !== unit) return;
+    // `shutdown` / `destroyTab` drop the unit. `resetFilesystem` detaches the
+    // context but leaves the unit in the map, so a restore that resumed
+    // after that swap must not mark the tab ready or flush onto the old fs.
+    if (this.units.get(jid) !== unit || unit.context !== context) return;
 
     if (unit.tab?.status === 'initializing' && unit.transition('ready')) {
       this.deps.callbacks.onStatusChange(jid, 'ready');

@@ -1,7 +1,7 @@
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
-import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
+import { SKILL_FILE, SKILLS_DIR, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 const log = createLogger('skills-discovery');
 
@@ -174,17 +174,22 @@ function invalidateCompatibilityCache(cacheKey: object): void {
 }
 
 function pathTouchesCompatibilityTree(path: string): boolean {
-  for (const segment of path.split('/')) {
+  const segments = path.split('/');
+  for (const segment of segments) {
     if (COMPATIBILITY_TREE_SEGMENTS.has(segment)) return true;
   }
-  return false;
+  // Marketplace plugin skills are discovered at `<source>/skills/<name>/SKILL.md`.
+  // `<source>` is a path from marketplace.json, not under `.claude-plugin`, so
+  // a write there must drop the cache or the new skill stays invisible.
+  const base = segments[segments.length - 1];
+  return base === SKILL_FILE || segments.includes(SKILLS_DIR);
 }
 
 /**
- * `mkdir` / `writeFile` invalidate only when an argument path sits inside a
- * compatibility tree. `rm` / `rename` / `mount` / `unmount` can add or drop
- * a whole subtree whose path does not itself contain `.claude`, so they
- * always invalidate.
+ * `mkdir` / `writeFile` invalidate when the path is a compatibility tree or
+ * a skill file a marketplace source would pick up. `rm` / `rename` / `mount`
+ * / `unmount` can add or drop a whole subtree, so they always invalidate.
+ * Scoop skeleton directories (`/scoops/<folder>/tmp`, `/shared`) do neither.
  */
 function shouldInvalidateCompatibilityCache(
   methodName: CompatibilityCacheInvalidationMethod,

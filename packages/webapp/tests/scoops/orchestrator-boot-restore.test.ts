@@ -171,4 +171,31 @@ describe('orchestrator boot restore is not proportional to scoop count', () => {
     expect(calls.get('scoop_boot_0')).toBe(1);
     expect(calls.get('cone_boot_0')).toBe(1);
   });
+
+  it('waits for a background child restore before swapping the filesystem', async () => {
+    await saveScoop(scoop('cone_boot_0', true));
+    await saveScoop(scoop('scoop_boot_0', false));
+
+    const container = { appendChild: () => {} } as unknown as HTMLElement;
+    orch = new Orchestrator(container, noopCallbacks());
+    let releaseChild: () => void = () => {};
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    vi.spyOn(lifecycleOf(orch), 'openTab').mockImplementation(async (jid: string) => {
+      if (jid === 'scoop_boot_0') await childGate;
+    });
+
+    await orch.init();
+    let resetDone = false;
+    const reset = orch.resetFilesystem().then(() => {
+      resetDone = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(resetDone).toBe(false);
+
+    releaseChild();
+    await reset;
+    expect(resetDone).toBe(true);
+  });
 });

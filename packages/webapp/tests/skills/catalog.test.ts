@@ -145,6 +145,38 @@ describe('discoverSkillCandidates', () => {
     );
   });
 
+  it('sees a marketplace skill added after the compatibility cache filled', async () => {
+    const manifest = JSON.stringify({
+      name: 'test-marketplace',
+      metadata: { version: '1.0.0' },
+      plugins: [
+        { name: 'my-tools', description: 'My tools', source: './plugins/my-tools', strict: false },
+      ],
+    });
+    await fs.mkdir('/mnt/repo/.claude-plugin', { recursive: true });
+    await fs.writeFile('/mnt/repo/.claude-plugin/marketplace.json', manifest);
+    await fs.mkdir('/mnt/repo/plugins/my-tools/skills/my-skill', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/my-tools/skills/my-skill/SKILL.md',
+      '---\nname: my-skill\n---\n'
+    );
+    await discoverSkillCandidates(fs);
+
+    await fs.mkdir('/mnt/repo/plugins/my-tools/skills/new-skill', { recursive: true });
+    await fs.writeFile(
+      '/mnt/repo/plugins/my-tools/skills/new-skill/SKILL.md',
+      '---\nname: new-skill\n---\n'
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+    expect(candidates).toContainEqual(
+      expect.objectContaining({
+        source: 'marketplace',
+        path: '/mnt/repo/plugins/my-tools/skills/new-skill',
+      })
+    );
+  });
+
   it('skips marketplace plugins whose source is a git-subdir object', async () => {
     const manifest = JSON.stringify({
       name: 'test-marketplace',
