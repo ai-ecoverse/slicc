@@ -213,14 +213,13 @@ export function layoutCommandForSkill(frontmatter: {
   return `layout set ${name}`;
 }
 
-const skillsLoadInflight = new WeakMap<object, Map<string, Promise<Skill[]>>>();
 const defaultSkillsInflight = new WeakMap<object, Map<string, Promise<void>>>();
 
 /**
- * Concurrent boot restores call these for the same shared filesystem.
- * Share the in-flight promise so a wave of scoops does one scan, not one
- * per scoop. The entry is dropped when the call settles, so a later edit
- * is visible to the next load.
+ * Share one in-flight `createDefaultSkills` for a filesystem. Seeding is
+ * idempotent (stat, then write only when missing). `loadSkills` is not
+ * shared: a scan started before an install must not be what
+ * `reloadAllSkills` rebuilds ready cones from.
  */
 function shareOnFs<T>(
   slots: WeakMap<object, Map<string, Promise<T>>>,
@@ -244,13 +243,12 @@ function shareOnFs<T>(
 }
 
 /**
- * Load skills from a directory in VirtualFS
+ * Load skills from a directory in VirtualFS.
+ *
+ * Not coalesced across callers. An install that lands while another scan is
+ * in flight must still be visible to the reload that follows it.
  */
-export function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
-  return shareOnFs(skillsLoadInflight, fs, skillsDir, () => loadSkillsOnce(fs, skillsDir));
-}
-
-async function loadSkillsOnce(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
+export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
   const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
   const nativeDiscoveredSkills = discoveredSkills.filter((skill) => skill.source === 'native');
