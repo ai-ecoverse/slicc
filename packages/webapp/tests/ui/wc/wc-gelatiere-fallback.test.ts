@@ -3,6 +3,7 @@ import {
   GELATIERE_SUGGESTIONS_PATH,
   type GelatiereVfs,
 } from '../../../src/base/gelatiere-store.js';
+import { FsError } from '../../../src/fs/types.js';
 import { makeGelatiereCardFallback } from '../../../src/ui/wc/wc-gelatiere-fallback.js';
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -13,7 +14,7 @@ function fakeVfs(initial: Record<string, string> = {}) {
     files,
     readFile: async (path: string) => {
       const text = files.get(path);
-      if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (text === undefined) throw new FsError('ENOENT', 'no such file', path);
       return text;
     },
     writeFile: async (path: string, body: string) => {

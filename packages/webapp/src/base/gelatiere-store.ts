@@ -14,6 +14,7 @@
  */
 
 import DEFAULT_GELATIERE_MD from '../../../vfs-root/shared/GELATIERE.md?raw';
+import { FsError } from '../fs/types.js';
 import {
   type FrontmatterValue,
   parseFrontmatter,
@@ -326,15 +327,29 @@ async function readText(vfs: Pick<GelatiereVfs, 'readFile'>, path: string): Prom
   return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
 }
 
+/**
+ * Read one JSON store. A missing file (`FsError` `ENOENT`) or malformed JSON
+ * is `undefined` — nothing durable to lose. Any other read fault propagates.
+ * Folding EIO / EACCES / a transient OPFS failure into the empty default would
+ * let `recordPass` and `settleSuggestion` rewrite the ledger from a truncated
+ * base (same shape as `readPluginsFile`).
+ */
 async function readJson(vfs: Pick<GelatiereVfs, 'readFile'>, path: string): Promise<unknown> {
+  let text: string;
   try {
-    return JSON.parse(await readText(vfs, path));
+    text = await readText(vfs, path);
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return undefined;
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
 }
 
-/** Every stored suggestion, newest first; `[]` when the store is absent or unreadable. */
+/** Every stored suggestion, newest first. `[]` when the file is absent or not JSON. */
 export async function readGelatiereSuggestions(
   vfs: Pick<GelatiereVfs, 'readFile'>
 ): Promise<GelatiereSuggestion[]> {
@@ -762,6 +777,8 @@ function findLastIndex<T>(list: readonly T[], predicate: (item: T) => boolean): 
 /**
  * Record a pass: validate `raw` (what the gelatiere wrote), merge it into the
  * store, stamp the ledger. Returns what was added and what is open now.
+ * A read fault on either store aborts before that file is rewritten — a lost
+ * pass can run again; a truncated ledger cannot.
  */
 export async function recordPass(
   vfs: GelatiereVfs,
