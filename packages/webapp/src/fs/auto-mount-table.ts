@@ -21,8 +21,16 @@
 
 import { apiHeaders, resolveApiUrl } from '../base/api-endpoint.js';
 import { createLogger } from '../base/logger.js';
+import { normalizePath } from './path-utils.js';
 
 const fetchLog = createLogger('auto-mount-table');
+
+/**
+ * Bound for `GET /api/runtime-config` during boot. The call sits on the
+ * critical path after the mount heartbeat has stopped, so a hung bridge
+ * must give up and let step 9 retry rather than stall scoop restore.
+ */
+export const AUTO_MOUNT_FETCH_TIMEOUT_MS = 8_000;
 
 /** Panel-terminal pending-mount prefix. Must match `localMountIdbKey`. */
 const PENDING_MOUNT_TERM_PREFIX = 'pendingMount:term:';
@@ -91,19 +99,40 @@ function isConfiguredHostMount(
 
 /**
  * IDB keys under which a picker may have armed a handle for these targets.
- * Includes the raw spelling and the trailing-slash-stripped form: the panel
- * stores `pendingMount:term:` plus the path the user typed, while the mount
- * table stores the normalized target.
+ * Includes the raw spelling and the `..`/`./`/trailing-slash-normalized
+ * form: the panel stores `pendingMount:term:` plus the path the user typed,
+ * while the mount table stores the normalized target.
  */
 export function shadowedPendingMountKeys(targetPaths: readonly string[]): string[] {
   const keys = new Set<string>();
   for (const raw of targetPaths) {
-    const normalized = raw.replace(/\/+$/, '') || '/';
+    const normalized = normalizePath(raw);
     if (normalized === '/') continue;
     keys.add(`${PENDING_MOUNT_TERM_PREFIX}${raw}`);
     if (normalized !== raw) keys.add(`${PENDING_MOUNT_TERM_PREFIX}${normalized}`);
   }
   return [...keys];
+}
+
+/**
+ * Stored `pendingMount:term:` keys whose path normalizes onto an owned
+ * target. Catches spellings the constructed-key list cannot guess, such as
+ * `pendingMount:term:/mnt/foo/../kb` for `/mnt/kb`.
+ */
+export function pendingMountKeysForOwnedTargets(
+  storedKeys: readonly string[],
+  ownedPaths: readonly string[]
+): string[] {
+  const owned = new Set(
+    ownedPaths.map((path) => normalizePath(path)).filter((path) => path !== '/')
+  );
+  const matches: string[] = [];
+  for (const key of storedKeys) {
+    if (!key.startsWith(PENDING_MOUNT_TERM_PREFIX)) continue;
+    const target = normalizePath(key.slice(PENDING_MOUNT_TERM_PREFIX.length));
+    if (owned.has(target)) matches.push(key);
+  }
+  return matches;
 }
 
 async function readErrorBody(response: Response): Promise<string> {
@@ -124,12 +153,14 @@ async function readErrorBody(response: Response): Promise<string> {
  */
 export async function fetchAutoMounts(
   fetchImpl: typeof fetch = fetch,
-  log?: AutoMountLogger
+  log?: AutoMountLogger,
+  timeoutMs: number = AUTO_MOUNT_FETCH_TIMEOUT_MS
 ): Promise<AutoMountMapping[]> {
   try {
     const response = await fetchImpl(resolveApiUrl('/api/runtime-config'), {
       cache: 'no-store',
       headers: apiHeaders(),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       warnAutoMount(log, 'Mount table fetch failed', {
@@ -294,7 +325,16 @@ export async function mountConfiguredHostMounts(
       continue;
     }
     if (occupied && !(await releaseBlockingMount(fs, mapping, backend, log))) continue;
-    if (!(await mountOne(fs, mapping, HostFsMountBackend, log))) continue;
+    if (!(await mountOne(fs, mapping, HostFsMountBackend, log))) {
+      if (occupied) {
+        warnAutoMount(
+          log,
+          'Released a blocking mount but could not mount the configured host folder',
+          { ...mapping, replacedKind: backend?.kind ?? 'unknown' }
+        );
+      }
+      continue;
+    }
     mounted.push(mapping);
     if (occupied) logReplacedMount(mapping, backend?.kind, log);
   }
@@ -305,15 +345,18 @@ export interface ShadowPurgeDeps {
   loadEntries: () => Promise<Array<{ targetPath: string }>>;
   removeMountEntry: (targetPath: string) => Promise<void>;
   clearPendingHandle: (idbKey: string) => Promise<void>;
+  /** Every key in the pending-mount store, so non-canonical spellings can be dropped. */
+  listPendingKeys?: () => Promise<string[]>;
 }
 
 async function defaultShadowPurgeDeps(): Promise<ShadowPurgeDeps> {
   const { getAllMountEntries, removeMountEntry } = await import('./mount-table-store.js');
-  const { clearPendingMountHandle } = await import('./mount-picker-popup.js');
+  const { clearPendingMountHandle, listPendingMountKeys } = await import('./mount-picker-popup.js');
   return {
     loadEntries: () => getAllMountEntries(),
     removeMountEntry,
     clearPendingHandle: clearPendingMountHandle,
+    listPendingKeys: listPendingMountKeys,
   };
 }
 
@@ -359,10 +402,28 @@ export async function purgeShadowedHostMountState(
       purge.removeMountEntry(stale.targetPath)
     );
   }
-  const keys = shadowedPendingMountKeys([
+  const ownedPaths = [
     ...mounted.map((mapping) => mapping.path),
     ...shadowed.map((entry) => entry.targetPath),
-  ]);
+  ];
+  let storedKeys: string[] = [];
+  if (purge.listPendingKeys) {
+    try {
+      storedKeys = await purge.listPendingKeys();
+    } catch (err) {
+      warnAutoMount(
+        log,
+        'Failed to list pending-mount handles while claiming config-owned targets',
+        { error: err instanceof Error ? err.message : String(err) }
+      );
+    }
+  }
+  const keys = [
+    ...new Set([
+      ...shadowedPendingMountKeys(ownedPaths),
+      ...pendingMountKeysForOwnedTargets(storedKeys, ownedPaths),
+    ]),
+  ];
   for (const key of keys) {
     await bestEffort(log, 'Failed to clear a shadowed pending-mount handle', { key }, () =>
       purge.clearPendingHandle(key)

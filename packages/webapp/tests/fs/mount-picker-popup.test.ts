@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearPendingMountHandle,
+  listPendingMountKeys,
   loadAndClearPendingHandle,
   openMountPickerPopup,
   reactivateHandle,
@@ -92,6 +93,21 @@ describe('clearPendingMountHandle', () => {
     await clearPendingMountHandle('pendingMount:term:/mnt/kb');
     expect(await readHandle('pendingMount:term:/mnt/kb')).toBeNull();
     expect((await readHandle('pendingMount:term:/mnt/other'))?.name).toBe('other');
+  });
+});
+
+describe('listPendingMountKeys', () => {
+  beforeEach(() => {
+    indexedDB.deleteDatabase('slicc-pending-mount');
+  });
+
+  it('returns the keys currently stored', async () => {
+    await seedHandle('pendingMount:term:/mnt/foo/../kb', mockHandle('kb'));
+    await seedHandle('pendingMount:dip-1', mockHandle('dip'));
+    expect((await listPendingMountKeys()).sort()).toEqual([
+      'pendingMount:dip-1',
+      'pendingMount:term:/mnt/foo/../kb',
+    ]);
   });
 });
 

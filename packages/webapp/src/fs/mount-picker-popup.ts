@@ -127,6 +127,23 @@ export async function storePendingHandle(
  * Config-owned host mounts call this for `pendingMount:term:<target>` so a
  * picker handle left armed cannot reclaim the path on the next `mount`.
  */
+/** Every key in the pending-mount store. Missing database resolves to []. */
+export async function listPendingMountKeys(): Promise<string[]> {
+  const db = await openPendingMountDB();
+  try {
+    const tx = db.transaction('handles', 'readonly');
+    const req = tx.objectStore('handles').getAllKeys();
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error ?? new Error('IDB getAllKeys failed'));
+      tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
+    });
+    return keys.filter((key): key is string => typeof key === 'string');
+  } finally {
+    db.close();
+  }
+}
+
 export async function clearPendingMountHandle(idbKey: string): Promise<void> {
   const db = await openPendingMountDB();
   try {

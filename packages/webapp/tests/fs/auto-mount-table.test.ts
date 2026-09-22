@@ -8,6 +8,7 @@ import {
   hostShadowedEntries,
   isCanonicalAbsoluteTarget,
   mountConfiguredHostMounts,
+  pendingMountKeysForOwnedTargets,
   purgeShadowedHostMountState,
   shadowedPendingMountKeys,
   withoutHostMountedTargets,
@@ -100,6 +101,22 @@ describe('fetchAutoMounts', () => {
     }) as unknown as typeof fetch;
     await expect(fetchAutoMounts(failing, { warn })).resolves.toEqual([]);
     expect(warn).toHaveBeenCalledWith('Mount table fetch failed', { error: 'offline' });
+  });
+
+  it('logs a timed-out runtime-config fetch and returns []', async () => {
+    const warn = vi.fn();
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new Error('The operation was aborted due to timeout'));
+        });
+      });
+    }) as unknown as typeof fetch;
+    await expect(fetchAutoMounts(fetchImpl, { warn }, 20)).resolves.toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      'Mount table fetch failed',
+      expect.objectContaining({ error: 'The operation was aborted due to timeout' })
+    );
   });
 
   it('truncates a long error body', async () => {
@@ -218,6 +235,25 @@ describe('mountConfiguredHostMounts', () => {
     );
   });
 
+  it('warns when the replacement mount fails after the blocker was released', async () => {
+    const warn = vi.fn();
+    const fs = mockFs(['/mnt/kb'], { '/mnt/kb': { kind: 'local' } });
+    fs.mount = () => {
+      throw new Error('ENOTEMPTY');
+    };
+    const mounted = await mountConfiguredHostMounts(
+      fs,
+      { warn },
+      fakeFetch({ autoMounts: [{ path: '/mnt/kb', hostPath: '/h/kb' }] })
+    );
+    expect(fs.unmounted).toEqual(['/mnt/kb']);
+    expect(mounted).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      'Released a blocking mount but could not mount the configured host folder',
+      expect.objectContaining({ path: '/mnt/kb', replacedKind: 'local' })
+    );
+  });
+
   it('continues past a failing mount and logs it', async () => {
     const warn = vi.fn();
     const fs = mockFs();
@@ -296,6 +332,19 @@ describe('shadowedPendingMountKeys', () => {
     ]);
     expect(shadowedPendingMountKeys(['/'])).toEqual([]);
   });
+
+  it('matches a stored key whose path normalizes onto the owned target', () => {
+    const stored = [
+      'pendingMount:term:/mnt/foo/../kb',
+      'pendingMount:term:/mnt/./kb',
+      'pendingMount:term:/mnt/other',
+      'pendingMount:dip-abc',
+    ];
+    expect(pendingMountKeysForOwnedTargets(stored, ['/mnt/kb'])).toEqual([
+      'pendingMount:term:/mnt/foo/../kb',
+      'pendingMount:term:/mnt/./kb',
+    ]);
+  });
 });
 
 describe('purgeShadowedHostMountState', () => {
@@ -326,6 +375,24 @@ describe('purgeShadowedHostMountState', () => {
     expect(removed).toEqual(['/mnt/kb']);
     expect(cleared).toEqual(['pendingMount:term:/mnt/kb']);
     expect(cleared.some((key) => key.includes('/mnt/other'))).toBe(false);
+  });
+
+  it('clears a pending handle stored under a non-canonical spelling of the target', async () => {
+    const cleared: string[] = [];
+    await purgeShadowedHostMountState(owned, undefined, {
+      loadEntries: async () => [],
+      removeMountEntry: async () => {},
+      clearPendingHandle: async (key) => {
+        cleared.push(key);
+      },
+      listPendingKeys: async () => [
+        'pendingMount:term:/mnt/foo/../kb',
+        'pendingMount:term:/mnt/other',
+      ],
+    });
+    expect(cleared).toContain('pendingMount:term:/mnt/kb');
+    expect(cleared).toContain('pendingMount:term:/mnt/foo/../kb');
+    expect(cleared).not.toContain('pendingMount:term:/mnt/other');
   });
 
   it('clears an armed pending handle even when no mount-table row exists', async () => {
