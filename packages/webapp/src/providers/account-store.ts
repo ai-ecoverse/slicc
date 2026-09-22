@@ -1673,6 +1673,22 @@ function resolveEffectiveProvider(providerId: string, providerConfig: ProviderCo
 }
 
 /**
+ * The pi-ai catalogues the configured accounts read from, for the live model
+ * catalogue refresh. Includes each account's own id (an OAuth provider such as
+ * `github-copilot` also reads its own pi-ai catalogue) and the registry it
+ * resolves against. Ids pi-ai does not know are filtered by the refresh.
+ */
+export function getModelCatalogProviderIds(): string[] {
+  const ids = new Set<string>();
+  for (const account of getAccounts()) {
+    if (account.loggedOut) continue;
+    ids.add(account.providerId);
+    ids.add(resolveEffectiveProvider(account.providerId, getProviderConfig(account.providerId)));
+  }
+  return [...ids];
+}
+
+/**
  * Resolve a specific model by ID, using a provider's baseUrl and API routing.
  * Falls back to resolveCurrentModel() if modelId is not provided.
  *

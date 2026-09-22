@@ -123,6 +123,8 @@ only here.
   ONLY the selected cone; global `selected-model` is a first-boot seed.
 - **Provider composition**: pi-ai auto-discovered + `src/providers/built-in/` + `providers/`, merged
   pi-ai → `modelOverrides` → `getModelIds()`; filter `packages/dev-tools/providers.build.json`.
+  Read the catalogue via `core/model-catalog.ts` (pi.dev overlay), never pi-ai's `getModels` directly
+  ([live model catalogue](../../docs/webapp-details.md#live-model-catalogue)).
 - **Budget-mode cost surfaces**: a provider on a rolling allowance implements `getBudgetUsage()`; cost
   surfaces headline percent **USED**, not `$` (no hook → `$`).
 

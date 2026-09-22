@@ -31,6 +31,7 @@ import {
 import knownGoodMacos from './known-good-macos.json';
 import { applySliccLinks } from './links.js';
 import { buildLlmsTxtResponse } from './llms-txt.js';
+import { handleModelCatalogRequest, modelCatalogProviderId } from './model-catalog.js';
 import {
   handleOAuthMethodNotAllowed,
   handleOAuthPreflight,
@@ -648,6 +649,7 @@ const ROUTES_INDEX_BODY = {
     'POST /oauth/revoke',
     'GET /api/runtime-config',
     'GET /api/flags',
+    'GET /api/models/providers/:id',
     'ANY /api/fetch-proxy',
     'GET /api/cloud/config',
     'POST /api/cloud/start',
@@ -876,6 +878,11 @@ async function tryHandleInfoRoutes(
 
   if (url.pathname === '/api/flags') {
     return handleFlagsRequest(request, env.FEATURE_FLAGS);
+  }
+
+  const modelCatalogProvider = modelCatalogProviderId(url.pathname);
+  if (modelCatalogProvider !== null) {
+    return handleModelCatalogRequest(request, modelCatalogProvider, fetchImpl);
   }
 
   if (url.pathname === '/api/fetch-proxy') {

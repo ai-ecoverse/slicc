@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
+import { piAiModelDataGeneratedAt } from './vite-plugins/pi-ai-model-data';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
@@ -499,6 +500,9 @@ export default defineConfig(({ mode }) => ({
     __DEV__: JSON.stringify(mode !== 'production'),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
+    // pi-ai's catalogue generation time for the live model catalogue's
+    // freshness check (see vite-plugins/pi-ai-model-data.ts).
+    __PI_AI_MODELS_GENERATED_AT__: JSON.stringify(piAiModelDataGeneratedAt(workspaceRoot)),
     // Per-build stamp inlined into every chunk that references it (page
     // AND kernel-worker graphs). A deploy landing mid-session can leave
     // stale HTML running page chunks from build N while the worker's

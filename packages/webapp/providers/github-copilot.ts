@@ -46,8 +46,6 @@ import type {
 } from '@earendil-works/pi-ai';
 import {
   createAssistantMessageEventStream,
-  getModel,
-  getModels,
   registerApiProvider,
   streamAnthropic,
   streamOpenAICompletions,
@@ -56,6 +54,7 @@ import {
   streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
+import { getModel, getModels } from '../src/core/model-catalog.js';
 import { fetchCopilotUsage } from '../src/providers/github-copilot-usage.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {

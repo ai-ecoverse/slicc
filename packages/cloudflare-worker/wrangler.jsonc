@@ -66,7 +66,10 @@
         // every float that reaches the worker. Flip it to "off" to kill the
         // background rounds without cutting a release.
         "compact-on-idle": "on",
-        "memory-v2": "off"
+        "memory-v2": "off",
+        // Kill switch for the pi.dev model-catalogue overlay; "off" falls back
+        // to the bundled pi-ai catalogue without a release.
+        "live-model-catalog": "on"
       },
       "floats": {
         "standalone": {},
@@ -162,7 +165,8 @@
             // Keep in step with the production `base` above: this value, not
             // the bundled default, decides the answer (and is the kill switch).
             "compact-on-idle": "on",
-            "memory-v2": "off"
+            "memory-v2": "off",
+            "live-model-catalog": "on"
           },
           "floats": {
             "standalone": {},
