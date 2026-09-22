@@ -19,6 +19,10 @@ export type CdpPayload = { [key: string]: unknown };
 
 const NAVIGATE_LOAD_TIMEOUT_MS = 30000;
 
+const MAX_WIDTH_ATTEMPTS = 3;
+
+const MAX_WIDTH_TOLERANCE = 0.98;
+
 export interface ViewportOverride {
   width: number;
   height: number;
@@ -195,43 +199,70 @@ export class TabHandle {
     const peekWidth = pngWidth(base64);
     if (!peekWidth || peekWidth <= maxWidth) return base64;
 
-    const scale = maxWidth / peekWidth;
+    const clip = await this.maxWidthClip(params);
+    params['captureBeyondViewport'] = true;
+
+    const baseScale = clip.scale ?? 1;
+    let scale = baseScale * (maxWidth / peekWidth);
+    let best: string | null = null;
+    let bestWidth = 0;
+
+    for (let attempt = 0; attempt < MAX_WIDTH_ATTEMPTS; attempt++) {
+      clip.scale = scale;
+      let data: string;
+      try {
+        data = (await this.send('Page.captureScreenshot', params))['data'] as string;
+      } catch (err) {
+        log.warn('maxWidth re-capture failed', err);
+        break;
+      }
+      const width = pngWidth(data);
+
+      if (!width) return data;
+      if (width <= maxWidth && width > bestWidth) {
+        best = data;
+        bestWidth = width;
+      }
+
+      if (width <= maxWidth && width >= maxWidth * MAX_WIDTH_TOLERANCE) break;
+
+      const next = (scale * maxWidth) / width;
+      if (!Number.isFinite(next) || next <= 0) break;
+      scale = next;
+    }
+
+    return best ?? base64;
+  }
+
+  private async maxWidthClip(
+    params: CdpPayload
+  ): Promise<{ x: number; y: number; width: number; height: number; scale?: number }> {
     const existingClip = params['clip'] as
       | { x: number; y: number; width: number; height: number; scale?: number }
       | undefined;
+    if (existingClip) return existingClip;
 
-    if (existingClip) {
-      existingClip.scale = (existingClip.scale ?? 1) * scale;
-    } else {
-      let vw = 1280;
-      let vh = 800;
+    let vw = 1280;
+    let vh = 800;
 
-      let vx = 0;
-      let vy = 0;
-      try {
-        await this.send('Runtime.enable');
-        const dim = await this.send('Runtime.evaluate', {
-          expression:
-            'JSON.stringify({w:window.innerWidth,h:window.innerHeight,x:window.scrollX,y:window.scrollY})',
-          returnByValue: true,
-        });
-        const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
-        vw = v.w || 1280;
-        vh = v.h || 800;
-        if (typeof v.x === 'number') vx = v.x;
-        if (typeof v.y === 'number') vy = v.y;
-      } catch {}
-      params['clip'] = { x: vx, y: vy, width: vw, height: vh, scale };
-    }
-    params['captureBeyondViewport'] = true;
-
+    let vx = 0;
+    let vy = 0;
     try {
-      const resized = await this.send('Page.captureScreenshot', params);
-      return resized['data'] as string;
-    } catch (err) {
-      log.warn('maxWidth re-capture failed, returning original', err);
-      return base64;
-    }
+      await this.send('Runtime.enable');
+      const dim = await this.send('Runtime.evaluate', {
+        expression:
+          'JSON.stringify({w:window.innerWidth,h:window.innerHeight,x:window.scrollX,y:window.scrollY})',
+        returnByValue: true,
+      });
+      const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
+      vw = v.w || 1280;
+      vh = v.h || 800;
+      if (typeof v.x === 'number') vx = v.x;
+      if (typeof v.y === 'number') vy = v.y;
+    } catch {}
+    const clip = { x: vx, y: vy, width: vw, height: vh };
+    params['clip'] = clip;
+    return clip;
   }
 
   async setViewportOverride(

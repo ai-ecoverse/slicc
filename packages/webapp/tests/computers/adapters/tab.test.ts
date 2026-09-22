@@ -291,6 +291,18 @@ describe('page-side screenshotTab / inputTab', () => {
     expect(shot.nativeWidth).toBe(800);
     expect(jpegSize(bytesFromBase64(shot.base64))).not.toBeNull();
     expect(tab.screenshot.mock.calls.some((c) => c[0]?.format === 'jpeg')).toBe(false);
+    expect(shot.overCap).toBeUndefined();
+  });
+
+  it('marks overCap when the tab cannot encode narrower than the cap (#3373)', async () => {
+    const tab = {
+      send: vi.fn(async () => ({})),
+      screenshot: vi.fn(async () => uint8ToBase64(pngHeader(1082, 2402))),
+    };
+    const browser = makeBrowser([EXAMPLE], tab as never);
+    const shot = await screenshotTab(browser as never, 'T1', { format: 'png', maxWidth: 500 });
+    expect(shot.width).toBe(1082);
+    expect(shot.overCap).toBe(true);
   });
 
   it('transcodes a realistic PNG re-capture on the poke path', async () => {

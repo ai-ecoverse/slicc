@@ -36,7 +36,7 @@ computer screenshot --size high out.jpg
 computer text                       # text-mode dump when the backend supports it
 ```
 
-`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. Coordinates on later verbs are in that last `computer screenshot` (the last model-facing shot) unless `--native` — a poke's frozen frame does not update that space. `--native` is the pixel space `computer info --json` advertises (`size` / lastShot). Tab computers screenshot in device pixels; clicks are converted to CSS pixels with the tab's `devicePixelRatio` before they hit the page. A human can also click, scroll, and type in the live lightbox when the computer allows input; Escape releases. Frozen stills in the transcript never forward.
+`--size` is `low` (256), `medium` (768, default), `high` (1536), or a max width. It is an upper bound: a frame is never widened past the computer's native size to reach it, and one that cannot be encoded that narrow arrives at native size rather than upscaled. Coordinates on later verbs are in that last `computer screenshot` (the last model-facing shot) unless `--native` — a poke's frozen frame does not update that space. `--native` is the pixel space `computer info --json` advertises (`size` / lastShot). Tab computers screenshot in device pixels; clicks are converted to CSS pixels with the tab's `devicePixelRatio` before they hit the page. A human can also click, scroll, and type in the live lightbox when the computer allows input; Escape releases. Frozen stills in the transcript never forward.
 
 ## Poke (xdotool; chainable)
 

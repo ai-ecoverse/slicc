@@ -944,6 +944,85 @@ describe('BrowserAPI', () => {
       expect((recapture[1] as { clip: { scale: number } }).clip.scale).toBe(1);
     });
 
+    function fakeChrome(tab: {
+      cssWidth: number;
+      peekWidth: number;
+
+      clipFactor: number;
+    }) {
+      return async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'Runtime.evaluate') {
+          return {
+            result: {
+              value: JSON.stringify({ w: tab.cssWidth, h: tab.cssWidth, x: 0, y: 0 }),
+            },
+          };
+        }
+        if (method !== 'Page.captureScreenshot') return {};
+        const clip = params?.['clip'] as { width: number; scale?: number } | undefined;
+        if (!clip) return { data: pngBase64(tab.peekWidth) };
+        return {
+          data: pngBase64(Math.round(clip.width * (clip.scale ?? 1) * tab.clipFactor)),
+        };
+      };
+    }
+
+    function captureWidths(): number[] {
+      return (mockClient.send as ReturnType<typeof vi.fn>).mock.calls
+        .filter(([m]) => m === 'Page.captureScreenshot')
+        .map(([, p]) => {
+          const clip = (p as { clip?: { width: number; scale?: number } }).clip;
+          return clip ? Math.round(clip.width * (clip.scale ?? 1)) : 0;
+        });
+    }
+
+    it('hits maxWidth on a zoomed tab whose peek ratio overstates the clip factor (#3373)', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 1024, peekWidth: 2560, clipFactor: 2 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+    });
+
+    it('hits maxWidth on a mobile-emulated tab without upscaling past native (#3373)', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 980, peekWidth: 1082, clipFactor: 2.625 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+
+      for (const width of captureWidths()) expect(width * 2.625).toBeLessThanOrEqual(1082);
+    });
+
+    it('corrects a one-pixel rounding overshoot instead of shipping the native frame', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 1000, peekWidth: 1000, clipFactor: 1.0012 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+      expect(captureWidths()).toHaveLength(3);
+    });
+
+    it('returns native pixels, never invented ones, when the cap cannot be met', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Page.captureScreenshot'
+          ? { data: pngBase64(1600) }
+          : { result: { value: JSON.stringify({ w: 800, h: 600, x: 0, y: 0 }) } }
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(1600));
+
+      expect(captureWidths()).toHaveLength(4);
+    });
+
     it('maxWidth is a no-op for non-PNG output rather than misreading the header', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
         method === 'Page.captureScreenshot'

@@ -671,6 +671,8 @@ export interface PanelRpcResults {
     height: number;
     nativeWidth?: number;
     nativeHeight?: number;
+
+    overCap?: boolean;
     title: string;
     url: string;
   };

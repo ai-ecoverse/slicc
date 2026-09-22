@@ -90,6 +90,7 @@ export class LocalTabComputerBackend implements ComputerBackend {
         width: captured.width,
         height: captured.height,
         bytes: captured.bytes,
+        ...(captured.overCap ? { overCap: true } : {}),
       };
     });
   }
@@ -120,6 +121,8 @@ export interface TabShotResult {
   height: number;
   nativeWidth?: number;
   nativeHeight?: number;
+
+  overCap?: boolean;
   title: string;
   url: string;
 }
@@ -130,6 +133,8 @@ interface CapturedTabFrame {
   width: number;
   height: number;
   native: { width: number; height: number } | null;
+
+  overCap?: boolean;
 }
 
 async function captureTabFrame(
@@ -156,6 +161,8 @@ async function captureTabFrame(
     width: encoded.width,
     height: encoded.height,
     native,
+
+    ...(opts.maxWidth && encoded.width > opts.maxWidth ? { overCap: true } : {}),
   };
 }
 
@@ -207,6 +214,7 @@ export class BridgedTabComputerBackend implements ComputerBackend {
       width: result.width,
       height: result.height,
       bytes: bytesFromBase64(result.base64),
+      ...(result.overCap ? { overCap: true } : {}),
     };
   }
 
@@ -373,6 +381,7 @@ export async function screenshotTab(
       ...(captured.native
         ? { nativeWidth: captured.native.width, nativeHeight: captured.native.height }
         : {}),
+      ...(captured.overCap ? { overCap: true } : {}),
       title: info.title,
       url: info.url,
     };
