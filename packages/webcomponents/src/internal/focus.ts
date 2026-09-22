@@ -38,6 +38,11 @@ function isWithin(scope: Node, node: Node): boolean {
  *
  * A textarea keeps its selection range across a move, so restoring the focus
  * puts the caret back exactly where it was.
+ *
+ * Focus inside a frame (a sprinkle or dip) is restored coarsely, on purpose:
+ * the lookup stops at the `<iframe>` element, so the frame gets the focus back
+ * but not the inner field — and a moved srcdoc frame reloads anyway. Still far
+ * better than dropping to `<body>`, which is what trips keyboard mode.
  */
 export function withFocusPreserved<T>(scope: Node, rebuild: () => T): T {
   const doc = scope.ownerDocument ?? (scope as Document);
