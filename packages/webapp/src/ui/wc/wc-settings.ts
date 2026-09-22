@@ -18,9 +18,13 @@ import {
   exportTheme,
   getActiveThemeId,
   getCustomThemes,
+  getSelectedThemeIds,
   importTheme,
+  pairedThemeRole,
   saveCustomTheme,
   setActiveTheme,
+  setSelectedThemeIds,
+  toggleSelectedTheme,
 } from '../theme-engine.js';
 import { PRESETS } from '../theme-presets.js';
 import type { SimplifiedSlots, SliccTheme, ThemeComponents } from '../theme-types.js';
@@ -71,8 +75,10 @@ slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}
 .wcset__preset-swatch{width:56px;height:48px;border-radius:8px;border:2px solid transparent;cursor:pointer;display:flex;flex-direction:column;overflow:hidden;transition:border-color 130ms ease;}
 .wcset__preset-swatch:hover{border-color:var(--ctx);}
 .wcset__preset-swatch--active{border-color:var(--ink);}
+.wcset__preset-swatch--live{outline:2px solid var(--ctx);outline-offset:1px;}
 .wcset__preset-swatch__stripe{flex:1;}
 .wcset__preset-name{font-size:9px;text-align:center;padding:2px 0;background:var(--canvas);color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wcset__pair-hint{font-size:11.5px;color:var(--txt-3);line-height:1.4;}
 .wcset__custom-themes{display:flex;flex-direction:column;gap:6px;}
 .wcset__custom-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;}
 .wcset__custom-row__name{flex:1;font-size:12px;font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -500,16 +506,31 @@ function buildExperimentalSection(deps: {
   };
 }
 
+function themeSwatchClass(id: string, selected: string[], liveId: string | null): string {
+  const on = selected.includes(id);
+  const live = liveId === id;
+  return `wcset__preset-swatch${on ? ' wcset__preset-swatch--active' : ''}${live ? ' wcset__preset-swatch--live' : ''}`;
+}
+
+function themeRoleTitle(id: string): string {
+  const role = pairedThemeRole(id);
+  if (role === 'darker') return 'Selected. Used when Dark is on.';
+  if (role === 'brighter') return 'Selected. Used when Light is on.';
+  return 'Select. Two themes follow Light and Dark automatically.';
+}
+
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
   const section = div('wcset__appearance');
   section.append(div('wcset__section-label', 'Appearance'));
 
-  const activeId = getActiveThemeId();
+  const selected = getSelectedThemeIds();
+  const liveId = getActiveThemeId();
 
   const grid = div('wcset__preset-grid');
 
   const defaultSwatch = document.createElement('div');
-  defaultSwatch.className = `wcset__preset-swatch${!activeId ? ' wcset__preset-swatch--active' : ''}`;
+  defaultSwatch.className = `wcset__preset-swatch${selected.length === 0 ? ' wcset__preset-swatch--active' : ''}`;
+  defaultSwatch.title = 'Follow the system colors, with no theme.';
   const defaultStripes = ['#161618', '#1f1f22', '#f59e0b'];
   defaultSwatch.innerHTML =
     defaultStripes
@@ -524,19 +545,26 @@ function buildAppearanceSection(deps: ViewDeps): HTMLElement {
 
   for (const preset of PRESETS) {
     const swatch = document.createElement('div');
-    swatch.className = `wcset__preset-swatch${activeId === preset.id ? ' wcset__preset-swatch--active' : ''}`;
+    swatch.className = themeSwatchClass(preset.id, selected, liveId);
+    swatch.title = themeRoleTitle(preset.id);
     const bg = preset.tokens['--s2-gray-25'] || '#1a1a1a';
     const surface = preset.tokens['--s2-gray-100'] || '#2c2c2c';
     const accent = preset.tokens['--s2-accent'] || '#3562ff';
     swatch.innerHTML = `<div class="wcset__preset-swatch__stripe" style="background:${bg}"></div><div class="wcset__preset-swatch__stripe" style="background:${surface}"></div><div class="wcset__preset-swatch__stripe" style="background:${accent}"></div><div class="wcset__preset-name">${preset.name}</div>`;
     swatch.addEventListener('click', () => {
-      setActiveTheme(preset.id);
+      toggleSelectedTheme(preset.id);
       applyTheme();
       rebuildSection();
     });
     grid.append(swatch);
   }
   section.append(grid);
+  section.append(
+    div(
+      'wcset__pair-hint',
+      'Select two themes to switch between the darker and the brighter one as Light and Dark change. A third pick replaces the older one.'
+    )
+  );
 
   const customs = getCustomThemes().filter((t) => t.id !== '__preview');
   if (customs.length > 0) {
@@ -545,11 +573,11 @@ function buildAppearanceSection(deps: ViewDeps): HTMLElement {
     for (const theme of customs) {
       const row = div('wcset__custom-row');
       const name = div('wcset__custom-row__name', theme.name);
-      if (activeId === theme.id) name.style.fontWeight = '700';
+      if (selected.includes(theme.id)) name.style.fontWeight = '700';
       row.append(name);
       row.append(
-        button('wcset__btn', 'Use', () => {
-          setActiveTheme(theme.id);
+        button('wcset__btn', selected.includes(theme.id) ? 'Selected' : 'Use', () => {
+          toggleSelectedTheme(theme.id);
           applyTheme();
           rebuildSection();
         })
@@ -1062,16 +1090,13 @@ export async function showThemeSettings(
     done.setAttribute('slot', 'footer');
     dialog.append(done);
 
-    const activeBeforeOpen = getActiveThemeId();
+    const selectedBeforeOpen = getSelectedThemeIds().filter((id) => id !== '__preview');
     dialog.addEventListener('slicc-dialog-close', () => {
       const current = getActiveThemeId();
       if (current === '__preview') {
         deleteCustomTheme('__preview');
-        if (activeBeforeOpen && activeBeforeOpen !== '__preview') {
-          setActiveTheme(activeBeforeOpen);
-        } else {
-          clearActiveTheme();
-        }
+        if (selectedBeforeOpen.length > 0) setSelectedThemeIds(selectedBeforeOpen);
+        else clearActiveTheme();
         applyTheme();
       }
       dialog.remove();

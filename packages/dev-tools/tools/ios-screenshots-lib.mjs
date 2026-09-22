@@ -27,6 +27,13 @@ export function validateScreens(registry) {
     ) {
       problems.push(`${where}: settleSeconds must be a positive number when present`);
     }
+    if (
+      screen.appearance !== undefined &&
+      screen.appearance !== 'light' &&
+      screen.appearance !== 'dark'
+    ) {
+      problems.push(`${where}: appearance must be "light" or "dark" when present`);
+    }
   }
   if (problems.length > 0) {
     throw new Error(`screenshot-screens.json invalid:\n  ${problems.join('\n  ')}`);

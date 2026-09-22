@@ -1,6 +1,29 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 
+if (typeof globalThis.localStorage?.getItem !== 'function') {
+  const store = new Map<string, string>();
+  const polyfill = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, String(value));
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => store.clear(),
+    key: (index: number) => [...store.keys()][index] ?? null,
+    get length() {
+      return store.size;
+    },
+  };
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: polyfill,
+    configurable: true,
+    writable: true,
+  });
+}
+
 const hasLocalStorage =
   typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function';
 const describeWithStorage = hasLocalStorage ? describe : describe.skip;
@@ -14,10 +37,13 @@ import {
   exportTheme,
   getActiveThemeId,
   getCustomThemes,
+  getSelectedThemeIds,
   importTheme,
+  pairedThemeRole,
   saveCustomTheme,
   setActiveTheme,
   setThemeChangeListener,
+  toggleSelectedTheme,
 } from '../../src/ui/theme-engine.js';
 import type { SimplifiedSlots, SliccTheme } from '../../src/ui/theme-types.js';
 import { TOKEN_GROUPS } from '../../src/ui/theme-types.js';
@@ -128,6 +154,8 @@ describeWithStorage('theme storage', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
+    localStorage.removeItem('slicc-theme-pair');
+    localStorage.removeItem('slicc-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
   });
 
@@ -180,6 +208,50 @@ describeWithStorage('theme storage', () => {
     deleteCustomTheme('del');
     expect(getCustomThemes()).toEqual([]);
     expect(getActiveThemeId()).toBeNull();
+  });
+
+  it('two selected themes follow Light and Dark by brightness', () => {
+    const night: SliccTheme = {
+      id: 'night',
+      name: 'Night',
+      base: 'dark',
+      tokens: { '--canvas': '#0f0f1a' },
+    };
+    const day: SliccTheme = {
+      id: 'day',
+      name: 'Day',
+      base: 'light',
+      tokens: { '--canvas': '#ffffff' },
+    };
+    saveCustomTheme(night);
+    saveCustomTheme(day);
+    toggleSelectedTheme('night');
+    toggleSelectedTheme('day');
+    expect(getSelectedThemeIds()).toEqual(['night', 'day']);
+    expect(pairedThemeRole('night')).toBe('darker');
+    expect(pairedThemeRole('day')).toBe('brighter');
+
+    localStorage.setItem('slicc-theme', 'dark');
+    expect(getActiveThemeId()).toBe('night');
+    applyThemeOverrides();
+    expect(document.body.getAttribute('data-theme')).toBe('dark');
+    expect(document.getElementById('slicc-theme-overrides')?.textContent).toContain('#0f0f1a');
+
+    localStorage.setItem('slicc-theme', 'light');
+    expect(getActiveThemeId()).toBe('day');
+    applyThemeOverrides();
+    expect(document.body.getAttribute('data-theme')).toBe('light');
+    expect(document.getElementById('slicc-theme-overrides')?.textContent).toContain('#ffffff');
+  });
+
+  it('a third selection replaces the older theme and setActiveTheme clears the pair', () => {
+    toggleSelectedTheme('vanilla');
+    toggleSelectedTheme('midnight-scoop');
+    toggleSelectedTheme('sorbet');
+    expect(getSelectedThemeIds()).toEqual(['midnight-scoop', 'sorbet']);
+    setActiveTheme('vanilla');
+    expect(getSelectedThemeIds()).toEqual(['vanilla']);
+    expect(getActiveThemeId()).toBe('vanilla');
   });
 });
 

@@ -32,6 +32,7 @@ struct SprinkleWebView: UIViewRepresentable {
     
     
     
+    
     @Environment(\.sprinkleThemeCSS) private var themeCSS
     @Environment(\.palette) private var palette
 

@@ -13,6 +13,8 @@ import SwiftUI
 
 
 
+
+
 struct ThemePalette: Equatable {
     
     let canvas: Color
@@ -109,9 +111,38 @@ struct ThemePalette: Equatable {
 
     
     
+    func withLeaderAccent(_ theme: SliccTheme) -> ThemePalette {
+        let nextAccent: Color
+        if let raw = theme.tokens["--ctx"], let parsed = Color(hexToken: raw) {
+            nextAccent = parsed
+        } else {
+            nextAccent = accent
+        }
+        return ThemePalette(
+            canvas: canvas,
+            surface: surface,
+            field: field,
+            ink: ink,
+            inkSecondary: inkSecondary,
+            inkTertiary: inkTertiary,
+            line: line,
+            accent: nextAccent,
+            bubble: bubble,
+            bubbleText: bubbleText,
+            isLeaderTheme: true
+        )
+    }
+
+    
+    
+    
     static func resolve(theme: SliccTheme?, systemScheme: ColorScheme) -> ThemePalette {
-        if let theme { return fromTheme(theme) }
-        return systemScheme == .light ? light : dark
+        let device = systemScheme == .light ? light : dark
+        guard let theme else { return device }
+        let themeIsLight = theme.base == .light
+        let deviceIsLight = systemScheme == .light
+        if themeIsLight == deviceIsLight { return fromTheme(theme) }
+        return device.withLeaderAccent(theme)
     }
 }
 
@@ -171,10 +202,56 @@ extension SliccTheme {
     
     
     
+    private static let lightDeviceSurfaces: [(String, String)] = [
+        ("--canvas", "#ffffff"),
+        ("--bg", "#f4f4f6"),
+        ("--ghost", "#ececef"),
+        ("--ink", "#0a0a0a"),
+        ("--txt-2", "#737373"),
+        ("--txt-3", "#a1a1a1"),
+        ("--line", "#e5e5e5"),
+        ("--s-bg-card", "#f4f4f6"),
+        ("--s-bg-card-soft", "#ececef"),
+        ("--s-bg-elevated", "#ececef"),
+        ("--s-text-primary", "#0a0a0a"),
+        ("--s-text-secondary", "#737373"),
+        ("--s-text-muted", "#a1a1a1"),
+    ]
+
+    private static let darkDeviceSurfaces: [(String, String)] = [
+        ("--canvas", "#0f0f1a"),
+        ("--bg", "#1c1c2e"),
+        ("--ghost", "#1f1f38"),
+        ("--ink", "#ffffff"),
+        ("--txt-2", "#b3b3b3"),
+        ("--txt-3", "#808080"),
+        ("--line", "#2e2e3a"),
+        ("--s-bg-card", "#1c1c2e"),
+        ("--s-bg-card-soft", "#1f1f38"),
+        ("--s-bg-elevated", "#25254a"),
+        ("--s-text-primary", "#ffffff"),
+        ("--s-text-secondary", "#b3b3b3"),
+        ("--s-text-muted", "#808080"),
+    ]
+
     
     
     
-    var sprinkleCSSOverrides: String {
+    
+    
+    
+    
+    
+    
+    func sprinkleCSSOverrides(for scheme: ColorScheme) -> String {
+        let deviceBase: Base = scheme == .light ? .light : .dark
+        if deviceBase == base {
+            return fullSprinkleCSS(colorScheme: deviceBase)
+        }
+        return deviceSprinkleCSS(colorScheme: deviceBase)
+    }
+
+    private func fullSprinkleCSS(colorScheme: Base) -> String {
         var lines: [String] = []
         for (name, value) in tokens.sorted(by: { $0.key < $1.key })
         where Self.isSafeCSSName(name) && Self.isSafeCSSValue(value) {
@@ -194,11 +271,36 @@ extension SliccTheme {
                 lines.append("  \(sVar): \(value);")
             }
         }
+        return Self.sprinkleCSSBlock(lines: lines, colorScheme: colorScheme, paintBody: false)
+    }
+
+    
+    
+    private func deviceSprinkleCSS(colorScheme: Base) -> String {
+        let surfaces = colorScheme == .light ? Self.lightDeviceSurfaces : Self.darkDeviceSurfaces
+        var lines = surfaces.map { "  \($0.0): \($0.1);" }
+        if let ctx = tokens["--ctx"], Self.isSafeCSSValue(ctx) {
+            lines.append("  --ctx: \(ctx);")
+            lines.append("  --s-accent: \(ctx);")
+        }
+        return Self.sprinkleCSSBlock(lines: lines, colorScheme: colorScheme, paintBody: true)
+    }
+
+    
+    
+    private static func sprinkleCSSBlock(
+        lines: [String], colorScheme: Base, paintBody: Bool
+    ) -> String {
+        let schemeName = colorScheme.rawValue
+        let bodyRule =
+            paintBody
+            ? "html, body { background: var(--canvas); color: var(--ink); }\n"
+            : ""
         guard !lines.isEmpty else {
-            return "html { color-scheme: \(base.rawValue); }"
+            return bodyRule + "html { color-scheme: \(schemeName); }"
         }
         return ":root {\n" + lines.joined(separator: "\n")
-            + "\n}\nhtml { color-scheme: \(base.rawValue); }"
+            + "\n}\n" + bodyRule + "html { color-scheme: \(schemeName); }"
     }
 
     private static func isSafeCSSName(_ name: String) -> Bool {

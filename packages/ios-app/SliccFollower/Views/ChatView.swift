@@ -97,12 +97,15 @@ struct ChatView: View {
         .transcriptActionSheets(transcriptActions)
         
         
-        .preferredColorScheme(appState.leaderTheme.map { $0.base == .light ? .light : .dark })
+        
         .environment(
             \.palette,
             ThemePalette.resolve(theme: appState.leaderTheme, systemScheme: systemScheme)
         )
-        .environment(\.sprinkleThemeCSS, appState.leaderTheme?.sprinkleCSSOverrides ?? "")
+        .environment(
+            \.sprinkleThemeCSS,
+            appState.leaderTheme?.sprinkleCSSOverrides(for: systemScheme) ?? ""
+        )
         
         
         .onChange(of: presentation.composerDraft) { _, _ in

@@ -30,12 +30,14 @@ describe('validateScreens', () => {
         { name: 'Bad Name', args: ['-a'] },
         { name: 'no-args', args: [] },
         { name: 'bad-settle', args: ['-a'], settleSeconds: 0 },
+        { name: 'bad-appearance', args: ['-a'], appearance: 'sepia' },
       ],
     };
     expect(() => validateScreens(registry)).toThrowError(/duplicate name "ok"/);
     expect(() => validateScreens(registry)).toThrowError(/kebab-case/);
     expect(() => validateScreens(registry)).toThrowError(/non-empty array of strings/);
     expect(() => validateScreens(registry)).toThrowError(/settleSeconds/);
+    expect(() => validateScreens(registry)).toThrowError(/appearance must be/);
   });
 
   it('rejects an empty registry', () => {

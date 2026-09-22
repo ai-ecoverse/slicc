@@ -206,6 +206,7 @@ class AppState: ObservableObject {
     @Published var lastError: String?
     
     
+    
     @Published var leaderTheme: SliccTheme?
 
     
