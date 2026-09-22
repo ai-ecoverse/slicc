@@ -262,15 +262,46 @@ needless reboot.
 | `shell/supplemental-commands/magick-wasm.ts` | Same memoized shape — not yet recycled                                           |
 | `shell/supplemental-commands/v86-wasm.ts`    | Same memoized shape — not yet recycled                                           |
 
-## Python Realm: Mounts Are Async-Only Via `slicc.fs`
+## Python Realm: Live VFS, `subprocess`, and the OPFS Fallback
+
+**Files**: `packages/webapp/src/kernel/realm/py-live-vfs.ts`,
+`packages/webapp/src/kernel/realm/live-vfs-fs.ts`,
+`packages/webapp/src/kernel/realm/py-subprocess.ts`
+
+When the realm has a synchronous bridge (the SAB path on an isolated leader,
+else the SW route — the same one behind `child_process.execSync`), Python's
+filesystem is `SLICC_LIVE_FS`: every top-level VFS dir plus `/tmp` is mounted
+**lazily** over the kernel VFS. Nothing is walked or preloaded; `lookup` /
+`stat` / `listdir` are one bridge round-trip each, file bytes load on first
+read and write back on the last `close()`. Because the backing store is
+`ctx.fs` itself, mounts (local / S3 / DA / hostfs) work with plain `open()`
+and the same path ACLs and sudo gate apply.
+
+`subprocess` (`run`, `check_output`, `Popen`, `os.system`, `os.popen`) runs
+the child through that bridge's exec channel — a shell command, not a fork.
+The child runs to completion and its output is buffered (no interactive
+pipes; `stdin=PIPE` input is sent when you `communicate()` / close stdin);
+stdout crosses as text, so raw binary output is not byte-exact. Every child
+is bracketed by a flush of Python-side dirty buffers and an invalidation of
+cached nodes, so it sees Python's written files and Python sees its output —
+including through files Python still holds open. As on Linux, Python's own
+`io` buffers are the exception both ways: unflushed writes are not visible
+to the child, and a buffered reader may replay bytes it read before the
+child ran (reopen, or use `os.read`). `os.environ` carries the shell environment and is
+what children inherit.
+
+`SLICC_PY_FS=opfs` in the environment (or no bridge at all) falls back to
+the older `OPFS_SYNC_FS` preload path below, which has no `subprocess`.
+
+### Fallback: mounts are async-only via `slicc.fs`
 
 **Files**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`,
 `packages/webapp/src/kernel/realm/mount-bomb-fs.ts`,
 `packages/webapp/src/kernel/realm/slicc-fs-module.ts`
 
-Synchronous access to a mounted path from Python (stdlib `open`,
-`os.listdir`, `pathlib`, pandas, …) is **intentionally disabled**. The realm
-overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at every VFS mount path that
+On the fallback path, synchronous access to a mounted path from Python
+(stdlib `open`, `os.listdir`, `pathlib`, pandas, …) is **intentionally
+disabled**. The realm overlays a throwing FS plugin (`MOUNT_BOMB_FS`) at every VFS mount path that
 overlaps the Python sync dirs, so the first sync touch raises immediately
 with an actionable `OSError` instead of stalling on per-file RPC traffic. To
 read or write under a mount, use the async `slicc.fs` Python module (or copy
@@ -282,7 +313,7 @@ local mount (~11k files) that produced ~24k sequential RPCs and hung
 `python3` startup for minutes; the bomb overlay is instant — no walk, no
 preload, no RPC traffic.
 
-### The bomb error
+#### The bomb error
 
 Any sync `node_ops` or `stream_ops` call under a mounted path raises an
 `OSError` (errno `EIO`) carrying:
@@ -303,7 +334,7 @@ only paths under a registered VFS mount bomb. Mount paths that exactly match
 a sync dir are excluded from the OPFS overlay so the bomb plugin can stack
 without an `EBUSY` collision.
 
-### The `slicc.fs` async API
+#### The `slicc.fs` async API
 
 `slicc.fs` is registered into `sys.modules` at realm startup (always — cheap
 and harmless even when no mounts overlap) and is backed by the same `vfs`
@@ -664,9 +695,10 @@ Two scopes:
 - **Cross-context** — a Web Lock (`navigator.locks`) spanning every context of
   the origin. Insurance: all ZenFS writers currently live in the kernel worker,
   so it is uncontended and costs one async hop. It does **not** cover the Python
-  realm, which mounts the same subtree through emscripten's `OPFS_SYNC_FS`
-  (sync access handles) and bypasses the ZenFS index entirely — a writer this
-  lock cannot see.
+  realm on its `OPFS_SYNC_FS` fallback path, which mounts the same subtree
+  through sync access handles and bypasses the ZenFS index entirely — a writer
+  this lock cannot see. (The default `SLICC_LIVE_FS` path writes through
+  `ctx.fs` in the kernel worker, so it is covered.)
 
 Lock **mutations only**. Locking reads too measured 4× slower and prevented no
 failures. Measured on five contexts writing 92 MB + 800 small files into one

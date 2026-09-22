@@ -42,6 +42,7 @@ import {
   type OpfsSyncFsPlugin,
   prewalkOpfsTree,
 } from './opfs-sync-fs.js';
+import type { PyLiveVfs } from './py-live-vfs.js';
 import { installPythonMountGuard } from './python-mount-guard.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
@@ -379,6 +380,7 @@ export async function runPyRealm(
   };
 
   let opfsMounts: OpfsRealmMount[] = [];
+  let live: PyLiveVfs | undefined;
   let exitCode: number;
   try {
     await preloadMicropip(
@@ -393,8 +395,16 @@ export async function runPyRealm(
     // which reads them from the Pyodide FS. The OPFS mount is what surfaces
     // `/workspace/python_wheels` into that FS, so activating first leaves a
     // cold-boot `di add <pypi-pkg>` failing with `FileNotFoundError`.
-    opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
-    await installMountOverlays(pyodide, init, pushWarning);
+    // The live VFS (sync bridge) supersedes the OPFS preload: it sees every
+    // mount natively, so no mount-bomb overlays either.
+    // Lazy: `python-command.ts` imports this module on the kernel worker's
+    // boot graph; the live FS + subprocess shim only load inside the realm.
+    const { mountPyLiveVfs } = await import('./py-live-vfs.js');
+    live = mountPyLiveVfs(pyodide, init, port, pushWarning);
+    if (!live) {
+      opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
+      await installMountOverlays(pyodide, init, pushWarning);
+    }
 
     await activateManifest(pyodide, rpc, init, pushWarning);
 
@@ -410,7 +420,8 @@ export async function runPyRealm(
 
     exitCode = await executePythonCode(pyodide, stderrChunks);
 
-    await flushOpfsIfNeeded(opfsMounts, init, rpc, pushWarning);
+    if (live) flushLiveVfsAtExit(live, pushWarning);
+    else await flushOpfsIfNeeded(opfsMounts, init, rpc, pushWarning);
   } catch (err) {
     // A post-load boot step can fatally crash Pyodide (e.g. a wasm
     // abort), after which every later Pyodide API call throws
@@ -837,9 +848,36 @@ function configurePyodideIo(
       return init.stdin;
     },
   });
+  applyRealmEnviron(pyodide, init.env);
   pyodide.globals.set('__slicc_code', init.code);
   pyodide.globals.set('__slicc_filename', init.filename);
   pyodide.globals.set('__slicc_argv', init.argv);
+}
+
+/**
+ * Expose the shell environment as `os.environ`, so scripts (and the children
+ * they spawn through `subprocess`) see `PATH`, `HOME`, and friends.
+ */
+function applyRealmEnviron(
+  pyodide: PyodideInterface,
+  env: Record<string, string> | undefined
+): void {
+  if (!env || Object.keys(env).length === 0) return;
+  pyodide.globals.set('__slicc_env', pyodide.toPy(env));
+  try {
+    pyodide.runPython('import os; os.environ.update(__slicc_env)');
+  } finally {
+    pyodide.runPython('del __slicc_env');
+  }
+}
+
+/** Push buffers of files Python left open; a failure only warns. */
+function flushLiveVfsAtExit(live: PyLiveVfs, pushWarning: WarningSink): void {
+  try {
+    live.flush();
+  } catch (err) {
+    pushWarning(`Pyodide→VFS flush failed: ${describeRealmError(err)}`);
+  }
 }
 
 /** Execute the Python runner and return the exit code. */
