@@ -461,6 +461,29 @@ describe('discoverSkillCandidates', () => {
     expect(afterRemove.map((candidate) => candidate.path)).toEqual([]);
     expect(rootReads).toBe(1);
   });
+
+  it('does not drop the compatibility cache when file contents mention a compatibility path', async () => {
+    await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
+    await fs.writeFile('/repo/.claude/skills/first-skill/SKILL.md', '# first');
+    await discoverSkillCandidates(fs);
+
+    let rootReads = 0;
+    const readDir = fs.readDir.bind(fs);
+    vi.spyOn(fs, 'readDir').mockImplementation(async (path: string) => {
+      if (path === '/') rootReads += 1;
+      return readDir(path);
+    });
+
+    await fs.mkdir('/notes', { recursive: true });
+    await fs.writeFile(
+      '/notes/readme.md',
+      'see /.claude/skills/not-real/SKILL.md and .agents/skills'
+    );
+
+    const cached = await discoverSkillCandidates(fs);
+    expect(cached.map((candidate) => candidate.path)).toEqual(['/repo/.claude/skills/first-skill']);
+    expect(rootReads).toBe(0);
+  });
 });
 
 describe('discoverSkillCandidates over a sudo-fs Proxy (OOM regression)', () => {

@@ -196,7 +196,12 @@ function shouldInvalidateCompatibilityCache(
   args: readonly unknown[]
 ): boolean {
   if (ALWAYS_INVALIDATING_METHODS.has(methodName)) return true;
-  return args.some((arg) => typeof arg === 'string' && pathTouchesCompatibilityTree(arg));
+  // `mkdir` / `writeFile` take the path as the first argument. Later
+  // arguments are file contents or options; scanning those would split a
+  // multi-megabyte write and would drop the cache when the text merely
+  // mentions a compatibility path.
+  const pathArg = args[0];
+  return typeof pathArg === 'string' && pathTouchesCompatibilityTree(pathArg);
 }
 
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
