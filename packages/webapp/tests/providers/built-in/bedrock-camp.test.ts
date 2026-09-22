@@ -484,21 +484,27 @@ describe('config.defaultModelId resolves against the real catalogue', () => {
 
   async function visibleModels(): Promise<Array<{ id: string }>> {
     const { getModels } = await import('../../../src/core/index.js');
-    const all = (getModels as (p: string) => Array<{ id: string }>)('amazon-bedrock');
+    const { BEDROCK_CAMP_EXTRA_MODELS, mergeBedrockCampCatalogue } = await import(
+      '../../../src/providers/built-in/bedrock-camp-extra-models.js'
+    );
+    const all = mergeBedrockCampCatalogue<{ id: string }>(
+      (getModels as (p: string) => Array<{ id: string }>)('amazon-bedrock'),
+      BEDROCK_CAMP_EXTRA_MODELS
+    );
     return all.filter((m) => isBedrockCampCompatible(m, REGION));
   }
 
-  it('is a Claude 5 default', () => {
-    expect(config.defaultModelId).toBe('claude-opus-5');
+  it('is the newest Opus', () => {
+    expect(config.defaultModelId).toBe('claude-opus-5-5');
   });
 
-  it('matches at least one model the picker actually shows', async () => {
+  it('matches at least one model the picker actually shows, and only that model', async () => {
     const id = config.defaultModelId!;
     const matches = (await visibleModels()).filter((m) =>
       m.id.toLowerCase().includes(id.toLowerCase())
     );
     expect(matches.length).toBeGreaterThan(0);
-    for (const m of matches) expect(m.id).toMatch(/anthropic\.claude-opus-5/);
+    for (const m of matches) expect(m.id).toMatch(/anthropic\.claude-opus-5-5$/);
   });
 });
 

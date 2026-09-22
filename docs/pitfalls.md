@@ -2183,9 +2183,33 @@ throughput isn't supported"), while pi-ai's catalogue ships only the bare id.
 so admitting it needs an upstream catalogue fix or a synthesized entry — an
 allowlist alone cannot surface it.
 
+### 6. AWS ships models before pi-ai's catalogue lists them
+
+The bedrock-camp picker is built from pi-ai's `amazon-bedrock` catalogue, so a
+model AWS already serves is invisible until a pi-ai release adds it. Claude
+Opus 5.5 was live on every profile tier (`us.`, `eu.`, `jp.`, `au.`,
+`global.`) while pi-ai 0.87.0 and pi's hosted catalogue still lacked it.
+
+`bedrock-camp-extra-models.ts` holds synthesized entries for these models.
+`mergeBedrockCampCatalogue` appends them after pi-ai's list and lets pi-ai win
+on an id collision, so a pi-ai bump supersedes an entry without breaking
+anything. Delete the entry once that happens.
+
+Two traps when adding one:
+
+- **Resolution, not just the picker.** `resolveModelById` and
+  `resolveCurrentModel` look the id up in pi-ai's registry first. On a miss,
+  `resolveUnknownModelId` now checks the provider's own catalogue before it
+  degrades to the selected model; without that, picking a synthesized model
+  would silently run the previous one.
+- **Verify live, do not copy.** Check `GET /inference-profiles` for the tiers
+  and `POST /converse` for `temperature`, the thinking shape, and a
+  `cachePoint` write-then-read. Regional tiers cost 10% more than `global.`.
+
 **Related tests:** `claude-model-version.test.ts`,
 `temperature-support.test.ts`, `adaptive-thinking.test.ts`,
-`bedrock-camp.test.ts`, `bedrock-camp-compat.test.ts`.
+`bedrock-camp.test.ts`, `bedrock-camp-compat.test.ts`,
+`bedrock-camp-extra-models.test.ts`, `bedrock-camp-picker.test.ts`.
 
 ## Detached popout (historical, removed)
 
