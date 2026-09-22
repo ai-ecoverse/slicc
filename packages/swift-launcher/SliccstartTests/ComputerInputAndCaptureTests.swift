@@ -195,10 +195,27 @@ final class ComputerInputInjectorTests: XCTestCase {
         } catch let error as ComputerInputError {
             XCTAssertEqual(error, .unknownKeysym("Foo"))
             XCTAssertEqual(error.message, "unknown keysym 'Foo' for macOS")
+            XCTAssertEqual(String(describing: error), error.message)
         } catch {
             XCTFail("unexpected \(error)")
         }
         XCTAssertTrue(sink.actions.isEmpty)
+    }
+
+    /// A keysym with no US-ANSI virtual key (punctuation, accented letters) is
+    /// typed as its character, carrying the modifiers it was pressed with.
+    func testAKeysymWithNoKeyCodeIsTypedAsUnicode() async throws {
+        var (injector, sink) = injector()
+        try await injector.apply([
+            .key(keysym: "!", down: nil),
+            .key(keysym: "shift+é", down: true),
+        ])
+        XCTAssertEqual(
+            sink.actions,
+            [
+                .unicode("!", flags: []),
+                .unicode("é", flags: .maskShift),
+            ])
     }
 
     func testDelayZeroReturnsImmediately() async {

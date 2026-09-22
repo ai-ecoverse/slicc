@@ -321,3 +321,83 @@ final class ComputerWireNumberTests: XCTestCase {
             sink.actions, [.scroll(dx: Int32.max, dy: Int32.min, at: CGPoint(x: 1, y: 1))])
     }
 }
+
+/// Implements only `post`, so the protocol's default `cursorLocation()` applies.
+private final class PostOnlySink: ComputerEventSink {
+    private(set) var actions: [ComputerCGAction] = []
+    func post(_ action: ComputerCGAction) { actions.append(action) }
+}
+
+final class ComputerEventSinkTests: XCTestCase {
+    /// A sink that cannot report the pointer must not invent one: a relative
+    /// move then starts at the captured display's origin, never at (0, 0) on main.
+    func testASinkWithoutAPointerReadingStartsRelativeMovesAtTheDisplayOrigin() async throws {
+        let sink = PostOnlySink()
+        XCTAssertNil(sink.cursorLocation())
+        let display = ComputerDisplayFixtures.right
+        var injector = ComputerInputInjector(
+            sink: sink, encodedSize: display.pixelSize, display: display, delay: { _ in })
+        try await injector.apply([.mousemove(x: 4, y: 4, relative: true)])
+        XCTAssertEqual(sink.actions, [.mouseMove(CGPoint(x: 2562, y: 325))])
+    }
+
+    /// Reading the live pointer and posting a `wait` touch no event tap, so both
+    /// are safe on a CI host; a headless session may simply have no pointer.
+    func testTheLiveSinkReadsThePointerAndTreatsWaitAsANoOp() {
+        let sink = LiveCGEventSink()
+        if let point = sink.cursorLocation() {
+            XCTAssertTrue(point.x.isFinite && point.y.isFinite)
+        }
+        sink.post(.wait(milliseconds: 1))
+    }
+}
+
+/// The CoreGraphics-only half of display selection runs against whatever
+/// displays the test host has. A headless host with none must report
+/// `noDisplay`, not trap on an empty list.
+final class ComputerLiveDisplayTests: XCTestCase {
+    func testLiveDefaultIsTheMainDisplayInItsPixels() throws {
+        let geometry: ComputerDisplayGeometry
+        do {
+            geometry = try ScreenCaptureKitCapturer.liveGeometry(index: nil)
+        } catch ComputerCaptureError.noDisplay {
+            throw XCTSkip("test host has no active display")
+        }
+        XCTAssertEqual(geometry.displayID, CGMainDisplayID())
+        XCTAssertTrue(geometry.isMain)
+        XCTAssertEqual(geometry.origin, .zero, "the main display anchors the global space")
+        XCTAssertGreaterThan(geometry.pointSize.width, 0)
+        XCTAssertGreaterThanOrEqual(geometry.pixelSize.width, geometry.pointSize.width)
+        XCTAssertGreaterThanOrEqual(geometry.pixelSize.height, geometry.pointSize.height)
+    }
+
+    func testLiveIndexOneIsTheFirstActiveDisplay() throws {
+        do {
+            let first = try ScreenCaptureKitCapturer.liveGeometry(index: 1)
+            XCTAssertNotEqual(first.displayID, 0)
+        } catch ComputerCaptureError.noDisplay {
+            throw XCTSkip("test host has no active display")
+        }
+    }
+
+    func testLiveIndexPastTheAttachedDisplaysIsAnErrorNotATrap() {
+        XCTAssertThrowsError(try ScreenCaptureKitCapturer.liveGeometry(index: 99)) { error in
+            switch error as? ComputerCaptureError {
+            case .displayOutOfRange(let index, let available):
+                XCTAssertEqual(index, 99)
+                XCTAssertTrue(available.hasPrefix("1="), available)
+            case .noDisplay:
+                break
+            default:
+                XCTFail("unexpected \(error)")
+            }
+        }
+    }
+
+    @MainActor
+    func testStoppingACapturerThatNeverStartedIsANoOp() {
+        let capturer = ScreenCaptureKitCapturer()
+        capturer.stop()
+        capturer.stop()
+    }
+}

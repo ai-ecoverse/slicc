@@ -1010,6 +1010,56 @@ final class ComputerTrayFollowerTests: XCTestCase {
     }
 }
 
+extension ComputerTrayFollowerTests {
+    func testRefreshWithoutAJoinUrlDialsNothing() async {
+        var created = 0
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in
+                created += 1
+                return RecordingConnector()
+            },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink())
+        follower.refresh()
+        await follower._testing_settle()
+        XCTAssertEqual(created, 0)
+    }
+
+    /// The live display resolver (no injected geometry): input naming a display
+    /// the host does not have is answered with an error and posts nothing.
+    func testTheLiveDisplayResolverRejectsAnUnattachedDisplay() async throws {
+        let sink = RecordingEventSink()
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in RecordingConnector() },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: sink)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-99", events: [.mousemove(x: 1, y: 1, relative: false)],
+                    display: 99)))
+        await follower._testing_settle()
+        XCTAssertTrue(sink.actions.isEmpty)
+        let errs = errors(in: sent)
+        XCTAssertEqual(errs.count, 1)
+        XCTAssertTrue(
+            errs.allSatisfy {
+                $0.hasPrefix("display 99 is not attached")
+                    || $0 == ComputerCaptureError.noDisplay.message
+            }, "\(errs)")
+    }
+}
+
 final class ComputerNativeFramingTests: XCTestCase {
     func testSmallPayloadIsUnchunked() throws {
         let messages = ComputerNativeFraming.messages(
