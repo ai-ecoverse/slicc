@@ -70,11 +70,13 @@ computer record -V 5 guest.webm
 ```bash
 playwright-cli tab-list             # pick a targetId that is not the SLICC app
 computer add tab <targetId> -n docs
-computer screenshot -c tab:<targetId>
+computer screenshot -c docs         # or -c tab:<targetId>
 computer click 1 --at 100,80 type hello
 ```
 
 `computer add tab` refuses SLICC app tabs (`sliccy.ai` leader, `?slicc=`, extension pages). Pass a URL or a CDP target id. Look at the screenshot and click what you see — screenshot-space `--at` lands on the visual target even when `devicePixelRatio` is not 1.
+
+The `-n <name>` you assign is a stable `-c <name>` selector for the tab's lifetime: it stays the match key even after screenshots or input let the page overwrite its `document.title`. `-c tab:<targetId>` also works if you did not name the tab.
 
 ## Display share (`screen`)
 
