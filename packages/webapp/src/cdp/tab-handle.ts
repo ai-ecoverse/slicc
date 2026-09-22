@@ -46,6 +46,15 @@ export type CdpPayload = { [key: string]: unknown };
 const NAVIGATE_LOAD_TIMEOUT_MS = 30000;
 
 /**
+ * Captures {@link TabHandle.applyMaxWidth} may spend fitting a frame to the
+ * cap: one guess plus measured corrections. Every tab shape measured for #3373
+ * converged in two.
+ */
+const MAX_WIDTH_ATTEMPTS = 3;
+/** Accept a frame within this fraction of the cap instead of re-capturing. */
+const MAX_WIDTH_TOLERANCE = 0.98;
+
+/**
  * Per-target emulation override, re-applied on every fresh attach so a
  * sibling driver switching tabs cannot reset it (see
  * {@link TabHandle.setViewportOverride}).
@@ -338,7 +347,22 @@ export class TabHandle {
 
   /**
    * Re-capture with a downscaled clip if the image exceeds maxWidth.
-   * Reads the width from the PNG IHDR and applies clip.scale to shrink.
+   *
+   * The encoded width of a clip capture is `clip.width × clip.scale × F`,
+   * where `clip.width` is in CSS px and `F` is a per-tab factor CDP never
+   * reports. `F` is NOT derivable from `devicePixelRatio` or from
+   * `peekWidth / clip.width`: under browser zoom it is the display scale while
+   * the unclipped capture used the zoomed DPR (measured 0.667× of the request),
+   * and under mobile emulation `window.innerWidth` is the *layout* viewport,
+   * far wider than the visual one the peek encoded (measured 2.4× — upscaled
+   * past the tab's own native pixels). Deriving a single scale from
+   * `maxWidth / peekWidth` mixes those two spaces, which is #3373.
+   *
+   * So `F` is measured instead of assumed: the first re-capture is a guess,
+   * then each encoded width pins `clip.width × F = width / scale` exactly and
+   * one correction lands on the cap (2 captures on every shape measured). A
+   * frame still over the cap after {@link MAX_WIDTH_ATTEMPTS} yields the
+   * original pixels — never invented ones — so the caller can mark `overCap`.
    */
   private async applyMaxWidth(
     base64: string,
@@ -348,52 +372,91 @@ export class TabHandle {
     const peekWidth = pngWidth(base64);
     if (!peekWidth || peekWidth <= maxWidth) return base64;
 
-    const scale = maxWidth / peekWidth;
+    const clip = await this.maxWidthClip(params);
+    params['captureBeyondViewport'] = true;
+    // `peekWidth` is the ENCODED width, which already includes the clip's own
+    // scale (e.g. --hires sets scale=DPR), so the first guess COMPOSES the
+    // ratios: replacing the scale would shrink relative to CSS pixels instead
+    // and a 2560px hires capture asked to fit 1280 would come back at 640.
+    const baseScale = clip.scale ?? 1;
+    let scale = baseScale * (maxWidth / peekWidth);
+    let best: string | null = null;
+    let bestWidth = 0;
+
+    for (let attempt = 0; attempt < MAX_WIDTH_ATTEMPTS; attempt++) {
+      clip.scale = scale;
+      let data: string;
+      try {
+        data = (await this.send('Page.captureScreenshot', params))['data'] as string;
+      } catch (err) {
+        log.warn('maxWidth re-capture failed', err);
+        break;
+      }
+      const width = pngWidth(data);
+      // Unmeasurable output (a non-PNG encode): the guess is all there is.
+      if (!width) return data;
+      if (width <= maxWidth && width > bestWidth) {
+        best = data;
+        bestWidth = width;
+      }
+      // Close enough under the cap: a further capture would only chase pixels.
+      if (width <= maxWidth && width >= maxWidth * MAX_WIDTH_TOLERANCE) break;
+      // Output is linear in scale, so this is the scale that hits the cap.
+      // It targets `maxWidth`, which is below `peekWidth` here, so a
+      // correction can never upscale past the tab's native pixels.
+      // No convergence early-exit: under the cap the tolerance break above
+      // already fires, so one could only trigger OVER the cap, where a
+      // one-pixel rounding overshoot (501 for 500) would leave no candidate
+      // and ship the native frame. Correcting from a measured width lands at
+      // or under the cap whether Chrome floors, ceils or rounds, and
+      // MAX_WIDTH_ATTEMPTS bounds the loop.
+      const next = (scale * maxWidth) / width;
+      if (!Number.isFinite(next) || next <= 0) break;
+      scale = next;
+    }
+
+    return best ?? base64;
+  }
+
+  /**
+   * The clip {@link applyMaxWidth} rescales, installed into `params`. An
+   * explicit clip (`--full-page`, `--hires`) is reused; a viewport capture
+   * needs one synthesized.
+   */
+  private async maxWidthClip(
+    params: CdpPayload
+  ): Promise<{ x: number; y: number; width: number; height: number; scale?: number }> {
     const existingClip = params['clip'] as
       | { x: number; y: number; width: number; height: number; scale?: number }
       | undefined;
+    if (existingClip) return existingClip;
 
-    if (existingClip) {
-      // `peekWidth` is the ENCODED width, which already includes the clip's
-      // own scale (e.g. --hires sets scale=DPR). Replacing the scale would
-      // shrink relative to CSS pixels instead — a 2560px hires capture asked
-      // to fit 1280 would come back at 640. Compose the ratios instead.
-      existingClip.scale = (existingClip.scale ?? 1) * scale;
-    } else {
-      let vw = 1280;
-      let vh = 800;
-      // CDP clip is document-origin. A viewport recapture must start at the
-      // current scroll, not {0,0} — that always rendered the top of the page
-      // while the default (no-clip) path correctly captured the live viewport
-      // (#3232).
-      let vx = 0;
-      let vy = 0;
-      try {
-        await this.send('Runtime.enable');
-        const dim = await this.send('Runtime.evaluate', {
-          expression:
-            'JSON.stringify({w:window.innerWidth,h:window.innerHeight,x:window.scrollX,y:window.scrollY})',
-          returnByValue: true,
-        });
-        const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
-        vw = v.w || 1280;
-        vh = v.h || 800;
-        if (typeof v.x === 'number') vx = v.x;
-        if (typeof v.y === 'number') vy = v.y;
-      } catch {
-        /* use defaults */
-      }
-      params['clip'] = { x: vx, y: vy, width: vw, height: vh, scale };
-    }
-    params['captureBeyondViewport'] = true;
-
+    let vw = 1280;
+    let vh = 800;
+    // CDP clip is document-origin. A viewport recapture must start at the
+    // current scroll, not {0,0} — that always rendered the top of the page
+    // while the default (no-clip) path correctly captured the live viewport
+    // (#3232).
+    let vx = 0;
+    let vy = 0;
     try {
-      const resized = await this.send('Page.captureScreenshot', params);
-      return resized['data'] as string;
-    } catch (err) {
-      log.warn('maxWidth re-capture failed, returning original', err);
-      return base64;
+      await this.send('Runtime.enable');
+      const dim = await this.send('Runtime.evaluate', {
+        expression:
+          'JSON.stringify({w:window.innerWidth,h:window.innerHeight,x:window.scrollX,y:window.scrollY})',
+        returnByValue: true,
+      });
+      const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
+      vw = v.w || 1280;
+      vh = v.h || 800;
+      if (typeof v.x === 'number') vx = v.x;
+      if (typeof v.y === 'number') vy = v.y;
+    } catch {
+      /* use defaults */
     }
+    const clip = { x: vx, y: vy, width: vw, height: vh };
+    params['clip'] = clip;
+    return clip;
   }
 
   // ---------------------------------------------------------------------

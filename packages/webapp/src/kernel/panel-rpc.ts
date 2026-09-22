@@ -998,6 +998,8 @@ export interface PanelRpcResults {
     height: number;
     nativeWidth?: number;
     nativeHeight?: number;
+    /** Encoded pixels are still wider than the requested `maxWidth` (#3373). */
+    overCap?: boolean;
     title: string;
     url: string;
   };

@@ -1013,6 +1013,105 @@ describe('BrowserAPI', () => {
       expect((recapture[1] as { clip: { scale: number } }).clip.scale).toBe(1);
     });
 
+    // #3373. Measured against Chrome 141: a clip capture encodes
+    // `clip.width × clip.scale × clipFactor` px, and `clipFactor` is neither
+    // `devicePixelRatio` nor `peekWidth / cssWidth`. Under browser zoom the
+    // unclipped peek used the zoomed DPR while the clip used the display
+    // scale; under mobile emulation `innerWidth` is the layout viewport, far
+    // wider than the visual one the peek encoded. A `maxWidth / peekWidth`
+    // scale mixes the two spaces and misses the cap in both directions.
+    function fakeChrome(tab: {
+      cssWidth: number;
+      peekWidth: number;
+      /** Encoded px per CSS px at clip scale 1 — unknowable before a capture. */
+      clipFactor: number;
+    }) {
+      return async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'Runtime.evaluate') {
+          return {
+            result: {
+              value: JSON.stringify({ w: tab.cssWidth, h: tab.cssWidth, x: 0, y: 0 }),
+            },
+          };
+        }
+        if (method !== 'Page.captureScreenshot') return {};
+        const clip = params?.['clip'] as { width: number; scale?: number } | undefined;
+        if (!clip) return { data: pngBase64(tab.peekWidth) };
+        return {
+          data: pngBase64(Math.round(clip.width * (clip.scale ?? 1) * tab.clipFactor)),
+        };
+      };
+    }
+
+    function captureWidths(): number[] {
+      return (mockClient.send as ReturnType<typeof vi.fn>).mock.calls
+        .filter(([m]) => m === 'Page.captureScreenshot')
+        .map(([, p]) => {
+          const clip = (p as { clip?: { width: number; scale?: number } }).clip;
+          return clip ? Math.round(clip.width * (clip.scale ?? 1)) : 0;
+        });
+    }
+
+    it('hits maxWidth on a zoomed tab whose peek ratio overstates the clip factor (#3373)', async () => {
+      // dpr 2.5 (retina × 125% zoom): the peek is 2.5× CSS but a clip renders
+      // at 2×, so the naive scale 500/2560 encoded 1024 × 0.1953 × 2 = 400 px
+      // — 0.8× the request, exactly the ratio measured on tab A.
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 1024, peekWidth: 2560, clipFactor: 2 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+    });
+
+    it('hits maxWidth on a mobile-emulated tab without upscaling past native (#3373)', async () => {
+      // dpr 2.625, visual viewport 412 CSS px (peek 1082) but innerWidth
+      // reports the 980 px layout viewport. The naive scale 500/1082 encoded
+      // 980 × 0.462 × 2.625 = 1189 px: 2.4× the request and wider than the
+      // tab's own native pixels, i.e. invented ones.
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 980, peekWidth: 1082, clipFactor: 2.625 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+      // Never upscaled: every capture stayed inside the native peek.
+      for (const width of captureWidths()) expect(width * 2.625).toBeLessThanOrEqual(1082);
+    });
+
+    it('corrects a one-pixel rounding overshoot instead of shipping the native frame', async () => {
+      // The guess encodes 1000 × 0.5 × 1.0012 = 500.6 → 501 px for a 500 cap.
+      // The correction is only 1/501 of the scale; treating that as converged
+      // left no under-cap candidate and returned the 1000 px peek (#3373).
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 1000, peekWidth: 1000, clipFactor: 1.0012 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+      expect(captureWidths()).toHaveLength(3);
+    });
+
+    it('returns native pixels, never invented ones, when the cap cannot be met', async () => {
+      // A tab that ignores clip.scale can never be made to encode narrower.
+      // The over-cap frame has to be the ORIGINAL capture so the computer
+      // adapter reports `overCap` instead of shipping an upscaled fake.
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Page.captureScreenshot'
+          ? { data: pngBase64(1600) }
+          : { result: { value: JSON.stringify({ w: 800, h: 600, x: 0, y: 0 }) } }
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(1600));
+      // Bounded: the peek plus MAX_WIDTH_ATTEMPTS corrections, not a spin.
+      expect(captureWidths()).toHaveLength(4);
+    });
+
     it('maxWidth is a no-op for non-PNG output rather than misreading the header', async () => {
       // JPEG bytes at the IHDR offsets decode to garbage; the signature check
       // makes pngWidth return 0 so no bogus rescale is attempted.
