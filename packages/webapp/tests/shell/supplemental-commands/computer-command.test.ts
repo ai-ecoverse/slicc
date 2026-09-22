@@ -17,13 +17,16 @@ class FakeBackend implements ComputerBackend {
   events: ComputerInputEvent[] = [];
   shots = 0;
 
-  constructor(readonly id = 'fake') {}
+  constructor(
+    readonly id = 'fake',
+    readonly label = id
+  ) {}
 
   describe(): ComputerDescriptor {
     return {
       id: this.id,
       kind: 'jsh',
-      title: this.id,
+      title: this.label,
       size: { width: 1000, height: 500 },
       state: 'live',
       capabilities: {
@@ -466,6 +469,76 @@ describe('computer command', () => {
     expect(shot.exitCode).toBe(0);
     expect(browser.withTab).toHaveBeenCalled();
     expect(tab.screenshot).toHaveBeenCalled();
+  });
+
+  it('keeps the -n name resolvable after the tab retitles itself', async () => {
+    const jpeg = uint8ToBase64(MINIMAL_JPEG);
+    const tab = {
+      send: vi.fn(async () => ({})),
+      screenshot: vi.fn(async () => jpeg),
+      evaluate: vi.fn(async () => 1),
+    };
+    let liveTitle = 'probe';
+    const browser = {
+      listAllTargets: vi.fn(async () => [
+        { targetId: 'T1', title: liveTitle, url: 'https://example.test/' },
+      ]),
+      withTab: vi.fn(async (_id: string, fn: (t: typeof tab) => Promise<unknown>) => fn(tab)),
+    };
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({ registry, browser: browser as never });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'tab', 'T1', '-n', 'probe'], ctx);
+    expect(added.stdout).toContain('(probe)');
+    // The page renames itself; every capture republishes `document.title`.
+    liveTitle = 'computer probe';
+    expect((await cmd.execute(['screenshot', '-c', 'probe'], ctx)).exitCode).toBe(0);
+    expect((await cmd.execute(['click', '1', '--at', '4,4', '-c', 'probe'], ctx)).exitCode).toBe(0);
+    const again = await cmd.execute(['screenshot', '-c', 'probe'], ctx);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toContain('target: tab:T1');
+    // The id handle keeps working, and `ls` shows both handles.
+    expect((await cmd.execute(['screenshot', '-c', 'tab:T1'], ctx)).exitCode).toBe(0);
+    const ls = await cmd.execute(['ls'], ctx);
+    expect(ls.stdout).toContain('NAME');
+    expect(ls.stdout).toMatch(/probe\s+computer probe/u);
+    const info = await cmd.execute(['info', '-c', 'probe'], ctx);
+    expect(info.stdout).toContain('name: probe');
+    expect(info.stdout).toContain('title: computer probe');
+  });
+
+  it('prefers the -n name over another computer claiming it as a title', async () => {
+    const registry = new ComputerRegistry(null);
+    registry.register(new FakeBackend('box', 'Box'), { name: 'probe' });
+    registry.register(new FakeBackend('other', 'probe'));
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const used = await cmd.execute(['use', 'probe'], ctx);
+    expect(used.stdout).toBe('using box\n');
+    expect(registry.nameOf('box')).toBe('probe');
+    expect(registry.nameOf('other')).toBeNull();
+  });
+
+  it('reports two computers sharing one -n name as ambiguous', async () => {
+    const registry = new ComputerRegistry(null);
+    registry.register(new FakeBackend('box'), { name: 'probe' });
+    registry.register(new FakeBackend('crate'), { name: 'probe' });
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const clash = await cmd.execute(['use', 'probe'], ctx);
+    expect(clash.exitCode).not.toBe(0);
+    expect(clash.stderr).toContain("ambiguous computer 'probe' matches box, crate");
+  });
+
+  it('names the -n handle in the unknown-computer error', async () => {
+    const registry = new ComputerRegistry(null);
+    registry.register(new FakeBackend('box'), { name: 'probe' });
+    const cmd = createComputerCommand({ registry });
+    const { ctx } = makeCtx();
+    const miss = await cmd.execute(['use', 'nope'], ctx);
+    expect(miss.exitCode).not.toBe(0);
+    expect(miss.stderr).toContain("unknown computer 'nope'");
+    expect(miss.stderr).toContain('box (probe)');
   });
 
   it('add tab uses panel-RPC when a client is provided', async () => {
