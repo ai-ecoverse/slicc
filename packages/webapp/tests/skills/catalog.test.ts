@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { emptyPolicy } from '../../src/base/sudoers.js';
@@ -377,6 +377,58 @@ describe('discoverSkillCandidates', () => {
 
     expect(candidates.map((candidate) => candidate.path)).toContain('/repo/.claude/skills/real');
   }, 8000);
+
+  it('shares one compatibility walk across overlapping discoveries', async () => {
+    await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
+    await fs.writeFile('/repo/.claude/skills/first-skill/SKILL.md', '# first');
+
+    let rootReads = 0;
+    const readDir = fs.readDir.bind(fs);
+    vi.spyOn(fs, 'readDir').mockImplementation(async (path: string) => {
+      if (path === '/') rootReads += 1;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return readDir(path);
+    });
+
+    const [first, second] = await Promise.all([
+      discoverSkillCandidates(fs),
+      discoverSkillCandidates(fs),
+    ]);
+
+    expect(first.map((candidate) => candidate.path)).toEqual(
+      second.map((candidate) => candidate.path)
+    );
+    expect(first.map((candidate) => candidate.path)).toContain('/repo/.claude/skills/first-skill');
+    expect(rootReads).toBe(1);
+  });
+
+  it('keeps the compatibility cache across scoop-skeleton mkdirs and drops it on rm', async () => {
+    await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
+    await fs.writeFile('/repo/.claude/skills/first-skill/SKILL.md', '# first');
+    await discoverSkillCandidates(fs);
+
+    let rootReads = 0;
+    const readDir = fs.readDir.bind(fs);
+    vi.spyOn(fs, 'readDir').mockImplementation(async (path: string) => {
+      if (path === '/') rootReads += 1;
+      return readDir(path);
+    });
+
+    // The directories and memory file every restored scoop creates.
+    await fs.mkdir('/scoops/child/workspace', { recursive: true });
+    await fs.mkdir('/scoops/child/tmp', { recursive: true });
+    await fs.mkdir('/shared', { recursive: true });
+    await fs.writeFile('/scoops/child/workspace/CLAUDE.md', '# memory');
+
+    const cached = await discoverSkillCandidates(fs);
+    expect(cached.map((candidate) => candidate.path)).toEqual(['/repo/.claude/skills/first-skill']);
+    expect(rootReads).toBe(0);
+
+    await fs.rm('/repo', { recursive: true });
+    const afterRemove = await discoverSkillCandidates(fs);
+    expect(afterRemove.map((candidate) => candidate.path)).toEqual([]);
+    expect(rootReads).toBe(1);
+  });
 });
 
 describe('discoverSkillCandidates over a sudo-fs Proxy (OOM regression)', () => {

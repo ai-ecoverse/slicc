@@ -213,10 +213,44 @@ export function layoutCommandForSkill(frontmatter: {
   return `layout set ${name}`;
 }
 
+const skillsLoadInflight = new WeakMap<object, Map<string, Promise<Skill[]>>>();
+const defaultSkillsInflight = new WeakMap<object, Map<string, Promise<void>>>();
+
+/**
+ * Concurrent boot restores call these for the same shared filesystem.
+ * Share the in-flight promise so a wave of scoops does one scan, not one
+ * per scoop. The entry is dropped when the call settles, so a later edit
+ * is visible to the next load.
+ */
+function shareOnFs<T>(
+  slots: WeakMap<object, Map<string, Promise<T>>>,
+  fs: object,
+  key: string,
+  run: () => Promise<T>
+): Promise<T> {
+  let byKey = slots.get(fs);
+  if (!byKey) {
+    byKey = new Map();
+    slots.set(fs, byKey);
+  }
+  const existing = byKey.get(key);
+  if (existing) return existing;
+  let promise!: Promise<T>;
+  promise = run().finally(() => {
+    if (byKey.get(key) === promise) byKey.delete(key);
+  });
+  byKey.set(key, promise);
+  return promise;
+}
+
 /**
  * Load skills from a directory in VirtualFS
  */
-export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
+export function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
+  return shareOnFs(skillsLoadInflight, fs, skillsDir, () => loadSkillsOnce(fs, skillsDir));
+}
+
+async function loadSkillsOnce(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
   const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
   const nativeDiscoveredSkills = discoveredSkills.filter((skill) => skill.source === 'native');
@@ -346,10 +380,16 @@ ${sections.join('\n')}
  * Create default files in VFS from bundled defaults.
  * Files are loaded from packages/vfs-root/ at build time via import.meta.glob.
  */
-export async function createDefaultSkills(
+export function createDefaultSkills(
   fs: VirtualFS,
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
+  return shareOnFs(defaultSkillsInflight, fs, skillsDir, () =>
+    createDefaultSkillsOnce(fs, skillsDir)
+  );
+}
+
+async function createDefaultSkillsOnce(fs: VirtualFS, skillsDir: string): Promise<void> {
   const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFileLoaders();
 

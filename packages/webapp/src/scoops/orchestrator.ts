@@ -84,6 +84,7 @@ import { globalSeedModel } from './model-seed.js';
 import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
+import { mapWithConcurrency, SCOOP_BOOT_CONCURRENCY } from './scoop-boot-restore.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
 import type { InFlightTurn, TurnJournal } from './scoop-context/turn-journal.js';
 import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
@@ -254,6 +255,12 @@ export class Orchestrator implements ConeApprovalRouter {
    * {@link recoverInterruptedWork}.
    */
   private interruptedTurns: InFlightTurn[] | null = null;
+  /**
+   * Child-context restore started by the latest `init()` and not awaited
+   * there. Roots are already finished when this promise is published.
+   * `shutdown` and reload recovery both wait on it.
+   */
+  private bootRestoreTail: Promise<void> = Promise.resolve();
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
@@ -563,9 +570,10 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Initialize orchestrator and load saved scoops */
   /**
    * @param onBootProgress Optional heartbeat fired after each restored
-   *   scoop's context init — the boot's main time sink for a large
-   *   session. Lets the page re-arm its kernel-ready watchdog so a
-   *   slow-but-advancing boot isn't killed by the timeout (#2007).
+   *   scoop's context init (success or skip). Root heartbeats land before
+   *   this promise resolves; child heartbeats land as the background
+   *   restore finishes. Either one re-arms the kernel-ready watchdog
+   *   (#2007) while that unit is still inside `init()`.
    */
   async init(onBootProgress?: (stage: string) => void): Promise<void> {
     await db.initDB();
@@ -666,44 +674,16 @@ export class Orchestrator implements ConeApprovalRouter {
     log.info('Orchestrator initialized', { scoopCount: this.scoops.size });
 
     // Saved chat does not need a live context. Tell the panel now, before
-    // the loop below — that loop is the long part of a large boot, and an
+    // context restore — that restore is the long part of a large boot, and an
     // empty thread until it finishes reads as lost history.
     onBootProgress?.('conversations-ready');
     await this.onConversationsReady?.();
 
-    // Initialize all scoop contexts. A single scoop whose context fails to
-    // initialize — e.g. a corrupt/unreadable persisted VFS file surfacing a
-    // ZenFS "Unexpected mismatch in file data size" throw — must not abort the
-    // whole boot. Skip that one scoop with a warning and keep loading the rest
-    // so the app still reaches a ready state instead of the opaque 30s
-    // ready-timeout the caller would otherwise hit.
-    for (const scoop of this.scoops.values()) {
-      try {
-        await this.createScoopTab(scoop.jid);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.warn('Skipping scoop whose context failed to initialize during boot', {
-          jid: scoop.jid,
-          folder: scoop.folder,
-          root: scoop.parentJid === null,
-          error: message,
-        });
-        // Leave a NON-cone scoop in a retryable 'error' state so a later
-        // feed_scoop/lick triggers the existing `routeToScoop` retry-on-error
-        // path (and `drop_scoop` still works), instead of a silent no-tab
-        // entry that stays unusable until a full reset. A failed cone is
-        // effectively fatal — there is no usable cone to retry into — so keep
-        // skipping+logging it rather than surfacing a phantom error tab.
-        if (scoop.parentJid !== null) {
-          this.lifecycle.markTabError(scoop.jid, message);
-        }
-      } finally {
-        // Heartbeat per scoop (success OR skip) so the page's ready
-        // watchdog keeps resetting through a slow multi-scoop restore
-        // instead of firing mid-progress (#2007).
-        onBootProgress?.(`scoop-restored:${scoop.jid}`);
-      }
-    }
+    // Roots block `init()` (the UI and cone bootstrap need them). Children
+    // continue afterwards so the rest of kernel boot is not proportional to
+    // scoop count. A failed context is still skipped — see
+    // {@link restoreScoopContext}.
+    await this.restoreScoopContexts(onBootProgress);
 
     // Register session costs provider for the `cost` shell command
     registerSessionCostsProvider((scope) => this.getSessionCostsForCommand(scope));
@@ -723,6 +703,73 @@ export class Orchestrator implements ConeApprovalRouter {
 
     // Start polling for pending messages
     this.messageRouter.startMessageLoop();
+  }
+
+  /**
+   * Resolves when the child contexts from the latest {@link init} have
+   * finished or been skipped. Already resolved when there are none.
+   */
+  whenBootRestoresSettled(): Promise<void> {
+    return this.bootRestoreTail;
+  }
+
+  /**
+   * Create root contexts before `init()` resolves, then keep creating child
+   * contexts in the background. Both waves share {@link SCOOP_BOOT_CONCURRENCY}.
+   * A single scoop whose context fails — e.g. a corrupt persisted VFS file
+   * surfacing a ZenFS "Unexpected mismatch in file data size" throw — must
+   * not abort the wave. Skip that scoop and keep loading the rest.
+   */
+  private async restoreScoopContexts(onBootProgress?: (stage: string) => void): Promise<void> {
+    const roots: RegisteredScoop[] = [];
+    const children: RegisteredScoop[] = [];
+    for (const scoop of this.scoops.values()) {
+      if (scoop.parentJid === null) roots.push(scoop);
+      else children.push(scoop);
+    }
+    await mapWithConcurrency(roots, SCOOP_BOOT_CONCURRENCY, (scoop) =>
+      this.restoreScoopContext(scoop, onBootProgress)
+    );
+    const childrenRestore = mapWithConcurrency(children, SCOOP_BOOT_CONCURRENCY, (scoop) =>
+      this.restoreScoopContext(scoop, onBootProgress)
+    ).catch((err) => {
+      log.warn('Background scoop restore failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    this.bootRestoreTail = this.bootRestoreTail.then(() => childrenRestore);
+  }
+
+  /** One restored scoop: create its context, or skip it and keep booting. */
+  private async restoreScoopContext(
+    scoop: RegisteredScoop,
+    onBootProgress?: (stage: string) => void
+  ): Promise<void> {
+    try {
+      await this.createScoopTab(scoop.jid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('Skipping scoop whose context failed to initialize during boot', {
+        jid: scoop.jid,
+        folder: scoop.folder,
+        root: scoop.parentJid === null,
+        error: message,
+      });
+      // Leave a NON-cone scoop in a retryable 'error' state so a later
+      // feed_scoop/lick triggers the existing `routeToScoop` retry-on-error
+      // path (and `drop_scoop` still works), instead of a silent no-tab
+      // entry that stays unusable until a full reset. A failed cone is
+      // effectively fatal — there is no usable cone to retry into — so keep
+      // skipping+logging it rather than surfacing a phantom error tab.
+      if (scoop.parentJid !== null) {
+        this.lifecycle.markTabError(scoop.jid, message);
+      }
+    } finally {
+      // Heartbeat per scoop (success OR skip) so the page's ready
+      // watchdog keeps resetting through a slow multi-scoop restore
+      // instead of firing mid-progress (#2007).
+      onBootProgress?.(`scoop-restored:${scoop.jid}`);
+    }
   }
 
   /**
@@ -1590,6 +1637,10 @@ export class Orchestrator implements ConeApprovalRouter {
    * after every unit is initialized; later calls are no-ops.
    */
   async recoverInterruptedWork(emitLick: (event: LickEvent) => void): Promise<RecoveryOutcome[]> {
+    // Child contexts are still starting when kernel boot reaches recovery.
+    // Waiting here does not hold `init()`; it only keeps a unit that has not
+    // been created yet from being treated as "failed to boot" and cleared.
+    await this.bootRestoreTail;
     const turns = this.interruptedTurns;
     this.interruptedTurns = null;
     const journal = this.turnJournal;
@@ -1725,6 +1776,9 @@ export class Orchestrator implements ConeApprovalRouter {
       log.info('Failed-closed pending sudo requests during shutdown', { count: sudoFailed });
     }
 
+    // Finish background context creates before tearing runtimes down, so a
+    // child `createTab` cannot attach a context onto a shut-down host.
+    await this.bootRestoreTail;
     await this.lifecycle.destroyAllTabs();
 
     // Drop the discovery-ignore and sudoers live-reload watcher subscriptions.

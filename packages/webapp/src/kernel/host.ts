@@ -560,10 +560,11 @@ async function bootOrchestrator(
   const unsubFollower = subscribeToFollowerTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
 
   // 4. Init orchestrator (loads persisted scoops, mounts the shared FS).
-  //    Each restored scoop's context init emits a boot-progress heartbeat —
-  //    this is the boot's main time sink for a large session, so it must
-  //    keep the ready watchdog alive (#2007). Saved chat is pushed from
-  //    inside init, before that loop, via the hook registered here.
+  //    Root contexts are created here. Child contexts continue in the
+  //    background, so lick init, mount restore, and cone bootstrap do not
+  //    grow with scoop count. Each context still emits a boot-progress
+  //    heartbeat (#2007). Saved chat is pushed from inside init, before
+  //    that restore, via the hook registered here.
   wireEarlyConversationHydration(orchestrator, bridge);
   await orchestrator.init(config.onBootProgress);
 
