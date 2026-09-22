@@ -31,7 +31,8 @@ struct SprinkleWebView: UIViewRepresentable {
 
     /// Leader-theme CSS variables ("" unthemed). Injected as a `<style>`
     /// element so full sprinkle documents reading webapp variables follow
-    /// the leader theme; see `SliccTheme.sprinkleCSSOverrides`.
+    /// the leader theme when its base matches the device; see
+    /// `SliccTheme.sprinkleCSSOverrides(for:)`.
     @Environment(\.sprinkleThemeCSS) private var themeCSS
     @Environment(\.palette) private var palette
 
@@ -97,7 +98,7 @@ struct SprinkleWebView: UIViewRepresentable {
 
     /// Idempotent injector: create-or-update a dedicated `<style>` element
     /// with the leader theme's variables. The CSS text itself is built from
-    /// allowlisted characters only (see `sprinkleCSSOverrides`), and is
+    /// allowlisted characters only (see `sprinkleCSSOverrides(for:)`), and is
     /// JSON-escaped here for the JS string literal.
     static func themeInjectionJS(_ css: String) -> String {
         let encoded =

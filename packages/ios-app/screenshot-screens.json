@@ -142,7 +142,8 @@
     },
     {
       "name": "theme-forest",
-      "description": "Leader theme applied natively: token-driven dark-green palette",
+      "description": "Leader theme applied natively on a dark device: token-driven dark-green palette",
+      "appearance": "dark",
       "args": [
         "-uiTestConnectionState",
         "connected",
@@ -154,7 +155,8 @@
     },
     {
       "name": "theme-light",
-      "description": "Light-base leader theme: the canonical webapp light tokens",
+      "description": "Light device with a light-base leader theme: the canonical webapp light tokens",
+      "appearance": "light",
       "args": [
         "-uiTestConnectionState",
         "connected",

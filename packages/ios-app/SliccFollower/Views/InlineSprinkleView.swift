@@ -21,7 +21,8 @@ struct InlineSprinkleView: UIViewRepresentable {
     var onHeightChange: (CGFloat) -> Void
 
     /// Leader-theme CSS variables ("" unthemed) appended after the inlined
-    /// dark tokens so `--s-*` surfaces follow the leader theme.
+    /// dark tokens. Surface overrides are present only when the theme's
+    /// base matches the device.
     @Environment(\.sprinkleThemeCSS) private var themeCSS
 
     func makeCoordinator() -> Coordinator {

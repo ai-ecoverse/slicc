@@ -95,14 +95,17 @@ struct ChatView: View {
         // present them against the default (dark) palette while the shell
         // behind them is light.
         .transcriptActionSheets(transcriptActions)
-        // A leader theme pins the scheme to its base; unthemed follows the
-        // system, like the unthemed webapp shell (#1801).
-        .preferredColorScheme(appState.leaderTheme.map { $0.base == .light ? .light : .dark })
+        // Light/dark follows the device. A leader theme paints its full
+        // palette only when its base matches that appearance; the accent
+        // still comes from the theme either way (#1801).
         .environment(
             \.palette,
             ThemePalette.resolve(theme: appState.leaderTheme, systemScheme: systemScheme)
         )
-        .environment(\.sprinkleThemeCSS, appState.leaderTheme?.sprinkleCSSOverrides ?? "")
+        .environment(
+            \.sprinkleThemeCSS,
+            appState.leaderTheme?.sprinkleCSSOverrides(for: systemScheme) ?? ""
+        )
         // Typing is the scrutiny channel: one raised lower lid per keystroke,
         // and any keystroke also wakes an avatar that has drowsed off waiting.
         .onChange(of: presentation.composerDraft) { _, _ in
