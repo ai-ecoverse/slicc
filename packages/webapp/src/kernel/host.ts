@@ -43,6 +43,7 @@ import {
 } from '../work-unit/capability/index.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { matchDiscoveryRouteCandidate } from './discovery-lick-routing.js';
+import { wireEarlyConversationHydration } from './early-conversation-hydration.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
@@ -322,9 +323,11 @@ async function bootOrchestrator(
   const unsubLeader = subscribeToLeaderTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
   const unsubFollower = subscribeToFollowerTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
 
+  wireEarlyConversationHydration(orchestrator, bridge);
   await orchestrator.init(config.onBootProgress);
 
   await bridge.hydrateBuffersFromRecords();
+  bridge.publishHydratedTranscripts();
 
   const sharedFs = orchestrator.getSharedFS();
   return { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs, capabilityBroker };

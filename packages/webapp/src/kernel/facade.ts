@@ -140,6 +140,8 @@ export class Bridge implements KernelFacade {
 
   private readonly scoopPresentation = new ScoopPresentation();
 
+  private transcriptsPublished = false;
+
   private readonly agentEventStream = new AgentEventStream();
 
   private sessionStore: SessionStore | null = null;
@@ -745,6 +747,28 @@ export class Bridge implements KernelFacade {
     }
   }
 
+  publishHydratedTranscripts(): void {
+    if (this.transcriptsPublished || !this.orchestrator) return;
+    const scoops = this.orchestrator.getScoops();
+    if (scoops.length === 0) return;
+    for (const scoop of scoops) {
+      const messages = this.messageBuffers.get(scoop.jid);
+      if (!messages || messages.length === 0) continue;
+      this.emitTranscript(scoop.jid, messages);
+    }
+    this.emitScoopList();
+    this.transcriptsPublished = true;
+  }
+
+  private emitTranscript(scoopJid: string, messages: BufferedChatMessage[]): void {
+    this.emit({
+      type: 'scoop-messages-replaced',
+      scoopJid,
+      messages,
+      queuedIds: this.queuedIdsFor(scoopJid),
+    });
+  }
+
   private queuedIdsFor(scoopJid: string): string[] | undefined {
     if (this.followerSync || !this.orchestrator) return undefined;
     return this.orchestrator.getQueuedMessageIds(scoopJid);
@@ -758,12 +782,7 @@ export class Bridge implements KernelFacade {
 
     const buffered = this.messageBuffers.get(scoopJid);
     if (buffered && buffered.length > 0) {
-      this.emit({
-        type: 'scoop-messages-replaced',
-        scoopJid,
-        messages: buffered,
-        queuedIds: this.queuedIdsFor(scoopJid),
-      });
+      this.emitTranscript(scoopJid, buffered);
       return;
     }
 
@@ -772,21 +791,11 @@ export class Bridge implements KernelFacade {
       this.messageBuffers.set(scoopJid, derived);
       this.currentMessageId.delete(scoopJid);
       this.agentEventStream.clear(scoopJid);
-      this.emit({
-        type: 'scoop-messages-replaced',
-        scoopJid,
-        messages: derived,
-        queuedIds: this.queuedIdsFor(scoopJid),
-      });
+      this.emitTranscript(scoopJid, derived);
       return;
     }
 
-    this.emit({
-      type: 'scoop-messages-replaced',
-      scoopJid,
-      messages: [],
-      queuedIds: this.queuedIdsFor(scoopJid),
-    });
+    this.emitTranscript(scoopJid, []);
   }
 
   private async handleConeCreate(

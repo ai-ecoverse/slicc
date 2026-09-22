@@ -56,6 +56,8 @@ export interface KernelFacade {
   getConeJid(): string | null;
 
   hydrateBuffersFromRecords(): Promise<void>;
+
+  publishHydratedTranscripts(): void;
 }
 
 export interface KernelClientCallbacks {

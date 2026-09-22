@@ -184,6 +184,24 @@ describe('buildThreadChildren', () => {
     }
   });
 
+  it('points a summarized marker at the snapshot the older history lives in', () => {
+    const [marker] = messageEls({
+      id: 'cmp-helix',
+      role: 'assistant',
+      content: '',
+      timestamp: 1,
+      compaction: {
+        trigger: 'threshold',
+        state: 'summarized',
+        transcriptPath: '/sessions/live-cone-helix.md',
+      },
+    });
+    expect(marker.tagName.toLowerCase()).toBe('slicc-compaction-marker');
+    expect(marker.getAttribute('state')).toBe('summarized');
+    expect(marker.getAttribute('trigger')).toBe('threshold');
+    expect(marker.getAttribute('transcript')).toBe('/sessions/live-cone-helix.md');
+  });
+
   it('does not render a discarded marker at all', () => {
     const els = messageEls({
       id: 'gone',

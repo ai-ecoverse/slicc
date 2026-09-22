@@ -213,9 +213,24 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     };
   }
 
+  private takeArrivedReplay(id: WorkUnitId): WorkUnitSnapshot | null {
+    const replay = this.orphanedReplays.get(id);
+    if (!replay) return null;
+    const snapshot = this.snapshotFor(id, replay.messages, replay.queuedIds);
+    if (!snapshot) return null;
+    this.orphanedReplays.delete(id);
+    this.lastSnapshots.set(id, snapshot);
+    return snapshot;
+  }
+
   snapshot(id: WorkUnitId): Promise<WorkUnitSnapshot> {
     const client = this.deps.getClient();
     if (!client) return Promise.reject(new Error('kernel client not attached'));
+    const arrived = this.takeArrivedReplay(id);
+    if (arrived) {
+      client.setSelectedScoopJid(id);
+      return Promise.resolve(arrived);
+    }
     const waiters =
       this.pendingSnapshots.get(id) ?? new Set<(snapshot: WorkUnitSnapshot) => void>();
     this.pendingSnapshots.set(id, waiters);

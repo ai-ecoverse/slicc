@@ -67,8 +67,30 @@ describe('orchestrator boot-progress heartbeat (#2007)', () => {
     const stages: string[] = [];
     await orch.init((stage) => stages.push(stage));
 
+    expect(stages).toContain('conversations-ready');
     expect(stages).toContain('scoop-restored:cone_bp_1');
     expect(stages).toContain('scoop-restored:scoop_bp_1');
+    expect(stages.indexOf('conversations-ready')).toBeLessThan(
+      stages.indexOf('scoop-restored:cone_bp_1')
+    );
+  });
+
+  it('runs the conversation-ready hook before any scoop context exists', async () => {
+    await saveScoop(scoop('cone_bp_1', true));
+    const container = { appendChild: () => {} } as unknown as HTMLElement;
+    orch = new Orchestrator(container, noopCallbacks());
+    const stages: string[] = [];
+    let contextAtHook: unknown = 'missing';
+    orch.setOnConversationsReady(async () => {
+      stages.push('hook');
+      contextAtHook = orch?.getScoopContext('cone_bp_1');
+    });
+
+    await orch.init((stage) => stages.push(stage));
+
+    expect(contextAtHook).toBeUndefined();
+    expect(stages.indexOf('conversations-ready')).toBeLessThan(stages.indexOf('hook'));
+    expect(stages.indexOf('hook')).toBeLessThan(stages.indexOf('scoop-restored:cone_bp_1'));
   });
 
   it('emits the shared-fs mount start beat (2026-08-18 cold-boot brick)', async () => {

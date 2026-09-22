@@ -24,6 +24,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import { syncRestoringSessionNotice, threadColumnIsEmpty } from './restoring-session-notice.js';
 import type { WcChatAttachment } from './wc-chat.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import {
@@ -103,6 +104,8 @@ export interface WcShellBoot {
   setActivateSurface(activator: WorkbenchActivator): void;
 
   onClientReady(fn: () => void): void;
+
+  setRestoringSessions(restoring: boolean): void;
 }
 
 function holdQueuedPile(args: {
@@ -292,12 +295,15 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   const lickBackpressure = new Map<string, LickBackpressureState>();
   let clientReady = false;
   let workbench: WorkbenchActivator | null = null;
+  let restoringSessions = false;
   const readyListeners = new Set<() => void>();
 
   const unitWatcher = createUnitWatcher(
     () => clientOf(),
     (messages, queuedIds) => {
       controller?.loadMessages(messages, queuedIds);
+
+      syncRestoringSessionNotice(refs.thread, messages.length === 0 && restoringSessions);
       chatHost.onSnapshotRendered?.(messages);
     }
   );
@@ -371,6 +377,11 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     onClientReady: (fn) => {
       readyListeners.add(fn);
       if (clientReady) fn();
+    },
+    setRestoringSessions: (restoring) => {
+      restoringSessions = restoring;
+
+      syncRestoringSessionNotice(refs.thread, restoring && threadColumnIsEmpty(refs.thread));
     },
   };
 }
@@ -1218,6 +1229,8 @@ export async function bootLeaderFloat(
     },
   });
 
+  boot.setRestoringSessions(true);
+
   const { setupSudoStandalone } = await import('../boot/setup-sudo.js');
   await setupSudoStandalone({ log });
 
@@ -1230,6 +1243,7 @@ export async function bootLeaderFloat(
   }
 
   boot.wiring.notifyReady?.();
+  boot.setRestoringSessions(false);
   (globalThis as unknown as KernelReadyHolder).__slicc_kernel_ready = true;
   log.info('WC live shell ready', { scoops: kernel.client.getScoops().length });
   schedulePendingCatchup?.();

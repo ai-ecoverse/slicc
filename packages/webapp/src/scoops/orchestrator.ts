@@ -191,6 +191,8 @@ export class Orchestrator implements ConeApprovalRouter {
 
   private conversationStore: WorkUnitConversationStore | null = null;
 
+  private onConversationsReady: (() => Promise<void>) | null = null;
+
   private turnJournal: TurnJournal | null = null;
 
   private interruptedTurns: InFlightTurn[] | null = null;
@@ -394,6 +396,10 @@ export class Orchestrator implements ConeApprovalRouter {
     );
   }
 
+  setOnConversationsReady(hook: () => Promise<void>): void {
+    this.onConversationsReady = hook;
+  }
+
   async init(onBootProgress?: (stage: string) => void): Promise<void> {
     await db.initDB();
 
@@ -461,6 +467,9 @@ export class Orchestrator implements ConeApprovalRouter {
     this.scheduler.start();
 
     log.info('Orchestrator initialized', { scoopCount: this.scoops.size });
+
+    onBootProgress?.('conversations-ready');
+    await this.onConversationsReady?.();
 
     for (const scoop of this.scoops.values()) {
       try {
