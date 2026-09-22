@@ -68,6 +68,9 @@ describe('boot stall overlay', () => {
     expect(document.getElementById('slicc-boot-stage')?.textContent).toContain('cone-bootstrapped');
     showBootStallOverlay(document, { elapsedMs: 1_000, stage: 'cone-bootstrapped' });
     expect(document.getElementById('slicc-boot-stage')).toBeNull();
+    // A later heartbeat must not put the chip back over the stall banner.
+    showBootStage(document, 'cone-bootstrapped');
+    expect(document.getElementById('slicc-boot-stage')).toBeNull();
     removeBootStage(document);
   });
 });

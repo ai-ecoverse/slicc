@@ -374,13 +374,17 @@ function createReadyDeadline(options: {
       clearTimer();
     },
     noteProgress(next: string | undefined) {
+      // After the budget rejects, or after dispose, drop the heartbeat.
+      // onLateReady keeps the port listener so a late ready is heard; that
+      // must not paint a boot-stage chip over the recovery screen.
+      if (stopped || exhausted) return;
       if (next) {
         stage = next;
         options.onBootProgress?.(next);
       }
       // A paused clock stays paused: heartbeats during a leader-lock wait
       // update the stage and must not start the failure window.
-      if (paused || stopped || exhausted) return;
+      if (paused) return;
       stalls = 0;
       arm();
     },

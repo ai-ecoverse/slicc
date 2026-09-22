@@ -36,6 +36,10 @@ export interface BootStallOverlayDeps {
  * progress. Removed when the stall overlay takes over, or when boot ends.
  */
 export function showBootStage(doc: Document, stage: string): void {
+  // The stall banner names the stage itself. A later progress heartbeat must
+  // not stack a second chip on the same anchor, or over the recovery screen
+  // once that banner is up.
+  if (doc.getElementById(OVERLAY_ID)) return;
   const message = `Starting — ${stage}`;
   const existing = doc.getElementById(STAGE_ID);
   if (existing) {

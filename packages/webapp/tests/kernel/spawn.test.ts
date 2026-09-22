@@ -403,6 +403,7 @@ describe('slow-boot stall tolerance (2026-08-24 field wedge)', () => {
       onReadyStall?: (info: { elapsedMs: number; stalls: number }) => void;
       readyStallLimit?: number;
       onLateReady?: () => void;
+      onBootProgress?: (stage: string) => void;
     }
   ) {
     return bootstrapKernelWorker({
@@ -542,6 +543,22 @@ describe('slow-boot stall tolerance (2026-08-24 field wedge)', () => {
     await new Promise((r) => setTimeout(r, 40));
     port().postMessage({ type: 'kernel-worker-ready' });
     await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it('ignores boot progress after the deadline rejects', async () => {
+    const { worker, port } = makeManualWorker();
+    const stages: string[] = [];
+    const host = bootstrap(worker, {
+      readyTimeoutMs: 40,
+      readyStallLimit: 1,
+      onLateReady: () => {},
+      onBootProgress: (stage) => stages.push(stage),
+    });
+    await expect(host.ready).rejects.toThrow(/did not signal ready/);
+    port().postMessage({ type: 'kernel-worker-boot-progress', stage: 'cone-bootstrapped' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stages).toEqual([]);
     host.dispose();
   });
 
