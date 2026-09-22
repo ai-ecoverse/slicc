@@ -10,6 +10,7 @@ import {
   GELATIERE_STATE_PATH,
 } from '../../../src/base/gelatiere-store.js';
 import { resetLoggerDedupForTests } from '../../../src/base/logger.js';
+import { FsError } from '../../../src/fs/types.js';
 import {
   notifyGelatiereOfSessionEnd,
   type WcGelatiereDeps,
@@ -24,7 +25,7 @@ function makeVfs(files: Record<string, string> = {}) {
     files: map,
     readFile: async (path: string) => {
       const text = map.get(path);
-      if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (text === undefined) throw new FsError('ENOENT', 'no such file', path);
       return text;
     },
     writeFile: async (path: string, content: string) => {
