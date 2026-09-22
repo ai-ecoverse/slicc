@@ -3,9 +3,10 @@
  * mount.
  *
  * The OPFS mount is the one boot phase with no natural milestones: ZenFS
- * parses the multi-megabyte metadata sidecar and the unconditional pre-boot
- * repair (#2146/#2148) probes every sidecar entry against the real OPFS
- * tree. On a large tree (22k entries in the 2026-08-18 field incident) a
+ * parses the multi-megabyte metadata sidecar and the pre-boot repair
+ * (#2146/#2148) probes every sidecar entry against the real OPFS tree
+ * unless a clean-boot mark says those bytes were already certified.
+ * On a large tree (22k entries in the 2026-08-18 field incident) a
  * COLD boot — fresh Chrome, no OPFS caches — spends 25-30s+ in that phase
  * in silence, which blows the page's 30s kernel-ready watchdog (#2007):
  * the leader bricked with "Kernel worker did not signal ready within

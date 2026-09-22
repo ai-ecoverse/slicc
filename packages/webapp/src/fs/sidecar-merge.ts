@@ -88,12 +88,26 @@ function isUnder(key: string, prefix: string): boolean {
  * data size mismatch" and fails. Both the merge result AND any full-snapshot
  * recovery flush — which skips {@link mergeSidecarEntries} entirely — must
  * strip it. The boot self-heal in `sidecar-repair.ts` drops any already on disk.
+ *
+ * `/.metadata.consistent.json` is the clean-boot mark written beside the
+ * sidecar. It is not user data. ZenFS will index the file; persisting that
+ * entry would change the sidecar every time the mark is rewritten and the
+ * next boot would never trust the hash. Strip it on every flush.
  */
 export const SIDECAR_SELF_ENTRY = '/.metadata.json';
 
-/** Drop the self-referential sidecar entry from `doc` in place; returns `doc`. */
+/** Basename of the clean-boot mark. Lives next to `/.metadata.json`. */
+export const SIDECAR_CONSISTENT_NAME = '.metadata.consistent.json';
+
+/** Sidecar path of {@link SIDECAR_CONSISTENT_NAME}. Never persisted. */
+export const SIDECAR_CONSISTENT_ENTRY = `/${SIDECAR_CONSISTENT_NAME}`;
+
+/** Drop bookkeeping entries from `doc` in place; returns `doc`. */
 export function stripSidecarSelfEntry(doc: SidecarIndexJson): SidecarIndexJson {
-  if (doc.entries) delete doc.entries[SIDECAR_SELF_ENTRY];
+  if (doc.entries) {
+    delete doc.entries[SIDECAR_SELF_ENTRY];
+    delete doc.entries[SIDECAR_CONSISTENT_ENTRY];
+  }
   return doc;
 }
 

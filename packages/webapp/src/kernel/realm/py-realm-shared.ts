@@ -874,6 +874,16 @@ async function flushOpfsIfNeeded(
 ): Promise<void> {
   if (init.opfsMountDbName === undefined) return;
 
+  // Clear the clean-boot mark BEFORE any byte hits OPFS. invalidatePaths
+  // runs after the flush and only evicts the in-memory index; a crash in
+  // between would otherwise let the next mount skip a tree the sidecar no
+  // longer describes.
+  try {
+    await forgetSidecarConsistencyIfDirty(opfsMounts, rpc);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`Pyodide→VFS consistency mark clear failed: ${message}`);
+  }
   try {
     await flushOpfsRealmMounts(opfsMounts);
   } catch (err) {
@@ -1122,6 +1132,14 @@ async function mountOpfsChild(
     flushBuffers: buffered.flush,
     getDirtyPaths: buffered.getDirtyPaths,
   });
+}
+
+async function forgetSidecarConsistencyIfDirty(
+  mounts: OpfsRealmMount[],
+  rpc: RealmRpcClient
+): Promise<void> {
+  if (!mounts.some((entry) => entry.getDirtyPaths().length > 0)) return;
+  await rpc.call('vfs', 'forgetSidecarConsistency', []);
 }
 
 // ---------------------------------------------------------------------------

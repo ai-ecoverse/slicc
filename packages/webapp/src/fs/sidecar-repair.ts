@@ -10,25 +10,36 @@
  * repair implemented here, manually.
  *
  * The pure half (`repairSidecarDocument`) is unit-testable with a fake
- * probe; the thin async half (`repairOpfsMetadataSidecar`) walks the real
- * OPFS handles and rewrites the file only when something changed.
+ * probe; the thin async half (`repairOpfsMetadataSidecar`) checks the
+ * clean-boot mark and, on a miss, probes the real OPFS tree. Directory
+ * listings are cached and file sizes are read with bounded concurrency —
+ * see `sidecar-probe.ts`. The file is rewritten only when something changed.
  */
 
-import { SIDECAR_SELF_ENTRY, type SidecarIndexJson } from './sidecar-merge.js';
+import {
+  SIDECAR_CONSISTENT_ENTRY,
+  SIDECAR_SELF_ENTRY,
+  type SidecarIndexJson,
+} from './sidecar-merge.js';
+import {
+  certifySidecarConsistency,
+  makeBulkOpfsProbe,
+  mapPool,
+  readOpfsSidecar,
+  SIDECAR_REPAIR_CONCURRENCY,
+  type SidecarProbe,
+  type SidecarProbeResult,
+  sidecarConsistencyMatches,
+  writeOpfsSidecarText,
+} from './sidecar-probe.js';
+
+export type { SidecarProbe, SidecarProbeHint, SidecarProbeResult } from './sidecar-probe.js';
+export { makeOpfsProbe, SIDECAR_REPAIR_CONCURRENCY } from './sidecar-probe.js';
 
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o40000;
 const S_IFREG = 0o100000;
 const S_IFLNK = 0o120000;
-
-/** What the filesystem really holds at a sidecar entry's path. */
-export type SidecarProbeResult =
-  | { kind: 'file'; size: number }
-  | { kind: 'directory' }
-  | { kind: 'missing' };
-
-/** Resolve a sidecar path (e.g. `/workspace/CLAUDE.md`) against reality. */
-export type SidecarProbe = (path: string) => Promise<SidecarProbeResult>;
 
 export interface SidecarRepairSummary {
   /** `path kind→kind` labels for flipped format bits. */
@@ -91,13 +102,38 @@ interface MutableEntry {
  *   real file, and `probe` reporting `file` for them is expected.
  *
  * Mutates and returns `doc`; the summary says what happened.
+ *
+ * Probes run `concurrency` at a time (default {@link SIDECAR_REPAIR_CONCURRENCY}).
+ * Results are applied in sidecar order, so ino reassignment stays deterministic.
  */
 export async function repairSidecarDocument(
   doc: SidecarIndexJson,
   probe: SidecarProbe,
-  onEntry?: () => void
+  onEntry?: () => void,
+  concurrency = SIDECAR_REPAIR_CONCURRENCY
 ): Promise<SidecarRepairSummary> {
-  const summary: SidecarRepairSummary = {
+  const summary = emptyRepairSummary();
+  const entries = doc.entries ?? {};
+  const plans: ProbePlan[] = [];
+  for (const [path, raw] of Object.entries(entries)) {
+    const plan = classifyEntry(path, raw, entries, summary);
+    // Tick skipped entries here. Probed entries tick inside the pool, as each
+    // lookup starts, so a long repair still advances the boot heartbeat.
+    if (!plan) onEntry?.();
+    else plans.push(plan);
+  }
+  const realities = await mapPool(concurrency, plans, async (plan) => {
+    onEntry?.();
+    const hint = plan.fmt === S_IFDIR ? 'directory' : 'file';
+    return probe(plan.path, hint);
+  });
+  applyProbeResults(plans, realities, entries, summary);
+  reassignDuplicateInos(entries, summary);
+  return summary;
+}
+
+function emptyRepairSummary(): SidecarRepairSummary {
+  return {
     kindFixed: [],
     sizesFixed: 0,
     dropped: 0,
@@ -106,43 +142,65 @@ export async function repairSidecarDocument(
     nlinksFixed: 0,
     changed: false,
   };
-  const entries = doc.entries ?? {};
-  for (const [path, raw] of Object.entries(entries)) {
-    // Liveness tick per entry scanned (probed or skipped) — the boot
-    // heartbeat uses it to prove the O(tree) repair is advancing, so a
-    // multi-minute pass on a cold or I/O-starved disk is not mistaken for
-    // a wedge (2026-08-24 field incident: ~8 minutes over 22k entries).
-    onEntry?.();
-    if (path === '/' || typeof raw !== 'object' || raw === null) continue;
-    // A sidecar must never track itself: writing it changes its own size, so
-    // any recorded `/.metadata.json` size is stale on the retry mount and the
-    // boot repair can never converge. Drop it rather than true it up — see
-    // {@link SidecarRepairSummary.selfEntryDropped}. Prevention lives in
-    // `sidecar-merge.ts`, which never persists this entry in the first place.
-    if (path === SIDECAR_SELF_ENTRY) {
-      delete entries[path];
-      summary.selfEntryDropped = true;
-      summary.changed = true;
-      continue;
-    }
-    const entry = raw as MutableEntry;
-    const fmt = (entry.mode ?? 0) & S_IFMT;
-    if (fmt === S_IFLNK) {
-      healNlink(entry, summary);
-      continue;
-    }
-    const real = await probe(path);
+}
+
+interface ProbePlan {
+  path: string;
+  entry: MutableEntry;
+  fmt: number;
+}
+
+/**
+ * Bookkeeping that does not need a disk probe: the root, a non-object, the
+ * self-entry, the clean-boot mark, and symlinks. Returns a plan when the
+ * entry still has to be checked against OPFS.
+ */
+function classifyEntry(
+  path: string,
+  raw: unknown,
+  entries: { [path: string]: unknown },
+  summary: SidecarRepairSummary
+): ProbePlan | null {
+  if (path === '/' || typeof raw !== 'object' || raw === null) return null;
+  // A sidecar must never track itself: writing it changes its own size, so
+  // any recorded `/.metadata.json` size is stale on the retry mount and the
+  // boot repair can never converge. Drop it rather than true it up — see
+  // {@link SidecarRepairSummary.selfEntryDropped}. The clean-boot mark is
+  // the same class of bookkeeping file: persisting it would change the
+  // sidecar every time the mark is rewritten.
+  if (path === SIDECAR_SELF_ENTRY || path === SIDECAR_CONSISTENT_ENTRY) {
+    delete entries[path];
+    if (path === SIDECAR_SELF_ENTRY) summary.selfEntryDropped = true;
+    summary.changed = true;
+    return null;
+  }
+  const entry = raw as MutableEntry;
+  const fmt = (entry.mode ?? 0) & S_IFMT;
+  if (fmt === S_IFLNK) {
+    healNlink(entry, summary);
+    return null;
+  }
+  return { path, entry, fmt };
+}
+
+function applyProbeResults(
+  plans: readonly ProbePlan[],
+  realities: readonly SidecarProbeResult[],
+  entries: { [path: string]: unknown },
+  summary: SidecarRepairSummary
+): void {
+  for (let i = 0; i < plans.length; i += 1) {
+    const plan = plans[i] as ProbePlan;
+    const real = realities[i] as SidecarProbeResult;
     if (real.kind === 'missing') {
-      delete entries[path];
+      delete entries[plan.path];
       summary.dropped += 1;
       summary.changed = true;
       continue;
     }
-    healNlink(entry, summary);
-    repairEntryAgainstReality(path, entry, fmt, real, summary);
+    healNlink(plan.entry, summary);
+    repairEntryAgainstReality(plan.path, plan.entry, plan.fmt, real, summary);
   }
-  reassignDuplicateInos(entries, summary);
-  return summary;
 }
 
 /**
@@ -239,35 +297,6 @@ function repairEntryAgainstReality(
   }
 }
 
-/** Build a {@link SidecarProbe} over a real OPFS directory handle. */
-export function makeOpfsProbe(root: FileSystemDirectoryHandle): SidecarProbe {
-  return async (path: string): Promise<SidecarProbeResult> => {
-    const parts = path.split('/').filter(Boolean);
-    let dir = root;
-    for (let i = 0; i < parts.length - 1; i += 1) {
-      try {
-        dir = await dir.getDirectoryHandle(parts[i]);
-      } catch {
-        return { kind: 'missing' };
-      }
-    }
-    const name = parts[parts.length - 1];
-    if (name === undefined) return { kind: 'directory' }; // path was '/'
-    try {
-      const fh = await dir.getFileHandle(name);
-      return { kind: 'file', size: (await fh.getFile()).size };
-    } catch {
-      /* not a file — try directory below */
-    }
-    try {
-      await dir.getDirectoryHandle(name);
-      return { kind: 'directory' };
-    } catch {
-      return { kind: 'missing' };
-    }
-  };
-}
-
 /**
  * Boot-time self-heal: run `resolve` (the ZenFS mount, whose `crossCopy`
  * trusts the sidecar); on failure, `repair` the sidecar and retry ONCE.
@@ -301,27 +330,27 @@ export async function resolveWithSidecarRepair<T>(
  * under `handle`. Returns the repair summary, or `null` when there is no
  * parseable sidecar to repair (absent or corrupt JSON — ZenFS reseeds an
  * absent sidecar itself, and `initOpfsBackend` seeds an empty one).
+ *
+ * A sidecar whose bytes still match the clean-boot mark is returned
+ * unchanged and is not probed. The mark is written only after a probe, and
+ * deleted before the next mutation, so a crash mid-write cannot skip a
+ * tree the sidecar no longer describes.
  */
 export async function repairOpfsMetadataSidecar(
   handle: FileSystemDirectoryHandle,
   onEntry?: () => void
 ): Promise<SidecarRepairSummary | null> {
-  let doc: SidecarIndexJson;
+  const loaded = await readOpfsSidecar(handle);
+  if (!loaded) return null;
+  if (await sidecarConsistencyMatches(handle, loaded.text)) return emptyRepairSummary();
+  const summary = await repairSidecarDocument(loaded.doc, makeBulkOpfsProbe(handle), onEntry);
+  const next = summary.changed ? JSON.stringify(loaded.doc) : loaded.text;
+  if (summary.changed) await writeOpfsSidecarText(handle, next);
   try {
-    const fh = await handle.getFileHandle('.metadata.json');
-    const parsed: unknown = JSON.parse(await (await fh.getFile()).text());
-    if (!parsed || typeof parsed !== 'object' || !(parsed as SidecarIndexJson).entries) {
-      return null;
-    }
-    doc = parsed as SidecarIndexJson;
+    await certifySidecarConsistency(handle, next);
   } catch {
-    return null;
+    // The sidecar is already consistent. A missed mark only costs the next
+    // boot a re-probe; it must not fail the mount.
   }
-  const summary = await repairSidecarDocument(doc, makeOpfsProbe(handle), onEntry);
-  if (!summary.changed) return summary;
-  const fh = await handle.getFileHandle('.metadata.json', { create: true });
-  const writable = await fh.createWritable();
-  await writable.write(JSON.stringify(doc));
-  await writable.close();
   return summary;
 }

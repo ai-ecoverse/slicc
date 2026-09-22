@@ -353,6 +353,11 @@ export class RestrictedFS {
     this.vfs.invalidatePaths(paths);
   }
 
+  /** See {@link VirtualFS.forgetSidecarConsistency}. Not path-selected. */
+  async forgetSidecarConsistency(): Promise<void> {
+    await this.vfs.forgetSidecarConsistency();
+  }
+
   /** Persist backend-owned metadata; this operation is not path-selected. */
   async flush(): Promise<void> {
     await this.vfs.flush();
