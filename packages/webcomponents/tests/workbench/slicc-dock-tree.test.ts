@@ -1969,4 +1969,24 @@ describe('slicc-dock-tree', () => {
       expect(placed.at(-1)).toEqual([CHAT_SURFACE_ID]);
     });
   });
+
+  describe('focus across a rebuild', () => {
+    it('keeps the caret in a surface the rebuild moves (a background sprinkle open/close)', () => {
+      const el = mount();
+      const chat = surface(CHAT_SURFACE_ID);
+      const ta = document.createElement('textarea');
+      chat.append(ta);
+      el.append(chat, surface('sprinkle:x'));
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf(CHAT_SURFACE_ID) } });
+      ta.value = 'typing';
+      ta.focus();
+      ta.setSelectionRange(3, 3);
+
+      el.placeSurface('sprinkle:x', 'right');
+      expect(document.activeElement).toBe(ta);
+      el.removeSurface('sprinkle:x');
+      expect(document.activeElement).toBe(ta);
+      expect([ta.selectionStart, ta.selectionEnd]).toEqual([3, 3]);
+    });
+  });
 });

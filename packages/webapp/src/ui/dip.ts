@@ -35,6 +35,7 @@ import {
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import { DIP_PENDING_PLACEHOLDER } from './dip-placeholder.js';
+import { iframeFocusGuardSource } from './iframe-focus-guard.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
@@ -327,6 +328,7 @@ function buildBridgeScript(includeExec: boolean): string {
     parent.postMessage({ type: 'dip-height',
       height: document.documentElement.scrollHeight }, '*');
   }
+  ${iframeFocusGuardSource}
   ${iframeThemeBridgeSource}
   window.addEventListener('message', function(e) {
     if (!e.data || typeof e.data.type !== 'string') return;

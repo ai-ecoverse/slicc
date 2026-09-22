@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { withFocusPreserved } from '../internal/focus.js';
 import { liveArrangement } from './center-ops.js';
 import { INTERACTION_CSS, LayoutInteraction } from './layout-interaction.js';
 import {
@@ -338,8 +339,18 @@ export class SliccLayout extends HTMLElement {
     return pool;
   }
 
-  /** Rebuild the arrangement from the document, resolved for the current environment. */
+  /**
+   * Rebuild the arrangement from the document, resolved for the current environment.
+   *
+   * The rebuild MOVES every placed panel — the chat panel with the composer
+   * included — so it runs under {@link withFocusPreserved}: a background
+   * `sprinkle open`/`close` must not take the caret away.
+   */
   #render(reason: LayoutChangeDetail['reason'] = 'set', opts?: { silent?: boolean }): void {
+    withFocusPreserved(this, () => this.#rebuild(reason, opts));
+  }
+
+  #rebuild(reason: LayoutChangeDetail['reason'], opts?: { silent?: boolean }): void {
     const resolved = resolveLayout(this.#doc, this.environment());
     this.#rendering = resolved;
     const pool = this.#collectPanels();

@@ -843,4 +843,27 @@ describe('slicc-layout', () => {
       expect(composed).toBe(true);
     });
   });
+
+  describe('focus across a rebuild', () => {
+    it('keeps the caret in a panel the rebuild moves (a background sprinkle open/close)', () => {
+      const layout = mount(['chat', 'sprinkle']);
+      layout.setLayout(doc({ center: { panel: 'chat' } }));
+      const ta = document.createElement('textarea');
+      panelEl(layout, 'chat').append(ta);
+      ta.value = 'typing';
+      ta.focus();
+      ta.setSelectionRange(3, 3);
+
+      layout.setLayout(
+        doc({
+          docks: [{ edge: 'right', size: '200px', panels: ['sprinkle'] }],
+          center: { panel: 'chat' },
+        })
+      );
+      expect(document.activeElement).toBe(ta);
+      layout.setLayout(doc({ center: { panel: 'chat' } }));
+      expect(document.activeElement).toBe(ta);
+      expect([ta.selectionStart, ta.selectionEnd]).toEqual([3, 3]);
+    });
+  });
 });

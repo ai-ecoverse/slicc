@@ -2464,3 +2464,41 @@ supplied. The field was right while the file was wrong is the wrong way round.
 - `packages/webapp/src/computers/frames.ts` — `frozenFrameExtension`
 - `packages/webapp/src/computers/frame-bytes.ts` — `sniffFrameMime`
 - `packages/webapp/tests/computers/frames.test.ts` — spurious-SOF regression
+
+## Background Actors Must Not Move the Keyboard Focus
+
+**The Problem**
+
+Keyboard mode (`ui/wc/wc-shortcuts.ts`) is on whenever nothing typable holds the
+focus, so ANY silent loss of the composer's focus turns the user's next
+keystrokes into shortcuts. Agents act while the user types — a scoop running
+`sprinkle open`/`reload`/`close`, a streamed dip — and two mechanisms used to
+take the caret away:
+
+1. **Moving a focused element blurs it.** `<slicc-dock-tree>` and
+   `<slicc-layout>` rebuild their skeleton on every change and RE-APPEND every
+   placed surface, the chat surface included. The removal half of the move runs
+   the browser's focus fixup; the insertion half never gives the focus back.
+2. **A same-origin frame's `el.focus()` takes the page's focus.** Sprinkles and
+   dips are same-origin srcdoc frames, so a "focus the first field on load"
+   nicety pulled the caret into the frame mid-sentence.
+
+**The Rule**
+
+- A component that rebuilds by moving its children runs the rebuild under
+  `withFocusPreserved()` (`webcomponents/src/internal/focus.ts`). A textarea
+  keeps its selection across a move, so restoring the focus restores the caret.
+- Agent-authored frames get `iframeFocusGuardSource`
+  (`webapp/src/ui/iframe-focus-guard.ts`) spliced in before any authored
+  script: programmatic focus only works while the frame already has the focus.
+  Do NOT allow it on `navigator.userActivation.isActive` — a keystroke in the
+  parent activates every same-origin descendant frame, so a srcdoc frame reads
+  as user-activated precisely while the user is typing in the composer.
+- `autofocus` inside a frame is already harmless: it is skipped whenever the top
+  document has something focused.
+
+**Related Files**
+
+- `packages/webcomponents/src/internal/focus.ts` — `withFocusPreserved`, `deepActiveElement`
+- `packages/webcomponents/src/workbench/slicc-dock-tree.ts`, `packages/webcomponents/src/panel/slicc-layout.ts` — rebuilds under the guard
+- `packages/webapp/src/ui/iframe-focus-guard.ts` — injected by `sprinkle-renderer.ts` and `dip.ts`
