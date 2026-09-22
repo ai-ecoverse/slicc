@@ -1211,7 +1211,7 @@ describe('formatLeaderOutput', () => {
     expect(output).toContain('  - follower-exec [ssh]');
     expect(output).toContain('      slicc-cli exec target · alice@box');
     expect(output).not.toContain('follower-plain-1');
-    expect(output).toContain('(2 other followers with no exec/browser capability)');
+    expect(output).toContain('(2 other followers with no exec/browser/computer capability)');
   });
 
   it('marks a browser follower [playwright] and a dual-capable one with both', () => {
@@ -1222,6 +1222,39 @@ describe('formatLeaderOutput', () => {
     expect(output).toContain('  - follower-browser [playwright]');
     expect(output).toContain('  - follower-both [ssh] [playwright]');
     expect(output).not.toContain('other follower');
+  });
+
+  it('tags a folded --computer Mac with every capability it has (#3381)', () => {
+    // The `slicc … follow --computer` pair reaches the renderer as ONE entry
+    // holding both capabilities. An entry tagged `[ssh]` alone has to mean
+    // native capture is unavailable through it — on the Mac in #3381 capture
+    // worked while the roster said nothing about it.
+    const output = formatLeaderOutput(activeLeaderStatus(), [
+      {
+        runtimeId: 'follower-cli',
+        exec: true,
+        computer: true,
+        motd: 'slicc-cli exec target · alice@Mac-Studio · darwin/arm64',
+      },
+    ]);
+    expect(output).toContain('  - follower-cli [ssh] [computer]');
+    expect(output).toContain('      slicc-cli exec target · alice@Mac-Studio · darwin/arm64');
+  });
+
+  it('lists a computer-only follower rather than tallying it as capability-less (#3381)', () => {
+    const output = formatLeaderOutput(activeLeaderStatus(), [
+      {
+        runtimeId: 'follower-launcher',
+        computer: true,
+        motd: 'Native screen capture on mac.local',
+      },
+      { runtimeId: 'follower-plain' },
+    ]);
+    expect(output).toContain('  - follower-launcher [computer]');
+    // Its MOTD is the only thing naming the machine, so it prints for a
+    // non-exec entry too.
+    expect(output).toContain('      Native screen capture on mac.local');
+    expect(output).toContain('(1 other follower with no exec/browser/computer capability)');
   });
 
   it('formats leader with error and no session', () => {

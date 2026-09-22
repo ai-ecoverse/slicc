@@ -224,9 +224,11 @@ All in `commands.go`:
 - **MOTD** (`hello.motd`, `followMotd`) — a one-line "who/what/where" summary
   the follower advertises so the leader surfaces it to the agent via
   `ssh --list`. The leader captures it in `tray-leader-sync.ts`
-  (`getFollowerMotds`) and, alongside `getBrowserCapableBootstrapIds`, tags
-  followers `[ssh]` / `[playwright]` in `host`. Additive + optional on the
-  wire (browser/iOS peers omit it).
+  (`getFollowerMotds`) and, alongside `getBrowserCapableBootstrapIds` and
+  `getComputerCapableBootstrapIds`, tags followers `[ssh]` / `[playwright]` /
+  `[computer]` in `host` — every capability an entry has, a paired launcher's
+  capture included (#3381). Additive + optional on the wire (browser/iOS peers
+  omit it).
 
 ## `follow --eval` (persistent REPL) lifecycle
 

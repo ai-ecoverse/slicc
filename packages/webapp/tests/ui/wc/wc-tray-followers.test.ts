@@ -6,8 +6,11 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 // component library into this module graph.
 installWcDomStubs();
 
+import type { LeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
 import { LeaderSyncManager } from '../../../src/scoops/tray-leader-sync.js';
+import type { FollowerToLeaderMessage } from '../../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../../src/scoops/tray-webrtc.js';
+import { formatLeaderOutput } from '../../../src/shell/supplemental-commands/host-command.js';
 import type { PageLeaderTrayHandle } from '../../../src/ui/page-leader-tray.js';
 import { buildFollowersSection } from '../../../src/ui/wc/wc-monitor.js';
 import {
@@ -17,11 +20,38 @@ import {
 
 class FakeChannel implements TrayDataChannelLike {
   readyState = 'open';
-  addEventListener(): void {}
+  private readonly listeners: Array<(event: { data: string }) => void> = [];
+  addEventListener(type: string, listener: (event: { data: string }) => void): void {
+    if (type === 'message') this.listeners.push(listener);
+  }
   send(): void {}
   close(): void {
     this.readyState = 'closed';
   }
+  /** Deliver one follower→leader frame, as the data channel would. */
+  simulateMessage(message: FollowerToLeaderMessage): void {
+    const data = JSON.stringify(message);
+    for (const listener of this.listeners) listener({ data });
+  }
+}
+
+function activeLeaderStatus(): LeaderTrayRuntimeStatus {
+  return {
+    state: 'leader',
+    session: {
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-123',
+      createdAt: '2026-09-22T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/controller-1',
+      joinUrl: 'https://tray.example.com/join/tray-123',
+      webhookUrl: 'https://tray.example.com/webhooks/tray-123',
+      leaderKey: 'leader-key',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws',
+      runtime: 'slicc-standalone',
+    },
+    error: null,
+  };
 }
 
 describe('WC tray connected follower mapping', () => {
@@ -178,6 +208,93 @@ describe('WC tray connected follower mapping', () => {
       computer: true,
       motd: 'slicc-cli exec target',
     });
+  });
+
+  it('prints a folded --computer Mac as one host entry tagged [ssh] [computer] (#3381)', () => {
+    // End-to-end over the real registry: two peers say hello with the same
+    // `pairId`, and the `host` renderer is what the agent reads. The unit-level
+    // fold already passed while `host` on a real Mac still showed two entries
+    // tagged `[ssh]` only, so the assertion that matters is on the OUTPUT.
+    const sync = new LeaderSyncManager({
+      sendControl: () => {},
+      getMessages: () => [],
+      getScoopJid: () => 'cone',
+      onFollowerMessage: vi.fn(),
+      onFollowerAbort: vi.fn(),
+    });
+    const cli = new FakeChannel();
+    sync.addFollower('cli-1', cli, { runtime: 'slicc-cli' });
+    cli.simulateMessage({
+      type: 'hello',
+      protocolVersion: 7,
+      capabilities: { exec: true },
+      motd: 'slicc-cli exec target · trieloff@Mac-Studio-2025 · darwin/arm64 · runner: bash -c',
+      pairId: 'pair-2ffe3b1c593741a10e3286b12d9c6838',
+    });
+    const launcher = new FakeChannel();
+    sync.addFollower('mac-1', launcher, { runtime: 'sliccstart-computer' });
+    launcher.simulateMessage({
+      type: 'hello',
+      protocolVersion: 7,
+      capabilities: { exec: false, computer: true },
+      pairId: 'pair-2ffe3b1c593741a10e3286b12d9c6838',
+    });
+    const handle = {
+      sync,
+      peers: {
+        getPeers: () => [
+          { bootstrapId: 'cli-1', state: 'connected' as const, runtime: 'slicc-cli' },
+          { bootstrapId: 'mac-1', state: 'connected' as const, runtime: 'sliccstart-computer' },
+        ],
+      },
+    } as unknown as PageLeaderTrayHandle;
+
+    const output = formatLeaderOutput(activeLeaderStatus(), getLeaderConnectedFollowers(handle));
+
+    expect(output).toContain('  - follower-cli-1 (slicc-cli) [ssh] [computer]');
+    expect(output).toContain(
+      '      slicc-cli exec target · trieloff@Mac-Studio-2025 · darwin/arm64 · runner: bash -c'
+    );
+    // One machine, one entry: the absorbed launcher is neither a second row nor
+    // an anonymous "other follower" tally.
+    expect(output).not.toContain('mac-1');
+    expect(output).not.toContain('other follower');
+  });
+
+  it('names an unpaired computer-only follower instead of hiding it in the count (#3381)', () => {
+    // A Sliccstart capture follower with no `pairId` (GUI Sliccstart, or a CLI
+    // whose launcher lost its token) folds into nothing. It is still a machine
+    // the agent can look at, so it gets a printable id — `computer add ssh`
+    // accepts a computer-only follower.
+    const sync = new LeaderSyncManager({
+      sendControl: () => {},
+      getMessages: () => [],
+      getScoopJid: () => 'cone',
+      onFollowerMessage: vi.fn(),
+      onFollowerAbort: vi.fn(),
+    });
+    const launcher = new FakeChannel();
+    sync.addFollower('mac-2', launcher, { runtime: 'sliccstart-computer' });
+    launcher.simulateMessage({
+      type: 'hello',
+      protocolVersion: 7,
+      capabilities: { exec: false, computer: true },
+      motd: 'Native screen capture on Mac-Studio-2025',
+    });
+    const handle = {
+      sync,
+      peers: {
+        getPeers: () => [
+          { bootstrapId: 'mac-2', state: 'connected' as const, runtime: 'sliccstart-computer' },
+        ],
+      },
+    } as unknown as PageLeaderTrayHandle;
+
+    const output = formatLeaderOutput(activeLeaderStatus(), getLeaderConnectedFollowers(handle));
+
+    expect(output).toContain('  - follower-mac-2 (sliccstart-computer) [computer]');
+    expect(output).toContain('      Native screen capture on Mac-Studio-2025');
+    expect(output).not.toContain('other follower');
   });
 
   it('keeps connecting rows uncounted through connect and death', () => {
