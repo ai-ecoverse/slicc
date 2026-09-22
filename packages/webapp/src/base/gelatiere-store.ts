@@ -1,4 +1,5 @@
 import DEFAULT_GELATIERE_MD from '../../../vfs-root/shared/GELATIERE.md?raw';
+import { FsError } from '../fs/types.js';
 import {
   type FrontmatterValue,
   parseFrontmatter,
@@ -238,8 +239,15 @@ async function readText(vfs: Pick<GelatiereVfs, 'readFile'>, path: string): Prom
 }
 
 async function readJson(vfs: Pick<GelatiereVfs, 'readFile'>, path: string): Promise<unknown> {
+  let text: string;
   try {
-    return JSON.parse(await readText(vfs, path));
+    text = await readText(vfs, path);
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return undefined;
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
   } catch {
     return undefined;
   }

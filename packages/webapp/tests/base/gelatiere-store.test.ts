@@ -33,6 +33,7 @@ import {
   takenSuggestions,
 } from '../../src/base/gelatiere-store.js';
 import { resetLoggerDedupForTests } from '../../src/base/logger.js';
+import { FsError } from '../../src/fs/types.js';
 
 interface FakeVfs extends GelatiereVfs {
   files: Map<string, string>;
@@ -44,7 +45,7 @@ function fakeVfs(initial: Record<string, string> = {}): FakeVfs {
     files,
     readFile: vi.fn(async (path: string) => {
       const text = files.get(path);
-      if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (text === undefined) throw new FsError('ENOENT', 'no such file', path);
       return text;
     }),
     writeFile: vi.fn(async (path: string, body: string) => {
@@ -693,5 +694,125 @@ describe('describeGelatiereLick', () => {
     expect(describeGelatiereLick('[Sprinkle Event: gelatiere] no json')).toBeNull();
     expect(describeGelatiereLick('{not json}')).toBeNull();
     expect(describeGelatiereLick('{"data":{}}')).toBeNull();
+  });
+});
+
+describe('readJson fault discrimination', () => {
+  const priorSuggestions = JSON.stringify([
+    suggestion({ dismissedAt: '2026-09-02T00:00:00.000Z' }),
+    suggestion({ id: 'tip-kept', kind: 'tip', title: 'Kept tip' }),
+  ]);
+  const priorState = JSON.stringify({
+    passes: 4,
+    lastPassAt: '2026-09-01T00:00:00.000Z',
+    lastTriggeredAt: '2026-09-08T00:00:00.000Z',
+    lastDeliveredAt: '2026-09-08T01:00:00.000Z',
+  });
+  const incoming = [suggestion({ id: 'tip-new', kind: 'tip', title: 'New tip' })];
+
+  function faultingStore(code: 'EIO' | 'EACCES', faultPaths: readonly string[]): FakeVfs {
+    const files = new Map<string, string>([
+      [GELATIERE_SUGGESTIONS_PATH, priorSuggestions],
+      [GELATIERE_STATE_PATH, priorState],
+    ]);
+    const fault = new Set(faultPaths);
+    return {
+      files,
+      readFile: vi.fn(async (path: string) => {
+        if (fault.has(path)) throw new FsError(code, `transient ${code}`, path);
+        const text = files.get(path);
+        if (text === undefined) throw new FsError('ENOENT', 'no such file', path);
+        return text;
+      }),
+      writeFile: vi.fn(async (path: string, body: string) => {
+        files.set(path, body);
+      }),
+      mkdir: vi.fn(async () => {}),
+    };
+  }
+
+  it('treats FsError ENOENT as an empty store', async () => {
+    expect(await readGelatiereSuggestions(fakeVfs())).toEqual([]);
+    expect(await readGelatiereState(fakeVfs())).toEqual({ passes: 0 });
+  });
+
+  it('treats malformed JSON as an empty store', async () => {
+    expect(
+      await readGelatiereSuggestions(fakeVfs({ [GELATIERE_SUGGESTIONS_PATH]: '{not json' }))
+    ).toEqual([]);
+    expect(await readGelatiereState(fakeVfs({ [GELATIERE_STATE_PATH]: '{not json' }))).toEqual({
+      passes: 0,
+    });
+  });
+
+  it.each(['EIO', 'EACCES'] as const)(
+    'readers propagate %s instead of an empty default',
+    async (code) => {
+      const vfs = faultingStore(code, [GELATIERE_SUGGESTIONS_PATH, GELATIERE_STATE_PATH]);
+      await expect(readGelatiereSuggestions(vfs)).rejects.toMatchObject({ name: 'FsError', code });
+      await expect(readGelatiereState(vfs)).rejects.toMatchObject({ name: 'FsError', code });
+    }
+  );
+
+  it.each(['EIO', 'EACCES'] as const)(
+    'recordPass aborts on %s and does not clobber suggestions or the billing ledger',
+    async (code) => {
+      const vfs = faultingStore(code, [GELATIERE_SUGGESTIONS_PATH, GELATIERE_STATE_PATH]);
+      await expect(recordPass(vfs, incoming, NOW)).rejects.toMatchObject({ name: 'FsError', code });
+      expect(vfs.files.get(GELATIERE_SUGGESTIONS_PATH)).toBe(priorSuggestions);
+      expect(vfs.files.get(GELATIERE_STATE_PATH)).toBe(priorState);
+      expect(vfs.writeFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it('recordPass keeps the billing ledger when only state.json faults', async () => {
+    const vfs = faultingStore('EIO', [GELATIERE_STATE_PATH]);
+    await expect(recordPass(vfs, incoming, NOW)).rejects.toMatchObject({ code: 'EIO' });
+    expect(vfs.files.get(GELATIERE_STATE_PATH)).toBe(priorState);
+    const stored = JSON.parse(vfs.files.get(GELATIERE_SUGGESTIONS_PATH) ?? '[]') as Array<{
+      id: string;
+      dismissedAt?: string;
+    }>;
+    expect(stored.find((s) => s.id === 'skill-github')?.dismissedAt).toBe(
+      '2026-09-02T00:00:00.000Z'
+    );
+    expect(stored.map((s) => s.id)).toContain('tip-kept');
+  });
+
+  it.each(['EIO', 'EACCES'] as const)(
+    'dismiss and install abort on %s and do not clobber suggestions',
+    async (code) => {
+      const vfs = faultingStore(code, [GELATIERE_SUGGESTIONS_PATH]);
+      await expect(dismissGelatiereSuggestion(vfs, 'skill-github', NOW)).rejects.toMatchObject({
+        code,
+      });
+      await expect(takeGelatiereSuggestion(vfs, 'tip-kept', NOW)).rejects.toMatchObject({ code });
+      expect(vfs.files.get(GELATIERE_SUGGESTIONS_PATH)).toBe(priorSuggestions);
+      expect(vfs.writeFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it('a faulted settle does not wedge the next settlement', async () => {
+    const broken = faultingStore('EIO', [GELATIERE_SUGGESTIONS_PATH]);
+    await expect(dismissGelatiereSuggestion(broken, 'skill-github', NOW)).rejects.toMatchObject({
+      code: 'EIO',
+    });
+    const healthy = fakeVfs({ [GELATIERE_SUGGESTIONS_PATH]: priorSuggestions });
+    expect(await dismissGelatiereSuggestion(healthy, 'tip-kept', NOW)).toBe(true);
+    const after = JSON.parse(healthy.files.get(GELATIERE_SUGGESTIONS_PATH) ?? '[]') as Array<{
+      id: string;
+      dismissedAt?: string;
+    }>;
+    expect(after.find((s) => s.id === 'tip-kept')?.dismissedAt).toBe(NOW.toISOString());
+    expect(after.find((s) => s.id === 'skill-github')?.dismissedAt).toBe(
+      '2026-09-02T00:00:00.000Z'
+    );
+  });
+
+  it('recordGelatiereTrigger aborts on EACCES and does not reset the ledger', async () => {
+    const vfs = faultingStore('EACCES', [GELATIERE_STATE_PATH]);
+    await expect(recordGelatiereTrigger(vfs, NOW)).rejects.toMatchObject({ code: 'EACCES' });
+    expect(vfs.files.get(GELATIERE_STATE_PATH)).toBe(priorState);
+    expect(vfs.writeFile).not.toHaveBeenCalled();
   });
 });

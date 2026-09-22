@@ -13,6 +13,7 @@ import {
   type GelatiereSuggestion,
 } from '../../../src/base/gelatiere-store.js';
 import type { VirtualFS } from '../../../src/fs/index.js';
+import { FsError } from '../../../src/fs/types.js';
 import { createGelatiereCommand } from '../../../src/shell/supplemental-commands/gelatiere-command.js';
 
 function memoryFs(initial: Record<string, string> = {}) {
@@ -21,7 +22,7 @@ function memoryFs(initial: Record<string, string> = {}) {
     files,
     readFile: async (path: string) => {
       const text = files.get(path);
-      if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      if (text === undefined) throw new FsError('ENOENT', 'no such file', path);
       return text;
     },
     writeFile: async (path: string, body: string) => {
