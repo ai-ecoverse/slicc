@@ -228,7 +228,10 @@ function resolveSshFollower(
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
   return {
-    error: `add ssh: no exec-capable or computer-capable follower '${query}' — try \`ssh --list\``,
+    // Name `host`, not `ssh --list` (#3388): `ssh` is an exec command and its
+    // lister stays exec-only, so it structurally cannot show the capture-only
+    // follower this resolver accepts. `host` tags those `[computer]` (#3381).
+    error: `add ssh: no exec-capable or computer-capable follower '${query}' — try \`host\` (an entry tagged [ssh] or [computer] is eligible; \`ssh --list\` shows exec targets only)`,
   };
 }
 
