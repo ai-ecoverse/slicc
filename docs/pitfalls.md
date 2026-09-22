@@ -746,6 +746,14 @@ interleaving. See [zen-fs/dom#46](https://github.com/zen-fs/dom/issues/46), repr
 on upstream dom 1.2.13 / core 2.7.3. Dom 1.2.14 still uses the same
 single-snapshot read, so the retry patch remains necessary on our pinned version.
 
+In a worker the same read does not take a snapshot at all. `createSyncAccessHandle()`
+writes the requested window straight into the caller's buffer and is closed
+before the call returns. That is the path Kokoro (`model.onnx_data`), kev's
+shards, and every other ONNX load share: `env.fetch` and `/preview` both
+arrive at `WebAccessFS.read` in the kernel worker. A locked handle, or a
+caller on the main thread where sync access handles do not exist, falls
+through to the snapshot retry below.
+
 The `@zenfs/dom` read patch obtains a fresh File for each byte-read attempt and
 retries native `NotReadableError` at most twice (three total attempts), with a
 short pause between attempts. The throw comes from `getFile()` itself as often

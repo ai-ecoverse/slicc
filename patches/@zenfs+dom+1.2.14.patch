@@ -1,5 +1,5 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index ac0cbbd..a255a56 100644
+index ac0cbbd..f77474b 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
 @@ -58,12 +58,18 @@ export class WebAccessFS extends Async(IndexFS) {
@@ -57,22 +57,58 @@ index ac0cbbd..a255a56 100644
      }
      removeSync() {
          throw log.crit(withErrno('ENOSYS'));
-@@ -157,8 +179,37 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -157,15 +179,74 @@ export class WebAccessFS extends Async(IndexFS) {
          if (end <= offset)
              return;
          const handle = await this.get('file', path);
 -        const file = await handle.getFile();
 -        const data = await file.arrayBuffer();
-+        // PATCH: Chromium invalidates an OPFS File snapshot with
-+        // NotReadableError ("could not be read after a reference was
-+        // acquired"). That throw comes from getFile() itself as often as
-+        // from arrayBuffer(), and a burst of large reads keeps failing
-+        // until the previous snapshot is dropped. Retry both steps, with
-+        // a short pause. Persistent failures stay fatal after three
-+        // attempts; other DOMExceptions are never retried.
+-        if (data.byteLength < end - offset)
+-            throw alert(withErrno('EIO', [
+-                'Unexpected mismatch in file data size. This should not happen.',
+-                `tried to read ${end - offset} bytes but the file is ${data.byteLength} bytes.`,
+-                `path: ${path}`,
+-            ].join('\n' + ' '.repeat(24))));
+-        buffer.set(new Uint8Array(data, offset, end - offset));
++        const length = end - offset;
++        const short = () => alert(withErrno('EIO', [
++            'Unexpected mismatch in file data size. This should not happen.',
++            `tried to read ${length} bytes at ${offset}.`,
++            `path: ${path}`,
++        ].join('\n' + ' '.repeat(24))));
++        // PATCH: a worker can read the window with a sync access handle.
++        // getFile() snapshots the whole object, which is what fails a 50 MB
++        // ONNX shard (and Kokoro's model.onnx_data) with NotReadableError
++        // once another snapshot is still held. The handle writes straight
++        // into the caller's buffer. Main-thread callers, and a handle that
++        // is already locked, fall through to the snapshot retry.
++        if (typeof handle.createSyncAccessHandle === 'function') {
++            let access;
++            try {
++                access = await handle.createSyncAccessHandle();
++                const view = buffer.subarray(0, length);
++                const n = access.read(view, { at: offset });
++                if (n < length)
++                    throw short();
++                return;
++            }
++            catch (error) {
++                if (error && error.code === 'EIO')
++                    throw error;
++            }
++            finally {
++                access?.close();
++            }
++        }
++        // Chromium invalidates an OPFS File snapshot with NotReadableError
++        // ("could not be read after a reference was acquired"). That throw
++        // comes from getFile() itself as often as from arrayBuffer(). Retry
++        // both, with a short pause. Three attempts, then the last error.
++        // Other DOMExceptions are never retried.
 +        const stale = (error) => error instanceof DOMException && error.name === 'NotReadableError';
 +        const pause = (attempt) => new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
 +        let data;
++        let sliced = false;
 +        for (let attempt = 0; ; attempt++) {
 +            let file;
 +            try {
@@ -85,7 +121,10 @@ index ac0cbbd..a255a56 100644
 +                continue;
 +            }
 +            try {
-+                data = await file.arrayBuffer();
++                // slice() materializes the window. A mock File with no slice
++                // still yields the whole buffer, indexed below.
++                sliced = typeof file.slice === 'function';
++                data = await (sliced ? file.slice(offset, end) : file).arrayBuffer();
 +                break;
 +            }
 +            catch (error) {
@@ -94,6 +133,11 @@ index ac0cbbd..a255a56 100644
 +                await pause(attempt);
 +            }
 +        }
-         if (data.byteLength < end - offset)
-             throw alert(withErrno('EIO', [
-                 'Unexpected mismatch in file data size. This should not happen.',
++        if (!sliced && data.byteLength < end)
++            throw short();
++        if (sliced && data.byteLength < length)
++            throw short();
++        buffer.set(sliced ? new Uint8Array(data) : new Uint8Array(data, offset, length));
+     }
+     async write(path, buffer, offset) {
+         if (isResizable(buffer.buffer) || _isShared(buffer.buffer)) {
