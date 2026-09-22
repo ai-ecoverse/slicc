@@ -12,7 +12,12 @@ import {
   screenshotTab,
   tabComputerId,
 } from '../../../src/computers/adapters/tab.js';
-import { bytesFromBase64, jpegSize, MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
+import {
+  bytesFromBase64,
+  jpegSize,
+  MINIMAL_JPEG,
+  pngSize,
+} from '../../../src/computers/encode-frame.js';
 import {
   ComputerRegistry,
   resetComputerRegistryForTests,
@@ -46,6 +51,15 @@ function pngHeader(width: number, height: number): Uint8Array {
   bytes[22] = (height >>> 8) & 255;
   bytes[23] = height & 255;
   return bytes;
+}
+
+function realisticPng(width: number, height: number): Uint8Array {
+  const head = pngHeader(width, height);
+  const body = Uint8Array.of(0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x80, 0x01, 0x90, 0x03);
+  const out = new Uint8Array(head.length + body.length);
+  out.set(head, 0);
+  out.set(body, head.length);
+  return out;
 }
 
 function makeTab(dpr = 1) {
@@ -277,6 +291,22 @@ describe('page-side screenshotTab / inputTab', () => {
     expect(shot.nativeWidth).toBe(800);
     expect(jpegSize(bytesFromBase64(shot.base64))).not.toBeNull();
     expect(tab.screenshot.mock.calls.some((c) => c[0]?.format === 'jpeg')).toBe(false);
+  });
+
+  it('transcodes a realistic PNG re-capture on the poke path', async () => {
+    const tab = {
+      send: vi.fn(async () => ({})),
+      screenshot: vi.fn(async (opts: { format?: string; maxWidth?: number } = {}) => {
+        const width = opts.maxWidth ?? 800;
+        return uint8ToBase64(realisticPng(width, Math.round((width * 400) / 800)));
+      }),
+    };
+    const browser = makeBrowser([EXAMPLE], tab as never);
+    const shot = await screenshotTab(browser as never, 'T1', { format: 'jpeg', maxWidth: 256 });
+    const bytes = bytesFromBase64(shot.base64);
+    expect(pngSize(bytes)).toBeNull();
+    expect(jpegSize(bytes)).not.toBeNull();
+    expect(shot.mime).toBe('image/jpeg');
   });
 
   it('refuses SLICC app tabs before touching CDP', async () => {

@@ -28,7 +28,7 @@ Resolution order: `-c` / `--computer`, else `$COMPUTER`, else last `computer use
 
 ## Look then act
 
-Every poke writes a frozen JPEG and prints `target: <id>` then `screen: <path>`. The `target:` line is the resolved computer (`-c`, `$COMPUTER`, last `use`, or the only registered one) so a later `computer screenshot` without `-c` still binds the bash-row UI. That poke frame is a transcript side effect only — it does **not** redefine the coordinate space, so never read new coordinates off it (it can come back narrower and your clicks would map to the wrong place). Run a fresh `computer screenshot` before choosing coordinates for the next click. If the frozen frame cannot be captured, the poke still exits 0 (it already happened); do not retry the same click.
+Every poke writes a frozen JPEG and prints `target: <id>` then `screen: <path>`. The extension of that path follows the bytes, so it is `.jpg` in practice and `.png` only if a backend hands back PNG the runtime could not transcode — read the extension, do not assume it. The `target:` line is the resolved computer (`-c`, `$COMPUTER`, last `use`, or the only registered one) so a later `computer screenshot` without `-c` still binds the bash-row UI. That poke frame is a transcript side effect only — it does **not** redefine the coordinate space, so never read new coordinates off it (it can come back narrower and your clicks would map to the wrong place). Run a fresh `computer screenshot` before choosing coordinates for the next click. If the frozen frame cannot be captured, the poke still exits 0 (it already happened); do not retry the same click.
 
 ```bash
 computer screenshot                 # JPEG; prints WxH → wxh (scale s)

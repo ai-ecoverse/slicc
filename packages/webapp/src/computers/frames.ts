@@ -1,6 +1,7 @@
 import type { ComputerFrame } from '@slicc/shared-ts';
 import { scratchDir, type TmpDirEnv } from '../shell/tmpdir-env.js';
 import { encodeRgbaFrame, type RgbaFrame } from './encode-frame.js';
+import { sniffFrameMime } from './frame-bytes.js';
 
 export const FROZEN_FRAME_PREFIX = 'screen: ';
 export const COMPUTER_TARGET_PREFIX = 'target: ';
@@ -20,8 +21,17 @@ export interface WriteFrozenFrameOpts {
   frame: ComputerFrame;
 }
 
-export function frozenFramePath(tmp: string, name: string, seq: number): string {
-  return `${tmp.replace(/\/$/u, '')}/computer/${name}/${seq}.jpg`;
+export function frozenFrameExtension(bytes: Uint8Array): 'jpg' | 'png' {
+  return sniffFrameMime(bytes) === 'image/png' ? 'png' : 'jpg';
+}
+
+export function frozenFramePath(
+  tmp: string,
+  name: string,
+  seq: number,
+  ext: 'jpg' | 'png' = 'jpg'
+): string {
+  return `${tmp.replace(/\/$/u, '')}/computer/${name}/${seq}.${ext}`;
 }
 
 export function frozenFrameLine(path: string): string {
@@ -34,7 +44,7 @@ export function computerTargetLine(id: string): string {
 
 export async function writeFrozenFrame(opts: WriteFrozenFrameOpts): Promise<string> {
   const dir = `${scratchDir(opts.env).replace(/\/$/u, '')}/computer/${opts.name}`;
-  const path = `${dir}/${opts.seq}.jpg`;
+  const path = `${dir}/${opts.seq}.${frozenFrameExtension(opts.frame.bytes)}`;
   const resolvedDir = opts.fs.resolvePath(opts.cwd, dir);
   const resolvedPath = opts.fs.resolvePath(opts.cwd, path);
   await opts.fs.mkdir(resolvedDir, { recursive: true });

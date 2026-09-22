@@ -28,15 +28,40 @@ export const MINIMAL_JPEG = Uint8Array.of(
   0xd9
 );
 
+const JPEG_SOF_MARKERS = new Set([
+  0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf,
+]);
+
+function isStandaloneJpegMarker(marker: number): boolean {
+  return marker === 0x01 || marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7);
+}
+
 export function jpegSize(bytes: Uint8Array): { width: number; height: number } | null {
-  for (let i = 0; i < bytes.length - 8; i++) {
-    if (bytes[i] !== 0xff) continue;
-    const marker = bytes[i + 1];
-    if (marker === 0xc0 || marker === 0xc2) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 3 < bytes.length) {
+    if (bytes[i] !== 0xff) return null;
+    let marker = bytes[i + 1];
+
+    while (marker === 0xff && i + 2 < bytes.length) {
+      i += 1;
+      marker = bytes[i + 1];
+    }
+    if (isStandaloneJpegMarker(marker)) {
+      i += 2;
+      continue;
+    }
+
+    if (marker === 0xd9 || marker === 0xda) return null;
+    const length = (bytes[i + 2] << 8) | bytes[i + 3];
+    if (length < 2) return null;
+    if (JPEG_SOF_MARKERS.has(marker)) {
+      if (i + 8 >= bytes.length) return null;
       const height = (bytes[i + 5] << 8) | bytes[i + 6];
       const width = (bytes[i + 7] << 8) | bytes[i + 8];
-      if (width > 0 && height > 0) return { width, height };
+      return width > 0 && height > 0 ? { width, height } : null;
     }
+    i += 2 + length;
   }
   return null;
 }
