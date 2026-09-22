@@ -65,7 +65,8 @@ same way `internal/cloud` does: `Sliccstart --computer-follow <url> --pair
 
 - **One roster entry.** Both peers send the same `hello.pairId`; the leader
   folds them (`webapp/src/scoops/tray-leader/follower-pairing.ts`) so
-  `ssh --list` shows one machine holding `exec` + `computer` and
+  `host` shows one machine tagged `[ssh] [computer]` (#3381 — `ssh --list`
+  stays exec-only, since `ssh` cannot reach a capture-only peer) and
   `computer add ssh` picks ScreenCaptureKit over the terminal-attributed
   `screencapture` shell-out. Token is minted per process —
   a bootstrap id doesn't exist yet and changes on reconnect. **With no runner
@@ -154,7 +155,7 @@ user who started `slicc`, echoed to stderr. **A `follow` with no runner
 advertises no capability and refuses every `exec.request`.** On start a banner +
 safety warning prints (`--no-banner` drops the art); `runnerExecWarning` flags
 the `follow bash` vs `follow bash -c` footgun; the MOTD surfaces via `ssh --list`
-(tagged `[ssh]`/`[playwright]`).
+(`host` tags `[ssh]`/`[computer]`/`[playwright]`).
 [Wiring](../../docs/slicc-cli-details.md#follow-startup-ergonomics).
 
 ## follow `--eval` (persistent REPL)

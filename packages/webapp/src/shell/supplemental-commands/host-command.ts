@@ -26,11 +26,15 @@ export interface ConnectedFollowerInfo {
   peerState?: 'connecting' | 'connected';
   /** True when the follower advertised `exec` capability (a `slicc … follow` CLI) — reach it with `ssh`. */
   exec?: boolean;
-  /** True when the follower advertised `capabilities.computer` (native screen capture). */
+  /**
+   * True when native screen capture is reachable through this entry — either the
+   * follower advertised `capabilities.computer` itself, or it is the `exec`
+   * primary of a `hello.pairId` pair whose partner holds the screen (#3260).
+   */
   computer?: boolean;
   /** True when the follower advertised browser targets — reach its tabs with `playwright-cli`. */
   cdp?: boolean;
-  /** One-line description the follower advertised on `hello.motd` (exec targets). */
+  /** One-line description the follower advertised on `hello.motd`. */
   motd?: string;
 }
 
@@ -188,8 +192,13 @@ export function formatDuration(seconds: number): string {
 
 /**
  * Lines for one actionable follower: the tagged entry (`[ssh]` for an exec
- * target, `[playwright]` for a browser one) plus, for an exec target, its
- * advertised MOTD on an indented line beneath it.
+ * target, `[computer]` for one whose screen can be captured, `[playwright]` for
+ * a browser one) plus its advertised MOTD on an indented line beneath it.
+ *
+ * Every capability the follower has is tagged, including a `computer` one lent
+ * to a paired primary (#3381): a Mac on `slicc … follow --computer` reads as one
+ * entry, and an entry tagged `[ssh]` alone has to mean native capture is NOT
+ * available through it — otherwise the roster denies a capability that works.
  */
 function formatFollowerEntry(f: ConnectedFollowerInfo): string[] {
   const parts = [f.runtimeId];
@@ -202,21 +211,30 @@ function formatFollowerEntry(f: ConnectedFollowerInfo): string[] {
   }
   const tags: string[] = [];
   if (f.exec) tags.push('[ssh]'); // reach it with `ssh <runtime-id> "<cmd>"`
+  if (f.computer) tags.push('[computer]'); // look at it with `computer add ssh <runtime-id>`
   if (f.cdp) tags.push('[playwright]'); // drive its tabs with `playwright-cli`
   if (tags.length > 0) parts.push(tags.join(' '));
   const lines = [`  - ${parts.join(' ')}`];
-  if (f.exec && f.motd) lines.push(`      ${f.motd}`);
+  // Not gated on `exec` any more: a computer-only Sliccstart is the one peer
+  // whose id says nothing about which machine it is, and its MOTD is the only
+  // thing that names the Mac.
+  if (f.motd) lines.push(`      ${f.motd}`);
   return lines;
 }
 
 /**
  * The `followers:` section. Lists only followers the agent can act on — an exec
- * target (`[ssh]`) or a browser-control target (`[playwright]`). Transient
- * `prompt`/`exec` CLI connections advertise no capability and would otherwise
- * linger as ghost ids until the hub GCs them, so collapse them to a count.
+ * target (`[ssh]`), a capturable screen (`[computer]`) or a browser-control
+ * target (`[playwright]`). Transient `prompt`/`exec` CLI connections advertise
+ * no capability and would otherwise linger as ghost ids until the hub GCs them,
+ * so collapse them to a count.
+ *
+ * `computer` counts as actionable (#3381) because `computer add ssh` accepts a
+ * computer-only follower: collapsing one into the "no capability" count made a
+ * machine that CAN be looked at unnamed and unaddressable here.
  */
 function formatFollowersSection(followers: ConnectedFollowerInfo[]): string[] {
-  const actionable = followers.filter((f) => f.exec || f.cdp);
+  const actionable = followers.filter((f) => f.exec || f.cdp || f.computer);
   const hidden = followers.length - actionable.length;
   const lines: string[] = [];
   if (actionable.length > 0) {
@@ -225,7 +243,7 @@ function formatFollowersSection(followers: ConnectedFollowerInfo[]): string[] {
   }
   if (hidden > 0) {
     lines.push(
-      `(${hidden} other follower${hidden === 1 ? '' : 's'} with no exec/browser capability)`
+      `(${hidden} other follower${hidden === 1 ? '' : 's'} with no exec/browser/computer capability)`
     );
   }
   return lines;

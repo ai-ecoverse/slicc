@@ -21,7 +21,7 @@ stdout, stderr, and exit code.
 CLI followers started with a **runner** and iOS followers advertising exec are targets. Find them:
 
 ```bash
-host           # exec targets tagged [ssh]; browser targets tagged [playwright]
+host           # every follower: [ssh] exec, [computer] capturable screen, [playwright] browser
 ssh --list     # just the exec targets + their runtime ids, each with a MOTD line
 ```
 
