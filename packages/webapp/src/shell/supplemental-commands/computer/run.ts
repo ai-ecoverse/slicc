@@ -223,7 +223,7 @@ function resolveSshFollower(
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
   return {
-    error: `add ssh: no exec-capable or computer-capable follower '${query}' — try \`ssh --list\``,
+    error: `add ssh: no exec-capable or computer-capable follower '${query}' — try \`host\` (an entry tagged [ssh] or [computer] is eligible; \`ssh --list\` shows exec targets only)`,
   };
 }
 

@@ -1071,6 +1071,29 @@ describe('computer parse', () => {
     expect(capture).toHaveBeenCalled();
   });
 
+  it('points a failed add ssh at `host`, the lister that shows a computer-only follower (#3388)', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+    });
+    const { ctx } = makeCtx();
+    const missed = await cmd.execute(['add', 'ssh', 'follower-nope'], ctx);
+    expect(missed.exitCode).toBe(1);
+    expect(missed.stderr).toContain('no exec-capable or computer-capable follower');
+    expect(missed.stderr).toContain('`host`');
+    expect(missed.stderr).toContain('[computer]');
+    expect(missed.stderr).not.toMatch(/try `ssh --list`/);
+  });
+
   it('add ssh --allow-input on a computer follower does not need cliclick', async () => {
     const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
     const input = vi.fn();

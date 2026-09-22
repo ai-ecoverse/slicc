@@ -1,8 +1,128 @@
+diff --git a/node_modules/@zenfs/core/dist/backends/store/fs.js b/node_modules/@zenfs/core/dist/backends/store/fs.js
+index 1e20478..51f47b7 100644
+--- a/node_modules/@zenfs/core/dist/backends/store/fs.js
++++ b/node_modules/@zenfs/core/dist/backends/store/fs.js
+@@ -442,7 +442,9 @@ export class StoreFS extends FileSystem {
+         try {
+             const tx = __addDisposableResource(env_10, this.transaction(), false);
+             const inode = this.findInodeSync(tx, path);
+-            if (!isDirectory(inode) && metadata.size !== undefined && metadata.size !== inode.size) {
++            // metaOnly: record size without zero-filling the body. crossCopy
++            // uses this for files above the sync preload cap.
++            if (!isDirectory(inode) && metadata.size !== undefined && metadata.size !== inode.size && !metadata.metaOnly) {
+                 const data = tx.getSync(inode.data) ?? new Uint8Array();
+                 if (metadata.size < data.byteLength)
+                     data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..c710d11 100644
+index 26aaf3a..a7c5417 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
-@@ -219,37 +219,62 @@ export function Async(FS) {
+@@ -129,9 +129,74 @@ export function Async(FS) {
+                 throw crit(withErrno('ENOTSUP', 'No sync cache is attached to this async file system'));
+             }
+         }
++        /**
++         * Drop `path` and every descendant from the metadata-only set.
++         * @internal
++         */
++        _forgetMetaOnly(path) {
++            const set = this._metaOnly;
++            if (!set)
++                return;
++            set.delete(path);
++            const prefix = path.endsWith('/') ? path : path + '/';
++            for (const key of [...set]) {
++                if (key.startsWith(prefix))
++                    set.delete(key);
++            }
++        }
++        /**
++         * A metadata-only path moved. The empty mirror inode moved with it;
++         * the guard has to follow or a read of the new path returns zeros.
++         * @internal
++         */
++        _moveMetaOnly(oldPath, newPath) {
++            const set = this._metaOnly;
++            if (!set || oldPath === newPath)
++                return;
++            const prefix = oldPath.endsWith('/') ? oldPath : oldPath + '/';
++            const moved = [];
++            for (const key of set) {
++                if (key === oldPath)
++                    moved.push([key, newPath]);
++                else if (key.startsWith(prefix))
++                    moved.push([key, newPath + key.slice(oldPath.length)]);
++            }
++            for (const [from, to] of moved) {
++                set.delete(from);
++                set.add(to);
++            }
++        }
++        /**
++         * Async `write`/`rename`/`unlink` update the mirror through `_sync`,
++         * not through the `*Sync` methods below. Keep the set in step there too.
++         * @internal
++         */
++        _followMetaOnly(op, args) {
++            if (!this._metaOnly?.size)
++                return;
++            if (op === 'write' || op === 'unlink' || op === 'truncate')
++                this._metaOnly.delete(args[0]);
++            else if (op === 'rename')
++                this._moveMetaOnly(args[0], args[1]);
++            else if (op === 'rmdir' || op === 'remove')
++                this._forgetMetaOnly(args[0]);
++        }
++        /**
++         * A metadata-only inode's size is not backed by bytes. Collapse it to
++         * the write offset so the store's `max(size, end)` becomes the new
++         * length instead of preserving the fictional size.
++         * @internal
++         */
++        _prepareMetaWrite(path, offset) {
++            if (!this._metaOnly?.has(path))
++                return;
++            this._sync.touchSync(path, { size: offset || 0, metaOnly: true });
++            this._metaOnly.delete(path);
++        }
+         renameSync(oldPath, newPath) {
+             this.checkSync();
+             this._sync.renameSync(oldPath, newPath);
++            this._moveMetaOnly(oldPath, newPath);
+             this._async(() => this.rename(oldPath, newPath));
+         }
+         statSync(path) {
+@@ -152,11 +217,13 @@ export function Async(FS) {
+         unlinkSync(path) {
+             this.checkSync();
+             this._sync.unlinkSync(path);
++            this._metaOnly?.delete(path);
+             this._async(() => this.unlink(path));
+         }
+         rmdirSync(path) {
+             this.checkSync();
+             this._sync.rmdirSync(path);
++            this._forgetMetaOnly(path);
+             this._async(() => this.rmdir(path));
+         }
+         mkdirSync(path, options) {
+@@ -189,10 +256,15 @@ export function Async(FS) {
+         }
+         readSync(path, buffer, offset, end) {
+             this.checkSync();
++            // Payload was not copied (see crossCopy). Serving the empty mirror
++            // buffer would look like a successful read of zeros.
++            if (this._metaOnly?.has(path))
++                throw withErrno('EIO', `sync mirror has no payload for ${path}`);
+             this._sync.readSync(path, buffer, offset, end);
+         }
+         writeSync(path, buffer, offset) {
+             this.checkSync();
++            this._prepareMetaWrite(path, offset);
+             this._sync.writeSync(path, buffer, offset);
+             this._async(() => this.write(path, buffer, offset));
+         }
+@@ -219,37 +291,76 @@ export function Async(FS) {
          /** @internal @protected */
          _crossCopySemaphore;
          /** @internal */
@@ -31,6 +151,20 @@ index 26aaf3a..c710d11 100644
 +                if (preload.failure)
 +                    throw preload.failure.error;
 +                if (!isDirectory(stats)) {
++                    // Bodies above the realm sync-snapshot cap (1 MiB, the same
++                    // SYNC_FS_MAX_FILE_BYTES as realm-host.ts) stay in OPFS.
++                    // new Uint8Array(stats.size) plus a File snapshot of every
++                    // shard is what fails mount on a multi-gigabyte tree
++                    // (NotReadableError, then Array buffer allocation failed).
++                    if (stats.size > 1048576) {
++                        // Name and size stay visible to readdir/stat. The body
++                        // does not: touchSync would otherwise zero-fill it.
++                        this._metaOnly ??= new Set();
++                        this._metaOnly.add(path);
++                        this._sync.createFileSync(path, stats);
++                        this._sync.touchSync(path, { ...stats, metaOnly: true });
++                        return;
++                    }
 +                    const release = (await this._crossCopySemaphore?.get()) || { [Symbol.dispose]() { } };
 +                    try {
 +                        // A slot may have been handed off just before a peer failed.
@@ -90,6 +224,17 @@ index 26aaf3a..c710d11 100644
          }
          /**
           * @internal
+@@ -284,7 +395,10 @@ export function Async(FS) {
+                     }
+                     try {
+                         // @ts-expect-error 2556 - The type of `args` is not narrowed
++                        if (key === 'write')
++                            this._prepareMetaWrite(args[0], args[2]);
+                         this._sync?.[`${key}Sync`]?.(...args);
++                        this._followMetaOnly(key, args);
+                     }
+                     catch (e) {
+                         if (isInLoop(3, e))
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index 44f7ed2..faea5dc 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js

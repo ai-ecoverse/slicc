@@ -10,6 +10,7 @@ const hoisted = vi.hoisted(() => ({
     runtime?: string;
     connectedAt?: string;
     exec?: boolean;
+    computer?: boolean;
     motd?: string;
   }>,
 }));
@@ -86,6 +87,16 @@ describe('ssh command', () => {
     const r = await createSshCommand().execute(['--list'], ctx());
     expect(r.stdout).toContain('  - follower-ios (slicc-ios)');
     expect(r.stdout).toContain('      SLICC iOS follower on iPhone — only supported command: open');
+  });
+
+  it('omits a computer-only follower, which `ssh` could never run a command on (#3388)', async () => {
+    hoisted.followers = [
+      { runtimeId: 'follower-a', runtime: 'slicc-cli', exec: true },
+      { runtimeId: 'sliccstart-computer-1', runtime: 'sliccstart-computer', computer: true },
+    ];
+    const r = await createSshCommand().execute(['--list'], ctx());
+    expect(r.stdout).toContain('follower-a');
+    expect(r.stdout).not.toContain('sliccstart-computer-1');
   });
 
   it('reports when no follower is an exec target', async () => {
