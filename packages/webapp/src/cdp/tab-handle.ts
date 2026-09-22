@@ -53,8 +53,6 @@ const NAVIGATE_LOAD_TIMEOUT_MS = 30000;
 const MAX_WIDTH_ATTEMPTS = 3;
 /** Accept a frame within this fraction of the cap instead of re-capturing. */
 const MAX_WIDTH_TOLERANCE = 0.98;
-/** Treat a correction this small as converged (Chrome rounds encoded widths). */
-const MAX_WIDTH_EPSILON = 0.002;
 
 /**
  * Per-target emulation override, re-applied on every fresh attach so a
@@ -406,11 +404,14 @@ export class TabHandle {
       // Output is linear in scale, so this is the scale that hits the cap.
       // It targets `maxWidth`, which is below `peekWidth` here, so a
       // correction can never upscale past the tab's native pixels.
+      // No convergence early-exit: under the cap the tolerance break above
+      // already fires, so one could only trigger OVER the cap, where a
+      // one-pixel rounding overshoot (501 for 500) would leave no candidate
+      // and ship the native frame. Correcting from a measured width lands at
+      // or under the cap whether Chrome floors, ceils or rounds, and
+      // MAX_WIDTH_ATTEMPTS bounds the loop.
       const next = (scale * maxWidth) / width;
       if (!Number.isFinite(next) || next <= 0) break;
-      // Chrome rounds the encoded width, so a correction can converge to a
-      // fixed point a hair off the cap. Stop rather than re-capture forever.
-      if (Math.abs(next - scale) <= scale * MAX_WIDTH_EPSILON) break;
       scale = next;
     }
 

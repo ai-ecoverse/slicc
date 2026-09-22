@@ -1081,6 +1081,20 @@ describe('BrowserAPI', () => {
       for (const width of captureWidths()) expect(width * 2.625).toBeLessThanOrEqual(1082);
     });
 
+    it('corrects a one-pixel rounding overshoot instead of shipping the native frame', async () => {
+      // The guess encodes 1000 × 0.5 × 1.0012 = 500.6 → 501 px for a 500 cap.
+      // The correction is only 1/501 of the scale; treating that as converged
+      // left no under-cap candidate and returned the 1000 px peek (#3373).
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        fakeChrome({ cssWidth: 1000, peekWidth: 1000, clipFactor: 1.0012 })
+      );
+
+      const data = await page.screenshot({ maxWidth: 500 });
+
+      expect(data).toBe(pngBase64(500));
+      expect(captureWidths()).toHaveLength(3);
+    });
+
     it('returns native pixels, never invented ones, when the cap cannot be met', async () => {
       // A tab that ignores clip.scale can never be made to encode narrower.
       // The over-cap frame has to be the ORIGINAL capture so the computer

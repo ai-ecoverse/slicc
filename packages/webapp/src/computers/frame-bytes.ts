@@ -83,7 +83,11 @@ export const DECODABLE_PNG = Uint8Array.of(
   0x82
 );
 
-/** Peek PNG / JPEG magic so a `.jpg` frozen path that holds PNG still renders. */
+/**
+ * Peek PNG / JPEG magic. Callers trust this over `frame.mime` or a path's
+ * extension: adapters may return PNG despite `format: 'jpeg'`, and frozen
+ * `.jpg` files already written can hold PNG bytes.
+ */
 export function sniffFrameMime(bytes: Uint8Array): ComputerImageMime | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e) {
     return 'image/png';
