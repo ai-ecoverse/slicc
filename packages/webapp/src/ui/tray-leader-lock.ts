@@ -183,6 +183,16 @@ export async function acquireLeaderRole(opts: {
   lockManager: LockManagerLike | null;
   shouldLead: () => boolean;
   onGranted: (release: () => void) => void;
+  /**
+   * Another tab holds the lock. Fired once, before the promotion wait.
+   * The kernel-ready clock pauses here so that wait is not boot time.
+   */
+  onDeferred?: () => void;
+  /**
+   * The promotion wait ended, whether this tab takes the lock or releases
+   * it because intent lapsed. The kernel-ready clock restarts here.
+   */
+  onDeferredEnd?: () => void;
 }): Promise<void> {
   const handOff = (release: () => void): void => {
     if (isTrayLeaderBootAborted() || !opts.shouldLead()) {
@@ -201,12 +211,17 @@ export async function acquireLeaderRole(opts: {
 
   // Deferred — another tab is leading. Prod log gate is ERROR, so this
   // must be `error` to be operator-visible.
+  opts.onDeferred?.();
   log.error(
     'Another tab is already leading on this tray worker — ' +
       'deferring leader start until the other tab releases the lock.'
   );
 
   const { release } = await result.waitForPromotion();
+  // The wait is over either way. Restart the kernel-ready clock before
+  // deciding whether this tab actually leads, so a declined promotion
+  // or a fatal-boot abort does not leave the deadline paused forever.
+  opts.onDeferredEnd?.();
   if (!isTrayLeaderBootAborted() && opts.shouldLead()) {
     log.error('Late promotion: this tab is now the tray leader.');
   }

@@ -164,14 +164,18 @@ export interface KernelWorkerSpawnOptions<TClient> {
   readyStallLimit?: number;
   /** See {@link KernelWorkerBootstrapOptions.onLateReady}. */
   onLateReady?: () => void;
+  /** See {@link KernelWorkerBootstrapOptions.onBootProgress}. */
+  onBootProgress?: (stage: string) => void;
 }
 
 /** Passed to {@link KernelWorkerBootstrapOptions.onReadyStall} per watchdog fire. */
 export interface ReadyStallInfo {
-  /** Wall-clock ms since the worker was handed its init message. */
+  /** Wall-clock ms since the ready deadline was last armed, not since page load. */
   elapsedMs: number;
   /** Consecutive watchdog fires with zero boot progress (1-based). */
   stalls: number;
+  /** Latest `kernel-worker-boot-progress` stage, when the worker has reported one. */
+  stage?: string;
 }
 
 export interface KernelWorkerBootstrapOptions<TClient> {
@@ -235,6 +239,14 @@ export interface KernelWorkerBootstrapOptions<TClient> {
    * this fires (or on `dispose()`).
    */
   onLateReady?: () => void;
+  /**
+   * Fired for each `kernel-worker-boot-progress` stage (`orchestrator-ready`,
+   * `scoop-restored:<jid>`, `lick-manager-ready`, `mounts-restored`,
+   * `cone-bootstrapped`, …). The page shows the stage on the boot status.
+   * Reporting a stage also re-arms the ready deadline, unless the deadline
+   * is paused for a leader-lock wait.
+   */
+  onBootProgress?: (stage: string) => void;
 }
 
 /**
@@ -265,6 +277,19 @@ export interface SpawnedKernelHost<TClient> {
   client: TClient;
   /** Resolves when the worker has finished `createKernelHost`. */
   ready: Promise<void>;
+  /**
+   * Stop the ready clock without rejecting. Time spent paused does not
+   * count: a tab deferred on the `slicc-tray-leader` Web Lock calls this
+   * so minutes of waiting are not boot time. Boot-progress still updates
+   * the stage, but does not start the failure window.
+   */
+  pauseReadyDeadline(): void;
+  /**
+   * Arm a fresh stall window from now and clear the pause. Call when the
+   * leader-lock wait ends (late promotion, or a promotion the tab declines)
+   * so the deadline measures kernel progress, not time since page load.
+   */
+  restartReadyDeadline(): void;
   /** Tear down the worker, the CDP forwarder, and close both ports. */
   dispose(): void;
 }
@@ -272,6 +297,96 @@ export interface SpawnedKernelHost<TClient> {
 // ---------------------------------------------------------------------------
 // Bootstrap (testable)
 // ---------------------------------------------------------------------------
+
+/**
+ * Silence watchdog for `kernel-worker-ready`.
+ *
+ * The clock bounds quiet time, not wall time since page load. Each
+ * `kernel-worker-boot-progress` re-arms one window and clears the stall
+ * count. `pause` drops the clock entirely (a tab waiting on the tray-leader
+ * lock); `restart` arms a fresh window from that moment. Only
+ * `readyStallLimit` consecutive quiet windows reject.
+ */
+function createReadyDeadline(options: {
+  readyTimeoutMs: number;
+  readyStallLimit: number;
+  onReadyStall?: (info: ReadyStallInfo) => void;
+  onBootProgress?: (stage: string) => void;
+  onExhausted: (message: string) => void;
+}): {
+  pause(): void;
+  restart(): void;
+  arm(): void;
+  clear(): void;
+  noteProgress(stage: string | undefined): void;
+  /** True once the stall budget rejected. Later progress must not re-arm. */
+  timedOut(): boolean;
+} {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let paused = false;
+  let stopped = false;
+  let exhausted = false;
+  let stalls = 0;
+  let startedAt = Date.now();
+  let stage: string | undefined;
+
+  const clearTimer = (): void => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  const arm = (): void => {
+    clearTimer();
+    if (paused || stopped || exhausted) return;
+    timeoutId = setTimeout(() => {
+      if (paused || stopped || exhausted) return;
+      stalls += 1;
+      if (stalls < options.readyStallLimit) {
+        options.onReadyStall?.({ elapsedMs: Date.now() - startedAt, stalls, stage });
+        arm();
+        return;
+      }
+      exhausted = true;
+      clearTimer();
+      const budget = options.readyTimeoutMs * options.readyStallLimit;
+      const where = stage ? ` (last progress: ${stage})` : '';
+      options.onExhausted(`Kernel worker did not signal ready within ${budget}ms${where}`);
+    }, options.readyTimeoutMs);
+  };
+
+  return {
+    pause() {
+      if (stopped || exhausted) return;
+      paused = true;
+      clearTimer();
+    },
+    restart() {
+      if (stopped || exhausted) return;
+      paused = false;
+      stalls = 0;
+      startedAt = Date.now();
+      arm();
+    },
+    arm,
+    clear() {
+      stopped = true;
+      clearTimer();
+    },
+    noteProgress(next: string | undefined) {
+      if (next) {
+        stage = next;
+        options.onBootProgress?.(next);
+      }
+      // A paused clock stays paused: heartbeats during a leader-lock wait
+      // update the stage and must not start the failure window.
+      if (paused || stopped || exhausted) return;
+      stalls = 0;
+      arm();
+    },
+    timedOut: () => exhausted,
+  };
+}
 
 /**
  * Watch the kernel port for the boot handshake and arm the ready watchdog.
@@ -286,62 +401,42 @@ function watchKernelReady(
   port: MessagePort,
   options: Pick<
     KernelWorkerBootstrapOptions<unknown>,
-    'onReadyStall' | 'readyStallLimit' | 'onLateReady'
+    'onReadyStall' | 'readyStallLimit' | 'onLateReady' | 'onBootProgress'
   >,
   readyTimeoutMs: number
-): { ready: Promise<void>; cleanup: () => void } {
+): {
+  ready: Promise<void>;
+  cleanup: () => void;
+  pauseReadyDeadline: () => void;
+  restartReadyDeadline: () => void;
+} {
   let cleanupReady: () => void = () => {};
+  let pauseReadyDeadline: () => void = () => {};
+  let restartReadyDeadline: () => void = () => {};
   const ready = new Promise<void>((resolve, reject) => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let listener: ((event: MessageEvent) => void) | null = null;
-
-    const clearTimer = (): void => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    };
-    // Stall accounting: the watchdog bounds SILENCE, not total boot time.
-    // Each zero-progress window is one stall; boot progress resets the
-    // count. Only after `readyStallLimit` consecutive stalls does `ready`
-    // reject — and with `onLateReady` set, even that keeps the listener
-    // attached so a worker that finishes booting late is still heard.
     const readyStallLimit = Math.max(1, options.readyStallLimit ?? (options.onReadyStall ? 3 : 1));
-    const startedAt = Date.now();
-    let stalls = 0;
-    let timedOut = false;
-    // Arm the boot-ready clock.
-    const armReadyTimeout = (): void => {
-      clearTimer();
-      timeoutId = setTimeout(() => {
-        stalls += 1;
-        if (stalls < readyStallLimit) {
-          options.onReadyStall?.({ elapsedMs: Date.now() - startedAt, stalls });
-          armReadyTimeout();
-          return;
-        }
-        if (options.onLateReady) {
-          // Keep the listener attached for a late `kernel-worker-ready`;
-          // only the timer dies here.
-          clearTimer();
-        } else {
-          cleanupReady();
-        }
-        timedOut = true;
-        reject(
-          new Error(
-            `Kernel worker did not signal ready within ${readyTimeoutMs * readyStallLimit}ms`
-          )
-        );
-      }, readyTimeoutMs);
-    };
+    const deadline = createReadyDeadline({
+      readyTimeoutMs,
+      readyStallLimit,
+      onReadyStall: options.onReadyStall,
+      onBootProgress: options.onBootProgress,
+      onExhausted: (message) => {
+        // With onLateReady, keep the listener so a late kernel-worker-ready
+        // is still heard. The deadline has already cleared its timer.
+        if (!options.onLateReady) cleanupReady();
+        reject(new Error(message));
+      },
+    });
+    pauseReadyDeadline = () => deadline.pause();
+    restartReadyDeadline = () => deadline.restart();
 
     cleanupReady = (): void => {
       if (listener !== null) {
         port.removeEventListener('message', listener as EventListener);
         listener = null;
       }
-      clearTimer();
+      deadline.clear();
     };
     listener = (event: MessageEvent): void => {
       const data = event.data as
@@ -354,13 +449,12 @@ function watchKernelReady(
       // …) — re-arm the clock so the timeout is a stall watchdog, not a
       // hard cap on a slow-but-healthy boot.
       if (data?.type === 'kernel-worker-boot-progress') {
-        stalls = 0;
-        armReadyTimeout();
+        deadline.noteProgress((data as Partial<KernelWorkerBootProgressMsg>).stage);
         return;
       }
       if (data?.type === 'kernel-worker-ready') {
         cleanupReady();
-        if (timedOut) {
+        if (deadline.timedOut()) {
           // `ready` already rejected — the page moved on (recovery screen /
           // stall UI). Report the late arrival instead of resolving into a
           // settled promise nobody is awaiting.
@@ -385,9 +479,14 @@ function watchKernelReady(
       }
     };
     port.addEventListener('message', listener as EventListener);
-    armReadyTimeout();
+    deadline.arm();
   });
-  return { ready, cleanup: () => cleanupReady() };
+  return {
+    ready,
+    cleanup: () => cleanupReady(),
+    pauseReadyDeadline: () => pauseReadyDeadline(),
+    restartReadyDeadline: () => restartReadyDeadline(),
+  };
 }
 
 /**
@@ -425,11 +524,12 @@ export function bootstrapKernelWorker<TClient>(
   // Wait for `kernel-worker-ready` on the kernel port. The OffscreenClient
   // already started this port via its onMessage subscription; the watcher
   // adds a second listener that resolves on the boot signal.
-  const { ready, cleanup: cleanupReady } = watchKernelReady(
-    kernelChannel.port1,
-    options,
-    readyTimeoutMs
-  );
+  const {
+    ready,
+    cleanup: cleanupReady,
+    pauseReadyDeadline,
+    restartReadyDeadline,
+  } = watchKernelReady(kernelChannel.port1, options, readyTimeoutMs);
 
   // Hand the worker its ports. After `postMessage` with a transferable
   // list, the page can no longer use port2 of either channel — that's
@@ -467,6 +567,8 @@ export function bootstrapKernelWorker<TClient>(
   return {
     client,
     ready,
+    pauseReadyDeadline,
+    restartReadyDeadline,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -540,5 +642,6 @@ export function spawnKernelWorker<TClient>(
     onReadyStall: options.onReadyStall,
     readyStallLimit: options.readyStallLimit,
     onLateReady: options.onLateReady,
+    onBootProgress: options.onBootProgress,
   });
 }

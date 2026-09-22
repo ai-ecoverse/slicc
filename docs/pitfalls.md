@@ -110,6 +110,26 @@ starts at the command's cwd, so a package sitting in `/workspace/node_modules`
 is genuinely invisible from `/shared`, and the bare message reads as a false
 claim.
 
+## The kernel-ready clock does not include the leader-lock wait
+
+A second same-origin tab defers `startPageLeaderTray` until it wins the
+`slicc-tray-leader` Web Lock. That wait lasts as long as the other tab is
+open. The kernel worker is spawned at page load, but shared storage often
+cannot move until the holder leaves, so boot progress goes quiet for the
+whole wait.
+
+The page's ready deadline (`kernel/spawn.ts`) is a silence watchdog, not a
+budget measured from page load. While the election is deferred the clock is
+paused; when the wait ends (late promotion, or a promotion the tab declines)
+it arms a fresh window. Each `kernel-worker-boot-progress` stage
+(`orchestrator-ready`, `scoop-restored:<jid>`, `lick-manager-ready`,
+`mounts-restored`, `cone-bootstrapped`, and the earlier provider and CDP
+stages) re-arms that window and updates the boot-stage chip. The boot fails
+only when a full stall budget passes with no progress after the clock is
+running. Counting the lock wait as boot time made a tab that had just been
+promoted fail with "did not signal ready within 90000ms" after a few seconds
+of real kernel work.
+
 ## A Lazy-Mount Latch Must Release on a HANG, Not Just a Rejection
 
 The same "promise that never settles" shape as the esbuild handshake above, one

@@ -633,6 +633,14 @@ export interface AttachWcWorkbenchOptions {
     runtimeMode: UiRuntimeMode;
     floatKind: import('@slicc/webcomponents').FloatbarFloatKind;
   };
+  /**
+   * Page-side kernel-ready clock. The tray election pauses it while this
+   * tab waits on the leader lock and restarts it when that wait ends.
+   */
+  kernelReadyDeadline?: {
+    pause(): void;
+    restart(): void;
+  };
 }
 
 /**
@@ -1456,6 +1464,7 @@ export function attachWcWorkbench(
           openWriter: async () => (await openVfs()).writer,
           window,
           log,
+          kernelReadyDeadline: options.kernelReadyDeadline,
         });
         boot.wiring.notifyScoopStateChanged = () => tray.scheduleScoopsListBroadcast();
         boot.wiring.notifyUnitStatus = (jid, status) =>
@@ -1595,6 +1604,38 @@ export function attachWcWorkbench(
   };
 }
 
+/**
+ * Boot-stage chip and stall overlay for the kernel-ready wait. Lazy-loaded
+ * so the overlay module stays out of the first paint. `dismiss` is a no-op
+ * until something actually rendered.
+ */
+function bindKernelBootStatus(doc: Document): {
+  onBootProgress: (stage: string) => void;
+  onReadyStall: (info: { elapsedMs: number; stalls: number; stage?: string }) => void;
+  dismiss: () => void;
+} {
+  let shown = false;
+  const load = (): Promise<typeof import('../boot/boot-stall-overlay.js')> =>
+    import('../boot/boot-stall-overlay.js');
+  return {
+    onBootProgress: (stage) => {
+      shown = true;
+      void load().then((m) => m.showBootStage(doc, stage));
+    },
+    onReadyStall: (info) => {
+      shown = true;
+      void load().then((m) => m.showBootStallOverlay(doc, info));
+    },
+    dismiss: () => {
+      if (!shown) return;
+      void load().then((m) => {
+        m.removeBootStallOverlay(doc);
+        m.removeBootStage(doc);
+      });
+    },
+  };
+}
+
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */
 export async function bootLeaderFloat(
   app: HTMLElement,
@@ -1632,7 +1673,7 @@ export async function bootLeaderFloat(
   // a fast boot-time failure.
   if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
   const { syncFsBridgeEnabled, syncFsChannelNonce } = setupSyncFsBootNonce();
-  let stallOverlayShown = false;
+  const bootStatus = bindKernelBootStatus(document);
   let kernel!: SpawnedKernelHost<OffscreenClient>;
   let schedulePendingCatchup: (() => void) | undefined;
   // ONE mount path (#2382 D2b): the frame and the chat surface are the shell's,
@@ -1667,12 +1708,9 @@ export async function bootLeaderFloat(
         // non-destructive overlay instead of bricking to the recovery screen.
         // The shell above is fully wired before `host.ready`, so a late
         // `kernel-worker-ready` resumes the normal boot path with no reload.
-        onReadyStall: (info) => {
-          stallOverlayShown = true;
-          void import('../boot/boot-stall-overlay.js').then((m) =>
-            m.showBootStallOverlay(document, info)
-          );
-        },
+        // Boot-progress stages both re-arm that clock and name the step.
+        onBootProgress: bootStatus.onBootProgress,
+        onReadyStall: bootStatus.onReadyStall,
         // The worker finished booting AFTER the stall budget ran out and the
         // recovery screen rendered. One guarded reload enters the now-warm
         // session; the guard (shared with the stale-asset path) caps it so a
@@ -1694,6 +1732,10 @@ export async function bootLeaderFloat(
           schedulePendingCatchup = attachWcWorkbench(mounted, kernel.client, chat, chatHost, log, {
             instanceId,
             standalone: { browser, floatKind, realCdpTransport, runtimeMode },
+            kernelReadyDeadline: {
+              pause: () => kernel.pauseReadyDeadline(),
+              restart: () => kernel.restartReadyDeadline(),
+            },
           });
         },
       };
@@ -1709,12 +1751,10 @@ export async function bootLeaderFloat(
   try {
     await kernel.ready;
   } finally {
-    // The overlay hangs off document.body, not #app — on a rejection the
+    // The status hangs off document.body, not #app — on a rejection the
     // recovery screen replaces only #app, so a success-path-only removal
     // would leave "Still starting" floating over the failure UI.
-    if (stallOverlayShown) {
-      void import('../boot/boot-stall-overlay.js').then((m) => m.removeBootStallOverlay(document));
-    }
+    bootStatus.dismiss();
   }
   // `host.ready` resolves on `kernel-worker-ready`, which the worker posts
   // AFTER its VfsRpcHost attaches — unlike the first scoop-list (the
