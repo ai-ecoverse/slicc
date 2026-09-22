@@ -32,7 +32,7 @@
     "e2b": "2.46.1"
   },
   "devDependencies": {
-    "@types/node": "24.13.4",
+    "@types/node": "24.13.5",
     "vitest": "4.1.11"
   }
 }
