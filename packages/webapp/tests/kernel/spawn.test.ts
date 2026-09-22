@@ -403,6 +403,7 @@ describe('slow-boot stall tolerance (2026-08-24 field wedge)', () => {
       onReadyStall?: (info: { elapsedMs: number; stalls: number }) => void;
       readyStallLimit?: number;
       onLateReady?: () => void;
+      onBootProgress?: (stage: string) => void;
     }
   ) {
     return bootstrapKernelWorker({
@@ -482,6 +483,90 @@ describe('slow-boot stall tolerance (2026-08-24 field wedge)', () => {
     await expect(host.ready).rejects.toThrow(/did not signal ready within 50ms/);
     // One window, not three: no onReadyStall means no silent extra waiting.
     expect(Date.now() - started).toBeLessThan(140);
+    host.dispose();
+  });
+
+  it('a paused deadline ignores silence, including silence after progress', async () => {
+    const { worker, port } = makeManualWorker();
+    const stages: string[] = [];
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      readyTimeoutMs: 40,
+      readyStallLimit: 1,
+      onBootProgress: (stage) => stages.push(stage),
+    });
+    host.pauseReadyDeadline();
+    port().postMessage({ type: 'kernel-worker-boot-progress', stage: 'orchestrator-ready' });
+    // Well past the window. The leader-lock wait must not reject `ready`.
+    await new Promise((r) => setTimeout(r, 120));
+    let settled = false;
+    host.ready.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    expect(stages).toEqual(['orchestrator-ready']);
+    host.restartReadyDeadline();
+    port().postMessage({ type: 'kernel-worker-ready' });
+    await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it('restart arms a fresh window that still rejects on silence', async () => {
+    const { worker } = makeManualWorker();
+    const host = bootstrap(worker, { readyTimeoutMs: 50, readyStallLimit: 1 });
+    host.pauseReadyDeadline();
+    await new Promise((r) => setTimeout(r, 80));
+    host.restartReadyDeadline();
+    const started = Date.now();
+    await expect(host.ready).rejects.toThrow(/did not signal ready within 50ms/);
+    const elapsed = Date.now() - started;
+    // One fresh window after the restart, not the paused wait plus the window.
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(elapsed).toBeLessThan(150);
+    host.dispose();
+  });
+
+  it('progress after restart extends the window', async () => {
+    const { worker, port } = makeManualWorker();
+    const host = bootstrap(worker, { readyTimeoutMs: 70, readyStallLimit: 1 });
+    host.restartReadyDeadline();
+    await new Promise((r) => setTimeout(r, 40));
+    port().postMessage({ type: 'kernel-worker-boot-progress', stage: 'mounts-restored' });
+    await new Promise((r) => setTimeout(r, 40));
+    port().postMessage({ type: 'kernel-worker-ready' });
+    await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it('ignores boot progress after the deadline rejects', async () => {
+    const { worker, port } = makeManualWorker();
+    const stages: string[] = [];
+    const host = bootstrap(worker, {
+      readyTimeoutMs: 40,
+      readyStallLimit: 1,
+      onLateReady: () => {},
+      onBootProgress: (stage) => stages.push(stage),
+    });
+    await expect(host.ready).rejects.toThrow(/did not signal ready/);
+    port().postMessage({ type: 'kernel-worker-boot-progress', stage: 'cone-bootstrapped' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stages).toEqual([]);
+    host.dispose();
+  });
+
+  it('a stall after progress names the last stage', async () => {
+    const { worker, port } = makeManualWorker();
+    const host = bootstrap(worker, { readyTimeoutMs: 40, readyStallLimit: 1 });
+    port().postMessage({ type: 'kernel-worker-boot-progress', stage: 'lick-manager-ready' });
+    await expect(host.ready).rejects.toThrow(/last progress: lick-manager-ready/);
     host.dispose();
   });
 });
