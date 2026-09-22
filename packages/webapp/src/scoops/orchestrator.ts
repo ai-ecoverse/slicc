@@ -73,6 +73,7 @@ import { globalSeedModel } from './model-seed.js';
 import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
+import { mapWithConcurrency, SCOOP_BOOT_CONCURRENCY } from './scoop-boot-restore.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
 import type { InFlightTurn, TurnJournal } from './scoop-context/turn-journal.js';
 import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
@@ -196,6 +197,8 @@ export class Orchestrator implements ConeApprovalRouter {
   private turnJournal: TurnJournal | null = null;
 
   private interruptedTurns: InFlightTurn[] | null = null;
+
+  private bootRestoreTail: Promise<void> = Promise.resolve();
   private fsWatcher: FsWatcher | null = null;
 
   private sudoManager: SudoManager | null = null;
@@ -471,25 +474,7 @@ export class Orchestrator implements ConeApprovalRouter {
     onBootProgress?.('conversations-ready');
     await this.onConversationsReady?.();
 
-    for (const scoop of this.scoops.values()) {
-      try {
-        await this.createScoopTab(scoop.jid);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.warn('Skipping scoop whose context failed to initialize during boot', {
-          jid: scoop.jid,
-          folder: scoop.folder,
-          root: scoop.parentJid === null,
-          error: message,
-        });
-
-        if (scoop.parentJid !== null) {
-          this.lifecycle.markTabError(scoop.jid, message);
-        }
-      } finally {
-        onBootProgress?.(`scoop-restored:${scoop.jid}`);
-      }
-    }
+    await this.restoreScoopContexts(onBootProgress);
 
     registerSessionCostsProvider((scope) => this.getSessionCostsForCommand(scope));
 
@@ -501,6 +486,53 @@ export class Orchestrator implements ConeApprovalRouter {
     this.unregisterExportService = registerTranscriptExportService(this.buildWorkerExportService());
 
     this.messageRouter.startMessageLoop();
+  }
+
+  whenBootRestoresSettled(): Promise<void> {
+    return this.bootRestoreTail;
+  }
+
+  private async restoreScoopContexts(onBootProgress?: (stage: string) => void): Promise<void> {
+    const roots: RegisteredScoop[] = [];
+    const children: RegisteredScoop[] = [];
+    for (const scoop of this.scoops.values()) {
+      if (scoop.parentJid === null) roots.push(scoop);
+      else children.push(scoop);
+    }
+    await mapWithConcurrency(roots, SCOOP_BOOT_CONCURRENCY, (scoop) =>
+      this.restoreScoopContext(scoop, onBootProgress)
+    );
+    const childrenRestore = mapWithConcurrency(children, SCOOP_BOOT_CONCURRENCY, (scoop) =>
+      this.restoreScoopContext(scoop, onBootProgress)
+    ).catch((err) => {
+      log.warn('Background scoop restore failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    this.bootRestoreTail = this.bootRestoreTail.then(() => childrenRestore);
+  }
+
+  private async restoreScoopContext(
+    scoop: RegisteredScoop,
+    onBootProgress?: (stage: string) => void
+  ): Promise<void> {
+    try {
+      await this.createScoopTab(scoop.jid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('Skipping scoop whose context failed to initialize during boot', {
+        jid: scoop.jid,
+        folder: scoop.folder,
+        root: scoop.parentJid === null,
+        error: message,
+      });
+
+      if (scoop.parentJid !== null) {
+        this.lifecycle.markTabError(scoop.jid, message);
+      }
+    } finally {
+      onBootProgress?.(`scoop-restored:${scoop.jid}`);
+    }
   }
 
   private async migrateConversations(onBootProgress?: (stage: string) => void): Promise<void> {
@@ -902,6 +934,7 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   async resetFilesystem(): Promise<void> {
+    await this.bootRestoreTail;
     this.lifecycle.stopAndClearAllContexts();
 
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
@@ -990,6 +1023,7 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   async recoverInterruptedWork(emitLick: (event: LickEvent) => void): Promise<RecoveryOutcome[]> {
+    await this.bootRestoreTail;
     const turns = this.interruptedTurns;
     this.interruptedTurns = null;
     const journal = this.turnJournal;
@@ -1091,6 +1125,7 @@ export class Orchestrator implements ConeApprovalRouter {
       log.info('Failed-closed pending sudo requests during shutdown', { count: sudoFailed });
     }
 
+    await this.bootRestoreTail;
     await this.lifecycle.destroyAllTabs();
 
     this.lickManager?.setDiscoveryIgnore?.(null);

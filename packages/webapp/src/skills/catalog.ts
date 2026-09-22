@@ -1,7 +1,7 @@
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
-import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
+import { SKILL_FILE, SKILLS_DIR, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 const log = createLogger('skills-discovery');
 
@@ -69,6 +69,21 @@ interface MarketplacePluginEntry {
 const compatibilityCandidatesCache = new WeakMap<object, DiscoveredSkillCandidate[]>();
 const compatibilityCacheHooksInstalled = new WeakSet<object>();
 
+const compatibilityCacheGeneration = new WeakMap<object, number>();
+const compatibilityCandidatesInflight = new WeakMap<
+  object,
+  { generation: number; promise: Promise<DiscoveredSkillCandidate[]> }
+>();
+
+const COMPATIBILITY_TREE_SEGMENTS = new Set(['.agents', '.claude', '.claude-plugin']);
+
+const ALWAYS_INVALIDATING_METHODS = new Set<CompatibilityCacheInvalidationMethod>([
+  'mount',
+  'rename',
+  'rm',
+  'unmount',
+]);
+
 export async function discoverSkillCandidates(
   fs: VirtualFS,
   nativeSkillsDir: string = WORKSPACE_SKILLS_PATH
@@ -118,23 +133,69 @@ async function discoverPluginSkillCandidates(fs: VirtualFS): Promise<DiscoveredS
   return discovered;
 }
 
+function copyCandidates(
+  candidates: readonly DiscoveredSkillCandidate[]
+): DiscoveredSkillCandidate[] {
+  return candidates.map((candidate) => ({ ...candidate }));
+}
+
+function invalidateCompatibilityCache(cacheKey: object): void {
+  compatibilityCandidatesCache.delete(cacheKey);
+  compatibilityCandidatesInflight.delete(cacheKey);
+  compatibilityCacheGeneration.set(cacheKey, (compatibilityCacheGeneration.get(cacheKey) ?? 0) + 1);
+}
+
+function pathTouchesCompatibilityTree(path: string): boolean {
+  const segments = path.split('/');
+  for (const segment of segments) {
+    if (COMPATIBILITY_TREE_SEGMENTS.has(segment)) return true;
+  }
+
+  const base = segments[segments.length - 1];
+  return base === SKILL_FILE || segments.includes(SKILLS_DIR);
+}
+
+function shouldInvalidateCompatibilityCache(
+  methodName: CompatibilityCacheInvalidationMethod,
+  args: readonly unknown[]
+): boolean {
+  if (ALWAYS_INVALIDATING_METHODS.has(methodName)) return true;
+
+  const pathArg = args[0];
+  return typeof pathArg === 'string' && pathTouchesCompatibilityTree(pathArg);
+}
+
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
   if (isMonkeypatchUnsafeFs(fs)) {
-    const fresh = await discoverCompatibilitySkillCandidates(fs);
-    return fresh.map((candidate) => ({ ...candidate }));
+    return copyCandidates(await discoverCompatibilitySkillCandidates(fs));
   }
 
   installCompatibilityCacheInvalidationHooks(fs);
 
   const cacheKey = fs as object;
   const cached = compatibilityCandidatesCache.get(cacheKey);
-  if (cached) {
-    return cached.map((candidate) => ({ ...candidate }));
+  if (cached) return copyCandidates(cached);
+
+  const generation = compatibilityCacheGeneration.get(cacheKey) ?? 0;
+  const pending = compatibilityCandidatesInflight.get(cacheKey);
+  if (pending && pending.generation === generation) {
+    return copyCandidates(await pending.promise);
   }
 
-  const discovered = await discoverCompatibilitySkillCandidates(fs);
-  compatibilityCandidatesCache.set(cacheKey, discovered);
-  return discovered.map((candidate) => ({ ...candidate }));
+  const discoveredPromise = discoverCompatibilitySkillCandidates(fs).then((discovered) => {
+    if ((compatibilityCacheGeneration.get(cacheKey) ?? 0) === generation) {
+      compatibilityCandidatesCache.set(cacheKey, discovered);
+    }
+    return discovered;
+  });
+  let tracked!: Promise<DiscoveredSkillCandidate[]>;
+  tracked = discoveredPromise.finally(() => {
+    if (compatibilityCandidatesInflight.get(cacheKey)?.promise === tracked) {
+      compatibilityCandidatesInflight.delete(cacheKey);
+    }
+  });
+  compatibilityCandidatesInflight.set(cacheKey, { generation, promise: tracked });
+  return copyCandidates(await tracked);
 }
 
 function isMonkeypatchUnsafeFs(fs: VirtualFS): boolean {
@@ -375,7 +436,9 @@ function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
     try {
       mutableFs[methodName] = async (...args: unknown[]) => {
         const result = await original.apply(fs, args);
-        compatibilityCandidatesCache.delete(cacheKey);
+        if (shouldInvalidateCompatibilityCache(methodName, args)) {
+          invalidateCompatibilityCache(cacheKey);
+        }
         return result;
       };
     } catch {}

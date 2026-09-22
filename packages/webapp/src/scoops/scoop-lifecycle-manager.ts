@@ -201,6 +201,8 @@ export interface ScoopLifecycleDeps {
 export class ScoopLifecycleManager {
   private units: Map<string, LiveWorkUnit> = new Map();
 
+  private tabCreates: Map<string, Promise<void>> = new Map();
+
   private gelatiereModelSync: Promise<void> = Promise.resolve();
 
   constructor(private deps: ScoopLifecycleDeps) {}
@@ -301,7 +303,18 @@ export class ScoopLifecycleManager {
     fs.setReadGrants(policy.read.filter((rule) => rule.nopasswd).map((rule) => rule.pattern));
   }
 
-  async createTab(jid: string): Promise<void> {
+  createTab(jid: string): Promise<void> {
+    const inflight = this.tabCreates.get(jid);
+    if (inflight) return inflight;
+    let run!: Promise<void>;
+    run = this.openTab(jid).finally(() => {
+      if (this.tabCreates.get(jid) === run) this.tabCreates.delete(jid);
+    });
+    this.tabCreates.set(jid, run);
+    return run;
+  }
+
+  private async openTab(jid: string): Promise<void> {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) throw new Error(`Scoop not found: ${jid}`);
 
@@ -363,6 +376,8 @@ export class ScoopLifecycleManager {
     unit.attachContext(context, contextId);
 
     await context.init();
+
+    if (this.units.get(jid) !== unit || unit.context !== context) return;
 
     if (unit.tab?.status === 'initializing' && unit.transition('ready')) {
       this.deps.callbacks.onStatusChange(jid, 'ready');

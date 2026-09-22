@@ -162,6 +162,29 @@ export function layoutCommandForSkill(frontmatter: {
   return `layout set ${name}`;
 }
 
+const defaultSkillsInflight = new WeakMap<object, Map<string, Promise<void>>>();
+
+function shareOnFs<T>(
+  slots: WeakMap<object, Map<string, Promise<T>>>,
+  fs: object,
+  key: string,
+  run: () => Promise<T>
+): Promise<T> {
+  let byKey = slots.get(fs);
+  if (!byKey) {
+    byKey = new Map();
+    slots.set(fs, byKey);
+  }
+  const existing = byKey.get(key);
+  if (existing) return existing;
+  let promise!: Promise<T>;
+  promise = run().finally(() => {
+    if (byKey.get(key) === promise) byKey.delete(key);
+  });
+  byKey.set(key, promise);
+  return promise;
+}
+
 export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
   const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
@@ -279,10 +302,16 @@ ${sections.join('\n')}
 ---`;
 }
 
-export async function createDefaultSkills(
+export function createDefaultSkills(
   fs: VirtualFS,
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
+  return shareOnFs(defaultSkillsInflight, fs, skillsDir, () =>
+    createDefaultSkillsOnce(fs, skillsDir)
+  );
+}
+
+async function createDefaultSkillsOnce(fs: VirtualFS, skillsDir: string): Promise<void> {
   const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFileLoaders();
 

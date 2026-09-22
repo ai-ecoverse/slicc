@@ -3738,6 +3738,7 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     await expect(orch.init()).resolves.toBeUndefined();
+    await orch.whenBootRestoresSettled();
 
     expect(lifecycle.getContext(healthyScoop.jid)).toBeDefined();
     expect(lifecycle.getContext(cone.jid)).toBeDefined();
