@@ -52,11 +52,59 @@ export function slugify(text: string): string {
   return slugifyText(text, { maxLen: 48, fallback: 'session' });
 }
 
+const UNTITLED_SESSION_TITLE = 'untitled-session';
+
+const LICK_HEADER_LABELS = [
+  'Webhook Event',
+  'Sprinkle Event',
+  'File Watch Event',
+  'Session Reload',
+  'Navigate Event',
+  'Upgrade Event',
+  'Cherry Event',
+  'Workflow Event',
+  'Background Command',
+  'jshd Unit',
+  'Cron Event',
+  'Scoop Access Request',
+  'Preview Event',
+  'Preview event',
+  'Discovery Event',
+];
+
+const INJECTED_TURN_RE = new RegExp(
+  '^(?:_Forwarded from .+?\\._\\s*)*(?:' +
+    '\\[@\\S+ (?:completed|idle|sudo-request|FAILED)\\b|' +
+    '\\[scoop_wait\\b|' +
+    `\\[(?:${LICK_HEADER_LABELS.join('|')})\\b|` +
+    'Preview tab (?:connected|disconnected) from |' +
+    '<context-summary\\b)'
+);
+
+function collapsedHead(text: string): string {
+  return text.slice(0, 480).trim().replace(/\s+/g, ' ').slice(0, 240);
+}
+
+function isInjectedSessionText(text: string): boolean {
+  const head = collapsedHead(text);
+  return head.length > 0 && INJECTED_TURN_RE.test(head);
+}
+
+export function isProvisionalSessionTitle(title: string): boolean {
+  return title === UNTITLED_SESSION_TITLE || isInjectedSessionText(title);
+}
+
+function isGenuineUserTurn(message: ChatMessage): boolean {
+  if (message.role !== 'user' || !message.content?.trim()) return false;
+  if (message.source === 'lick' || message.channel) return false;
+  return !isInjectedSessionText(message.content);
+}
+
 export function heuristicTitle(messages: readonly ChatMessage[]): string {
-  const firstUser = messages.find((m) => m.role === 'user');
-  if (!firstUser?.content) return 'untitled-session';
+  const firstUser = messages.find(isGenuineUserTurn);
+  if (!firstUser?.content) return UNTITLED_SESSION_TITLE;
   const head = firstUser.content.trim().replace(/\s+/g, ' ');
-  return head.length > 60 ? `${head.slice(0, 60)}…` : head || 'untitled-session';
+  return head.length > 60 ? `${head.slice(0, 60)}…` : head || UNTITLED_SESSION_TITLE;
 }
 
 export function stripEphemeral(messages: readonly ChatMessage[]): ChatMessage[] {

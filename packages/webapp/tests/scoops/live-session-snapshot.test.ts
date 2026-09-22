@@ -94,6 +94,37 @@ describe('snapshotLiveSession', () => {
     expect(archive.messages.map((m) => m.content)).toEqual(['fix the build', 'on it']);
   });
 
+  it('titles from the first real prompt and replaces a lick-derived title later', async () => {
+    const vfs = fakeVfs();
+    const lick =
+      '[@agent-memory-curator-cone-slicc-website sudo-request]\nLick ID: abc\nKind: sudo';
+    const first = await snap({
+      vfs,
+      cone: { folder: 'cone-slicc-website', label: 'slicc-website' },
+      messages: [user(lick, 10)],
+      trigger: 'threshold',
+      now: () => 1_000,
+    });
+    expect(first.entry.title).toBe('untitled-session');
+    expect(parseFrozenArchive(vfs.files.get(first.transcriptPath)!).title).toBe('untitled-session');
+
+    const rows = await indexOf(vfs);
+    rows[0].title = '[@agent-memory-curator-cone-slicc-website sudo-request] Lick…';
+    vfs.files.set(SESSIONS_INDEX_PATH, JSON.stringify(rows));
+
+    const second = await snap({
+      vfs,
+      cone: { folder: 'cone-slicc-website', label: 'slicc-website' },
+      messages: [user(lick, 10), assistant('approved', 20), user('ship the helix homepage', 30)],
+      trigger: 'idle',
+      now: () => 2_000,
+    });
+    expect(second.entry.title).toBe('ship the helix homepage');
+    expect(parseFrozenArchive(vfs.files.get(second.transcriptPath)!).title).toBe(
+      'ship the helix homepage'
+    );
+  });
+
   it('appends only messages newer than the cursor on later rounds, keeping identity', async () => {
     const vfs = fakeVfs();
     const first = await snap({

@@ -14,6 +14,7 @@ import {
   findLiveSnapshotEntry,
   formatArchiveAsMarkdown,
   heuristicTitle,
+  isProvisionalSessionTitle,
   liveSnapshotFilename,
   readSessionsIndexForWrite,
   serializeIndexWrite,
@@ -94,7 +95,10 @@ async function writeSnapshot(
 
   const filename = existing?.filename ?? liveSnapshotFilename(folder);
   const frozenAt = existing?.frozenAt ?? new Date(now()).toISOString();
-  const title = existing?.title ?? heuristicTitle(merged);
+
+  const derivedTitle = heuristicTitle(merged);
+  const title =
+    existing?.title && !isProvisionalSessionTitle(existing.title) ? existing.title : derivedTitle;
   const compactions = (existing?.compactions ?? 0) + 1;
   const provenance = {
     cone: folder,
