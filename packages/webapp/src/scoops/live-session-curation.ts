@@ -297,22 +297,30 @@ function startScheduled(
 
 function track(folder: string, job: Promise<LiveDeltaResult>): Promise<LiveDeltaResult> {
   inflight.set(folder, job);
-  void job.finally(() => {
-    if (inflight.get(folder) !== job) return;
-    inflight.delete(folder);
-    const again = rerun.get(folder);
-    rerun.delete(folder);
-    if (!again || !liveDeltaCurationEnabled()) return;
-    const bridge = readAgentBridge();
-    if (!bridge) return;
-    void startScheduled(again, bridge).catch((error) => {
-      log.warn('Follow-up live delta curation failed to start', {
-        cone: folder,
-        error: errorText(error),
-      });
+  // Both branches handle the outcome. `finally` would mint a second promise
+  // that rejects with the original reason, and voiding that promise is an
+  // unhandledrejection even when the caller caught `job`.
+  void job.then(
+    () => releaseInflight(folder, job),
+    () => releaseInflight(folder, job)
+  );
+  return job;
+}
+
+function releaseInflight(folder: string, job: Promise<LiveDeltaResult>): void {
+  if (inflight.get(folder) !== job) return;
+  inflight.delete(folder);
+  const again = rerun.get(folder);
+  rerun.delete(folder);
+  if (!again || !liveDeltaCurationEnabled()) return;
+  const bridge = readAgentBridge();
+  if (!bridge) return;
+  void startScheduled(again, bridge).catch((error) => {
+    log.warn('Follow-up live delta curation failed to start', {
+      cone: folder,
+      error: errorText(error),
     });
   });
-  return job;
 }
 
 async function runLiveDelta(opts: CurateLiveDeltaOptions): Promise<LiveDeltaResult> {

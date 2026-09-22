@@ -218,6 +218,40 @@ describe('curateLiveSessionDelta', () => {
     expect(parseFrozenArchive(vfs.files.get(again!.transcriptPath)!).curatedThrough).toBe(20);
   });
 
+  it('releases the in-flight slot when the pass rejects, without an unhandled rejection', async () => {
+    const vfs = fakeVfs();
+    await seedLive(vfs);
+    const original = vfs.readFile.bind(vfs);
+    vfs.readFile = async (path: string) => {
+      if (path.includes('/.curated/')) throw new FsError('EIO', 'disk', path);
+      return original(path);
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => {
+      unhandled.push(error);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    const spawn = successSpawn();
+    try {
+      await expect(
+        curateLiveSessionDelta({ vfs, cone: { folder: 'cone' }, spawn, enabled: true })
+      ).rejects.toThrow('disk');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
+    vfs.readFile = original;
+    const retried = await curateLiveSessionDelta({
+      vfs,
+      cone: { folder: 'cone' },
+      spawn,
+      enabled: true,
+    });
+    expect(retried).toMatchObject({ status: 'curated', curatedThrough: 20 });
+  });
+
   it('serializes a second caller behind the in-flight pass', async () => {
     const vfs = fakeVfs();
     await seedLive(vfs);

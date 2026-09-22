@@ -291,6 +291,26 @@ describe('finalize after incremental curation', () => {
     expect(updated?.curatedThrough).toBe(5);
   });
 
+  it('keeps curatedThrough across the title rename that runs before curation', async () => {
+    const vfs = makeFakeVfs();
+    const live = await seedFull(vfs);
+    await advanceCuratedThrough(vfs, live.entry.filename, 2);
+    const frozen = await freezeConeSession({ sessionStore: store, vfs, mode: 'quick' });
+    mockRunOneOffCompactionCall.mockResolvedValue('Renamed After Cursor');
+
+    const updated = await enrichPendingSession(vfs, frozen!, {
+      model: { id: 'm', provider: 'anthropic' } as never,
+      apiKey: 'k',
+      skipMemory: true,
+      pickIcon: async () => null,
+    });
+
+    expect(updated?.curatedThrough).toBe(2);
+    expect(updated?.filename.startsWith('live-')).toBe(false);
+    const renamed = vfs.files.get(`/sessions/${updated?.filename}`);
+    expect(String(renamed)).toContain('curatedThrough: 2');
+  });
+
   it('does not spawn when the cursor already covers the frozen chat', async () => {
     const vfs = makeFakeVfs();
     const live = await seedFull(vfs);

@@ -1346,6 +1346,10 @@ function buildEnrichedIndexEntry(
     ...(entry.cone ? { cone: entry.cone } : {}),
     ...(entry.coneLabel ? { coneLabel: entry.coneLabel } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+    // The live curator cursor has to survive the title rename. The agentic
+    // New Chat path enriches first and then curates the updated entry; dropping
+    // the cursor here makes that pass mine the whole transcript again.
+    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),
