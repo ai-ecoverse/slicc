@@ -89,12 +89,83 @@ export function slugify(text: string): string {
   return slugifyText(text, { maxLen: 48, fallback: 'session' });
 }
 
-/** Title from the first user message, when no LLM title is available. */
+/** Neutral title when the transcript has no genuine user prompt yet. */
+const UNTITLED_SESSION_TITLE = 'untitled-session';
+
+/**
+ * Bracket labels `formatLickEventForCone` writes (`LICK_LABELS`), plus the
+ * lowercase "Preview event" chip. A title taken from one of these is the
+ * lick, not the conversation.
+ */
+const LICK_HEADER_LABELS = [
+  'Webhook Event',
+  'Sprinkle Event',
+  'File Watch Event',
+  'Session Reload',
+  'Navigate Event',
+  'Upgrade Event',
+  'Cherry Event',
+  'Workflow Event',
+  'Background Command',
+  'jshd Unit',
+  'Cron Event',
+  'Scoop Access Request',
+  'Preview Event',
+  'Preview event',
+  'Discovery Event',
+];
+
+/**
+ * Opening of a lick body or a compaction summary. The forwarded prefix is
+ * what a generic lick prepends. Only the head is tested — titles are 60
+ * characters, and a long JSON body must not be scanned.
+ */
+const INJECTED_TURN_RE = new RegExp(
+  '^(?:_Forwarded from .+?\\._\\s*)*(?:' +
+    '\\[@\\S+ (?:completed|idle|sudo-request|FAILED)\\b|' +
+    '\\[scoop_wait\\b|' +
+    `\\[(?:${LICK_HEADER_LABELS.join('|')})\\b|` +
+    'Preview tab (?:connected|disconnected) from |' +
+    '<context-summary\\b)'
+);
+
+function collapsedHead(text: string): string {
+  // Headers sit at the start. Skip the rest so a large lick JSON body is
+  // not whitespace-collapsed just to decide it is not a title.
+  return text.slice(0, 480).trim().replace(/\s+/g, ' ').slice(0, 240);
+}
+
+/** True when `text` opens like a lick body or a compaction `<context-summary>`. */
+function isInjectedSessionText(text: string): boolean {
+  const head = collapsedHead(text);
+  return head.length > 0 && INJECTED_TURN_RE.test(head);
+}
+
+/**
+ * A stored live title that should be replaced on a later snapshot: the
+ * placeholder, or a head taken from a lick (including rows written before
+ * those turns were skipped).
+ */
+export function isProvisionalSessionTitle(title: string): boolean {
+  return title === UNTITLED_SESSION_TITLE || isInjectedSessionText(title);
+}
+
+function isGenuineUserTurn(message: ChatMessage): boolean {
+  if (message.role !== 'user' || !message.content?.trim()) return false;
+  if (message.source === 'lick' || message.channel) return false;
+  return !isInjectedSessionText(message.content);
+}
+
+/**
+ * Title from the first genuine user message, when no LLM title is available.
+ * Lick headers (`[@… sudo-request]`, `[Cron Event: …]`, `[Sprinkle Event: …]`)
+ * and compaction summaries are skipped; with none left, the neutral label.
+ */
 export function heuristicTitle(messages: readonly ChatMessage[]): string {
-  const firstUser = messages.find((m) => m.role === 'user');
-  if (!firstUser?.content) return 'untitled-session';
+  const firstUser = messages.find(isGenuineUserTurn);
+  if (!firstUser?.content) return UNTITLED_SESSION_TITLE;
   const head = firstUser.content.trim().replace(/\s+/g, ' ');
-  return head.length > 60 ? `${head.slice(0, 60)}…` : head || 'untitled-session';
+  return head.length > 60 ? `${head.slice(0, 60)}…` : head || UNTITLED_SESSION_TITLE;
 }
 
 /**
