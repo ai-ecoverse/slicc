@@ -93,6 +93,7 @@ const FakeRenderer = SprinkleRenderer as unknown as {
       close: () => void;
       stopCone: () => void;
       selectScoop: (target: string) => Promise<boolean>;
+      selectedScoop: () => Promise<string | null>;
       on: (event: 'update', cb: (data: unknown) => void) => void;
       off: (event: 'update', cb: (data: unknown) => void) => void;
       usb: SprinkleUsbApi;
@@ -684,6 +685,33 @@ describe('SprinkleFollowerController', () => {
       const api = FakeRenderer.instances[0]!.api;
       await expect(api.selectScoop('cone:cone-research')).resolves.toBe(true);
       expect(selectScoop).toHaveBeenCalledWith('cone:cone-research');
+    });
+  });
+
+  describe('bridge selectedScoop()', () => {
+    it('resolves null when no selectedScoop handler is wired', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const api = FakeRenderer.instances[0]!.api;
+      await expect(api.selectedScoop()).resolves.toBeNull();
+    });
+
+    it('returns the current target without calling selectScoop', async () => {
+      const selectScoop = vi.fn().mockReturnValue(true);
+      const selectedScoop = vi.fn().mockReturnValue('scoop:helper');
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      const customController = new SprinkleFollowerController({
+        sync,
+        addSprinkle,
+        removeSprinkle,
+        selectScoop,
+        selectedScoop,
+      });
+      await customController.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const api = FakeRenderer.instances[0]!.api;
+      await expect(api.selectedScoop()).resolves.toBe('scoop:helper');
+      expect(selectedScoop).toHaveBeenCalledOnce();
+      expect(selectScoop).not.toHaveBeenCalled();
     });
   });
 

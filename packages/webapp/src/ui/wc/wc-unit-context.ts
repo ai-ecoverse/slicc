@@ -108,6 +108,27 @@ export function selectScoopForContext(
 }
 
 /**
+ * The shell's current selection in the grammar {@link selectScoopForContext}
+ * accepts: `'cone'`, `'cone:<folder>'`, or `'scoop:<name>'`.
+ *
+ * A read. It does not switch the view, so a sprinkle can ask where the
+ * shell is without the side effect of calling `selectScoop` (which reports
+ * success for an already-selected target by leaving the view where it is).
+ * Returns `null` when nothing is selected, the id is no longer on the
+ * roster, or the unit's context would fall outside that grammar.
+ */
+export function selectedScoopTarget(
+  units: readonly WorkUnitSummary[],
+  selectedId: string | null | undefined
+): string | null {
+  if (!selectedId) return null;
+  const unit = units.find((candidate) => candidate.id === selectedId);
+  if (!unit) return null;
+  const target = threadContextFor(unit);
+  return isSelectScoopTarget(target) ? target : null;
+}
+
+/**
  * The primary root when present, else the oldest root.
  *
  * "Oldest" is the STRIP's rule (`orderRoots`: `addedAt` ascending when every

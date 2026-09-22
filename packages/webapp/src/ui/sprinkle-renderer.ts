@@ -145,6 +145,8 @@ interface SprinkleIframeResponseBody {
   mimeType?: string;
   result?: unknown;
   ok?: boolean;
+  /** Current selection from `slicc.selectedScoop`, or null when nothing is selected. */
+  target?: string | null;
 }
 
 /** A handler for one inbound message type. */
@@ -219,6 +221,14 @@ function createSharedBridgeHandlers(
         msg.id,
         bridge.selectScoop(typeof msg.target === 'string' ? msg.target : ''),
         (ok) => ({ ok })
+      ),
+    'sprinkle-selected-scoop': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-selected-scoop-response',
+        msg.id,
+        bridge.selectedScoop(),
+        (target) => ({ target })
       ),
     'sprinkle-attach-image': (_iframe, msg) =>
       bridge.attachImage(msg.base64 as string, msg.name as string, msg.mimeType as string),
@@ -696,6 +706,11 @@ export class SprinkleRenderer {
     stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
     selectScoop: function(target) {
       return _vfsCall('sprinkle-select-scoop', { target: target }, function(m) { return !!m.ok; });
+    },
+    selectedScoop: function() {
+      return _vfsCall('sprinkle-selected-scoop', {}, function(m) {
+        return typeof m.target === 'string' ? m.target : null;
+      });
     },
     attachImage: function(base64, name, mimeType) { parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*'); },
     captureScreen: function() {
