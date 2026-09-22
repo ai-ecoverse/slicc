@@ -324,7 +324,18 @@ async function bootOrchestrator(
   const unsubFollower = subscribeToFollowerTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
 
   wireEarlyConversationHydration(orchestrator, bridge);
-  await orchestrator.init(config.onBootProgress);
+  const bootLog = config.logger ?? console;
+  await orchestrator.init(config.onBootProgress, {
+    onSharedFsReady: async (fs) => {
+      try {
+        const { applyConfiguredHostMounts } = await import('../fs/auto-mount-table.js');
+        await applyConfiguredHostMounts(fs, bootLog);
+      } catch (err) {
+        bootLog.warn('Configured host mounts failed', err);
+      }
+      config.onBootProgress?.('host-mounts-applied');
+    },
+  });
 
   await bridge.hydrateBuffersFromRecords();
   bridge.publishHydratedTranscripts();
@@ -667,24 +678,15 @@ async function recoverPersistedMounts(
   log: KernelHostLogger
 ): Promise<void> {
   try {
-    const { getAllMountEntries, removeMountEntry } = await import('../fs/mount-table-store.js');
+    const { getAllMountEntries } = await import('../fs/mount-table-store.js');
     const { recoverMounts } = await import('../fs/mount-recovery.js');
 
-    const { hostShadowedEntries, mountConfiguredHostMounts, withoutHostMountedTargets } =
-      await import('../fs/auto-mount-table.js');
-    const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
-
+    const { applyConfiguredHostMounts, withoutHostMountedTargets } = await import(
+      '../fs/auto-mount-table.js'
+    );
+    const hostMounted = await applyConfiguredHostMounts(sharedFs, log);
     const allEntries = await getAllMountEntries();
     const entries = withoutHostMountedTargets(allEntries, hostMounted);
-
-    for (const stale of hostShadowedEntries(allEntries, hostMounted)) {
-      void removeMountEntry(stale.targetPath).catch((err) => {
-        log.warn('failed to purge host-owned mount row', {
-          path: stale.targetPath,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
     if (entries.length === 0) return;
     const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
     if (needsRecovery.length === 0) return;

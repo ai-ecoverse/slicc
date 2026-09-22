@@ -11,7 +11,6 @@ function noopCallbacks() {
     onSendMessage: vi.fn(),
     onStatusChange: vi.fn(),
     onError: vi.fn(),
-    // biome-ignore lint/suspicious/noExplicitAny: minimal test stub
     getBrowserAPI: vi.fn(() => ({}) as any),
   };
 }
@@ -112,5 +111,27 @@ describe('orchestrator boot-progress heartbeat (#2007)', () => {
     const container = { appendChild: () => {} } as unknown as HTMLElement;
     orch = new Orchestrator(container, noopCallbacks());
     await expect(orch.init()).resolves.toBeUndefined();
+  });
+
+  it('runs onSharedFsReady before the root cone wave and the child restore', async () => {
+    await saveScoop(scoop('cone_hm_1', true));
+    await saveScoop(scoop('scoop_hm_1', false));
+    const container = { appendChild: () => {} } as unknown as HTMLElement;
+    orch = new Orchestrator(container, noopCallbacks());
+    const stages: string[] = [];
+    await orch.init((stage) => stages.push(stage), {
+      onSharedFsReady: async () => {
+        stages.push('shared-fs-ready');
+      },
+    });
+    const ready = stages.indexOf('shared-fs-ready');
+    expect(ready).toBeGreaterThanOrEqual(0);
+    expect(ready).toBeLessThan(stages.indexOf('conversations-ready'));
+    expect(ready).toBeLessThan(stages.indexOf('scoop-restored:cone_hm_1'));
+    expect(stages).not.toContain('scoop-restored:scoop_hm_1');
+    await orch.whenBootRestoresSettled();
+    expect(stages.indexOf('shared-fs-ready')).toBeLessThan(
+      stages.indexOf('scoop-restored:scoop_hm_1')
+    );
   });
 });

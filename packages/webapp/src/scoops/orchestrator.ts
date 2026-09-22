@@ -175,6 +175,10 @@ export interface AssistantConfig {
   triggerPattern: RegExp;
 }
 
+export interface OrchestratorInitHooks {
+  onSharedFsReady?: (fs: VirtualFS) => Promise<void>;
+}
+
 export class Orchestrator implements ConeApprovalRouter {
   private scoops: Map<string, RegisteredScoop> = new Map();
 
@@ -403,13 +407,15 @@ export class Orchestrator implements ConeApprovalRouter {
     this.onConversationsReady = hook;
   }
 
-  async init(onBootProgress?: (stage: string) => void): Promise<void> {
-    await db.initDB();
-
-    this.sharedFs = await withMountHeartbeat(
+  private async openSharedFilesystem(
+    onBootProgress: ((stage: string) => void) | undefined,
+    hooks: OrchestratorInitHooks | undefined
+  ): Promise<{ sharedFs: VirtualFS; fsWatcher: FsWatcher }> {
+    const sharedFs = await withMountHeartbeat(
       (tick) => VirtualFS.create({ dbName: 'slicc-fs', onRepairProgress: tick }),
       onBootProgress
     );
+    this.sharedFs = sharedFs;
     this.sessionStore = new SessionStore();
     this.conversationStore = new WorkUnitConversationStore();
 
@@ -417,13 +423,25 @@ export class Orchestrator implements ConeApprovalRouter {
     this.turnJournal = new TurnJournal();
     this.interruptedTurns = await this.turnJournal.readAll();
 
-    this.fsWatcher = new FsWatcher();
-    this.sharedFs.setWatcher(this.fsWatcher);
-    (globalThis as SliccGlobalHooks).__slicc_fs_watcher = this.fsWatcher;
+    const fsWatcher = new FsWatcher();
+    this.fsWatcher = fsWatcher;
+    sharedFs.setWatcher(fsWatcher);
+    (globalThis as SliccGlobalHooks).__slicc_fs_watcher = fsWatcher;
+
+    if (hooks?.onSharedFsReady) await hooks.onSharedFsReady(sharedFs);
+    return { sharedFs, fsWatcher };
+  }
+
+  async init(
+    onBootProgress?: (stage: string) => void,
+    hooks?: OrchestratorInitHooks
+  ): Promise<void> {
+    await db.initDB();
+    const { sharedFs, fsWatcher } = await this.openSharedFilesystem(onBootProgress, hooks);
 
     const savedScoops = await this.initPolicyLayerAndLoadRecords(
-      this.sharedFs,
-      this.fsWatcher,
+      sharedFs,
+      fsWatcher,
       onBootProgress
     );
 

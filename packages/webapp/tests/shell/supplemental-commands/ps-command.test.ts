@@ -103,6 +103,58 @@ describe('ps command', () => {
     expect(dataLines[2]).toMatch(/└─ read_file/);
   });
 
+  it('-o scoop prints the full jid when two names share a 10-character prefix', async () => {
+    const pm = new ProcessManager();
+
+    const reviewer = 'scoop_github-reviewer';
+    const merger = 'scoop_github-merger';
+    pm.spawn({ kind: 'tool', argv: ['review'], owner: { kind: 'scoop', scoopJid: reviewer } });
+    pm.spawn({ kind: 'tool', argv: ['merge'], owner: { kind: 'scoop', scoopJid: merger } });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute(['-o', 'scoop,stat,pid'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    const dataLines = result.stdout.trim().split('\n').slice(1);
+    expect(dataLines).toHaveLength(2);
+    expect(dataLines[0]).toContain(reviewer);
+    expect(dataLines[1]).toContain(merger);
+    expect(dataLines[0]).not.toContain(merger);
+    expect(dataLines[1]).not.toContain(reviewer);
+
+    expect(dataLines[0]).toMatch(/\bR\b/);
+    expect(dataLines[1]).toMatch(/\bR\b/);
+    expect(dataLines[0]).toContain('1024');
+    expect(dataLines[1]).toContain('1025');
+    expect(result.stdout).not.toContain('PPID');
+  });
+
+  it('--columns scoop is the same full-jid opt-out as -o', async () => {
+    const pm = new ProcessManager();
+    const jid = 'scoop_gh-mcp-helper';
+    pm.spawn({ kind: 'shell', argv: ['sleep'], owner: { kind: 'scoop', scoopJid: jid } });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute(['--columns', 'scoop'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    const data = result.stdout.trim().split('\n').slice(1);
+    expect(data).toEqual([jid]);
+  });
+
+  it('default table still caps SCOOP at 10 characters', async () => {
+    const pm = new ProcessManager();
+    const reviewer = 'scoop_github-reviewer';
+    const merger = 'scoop_github-merger';
+    pm.spawn({ kind: 'tool', argv: ['review'], owner: { kind: 'scoop', scoopJid: reviewer } });
+    pm.spawn({ kind: 'tool', argv: ['merge'], owner: { kind: 'scoop', scoopJid: merger } });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute([], mockCtx);
+    const dataLines = result.stdout.trim().split('\n').slice(1);
+    expect(dataLines).toHaveLength(2);
+    for (const line of dataLines) {
+      expect(line).toContain('scoop_gith');
+      expect(line).not.toContain(reviewer);
+      expect(line).not.toContain(merger);
+    }
+  });
+
   it('-o filters columns', async () => {
     const pm = new ProcessManager();
     pm.spawn({ kind: 'shell', argv: ['ls'], owner: { kind: 'cone' } });

@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  clearPendingMountHandle,
+  listPendingMountKeys,
   loadAndClearPendingHandle,
   openMountPickerPopup,
   reactivateHandle,
@@ -69,6 +71,41 @@ describe('loadAndClearPendingHandle', () => {
     await loadAndClearPendingHandle('pendingMount:a');
     const survivor = await readHandle('pendingMount:b');
     expect(survivor?.name).toBe('b');
+  });
+});
+
+describe('clearPendingMountHandle', () => {
+  beforeEach(async () => {
+    indexedDB.deleteDatabase('slicc-pending-mount');
+  });
+
+  it('resolves when the key is missing', async () => {
+    await expect(
+      clearPendingMountHandle('pendingMount:term:/mnt/missing')
+    ).resolves.toBeUndefined();
+  });
+
+  it('deletes only the named key', async () => {
+    await seedHandle('pendingMount:term:/mnt/kb', mockHandle('kb'));
+    await seedHandle('pendingMount:term:/mnt/other', mockHandle('other'));
+    await clearPendingMountHandle('pendingMount:term:/mnt/kb');
+    expect(await readHandle('pendingMount:term:/mnt/kb')).toBeNull();
+    expect((await readHandle('pendingMount:term:/mnt/other'))?.name).toBe('other');
+  });
+});
+
+describe('listPendingMountKeys', () => {
+  beforeEach(() => {
+    indexedDB.deleteDatabase('slicc-pending-mount');
+  });
+
+  it('returns the keys currently stored', async () => {
+    await seedHandle('pendingMount:term:/mnt/foo/../kb', mockHandle('kb'));
+    await seedHandle('pendingMount:dip-1', mockHandle('dip'));
+    expect((await listPendingMountKeys()).sort()).toEqual([
+      'pendingMount:dip-1',
+      'pendingMount:term:/mnt/foo/../kb',
+    ]);
   });
 });
 
