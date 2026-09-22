@@ -2369,3 +2369,45 @@ real `<`.
 - `packages/webapp/src/ui/code-highlight.ts` — tokenize-then-escape highlighter
 - `packages/webapp/tests/ui/code-highlight.test.ts` — regressions for all three failures
 - `packages/webapp/src/shell/supplemental-commands/man-command.ts` — `stripHtml()` unescape order
+
+## Sniff an Image Format From Its Header, Not From a Free Scan (#3372)
+
+**The Failure**
+
+`jpegSize()` used to look for `FF C0` / `FF C2` anywhere in the buffer and read
+four bytes past it as the frame dimensions. A PNG's compressed IDAT data hits
+that pair within the first few KB, so the probe reported a JPEG — with garbage
+dimensions — for **every** real screenshot (13/13 PNGs in `docs/`, widths up to
+61896).
+
+Two things downstream believed it. `pngBytesToJpeg()` short-circuits on
+`if (jpegSize(bytes)) return bytes`, so it handed the PNG straight back, and
+`captureTabFrame`'s `if (opts.format !== 'png' && !jpegSize(shotBytes))` guard
+decided no transcode was needed. Every post-input tab frame therefore landed as
+PNG bytes in a `<seq>.jpg` file while `frame.mime` claimed `image/jpeg`. The UI
+had already papered over it (`sniffFrameMime` in `computers/frame-bytes.ts`
+exists so "a `.jpg` frozen path that holds PNG still renders"), which is why it
+survived so long.
+
+Unit tests missed it because the PNG fixtures were 24-byte IHDR headers — too
+short and too clean to contain a spurious marker pair. A synthetic fixture that
+cannot reproduce the production input is not coverage.
+
+**The Rule**
+
+Anchor at the magic number and walk the container: `FF D8` for SOI, then
+segment by segment (`FF <marker> <len16>`) to the first SOF. Never scan raw
+bytes for a marker that also occurs in arbitrary compressed data. When a test
+needs to stand in for a compressed payload, give the fixture a body, not just a
+header.
+
+Corollary for anything that names a file after an image: derive the extension
+from the bytes (`frozenFrameExtension`), not from a `mime` field a caller
+supplied. The field was right while the file was wrong is the wrong way round.
+
+**Related Files**
+
+- `packages/webapp/src/computers/encode-frame.ts` — `jpegSize` / `pngBytesToJpeg`
+- `packages/webapp/src/computers/frames.ts` — `frozenFrameExtension`
+- `packages/webapp/src/computers/frame-bytes.ts` — `sniffFrameMime`
+- `packages/webapp/tests/computers/frames.test.ts` — spurious-SOF regression
