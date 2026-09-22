@@ -29,11 +29,26 @@ export interface PairablePeer {
 export interface FollowerPairing {
   /** Absorbed peer → the primary it folded into. Absorbed peers stay off the roster. */
   readonly absorbedBy: ReadonlyMap<string, string>;
-  /** Primary peer → the absorbed peer that actually serves `computer.native.*`. */
+  /**
+   * Primary peer → the peer folded into it, whatever that peer can do. The
+   * inverse of `absorbedBy`; what lets the primary's roster entry carry what
+   * its partner said on `hello` (the MOTD naming a missing grant).
+   */
+  readonly partner: ReadonlyMap<string, string>;
+  /**
+   * Primary peer → the absorbed peer that actually serves `computer.native.*`.
+   * A subset of `partner`: only a partner advertising `computer` lends the
+   * primary a screen. An ungranted launcher still folds, but routing capture at
+   * it would re-create the false claim #3387 removed.
+   */
   readonly computerPartner: ReadonlyMap<string, string>;
 }
 
-const EMPTY: FollowerPairing = { absorbedBy: new Map(), computerPartner: new Map() };
+const EMPTY: FollowerPairing = {
+  absorbedBy: new Map(),
+  partner: new Map(),
+  computerPartner: new Map(),
+};
 
 /**
  * Resolve the pairs among `peers`.
@@ -42,8 +57,13 @@ const EMPTY: FollowerPairing = { absorbedBy: new Map(), computerPartner: new Map
  *
  * - the **primary** is the single `exec` peer — the CLI, which is what the
  *   agent addresses with `ssh` and what `computer add ssh` probes;
- * - the **partner** is the first `computer`-only peer, whose capability is
- *   lent to the primary and whose own roster entry disappears.
+ * - the **partner** is a non-`exec` peer — the launcher — whose own roster
+ *   entry disappears. It folds on the shared token alone, not on whether it can
+ *   capture right now: the launcher advertises `computer` as its Screen
+ *   Recording grant actually stands (#3387), and an ungranted Mac is still one
+ *   machine. Only a `computer` partner lends the primary its screen
+ *   (`computerPartner`); a capture-capable one is preferred when there is a
+ *   choice.
  *
  * Deliberately conservative — anything ambiguous folds nothing, leaving
  * today's two-entry behaviour rather than silently hiding a machine:
@@ -53,7 +73,7 @@ const EMPTY: FollowerPairing = { absorbedBy: new Map(), computerPartner: new Map
  *   plain Sliccstart both stay addressable;
  * - more than one `exec` peer on a token — two CLIs cannot both be the same
  *   machine, so neither is trusted to speak for it;
- * - extra `computer` peers beyond the first — a leftover from a restart is
+ * - extra non-`exec` peers beyond the partner — a leftover from a restart is
  *   left visible instead of being folded into a machine it may not belong to.
  *
  * A peer that advertises BOTH capabilities is already one entry and is never
@@ -71,17 +91,20 @@ export function resolveFollowerPairs(peers: Iterable<PairablePeer>): FollowerPai
   if (groups.size === 0) return EMPTY;
 
   const absorbedBy = new Map<string, string>();
+  const partnerOf = new Map<string, string>();
   const computerPartner = new Map<string, string>();
   for (const group of groups.values()) {
     if (group.length < 2) continue;
     const primaries = group.filter((peer) => peer.exec);
     if (primaries.length !== 1) continue;
     const primary = primaries[0];
-    const partner = group.find((peer) => peer.computer && !peer.exec);
+    const candidates = group.filter((peer) => !peer.exec);
+    const partner = candidates.find((peer) => peer.computer) ?? candidates[0];
     if (!partner) continue;
     absorbedBy.set(partner.bootstrapId, primary.bootstrapId);
-    computerPartner.set(primary.bootstrapId, partner.bootstrapId);
+    partnerOf.set(primary.bootstrapId, partner.bootstrapId);
+    if (partner.computer) computerPartner.set(primary.bootstrapId, partner.bootstrapId);
   }
   if (absorbedBy.size === 0) return EMPTY;
-  return { absorbedBy, computerPartner };
+  return { absorbedBy, partner: partnerOf, computerPartner };
 }

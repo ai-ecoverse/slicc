@@ -36,6 +36,12 @@ export interface ConnectedFollowerInfo {
   cdp?: boolean;
   /** One-line description the follower advertised on `hello.motd`. */
   motd?: string;
+  /**
+   * The `hello.motd` of the paired launcher folded into this entry — the line
+   * that names a missing Screen Recording or Accessibility grant. Separate from
+   * `motd` so neither peer's statement overwrites the other's.
+   */
+  computerMotd?: string;
 }
 
 /**
@@ -219,6 +225,7 @@ function formatFollowerEntry(f: ConnectedFollowerInfo): string[] {
   // whose id says nothing about which machine it is, and its MOTD is the only
   // thing that names the Mac.
   if (f.motd) lines.push(`      ${f.motd}`);
+  if (f.computerMotd) lines.push(`      ${f.computerMotd}`);
   return lines;
 }
 

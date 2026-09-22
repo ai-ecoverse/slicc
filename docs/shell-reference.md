@@ -736,7 +736,8 @@ host leave --leader https://www.sliccy.ai
 # `[ssh]` tag in `host`; browser followers show `[playwright]`, and a follower
 # whose screen can be captured — including a `--computer` Mac folded into its
 # CLI entry — shows `[computer]`). Only `[ssh]` targets accept commands;
-# `ssh --list` prints each with its advertised MOTD.
+# `ssh --list` prints each with its advertised MOTD (plus, for a `--computer`
+# Mac, the folded launcher's MOTD naming any missing macOS grant).
 ssh --list
 
 # Run a command on a follower's real machine (as the user who started

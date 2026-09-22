@@ -399,6 +399,34 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), false)
     }
 
+    /// A `hello` the channel refuses (send-buffer pressure on an open channel)
+    /// was not delivered, so it must not count as advertised: the next beat has
+    /// to try again even though the grants themselves never changed.
+    func testARefusedHelloIsRetriedOnTheNextBeat() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{ grants.screenRecording = true }, {}, {}]))
+        var attempts: [Data] = []
+        var delivered: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                attempts.append(data)
+                // Accept the first hello, refuse the re-advertisement once.
+                guard attempts.count != 2 else { return false }
+                delivered.append(data)
+                return true
+            })
+        await settle()
+        await follower._testing_settleGrantWatch()
+
+        XCTAssertEqual(hellos(in: attempts).count, 3, "one refused send, then exactly one retry")
+        let published = hellos(in: delivered)
+        XCTAssertEqual(published.count, 2)
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
+    }
+
     /// Stopping must take the watch with it: a cancelled follower that kept
     /// polling would re-advertise a peer the leader has already dropped.
     func testStoppingEndsTheGrantWatch() async throws {

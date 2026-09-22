@@ -72,6 +72,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(['browser-1']),
         getTeleportEligibleBootstrapIds: () => new Set(['browser-1']),
         getFollowerMotds: () => new Map([['browser-1', 'remote browser']]),
+        getPartnerMotds: () => new Map(),
         getSprinkleInstances: () => [],
         getFollowerDetails: () => [
           {
@@ -175,6 +176,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'slicc-cli exec target']]),
+        getPartnerMotds: () => new Map(),
         getSprinkleInstances: () => [],
         getFollowerDetails: () => [
           {
@@ -259,6 +261,89 @@ describe('WC tray connected follower mapping', () => {
     // an anonymous "other follower" tally.
     expect(output).not.toContain('mac-1');
     expect(output).not.toContain('other follower');
+  });
+
+  /** A real registry holding one `follow --computer` Mac: the CLI and its launcher. */
+  function pairedMac(launcherHello: { computer: boolean; motd?: string }): PageLeaderTrayHandle {
+    const sync = new LeaderSyncManager({
+      sendControl: () => {},
+      getMessages: () => [],
+      getScoopJid: () => 'cone',
+      onFollowerMessage: vi.fn(),
+      onFollowerAbort: vi.fn(),
+    });
+    const cli = new FakeChannel();
+    sync.addFollower('cli-1', cli, { runtime: 'slicc-cli' });
+    cli.simulateMessage({
+      type: 'hello',
+      protocolVersion: 7,
+      capabilities: { exec: true },
+      motd: 'slicc-cli exec target · trieloff@Mac-Studio-2025 · darwin/arm64 · runner: bash -c',
+      pairId: 'pair-2ffe3b1c593741a10e3286b12d9c6838',
+    });
+    const launcher = new FakeChannel();
+    sync.addFollower('mac-1', launcher, { runtime: 'sliccstart-computer' });
+    launcher.simulateMessage({
+      type: 'hello',
+      protocolVersion: 7,
+      capabilities: { exec: false, computer: launcherHello.computer },
+      motd: launcherHello.motd,
+      pairId: 'pair-2ffe3b1c593741a10e3286b12d9c6838',
+    });
+    return {
+      sync,
+      peers: {
+        getPeers: () => [
+          { bootstrapId: 'cli-1', state: 'connected' as const, runtime: 'slicc-cli' },
+          { bootstrapId: 'mac-1', state: 'connected' as const, runtime: 'sliccstart-computer' },
+        ],
+      },
+    } as unknown as PageLeaderTrayHandle;
+  }
+
+  it('keeps the launcher MOTD naming a missing grant on the folded entry', () => {
+    // The common `follow --computer` Mac: Screen Recording granted, Accessibility
+    // not. The fold removes the launcher from the roster, so its MOTD — the only
+    // place the missing grant is named — has to survive on the CLI's entry, and
+    // beside the CLI's own line, not instead of it.
+    const handle = pairedMac({
+      computer: true,
+      motd: 'Native screen capture on Mac-Studio-2025 — input needs Accessibility in System Settings → Privacy & Security',
+    });
+    const followers = getLeaderConnectedFollowers(handle);
+
+    expect(followers.map((f) => f.bootstrapId)).toEqual(['cli-1']);
+    expect(followers[0].motd).toContain('slicc-cli exec target');
+    expect(followers[0].computerMotd).toContain('input needs Accessibility');
+
+    const output = formatLeaderOutput(activeLeaderStatus(), followers);
+    expect(output).toContain('  - follower-cli-1 (slicc-cli) [ssh] [computer]');
+    expect(output).toContain('      slicc-cli exec target');
+    expect(output).toContain(
+      '      Native screen capture on Mac-Studio-2025 — input needs Accessibility'
+    );
+  });
+
+  it('still folds an ungranted launcher into one entry, without lending it capture', () => {
+    // An honest launcher with Screen Recording denied advertises
+    // `computer: false`. It is still the same machine as the CLI (shared
+    // `pairId`), so it folds — but the CLI's entry must not read `[computer]`,
+    // or `computer add ssh` would skip the `screencapture` fallback again.
+    const handle = pairedMac({
+      computer: false,
+      motd: 'Mac-Studio-2025: no native screen capture — grant Screen Recording in System Settings → Privacy & Security',
+    });
+    const followers = getLeaderConnectedFollowers(handle);
+
+    expect(followers.map((f) => f.bootstrapId)).toEqual(['cli-1']);
+    expect(followers[0]).toMatchObject({ exec: true, computer: false });
+    expect(followers[0].computerMotd).toContain('grant Screen Recording');
+
+    const output = formatLeaderOutput(activeLeaderStatus(), followers);
+    expect(output).toContain('  - follower-cli-1 (slicc-cli) [ssh]\n');
+    expect(output).not.toContain('[computer]');
+    expect(output).not.toContain('mac-1');
+    expect(output).toContain('grant Screen Recording');
   });
 
   it('names an unpaired computer-only follower instead of hiding it in the count (#3381)', () => {
@@ -368,6 +453,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
+        getPartnerMotds: () => new Map(),
         getFollowerDetails: () => [],
         getSprinkleInstances: () => [],
       },
@@ -429,6 +515,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),
+        getPartnerMotds: () => new Map(),
         getSprinkleInstances: () => [],
         getFollowerDetails: () => [
           {

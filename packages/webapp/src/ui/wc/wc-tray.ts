@@ -213,6 +213,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
   const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
+  const partnerMotds = handle.sync.getPartnerMotds();
   // A Mac running `slicc … follow --computer` dials twice (CLI + the headless
   // Sliccstart it spawned). The launcher's capability is lent to the CLI's
   // entry above, so dropping it here is what makes the machine read as one
@@ -237,6 +238,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
         computer: computerIds.has(follower.bootstrapId),
         teleportEligible: teleportIds.has(follower.bootstrapId),
         motd: motds.get(follower.bootstrapId),
+        computerMotd: partnerMotds.get(follower.bootstrapId),
       };
     });
 }

@@ -111,6 +111,30 @@ describe('resolveFollowerPairs', () => {
     expect(pairing.computerPartner.get('both')).toBe('mac-1');
   });
 
+  it('folds an ungranted launcher on the token alone, lending no capture', () => {
+    // Screen Recording denied: the launcher honestly says `computer: false`
+    // (#3387) but is still this machine, so it must not reappear as a second
+    // roster entry.
+    const ungranted = { bootstrapId: 'mac-1', exec: false, computer: false, pairId: 'pair-a' };
+    const pairing = resolveFollowerPairs([cli('cli-1', 'pair-a'), ungranted]);
+
+    expect([...pairing.absorbedBy]).toEqual([['mac-1', 'cli-1']]);
+    expect([...pairing.partner]).toEqual([['cli-1', 'mac-1']]);
+    expect(pairing.computerPartner.size).toBe(0);
+  });
+
+  it('prefers a capture-capable launcher over an ungranted leftover', () => {
+    const pairing = resolveFollowerPairs([
+      cli('cli-1', 'pair-a'),
+      { bootstrapId: 'mac-stale', exec: false, computer: false, pairId: 'pair-a' },
+      launcher('mac-1', 'pair-a'),
+    ]);
+
+    expect(pairing.partner.get('cli-1')).toBe('mac-1');
+    expect(pairing.computerPartner.get('cli-1')).toBe('mac-1');
+    expect(pairing.absorbedBy.has('mac-stale')).toBe(false);
+  });
+
   it('folds nothing for a lone peer holding a token', () => {
     // The launcher died, or has not said hello yet.
     expect(resolveFollowerPairs([cli('cli-1', 'pair-a')]).absorbedBy.size).toBe(0);

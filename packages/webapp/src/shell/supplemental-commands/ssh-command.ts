@@ -83,6 +83,9 @@ function formatTargets(followers: ConnectedFollowerInfo[]): string {
     // The follower's advertised MOTD (hello.motd) — who/what/where the target
     // is, so the agent sees what it's connecting to on first `ssh --list`.
     if (f.motd) lines.push(`      ${f.motd}`);
+    // A paired launcher's MOTD — the only place a missing grant is named once
+    // the launcher is folded into this entry.
+    if (f.computerMotd) lines.push(`      ${f.computerMotd}`);
   }
   return `${lines.join('\n')}\n`;
 }

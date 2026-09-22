@@ -180,12 +180,19 @@ input rather than capture and the wire has one boolean, so it travels in the
 MOTD, which the leader already shows beside a roster entry. The watch is
 injectable (`ComputerGrantTick`) so tests drive beats instead of sleeping.
 
-One consequence worth knowing: an ungranted launcher advertising `computer:
-false` no longer satisfies `resolveFollowerPairs`' partner rule, so a Mac
-running `follow --computer` shows its CLI entry and its launcher entry
-separately instead of folded. The CLI entry is the one `add ssh` resolves and
-the one that can still capture, so the fallback is reached; the roster is
-merely less tidy than when the grant is in place.
+The leader folds on the shared `hello.pairId`, not on the capability: an
+ungranted launcher advertising `computer: false` still folds into its CLI's
+roster entry (`resolveFollowerPairs` in
+`webapp/src/scoops/tray-leader/follower-pairing.ts`), but lends it no capture —
+the entry reads `[ssh]` only, so `add ssh` reaches the `screencapture`
+fallback. The folded launcher's MOTD survives as the entry's `computerMotd`,
+printed on its own line under the CLI's MOTD in `host` and `ssh --list`, which is
+how a missing Screen Recording or Accessibility grant stays readable once the
+launcher is off the roster. A refused `hello` (the channel's `send` returned
+false) is not cached as advertised, so the next watch beat retries it.
+
+The menu-bar (GUI) Sliccstart sends no `pairId` — no CLI minted one for it — so
+beside a plain `slicc … follow` it is still a second roster row.
 
 **Dev-build caveat:** TCC keys a grant to the code signature, so an ad-hoc
 re-signed local build re-prompts on every rebuild. Released, Developer

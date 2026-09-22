@@ -173,10 +173,14 @@ final class ComputerTrayFollower: NSObject {
     /// re-notifies every follower-selection site, so a box ticked in System
     /// Settings mid-session reaches the roster without a reconnect and without a
     /// new message type on the wire.
+    ///
+    /// The cache records only what was delivered: a `hello` the channel refused
+    /// (send-buffer pressure on a still-open channel) leaves it untouched, so the
+    /// next watch beat sees a difference and tries again instead of the leader
+    /// keeping a stale `computer` until the next grant flip or reconnect.
     private func advertise() {
         let grants = permissions.grants()
-        advertisedGrants = grants
-        _ = send(
+        let sent = send(
             .hello(
                 protocolVersion: traySyncProtocolVersion,
                 runtime: ComputerTrayFollower.runtime,
@@ -184,6 +188,7 @@ final class ComputerTrayFollower: NSObject {
                 motd: ComputerCapabilityAdvertisement.motd(
                     host: ProcessInfo.processInfo.hostName, grants: grants),
                 pairId: pairId))
+        if sent { advertisedGrants = grants }
     }
 
     private func startGrantWatch() {
