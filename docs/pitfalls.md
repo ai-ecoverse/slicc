@@ -786,11 +786,14 @@ tree it writes `/.metadata.consistent.json` (a hash of the sidecar bytes).
 The next mount skips the walk when that hash still matches.
 
 The mark is deleted **before** the next OPFS mutation (`VirtualFS` writes,
-and a Python realm flush that has dirty buffers). A crash after the delete
-re-probes. Certifying a flush that was not probed would let a drifted tree
-skip the repair and brick `crossCopy` again, so only the probe path writes
-the mark. The mark's own sidecar entry is stripped on flush, same as
-`/.metadata.json`, because persisting it changes the bytes the hash covers.
+and a Python realm flush that has dirty file buffers or a queued mkdir,
+rename, unlink, or rmdir). A crash after the delete re-probes. If the
+delete fails, that Python flush is skipped so the mark cannot certify a
+tree that just changed. Certifying a flush that was not probed would let a
+drifted tree skip the repair and brick `crossCopy` again, so only the probe
+path writes the mark. The mark's own sidecar entry is stripped on flush,
+same as `/.metadata.json`, because persisting it changes the bytes the hash
+covers.
 
 ## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
 

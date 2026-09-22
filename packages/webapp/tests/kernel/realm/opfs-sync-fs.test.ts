@@ -22,6 +22,7 @@ import {
   type FsNode,
   type FsStream,
   flushPendingOpfsOps,
+  hasPendingOpfsOps,
   type OpfsMount,
   type OpfsSahProvider,
   type OpfsSyncAccessHandle,
@@ -336,6 +337,15 @@ describe('OPFS_SYNC_FS — mount + node_ops', () => {
     const childFile = await rootDir.handle.getFileHandle('fresh.txt');
     const text = await (await childFile.getFile()).text();
     expect(text).toBe('hi');
+  });
+
+  it('queued mkdir stays pending until the OPFS chain is flushed', async () => {
+    const { plugin, root, mount } = await setup({});
+    expect(hasPendingOpfsOps(mount)).toBe(false);
+    plugin.node_ops.mknod(root, 'newdir', 0o040755, 0);
+    expect(hasPendingOpfsOps(mount)).toBe(true);
+    await flushPendingOpfsOps(mount);
+    expect(hasPendingOpfsOps(mount)).toBe(false);
   });
 
   it('mknod throws EEXIST when name already exists', async () => {
