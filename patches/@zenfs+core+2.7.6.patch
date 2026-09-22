@@ -1,8 +1,32 @@
-diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..c710d11 100644
---- a/node_modules/@zenfs/core/dist/mixins/async.js
-+++ b/node_modules/@zenfs/core/dist/mixins/async.js
-@@ -219,37 +219,62 @@ export function Async(FS) {
+diff -ru a/node_modules/@zenfs/core/dist/backends/store/fs.js b/node_modules/@zenfs/core/dist/backends/store/fs.js
+--- a/node_modules/@zenfs/core/dist/backends/store/fs.js	1985-10-26 09:15:00.000000000 +0100
++++ b/node_modules/@zenfs/core/dist/backends/store/fs.js	2026-09-22 16:30:52.663291628 +0200
+@@ -442,7 +442,9 @@
+         try {
+             const tx = __addDisposableResource(env_10, this.transaction(), false);
+             const inode = this.findInodeSync(tx, path);
+-            if (!isDirectory(inode) && metadata.size !== undefined && metadata.size !== inode.size) {
++            // metaOnly: record size without zero-filling the body. crossCopy
++            // uses this for files above the sync preload cap.
++            if (!isDirectory(inode) && metadata.size !== undefined && metadata.size !== inode.size && !metadata.metaOnly) {
+                 const data = tx.getSync(inode.data) ?? new Uint8Array();
+                 if (metadata.size < data.byteLength)
+                     data.fill(0, metadata.size);
+diff -ru a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
+--- a/node_modules/@zenfs/core/dist/mixins/async.js	1985-10-26 09:15:00.000000000 +0100
++++ b/node_modules/@zenfs/core/dist/mixins/async.js	2026-09-22 16:30:47.403232812 +0200
+@@ -189,6 +189,10 @@
+         }
+         readSync(path, buffer, offset, end) {
+             this.checkSync();
++            // Payload was not copied (see crossCopy). Serving the empty mirror
++            // buffer would look like a successful read of zeros.
++            if (this._metaOnly?.has(path))
++                throw withErrno('EIO', `sync mirror has no payload for ${path}`);
+             this._sync.readSync(path, buffer, offset, end);
+         }
+         writeSync(path, buffer, offset) {
+@@ -219,37 +223,76 @@
          /** @internal @protected */
          _crossCopySemaphore;
          /** @internal */
@@ -31,6 +55,20 @@ index 26aaf3a..c710d11 100644
 +                if (preload.failure)
 +                    throw preload.failure.error;
 +                if (!isDirectory(stats)) {
++                    // Bodies above the realm sync-snapshot cap (1 MiB, the same
++                    // SYNC_FS_MAX_FILE_BYTES as realm-host.ts) stay in OPFS.
++                    // new Uint8Array(stats.size) plus a File snapshot of every
++                    // shard is what fails mount on a multi-gigabyte tree
++                    // (NotReadableError, then Array buffer allocation failed).
++                    if (stats.size > 1048576) {
++                        // Name and size stay visible to readdir/stat. The body
++                        // does not: touchSync would otherwise zero-fill it.
++                        this._metaOnly ??= new Set();
++                        this._metaOnly.add(path);
++                        this._sync.createFileSync(path, stats);
++                        this._sync.touchSync(path, { ...stats, metaOnly: true });
++                        return;
++                    }
 +                    const release = (await this._crossCopySemaphore?.get()) || { [Symbol.dispose]() { } };
 +                    try {
 +                        // A slot may have been handed off just before a peer failed.
@@ -90,11 +128,10 @@ index 26aaf3a..c710d11 100644
          }
          /**
           * @internal
-diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index 44f7ed2..faea5dc 100644
---- a/node_modules/@zenfs/core/dist/vfs/vcache.js
-+++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
-@@ -79,6 +79,30 @@ export class VCache {
+diff -ru a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
+--- a/node_modules/@zenfs/core/dist/vfs/vcache.js	1985-10-26 09:15:00.000000000 +0100
++++ b/node_modules/@zenfs/core/dist/vfs/vcache.js	2026-09-22 16:26:54.802582597 +0200
+@@ -79,6 +79,30 @@
          let node = this.byIno.get(inode.ino);
          if (node && node.inode.nlink === node.paths.size && !node.paths.has(path))
              err(`vcache.ref: vnode for ${this.fs.label || this.fs.uuid}:${inode.ino} has an nlink of ${node.inode.nlink} but referenced by more paths [#314]`);

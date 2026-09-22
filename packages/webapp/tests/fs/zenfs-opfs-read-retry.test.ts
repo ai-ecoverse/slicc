@@ -52,12 +52,32 @@ describe('WebAccess File snapshot retry', () => {
     expect(reader.getFile).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry failed snapshot acquisition', async () => {
-    const error = new DOMException('Snapshot unavailable', 'NotReadableError');
+  it('retries NotReadableError thrown by getFile itself', async () => {
+    const stale = new DOMException(
+      'The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.',
+      'NotReadableError'
+    );
     const reader = setupReader([readable]);
-    reader.getFile.mockReset().mockRejectedValue(error);
-    await expect(reader.read()).rejects.toBe(error);
-    expect(reader.getFile).toHaveBeenCalledTimes(1);
+    reader.getFile
+      .mockReset()
+      .mockRejectedValueOnce(stale)
+      .mockRejectedValueOnce(stale)
+      .mockResolvedValueOnce({ arrayBuffer: readable });
+    await reader.read();
+    expect(reader.output).toEqual(bytes);
+    expect(reader.getFile).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops after three NotReadableError failures from getFile', async () => {
+    const errors = [1, 2, 3].map(
+      (n) => new DOMException(`Snapshot ${n}`, 'NotReadableError')
+    );
+    const reader = setupReader([readable]);
+    reader.getFile.mockReset();
+    for (const error of errors) reader.getFile.mockRejectedValueOnce(error);
+    reader.getFile.mockResolvedValueOnce({ arrayBuffer: readable });
+    await expect(reader.read()).rejects.toBe(errors[2]);
+    expect(reader.getFile).toHaveBeenCalledTimes(3);
   });
 
   it('does not retry a non-native error with the same name', async () => {

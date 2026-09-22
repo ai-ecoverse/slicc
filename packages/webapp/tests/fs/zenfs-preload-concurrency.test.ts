@@ -58,6 +58,28 @@ describe('ZenFS preload concurrency across a directory tree', () => {
     }
   });
 
+  it('does not copy file bodies above 1 MiB into the sync mirror', async () => {
+    const backend = await makeBackend();
+    const stat = backend.stat.bind(backend);
+    const read = backend.read.bind(backend);
+    const reads: string[] = [];
+    vi.spyOn(backend, 'stat').mockImplementation(async (path: string) => {
+      const stats = await stat(path);
+      if (path === '/d0/f0') stats.size = 1048577;
+      return stats;
+    });
+    vi.spyOn(backend, 'read').mockImplementation(async (...args: unknown[]) => {
+      reads.push(String(args[0]));
+      return read(...(args as Parameters<typeof read>));
+    });
+    await backend.ready();
+    expect(reads).not.toContain('/d0/f0');
+    expect(reads).toContain('/d0/f1');
+    expect(backend.readdirSync('/d0')).toContain('f0');
+    expect(backend.statSync('/d0/f0').size).toBe(1048577);
+    expect(() => backend.readSync('/d0/f0', new Uint8Array(4), 0, 4)).toThrow(/no payload/);
+  });
+
   it.each(['read', 'stat', 'readdir', 'slot handoff'] as const)(
     'cancels queued copies on %s failure, drains active copies, and preserves the first error',
     async (failureSite) => {

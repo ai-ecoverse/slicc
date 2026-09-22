@@ -57,26 +57,41 @@ index ac0cbbd..a255a56 100644
      }
      removeSync() {
          throw log.crit(withErrno('ENOSYS'));
-@@ -157,8 +179,22 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -157,8 +179,37 @@ export class WebAccessFS extends Async(IndexFS) {
          if (end <= offset)
              return;
          const handle = await this.get('file', path);
 -        const file = await handle.getFile();
 -        const data = await file.arrayBuffer();
-+        // PATCH: a concurrent OPFS write invalidates an acquired File snapshot.
-+        // Retry the byte read with a fresh snapshot, not the same stale File.
-+        // Persistent failures remain fatal after three attempts; other errors
-+        // (including permission failures) are never retried.
++        // PATCH: Chromium invalidates an OPFS File snapshot with
++        // NotReadableError ("could not be read after a reference was
++        // acquired"). That throw comes from getFile() itself as often as
++        // from arrayBuffer(), and a burst of large reads keeps failing
++        // until the previous snapshot is dropped. Retry both steps, with
++        // a short pause. Persistent failures stay fatal after three
++        // attempts; other DOMExceptions are never retried.
++        const stale = (error) => error instanceof DOMException && error.name === 'NotReadableError';
++        const pause = (attempt) => new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
 +        let data;
 +        for (let attempt = 0; ; attempt++) {
-+            const file = await handle.getFile();
++            let file;
++            try {
++                file = await handle.getFile();
++            }
++            catch (error) {
++                if (!stale(error) || attempt >= 2)
++                    throw error;
++                await pause(attempt);
++                continue;
++            }
 +            try {
 +                data = await file.arrayBuffer();
 +                break;
 +            }
 +            catch (error) {
-+                if (!(error instanceof DOMException) || error.name !== 'NotReadableError' || attempt >= 2)
++                if (!stale(error) || attempt >= 2)
 +                    throw error;
++                await pause(attempt);
 +            }
 +        }
          if (data.byteLength < end - offset)
