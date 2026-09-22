@@ -58,6 +58,67 @@ describe('ZenFS preload concurrency across a directory tree', () => {
     }
   });
 
+  it('does not copy file bodies above 1 MiB into the sync mirror', async () => {
+    const backend = await makeBackend();
+    const stat = backend.stat.bind(backend);
+    const read = backend.read.bind(backend);
+    const reads: string[] = [];
+    vi.spyOn(backend, 'stat').mockImplementation(async (path: string) => {
+      const stats = await stat(path);
+      if (path === '/d0/f0') stats.size = 1048577;
+      return stats;
+    });
+    vi.spyOn(backend, 'read').mockImplementation(async (...args: unknown[]) => {
+      reads.push(String(args[0]));
+      return read(...(args as Parameters<typeof read>));
+    });
+    await backend.ready();
+    expect(reads).not.toContain('/d0/f0');
+    expect(reads).toContain('/d0/f1');
+    expect(backend.readdirSync('/d0')).toContain('f0');
+    expect(backend.statSync('/d0/f0').size).toBe(1048577);
+    expect(() => backend.readSync('/d0/f0', new Uint8Array(4), 0, 4)).toThrow(/no payload/);
+  });
+
+  it('follows a metadata-only path across rename, overwrite, and unlink', async () => {
+    const backend = await makeBackend();
+    const stat = backend.stat.bind(backend);
+    vi.spyOn(backend, 'stat').mockImplementation(async (path: string) => {
+      const stats = await stat(path);
+      if (path === '/d0/f0') stats.size = 1048577;
+      return stats;
+    });
+    await backend.ready();
+
+    backend.renameSync('/d0/f0', '/d0/moved');
+    // Before the queued rename copies bytes, the marker has to be on the new
+    // path. Otherwise readSync would return zeros from the empty mirror.
+    expect(() => backend.readSync('/d0/moved', new Uint8Array(4), 0, 4)).toThrow(/no payload/);
+    await backend.sync();
+    expect(() => backend.readSync('/d0/f0', new Uint8Array(4), 0, 4)).toThrow();
+    const movedBytes = new Uint8Array(4);
+    backend.readSync('/d0/moved', movedBytes, 0, 4);
+    expect(new TextDecoder().decode(movedBytes)).toBe('data');
+
+    const hello = new TextEncoder().encode('hello');
+    backend.writeSync('/d0/moved', hello, 0);
+    await backend.sync();
+    const written = new Uint8Array(hello.length);
+    backend.readSync('/d0/moved', written, 0, hello.length);
+    expect(new TextDecoder().decode(written)).toBe('hello');
+    expect(backend.statSync('/d0/moved').size).toBe(hello.length);
+
+    backend.unlinkSync('/d0/moved');
+    await backend.sync();
+    backend.createFileSync('/d0/moved', { mode: 0o644, uid: 0, gid: 0 });
+    const again = new TextEncoder().encode('again');
+    backend.writeSync('/d0/moved', again, 0);
+    const replaced = new Uint8Array(again.length);
+    backend.readSync('/d0/moved', replaced, 0, again.length);
+    expect(new TextDecoder().decode(replaced)).toBe('again');
+    await backend.sync();
+  });
+
   it.each(['read', 'stat', 'readdir', 'slot handoff'] as const)(
     'cancels queued copies on %s failure, drains active copies, and preserves the first error',
     async (failureSite) => {

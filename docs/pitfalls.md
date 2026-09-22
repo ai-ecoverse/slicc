@@ -620,6 +620,18 @@ Failures in `stat` or `readdir` also cancel queued payload work, and later failu
 do not replace the first error. Cancellation does not abort an already-issued
 backend operation; the backend read API has no abort signal.
 The synchronous cache remains enabled for synchronous filesystem callers.
+Files larger than 1 MiB are the exception: `crossCopy` records the name and
+size in the sync mirror and does not allocate the body. That is the same
+per-file cap as the realm snapshot (`SYNC_FS_MAX_FILE_BYTES`). A mount that
+preloaded every shard of an 8.8 GB tree allocated each body twice (the
+`Uint8Array` plus the OPFS snapshot) and died with `NotReadableError`, then
+`Array buffer allocation failed`, before the kernel worker posted ready.
+`readdir` / `stat` still see those paths. A sync read of the mirror throws
+rather than returning zeros. A later rename moves that guard with the inode,
+an unlink or rmdir drops it, and a write collapses the fictional size and
+then stores the new bytes, so the path can be read again. Async reads hit
+the backend. The realm snapshot already stores them as `truncated` /
+`ENOSYNC` and bridges `readFileSync` to a live read.
 
 Run the [standalone browser reproduction](../packages/webapp/tests/e2e/zenfs-preload/README.md).
 `tests/fs/zenfs-preload-concurrency.test.ts` in `packages/webapp` guards the global
@@ -734,12 +746,25 @@ interleaving. See [zen-fs/dom#46](https://github.com/zen-fs/dom/issues/46), repr
 on upstream dom 1.2.13 / core 2.7.3. Dom 1.2.14 still uses the same
 single-snapshot read, so the retry patch remains necessary on our pinned version.
 
+In a worker the same read does not take a snapshot at all. `createSyncAccessHandle()`
+writes the requested window straight into the caller's buffer and is closed
+before the call returns. That is the path Kokoro (`model.onnx_data`), kev's
+shards, and every other ONNX load share: `env.fetch` and `/preview` both
+arrive at `WebAccessFS.read` in the kernel worker. A locked handle, or a
+caller on the main thread where sync access handles do not exist, falls
+through to the snapshot retry below.
+
 The `@zenfs/dom` read patch obtains a fresh File for each byte-read attempt and
-retries native `NotReadableError` at most twice (three total attempts). Retrying
-the same File keeps the stale snapshot. Handle lookup and snapshot acquisition
-errors are outside this retry, and other byte-read errors propagate immediately.
-Persistent failures still reject with the final error. This does not make a
-multi-file mount an atomic snapshot or repair concurrent file-size changes.
+retries native `NotReadableError` at most twice (three total attempts), with a
+short pause between attempts. The throw comes from `getFile()` itself as often
+as from `arrayBuffer()` — Chromium's message is "could not be read after a
+reference to a file was acquired" — and retrying only `arrayBuffer()` never
+runs in that case. Each attempt calls `getFile()` again; retrying the same
+File keeps the stale snapshot. Handle lookup errors, and any DOMException
+other than `NotReadableError`, propagate immediately. Persistent failures
+still reject with the final error. This does not make a multi-file mount an
+atomic snapshot, repair concurrent file-size changes, or make a multi-gigabyte
+tree fit in the sync mirror (that cap is the preload section above).
 
 The [browser reproduction](../packages/webapp/tests/e2e/zenfs-opfs-read-race/README.md)
 uses real native Files and writes; its hooks only control timing. A once-overwrite
