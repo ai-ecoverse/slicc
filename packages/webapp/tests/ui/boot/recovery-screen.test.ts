@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StaleBridgeTokenError } from '../../../src/base/api-endpoint.js';
 import { NUKE_LOCAL_STORAGE_KEYS } from '../../../src/shell/supplemental-commands/nuke-channel.js';
 import { renderBootRecoveryScreen } from '../../../src/ui/boot/recovery-screen.js';
 
@@ -50,6 +51,19 @@ describe('renderBootRecoveryScreen', () => {
     buttonByText(app, 'Reload');
     // Prior content was replaced.
     expect(app.querySelector('span')).toBeNull();
+  });
+
+  it('shows the stale-token message and demotes the data wipe', () => {
+    const app = mount();
+    renderBootRecoveryScreen(app, new StaleBridgeTokenError(), {
+      wipe: vi.fn(async () => {}),
+      reload: vi.fn(),
+    });
+
+    expect(app.querySelector('h1')?.textContent).toBe('Failed to start');
+    expect(app.querySelector('p')?.textContent).toContain('bridge token is no longer valid');
+    expect(app.querySelector('p')?.textContent).toContain('Reload from the launcher');
+    expect(buttonByText(app, 'Reset local data & reload').dataset['variant']).toBe('demoted');
   });
 
   it('renders a non-Error argument via String()', () => {

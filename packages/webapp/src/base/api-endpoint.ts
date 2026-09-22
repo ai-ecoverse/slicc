@@ -189,3 +189,83 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
   }
   return headers;
 }
+
+/**
+ * Body `error` the local node-server returns when `X-Bridge-Token` is missing
+ * or no longer the process token (launcher restart).
+ */
+export const BRIDGE_TOKEN_REQUIRED_ERROR = 'bridge-token-required';
+
+/** `Error.code` for a boot that must stop because the bridge rejected the token. */
+export const STALE_BRIDGE_TOKEN_CODE = 'stale-bridge-token';
+
+/**
+ * Shown on the Failed-to-start screen. Reloading the same URL keeps the
+ * rejected query token; the launcher mints a new one.
+ */
+export const STALE_BRIDGE_TOKEN_MESSAGE =
+  "This tab's bridge token is no longer valid — the launcher restarted. Reload from the launcher.";
+
+export class StaleBridgeTokenError extends Error {
+  readonly code = STALE_BRIDGE_TOKEN_CODE;
+
+  constructor() {
+    super(STALE_BRIDGE_TOKEN_MESSAGE);
+    this.name = 'StaleBridgeTokenError';
+  }
+}
+
+export function isStaleBridgeTokenError(err: unknown): err is StaleBridgeTokenError {
+  if (err instanceof StaleBridgeTokenError) return true;
+  if (!(err instanceof Error)) return false;
+  return (err as Error & { code?: unknown }).code === STALE_BRIDGE_TOKEN_CODE;
+}
+
+/** Minimal response shape so callers can pass a real `Response` or a test double. */
+export interface BridgeStatusResponse {
+  status: number;
+  clone(): { json(): Promise<unknown> };
+}
+
+/**
+ * Throw {@link StaleBridgeTokenError} when `response` is the bridge's
+ * token rejection. Other statuses and unreadable bodies are ignored so a
+ * down or unrelated 403 keeps today's fail-open boot behavior.
+ */
+export async function throwIfStaleBridgeToken(response: BridgeStatusResponse): Promise<void> {
+  if (response.status !== 403) return;
+  let errorField: unknown;
+  try {
+    const body = (await response.clone().json()) as { error?: unknown } | null;
+    errorField = body?.error;
+  } catch {
+    return;
+  }
+  if (errorField === BRIDGE_TOKEN_REQUIRED_ERROR) {
+    throw new StaleBridgeTokenError();
+  }
+}
+
+/**
+ * One local `/api/status` probe. No-op when this realm has no bridge token.
+ * A network failure or a non-token 403 resolves; only `bridge-token-required`
+ * rejects. Boot calls this before OAuth posts, the CDP retry loop, and the
+ * kernel-ready wait.
+ */
+export async function assertLocalBridgeAcceptsToken(
+  fetchImpl: typeof fetch = fetch
+): Promise<void> {
+  if (!localApiBaseUrl || !bridgeToken) return;
+  let response: Response;
+  try {
+    response = await fetchImpl(resolveApiUrl('/api/status'), {
+      cache: 'no-store',
+      headers: apiHeaders(),
+      signal: AbortSignal.timeout(1500),
+    });
+  } catch (err) {
+    if (isStaleBridgeTokenError(err)) throw err;
+    return;
+  }
+  await throwIfStaleBridgeToken(response);
+}

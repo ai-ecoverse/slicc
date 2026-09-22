@@ -23,7 +23,11 @@ import { initTelemetry } from '../kernel/telemetry.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
+import {
+  assertLocalBridgeAcceptsToken,
+  setBridgeToken,
+  setLocalApiBaseUrl,
+} from '../shell/proxied-fetch.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { setupFeatureFlagsForPage } from './boot/setup-feature-flags.js';
@@ -34,6 +38,7 @@ import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupStoragePersistence } from './boot/setup-storage-persistence.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
+import { releaseTrayLeaderOnFatalBoot } from './tray-leader-fatal.js';
 
 const log = createLogger('main');
 
@@ -170,6 +175,10 @@ async function main(): Promise<void> {
   if (bridge?.apiBaseUrl && !extensionDelegate) {
     setLocalApiBaseUrl(bridge.apiBaseUrl);
     setBridgeToken(bridge.token);
+    // Before OAuth replica posts, the CDP retry loop, and the kernel-ready
+    // wait. A rejected token 403s all of those; continuing holds the tray
+    // leader lock until the 90s timeout.
+    await assertLocalBridgeAcceptsToken();
   }
 
   // Pre-warm OAuth replicas so the kernel-worker starts with fresh tokens;
@@ -258,6 +267,10 @@ async function bootRecovery(app: HTMLElement, err: unknown): Promise<void> {
 
 main().catch((err) => {
   log.error('Fatal error', err);
+  // Drop the Web Lock before painting recovery. A tab that stays on
+  // Failed-to-start otherwise keeps `slicc-tray-leader:<worker>` and the
+  // healthy tab waits in `navigator.locks` forever.
+  releaseTrayLeaderOnFatalBoot();
   const app = document.getElementById('app');
   if (!app) return;
   void bootRecovery(app, err);

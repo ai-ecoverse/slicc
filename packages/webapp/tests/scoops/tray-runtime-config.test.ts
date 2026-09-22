@@ -421,6 +421,25 @@ describe('tray-runtime-config', () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'));
     await expect(fetchRuntimeConfig(fetchImpl)).resolves.toBeNull();
   });
+
+  it('rejects a 403 bridge-token-required instead of looking like a missing config', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'bridge-token-required' }), {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    await expect(fetchRuntimeConfig(fetchImpl)).rejects.toMatchObject({
+      code: 'stale-bridge-token',
+    });
+  });
+
+  it('still returns null for a non-token 403', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }));
+    await expect(fetchRuntimeConfig(fetchImpl)).resolves.toBeNull();
+  });
 });
 
 describe('resolveFollowerJoinUrl', () => {
