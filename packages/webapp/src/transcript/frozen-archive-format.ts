@@ -135,6 +135,14 @@ export interface FrozenSessionIndexEntry {
   liveThrough?: number;
   /** How many compaction rounds have written into this live snapshot. */
   compactions?: number;
+  /**
+   * Epoch ms of the newest message a curator pass has already mined.
+   * Parallel to {@link liveThrough}: a later "New chat" mines only messages
+   * newer than this, and a live archive's incremental passes advance it
+   * one slice at a time. Survives finalize so the receipt and the cursor
+   * agree.
+   */
+  curatedThrough?: number;
 }
 
 export interface FrozenSessionArchive {
@@ -167,6 +175,8 @@ export interface FrozenSessionArchive {
   liveThrough?: number;
   /** Rounds written into a live snapshot — see {@link FrozenSessionIndexEntry.compactions}. */
   compactions?: number;
+  /** Curator cursor — see {@link FrozenSessionIndexEntry.curatedThrough}. */
+  curatedThrough?: number;
 }
 
 /**
@@ -219,6 +229,7 @@ export function parseFrozenArchive(
   | 'live'
   | 'liveThrough'
   | 'compactions'
+  | 'curatedThrough'
 > & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
@@ -232,6 +243,7 @@ export function parseFrozenArchive(
     | 'live'
     | 'liveThrough'
     | 'compactions'
+    | 'curatedThrough'
   > & { id?: string; sidecar?: string } = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
@@ -291,6 +303,7 @@ function parseFrontmatterMeta(
   | 'live'
   | 'liveThrough'
   | 'compactions'
+  | 'curatedThrough'
 > & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
@@ -316,6 +329,8 @@ function parseFrontmatterMeta(
   if (Number.isFinite(liveThrough) && liveThrough > 0) meta.liveThrough = liveThrough;
   const compactions = Number(frontmatter.match(/^compactions:\s*(\d+)\s*$/m)?.[1]);
   if (Number.isFinite(compactions) && compactions > 0) meta.compactions = compactions;
+  const curatedThrough = Number(frontmatter.match(/^curatedThrough:\s*(\d+)\s*$/m)?.[1]);
+  if (Number.isFinite(curatedThrough) && curatedThrough > 0) meta.curatedThrough = curatedThrough;
   const id = frontmatter.match(/^id:\s*(\S+)\s*$/m)?.[1];
   if (id) meta.id = id;
   // Memory v2 JSONL sidecar filename (basename under /sessions/).

@@ -41,6 +41,11 @@ import {
   runAgenticMemoryPass,
 } from '../scoops/agentic-memory.js';
 import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
+import {
+  advanceCuratedThrough,
+  curationTargetForFinalize,
+  incrementalCoverage,
+} from '../scoops/live-session-curation.js';
 import type {
   FrozenSessionArchive,
   FrozenSessionCost,
@@ -257,13 +262,29 @@ export async function curateFrozenSessionMemories(
   opts: FreezeConeSessionOptions,
   frozen: FrozenSession
 ): Promise<FrozenSessionIndexEntry | null> {
-  const agentMessages = toAgentMessages(frozen.archive.messages);
+  const target = await curationTargetForFinalize(opts.vfs, {
+    sessionId: frozen.sessionId || frozen.filename.replace(/\.md$/i, ''),
+    filename: frozen.filename,
+    title: frozen.title,
+    frozenAt: frozen.frozenAt,
+    cone: frozen.cone,
+    coneLabel: frozen.coneLabel,
+    curatedThrough: frozen.curatedThrough,
+    messages: frozen.archive.messages,
+  });
+  // The live passes already mined every message. Clear the marker without
+  // spawning — a second pass would rewrite the same facts.
+  if (target.kind === 'covered') {
+    return finishSuccessfulCuration(opts, frozen, null);
+  }
+  const sessionArchivePath = target.kind === 'delta' ? target.path : frozenSessionPath(frozen);
+  const fallbackMessages = target.kind === 'delta' ? target.messages : frozen.archive.messages;
   let result: Awaited<ReturnType<typeof runAgenticMemoryPass>>;
   try {
     result = await runAgenticMemoryPass({
       spawn: opts.agenticMemorySpawn!,
       vfs: opts.vfs,
-      sessionArchivePath: frozenSessionPath(frozen),
+      sessionArchivePath,
       sessionCount: await readSessionCount(opts.vfs),
       // The pass runs per cone (#2271): this archive's cone owns the memory
       // file the curator rewrites and the workspace it runs in.
@@ -277,22 +298,10 @@ export async function curateFrozenSessionMemories(
     };
   }
   if (result.ok) {
-    const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
-    // The bridge's completion receipt has served its purpose once the
-    // marker is durably cleared (or the entry is gone) — drop it so a
-    // later catch-up never consumes stale evidence.
-    await removeCuratorReceipt(opts.vfs, frozen.filename);
-    if (!updated) {
-      // The curated memory is already on disk; only the index bookkeeping
-      // missed, so there is no work left for a retry to redo.
-      log.info('Agentic memory pass completed; index entry already gone', {
-        filename: frozen.filename,
-      });
-      return null;
+    if (target.kind === 'delta') {
+      await advanceCuratedThrough(opts.vfs, frozen.filename, target.through);
     }
-    delete frozen.memoryPending;
-    log.info('Agentic memory pass completed', { filename: frozen.filename });
-    return updated;
+    return finishSuccessfulCuration(opts, frozen, sessionArchivePath);
   }
   // Either failure branch leaves a durable note on the index entry — the
   // other half of the ledger `memoryCuratedAt` provides on success.
@@ -309,8 +318,34 @@ export async function curateFrozenSessionMemories(
     filename: frozen.filename,
     reason: result.reason,
   });
-  await extractMemoriesBestEffort(opts, agentMessages, true);
+  await extractMemoriesBestEffort(opts, toAgentMessages(fallbackMessages), true);
   return null;
+}
+
+/**
+ * Marker clear after a curator success. `sessionArchivePath` is the file
+ * the bridge receipt was keyed by — the archive itself, or a live-delta
+ * slice. Null when no pass ran (the cursor already covered the transcript).
+ */
+async function finishSuccessfulCuration(
+  opts: FreezeConeSessionOptions,
+  frozen: FrozenSession,
+  sessionArchivePath: string | null
+): Promise<FrozenSessionIndexEntry | null> {
+  const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
+  if (sessionArchivePath) {
+    const receiptName = sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1);
+    await removeCuratorReceipt(opts.vfs, receiptName);
+  }
+  if (!updated) {
+    log.info('Agentic memory pass completed; index entry already gone', {
+      filename: frozen.filename,
+    });
+    return null;
+  }
+  delete frozen.memoryPending;
+  log.info('Agentic memory pass completed', { filename: frozen.filename });
+  return updated;
 }
 
 /**
@@ -476,6 +511,7 @@ async function writeFrozenArchive(
     ...(mode === 'quick' || live ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
     ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
+    ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -495,6 +531,7 @@ async function writeFrozenArchive(
       ...(usageSummary ?? {}),
       ...provenance,
       ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
+      ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
     };
     if (isFeatureEnabled('memory-v2')) {
       // Lazy: keep Memory-v2 JSONL glue out of the eager freezer import graph.
@@ -969,8 +1006,9 @@ export async function enrichPendingSession(
   }
   const archiveContent = await readPendingArchive(vfs, entry);
   if (archiveContent === null) return null;
-  const agentMessages = await recoverPendingMessages(vfs, entry, archiveContent);
-  if (agentMessages === null) return null;
+  const recovered = await recoverPendingMessages(vfs, entry, archiveContent);
+  if (recovered === null) return null;
+  const { agentMessages } = recovered;
   // #1989: the agentic background pass clears `memoryPending` only AFTER
   // the curator's rewrite lands — a tab dying between the two leaves a
   // marker whose memory work is already done. The agent bridge writes a
@@ -979,15 +1017,19 @@ export async function enrichPendingSession(
   // recovery instead of appending legacy-extracted duplicates on top of
   // the curated memory, and let the marker drop. Per-entry by design: a
   // sibling archive's enrichment or any other memory write can never be
-  // misattributed to this one.
-  const curatorAlreadyRan =
-    entry.memoryPending === true &&
-    opts.skipMemory !== true &&
-    (await curatorReceiptExists(vfs, entry));
+  // misattributed to this one. A live-delta cursor that already covers the
+  // transcript is the same signal.
+  const catchUp = await resolveIncrementalCatchUp(vfs, entry, recovered.chatMessages, opts);
+  const curatorAlreadyRan = catchUp.curatorAlreadyRan;
   // A memory-skipped archive (dropped cone) is title/icon-only for good.
   const effectiveOpts =
     curatorAlreadyRan || entry.memorySkipped === true ? { ...opts, skipMemory: true } : opts;
-  const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
+  const calls = await runEnrichmentCalls(
+    entry,
+    agentMessages,
+    effectiveOpts,
+    catchUp.memoryMessages
+  );
   if (calls === null) return null;
   // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
   // that can hang, while the append is non-idempotent. Running it first means
@@ -1121,7 +1163,7 @@ async function recoverPendingMessages(
   vfs: LocalVfsClient,
   entry: FrozenSessionIndexEntry,
   archiveContent: string
-): Promise<AgentMessage[] | null> {
+): Promise<{ agentMessages: AgentMessage[]; chatMessages: ChatMessage[] } | null> {
   let messages: ChatMessage[];
   try {
     messages = (await loadFrozenArchive(vfs, archiveContent, entry.filename)).messages;
@@ -1138,7 +1180,42 @@ async function recoverPendingMessages(
     });
     return null;
   }
-  return toAgentMessages(messages);
+  return { agentMessages: toAgentMessages(messages), chatMessages: messages };
+}
+
+/**
+ * Boot catch-up memory decision. The classic per-archive receipt (#1989)
+ * and a `curatedThrough` cursor that already covers the transcript both
+ * mean the curator finished. A cursor that covers only a prefix limits the
+ * legacy extraction to the messages after it.
+ */
+async function resolveIncrementalCatchUp(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  chatMessages: readonly ChatMessage[],
+  opts: EnrichPendingSessionOptions
+): Promise<{ curatorAlreadyRan: boolean; memoryMessages: AgentMessage[] }> {
+  const all = toAgentMessages([...chatMessages]);
+  if (opts.skipMemory === true || entry.memoryPending !== true) {
+    return { curatorAlreadyRan: false, memoryMessages: all };
+  }
+  if (await curatorReceiptExists(vfs, entry)) {
+    return { curatorAlreadyRan: true, memoryMessages: all };
+  }
+  const coverage = await incrementalCoverage(vfs, entry, chatMessages);
+  if (coverage.caughtUp) return { curatorAlreadyRan: true, memoryMessages: all };
+  if (coverage.through > 0) {
+    return {
+      curatorAlreadyRan: false,
+      memoryMessages: all.filter((message) => messageTimestamp(message) > coverage.through),
+    };
+  }
+  return { curatorAlreadyRan: false, memoryMessages: all };
+}
+
+function messageTimestamp(message: AgentMessage): number {
+  const timestamp = (message as { timestamp?: number }).timestamp;
+  return typeof timestamp === 'number' ? timestamp : 0;
 }
 
 /**
@@ -1150,13 +1227,14 @@ async function recoverPendingMessages(
 async function runEnrichmentCalls(
   entry: FrozenSessionIndexEntry,
   agentMessages: AgentMessage[],
-  opts: EnrichPendingSessionOptions
+  opts: EnrichPendingSessionOptions,
+  memoryMessages: AgentMessage[] = agentMessages
 ): Promise<{ bullets: string; newTitle: string } | null> {
   let bullets = '';
   if (!opts.skipMemory) {
     try {
       bullets = await runOneOffCompactionCall({
-        messages: agentMessages,
+        messages: memoryMessages,
         instruction: COMPACTION_MEMORY_INSTRUCTION,
         model: opts.model,
         apiKey: opts.apiKey,
@@ -1268,6 +1346,10 @@ function buildEnrichedIndexEntry(
     ...(entry.cone ? { cone: entry.cone } : {}),
     ...(entry.coneLabel ? { coneLabel: entry.coneLabel } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+    // The live curator cursor has to survive the title rename. The agentic
+    // New Chat path enriches first and then curates the updated entry; dropping
+    // the cursor here makes that pass mine the whole transcript again.
+    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),

@@ -261,7 +261,10 @@ export function formatArchiveAsMarkdown(rawArchive: FrozenSessionArchive): strin
     // cursor back, or the next round re-appends the kept tail.
     (archive.live ? `live: true\n` : '') +
     (archive.live && archive.liveThrough ? `liveThrough: ${archive.liveThrough}\n` : '') +
-    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '');
+    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '') +
+    // Kept on a finished archive too: finalize uses it to avoid re-mining
+    // a range the live passes already curated.
+    (archive.curatedThrough ? `curatedThrough: ${archive.curatedThrough}\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
