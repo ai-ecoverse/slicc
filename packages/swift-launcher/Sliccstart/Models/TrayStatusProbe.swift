@@ -24,6 +24,45 @@ enum TrayStatusProbeExhaustion {
 /// with the join URL the launcher then threads into every follower
 /// Electron app via `--join=<url>`.
 ///
+/// How long to wait before the next `/api/tray-status` read.
+///
+/// A tray that is up and still minting (`200`) stays on `base`. A `503`
+/// (no lick client — the tray is not there) or a transport error doubles
+/// the gap, up to `cap`. `startLeaderProbe` keeps one pace across its
+/// outer rounds so an unavailable tray does not stay at a fixed 1.5s.
+final class TrayPollPace: @unchecked Sendable {
+    static let unavailableCap: TimeInterval = 30
+
+    private let lock = NSLock()
+    private var delay: TimeInterval
+    let base: TimeInterval
+    private let cap: TimeInterval
+
+    init(base: TimeInterval, cap: TimeInterval = TrayPollPace.unavailableCap) {
+        self.base = base
+        self.delay = base
+        self.cap = cap
+    }
+
+    var current: TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return delay
+    }
+
+    /// `nil` is a transport failure. `503` is "tray not available".
+    func note(status: Int?) {
+        lock.lock()
+        defer { lock.unlock() }
+        if status == nil || status == 503 {
+            let grown = delay <= 0 ? base : delay * 2
+            delay = min(max(grown, base), cap)
+        } else {
+            delay = base
+        }
+    }
+}
+
 /// Mirrors `CDPLiveProbe`: thin struct with an injectable `fetch` closure
 /// so unit tests can drive the retry/backoff loop without real HTTP.
 struct TrayStatusProbe {
@@ -31,6 +70,18 @@ struct TrayStatusProbe {
     /// status separately lets us distinguish "leader not ready" (503)
     /// from "leader has no tray yet" (200 with `state == "connecting"`).
     let fetch: (URL) async throws -> (Int, Data)
+    let sleep: (TimeInterval) async -> Void
+
+    init(
+        fetch: @escaping (URL) async throws -> (Int, Data),
+        sleep: @escaping (TimeInterval) async -> Void = { seconds in
+            guard seconds > 0 else { return }
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        }
+    ) {
+        self.fetch = fetch
+        self.sleep = sleep
+    }
 
     static let `default` = TrayStatusProbe(fetch: { url in
         var request = URLRequest(url: url)
@@ -47,15 +98,18 @@ struct TrayStatusProbe {
         serveOrigin: String,
         maxAttempts: Int = 8,
         retryDelay: TimeInterval = 1.5,
-        exhaustion: TrayStatusProbeExhaustion = .terminal
+        exhaustion: TrayStatusProbeExhaustion = .terminal,
+        pace: TrayPollPace? = nil
     ) async -> String? {
         guard let url = URL(string: "\(serveOrigin)/api/tray-status") else {
             log.error("discoverJoinUrl: invalid serveOrigin \(serveOrigin, privacy: .public)")
             return nil
         }
         for attempt in 0..<maxAttempts {
+            var statusCode: Int?
             do {
                 let (status, data) = try await fetch(url)
+                statusCode = status
                 if status == 200,
                     let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                 {
@@ -71,8 +125,9 @@ struct TrayStatusProbe {
             } catch {
                 log.info("discoverJoinUrl: fetch error attempt=\(attempt + 1): \(error.localizedDescription, privacy: .public)")
             }
+            pace?.note(status: statusCode)
             if attempt < maxAttempts - 1 {
-                try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                await sleep(pace?.current ?? retryDelay)
             }
         }
         let exhaustionMessage = exhaustion.message(maxAttempts: maxAttempts)

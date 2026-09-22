@@ -171,6 +171,16 @@ enum BridgeSecurity {
         case subprotocolMissingOrMismatched = "subprotocol-missing-or-mismatched"
     }
 
+    /// Log line for a rejected `/cdp` upgrade. The HTTP response stays the
+    /// coarse reason (it must not tell a caller which check failed). The log
+    /// splits an empty `Sec-WebSocket-Protocol` from a token that does not
+    /// match, so a startup burst can be told apart from a stale-token tab.
+    static func upgradeRejectionLogDetail(reason: String, subprotocolHeader: String?) -> String {
+        guard reason == RejectionReason.subprotocolMissingOrMismatched.rawValue else { return reason }
+        let trimmed = subprotocolHeader?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "subprotocol-missing" : "subprotocol-mismatched"
+    }
+
     struct UpgradeGateResult: Sendable, Equatable {
         let ok: Bool
         /// The subprotocol to echo back in the 101 response when `ok == true`. Always

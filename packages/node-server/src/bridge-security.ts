@@ -317,6 +317,23 @@ export function validateBridgeUpgrade(input: {
 }
 
 /**
+ * Log detail for a rejected `/cdp` upgrade. The bytes written back to the
+ * socket stay the coarse `reason` (a caller must not learn which check
+ * failed). The log splits an empty subprotocol from a token that does not
+ * match.
+ */
+export function describeUpgradeRejection(
+  reason: BridgeUpgradeGateResult['reason'],
+  subprotocolHeader: string | string[] | undefined
+): string {
+  if (reason !== 'subprotocol-missing-or-mismatched') return reason ?? 'rejected';
+  const raw = Array.isArray(subprotocolHeader)
+    ? subprotocolHeader.join(',')
+    : (subprotocolHeader ?? '');
+  return raw.trim() ? 'subprotocol-mismatched' : 'subprotocol-missing';
+}
+
+/**
  * Resolve the `Access-Control-Allow-Headers` value for a request. Starts
  * from `CORS_BASE_ALLOW_HEADERS` (the static set covering the documented
  * /api endpoints + the `/api/fetch-proxy` transport headers) and unions

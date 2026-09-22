@@ -717,6 +717,9 @@ class SliccProcess {
         // closure) avoids the Swift 6 sendable-capture warning about
         // mutating a captured `var self` from a concurrent context.
         leaderProbeTask = Task { [weak self] in
+            // One pace for the whole loop. A 503 doubles it (capped); a 200
+            // resets it, so a tray that is merely still minting stays quick.
+            let pace = TrayPollPace(base: innerRetryDelay)
             var hasObservedBrowserRecord = false
             var recordWaitRoundsLeft = Self.leaderProbeRecordWaitRounds
             while !Task.isCancelled {
@@ -763,7 +766,8 @@ class SliccProcess {
                     serveOrigin: serveOrigin,
                     maxAttempts: innerMaxAttempts,
                     retryDelay: innerRetryDelay,
-                    exhaustion: .retryable
+                    exhaustion: .retryable,
+                    pace: pace
                 )
                 if let joinUrl {
                     await MainActor.run { [weak self] in
@@ -780,9 +784,11 @@ class SliccProcess {
                     return
                 }
 
-                // The inner attempt window exhausted — wait a short outer backoff
-                // then re-check the stop conditions and probe again.
-                try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
+                // The inner attempt window exhausted — wait, then probe again.
+                // `outerBackoff` is the floor (tests drive the loop with a
+                // short one). A run of 503s has already grown `pace` past it.
+                let outerWait = max(outerBackoff, pace.current)
+                try? await Task.sleep(nanoseconds: UInt64(outerWait * 1_000_000_000))
             }
         }
     }

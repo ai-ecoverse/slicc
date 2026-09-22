@@ -9,6 +9,12 @@ import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { CDPClient } from './cdp-client.js';
+import {
+  CdpBridgeRejectedError,
+  type CdpConnectFailureClassifier,
+  CdpReconnectBackoffError,
+  nextCdpReconnectDelayMs,
+} from './cdp-reconnect-policy.js';
 import { raceAbort, throwIfAborted } from './command-abort.js';
 import { HarRecorder } from './har-recorder.js';
 import type {
@@ -317,6 +323,23 @@ export class BrowserAPI implements TabHost {
    */
   private supersededHandler: (() => void) | null = null;
   private supersededNotified = false;
+  /**
+   * Transient-failure backoff for lazy reconnects (`ensureConnected`).
+   * `connect()` itself still dials immediately so the boot race can retry
+   * on its own short schedule; the gate stops the 5s target-refresh loop
+   * from opening a WebSocket on every tick.
+   */
+  private _reconnectAttempt = 0;
+  private _reconnectNotBefore = 0;
+  /** Set when the bridge refused the token. Further dials cannot succeed. */
+  private _bridgeRejection: string | null = null;
+  private bridgeRejectedHandler: (() => void) | null = null;
+  private bridgeRejectedNotified = false;
+  /**
+   * Defaults to "transient" so unit tests that reject `connect()` do not
+   * probe a live bridge. Standalone boot installs {@link classifyCdpConnectFailure}.
+   */
+  private classifyConnectFailure: CdpConnectFailureClassifier = async () => 'transient';
   private readonly handleJavaScriptDialogOpening = (params: CdpPayload): void => {
     void this.dismissJavaScriptDialog(params);
   };
@@ -974,19 +997,30 @@ export class BrowserAPI implements TabHost {
    * `ExtensionBridgeTransport` (thin extension) ignores these options.
    */
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
+    // An explicit connect (boot's bounded retry) dials even during the
+    // backoff window. A rejected token does not: another handshake cannot
+    // succeed until the tab is opened with the current token.
+    if (this._bridgeRejection) {
+      this.notifyBridgeRejected();
+      throw new CdpBridgeRejectedError(this._bridgeRejection);
+    }
     // Capture the connect options BEFORE attempting the connection so
     // subsequent lazy reconnects via `ensureConnected()` can replay the
     // same bridge URL + subprotocol even when the very first connect
     // racing against bridge startup failed.
     this._lastConnectOptions = options ? { ...options } : {};
-    await this.client.connect({
-      url: options?.url ?? getDefaultCdpUrl(),
-      timeout: options?.timeout,
-      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
-    });
-    // A successful (re)connect re-arms the supersede notification so a later
-    // eviction can surface again.
-    this.supersededNotified = false;
+    try {
+      await this.client.connect({
+        url: options?.url ?? getDefaultCdpUrl(),
+        timeout: options?.timeout,
+        ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
+      });
+    } catch (err) {
+      await this.noteReconnectFailure(options);
+      if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
+      throw err;
+    }
+    this.noteReconnectSuccess();
   }
 
   /**
@@ -1032,6 +1066,60 @@ export class BrowserAPI implements TabHost {
    */
   setCdpSupersededHandler(handler: (() => void) | null): void {
     this.supersededHandler = handler;
+  }
+
+  /**
+   * Fired once when the bridge refuses this tab's token. Boot wires a banner.
+   * Pass `null` to clear.
+   */
+  setCdpBridgeRejectedHandler(handler: (() => void) | null): void {
+    this.bridgeRejectedHandler = handler;
+  }
+
+  /** Standalone boot installs the HTTP probe. Tests install a fake. */
+  setCdpConnectFailureClassifier(classifier: CdpConnectFailureClassifier): void {
+    this.classifyConnectFailure = classifier;
+  }
+
+  private throwIfReconnectPaused(): void {
+    if (this._bridgeRejection) {
+      this.notifyBridgeRejected();
+      throw new CdpBridgeRejectedError(this._bridgeRejection);
+    }
+    if (Date.now() < this._reconnectNotBefore) throw new CdpReconnectBackoffError();
+  }
+
+  private noteReconnectSuccess(): void {
+    this._reconnectAttempt = 0;
+    this._reconnectNotBefore = 0;
+    // A successful (re)connect re-arms the supersede notification so a later
+    // eviction can surface again.
+    this.supersededNotified = false;
+  }
+
+  private async noteReconnectFailure(options?: Partial<CDPConnectOptions>): Promise<void> {
+    const kind = await this.classifyConnectFailure({
+      url: options?.url ?? '',
+      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
+    });
+    if (kind === 'terminal') {
+      this._bridgeRejection = new CdpBridgeRejectedError().message;
+      this.notifyBridgeRejected();
+      return;
+    }
+    const delay = nextCdpReconnectDelayMs(this._reconnectAttempt);
+    this._reconnectAttempt += 1;
+    this._reconnectNotBefore = Date.now() + delay;
+  }
+
+  private notifyBridgeRejected(): void {
+    if (this.bridgeRejectedNotified) return;
+    this.bridgeRejectedNotified = true;
+    try {
+      this.bridgeRejectedHandler?.();
+    } catch {
+      // A banner failure must not break the agent's CDP path.
+    }
   }
 
   private notifySuperseded(): void {
@@ -1527,12 +1615,20 @@ export class BrowserAPI implements TabHost {
       return;
     }
     if (this.localClient.state === 'disconnected') {
+      this.throwIfReconnectPaused();
       const opts = this._lastConnectOptions;
-      await this.localClient.connect({
-        url: opts?.url ?? getDefaultCdpUrl(),
-        ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
-        ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
-      });
+      try {
+        await this.localClient.connect({
+          url: opts?.url ?? getDefaultCdpUrl(),
+          ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
+          ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
+        });
+      } catch (err) {
+        await this.noteReconnectFailure(opts ?? undefined);
+        if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
+        throw err;
+      }
+      this.noteReconnectSuccess();
     }
   }
 
@@ -1543,6 +1639,9 @@ export class BrowserAPI implements TabHost {
       return;
     }
     if (this.client.state === 'disconnected') {
+      // Before clearing sessions: a backoff tick must not drop live state
+      // or open another socket.
+      this.throwIfReconnectPaused();
       const dropped = this.client;
       // If we were using a remote transport that got disconnected (follower went away),
       // restore the local transport and clear stale remote state.

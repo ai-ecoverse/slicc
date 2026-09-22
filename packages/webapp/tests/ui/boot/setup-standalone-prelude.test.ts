@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STALE_BRIDGE_TOKEN_CODE } from '../../../src/base/api-endpoint.js';
+import { CdpBridgeRejectedError } from '../../../src/cdp/cdp-reconnect-policy.js';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
@@ -41,9 +42,11 @@ const instantSleep = async (): Promise<void> => {};
 function createLog(): BootStageLogger & {
   warnCalls: unknown[][];
   infoCalls: unknown[][];
+  errorCalls: unknown[][];
 } {
   const warnCalls: unknown[][] = [];
   const infoCalls: unknown[][] = [];
+  const errorCalls: unknown[][] = [];
   return {
     debug: vi.fn(),
     info: (..._args: unknown[]) => {
@@ -52,10 +55,17 @@ function createLog(): BootStageLogger & {
     warn: (..._args: unknown[]) => {
       warnCalls.push(_args);
     },
-    error: vi.fn(),
+    error: (..._args: unknown[]) => {
+      errorCalls.push(_args);
+    },
     warnCalls,
     infoCalls,
-  } as unknown as BootStageLogger & { warnCalls: unknown[][]; infoCalls: unknown[][] };
+    errorCalls,
+  } as unknown as BootStageLogger & {
+    warnCalls: unknown[][];
+    infoCalls: unknown[][];
+    errorCalls: unknown[][];
+  };
 }
 
 function createBrowser(connect: BrowserAPI['connect']): BrowserAPI {
@@ -126,6 +136,25 @@ describe('connectWithBoundedRetry', () => {
     expect(sleep).toHaveBeenCalledTimes(2);
     expect(log.warnCalls).toHaveLength(1);
     expect(String(log.warnCalls[0]?.[1] ?? '')).toBe('bridge never came up');
+  });
+
+  it('stops on a rejected bridge token instead of walking the rest of the schedule', async () => {
+    const connect = vi.fn().mockRejectedValue(new CdpBridgeRejectedError());
+    const log = createLog();
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await connectWithBoundedRetry(
+      createBrowser(connect as unknown as BrowserAPI['connect']),
+      { url: 'ws://localhost:5710/cdp', protocols: 'slicc.bridge.v1.stale' },
+      log,
+      [50, 50, 50],
+      sleep
+    );
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(log.errorCalls).toHaveLength(1);
+    expect(log.warnCalls).toHaveLength(0);
   });
 
   it('exposes a non-trivial default backoff schedule', () => {
