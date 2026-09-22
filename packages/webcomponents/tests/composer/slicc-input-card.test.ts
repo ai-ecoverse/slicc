@@ -137,6 +137,48 @@ describe('slicc-input-card', () => {
       expect(textarea(el).disabled).toBe(true);
     });
 
+    /**
+     * A host disables the card under a user who is typing (a follower losing
+     * its leader, a thawed archive). The browser drops the focus of a disabled
+     * control silently, so without the card's help the user lands on nothing
+     * — which the shell's resting keyboard mode reads as "run my keystrokes as
+     * shortcuts" — and re-enabling brings nothing back.
+     */
+    it('gives the caret back when it re-enables after disabling a focused textarea', async () => {
+      const el = mount((e) => {
+        e.value = 'half a sent';
+      });
+      const ta = textarea(el);
+      ta.focus();
+      ta.setSelectionRange(4, 4);
+      el.disabled = true;
+      // Chromium moves the focus off a disabled control asynchronously.
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      expect(document.activeElement).not.toBe(ta);
+      el.disabled = false;
+      expect(document.activeElement).toBe(ta);
+      expect(ta.selectionStart).toBe(4);
+    });
+
+    it('does not take the focus back from somewhere the user went since', async () => {
+      const el = mount();
+      const other = document.createElement('input');
+      document.body.appendChild(other);
+      textarea(el).focus();
+      el.disabled = true;
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      other.focus();
+      el.disabled = false;
+      expect(document.activeElement).toBe(other);
+    });
+
+    it('does not grab the focus on re-enable when it never had it', () => {
+      const el = mount();
+      el.disabled = true;
+      el.disabled = false;
+      expect(document.activeElement).not.toBe(textarea(el));
+    });
+
     it('reflects suggestion and shows it as the textarea placeholder', () => {
       const el = mount((e) => {
         e.suggestion = 'Now add dark mode?';

@@ -218,6 +218,64 @@ describe('wireWcSprinkles boot resilience', () => {
   });
 });
 
+describe('wireWcSprinkles slicc.selectScoop', () => {
+  /**
+   * A sprinkle's own script switching the view while the user is typing would
+   * readdress their half-written message to another cone (or hide it behind a
+   * read-only scoop), because the draft is not per unit. The click the user
+   * makes INSIDE a sprinkle moves the focus into its frame first, so only a
+   * scripted switch can find the composer focused.
+   */
+  async function wire(draft: string, focused: boolean) {
+    const refs = makeRefs();
+    const inputCard = document.createElement('div') as HTMLElement & { value?: string };
+    const textarea = document.createElement('textarea');
+    inputCard.append(textarea);
+    inputCard.value = draft;
+    refs.frame.append(inputCard);
+    (refs as { inputCard: HTMLElement }).inputCard = inputCard;
+    if (focused) textarea.focus();
+    const cone = workUnit({ id: 'cone-1', role: 'primary', folder: 'cone' });
+    const other = workUnit({ id: 'cone-2', role: 'primary', folder: 'cone-two' });
+    const selectScoop = vi.fn();
+    const { manager } = await wireWcSprinkles({
+      refs,
+      client: {
+        sendSprinkleLick: () => {},
+        getScoops: () => [],
+        stopScoop: () => {},
+      } as unknown as OffscreenClient,
+      fs: fakeSprinkleFs([]),
+      getUnits: () => [cone, other],
+      getSelected: () => cone,
+      selectScoop,
+      log: { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger,
+    });
+    const api = (
+      manager as unknown as {
+        bridge: { createAPI(name: string): { selectScoop(t: string): Promise<boolean> } };
+      }
+    ).bridge.createAPI('dashboard');
+    return { api, selectScoop, other };
+  }
+
+  it('holds a scripted switch while the focused composer has a draft', async () => {
+    const { api, selectScoop } = await wire('half a sent', true);
+    await expect(api.selectScoop('cone:cone-two')).resolves.toBe(false);
+    expect(selectScoop).not.toHaveBeenCalled();
+  });
+
+  it('switches when the composer is empty or not focused', async () => {
+    const empty = await wire('', true);
+    await expect(empty.api.selectScoop('cone:cone-two')).resolves.toBe(true);
+    expect(empty.selectScoop).toHaveBeenCalledWith(empty.other);
+
+    const blurred = await wire('half a sent', false);
+    await expect(blurred.api.selectScoop('cone:cone-two')).resolves.toBe(true);
+    expect(blurred.selectScoop).toHaveBeenCalledWith(blurred.other);
+  });
+});
+
 describe('makeSprinkleLickHandler', () => {
   const lick = (sprinkleName: string) =>
     ({
