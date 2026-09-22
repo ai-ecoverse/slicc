@@ -270,194 +270,6 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(frames(in: sent).count, 1)
     }
 
-    /// Every `hello` on the wire, oldest first.
-    private func hellos(in sent: [Data]) -> [[String: Any]] {
-        sent.compactMap { data -> [String: Any]? in
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                obj["type"] as? String == "hello"
-            else { return nil }
-            return obj
-        }
-    }
-
-    private func claimsComputer(_ hello: [String: Any]) -> Bool? {
-        (hello["capabilities"] as? [String: Any])?["computer"] as? Bool
-    }
-
-    private func connect(_ follower: ComputerTrayFollower) throws -> [Data] {
-        var sent: [Data] = []
-        follower.connector(
-            connectorStandIn(),
-            didConnect: { data in
-                sent.append(data)
-                return true
-            })
-        let hello = expectation(description: "hello")
-        Task { @MainActor in hello.fulfill() }
-        wait(for: [hello], timeout: 2)
-        return sent
-    }
-
-    func testOpeningTheChannelAdvertisesComputerCapability() throws {
-        let (follower, _, _) = makeFollower()
-        let sent = try connect(follower)
-        XCTAssertEqual(sent.count, 1)
-        let decoded = try XCTUnwrap(
-            try? JSONSerialization.jsonObject(with: XCTUnwrap(sent.first)) as? [String: Any]
-        )
-        XCTAssertEqual(decoded["type"] as? String, "hello")
-        XCTAssertEqual(decoded["runtime"] as? String, "sliccstart-computer")
-        let caps = decoded["capabilities"] as? [String: Any]
-        XCTAssertEqual(caps?["computer"] as? Bool, true)
-        XCTAssertEqual(caps?["exec"] as? Bool, false)
-        XCTAssertEqual(decoded["protocolVersion"] as? Int, traySyncProtocolVersion)
-        XCTAssertNil(
-            decoded["pairId"],
-            "the menu-bar follower has no CLI to be folded with and must not claim a pair")
-    }
-
-    /// The whole of #3387: `capabilities.computer` used to be a constant `true`,
-    /// so an ungranted Mac claimed native capture, `computer add ssh` picked the
-    /// native backend and the `screencapture` + `cliclick` tray-exec fallback
-    /// that would have worked was never tried.
-    func testAnUngrantedMacDoesNotClaimNativeCapture() throws {
-        let (follower, _, _) = makeFollower(
-            permissions: ComputerPermissions(probe: .alwaysDenied))
-        let hello = try XCTUnwrap(hellos(in: try connect(follower)).first)
-
-        XCTAssertEqual(claimsComputer(hello), false)
-        let motd = try XCTUnwrap(hello["motd"] as? String)
-        XCTAssertTrue(motd.contains("Screen Recording"), motd)
-        XCTAssertTrue(motd.contains("Accessibility"), motd)
-        XCTAssertTrue(motd.contains("System Settings"), motd)
-    }
-
-    /// The wire has one boolean and it means capture, so a Mac missing only the
-    /// Accessibility grant still claims `computer` — but says so in its MOTD,
-    /// which the leader shows beside the roster entry. Without this the input
-    /// half of #3387 is discoverable only by injecting an event and failing.
-    func testAMissingAccessibilityGrantIsNamedInTheMotdButStillClaimsCapture() throws {
-        let (follower, _, _) = makeFollower(
-            permissions: ComputerPermissions(probe: .captureOnly))
-        let hello = try XCTUnwrap(hellos(in: try connect(follower)).first)
-
-        XCTAssertEqual(claimsComputer(hello), true)
-        let motd = try XCTUnwrap(hello["motd"] as? String)
-        XCTAssertTrue(motd.contains("Accessibility"), motd)
-        XCTAssertTrue(motd.contains("System Settings"), motd)
-    }
-
-    /// A box ticked in System Settings mid-session has to reach the leader
-    /// without a reconnect: TCC has no change notification, so the follower
-    /// re-reads on a tick and re-sends `hello`, which is what
-    /// `handleFollowerHello` overwrites `peerCapabilities` from.
-    func testAGrantGivenMidSessionIsReAdvertisedWithoutAReconnect() async throws {
-        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
-        let (follower, _, _) = makeFollower(
-            permissions: ComputerPermissions(probe: grants.probe),
-            grantTick: scriptedGrantTick([{}, { grants.screenRecording = true }, {}]))
-        var sent: [Data] = []
-        follower.connector(
-            connectorStandIn(),
-            didConnect: { data in
-                sent.append(data)
-                return true
-            })
-        await settle()
-        XCTAssertEqual(claimsComputer(try XCTUnwrap(hellos(in: sent).first)), false)
-        await follower._testing_settleGrantWatch()
-
-        let published = hellos(in: sent)
-        XCTAssertEqual(published.count, 2, "the grant change must be published, not waited for")
-        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
-        let motd = try XCTUnwrap(published.last?["motd"] as? String)
-        XCTAssertTrue(motd.contains("Native screen capture"), motd)
-    }
-
-    /// A revoked grant travels the same way — the roster must stop claiming
-    /// capture the moment the box is unticked, not at the next capture failure.
-    func testARevokedGrantIsRepublishedAndTheWatchIsOtherwiseSilent() async throws {
-        let grants = MutableGrantProbe(screenRecording: true, accessibility: true)
-        let (follower, _, _) = makeFollower(
-            permissions: ComputerPermissions(probe: grants.probe),
-            grantTick: scriptedGrantTick([{}, {}, { grants.screenRecording = false }, {}]))
-        var sent: [Data] = []
-        follower.connector(
-            connectorStandIn(),
-            didConnect: { data in
-                sent.append(data)
-                return true
-            })
-        await settle()
-        XCTAssertEqual(claimsComputer(try XCTUnwrap(hellos(in: sent).first)), true)
-        await follower._testing_settleGrantWatch()
-
-        let published = hellos(in: sent)
-        XCTAssertEqual(
-            published.count, 2,
-            "four ticks around one change must produce exactly one re-advertisement")
-        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), false)
-    }
-
-    /// A `hello` the channel refuses (send-buffer pressure on an open channel)
-    /// was not delivered, so it must not count as advertised: the next beat has
-    /// to try again even though the grants themselves never changed.
-    func testARefusedHelloIsRetriedOnTheNextBeat() async throws {
-        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
-        let (follower, _, _) = makeFollower(
-            permissions: ComputerPermissions(probe: grants.probe),
-            grantTick: scriptedGrantTick([{ grants.screenRecording = true }, {}, {}]))
-        var attempts: [Data] = []
-        var delivered: [Data] = []
-        follower.connector(
-            connectorStandIn(),
-            didConnect: { data in
-                attempts.append(data)
-                // Accept the first hello, refuse the re-advertisement once.
-                guard attempts.count != 2 else { return false }
-                delivered.append(data)
-                return true
-            })
-        await settle()
-        await follower._testing_settleGrantWatch()
-
-        XCTAssertEqual(hellos(in: attempts).count, 3, "one refused send, then exactly one retry")
-        let published = hellos(in: delivered)
-        XCTAssertEqual(published.count, 2)
-        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
-    }
-
-    /// Stopping must take the watch with it: a cancelled follower that kept
-    /// polling would re-advertise a peer the leader has already dropped.
-    func testStoppingEndsTheGrantWatch() async throws {
-        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
-        // The beat stops the follower and grants the permission in the same
-        // breath, so the watch reaches its read with both a cancelled task and a
-        // genuine change to publish — the one ordering that would slip through.
-        let box = StopBox()
-        let (follower, _, _) = makeFollower(
-            permissions: ComputerPermissions(probe: grants.probe),
-            grantTick: scriptedGrantTick([
-                {
-                    await box.callStop()
-                    grants.screenRecording = true
-                },
-                {  },
-            ]))
-        box.stop = { [weak follower] in follower?.stop() }
-        var sent: [Data] = []
-        follower.connector(
-            connectorStandIn(),
-            didConnect: { data in
-                sent.append(data)
-                return true
-            })
-        await settle()
-        await follower._testing_settleGrantWatch()
-
-        XCTAssertEqual(hellos(in: sent).count, 1, "no hello after stop()")
-    }
-
     /// The headless `--computer-follow` mode reports "attached" off this hook,
     /// and `--computer=require` trusts that line — so it must fire only once
     /// `hello` has told the leader this peer can capture (#3260 review).
@@ -1217,6 +1029,198 @@ extension ComputerTrayFollowerTests {
                 $0.hasPrefix("display 99 is not attached")
                     || $0 == ComputerCaptureError.noDisplay.message
             }, "\(errs)")
+    }
+}
+
+extension ComputerTrayFollowerTests {
+    /// Every `hello` on the wire, oldest first.
+    private func hellos(in sent: [Data]) -> [[String: Any]] {
+        sent.compactMap { data -> [String: Any]? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "hello"
+            else { return nil }
+            return obj
+        }
+    }
+
+    private func claimsComputer(_ hello: [String: Any]) -> Bool? {
+        (hello["capabilities"] as? [String: Any])?["computer"] as? Bool
+    }
+
+    private func connect(_ follower: ComputerTrayFollower) throws -> [Data] {
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        let hello = expectation(description: "hello")
+        Task { @MainActor in hello.fulfill() }
+        wait(for: [hello], timeout: 2)
+        return sent
+    }
+
+    func testOpeningTheChannelAdvertisesComputerCapability() throws {
+        let (follower, _, _) = makeFollower()
+        let sent = try connect(follower)
+        XCTAssertEqual(sent.count, 1)
+        let decoded = try XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: XCTUnwrap(sent.first)) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["type"] as? String, "hello")
+        XCTAssertEqual(decoded["runtime"] as? String, "sliccstart-computer")
+        let caps = decoded["capabilities"] as? [String: Any]
+        XCTAssertEqual(caps?["computer"] as? Bool, true)
+        XCTAssertEqual(caps?["exec"] as? Bool, false)
+        XCTAssertEqual(decoded["protocolVersion"] as? Int, traySyncProtocolVersion)
+        XCTAssertNil(
+            decoded["pairId"],
+            "the menu-bar follower has no CLI to be folded with and must not claim a pair")
+    }
+
+    /// The whole of #3387: `capabilities.computer` used to be a constant `true`,
+    /// so an ungranted Mac claimed native capture, `computer add ssh` picked the
+    /// native backend and the `screencapture` + `cliclick` tray-exec fallback
+    /// that would have worked was never tried.
+    func testAnUngrantedMacDoesNotClaimNativeCapture() throws {
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: .alwaysDenied))
+        let hello = try XCTUnwrap(hellos(in: try connect(follower)).first)
+
+        XCTAssertEqual(claimsComputer(hello), false)
+        let motd = try XCTUnwrap(hello["motd"] as? String)
+        XCTAssertTrue(motd.contains("Screen Recording"), motd)
+        XCTAssertTrue(motd.contains("Accessibility"), motd)
+        XCTAssertTrue(motd.contains("System Settings"), motd)
+    }
+
+    /// The wire has one boolean and it means capture, so a Mac missing only the
+    /// Accessibility grant still claims `computer` — but says so in its MOTD,
+    /// which the leader shows beside the roster entry. Without this the input
+    /// half of #3387 is discoverable only by injecting an event and failing.
+    func testAMissingAccessibilityGrantIsNamedInTheMotdButStillClaimsCapture() throws {
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: .captureOnly))
+        let hello = try XCTUnwrap(hellos(in: try connect(follower)).first)
+
+        XCTAssertEqual(claimsComputer(hello), true)
+        let motd = try XCTUnwrap(hello["motd"] as? String)
+        XCTAssertTrue(motd.contains("Accessibility"), motd)
+        XCTAssertTrue(motd.contains("System Settings"), motd)
+    }
+
+    /// A box ticked in System Settings mid-session has to reach the leader
+    /// without a reconnect: TCC has no change notification, so the follower
+    /// re-reads on a tick and re-sends `hello`, which is what
+    /// `handleFollowerHello` overwrites `peerCapabilities` from.
+    func testAGrantGivenMidSessionIsReAdvertisedWithoutAReconnect() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{}, { grants.screenRecording = true }, {}]))
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(hellos(in: sent).first)), false)
+        await follower._testing_settleGrantWatch()
+
+        let published = hellos(in: sent)
+        XCTAssertEqual(published.count, 2, "the grant change must be published, not waited for")
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
+        let motd = try XCTUnwrap(published.last?["motd"] as? String)
+        XCTAssertTrue(motd.contains("Native screen capture"), motd)
+    }
+
+    /// A revoked grant travels the same way — the roster must stop claiming
+    /// capture the moment the box is unticked, not at the next capture failure.
+    func testARevokedGrantIsRepublishedAndTheWatchIsOtherwiseSilent() async throws {
+        let grants = MutableGrantProbe(screenRecording: true, accessibility: true)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{}, {}, { grants.screenRecording = false }, {}]))
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(hellos(in: sent).first)), true)
+        await follower._testing_settleGrantWatch()
+
+        let published = hellos(in: sent)
+        XCTAssertEqual(
+            published.count, 2,
+            "four ticks around one change must produce exactly one re-advertisement")
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), false)
+    }
+
+    /// A `hello` the channel refuses (send-buffer pressure on an open channel)
+    /// was not delivered, so it must not count as advertised: the next beat has
+    /// to try again even though the grants themselves never changed.
+    func testARefusedHelloIsRetriedOnTheNextBeat() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{ grants.screenRecording = true }, {}, {}]))
+        var attempts: [Data] = []
+        var delivered: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                attempts.append(data)
+                // Accept the first hello, refuse the re-advertisement once.
+                guard attempts.count != 2 else { return false }
+                delivered.append(data)
+                return true
+            })
+        await settle()
+        await follower._testing_settleGrantWatch()
+
+        XCTAssertEqual(hellos(in: attempts).count, 3, "one refused send, then exactly one retry")
+        let published = hellos(in: delivered)
+        XCTAssertEqual(published.count, 2)
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
+    }
+
+    /// Stopping must take the watch with it: a cancelled follower that kept
+    /// polling would re-advertise a peer the leader has already dropped.
+    func testStoppingEndsTheGrantWatch() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        // The beat stops the follower and grants the permission in the same
+        // breath, so the watch reaches its read with both a cancelled task and a
+        // genuine change to publish — the one ordering that would slip through.
+        let box = StopBox()
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([
+                {
+                    await box.callStop()
+                    grants.screenRecording = true
+                },
+                // Not `{}`: SwiftLint's autocorrect pads an empty multi-line
+                // closure to `{  }`, which `swift format lint --strict` rejects.
+                { await Task.yield() },
+            ]))
+        box.stop = { [weak follower] in follower?.stop() }
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        await follower._testing_settleGrantWatch()
+
+        XCTAssertEqual(hellos(in: sent).count, 1, "no hello after stop()")
     }
 }
 
