@@ -2589,9 +2589,17 @@ take the caret away:
   as user-activated precisely while the user is typing in the composer.
 - `autofocus` inside a frame is already harmless: it is skipped whenever the top
   document has something focused.
+- Inline (fragment, non-full-document) sprinkles have no frame: their revived
+  scripts run in the SLICC document, where there is no per-sprinkle `focus` to
+  patch. `guardInlineFocus()` (`webapp/src/ui/inline-focus-guard.ts`) guards
+  the receiving end instead, for the sprinkle's whole lifetime: a `focusin`
+  into the sprinkle is undone (focus handed back to the last outside holder,
+  caret intact) unless the focus was already inside it, or a pointer press
+  inside it or a Tab came within the last second.
 
 **Related Files**
 
 - `packages/webcomponents/src/internal/focus.ts` — `withFocusPreserved`, `deepActiveElement`
 - `packages/webcomponents/src/workbench/slicc-dock-tree.ts`, `packages/webcomponents/src/panel/slicc-layout.ts` — rebuilds under the guard
 - `packages/webapp/src/ui/iframe-focus-guard.ts` — injected by `sprinkle-renderer.ts` and `dip.ts`
+- `packages/webapp/src/ui/inline-focus-guard.ts` — installed by `sprinkle-renderer.ts` `renderInline`
