@@ -4,10 +4,12 @@ Usage:
   computer [-c <id>] [--json] [--native] <verb> [args] [verb ...]
 
 Target: -c / --computer, else $COMPUTER, else last \`computer use\`, else
-the only registered computer. \`computer ls\` lists ids.
+the only registered computer. \`computer ls\` lists ids. -c takes an id, the
+\`-n\` name (preferred — it never changes), or the live title.
 
 Lifecycle:
-  ls                         list registered computers
+  ls                         list registered computers (NAME is the -n handle,
+                             TITLE is what the surface currently calls itself)
   add tab <targetId|url> [-n name]
                              register a browser tab (refuses SLICC app tabs)
   add screen [-n name]       share this display (needs a user gesture)

@@ -1723,7 +1723,7 @@ Look-then-act xdotool over a registered screen (`packages/webapp/src/shell/suppl
 
 A **computer** is any screen the agent can screenshot and poke. Backends: `v86:<name>` (registered by `v86 start`), `tab:<targetId>` (`computer add tab`), `jsh:<name>` (`sliccy:computer.register` from a `.jsh` / `jshd` unit), `screen:<handle>` (`computer add screen` — persistent display share), `ssh:<runtimeId>` (`computer add ssh` — follower desktop), `url:<host><path>` (`computer add url` — HTTP remote). Registered computers also appear as cards after browser tabs in the Browser overlay (live lightbox + bash-row frames).
 
-Target resolution: `-c` / `--computer`, else `$COMPUTER`, else last `computer use`, else the only registered computer. `computer ls` lists ids.
+Target resolution: `-c` / `--computer`, else `$COMPUTER`, else last `computer use`, else the only registered computer. `computer ls` lists ids. A `-c` query matches an id first, then the `-n` name (`NAME` in `ls` — fixed for the life of the registration), then the live title (`TITLE` — what the surface currently calls itself, which a tab rewrites from `document.title` on every capture).
 
 Every poke writes a frozen JPEG to `$TMPDIR/computer/<name>/<seq>.jpg` and prints `target: <id>` (resolved target) then `screen: <path>`. `ls` / `add` / `rm` / `use` and `--json` omit the stamp. Coordinates are screenshot-space of the last shot unless `--native` (the pixel space the descriptor advertises). Tab captures are device pixels; the tab adapter divides by `devicePixelRatio` before CDP input so a screenshot-space click lands on the visual target. Size presets: `low` 256, `medium` 768 (default), `high` 1536.
 
@@ -1733,30 +1733,30 @@ Prefer `computer` over `v86 type|key|mouse|screenshot|text`; those remain as thi
 
 ### Subcommands
 
-| Form                                                                   | Behavior                                                                                                                          |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `computer ls`                                                          | List registered computers (`screen` rows include `[display slot]`; `ssh` rows `[input]` or `[view-only]`).                        |
-| `computer add tab <targetId\|url> [-n name]`                           | Register a browser tab.                                                                                                           |
-| `computer add screen [-n name]`                                        | Share this display (needs a user gesture).                                                                                        |
-| `computer add ssh <follower> [--sim <udid>] [--allow-input] [-n name]` | Register a follower desktop (or iOS Simulator on a Mac).                                                                          |
-| `computer add url <http(s)://base> [-n name]`                          | Register an HTTP remote computer (`GET /computer`).                                                                               |
-| `computer rm [id]`                                                     | Unregister (does not stop a v86 guest).                                                                                           |
-| `computer use <id>`                                                    | Set the default computer.                                                                                                         |
-| `computer info`                                                        | Descriptor for the current target.                                                                                                |
-| `computer screenshot [--size low\|medium\|high\|<N>] [--view] [file]`  | JPEG; prints `target: <id>`, `WxH → wxh (scale s)`, and a frozen frame.                                                           |
-| `computer text`                                                        | Text-mode dump when the backend supports it.                                                                                      |
-| `computer watch [--fps N] [--stop]`                                    | Live frames to the page overlay, lightbox, and bash rows.                                                                         |
-| `computer record [-V\|--duration SEC] [--fps N] [file]`                | Timed clip. `screen` uses the live session recorder; other kinds pipe JPEG stills through ffmpeg wasm (`-f image2pipe`, max 60s). |
-| `computer mousemove <x> <y> [--relative]`                              | Move the pointer.                                                                                                                 |
-| `computer click [1\|2\|3] [--at x,y] [--hold MS] [--repeat N]`         | Click. Two numbers are coords with button 1.                                                                                      |
-| `computer mousedown` / `mouseup [1\|2\|3] [--at x,y]`                  | Button down/up.                                                                                                                   |
-| `computer drag <x1> <y1> <x2> <y2>`                                    | Synthesized mousemove + button sequence.                                                                                          |
-| `computer scroll <dx> <dy> [--at x,y]`                                 | Scroll.                                                                                                                           |
-| `computer key <keysym> [keysym...]`                                    | Key chords (`ctrl+alt+Delete`, `Return`, `F5`).                                                                                   |
-| `computer keydown` / `keyup <keysym>`                                  | Key down/up.                                                                                                                      |
-| `computer type <text...>`                                              | Type text.                                                                                                                        |
-| `computer wait <ms>`                                                   | Pause between chained verbs.                                                                                                      |
-| `computer exec <command...>`                                           | When the backend supports it.                                                                                                     |
+| Form                                                                   | Behavior                                                                                                                                                       |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `computer ls`                                                          | List registered computers — `NAME` is the `-n` handle, `TITLE` the live title (`screen` rows include `[display slot]`; `ssh` rows `[input]` or `[view-only]`). |
+| `computer add tab <targetId\|url> [-n name]`                           | Register a browser tab.                                                                                                                                        |
+| `computer add screen [-n name]`                                        | Share this display (needs a user gesture).                                                                                                                     |
+| `computer add ssh <follower> [--sim <udid>] [--allow-input] [-n name]` | Register a follower desktop (or iOS Simulator on a Mac).                                                                                                       |
+| `computer add url <http(s)://base> [-n name]`                          | Register an HTTP remote computer (`GET /computer`).                                                                                                            |
+| `computer rm [id]`                                                     | Unregister (does not stop a v86 guest).                                                                                                                        |
+| `computer use <id>`                                                    | Set the default computer.                                                                                                                                      |
+| `computer info`                                                        | Descriptor for the current target.                                                                                                                             |
+| `computer screenshot [--size low\|medium\|high\|<N>] [--view] [file]`  | JPEG; prints `target: <id>`, `WxH → wxh (scale s)`, and a frozen frame.                                                                                        |
+| `computer text`                                                        | Text-mode dump when the backend supports it.                                                                                                                   |
+| `computer watch [--fps N] [--stop]`                                    | Live frames to the page overlay, lightbox, and bash rows.                                                                                                      |
+| `computer record [-V\|--duration SEC] [--fps N] [file]`                | Timed clip. `screen` uses the live session recorder; other kinds pipe JPEG stills through ffmpeg wasm (`-f image2pipe`, max 60s).                              |
+| `computer mousemove <x> <y> [--relative]`                              | Move the pointer.                                                                                                                                              |
+| `computer click [1\|2\|3] [--at x,y] [--hold MS] [--repeat N]`         | Click. Two numbers are coords with button 1.                                                                                                                   |
+| `computer mousedown` / `mouseup [1\|2\|3] [--at x,y]`                  | Button down/up.                                                                                                                                                |
+| `computer drag <x1> <y1> <x2> <y2>`                                    | Synthesized mousemove + button sequence.                                                                                                                       |
+| `computer scroll <dx> <dy> [--at x,y]`                                 | Scroll.                                                                                                                                                        |
+| `computer key <keysym> [keysym...]`                                    | Key chords (`ctrl+alt+Delete`, `Return`, `F5`).                                                                                                                |
+| `computer keydown` / `keyup <keysym>`                                  | Key down/up.                                                                                                                                                   |
+| `computer type <text...>`                                              | Type text.                                                                                                                                                     |
+| `computer wait <ms>`                                                   | Pause between chained verbs.                                                                                                                                   |
+| `computer exec <command...>`                                           | When the backend supports it.                                                                                                                                  |
 
 Buttons: 1 left, 2 middle, 3 right. Anthropic aliases (`left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `left_click_drag`, `mouse_move`, `scroll`, `key`, `type`, `screenshot`, `wait`) map onto the same verbs. Chain: `computer click 1 type hello`.
 

@@ -18,12 +18,20 @@ export interface RegisterComputerOptions {
   pid?: number | null;
   argv?: string[];
   cwd?: string;
+  /**
+   * Operator-assigned handle from `computer add … -n <name>`. Held here, beside
+   * the backend, because a backend's descriptor `title` tracks whatever the
+   * live surface reports (a tab republishes `document.title` on every capture),
+   * and an author-controlled string cannot be the only key `-c` resolves.
+   */
+  name?: string;
 }
 
 interface Entry {
   backend: ComputerBackend;
   pid: number | null;
   ownsPid: boolean;
+  name: string | null;
   lastShot?: ComputerLastShot;
   lastFrame: ComputerFrame | null;
   seq: number;
@@ -63,6 +71,11 @@ export class ComputerRegistry {
 
   lastUsedId(): string | null {
     return this.usedId;
+  }
+
+  /** The `-n` name this computer was registered under, if any. */
+  nameOf(id: string): string | null {
+    return this.entries.get(id)?.name ?? null;
   }
 
   use(id: string): ComputerDescriptor | null {
@@ -132,6 +145,7 @@ export class ComputerRegistry {
       backend,
       pid,
       ownsPid,
+      name: options.name ?? null,
       lastShot: described.lastShot,
       lastFrame: null,
       seq: 0,

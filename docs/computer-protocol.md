@@ -35,7 +35,7 @@ Human-in-the-loop: a live lightbox with `inputAllowed` sets `<slicc-image-previe
 `packages/webapp/src/computers/` is unranked in the layer stack (same band as UI minus a half-step). Shell, kernel, and CDP may import it. Importing `ui/` from `computers/` is a back-edge — the computers store lives in `ui/`.
 
 - `backend.ts` — `ComputerBackend` (`describe`, `screenshot`, `input`, optional `text` / `exec` / `subscribe`, `close`)
-- `registry.ts` — `installComputerRegistry` (idempotent). Spawn `ProcessKind 'computer'` or adopt an existing pid (v86 VM, jshd unit). Abort of an owned pid closes the backend; an adopted pid is not killed on `computer rm`
+- `registry.ts` — `installComputerRegistry` (idempotent). Spawn `ProcessKind 'computer'` or adopt an existing pid (v86 VM, jshd unit). Abort of an owned pid closes the backend; an adopted pid is not killed on `computer rm`. The operator-assigned `-n` name rides on the registry **entry** (`register(backend, { name })` / `nameOf(id)`), not on the descriptor: a descriptor's `title` is whatever the live surface reports, so it is not a stable handle and never leaves the leader as a name
 - `host.ts` — kernel messages `computers`, `computer-frame`, `computer-watch`, `computer-unwatch`. Watches poll `screenshot` when the backend has no `subscribe`. Push `subscribe(fps, onFrame, maxWidth)` receives the watch cap; the host resamples wider frames with createImageBitmap + OffscreenCanvas + convertToBlob, or passes them through with `overCap` when those APIs are missing
 - `encode-frame.ts` / `frame-bytes.ts` / `frames.ts` / `keys.ts` / `scale.ts`
 
@@ -54,7 +54,7 @@ The kernel worker lazy-loads `startComputersHost` so computers stay out of the f
 
 ## Shell
 
-`computer` (`packages/webapp/src/shell/supplemental-commands/computer/`) is xdotool plus Anthropic aliases. Target: `-c` → `$COMPUTER` → last `computer use` → the only registered computer. `switch (verb)` in `run.ts` so subcommand-help source scan finds cases.
+`computer` (`packages/webapp/src/shell/supplemental-commands/computer/`) is xdotool plus Anthropic aliases. Target: `-c` → `$COMPUTER` → last `computer use` → the only registered computer. A `-c` query matches an id, then the `-n` name, then the live title (`target.ts`) — the name outranks the title so a page that retitles itself neither loses its own handle nor steals another computer's. `computer ls` / `info` print `NAME` (the `-n` handle) beside `TITLE` (what the surface currently calls itself). `switch (verb)` in `run.ts` so subcommand-help source scan finds cases.
 
 `v86 type|key|mouse|screenshot|text` are thin aliases of `computer` (`v86:<name>`); prefer `computer <verb> -c v86:<name>`. Each poke still prints `target: <id>` then `screen: <path>`. `v86 serve` is retired and prints `computer watch -c v86:<name>`.
 
