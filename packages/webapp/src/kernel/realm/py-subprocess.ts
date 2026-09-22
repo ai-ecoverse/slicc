@@ -251,7 +251,10 @@ def __slicc_install_subprocess():
             return self.returncode
 
         def poll(self):
-            return self.wait()
+            # Never starts work, like CPython: a child still waiting for its
+            # stdin=PIPE input has not run yet, so it is "still running".
+            # A started child always ran to completion.
+            return self.returncode
 
         def send_signal(self, sig):
             pass

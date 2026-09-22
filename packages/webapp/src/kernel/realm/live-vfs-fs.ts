@@ -554,8 +554,17 @@ export function invalidateLiveVfs(Fs: LiveFsApi, plugin: LiveVfsPlugin): void {
   for (const head of table) {
     for (let node = head; node; node = (node as { name_next?: LiveFsNode }).name_next ?? null) {
       if (!ownedBy(plugin, node)) continue;
-      node.live.stat = undefined;
-      if (node !== node.mount.root && node.live.openCount === 0) drop.push(node);
+      const s = node.live;
+      s.stat = undefined;
+      if (s.openCount === 0) {
+        if (node !== node.mount.root) drop.push(node);
+      } else if (s.loaded && !s.dirty) {
+        // An open file Python already read: re-read it on the next access so
+        // a child's rewrite shows. A dirty buffer (flush failed) is kept.
+        s.data = undefined;
+        s.len = 0;
+        s.loaded = false;
+      }
     }
   }
   if (!Fs.hashRemoveNode) return;

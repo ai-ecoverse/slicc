@@ -186,6 +186,20 @@ is_dir = err(lambda: os.unlink('/work/sub'))
     py('g.close()');
   });
 
+  it('invalidateLiveVfs re-reads a file Python holds open and already read', () => {
+    py(`
+import os
+fd = os.open('/work/hello.txt', os.O_RDONLY)
+before = os.read(fd, 100).decode()
+`);
+    nodeFs.writeFileSync(join(host, 'hello.txt'), 'rewritten by a child');
+    invalidateLiveVfs(FS, plugin);
+    expect(py(`os.lseek(fd, 0, 0); after = os.read(fd, 100).decode(); os.close(fd); after`)).toBe(
+      'rewritten by a child'
+    );
+    expect(py('before')).toBe('hello from the vfs\n');
+  });
+
   it('invalidateLiveVfs makes changes by another process visible', () => {
     expect(py(`__import__('os').path.exists('/work/hello.txt')`)).toBe(true);
     nodeFs.rmSync(join(host, 'hello.txt'));

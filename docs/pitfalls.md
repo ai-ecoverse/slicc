@@ -284,8 +284,10 @@ pipes; `stdin=PIPE` input is sent when you `communicate()` / close stdin);
 stdout crosses as text, so raw binary output is not byte-exact. Every child
 is bracketed by a flush of Python-side dirty buffers and an invalidation of
 cached nodes, so it sees Python's written files and Python sees its output —
-but, as on Linux, data still in a Python `io` buffer (no `flush()`) is not
-visible to the child. `os.environ` carries the shell environment and is
+including through files Python still holds open. As on Linux, Python's own
+`io` buffers are the exception both ways: unflushed writes are not visible
+to the child, and a buffered reader may replay bytes it read before the
+child ran (reopen, or use `os.read`). `os.environ` carries the shell environment and is
 what children inherit.
 
 `SLICC_PY_FS=opfs` in the environment (or no bridge at all) falls back to

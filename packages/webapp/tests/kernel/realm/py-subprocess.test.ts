@@ -112,8 +112,12 @@ except subprocess.CalledProcessError as e:
 p = subprocess.Popen(['cat'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 `);
     expect(calls).toHaveLength(0);
+    // poll() never starts the child (CPython contract): still "running".
+    expect(py('p.poll()')).toBeUndefined();
+    expect(calls).toHaveLength(0);
     expect(py(`p.communicate('late input')[0]`)).toBe('late input');
     expect(calls).toHaveLength(1);
+    expect(py('p.poll()')).toBe(0);
   });
 
   it('raises FileNotFoundError for a missing program (argv form only)', () => {
