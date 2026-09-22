@@ -210,6 +210,10 @@ export class RestrictedFS {
     this.vfs.invalidatePaths(paths);
   }
 
+  async forgetSidecarConsistency(): Promise<void> {
+    await this.vfs.forgetSidecarConsistency();
+  }
+
   async flush(): Promise<void> {
     await this.vfs.flush();
   }

@@ -22,6 +22,7 @@ import {
   createBufferedOpfsSahProvider,
   createOpfsSyncFs,
   flushPendingOpfsOps,
+  hasPendingOpfsOps,
   type OpfsMount,
   type OpfsSyncFilesystems,
   type OpfsSyncFsPlugin,
@@ -592,6 +593,14 @@ async function flushOpfsIfNeeded(
   if (init.opfsMountDbName === undefined) return;
 
   try {
+    await forgetSidecarConsistencyIfDirty(opfsMounts, rpc);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`Pyodide→VFS consistency mark clear failed: ${message}`);
+    pushWarning('Pyodide→VFS OPFS flush skipped: clean-boot mark could not be cleared');
+    return;
+  }
+  try {
     await flushOpfsRealmMounts(opfsMounts);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -768,6 +777,18 @@ async function mountOpfsChild(
     flushBuffers: buffered.flush,
     getDirtyPaths: buffered.getDirtyPaths,
   });
+}
+
+function opfsRealmMutated(mounts: OpfsRealmMount[]): boolean {
+  return mounts.some((entry) => entry.getDirtyPaths().length > 0 || hasPendingOpfsOps(entry.mount));
+}
+
+async function forgetSidecarConsistencyIfDirty(
+  mounts: OpfsRealmMount[],
+  rpc: RealmRpcClient
+): Promise<void> {
+  if (!opfsRealmMutated(mounts)) return;
+  await rpc.call('vfs', 'forgetSidecarConsistency', []);
 }
 
 export async function flushOpfsRealmMounts(mounts: OpfsRealmMount[]): Promise<void> {

@@ -101,6 +101,22 @@ describe('formatArchiveAsMarkdown', () => {
     expect(parseFrozenArchive(markdown).live).toBeUndefined();
   });
 
+  it('keeps curatedThrough on a finished archive so finalize can see it', () => {
+    const markdown = formatArchiveAsMarkdown({
+      id: 'sid',
+      title: 't',
+      frozenAt: 'now',
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 1,
+      messages: [user],
+      curatedThrough: 2,
+    });
+    expect(markdown).toContain('curatedThrough: 2\n');
+    expect(markdown).not.toContain('live:');
+    expect(parseFrozenArchive(markdown).curatedThrough).toBe(2);
+  });
+
   it('keeps compaction seams (including transcriptPath) through stripEphemeral', () => {
     const seam: ChatMessage = {
       id: 'c1',

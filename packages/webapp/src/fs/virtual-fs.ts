@@ -31,6 +31,7 @@ import {
   type SidecarIndexJson,
   stripSidecarSelfEntry,
 } from './sidecar-merge.js';
+import { invalidateSidecarConsistency } from './sidecar-probe.js';
 import { makeOpfsProbe } from './sidecar-repair.js';
 import { inodeIdentity } from './stat-identity.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
@@ -653,8 +654,29 @@ export class VirtualFS {
     }
   }
 
+  async forgetSidecarConsistency(): Promise<void> {
+    await this.dropSidecarConsistency();
+  }
+
+  private sidecarConsistencyDrop: Promise<void> | null = null;
+
+  private dropSidecarConsistency(): Promise<void> {
+    if (this.backend !== 'opfs' || !this.opfsHandle) return Promise.resolve();
+    if (!this.sidecarConsistencyDrop) {
+      const handle = this.opfsHandle;
+      this.sidecarConsistencyDrop = invalidateSidecarConsistency(handle).catch((err: unknown) => {
+        this.sidecarConsistencyDrop = null;
+        throw err;
+      });
+    }
+    return this.sidecarConsistencyDrop;
+  }
+
   invalidatePaths(paths: string[]): void {
     if (this.backend !== 'opfs' || !this.opfsBackendFs) return;
+    if (paths.length > 0) {
+      void this.dropSidecarConsistency().catch(() => undefined);
+    }
     const fs = this.opfsBackendFs as unknown as {
       index: { delete: (path: string) => boolean };
 
@@ -972,6 +994,7 @@ export class VirtualFS {
 
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
+    await this.dropSidecarConsistency();
     try {
       await this.lfs.mkdir(normalized);
     } catch {}
@@ -1113,6 +1136,7 @@ export class VirtualFS {
 
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
+    await this.dropSidecarConsistency();
     try {
       await this.lfs.mkdir(normalized);
     } catch {}
@@ -1345,6 +1369,7 @@ export class VirtualFS {
 
     const { dir } = splitPath(resolved);
     await this.withWriteLock(async () => {
+      await this.dropSidecarConsistency();
       this.markSidecarDirty(resolved);
       if (dir !== '/') {
         await this.mkdirRecursiveUnlocked(dir);
@@ -1394,6 +1419,7 @@ export class VirtualFS {
           await this.appendMounted(normalized, content);
           return;
         }
+        await this.dropSidecarConsistency();
         let resolved = normalized;
         let wasExisting = false;
         try {
@@ -1465,6 +1491,7 @@ export class VirtualFS {
     }
     await this.withKindMismatchRetry(normalized, () =>
       this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         const resolved = await this.resolveSymlinks(normalized);
         try {
           const stat = await this.lfs.stat(resolved);
@@ -1650,7 +1677,8 @@ export class VirtualFS {
     }
 
     if (options?.recursive) {
-      const created = await this.withWriteLock(() => {
+      const created = await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         this.markSidecarDirty(normalized);
         return this.mkdirRecursiveUnlocked(normalized);
       });
@@ -1666,6 +1694,7 @@ export class VirtualFS {
       }
     } else {
       await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         this.markSidecarDirty(normalized);
         try {
           await this.lfs.mkdir(normalized);
@@ -1706,6 +1735,7 @@ export class VirtualFS {
     try {
       const s = await this.lfs.lstat(normalized);
       await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         if (s.isSymbolicLink()) {
           await this.lfs.unlink(normalized);
         } else if (s.isDirectory()) {
@@ -1874,6 +1904,7 @@ export class VirtualFS {
     }
     try {
       await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
         await this.lfs.rename(normalizedOld, normalizedNew);
@@ -1958,6 +1989,7 @@ export class VirtualFS {
 
     const { dir } = splitPath(normalizedLinkPath);
     await this.withWriteLock(async () => {
+      await this.dropSidecarConsistency();
       if (dir !== '/') {
         await this.mkdirRecursiveUnlocked(dir);
       }

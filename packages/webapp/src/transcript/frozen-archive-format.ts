@@ -59,6 +59,8 @@ export interface FrozenSessionIndexEntry {
   liveThrough?: number;
 
   compactions?: number;
+
+  curatedThrough?: number;
 }
 
 export interface FrozenSessionArchive {
@@ -83,6 +85,8 @@ export interface FrozenSessionArchive {
   liveThrough?: number;
 
   compactions?: number;
+
+  curatedThrough?: number;
 }
 
 export async function readSessionsIndex(vfs: LocalVfsClient): Promise<FrozenSessionIndexEntry[]> {
@@ -114,6 +118,7 @@ export function parseFrozenArchive(
   | 'live'
   | 'liveThrough'
   | 'compactions'
+  | 'curatedThrough'
 > & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
@@ -127,6 +132,7 @@ export function parseFrozenArchive(
     | 'live'
     | 'liveThrough'
     | 'compactions'
+    | 'curatedThrough'
   > & { id?: string; sidecar?: string } = {};
 
   const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
@@ -171,6 +177,7 @@ function parseFrontmatterMeta(
   | 'live'
   | 'liveThrough'
   | 'compactions'
+  | 'curatedThrough'
 > & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
@@ -191,6 +198,8 @@ function parseFrontmatterMeta(
   if (Number.isFinite(liveThrough) && liveThrough > 0) meta.liveThrough = liveThrough;
   const compactions = Number(frontmatter.match(/^compactions:\s*(\d+)\s*$/m)?.[1]);
   if (Number.isFinite(compactions) && compactions > 0) meta.compactions = compactions;
+  const curatedThrough = Number(frontmatter.match(/^curatedThrough:\s*(\d+)\s*$/m)?.[1]);
+  if (Number.isFinite(curatedThrough) && curatedThrough > 0) meta.curatedThrough = curatedThrough;
   const id = frontmatter.match(/^id:\s*(\S+)\s*$/m)?.[1];
   if (id) meta.id = id;
 

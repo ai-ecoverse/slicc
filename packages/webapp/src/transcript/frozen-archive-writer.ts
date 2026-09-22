@@ -158,7 +158,8 @@ export function formatArchiveAsMarkdown(rawArchive: FrozenSessionArchive): strin
     (archive.memorySkipped ? `memorySkipped: true\n` : '') +
     (archive.live ? `live: true\n` : '') +
     (archive.live && archive.liveThrough ? `liveThrough: ${archive.liveThrough}\n` : '') +
-    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '');
+    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '') +
+    (archive.curatedThrough ? `curatedThrough: ${archive.curatedThrough}\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +

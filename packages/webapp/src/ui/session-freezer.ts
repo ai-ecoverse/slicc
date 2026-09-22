@@ -19,6 +19,11 @@ import {
   runAgenticMemoryPass,
 } from '../scoops/agentic-memory.js';
 import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
+import {
+  advanceCuratedThrough,
+  curationTargetForFinalize,
+  incrementalCoverage,
+} from '../scoops/live-session-curation.js';
 import type {
   FrozenSessionArchive,
   FrozenSessionCost,
@@ -155,13 +160,28 @@ export async function curateFrozenSessionMemories(
   opts: FreezeConeSessionOptions,
   frozen: FrozenSession
 ): Promise<FrozenSessionIndexEntry | null> {
-  const agentMessages = toAgentMessages(frozen.archive.messages);
+  const target = await curationTargetForFinalize(opts.vfs, {
+    sessionId: frozen.sessionId || frozen.filename.replace(/\.md$/i, ''),
+    filename: frozen.filename,
+    title: frozen.title,
+    frozenAt: frozen.frozenAt,
+    cone: frozen.cone,
+    coneLabel: frozen.coneLabel,
+    curatedThrough: frozen.curatedThrough,
+    messages: frozen.archive.messages,
+  });
+
+  if (target.kind === 'covered') {
+    return finishSuccessfulCuration(opts, frozen, null);
+  }
+  const sessionArchivePath = target.kind === 'delta' ? target.path : frozenSessionPath(frozen);
+  const fallbackMessages = target.kind === 'delta' ? target.messages : frozen.archive.messages;
   let result: Awaited<ReturnType<typeof runAgenticMemoryPass>>;
   try {
     result = await runAgenticMemoryPass({
       spawn: opts.agenticMemorySpawn!,
       vfs: opts.vfs,
-      sessionArchivePath: frozenSessionPath(frozen),
+      sessionArchivePath,
       sessionCount: await readSessionCount(opts.vfs),
 
       ...(opts.cone ? { cone: opts.cone } : {}),
@@ -174,18 +194,10 @@ export async function curateFrozenSessionMemories(
     };
   }
   if (result.ok) {
-    const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
-
-    await removeCuratorReceipt(opts.vfs, frozen.filename);
-    if (!updated) {
-      log.info('Agentic memory pass completed; index entry already gone', {
-        filename: frozen.filename,
-      });
-      return null;
+    if (target.kind === 'delta') {
+      await advanceCuratedThrough(opts.vfs, frozen.filename, target.through);
     }
-    delete frozen.memoryPending;
-    log.info('Agentic memory pass completed', { filename: frozen.filename });
-    return updated;
+    return finishSuccessfulCuration(opts, frozen, sessionArchivePath);
   }
 
   await stampMemoryFailure(opts.vfs, frozen.filename, result.reason);
@@ -201,8 +213,29 @@ export async function curateFrozenSessionMemories(
     filename: frozen.filename,
     reason: result.reason,
   });
-  await extractMemoriesBestEffort(opts, agentMessages, true);
+  await extractMemoriesBestEffort(opts, toAgentMessages(fallbackMessages), true);
   return null;
+}
+
+async function finishSuccessfulCuration(
+  opts: FreezeConeSessionOptions,
+  frozen: FrozenSession,
+  sessionArchivePath: string | null
+): Promise<FrozenSessionIndexEntry | null> {
+  const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
+  if (sessionArchivePath) {
+    const receiptName = sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1);
+    await removeCuratorReceipt(opts.vfs, receiptName);
+  }
+  if (!updated) {
+    log.info('Agentic memory pass completed; index entry already gone', {
+      filename: frozen.filename,
+    });
+    return null;
+  }
+  delete frozen.memoryPending;
+  log.info('Agentic memory pass completed', { filename: frozen.filename });
+  return updated;
 }
 
 async function pickIconBestEffort(
@@ -339,6 +372,7 @@ async function writeFrozenArchive(
     ...(mode === 'quick' || live ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
     ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
+    ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -358,6 +392,7 @@ async function writeFrozenArchive(
       ...(usageSummary ?? {}),
       ...provenance,
       ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
+      ...(live?.curatedThrough ? { curatedThrough: live.curatedThrough } : {}),
     };
     if (isFeatureEnabled('memory-v2')) {
       const { writeArchiveBundle } = await import('../transcript/session-jsonl.js');
@@ -740,17 +775,21 @@ export async function enrichPendingSession(
   }
   const archiveContent = await readPendingArchive(vfs, entry);
   if (archiveContent === null) return null;
-  const agentMessages = await recoverPendingMessages(vfs, entry, archiveContent);
-  if (agentMessages === null) return null;
+  const recovered = await recoverPendingMessages(vfs, entry, archiveContent);
+  if (recovered === null) return null;
+  const { agentMessages } = recovered;
 
-  const curatorAlreadyRan =
-    entry.memoryPending === true &&
-    opts.skipMemory !== true &&
-    (await curatorReceiptExists(vfs, entry));
+  const catchUp = await resolveIncrementalCatchUp(vfs, entry, recovered.chatMessages, opts);
+  const curatorAlreadyRan = catchUp.curatorAlreadyRan;
 
   const effectiveOpts =
     curatorAlreadyRan || entry.memorySkipped === true ? { ...opts, skipMemory: true } : opts;
-  const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
+  const calls = await runEnrichmentCalls(
+    entry,
+    agentMessages,
+    effectiveOpts,
+    catchUp.memoryMessages
+  );
   if (calls === null) return null;
 
   const icon = await pickEnrichmentIcon(effectiveOpts, calls.newTitle);
@@ -846,7 +885,7 @@ async function recoverPendingMessages(
   vfs: LocalVfsClient,
   entry: FrozenSessionIndexEntry,
   archiveContent: string
-): Promise<AgentMessage[] | null> {
+): Promise<{ agentMessages: AgentMessage[]; chatMessages: ChatMessage[] } | null> {
   let messages: ChatMessage[];
   try {
     messages = (await loadFrozenArchive(vfs, archiveContent, entry.filename)).messages;
@@ -863,19 +902,49 @@ async function recoverPendingMessages(
     });
     return null;
   }
-  return toAgentMessages(messages);
+  return { agentMessages: toAgentMessages(messages), chatMessages: messages };
+}
+
+async function resolveIncrementalCatchUp(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  chatMessages: readonly ChatMessage[],
+  opts: EnrichPendingSessionOptions
+): Promise<{ curatorAlreadyRan: boolean; memoryMessages: AgentMessage[] }> {
+  const all = toAgentMessages([...chatMessages]);
+  if (opts.skipMemory === true || entry.memoryPending !== true) {
+    return { curatorAlreadyRan: false, memoryMessages: all };
+  }
+  if (await curatorReceiptExists(vfs, entry)) {
+    return { curatorAlreadyRan: true, memoryMessages: all };
+  }
+  const coverage = await incrementalCoverage(vfs, entry, chatMessages);
+  if (coverage.caughtUp) return { curatorAlreadyRan: true, memoryMessages: all };
+  if (coverage.through > 0) {
+    return {
+      curatorAlreadyRan: false,
+      memoryMessages: all.filter((message) => messageTimestamp(message) > coverage.through),
+    };
+  }
+  return { curatorAlreadyRan: false, memoryMessages: all };
+}
+
+function messageTimestamp(message: AgentMessage): number {
+  const timestamp = (message as { timestamp?: number }).timestamp;
+  return typeof timestamp === 'number' ? timestamp : 0;
 }
 
 async function runEnrichmentCalls(
   entry: FrozenSessionIndexEntry,
   agentMessages: AgentMessage[],
-  opts: EnrichPendingSessionOptions
+  opts: EnrichPendingSessionOptions,
+  memoryMessages: AgentMessage[] = agentMessages
 ): Promise<{ bullets: string; newTitle: string } | null> {
   let bullets = '';
   if (!opts.skipMemory) {
     try {
       bullets = await runOneOffCompactionCall({
-        messages: agentMessages,
+        messages: memoryMessages,
         instruction: COMPACTION_MEMORY_INSTRUCTION,
         model: opts.model,
         apiKey: opts.apiKey,
@@ -965,6 +1034,8 @@ function buildEnrichedIndexEntry(
     ...(entry.cone ? { cone: entry.cone } : {}),
     ...(entry.coneLabel ? { coneLabel: entry.coneLabel } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+
+    ...(entry.curatedThrough ? { curatedThrough: entry.curatedThrough } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),

@@ -31,8 +31,15 @@ function isUnder(key: string, prefix: string): boolean {
 
 export const SIDECAR_SELF_ENTRY = '/.metadata.json';
 
+export const SIDECAR_CONSISTENT_NAME = '.metadata.consistent.json';
+
+export const SIDECAR_CONSISTENT_ENTRY = `/${SIDECAR_CONSISTENT_NAME}`;
+
 export function stripSidecarSelfEntry(doc: SidecarIndexJson): SidecarIndexJson {
-  if (doc.entries) delete doc.entries[SIDECAR_SELF_ENTRY];
+  if (doc.entries) {
+    delete doc.entries[SIDECAR_SELF_ENTRY];
+    delete doc.entries[SIDECAR_CONSISTENT_ENTRY];
+  }
   return doc;
 }
 

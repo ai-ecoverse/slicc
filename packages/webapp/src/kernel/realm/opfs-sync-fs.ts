@@ -515,7 +515,10 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
 
 const OPFS_OP_CHAINS = new WeakMap<OpfsMount, Promise<void>>();
 
+const OPFS_OP_PENDING = new WeakMap<OpfsMount, boolean>();
+
 function enqueueOpfsOp(mount: OpfsMount, op: () => Promise<void>): void {
+  OPFS_OP_PENDING.set(mount, true);
   const prev = OPFS_OP_CHAINS.get(mount) ?? Promise.resolve();
   const next = prev.then(op, op);
   OPFS_OP_CHAINS.set(mount, next);
@@ -524,8 +527,23 @@ function enqueueOpfsOp(mount: OpfsMount, op: () => Promise<void>): void {
   }
 }
 
+export function hasPendingOpfsOps(mount: OpfsMount): boolean {
+  return OPFS_OP_PENDING.get(mount) === true;
+}
+
 export async function flushPendingOpfsOps(mount: OpfsMount): Promise<void> {
-  await (OPFS_OP_CHAINS.get(mount) ?? Promise.resolve());
+  let chain = OPFS_OP_CHAINS.get(mount);
+  while (chain) {
+    const draining = chain;
+    await draining;
+    const latest = OPFS_OP_CHAINS.get(mount);
+
+    if (latest === draining) {
+      OPFS_OP_PENDING.set(mount, false);
+      return;
+    }
+    chain = latest;
+  }
 }
 
 export interface OpfsBufferedSahProvider {

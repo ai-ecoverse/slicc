@@ -319,6 +319,50 @@ describe('repair progress ticks', () => {
     expect(onEntry).toHaveBeenCalledTimes(4);
   });
 
+  it('drops the clean-boot mark without probing it', async () => {
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/.metadata.consistent.json': file(40),
+        '/ok.txt': file(1),
+      },
+    };
+    const probe = vi.fn(probeFrom({ '/ok.txt': { kind: 'file', size: 1 } }));
+    const summary = await repairSidecarDocument(doc, probe);
+    expect(summary.changed).toBe(true);
+    expect(doc.entries).not.toHaveProperty('/.metadata.consistent.json');
+    expect(probe).not.toHaveBeenCalledWith('/.metadata.consistent.json', expect.anything());
+    expect(doc.entries).toHaveProperty('/ok.txt');
+  });
+
+  it('probes at most the requested concurrency, and applies results in entry order', async () => {
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/a.txt': { ...file(1), ino: 0, data: 0 },
+        '/b.txt': { ...file(1), ino: 0, data: 0 },
+        '/c.txt': { ...file(1), ino: 0, data: 0 },
+        '/d.txt': { ...file(1), ino: 0, data: 0 },
+      } as SidecarIndexJson['entries'],
+    };
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const probe: SidecarProbe = async (path) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return { kind: 'file', size: path.length };
+    };
+    const serial = structuredClone(doc);
+    const serialSummary = await repairSidecarDocument(serial, probe, undefined, 1);
+    expect(maxInFlight).toBe(1);
+    maxInFlight = 0;
+    const parallelSummary = await repairSidecarDocument(doc, probe, undefined, 4);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(parallelSummary.sizesFixed).toBe(serialSummary.sizesFixed);
+    expect(parallelSummary.inosReassigned).toBe(serialSummary.inosReassigned);
+    expect(doc.entries).toEqual(serial.entries);
+  });
+
   it('is optional — omitting the tick leaves the repair result unaffected', async () => {
     const doc: SidecarIndexJson = { entries: { '/a': file(1) } };
     const summary = await repairSidecarDocument(

@@ -116,6 +116,8 @@ async function writeSnapshot(
     live: true,
     liveThrough,
     compactions,
+
+    ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
   };
   const entry: FrozenSessionIndexEntry = {
     filename,
@@ -128,6 +130,8 @@ async function writeSnapshot(
     live: true,
     liveThrough,
     compactions,
+    ...(existing?.curatedThrough ? { curatedThrough: existing.curatedThrough } : {}),
+    ...(existing?.memoryFailed ? { memoryFailed: existing.memoryFailed } : {}),
   };
 
   await ensureSessionsDir(deps.vfs, sessionsDir);

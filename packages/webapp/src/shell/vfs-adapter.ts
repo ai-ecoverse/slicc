@@ -494,4 +494,9 @@ export class VfsAdapter implements IFileSystem {
       vfs.invalidatePaths(paths);
     }
   }
+
+  async forgetSidecarConsistency(): Promise<void> {
+    const vfs = this.vfs as { forgetSidecarConsistency?: () => Promise<void> };
+    await vfs.forgetSidecarConsistency?.();
+  }
 }

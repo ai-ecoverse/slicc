@@ -585,7 +585,26 @@ export class ScoopContext {
       ...(isRoot ? {} : { sessionsDir: scoopSessionsDir(this.scoop.folder, this.scoop.jid) }),
       stillValid: () => !this.disposed && generation === this.sessionGeneration,
     });
+
+    if (result && isRoot) this.scheduleLiveDeltaCuration();
     return result ? { transcriptPath: result.transcriptPath } : undefined;
+  }
+
+  private scheduleLiveDeltaCuration(): void {
+    const fs = this.fs;
+    if (!fs) return;
+    const cone = {
+      folder: this.scoop.folder,
+      ...(this.scoop.jid ? { jid: this.scoop.jid } : {}),
+    };
+    void import('./live-session-curation.js')
+      .then((mod) => mod.scheduleLiveDeltaCuration({ vfs: fs, cone }))
+      .catch((err) => {
+        log.warn('Live delta curation failed to start', {
+          folder: this.scoop.folder,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 
   private async settleLiveSnapshot(discard: boolean): Promise<void> {

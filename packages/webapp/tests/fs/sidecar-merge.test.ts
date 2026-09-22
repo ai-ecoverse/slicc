@@ -141,6 +141,16 @@ describe('stripSidecarSelfEntry', () => {
     expect(stripSidecarSelfEntry(d).entries).toEqual({ '/a.txt': entry('a') });
   });
 
+  it('drops the clean-boot mark so a flush cannot invalidate its own hash', () => {
+    const d = doc({
+      '/a.txt': entry('a'),
+      '/.metadata.consistent.json': entry('mark'),
+    });
+    const out = stripSidecarSelfEntry(d);
+    expect(out.entries).not.toHaveProperty('/.metadata.consistent.json');
+    expect(out.entries?.['/a.txt']).toEqual(entry('a'));
+  });
+
   it('tolerates a document with no entries map', () => {
     expect(() => stripSidecarSelfEntry({ version: 1 })).not.toThrow();
   });
