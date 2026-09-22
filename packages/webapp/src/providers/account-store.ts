@@ -29,6 +29,10 @@ import {
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
 } from './built-in/bedrock-camp-compat.js';
+import {
+  BEDROCK_CAMP_EXTRA_MODELS,
+  mergeBedrockCampCatalogue,
+} from './built-in/bedrock-camp-extra-models.js';
 import { findFamilyCost } from './family-cost.js';
 import {
   getRegisteredProviderConfig,
@@ -390,11 +394,14 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // inference-profile-prefixed Claude 4.x and newer (plus the narrow
     // non-Claude allowlist) whose region matches the configured endpoint
     // (eu.* against us-* 400s "invalid model identifier"). pi-ai's
-    // amazon-bedrock registry ships every profile variant we surface; no
-    // manual extras list is needed.
+    // amazon-bedrock registry is topped up with models AWS serves before
+    // pi-ai lists them (`bedrock-camp-extra-models.ts`).
     if (providerId === 'bedrock-camp') {
       const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
-      return getModelsDynamic('amazon-bedrock')
+      return mergeBedrockCampCatalogue(
+        getModelsDynamic('amazon-bedrock'),
+        BEDROCK_CAMP_EXTRA_MODELS as unknown as Model<Api>[]
+      )
         .filter((m) => isBedrockCampCompatible(m, region))
         .map((m) => ({
           ...m,
@@ -1719,11 +1726,14 @@ function applyProviderRouting(
 /**
  * Fallback for an id pi-ai's registry doesn't know (threw or returned no id).
  *
- * For an OAuth/custom provider, resolve the REQUESTED id through the provider —
- * prefer its own model list, else synthesize a provider-routed model. Never
- * fall through to `resolveCurrentModel()` (which resolves the *selected*
- * model, not the requested one) or to a native Anthropic model (which would
- * leak the OAuth token → 401 invalid x-api-key). See the cloud-cone regression.
+ * Any provider whose own catalogue lists the id serves it — e.g.
+ * bedrock-camp's models that pi-ai's `amazon-bedrock` registry lacks. For an
+ * OAuth/custom provider, an unlisted id is still resolved through the provider
+ * by synthesizing a provider-routed model. Never fall through to
+ * `resolveCurrentModel()` for an id the provider lists (that resolves the
+ * *selected* model, not the requested one) or to a native Anthropic model
+ * (which would leak the OAuth token → 401 invalid x-api-key). See the
+ * cloud-cone regression.
  */
 function resolveUnknownModelId(
   providerId: string,
@@ -1732,11 +1742,10 @@ function resolveUnknownModelId(
   baseUrl: string | null,
   pinned: boolean
 ): Model<Api> {
+  const catalogueModel = providerCatalogueModel(providerId, modelId, baseUrl);
+  if (catalogueModel) return catalogueModel;
   if (providerConfig.isOAuth) {
-    return (
-      providerCatalogueModel(providerId, modelId, baseUrl) ??
-      buildProviderRoutedModel(providerId, modelId, baseUrl)
-    );
+    return buildProviderRoutedModel(providerId, modelId, baseUrl);
   }
   // A pinned provider must never degrade to the SELECTED provider's model.
   if (pinned) {

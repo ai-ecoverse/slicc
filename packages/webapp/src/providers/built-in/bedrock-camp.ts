@@ -59,7 +59,7 @@ export const config: ProviderConfig = {
   requiresBaseUrl: true,
   baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
-  defaultModelId: 'claude-opus-5',
+  defaultModelId: 'claude-opus-5-5',
 };
 
 // Picker filter: keep only Claude 4.x and newer on an inference-profile prefix
