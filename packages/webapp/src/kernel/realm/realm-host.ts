@@ -473,6 +473,11 @@ async function dispatchVfs(
       }
       return true;
     }
+    case 'forgetSidecarConsistency': {
+      const vfs = ctx.fs as { forgetSidecarConsistency?: () => Promise<void> };
+      await vfs.forgetSidecarConsistency?.();
+      return true;
+    }
     case 'snapshot': {
       const root = typeof args[0] === 'string' ? (args[0] as string) : ctx.cwd;
       return buildSyncFsSnapshot(ctx, root);

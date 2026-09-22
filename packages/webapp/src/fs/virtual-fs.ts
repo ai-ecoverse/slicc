@@ -48,6 +48,7 @@ import {
   type SidecarIndexJson,
   stripSidecarSelfEntry,
 } from './sidecar-merge.js';
+import { invalidateSidecarConsistency } from './sidecar-probe.js';
 import { makeOpfsProbe } from './sidecar-repair.js';
 import { inodeIdentity } from './stat-identity.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
@@ -1090,8 +1091,44 @@ export class VirtualFS {
    * metadata from the OPFS handles. The handle cache is also cleared
    * so new files get their handles resolved from the OPFS tree.
    */
+  /**
+   * Drop the boot-repair certification for this OPFS tree. The next mount
+   * re-probes the sidecar. Await this before OPFS bytes change: a crash
+   * between the write and the delete would let the next boot skip a tree
+   * the sidecar no longer describes.
+   */
+  async forgetSidecarConsistency(): Promise<void> {
+    await this.dropSidecarConsistency();
+  }
+
+  /**
+   * One in-flight delete of `/.metadata.consistent.json` per instance.
+   * Later mutations share it. A failed delete clears the latch so the next
+   * mutation tries again. No handle (memory backend, or a test that only
+   * flipped `backend`) is a no-op.
+   */
+  private sidecarConsistencyDrop: Promise<void> | null = null;
+
+  private dropSidecarConsistency(): Promise<void> {
+    if (this.backend !== 'opfs' || !this.opfsHandle) return Promise.resolve();
+    if (!this.sidecarConsistencyDrop) {
+      const handle = this.opfsHandle;
+      this.sidecarConsistencyDrop = invalidateSidecarConsistency(handle).catch((err: unknown) => {
+        this.sidecarConsistencyDrop = null;
+        throw err;
+      });
+    }
+    return this.sidecarConsistencyDrop;
+  }
+
   invalidatePaths(paths: string[]): void {
     if (this.backend !== 'opfs' || !this.opfsBackendFs) return;
+    if (paths.length > 0) {
+      // External bytes may already have changed. Swallow a delete failure here
+      // so a sync caller cannot leak an unhandled rejection; the next awaited
+      // mutation retries because a failure clears the latch.
+      void this.dropSidecarConsistency().catch(() => undefined);
+    }
     const fs = this.opfsBackendFs as unknown as {
       index: { delete: (path: string) => boolean };
       // Private field on @zenfs/dom WebAccessFS — pinned at v1.2.9.
@@ -1524,6 +1561,7 @@ export class VirtualFS {
     // Ensure parent dirs exist in LFS, then create placeholder for mount root
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
+    await this.dropSidecarConsistency();
     try {
       await this.lfs.mkdir(normalized);
     } catch {
@@ -1732,6 +1770,7 @@ export class VirtualFS {
     // Create parent + placeholder so path resolution works.
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
+    await this.dropSidecarConsistency();
     try {
       await this.lfs.mkdir(normalized);
     } catch {
@@ -2051,6 +2090,7 @@ export class VirtualFS {
     // write hit a not-yet-created parent (spurious ENOENT). See withWriteLock.
     const { dir } = splitPath(resolved);
     await this.withWriteLock(async () => {
+      await this.dropSidecarConsistency();
       this.markSidecarDirty(resolved);
       if (dir !== '/') {
         await this.mkdirRecursiveUnlocked(dir);
@@ -2109,6 +2149,7 @@ export class VirtualFS {
           await this.appendMounted(normalized, content);
           return;
         }
+        await this.dropSidecarConsistency();
         let resolved = normalized;
         let wasExisting = false;
         try {
@@ -2183,6 +2224,7 @@ export class VirtualFS {
     }
     await this.withKindMismatchRetry(normalized, () =>
       this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         const resolved = await this.resolveSymlinks(normalized);
         try {
           const stat = await this.lfs.stat(resolved);
@@ -2451,7 +2493,8 @@ export class VirtualFS {
     if (options?.recursive) {
       // Create all parent directories under the write lock so a concurrent
       // writeFile/symlink can't observe a half-materialized path.
-      const created = await this.withWriteLock(() => {
+      const created = await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         this.markSidecarDirty(normalized);
         return this.mkdirRecursiveUnlocked(normalized);
       });
@@ -2470,6 +2513,7 @@ export class VirtualFS {
       }
     } else {
       await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         this.markSidecarDirty(normalized);
         try {
           await this.lfs.mkdir(normalized);
@@ -2522,6 +2566,7 @@ export class VirtualFS {
       // (don't follow the link or recurse into a target directory)
       const s = await this.lfs.lstat(normalized);
       await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         if (s.isSymbolicLink()) {
           await this.lfs.unlink(normalized);
         } else if (s.isDirectory()) {
@@ -2730,6 +2775,7 @@ export class VirtualFS {
       // Prefix marks on both ends: a directory rename supersedes every
       // on-disk child entry under the old AND new paths (sidecar-merge.ts).
       await this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
         this.markSidecarDirty(normalizedOld, 'prefix');
         this.markSidecarDirty(normalizedNew, 'prefix');
         await this.lfs.rename(normalizedOld, normalizedNew);
@@ -2861,6 +2907,7 @@ export class VirtualFS {
     // writeFile (see withWriteLock).
     const { dir } = splitPath(normalizedLinkPath);
     await this.withWriteLock(async () => {
+      await this.dropSidecarConsistency();
       if (dir !== '/') {
         await this.mkdirRecursiveUnlocked(dir);
       }

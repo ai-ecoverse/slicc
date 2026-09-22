@@ -672,14 +672,21 @@ export function createOpfsSyncFs(Fs: EmscriptenFsApi): OpfsSyncFsPlugin {
 // ---------------------------------------------------------------------------
 
 const OPFS_OP_CHAINS = new WeakMap<OpfsMount, Promise<void>>();
+/** True once a structural op (mkdir, rename, unlink, rmdir) has been queued. */
+const OPFS_OP_PENDING = new WeakMap<OpfsMount, boolean>();
 
 /**
  * Append `op` to the mount's serial OPFS-mutation chain. Caller
  * can `await mount.opts.flush()` (or the helper below) to drain
  * pending work — needed before relinquishing the worker to keep
  * the on-disk view consistent with the in-memory tree.
+ *
+ * Structural ops do not pass through the buffered file provider, so
+ * {@link hasPendingOpfsOps} is how a flush knows to drop the clean-boot
+ * sidecar mark before these bytes land.
  */
 function enqueueOpfsOp(mount: OpfsMount, op: () => Promise<void>): void {
+  OPFS_OP_PENDING.set(mount, true);
   const prev = OPFS_OP_CHAINS.get(mount) ?? Promise.resolve();
   const next = prev.then(op, op);
   OPFS_OP_CHAINS.set(mount, next);
@@ -688,13 +695,30 @@ function enqueueOpfsOp(mount: OpfsMount, op: () => Promise<void>): void {
   }
 }
 
+/** Whether {@link flushPendingOpfsOps} still has structural mutations to write. */
+export function hasPendingOpfsOps(mount: OpfsMount): boolean {
+  return OPFS_OP_PENDING.get(mount) === true;
+}
+
 /**
  * Public flush helper — drains every queued OPFS mutation across
  * the mount. E2 calls this before `realm-done` so the kernel sees
  * a consistent tree after Python exits.
  */
 export async function flushPendingOpfsOps(mount: OpfsMount): Promise<void> {
-  await (OPFS_OP_CHAINS.get(mount) ?? Promise.resolve());
+  let chain = OPFS_OP_CHAINS.get(mount);
+  while (chain) {
+    const draining = chain;
+    await draining;
+    const latest = OPFS_OP_CHAINS.get(mount);
+    // An op that ran during the drain may have queued another. Only a chain
+    // that is still the latest one is finished.
+    if (latest === draining) {
+      OPFS_OP_PENDING.set(mount, false);
+      return;
+    }
+    chain = latest;
+  }
 }
 
 // ---------------------------------------------------------------------------

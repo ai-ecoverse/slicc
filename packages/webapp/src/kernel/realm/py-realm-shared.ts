@@ -36,6 +36,7 @@ import {
   createBufferedOpfsSahProvider,
   createOpfsSyncFs,
   flushPendingOpfsOps,
+  hasPendingOpfsOps,
   type OpfsMount,
   type OpfsSyncFilesystems,
   type OpfsSyncFsPlugin,
@@ -874,6 +875,19 @@ async function flushOpfsIfNeeded(
 ): Promise<void> {
   if (init.opfsMountDbName === undefined) return;
 
+  // Clear the clean-boot mark BEFORE any byte hits OPFS. invalidatePaths
+  // runs after the flush and only evicts the in-memory index; a crash in
+  // between would otherwise let the next mount skip a tree the sidecar no
+  // longer describes. A failed clear aborts the flush: writing anyway would
+  // leave mutated OPFS behind a mark that still certifies the old sidecar.
+  try {
+    await forgetSidecarConsistencyIfDirty(opfsMounts, rpc);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`Pyodide→VFS consistency mark clear failed: ${message}`);
+    pushWarning('Pyodide→VFS OPFS flush skipped: clean-boot mark could not be cleared');
+    return;
+  }
   try {
     await flushOpfsRealmMounts(opfsMounts);
   } catch (err) {
@@ -1122,6 +1136,21 @@ async function mountOpfsChild(
     flushBuffers: buffered.flush,
     getDirtyPaths: buffered.getDirtyPaths,
   });
+}
+
+function opfsRealmMutated(mounts: OpfsRealmMount[]): boolean {
+  return mounts.some((entry) => entry.getDirtyPaths().length > 0 || hasPendingOpfsOps(entry.mount));
+}
+
+async function forgetSidecarConsistencyIfDirty(
+  mounts: OpfsRealmMount[],
+  rpc: RealmRpcClient
+): Promise<void> {
+  // Buffered file writes AND queued mkdir/rename/unlink/rmdir. The latter
+  // never show up in getDirtyPaths, but they still change the tree the
+  // sidecar describes.
+  if (!opfsRealmMutated(mounts)) return;
+  await rpc.call('vfs', 'forgetSidecarConsistency', []);
 }
 
 // ---------------------------------------------------------------------------

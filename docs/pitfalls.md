@@ -767,6 +767,34 @@ mid-write. A boot that fails loudly is recoverable on the next reload; a reseed
 over good metadata is not. Regression:
 `tests/fs/virtual-fs-torn-sidecar.test.ts`.
 
+## Boot Sidecar Repair Must Not Re-Walk Every Path From The Root
+
+**Files**: `packages/webapp/src/fs/sidecar-repair.ts`,
+`packages/webapp/src/fs/sidecar-probe.ts`.
+
+The pre-boot repair used to resolve every `/.metadata.json` entry from the
+OPFS root: one `getDirectoryHandle` per path segment, then `getFile()` solely
+to read `size`, serially. On a 22k-entry tree that is O(entries × depth) IPCs
+and it ran inside `Orchestrator.init()` before anything else booted (field:
+about 8 minutes, every CPU-profile sample inside that loop).
+
+The repair still fixes the same things (kind flips, stale sizes, missing
+paths, ino collisions, `nlink: 0`, the self-entry). It lists each directory
+once, reads file sizes through `createSyncAccessHandle().getSize()` when that
+exists, and runs at most 16 probes at once. After a probe that matches the
+tree it writes `/.metadata.consistent.json` (a hash of the sidecar bytes).
+The next mount skips the walk when that hash still matches.
+
+The mark is deleted **before** the next OPFS mutation (`VirtualFS` writes,
+and a Python realm flush that has dirty file buffers or a queued mkdir,
+rename, unlink, or rmdir). A crash after the delete re-probes. If the
+delete fails, that Python flush is skipped so the mark cannot certify a
+tree that just changed. Certifying a flush that was not probed would let a
+drifted tree skip the repair and brick `crossCopy` again, so only the probe
+path writes the mark. The mark's own sidecar entry is stripped on flush,
+same as `/.metadata.json`, because persisting it changes the bytes the hash
+covers.
+
 ## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
 
 **Files**: `packages/webapp/src/ui/boot/setup-storage-persistence.ts`,
