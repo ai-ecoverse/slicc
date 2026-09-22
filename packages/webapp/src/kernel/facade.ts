@@ -213,6 +213,13 @@ export class Bridge implements KernelFacade {
   private readonly pendingMarkers = new Map<string, ConversationMarker[]>();
   /** Panel-facing scoop state and projection. */
   private readonly scoopPresentation = new ScoopPresentation();
+  /**
+   * Set once {@link publishHydratedTranscripts} has pushed this boot's
+   * saved chat. A second push would replay a buffer a live turn may
+   * already have extended, and the panel would replace the thread with
+   * a stale copy.
+   */
+  private transcriptsPublished = false;
   /** Post-transport agent-event translation and fan-out. */
   private readonly agentEventStream = new AgentEventStream();
   /**
@@ -1057,6 +1064,40 @@ export class Bridge implements KernelFacade {
   }
 
   /**
+   * Tell the panel about every hydrated transcript, once per boot.
+   *
+   * Listing the roster first gives the page a unit to attach the replay
+   * to. An empty buffer is not pushed: an empty replace is how a scoop
+   * switch clears the previous thread, and a boot-time one would wipe a
+   * transcript the page already painted. Status is left untouched — a
+   * context that fails to start never emits its own status, and stamping
+   * `initializing` here would leave that scoop initializing for good.
+   * A later call does nothing.
+   */
+  publishHydratedTranscripts(): void {
+    if (this.transcriptsPublished || !this.orchestrator) return;
+    const scoops = this.orchestrator.getScoops();
+    if (scoops.length === 0) return;
+    this.emitScoopList();
+    for (const scoop of scoops) {
+      const messages = this.messageBuffers.get(scoop.jid);
+      if (!messages || messages.length === 0) continue;
+      this.emitTranscript(scoop.jid, messages);
+    }
+    this.transcriptsPublished = true;
+  }
+
+  /** `scoop-messages-replaced` for one unit. Same envelope as a replay. */
+  private emitTranscript(scoopJid: string, messages: BufferedChatMessage[]): void {
+    this.emit({
+      type: 'scoop-messages-replaced',
+      scoopJid,
+      messages,
+      queuedIds: this.queuedIdsFor(scoopJid),
+    });
+  }
+
+  /**
    * The orchestrator's pending queue for a scoop, in delivery order, or
    * `undefined` when this float cannot answer authoritatively (#2354).
    *
@@ -1099,12 +1140,7 @@ export class Bridge implements KernelFacade {
 
     const buffered = this.messageBuffers.get(scoopJid);
     if (buffered && buffered.length > 0) {
-      this.emit({
-        type: 'scoop-messages-replaced',
-        scoopJid,
-        messages: buffered,
-        queuedIds: this.queuedIdsFor(scoopJid),
-      });
+      this.emitTranscript(scoopJid, buffered);
       return;
     }
 
@@ -1117,12 +1153,7 @@ export class Bridge implements KernelFacade {
       this.messageBuffers.set(scoopJid, derived);
       this.currentMessageId.delete(scoopJid);
       this.agentEventStream.clear(scoopJid);
-      this.emit({
-        type: 'scoop-messages-replaced',
-        scoopJid,
-        messages: derived,
-        queuedIds: this.queuedIdsFor(scoopJid),
-      });
+      this.emitTranscript(scoopJid, derived);
       return;
     }
 
@@ -1134,12 +1165,7 @@ export class Bridge implements KernelFacade {
     // accent — and the next real message for this scoop appends onto that
     // foreign transcript. No buffer is seeded: with nothing to restore, a
     // later agent event should start a fresh buffer.
-    this.emit({
-      type: 'scoop-messages-replaced',
-      scoopJid,
-      messages: [],
-      queuedIds: this.queuedIdsFor(scoopJid),
-    });
+    this.emitTranscript(scoopJid, []);
   }
 
   /**
