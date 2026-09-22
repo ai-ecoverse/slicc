@@ -48,7 +48,7 @@ export interface ComputerCommandDeps {
       nativeHeight: number;
     }>;
     unwatch(): void;
-    input(events: ComputerInputEvent[]): Promise<void> | void;
+    input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
   };
   /**
    * Injected in tests so `computer record` does not boot `@ffmpeg/core`.

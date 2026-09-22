@@ -600,8 +600,12 @@ public enum LeaderToFollowerMessage: Codable {
     /// absent means the follower's main display (#3379).
     case computerNativeCapture(
         requestId: String, fps: Double?, maxWidth: Double?, display: Double?, watch: Bool?)
+    /// `requestId` names the stream to stop; absent stops every capture.
     case computerNativeUnwatch(requestId: String?)
-    case computerNativeInput(requestId: String, events: [ComputerInputEvent])
+    /// `display` is the capture's display index, so input maps through the
+    /// geometry of the screen it targets rather than whichever was captured last.
+    case computerNativeInput(
+        requestId: String, events: [ComputerInputEvent], display: Double? = nil)
     case modelsList(models: [TrayModelCatalogEntry])
     case modelState(state: TrayModelSelectionState)
     case sprinklesList(sprinkles: [SprinkleSummary])
@@ -763,7 +767,8 @@ public enum LeaderToFollowerMessage: Codable {
         case "computer.native.input":
             self = .computerNativeInput(
                 requestId: try container.decode(String.self, forKey: .requestId),
-                events: (try? container.decode([ComputerInputEvent].self, forKey: .events)) ?? [])
+                events: (try? container.decode([ComputerInputEvent].self, forKey: .events)) ?? [],
+                display: try container.decodeIfPresent(Double.self, forKey: .display))
         case "models.list":
             self = .modelsList(
                 models: try container.decode([TrayModelCatalogEntry].self, forKey: .models))
@@ -969,10 +974,11 @@ public enum LeaderToFollowerMessage: Codable {
         case .computerNativeUnwatch(let requestId):
             try container.encode("computer.native.unwatch", forKey: .type)
             try container.encodeIfPresent(requestId, forKey: .requestId)
-        case .computerNativeInput(let requestId, let events):
+        case .computerNativeInput(let requestId, let events, let display):
             try container.encode("computer.native.input", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(events, forKey: .events)
+            try container.encodeIfPresent(display, forKey: .display)
         case .modelsList(let models):
             try container.encode("models.list", forKey: .type)
             try container.encode(models, forKey: .models)

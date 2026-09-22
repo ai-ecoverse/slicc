@@ -22,11 +22,13 @@ extension ComputerPermissionProbe {
 
 final class RecordingEventSink: ComputerEventSink {
     private(set) var actions: [ComputerCGAction] = []
+    var cursor: CGPoint?
     func post(_ action: ComputerCGAction) { actions.append(action) }
+    func cursorLocation() -> CGPoint? { cursor }
 }
 
 @MainActor
-final class StubCapturer: ComputerCapturing {
+class StubCapturer: ComputerCapturing {
     var image: CGImage
     /// Stand-in for the display ScreenCaptureKit would have picked. Defaults to
     /// the image's own pixels at the origin, i.e. a lone main display.
@@ -84,6 +86,46 @@ final class StubCapturer: ComputerCapturing {
     func emitHeldFrame() { pendingFrame?() }
 
     func stop() { stopped += 1 }
+}
+
+/// Reports the geometry of whichever display `start` was asked for, and keeps
+/// its frame callback so a test can push further frames as a stream would.
+@MainActor
+final class MultiDisplayStubCapturer: StubCapturer {
+    private let geometries: [Int: ComputerDisplayGeometry]
+    private var again: (() -> Void)?
+    /// Park `start` until ``release()``, like a one-shot `SCScreenshotManager`
+    /// call still in flight while another capture begins.
+    var suspends = false
+    private var parked: CheckedContinuation<Void, Never>?
+
+    init(geometries: [Int: ComputerDisplayGeometry]) {
+        self.geometries = geometries
+        super.init()
+    }
+
+    override func start(
+        fps: Double,
+        maxWidth: Int?,
+        display: Int?,
+        watch: Bool,
+        onFrame: @escaping (CGImage, ComputerDisplayGeometry) -> Void,
+        onEnded: (() -> Void)?
+    ) async throws {
+        if let chosen = geometries[display ?? 0] { geometry = chosen }
+        if suspends { await withCheckedContinuation { parked = $0 } }
+        again = { [image, geometry] in onFrame(image, geometry) }
+        try await super.start(
+            fps: fps, maxWidth: maxWidth, display: display, watch: watch, onFrame: onFrame,
+            onEnded: onEnded)
+    }
+
+    func emitAgain() { again?() }
+
+    func release() {
+        parked?.resume()
+        parked = nil
+    }
 }
 
 enum ComputerTestImages {

@@ -242,4 +242,82 @@ final class ComputerInputOriginTests: XCTestCase {
         try await injector.apply([.mousemove(x: 0, y: 0, relative: false)])
         XCTAssertEqual(sink.actions, [.mouseMove(CGPoint(x: -1440, y: 280))])
     }
+
+    /// A relative delta is screenshot pixels like any other coordinate: on a
+    /// 2x display 200 px is 100 pt, and it carries no origin of its own.
+    func testRelativeMoveOnARetinaDisplayScalesTheDeltaButAddsNoOrigin() async throws {
+        let sink = RecordingEventSink()
+        let display = ComputerDisplayFixtures.right
+        var injector = ComputerInputInjector(
+            sink: sink, encodedSize: display.pixelSize, display: display, delay: { _ in })
+        try await injector.apply([
+            .mousemove(x: 0, y: 0, relative: false),
+            .mousemove(x: 200, y: -100, relative: true),
+        ])
+        XCTAssertEqual(
+            sink.actions,
+            [
+                .mouseMove(CGPoint(x: 2560, y: 323)),
+                .mouseMove(CGPoint(x: 2660, y: 273)),
+            ])
+    }
+
+    func testRelativeMoveBeforeAnyAbsoluteStartsFromTheRealPointer() async throws {
+        let sink = RecordingEventSink()
+        sink.cursor = CGPoint(x: 100, y: 50)
+        let display = ComputerDisplayFixtures.main
+        var injector = ComputerInputInjector(
+            sink: sink, encodedSize: display.pixelSize, display: display, delay: { _ in })
+        try await injector.apply([.mousemove(x: 20, y: 20, relative: true)])
+        XCTAssertEqual(sink.actions, [.mouseMove(CGPoint(x: 110, y: 60))])
+    }
+
+    func testRelativeMoveWithNoKnownPointerStartsAtTheDisplayOrigin() async throws {
+        let sink = RecordingEventSink()
+        let display = ComputerDisplayFixtures.left
+        var injector = ComputerInputInjector(
+            sink: sink, encodedSize: display.pixelSize, display: display, delay: { _ in })
+        try await injector.apply([.mousemove(x: 2, y: 2, relative: true)])
+        XCTAssertEqual(sink.actions, [.mouseMove(CGPoint(x: -1439, y: 281))])
+    }
+
+    func testGlobalDeltaUndoesScaleOnly() {
+        XCTAssertEqual(
+            ComputerDisplayFixtures.left.globalDelta(fromPixel: CGPoint(x: 10, y: -4)),
+            CGPoint(x: 5, y: -2))
+    }
+}
+
+final class ComputerWireNumberTests: XCTestCase {
+    /// `Int(1e19)` traps; a wire value must turn into nil, not a crash.
+    func testIntRejectsWhatIntCannotHold() {
+        XCTAssertNil(ComputerWireNumber.int(1e19))
+        XCTAssertNil(ComputerWireNumber.int(-1e19))
+        XCTAssertNil(ComputerWireNumber.int(.nan))
+        XCTAssertNil(ComputerWireNumber.int(.infinity))
+        XCTAssertEqual(ComputerWireNumber.int(2.6), 3)
+    }
+
+    func testInt32Saturates() {
+        XCTAssertEqual(ComputerWireNumber.int32(1e19), Int32.max)
+        XCTAssertEqual(ComputerWireNumber.int32(-1e19), Int32.min)
+        XCTAssertEqual(ComputerWireNumber.int32(.nan), 0)
+        XCTAssertEqual(ComputerWireNumber.int32(-2.4), -2)
+    }
+
+    func testNanosecondsSaturatesAndFloorsAtZero() {
+        XCTAssertEqual(ComputerWireNumber.nanoseconds(milliseconds: 1e300), 9_000_000_000_000_000_000)
+        XCTAssertEqual(ComputerWireNumber.nanoseconds(milliseconds: -5), 0)
+        XCTAssertEqual(ComputerWireNumber.nanoseconds(milliseconds: 2), 2_000_000)
+    }
+
+    func testAHugeScrollDoesNotTrapTheInjector() async throws {
+        let sink = RecordingEventSink()
+        var injector = ComputerInputInjector(
+            sink: sink, encodedSize: CGSize(width: 10, height: 10),
+            nativeSize: CGSize(width: 10, height: 10), delay: { _ in })
+        try await injector.apply([.scroll(dx: 1e19, dy: -1e19, x: 1, y: 1)])
+        XCTAssertEqual(
+            sink.actions, [.scroll(dx: Int32.max, dy: Int32.min, at: CGPoint(x: 1, y: 1))])
+    }
 }

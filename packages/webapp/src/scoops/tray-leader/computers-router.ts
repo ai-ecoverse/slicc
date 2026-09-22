@@ -225,7 +225,11 @@ export class ComputersRouter {
   async inputNative(
     runtimeId: string,
     events: ComputerInputEvent[],
-    opts: { timeoutMs?: number } = {}
+    opts: {
+      timeoutMs?: number;
+      /** The capture's display index, so the follower maps through that screen. */
+      display?: number;
+    } = {}
   ): Promise<void> {
     const follower = this.requireComputerFollower(runtimeId);
     const requestId = `nin-${crypto.randomUUID()}`;
@@ -240,6 +244,7 @@ export class ComputersRouter {
         type: 'computer.native.input',
         requestId,
         events,
+        display: opts.display,
       });
       if (!sent) {
         this.pendingInput.delete(requestId);

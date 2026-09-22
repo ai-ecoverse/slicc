@@ -29,8 +29,241 @@ final class ComputerTrayFollowerTests: XCTestCase {
             makeCapturer: { capturer },
             permissions: permissions,
             eventSink: sink,
-            pairId: pairId)
+            pairId: pairId,
+            makeDisplayGeometry: { [capturer] _ in capturer.geometry })
         return (follower, capturer, sink)
+    }
+
+    /// A follower whose `makeCapturer` hands out a fresh stub per capture, as
+    /// the live one does, so two captures can genuinely be in flight at once.
+    private func makeMultiCaptureFollower(
+        geometries: [Int: ComputerDisplayGeometry],
+        sink: RecordingEventSink = RecordingEventSink(),
+        suspends: Bool = false
+    ) -> (ComputerTrayFollower, () -> [MultiDisplayStubCapturer]) {
+        var made: [MultiDisplayStubCapturer] = []
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in RecordingConnector() },
+            makeCapturer: {
+                let capturer = MultiDisplayStubCapturer(geometries: geometries)
+                capturer.suspends = suspends
+                made.append(capturer)
+                return capturer
+            },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: sink,
+            makeDisplayGeometry: { index in
+                guard let geometry = geometries[index ?? 0] else {
+                    throw ComputerCaptureError.displayOutOfRange(index: index ?? 0, available: "")
+                }
+                return geometry
+            })
+        return (follower, { made })
+    }
+
+    private func frames(in sent: [Data]) -> [[String: Any]] {
+        sent.compactMap { data -> [String: Any]? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.frame"
+            else { return nil }
+            return obj
+        }
+    }
+
+    private func errors(in sent: [Data]) -> [String] {
+        sent.compactMap { data -> String? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "computer.native.error"
+            else { return nil }
+            return obj["error"] as? String
+        }
+    }
+
+    /// Two displays polled at once: each capture used to replace the single
+    /// capturer and re-key `currentRequestId`, so the first display's frame was
+    /// dropped and its leader request timed out after 30 s (#3399 review).
+    func testConcurrentCapturesOfTwoDisplaysBothAnswer() async throws {
+        let (follower, made) = makeMultiCaptureFollower(
+            geometries: [3: ComputerDisplayFixtures.right, 4: ComputerDisplayFixtures.left],
+            suspends: true)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap-3", fps: 1, maxWidth: nil, display: 3, watch: false)))
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap-4", fps: 1, maxWidth: nil, display: 4, watch: false)))
+        await settle()
+        XCTAssertEqual(made().count, 2, "both captures must be in flight at once")
+        for capturer in made() { capturer.release() }
+        await follower._testing_settle()
+        let answered = frames(in: sent).compactMap { $0["requestId"] as? String }
+        XCTAssertEqual(Set(answered), ["cap-3", "cap-4"])
+        XCTAssertEqual(made().map(\.stopped), [0, 0], "neither capture may cancel the other")
+    }
+
+    /// Watching display 4 must not tear down display 3's stream.
+    func testAWatchOfOneDisplayLeavesAnotherDisplaysStreamRunning() async throws {
+        let (follower, made) = makeMultiCaptureFollower(
+            geometries: [3: ComputerDisplayFixtures.right, 4: ComputerDisplayFixtures.left])
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "w3", fps: 2, maxWidth: 64, display: 3, watch: true)))
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "w4", fps: 2, maxWidth: 64, display: 4, watch: true)))
+        await follower._testing_settle()
+        XCTAssertEqual(made()[0].stopped, 0)
+        sent.removeAll()
+        made()[0].emitAgain()
+        await settle()
+        XCTAssertEqual(frames(in: sent).compactMap { $0["requestId"] as? String }, ["w3"])
+
+        // A second watch of the SAME display does supersede the first.
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "w3b", fps: 2, maxWidth: 64, display: 3, watch: true)))
+        await follower._testing_settle()
+        XCTAssertEqual(made()[0].stopped, 1)
+        XCTAssertEqual(made()[1].stopped, 0)
+    }
+
+    func testUnwatchWithARequestIdStopsOnlyThatStream() async throws {
+        let (follower, made) = makeMultiCaptureFollower(
+            geometries: [3: ComputerDisplayFixtures.right, 4: ComputerDisplayFixtures.left])
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        for (id, display) in [("w3", 3.0), ("w4", 4.0)] {
+            follower.route(
+                try encode(
+                    .computerNativeCapture(
+                        requestId: id, fps: 2, maxWidth: 64, display: display, watch: true)))
+        }
+        await follower._testing_settle()
+        follower.route(try encode(.computerNativeUnwatch(requestId: "w4")))
+        XCTAssertEqual(made().map(\.stopped), [0, 1])
+        follower.route(try encode(.computerNativeUnwatch(requestId: nil)))
+        XCTAssertEqual(made().map(\.stopped), [1, 1], "a bare unwatch still stops everything")
+    }
+
+    /// Display 3 captured, then display 4: a click on 3 must use 3's origin and
+    /// scale, not the last frame's (#3399 review).
+    func testInputUsesTheGeometryOfTheDisplayItNames() async throws {
+        let sink = RecordingEventSink()
+        let (follower, _) = makeMultiCaptureFollower(
+            geometries: [3: ComputerDisplayFixtures.right, 4: ComputerDisplayFixtures.left],
+            sink: sink)
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        for (id, display) in [("c3", 3.0), ("c4", 4.0)] {
+            follower.route(
+                try encode(
+                    .computerNativeCapture(
+                        requestId: id, fps: 1, maxWidth: nil, display: display, watch: false)))
+            await follower._testing_settle()
+        }
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-3",
+                    events: [.click(button: 1, count: 1, holdMs: nil, x: 1440, y: 2560)],
+                    display: 3)))
+        await follower._testing_settle()
+        let onRight = CGPoint(x: 3280, y: 1603)
+        XCTAssertEqual(
+            sink.actions,
+            [
+                .mouseButton(.left, down: true, at: onRight),
+                .mouseButton(.left, down: false, at: onRight),
+            ])
+    }
+
+    /// No frame of that display yet: resolve its geometry rather than mapping
+    /// through a placeholder.
+    func testInputBeforeAnyCaptureResolvesTheDisplayGeometry() async throws {
+        let sink = RecordingEventSink()
+        let (follower, made) = makeMultiCaptureFollower(
+            geometries: [0: ComputerDisplayFixtures.main, 4: ComputerDisplayFixtures.left],
+            sink: sink)
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-4", events: [.mousemove(x: 0, y: 0, relative: false)],
+                    display: 4)))
+        await follower._testing_settle()
+        XCTAssertTrue(made().isEmpty, "input must not start a capture")
+        XCTAssertEqual(sink.actions, [.mouseMove(CGPoint(x: -1440, y: 280))])
+    }
+
+    /// `Int(1e19)` traps. A leader (or anything impersonating one) must get an
+    /// error reply instead of killing the follower process (#3399 review).
+    func testAnUnrepresentableDisplayIsAnErrorNotATrap() async throws {
+        let (follower, capturer, sink) = makeFollower()
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap-huge", fps: 1, maxWidth: 1e19, display: 1e19, watch: false)))
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-huge", events: [.mousemove(x: 1, y: 1, relative: false)],
+                    display: -1e19)))
+        await follower._testing_settle()
+        XCTAssertEqual(capturer.started, 0)
+        XCTAssertTrue(sink.actions.isEmpty)
+        let errs = errors(in: sent)
+        XCTAssertEqual(errs.count, 2)
+        XCTAssertTrue(errs.allSatisfy { $0.contains("is not a valid display number") }, "\(errs)")
+    }
+
+    func testAnUnrepresentableMaxWidthMeansNoDownscaleNotATrap() async throws {
+        let (follower, capturer, _) = makeFollower()
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap-w", fps: 1, maxWidth: 1e19, display: nil, watch: false)))
+        await follower._testing_settle()
+        XCTAssertEqual(capturer.started, 1)
+        XCTAssertNil(capturer.lastMaxWidth)
+        XCTAssertEqual(frames(in: sent).count, 1)
     }
 
     private func connect(_ follower: ComputerTrayFollower) throws -> [Data] {

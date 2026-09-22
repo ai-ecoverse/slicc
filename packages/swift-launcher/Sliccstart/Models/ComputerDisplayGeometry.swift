@@ -50,6 +50,12 @@ struct ComputerDisplayGeometry: Equatable {
         return CGPoint(x: origin.x + pixel.x / sx, y: origin.y + pixel.y / sy)
     }
 
+    /// A native-pixel offset → the same offset in global points.
+    func globalDelta(fromPixel pixel: CGPoint) -> CGPoint {
+        let point = globalPoint(fromPixel: pixel)
+        return CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+    }
+
     /// `2880x5120 (main)` — the operator-facing shorthand in a display listing.
     var summary: String {
         "\(Int(pixelSize.width.rounded()))x\(Int(pixelSize.height.rounded()))"

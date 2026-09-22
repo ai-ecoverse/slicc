@@ -15,10 +15,20 @@ enum ComputerCGAction: Equatable {
 
 protocol ComputerEventSink {
     func post(_ action: ComputerCGAction)
+    /// The pointer's current global `CGEvent` point, or nil when unknown.
+    func cursorLocation() -> CGPoint?
+}
+
+extension ComputerEventSink {
+    func cursorLocation() -> CGPoint? { nil }
 }
 
 /// Posts into the real event tap. Unused in unit tests.
 struct LiveCGEventSink: ComputerEventSink {
+    func cursorLocation() -> CGPoint? {
+        CGEvent(source: nil)?.location
+    }
+
     func post(_ action: ComputerCGAction) {
         switch action {
         case .mouseMove(let point):
@@ -64,10 +74,33 @@ struct LiveCGEventSink: ComputerEventSink {
     }
 }
 
+/// Wire numbers arrive as `Double`, and `Int(_:)` / `Int32(_:)` / `UInt64(_:)`
+/// trap on anything they cannot represent. A peer must never be able to crash
+/// the follower with a large number, so every wire → integer conversion goes
+/// through here.
+enum ComputerWireNumber {
+    /// The nearest `Int`, or nil for NaN, infinity, or a value outside `Int`.
+    static func int(_ value: Double) -> Int? {
+        Int(exactly: value.rounded())
+    }
+
+    static func int32(_ value: Double) -> Int32 {
+        guard value.isFinite else { return 0 }
+        return Int32(max(Double(Int32.min), min(Double(Int32.max), value.rounded())))
+    }
+
+    /// Non-negative nanoseconds, saturating well below `UInt64.max` (whose
+    /// `Double` rounds up past it and would itself trap).
+    static func nanoseconds(milliseconds: Double) -> UInt64 {
+        guard milliseconds.isFinite, milliseconds > 0 else { return 0 }
+        return UInt64(min(milliseconds * 1_000_000, 9e18).rounded())
+    }
+}
+
 enum ComputerInputDelay {
     static func sleep(_ milliseconds: Double) async {
-        guard milliseconds > 0 else { return }
-        let ns = UInt64((milliseconds * 1_000_000).rounded())
+        let ns = ComputerWireNumber.nanoseconds(milliseconds: milliseconds)
+        guard ns > 0 else { return }
         try? await Task.sleep(nanoseconds: ns)
     }
 }
@@ -95,6 +128,15 @@ enum ComputerInputScaler {
         display.globalPoint(
             fromPixel: nativePoint(x: x, y: y, encoded: encoded, native: display.pixelSize))
     }
+
+    /// A screenshot-space *delta* → global points: the same scale as
+    /// ``globalPoint`` but no origin, since a delta has no position.
+    static func globalDelta(
+        dx: Double, dy: Double, encoded: CGSize, display: ComputerDisplayGeometry
+    ) -> CGPoint {
+        display.globalDelta(
+            fromPixel: nativePoint(x: dx, y: dy, encoded: encoded, native: display.pixelSize))
+    }
 }
 
 enum ComputerInputError: Error, Equatable, CustomStringConvertible {
@@ -115,7 +157,14 @@ struct ComputerInputInjector {
     var encodedSize: CGSize
     var display: ComputerDisplayGeometry
     var delay: (Double) async -> Void
-    private var cursor = CGPoint.zero
+    /// Nil until an event positions the pointer; a relative move or a
+    /// coordinate-less button before that starts from where the pointer really is.
+    private var knownCursor: CGPoint?
+
+    private var cursor: CGPoint {
+        get { knownCursor ?? sink.cursorLocation() ?? display.origin }
+        set { knownCursor = newValue }
+    }
 
     init(
         sink: ComputerEventSink, encodedSize: CGSize, display: ComputerDisplayGeometry,
@@ -159,8 +208,10 @@ struct ComputerInputInjector {
         switch event {
         case .mousemove(let x, let y, let relative):
             if relative == true {
-                cursor.x += x
-                cursor.y += y
+                let delta = ComputerInputScaler.globalDelta(
+                    dx: x, dy: y, encoded: encodedSize, display: display)
+                let from = cursor
+                cursor = CGPoint(x: from.x + delta.x, y: from.y + delta.y)
             } else {
                 cursor = point(x, y)
             }
@@ -182,7 +233,10 @@ struct ComputerInputInjector {
             }
         case .scroll(let dx, let dy, let x, let y):
             if let x, let y { cursor = point(x, y) }
-            sink.post(.scroll(dx: Int32(dx.rounded()), dy: Int32(dy.rounded()), at: cursor))
+            sink.post(
+                .scroll(
+                    dx: ComputerWireNumber.int32(dx), dy: ComputerWireNumber.int32(dy),
+                    at: cursor))
         case .drag(let x1, let y1, let x2, let y2):
             cursor = point(x1, y1)
             sink.post(.mouseMove(cursor))

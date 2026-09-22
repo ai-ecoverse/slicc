@@ -1132,7 +1132,7 @@ describe('computer parse', () => {
     expect(capture).toHaveBeenCalledWith(expect.objectContaining({ display: 3 }));
   });
 
-  it('add ssh rejects a non-numeric or zero --display', async () => {
+  it('add ssh rejects a non-numeric, zero, or unbounded --display', async () => {
     const cmd = createComputerCommand({
       registry: new ComputerRegistry(null),
       listFollowers: () => [
@@ -1158,7 +1158,9 @@ describe('computer parse', () => {
       }),
     });
     const { ctx } = makeCtx();
-    for (const bad of ['0', 'left', '-2']) {
+    // 1e19 passes Number.isInteger but overflows the follower's Int, which
+    // used to trap the native follower instead of listing its displays.
+    for (const bad of ['0', 'left', '-2', '10000000000000000000', '65', '2.5']) {
       const added = await cmd.execute(
         ['add', 'ssh', 'sliccstart-computer-1', '--display', bad],
         ctx

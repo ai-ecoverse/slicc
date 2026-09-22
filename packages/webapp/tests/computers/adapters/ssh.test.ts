@@ -240,12 +240,15 @@ describe('ssh backend', () => {
     });
     expect(exec).not.toHaveBeenCalled();
     await backend.input([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
-    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
+    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }], {
+      display: undefined,
+    });
     await backend.close();
     expect(unwatch).toHaveBeenCalled();
   });
 
   it('carries the picked display into every native capture and into the id', async () => {
+    const input = vi.fn();
     const capture = vi.fn(async () => ({
       bytes: new Uint8Array([1, 2, 3]),
       mime: 'image/jpeg' as const,
@@ -261,15 +264,21 @@ describe('ssh backend', () => {
         runtimeId: 'sliccstart-computer-1',
         title: 'desk display 3',
         probe: { platform: 'darwin', tools: [], capture: null, input: 'none' },
-        inputAllowed: false,
+        inputAllowed: true,
         display: 3,
-        native: { capture, input: vi.fn(), unwatch: vi.fn() },
+        native: { capture, input, unwatch: vi.fn() },
       }
     );
     expect(backend.describe().id).toBe('ssh:sliccstart-computer-1:display:3');
     await backend.screenshot({ format: 'jpeg', maxWidth: 768 });
     expect(capture).toHaveBeenCalledWith({ fps: 2, maxWidth: 768, display: 3, watch: false });
     expect(backend.describe().size).toEqual({ width: 2880, height: 5120 });
+    // Input names its display too, or the follower maps a click on display 3
+    // through whichever display it captured last.
+    await backend.input([{ type: 'click', button: 1, count: 1, x: 5, y: 5 }]);
+    expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 5, y: 5 }], {
+      display: 3,
+    });
   });
 
   it('keeps the plain id for the default display so one registration is unchanged', () => {

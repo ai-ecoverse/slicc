@@ -36,20 +36,30 @@ final class ComputerTrayFollower: NSObject {
     /// exits, because a launcher nobody can reach should not outlive its use.
     var onGaveUp: ((String) -> Void)?
 
+    /// One in-flight capture. Keyed by requestId, not held as a single
+    /// follower-wide capturer: two displays captured concurrently must not
+    /// cancel each other's request or stream.
+    private struct CaptureSlot {
+        let capturer: ComputerCapturing
+        let displayKey: Int
+        let maxWidth: Int?
+        let watch: Bool
+    }
+
+    private let makeDisplayGeometry: (Int?) throws -> ComputerDisplayGeometry
     private var connector: TrayFollowerConnecting?
     private var startTask: Task<Void, Never>?
     private var lastSync: Task<Void, Never>?
-    private var lastCapture: Task<Void, Never>?
+    private var captureTasks: [Task<Void, Never>] = []
     private var sendData: ((Data) -> Bool)?
     private var reassembler = TrayChunkReassembler()
-    private var capturer: ComputerCapturing?
+    private var captures: [String: CaptureSlot] = [:]
     private var joinUrl: URL?
     private var seq = 0
-    private var currentRequestId: String?
-    /// Geometry of the display the last frame came from — pixel size for the
-    /// wire, point size and origin so input lands on *that* display (#3385).
-    private var geometry = ComputerDisplayGeometry.identity(size: CGSize(width: 1, height: 1))
-    private var lastMaxWidth: Int?
+    /// Geometry of the last frame per display (key 0 = the default, main
+    /// display) — pixel size for the wire, point size and origin so input
+    /// lands on the display the input names (#3385).
+    private var geometries: [Int: ComputerDisplayGeometry] = [:]
     private var lastInput: Task<Void, Never>?
 
     init(
@@ -59,10 +69,14 @@ final class ComputerTrayFollower: NSObject {
         makeCapturer: (() -> ComputerCapturing)? = nil,
         permissions: ComputerPermissions = ComputerPermissions(),
         eventSink: ComputerEventSink = LiveCGEventSink(),
-        pairId: String? = nil
+        pairId: String? = nil,
+        makeDisplayGeometry: @escaping (Int?) throws -> ComputerDisplayGeometry = {
+            try ScreenCaptureKitCapturer.liveGeometry(index: $0)
+        }
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
+        self.makeDisplayGeometry = makeDisplayGeometry
         self.permissions = permissions
         self.eventSink = eventSink
         self.pairId = pairId
@@ -91,8 +105,12 @@ final class ComputerTrayFollower: NSObject {
     func _testing_settle() async {
         await lastSync?.value
         await lastInput?.value
-        await lastCapture?.value
-        await lastCapture?.value
+        // A stream that ends re-queues its own capture, so drain until quiet.
+        while !captureTasks.isEmpty {
+            let pending = captureTasks
+            captureTasks.removeAll()
+            for task in pending { await task.value }
+        }
     }
 
     func stop() {
@@ -102,9 +120,8 @@ final class ComputerTrayFollower: NSObject {
     }
 
     private func teardownConnection() {
-        capturer?.stop()
-        capturer = nil
-        currentRequestId = nil
+        stopAllCaptures()
+        geometries.removeAll()
         connector?.stop()
         connector = nil
         sendData = nil
@@ -156,20 +173,42 @@ final class ComputerTrayFollower: NSObject {
         case .ping:
             _ = send(.pong)
         case .computerNativeCapture(let requestId, let fps, let maxWidth, let display, let watch):
-            lastCapture = Task {
-                await handleCapture(
-                    requestId: requestId, fps: fps, maxWidth: maxWidth, display: display,
-                    watch: watch)
+            queueCapture(
+                requestId: requestId, fps: fps, maxWidth: maxWidth, display: display, watch: watch)
+        case .computerNativeUnwatch(let requestId):
+            if let requestId {
+                stopCapture(requestId)
+            } else {
+                stopAllCaptures()
             }
-        case .computerNativeUnwatch:
-            capturer?.stop()
-            capturer = nil
-            currentRequestId = nil
-        case .computerNativeInput(let requestId, let events):
-            lastInput = Task { await handleInput(requestId: requestId, events: events) }
+        case .computerNativeInput(let requestId, let events, let display):
+            lastInput = Task {
+                await handleInput(requestId: requestId, events: events, display: display)
+            }
         default:
             break
         }
+    }
+
+    private func queueCapture(
+        requestId: String, fps: Double?, maxWidth: Double?, display: Double?, watch: Bool?
+    ) {
+        captureTasks.append(
+            Task {
+                await handleCapture(
+                    requestId: requestId, fps: fps, maxWidth: maxWidth, display: display,
+                    watch: watch)
+            })
+    }
+
+    private func stopCapture(_ requestId: String) {
+        captures.removeValue(forKey: requestId)?.capturer.stop()
+    }
+
+    private func stopAllCaptures() {
+        let slots = captures.values
+        captures.removeAll()
+        for slot in slots { slot.capturer.stop() }
     }
 
     private func handleCapture(
@@ -183,42 +222,73 @@ final class ComputerTrayFollower: NSObject {
                     requestId: requestId, error: ComputerCaptureFailure.message(for: error)))
             return
         }
-        capturer?.stop()
-        let capturer = makeCapturer()
-        self.capturer = capturer
-        currentRequestId = requestId
-        let fpsValue = fps ?? 2
-        let width = maxWidth.map { Int($0.rounded()) }
-        lastMaxWidth = width
+        let displayIndex: Int?
+        do {
+            displayIndex = try Self.displayIndex(display)
+        } catch {
+            _ = send(
+                .computerNativeError(
+                    requestId: requestId, error: ComputerCaptureFailure.message(for: error)))
+            return
+        }
+        let displayKey = displayIndex ?? 0
         let watching = watch ?? false
-        let displayIndex = display.map { Int($0.rounded()) }
+        stopCapture(requestId)
+        if watching {
+            // One stream per display: a newer watch of the same screen supersedes
+            // the older one; other displays' streams and one-shots are untouched.
+            for (id, slot) in captures where slot.watch && slot.displayKey == displayKey {
+                stopCapture(id)
+            }
+        }
+        let capturer = makeCapturer()
+        captures[requestId] = CaptureSlot(
+            capturer: capturer, displayKey: displayKey,
+            maxWidth: maxWidth.flatMap(ComputerWireNumber.int), watch: watching)
         do {
             try await capturer.start(
-                fps: fpsValue, maxWidth: width, display: displayIndex, watch: watching,
+                fps: fps ?? 2, maxWidth: captures[requestId]?.maxWidth, display: displayIndex,
+                watch: watching,
                 onFrame: { [weak self] image, geometry in
                     self?.emitFrame(requestId: requestId, image: image, geometry: geometry)
                 },
                 onEnded: { [weak self] in
-                    guard watching, let self else { return }
-                    self.lastCapture = Task { @MainActor in
-                        await self.handleCapture(
-                            requestId: requestId, fps: fps, maxWidth: maxWidth, display: display,
-                            watch: true)
-                    }
+                    guard watching, let self, self.captures[requestId]?.capturer === capturer
+                    else { return }
+                    self.queueCapture(
+                        requestId: requestId, fps: fps, maxWidth: maxWidth, display: display,
+                        watch: true)
                 })
+            if !watching, captures[requestId]?.capturer === capturer {
+                captures.removeValue(forKey: requestId)
+            }
         } catch {
+            if captures[requestId]?.capturer === capturer {
+                captures.removeValue(forKey: requestId)
+            }
             _ = send(
                 .computerNativeError(
                     requestId: requestId, error: ComputerCaptureFailure.message(for: error)))
         }
     }
 
+    /// Wire `display` → a 1-based index. Nil means the main display; a value
+    /// `Int` cannot hold is an error reply, never a trap.
+    private static func displayIndex(_ display: Double?) throws -> Int? {
+        guard let display else { return nil }
+        guard let index = ComputerWireNumber.int(display) else {
+            throw ComputerCaptureError.invalidDisplay(display)
+        }
+        return index
+    }
+
     private func emitFrame(
         requestId: String, image: CGImage, geometry incoming: ComputerDisplayGeometry
     ) {
-        guard currentRequestId == requestId else { return }
+        guard let slot = captures[requestId] else { return }
+        if !slot.watch { captures.removeValue(forKey: requestId) }
         guard
-            let encoded = ComputerFrameEncoder.jpeg(from: image, maxWidth: lastMaxWidth)
+            let encoded = ComputerFrameEncoder.jpeg(from: image, maxWidth: slot.maxWidth)
         else {
             _ = send(
                 .computerNativeError(
@@ -230,32 +300,35 @@ final class ComputerTrayFollower: NSObject {
         // evidence of native size; treat it as unscaled and un-offset.
         let fallback = CGSize(
             width: CGFloat(encoded.nativeWidth), height: CGFloat(encoded.nativeHeight))
-        geometry =
+        let geometry =
             incoming.pixelSize.width > 0 && incoming.pixelSize.height > 0
             ? incoming : .identity(size: fallback)
-        let nativeW = geometry.pixelSize.width
-        let nativeH = geometry.pixelSize.height
+        geometries[slot.displayKey] = geometry
         let b64 = encoded.data.base64EncodedString()
         for message in ComputerNativeFraming.messages(
             requestId: requestId,
             seq: seq,
             width: Double(encoded.width),
             height: Double(encoded.height),
-            nativeWidth: Double(nativeW),
-            nativeHeight: Double(nativeH),
+            nativeWidth: Double(geometry.pixelSize.width),
+            nativeHeight: Double(geometry.pixelSize.height),
             data: b64)
         {
             _ = send(message)
         }
     }
 
-    private func handleInput(requestId: String, events: [ComputerInputEvent]) async {
+    private func handleInput(
+        requestId: String, events: [ComputerInputEvent], display: Double?
+    ) async {
         // Wire events are already native pixels (leader/lightbox map once), so
         // the injector's scale is identity — but pixels→points and the captured
         // display's origin are the follower's job: it is the only party that
         // knows which `SCDisplay` it picked (#3385).
         do {
             try permissions.ensureAccessibility()
+            let index = try Self.displayIndex(display)
+            let geometry = try geometries[index ?? 0] ?? makeDisplayGeometry(index)
             var injector = ComputerInputInjector(
                 sink: eventSink, encodedSize: geometry.pixelSize, display: geometry)
             try await injector.apply(events)
@@ -292,8 +365,7 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
     nonisolated func connectorDidDisconnect(_ connector: TrayFollowerConnector, reason: String) {
         Task { @MainActor [weak self] in
             self?.sendData = nil
-            self?.capturer?.stop()
-            self?.capturer = nil
+            self?.stopAllCaptures()
         }
     }
 

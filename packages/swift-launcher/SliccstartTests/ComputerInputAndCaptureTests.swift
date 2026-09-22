@@ -137,7 +137,9 @@ final class ComputerInputInjectorTests: XCTestCase {
         ])
         XCTAssertEqual(slept, [25, 25, 40])
         XCTAssertEqual(sink.actions[0], .mouseMove(CGPoint(x: 20, y: 10)))
-        XCTAssertEqual(sink.actions[1], .mouseMove(CGPoint(x: 22, y: 13)))
+        // The relative delta is in screenshot space too, so it scales like an
+        // absolute point: (2,3) at 2x is (4,6), not an unscaled (2,3).
+        XCTAssertEqual(sink.actions[1], .mouseMove(CGPoint(x: 24, y: 16)))
         XCTAssertEqual(sink.actions[2], .mouseButton(.left, down: true, at: CGPoint(x: 40, y: 20)))
         XCTAssertEqual(sink.actions[3], .mouseButton(.right, down: false, at: CGPoint(x: 40, y: 20)))
         XCTAssertEqual(sink.actions[4], .mouseButton(.center, down: true, at: CGPoint(x: 2, y: 2)))

@@ -365,6 +365,15 @@ describe('ComputersRouter', () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it('names the display on computer.native.input when one is picked', () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    void router
+      .inputNative('mac', [{ type: 'key', keysym: 'Return' }], { display: 3, timeoutMs: 5 })
+      .catch(() => {});
+    expect(sent.get('mac')?.[0]).toMatchObject({ type: 'computer.native.input', display: 3 });
+  });
+
   it('rejects inputNative when the follower reports Accessibility denial', async () => {
     const { router, addFollower, sent } = createHarness();
     addFollower('mac', 'full', { computer: true });

@@ -132,8 +132,13 @@ function nativeChannelFromRpc(
     unwatch() {
       void rpc.call('tray-computer-native', { runtimeId, action: 'unwatch' }).catch(() => {});
     },
-    async input(events) {
-      await rpc.call('tray-computer-native', { runtimeId, action: 'input', events });
+    async input(events, opts) {
+      await rpc.call('tray-computer-native', {
+        runtimeId,
+        action: 'input',
+        events,
+        display: opts?.display,
+      });
     },
   };
 }
@@ -141,6 +146,9 @@ function nativeChannelFromRpc(
 function listFollowers(deps: ComputerCommandDeps): ConnectedFollowerInfo[] {
   return deps.listFollowers?.() ?? getConnectedFollowersWithFallback();
 }
+
+/** Far above any real Mac's display count; only a guard against absurd input. */
+const MAX_NATIVE_DISPLAY = 64;
 
 const NATIVE_FALLBACK_PROBE: SshProbe = {
   platform: 'darwin',
@@ -422,7 +430,9 @@ async function verbAddSsh(
   let display: number | undefined;
   if (rawDisplay !== undefined) {
     display = Number(rawDisplay);
-    if (!Number.isInteger(display) || display < 1) {
+    // Bounded, not just integral: `Number.isInteger(1e19)` is true, and a value
+    // past the follower's `Int` used to trap it instead of listing displays.
+    if (!Number.isSafeInteger(display) || display < 1 || display > MAX_NATIVE_DISPLAY) {
       return fail(`add ssh: --display takes a 1-based display number, got '${rawDisplay}'`);
     }
     if (sim) return fail('add ssh: --display and --sim are exclusive');

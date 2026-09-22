@@ -44,7 +44,8 @@ export interface NativeComputerChannel {
     nativeHeight: number;
   }>;
   unwatch(): void;
-  input(events: ComputerInputEvent[]): Promise<void> | void;
+  /** `display` names the screen the events target — the same index `capture` used. */
+  input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
 }
 
 export type SshPlatform = 'darwin' | 'linux' | 'unknown';
@@ -333,7 +334,7 @@ export class SshComputerBackend implements ComputerBackend {
     if (!this.inputAllowed) throw new Error('input is not allowed');
     const filled = applyPointerToEvents(this.pointer, events);
     if (this.native) {
-      await this.native.input(filled);
+      await this.native.input(filled, { display: this.display });
       return;
     }
     for (const event of filled) {

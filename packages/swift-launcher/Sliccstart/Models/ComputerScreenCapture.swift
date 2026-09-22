@@ -23,9 +23,12 @@ enum ComputerCaptureError: Error, Equatable {
     case noDisplay
     case encodeFailed
     case displayOutOfRange(index: Int, available: String)
+    case invalidDisplay(Double)
 
     var message: String {
         switch self {
+        case .invalidDisplay(let value):
+            return "display \(value) is not a valid display number"
         case .noDisplay:
             return "no display available for ScreenCaptureKit"
         case .encodeFailed:
@@ -177,7 +180,23 @@ final class ScreenCaptureKitCapturer: NSObject, ComputerCapturing, SCStreamOutpu
             isMain: display.displayID == CGMainDisplayID())
     }
 
-    private static func activeDisplayIDs() -> [CGDirectDisplayID] {
+    /// The geometry input maps through when no frame of that display has been
+    /// captured yet. CoreGraphics only, so it needs no Screen Recording grant.
+    nonisolated static func liveGeometry(index: Int?) throws -> ComputerDisplayGeometry {
+        let ids = activeDisplayIDs()
+        let geometries = ids.map { id -> ComputerDisplayGeometry in
+            let bounds = CGDisplayBounds(id)
+            let pixels = CGDisplayCopyDisplayMode(id).map {
+                CGSize(width: CGFloat($0.pixelWidth), height: CGFloat($0.pixelHeight))
+            }
+            return ComputerDisplayGeometry(
+                displayID: id, origin: bounds.origin, pointSize: bounds.size,
+                pixelSize: pixels, isMain: id == CGMainDisplayID())
+        }
+        return try ComputerDisplaySelection.pick(from: geometries, activeOrder: ids, index: index)
+    }
+
+    private nonisolated static func activeDisplayIDs() -> [CGDirectDisplayID] {
         var count: UInt32 = 0
         guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
