@@ -230,12 +230,23 @@ function resolveSshFollower(
   query: string,
   followers: ConnectedFollowerInfo[]
 ): ConnectedFollowerInfo | { error: string } {
+  const matches = (f: ConnectedFollowerInfo) =>
+    f.runtimeId.endsWith(query) || f.runtimeId.includes(query);
   const capable = followers.filter((f) => f.exec || f.computer);
   const exact = capable.find((f) => f.runtimeId === query);
   if (exact) return exact;
-  const hits = capable.filter((f) => f.runtimeId.endsWith(query) || f.runtimeId.includes(query));
+  const hits = capable.filter(matches);
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
+  // A Mac missing the Screen Recording grant advertises `computer: false`
+  // honestly (#3387), so it is not `capable` — but it is connected, and its MOTD
+  // names the grant. Saying which box to tick beats claiming it isn't there.
+  const ungranted = followers.find((f) => !f.exec && !f.computer && f.motd && matches(f));
+  if (ungranted) {
+    return {
+      error: `add ssh: follower '${ungranted.runtimeId}' advertises no shell and no native capture — ${ungranted.motd}`,
+    };
+  }
   return {
     // Name `host`, not `ssh --list` (#3388): `ssh` is an exec command and its
     // lister stays exec-only, so it structurally cannot show the capture-only

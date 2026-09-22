@@ -10,8 +10,9 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "ComputerT
 ///
 /// Unlike ``WidgetTrayObserver``, this always dials when a leader join URL is
 /// set — capture is a capability of the Mac, not of an installed widget. It
-/// advertises `capabilities.computer` and never `exec` (shell-out stays on
-/// `slicc … follow`). iOS never runs this type.
+/// advertises `capabilities.computer` **as the Screen Recording grant actually
+/// stands** (#3387) and never `exec` (shell-out stays on `slicc … follow`).
+/// iOS never runs this type.
 @MainActor
 final class ComputerTrayFollower: NSObject {
     static let runtime = "sliccstart-computer"
@@ -19,6 +20,7 @@ final class ComputerTrayFollower: NSObject {
     private let makeConnector: (URL) -> TrayFollowerConnecting
     private let makeCapturer: () -> ComputerCapturing
     private var permissions: ComputerPermissions
+    private let grantTick: ComputerGrantTick
     private let eventSink: ComputerEventSink
     /// "Same machine" token from `slicc … follow --computer --pair <id>`, put on
     /// `hello` so the leader folds this follower and that CLI into ONE roster
@@ -61,6 +63,11 @@ final class ComputerTrayFollower: NSObject {
     /// lands on the display the input names (#3385).
     private var geometries: [Int: ComputerDisplayGeometry] = [:]
     private var lastInput: Task<Void, Never>?
+    /// The grants the leader has been told about, so the watch re-`hello`s on a
+    /// change and stays silent otherwise.
+    private var advertisedGrants: ComputerGrants?
+    private var grantWatch: Task<Void, Never>?
+    private var lastGrantWatch: Task<Void, Never>?
 
     init(
         makeConnector: @escaping (URL) -> TrayFollowerConnecting = {
@@ -72,7 +79,8 @@ final class ComputerTrayFollower: NSObject {
         pairId: String? = nil,
         makeDisplayGeometry: @escaping (Int?) throws -> ComputerDisplayGeometry = {
             try ScreenCaptureKitCapturer.liveGeometry(index: $0)
-        }
+        },
+        grantTick: @escaping ComputerGrantTick = ComputerGrantWatch.liveTick
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
@@ -80,6 +88,7 @@ final class ComputerTrayFollower: NSObject {
         self.permissions = permissions
         self.eventSink = eventSink
         self.pairId = pairId
+        self.grantTick = grantTick
         super.init()
     }
 
@@ -113,6 +122,12 @@ final class ComputerTrayFollower: NSObject {
         }
     }
 
+    /// Awaits the grant watch, which only ends when the injected tick says stop
+    /// — so this hangs against the live tick and is for tests alone.
+    func _testing_settleGrantWatch() async {
+        await lastGrantWatch?.value
+    }
+
     func stop() {
         startTask?.cancel()
         startTask = nil
@@ -120,6 +135,9 @@ final class ComputerTrayFollower: NSObject {
     }
 
     private func teardownConnection() {
+        grantWatch?.cancel()
+        grantWatch = nil
+        advertisedGrants = nil
         stopAllCaptures()
         geometries.removeAll()
         connector?.stop()
@@ -146,6 +164,42 @@ final class ComputerTrayFollower: NSObject {
             if self.connector === connector { self.connector = nil }
             onGaveUp?(error.localizedDescription)
         }
+    }
+
+    /// Publish the grants as they stand on `hello`.
+    ///
+    /// Repeating `hello` is deliberately the whole re-advertisement mechanism:
+    /// the leader's `handleFollowerHello` overwrites `peerCapabilities` and
+    /// re-notifies every follower-selection site, so a box ticked in System
+    /// Settings mid-session reaches the roster without a reconnect and without a
+    /// new message type on the wire.
+    private func advertise() {
+        let grants = permissions.grants()
+        advertisedGrants = grants
+        _ = send(
+            .hello(
+                protocolVersion: traySyncProtocolVersion,
+                runtime: ComputerTrayFollower.runtime,
+                capabilities: ComputerCapabilityAdvertisement.capabilities(for: grants),
+                motd: ComputerCapabilityAdvertisement.motd(
+                    host: ProcessInfo.processInfo.hostName, grants: grants),
+                pairId: pairId))
+    }
+
+    private func startGrantWatch() {
+        grantWatch?.cancel()
+        let tick = grantTick
+        let task = Task { @MainActor [weak self] in
+            while await tick() {
+                guard !Task.isCancelled, let self, self.sendData != nil else { return }
+                let grants = self.permissions.grants()
+                guard grants != self.advertisedGrants else { continue }
+                log.info("Computer permission grants changed — re-advertising capabilities")
+                self.advertise()
+            }
+        }
+        grantWatch = task
+        lastGrantWatch = task
     }
 
     private func send(_ message: FollowerToLeaderMessage) -> Bool {
@@ -348,23 +402,20 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             sendData = channelSend
-            let host = ProcessInfo.processInfo.hostName
-            _ = send(
-                .hello(
-                    protocolVersion: traySyncProtocolVersion,
-                    runtime: ComputerTrayFollower.runtime,
-                    capabilities: TraySyncCapabilities(exec: false, computer: true),
-                    motd: "Native screen capture on \(host)",
-                    pairId: pairId))
+            advertise()
             // After `hello`, not before: "attached" has to mean the leader now
-            // knows this peer can capture, not merely that a channel opened.
+            // knows what this peer can do, not merely that a channel opened.
             onConnected?()
+            startGrantWatch()
         }
     }
 
     nonisolated func connectorDidDisconnect(_ connector: TrayFollowerConnector, reason: String) {
         Task { @MainActor [weak self] in
             self?.sendData = nil
+            self?.grantWatch?.cancel()
+            self?.grantWatch = nil
+            self?.advertisedGrants = nil
             self?.stopAllCaptures()
         }
     }

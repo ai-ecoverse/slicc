@@ -18,6 +18,71 @@ extension ComputerPermissionProbe {
         accessibilityGranted: { false },
         requestAccessibility: { false }
     )
+
+    /// Capture granted, input not — the state a Mac is actually in when Screen
+    /// Recording is ticked and Accessibility is not (#3387).
+    static let captureOnly = ComputerPermissionProbe(
+        screenRecordingGranted: { true },
+        requestScreenRecording: { true },
+        accessibilityGranted: { false },
+        requestAccessibility: { false }
+    )
+}
+
+/// Grants that can flip mid-test, standing in for a human ticking a box in
+/// System Settings while the follower is connected. Never touches real TCC.
+///
+/// `@unchecked Sendable` because the probe closures are `@Sendable` while every
+/// test mutates this from the main actor only.
+final class MutableGrantProbe: @unchecked Sendable {
+    var screenRecording: Bool
+    var accessibility: Bool
+
+    init(screenRecording: Bool, accessibility: Bool) {
+        self.screenRecording = screenRecording
+        self.accessibility = accessibility
+    }
+
+    var probe: ComputerPermissionProbe {
+        ComputerPermissionProbe(
+            screenRecordingGranted: { [self] in screenRecording },
+            requestScreenRecording: { [self] in screenRecording },
+            accessibilityGranted: { [self] in accessibility },
+            requestAccessibility: { [self] in accessibility }
+        )
+    }
+}
+
+/// A grant watch driven by a script instead of a 2 s sleep: beat `i` runs
+/// `beats[i]` — typically flipping a ``MutableGrantProbe`` — and then lets the
+/// watch read the grants once. The watch stops when the script runs out, so a
+/// test can `await follower._testing_settleGrantWatch()` rather than sleep, and
+/// a change lands on a known beat rather than racing the watch.
+func scriptedGrantTick(_ beats: [@Sendable () async -> Void]) -> ComputerGrantTick {
+    final class Cursor: @unchecked Sendable {
+        var index = 0
+    }
+    let cursor = Cursor()
+    return {
+        guard cursor.index < beats.count else { return false }
+        let beat = beats[cursor.index]
+        cursor.index += 1
+        await beat()
+        return true
+    }
+}
+
+/// Lets a grant-watch beat reach back into the ``ComputerTrayFollower`` the
+/// watch belongs to, which cannot be captured before it exists. A beat runs on
+/// the generic executor (the tick is non-isolated), so reaching the follower
+/// means hopping to the main actor and waiting for the hop to land — otherwise
+/// the test races the very ordering it is pinning.
+final class StopBox: @unchecked Sendable {
+    var stop: (@MainActor () -> Void)?
+
+    func callStop() async {
+        await MainActor.run { stop?() }
+    }
 }
 
 final class RecordingEventSink: ComputerEventSink {

@@ -157,6 +157,36 @@ Pure logic in `Models/ComputerFollowCLI.swift` is unit-tested
 (`ComputerFollowCLITests`); the untestable glue (NSApplication, the run loop,
 the live permission probes) sits in `ComputerFollowCLIRunner`.
 
+**Preflight run by hand tells you nothing.** `Sliccstart --computer-preflight
+--json` invoked straight from a terminal answers
+`{"accessibility":false,"screenRecording":false}` and draws no dialog, however
+well-granted the machine is: TCC attributes the check to the _responsible_
+process — the terminal — not to the bundle, the same attribution problem
+`packages/slicc-cli/internal/computer/computer.go` documents for the CLI itself.
+Preflight output is only meaningful when the Go CLI spawns it.
+
+**`capabilities.computer` is derived, never asserted (#3387).**
+`ComputerTrayFollower` builds its `hello` from `ComputerPermissions.grants()`
+through `Models/ComputerCapabilityAdvertisement.swift`, so a Mac whose Screen
+Recording grant is missing or revoked does not claim native capture and the
+leader's `computer add ssh` reaches the `screencapture` + `cliclick` tray-exec
+fallback instead of picking a native backend that can only error. TCC has no
+change notification, so a grant watch re-reads both grants every
+`ComputerGrantWatch.intervalSeconds` while the channel is open and re-sends
+`hello` when either flips — the leader's `handleFollowerHello` overwrites
+`peerCapabilities` and re-notifies the follower-selection sites, which is what
+makes a box ticked mid-session land without a reconnect. Accessibility gates
+input rather than capture and the wire has one boolean, so it travels in the
+MOTD, which the leader already shows beside a roster entry. The watch is
+injectable (`ComputerGrantTick`) so tests drive beats instead of sleeping.
+
+One consequence worth knowing: an ungranted launcher advertising `computer:
+false` no longer satisfies `resolveFollowerPairs`' partner rule, so a Mac
+running `follow --computer` shows its CLI entry and its launcher entry
+separately instead of folded. The CLI entry is the one `add ssh` resolves and
+the one that can still capture, so the fallback is reached; the roster is
+merely less tidy than when the grant is in place.
+
 **Dev-build caveat:** TCC keys a grant to the code signature, so an ad-hoc
 re-signed local build re-prompts on every rebuild. Released, Developer
 ID-signed Sliccstart builds keep the grant across CLI restarts and updates.

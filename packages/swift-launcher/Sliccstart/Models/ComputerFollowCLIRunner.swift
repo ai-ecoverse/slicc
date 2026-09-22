@@ -19,6 +19,12 @@ enum ComputerFollowCLIRunner {
     /// TCC prompt needs a GUI session to appear in — a plain `Foundation`
     /// process would have `CGRequestScreenCaptureAccess` return false with no
     /// dialog and the user would be told they denied something they never saw.
+    ///
+    /// Which is also why running `Sliccstart --computer-preflight --json` by hand
+    /// from a shell is not a diagnostic: TCC attributes the check to the
+    /// *responsible* process — the terminal, not this bundle — so it answers
+    /// `{"accessibility":false,"screenRecording":false}` and draws nothing on a
+    /// fully granted Mac. Only the Go CLI's spawn reports this machine's grants.
     private static func runPreflight(json: Bool) -> Int32 {
         NSApplication.shared.setActivationPolicy(.accessory)
         return ComputerFollowCLI.preflight(
