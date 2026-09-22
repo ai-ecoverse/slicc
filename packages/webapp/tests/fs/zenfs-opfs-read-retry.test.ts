@@ -69,9 +69,7 @@ describe('WebAccess File snapshot retry', () => {
   });
 
   it('stops after three NotReadableError failures from getFile', async () => {
-    const errors = [1, 2, 3].map(
-      (n) => new DOMException(`Snapshot ${n}`, 'NotReadableError')
-    );
+    const errors = [1, 2, 3].map((n) => new DOMException(`Snapshot ${n}`, 'NotReadableError'));
     const reader = setupReader([readable]);
     reader.getFile.mockReset();
     for (const error of errors) reader.getFile.mockRejectedValueOnce(error);

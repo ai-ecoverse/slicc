@@ -110,7 +110,7 @@ describe('ZenFS preload concurrency across a directory tree', () => {
 
     backend.unlinkSync('/d0/moved');
     await backend.sync();
-    backend.createFileSync('/d0/moved', { mode: 0o644 });
+    backend.createFileSync('/d0/moved', { mode: 0o644, uid: 0, gid: 0 });
     const again = new TextEncoder().encode('again');
     backend.writeSync('/d0/moved', again, 0);
     const replaced = new Uint8Array(again.length);
