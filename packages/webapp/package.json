@@ -19,7 +19,7 @@
   "dependencies": {
     "@adobe/helix-rum-js": "2.15.3",
     "@ai-ecoverse/spoon": "*",
-    "@cantoo/pdf-lib": "2.11.0",
+    "@cantoo/pdf-lib": "2.11.1",
     "@codemirror/commands": "6.11.0",
     "@codemirror/lang-html": "6.4.12",
     "@codemirror/lang-json": "6.0.2",
