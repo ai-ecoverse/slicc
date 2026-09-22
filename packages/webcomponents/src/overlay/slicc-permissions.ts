@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { deepFocus, typingElement } from '../internal/typing-focus.js';
 import type { CameraMediaProvider } from './slicc-camera-dialog.js';
 
 /** Re-export so hosts can swap the media seam without depending on the camera dialog module. */
@@ -947,15 +948,18 @@ export class SliccPermissions extends HTMLElement {
     }
 
     let settled = false;
-    const previouslyFocused = (this.ownerDocument.activeElement as HTMLElement | null) ?? null;
+    const focus = this.#promptFocus(panel, grantBtn);
 
     const close = (): void => {
       panel.removeEventListener('keydown', onKeydown);
+      const { previouslyFocused, owned } = focus.release();
       // Synchronous removal — matches Chrome's native popup, which vanishes
       // immediately on Allow / Cancel. The entrance transition is what
       // matters for the user; the close just gets out of the way.
       panel.remove();
-      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+      // Only hand the focus back when the prompt holds it: a prompt that left
+      // the user typing must not yank the caret off wherever they are now.
+      if (owned && previouslyFocused && typeof previouslyFocused.focus === 'function') {
         try {
           previouslyFocused.focus();
         } catch {
@@ -1000,8 +1004,8 @@ export class SliccPermissions extends HTMLElement {
     };
 
     cancelBtn.addEventListener('click', () => cancelAll('cancelled'));
-    grantBtn.addEventListener('click', async () => {
-      if (settled) return;
+    grantBtn.addEventListener('click', async (event) => {
+      if (settled || !focus.allowsClick(event)) return;
       settled = true;
       grantBtn.disabled = true;
       cancelBtn.disabled = true;
@@ -1041,8 +1045,77 @@ export class SliccPermissions extends HTMLElement {
     // state has been laid out — keeps the slide-down visible.
     requestAnimationFrame(() => {
       panel.setAttribute('data-open', '');
-      grantBtn.focus();
+      focus.enter();
     });
+  }
+
+  /**
+   * Keyboard safety for the prompt's Grant button.
+   *
+   * Prompts open from the BACKGROUND — an agent's shell command, an OAuth
+   * flow — while the user may be typing in the composer. Focusing Grant then
+   * would put the user's next Space or Enter on it and grant camera, mic, USB
+   * or folder access nobody read. So:
+   *
+   * - `enter()` focuses Grant only when nothing typable holds the focus.
+   *   Otherwise the focus stays put; the open panel suspends keyboard-mode
+   *   shortcuts like any modal, and Escape — "leave the text field" — carries
+   *   the focus to the panel CONTAINER (never a button), from where Tab walks
+   *   the trapped Cancel / Grant pair and Escape cancels. Pointer users just
+   *   click.
+   * - `allowsClick()` rejects a keyboard activation of Grant unless the key
+   *   went DOWN on Grant after the prompt opened: an Enter auto-repeating from
+   *   the composer, or a Space whose keyup lands after the focus moved, is not
+   *   an answer.
+   * - `release()` reports the pre-open focus (deep, so the composer's shadow
+   *   `<textarea>`, not its host) and whether the focus is the prompt's to
+   *   give back — it is not while the user is still typing somewhere else.
+   */
+  #promptFocus(
+    panel: HTMLElement,
+    grantBtn: HTMLButtonElement
+  ): {
+    enter: () => void;
+    allowsClick: (event: MouseEvent) => boolean;
+    release: () => { previouslyFocused: HTMLElement | null; owned: boolean };
+  } {
+    const doc = this.ownerDocument;
+    const previouslyFocused = deepFocus(doc) as HTMLElement | null;
+    let armed = false;
+    let released = false;
+    const onArmKey = (event: KeyboardEvent): void => {
+      if (event.target !== grantBtn || event.repeat) return;
+      if (event.key === 'Enter' || event.key === ' ') armed = true;
+    };
+    const onOutsideEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (event.composedPath().includes(panel)) return;
+      event.preventDefault();
+      panel.focus();
+    };
+    panel.addEventListener('keydown', onArmKey, true);
+    return {
+      enter: () => {
+        // The open frame can fire after a same-tick cancel already released.
+        if (released) return;
+        if (typingElement(doc)) doc.addEventListener('keydown', onOutsideEscape);
+        else grantBtn.focus();
+      },
+      // A trusted click with `detail === 0` is a keyboard activation; a
+      // pointer click counts its presses (>= 1) and a scripted `.click()` is
+      // untrusted — both are deliberate and pass.
+      allowsClick: (event) => armed || !event.isTrusted || event.detail !== 0,
+      release: () => {
+        released = true;
+        // Focus on <body> counts as the prompt's too: disabling the focused
+        // Grant button while the pickers run drops the focus there.
+        const focused = deepFocus(doc);
+        const owned = !focused || focused === doc.body || panel.contains(focused);
+        panel.removeEventListener('keydown', onArmKey, true);
+        doc.removeEventListener('keydown', onOutsideEscape);
+        return { previouslyFocused, owned };
+      },
+    };
   }
 }
 

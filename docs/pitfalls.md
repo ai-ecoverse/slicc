@@ -2479,6 +2479,43 @@ real `<`.
 - `packages/webapp/tests/ui/code-highlight.test.ts` — regressions for all three failures
 - `packages/webapp/src/shell/supplemental-commands/man-command.ts` — `stripHtml()` unescape order
 
+## Agent-Opened Dialogs Must Not Take the Caret
+
+**The Problem**
+
+The permission prompt (`<slicc-permissions>` `prompt()`) and the
+`request_secret` dialog (`<slicc-secret-dialog>`) open from the BACKGROUND — an
+agent's shell command, an OAuth flow, a tool call — while the user may be
+typing in the composer. Both used to focus their first control on open: the
+prompt its Grant button, so the user's next Space or Enter granted camera, mic,
+USB or folder access; the secret dialog its value field, so the rest of the
+chat message became the "secret" and Enter submitted it.
+
+**The Rule**
+
+- Before moving the focus on open, ask `typingElement(doc)`
+  (`packages/webcomponents/src/internal/typing-focus.ts` — pierces shadow roots
+  and same-origin frames). If the user is typing, leave the caret alone (the
+  prompt), or let the modal card take it rather than a field (the secret
+  dialog, a true `<slicc-dialog>` modal whose card swallows keystrokes).
+- Keep an unfocused prompt keyboard-reachable: Escape from outside carries the
+  focus to the panel CONTAINER, never to a button.
+- A consequential button must not act on a key that went down elsewhere:
+  Grant ignores a trusted keyboard click (`detail === 0`) unless a fresh
+  (non-`repeat`) Enter/Space keydown landed on Grant itself.
+- Restore the pre-open focus on close only if the prompt holds it; a prompt
+  that never took the caret must not move it when it goes.
+- `<slicc-dialog>` itself (sudo approval) focuses only its card, and neither
+  Space nor Enter on the card activates a slotted button — so it needs no
+  guard.
+
+**Related Files**
+
+- `packages/webcomponents/src/internal/typing-focus.ts`
+- `packages/webcomponents/src/overlay/slicc-permissions.ts` — `#promptFocus`
+- `packages/webcomponents/src/overlay/slicc-secret-dialog.ts` — `open()`
+- `packages/webcomponents/tests/overlay/slicc-permissions.test.ts` — "prompt focus safety"
+
 ## Sniff an Image Format From Its Header, Not From a Free Scan (#3372)
 
 **The Failure**

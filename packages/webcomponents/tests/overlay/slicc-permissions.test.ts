@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cdp, userEvent } from 'vitest/browser';
 import {
   type PermissionDenyDetail,
   type PermissionGrant,
@@ -1287,5 +1288,168 @@ describe('slicc-permissions', () => {
       (panel?.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
       await pending;
     });
+  });
+});
+
+/**
+ * Agent-opened prompts must never land a keystroke on Grant (follow-up to
+ * #3408): the user may be typing in the composer when a shell command asks for
+ * a device, and a Space or Enter there must not grant it.
+ */
+describe('slicc-permissions — prompt focus safety', () => {
+  const frame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()));
+  const panelOf = (el: SliccPermissions): HTMLElement =>
+    el.querySelector('.slicc-permissions__prompt') as HTMLElement;
+  const grantOf = (el: SliccPermissions): HTMLButtonElement =>
+    el.querySelector('[part="prompt-grant"]') as HTMLButtonElement;
+  const cancelOf = (el: SliccPermissions): HTMLButtonElement =>
+    el.querySelector('[part="prompt-cancel"]') as HTMLButtonElement;
+
+  /** A composer stand-in: a `<textarea>` inside an open shadow root. */
+  function mountComposer(): HTMLTextAreaElement {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const textarea = document.createElement('textarea');
+    host.attachShadow({ mode: 'open' }).appendChild(textarea);
+    return textarea;
+  }
+
+  function mountWithUsb(): { el: SliccPermissions; requestDevice: ReturnType<typeof vi.fn> } {
+    const el = mount();
+    const requestDevice = vi.fn(async () => ({ productName: 'dev' }));
+    el.providers = { usb: { requestDevice } };
+    return { el, requestDevice };
+  }
+
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  it('leaves the focus in a (shadow-DOM) text field the user is typing in', async () => {
+    const textarea = mountComposer();
+    textarea.focus();
+    const { el, requestDevice } = mountWithUsb();
+    const pending = el.prompt({ kinds: ['usb'], description: 'agent wants a device' });
+    await frame();
+    expect(panelOf(el).hasAttribute('data-open')).toBe(true);
+    expect(textarea.getRootNode()).toBeInstanceOf(ShadowRoot);
+    expect((textarea.getRootNode() as ShadowRoot).activeElement).toBe(textarea);
+    // The user keeps typing — Space and Enter included — into the textarea.
+    await userEvent.keyboard('hi there{Enter}');
+    expect(textarea.value).toBe('hi there\n');
+    expect(requestDevice).not.toHaveBeenCalled();
+    expect(panelOf(el)).not.toBeNull();
+    cancelOf(el).click();
+    expect(((await pending) as PermissionPromptResult).status).toBe('cancelled');
+    // A prompt that never took the focus does not move it on close either.
+    expect((textarea.getRootNode() as ShadowRoot).activeElement).toBe(textarea);
+  });
+
+  it('Escape from the text field carries the focus to the panel, never to Grant', async () => {
+    const textarea = mountComposer();
+    textarea.focus();
+    const { el, requestDevice } = mountWithUsb();
+    const pending = el.prompt({ kinds: ['usb'], description: 'agent wants a device' });
+    await frame();
+    await userEvent.keyboard('{Escape}');
+    expect(document.activeElement).toBe(panelOf(el));
+    // Enter / Space on the container answer nothing.
+    await userEvent.keyboard('{Enter} ');
+    expect(requestDevice).not.toHaveBeenCalled();
+    // Tab enters the Cancel / Grant trap; a second Escape cancels and hands
+    // the caret back to the composer.
+    await userEvent.keyboard('{Tab}');
+    expect(document.activeElement).toBe(cancelOf(el));
+    await userEvent.keyboard('{Escape}');
+    expect(((await pending) as PermissionPromptResult).status).toBe('cancelled');
+    expect((textarea.getRootNode() as ShadowRoot).activeElement).toBe(textarea);
+  });
+
+  it('focuses Grant when nothing typable holds the focus, and a fresh Enter grants', async () => {
+    const before = document.createElement('button');
+    before.textContent = 'elsewhere';
+    document.body.appendChild(before);
+    before.focus();
+    const { el, requestDevice } = mountWithUsb();
+    const pending = el.prompt({ kinds: ['usb'], description: 'device' });
+    await frame();
+    expect(document.activeElement).toBe(grantOf(el));
+    await userEvent.keyboard('{Enter}');
+    expect(((await pending) as PermissionPromptResult).status).toBe('granted');
+    expect(requestDevice).toHaveBeenCalledTimes(1);
+    // Restore-previous-focus still applies when the prompt took the focus.
+    expect(document.activeElement).toBe(before);
+  });
+
+  it('ignores an Enter that went down before the prompt opened (auto-repeat)', async () => {
+    const { el, requestDevice } = mountWithUsb();
+    const enter = {
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+      text: '\r',
+      unmodifiedText: '\r',
+    };
+    // The Playwright provider's CDP typings are not in this tsconfig.
+    const session = cdp() as unknown as {
+      send: (method: string, params: object) => Promise<unknown>;
+    };
+    const pending = el.prompt({ kinds: ['usb'], description: 'device' });
+    await frame();
+    expect(document.activeElement).toBe(grantOf(el));
+    // Enter held since before the prompt opened: what reaches the now-focused
+    // Grant is auto-repeat, and each repeat is a trusted keyboard activation.
+    // (`userEvent` cannot emit repeats, so this goes straight through CDP.)
+    await session.send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, autoRepeat: true });
+    await session.send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, autoRepeat: true });
+    await session.send('Input.dispatchKeyEvent', { type: 'keyUp', ...enter });
+    expect(requestDevice).not.toHaveBeenCalled();
+    expect(panelOf(el)).not.toBeNull();
+    cancelOf(el).click();
+    await pending;
+  });
+
+  it('a prompt cancelled before its open frame does not claim a later Escape', async () => {
+    const { el } = mountWithUsb();
+    const first = el.prompt({ kinds: ['usb'], description: 'first' });
+    cancelOf(el).click();
+    await first;
+    // The user starts typing before the dead prompt's open frame runs.
+    const textarea = mountComposer();
+    textarea.focus();
+    await frame();
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    textarea.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect((textarea.getRootNode() as ShadowRoot).activeElement).toBe(textarea);
+  });
+
+  it('ignores a Space whose keyup lands on Grant after the focus moved there', async () => {
+    const { el, requestDevice } = mountWithUsb();
+    // `setup()` keeps the key held across calls: down before the prompt, up after.
+    const user = userEvent.setup();
+    await user.keyboard('{ >}');
+    const pending = el.prompt({ kinds: ['usb'], description: 'device' });
+    await frame();
+    expect(document.activeElement).toBe(grantOf(el));
+    await user.keyboard('{/ }');
+    expect(requestDevice).not.toHaveBeenCalled();
+    // A deliberate press on Grant itself still works.
+    await user.keyboard(' ');
+    expect(((await pending) as PermissionPromptResult).status).toBe('granted');
+    expect(requestDevice).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pointer click on Grant still grants while the user was typing', async () => {
+    const textarea = mountComposer();
+    textarea.focus();
+    const { el, requestDevice } = mountWithUsb();
+    const pending = el.prompt({ kinds: ['usb'], description: 'device' });
+    await frame();
+    await userEvent.click(grantOf(el));
+    expect(((await pending) as PermissionPromptResult).status).toBe('granted');
+    expect(requestDevice).toHaveBeenCalledTimes(1);
   });
 });
