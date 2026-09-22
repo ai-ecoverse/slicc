@@ -36,7 +36,7 @@ import {
   WELCOME_HANDOFF_CARD_CLASS,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
-import { selectScoopForContext } from './wc-unit-context.js';
+import { selectedScoopTarget, selectScoopForContext } from './wc-unit-context.js';
 
 const log = createLogger('wc-follower');
 
@@ -674,6 +674,8 @@ export async function bootFollowerFloat(
         selectScoopForContext(workUnits.currentUnits(), target, boot.getSelected()?.id, (unit) =>
           boot.selectScoop(unit)
         ),
+
+      onSelectedScoop: () => selectedScoopTarget(workUnits.currentUnits(), boot.getSelected()?.id),
       onScoopsList: (scoops, activeScoopJid) => {
         unitConfirmedThisSession = true;
 

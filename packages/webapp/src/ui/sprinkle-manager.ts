@@ -16,6 +16,7 @@ import {
   type CaptureScreenResult,
   SprinkleBridge,
   type SprinkleExecHandler,
+  type SprinkleSelectedScoopHandler,
   type SprinkleSelectScoopHandler,
 } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
@@ -141,6 +142,8 @@ export interface SprinkleManagerOptions {
   resolveLickOriginUnitId?: (target: string) => string | undefined;
 
   selectScoopHandler?: SprinkleSelectScoopHandler;
+
+  selectedScoopHandler?: SprinkleSelectedScoopHandler;
 }
 
 const WATCHER_ROOTS = SPRINKLE_ROOTS;
@@ -277,7 +280,8 @@ export class SprinkleManager implements SprinkleManagerHandle {
         const entry = this.openSprinkles.get(name);
         entry?.renderer.pushDeviceEvent(channel, payload);
       },
-      options.selectScoopHandler
+      options.selectScoopHandler,
+      options.selectedScoopHandler
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';

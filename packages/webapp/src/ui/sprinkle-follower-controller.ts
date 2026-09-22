@@ -1,7 +1,12 @@
 import { createLogger } from '../base/logger.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
-import type { SprinkleBridgeAPI, SprinkleBrowserApi, SprinkleUsbApi } from './sprinkle-bridge.js';
+import {
+  coerceSelectedScoop,
+  type SprinkleBridgeAPI,
+  type SprinkleBrowserApi,
+  type SprinkleUsbApi,
+} from './sprinkle-bridge.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 
@@ -33,6 +38,8 @@ export interface SprinkleFollowerControllerOptions {
   open?: (path: string) => void;
 
   selectScoop?: (target: string) => boolean | Promise<boolean>;
+
+  selectedScoop?: () => string | null | Promise<string | null>;
 }
 
 interface OpenEntry {
@@ -88,6 +95,7 @@ export class SprinkleFollowerController {
   private readonly zone?: string;
   private readonly openPath?: SprinkleFollowerControllerOptions['open'];
   private readonly selectScoopHandler?: SprinkleFollowerControllerOptions['selectScoop'];
+  private readonly selectedScoopHandler?: SprinkleFollowerControllerOptions['selectedScoop'];
 
   private readonly open = new Map<string, OpenEntry>();
 
@@ -107,6 +115,7 @@ export class SprinkleFollowerController {
     this.zone = options.zone;
     this.openPath = options.open;
     this.selectScoopHandler = options.selectScoop;
+    this.selectedScoopHandler = options.selectedScoop;
   }
 
   async updateAvailable(sprinkles: SprinkleSummary[]): Promise<void> {
@@ -427,6 +436,7 @@ export class SprinkleFollowerController {
         this.sync.sendSprinkleLick(sprinkleName, { action: '__stopCone__' });
       },
       selectScoop: (target) => this.selectScoopOnFollower(target),
+      selectedScoop: () => this.selectedScoopOnFollower(),
       attachImage: () => {},
       captureScreen: () =>
         Promise.reject(new Error('captureScreen not supported in follower-rendered sprinkle')),
@@ -499,5 +509,10 @@ export class SprinkleFollowerController {
   private async selectScoopOnFollower(target: string): Promise<boolean> {
     if (!this.selectScoopHandler) return false;
     return Boolean(await this.selectScoopHandler(target));
+  }
+
+  private async selectedScoopOnFollower(): Promise<string | null> {
+    if (!this.selectedScoopHandler) return null;
+    return coerceSelectedScoop(await this.selectedScoopHandler());
   }
 }

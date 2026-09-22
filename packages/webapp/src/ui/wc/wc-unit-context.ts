@@ -63,6 +63,17 @@ export function selectScoopForContext(
   return true;
 }
 
+export function selectedScoopTarget(
+  units: readonly WorkUnitSummary[],
+  selectedId: string | null | undefined
+): string | null {
+  if (!selectedId) return null;
+  const unit = units.find((candidate) => candidate.id === selectedId);
+  if (!unit) return null;
+  const target = threadContextFor(unit);
+  return isSelectScoopTarget(target) ? target : null;
+}
+
 export function defaultRootOf(units: readonly WorkUnitSummary[]): WorkUnitSummary | undefined {
   const roots = orderRoots(units.filter(isRootSummary));
   return roots.find(isPrimaryRootSummary) ?? roots[0];

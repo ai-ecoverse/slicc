@@ -9,6 +9,7 @@ import { buildFollowerOptions } from '../../../src/ui/wc/wc-tray.js';
 function mountFollower(): {
   switcher: HTMLElement & { scoops: Array<{ key: string; unread?: number }> };
   onScoopsList: (scoops: unknown[], selected?: string) => void;
+  onSelectedScoop: () => Promise<string | null> | string | null;
 } {
   const switcher = document.createElement('div') as unknown as HTMLElement & {
     scoops: Array<{ key: string; unread?: number }>;
@@ -38,6 +39,7 @@ function mountFollower(): {
   return {
     switcher,
     onScoopsList: (scoops, selected) => options.onScoopsList?.(scoops as never, selected as never),
+    onSelectedScoop: () => options.onSelectedScoop?.() ?? null,
   };
 }
 
@@ -103,5 +105,44 @@ describe('follower strip unread', () => {
     const { switcher, onScoopsList } = mountFollower();
     onScoopsList(roster('idle'), 'cone-a');
     expect(switcher.scoops.every((chip) => chip.unread === undefined)).toBe(true);
+  });
+});
+
+describe('follower sprinkle selectedScoop', () => {
+  const named = (state: 'working' | 'idle') => [
+    {
+      jid: 'cone-a',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      parentId: null,
+      state,
+    },
+    {
+      jid: 'scoop-a',
+      name: 'helper',
+      folder: 'helper-scoop',
+      isCone: false,
+      parentId: 'cone-a',
+      state,
+    },
+  ];
+
+  it('reads the followed unit in selectScoop grammar and null before a roster', () => {
+    const { switcher, onScoopsList, onSelectedScoop } = mountFollower();
+    expect(onSelectedScoop()).toBeNull();
+
+    onScoopsList(named('idle'), 'cone-a');
+    expect(onSelectedScoop()).toBe('cone');
+
+    switcher.dispatchEvent(
+      new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' }, bubbles: true })
+    );
+    expect(onSelectedScoop()).toBe('scoop:helper');
+
+    switcher.dispatchEvent(
+      new CustomEvent('slicc-scoop-select', { detail: { key: 'retired' }, bubbles: true })
+    );
+    expect(onSelectedScoop()).toBeNull();
   });
 });

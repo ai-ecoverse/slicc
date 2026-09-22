@@ -11,7 +11,12 @@ import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
 import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
 import type { WcShellRefs } from './wc-shell.js';
-import { defaultRootOf, rootForSelection, selectScoopForContext } from './wc-unit-context.js';
+import {
+  defaultRootOf,
+  rootForSelection,
+  selectedScoopTarget,
+  selectScoopForContext,
+} from './wc-unit-context.js';
 
 const SPRINKLE_PREFIX = 'sprinkle:';
 
@@ -443,6 +448,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       execHandler,
       onAttachImage: onAttachImage ?? (() => {}),
       resolveLickOriginUnitId: (target) => matchLickTargetAlias(deps.getUnits(), target)?.id,
+      selectedScoopHandler: () => selectedScoopTarget(deps.getUnits(), deps.getSelected()?.id),
       ...(selectScoop
         ? {
             selectScoopHandler: (target: string) =>

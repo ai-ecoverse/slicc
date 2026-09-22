@@ -351,6 +351,12 @@ export type SprinkleExecHandler = (cmd: string) => Promise<SprinkleExecResult>;
 
 export type SprinkleSelectScoopHandler = (target: string) => boolean | Promise<boolean>;
 
+export type SprinkleSelectedScoopHandler = () => string | null | Promise<string | null>;
+
+export function coerceSelectedScoop(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 export interface SprinkleLickRequest {
   action: string;
   data?: unknown;
@@ -396,6 +402,8 @@ export interface SprinkleBridgeAPI {
   stopCone(): void;
 
   selectScoop(target: string): Promise<boolean>;
+
+  selectedScoop(): Promise<string | null>;
 
   attachImage(base64: string, name?: string, mimeType?: string): void;
 
@@ -451,6 +459,7 @@ export class SprinkleBridge {
   private minimizeHandler: (name: string) => void;
   private stopConeHandler: () => void;
   private selectScoopHandler: SprinkleSelectScoopHandler;
+  private selectedScoopHandler: SprinkleSelectedScoopHandler;
   private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
   private captureScreenHandler: () => Promise<CaptureScreenResult>;
   private execHandler: SprinkleExecHandler | undefined;
@@ -470,7 +479,8 @@ export class SprinkleBridge {
     captureScreenHandler: () => Promise<CaptureScreenResult>,
     execHandler?: SprinkleExecHandler,
     iframePusher?: SprinkleIframePusher,
-    selectScoopHandler?: SprinkleSelectScoopHandler
+    selectScoopHandler?: SprinkleSelectScoopHandler,
+    selectedScoopHandler?: SprinkleSelectedScoopHandler
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
@@ -478,6 +488,7 @@ export class SprinkleBridge {
     this.minimizeHandler = minimizeHandler;
     this.stopConeHandler = stopConeHandler;
     this.selectScoopHandler = selectScoopHandler ?? (() => false);
+    this.selectedScoopHandler = selectedScoopHandler ?? (() => null);
     this.attachImageHandler = attachImageHandler;
     this.captureScreenHandler = captureScreenHandler;
     this.execHandler = execHandler;
@@ -1043,6 +1054,7 @@ export class SprinkleBridge {
       minimize: () => this.minimizeHandler(sprinkleName),
       stopCone: () => this.stopConeHandler(),
       selectScoop: async (target: string) => Boolean(await this.selectScoopHandler(target)),
+      selectedScoop: async () => coerceSelectedScoop(await this.selectedScoopHandler()),
       attachImage: (base64: string, name?: string, mimeType?: string) =>
         this.attachImageHandler(base64, name, mimeType),
       captureScreen: () => this.captureScreenHandler(),

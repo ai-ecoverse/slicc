@@ -6,6 +6,7 @@ import {
   rootFolderForContext,
   rootForConeFolder,
   rootForSelection,
+  selectedScoopTarget,
   selectScoopForContext,
   switcherLabelFor,
   threadContextFor,
@@ -141,6 +142,31 @@ describe('wc-unit-context', () => {
     const select = vi.fn();
     expect(selectScoopForContext(all, 'scoop:helper', helper.id, select)).toBe(true);
     expect(select).not.toHaveBeenCalled();
+  });
+
+  it('selectedScoopTarget reads the selection in selectScoop grammar without switching', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectedScoopTarget(all, primary.id)).toBe('cone');
+    expect(selectedScoopTarget(all, research.id)).toBe('cone:cone-research');
+    expect(selectedScoopTarget(all, worker.id)).toBe('scoop:worker');
+    expect(selectedScoopTarget(all, helper.id)).toBe('scoop:helper');
+
+    for (const current of [primary, research, worker, helper]) {
+      const target = selectedScoopTarget(all, current.id);
+      expect(selectScoopForContext(all, target ?? '', current.id, select)).toBe(true);
+    }
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('selectedScoopTarget returns null when nothing is selected or the unit is gone', () => {
+    const all = [worker, research, primary, helper];
+    expect(selectedScoopTarget(all, null)).toBeNull();
+    expect(selectedScoopTarget(all, undefined)).toBeNull();
+    expect(selectedScoopTarget(all, '')).toBeNull();
+    expect(selectedScoopTarget(all, 'retired-scoop')).toBeNull();
+    const blank = unit({ jid: 'scoop_blank', name: '', folder: 'blank-scoop' });
+    expect(selectedScoopTarget([primary, blank], blank.id)).toBeNull();
   });
 
   it('prefers the primary root, else the oldest root, as default', () => {
