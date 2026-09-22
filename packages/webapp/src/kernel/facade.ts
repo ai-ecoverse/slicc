@@ -1066,24 +1066,24 @@ export class Bridge implements KernelFacade {
   /**
    * Tell the panel about every hydrated transcript, once per boot.
    *
-   * Listing the roster first gives the page a unit to attach the replay
-   * to. An empty buffer is not pushed: an empty replace is how a scoop
-   * switch clears the previous thread, and a boot-time one would wipe a
-   * transcript the page already painted. Status is left untouched — a
-   * context that fails to start never emits its own status, and stamping
-   * `initializing` here would leave that scoop initializing for good.
+   * Transcripts go out BEFORE the roster. The page holds a replay that
+   * arrives before its unit is listed, and the selection that the roster
+   * triggers adopts that replay instead of asking again. Asking as well
+   * would wholesale-render the thread a second time. An empty buffer is
+   * not pushed: an empty replace clears the previous thread, and a
+   * boot-time one would wipe a transcript the page already painted.
    * A later call does nothing.
    */
   publishHydratedTranscripts(): void {
     if (this.transcriptsPublished || !this.orchestrator) return;
     const scoops = this.orchestrator.getScoops();
     if (scoops.length === 0) return;
-    this.emitScoopList();
     for (const scoop of scoops) {
       const messages = this.messageBuffers.get(scoop.jid);
       if (!messages || messages.length === 0) continue;
       this.emitTranscript(scoop.jid, messages);
     }
+    this.emitScoopList();
     this.transcriptsPublished = true;
   }
 

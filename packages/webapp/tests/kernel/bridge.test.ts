@@ -3632,6 +3632,10 @@ describe('Bridge hydrateBuffersFromRecords', () => {
     });
     const list = sentMessages.find((m: any) => m.payload?.type === 'scoop-list') as any;
     expect(list.payload.scoops[0].jid).toBe('cone_1');
+    const wireOrder = sentMessages
+      .map((m: any) => m.payload?.type)
+      .filter((type: string) => type === 'scoop-messages-replaced' || type === 'scoop-list');
+    expect(wireOrder).toEqual(['scoop-messages-replaced', 'scoop-list']);
 
     const before = sentMessages.length;
     bridge.publishHydratedTranscripts();

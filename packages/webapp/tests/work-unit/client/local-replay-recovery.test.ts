@@ -11,6 +11,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RegisteredScoop } from '../../../src/scoops/types.js';
+import type { OffscreenClientCallbacks } from '../../../src/ui/offscreen-client.js';
+import { LocalWorkUnitClient } from '../../../src/ui/work-unit-client/local.js';
 import type { WorkUnitClientEvent } from '../../../src/work-unit/client/types.js';
 import { ROSTER } from './conformance.js';
 import { makeLocalHarness } from './fakes.js';
@@ -18,6 +21,52 @@ import { makeLocalHarness } from './fakes.js';
 describe('LocalWorkUnitClient replay recovery', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it('adopts a replay that beat the roster and does not ask for it again', async () => {
+    const requests: string[] = [];
+    let roster: RegisteredScoop[] = [];
+    const client = new LocalWorkUnitClient({
+      fills: new Map(),
+      getClient: () =>
+        ({
+          getScoops: () => roster,
+          requestScoopMessages: (jid: string) => requests.push(jid),
+          setSelectedScoopJid: () => undefined,
+        }) as never,
+      phases: new Map(),
+      statuses: new Map(),
+    });
+    const callbacks = client.wrapCallbacks({
+      onIncomingMessage: () => undefined,
+      onScoopCreated: () => undefined,
+      onScoopListUpdate: () => undefined,
+      onStatusChange: () => undefined,
+    } satisfies OffscreenClientCallbacks);
+    callbacks.onScoopMessagesReplaced?.('cone_1', [
+      { content: 'saved', id: 'm1', role: 'user', timestamp: 1 },
+    ] as never);
+    roster = [
+      {
+        assistantLabel: 'sliccy',
+        folder: 'cone-helix',
+        jid: 'cone_1',
+        name: 'Helix',
+        parentJid: null,
+      } as RegisteredScoop,
+    ];
+
+    const seen: string[][] = [];
+    const snap = client.snapshot('cone_1');
+    client.subscribe('cone_1', (event) => {
+      if (event.type === 'snapshot') seen.push(event.snapshot.messages.map((m) => m.id));
+    });
+    await expect(snap).resolves.toMatchObject({ messages: [{ id: 'm1' }] });
+    expect(requests).toEqual([]);
+    expect(seen).toEqual([['m1']]);
+
+    void client.snapshot('cone_1');
+    expect(requests).toEqual(['cone_1']);
+  });
 
   it('re-asks once when the request is dropped, and paints the subscriber', async () => {
     const harness = makeLocalHarness();

@@ -338,9 +338,30 @@ export class LocalWorkUnitClient implements WorkUnitClient {
    * The 5 s fallback is cancelled when a replay lands (#2859); recovery is
    * only for a request that stayed unanswered.
    */
+  /**
+   * A replay that arrived before this unit was on the roster, now that the
+   * roster can name it. Boot publishes saved chat and then the roster; the
+   * selection the roster triggers would otherwise ask for the same transcript
+   * and the thread would be replaced twice.
+   */
+  private takeArrivedReplay(id: WorkUnitId): WorkUnitSnapshot | null {
+    const replay = this.orphanedReplays.get(id);
+    if (!replay) return null;
+    const snapshot = this.snapshotFor(id, replay.messages, replay.queuedIds);
+    if (!snapshot) return null;
+    this.orphanedReplays.delete(id);
+    this.lastSnapshots.set(id, snapshot);
+    return snapshot;
+  }
+
   snapshot(id: WorkUnitId): Promise<WorkUnitSnapshot> {
     const client = this.deps.getClient();
     if (!client) return Promise.reject(new Error('kernel client not attached'));
+    const arrived = this.takeArrivedReplay(id);
+    if (arrived) {
+      client.setSelectedScoopJid(id);
+      return Promise.resolve(arrived);
+    }
     const waiters =
       this.pendingSnapshots.get(id) ?? new Set<(snapshot: WorkUnitSnapshot) => void>();
     this.pendingSnapshots.set(id, waiters);
