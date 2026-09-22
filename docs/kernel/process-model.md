@@ -133,7 +133,7 @@ One deliberate ADDITION: `/proc/table` has no Linux counterpart. Linux readers w
 
 ## `ps` and `kill`
 
-`ps` (default) lists `running` and `pending` processes only. `-a` / `-A` / `-e` / `--all` includes the dead. Tree mode (`-T`) walks `ppid` links and indents children with `└─`.
+`ps` (default) lists `running` and `pending` processes only. `-a` / `-A` / `-e` / `--all` includes the dead. Tree mode (`-T`) walks `ppid` links and indents children with `└─`. The default `SCOOP` cell is `cone`, `system`, `jshd`, or a 10-character prefix of the scoop jid, so the fixed table stays aligned. Naming `scoop` in `-o` / `--columns` (`ps -o scoop,stat,pid`) prints that jid in full. `STAT` and `PID` are the same fields either way. `COMMAND` stays capped at 80 characters.
 
 `kill` defaults to SIGTERM (POSIX). Short forms: `-INT`, `-TERM`, `-KILL`, `-STOP`, `-CONT`, `-9`. Long form: `-s SIGINT`. Multiple pids in one call. Exit codes: 0 if every signal landed; 1 if any pid was unknown / already terminated; 2 on parse error.
 
