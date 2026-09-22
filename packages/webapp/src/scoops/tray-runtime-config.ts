@@ -12,6 +12,7 @@ import {
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
 } from '@slicc/shared-ts';
+import { isStaleBridgeTokenError, throwIfStaleBridgeToken } from '../base/api-endpoint.js';
 import {
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
@@ -273,11 +274,16 @@ export async function fetchRuntimeConfig(
       cache: 'no-store',
       headers: apiHeaders(),
     });
+    // A restarted launcher rejects every local call with this body. Surface
+    // it — boot must not treat it as "no runtime config" and continue into
+    // the kernel-ready wait.
+    await throwIfStaleBridgeToken(response);
     if (!response.ok) {
       return null;
     }
     return (await response.json()) as RuntimeConfigResponse;
-  } catch {
+  } catch (err) {
+    if (isStaleBridgeTokenError(err)) throw err;
     return null;
   }
 }

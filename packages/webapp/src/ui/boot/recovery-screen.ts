@@ -16,6 +16,7 @@
  * bundle.
  */
 
+import { isStaleBridgeTokenError } from '../../base/api-endpoint.js';
 import { NUKE_LOCAL_STORAGE_KEYS } from '../../shell/supplemental-commands/nuke-channel.js';
 import { wipeLocalStorageState } from '../../shell/supplemental-commands/wipe-local-storage-state.js';
 import type { WorkerTriageVerdict } from './worker-triage.js';
@@ -56,6 +57,10 @@ export function renderBootRecoveryScreen(
   const reload = deps.reload ?? (() => location.reload());
   const message = error instanceof Error ? error.message : String(error);
   const wedged = deps.verdict === 'browser-wedged';
+  // A rejected bridge token is not corrupt local data. Demote the wipe so
+  // the message (reload from the launcher) is the action on screen.
+  const staleToken = isStaleBridgeTokenError(error);
+  const softenReset = wedged || staleToken;
 
   const box = document.createElement('div');
   box.style.cssText = 'padding:2rem;text-align:center;font-family:system-ui;';
@@ -75,11 +80,11 @@ export function renderBootRecoveryScreen(
   const resetBtn = document.createElement('button');
   resetBtn.type = 'button';
   resetBtn.textContent = 'Reset local data & reload';
-  // Demoted on a wedged browser: the wipe destroys intact data and fixes
-  // nothing there, so it renders as a plain outline action instead of the
+  // Demoted when a wipe cannot fix the failure: a wedged browser, or a
+  // bridge token the launcher has already replaced. Outline instead of the
   // filled negative. The data attribute is the stable semantic hook.
-  resetBtn.dataset['variant'] = wedged ? 'demoted' : 'destructive';
-  resetBtn.style.cssText = wedged
+  resetBtn.dataset['variant'] = softenReset ? 'demoted' : 'destructive';
+  resetBtn.style.cssText = softenReset
     ? 'padding:0.5rem 1rem;cursor:pointer;border:1px solid var(--s2-content-tertiary, #717171);' +
       'background:transparent;color:inherit;border-radius:4px;'
     : 'padding:0.5rem 1rem;cursor:pointer;border:1px solid var(--s2-negative, #e34850);' +

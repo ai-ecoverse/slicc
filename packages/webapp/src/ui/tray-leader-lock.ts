@@ -12,6 +12,14 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { bindHeldLeaderLock, isTrayLeaderBootAborted } from './tray-leader-fatal.js';
+
+export {
+  isTrayLeaderBootAborted,
+  registerTrayLeaderFatalCleanup,
+  releaseTrayLeaderOnFatalBoot,
+  resetTrayLeaderFatalForTests,
+} from './tray-leader-fatal.js';
 
 const log = createLogger('tray-leader-lock');
 
@@ -176,14 +184,18 @@ export async function acquireLeaderRole(opts: {
   shouldLead: () => boolean;
   onGranted: (release: () => void) => void;
 }): Promise<void> {
+  const handOff = (release: () => void): void => {
+    if (isTrayLeaderBootAborted() || !opts.shouldLead()) {
+      release();
+      return;
+    }
+    opts.onGranted(bindHeldLeaderLock(release));
+  };
+
   const result = await requestLeaderLock(opts.workerBaseUrl, opts.lockManager);
 
   if (result.status === 'granted') {
-    if (!opts.shouldLead()) {
-      result.release();
-      return;
-    }
-    opts.onGranted(result.release);
+    handOff(result.release);
     return;
   }
 
@@ -195,12 +207,10 @@ export async function acquireLeaderRole(opts: {
   );
 
   const { release } = await result.waitForPromotion();
-  if (!opts.shouldLead()) {
-    release();
-    return;
+  if (!isTrayLeaderBootAborted() && opts.shouldLead()) {
+    log.error('Late promotion: this tab is now the tray leader.');
   }
-  log.error('Late promotion: this tab is now the tray leader.');
-  opts.onGranted(release);
+  handOff(release);
 }
 
 /**

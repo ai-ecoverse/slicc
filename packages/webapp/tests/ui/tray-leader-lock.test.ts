@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireLeaderRole,
   type LeaderLockResult,
   type LockManagerLike,
+  registerTrayLeaderFatalCleanup,
+  releaseTrayLeaderOnFatalBoot,
   requestLeaderLock,
+  resetTrayLeaderFatalForTests,
 } from '../../src/ui/tray-leader-lock.js';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +101,9 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 // ---------------------------------------------------------------------------
 
 describe('tray-leader-lock', () => {
+  afterEach(() => {
+    resetTrayLeaderFatalForTests();
+  });
   describe('requestLeaderLock', () => {
     it('first requester is granted immediately', async () => {
       const mgr = createFakeLockManager();
@@ -297,6 +303,50 @@ describe('tray-leader-lock', () => {
 
       expect(granted).toHaveLength(0);
       // The promoted-then-released lock is free for the next requester.
+      const next = await requestLeaderLock(URL, mgr);
+      expect(next.status).toBe('granted');
+    });
+
+    it('releases a held lock on fatal boot so the next tab can lead', async () => {
+      const mgr = createFakeLockManager();
+      const granted: Array<() => void> = [];
+      const stopped = vi.fn();
+      registerTrayLeaderFatalCleanup(stopped);
+      await acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => true,
+        onGranted: (release) => granted.push(release),
+      });
+      expect(granted).toHaveLength(1);
+
+      releaseTrayLeaderOnFatalBoot();
+
+      expect(stopped).toHaveBeenCalledTimes(1);
+      const next = await requestLeaderLock(URL, mgr);
+      expect(next.status).toBe('granted');
+    });
+
+    it('drops a late promotion that arrives after fatal boot', async () => {
+      const mgr = createFakeLockManager();
+      const holder = await requestLeaderLock(URL, mgr);
+      expect(holder.status).toBe('granted');
+
+      const granted: Array<() => void> = [];
+      const election = acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => true,
+        onGranted: (release) => granted.push(release),
+      });
+      await tick();
+      expect(granted).toHaveLength(0);
+
+      releaseTrayLeaderOnFatalBoot();
+      (holder as Extract<LeaderLockResult, { status: 'granted' }>).release();
+      await election;
+
+      expect(granted).toHaveLength(0);
       const next = await requestLeaderLock(URL, mgr);
       expect(next.status).toBe('granted');
     });

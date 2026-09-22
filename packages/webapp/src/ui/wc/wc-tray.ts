@@ -84,7 +84,9 @@ import type { SprinkleManager } from '../sprinkle-manager.js';
 import {
   acquireLeaderRole,
   getDefaultLockManager,
+  isTrayLeaderBootAborted,
   type LockManagerLike,
+  registerTrayLeaderFatalCleanup,
   requestLeaderLock,
 } from '../tray-leader-lock.js';
 import type { AgentHandle, ChatMessage } from '../types.js';
@@ -1179,6 +1181,25 @@ function startInitialRole(
  * while we were deferred" — without it, a late promotion would start
  * a leader on a tray the user explicitly left.
  */
+/**
+ * Fatal boot paints Failed-to-start and must not keep this tab's leader
+ * tray or its Web Lock. The release lives in this closure; the boot catch
+ * in `main.ts` can only call `releaseTrayLeaderOnFatalBoot`.
+ */
+function installFatalLeaderRelease(deps: WcTrayDeps, state: TrayRoleState): void {
+  registerTrayLeaderFatalCleanup(() => {
+    try {
+      state.leader?.stop();
+    } catch (err) {
+      deps.log.error('leader stop threw during fatal boot', err);
+    }
+    state.leader = null;
+    state.persistenceGuard.deactivate();
+    state.lockRelease?.();
+    state.lockRelease = null;
+  });
+}
+
 function acquireAndStartLeader(
   workerBaseUrl: string,
   deps: WcTrayDeps,
@@ -1361,7 +1382,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
           // instead of pinning a lock without a leader.
           void requestLeaderLock(workerBaseUrl, lockManager).then((lockResult) => {
             if (lockResult.status !== 'granted') return;
-            if (!state.leader) {
+            if (!state.leader || isTrayLeaderBootAborted()) {
               lockResult.release();
               return;
             }
@@ -1385,6 +1406,8 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
       throw err;
     }
   };
+
+  installFatalLeaderRelease(deps, state);
 
   await setupStandalonePanelRpc({
     instanceId,

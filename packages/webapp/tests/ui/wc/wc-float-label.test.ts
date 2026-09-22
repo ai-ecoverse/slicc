@@ -42,6 +42,26 @@ describe('resolveStandaloneFloatKind', () => {
       resolveStandaloneFloatKind({ fetchFn: okJson({ status: 'ok', service: 'mystery' }) })
     ).resolves.toBe('standalone');
   });
+
+  it('fails fast when the local bridge rejects the token', async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'bridge-token-required' }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        })
+    );
+    await expect(resolveStandaloneFloatKind({ fetchFn })).rejects.toMatchObject({
+      code: 'stale-bridge-token',
+    });
+  });
+
+  it('keeps the standalone fallback for a 403 that is not a stale token', async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 })
+    );
+    await expect(resolveStandaloneFloatKind({ fetchFn })).resolves.toBe('standalone');
+  });
 });
 
 describe('floatKindForRuntimeMode', () => {

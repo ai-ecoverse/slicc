@@ -14,6 +14,9 @@
  * forwards lands in `startPageCdpForwarder` → `realTransport.send(...)`.
  * Without the eager connect the first agent CDP command throws
  * "CDP client is not connected".
+ *
+ * `fetchRuntimeConfig` rejects on `403 bridge-token-required` before that
+ * connect, so a stale launcher token never enters the CDP retry loop.
  */
 
 import { LEADER_EXT_ID_QUERY_NAME } from '@slicc/shared-ts';
