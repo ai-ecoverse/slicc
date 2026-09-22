@@ -130,8 +130,13 @@ export async function refreshOAuthToken(opts: {
       refresh_token: opts.refreshToken,
     }),
   });
-  const blockedBody = await res.clone().text();
-  if (noteBridgeTokenRequired(res.status, blockedBody)) throw new BridgeTokenRequiredError();
+  // Only peek when the body can be cloned. Several provider tests stub fetch
+  // with a plain `{ ok, status, json }` object; calling clone() on that throws
+  // and makes a successful refresh look like a bridge rejection.
+  if (res.status === 403 && typeof res.clone === 'function') {
+    const blockedBody = await res.clone().text();
+    if (noteBridgeTokenRequired(res.status, blockedBody)) throw new BridgeTokenRequiredError();
+  }
 
   return parseTokenResponse(res);
 }
