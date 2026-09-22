@@ -28,38 +28,51 @@ final class RecordingEventSink: ComputerEventSink {
 @MainActor
 final class StubCapturer: ComputerCapturing {
     var image: CGImage
-    var native: CGSize
+    /// Stand-in for the display ScreenCaptureKit would have picked. Defaults to
+    /// the image's own pixels at the origin, i.e. a lone main display.
+    var geometry: ComputerDisplayGeometry
     private(set) var started = 0
     private(set) var stopped = 0
     private(set) var lastFps: Double?
     private(set) var lastMaxWidth: Int?
+    private(set) var lastDisplay: Int?
     private(set) var lastWatch: Bool?
     var startError: Error?
     var holdFrame = false
     var endsRemaining = 0
     private var pendingFrame: (() -> Void)?
 
-    init(image: CGImage = ComputerTestImages.solid(width: 64, height: 48), native: CGSize? = nil) {
+    init(
+        image: CGImage = ComputerTestImages.solid(width: 64, height: 48),
+        native: CGSize? = nil,
+        geometry: ComputerDisplayGeometry? = nil
+    ) {
         self.image = image
-        self.native = native ?? CGSize(width: image.width, height: image.height)
+        self.geometry =
+            geometry
+            ?? .identity(size: native ?? CGSize(width: image.width, height: image.height))
     }
+
+    var native: CGSize { geometry.pixelSize }
 
     func start(
         fps: Double,
         maxWidth: Int?,
+        display: Int?,
         watch: Bool,
-        onFrame: @escaping (CGImage, CGSize) -> Void,
+        onFrame: @escaping (CGImage, ComputerDisplayGeometry) -> Void,
         onEnded: (() -> Void)?
     ) async throws {
         started += 1
         lastFps = fps
         lastMaxWidth = maxWidth
+        lastDisplay = display
         lastWatch = watch
         if let startError { throw startError }
         if holdFrame {
-            pendingFrame = { [image, native] in onFrame(image, native) }
+            pendingFrame = { [image, geometry] in onFrame(image, geometry) }
         } else {
-            onFrame(image, native)
+            onFrame(image, geometry)
         }
         if endsRemaining > 0 {
             endsRemaining -= 1

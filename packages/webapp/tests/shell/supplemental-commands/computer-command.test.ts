@@ -1100,6 +1100,92 @@ describe('computer parse', () => {
     expect(missed.stderr).not.toMatch(/try `ssh --list`/);
   });
 
+  it('add ssh --display picks a screen and forwards the index to native capture', async () => {
+    const capture = vi.fn(async () => ({
+      bytes: MINIMAL_JPEG,
+      mime: 'image/jpeg' as const,
+      width: 1,
+      height: 1,
+      nativeWidth: 2880,
+      nativeHeight: 5120,
+    }));
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({ capture, input: vi.fn(), unwatch: vi.fn() }),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--display', '3'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('ssh:sliccstart-computer-1:display:3');
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(capture).toHaveBeenCalledWith(expect.objectContaining({ display: 3 }));
+  });
+
+  it('add ssh rejects a non-numeric or zero --display', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      sshExec: vi.fn(),
+      nativeComputer: () => ({
+        capture: async () => ({
+          bytes: MINIMAL_JPEG,
+          mime: 'image/jpeg' as const,
+          width: 1,
+          height: 1,
+          nativeWidth: 1,
+          nativeHeight: 1,
+        }),
+        input: vi.fn(),
+        unwatch: vi.fn(),
+      }),
+    });
+    const { ctx } = makeCtx();
+    for (const bad of ['0', 'left', '-2']) {
+      const added = await cmd.execute(
+        ['add', 'ssh', 'sliccstart-computer-1', '--display', bad],
+        ctx
+      );
+      expect(added.exitCode).toBe(1);
+      expect(added.stderr).toContain('--display takes a 1-based display number');
+    }
+  });
+
+  it('add ssh --display needs a native-capture follower', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        { runtimeId: 'cli-1', exec: true, computer: false, floatType: 'standalone' },
+      ],
+      sshExec: vi.fn(async () => ({
+        stdout: 'SLICC_SSH_PROBE Darwin screencapture cliclick ',
+        stderr: '',
+        exitCode: 0,
+      })),
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'cli-1', '--display', '2'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('--display needs a native-capture');
+  });
+
   it('add ssh --allow-input on a computer follower does not need cliclick', async () => {
     const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
     const input = vi.fn();

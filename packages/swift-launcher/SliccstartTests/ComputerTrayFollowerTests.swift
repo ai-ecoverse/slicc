@@ -153,7 +153,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
 
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap-1", fps: 2, maxWidth: 400, watch: false)))
+                .computerNativeCapture(requestId: "cap-1", fps: 2, maxWidth: 400, display: nil, watch: false)))
         await settle()
 
         XCTAssertEqual(capturer.started, 1)
@@ -191,7 +191,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap-denied", fps: nil, maxWidth: nil, watch: nil)))
+                .computerNativeCapture(requestId: "cap-denied", fps: nil, maxWidth: nil, display: nil, watch: nil)))
         await settle()
 
         XCTAssertEqual(capturer.started, 0)
@@ -295,7 +295,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await follower._testing_settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 480, watch: false)))
+                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 480, display: nil, watch: false)))
         await follower._testing_settle()
         follower.route(
             try encode(
@@ -309,6 +309,78 @@ final class ComputerTrayFollowerTests: XCTestCase {
             [
                 .mouseButton(.left, down: true, at: CGPoint(x: 1200, y: 400)),
                 .mouseButton(.left, down: false, at: CGPoint(x: 1200, y: 400)),
+            ])
+    }
+
+    func testCaptureForwardsTheRequestedDisplayIndex() async throws {
+        let (follower, capturer, _) = makeFollower()
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap-d3", fps: 2, maxWidth: nil, display: 3, watch: false)))
+        await settle()
+        XCTAssertEqual(capturer.lastDisplay, 3)
+    }
+
+    func testFrameReportsDisplayPixelsNotItsPointSize() async throws {
+        let capturer = StubCapturer(
+            image: ComputerTestImages.solid(width: 288, height: 512),
+            geometry: ComputerDisplayFixtures.right)
+        let (follower, _, _) = makeFollower(capturer: capturer)
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap-px", fps: 1, maxWidth: nil, display: 3, watch: false)))
+        await settle()
+        let frame = try XCTUnwrap(
+            sent.compactMap { data -> [String: Any]? in
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    obj["type"] as? String == "computer.native.frame"
+                else { return nil }
+                return obj
+            }.first)
+        XCTAssertEqual(frame["nativeWidth"] as? Double, 2880)
+        XCTAssertEqual(frame["nativeHeight"] as? Double, 5120)
+    }
+
+    /// The leader maps to native pixels; the follower owes the display origin,
+    /// or the click lands at the same coordinates on the main display (#3385).
+    func testInputLandsOnTheCapturedDisplayNotTheMainOne() async throws {
+        let sink = RecordingEventSink()
+        let capturer = StubCapturer(
+            image: ComputerTestImages.solid(width: 288, height: 512),
+            geometry: ComputerDisplayFixtures.right)
+        let (follower, _, _) = makeFollower(capturer: capturer, sink: sink)
+        follower.connector(connectorStandIn(), didConnect: { _ in true })
+        await follower._testing_settle()
+        follower.route(
+            try encode(
+                .computerNativeCapture(
+                    requestId: "cap", fps: 1, maxWidth: nil, display: 3, watch: false)))
+        await follower._testing_settle()
+        follower.route(
+            try encode(
+                .computerNativeInput(
+                    requestId: "in-origin",
+                    events: [.click(button: 1, count: 1, holdMs: nil, x: 1440, y: 2560)])))
+        await follower._testing_settle()
+
+        let expected = CGPoint(x: 3280, y: 1603)
+        XCTAssertEqual(
+            sink.actions,
+            [
+                .mouseButton(.left, down: true, at: expected),
+                .mouseButton(.left, down: false, at: expected),
             ])
     }
 
@@ -328,7 +400,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 400, watch: false)))
+                .computerNativeCapture(requestId: "cap", fps: 1, maxWidth: 400, display: nil, watch: false)))
         await settle()
         follower.route(
             try encode(
@@ -355,7 +427,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap", fps: 2, maxWidth: 64, watch: true)))
+                .computerNativeCapture(requestId: "cap", fps: 2, maxWidth: 64, display: nil, watch: true)))
         await settle()
         XCTAssertEqual(capturer.started, 1)
         follower.route(try encode(.computerNativeUnwatch(requestId: "cap")))
@@ -471,7 +543,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap-miss", fps: nil, maxWidth: nil, watch: false)))
+                .computerNativeCapture(requestId: "cap-miss", fps: nil, maxWidth: nil, display: nil, watch: false)))
         await follower._testing_settle()
         let errors = sent.compactMap { data -> String? in
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -497,7 +569,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap-boom", fps: 1, maxWidth: 64, watch: false)))
+                .computerNativeCapture(requestId: "cap-boom", fps: 1, maxWidth: 64, display: nil, watch: false)))
         await follower._testing_settle()
         let errors = sent.compactMap { data -> String? in
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -517,7 +589,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "watch", fps: 2, maxWidth: 64, watch: true)))
+                .computerNativeCapture(requestId: "watch", fps: 2, maxWidth: 64, display: nil, watch: true)))
         await follower._testing_settle()
         await settle()
         await follower._testing_settle()
@@ -532,7 +604,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap", fps: 2, maxWidth: 64, watch: true)))
+                .computerNativeCapture(requestId: "cap", fps: 2, maxWidth: 64, display: nil, watch: true)))
         await settle()
         XCTAssertEqual(capturer.started, 1)
         follower.connector(connectorStandIn(), isReconnecting: 1)
@@ -611,7 +683,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "stale", fps: 1, maxWidth: 64, watch: false)))
+                .computerNativeCapture(requestId: "stale", fps: 1, maxWidth: 64, display: nil, watch: false)))
         await follower._testing_settle()
         follower.route(try encode(.computerNativeUnwatch(requestId: "stale")))
         await settle()
@@ -638,7 +710,7 @@ final class ComputerTrayFollowerTests: XCTestCase {
         await settle()
         follower.route(
             try encode(
-                .computerNativeCapture(requestId: "cap-zero", fps: 1, maxWidth: 40, watch: false)))
+                .computerNativeCapture(requestId: "cap-zero", fps: 1, maxWidth: 40, display: nil, watch: false)))
         await follower._testing_settle()
         let frame = try XCTUnwrap(
             sent.compactMap { data -> [String: Any]? in

@@ -386,6 +386,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       requestId: 'cap-1',
       fps: 4,
       maxWidth: 768,
+      display: 3,
       watch: true,
     },
   },

@@ -595,8 +595,11 @@ public enum LeaderToFollowerMessage: Codable {
         id: String, seq: Int, mime: String, width: Double, height: Double, data: String?,
         chunkData: String?, chunkIndex: Int?, totalChunks: Int?)
     /// Leader asks a macOS computer follower to start ScreenCaptureKit capture.
-    /// iOS decodes and ignores (viewer, not a driven computer).
-    case computerNativeCapture(requestId: String, fps: Double?, maxWidth: Double?, watch: Bool?)
+    /// iOS decodes and ignores (viewer, not a driven computer). `display` is the
+    /// 1-based index in the follower's OS display order (`screencapture -D <n>`);
+    /// absent means the follower's main display (#3379).
+    case computerNativeCapture(
+        requestId: String, fps: Double?, maxWidth: Double?, display: Double?, watch: Bool?)
     case computerNativeUnwatch(requestId: String?)
     case computerNativeInput(requestId: String, events: [ComputerInputEvent])
     case modelsList(models: [TrayModelCatalogEntry])
@@ -688,7 +691,7 @@ public enum LeaderToFollowerMessage: Codable {
         case capabilities, motd
         case command, cwd, env, stream, exitCode, signal, stdin
         case kind, requester, suggestedPattern, reason, scoopName, expiresAt
-        case computers, id, seq, mime, width, height, fps, maxWidth, watch, events
+        case computers, id, seq, mime, width, height, fps, maxWidth, display, watch, events
         case nativeWidth, nativeHeight
     }
 
@@ -752,6 +755,7 @@ public enum LeaderToFollowerMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 fps: try container.decodeIfPresent(Double.self, forKey: .fps),
                 maxWidth: try container.decodeIfPresent(Double.self, forKey: .maxWidth),
+                display: try container.decodeIfPresent(Double.self, forKey: .display),
                 watch: try container.decodeIfPresent(Bool.self, forKey: .watch))
         case "computer.native.unwatch":
             self = .computerNativeUnwatch(
@@ -955,11 +959,12 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encodeIfPresent(chunkData, forKey: .chunkData)
             try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
             try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
-        case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch):
+        case .computerNativeCapture(let requestId, let fps, let maxWidth, let display, let watch):
             try container.encode("computer.native.capture", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encodeIfPresent(fps, forKey: .fps)
             try container.encodeIfPresent(maxWidth, forKey: .maxWidth)
+            try container.encodeIfPresent(display, forKey: .display)
             try container.encodeIfPresent(watch, forKey: .watch)
         case .computerNativeUnwatch(let requestId):
             try container.encode("computer.native.unwatch", forKey: .type)

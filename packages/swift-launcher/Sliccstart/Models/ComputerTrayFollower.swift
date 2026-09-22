@@ -46,7 +46,9 @@ final class ComputerTrayFollower: NSObject {
     private var joinUrl: URL?
     private var seq = 0
     private var currentRequestId: String?
-    private var nativeSize = CGSize(width: 1, height: 1)
+    /// Geometry of the display the last frame came from — pixel size for the
+    /// wire, point size and origin so input lands on *that* display (#3385).
+    private var geometry = ComputerDisplayGeometry.identity(size: CGSize(width: 1, height: 1))
     private var lastMaxWidth: Int?
     private var lastInput: Task<Void, Never>?
 
@@ -153,8 +155,12 @@ final class ComputerTrayFollower: NSObject {
         switch message {
         case .ping:
             _ = send(.pong)
-        case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch):
-            lastCapture = Task { await handleCapture(requestId: requestId, fps: fps, maxWidth: maxWidth, watch: watch) }
+        case .computerNativeCapture(let requestId, let fps, let maxWidth, let display, let watch):
+            lastCapture = Task {
+                await handleCapture(
+                    requestId: requestId, fps: fps, maxWidth: maxWidth, display: display,
+                    watch: watch)
+            }
         case .computerNativeUnwatch:
             capturer?.stop()
             capturer = nil
@@ -166,9 +172,9 @@ final class ComputerTrayFollower: NSObject {
         }
     }
 
-    private func handleCapture(requestId: String, fps: Double?, maxWidth: Double?, watch: Bool?)
-        async
-    {
+    private func handleCapture(
+        requestId: String, fps: Double?, maxWidth: Double?, display: Double?, watch: Bool?
+    ) async {
         do {
             try permissions.ensureScreenRecording()
         } catch {
@@ -185,17 +191,19 @@ final class ComputerTrayFollower: NSObject {
         let width = maxWidth.map { Int($0.rounded()) }
         lastMaxWidth = width
         let watching = watch ?? false
+        let displayIndex = display.map { Int($0.rounded()) }
         do {
             try await capturer.start(
-                fps: fpsValue, maxWidth: width, watch: watching,
-                onFrame: { [weak self] image, native in
-                    self?.emitFrame(requestId: requestId, image: image, native: native)
+                fps: fpsValue, maxWidth: width, display: displayIndex, watch: watching,
+                onFrame: { [weak self] image, geometry in
+                    self?.emitFrame(requestId: requestId, image: image, geometry: geometry)
                 },
                 onEnded: { [weak self] in
                     guard watching, let self else { return }
                     self.lastCapture = Task { @MainActor in
                         await self.handleCapture(
-                            requestId: requestId, fps: fps, maxWidth: maxWidth, watch: true)
+                            requestId: requestId, fps: fps, maxWidth: maxWidth, display: display,
+                            watch: true)
                     }
                 })
         } catch {
@@ -205,7 +213,9 @@ final class ComputerTrayFollower: NSObject {
         }
     }
 
-    private func emitFrame(requestId: String, image: CGImage, native: CGSize) {
+    private func emitFrame(
+        requestId: String, image: CGImage, geometry incoming: ComputerDisplayGeometry
+    ) {
         guard currentRequestId == requestId else { return }
         guard
             let encoded = ComputerFrameEncoder.jpeg(from: image, maxWidth: lastMaxWidth)
@@ -216,9 +226,15 @@ final class ComputerTrayFollower: NSObject {
             return
         }
         seq += 1
-        let nativeW = native.width > 0 ? native.width : CGFloat(encoded.nativeWidth)
-        let nativeH = native.height > 0 ? native.height : CGFloat(encoded.nativeHeight)
-        nativeSize = CGSize(width: nativeW, height: nativeH)
+        // A capturer that reports nothing leaves the image itself as the only
+        // evidence of native size; treat it as unscaled and un-offset.
+        let fallback = CGSize(
+            width: CGFloat(encoded.nativeWidth), height: CGFloat(encoded.nativeHeight))
+        geometry =
+            incoming.pixelSize.width > 0 && incoming.pixelSize.height > 0
+            ? incoming : .identity(size: fallback)
+        let nativeW = geometry.pixelSize.width
+        let nativeH = geometry.pixelSize.height
         let b64 = encoded.data.base64EncodedString()
         for message in ComputerNativeFraming.messages(
             requestId: requestId,
@@ -234,11 +250,14 @@ final class ComputerTrayFollower: NSObject {
     }
 
     private func handleInput(requestId: String, events: [ComputerInputEvent]) async {
-        // Wire events are already native pixels (leader/lightbox map once).
+        // Wire events are already native pixels (leader/lightbox map once), so
+        // the injector's scale is identity — but pixels→points and the captured
+        // display's origin are the follower's job: it is the only party that
+        // knows which `SCDisplay` it picked (#3385).
         do {
             try permissions.ensureAccessibility()
             var injector = ComputerInputInjector(
-                sink: eventSink, encodedSize: nativeSize, nativeSize: nativeSize)
+                sink: eventSink, encodedSize: geometry.pixelSize, display: geometry)
             try await injector.apply(events)
             _ = send(.computerNativeInputResult(requestId: requestId, error: nil))
         } catch {

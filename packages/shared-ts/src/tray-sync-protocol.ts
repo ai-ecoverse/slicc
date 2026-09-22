@@ -482,6 +482,13 @@ export type LeaderToFollowerMessage =
       requestId: string;
       fps?: number;
       maxWidth?: number;
+      /**
+       * 1-based index in the follower's OS display order, the same numbering
+       * `screencapture -D <n>` uses. Absent means the follower's MAIN display —
+       * never "whatever ScreenCaptureKit lists first", which on a multi-display
+       * Mac is a secondary one (#3379).
+       */
+      display?: number;
       watch?: boolean;
     }
   | { type: 'computer.native.unwatch'; requestId?: string }
@@ -623,8 +630,11 @@ export type FollowerToLeaderMessage =
   /**
    * Native capture JPEG from a `capabilities.computer` follower. Small
    * payloads carry `data`; oversize frames reuse CDP-style chunks.
-   * `nativeWidth`/`nativeHeight` are the unscaled display so the leader can
-   * map screenshot-space input.
+   * `nativeWidth`/`nativeHeight` are the captured display in PIXELS — as for a
+   * tab computer, not `SCDisplay`'s points (#3380) — so the leader can map
+   * screenshot-space input. The display's global ORIGIN deliberately stays off
+   * the wire: the follower applies it, since it alone knows which display it
+   * picked (#3385).
    */
   | {
       type: 'computer.native.frame';

@@ -195,6 +195,7 @@ function createComputerNativeBridge(getLeader: StandalonePanelRpcDeps['getLeader
       const frame = await sync.captureNativeComputer(payload.runtimeId, {
         fps: payload.fps,
         maxWidth: payload.maxWidth,
+        display: payload.display,
         watch: payload.watch,
       });
       return { ok: true as const, ...frame };

@@ -72,15 +72,28 @@ enum ComputerInputDelay {
     }
 }
 
-/// Screenshot-space events → native display points (CGEvent origin is the
-/// top-left of the main display, matching ScreenCaptureKit).
+/// Screenshot-space events → the global point space `CGEvent` posts into.
+///
+/// Two steps, both load-bearing: scale into the captured display's native
+/// pixels, then divide by its backing scale and add its origin. `CGEvent`'s
+/// origin is the *main* display's top-left, and the captured display need not be
+/// the main one — on a four-display Mac Studio it is not (#3379/#3385).
 enum ComputerInputScaler {
+    /// Screenshot space → the captured display's own native pixels.
     static func nativePoint(
         x: Double, y: Double, encoded: CGSize, native: CGSize
     ) -> CGPoint {
         let sx = encoded.width > 0 ? native.width / encoded.width : 1
         let sy = encoded.height > 0 ? native.height / encoded.height : 1
         return CGPoint(x: x * sx, y: y * sy)
+    }
+
+    /// Screenshot space → global `CGEvent` points on the display the frame came from.
+    static func globalPoint(
+        x: Double, y: Double, encoded: CGSize, display: ComputerDisplayGeometry
+    ) -> CGPoint {
+        display.globalPoint(
+            fromPixel: nativePoint(x: x, y: y, encoded: encoded, native: display.pixelSize))
     }
 }
 
@@ -100,18 +113,29 @@ enum ComputerInputError: Error, Equatable, CustomStringConvertible {
 struct ComputerInputInjector {
     var sink: ComputerEventSink
     var encodedSize: CGSize
-    var nativeSize: CGSize
+    var display: ComputerDisplayGeometry
     var delay: (Double) async -> Void
     private var cursor = CGPoint.zero
 
     init(
-        sink: ComputerEventSink, encodedSize: CGSize, nativeSize: CGSize,
+        sink: ComputerEventSink, encodedSize: CGSize, display: ComputerDisplayGeometry,
         delay: @escaping (Double) async -> Void = ComputerInputDelay.sleep
     ) {
         self.sink = sink
         self.encodedSize = encodedSize
-        self.nativeSize = nativeSize
+        self.display = display
         self.delay = delay
+    }
+
+    /// Size-only caller: zero origin and scale 1, so screenshot space maps
+    /// straight onto the main display as it did before display selection landed.
+    init(
+        sink: ComputerEventSink, encodedSize: CGSize, nativeSize: CGSize,
+        delay: @escaping (Double) async -> Void = ComputerInputDelay.sleep
+    ) {
+        self.init(
+            sink: sink, encodedSize: encodedSize,
+            display: .identity(size: nativeSize), delay: delay)
     }
 
     mutating func apply(_ events: [ComputerInputEvent]) async throws {
@@ -189,7 +213,7 @@ struct ComputerInputInjector {
     }
 
     private func point(_ x: Double, _ y: Double) -> CGPoint {
-        ComputerInputScaler.nativePoint(x: x, y: y, encoded: encodedSize, native: nativeSize)
+        ComputerInputScaler.globalPoint(x: x, y: y, encoded: encodedSize, display: display)
     }
 
     private func cgButton(_ button: Int) -> CGMouseButton {

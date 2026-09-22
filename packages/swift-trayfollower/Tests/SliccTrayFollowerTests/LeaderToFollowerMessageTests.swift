@@ -551,10 +551,11 @@ final class LeaderToFollowerMessageTests: XCTestCase {
 
     func testComputerNativeLeaderMessagesRoundTrip() throws {
         guard
-            case .computerNativeCapture(let requestId, let fps, let maxWidth, let watch) =
+            case .computerNativeCapture(
+                let requestId, let fps, let maxWidth, let display, let watch) =
                 try roundTrip(
                     .computerNativeCapture(
-                        requestId: "cap-1", fps: 2, maxWidth: 480, watch: true))
+                        requestId: "cap-1", fps: 2, maxWidth: 480, display: 3, watch: true))
         else {
             XCTFail("expected computer.native.capture")
             return
@@ -562,6 +563,7 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(requestId, "cap-1")
         XCTAssertEqual(fps, 2)
         XCTAssertEqual(maxWidth, 480)
+        XCTAssertEqual(display, 3)
         XCTAssertEqual(watch, true)
 
         guard

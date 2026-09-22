@@ -33,7 +33,13 @@ export interface ComputerCommandDeps {
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Injected native capture for a `capabilities.computer` follower. */
   nativeComputer?: (runtimeId: string) => {
-    capture(opts: { fps?: number; maxWidth?: number; watch?: boolean }): Promise<{
+    capture(opts: {
+      fps?: number;
+      maxWidth?: number;
+      /** 1-based OS display index on the follower; omitted means its main display. */
+      display?: number;
+      watch?: boolean;
+    }): Promise<{
       bytes: Uint8Array;
       mime: 'image/jpeg';
       width: number;

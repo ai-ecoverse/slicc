@@ -540,7 +540,13 @@ export class LeaderSyncManager {
 
   captureNativeComputer(
     runtimeId: string,
-    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+    opts: {
+      fps?: number;
+      maxWidth?: number;
+      display?: number;
+      watch?: boolean;
+      timeoutMs?: number;
+    } = {}
   ): Promise<NativeComputerCaptureResult> {
     return this.computersRouter.captureNative(runtimeId, opts);
   }

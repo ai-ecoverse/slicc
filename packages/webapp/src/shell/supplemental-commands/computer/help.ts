@@ -13,9 +13,13 @@ Lifecycle:
   add tab <targetId|url> [-n name]
                              register a browser tab (refuses SLICC app tabs)
   add screen [-n name]       share this display (needs a user gesture)
-  add ssh <follower> [--sim <udid>] [--allow-input] [-n name]
+  add ssh <follower> [--sim <udid>] [--display <n>] [--allow-input] [-n name]
                              follower desktop (or iOS Simulator on a Mac).
                              --allow-input needs sudo (phone can Face ID).
+                             --display picks a screen on a native-capture Mac:
+                             1-based, same numbering as \`screencapture -D <n>\`,
+                             default the follower's main display. Register one
+                             computer per display to drive several at once.
                              The iOS follower itself is never a computer.
   add url <http(s)://base> [-n name]
                              HTTP remote computer (GET /computer). Trailing
@@ -76,4 +80,5 @@ export const COMPUTER_VALUE_FLAGS = [
   '-V',
   '--duration',
   '--sim',
+  '--display',
 ] as const;
