@@ -1,7 +1,7 @@
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
-import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
+import { SKILL_FILE, SKILLS_DIR, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 const log = createLogger('skills-discovery');
 
@@ -82,6 +82,27 @@ interface MarketplacePluginEntry {
 
 const compatibilityCandidatesCache = new WeakMap<object, DiscoveredSkillCandidate[]>();
 const compatibilityCacheHooksInstalled = new WeakSet<object>();
+/** Bumped on invalidation so an in-flight walk cannot repopulate a stale snapshot. */
+const compatibilityCacheGeneration = new WeakMap<object, number>();
+const compatibilityCandidatesInflight = new WeakMap<
+  object,
+  { generation: number; promise: Promise<DiscoveredSkillCandidate[]> }
+>();
+
+/** Directory names whose contents are compatibility skill roots. */
+const COMPATIBILITY_TREE_SEGMENTS = new Set(['.agents', '.claude', '.claude-plugin']);
+
+/**
+ * Tree-shaped mutations. A `mkdir` of `/scoops/<folder>/tmp` cannot add a
+ * skill; invalidating on it made every restored scoop repeat the full-VFS
+ * compatibility walk (tens of seconds each on a large profile).
+ */
+const ALWAYS_INVALIDATING_METHODS = new Set<CompatibilityCacheInvalidationMethod>([
+  'mount',
+  'rename',
+  'rm',
+  'unmount',
+]);
 
 export async function discoverSkillCandidates(
   fs: VirtualFS,
@@ -140,6 +161,49 @@ async function discoverPluginSkillCandidates(fs: VirtualFS): Promise<DiscoveredS
   return discovered;
 }
 
+function copyCandidates(
+  candidates: readonly DiscoveredSkillCandidate[]
+): DiscoveredSkillCandidate[] {
+  return candidates.map((candidate) => ({ ...candidate }));
+}
+
+function invalidateCompatibilityCache(cacheKey: object): void {
+  compatibilityCandidatesCache.delete(cacheKey);
+  compatibilityCandidatesInflight.delete(cacheKey);
+  compatibilityCacheGeneration.set(cacheKey, (compatibilityCacheGeneration.get(cacheKey) ?? 0) + 1);
+}
+
+function pathTouchesCompatibilityTree(path: string): boolean {
+  const segments = path.split('/');
+  for (const segment of segments) {
+    if (COMPATIBILITY_TREE_SEGMENTS.has(segment)) return true;
+  }
+  // Marketplace plugin skills are discovered at `<source>/skills/<name>/SKILL.md`.
+  // `<source>` is a path from marketplace.json, not under `.claude-plugin`, so
+  // a write there must drop the cache or the new skill stays invisible.
+  const base = segments[segments.length - 1];
+  return base === SKILL_FILE || segments.includes(SKILLS_DIR);
+}
+
+/**
+ * `mkdir` / `writeFile` invalidate when the path is a compatibility tree or
+ * a skill file a marketplace source would pick up. `rm` / `rename` / `mount`
+ * / `unmount` can add or drop a whole subtree, so they always invalidate.
+ * Scoop skeleton directories (`/scoops/<folder>/tmp`, `/shared`) do neither.
+ */
+function shouldInvalidateCompatibilityCache(
+  methodName: CompatibilityCacheInvalidationMethod,
+  args: readonly unknown[]
+): boolean {
+  if (ALWAYS_INVALIDATING_METHODS.has(methodName)) return true;
+  // `mkdir` / `writeFile` take the path as the first argument. Later
+  // arguments are file contents or options; scanning those would split a
+  // multi-megabyte write and would drop the cache when the text merely
+  // mentions a compatibility path.
+  const pathArg = args[0];
+  return typeof pathArg === 'string' && pathTouchesCompatibilityTree(pathArg);
+}
+
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
   // A get/set-asymmetric Proxy (the sudo-fs handle that backs the agent shell)
   // cannot be monkeypatched for cache invalidation without creating an infinite
@@ -149,21 +213,35 @@ async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<Discovere
   // eliminating the OOM cycle. The expense (a full-VFS walk per call) is bounded
   // and off the hot path.
   if (isMonkeypatchUnsafeFs(fs)) {
-    const fresh = await discoverCompatibilitySkillCandidates(fs);
-    return fresh.map((candidate) => ({ ...candidate }));
+    return copyCandidates(await discoverCompatibilitySkillCandidates(fs));
   }
 
   installCompatibilityCacheInvalidationHooks(fs);
 
   const cacheKey = fs as object;
   const cached = compatibilityCandidatesCache.get(cacheKey);
-  if (cached) {
-    return cached.map((candidate) => ({ ...candidate }));
+  if (cached) return copyCandidates(cached);
+
+  const generation = compatibilityCacheGeneration.get(cacheKey) ?? 0;
+  const pending = compatibilityCandidatesInflight.get(cacheKey);
+  if (pending && pending.generation === generation) {
+    return copyCandidates(await pending.promise);
   }
 
-  const discovered = await discoverCompatibilitySkillCandidates(fs);
-  compatibilityCandidatesCache.set(cacheKey, discovered);
-  return discovered.map((candidate) => ({ ...candidate }));
+  const discoveredPromise = discoverCompatibilitySkillCandidates(fs).then((discovered) => {
+    if ((compatibilityCacheGeneration.get(cacheKey) ?? 0) === generation) {
+      compatibilityCandidatesCache.set(cacheKey, discovered);
+    }
+    return discovered;
+  });
+  let tracked!: Promise<DiscoveredSkillCandidate[]>;
+  tracked = discoveredPromise.finally(() => {
+    if (compatibilityCandidatesInflight.get(cacheKey)?.promise === tracked) {
+      compatibilityCandidatesInflight.delete(cacheKey);
+    }
+  });
+  compatibilityCandidatesInflight.set(cacheKey, { generation, promise: tracked });
+  return copyCandidates(await tracked);
 }
 
 /**
@@ -423,7 +501,9 @@ function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
     try {
       mutableFs[methodName] = async (...args: unknown[]) => {
         const result = await original.apply(fs, args);
-        compatibilityCandidatesCache.delete(cacheKey);
+        if (shouldInvalidateCompatibilityCache(methodName, args)) {
+          invalidateCompatibilityCache(cacheKey);
+        }
         return result;
       };
     } catch {

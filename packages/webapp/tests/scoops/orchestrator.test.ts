@@ -4020,8 +4020,11 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    // Boot must complete despite the corrupt scoop.
+    // Boot must complete despite the corrupt scoop. Child contexts finish
+    // after init resolves; the skip and the healthy context are both done
+    // once the background restore settles.
     await expect(orch.init()).resolves.toBeUndefined();
+    await orch.whenBootRestoresSettled();
 
     // The healthy scoop + cone still loaded their contexts...
     expect(lifecycle.getContext(healthyScoop.jid)).toBeDefined();

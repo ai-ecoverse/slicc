@@ -213,8 +213,40 @@ export function layoutCommandForSkill(frontmatter: {
   return `layout set ${name}`;
 }
 
+const defaultSkillsInflight = new WeakMap<object, Map<string, Promise<void>>>();
+
 /**
- * Load skills from a directory in VirtualFS
+ * Share one in-flight `createDefaultSkills` for a filesystem. Seeding is
+ * idempotent (stat, then write only when missing). `loadSkills` is not
+ * shared: a scan started before an install must not be what
+ * `reloadAllSkills` rebuilds ready cones from.
+ */
+function shareOnFs<T>(
+  slots: WeakMap<object, Map<string, Promise<T>>>,
+  fs: object,
+  key: string,
+  run: () => Promise<T>
+): Promise<T> {
+  let byKey = slots.get(fs);
+  if (!byKey) {
+    byKey = new Map();
+    slots.set(fs, byKey);
+  }
+  const existing = byKey.get(key);
+  if (existing) return existing;
+  let promise!: Promise<T>;
+  promise = run().finally(() => {
+    if (byKey.get(key) === promise) byKey.delete(key);
+  });
+  byKey.set(key, promise);
+  return promise;
+}
+
+/**
+ * Load skills from a directory in VirtualFS.
+ *
+ * Not coalesced across callers. An install that lands while another scan is
+ * in flight must still be visible to the reload that follows it.
  */
 export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
@@ -346,10 +378,16 @@ ${sections.join('\n')}
  * Create default files in VFS from bundled defaults.
  * Files are loaded from packages/vfs-root/ at build time via import.meta.glob.
  */
-export async function createDefaultSkills(
+export function createDefaultSkills(
   fs: VirtualFS,
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
+  return shareOnFs(defaultSkillsInflight, fs, skillsDir, () =>
+    createDefaultSkillsOnce(fs, skillsDir)
+  );
+}
+
+async function createDefaultSkillsOnce(fs: VirtualFS, skillsDir: string): Promise<void> {
   const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFileLoaders();
 

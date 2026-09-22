@@ -42,6 +42,10 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 5. Closing a unit tears down everything it owns — turns, tools, realm workers, shell processes, observers, subscriptions — in one place. Descendants **cascade** by default; a child (or the `close` call) may opt into **detach-on-close**, which promotes survivors instead of tearing them down.
 6. Runtime detection (float, extension, follower) happens at composition time, not in unit logic.
 
+### Boot restore
+
+`Orchestrator.init()` awaits root contexts (`parentJid === null`) with bounded concurrency (`SCOOP_BOOT_CONCURRENCY` in `packages/webapp/src/scoops/scoop-boot-restore.ts`) and restores child contexts afterwards in the background. `init()` resolving means records, the shared filesystem, and root runtimes are up; a child runtime may still be starting. Each unit still emits `scoop-restored:<jid>` when its create finishes or is skipped, including a context that throws (non-roots land in a retryable `error` tab). In-flight `createTab` calls for one jid share one promise, so a message or lick during background restore does not build a second context. `recoverInterruptedWork` and `shutdown` wait for that background pass. Compatibility skill discovery walks the filesystem once and keeps the result across scoop-skeleton `mkdir`s. A write under `.agents`, `.claude`, or `.claude-plugin`, a `skills/` path or `SKILL.md` (marketplace plugin sources live outside `.claude-plugin`), and any `rm` / `rename` / `mount` / `unmount`, drops the cache. `resetFilesystem` waits for the background restore before it detaches contexts.
+
 ## Module map
 
 | File                | Purpose                                                                                                                                                                                                                                                                                                                                        |

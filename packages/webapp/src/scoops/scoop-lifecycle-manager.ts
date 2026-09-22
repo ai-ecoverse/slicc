@@ -255,6 +255,11 @@ export interface ScoopLifecycleDeps {
 export class ScoopLifecycleManager {
   /** One owning runtime per scoop jid (#1666). */
   private units: Map<string, LiveWorkUnit> = new Map();
+  /**
+   * In-flight `createTab` per jid. Boot restore and a message that arrives
+   * mid-restore must share one context build (#440).
+   */
+  private tabCreates: Map<string, Promise<void>> = new Map();
   /** Serialize model repairs so an older root/model snapshot can never win a later one. */
   private gelatiereModelSync: Promise<void> = Promise.resolve();
 
@@ -401,8 +406,23 @@ export class ScoopLifecycleManager {
     fs.setReadGrants(policy.read.filter((rule) => rule.nopasswd).map((rule) => rule.pattern));
   }
 
-  /** Create and initialize a scoop context. */
-  async createTab(jid: string): Promise<void> {
+  /**
+   * Create and initialize a scoop context. Concurrent callers for the same
+   * jid await the same attempt.
+   */
+  createTab(jid: string): Promise<void> {
+    const inflight = this.tabCreates.get(jid);
+    if (inflight) return inflight;
+    let run!: Promise<void>;
+    run = this.openTab(jid).finally(() => {
+      if (this.tabCreates.get(jid) === run) this.tabCreates.delete(jid);
+    });
+    this.tabCreates.set(jid, run);
+    return run;
+  }
+
+  /** Create and initialize a scoop context. One attempt; see {@link createTab}. */
+  private async openTab(jid: string): Promise<void> {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) throw new Error(`Scoop not found: ${jid}`);
 
@@ -474,6 +494,10 @@ export class ScoopLifecycleManager {
     unit.attachContext(context, contextId);
 
     await context.init();
+    // `shutdown` / `destroyTab` drop the unit. `resetFilesystem` detaches the
+    // context but leaves the unit in the map, so a restore that resumed
+    // after that swap must not mark the tab ready or flush onto the old fs.
+    if (this.units.get(jid) !== unit || unit.context !== context) return;
 
     if (unit.tab?.status === 'initializing' && unit.transition('ready')) {
       this.deps.callbacks.onStatusChange(jid, 'ready');
