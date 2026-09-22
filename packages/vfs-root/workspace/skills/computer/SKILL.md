@@ -17,12 +17,14 @@ allowed-tools: bash
 ## Target
 
 ```bash
-computer ls                         # ids, kinds, sizes
+computer ls                         # ids, kinds, names, titles
 computer use v86:arch               # default for later verbs
 computer info                       # descriptor for the current target
 ```
 
 Resolution order: `-c` / `--computer`, else `$COMPUTER`, else last `computer use`, else the only registered computer.
+
+`-c` takes an id, the `-n` name the computer was added under, or its current title — in that order. Prefer the **id** or the **name**: `ls` shows them in separate columns because `TITLE` is whatever the surface calls itself right now (a tab republishes `document.title` on every capture), while `NAME` is fixed for the life of the registration.
 
 ## Look then act
 

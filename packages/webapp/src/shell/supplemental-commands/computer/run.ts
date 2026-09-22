@@ -317,12 +317,20 @@ async function runVerb(
 
 function verbLs(registry: ComputerRegistry, json: boolean): CmdResult {
   const list = registry.list();
-  if (json) return ok(`${JSON.stringify(list)}\n`);
+  if (json) {
+    const rows = list.map((c) => {
+      const name = registry.nameOf(c.id);
+      return name ? { ...c, name } : c;
+    });
+    return ok(`${JSON.stringify(rows)}\n`);
+  }
   if (list.length === 0) return ok('no computers registered\n');
-  const lines = ['ID                   KIND   STATE     TITLE'];
+
+  const lines = ['ID                   KIND   STATE     NAME       TITLE'];
   for (const c of list) {
+    const name = registry.nameOf(c.id) ?? '-';
     lines.push(
-      `${c.id.padEnd(20)} ${c.kind.padEnd(6)} ${c.state.padEnd(9)} ${c.title}${lsExtras(c)}`
+      `${c.id.padEnd(20)} ${c.kind.padEnd(6)} ${c.state.padEnd(9)} ${name.padEnd(10)} ${c.title}${lsExtras(c)}`
     );
   }
   return ok(`${lines.join('\n')}\n`);
@@ -383,10 +391,10 @@ async function verbAddUrl(
   }
   if (name) desc = { ...desc, title: name };
   const backend = new UrlComputerBackend(fetchImpl, base, desc);
-  const registered = registry.register(backend);
+  const registered = registry.register(backend, { name });
   registry.use(registered.id);
   void ctx;
-  return ok(`registered ${registered.id} (${registered.title})\n`);
+  return ok(`registered ${registered.id} (${name ?? registered.title})\n`);
 }
 
 async function verbAddSsh(
@@ -435,10 +443,10 @@ async function verbAddSsh(
     sim,
     native,
   });
-  const desc = registry.register(backend);
+  const desc = registry.register(backend, { name });
   registry.use(desc.id);
   void ctx;
-  return ok(`registered ${desc.id} (${desc.title})\n`);
+  return ok(`registered ${desc.id} (${name ?? desc.title})\n`);
 }
 
 async function verbAddTab(
@@ -460,16 +468,17 @@ async function verbAddTab(
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err));
   }
-  const info = { title: name ?? page.title, url: page.url };
+
+  const info = { title: page.title, url: page.url };
   const browserForced = Boolean(deps.browser) && !deps.panelRpc;
   const rpc = browserForced ? null : lookupRpc(deps);
   const backend = rpc
     ? new BridgedTabComputerBackend(rpc, page.targetId, info)
     : new LocalTabComputerBackend(browser, page.targetId, info);
-  const desc = registry.register(backend);
+  const desc = registry.register(backend, { name });
   registry.use(desc.id);
   void ctx;
-  return ok(`registered ${desc.id} (${desc.title})\n`);
+  return ok(`registered ${desc.id} (${name ?? desc.title})\n`);
 }
 
 async function verbAddScreen(
@@ -508,10 +517,10 @@ async function verbAddScreen(
       registry.refresh(screenComputerId(handle));
     }
   );
-  const desc = registry.register(backend);
+  const desc = registry.register(backend, { name });
   registry.use(desc.id);
   void ctx;
-  return ok(`registered ${desc.id} (${desc.title})\n`);
+  return ok(`registered ${desc.id} (${name ?? desc.title})\n`);
 }
 
 async function verbRm(
@@ -545,11 +554,14 @@ function verbInfo(
   if ('error' in resolved) return fail(resolved.error);
   const entry = registry.getEntry(resolved.id);
   if (!entry) return fail(`unknown computer '${resolved.id}'`);
-  if (globals.json) return ok(`${JSON.stringify(entry.descriptor)}\n`);
+  const name = registry.nameOf(resolved.id);
+  if (globals.json) {
+    return ok(`${JSON.stringify(name ? { ...entry.descriptor, name } : entry.descriptor)}\n`);
+  }
   const d = entry.descriptor;
   const size = d.size ? `${d.size.width}x${d.size.height}` : '-';
   return ok(
-    `id: ${d.id}\nkind: ${d.kind}\ntitle: ${d.title}\nstate: ${d.state}\nsize: ${size}\npid: ${d.pid ?? '-'}\n`
+    `id: ${d.id}\nname: ${name ?? '-'}\nkind: ${d.kind}\ntitle: ${d.title}\nstate: ${d.state}\nsize: ${size}\npid: ${d.pid ?? '-'}\n`
   );
 }
 

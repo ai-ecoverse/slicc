@@ -144,6 +144,19 @@ describe('ComputerRegistry', () => {
     expect(registry.lastUsedId()).toBe('b');
   });
 
+  it('holds the assigned name beside the backend and drops it on unregister', async () => {
+    const registry = installComputerRegistry(null);
+    registry.register(new FakeBackend('a'), { name: 'probe' });
+    registry.register(new FakeBackend('b'));
+    expect(registry.nameOf('a')).toBe('probe');
+    expect(registry.nameOf('b')).toBeNull();
+    expect(registry.nameOf('missing')).toBeNull();
+
+    expect(registry.list().find((c) => c.id === 'a')).not.toHaveProperty('name');
+    await registry.unregister('a');
+    expect(registry.nameOf('a')).toBeNull();
+  });
+
   it('rememberFrame updates the still and seq but leaves lastShot untouched', () => {
     const registry = installComputerRegistry(null);
     registry.register(new FakeBackend('fake'));

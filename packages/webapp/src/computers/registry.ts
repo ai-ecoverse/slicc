@@ -8,12 +8,15 @@ export interface RegisterComputerOptions {
   pid?: number | null;
   argv?: string[];
   cwd?: string;
+
+  name?: string;
 }
 
 interface Entry {
   backend: ComputerBackend;
   pid: number | null;
   ownsPid: boolean;
+  name: string | null;
   lastShot?: ComputerLastShot;
   lastFrame: ComputerFrame | null;
   seq: number;
@@ -53,6 +56,10 @@ export class ComputerRegistry {
 
   lastUsedId(): string | null {
     return this.usedId;
+  }
+
+  nameOf(id: string): string | null {
+    return this.entries.get(id)?.name ?? null;
   }
 
   use(id: string): ComputerDescriptor | null {
@@ -117,6 +124,7 @@ export class ComputerRegistry {
       backend,
       pid,
       ownsPid,
+      name: options.name ?? null,
       lastShot: described.lastShot,
       lastFrame: null,
       seq: 0,
