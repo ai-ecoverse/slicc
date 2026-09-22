@@ -32,6 +32,7 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     minimize: vi.fn(),
     stopCone: vi.fn(),
     selectScoop: vi.fn().mockResolvedValue(false),
+    selectedScoop: vi.fn().mockResolvedValue(null),
     attachImage: vi.fn(),
     captureScreen: vi.fn(),
     exec,
@@ -408,6 +409,7 @@ describe('full document rendering', () => {
     expect(srcdoc).toContain('sprinkle-exec');
     expect(srcdoc).toContain('sprinkle-agent');
     expect(srcdoc).toContain('sprinkle-select-scoop');
+    expect(srcdoc).toContain('sprinkle-selected-scoop');
     // Dual copy of slicc.screenshot() — keep in lockstep with sprinkle-screenshot.ts.
     expect(srcdoc).toContain('Element has zero dimensions');
     expect(srcdoc).toContain('image decode failed');
@@ -519,6 +521,58 @@ describe('full document rendering', () => {
     );
 
     expect(bridge.selectScoop).toHaveBeenCalledWith('scoop:issue-triage-1');
+  });
+
+  it('posts sprinkle-selected-scoop from the full-document iframe', async () => {
+    const renderer = new SprinkleRenderer(container, makeBridge('full-doc'));
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const srcdoc = container.querySelector('iframe')!.srcdoc;
+    const frameDom = new JSDOM(srcdoc, { runScripts: 'dangerously' });
+    const postMessage = vi.spyOn(frameDom.window, 'postMessage').mockImplementation(() => {});
+
+    void (frameDom.window as unknown as { slicc: SprinkleBridgeAPI }).slicc.selectedScoop();
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'sprinkle-selected-scoop',
+      }),
+      '*'
+    );
+  });
+
+  it('answers an inbound sprinkle-selected-scoop without calling selectScoop', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.selectedScoop as ReturnType<typeof vi.fn>).mockResolvedValue('cone:cone-research');
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const iframe = container.querySelector('iframe')!;
+    const post = vi.spyOn(iframe.contentWindow!, 'postMessage');
+
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent('message', {
+        data: { type: 'sprinkle-selected-scoop', id: 'sel-read' },
+        source: iframe.contentWindow,
+      })
+    );
+
+    expect(bridge.selectedScoop).toHaveBeenCalledOnce();
+    expect(bridge.selectScoop).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sprinkle-selected-scoop-response',
+          id: 'sel-read',
+          target: 'cone:cone-research',
+        }),
+        '*'
+      );
+    });
   });
 
   it('handles bridge calls posted while the iframe is being appended', async () => {

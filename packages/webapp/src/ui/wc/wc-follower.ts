@@ -36,7 +36,7 @@ import {
   WELCOME_HANDOFF_CARD_CLASS,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
-import { selectScoopForContext } from './wc-unit-context.js';
+import { selectedScoopTarget, selectScoopForContext } from './wc-unit-context.js';
 
 const log = createLogger('wc-follower');
 
@@ -1042,6 +1042,9 @@ export async function bootFollowerFloat(
         selectScoopForContext(workUnits.currentUnits(), target, boot.getSelected()?.id, (unit) =>
           boot.selectScoop(unit)
         ),
+      // Same grammar as selectScoop, read from this follower's own selection.
+      // A panel can ask where the view is without switching it.
+      onSelectedScoop: () => selectedScoopTarget(workUnits.currentUnits(), boot.getSelected()?.id),
       onScoopsList: (scoops, activeScoopJid) => {
         // Either frame can be the first of a session, so neither may be the
         // only door out of the un-addressable window.

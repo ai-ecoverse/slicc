@@ -331,6 +331,12 @@ export interface StartPageFollowerTrayOptions {
    * Unset, the follower sprinkle bridge returns `false`.
    */
   onSelectScoop?: (target: string) => boolean | Promise<boolean>;
+  /**
+   * Read this follower's current selection (`slicc.selectedScoop`). The WC
+   * follower wires this to `selectedScoopTarget`. Unset, the bridge
+   * resolves `null`.
+   */
+  onSelectedScoop?: () => string | null | Promise<string | null>;
 
   // --- Test hooks ---
   /** @internal Override fetch (defaults to plain `fetch`). */
@@ -465,6 +471,7 @@ export function startPageFollowerTray(
         removeSprinkle: options.removeSprinkle,
         open: options.onOpen,
         selectScoop: options.onSelectScoop,
+        selectedScoop: options.onSelectedScoop,
       });
       activeSprinkleController = sprinkleController;
     }

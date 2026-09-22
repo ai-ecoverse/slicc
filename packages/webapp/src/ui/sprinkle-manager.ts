@@ -21,6 +21,7 @@ import {
   type CaptureScreenResult,
   SprinkleBridge,
   type SprinkleExecHandler,
+  type SprinkleSelectedScoopHandler,
   type SprinkleSelectScoopHandler,
 } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
@@ -295,6 +296,12 @@ export interface SprinkleManagerOptions {
    * `false` (the panel can fall back to a lick).
    */
   selectScoopHandler?: SprinkleSelectScoopHandler;
+  /**
+   * Read the shell's current selection in `selectScoop`'s grammar. Wired by
+   * the WC shell to `selectedScoopTarget`. Unset, `slicc.selectedScoop`
+   * resolves `null`. A read: it must not switch the view.
+   */
+  selectedScoopHandler?: SprinkleSelectedScoopHandler;
 }
 
 /**
@@ -471,7 +478,8 @@ export class SprinkleManager implements SprinkleManagerHandle {
         const entry = this.openSprinkles.get(name);
         entry?.renderer.pushDeviceEvent(channel, payload);
       },
-      options.selectScoopHandler
+      options.selectScoopHandler,
+      options.selectedScoopHandler
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';

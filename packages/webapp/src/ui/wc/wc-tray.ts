@@ -108,7 +108,7 @@ import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { applyComposerAvailability, type SwitcherScoop, type WcShellRefs } from './wc-shell.js';
 import { toScoopSummaries, turnsFromUnits } from './wc-tray-scoops.js';
-import { rootForSelection } from './wc-unit-context.js';
+import { rootForSelection, selectedScoopTarget } from './wc-unit-context.js';
 
 export interface WcTrayDeps {
   refs: WcShellRefs;
@@ -630,6 +630,10 @@ export function buildFollowerOptions(
     },
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
+    // This float follows another leader, so the read uses its remote roster
+    // and the selection this role tracks — the local kernel describes
+    // different units. Same helper the dedicated follower mount wires.
+    onSelectedScoop: () => selectedScoopTarget(workUnits.currentUnits(), selectedScoopJid),
     onScoopsList: (scoops, activeScoopJid) => {
       if (!selectedScoopJid || !scoops.some((scoop) => scoop.jid === selectedScoopJid)) {
         selectedScoopJid = usableUnitId(activeScoopJid);
