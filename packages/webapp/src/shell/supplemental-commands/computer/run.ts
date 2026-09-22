@@ -465,7 +465,7 @@ async function verbAddTab(
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err));
   }
-  const info = { title: name ?? page.title, url: page.url };
+  const info = { title: page.title, url: page.url, ...(name ? { name } : {}) };
   const browserForced = Boolean(deps.browser) && !deps.panelRpc;
   const rpc = browserForced ? null : lookupRpc(deps);
   const backend = rpc

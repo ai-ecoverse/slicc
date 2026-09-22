@@ -32,6 +32,18 @@ export function tabComputerId(targetId: string): string {
   return `tab:${targetId}`;
 }
 
+/**
+ * Registration info for a tab computer. `title`/`url` track the live tab and
+ * are refreshed on every capture; `name` is the operator's `-n` handle and,
+ * when set, stays the descriptor title so `-c <name>` keeps resolving even
+ * after the page changes its `document.title`.
+ */
+export interface TabComputerInfo {
+  title: string;
+  url: string;
+  name?: string;
+}
+
 const CAPABILITIES: ComputerCapabilities = {
   screenshot: true,
   text: false,
@@ -59,23 +71,26 @@ export class LocalTabComputerBackend implements ComputerBackend {
   private seq = 0;
   private title: string;
   private url: string;
+  /** Operator-assigned `-n` name; stable match key for `-c`, unlike the live title. */
+  private readonly name?: string;
   private size: { width: number; height: number } | null = null;
   private readonly pointer = createPointer();
 
   constructor(
     private readonly browser: BrowserAPI,
     readonly targetId: string,
-    info: { title: string; url: string } = { title: targetId, url: '' }
+    info: TabComputerInfo = { title: targetId, url: '' }
   ) {
     this.title = info.title;
     this.url = info.url;
+    this.name = info.name;
   }
 
   describe(): ComputerDescriptor {
     return {
       id: tabComputerId(this.targetId),
       kind: 'tab',
-      title: this.title,
+      title: this.name ?? this.title,
       size: this.size,
       state: 'live',
       capabilities: CAPABILITIES,
@@ -171,23 +186,26 @@ export class BridgedTabComputerBackend implements ComputerBackend {
   private seq = 0;
   private title: string;
   private url: string;
+  /** Operator-assigned `-n` name; stable match key for `-c`, unlike the live title. */
+  private readonly name?: string;
   private size: { width: number; height: number } | null = null;
   private readonly pointer = createPointer();
 
   constructor(
     private readonly rpc: PanelRpcClient,
     readonly targetId: string,
-    info: { title: string; url: string } = { title: targetId, url: '' }
+    info: TabComputerInfo = { title: targetId, url: '' }
   ) {
     this.title = info.title;
     this.url = info.url;
+    this.name = info.name;
   }
 
   describe(): ComputerDescriptor {
     return {
       id: tabComputerId(this.targetId),
       kind: 'tab',
-      title: this.title,
+      title: this.name ?? this.title,
       size: this.size,
       state: 'live',
       capabilities: CAPABILITIES,

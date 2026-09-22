@@ -200,6 +200,31 @@ describe('LocalTabComputerBackend', () => {
     expect(browser.withTab).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps the operator -n name as the descriptor title after a screenshot changes the live title', async () => {
+    const { tab } = makeTab();
+    const renamed: PageInfo = { targetId: 'T1', title: 'document title', url: EXAMPLE.url };
+    const browser = makeBrowser([renamed], tab);
+    const backend = new LocalTabComputerBackend(browser as never, 'T1', {
+      title: EXAMPLE.title,
+      url: EXAMPLE.url,
+      name: 'probe',
+    });
+    expect(backend.describe().title).toBe('probe');
+    await backend.screenshot({ format: 'jpeg' });
+    await backend.input([{ type: 'text', text: 'x' }]);
+    expect(backend.describe().title).toBe('probe');
+  });
+
+  it('falls back to the live title when no -n name was assigned', async () => {
+    const { tab } = makeTab();
+    const renamed: PageInfo = { targetId: 'T1', title: 'document title', url: EXAMPLE.url };
+    const browser = makeBrowser([renamed], tab);
+    const backend = new LocalTabComputerBackend(browser as never, 'T1', EXAMPLE);
+    expect(backend.describe().title).toBe('Example');
+    await backend.screenshot({ format: 'jpeg' });
+    expect(backend.describe().title).toBe('document title');
+  });
+
   it('refuses a SLICC app tab on screenshot and input', async () => {
     const { tab } = makeTab();
     const app: PageInfo = { targetId: 'APP', title: 'SLICC', url: 'https://www.sliccy.ai/' };
@@ -238,6 +263,25 @@ describe('BridgedTabComputerBackend', () => {
       targetId: 'T1',
       events: [{ type: 'click', button: 1, count: 1, x: 1, y: 2 }],
     });
+  });
+
+  it('keeps the operator -n name as the descriptor title after a bridged screenshot', async () => {
+    const call = vi.fn(async () => ({
+      mime: 'image/jpeg' as const,
+      base64: JPEG_B64,
+      width: 2,
+      height: 3,
+      title: 'document title',
+      url: 'https://example.test/',
+    }));
+    const backend = new BridgedTabComputerBackend({ call } as never, 'T1', {
+      title: EXAMPLE.title,
+      url: EXAMPLE.url,
+      name: 'probe',
+    });
+    expect(backend.describe().title).toBe('probe');
+    await backend.screenshot({ format: 'jpeg' });
+    expect(backend.describe().title).toBe('probe');
   });
 
   it('fills omitted click coordinates from the previous mousemove', async () => {
