@@ -217,6 +217,14 @@ export interface AssistantConfig {
   triggerPattern: RegExp;
 }
 
+/**
+ * Optional work `Orchestrator.init` runs the moment the shared filesystem
+ * exists, before policy load and scoop context restore.
+ */
+export interface OrchestratorInitHooks {
+  onSharedFsReady?: (fs: VirtualFS) => Promise<void>;
+}
+
 export class Orchestrator implements ConeApprovalRouter {
   private scoops: Map<string, RegisteredScoop> = new Map();
   /**
@@ -567,30 +575,26 @@ export class Orchestrator implements ConeApprovalRouter {
     this.onConversationsReady = hook;
   }
 
-  /** Initialize orchestrator and load saved scoops */
   /**
-   * @param onBootProgress Optional heartbeat fired after each restored
-   *   scoop's context init (success or skip). Root heartbeats land before
-   *   this promise resolves; child heartbeats land as the background
-   *   restore finishes. Either one re-arms the kernel-ready watchdog
-   *   (#2007) while that unit is still inside `init()`.
+   * Open the shared VirtualFS, attach its watcher, then run
+   * `onSharedFsReady` before policy load, skill discovery, the root cone
+   * wave, and the background child restore. The mount parses the metadata
+   * sidecar and runs the unconditional pre-boot repair (#2146) — O(tree
+   * size) with no milestones of its own, 25-30s+ on a COLD boot of a large
+   * tree (2026-08-18 restart brick: "did not signal ready" on every fresh
+   * Chrome start, warm reloads passed; 2026-08-24: ~8 minutes on an
+   * I/O-starved disk). The heartbeat keeps the page's kernel-ready watchdog
+   * (#2007) armed while the mount provably advances.
    */
-  async init(onBootProgress?: (stage: string) => void): Promise<void> {
-    await db.initDB();
-
-    // Create the single shared VirtualFS. The mount parses the metadata
-    // sidecar and runs the unconditional pre-boot repair (#2146) — O(tree
-    // size) with no milestones of its own, 25-30s+ on a COLD boot of a
-    // large tree (2026-08-18 restart brick: "did not signal ready" on
-    // every fresh Chrome start, warm reloads passed; 2026-08-24: ~8
-    // minutes on an I/O-starved disk). The heartbeat keeps the page's
-    // kernel-ready watchdog (#2007) armed while the mount provably
-    // advances: the repair ticks per sidecar entry probed, so beats flow
-    // for as long as the scan moves and go quiet only when it stalls.
-    this.sharedFs = await withMountHeartbeat(
+  private async openSharedFilesystem(
+    onBootProgress: ((stage: string) => void) | undefined,
+    hooks: OrchestratorInitHooks | undefined
+  ): Promise<{ sharedFs: VirtualFS; fsWatcher: FsWatcher }> {
+    const sharedFs = await withMountHeartbeat(
       (tick) => VirtualFS.create({ dbName: 'slicc-fs', onRepairProgress: tick }),
       onBootProgress
     );
+    this.sharedFs = sharedFs;
     this.sessionStore = new SessionStore();
     this.conversationStore = new WorkUnitConversationStore();
     // Snapshot the journal NOW, before any context exists to start a turn
@@ -600,14 +604,36 @@ export class Orchestrator implements ConeApprovalRouter {
     this.turnJournal = new TurnJournal();
     this.interruptedTurns = await this.turnJournal.readAll();
 
-    // Create and attach file system watcher
-    this.fsWatcher = new FsWatcher();
-    this.sharedFs.setWatcher(this.fsWatcher);
-    (globalThis as SliccGlobalHooks).__slicc_fs_watcher = this.fsWatcher;
+    const fsWatcher = new FsWatcher();
+    this.fsWatcher = fsWatcher;
+    sharedFs.setWatcher(fsWatcher);
+    (globalThis as SliccGlobalHooks).__slicc_fs_watcher = fsWatcher;
+    // Config-owned host folders land here, before the root cone wave and
+    // the background child restore, so skill discovery on the shared
+    // filesystem sees `/mnt/<target>` from the first scan.
+    if (hooks?.onSharedFsReady) await hooks.onSharedFsReady(sharedFs);
+    return { sharedFs, fsWatcher };
+  }
+
+  /**
+   * @param onBootProgress Optional heartbeat fired after each restored
+   *   scoop's context init (success or skip). Root heartbeats land before
+   *   this promise resolves; child heartbeats land as the background
+   *   restore finishes. Either one re-arms the kernel-ready watchdog
+   *   (#2007) while that unit is still inside `init()`.
+   * @param hooks `onSharedFsReady` runs once the shared filesystem exists,
+   *   before the root cone wave and the background child restore.
+   */
+  async init(
+    onBootProgress?: (stage: string) => void,
+    hooks?: OrchestratorInitHooks
+  ): Promise<void> {
+    await db.initDB();
+    const { sharedFs, fsWatcher } = await this.openSharedFilesystem(onBootProgress, hooks);
 
     const savedScoops = await this.initPolicyLayerAndLoadRecords(
-      this.sharedFs,
-      this.fsWatcher,
+      sharedFs,
+      fsWatcher,
       onBootProgress
     );
     // Legacy records predate the ownership edge; the deleted `isCone` field

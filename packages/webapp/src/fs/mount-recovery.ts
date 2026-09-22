@@ -24,7 +24,8 @@
  *
  * Mount-table (`hostfs`) mounts never appear here: they are config-owned
  * and re-mounted from `/api/runtime-config` on every boot
- * (`mountConfiguredHostMounts` in kernel/host.ts), not persisted to IDB.
+ * (`applyConfiguredHostMounts`, first inside `Orchestrator.init` and again
+ * from `recoverPersistedMounts`), not persisted to IDB.
  *
  * For REMOTE backends (S3, DA):
  * The browser-side backend is signing-naive — it never holds creds. Recovery
@@ -199,7 +200,7 @@ export async function recoverMounts(
   for (const { targetPath, descriptor } of entries) {
     if (descriptor.kind === 'hostfs') {
       // Config-owned mounts are re-mounted from the launcher's mount table
-      // at boot (mountConfiguredHostMounts), never from IDB. A row can only
+      // at boot (applyConfiguredHostMounts), never from IDB. A row can only
       // exist here as legacy debris; skip it silently.
       continue;
     }

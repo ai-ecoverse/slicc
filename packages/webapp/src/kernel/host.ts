@@ -23,6 +23,8 @@
  *     panel via `bridge.emitTrayRuntimeStatus()`.
  *  4. `orchestrator.init()`. Saved chat is pushed to the panel once
  *     conversation records are loaded, before scoop contexts are created.
+ *     Config-owned host folders mount inside it as soon as the shared
+ *     filesystem exists (`onSharedFsReady`), before the root cone wave.
  *  5. `publishAgentBridge` on `globalThis.__slicc_agent` (worker-safe;
  *     no chrome.runtime).
  *  6. `registerSessionCostsProvider` (+ `registerSessionBudgetProvider`, the
@@ -33,8 +35,9 @@
  *     Callers that need different routing (the standalone wizard's
  *     onboarding flow) supply `lickEventHandler`.
  *  8. `globalThis.__slicc_lickManager = lickManager`.
- *  9. `recoverMounts` against the shared FS, emitting a `session-reload`
- *     lick if any mount needs user re-consent. Awaited before jshd restore.
+ *  9. Retry config-owned host mounts, then `recoverMounts` for everything
+ *     else, emitting a `session-reload` lick if any mount needs user
+ *     re-consent. Awaited before jshd restore.
  *  9b. Restore enabled `jshd` units after mounts are back, before cone
  *      bootstrap. Held on the first-turn readiness boundary so relaunched
  *      units are live before the cone's first turn.
@@ -565,8 +568,22 @@ async function bootOrchestrator(
   //    grow with scoop count. Each context still emits a boot-progress
   //    heartbeat (#2007). Saved chat is pushed from inside init, before
   //    that restore, via the hook registered here.
+  //    Host-table mounts need no picker. Apply them the moment the shared
+  //    FS exists — inside init, before the root cone wave — so the wave
+  //    and the background child pass both see `/mnt/<target>`.
   wireEarlyConversationHydration(orchestrator, bridge);
-  await orchestrator.init(config.onBootProgress);
+  const bootLog = config.logger ?? console;
+  await orchestrator.init(config.onBootProgress, {
+    onSharedFsReady: async (fs) => {
+      try {
+        const { applyConfiguredHostMounts } = await import('../fs/auto-mount-table.js');
+        await applyConfiguredHostMounts(fs, bootLog);
+      } catch (err) {
+        bootLog.warn('Configured host mounts failed', err);
+      }
+      config.onBootProgress?.('host-mounts-applied');
+    },
+  });
 
   // 4b. Fill any buffer the early pass left empty (a record that was not
   // readable yet). Buffers that already hold the saved transcript are
@@ -1006,27 +1023,18 @@ async function recoverPersistedMounts(
   log: KernelHostLogger
 ): Promise<void> {
   try {
-    const { getAllMountEntries, removeMountEntry } = await import('../fs/mount-table-store.js');
+    const { getAllMountEntries } = await import('../fs/mount-table-store.js');
     const { recoverMounts } = await import('../fs/mount-recovery.js');
-    // Config-owned host mounts first (mount table via /api/hostfs): fully
-    // automatic, no picker, no permission prompt, never persisted to IDB.
-    const { hostShadowedEntries, mountConfiguredHostMounts, withoutHostMountedTargets } =
-      await import('../fs/auto-mount-table.js');
-    const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
-    // Stale persisted rows at a now-config-owned target would only EEXIST.
+    // Retry config-owned host mounts (also applied at the start of
+    // orchestrator.init). `applyConfiguredHostMounts` replaces a non-hostfs
+    // backend at a table target and purges its persisted row plus any armed
+    // `pendingMount:term:` handle. Returned mappings are the owned targets.
+    const { applyConfiguredHostMounts, withoutHostMountedTargets } = await import(
+      '../fs/auto-mount-table.js'
+    );
+    const hostMounted = await applyConfiguredHostMounts(sharedFs, log);
     const allEntries = await getAllMountEntries();
     const entries = withoutHostMountedTargets(allEntries, hostMounted);
-    // Purge the shadowed rows for good, not just for this boot — see
-    // `hostShadowedEntries`. Best-effort per row; a failed delete just
-    // re-shadows next boot.
-    for (const stale of hostShadowedEntries(allEntries, hostMounted)) {
-      void removeMountEntry(stale.targetPath).catch((err) => {
-        log.warn('failed to purge host-owned mount row', {
-          path: stale.targetPath,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
     if (entries.length === 0) return;
     const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
     if (needsRecovery.length === 0) return;
@@ -1319,9 +1327,11 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     config.appPageUrl
   );
 
-  // 9. Restore persisted mounts then jshd units. MUST run AFTER
-  //    setEventHandler so the `session-reload` lick routes through the
-  //    installed handler. Both complete before first-turn readiness.
+  // 9. Retry config-owned host mounts, restore persisted mounts, then jshd
+  //    units. MUST run AFTER setEventHandler so the `session-reload` lick
+  //    routes through the installed handler. Both complete before
+  //    first-turn readiness. Host folders were already applied inside
+  //    orchestrator.init; this pass retries a fetch that failed early.
   await restoreMountsThenJshd(sharedFs, processManager, lickManager, log, progress, orchestrator);
 
   // 10. Cone bootstrap.

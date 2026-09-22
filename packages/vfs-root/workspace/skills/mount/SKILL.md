@@ -15,14 +15,17 @@ allowed-tools: bash, read_file, write_file, edit
 
 # Mount
 
-The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends:
+The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends the command itself mounts, plus host folders the launcher already mounted:
 
 | Backend | Source URI                    | Auth                                                   |
 | ------- | ----------------------------- | ------------------------------------------------------ |
 | Local   | (no `--source`)               | OS file picker — cone-only, fails in scoops            |
+| Host    | (launcher mount table)        | Already mounted — do not picker-mount over it          |
 | S3      | `s3://<bucket>[/<prefix>]`    | Profile-namespaced secrets (`s3.<profile>.*`)          |
 | DA      | `da://<org>/<repo>[/<path>]`  | Adobe IMS bearer (reuses the Adobe LLM provider login) |
 | AEM     | `aem://<org>/<site>[/<path>]` | Adobe IMS bearer (same login as DA)                    |
+
+A launcher mount-table entry (`--mount` / Sliccstart Settings → Mounts) is already at its target when the cone starts. `mount list` shows it as `hostfs://<os-path>`. Do not `mount <that-path>` over it. A picker mount on a table target is replaced by the host folder; picker mounts at other paths stay.
 
 ## Choosing a backend from user intent
 
@@ -197,3 +200,4 @@ For AEM: listings _do_ carry size and mtime, so `ls -l` costs one listing and no
 - Don't fall back to a local mount if the user mentioned a remote service. Default to clarifying which remote backend, not which directory to pick.
 - Don't rename a file to change only case or Unicode form until `mount info` says the volume is byte-exact. On an insensitive mount that is the #3107 truncate.
 - Don't `ln -s` a mounted path onto `/tmp`, `/shared`, or any other VFS path to alias it. That is `EXDEV` (#3311); use the mount path or copy.
+- Don't `mount` a path that `mount list` already shows as `hostfs://`. The launcher mount table owns that target.
