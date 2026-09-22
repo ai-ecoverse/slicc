@@ -18,6 +18,7 @@ import {
   formatArchiveAsMarkdown,
   heuristicTitle,
   isDraftArchiveFilename,
+  isProvisionalSessionTitle,
   liveSnapshotFilename,
   readSessionsIndexForWrite,
   rewriteTranscriptPointers,
@@ -177,6 +178,59 @@ describe('naming helpers', () => {
     expect(heuristicTitle([assistant, user])).toBe('fix "the" build');
     expect(heuristicTitle([assistant])).toBe('untitled-session');
     expect(heuristicTitle([{ ...user, content: 'x'.repeat(80) }])).toBe(`${'x'.repeat(60)}…`);
+  });
+
+  it('skips lick headers and compaction summaries, then falls back', () => {
+    const lick = (content: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+      id: 'lick',
+      role: 'user',
+      content,
+      timestamp: 1,
+      ...extra,
+    });
+    const sudo =
+      '[@agent-memory-curator-cone-slicc-website sudo-request]\nLick ID: abc\nKind: sudo';
+    const legacyHead = `${sudo.trim().replace(/\s+/g, ' ').slice(0, 60)}…`;
+    expect(legacyHead).toBe('[@agent-memory-curator-cone-slicc-website sudo-request] Lick…');
+    expect(isProvisionalSessionTitle(legacyHead)).toBe(true);
+
+    const real: ChatMessage = { ...user, content: 'rename the sessions rail' };
+    expect(heuristicTitle([lick(sudo, { source: 'lick', channel: 'sudo-request' }), real])).toBe(
+      'rename the sessions rail'
+    );
+    expect(
+      heuristicTitle([
+        lick('[Cron Event: gelatiere-nightly]\n```json\n{}\n```'),
+        lick('_Forwarded from Research._\n\n[Sprinkle Event: gelatiere]\n{}'),
+        lick('<context-summary>\nold chat\n</context-summary>'),
+        lick('<context-summary/>'),
+        real,
+      ])
+    ).toBe('rename the sessions rail');
+    expect(
+      heuristicTitle([
+        lick('[Cron Event: gelatiere-nightly]'),
+        lick('<context-summary>only a summary</context-summary>'),
+      ])
+    ).toBe('untitled-session');
+    expect(
+      heuristicTitle([
+        lick('Preview tab connected from https://example.test', {
+          source: 'lick',
+          channel: 'preview',
+        }),
+        real,
+      ])
+    ).toBe('rename the sessions rail');
+    // A later mention of a lick header is still a real prompt.
+    expect(
+      heuristicTitle([
+        lick('[Cron Event: nightly]'),
+        { ...user, content: 'the [Cron Event: nightly] woke me up' },
+      ])
+    ).toBe('the [Cron Event: nightly] woke me up');
+    expect(isProvisionalSessionTitle('untitled-session')).toBe(true);
+    expect(isProvisionalSessionTitle('rename the sessions rail')).toBe(false);
   });
 
   it('finds a cone’s live entry, defaulting a missing cone field to the primary cone', () => {
