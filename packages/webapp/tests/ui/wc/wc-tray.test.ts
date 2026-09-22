@@ -12,6 +12,10 @@ const trayMocks = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   stop: vi.fn(),
 }));
+const lockMocks = vi.hoisted(() => ({
+  fatalCleanup: null as (() => void) | null,
+  acquireLeaderRole: vi.fn(),
+}));
 
 vi.mock('../../../src/scoops/tab-persistence-guard.js', () => ({
   TabPersistenceGuard: class {
@@ -72,8 +76,12 @@ vi.mock('../../../src/ui/remote-cdp-page-bridge.js', () => ({
   }),
 }));
 vi.mock('../../../src/ui/tray-leader-lock.js', () => ({
-  acquireLeaderRole: vi.fn(),
+  acquireLeaderRole: (...args: unknown[]) => lockMocks.acquireLeaderRole(...args),
   getDefaultLockManager: () => null,
+  isTrayLeaderBootAborted: () => false,
+  registerTrayLeaderFatalCleanup: (cleanup: () => void) => {
+    lockMocks.fatalCleanup = cleanup;
+  },
   requestLeaderLock: vi.fn(),
 }));
 vi.mock('../../../src/shell/supplemental-commands/host-command.js', () => ({
@@ -166,6 +174,37 @@ describe('wireWcTray tab persistence guard', () => {
     testWindow.dispatchEvent(new Event('beforeunload'));
     expect(guard.deactivate).toHaveBeenCalledTimes(2);
     expect(trayMocks.stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wireWcTray fatal boot', () => {
+  beforeEach(() => {
+    guardMocks.instances.length = 0;
+    trayMocks.options = null;
+    trayMocks.stop.mockClear();
+    lockMocks.fatalCleanup = null;
+    lockMocks.acquireLeaderRole.mockReset();
+  });
+
+  it('stops the leader tray and releases the lock when boot fails', async () => {
+    const release = vi.fn();
+    lockMocks.acquireLeaderRole.mockImplementation(
+      async (opts: { onGranted: (release: () => void) => void }) => {
+        opts.onGranted(release);
+      }
+    );
+    const { deps } = makeDeps();
+    (deps as { runtimeMode: string }).runtimeMode = 'standalone';
+
+    await wireWcTray(deps as never);
+
+    expect(lockMocks.fatalCleanup).toEqual(expect.any(Function));
+    expect(trayMocks.stop).not.toHaveBeenCalled();
+    lockMocks.fatalCleanup?.();
+
+    expect(trayMocks.stop).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(guardMocks.instances[0]?.deactivate).toHaveBeenCalled();
   });
 });
 

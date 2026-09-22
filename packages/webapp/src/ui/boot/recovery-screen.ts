@@ -1,3 +1,4 @@
+import { isStaleBridgeTokenError } from '../../base/api-endpoint.js';
 import { NUKE_LOCAL_STORAGE_KEYS } from '../../shell/supplemental-commands/nuke-channel.js';
 import { wipeLocalStorageState } from '../../shell/supplemental-commands/wipe-local-storage-state.js';
 import type { WorkerTriageVerdict } from './worker-triage.js';
@@ -22,6 +23,9 @@ export function renderBootRecoveryScreen(
   const message = error instanceof Error ? error.message : String(error);
   const wedged = deps.verdict === 'browser-wedged';
 
+  const staleToken = isStaleBridgeTokenError(error);
+  const softenReset = wedged || staleToken;
+
   const box = document.createElement('div');
   box.style.cssText = 'padding:2rem;text-align:center;font-family:system-ui;';
 
@@ -41,8 +45,8 @@ export function renderBootRecoveryScreen(
   resetBtn.type = 'button';
   resetBtn.textContent = 'Reset local data & reload';
 
-  resetBtn.dataset['variant'] = wedged ? 'demoted' : 'destructive';
-  resetBtn.style.cssText = wedged
+  resetBtn.dataset['variant'] = softenReset ? 'demoted' : 'destructive';
+  resetBtn.style.cssText = softenReset
     ? 'padding:0.5rem 1rem;cursor:pointer;border:1px solid var(--s2-content-tertiary, #717171);' +
       'background:transparent;color:inherit;border-radius:4px;'
     : 'padding:0.5rem 1rem;cursor:pointer;border:1px solid var(--s2-negative, #e34850);' +

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { STALE_BRIDGE_TOKEN_CODE } from '../../../src/base/api-endpoint.js';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
@@ -449,6 +450,35 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
       });
     } finally {
       primeSpy.mockRestore();
+      connectSpy.mockRestore();
+    }
+  });
+
+  it('rejects a stale bridge token before the CDP retry loop', async () => {
+    const search = '?bridge=ws://localhost:7777/cdp&bridgeToken=stale-token';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'bridge-token-required' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' },
+          })
+      )
+    );
+    const connectSpy = vi.spyOn(BrowserAPI.prototype, 'connect');
+    try {
+      await expect(
+        setupStandalonePrelude({
+          sleep: instantSleep,
+          runtimeMode: 'standalone',
+          envBaseUrl: null,
+          window: createFakeWindow(search),
+          log: createLog(),
+        })
+      ).rejects.toMatchObject({ code: STALE_BRIDGE_TOKEN_CODE });
+      expect(connectSpy).not.toHaveBeenCalled();
+    } finally {
       connectSpy.mockRestore();
     }
   });

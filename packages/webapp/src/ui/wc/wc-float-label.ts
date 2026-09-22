@@ -1,5 +1,6 @@
 import type { FloatbarFloatKind } from '@slicc/webcomponents';
 import { floatKindLabel } from '@slicc/webcomponents';
+import { isStaleBridgeTokenError, throwIfStaleBridgeToken } from '../../base/api-endpoint.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 
@@ -44,11 +45,13 @@ export async function resolveStandaloneFloatKind(opts?: {
       signal: ctrl.signal,
       headers: apiHeaders(),
     }).finally(() => clearTimeout(timer));
+    await throwIfStaleBridgeToken(res);
     if (!res.ok) return 'standalone';
     const body = (await res.json()) as { service?: string };
     const kind = body.service ? FLOAT_KIND_BY_SERVICE[body.service] : undefined;
     return kind ?? 'standalone';
-  } catch {
+  } catch (err) {
+    if (isStaleBridgeTokenError(err)) throw err;
     return 'standalone';
   }
 }

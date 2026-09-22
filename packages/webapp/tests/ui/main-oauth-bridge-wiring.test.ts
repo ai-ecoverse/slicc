@@ -9,7 +9,7 @@ const source = readFileSync(join(here, '..', '..', 'src', 'ui', 'main.ts'), 'utf
 describe('ui/main.ts OAuth replica bridge wiring', () => {
   it('imports both setters from the proxied-fetch module', () => {
     expect(source).toMatch(
-      /import\s+\{\s*setBridgeToken,\s*setLocalApiBaseUrl\s*\}\s+from\s+['"]\.\.\/shell\/proxied-fetch\.js['"]/
+      /import\s*\{[^}]*\bassertLocalBridgeAcceptsToken\b[^}]*\bsetBridgeToken\b[^}]*\bsetLocalApiBaseUrl\b[^}]*\}\s*from\s*['"]\.\.\/shell\/proxied-fetch\.js['"]/
     );
   });
 
@@ -26,6 +26,14 @@ describe('ui/main.ts OAuth replica bridge wiring', () => {
     const bootstrapIdx = source.indexOf('bootstrapOAuthReplicas()');
     expect(tokenIdx).toBeGreaterThan(-1);
     expect(tokenIdx).toBeLessThan(bootstrapIdx);
+  });
+
+  it('rejects a stale bridge token before the OAuth bootstrap posts', () => {
+    const tokenIdx = source.indexOf('setBridgeToken(bridge.token)');
+    const assertIdx = source.indexOf('assertLocalBridgeAcceptsToken()');
+    const bootstrapIdx = source.indexOf('bootstrapOAuthReplicas()');
+    expect(assertIdx).toBeGreaterThan(tokenIdx);
+    expect(assertIdx).toBeLessThan(bootstrapIdx);
   });
 
   it('skips the wiring on the extension-delegate path, as the prelude does', () => {

@@ -63,3 +63,62 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
   }
   return headers;
 }
+
+export const BRIDGE_TOKEN_REQUIRED_ERROR = 'bridge-token-required';
+
+export const STALE_BRIDGE_TOKEN_CODE = 'stale-bridge-token';
+
+export const STALE_BRIDGE_TOKEN_MESSAGE =
+  "This tab's bridge token is no longer valid — the launcher restarted. Reload from the launcher.";
+
+export class StaleBridgeTokenError extends Error {
+  readonly code = STALE_BRIDGE_TOKEN_CODE;
+
+  constructor() {
+    super(STALE_BRIDGE_TOKEN_MESSAGE);
+    this.name = 'StaleBridgeTokenError';
+  }
+}
+
+export function isStaleBridgeTokenError(err: unknown): err is StaleBridgeTokenError {
+  if (err instanceof StaleBridgeTokenError) return true;
+  if (!(err instanceof Error)) return false;
+  return (err as Error & { code?: unknown }).code === STALE_BRIDGE_TOKEN_CODE;
+}
+
+export interface BridgeStatusResponse {
+  status: number;
+  clone(): { json(): Promise<unknown> };
+}
+
+export async function throwIfStaleBridgeToken(response: BridgeStatusResponse): Promise<void> {
+  if (response.status !== 403) return;
+  let errorField: unknown;
+  try {
+    const body = (await response.clone().json()) as { error?: unknown } | null;
+    errorField = body?.error;
+  } catch {
+    return;
+  }
+  if (errorField === BRIDGE_TOKEN_REQUIRED_ERROR) {
+    throw new StaleBridgeTokenError();
+  }
+}
+
+export async function assertLocalBridgeAcceptsToken(
+  fetchImpl: typeof fetch = fetch
+): Promise<void> {
+  if (!localApiBaseUrl || !bridgeToken) return;
+  let response: Response;
+  try {
+    response = await fetchImpl(resolveApiUrl('/api/status'), {
+      cache: 'no-store',
+      headers: apiHeaders(),
+      signal: AbortSignal.timeout(1500),
+    });
+  } catch (err) {
+    if (isStaleBridgeTokenError(err)) throw err;
+    return;
+  }
+  await throwIfStaleBridgeToken(response);
+}

@@ -75,7 +75,9 @@ import type { SprinkleManager } from '../sprinkle-manager.js';
 import {
   acquireLeaderRole,
   getDefaultLockManager,
+  isTrayLeaderBootAborted,
   type LockManagerLike,
+  registerTrayLeaderFatalCleanup,
   requestLeaderLock,
 } from '../tray-leader-lock.js';
 import type { AgentHandle, ChatMessage } from '../types.js';
@@ -927,6 +929,20 @@ function startInitialRole(
   }
 }
 
+function installFatalLeaderRelease(deps: WcTrayDeps, state: TrayRoleState): void {
+  registerTrayLeaderFatalCleanup(() => {
+    try {
+      state.leader?.stop();
+    } catch (err) {
+      deps.log.error('leader stop threw during fatal boot', err);
+    }
+    state.leader = null;
+    state.persistenceGuard.deactivate();
+    state.lockRelease?.();
+    state.lockRelease = null;
+  });
+}
+
 function acquireAndStartLeader(
   workerBaseUrl: string,
   deps: WcTrayDeps,
@@ -1082,7 +1098,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
 
           void requestLeaderLock(workerBaseUrl, lockManager).then((lockResult) => {
             if (lockResult.status !== 'granted') return;
-            if (!state.leader) {
+            if (!state.leader || isTrayLeaderBootAborted()) {
               lockResult.release();
               return;
             }
@@ -1106,6 +1122,8 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
       throw err;
     }
   };
+
+  installFatalLeaderRelease(deps, state);
 
   await setupStandalonePanelRpc({
     instanceId,

@@ -3,7 +3,11 @@ import { hasChromeRuntimeConnect, isExtensionRealm } from '../core/runtime-env.j
 import { initTelemetry } from '../kernel/telemetry.js';
 
 import { registerProviders } from '../providers/index.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
+import {
+  assertLocalBridgeAcceptsToken,
+  setBridgeToken,
+  setLocalApiBaseUrl,
+} from '../shell/proxied-fetch.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { setupFeatureFlagsForPage } from './boot/setup-feature-flags.js';
@@ -14,6 +18,7 @@ import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupStoragePersistence } from './boot/setup-storage-persistence.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
+import { releaseTrayLeaderOnFatalBoot } from './tray-leader-fatal.js';
 
 const log = createLogger('main');
 
@@ -83,6 +88,8 @@ async function main(): Promise<void> {
   if (bridge?.apiBaseUrl && !extensionDelegate) {
     setLocalApiBaseUrl(bridge.apiBaseUrl);
     setBridgeToken(bridge.token);
+
+    await assertLocalBridgeAcceptsToken();
   }
 
   const { bootstrapOAuthReplicas } = await import('./oauth-bootstrap.js');
@@ -149,6 +156,8 @@ async function bootRecovery(app: HTMLElement, err: unknown): Promise<void> {
 
 main().catch((err) => {
   log.error('Fatal error', err);
+
+  releaseTrayLeaderOnFatalBoot();
   const app = document.getElementById('app');
   if (!app) return;
   void bootRecovery(app, err);

@@ -50,6 +50,7 @@ import {
 
 export {
   apiHeaders,
+  assertLocalBridgeAcceptsToken,
   getBridgeToken,
   getChromeExtensionRealm,
   getExtensionDelegateId,
