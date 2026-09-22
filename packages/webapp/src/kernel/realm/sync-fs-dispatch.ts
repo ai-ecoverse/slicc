@@ -17,11 +17,14 @@
  * NOTE: this module is pure (no BroadcastChannel / SW). Phase-2 routes
  * `stat` / `readdir` / `exists` through the SW wire in addition to the
  * phase-1 `read` / `write`, and the sync-exec flush-before path adds
- * `mkdir` / `rm`. `rename` is kept for the responder's completeness but is
- * not reachable from the SW handler today.
+ * `mkdir` / `rm`. The POSIX ops (`rename` / `unlink` / `rmdir` / `symlink` /
+ * `readlink` / `chmod` / `utimes`) back the Pyodide live-VFS plugin
+ * (`live-vfs-fs.ts`), which needs single-node semantics rather than the
+ * recursive `rm` / `mkdir -p` the flush path uses.
  */
 
-import { resolveSyncFsToken } from './sync-fs-token-registry.js';
+import type { FsStat } from 'just-bash';
+import { resolveSyncFsToken, type SyncFsTokenEntry } from './sync-fs-token-registry.js';
 
 export type SyncFsOp =
   | 'read'
@@ -32,7 +35,13 @@ export type SyncFsOp =
   | 'readdir'
   | 'mkdir'
   | 'rm'
-  | 'rename';
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'symlink'
+  | 'readlink'
+  | 'chmod'
+  | 'utimes';
 
 export interface SyncFsRequest {
   token: string;
@@ -40,8 +49,16 @@ export interface SyncFsRequest {
   path: string;
   /** Write payload for `op: 'write'`. */
   body?: Uint8Array;
-  /** Second path argument for `op: 'rename'` (the destination). */
+  /**
+   * Second argument: the destination for `op: 'rename'`, the link target for
+   * `op: 'symlink'` (whose `path` is the new link itself).
+   */
   arg2?: string;
+  /** Permission bits for `op: 'chmod'`. */
+  mode?: number;
+  /** Access / modification times (ms since epoch) for `op: 'utimes'`. */
+  atimeMs?: number;
+  mtimeMs?: number;
 }
 
 /**
@@ -101,32 +118,10 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return { ok: true, kind: 'void' };
       case 'exists':
         return { ok: true, kind: 'json', json: await fs.exists(resolved) };
-      case 'stat': {
-        const s = await fs.stat(resolved);
-        return {
-          ok: true,
-          kind: 'json',
-          json: {
-            isDirectory: s.isDirectory,
-            isFile: s.isFile,
-            isSymbolicLink: s.isSymbolicLink,
-            size: s.size,
-          },
-        };
-      }
-      case 'lstat': {
-        const s = await fs.lstat(resolved);
-        return {
-          ok: true,
-          kind: 'json',
-          json: {
-            isDirectory: s.isDirectory,
-            isFile: s.isFile,
-            isSymbolicLink: s.isSymbolicLink ?? false,
-            size: s.size,
-          },
-        };
-      }
+      case 'stat':
+        return { ok: true, kind: 'json', json: statJson(await fs.stat(resolved)) };
+      case 'lstat':
+        return { ok: true, kind: 'json', json: statJson(await fs.lstat(resolved)) };
       case 'readdir':
         return { ok: true, kind: 'json', json: await fs.readdir(resolved) };
       case 'mkdir':
@@ -138,18 +133,88 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
       case 'rename': {
         // Probe `rename` then `mv` (VfsAdapter exposes `mv`); copy+remove
         // only when neither is present, and never when dest is the same inode
-        // as source (#3107). Not reachable from the SW handler — kept for
-        // the responder's completeness. First-use import: this module is on
-        // the kernel-worker boot path (host → sync-fs-responder).
+        // as source (#3107). First-use import: this module is on the
+        // kernel-worker boot path (host → sync-fs-responder).
         const dest = fs.resolvePath(cwd, req.arg2 ?? '');
         const { renameViaFs } = await import('./rename-via-fs.js');
         await renameViaFs(fs, resolved, dest);
         return { ok: true, kind: 'void' };
       }
       default:
-        return { ok: false, errno: 'EINVAL', message: `sync-fs: unknown op '${req.op as string}'` };
+        return await dispatchPosixOp(fs, resolved, req);
     }
   } catch (err) {
     return toErrno(err);
+  }
+}
+
+/** Wire shape of a `stat` / `lstat` result. */
+export interface SyncFsStatJson {
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymbolicLink: boolean;
+  size: number;
+  mode: number;
+  mtimeMs: number;
+}
+
+function statJson(s: FsStat): SyncFsStatJson {
+  return {
+    isDirectory: s.isDirectory,
+    isFile: s.isFile,
+    isSymbolicLink: s.isSymbolicLink ?? false,
+    size: s.size,
+    mode: s.mode,
+    mtimeMs: s.mtime instanceof Date ? s.mtime.getTime() : 0,
+  };
+}
+
+/** An `Error` carrying a POSIX `.code`, which {@link toErrno} forwards. */
+function posixError(code: string, path: string): Error & { code: string } {
+  return Object.assign(new Error(`${code}: ${path}`), { code });
+}
+
+/**
+ * The single-node POSIX ops. `unlink` / `rmdir` check type and emptiness
+ * themselves because `ctx.fs.rm` is a looser primitive: an unchecked `rmdir`
+ * would delete a populated tree.
+ */
+async function dispatchPosixOp(
+  fs: SyncFsTokenEntry['fs'],
+  resolved: string,
+  req: SyncFsRequest
+): Promise<SyncFsResult> {
+  switch (req.op) {
+    case 'unlink': {
+      if ((await fs.lstat(resolved)).isDirectory) throw posixError('EISDIR', resolved);
+      await fs.rm(resolved);
+      return { ok: true, kind: 'void' };
+    }
+    case 'rmdir': {
+      if (!(await fs.lstat(resolved)).isDirectory) throw posixError('ENOTDIR', resolved);
+      if ((await fs.readdir(resolved)).length > 0) throw posixError('ENOTEMPTY', resolved);
+      await fs.rm(resolved, { recursive: true });
+      return { ok: true, kind: 'void' };
+    }
+    case 'symlink':
+      // Stored verbatim: a relative target resolves against the link's
+      // directory at use time, as symlink(2) does.
+      if (!req.arg2) throw posixError('EINVAL', resolved);
+      await fs.symlink(req.arg2, resolved);
+      return { ok: true, kind: 'void' };
+    case 'readlink':
+      return { ok: true, kind: 'json', json: await fs.readlink(resolved) };
+    case 'chmod':
+      if (typeof req.mode !== 'number') throw posixError('EINVAL', resolved);
+      await fs.chmod(resolved, req.mode);
+      return { ok: true, kind: 'void' };
+    case 'utimes':
+      if (typeof req.atimeMs !== 'number' || typeof req.mtimeMs !== 'number') {
+        throw posixError('EINVAL', resolved);
+      }
+      await fs.utimes(resolved, new Date(req.atimeMs), new Date(req.mtimeMs));
+      return { ok: true, kind: 'void' };
+    default:
+      return { ok: false, errno: 'EINVAL', message: `sync-fs: unknown op '${req.op as string}'` };
   }
 }

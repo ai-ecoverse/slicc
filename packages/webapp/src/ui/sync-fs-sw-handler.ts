@@ -98,11 +98,31 @@ export interface SyncFsSwChannelLike {
   removeEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
 }
 
+/** A POSIX op whose extra arguments ride a JSON POST body. */
+type PosixArgOp = 'rename' | 'unlink' | 'rmdir' | 'symlink' | 'chmod' | 'utimes';
+
 export interface SyncFsHandlerFsRequest {
   token: string;
-  op: 'read' | 'write' | 'stat' | 'lstat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+  op:
+    | 'read'
+    | 'write'
+    | 'stat'
+    | 'lstat'
+    | 'readdir'
+    | 'exists'
+    | 'readlink'
+    | 'mkdir'
+    | 'rm'
+    | PosixArgOp;
   path: string;
   body?: Uint8Array;
+  /** `rename` destination / `symlink` target. */
+  arg2?: string;
+  /** `chmod` permission bits. */
+  mode?: number;
+  /** `utimes` times, ms since epoch. */
+  atimeMs?: number;
+  mtimeMs?: number;
 }
 
 /**
@@ -115,7 +135,7 @@ export type SyncFsHandlerRequest =
   | (SyncExecRequest & { op?: undefined; path?: undefined; body?: undefined });
 
 /** Read-only metadata ops the SW parses off a GET `?op=` query param. */
-const METADATA_OPS = new Set(['stat', 'lstat', 'readdir', 'exists']);
+const METADATA_OPS = new Set(['stat', 'lstat', 'readdir', 'exists', 'readlink']);
 /**
  * Mutating metadata ops, parsed off a POST `?op=`. Only the sync-exec
  * flush-before path issues these — the `fs` shim keeps mkdir/rm cache-backed —
@@ -123,6 +143,47 @@ const METADATA_OPS = new Set(['stat', 'lstat', 'readdir', 'exists']);
  * before an `execSync` subprocess looks for them.
  */
 const MUTATING_OPS = new Set(['mkdir', 'rm']);
+/**
+ * Single-node POSIX ops (Pyodide live-VFS plugin), parsed off a POST `?op=`.
+ * Their arguments ride a JSON body, validated field by field below.
+ */
+const POSIX_ARG_OPS: ReadonlySet<string> = new Set<PosixArgOp>([
+  'rename',
+  'unlink',
+  'rmdir',
+  'symlink',
+  'chmod',
+  'utimes',
+]);
+
+/**
+ * Pick the typed POSIX arguments off an untrusted JSON body. Anything of the
+ * wrong type is dropped, so the dispatcher's own `EINVAL` checks fire rather
+ * than a malformed value reaching `ctx.fs`. An unparsable body yields `{}`.
+ */
+function parsePosixArgs(
+  buf: ArrayBuffer
+): Pick<SyncFsHandlerFsRequest, 'arg2' | 'mode' | 'atimeMs' | 'mtimeMs'> {
+  let raw: { arg2?: unknown; mode?: unknown; atimeMs?: unknown; mtimeMs?: unknown } | null;
+  try {
+    raw = buf.byteLength ? JSON.parse(new TextDecoder().decode(buf)) : null;
+  } catch {
+    return {};
+  }
+  if (!raw || typeof raw !== 'object') return {};
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  const arg2 = typeof raw.arg2 === 'string' ? raw.arg2 : undefined;
+  const mode = num(raw.mode);
+  const atimeMs = num(raw.atimeMs);
+  const mtimeMs = num(raw.mtimeMs);
+  return {
+    ...(arg2 !== undefined ? { arg2 } : {}),
+    ...(mode !== undefined ? { mode } : {}),
+    ...(atimeMs !== undefined ? { atimeMs } : {}),
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+  };
+}
 
 /**
  * Per-request round-trip budget. The fs channel's budget is a fixed constant
@@ -260,6 +321,9 @@ export async function parseSyncFsRequest(request: {
       return { token, op: opParam as 'mkdir' | 'rm', path };
     }
     const buf = await request.arrayBuffer();
+    if (opParam && POSIX_ARG_OPS.has(opParam)) {
+      return { token, op: opParam as PosixArgOp, path, ...parsePosixArgs(buf) };
+    }
     return { token, op: 'write', path, body: new Uint8Array(buf) };
   }
   // Metadata ops (phase-2) ride a GET with an `?op=` query param — the body
@@ -268,7 +332,7 @@ export async function parseSyncFsRequest(request: {
   // so a typo can't traverse the discriminated union with an untyped op
   // string (the responder / route would fail closed EINVAL anyway).
   if (opParam && METADATA_OPS.has(opParam)) {
-    return { token, op: opParam as 'stat' | 'lstat' | 'readdir' | 'exists', path };
+    return { token, op: opParam as 'stat' | 'lstat' | 'readdir' | 'exists' | 'readlink', path };
   }
   return { token, op: 'read', path };
 }

@@ -9,7 +9,7 @@
  * on this path; the per-op cost is one postMessage hop plus a memcpy per
  * window-sized chunk.
  *
- * The fs surface implements the SAME {@link SyncFsXhrMutatingBridge} the SW
+ * The fs surface implements the SAME {@link SyncFsPosixBridge} the SW
  * transport does, so `createSyncFsBridge` (the `fs` shim) is transport-blind;
  * the exec surface is a {@link SyncExecTransport} plugged into
  * `createSyncExecXhrBridge`, which keeps its cache-coherence dance.
@@ -24,7 +24,7 @@ import { SYNC_EXEC_CHANNEL, type SyncExecResultPayload } from './sync-exec-dispa
 import type { SyncExecTransport } from './sync-exec-xhr-bridge.js';
 import type { SyncFsResult } from './sync-fs-dispatch.js';
 import { SYNC_EXEC_XHR_MARGIN_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
-import type { SyncFsBridgeStat, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
+import { parseSyncFsStat, type SyncFsPosixBridge } from './sync-fs-xhr-bridge.js';
 import {
   decodeSabResult,
   SAB_I_CHUNK,
@@ -153,16 +153,6 @@ function errnoError(code: string, path: string): Error & { code: string } {
   return syncXhrError(code, `sync-sab bridge, '${path}'`);
 }
 
-function isStat(json: unknown): json is SyncFsBridgeStat {
-  const s = json as Partial<SyncFsBridgeStat> | null;
-  return (
-    !!s &&
-    typeof s.isFile === 'boolean' &&
-    typeof s.isDirectory === 'boolean' &&
-    typeof s.size === 'number'
-  );
-}
-
 /**
  * The fs half: same method surface + error contract as `createSyncFsXhrBridge`,
  * so the `fs` shim cannot tell the transports apart.
@@ -170,7 +160,7 @@ function isStat(json: unknown): json is SyncFsBridgeStat {
 export function createSyncFsSabBridge(
   transport: SyncSabTransport,
   opts: { timeoutMs?: number } = {}
-): SyncFsXhrMutatingBridge {
+): SyncFsPosixBridge {
   const timeoutMs = opts.timeoutMs ?? SYNC_FS_REQUEST_TIMEOUT_MS;
 
   function run(req: SyncSabRequestBody, path: string): SyncFsResult {
@@ -197,13 +187,13 @@ export function createSyncFsSabBridge(
       run({ op: 'write', path, body: data }, path);
     },
     stat: (path) => {
-      const s = json({ op: 'stat', path }, path);
-      if (!isStat(s)) throw errnoError('EIO', path);
+      const s = parseSyncFsStat(json({ op: 'stat', path }, path));
+      if (!s) throw errnoError('EIO', path);
       return s;
     },
     lstat: (path) => {
-      const s = json({ op: 'lstat', path }, path);
-      if (!isStat(s)) throw errnoError('EIO', path);
+      const s = parseSyncFsStat(json({ op: 'lstat', path }, path));
+      if (!s) throw errnoError('EIO', path);
       return s;
     },
     readdir: (path) => {
@@ -223,6 +213,29 @@ export function createSyncFsSabBridge(
     },
     rm: (path) => {
       run({ op: 'rm', path }, path);
+    },
+    rename: (from, to) => {
+      run({ op: 'rename', path: from, arg2: to }, from);
+    },
+    unlink: (path) => {
+      run({ op: 'unlink', path }, path);
+    },
+    rmdir: (path) => {
+      run({ op: 'rmdir', path }, path);
+    },
+    symlink: (target, linkPath) => {
+      run({ op: 'symlink', path: linkPath, arg2: target }, linkPath);
+    },
+    readlink: (path) => {
+      const target = json({ op: 'readlink', path }, path);
+      if (typeof target !== 'string') throw errnoError('EIO', path);
+      return target;
+    },
+    chmod: (path, mode) => {
+      run({ op: 'chmod', path, mode }, path);
+    },
+    utimes: (path, atimeMs, mtimeMs) => {
+      run({ op: 'utimes', path, atimeMs, mtimeMs }, path);
     },
   };
 }

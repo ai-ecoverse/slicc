@@ -27,6 +27,10 @@ export interface SyncFsBridgeStat {
   isDirectory: boolean;
   isSymbolicLink?: boolean;
   size: number;
+  /** Full `st_mode` (type + permission bits), when the responder sent one. */
+  mode?: number;
+  /** Modification time, ms since epoch, when the responder sent one. */
+  mtimeMs?: number;
 }
 
 /** What the `fs` shim consumes — read/write plus read-only metadata. */
@@ -52,8 +56,69 @@ export interface SyncFsXhrMutatingBridge extends SyncFsXhrBridge {
   rm(path: string): void;
 }
 
+/**
+ * Single-node POSIX mutations for a consumer that mirrors a real filesystem
+ * (the Pyodide live-VFS plugin). Unlike {@link SyncFsXhrMutatingBridge.rm},
+ * `unlink` refuses a directory and `rmdir` refuses a non-empty one.
+ */
+export interface SyncFsPosixBridge extends SyncFsXhrMutatingBridge {
+  rename(from: string, to: string): void;
+  unlink(path: string): void;
+  rmdir(path: string): void;
+  /** Create `linkPath` pointing at `target` (stored verbatim). */
+  symlink(target: string, linkPath: string): void;
+  readlink(path: string): string;
+  chmod(path: string, mode: number): void;
+  utimes(path: string, atimeMs: number, mtimeMs: number): void;
+}
+
+/** JSON arguments of a POSIX op (see `SyncFsRequest`). */
+export interface SyncFsPosixArgs {
+  arg2?: string;
+  mode?: number;
+  atimeMs?: number;
+  mtimeMs?: number;
+}
+
+/**
+ * Validate a `stat` / `lstat` JSON payload. `mode` / `mtimeMs` are optional so
+ * an older responder's four-field shape still parses.
+ */
+export function parseSyncFsStat(json: unknown): SyncFsBridgeStat | null {
+  const s = json as Partial<SyncFsBridgeStat> | null;
+  if (
+    !s ||
+    typeof s.isFile !== 'boolean' ||
+    typeof s.isDirectory !== 'boolean' ||
+    typeof s.size !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    isFile: s.isFile,
+    isDirectory: s.isDirectory,
+    isSymbolicLink: s.isSymbolicLink,
+    size: s.size,
+    ...(typeof s.mode === 'number' ? { mode: s.mode } : {}),
+    ...(typeof s.mtimeMs === 'number' ? { mtimeMs: s.mtimeMs } : {}),
+  };
+}
+
 /** Ops the route carries as an `?op=` query param (bare read/write carry none). */
-type SyncFsRouteOp = 'stat' | 'lstat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+type SyncFsRouteOp =
+  | 'stat'
+  | 'lstat'
+  | 'readdir'
+  | 'exists'
+  | 'readlink'
+  | 'mkdir'
+  | 'rm'
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'symlink'
+  | 'chmod'
+  | 'utimes';
 
 /** An `Error` carrying a POSIX `.code`, matching sync-fs-cache's errors. */
 function errnoError(code: string, path: string): Error & { code: string } {
@@ -77,7 +142,7 @@ function routeUrl(path: string, op?: SyncFsRouteOp): string {
 export function createSyncFsXhrBridge(
   token: string,
   opts: { timeoutMs?: number } = {}
-): SyncFsXhrMutatingBridge {
+): SyncFsPosixBridge {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   function request(
@@ -109,42 +174,14 @@ export function createSyncFsXhrBridge(
       synchronify(request('POST', path, bytes));
     },
     stat(path: string): SyncFsBridgeStat {
-      const json = synchronifyJson(
-        request('GET', path, undefined, 'stat')
-      ) as Partial<SyncFsBridgeStat> | null;
-      if (
-        !json ||
-        typeof json.isFile !== 'boolean' ||
-        typeof json.isDirectory !== 'boolean' ||
-        typeof json.size !== 'number'
-      ) {
-        throw errnoError('EIO', path);
-      }
-      return {
-        isFile: json.isFile,
-        isDirectory: json.isDirectory,
-        isSymbolicLink: json.isSymbolicLink,
-        size: json.size,
-      };
+      const st = parseSyncFsStat(synchronifyJson(request('GET', path, undefined, 'stat')));
+      if (!st) throw errnoError('EIO', path);
+      return st;
     },
     lstat(path: string): SyncFsBridgeStat {
-      const json = synchronifyJson(
-        request('GET', path, undefined, 'lstat')
-      ) as Partial<SyncFsBridgeStat> | null;
-      if (
-        !json ||
-        typeof json.isFile !== 'boolean' ||
-        typeof json.isDirectory !== 'boolean' ||
-        typeof json.size !== 'number'
-      ) {
-        throw errnoError('EIO', path);
-      }
-      return {
-        isFile: json.isFile,
-        isDirectory: json.isDirectory,
-        isSymbolicLink: json.isSymbolicLink,
-        size: json.size,
-      };
+      const st = parseSyncFsStat(synchronifyJson(request('GET', path, undefined, 'lstat')));
+      if (!st) throw errnoError('EIO', path);
+      return st;
     },
     readdir(path: string): string[] {
       const json = synchronifyJson(request('GET', path, undefined, 'readdir'));
@@ -169,5 +206,33 @@ export function createSyncFsXhrBridge(
     rm(path: string): void {
       synchronify(request('POST', path, undefined, 'rm'));
     },
+    rename(from: string, to: string): void {
+      synchronify(request('POST', from, posixBody({ arg2: to }), 'rename'));
+    },
+    unlink(path: string): void {
+      synchronify(request('POST', path, posixBody({}), 'unlink'));
+    },
+    rmdir(path: string): void {
+      synchronify(request('POST', path, posixBody({}), 'rmdir'));
+    },
+    symlink(target: string, linkPath: string): void {
+      synchronify(request('POST', linkPath, posixBody({ arg2: target }), 'symlink'));
+    },
+    readlink(path: string): string {
+      const json = synchronifyJson(request('GET', path, undefined, 'readlink'));
+      if (typeof json !== 'string') throw errnoError('EIO', path);
+      return json;
+    },
+    chmod(path: string, mode: number): void {
+      synchronify(request('POST', path, posixBody({ mode }), 'chmod'));
+    },
+    utimes(path: string, atimeMs: number, mtimeMs: number): void {
+      synchronify(request('POST', path, posixBody({ atimeMs, mtimeMs }), 'utimes'));
+    },
   };
+}
+
+/** Encode POSIX op arguments as the JSON POST body the SW parses. */
+function posixBody(args: SyncFsPosixArgs): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(args));
 }
