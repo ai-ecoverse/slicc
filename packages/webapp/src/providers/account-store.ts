@@ -16,6 +16,10 @@ import {
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
 } from './built-in/bedrock-camp-compat.js';
+import {
+  BEDROCK_CAMP_EXTRA_MODELS,
+  mergeBedrockCampCatalogue,
+} from './built-in/bedrock-camp-extra-models.js';
 import { findFamilyCost } from './family-cost.js';
 import {
   getRegisteredProviderConfig,
@@ -255,7 +259,10 @@ export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     if (providerId === 'bedrock-camp') {
       const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
-      return getModelsDynamic('amazon-bedrock')
+      return mergeBedrockCampCatalogue(
+        getModelsDynamic('amazon-bedrock'),
+        BEDROCK_CAMP_EXTRA_MODELS as unknown as Model<Api>[]
+      )
         .filter((m) => isBedrockCampCompatible(m, region))
         .map((m) => ({
           ...m,
@@ -1176,11 +1183,10 @@ function resolveUnknownModelId(
   baseUrl: string | null,
   pinned: boolean
 ): Model<Api> {
+  const catalogueModel = providerCatalogueModel(providerId, modelId, baseUrl);
+  if (catalogueModel) return catalogueModel;
   if (providerConfig.isOAuth) {
-    return (
-      providerCatalogueModel(providerId, modelId, baseUrl) ??
-      buildProviderRoutedModel(providerId, modelId, baseUrl)
-    );
+    return buildProviderRoutedModel(providerId, modelId, baseUrl);
   }
 
   if (pinned) {

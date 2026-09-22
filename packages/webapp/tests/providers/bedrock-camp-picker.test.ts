@@ -45,6 +45,41 @@ describe('bedrock-camp picker contents', () => {
     expect(ids.some((id) => /anthropic\.claude-sonnet-5/.test(id))).toBe(true);
   });
 
+  it('surfaces Opus 5.5 before pi-ai lists it, on the profiles the endpoint reaches', async () => {
+    const ids = (await pickerModels()).map((m) => m.id);
+    expect(ids).toContain('us.anthropic.claude-opus-5-5');
+    expect(ids).toContain('global.anthropic.claude-opus-5-5');
+    expect(ids).not.toContain('eu.anthropic.claude-opus-5-5');
+    expect(ids).not.toContain('jp.anthropic.claude-opus-5-5');
+  });
+
+  it('routes Opus 5.5 through bedrock-camp with effort control', async () => {
+    const opus = (await pickerModels()).find((m) => m.id === 'us.anthropic.claude-opus-5-5') as
+      | { reasoning?: boolean; api?: string; provider?: string }
+      | undefined;
+    expect(opus?.reasoning).toBe(true);
+    expect(opus?.api).toBe('bedrock-camp-converse');
+    expect(opus?.provider).toBe('bedrock-camp');
+  });
+
+  it('resolves a requested Opus 5.5 id instead of degrading to the selected model', async () => {
+    storage.set('selected-model', 'bedrock-camp:us.anthropic.claude-opus-5');
+    const { resolveModelById } = await import('../../src/providers/account-store.js');
+    const model = resolveModelById('us.anthropic.claude-opus-5-5');
+    expect(model.id).toBe('us.anthropic.claude-opus-5-5');
+    expect(model.api).toBe('bedrock-camp-converse');
+    expect(model.baseUrl).toBe(BEDROCK_BASE_URL);
+  });
+
+  it('resolves a selected Opus 5.5 as the current model', async () => {
+    storage.set('selected-model', 'bedrock-camp:us.anthropic.claude-opus-5-5');
+    const { resolveCurrentModel } = await import('../../src/providers/account-store.js');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('us.anthropic.claude-opus-5-5');
+    expect(model.api).toBe('bedrock-camp-converse');
+    expect(model.baseUrl).toBe(BEDROCK_BASE_URL);
+  });
+
   it('keeps effort control on Claude, where it reaches the wire', async () => {
     const opus = (await pickerModels()).find((m) => m.id === 'us.anthropic.claude-opus-5');
     expect(opus?.reasoning).toBe(true);
