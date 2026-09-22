@@ -33,7 +33,13 @@ export interface ComputerCommandDeps {
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Injected native capture for a `capabilities.computer` follower. */
   nativeComputer?: (runtimeId: string) => {
-    capture(opts: { fps?: number; maxWidth?: number; watch?: boolean }): Promise<{
+    capture(opts: {
+      fps?: number;
+      maxWidth?: number;
+      /** 1-based OS display index on the follower; omitted means its main display. */
+      display?: number;
+      watch?: boolean;
+    }): Promise<{
       bytes: Uint8Array;
       mime: 'image/jpeg';
       width: number;
@@ -42,7 +48,7 @@ export interface ComputerCommandDeps {
       nativeHeight: number;
     }>;
     unwatch(): void;
-    input(events: ComputerInputEvent[]): Promise<void> | void;
+    input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
   };
   /**
    * Injected in tests so `computer record` does not boot `@ffmpeg/core`.

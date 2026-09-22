@@ -16,7 +16,7 @@ Phase 1 (#3245) ships the protocol, registry, `computer` command, `v86` / `tab` 
 | `ComputerFrame`        | `seq`, `mime` (`image/jpeg` or `image/png`), `width`, `height`, `bytes`, optional `overCap` when encoded pixels exceed the requested maxWidth                 |
 | `ComputerLastShot`     | screenshot-space size + scale of the last frame the model saw                                                                                                 |
 
-Kinds on the wire: `'v86' | 'tab' | 'screen' | 'ssh' | 'url' | 'vnc' | 'jsh'`. Ids are namespaced (`v86:<name>`, `tab:<targetId>`, `screen:<handle>`, `ssh:<runtimeId>`, `ssh:<runtimeId>:sim:<udid>`, `url:<host><path>`, `jsh:<name>`).
+Kinds on the wire: `'v86' | 'tab' | 'screen' | 'ssh' | 'url' | 'vnc' | 'jsh'`. Ids are namespaced (`v86:<name>`, `tab:<targetId>`, `screen:<handle>`, `ssh:<runtimeId>`, `ssh:<runtimeId>:sim:<udid>`, `ssh:<runtimeId>:display:<n>`, `url:<host><path>`, `jsh:<name>`).
 
 Buttons: xdotool 1 / 2 / 3 = left / middle / right.
 
@@ -27,6 +27,18 @@ Input coordinates are in the space of `lastShot` unless `--native`. `computer sc
 Presets (`packages/webapp/src/computers/scale.ts`): `low` 256, `medium` 768 (default), `high` 1536. A bare number is a max width.
 
 Every poke writes a frozen JPEG to `$TMPDIR/computer/<name>/<seq>.jpg` and prints `screen: <path>`. The extension comes from the payload's magic bytes (`frozenFrameExtension`), never from `frame.mime`, so a backend that ignores `format: 'jpeg'` gets an honest `.png` name instead of PNG bytes in a `.jpg` file. On a `frames: "push"` backend the post-input capture waits for a live `computer watch` frame, then falls back to on-demand `screenshot()` if that wait times out or no watch is running. A failed frozen frame warns on stderr and still exits 0 — the poke already landed. Successful look/act verbs also prepend `target: <id>` (the resolved computer) so bash-row UI can watch without `-c` on the command line. `ls` / `add` / `rm` / `use` and `--json` omit the stamp. The post-input frozen frame is a transcript side effect the model never sees as a reference image, so it updates the stored still (`rememberFrame`) but must **not** overwrite `lastShot` — only a model-facing `screenshot` / `--view` redefines the coordinate space. Otherwise the frame's DPR shrink would feed back into the next poke's scale and coordinates would drift each command.
+
+### Native macOS display geometry
+
+`ComputerDisplayGeometry` (`packages/swift-launcher/Sliccstart/Models/ComputerDisplayGeometry.swift`) holds the three spaces the native path reconciles, because mixing them was three separate bugs (#3379/#3380/#3385):
+
+- **Points** — what `SCDisplay.width`/`.height` report.
+- **Pixels** — what `SCStreamConfiguration.width`/`.height` and the wire's `nativeWidth`/`nativeHeight` mean, from `CGDisplayCopyDisplayMode`. `native` therefore means pixels here as it does for a tab computer, and `--size 2000` reaches 2000 px on a 2x display instead of clamping at its point width.
+- **Global points** — what `CGEvent` posts in, origin at the **main** display's top-left, from `CGDisplayBounds`. Negative for a display left of or above main.
+
+Selection is `ComputerDisplaySelection`: default the **main** display, `display` on `computer.native.capture` a 1-based index in `CGGetActiveDisplayList` order — the same numbering as `screencapture -D <n>` on that follower, so a choice is checkable from the exec channel. `SCShareableContent.displays` order is never used for either (it returned a secondary display first on a four-display Mac Studio). Out of range fails naming the attached displays, which doubles as enumeration.
+
+Input maps **follower-side**, not on the leader: the wire carries no origin and the shell/lightbox keep mapping once into native pixels, because the follower is the only party that knows which `SCDisplay` it picked. `ComputerInputScaler.globalPoint` scales screenshot space to that display's pixels, divides by its backing scale, then adds its origin; `ComputerTrayFollower` caches the geometry of the last emitted frame **per display**, and `computer.native.input` carries the same `display` the capture used, so a click on one screen never maps through another screen's last frame (with no frame yet, the follower resolves that display from CoreGraphics). Captures are tracked per `requestId`: concurrent captures of different displays never cancel each other, a new watch supersedes only an older watch of the same display, and `computer.native.unwatch` with a `requestId` stops only that stream.
 
 Human-in-the-loop: a live lightbox with `inputAllowed` sets `<slicc-image-preview drive>` and forwards clicks/scroll/keys as `computer-input` in **native** pixels (`mapDisplayedToNative`; the kernel does not remap). Escape and the backdrop release. Frozen bash-row stills never forward input.
 

@@ -188,7 +188,14 @@ export class ComputersRouter {
 
   async captureNative(
     runtimeId: string,
-    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+    opts: {
+      fps?: number;
+      maxWidth?: number;
+      /** 1-based OS display index on the follower; omitted means its main display. */
+      display?: number;
+      watch?: boolean;
+      timeoutMs?: number;
+    } = {}
   ): Promise<NativeComputerCaptureResult> {
     const follower = this.requireComputerFollower(runtimeId);
     const requestId = `ncap-${crypto.randomUUID()}`;
@@ -204,6 +211,7 @@ export class ComputersRouter {
         requestId,
         fps: opts.fps,
         maxWidth: opts.maxWidth,
+        display: opts.display,
         watch: opts.watch ?? false,
       });
       if (!sent) {
@@ -217,7 +225,11 @@ export class ComputersRouter {
   async inputNative(
     runtimeId: string,
     events: ComputerInputEvent[],
-    opts: { timeoutMs?: number } = {}
+    opts: {
+      timeoutMs?: number;
+      /** The capture's display index, so the follower maps through that screen. */
+      display?: number;
+    } = {}
   ): Promise<void> {
     const follower = this.requireComputerFollower(runtimeId);
     const requestId = `nin-${crypto.randomUUID()}`;
@@ -232,6 +244,7 @@ export class ComputersRouter {
         type: 'computer.native.input',
         requestId,
         events,
+        display: opts.display,
       });
       if (!sent) {
         this.pendingInput.delete(requestId);

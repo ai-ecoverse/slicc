@@ -363,6 +363,8 @@ export type PanelRpcRequest =
         action: 'capture' | 'unwatch' | 'input';
         fps?: number;
         maxWidth?: number;
+        /** 1-based OS display index on the follower; omitted means its main display. */
+        display?: number;
         watch?: boolean;
         events?: ComputerInputEvent[];
       };

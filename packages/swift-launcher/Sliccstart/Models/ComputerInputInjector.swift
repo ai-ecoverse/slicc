@@ -15,10 +15,20 @@ enum ComputerCGAction: Equatable {
 
 protocol ComputerEventSink {
     func post(_ action: ComputerCGAction)
+    /// The pointer's current global `CGEvent` point, or nil when unknown.
+    func cursorLocation() -> CGPoint?
+}
+
+extension ComputerEventSink {
+    func cursorLocation() -> CGPoint? { nil }
 }
 
 /// Posts into the real event tap. Unused in unit tests.
 struct LiveCGEventSink: ComputerEventSink {
+    func cursorLocation() -> CGPoint? {
+        CGEvent(source: nil)?.location
+    }
+
     func post(_ action: ComputerCGAction) {
         switch action {
         case .mouseMove(let point):
@@ -64,23 +74,68 @@ struct LiveCGEventSink: ComputerEventSink {
     }
 }
 
+/// Wire numbers arrive as `Double`, and `Int(_:)` / `Int32(_:)` / `UInt64(_:)`
+/// trap on anything they cannot represent. A peer must never be able to crash
+/// the follower with a large number, so every wire → integer conversion goes
+/// through here.
+enum ComputerWireNumber {
+    /// The nearest `Int`, or nil for NaN, infinity, or a value outside `Int`.
+    static func int(_ value: Double) -> Int? {
+        Int(exactly: value.rounded())
+    }
+
+    static func int32(_ value: Double) -> Int32 {
+        guard value.isFinite else { return 0 }
+        return Int32(max(Double(Int32.min), min(Double(Int32.max), value.rounded())))
+    }
+
+    /// Non-negative nanoseconds, saturating well below `UInt64.max` (whose
+    /// `Double` rounds up past it and would itself trap).
+    static func nanoseconds(milliseconds: Double) -> UInt64 {
+        guard milliseconds.isFinite, milliseconds > 0 else { return 0 }
+        return UInt64(min(milliseconds * 1_000_000, 9e18).rounded())
+    }
+}
+
 enum ComputerInputDelay {
     static func sleep(_ milliseconds: Double) async {
-        guard milliseconds > 0 else { return }
-        let ns = UInt64((milliseconds * 1_000_000).rounded())
+        let ns = ComputerWireNumber.nanoseconds(milliseconds: milliseconds)
+        guard ns > 0 else { return }
         try? await Task.sleep(nanoseconds: ns)
     }
 }
 
-/// Screenshot-space events → native display points (CGEvent origin is the
-/// top-left of the main display, matching ScreenCaptureKit).
+/// Screenshot-space events → the global point space `CGEvent` posts into.
+///
+/// Two steps, both load-bearing: scale into the captured display's native
+/// pixels, then divide by its backing scale and add its origin. `CGEvent`'s
+/// origin is the *main* display's top-left, and the captured display need not be
+/// the main one — on a four-display Mac Studio it is not (#3379/#3385).
 enum ComputerInputScaler {
+    /// Screenshot space → the captured display's own native pixels.
     static func nativePoint(
         x: Double, y: Double, encoded: CGSize, native: CGSize
     ) -> CGPoint {
         let sx = encoded.width > 0 ? native.width / encoded.width : 1
         let sy = encoded.height > 0 ? native.height / encoded.height : 1
         return CGPoint(x: x * sx, y: y * sy)
+    }
+
+    /// Screenshot space → global `CGEvent` points on the display the frame came from.
+    static func globalPoint(
+        x: Double, y: Double, encoded: CGSize, display: ComputerDisplayGeometry
+    ) -> CGPoint {
+        display.globalPoint(
+            fromPixel: nativePoint(x: x, y: y, encoded: encoded, native: display.pixelSize))
+    }
+
+    /// A screenshot-space *delta* → global points: the same scale as
+    /// ``globalPoint`` but no origin, since a delta has no position.
+    static func globalDelta(
+        dx: Double, dy: Double, encoded: CGSize, display: ComputerDisplayGeometry
+    ) -> CGPoint {
+        display.globalDelta(
+            fromPixel: nativePoint(x: dx, y: dy, encoded: encoded, native: display.pixelSize))
     }
 }
 
@@ -100,18 +155,36 @@ enum ComputerInputError: Error, Equatable, CustomStringConvertible {
 struct ComputerInputInjector {
     var sink: ComputerEventSink
     var encodedSize: CGSize
-    var nativeSize: CGSize
+    var display: ComputerDisplayGeometry
     var delay: (Double) async -> Void
-    private var cursor = CGPoint.zero
+    /// Nil until an event positions the pointer; a relative move or a
+    /// coordinate-less button before that starts from where the pointer really is.
+    private var knownCursor: CGPoint?
+
+    private var cursor: CGPoint {
+        get { knownCursor ?? sink.cursorLocation() ?? display.origin }
+        set { knownCursor = newValue }
+    }
 
     init(
-        sink: ComputerEventSink, encodedSize: CGSize, nativeSize: CGSize,
+        sink: ComputerEventSink, encodedSize: CGSize, display: ComputerDisplayGeometry,
         delay: @escaping (Double) async -> Void = ComputerInputDelay.sleep
     ) {
         self.sink = sink
         self.encodedSize = encodedSize
-        self.nativeSize = nativeSize
+        self.display = display
         self.delay = delay
+    }
+
+    /// Size-only caller: zero origin and scale 1, so screenshot space maps
+    /// straight onto the main display as it did before display selection landed.
+    init(
+        sink: ComputerEventSink, encodedSize: CGSize, nativeSize: CGSize,
+        delay: @escaping (Double) async -> Void = ComputerInputDelay.sleep
+    ) {
+        self.init(
+            sink: sink, encodedSize: encodedSize,
+            display: .identity(size: nativeSize), delay: delay)
     }
 
     mutating func apply(_ events: [ComputerInputEvent]) async throws {
@@ -135,8 +208,10 @@ struct ComputerInputInjector {
         switch event {
         case .mousemove(let x, let y, let relative):
             if relative == true {
-                cursor.x += x
-                cursor.y += y
+                let delta = ComputerInputScaler.globalDelta(
+                    dx: x, dy: y, encoded: encodedSize, display: display)
+                let from = cursor
+                cursor = CGPoint(x: from.x + delta.x, y: from.y + delta.y)
             } else {
                 cursor = point(x, y)
             }
@@ -158,7 +233,10 @@ struct ComputerInputInjector {
             }
         case .scroll(let dx, let dy, let x, let y):
             if let x, let y { cursor = point(x, y) }
-            sink.post(.scroll(dx: Int32(dx.rounded()), dy: Int32(dy.rounded()), at: cursor))
+            sink.post(
+                .scroll(
+                    dx: ComputerWireNumber.int32(dx), dy: ComputerWireNumber.int32(dy),
+                    at: cursor))
         case .drag(let x1, let y1, let x2, let y2):
             cursor = point(x1, y1)
             sink.post(.mouseMove(cursor))
@@ -189,7 +267,7 @@ struct ComputerInputInjector {
     }
 
     private func point(_ x: Double, _ y: Double) -> CGPoint {
-        ComputerInputScaler.nativePoint(x: x, y: y, encoded: encodedSize, native: nativeSize)
+        ComputerInputScaler.globalPoint(x: x, y: y, encoded: encodedSize, display: display)
     }
 
     private func cgButton(_ button: Int) -> CGMouseButton {

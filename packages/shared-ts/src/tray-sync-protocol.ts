@@ -482,14 +482,29 @@ export type LeaderToFollowerMessage =
       requestId: string;
       fps?: number;
       maxWidth?: number;
+      /**
+       * 1-based index in the follower's OS display order, the same numbering
+       * `screencapture -D <n>` uses. Absent means the follower's MAIN display —
+       * never "whatever ScreenCaptureKit lists first", which on a multi-display
+       * Mac is a secondary one (#3379).
+       */
+      display?: number;
       watch?: boolean;
     }
+  /** `requestId` names the stream to stop; absent stops every capture. */
   | { type: 'computer.native.unwatch'; requestId?: string }
   /**
    * Inject pointer/key events on a `capabilities.computer` follower. The
    * leader still gates this behind `--allow-input` (sudo) before sending.
+   * `display` is the same index the capture used, so the follower maps through
+   * THAT screen's geometry, not whichever display it captured last.
    */
-  | { type: 'computer.native.input'; requestId: string; events: ComputerInputEvent[] }
+  | {
+      type: 'computer.native.input';
+      requestId: string;
+      events: ComputerInputEvent[];
+      display?: number;
+    }
   /**
    * Compact catalog rows normally remain below the 64 KiB CDP chunk threshold.
    * A bespoke semantic chunk variant is unnecessary: the generic
@@ -623,8 +638,11 @@ export type FollowerToLeaderMessage =
   /**
    * Native capture JPEG from a `capabilities.computer` follower. Small
    * payloads carry `data`; oversize frames reuse CDP-style chunks.
-   * `nativeWidth`/`nativeHeight` are the unscaled display so the leader can
-   * map screenshot-space input.
+   * `nativeWidth`/`nativeHeight` are the captured display in PIXELS — as for a
+   * tab computer, not `SCDisplay`'s points (#3380) — so the leader can map
+   * screenshot-space input. The display's global ORIGIN deliberately stays off
+   * the wire: the follower applies it, since it alone knows which display it
+   * picked (#3385).
    */
   | {
       type: 'computer.native.frame';

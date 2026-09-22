@@ -22,44 +22,59 @@ extension ComputerPermissionProbe {
 
 final class RecordingEventSink: ComputerEventSink {
     private(set) var actions: [ComputerCGAction] = []
+    var cursor: CGPoint?
     func post(_ action: ComputerCGAction) { actions.append(action) }
+    func cursorLocation() -> CGPoint? { cursor }
 }
 
 @MainActor
-final class StubCapturer: ComputerCapturing {
+class StubCapturer: ComputerCapturing {
     var image: CGImage
-    var native: CGSize
+    /// Stand-in for the display ScreenCaptureKit would have picked. Defaults to
+    /// the image's own pixels at the origin, i.e. a lone main display.
+    var geometry: ComputerDisplayGeometry
     private(set) var started = 0
     private(set) var stopped = 0
     private(set) var lastFps: Double?
     private(set) var lastMaxWidth: Int?
+    private(set) var lastDisplay: Int?
     private(set) var lastWatch: Bool?
     var startError: Error?
     var holdFrame = false
     var endsRemaining = 0
     private var pendingFrame: (() -> Void)?
 
-    init(image: CGImage = ComputerTestImages.solid(width: 64, height: 48), native: CGSize? = nil) {
+    init(
+        image: CGImage = ComputerTestImages.solid(width: 64, height: 48),
+        native: CGSize? = nil,
+        geometry: ComputerDisplayGeometry? = nil
+    ) {
         self.image = image
-        self.native = native ?? CGSize(width: image.width, height: image.height)
+        self.geometry =
+            geometry
+            ?? .identity(size: native ?? CGSize(width: image.width, height: image.height))
     }
+
+    var native: CGSize { geometry.pixelSize }
 
     func start(
         fps: Double,
         maxWidth: Int?,
+        display: Int?,
         watch: Bool,
-        onFrame: @escaping (CGImage, CGSize) -> Void,
+        onFrame: @escaping (CGImage, ComputerDisplayGeometry) -> Void,
         onEnded: (() -> Void)?
     ) async throws {
         started += 1
         lastFps = fps
         lastMaxWidth = maxWidth
+        lastDisplay = display
         lastWatch = watch
         if let startError { throw startError }
         if holdFrame {
-            pendingFrame = { [image, native] in onFrame(image, native) }
+            pendingFrame = { [image, geometry] in onFrame(image, geometry) }
         } else {
-            onFrame(image, native)
+            onFrame(image, geometry)
         }
         if endsRemaining > 0 {
             endsRemaining -= 1
@@ -71,6 +86,46 @@ final class StubCapturer: ComputerCapturing {
     func emitHeldFrame() { pendingFrame?() }
 
     func stop() { stopped += 1 }
+}
+
+/// Reports the geometry of whichever display `start` was asked for, and keeps
+/// its frame callback so a test can push further frames as a stream would.
+@MainActor
+final class MultiDisplayStubCapturer: StubCapturer {
+    private let geometries: [Int: ComputerDisplayGeometry]
+    private var again: (() -> Void)?
+    /// Park `start` until ``release()``, like a one-shot `SCScreenshotManager`
+    /// call still in flight while another capture begins.
+    var suspends = false
+    private var parked: CheckedContinuation<Void, Never>?
+
+    init(geometries: [Int: ComputerDisplayGeometry]) {
+        self.geometries = geometries
+        super.init()
+    }
+
+    override func start(
+        fps: Double,
+        maxWidth: Int?,
+        display: Int?,
+        watch: Bool,
+        onFrame: @escaping (CGImage, ComputerDisplayGeometry) -> Void,
+        onEnded: (() -> Void)?
+    ) async throws {
+        if let chosen = geometries[display ?? 0] { geometry = chosen }
+        if suspends { await withCheckedContinuation { parked = $0 } }
+        again = { [image, geometry] in onFrame(image, geometry) }
+        try await super.start(
+            fps: fps, maxWidth: maxWidth, display: display, watch: watch, onFrame: onFrame,
+            onEnded: onEnded)
+    }
+
+    func emitAgain() { again?() }
+
+    func release() {
+        parked?.resume()
+        parked = nil
+    }
 }
 
 enum ComputerTestImages {

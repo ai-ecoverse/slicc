@@ -540,13 +540,23 @@ export class LeaderSyncManager {
 
   captureNativeComputer(
     runtimeId: string,
-    opts: { fps?: number; maxWidth?: number; watch?: boolean; timeoutMs?: number } = {}
+    opts: {
+      fps?: number;
+      maxWidth?: number;
+      display?: number;
+      watch?: boolean;
+      timeoutMs?: number;
+    } = {}
   ): Promise<NativeComputerCaptureResult> {
     return this.computersRouter.captureNative(runtimeId, opts);
   }
 
-  inputNativeComputer(runtimeId: string, events: ComputerInputEvent[]): Promise<void> {
-    return this.computersRouter.inputNative(runtimeId, events);
+  inputNativeComputer(
+    runtimeId: string,
+    events: ComputerInputEvent[],
+    opts: { display?: number } = {}
+  ): Promise<void> {
+    return this.computersRouter.inputNative(runtimeId, events, opts);
   }
 
   unwatchNativeComputer(runtimeId: string): void {

@@ -195,12 +195,15 @@ function createComputerNativeBridge(getLeader: StandalonePanelRpcDeps['getLeader
       const frame = await sync.captureNativeComputer(payload.runtimeId, {
         fps: payload.fps,
         maxWidth: payload.maxWidth,
+        display: payload.display,
         watch: payload.watch,
       });
       return { ok: true as const, ...frame };
     }
     if (payload.action === 'input') {
-      await sync.inputNativeComputer(payload.runtimeId, payload.events ?? []);
+      await sync.inputNativeComputer(payload.runtimeId, payload.events ?? [], {
+        display: payload.display,
+      });
       return { ok: true as const };
     }
     sync.unwatchNativeComputer(payload.runtimeId);

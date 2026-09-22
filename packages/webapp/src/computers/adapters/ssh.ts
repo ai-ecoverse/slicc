@@ -29,7 +29,13 @@ export type SshExec = (command: string, opts?: { timeoutMs?: number }) => Promis
 
 /** Injected native capture/input for a `capabilities.computer` follower. */
 export interface NativeComputerChannel {
-  capture(opts: { fps?: number; maxWidth?: number; watch?: boolean }): Promise<{
+  capture(opts: {
+    fps?: number;
+    maxWidth?: number;
+    /** 1-based OS display index on the follower; omitted means its main display. */
+    display?: number;
+    watch?: boolean;
+  }): Promise<{
     bytes: Uint8Array;
     mime: 'image/jpeg';
     width: number;
@@ -38,7 +44,8 @@ export interface NativeComputerChannel {
     nativeHeight: number;
   }>;
   unwatch(): void;
-  input(events: ComputerInputEvent[]): Promise<void> | void;
+  /** `display` names the screen the events target — the same index `capture` used. */
+  input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
 }
 
 export type SshPlatform = 'darwin' | 'linux' | 'unknown';
@@ -59,11 +66,19 @@ export interface SshComputerOptions {
   probe: SshProbe;
   inputAllowed: boolean;
   sim?: string;
+  /**
+   * 1-based OS display index for native capture (`computer add ssh --display`).
+   * Omitted means the follower's main display.
+   */
+  display?: number;
   native?: NativeComputerChannel;
 }
 
-export function sshComputerId(runtimeId: string, sim?: string): string {
-  return sim ? `ssh:${runtimeId}:sim:${sim}` : `ssh:${runtimeId}`;
+export function sshComputerId(runtimeId: string, sim?: string, display?: number): string {
+  if (sim) return `ssh:${runtimeId}:sim:${sim}`;
+  // Only a non-default pick widens the id, so registering one display keeps the
+  // plain `ssh:<runtime>` name while a second display can coexist beside it.
+  return display ? `ssh:${runtimeId}:display:${display}` : `ssh:${runtimeId}`;
 }
 
 export function sshTempBase(id: string): string {
@@ -217,6 +232,7 @@ export class SshComputerBackend implements ComputerBackend {
   private readonly tmpBase: string;
   readonly runtimeId: string;
   readonly sim?: string;
+  readonly display?: number;
   private readonly probe: SshProbe;
   private readonly inputAllowed: boolean;
   private readonly title: string;
@@ -228,17 +244,18 @@ export class SshComputerBackend implements ComputerBackend {
   ) {
     this.runtimeId = opts.runtimeId;
     this.sim = opts.sim;
+    this.display = opts.display;
     this.probe = opts.probe;
     this.native = opts.native;
     this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!opts.native);
     this.title = opts.title;
-    this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim));
+    this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim, opts.display));
   }
 
   describe(): ComputerDescriptor {
     const caps = sshCapabilities(this.probe, this.inputAllowed, !!this.native);
     return {
-      id: sshComputerId(this.runtimeId, this.sim),
+      id: sshComputerId(this.runtimeId, this.sim, this.display),
       kind: 'ssh',
       title: this.title,
       size: this.size,
@@ -254,6 +271,7 @@ export class SshComputerBackend implements ComputerBackend {
       const shot = await this.native.capture({
         fps: 2,
         maxWidth: opts.maxWidth,
+        display: this.display,
         watch: false,
       });
       this.seq += 1;
@@ -316,7 +334,7 @@ export class SshComputerBackend implements ComputerBackend {
     if (!this.inputAllowed) throw new Error('input is not allowed');
     const filled = applyPointerToEvents(this.pointer, events);
     if (this.native) {
-      await this.native.input(filled);
+      await this.native.input(filled, { display: this.display });
       return;
     }
     for (const event of filled) {

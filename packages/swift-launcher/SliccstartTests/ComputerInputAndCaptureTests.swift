@@ -137,7 +137,9 @@ final class ComputerInputInjectorTests: XCTestCase {
         ])
         XCTAssertEqual(slept, [25, 25, 40])
         XCTAssertEqual(sink.actions[0], .mouseMove(CGPoint(x: 20, y: 10)))
-        XCTAssertEqual(sink.actions[1], .mouseMove(CGPoint(x: 22, y: 13)))
+        // The relative delta is in screenshot space too, so it scales like an
+        // absolute point: (2,3) at 2x is (4,6), not an unscaled (2,3).
+        XCTAssertEqual(sink.actions[1], .mouseMove(CGPoint(x: 24, y: 16)))
         XCTAssertEqual(sink.actions[2], .mouseButton(.left, down: true, at: CGPoint(x: 40, y: 20)))
         XCTAssertEqual(sink.actions[3], .mouseButton(.right, down: false, at: CGPoint(x: 40, y: 20)))
         XCTAssertEqual(sink.actions[4], .mouseButton(.center, down: true, at: CGPoint(x: 2, y: 2)))
@@ -193,10 +195,27 @@ final class ComputerInputInjectorTests: XCTestCase {
         } catch let error as ComputerInputError {
             XCTAssertEqual(error, .unknownKeysym("Foo"))
             XCTAssertEqual(error.message, "unknown keysym 'Foo' for macOS")
+            XCTAssertEqual(String(describing: error), error.message)
         } catch {
             XCTFail("unexpected \(error)")
         }
         XCTAssertTrue(sink.actions.isEmpty)
+    }
+
+    /// A keysym with no US-ANSI virtual key (punctuation, accented letters) is
+    /// typed as its character, carrying the modifiers it was pressed with.
+    func testAKeysymWithNoKeyCodeIsTypedAsUnicode() async throws {
+        var (injector, sink) = injector()
+        try await injector.apply([
+            .key(keysym: "!", down: nil),
+            .key(keysym: "shift+é", down: true),
+        ])
+        XCTAssertEqual(
+            sink.actions,
+            [
+                .unicode("!", flags: []),
+                .unicode("é", flags: .maskShift),
+            ])
     }
 
     func testDelayZeroReturnsImmediately() async {
