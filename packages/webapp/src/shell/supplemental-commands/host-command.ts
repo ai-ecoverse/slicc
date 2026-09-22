@@ -143,15 +143,17 @@ function formatFollowerEntry(f: ConnectedFollowerInfo): string[] {
   }
   const tags: string[] = [];
   if (f.exec) tags.push('[ssh]');
+  if (f.computer) tags.push('[computer]');
   if (f.cdp) tags.push('[playwright]');
   if (tags.length > 0) parts.push(tags.join(' '));
   const lines = [`  - ${parts.join(' ')}`];
-  if (f.exec && f.motd) lines.push(`      ${f.motd}`);
+
+  if (f.motd) lines.push(`      ${f.motd}`);
   return lines;
 }
 
 function formatFollowersSection(followers: ConnectedFollowerInfo[]): string[] {
-  const actionable = followers.filter((f) => f.exec || f.cdp);
+  const actionable = followers.filter((f) => f.exec || f.cdp || f.computer);
   const hidden = followers.length - actionable.length;
   const lines: string[] = [];
   if (actionable.length > 0) {
@@ -160,7 +162,7 @@ function formatFollowersSection(followers: ConnectedFollowerInfo[]): string[] {
   }
   if (hidden > 0) {
     lines.push(
-      `(${hidden} other follower${hidden === 1 ? '' : 's'} with no exec/browser capability)`
+      `(${hidden} other follower${hidden === 1 ? '' : 's'} with no exec/browser/computer capability)`
     );
   }
   return lines;
