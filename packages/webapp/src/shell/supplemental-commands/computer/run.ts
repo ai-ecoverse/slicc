@@ -35,8 +35,12 @@ import {
   toLastShot,
 } from '../../../computers/scale.js';
 import type { BrowserAPI } from '../../../kernel/browser-api.js';
-import type { PanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { getPanelRpcClient, PANEL_RPC_DEFAULT_TIMEOUT_MS } from '../../../kernel/panel-rpc.js';
+import type { ComputerNativeFramePayload, PanelRpcClient } from '../../../kernel/panel-rpc.js';
+import {
+  COMPUTER_NATIVE_FRAME_CHANNEL,
+  getPanelRpcClient,
+  PANEL_RPC_DEFAULT_TIMEOUT_MS,
+} from '../../../kernel/panel-rpc.js';
 import type { ProcessManager } from '../../../kernel/process-manager.js';
 import { sudoRefusalMessage } from '../../../sudo/approval-timeout.js';
 import type { SudoBroker } from '../../../sudo/types.js';
@@ -128,6 +132,28 @@ function nativeChannelFromRpc(
         nativeWidth: result.nativeWidth ?? result.width ?? 0,
         nativeHeight: result.nativeHeight ?? result.height ?? 0,
       };
+    },
+    onFrame(listener) {
+      // Page → worker push for a live `SCStream`: the page emits every
+      // reassembled `computer.native.frame` on this one channel for all
+      // followers, so filter by runtimeId (#3386). The decoder promise is
+      // hoisted out of the listener so frames stay in arrival order.
+      const decoder = import('../../../computers/encode-frame.js');
+      return rpc.onEvent(COMPUTER_NATIVE_FRAME_CHANNEL, (raw) => {
+        const frame = raw as Partial<ComputerNativeFramePayload> | null;
+        if (!frame?.jpeg || frame.runtimeId !== runtimeId) return;
+        const jpeg = frame.jpeg;
+        void decoder.then(({ bytesFromBase64 }) => {
+          listener({
+            bytes: bytesFromBase64(jpeg),
+            mime: 'image/jpeg' as const,
+            width: frame.width ?? 0,
+            height: frame.height ?? 0,
+            nativeWidth: frame.nativeWidth ?? frame.width ?? 0,
+            nativeHeight: frame.nativeHeight ?? frame.height ?? 0,
+          });
+        });
+      });
     },
     unwatch() {
       void rpc.call('tray-computer-native', { runtimeId, action: 'unwatch' }).catch(() => {});
@@ -765,14 +791,22 @@ async function recordWorkerHostedClip(
   ctx: CommandContext,
   deps: ComputerCommandDeps
 ) {
-  return recordPolledClip({
-    screenshot: () => backend.screenshot({ format: 'jpeg', maxWidth: COMPUTER_RECORD_MAX_WIDTH }),
-    durationMs,
-    fps,
-    dest,
-    ctx,
-    encode: deps.encodeRecordedFrames,
-  });
+  // Hold ONE stream open for the clip on a push backend: `screenshot` then
+  // serves that stream's latest frame, instead of a fresh full capture per
+  // poll (on a native Mac, a whole ScreenCaptureKit setup per frame — #3386).
+  const unsubscribe = backend.subscribe?.(fps, () => {}, COMPUTER_RECORD_MAX_WIDTH);
+  try {
+    return await recordPolledClip({
+      screenshot: () => backend.screenshot({ format: 'jpeg', maxWidth: COMPUTER_RECORD_MAX_WIDTH }),
+      durationMs,
+      fps,
+      dest,
+      ctx,
+      encode: deps.encodeRecordedFrames,
+    });
+  } finally {
+    unsubscribe?.();
+  }
 }
 
 function resolveWatchControl(deps: ComputerCommandDeps): {

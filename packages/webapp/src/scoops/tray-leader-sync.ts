@@ -546,6 +546,8 @@ export class LeaderSyncManager {
       display?: number;
       watch?: boolean;
       timeoutMs?: number;
+      /** Sink for every frame of a `watch: true` stream. */
+      onFrame?: (frame: NativeComputerCaptureResult) => void;
     } = {}
   ): Promise<NativeComputerCaptureResult> {
     return this.computersRouter.captureNative(runtimeId, opts);

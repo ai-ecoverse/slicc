@@ -354,9 +354,14 @@ export type PanelRpcRequest =
       payload: { execToken: string };
     }
   | {
-      // One-shot ScreenCaptureKit / CGEvent hop to a computer-capable follower
+      // ScreenCaptureKit / CGEvent hop to a computer-capable follower
       // (`capabilities.computer`). The kernel `computer add ssh` command
       // bridges here because native frames live on the page's tray channel.
+      //
+      // `watch: true` starts a live `SCStream`: this call still resolves with
+      // the FIRST frame, and every frame (that one included) is also pushed on
+      // the `computer-native-frame` event channel (see
+      // {@link ComputerNativeFramePayload}) until `action: 'unwatch'`.
       op: 'tray-computer-native';
       payload: {
         runtimeId: string;
@@ -1119,6 +1124,29 @@ export interface HidInputReportEventPayload {
   handle: string;
   reportId: number;
   bytes: ArrayBuffer;
+}
+
+/**
+ * Event channel carrying {@link ComputerNativeFramePayload} page → worker.
+ * Both ends import this rather than repeating the string, because a typo
+ * degrades silently into "the stream never delivers".
+ */
+export const COMPUTER_NATIVE_FRAME_CHANNEL = 'computer-native-frame';
+
+/**
+ * Payload pushed on the `computer-native-frame` event channel for each frame
+ * of a live `tray-computer-native` watch. `runtimeId` names the follower the
+ * frame came from, because one leader can stream several at once. `jpeg` is
+ * base64 (the wire form, already reassembled from its chunks).
+ */
+export interface ComputerNativeFramePayload {
+  runtimeId: string;
+  jpeg: string;
+  mime: string;
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
 }
 
 /**

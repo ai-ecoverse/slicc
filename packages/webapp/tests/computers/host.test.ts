@@ -1,5 +1,7 @@
 import type { ComputerDescriptor, ComputerFrame, ComputerInputEvent } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { NativeComputerShot } from '../../src/computers/adapters/ssh.js';
+import { SshComputerBackend } from '../../src/computers/adapters/ssh.js';
 import type { ComputerBackend } from '../../src/computers/backend.js';
 import { jpegSize, MINIMAL_JPEG } from '../../src/computers/encode-frame.js';
 import { startComputersHost } from '../../src/computers/host.js';
@@ -327,6 +329,72 @@ describe('computers host watch transport', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('watches a native ssh computer off ONE stream instead of polling captures', async () => {
+    // #3386: `watch` used to poll one-shot captures, re-entering the whole
+    // ScreenCaptureKit setup per frame, because the adapter had no `subscribe`.
+    const stream: { push?: (shot: NativeComputerShot) => void } = {};
+    const capture = vi.fn(async () => {
+      throw new Error('watch must not issue a one-shot capture');
+    });
+    const unwatch = vi.fn();
+    const captures: Array<{ watch?: boolean; fps?: number; display?: number }> = [];
+    const registry = installComputerRegistry(null);
+    registry.register(
+      new SshComputerBackend(async () => ({ stdout: '', stderr: '', exitCode: 0 }), {
+        runtimeId: 'sliccstart-computer-1',
+        title: 'desk',
+        probe: { platform: 'darwin', tools: [], capture: null, input: 'none' },
+        inputAllowed: false,
+        display: 2,
+        native: {
+          async capture(opts) {
+            captures.push(opts);
+            if (!opts.watch) return capture();
+            return {
+              bytes: jpegSof0(640, 400),
+              mime: 'image/jpeg' as const,
+              width: 640,
+              height: 400,
+              nativeWidth: 5120,
+              nativeHeight: 2880,
+            };
+          },
+          onFrame(listener) {
+            stream.push = listener;
+            return () => {
+              stream.push = undefined;
+            };
+          },
+          unwatch,
+          input: vi.fn(),
+        },
+      })
+    );
+    const { transport, sent } = mockTransport();
+    const host = startComputersHost({ transport, processManager: null });
+    host.watch('ssh:sliccstart-computer-1:display:2', 10, 480);
+    expect(captures).toEqual([{ fps: 10, maxWidth: 480, display: 2, watch: true }]);
+    const shot = {
+      bytes: jpegSof0(640, 400),
+      mime: 'image/jpeg' as const,
+      width: 640,
+      height: 400,
+      nativeWidth: 5120,
+      nativeHeight: 2880,
+    };
+    stream.push?.(shot);
+    stream.push?.(shot);
+    await vi.waitFor(() => {
+      expect(sent.filter((m) => m.type === 'computer-frame')).toHaveLength(2);
+    });
+    // Two frames, one capture — and no poll ever hit the one-shot path.
+    expect(captures).toHaveLength(1);
+    expect(capture).not.toHaveBeenCalled();
+    host.unwatch('ssh:sliccstart-computer-1:display:2');
+    expect(unwatch).toHaveBeenCalledTimes(1);
+    host.stop();
   });
 
   it('forwards computer-input events to the registered backend', async () => {

@@ -55,7 +55,9 @@ type NativeWireMessage = Extract<
 /**
  * Fans `computers.list` / `computer.frame` to full-trust followers and answers
  * `computer.watch` / `computer.unwatch` / `computer.input`. Caps the tray
- * stream at 2 fps / 480 px. Native capture frames fan out via `onNative`.
+ * stream at 2 fps / 480 px. Native capture frames fan out via `onNative`; a
+ * `watch: true` capture also feeds its own per-request `onFrame` sink, which is
+ * how the `ssh` adapter consumes a live `SCStream` instead of polling (#3386).
  */
 export class ComputersRouter {
   /** Computer ids each follower is watching. */
@@ -85,6 +87,15 @@ export class ComputersRouter {
       reject: (err: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
+  >();
+  /**
+   * Live `watch: true` captures. The follower reuses one requestId for every
+   * frame of a stream, so this outlives the `pendingNative` slot the first
+   * frame settles.
+   */
+  private readonly nativeWatches = new Map<
+    string,
+    { runtimeId: string; onFrame: (frame: NativeComputerCaptureResult) => void }
   >();
   private unsubList: (() => void) | null = null;
   private unsubFrame: (() => void) | null = null;
@@ -195,14 +206,23 @@ export class ComputersRouter {
       display?: number;
       watch?: boolean;
       timeoutMs?: number;
+      /**
+       * Sink for a `watch: true` stream — called for EVERY frame, the first
+       * one included. Ignored for a one-shot capture.
+       */
+      onFrame?: (frame: NativeComputerCaptureResult) => void;
     } = {}
   ): Promise<NativeComputerCaptureResult> {
     const follower = this.requireComputerFollower(runtimeId);
     const requestId = `ncap-${crypto.randomUUID()}`;
     const timeoutMs = opts.timeoutMs ?? 30_000;
+    if (opts.watch && opts.onFrame) {
+      this.nativeWatches.set(requestId, { runtimeId, onFrame: opts.onFrame });
+    }
     return await new Promise<NativeComputerCaptureResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingNative.delete(requestId);
+        this.nativeWatches.delete(requestId);
         reject(new Error(`computer.native.capture timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.pendingNative.set(requestId, { resolve, reject, timer });
@@ -216,6 +236,7 @@ export class ComputersRouter {
       });
       if (!sent) {
         this.pendingNative.delete(requestId);
+        this.nativeWatches.delete(requestId);
         clearTimeout(timer);
         reject(new Error(`Failed to send computer.native.capture to '${runtimeId}'`));
       }
@@ -255,6 +276,12 @@ export class ComputersRouter {
   }
 
   unwatchNative(runtimeId: string): void {
+    // Drop the sink FIRST: a follower that dropped off makes
+    // `requireComputerFollower` throw, and a stale sink would then outlive the
+    // stream it belongs to.
+    for (const [requestId, watch] of this.nativeWatches) {
+      if (watch.runtimeId === runtimeId) this.nativeWatches.delete(requestId);
+    }
     const follower = this.requireComputerFollower(runtimeId);
     follower.sync.send({ type: 'computer.native.unwatch' });
   }
@@ -374,6 +401,7 @@ export class ComputersRouter {
 
   private settleNative(message: NativeFanoutMessage): void {
     if (message.type === 'computer.native.error') {
+      this.nativeWatches.delete(message.requestId);
       const pending = this.pendingNative.get(message.requestId);
       if (!pending) return;
       this.pendingNative.delete(message.requestId);
@@ -386,18 +414,30 @@ export class ComputersRouter {
       message as ComputerNativeFrameMessage
     );
     if (!assembled?.data) return;
-    const pending = this.pendingNative.get(assembled.requestId);
-    if (!pending) return;
-    this.pendingNative.delete(assembled.requestId);
-    clearTimeout(pending.timer);
-    pending.resolve({
+    const frame: NativeComputerCaptureResult = {
       jpeg: assembled.data,
       mime: assembled.mime,
       width: assembled.width,
       height: assembled.height,
       nativeWidth: assembled.nativeWidth,
       nativeHeight: assembled.nativeHeight,
-    });
+    };
+    const watch = this.nativeWatches.get(assembled.requestId);
+    if (watch) {
+      try {
+        watch.onFrame(frame);
+      } catch (err) {
+        this.context.log.warn('computer.native watch sink failed', {
+          runtimeId: watch.runtimeId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    const pending = this.pendingNative.get(assembled.requestId);
+    if (!pending) return;
+    this.pendingNative.delete(assembled.requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(frame);
   }
 
   private source(): TrayComputersSource | undefined {

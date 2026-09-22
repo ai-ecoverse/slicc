@@ -24,8 +24,21 @@ import { type SshInputTool, shQuote, sshInputCommands } from './ssh-input.js';
 /** Tray-exec stdout is buffered whole; keep each base64 piece under this. */
 export const SSH_B64_CHUNK = 3 * 1024 * 1024;
 
+/** How long `screenshot` waits for a live stream's first frame. */
+export const SSH_NATIVE_FRAME_TIMEOUT_MS = 8_000;
+
 export type SshExecResult = { stdout: string; stderr: string; exitCode: number };
 export type SshExec = (command: string, opts?: { timeoutMs?: number }) => Promise<SshExecResult>;
+
+/** One decoded `computer.native.frame` off the follower. */
+export interface NativeComputerShot {
+  bytes: Uint8Array;
+  mime: 'image/jpeg';
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+}
 
 /** Injected native capture/input for a `capabilities.computer` follower. */
 export interface NativeComputerChannel {
@@ -35,14 +48,13 @@ export interface NativeComputerChannel {
     /** 1-based OS display index on the follower; omitted means its main display. */
     display?: number;
     watch?: boolean;
-  }): Promise<{
-    bytes: Uint8Array;
-    mime: 'image/jpeg';
-    width: number;
-    height: number;
-    nativeWidth: number;
-    nativeHeight: number;
-  }>;
+  }): Promise<NativeComputerShot>;
+  /**
+   * Every frame of a live `watch: true` capture, including the one that
+   * resolved `capture`. Absent on a channel that cannot push (an older
+   * bridge), which leaves this backend polled — see {@link SshComputerBackend}.
+   */
+  onFrame?(listener: (shot: NativeComputerShot) => void): () => void;
   unwatch(): void;
   /** `display` names the screen the events target — the same index `capture` used. */
   input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
@@ -72,6 +84,8 @@ export interface SshComputerOptions {
    */
   display?: number;
   native?: NativeComputerChannel;
+  /** How long `screenshot` waits for the live stream's first frame. */
+  frameTimeoutMs?: number;
 }
 
 export function sshComputerId(runtimeId: string, sim?: string, display?: number): string {
@@ -233,10 +247,26 @@ export class SshComputerBackend implements ComputerBackend {
   readonly runtimeId: string;
   readonly sim?: string;
   readonly display?: number;
+  /**
+   * Set only for a native channel that can push (`onFrame`). Absent, the
+   * registry falls back to polling `screenshot`, which on a native follower
+   * re-enters ScreenCaptureKit setup per frame (#3386).
+   */
+  readonly subscribe?: (
+    fps: number,
+    onFrame: (frame: ComputerFrame) => void,
+    maxWidth?: number
+  ) => () => void;
   private readonly probe: SshProbe;
   private readonly inputAllowed: boolean;
   private readonly title: string;
   private readonly native?: NativeComputerChannel;
+  private readonly frameTimeoutMs: number;
+  private readonly sinks = new Set<(frame: ComputerFrame) => void>();
+  private readonly waiters = new Set<(frame: ComputerFrame) => void>();
+  private offNativeFrame: (() => void) | null = null;
+  private lastFrame: ComputerFrame | null = null;
+  private streaming = false;
 
   constructor(
     private readonly sshExec: SshExec,
@@ -249,7 +279,11 @@ export class SshComputerBackend implements ComputerBackend {
     this.native = opts.native;
     this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!opts.native);
     this.title = opts.title;
+    this.frameTimeoutMs = opts.frameTimeoutMs ?? SSH_NATIVE_FRAME_TIMEOUT_MS;
     this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim, opts.display));
+    if (opts.native?.onFrame) {
+      this.subscribe = (fps, onFrame, maxWidth) => this.bindSubscribe(fps, onFrame, maxWidth);
+    }
   }
 
   describe(): ComputerDescriptor {
@@ -260,13 +294,89 @@ export class SshComputerBackend implements ComputerBackend {
       title: this.title,
       size: this.size,
       state: 'live',
-      capabilities: caps,
+      capabilities: this.subscribe ? { ...caps, frames: 'push' } : caps,
       pid: null,
       ...(this.sim ? { softKeys: [{ label: 'Home', keysym: 'Home' }] } : {}),
     };
   }
 
+  /**
+   * Refcounted sinks over ONE `SCStream`: the last unsubscribe stops capture,
+   * an earlier one leaves the survivors streaming.
+   */
+  private bindSubscribe(
+    fps: number,
+    onFrame: (frame: ComputerFrame) => void,
+    maxWidth?: number
+  ): () => void {
+    this.sinks.add(onFrame);
+    if (this.lastFrame) onFrame(this.lastFrame);
+    if (!this.streaming) this.startStream(fps, maxWidth);
+    return () => {
+      this.sinks.delete(onFrame);
+      if (this.sinks.size === 0) this.stopStream();
+    };
+  }
+
+  private startStream(fps: number, maxWidth?: number): void {
+    const native = this.native;
+    if (!native?.onFrame) return;
+    this.streaming = true;
+    this.offNativeFrame = native.onFrame((shot) => this.pushNativeFrame(shot));
+    // `capture` resolves on the stream's FIRST frame, which `onFrame` has
+    // already delivered — so only a failure is acted on here.
+    void native
+      .capture({ fps, maxWidth, display: this.display, watch: true })
+      .catch(() => this.stopStream());
+  }
+
+  private stopStream(): void {
+    if (!this.streaming) return;
+    this.streaming = false;
+    this.offNativeFrame?.();
+    this.offNativeFrame = null;
+    this.waiters.clear();
+    this.native?.unwatch();
+  }
+
+  private pushNativeFrame(shot: NativeComputerShot): void {
+    this.seq += 1;
+    const frame: ComputerFrame = {
+      seq: this.seq,
+      mime: shot.mime,
+      width: shot.width,
+      height: shot.height,
+      bytes: shot.bytes,
+    };
+    this.size = { width: shot.nativeWidth, height: shot.nativeHeight };
+    this.lastFrame = frame;
+    for (const sink of [...this.sinks]) sink(frame);
+    for (const waiter of [...this.waiters]) waiter(frame);
+    this.waiters.clear();
+  }
+
+  private waitForStreamFrame(): Promise<ComputerFrame> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waiters.delete(onFrame);
+        reject(new Error('native computer frame timed out'));
+      }, this.frameTimeoutMs);
+      const onFrame = (frame: ComputerFrame): void => {
+        clearTimeout(timer);
+        this.waiters.delete(onFrame);
+        resolve(frame);
+      };
+      this.waiters.add(onFrame);
+    });
+  }
+
   async screenshot(opts: ComputerScreenshotOpts): Promise<ComputerFrame> {
+    // A one-shot capture REPLACES the follower's live capturer, so while a
+    // stream is up the stream is the only safe source — `pull` included, or
+    // the poll would kill the very stream it reads.
+    if (this.streaming) {
+      return this.lastFrame ?? (await this.waitForStreamFrame());
+    }
     if (this.native) {
       const shot = await this.native.capture({
         fps: 2,
@@ -349,7 +459,9 @@ export class SshComputerBackend implements ComputerBackend {
   }
 
   async close(): Promise<void> {
-    this.native?.unwatch();
+    this.sinks.clear();
+    if (this.streaming) this.stopStream();
+    else this.native?.unwatch();
     if (!this.probe.capture) return;
     try {
       await this.sshExec(
