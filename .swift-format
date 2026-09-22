@@ -20,7 +20,7 @@
   "spacesBeforeEndOfLineComments": 2,
   "fileScopedDeclarationPrivacy": { "accessLevel": "private" },
   "noAssignmentInExpressions": { "allowedFunctions": ["XCTAssertNoThrow"] },
-  "orderedImports": { "includeConditionalImports": false },
+  "orderedImports": { "includeConditionalImports": false, "shouldGroupImports": true },
   "rules": {
     "AllPublicDeclarationsHaveDocumentation": false,
     "AlwaysUseLiteralForEmptyCollectionInit": false,
