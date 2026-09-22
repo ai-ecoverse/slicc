@@ -26,9 +26,13 @@
  *   exited   → Z (zombie — not reaped)
  *   killed   → K
  *
- * `SCOOP` shows `cone` / `<scoopJid prefix>` / `system` derived
- * from `Process.owner`. `COMMAND` is `argv.join(' ')` truncated
- * to a configurable width (80 chars by default).
+ * `SCOOP` shows `cone` / `system` / `jshd` / the scoop jid, derived
+ * from `Process.owner`. The default table keeps a 10-character cap
+ * on that jid so the fixed columns stay aligned. Naming `scoop` in
+ * `-o` / `--columns` prints the jid in full — a width cap on a
+ * column the caller asked for drops the identity `slicc.selectScoop`
+ * has to be joined back to. `COMMAND` is `argv.join(' ')` truncated
+ * to 80 characters either way.
  */
 
 import type { Command } from 'just-bash';
@@ -59,6 +63,15 @@ const STAT_MAP: Record<ProcessStatus, string> = {
 };
 
 const COMMAND_MAX = 80;
+/** Default-table width of the SCOOP column. Explicit `-o scoop` ignores it. */
+const SCOOP_COLUMN_WIDTH = 10;
+
+interface ScoopColumn {
+  /** `true` when the caller named `scoop` in `-o` / `--columns`. */
+  full: boolean;
+  /** Pad width. The full column sizes to its widest cell and is never cut. */
+  width: number;
+}
 
 /** Boolean flags (exact token only). */
 const PS_BOOL_FLAGS = ['-a', '-A', '-e', '--all', '-T', '--tree'] as const;
@@ -128,8 +141,13 @@ export function createPsCommand(options: PsCommandOptions = {}): Command {
       ? all
       : all.filter((p) => p.status === 'running' || p.status === 'pending');
     const ordered = tree ? orderAsTree(procs) : procs.map((p) => ({ proc: p, depth: 0 }));
-    const rows = ordered.map(({ proc, depth }) => renderRow(proc, columns, depth, tree));
-    const header = renderHeader(columns);
+    const scoop = scoopColumnFor(
+      columns,
+      ordered.map(({ proc }) => proc),
+      rawColumns !== undefined
+    );
+    const rows = ordered.map(({ proc, depth }) => renderRow(proc, columns, depth, tree, scoop));
+    const header = renderHeader(columns, scoop);
     return {
       stdout: [header, ...rows].join('\n') + '\n',
       stderr: '',
@@ -167,11 +185,19 @@ function parseColumns(raw: string): Column[] | Error {
   return out;
 }
 
-function renderHeader(columns: Column[]): string {
-  return columns.map((c) => columnHeader(c)).join('  ');
+function scoopColumnFor(columns: Column[], procs: Process[], explicit: boolean): ScoopColumn {
+  const full = explicit && columns.includes('scoop');
+  if (!full) return { full: false, width: SCOOP_COLUMN_WIDTH };
+  let width = 'SCOOP'.length;
+  for (const proc of procs) width = Math.max(width, scoopIdentity(proc).length);
+  return { full: true, width };
 }
 
-function columnHeader(c: Column): string {
+function renderHeader(columns: Column[], scoop: ScoopColumn): string {
+  return columns.map((c) => columnHeader(c, scoop)).join('  ');
+}
+
+function columnHeader(c: Column, scoop: ScoopColumn): string {
   switch (c) {
     case 'pid':
       return 'PID'.padStart(5);
@@ -184,17 +210,29 @@ function columnHeader(c: Column): string {
     case 'start':
       return 'START';
     case 'scoop':
-      return 'SCOOP'.padEnd(10);
+      return 'SCOOP'.padEnd(scoop.width);
     case 'command':
       return 'COMMAND';
   }
 }
 
-function renderRow(proc: Process, columns: Column[], depth: number, tree: boolean): string {
-  return columns.map((c) => renderCell(proc, c, depth, tree)).join('  ');
+function renderRow(
+  proc: Process,
+  columns: Column[],
+  depth: number,
+  tree: boolean,
+  scoop: ScoopColumn
+): string {
+  return columns.map((c) => renderCell(proc, c, depth, tree, scoop)).join('  ');
 }
 
-function renderCell(proc: Process, col: Column, depth: number, tree: boolean): string {
+function renderCell(
+  proc: Process,
+  col: Column,
+  depth: number,
+  tree: boolean,
+  scoop: ScoopColumn
+): string {
   switch (col) {
     case 'pid':
       return String(proc.pid).padStart(5);
@@ -207,7 +245,7 @@ function renderCell(proc: Process, col: Column, depth: number, tree: boolean): s
     case 'start':
       return formatStart(proc.startedAt);
     case 'scoop':
-      return formatScoop(proc).padEnd(10);
+      return formatScoop(proc, scoop);
     case 'command':
       return formatCommand(proc, depth, tree);
   }
@@ -221,12 +259,18 @@ function formatStart(ts: number): string {
   return `${hh}:${mm}:${ss}`;
 }
 
-function formatScoop(proc: Process): string {
+/** Full SCOOP identity. Cone, system, and jshd stay the short role labels. */
+function scoopIdentity(proc: Process): string {
   if (proc.owner.kind === 'cone') return 'cone';
   if (proc.owner.kind === 'system') return 'system';
   if (proc.owner.kind === 'jshd') return 'jshd';
-  // scoop — show short jid prefix to keep the column tight.
-  return proc.owner.scoopJid?.slice(0, 10) ?? 'scoop';
+  return proc.owner.scoopJid ?? 'scoop';
+}
+
+function formatScoop(proc: Process, scoop: ScoopColumn): string {
+  const identity = scoopIdentity(proc);
+  const shown = scoop.full ? identity : identity.slice(0, scoop.width);
+  return shown.padEnd(scoop.width);
 }
 
 function formatCommand(proc: Process, depth: number, tree: boolean): string {
@@ -325,7 +369,9 @@ Columns (default: pid,ppid,stat,start,scoop,command):
   KIND          scoop-turn | tool | shell | jsh | py | net
   STAT          R running, S pending, Z exited, K killed
   START         hh:mm:ss when the process spawned
-  SCOOP         cone | system | <scoopJid prefix>
+  SCOOP         cone | system | jshd | scoop jid. The default
+                table keeps a 10-character prefix. Naming scoop
+                in -o prints the jid in full.
   COMMAND       argv (truncated; tree mode draws connectors)
 
 Examples:
@@ -333,7 +379,8 @@ Examples:
   ps -a               every process, including the dead
   ps -T               live tree
   ps -a -T            full tree
-  ps -o pid,kind,stat just three columns
+  ps -o pid,kind,stat      just three columns
+  ps -o scoop,stat,pid     full scoop jid, with STAT and PID
 `,
     stderr: '',
     exitCode: 0,
