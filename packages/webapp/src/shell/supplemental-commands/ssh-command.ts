@@ -66,6 +66,10 @@ Examples:
 }
 
 function formatTargets(followers: ConnectedFollowerInfo[]): string {
+  // Deliberately exec-only, even though `computer add ssh` accepts `exec ||
+  // computer` (#3388): a capture-only `sliccstart-computer` peer cannot serve
+  // exec, so listing it here would advertise a target every `ssh <id> "<cmd>"`
+  // would refuse. `host` is the roster that shows both — it tags `[computer]`.
   const targets = followers.filter((f) => f.exec);
   if (targets.length === 0) {
     // `follow` with no runner advertises no exec capability, so name a runner.
