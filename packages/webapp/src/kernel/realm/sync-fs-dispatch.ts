@@ -1,4 +1,5 @@
-import { resolveSyncFsToken } from './sync-fs-token-registry.js';
+import type { FsStat } from 'just-bash';
+import { resolveSyncFsToken, type SyncFsTokenEntry } from './sync-fs-token-registry.js';
 
 export type SyncFsOp =
   | 'read'
@@ -9,7 +10,13 @@ export type SyncFsOp =
   | 'readdir'
   | 'mkdir'
   | 'rm'
-  | 'rename';
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'symlink'
+  | 'readlink'
+  | 'chmod'
+  | 'utimes';
 
 export interface SyncFsRequest {
   token: string;
@@ -19,6 +26,11 @@ export interface SyncFsRequest {
   body?: Uint8Array;
 
   arg2?: string;
+
+  mode?: number;
+
+  atimeMs?: number;
+  mtimeMs?: number;
 }
 
 export type SyncFsResult =
@@ -53,32 +65,10 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return { ok: true, kind: 'void' };
       case 'exists':
         return { ok: true, kind: 'json', json: await fs.exists(resolved) };
-      case 'stat': {
-        const s = await fs.stat(resolved);
-        return {
-          ok: true,
-          kind: 'json',
-          json: {
-            isDirectory: s.isDirectory,
-            isFile: s.isFile,
-            isSymbolicLink: s.isSymbolicLink,
-            size: s.size,
-          },
-        };
-      }
-      case 'lstat': {
-        const s = await fs.lstat(resolved);
-        return {
-          ok: true,
-          kind: 'json',
-          json: {
-            isDirectory: s.isDirectory,
-            isFile: s.isFile,
-            isSymbolicLink: s.isSymbolicLink ?? false,
-            size: s.size,
-          },
-        };
-      }
+      case 'stat':
+        return { ok: true, kind: 'json', json: statJson(await fs.stat(resolved)) };
+      case 'lstat':
+        return { ok: true, kind: 'json', json: statJson(await fs.lstat(resolved)) };
       case 'readdir':
         return { ok: true, kind: 'json', json: await fs.readdir(resolved) };
       case 'mkdir':
@@ -94,9 +84,71 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return { ok: true, kind: 'void' };
       }
       default:
-        return { ok: false, errno: 'EINVAL', message: `sync-fs: unknown op '${req.op as string}'` };
+        return await dispatchPosixOp(fs, resolved, req);
     }
   } catch (err) {
     return toErrno(err);
+  }
+}
+
+export interface SyncFsStatJson {
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymbolicLink: boolean;
+  size: number;
+  mode: number;
+  mtimeMs: number;
+}
+
+function statJson(s: FsStat): SyncFsStatJson {
+  return {
+    isDirectory: s.isDirectory,
+    isFile: s.isFile,
+    isSymbolicLink: s.isSymbolicLink ?? false,
+    size: s.size,
+    mode: s.mode,
+    mtimeMs: s.mtime instanceof Date ? s.mtime.getTime() : 0,
+  };
+}
+
+function posixError(code: string, path: string): Error & { code: string } {
+  return Object.assign(new Error(`${code}: ${path}`), { code });
+}
+
+async function dispatchPosixOp(
+  fs: SyncFsTokenEntry['fs'],
+  resolved: string,
+  req: SyncFsRequest
+): Promise<SyncFsResult> {
+  switch (req.op) {
+    case 'unlink': {
+      if ((await fs.lstat(resolved)).isDirectory) throw posixError('EISDIR', resolved);
+      await fs.rm(resolved);
+      return { ok: true, kind: 'void' };
+    }
+    case 'rmdir': {
+      if (!(await fs.lstat(resolved)).isDirectory) throw posixError('ENOTDIR', resolved);
+      if ((await fs.readdir(resolved)).length > 0) throw posixError('ENOTEMPTY', resolved);
+      await fs.rm(resolved, { recursive: true });
+      return { ok: true, kind: 'void' };
+    }
+    case 'symlink':
+      if (!req.arg2) throw posixError('EINVAL', resolved);
+      await fs.symlink(req.arg2, resolved);
+      return { ok: true, kind: 'void' };
+    case 'readlink':
+      return { ok: true, kind: 'json', json: await fs.readlink(resolved) };
+    case 'chmod':
+      if (typeof req.mode !== 'number') throw posixError('EINVAL', resolved);
+      await fs.chmod(resolved, req.mode);
+      return { ok: true, kind: 'void' };
+    case 'utimes':
+      if (typeof req.atimeMs !== 'number' || typeof req.mtimeMs !== 'number') {
+        throw posixError('EINVAL', resolved);
+      }
+      await fs.utimes(resolved, new Date(req.atimeMs), new Date(req.mtimeMs));
+      return { ok: true, kind: 'void' };
+    default:
+      return { ok: false, errno: 'EINVAL', message: `sync-fs: unknown op '${req.op as string}'` };
   }
 }

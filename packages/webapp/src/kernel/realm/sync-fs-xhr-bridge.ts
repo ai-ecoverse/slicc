@@ -8,6 +8,10 @@ export interface SyncFsBridgeStat {
   isDirectory: boolean;
   isSymbolicLink?: boolean;
   size: number;
+
+  mode?: number;
+
+  mtimeMs?: number;
 }
 
 export interface SyncFsXhrBridge {
@@ -25,7 +29,58 @@ export interface SyncFsXhrMutatingBridge extends SyncFsXhrBridge {
   rm(path: string): void;
 }
 
-type SyncFsRouteOp = 'stat' | 'lstat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+export interface SyncFsPosixBridge extends SyncFsXhrMutatingBridge {
+  rename(from: string, to: string): void;
+  unlink(path: string): void;
+  rmdir(path: string): void;
+
+  symlink(target: string, linkPath: string): void;
+  readlink(path: string): string;
+  chmod(path: string, mode: number): void;
+  utimes(path: string, atimeMs: number, mtimeMs: number): void;
+}
+
+export interface SyncFsPosixArgs {
+  arg2?: string;
+  mode?: number;
+  atimeMs?: number;
+  mtimeMs?: number;
+}
+
+export function parseSyncFsStat(json: unknown): SyncFsBridgeStat | null {
+  const s = json as Partial<SyncFsBridgeStat> | null;
+  if (
+    !s ||
+    typeof s.isFile !== 'boolean' ||
+    typeof s.isDirectory !== 'boolean' ||
+    typeof s.size !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    isFile: s.isFile,
+    isDirectory: s.isDirectory,
+    isSymbolicLink: s.isSymbolicLink,
+    size: s.size,
+    ...(typeof s.mode === 'number' ? { mode: s.mode } : {}),
+    ...(typeof s.mtimeMs === 'number' ? { mtimeMs: s.mtimeMs } : {}),
+  };
+}
+
+type SyncFsRouteOp =
+  | 'stat'
+  | 'lstat'
+  | 'readdir'
+  | 'exists'
+  | 'readlink'
+  | 'mkdir'
+  | 'rm'
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'symlink'
+  | 'chmod'
+  | 'utimes';
 
 function errnoError(code: string, path: string): Error & { code: string } {
   return syncXhrError(code, `sync-fs bridge, '${path}'`);
@@ -41,7 +96,7 @@ function routeUrl(path: string, op?: SyncFsRouteOp): string {
 export function createSyncFsXhrBridge(
   token: string,
   opts: { timeoutMs?: number } = {}
-): SyncFsXhrMutatingBridge {
+): SyncFsPosixBridge {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   function request(
@@ -68,42 +123,14 @@ export function createSyncFsXhrBridge(
       synchronify(request('POST', path, bytes));
     },
     stat(path: string): SyncFsBridgeStat {
-      const json = synchronifyJson(
-        request('GET', path, undefined, 'stat')
-      ) as Partial<SyncFsBridgeStat> | null;
-      if (
-        !json ||
-        typeof json.isFile !== 'boolean' ||
-        typeof json.isDirectory !== 'boolean' ||
-        typeof json.size !== 'number'
-      ) {
-        throw errnoError('EIO', path);
-      }
-      return {
-        isFile: json.isFile,
-        isDirectory: json.isDirectory,
-        isSymbolicLink: json.isSymbolicLink,
-        size: json.size,
-      };
+      const st = parseSyncFsStat(synchronifyJson(request('GET', path, undefined, 'stat')));
+      if (!st) throw errnoError('EIO', path);
+      return st;
     },
     lstat(path: string): SyncFsBridgeStat {
-      const json = synchronifyJson(
-        request('GET', path, undefined, 'lstat')
-      ) as Partial<SyncFsBridgeStat> | null;
-      if (
-        !json ||
-        typeof json.isFile !== 'boolean' ||
-        typeof json.isDirectory !== 'boolean' ||
-        typeof json.size !== 'number'
-      ) {
-        throw errnoError('EIO', path);
-      }
-      return {
-        isFile: json.isFile,
-        isDirectory: json.isDirectory,
-        isSymbolicLink: json.isSymbolicLink,
-        size: json.size,
-      };
+      const st = parseSyncFsStat(synchronifyJson(request('GET', path, undefined, 'lstat')));
+      if (!st) throw errnoError('EIO', path);
+      return st;
     },
     readdir(path: string): string[] {
       const json = synchronifyJson(request('GET', path, undefined, 'readdir'));
@@ -123,5 +150,32 @@ export function createSyncFsXhrBridge(
     rm(path: string): void {
       synchronify(request('POST', path, undefined, 'rm'));
     },
+    rename(from: string, to: string): void {
+      synchronify(request('POST', from, posixBody({ arg2: to }), 'rename'));
+    },
+    unlink(path: string): void {
+      synchronify(request('POST', path, posixBody({}), 'unlink'));
+    },
+    rmdir(path: string): void {
+      synchronify(request('POST', path, posixBody({}), 'rmdir'));
+    },
+    symlink(target: string, linkPath: string): void {
+      synchronify(request('POST', linkPath, posixBody({ arg2: target }), 'symlink'));
+    },
+    readlink(path: string): string {
+      const json = synchronifyJson(request('GET', path, undefined, 'readlink'));
+      if (typeof json !== 'string') throw errnoError('EIO', path);
+      return json;
+    },
+    chmod(path: string, mode: number): void {
+      synchronify(request('POST', path, posixBody({ mode }), 'chmod'));
+    },
+    utimes(path: string, atimeMs: number, mtimeMs: number): void {
+      synchronify(request('POST', path, posixBody({ atimeMs, mtimeMs }), 'utimes'));
+    },
   };
+}
+
+function posixBody(args: SyncFsPosixArgs): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(args));
 }

@@ -42,20 +42,72 @@ export interface SyncFsSwChannelLike {
   removeEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
 }
 
+type PosixArgOp = 'rename' | 'unlink' | 'rmdir' | 'symlink' | 'chmod' | 'utimes';
+
 export interface SyncFsHandlerFsRequest {
   token: string;
-  op: 'read' | 'write' | 'stat' | 'lstat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+  op:
+    | 'read'
+    | 'write'
+    | 'stat'
+    | 'lstat'
+    | 'readdir'
+    | 'exists'
+    | 'readlink'
+    | 'mkdir'
+    | 'rm'
+    | PosixArgOp;
   path: string;
   body?: Uint8Array;
+
+  arg2?: string;
+
+  mode?: number;
+
+  atimeMs?: number;
+  mtimeMs?: number;
 }
 
 export type SyncFsHandlerRequest =
   | SyncFsHandlerFsRequest
   | (SyncExecRequest & { op?: undefined; path?: undefined; body?: undefined });
 
-const METADATA_OPS = new Set(['stat', 'lstat', 'readdir', 'exists']);
+const METADATA_OPS = new Set(['stat', 'lstat', 'readdir', 'exists', 'readlink']);
 
 const MUTATING_OPS = new Set(['mkdir', 'rm']);
+
+const POSIX_ARG_OPS: ReadonlySet<string> = new Set<PosixArgOp>([
+  'rename',
+  'unlink',
+  'rmdir',
+  'symlink',
+  'chmod',
+  'utimes',
+]);
+
+function parsePosixArgs(
+  buf: ArrayBuffer
+): Pick<SyncFsHandlerFsRequest, 'arg2' | 'mode' | 'atimeMs' | 'mtimeMs'> {
+  let raw: { arg2?: unknown; mode?: unknown; atimeMs?: unknown; mtimeMs?: unknown } | null;
+  try {
+    raw = buf.byteLength ? JSON.parse(new TextDecoder().decode(buf)) : null;
+  } catch {
+    return {};
+  }
+  if (!raw || typeof raw !== 'object') return {};
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  const arg2 = typeof raw.arg2 === 'string' ? raw.arg2 : undefined;
+  const mode = num(raw.mode);
+  const atimeMs = num(raw.atimeMs);
+  const mtimeMs = num(raw.mtimeMs);
+  return {
+    ...(arg2 !== undefined ? { arg2 } : {}),
+    ...(mode !== undefined ? { mode } : {}),
+    ...(atimeMs !== undefined ? { atimeMs } : {}),
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+  };
+}
 
 function budgetFor(req: SyncFsHandlerRequest): number {
   if (!isExecHandlerRequest(req)) return DEFAULT_TIMEOUT_MS;
@@ -154,11 +206,14 @@ export async function parseSyncFsRequest(request: {
       return { token, op: opParam as 'mkdir' | 'rm', path };
     }
     const buf = await request.arrayBuffer();
+    if (opParam && POSIX_ARG_OPS.has(opParam)) {
+      return { token, op: opParam as PosixArgOp, path, ...parsePosixArgs(buf) };
+    }
     return { token, op: 'write', path, body: new Uint8Array(buf) };
   }
 
   if (opParam && METADATA_OPS.has(opParam)) {
-    return { token, op: opParam as 'stat' | 'lstat' | 'readdir' | 'exists', path };
+    return { token, op: opParam as 'stat' | 'lstat' | 'readdir' | 'exists' | 'readlink', path };
   }
   return { token, op: 'read', path };
 }

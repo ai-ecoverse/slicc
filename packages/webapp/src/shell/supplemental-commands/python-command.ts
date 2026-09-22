@@ -13,6 +13,7 @@ import {
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
 import type { RealmMountPoint } from '../../kernel/realm/realm-types.js';
+import { isSyncFsBridgeEnabled } from '../../kernel/realm/sync-fs-enabled.js';
 import type { JshProcessConfig } from '../jsh-executor.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
@@ -351,6 +352,8 @@ export function createPython3LikeCommand(
       mountPoints,
       procKind: 'py',
       ppid,
+
+      syncFsBridgeEnabled: isSyncFsBridgeEnabled(),
     });
   });
 }
@@ -411,5 +414,6 @@ async function runWithEphemeralPm(args: {
     mountPoints: args.mountPoints,
     opfsMountDbName: args.opfsMountDbName,
     procKind: 'py',
+    syncFsBridgeEnabled: isSyncFsBridgeEnabled(),
   });
 }

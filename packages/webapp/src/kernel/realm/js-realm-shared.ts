@@ -39,6 +39,7 @@ import {
 } from './realm-node-shims.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import { createSerialBridge, type RealmSerialApi } from './realm-serial-bridge.js';
+import { resolveSyncFsBridge, resolveSyncSabTransport } from './realm-sync-transport.js';
 import { createTimerHandleTracker, type TimerHandleTracker } from './realm-timer-handles.js';
 import type {
   RealmDoneMsg,
@@ -52,13 +53,7 @@ import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
-import { createSyncFsXhrBridge, type SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
-import {
-  createSyncExecSabTransport,
-  createSyncFsSabBridge,
-  createSyncSabTransport,
-  type SyncSabTransport,
-} from './sync-sab-bridge.js';
+import { createSyncExecSabTransport } from './sync-sab-bridge.js';
 
 const OUTPUT_TAIL_MAX = 64 * 1024;
 
@@ -90,24 +85,6 @@ function syncFsSnapshotErrorSink(
   if (!init.syncFsToken) return undefined;
   return (message) =>
     writeStderr(`[sync-fs] snapshot failed, sync metadata will be incomplete: ${message}\n`);
-}
-
-function resolveSyncFsBridge(
-  init: RealmInitMsg,
-  sab: SyncSabTransport | undefined
-): SyncFsXhrMutatingBridge | undefined {
-  if (sab) return createSyncFsSabBridge(sab);
-  return init.syncFsToken ? createSyncFsXhrBridge(init.syncFsToken) : undefined;
-}
-
-function resolveSyncSabTransport(
-  init: RealmInitMsg,
-  port: RealmPortLike
-): SyncSabTransport | undefined {
-  if (!init.syncSab || typeof Atomics === 'undefined' || typeof Atomics.wait !== 'function') {
-    return undefined;
-  }
-  return createSyncSabTransport(init.syncSab, port);
 }
 
 function installSyncBridges(
