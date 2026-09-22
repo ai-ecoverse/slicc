@@ -310,6 +310,56 @@ describe('tray-leader-lock', () => {
       expect(next.status).toBe('granted');
     });
 
+    it('pauses only while deferred, then ends the wait on promotion', async () => {
+      const mgr = createFakeLockManager();
+      const holder = await requestLeaderLock(URL, mgr);
+      const onDeferred = vi.fn();
+      const onDeferredEnd = vi.fn();
+      const election = acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => true,
+        onDeferred,
+        onDeferredEnd,
+        onGranted: () => {},
+      });
+      await tick();
+      expect(onDeferred).toHaveBeenCalledTimes(1);
+      expect(onDeferredEnd).not.toHaveBeenCalled();
+      (holder as Extract<LeaderLockResult, { status: 'granted' }>).release();
+      await election;
+      expect(onDeferredEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends the wait even when promotion is declined', async () => {
+      const mgr = createFakeLockManager();
+      const holder = await requestLeaderLock(URL, mgr);
+      const onDeferredEnd = vi.fn();
+      const election = acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => false,
+        onDeferredEnd,
+        onGranted: () => {},
+      });
+      await tick();
+      (holder as Extract<LeaderLockResult, { status: 'granted' }>).release();
+      await election;
+      expect(onDeferredEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not report deferral when the lock is free', async () => {
+      const onDeferred = vi.fn();
+      await acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: createFakeLockManager(),
+        shouldLead: () => true,
+        onDeferred,
+        onGranted: () => {},
+      });
+      expect(onDeferred).not.toHaveBeenCalled();
+    });
+
     it('leads immediately when the lock API is unavailable', async () => {
       const granted: Array<() => void> = [];
       await acquireLeaderRole({

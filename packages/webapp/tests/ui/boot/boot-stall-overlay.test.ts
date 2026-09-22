@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  removeBootStage,
   removeBootStallOverlay,
+  showBootStage,
   showBootStallOverlay,
 } from '../../../src/ui/boot/boot-stall-overlay.js';
 
@@ -46,5 +48,28 @@ describe('boot stall overlay', () => {
     showBootStallOverlay(document, { elapsedMs: 30_000 });
     removeBootStallOverlay(document);
     expect(document.getElementById('slicc-boot-stall-overlay')).toBeNull();
+  });
+
+  it('names the latest boot stage on the stall banner', () => {
+    showBootStallOverlay(document, { elapsedMs: 30_000, stage: 'mounts-restored' });
+    expect(document.getElementById('slicc-boot-stall-overlay')?.textContent).toContain(
+      'mounts-restored'
+    );
+  });
+
+  it('shows the live boot stage and drops it when the stall banner takes over', () => {
+    showBootStage(document, 'orchestrator-ready');
+    expect(document.getElementById('slicc-boot-stage')?.textContent).toContain(
+      'orchestrator-ready'
+    );
+    showBootStage(document, 'cone-bootstrapped');
+    expect(document.querySelectorAll('#slicc-boot-stage')).toHaveLength(1);
+    expect(document.getElementById('slicc-boot-stage')?.textContent).toContain('cone-bootstrapped');
+    showBootStallOverlay(document, { elapsedMs: 1_000, stage: 'cone-bootstrapped' });
+    expect(document.getElementById('slicc-boot-stage')).toBeNull();
+
+    showBootStage(document, 'cone-bootstrapped');
+    expect(document.getElementById('slicc-boot-stage')).toBeNull();
+    removeBootStage(document);
   });
 });

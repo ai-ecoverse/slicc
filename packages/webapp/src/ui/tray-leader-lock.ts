@@ -99,6 +99,10 @@ export async function acquireLeaderRole(opts: {
   lockManager: LockManagerLike | null;
   shouldLead: () => boolean;
   onGranted: (release: () => void) => void;
+
+  onDeferred?: () => void;
+
+  onDeferredEnd?: () => void;
 }): Promise<void> {
   const handOff = (release: () => void): void => {
     if (isTrayLeaderBootAborted() || !opts.shouldLead()) {
@@ -115,12 +119,15 @@ export async function acquireLeaderRole(opts: {
     return;
   }
 
+  opts.onDeferred?.();
   log.error(
     'Another tab is already leading on this tray worker — ' +
       'deferring leader start until the other tab releases the lock.'
   );
 
   const { release } = await result.waitForPromotion();
+
+  opts.onDeferredEnd?.();
   if (!isTrayLeaderBootAborted() && opts.shouldLead()) {
     log.error('Late promotion: this tab is now the tray leader.');
   }

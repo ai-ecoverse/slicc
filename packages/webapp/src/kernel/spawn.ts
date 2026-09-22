@@ -55,12 +55,16 @@ export interface KernelWorkerSpawnOptions<TClient> {
   readyStallLimit?: number;
 
   onLateReady?: () => void;
+
+  onBootProgress?: (stage: string) => void;
 }
 
 export interface ReadyStallInfo {
   elapsedMs: number;
 
   stalls: number;
+
+  stage?: string;
 }
 
 export interface KernelWorkerBootstrapOptions<TClient> {
@@ -96,6 +100,8 @@ export interface KernelWorkerBootstrapOptions<TClient> {
   readyStallLimit?: number;
 
   onLateReady?: () => void;
+
+  onBootProgress?: (stage: string) => void;
 }
 
 export function collectLocalStorageSeed(): Record<string, string> {
@@ -116,63 +122,132 @@ export interface SpawnedKernelHost<TClient> {
 
   ready: Promise<void>;
 
+  pauseReadyDeadline(): void;
+
+  restartReadyDeadline(): void;
+
   dispose(): void;
+}
+
+function createReadyDeadline(options: {
+  readyTimeoutMs: number;
+  readyStallLimit: number;
+  onReadyStall?: (info: ReadyStallInfo) => void;
+  onBootProgress?: (stage: string) => void;
+  onExhausted: (message: string) => void;
+}): {
+  pause(): void;
+  restart(): void;
+  arm(): void;
+  clear(): void;
+  noteProgress(stage: string | undefined): void;
+
+  timedOut(): boolean;
+} {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let paused = false;
+  let stopped = false;
+  let exhausted = false;
+  let stalls = 0;
+  let startedAt = Date.now();
+  let stage: string | undefined;
+
+  const clearTimer = (): void => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  const arm = (): void => {
+    clearTimer();
+    if (paused || stopped || exhausted) return;
+    timeoutId = setTimeout(() => {
+      if (paused || stopped || exhausted) return;
+      stalls += 1;
+      if (stalls < options.readyStallLimit) {
+        options.onReadyStall?.({ elapsedMs: Date.now() - startedAt, stalls, stage });
+        arm();
+        return;
+      }
+      exhausted = true;
+      clearTimer();
+      const budget = options.readyTimeoutMs * options.readyStallLimit;
+      const where = stage ? ` (last progress: ${stage})` : '';
+      options.onExhausted(`Kernel worker did not signal ready within ${budget}ms${where}`);
+    }, options.readyTimeoutMs);
+  };
+
+  return {
+    pause() {
+      if (stopped || exhausted) return;
+      paused = true;
+      clearTimer();
+    },
+    restart() {
+      if (stopped || exhausted) return;
+      paused = false;
+      stalls = 0;
+      startedAt = Date.now();
+      arm();
+    },
+    arm,
+    clear() {
+      stopped = true;
+      clearTimer();
+    },
+    noteProgress(next: string | undefined) {
+      if (stopped || exhausted) return;
+      if (next) {
+        stage = next;
+        options.onBootProgress?.(next);
+      }
+
+      if (paused) return;
+      stalls = 0;
+      arm();
+    },
+    timedOut: () => exhausted,
+  };
 }
 
 function watchKernelReady(
   port: MessagePort,
   options: Pick<
     KernelWorkerBootstrapOptions<unknown>,
-    'onReadyStall' | 'readyStallLimit' | 'onLateReady'
+    'onReadyStall' | 'readyStallLimit' | 'onLateReady' | 'onBootProgress'
   >,
   readyTimeoutMs: number
-): { ready: Promise<void>; cleanup: () => void } {
+): {
+  ready: Promise<void>;
+  cleanup: () => void;
+  pauseReadyDeadline: () => void;
+  restartReadyDeadline: () => void;
+} {
   let cleanupReady: () => void = () => {};
+  let pauseReadyDeadline: () => void = () => {};
+  let restartReadyDeadline: () => void = () => {};
   const ready = new Promise<void>((resolve, reject) => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let listener: ((event: MessageEvent) => void) | null = null;
-
-    const clearTimer = (): void => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    };
-
     const readyStallLimit = Math.max(1, options.readyStallLimit ?? (options.onReadyStall ? 3 : 1));
-    const startedAt = Date.now();
-    let stalls = 0;
-    let timedOut = false;
-
-    const armReadyTimeout = (): void => {
-      clearTimer();
-      timeoutId = setTimeout(() => {
-        stalls += 1;
-        if (stalls < readyStallLimit) {
-          options.onReadyStall?.({ elapsedMs: Date.now() - startedAt, stalls });
-          armReadyTimeout();
-          return;
-        }
-        if (options.onLateReady) {
-          clearTimer();
-        } else {
-          cleanupReady();
-        }
-        timedOut = true;
-        reject(
-          new Error(
-            `Kernel worker did not signal ready within ${readyTimeoutMs * readyStallLimit}ms`
-          )
-        );
-      }, readyTimeoutMs);
-    };
+    const deadline = createReadyDeadline({
+      readyTimeoutMs,
+      readyStallLimit,
+      onReadyStall: options.onReadyStall,
+      onBootProgress: options.onBootProgress,
+      onExhausted: (message) => {
+        if (!options.onLateReady) cleanupReady();
+        reject(new Error(message));
+      },
+    });
+    pauseReadyDeadline = () => deadline.pause();
+    restartReadyDeadline = () => deadline.restart();
 
     cleanupReady = (): void => {
       if (listener !== null) {
         port.removeEventListener('message', listener as EventListener);
         listener = null;
       }
-      clearTimer();
+      deadline.clear();
     };
     listener = (event: MessageEvent): void => {
       const data = event.data as
@@ -182,13 +257,12 @@ function watchKernelReady(
         | null;
 
       if (data?.type === 'kernel-worker-boot-progress') {
-        stalls = 0;
-        armReadyTimeout();
+        deadline.noteProgress((data as Partial<KernelWorkerBootProgressMsg>).stage);
         return;
       }
       if (data?.type === 'kernel-worker-ready') {
         cleanupReady();
-        if (timedOut) {
+        if (deadline.timedOut()) {
           options.onLateReady?.();
           return;
         }
@@ -206,9 +280,14 @@ function watchKernelReady(
       }
     };
     port.addEventListener('message', listener as EventListener);
-    armReadyTimeout();
+    deadline.arm();
   });
-  return { ready, cleanup: () => cleanupReady() };
+  return {
+    ready,
+    cleanup: () => cleanupReady(),
+    pauseReadyDeadline: () => pauseReadyDeadline(),
+    restartReadyDeadline: () => restartReadyDeadline(),
+  };
 }
 
 export function bootstrapKernelWorker<TClient>(
@@ -232,11 +311,12 @@ export function bootstrapKernelWorker<TClient>(
     ...(options.reconnectCdp ? { reconnect: options.reconnectCdp } : {}),
   });
 
-  const { ready, cleanup: cleanupReady } = watchKernelReady(
-    kernelChannel.port1,
-    options,
-    readyTimeoutMs
-  );
+  const {
+    ready,
+    cleanup: cleanupReady,
+    pauseReadyDeadline,
+    restartReadyDeadline,
+  } = watchKernelReady(kernelChannel.port1, options, readyTimeoutMs);
 
   const init: KernelWorkerInitMsg = {
     type: 'kernel-worker-init',
@@ -264,6 +344,8 @@ export function bootstrapKernelWorker<TClient>(
   return {
     client,
     ready,
+    pauseReadyDeadline,
+    restartReadyDeadline,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -305,5 +387,6 @@ export function spawnKernelWorker<TClient>(
     onReadyStall: options.onReadyStall,
     readyStallLimit: options.readyStallLimit,
     onLateReady: options.onLateReady,
+    onBootProgress: options.onBootProgress,
   });
 }

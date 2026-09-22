@@ -432,6 +432,11 @@ export interface AttachWcWorkbenchOptions {
     runtimeMode: UiRuntimeMode;
     floatKind: import('@slicc/webcomponents').FloatbarFloatKind;
   };
+
+  kernelReadyDeadline?: {
+    pause(): void;
+    restart(): void;
+  };
 }
 
 function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void {
@@ -1016,6 +1021,7 @@ export function attachWcWorkbench(
           openWriter: async () => (await openVfs()).writer,
           window,
           log,
+          kernelReadyDeadline: options.kernelReadyDeadline,
         });
         boot.wiring.notifyScoopStateChanged = () => tray.scheduleScoopsListBroadcast();
         boot.wiring.notifyUnitStatus = (jid, status) =>
@@ -1142,6 +1148,33 @@ export function attachWcWorkbench(
   };
 }
 
+function bindKernelBootStatus(doc: Document): {
+  onBootProgress: (stage: string) => void;
+  onReadyStall: (info: { elapsedMs: number; stalls: number; stage?: string }) => void;
+  dismiss: () => void;
+} {
+  let shown = false;
+  const load = (): Promise<typeof import('../boot/boot-stall-overlay.js')> =>
+    import('../boot/boot-stall-overlay.js');
+  return {
+    onBootProgress: (stage) => {
+      shown = true;
+      void load().then((m) => m.showBootStage(doc, stage));
+    },
+    onReadyStall: (info) => {
+      shown = true;
+      void load().then((m) => m.showBootStallOverlay(doc, info));
+    },
+    dismiss: () => {
+      if (!shown) return;
+      void load().then((m) => {
+        m.removeBootStallOverlay(doc);
+        m.removeBootStage(doc);
+      });
+    },
+  };
+}
+
 export async function bootLeaderFloat(
   app: HTMLElement,
   log: BootStageLogger,
@@ -1174,7 +1207,7 @@ export async function bootLeaderFloat(
 
   if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
   const { syncFsBridgeEnabled, syncFsChannelNonce } = setupSyncFsBootNonce();
-  let stallOverlayShown = false;
+  const bootStatus = bindKernelBootStatus(document);
   let kernel!: SpawnedKernelHost<OffscreenClient>;
   let schedulePendingCatchup: (() => void) | undefined;
 
@@ -1201,12 +1234,8 @@ export async function bootLeaderFloat(
           guardedReload();
         },
 
-        onReadyStall: (info) => {
-          stallOverlayShown = true;
-          void import('../boot/boot-stall-overlay.js').then((m) =>
-            m.showBootStallOverlay(document, info)
-          );
-        },
+        onBootProgress: bootStatus.onBootProgress,
+        onReadyStall: bootStatus.onReadyStall,
 
         onLateReady: () => {
           guardedReload();
@@ -1223,6 +1252,10 @@ export async function bootLeaderFloat(
           schedulePendingCatchup = attachWcWorkbench(mounted, kernel.client, chat, chatHost, log, {
             instanceId,
             standalone: { browser, floatKind, realCdpTransport, runtimeMode },
+            kernelReadyDeadline: {
+              pause: () => kernel.pauseReadyDeadline(),
+              restart: () => kernel.restartReadyDeadline(),
+            },
           });
         },
       };
@@ -1237,9 +1270,7 @@ export async function bootLeaderFloat(
   try {
     await kernel.ready;
   } finally {
-    if (stallOverlayShown) {
-      void import('../boot/boot-stall-overlay.js').then((m) => m.removeBootStallOverlay(document));
-    }
+    bootStatus.dismiss();
   }
 
   boot.wiring.notifyReady?.();

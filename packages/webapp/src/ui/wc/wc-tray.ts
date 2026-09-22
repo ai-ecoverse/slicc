@@ -123,6 +123,11 @@ export interface WcTrayDeps {
   openWriter(): Promise<import('../../kernel/writable-vfs-client.js').WritableVfsClient>;
   window: Window;
   log: BootStageLogger;
+
+  kernelReadyDeadline?: {
+    pause(): void;
+    restart(): void;
+  };
 }
 
 export interface WcTrayHandle {
@@ -958,6 +963,8 @@ function acquireAndStartLeader(
       !state.leader &&
       !state.follower &&
       deps.window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY) === workerBaseUrl,
+    onDeferred: () => deps.kernelReadyDeadline?.pause(),
+    onDeferredEnd: () => deps.kernelReadyDeadline?.restart(),
     onGranted: (release) => {
       state.lockRelease = release;
       state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
