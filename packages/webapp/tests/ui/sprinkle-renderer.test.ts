@@ -410,6 +410,10 @@ describe('full document rendering', () => {
     expect(srcdoc).toContain('sprinkle-agent');
     expect(srcdoc).toContain('sprinkle-select-scoop');
     expect(srcdoc).toContain('sprinkle-selected-scoop');
+    // The focus guard runs before any authored script: an agent-opened
+    // sprinkle must not pull the caret out of the composer.
+    expect(srcdoc).toContain('_focusAllowed');
+    expect(srcdoc.indexOf('_focusAllowed')).toBeLessThan(srcdoc.indexOf('<p>Hello</p>'));
     // Dual copy of slicc.screenshot() — keep in lockstep with sprinkle-screenshot.ts.
     expect(srcdoc).toContain('Element has zero dimensions');
     expect(srcdoc).toContain('image decode failed');

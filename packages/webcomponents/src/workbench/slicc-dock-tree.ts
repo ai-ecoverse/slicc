@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { withFocusPreserved } from '../internal/focus.js';
 import { iconEl } from '../internal/icons.js';
 import { TERM_SURFACE_ID } from './terminal-theme.js';
 
@@ -1191,8 +1192,16 @@ export class SliccDockTree extends HTMLElement {
    * pool BEFORE tearing down the old skeleton so in-flight elements survive
    * the move regardless of where they currently sit (a prior leaf, parking,
    * or a fresh direct child of the host).
+   *
+   * The rebuild MOVES every placed surface — the chat surface with the
+   * composer included — so it runs under {@link withFocusPreserved}: a
+   * background `sprinkle open`/`close` must not take the caret away.
    */
   #render(): void {
+    withFocusPreserved(this, () => this.#rebuild());
+  }
+
+  #rebuild(): void {
     const tree = this.#tree;
     const pool = this.#collectSurfacePool();
     const usedIds = new Set(this.getSurfaceIds());
