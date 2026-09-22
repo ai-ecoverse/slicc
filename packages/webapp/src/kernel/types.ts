@@ -123,13 +123,22 @@ export interface KernelFacade {
 
   /**
    * Hydrate each registered scoop's chat buffer from its canonical
-   * conversation record, immediately after `orchestrator.init()` and BEFORE
-   * any post-boot turn runs. The buffers otherwise start empty on boot, so the
-   * first turn after a reload would append to nothing and every later replay
+   * conversation record. The first call is before scoop contexts are created;
+   * a second call after `orchestrator.init()` fills any buffer that was still
+   * empty. The buffers otherwise start empty on boot, so the first turn after
+   * a reload would append to nothing and every later replay
    * (`request-scoop-messages` answers from a non-empty buffer) would show only
    * the new messages. Read-only and idempotent: only fills empty buffers.
    */
   hydrateBuffersFromRecords(): Promise<void>;
+
+  /**
+   * Push the hydrated transcripts to the panel, once per boot. A later call
+   * is a no-op so a live turn that extended a buffer is not replayed over
+   * itself. Scoops that have no saved chat are listed but not given an
+   * empty replace.
+   */
+  publishHydratedTranscripts(): void;
 }
 
 // ---------------------------------------------------------------------------

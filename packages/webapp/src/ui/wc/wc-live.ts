@@ -33,6 +33,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import { syncRestoringSessionNotice, threadColumnIsEmpty } from './restoring-session-notice.js';
 import type { WcChatAttachment } from './wc-chat.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import {
@@ -143,6 +144,12 @@ export interface WcShellBoot {
    * RPC sent before the worker's hosts are installed is lost, not queued.
    */
   onClientReady(fn: () => void): void;
+  /**
+   * Leader boot. While set, an empty transcript says the session is still
+   * being restored. Followers leave this unset; a cone with no history
+   * stays blank once it is cleared.
+   */
+  setRestoringSessions(restoring: boolean): void;
 }
 
 /**
@@ -470,6 +477,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   const lickBackpressure = new Map<string, LickBackpressureState>();
   let clientReady = false;
   let workbench: WorkbenchActivator | null = null;
+  let restoringSessions = false;
   const readyListeners = new Set<() => void>();
 
   /** Re-points the transcript subscription; see {@link createUnitWatcher}. */
@@ -477,6 +485,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     () => clientOf(),
     (messages, queuedIds) => {
       controller?.loadMessages(messages, queuedIds);
+      // An empty replace during boot is the 5s unanswered-snapshot fallback,
+      // not proof the cone has no history. Say so instead of leaving a blank
+      // thread. A transcript that arrives replaces the notice with the rows.
+      syncRestoringSessionNotice(refs.thread, messages.length === 0 && restoringSessions);
       chatHost.onSnapshotRendered?.(messages);
     }
   );
@@ -554,6 +566,12 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     onClientReady: (fn) => {
       readyListeners.add(fn);
       if (clientReady) fn();
+    },
+    setRestoringSessions: (restoring) => {
+      restoringSessions = restoring;
+      // Turning it on must not append the line under a transcript that
+      // already arrived (a fast boot can replay before this is called).
+      syncRestoringSessionNotice(refs.thread, restoring && threadColumnIsEmpty(refs.thread));
     },
   };
 }
@@ -1681,6 +1699,9 @@ export async function bootLeaderFloat(
       };
     },
   });
+  // The thread is on screen before the worker can read saved chat. An empty
+  // column during that wait is what a reload looks like when history is lost.
+  boot.setRestoringSessions(true);
 
   const { setupSudoStandalone } = await import('../boot/setup-sudo.js');
   await setupSudoStandalone({ log });
@@ -1700,6 +1721,7 @@ export async function bootLeaderFloat(
   // callbacks' onReady), which fires mid-boot while VFS RPCs still fan out
   // into nobody. Re-notify so boot reads (freezer rail) finally land.
   boot.wiring.notifyReady?.();
+  boot.setRestoringSessions(false);
   (globalThis as unknown as KernelReadyHolder).__slicc_kernel_ready = true;
   log.info('WC live shell ready', { scoops: kernel.client.getScoops().length });
   schedulePendingCatchup?.();

@@ -240,6 +240,12 @@ export class Orchestrator implements ConeApprovalRouter {
    * read-old/write-new window is open.
    */
   private conversationStore: WorkUnitConversationStore | null = null;
+  /**
+   * Runs once records are loaded and before scoop contexts are created.
+   * The kernel uses it to push saved chat to the panel while that loop,
+   * the slow part of boot, is still ahead.
+   */
+  private onConversationsReady: (() => Promise<void>) | null = null;
   /** In-flight turn journal (reload recovery). Created in {@link init}. */
   private turnJournal: TurnJournal | null = null;
   /**
@@ -545,6 +551,15 @@ export class Orchestrator implements ConeApprovalRouter {
     );
   }
 
+  /**
+   * Register the hook that runs after persisted scoops and their
+   * conversation records are loaded, and before any scoop context is
+   * created. One shot per boot; a later `init` does not happen.
+   */
+  setOnConversationsReady(hook: () => Promise<void>): void {
+    this.onConversationsReady = hook;
+  }
+
   /** Initialize orchestrator and load saved scoops */
   /**
    * @param onBootProgress Optional heartbeat fired after each restored
@@ -649,6 +664,12 @@ export class Orchestrator implements ConeApprovalRouter {
     this.scheduler.start();
 
     log.info('Orchestrator initialized', { scoopCount: this.scoops.size });
+
+    // Saved chat does not need a live context. Tell the panel now, before
+    // the loop below — that loop is the long part of a large boot, and an
+    // empty thread until it finishes reads as lost history.
+    onBootProgress?.('conversations-ready');
+    await this.onConversationsReady?.();
 
     // Initialize all scoop contexts. A single scoop whose context fails to
     // initialize — e.g. a corrupt/unreadable persisted VFS file surfacing a

@@ -104,6 +104,11 @@ slicc-chat-thread > .slicc-thread__inner {
 slicc-chat-thread[open] > .slicc-thread__inner {
   padding: 24px 32px;
 }
+slicc-chat-thread .slicc-restoring-session {
+  margin: 0;
+  color: var(--muted, #8899aa);
+  font: 14px/1.4 var(--ui, system-ui);
+}
 /* Narrow / extension-sidebar: the reading column fills the full width — no
    centered 776px cap. */
 @media (max-width: 560px) {

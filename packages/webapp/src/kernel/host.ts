@@ -21,7 +21,8 @@
  *  2. `bridge.bind(orchestrator, browser)`.
  *  3. Tray-runtime subscription so leader/follower status pushes to the
  *     panel via `bridge.emitTrayRuntimeStatus()`.
- *  4. `orchestrator.init()`.
+ *  4. `orchestrator.init()`. Saved chat is pushed to the panel once
+ *     conversation records are loaded, before scoop contexts are created.
  *  5. `publishAgentBridge` on `globalThis.__slicc_agent` (worker-safe;
  *     no chrome.runtime).
  *  6. `registerSessionCostsProvider` (+ `registerSessionBudgetProvider`, the
@@ -99,6 +100,7 @@ import {
 } from '../work-unit/capability/index.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { matchDiscoveryRouteCandidate } from './discovery-lick-routing.js';
+import { wireEarlyConversationHydration } from './early-conversation-hydration.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
@@ -560,15 +562,19 @@ async function bootOrchestrator(
   // 4. Init orchestrator (loads persisted scoops, mounts the shared FS).
   //    Each restored scoop's context init emits a boot-progress heartbeat —
   //    this is the boot's main time sink for a large session, so it must
-  //    keep the ready watchdog alive (#2007).
+  //    keep the ready watchdog alive (#2007). Saved chat is pushed from
+  //    inside init, before that loop, via the hook registered here.
+  wireEarlyConversationHydration(orchestrator, bridge);
   await orchestrator.init(config.onBootProgress);
 
-  // 4b. Hydrate the bridge's chat buffers from each scoop's canonical
-  // conversation record, BEFORE `kernel-worker-ready` is signaled and
-  // therefore before the panel selects a scoop or a post-boot turn runs.
-  // Without this the buffers start empty, and a replay after the first
-  // post-reload turn would show only that turn.
+  // 4b. Fill any buffer the early pass left empty (a record that was not
+  // readable yet). Buffers that already hold the saved transcript are
+  // skipped, and publish is a no-op when the early pass already told the
+  // panel — a second replace would race a live turn. Still before
+  // `kernel-worker-ready`, so the first post-reload turn extends the
+  // restored history instead of starting a new one.
   await bridge.hydrateBuffersFromRecords();
+  bridge.publishHydratedTranscripts();
 
   // 5 (caller): publish agent bridge for the `agent` shell command.
   const sharedFs = orchestrator.getSharedFS();

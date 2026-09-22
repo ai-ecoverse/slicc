@@ -322,9 +322,16 @@ the only store a conversation is written to or read from:
 
 - **One write.** `SessionPersistence.persistNow` writes the canonical record
   and nothing else; the bridge no longer writes `browser-coding-agent`
-  (`persistScoop` is gone). The panel buffer is a live cache, hydrated at boot
-  from the record (`Bridge.hydrateBuffersFromRecords`) so a turn after a
-  reload extends the restored transcript instead of starting a new one.
+  (`persistScoop` is gone). The panel buffer is a live cache, hydrated from
+  the record (`Bridge.hydrateBuffersFromRecords`) as soon as those records
+  are loaded and before scoop contexts are created — that context loop is
+  the long part of boot, and the panel is pushed `scoop-messages-replaced`
+  then (`publishHydratedTranscripts`, once) so the thread shows the saved
+  chat, compaction markers included, instead of sitting empty until every
+  context exists. A second hydrate after init only fills buffers that are
+  still empty and does not push again. A turn after a reload extends the
+  restored transcript instead of starting a new one. Until that replay
+  arrives, the leader's empty thread says it is restoring the session.
 - **One read.** A restore, a replay (`request-scoop-messages`), the tray's
   `request-scoop-chat-messages`, transcript export, the Freezer, welcome
   detection and the page's pre-replay hydration all derive from the record

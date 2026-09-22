@@ -3586,4 +3586,97 @@ describe('Bridge hydrateBuffersFromRecords', () => {
     expect(echo.lickState).toBeUndefined();
     expect(echo.lickId).toBeUndefined();
   });
+
+  it('publishes the saved transcript once, compaction marker included, and a later turn does not duplicate it', async () => {
+    const record = canonicalRecord(coneScoop, restoredHistory) as {
+      markers?: unknown[];
+    };
+    record.markers = [
+      {
+        id: 'cmp-helix',
+        kind: 'compaction',
+        timestamp: 3,
+        compaction: {
+          trigger: 'threshold',
+          state: 'summarized',
+          transcriptPath: '/sessions/live-cone-helix.md',
+        },
+      },
+    ];
+    const load = vi.fn(async () => record);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getConversationStore: vi.fn(() => ({ load })),
+      getQueuedMessageIds: vi.fn(() => []),
+    } as any);
+
+    await bridge.hydrateBuffersFromRecords();
+    bridge.publishHydratedTranscripts();
+
+    const replaced = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any[];
+    expect(replaced).toHaveLength(1);
+    const messages = replaced[0].payload.messages;
+    expect(messages.map((m: { content: string }) => m.content)).toEqual([
+      'first question',
+      'first answer',
+      '',
+    ]);
+    expect(messages.find((m: { id: string }) => m.id === 'cmp-helix')).toMatchObject({
+      compaction: {
+        trigger: 'threshold',
+        state: 'summarized',
+        transcriptPath: '/sessions/live-cone-helix.md',
+      },
+    });
+    const list = sentMessages.find((m: any) => m.payload?.type === 'scoop-list') as any;
+    expect(list.payload.scoops[0].jid).toBe('cone_1');
+    const wireOrder = sentMessages
+      .map((m: any) => m.payload?.type)
+      .filter((type: string) => type === 'scoop-messages-replaced' || type === 'scoop-list');
+    expect(wireOrder).toEqual(['scoop-messages-replaced', 'scoop-list']);
+
+    const before = sentMessages.length;
+    bridge.publishHydratedTranscripts();
+    expect(sentMessages.length).toBe(before);
+
+    const callbacks = Bridge.createCallbacks(bridge);
+    callbacks.onResponse('cone_1', 'second answer', false);
+    callbacks.onResponseDone('cone_1');
+    await (bridge as any).handleRequestScoopMessages('cone_1');
+
+    const replay = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any[];
+    const contents = replay[replay.length - 1].payload.messages.map(
+      (m: { content: string }) => m.content
+    );
+    expect(contents.filter((text: string) => text === 'first question')).toHaveLength(1);
+    expect(contents.filter((text: string) => text === 'first answer')).toHaveLength(1);
+    expect(contents.filter((text: string) => text === 'second answer')).toHaveLength(1);
+    expect(
+      replay[replay.length - 1].payload.messages.filter((m: { id: string }) => m.id === 'cmp-helix')
+    ).toHaveLength(1);
+  });
+
+  it('does not push an empty replace for a unit that has no saved chat', async () => {
+    const quiet = { ...coneScoop, jid: 'cone_quiet', folder: 'cone-quiet' };
+    const load = vi.fn(async (key: string) =>
+      key.endsWith('cone_1') ? canonicalRecord(coneScoop, restoredHistory) : null
+    );
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop, quiet]),
+      getConversationStore: vi.fn(() => ({ load })),
+      getQueuedMessageIds: vi.fn(() => []),
+    } as any);
+
+    await bridge.hydrateBuffersFromRecords();
+    bridge.publishHydratedTranscripts();
+
+    const replaced = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any[];
+    expect(replaced.map((m) => m.payload.scoopJid)).toEqual(['cone_1']);
+  });
 });
