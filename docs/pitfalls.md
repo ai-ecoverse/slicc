@@ -858,6 +858,34 @@ Load-bearing details, all of them easy to get wrong:
 `df` (and `diskutil info`) report the live flag via `storage.persisted()`, so
 that is where to look when a session is suspected of having been evicted.
 
+## `clip.scale` Encodes At A Factor Only A Capture Can Tell You
+
+**File**: `packages/webapp/src/cdp/tab-handle.ts` (`applyMaxWidth`)
+
+`Page.captureScreenshot` with a `clip` encodes `clip.width × clip.scale × F`
+px, where `clip.width` is CSS px and `F` is a per-tab factor CDP never reports.
+`F` is **not** `devicePixelRatio`, and it is not the unclipped capture's
+`encodedWidth / cssWidth` either. Measured on Chrome 141:
+
+| Tab                           | unclipped peek / CSS | `F` (clip) |
+| ----------------------------- | -------------------- | ---------- |
+| retina + 125 % browser zoom   | 2.5                  | 2          |
+| `Emulation` dsf 2.5, desktop  | 2.5                  | 2.5        |
+| `Emulation` dsf 2.625, mobile | 2.63 of the _visual_ | 2.625      |
+
+Under zoom the peek used the zoomed DPR while the clip renders at the display
+scale. Under mobile emulation `window.innerWidth` is the **layout** viewport,
+far wider than the visual viewport the peek encoded, so a scale derived from
+the peek width lands `F × layout / visual` too big — the frame comes back
+_upscaled past the tab's own native pixels_ (#3373).
+
+So do not compute a fit from geometry the page reports. Capture once, read the
+encoded width, and correct: output is exactly linear in `clip.scale`, so
+`scale × target / encodedWidth` lands on the target in one more capture (every
+shape measured converged in two). Bound the attempts and keep the original
+pixels as the fallback — a frame that cannot be made to fit is reported
+`overCap`, never faked by rewriting a header.
+
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`
