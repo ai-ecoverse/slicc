@@ -16,6 +16,10 @@ import {
   streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
+import {
+  bridgeRefreshBlocked,
+  noteBridgeTokenRequired,
+} from '../src/providers/bridge-token-required.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {
@@ -157,6 +161,7 @@ async function exchangeCode(code: string, codeVerifier: string): Promise<TokenRe
 }
 
 async function refreshToken(refresh: string): Promise<TokenResponse | null> {
+  if (bridgeRefreshBlocked()) return null;
   try {
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -169,7 +174,10 @@ async function refreshToken(refresh: string): Promise<TokenResponse | null> {
       body,
     });
     if (!res.ok) {
-      console.error('[xai-grok] refresh failed:', res.status, await res.text());
+      const text = await res.text();
+
+      if (noteBridgeTokenRequired(res.status, text)) return null;
+      console.error('[xai-grok] refresh failed:', res.status, text);
       return null;
     }
     return (await res.json()) as TokenResponse;

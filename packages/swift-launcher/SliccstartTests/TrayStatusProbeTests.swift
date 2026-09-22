@@ -123,6 +123,56 @@ final class TrayStatusProbeTests: XCTestCase {
         XCTAssertEqual(count, 4, "probe must respect the attempt cap")
     }
 
+    func testUnavailableStatusDoublesTheGapAndAMintingTrayResetsIt() async {
+        actor Delays {
+            var values: [TimeInterval] = []
+            func add(_ value: TimeInterval) { values.append(value) }
+        }
+        let delays = Delays()
+        let pace = TrayPollPace(base: 1.5, cap: 30)
+        let statuses = [503, 503, 200]
+        actor Step {
+            var n = 0
+            func next() -> Int {
+                let current = n
+                n += 1
+                return current
+            }
+        }
+        let step = Step()
+        let connecting = Data(#"{"state":"connecting"}"#.utf8)
+        let probe = TrayStatusProbe(
+            fetch: { _ in
+                let index = await step.next()
+                let status = statuses[index]
+                return (status, status == 200 ? connecting : Data())
+            },
+            sleep: { seconds in
+                await delays.add(seconds)
+            }
+        )
+
+        let joinUrl = await probe.discoverJoinUrl(
+            serveOrigin: "http://127.0.0.1:5710",
+            maxAttempts: 3,
+            retryDelay: 1.5,
+            pace: pace
+        )
+
+        XCTAssertNil(joinUrl)
+        let waited = await delays.values
+        XCTAssertEqual(waited, [3, 6])
+        XCTAssertEqual(pace.current, 1.5, "a 200 while the tray is still minting restores the base gap")
+    }
+
+    func testUnavailableGapCaps() {
+        let pace = TrayPollPace(base: 16, cap: 30)
+        pace.note(status: 503)
+        XCTAssertEqual(pace.current, 30)
+        pace.note(status: nil)
+        XCTAssertEqual(pace.current, 30)
+    }
+
     func testExhaustionMessagesDistinguishRetryableFromTerminalGiveUp() {
         XCTAssertEqual(
             TrayStatusProbeExhaustion.retryable.message(maxAttempts: 8),

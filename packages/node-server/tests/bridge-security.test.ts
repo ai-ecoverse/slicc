@@ -6,6 +6,7 @@ import {
   BRIDGE_TOKEN_HEADER,
   buildCorsHeaders,
   buildPnaPreflightHeaders,
+  describeUpgradeRejection,
   isAllowedBridgeOrigin,
   isLoopbackBridgeOrigin,
   mintBridgeToken,
@@ -179,6 +180,21 @@ describe('validateBridgeUpgrade', () => {
     });
     expect(res.ok).toBe(false);
     expect(res.reason).toBe('subprotocol-missing-or-mismatched');
+  });
+
+  it('logs a missing subprotocol separately from a mismatched token', () => {
+    expect(describeUpgradeRejection('subprotocol-missing-or-mismatched', undefined)).toBe(
+      'subprotocol-missing'
+    );
+    expect(describeUpgradeRejection('subprotocol-missing-or-mismatched', '   ')).toBe(
+      'subprotocol-missing'
+    );
+    expect(
+      describeUpgradeRejection('subprotocol-missing-or-mismatched', 'slicc.bridge.v1.stale')
+    ).toBe('subprotocol-mismatched');
+    expect(describeUpgradeRejection('origin-not-allowed', 'slicc.bridge.v1.stale')).toBe(
+      'origin-not-allowed'
+    );
   });
 
   it('rejects allowlisted origin with wrong token in subprotocol', () => {

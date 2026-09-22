@@ -77,6 +77,10 @@ actor CDPProxy {
 
     private let logger: Logger
     private let logDedup: CliLogDedup
+    
+    
+    
+    private let upgradeRejectDedup: CliLogDedup
     private let discoverer: @Sendable (Int) async throws -> String
     private let chromeConnector: ChromeSocketConnector
     private let maxMessageSize: Int
@@ -135,6 +139,11 @@ actor CDPProxy {
             sink: { summary in
                 logger.debug("\(summary)")
             })
+        self.upgradeRejectDedup = CliLogDedup(
+            prefix: "[cdp-proxy]",
+            sink: { summary in
+                logger.warning("\(summary)")
+            })
     }
 
     
@@ -153,13 +162,24 @@ actor CDPProxy {
     ) {
         self.cdpPort = cdpPort
         let proxyLogger = self.logger
+        let rejectDedup = self.upgradeRejectDedup
         router.ws("/cdp") { request, _ in
-            Self.evaluateBridgeUpgrade(
+            let subprotocolHeader = request.headers[.secWebSocketProtocol]
+            return Self.evaluateBridgeUpgrade(
                 origin: request.headers[.origin],
-                subprotocolHeader: request.headers[.secWebSocketProtocol],
+                subprotocolHeader: subprotocolHeader,
                 bridgeToken: bridgeToken,
                 onReject: { reason in
-                    proxyLogger.warning("[cdp-proxy] /cdp upgrade rejected: \(reason)")
+                    let detail = BridgeSecurity.upgradeRejectionLogDetail(
+                        reason: reason,
+                        subprotocolHeader: subprotocolHeader
+                    )
+                    let line = "[cdp-proxy] /cdp upgrade rejected: \(detail)"
+                    
+                    
+                    if rejectDedup.shouldLog(line) {
+                        proxyLogger.warning("\(line)")
+                    }
                 }
             )
         } onUpgrade: { inbound, outbound, context in

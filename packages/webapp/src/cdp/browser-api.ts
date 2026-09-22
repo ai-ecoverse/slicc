@@ -2,6 +2,12 @@ import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { CDPClient } from './cdp-client.js';
+import {
+  CdpBridgeRejectedError,
+  type CdpConnectFailureClassifier,
+  CdpReconnectBackoffError,
+  nextCdpReconnectDelayMs,
+} from './cdp-reconnect-policy.js';
 import { raceAbort, throwIfAborted } from './command-abort.js';
 import { HarRecorder } from './har-recorder.js';
 import type {
@@ -207,6 +213,15 @@ export class BrowserAPI implements TabHost {
 
   private supersededHandler: (() => void) | null = null;
   private supersededNotified = false;
+
+  private _reconnectAttempt = 0;
+  private _reconnectNotBefore = 0;
+
+  private _bridgeRejection: string | null = null;
+  private bridgeRejectedHandler: (() => void) | null = null;
+  private bridgeRejectedNotified = false;
+
+  private classifyConnectFailure: CdpConnectFailureClassifier = async () => 'transient';
   private readonly handleJavaScriptDialogOpening = (params: CdpPayload): void => {
     void this.dismissJavaScriptDialog(params);
   };
@@ -627,14 +642,24 @@ export class BrowserAPI implements TabHost {
   }
 
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
-    this._lastConnectOptions = options ? { ...options } : {};
-    await this.client.connect({
-      url: options?.url ?? getDefaultCdpUrl(),
-      timeout: options?.timeout,
-      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
-    });
+    if (this._bridgeRejection) {
+      this.notifyBridgeRejected();
+      throw new CdpBridgeRejectedError(this._bridgeRejection);
+    }
 
-    this.supersededNotified = false;
+    this._lastConnectOptions = options ? { ...options } : {};
+    try {
+      await this.client.connect({
+        url: options?.url ?? getDefaultCdpUrl(),
+        timeout: options?.timeout,
+        ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
+      });
+    } catch (err) {
+      await this.noteReconnectFailure(options);
+      if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
+      throw err;
+    }
+    this.noteReconnectSuccess();
   }
 
   async reconnectIfNeeded(): Promise<void> {
@@ -649,6 +674,52 @@ export class BrowserAPI implements TabHost {
 
   setCdpSupersededHandler(handler: (() => void) | null): void {
     this.supersededHandler = handler;
+  }
+
+  setCdpBridgeRejectedHandler(handler: (() => void) | null): void {
+    this.bridgeRejectedHandler = handler;
+  }
+
+  setCdpConnectFailureClassifier(classifier: CdpConnectFailureClassifier): void {
+    this.classifyConnectFailure = classifier;
+  }
+
+  private throwIfReconnectPaused(): void {
+    if (this._bridgeRejection) {
+      this.notifyBridgeRejected();
+      throw new CdpBridgeRejectedError(this._bridgeRejection);
+    }
+    if (Date.now() < this._reconnectNotBefore) throw new CdpReconnectBackoffError();
+  }
+
+  private noteReconnectSuccess(): void {
+    this._reconnectAttempt = 0;
+    this._reconnectNotBefore = 0;
+
+    this.supersededNotified = false;
+  }
+
+  private async noteReconnectFailure(options?: Partial<CDPConnectOptions>): Promise<void> {
+    const kind = await this.classifyConnectFailure({
+      url: options?.url ?? '',
+      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
+    });
+    if (kind === 'terminal') {
+      this._bridgeRejection = new CdpBridgeRejectedError().message;
+      this.notifyBridgeRejected();
+      return;
+    }
+    const delay = nextCdpReconnectDelayMs(this._reconnectAttempt);
+    this._reconnectAttempt += 1;
+    this._reconnectNotBefore = Date.now() + delay;
+  }
+
+  private notifyBridgeRejected(): void {
+    if (this.bridgeRejectedNotified) return;
+    this.bridgeRejectedNotified = true;
+    try {
+      this.bridgeRejectedHandler?.();
+    } catch {}
   }
 
   private notifySuperseded(): void {
@@ -1001,12 +1072,20 @@ export class BrowserAPI implements TabHost {
       return;
     }
     if (this.localClient.state === 'disconnected') {
+      this.throwIfReconnectPaused();
       const opts = this._lastConnectOptions;
-      await this.localClient.connect({
-        url: opts?.url ?? getDefaultCdpUrl(),
-        ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
-        ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
-      });
+      try {
+        await this.localClient.connect({
+          url: opts?.url ?? getDefaultCdpUrl(),
+          ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
+          ...(opts?.protocols !== undefined ? { protocols: opts.protocols } : {}),
+        });
+      } catch (err) {
+        await this.noteReconnectFailure(opts ?? undefined);
+        if (this._bridgeRejection) throw new CdpBridgeRejectedError(this._bridgeRejection);
+        throw err;
+      }
+      this.noteReconnectSuccess();
     }
   }
 
@@ -1016,6 +1095,7 @@ export class BrowserAPI implements TabHost {
       return;
     }
     if (this.client.state === 'disconnected') {
+      this.throwIfReconnectPaused();
       const dropped = this.client;
 
       if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {

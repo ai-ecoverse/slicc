@@ -31,6 +31,7 @@ import {
 } from '@earendil-works/pi-ai/compat';
 import { config, register } from '../../providers/xai-grok.js';
 import { getProviderModels } from '../../src/providers/account-store.js';
+import { resetBridgeTokenRefreshBlockForTests } from '../../src/providers/bridge-token-required.js';
 import { registerProviderConfig } from '../../src/providers/index.js';
 
 const XAI_API = 'xai-grok-openai' as Api;
@@ -117,6 +118,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetBridgeTokenRefreshBlockForTests();
   vi.unstubAllGlobals();
 });
 
@@ -237,6 +239,26 @@ describe('xai-grok provider', () => {
     expect(mocks.streamOpenAIResponses.mock.calls[0][2]).toEqual(
       expect.objectContaining({ apiKey: 'stream-refreshed-access' })
     );
+  });
+
+  it('does not retry a refresh the local bridge rejected', async () => {
+    providerSettingsMocks.accounts = [
+      {
+        providerId: 'xai-grok',
+        accessToken: 'expired-access',
+        refreshToken: 'old-refresh',
+        tokenExpiresAt: Date.now() - 1,
+      },
+    ];
+    const fetchMock = vi.fn(
+      async () => new Response('{"error":"bridge-token-required"}', { status: 403 })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(config.onSilentRenew!()).resolves.toBeNull();
+    await expect(config.onSilentRenew!()).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('sources its catalog and metadata from pi-ai xai models', () => {

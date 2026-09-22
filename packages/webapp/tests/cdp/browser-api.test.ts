@@ -2,6 +2,10 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserAPI, getDefaultCdpUrl } from '../../src/cdp/browser-api.js';
 import type { CDPClient } from '../../src/cdp/cdp-client.js';
+import {
+  CdpBridgeRejectedError,
+  CdpReconnectBackoffError,
+} from '../../src/cdp/cdp-reconnect-policy.js';
 import { HarRecorder } from '../../src/cdp/har-recorder.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../../src/cdp/remote-cdp-transport.js';
 import type { TabPage } from '../../src/cdp/tab-handle.js';
@@ -215,6 +219,8 @@ describe('BrowserAPI', () => {
     });
 
     it('captures connect() options even when the initial attempt rejects', async () => {
+      let now = 1_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
       (mockClient.connect as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
         new Error('bridge not listening yet')
       );
@@ -226,6 +232,10 @@ describe('BrowserAPI', () => {
       ).rejects.toThrow('bridge not listening yet');
 
       (mockClient as unknown as { state: string }).state = 'disconnected';
+      await expect(api.listPages()).rejects.toBeInstanceOf(CdpReconnectBackoffError);
+      expect(mockClient.connect).toHaveBeenCalledTimes(1);
+
+      now += 60_000;
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ targetInfos: [] });
       await api.listPages();
 
@@ -234,6 +244,30 @@ describe('BrowserAPI', () => {
         timeout: undefined,
         protocols: 'slicc.bridge.v1.xyz',
       });
+      nowSpy.mockRestore();
+    });
+
+    it('stops redialing after the bridge rejects the token', async () => {
+      api.setCdpConnectFailureClassifier(async () => 'terminal');
+      const onRejected = vi.fn();
+      api.setCdpBridgeRejectedHandler(onRejected);
+      (mockClient.connect as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('CDP WebSocket connection failed')
+      );
+
+      await expect(
+        api.connect({
+          url: 'ws://localhost:5710/cdp',
+          protocols: 'slicc.bridge.v1.stale',
+        })
+      ).rejects.toBeInstanceOf(CdpBridgeRejectedError);
+
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      await expect(api.listPages()).rejects.toBeInstanceOf(CdpBridgeRejectedError);
+      await expect(api.listPages()).rejects.toBeInstanceOf(CdpBridgeRejectedError);
+
+      expect(mockClient.connect).toHaveBeenCalledTimes(1);
+      expect(onRejected).toHaveBeenCalledTimes(1);
     });
 
     it('primeConnectOptions replays the bridge URL on lazy connect without an eager connect (follower overlay)', async () => {

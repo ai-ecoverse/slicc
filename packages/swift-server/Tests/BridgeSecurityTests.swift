@@ -114,6 +114,37 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertEqual(result.reason, .subprotocolMissingOrMismatched)
     }
 
+    func testUpgradeRejectionLogDetailSplitsMissingFromMismatched() {
+        XCTAssertEqual(
+            BridgeSecurity.upgradeRejectionLogDetail(
+                reason: BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue,
+                subprotocolHeader: nil
+            ),
+            "subprotocol-missing"
+        )
+        XCTAssertEqual(
+            BridgeSecurity.upgradeRejectionLogDetail(
+                reason: BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue,
+                subprotocolHeader: "  "
+            ),
+            "subprotocol-missing"
+        )
+        XCTAssertEqual(
+            BridgeSecurity.upgradeRejectionLogDetail(
+                reason: BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue,
+                subprotocolHeader: "slicc.bridge.v1.stale"
+            ),
+            "subprotocol-mismatched"
+        )
+        XCTAssertEqual(
+            BridgeSecurity.upgradeRejectionLogDetail(
+                reason: BridgeSecurity.RejectionReason.originNotAllowed.rawValue,
+                subprotocolHeader: "slicc.bridge.v1.stale"
+            ),
+            "origin-not-allowed"
+        )
+    }
+
     func testValidateUpgradeRejectsWrongTokenSubprotocol() {
         let result = BridgeSecurity.validateUpgrade(
             origin: "https://www.sliccy.ai",

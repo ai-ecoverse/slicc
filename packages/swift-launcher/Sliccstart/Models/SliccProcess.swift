@@ -717,6 +717,9 @@ class SliccProcess {
         
         
         leaderProbeTask = Task { [weak self] in
+            
+            
+            let pace = TrayPollPace(base: innerRetryDelay)
             var hasObservedBrowserRecord = false
             var recordWaitRoundsLeft = Self.leaderProbeRecordWaitRounds
             while !Task.isCancelled {
@@ -763,7 +766,8 @@ class SliccProcess {
                     serveOrigin: serveOrigin,
                     maxAttempts: innerMaxAttempts,
                     retryDelay: innerRetryDelay,
-                    exhaustion: .retryable
+                    exhaustion: .retryable,
+                    pace: pace
                 )
                 if let joinUrl {
                     await MainActor.run { [weak self] in
@@ -782,7 +786,9 @@ class SliccProcess {
 
                 
                 
-                try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
+                
+                let outerWait = max(outerBackoff, pace.current)
+                try? await Task.sleep(nanoseconds: UInt64(outerWait * 1_000_000_000))
             }
         }
     }

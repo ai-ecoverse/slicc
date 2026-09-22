@@ -3,6 +3,10 @@ import {
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
 } from '../../base/leader-runtime-query.js';
+import {
+  CdpBridgeRejectedError,
+  classifyCdpConnectFailure,
+} from '../../cdp/cdp-reconnect-policy.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { hasChromeRuntimeConnect } from '../../core/runtime-env.js';
@@ -19,10 +23,10 @@ import {
   setExtensionDelegateId,
   setLocalApiBaseUrl,
 } from '../../shell/proxied-fetch.js';
-import { showCdpSupersededBanner } from '../cdp-superseded-banner.js';
+import { showCdpBridgeRejectedBanner, showCdpSupersededBanner } from '../cdp-superseded-banner.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
-import { parseBridgeLaunchParams } from './bridge-launch-params.js';
+import { type BridgeLaunchParams, parseBridgeLaunchParams } from './bridge-launch-params.js';
 import { setupSudoStandalone } from './setup-sudo.js';
 import type { BootStageLogger } from './types.js';
 
@@ -101,6 +105,10 @@ export async function connectWithBoundedRetry(
       return;
     } catch (err) {
       lastError = err;
+      if (err instanceof CdpBridgeRejectedError) {
+        log.error('CDP bridge rejected the session token; stopped reconnecting', err.message);
+        return;
+      }
       if (i < delays.length) {
         const delay = delays[i] ?? 0;
         await sleep(delay);
@@ -169,6 +177,37 @@ async function createExtensionLeaderBrowser(
   );
   await connectWithBoundedRetry(browser, undefined, log);
   return { browser, attachLickForwardingClient };
+}
+
+async function connectStandaloneCdp(options: {
+  browser: BrowserAPI;
+  bridge: BridgeLaunchParams | null;
+  log: BootStageLogger;
+  document: Document;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const { browser, bridge, log, document, sleep } = options;
+
+  browser.setCdpConnectFailureClassifier(classifyCdpConnectFailure);
+  browser.setCdpBridgeRejectedHandler(() => showCdpBridgeRejectedBanner(document));
+  if (bridge) {
+    log.info('Routing CDP through local standalone bridge', {
+      url: bridge.url,
+      role: bridge.role ?? '(unset)',
+    });
+  }
+  const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
+
+  if (bridge?.role === 'follower') {
+    log.info('Skipping CDP connect for follower overlay tab');
+
+    browser.primeConnectOptions(connectOpts);
+    return;
+  }
+
+  await connectWithBoundedRetry(browser, connectOpts, log, undefined, sleep);
+
+  browser.setCdpSupersededHandler(() => showCdpSupersededBanner(document));
 }
 
 export async function setupStandalonePrelude(
@@ -247,23 +286,13 @@ export async function setupStandalonePrelude(
   } else {
     browser = new BrowserAPI();
 
-    if (bridge) {
-      log.info('Routing CDP through local standalone bridge', {
-        url: bridge.url,
-        role: bridge.role ?? '(unset)',
-      });
-    }
-    const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
-
-    if (bridge?.role === 'follower') {
-      log.info('Skipping CDP connect for follower overlay tab');
-
-      browser.primeConnectOptions(connectOpts);
-    } else {
-      await connectWithBoundedRetry(browser, connectOpts, log, undefined, sleep);
-
-      browser.setCdpSupersededHandler(() => showCdpSupersededBanner(win.document));
-    }
+    await connectStandaloneCdp({
+      browser,
+      bridge,
+      log,
+      document: win.document,
+      sleep,
+    });
   }
   const realCdpTransport = browser.getUnderlyingTransport();
 

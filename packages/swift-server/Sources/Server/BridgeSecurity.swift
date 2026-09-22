@@ -171,6 +171,16 @@ enum BridgeSecurity {
         case subprotocolMissingOrMismatched = "subprotocol-missing-or-mismatched"
     }
 
+    
+    
+    
+    
+    static func upgradeRejectionLogDetail(reason: String, subprotocolHeader: String?) -> String {
+        guard reason == RejectionReason.subprotocolMissingOrMismatched.rawValue else { return reason }
+        let trimmed = subprotocolHeader?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "subprotocol-missing" : "subprotocol-mismatched"
+    }
+
     struct UpgradeGateResult: Sendable, Equatable {
         let ok: Bool
         

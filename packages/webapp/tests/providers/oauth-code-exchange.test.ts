@@ -13,10 +13,14 @@ vi.stubGlobal('fetch', mockFetch);
 const { exchangeOAuthCode, refreshOAuthToken, revokeOAuthToken } = await import(
   '../../src/providers/oauth-code-exchange.js'
 );
+const { resetBridgeTokenRefreshBlockForTests } = await import(
+  '../../src/providers/bridge-token-required.js'
+);
 
 beforeEach(() => {
   store.clear();
   mockFetch.mockReset();
+  resetBridgeTokenRefreshBlockForTests();
 });
 
 afterEach(() => {
@@ -178,6 +182,19 @@ describe('refreshOAuthToken', () => {
     await expect(
       refreshOAuthToken({ provider: 'github', refreshToken: 'ghr_expired' })
     ).rejects.toThrow('Refresh expired.');
+  });
+
+  it('does not fetch again after the local bridge rejects the refresh', async () => {
+    mockFetch.mockResolvedValue(new Response('{"error":"bridge-token-required"}', { status: 403 }));
+
+    await expect(
+      refreshOAuthToken({ provider: 'github', refreshToken: 'ghr_existing' })
+    ).rejects.toThrow(/bridge-token-required/);
+    await expect(
+      refreshOAuthToken({ provider: 'github', refreshToken: 'ghr_existing' })
+    ).rejects.toThrow(/bridge-token-required/);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 

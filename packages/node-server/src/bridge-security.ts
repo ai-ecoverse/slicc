@@ -161,6 +161,17 @@ export function validateBridgeUpgrade(input: {
   return { ok: true, acceptedSubprotocol: accepted };
 }
 
+export function describeUpgradeRejection(
+  reason: BridgeUpgradeGateResult['reason'],
+  subprotocolHeader: string | string[] | undefined
+): string {
+  if (reason !== 'subprotocol-missing-or-mismatched') return reason ?? 'rejected';
+  const raw = Array.isArray(subprotocolHeader)
+    ? subprotocolHeader.join(',')
+    : (subprotocolHeader ?? '');
+  return raw.trim() ? 'subprotocol-mismatched' : 'subprotocol-missing';
+}
+
 export function resolveCorsAllowHeaders(requestHeadersHeader: string | undefined | null): string {
   if (!requestHeadersHeader) return CORS_BASE_ALLOW_HEADERS.join(', ');
   const seen = new Set(CORS_BASE_ALLOW_HEADERS.map((h) => h.toLowerCase()));

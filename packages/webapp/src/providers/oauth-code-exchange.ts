@@ -2,6 +2,11 @@ import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   TRAY_WORKER_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
+import {
+  BridgeTokenRequiredError,
+  bridgeRefreshBlocked,
+  noteBridgeTokenRequired,
+} from './bridge-token-required.js';
 
 export function getWorkerBaseUrl(): string {
   try {
@@ -84,6 +89,7 @@ export async function refreshOAuthToken(opts: {
   provider: string;
   refreshToken: string;
 }): Promise<TokenResponse> {
+  if (bridgeRefreshBlocked()) throw new BridgeTokenRequiredError();
   const url = `${getWorkerBaseUrl()}/oauth/token`;
   const res = await fetch(url, {
     method: 'POST',
@@ -93,6 +99,11 @@ export async function refreshOAuthToken(opts: {
       refresh_token: opts.refreshToken,
     }),
   });
+
+  if (res.status === 403 && typeof res.clone === 'function') {
+    const blockedBody = await res.clone().text();
+    if (noteBridgeTokenRequired(res.status, blockedBody)) throw new BridgeTokenRequiredError();
+  }
 
   return parseTokenResponse(res);
 }

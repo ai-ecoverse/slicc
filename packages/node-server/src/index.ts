@@ -15,6 +15,7 @@ import {
   BRIDGE_TOKEN_HEADER,
   buildCorsHeaders,
   buildPnaPreflightHeaders,
+  describeUpgradeRejection,
   isLoopbackBridgeOrigin,
   preflightMaxAge,
   resolveServerBridgeToken,
@@ -608,6 +609,7 @@ function attachCdpUpgradeRouting(
   bridgeToken: string | null,
   computerDemoWss: WebSocketServer | null = null
 ): void {
+  const upgradeRejectDedup = new CliLogDedup('[cdp-proxy]');
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
     if (pathname === '/cdp') {
@@ -618,7 +620,13 @@ function attachCdpUpgradeRouting(
           expectedToken: bridgeToken,
         });
         if (!gate.ok) {
-          console.warn(`[cdp-proxy] /cdp upgrade rejected: ${gate.reason}`);
+          const detail = describeUpgradeRejection(
+            gate.reason,
+            request.headers['sec-websocket-protocol']
+          );
+          const line = `[cdp-proxy] /cdp upgrade rejected: ${detail}`;
+          if (upgradeRejectDedup.shouldLog(line)) console.warn(line);
+
           rejectUpgradeUnauthorized(socket, gate.reason ?? 'rejected');
           return;
         }
