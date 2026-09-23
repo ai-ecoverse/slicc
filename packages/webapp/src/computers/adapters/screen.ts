@@ -99,6 +99,8 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
       bytes: ArrayBuffer;
       width: number;
       height: number;
+      nativeWidth?: number;
+      nativeHeight?: number;
       mimeType: string;
     };
     try {
@@ -115,8 +117,11 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
       if (message.includes('no screen-share session')) this.markGone();
       throw err;
     }
-    if (result.width > 0 && result.height > 0) {
-      this.size = { width: result.width, height: result.height };
+    // Track the shared display's pixels, never the encode: every consumer
+    // (agent, overlay thumbnail poll) shares this backend and asks for its
+    // own maxWidth, so the encoded size says nothing about the source (#3384).
+    if (result.nativeWidth && result.nativeHeight) {
+      this.size = { width: result.nativeWidth, height: result.nativeHeight };
     }
     this.seq += 1;
     return {

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  captureDisplayMedia,
   DisplaySessionStore,
+  displaySessions,
   stopMediaStreamTracks,
 } from '../../../src/shell/supplemental-commands/screencapture-media.js';
 import {
@@ -194,5 +196,51 @@ describe('DisplaySessionStore', () => {
     };
     stopMediaStreamTracks({ getTracks: () => [good, bad] });
     expect(good.stopped).toBe(true);
+  });
+});
+
+describe('session frame source size (#3384)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    displaySessions.stopAll();
+  });
+
+  it('reports the track pixels alongside the scaled encode', async () => {
+    const drawn: number[][] = [];
+    vi.stubGlobal('document', {
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          drawImage: (_v: unknown, _x: number, _y: number, w: number, h: number) => {
+            drawn.push([w, h]);
+          },
+        }),
+        toBlob: (cb: (b: Blob) => void, type: string) => {
+          cb(new Blob([Uint8Array.of(0xff, 0xd8, 0xff, 0xd9)], { type }));
+        },
+      }),
+    });
+    const stream = {
+      getTracks: () => [{ stop() {}, addEventListener() {} }],
+    } as unknown as MediaStream;
+    const video = { srcObject: stream, videoWidth: 5120, videoHeight: 2880 };
+    const handle = displaySessions.add(stream, video as unknown as HTMLVideoElement);
+
+    const thumb = await captureDisplayMedia({
+      mode: 'session',
+      action: 'frame',
+      handle,
+      maxWidth: 480,
+      mimeType: 'image/jpeg',
+      quality: 0.7,
+    });
+    expect(thumb).toMatchObject({
+      width: 480,
+      height: 270,
+      nativeWidth: 5120,
+      nativeHeight: 2880,
+    });
+    expect(drawn).toEqual([[480, 270]]);
   });
 });

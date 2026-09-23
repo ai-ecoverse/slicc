@@ -41,6 +41,8 @@ describe('screencapture panel-RPC session op', () => {
       mimeType: 'image/jpeg',
       width: 768,
       height: 432,
+      nativeWidth: 5120,
+      nativeHeight: 2880,
     });
     const frame = await op!({
       mimeType: 'image/jpeg',
@@ -51,6 +53,7 @@ describe('screencapture panel-RPC session op', () => {
       maxWidth: 768,
     });
     expect(frame.width).toBe(768);
+    expect(frame).toMatchObject({ nativeWidth: 5120, nativeHeight: 2880 });
     expect(mockCapture).toHaveBeenCalledWith({
       mode: 'session',
       action: 'frame',
