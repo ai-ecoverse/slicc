@@ -69,6 +69,7 @@ import {
 } from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 import { wireFileMentions } from './wire-file-mentions.js';
+import { attachMentionPreviewFs } from './wire-mention-previews.js';
 
 export {
   createWcLiveCallbacks,
@@ -1281,6 +1282,9 @@ export function attachWcWorkbench(
   // and lazy mounts — including the terminal's. Ordering it last means it can
   // neither delay that work nor, if it throws, prevent it.
   wireFileMentions({ thread: refs.thread, openFs: openReader, log });
+  // Lets a bare `#123` fall back to the git remote of the checkout the turn
+  // was working in (the previews themselves are wired in `buildWcShellFrame`).
+  attachMentionPreviewFs(refs.thread, openReader);
 
   // Floatbar click toggles the monitor panel.
   refs.floatbar.addEventListener('click', () => {

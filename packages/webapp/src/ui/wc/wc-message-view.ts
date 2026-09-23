@@ -999,6 +999,11 @@ export function buildClusterFromElements(
 function assistantMessageEls(message: ChatMessage): HTMLElement[] {
   const bubble = document.createElement('slicc-agent-message');
   bubble.setAttribute('data-msg-id', message.id);
+  // Machine-readable send time; `timestamp` below is a display string. Relative
+  // dates in the prose ("tomorrow") are resolved against this, not "now".
+  if (Number.isFinite(message.timestamp) && message.timestamp > 0) {
+    bubble.setAttribute('data-msg-time', String(message.timestamp));
+  }
   const hasContent = (message.content ?? '').trim().length > 0;
   const ts = formatMessageTimestamp(message.timestamp);
   // Only stamp a timestamp on bubbles that actually render content. Empty

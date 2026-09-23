@@ -39,6 +39,9 @@ only here.
   `navigator.storage.persist()` is the only opt-out, page-realm only; more in `docs/pitfalls.md`)
 - File mentions / preview + base64 payload chips: confirm-then-linkify only, never a streaming bubble
   (`getMimeType()` SERVES vs `sniffFileType()` READS)
+- Mention previews (links, GitHub refs, times, agent questions) — `ui/mention-previews.ts` +
+  `ui/wc/wire-mention-previews.ts`: fetch on hover only; answers become a `question` lick
+  (`docs/webapp-details.md`)
 
 ## Never-Rules
 

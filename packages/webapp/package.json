@@ -13,7 +13,7 @@
       "name": "webapp: total JS payload",
       "path": "../../dist/ui/**/*.js",
       "brotli": false,
-      "limit": "25.744 MB"
+      "limit": "25.906 MB"
     }
   ],
   "dependencies": {
@@ -47,6 +47,7 @@
     "esbuild-wasm": "0.28.2",
     "esptool-js": "0.6.1",
     "fflate": "0.8.3",
+    "gpu-time": "0.5.0",
     "isomorphic-dompurify": "3.23.0",
     "isomorphic-git": "1.42.2",
     "js-md5": "0.9.2",

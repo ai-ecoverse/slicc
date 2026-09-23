@@ -5,6 +5,7 @@ import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/typ
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import type { AgentHandle } from '../types.js';
 import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
+import { wireQuestionAnswerLicks } from './question-answer-lick.js';
 import { WcChatController } from './wc-chat-controller.js';
 import type { WcChatHost } from './wc-chat-host.js';
 import type { WcShellRefs } from './wc-shell.js';
@@ -200,5 +201,14 @@ export function createWcController(
     const jid = getSelected()?.id;
     if (jid) void host.deleteQueuedMessage(jid, id).catch(() => undefined);
   });
+
+  // Answers given on a question's hover card go to the cone as licks. Never
+  // unwired: this controller lives as long as the shell does.
+  wireQuestionAnswerLicks(
+    refs.thread,
+    (name, body, targetScoop, originUnitId) =>
+      host.sendSprinkleLick(name, body, targetScoop, originUnitId),
+    addressedUnitId
+  );
   return { controller, agentHandle };
 }
