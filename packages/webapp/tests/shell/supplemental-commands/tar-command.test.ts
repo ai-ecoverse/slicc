@@ -57,8 +57,8 @@ describe('tar command', () => {
     await shell.executeCommand('cd /workspace && tar -czf /tmp/exec.tgz source');
     const out = await shell.executeCommand('tar -xzf /tmp/exec.tgz -C /tmp/exec-out');
     expect(out.exitCode).toBe(0);
-    expect((await fs.stat('/tmp/exec-out/source/configure')).mode & 0o777).toBe(0o755);
-    expect((await fs.stat('/tmp/exec-out/source/hello.txt')).mode & 0o777).toBe(0o644);
+    expect(((await fs.stat('/tmp/exec-out/source/configure')).mode ?? 0) & 0o777).toBe(0o755);
+    expect(((await fs.stat('/tmp/exec-out/source/hello.txt')).mode ?? 0) & 0o777).toBe(0o644);
   });
 
   it("applies an archive's own modes on extract", async () => {
@@ -70,8 +70,8 @@ describe('tar command', () => {
       ])
     );
     expect((await shell.executeCommand('tar -xf /tmp/modes.tar -C /tmp/modes')).exitCode).toBe(0);
-    expect((await fs.stat('/tmp/modes/pkg/run.sh')).mode & 0o777).toBe(0o755);
-    expect((await fs.stat('/tmp/modes/pkg/secret')).mode & 0o777).toBe(0o600);
+    expect(((await fs.stat('/tmp/modes/pkg/run.sh')).mode ?? 0) & 0o777).toBe(0o755);
+    expect(((await fs.stat('/tmp/modes/pkg/secret')).mode ?? 0) & 0o777).toBe(0o600);
   });
 
   it('accepts the traditional dashless form (tar xzf, tar czf)', async () => {
