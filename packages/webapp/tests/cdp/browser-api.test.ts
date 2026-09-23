@@ -1515,6 +1515,42 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].value).toBe('0');
       expect(tree.children![0].description).toBe('["composer"]');
     });
+
+    it('joins backendNodeIds when CDP names carry extra whitespace', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Flights',
+              children: [
+                { role: 'combobox', name: 'Where from?' },
+                { role: 'button', name: 'Search for flights' },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              role: { value: 'combobox' },
+              name: { value: 'Where from? ' },
+              backendDOMNodeId: 2719,
+            },
+            {
+              role: { value: 'button' },
+              name: { value: '  Search  for\nflights ' },
+              backendDOMNodeId: 2800,
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      expect(tree.children![0].backendNodeId).toBe(2719);
+      expect(tree.children![1].backendNodeId).toBe(2800);
+    });
   });
 
   describe('viewport override persistence', () => {

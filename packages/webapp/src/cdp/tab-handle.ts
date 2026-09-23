@@ -672,14 +672,18 @@ function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
     const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
     const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
     if (!role) continue;
-    const key = `${role}|${name}`;
+    const key = axIndexKey(role, name);
     if (!index.has(key)) index.set(key, backendNodeId);
   }
   return index;
 }
 
+function axIndexKey(role: string, name: string): string {
+  return `${role.toLowerCase()}|${name.replace(/\s+/g, ' ').trim()}`;
+}
+
 function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<string, number>): void {
-  const key = `${node.role.toLowerCase()}|${node.name}`;
+  const key = axIndexKey(node.role, node.name);
   const id = index.get(key);
   if (id !== undefined) node.backendNodeId = id;
   if (node.children) {
