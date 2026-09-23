@@ -17,12 +17,7 @@ import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import { appendPipelineStatus } from '../shell/pipe-status.js';
-import {
-  type BashJobJournal,
-  type BashJobRecord,
-  createBashJobJournal,
-  KERNEL_RESTART_EXIT_CODE,
-} from './bash-job-journal.js';
+import type { BashJobJournal, BashJobRecord } from './bash-job-journal.js';
 import type {
   BashJobHost,
   BashJobProcess,
@@ -373,7 +368,7 @@ interface BashRunContext {
   defaultBackgroundAfter: number;
   nextOutputSeq: () => number;
   nextJobId: () => string;
-  journal: BashJobJournal;
+  journal: Promise<BashJobJournal>;
   /** Settles once jobs orphaned by an earlier kernel boot have been reported. */
   swept: Promise<unknown>;
 }
@@ -637,8 +632,14 @@ export function createBashTool(
 ): ToolDefinition {
   let outputSeq = 0;
   let jobSeq = 0;
-  const journal = createBashJobJournal(fs, tempDir, undefined, (message, error) =>
-    log.warn(message, { tempDir, error: error instanceof Error ? error.message : String(error) })
+  // Loaded lazily: the journal only matters once a job detaches or a boot
+  // finds orphans, and keeping it out of the kernel worker's eager graph
+  // keeps first-load small.
+  const journalModule = import('./bash-job-journal.js');
+  const journal = journalModule.then(({ createBashJobJournal }) =>
+    createBashJobJournal(fs, tempDir, undefined, (message, error) =>
+      log.warn(message, { tempDir, error: error instanceof Error ? error.message : String(error) })
+    )
   );
   const ctx: BashRunContext = {
     shell,
@@ -652,7 +653,11 @@ export function createBashTool(
     journal,
     swept: Promise.resolve(),
   };
-  ctx.swept = journal.sweep((record, notice) => reportOrphanedJob(ctx, record, notice));
+  ctx.swept = Promise.all([journalModule, journal])
+    .then(([{ KERNEL_RESTART_EXIT_CODE }, j]) =>
+      j.sweep((record, notice) => reportOrphanedJob(ctx, record, notice, KERNEL_RESTART_EXIT_CODE))
+    )
+    .catch((error) => log.warn('Could not sweep orphaned bash jobs', { tempDir, error }));
 
   return {
     name: 'bash',
@@ -673,12 +678,17 @@ const ORPHAN_LICK_ATTEMPTS = 30;
  * instead of waiting forever. At boot the lick sink may not be attached yet,
  * so a refused delivery is retried for a bounded time.
  */
-function reportOrphanedJob(ctx: BashRunContext, record: BashJobRecord, notice: string): void {
+function reportOrphanedJob(
+  ctx: BashRunContext,
+  record: BashJobRecord,
+  notice: string,
+  exitCode: number
+): void {
   const event: LickEvent = {
     type: 'bash',
     bashJobId: record.jobId,
     bashCommand: record.command,
-    bashExitCode: KERNEL_RESTART_EXIT_CODE,
+    bashExitCode: exitCode,
     ...(record.pid !== undefined ? { bashJobPid: record.pid } : {}),
     resultPath: record.outputPath,
     preview: notice,
@@ -688,7 +698,7 @@ function reportOrphanedJob(ctx: BashRunContext, record: BashJobRecord, notice: s
       jobId: record.jobId,
       pid: record.pid ?? null,
       command: record.command,
-      exitCode: KERNEL_RESTART_EXIT_CODE,
+      exitCode,
       resultPath: record.outputPath,
       killedByKernelRestart: true,
     },
@@ -866,8 +876,8 @@ function detachRun(
   run.startPersisting(outputPath, jobId);
   // Only the journal survives the worker: if it dies, the next boot's sweep
   // reports this job as killed instead of letting it vanish.
-  const recorded = ctx.swept.then(() =>
-    ctx.journal.record({
+  const recorded = Promise.all([ctx.journal, ctx.swept]).then(([journal]) =>
+    journal.record({
       jobId,
       pid,
       command,
@@ -875,6 +885,11 @@ function detachRun(
       startedAt: new Date().toISOString(),
     })
   );
+  const unjournal = (): Promise<void> =>
+    recorded
+      .then(() => ctx.journal)
+      .then((journal) => journal.clear(jobId))
+      .catch((error) => log.warn('Could not journal a detached bash job', { jobId, error }));
   const killAfter = timeoutSeconds === undefined ? undefined : timeoutSeconds - backgroundAfter;
   const killTimer =
     killAfter === undefined
@@ -898,7 +913,7 @@ function detachRun(
       );
     })
     .catch((err) => log.error('Background bash delivery failed', { jobId, error: err }))
-    .finally(() => recorded.then(() => ctx.journal.clear(jobId)));
+    .then(unjournal);
 
   log.info('Bash command detached to background', { command, jobId, pid, killAfter });
   return detachedResult(jobId, pid, waitSeconds, outputPath, timeoutSeconds);
