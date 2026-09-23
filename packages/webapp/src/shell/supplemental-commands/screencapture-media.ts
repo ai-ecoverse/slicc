@@ -270,6 +270,8 @@ async function grabStillFromVideo(
     mimeType: blob.type || opts.mimeType,
     width,
     height,
+    nativeWidth: nativeW,
+    nativeHeight: nativeH,
   };
 }
 

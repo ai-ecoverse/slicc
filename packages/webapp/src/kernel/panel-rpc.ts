@@ -483,6 +483,9 @@ export interface PanelRpcResults {
     bytes: ArrayBuffer;
     width: number;
     height: number;
+
+    nativeWidth?: number;
+    nativeHeight?: number;
     mimeType: string;
     durationMs?: number;
 

@@ -56,6 +56,9 @@ export interface DisplayCaptureResult {
   mimeType: string;
   width: number;
   height: number;
+
+  nativeWidth?: number;
+  nativeHeight?: number;
   durationMs?: number;
 
   handle?: string;

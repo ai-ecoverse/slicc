@@ -92,6 +92,8 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
       bytes: ArrayBuffer;
       width: number;
       height: number;
+      nativeWidth?: number;
+      nativeHeight?: number;
       mimeType: string;
     };
     try {
@@ -108,8 +110,9 @@ export class BridgedScreenComputerBackend implements ComputerBackend {
       if (message.includes('no screen-share session')) this.markGone();
       throw err;
     }
-    if (result.width > 0 && result.height > 0) {
-      this.size = { width: result.width, height: result.height };
+
+    if (result.nativeWidth && result.nativeHeight) {
+      this.size = { width: result.nativeWidth, height: result.nativeHeight };
     }
     this.seq += 1;
     return {

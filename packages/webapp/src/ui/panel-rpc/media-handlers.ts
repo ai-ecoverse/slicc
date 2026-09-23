@@ -19,6 +19,8 @@ async function handleScreencaptureRpc(payload: {
   bytes: ArrayBuffer;
   width: number;
   height: number;
+  nativeWidth?: number;
+  nativeHeight?: number;
   mimeType: string;
   durationMs?: number;
   handle?: string;
@@ -48,6 +50,8 @@ async function handleScreencaptureRpc(payload: {
     width: captured.width,
     height: captured.height,
     mimeType: captured.mimeType,
+    nativeWidth: captured.nativeWidth,
+    nativeHeight: captured.nativeHeight,
     ...(captured.durationMs !== undefined ? { durationMs: captured.durationMs } : {}),
     ...(captured.handle !== undefined ? { handle: captured.handle } : {}),
   };
