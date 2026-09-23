@@ -80,6 +80,9 @@ struct ServerCommand: AsyncParsableCommand {
     var mount: [String] = []
 
     mutating func run() async throws {
+        // Sliccstart owns our stdout/stderr pipes; if it dies, the next log
+        // line must fail with EPIPE instead of killing the server (#3418).
+        BrokenPipeSignal.ignore()
         let config = ServerConfig.resolve(from: self)
         let logLevel = Self.loggerLevel(from: config.logLevel)
         let logDirectory = config.logDirectoryURL ?? FileLogger.defaultLogDirectory

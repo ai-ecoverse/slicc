@@ -69,7 +69,7 @@ Stores: `OAuthSecretStore.swift` (OAuth replicas); `SessionSecretStore.swift` (p
 
 ## Graceful Shutdown / Detach
 
-`GracefulShutdown.swift` handles `SIGINT`/`SIGTERM` (full shutdown, `closeBrowser: true`) and `SIGUSR1` (`detach()`, `closeBrowser: false` — HTTP + CDP stop, browser open). Sliccstart uses `detach()` for binary swaps without killing the user's session (`packages/swift-launcher/CLAUDE.md`); a second signal after `detach()` no-ops (`shuttingDown`).
+`GracefulShutdown.swift` handles `SIGINT`/`SIGTERM` (full shutdown, `closeBrowser: true`) and `SIGUSR1` (`detach()`, `closeBrowser: false` — HTTP + CDP stop, browser open). Sliccstart uses `detach()` for binary swaps without killing the user's session (`packages/swift-launcher/CLAUDE.md`); a second signal after `detach()` no-ops (`shuttingDown`). `SIGPIPE` is ignored first thing in `run()` (`BrokenPipeSignal`, #3418): Sliccstart owns our stdout/stderr pipes, so an orphaned server's next log line must fail with `EPIPE`, not kill it. node-server needs no twin — Node ignores `SIGPIPE` by default.
 
 ## Related Guides
 
