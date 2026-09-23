@@ -25,6 +25,12 @@ export interface RecordedClip {
   height: number;
   durationMs: number;
   truncated?: boolean;
+  /** Polled clips: stills captured, measured fps, and the `--fps` asked for. */
+  frames?: number;
+  fps?: number;
+  requestedFps?: number;
+  /** The backend could not sustain `requestedFps`. */
+  slow?: boolean;
 }
 
 export interface CollectPolledFramesOpts {
@@ -40,6 +46,8 @@ export interface CollectPolledFramesOpts {
 export interface EncodeRecordedFramesArgs {
   frames: Uint8Array[];
   fps: number;
+  /** Measured `-framerate` rational; falls back to `fps`. */
+  frameRate?: string;
   dest: string;
   width: number;
   height: number;
@@ -101,20 +109,78 @@ async function appendBytes(
   await fs.writeFile(path, next);
 }
 
-/** Grab JPEG stills at `fps` until `durationMs` elapses. Always ≥1 frame. */
-export async function collectPolledFrames(opts: CollectPolledFramesOpts): Promise<{
+export interface CollectedFrames {
   width: number;
   height: number;
   frameCount: number;
   byteLength: number;
+  /** Measured wall time the clip covers — never the request alone (#3382). */
   durationMs: number;
+  /** ffmpeg `-framerate` rational (`frames/seconds`) that spans `durationMs`. */
+  frameRate: string;
+  achievedFps: number;
+  /** The backend could not sustain the requested fps. */
+  slow: boolean;
   truncated: boolean;
-}> {
+}
+
+/** Below this share of the requested fps the clip is reported as `slow`. */
+const COMPUTER_RECORD_SLOW_RATIO = 0.9;
+
+function gcd(a: number, b: number): number {
+  let x = a;
+  let y = b;
+  while (y > 0) [x, y] = [y, x % y];
+  return x;
+}
+
+/**
+ * Time the clip from the measured capture span. When the backend keeps up,
+ * frames land on the `interval` grid and the last one owns the rest of the
+ * window; a slow backend's clip covers exactly the wall time it took.
+ */
+function measureClip(
+  frameCount: number,
+  elapsedMs: number,
+  interval: number,
+  requestedMs: number,
+  fps: number
+): Pick<CollectedFrames, 'durationMs' | 'frameRate' | 'achievedFps' | 'slow'> {
+  const durationMs = Math.max(
+    1,
+    Math.round(elapsedMs),
+    Math.min(frameCount * interval, requestedMs)
+  );
+  const num = frameCount * 1000;
+  const div = gcd(num, durationMs);
+  const achievedFps = num / durationMs;
+  return {
+    durationMs,
+    frameRate: `${num / div}/${durationMs / div}`,
+    achievedFps: Math.round(achievedFps * 100) / 100,
+    slow: achievedFps < fps * COMPUTER_RECORD_SLOW_RATIO,
+  };
+}
+
+function overByteCap(frameCount: number, nextBytes: number): boolean {
+  return (
+    frameCount > 0 &&
+    (frameCount >= COMPUTER_RECORD_MAX_FRAMES || nextBytes > COMPUTER_RECORD_MAX_BYTES)
+  );
+}
+
+/**
+ * Grab JPEG stills on a `1/fps` grid until `durationMs` elapses. Capture
+ * latency counts against the interval; a capture that overruns its slot is
+ * followed immediately by the next. Always ≥1 frame.
+ */
+export async function collectPolledFrames(opts: CollectPolledFramesOpts): Promise<CollectedFrames> {
   const fps = clampRecordFps(opts.fps);
   const interval = Math.max(1, Math.round(1000 / fps));
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? defaultSleep;
-  const end = now() + opts.durationMs;
+  const start = now();
+  const end = start + opts.durationMs;
   let width = 0;
   let height = 0;
   let frameCount = 0;
@@ -123,10 +189,7 @@ export async function collectPolledFrames(opts: CollectPolledFramesOpts): Promis
   for (;;) {
     const frame = await opts.screenshot();
     const nextBytes = byteLength + frame.bytes.byteLength;
-    if (
-      frameCount > 0 &&
-      (frameCount >= COMPUTER_RECORD_MAX_FRAMES || nextBytes > COMPUTER_RECORD_MAX_BYTES)
-    ) {
+    if (overByteCap(frameCount, nextBytes)) {
       truncated = true;
       break;
     }
@@ -137,21 +200,16 @@ export async function collectPolledFrames(opts: CollectPolledFramesOpts): Promis
     byteLength = nextBytes;
     const hitCap =
       frameCount >= COMPUTER_RECORD_MAX_FRAMES || byteLength >= COMPUTER_RECORD_MAX_BYTES;
-    const hitTime = now() + interval >= end;
-    if (hitCap || hitTime) {
-      truncated = hitCap && Math.round((frameCount / fps) * 1000) < opts.durationMs;
+    const current = now();
+    const nextAt = Math.max(current, start + frameCount * interval);
+    if (hitCap || nextAt >= end) {
+      truncated = hitCap && nextAt < end;
       break;
     }
-    await sleep(interval);
+    await sleep(nextAt - current);
   }
-  return {
-    width,
-    height,
-    frameCount,
-    byteLength,
-    durationMs: truncated ? Math.round((frameCount / fps) * 1000) : opts.durationMs,
-    truncated,
-  };
+  const measured = measureClip(frameCount, now() - start, interval, opts.durationMs, fps);
+  return { width, height, frameCount, byteLength, truncated, ...measured };
 }
 
 function uniqueMjpegPath(ctx: CommandContext): string {
@@ -195,7 +253,7 @@ export async function encodeFramesWithFfmpeg(args: EncodeRecordedFramesArgs): Pr
         '-c:v',
         'mjpeg',
         '-framerate',
-        String(args.fps),
+        args.frameRate ?? String(args.fps),
         '-i',
         tempPath,
         '-an',
@@ -255,6 +313,7 @@ export async function recordPolledClip(opts: {
       frames: [],
       sourcePath,
       fps,
+      frameRate: collected.frameRate,
       dest: opts.dest,
       width: collected.width,
       height: collected.height,
@@ -273,7 +332,11 @@ export async function recordPolledClip(opts: {
       width: collected.width,
       height: collected.height,
       durationMs: collected.durationMs,
+      frames: collected.frameCount,
+      fps: collected.achievedFps,
+      requestedFps: fps,
       ...(collected.truncated ? { truncated: true } : {}),
+      ...(collected.slow ? { slow: true } : {}),
     };
   } finally {
     await removeScratch(opts.ctx.fs, sourcePath);

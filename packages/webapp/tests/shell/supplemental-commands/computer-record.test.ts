@@ -148,6 +148,73 @@ describe('collectPolledFrames', () => {
     expect(collected.truncated).toBe(true);
   });
 
+  it('measures a slow capture instead of synthesising the timeline from fps (#3382)', async () => {
+    let t = 0;
+    const sleeps: number[] = [];
+    const collected = await collectPolledFrames({
+      durationMs: 3000,
+      fps: 2,
+      now: () => t,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        t += ms;
+      },
+      screenshot: async () => {
+        t += 1000;
+        return jpegFrame(1);
+      },
+    });
+    expect(collected.frameCount).toBe(3);
+    expect(collected.durationMs).toBe(3000);
+    expect(collected.frameRate).toBe('1/1');
+    expect(collected.achievedFps).toBe(1);
+    expect(collected.slow).toBe(true);
+    expect(sleeps.every((ms) => ms === 0)).toBe(true);
+  });
+
+  it('reports wall time past the window when one capture overruns it (#3382)', async () => {
+    let t = 0;
+    const collected = await collectPolledFrames({
+      durationMs: 3000,
+      fps: 2,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      screenshot: async () => {
+        t += 2500;
+        return jpegFrame(1);
+      },
+    });
+    expect(collected.frameCount).toBe(2);
+    expect(collected.durationMs).toBe(5000);
+    expect(collected.frameRate).toBe('2/5');
+    expect(collected.slow).toBe(true);
+  });
+
+  it('counts capture latency against the interval', async () => {
+    let t = 0;
+    const sleeps: number[] = [];
+    const collected = await collectPolledFrames({
+      durationMs: 1000,
+      fps: 4,
+      now: () => t,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        t += ms;
+      },
+      screenshot: async () => {
+        t += 100;
+        return jpegFrame(1);
+      },
+    });
+    expect(sleeps).toEqual([150, 150, 150]);
+    expect(collected.frameCount).toBe(4);
+    expect(collected.durationMs).toBe(1000);
+    expect(collected.frameRate).toBe('4/1');
+    expect(collected.slow).toBe(false);
+  });
+
   it('yields between polls so the event loop can run', async () => {
     let ticks = 0;
     const id = setInterval(() => {
@@ -205,6 +272,34 @@ describe('encodeFramesWithFfmpeg', () => {
     const mjpeg = [...written.entries()].find(([path]) => path.endsWith('.mjpeg'));
     expect(mjpeg?.[1]?.byteLength).toBe(MINIMAL_JPEG.byteLength * 2);
     expect(mockRunFfmpeg).toHaveBeenCalledOnce();
+  });
+
+  it('muxes at the measured frame rate when one is given', async () => {
+    let seen: string[] = [];
+    mockRunFfmpeg.mockImplementation(async (args: string[]) => {
+      seen = args;
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const ctx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      fs: {
+        resolvePath: (_base: string, path: string) => path,
+        mkdir: async () => undefined,
+        writeFile: async () => undefined,
+      },
+    };
+    await encodeFramesWithFfmpeg({
+      frames: [MINIMAL_JPEG],
+      fps: 4,
+      frameRate: '2/3',
+      dest: '/clip.webm',
+      width: 2,
+      height: 2,
+      durationMs: 4500,
+      ctx: ctx as never,
+    });
+    expect(seen[seen.indexOf('-framerate') + 1]).toBe('2/3');
   });
 
   it('surfaces a failed ffmpeg encode', async () => {
@@ -284,6 +379,48 @@ describe('recordPolledClip', () => {
     expect(clip.mime).toBe('video/webm');
     expect(clip.durationMs).toBe(1000);
     expect(clip.truncated).toBeUndefined();
+    expect(clip.frames).toBe(4);
+    expect(clip.fps).toBe(4);
+    expect(clip.requestedFps).toBe(4);
+  });
+
+  it('muxes a slow capture at the measured rate, not the requested fps (#3382)', async () => {
+    const ctx = {
+      cwd: '/',
+      env: new Map<string, string>(),
+      fs: {
+        resolvePath: (_base: string, path: string) => path,
+        mkdir: async () => undefined,
+        writeFile: async () => undefined,
+        appendFile: async () => undefined,
+        rm: async () => undefined,
+      },
+    };
+    let t = 0;
+    let frameRate: string | undefined;
+    const clip = await recordPolledClip({
+      durationMs: 4000,
+      fps: 4,
+      dest: '/clip.webm',
+      ctx: ctx as never,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      screenshot: async () => {
+        t += 1500;
+        return jpegFrame(1);
+      },
+      encode: async (args) => {
+        frameRate = args.frameRate;
+        return { mime: 'video/webm' };
+      },
+    });
+    expect(frameRate).toBe('2/3');
+    expect(clip.durationMs).toBe(4500);
+    expect(clip.frames).toBe(3);
+    expect(clip.fps).toBeCloseTo(0.67, 2);
+    expect(clip.slow).toBe(true);
   });
 
   it('starts each recording from a fresh MJPEG scratch file', async () => {
