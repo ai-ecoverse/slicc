@@ -1,5 +1,9 @@
 import Foundation
 
+// Before anything else, so a write to a closed socket or pipe returns EPIPE
+// instead of silently killing the GUI or either headless mode (#3418).
+BrokenPipeSignal.ignore()
+
 // Headless `Sliccstart --list-sessions [--reveal-urls]` short-circuits before
 // the SwiftUI app boots so the `slicc` CLI can read iCloud tray sessions from
 // the signed, iCloud-entitled launcher binary. Any other launch falls through
@@ -20,7 +24,7 @@ do {
         exit(ComputerFollowCLIRunner.run(request))
     }
 } catch let error as ComputerFollowCLI.ParseError {
-    FileHandle.standardError.write(Data(error.message.utf8))
+    try? FileHandle.standardError.write(contentsOf: Data(error.message.utf8))
     exit(ComputerFollowCLI.usageExitCode)
 }
 
