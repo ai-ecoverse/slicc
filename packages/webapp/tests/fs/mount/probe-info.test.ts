@@ -17,6 +17,7 @@ import {
   probeMountInfo,
 } from '../../../src/fs/mount/probe-info.js';
 import { MountCommands } from '../../../src/fs/mount-commands.js';
+import { RestrictedFS } from '../../../src/fs/restricted-fs.js';
 import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 
@@ -386,6 +387,23 @@ describe('probeMountInfo', () => {
   it('throws ENOENT for a missing path', async () => {
     const vfs = await newVfs();
     await expect(probeMountInfo(vfs, '/nope')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reports host-backed through a RestrictedFS scoop sandbox (#3434)', async () => {
+    // A scoop probes through a RestrictedFS, not the raw VFS. Before it
+    // forwarded listMountPoints(), the covering mount was invisible, so the
+    // kind fell back to 'vfs' and host-backed reported 'no' for a live
+    // host-backed mount — the only write-safety signal a scoop has.
+    const vfs = await newVfs();
+    await vfs.mkdir('/scoops/editor/kb', { recursive: true });
+    await vfs.mount('/scoops/editor/kb', new InsensitiveHostFsBackend());
+    const restricted = new RestrictedFS(vfs, ['/scoops/editor/']);
+
+    const info = await probeMountInfo(restricted as unknown as MountProbeFs, '/scoops/editor/kb');
+
+    expect(info.mountPoint).toBe('/scoops/editor/kb');
+    expect(info.kind).toBe('hostfs');
+    expect(info.hostBacked).toBe(true);
   });
 });
 

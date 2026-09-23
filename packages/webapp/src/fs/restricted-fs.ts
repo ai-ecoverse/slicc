@@ -965,6 +965,20 @@ export class RestrictedFS {
     return all.filter((p) => this.isAllowedStrict(p));
   }
 
+  /**
+   * Forward the underlying VFS's `{ path, kind }` mount table, filtered to
+   * the mounts this sandbox can see — the same visibility rule
+   * {@link listMounts} applies. Without this, a scoop's `MountProbeFs` (the
+   * `mount info` probe) never sees a covering mount and reports every
+   * host-backed mount as plain `vfs` / `host-backed: no`, which is the only
+   * signal a scoop has for whether a mount is safe to write to (#3434).
+   */
+  listMountPoints(): ReturnType<VirtualFS['listMountPoints']> {
+    const all = this.vfs.listMountPoints();
+    if (this.includeMounts) return all;
+    return all.filter((m) => this.isAllowedStrict(m.path));
+  }
+
   getMountIndex(): ReturnType<VirtualFS['getMountIndex']> {
     return this.vfs.getMountIndex();
   }

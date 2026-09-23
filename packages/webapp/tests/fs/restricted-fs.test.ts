@@ -395,6 +395,41 @@ describe('RestrictedFS', () => {
     });
   });
 
+  // ── listMountPoints forwarding (#3434) ────────────────────────────
+  //
+  // `mount info`'s probe reads the covering mount's `kind` through
+  // `listMountPoints()`. When a scoop's RestrictedFS did not forward it,
+  // the probe saw an empty mount table and reported every host-backed
+  // mount as plain `vfs` / `host-backed: no` — the only write-safety
+  // signal a scoop has, wrong for every scoop.
+  describe('listMountPoints forwarding (#3434)', () => {
+    let mpVfs: VirtualFS;
+
+    beforeAll(async () => {
+      mpVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-list-mps', wipe: true });
+      await mpVfs.mkdir('/scoops/editor/da-site', { recursive: true });
+      await mpVfs.mkdir('/mnt/other', { recursive: true });
+      await mpVfs.mount('/scoops/editor/da-site', fakeMountBackend());
+      await mpVfs.mount('/mnt/other', fakeMountBackend());
+    });
+
+    it('forwards the VFS mount table with kind by default', () => {
+      const rfs = new RestrictedFS(mpVfs, ['/scoops/editor/']);
+      expect(rfs.listMountPoints()).toEqual(mpVfs.listMountPoints());
+      const daSite = rfs.listMountPoints().find((m) => m.path === '/scoops/editor/da-site');
+      expect(daSite?.kind).toBe('da');
+    });
+
+    it('filters to granted mounts under private isolation (includeMounts: false)', () => {
+      const rfs = new RestrictedFS(mpVfs, ['/scoops/editor/'], [], 'hard', {
+        includeMounts: false,
+      });
+      const paths = rfs.listMountPoints().map((m) => m.path);
+      expect(paths).toContain('/scoops/editor/da-site');
+      expect(paths).not.toContain('/mnt/other');
+    });
+  });
+
   // ── Symlink target validation ─────────────────────────────────────
 
   describe('symlink target validation', () => {
