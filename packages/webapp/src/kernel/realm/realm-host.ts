@@ -1283,13 +1283,13 @@ async function dispatchBrowser(
     case 'screenshotTab': {
       const targetId = args[0] as string;
       const screenshotOpts = args[1] as { fullPage?: boolean } | undefined;
-      return browser.withTab(targetId, async (page) => {
-        // Mirrors Playwright's own screenshot semantics: a background tab's
-        // renderer is suspended, so `Page.captureScreenshot` can come back
-        // blank until the target is brought to the front (PR #361 precedent).
-        await page.bringToFront();
-        return page.screenshot(screenshotOpts);
-      });
+      // No unconditional `bringToFront`: it stole window focus on every
+      // capture and never gave it back, so keystrokes typed into SLICC's
+      // composer landed in the captured page. `TabHandle.screenshot` already
+      // wakes a suspended background renderer when the plain capture fails,
+      // via `wakeCapture`, which hands focus back afterwards — the same path
+      // `playwright-cli screenshot` takes.
+      return browser.withTab(targetId, (page) => page.screenshot(screenshotOpts));
     }
     case 'waitForLoadState': {
       const targetId = args[0] as string;

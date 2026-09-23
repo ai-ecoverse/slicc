@@ -232,7 +232,19 @@ describe('realm RPC: browser channel — screenshotTab', () => {
     const png = await client.call<string>('browser', 'screenshotTab', ['t-1']);
     expect(png).toBe('base64-png-data');
     expect(state.attachedTargets).toContain('t-1');
-    expect(state.bringToFrontCallCount).toBe(1);
+    dispose();
+  });
+
+  it('does not bring the tab to the front (no window-focus steal)', async () => {
+    // Regression: an unconditional bringToFront raised the captured tab over
+    // SLICC and never handed focus back, so the user's composer keystrokes
+    // landed in the captured page.
+    const state = makeBrowserState();
+    const { client, dispose } = setup(state);
+    await client.call('browser', 'screenshotTab', ['t-1']);
+    expect(state.bringToFrontCallCount).toBe(0);
+    // The focus-restoring wake fallback in TabHandle.screenshot stays enabled.
+    expect(state.screenshotOptions[0]?.['foregroundFallback']).not.toBe(false);
     dispose();
   });
 

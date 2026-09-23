@@ -319,7 +319,10 @@ API backed by SLICC's CDP connection to the running Chrome instance.
   context's tabs
 - `page.goto(url)`, `page.waitForLoadState(state?)`, `page.waitForTimeout(ms)`
 - `page.evaluate(fn, ...args)` — runs JS in page context
-- `page.screenshot({ path?, fullPage? })` — returns Uint8Array (PNG)
+- `page.screenshot({ path?, fullPage? })` — returns Uint8Array (PNG). Does not
+  raise the tab: only a capture that fails on a suspended background tab falls
+  back to a brief `Page.bringToFront` that hands window focus back afterwards,
+  same as `playwright-cli screenshot`
 - `page.$(selector)`, `page.$$(selector)` — query selectors → ElementHandle
 - `page.$$eval(selector, fn, ...args)` — runs `fn` over every matched element
 - `page.content()` — returns page HTML
