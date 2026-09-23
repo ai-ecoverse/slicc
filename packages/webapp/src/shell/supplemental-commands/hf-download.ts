@@ -1,4 +1,5 @@
 import type { SecureFetch } from 'just-bash';
+import type { StreamedFetchResponse, StreamingFetch } from '../proxied-fetch.js';
 import { DEFAULT_HF_CONCURRENCY, DEFAULT_HF_MAX_BYTES_IN_FLIGHT } from './hf-defaults.js';
 
 export {
@@ -12,7 +13,14 @@ export interface DownloadFs {
   stat(path: string): Promise<{ size: number }>;
   mkdir(path: string, options: { recursive: boolean }): Promise<unknown>;
   writeFile(path: string, data: Uint8Array): Promise<unknown>;
+
+  appendFile?(path: string, data: Uint8Array): Promise<unknown>;
+  rm?(path: string): Promise<unknown>;
 }
+
+export const HF_STREAM_WRITE_BYTES = 8 * 1024 * 1024;
+
+export const HF_INCOMPLETE_SUFFIX = '.hf-incomplete';
 
 const HF_HOST = ['huggingface', 'co'].join('.');
 
@@ -51,8 +59,12 @@ async function fetchWithHostContext(
   url: string,
   init?: Parameters<SecureFetch>[1]
 ): ReturnType<SecureFetch> {
+  return withHostContext(url, () => fetchFn(url, init));
+}
+
+async function withHostContext<T>(url: string, run: () => Promise<T>): Promise<T> {
   try {
-    return await fetchFn(url, init);
+    return await run();
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -136,6 +148,7 @@ async function completeSize(
 ): Promise<number | undefined> {
   if (!(await fs.exists(destPath))) return undefined;
   try {
+    if (await fs.exists(`${destPath}${HF_INCOMPLETE_SUFFIX}`)) return undefined;
     const stat = await fs.stat(destPath);
 
     const complete = declaredSize === undefined || declaredSize <= 0 || stat.size === declaredSize;
@@ -146,14 +159,17 @@ async function completeSize(
 }
 
 async function fetchOne(
-  fetchFn: SecureFetch,
-  fs: DownloadFs,
+  job: PoolJob,
   url: string,
   file: string,
   destPath: string,
   signal: AbortSignal
 ): Promise<number> {
-  const resp = await fetchWithHostContext(fetchFn, url, { method: 'GET', signal });
+  const { fs } = job;
+  if (job.streamFetch && fs.appendFile && fs.rm) {
+    return fetchStreamed(job.streamFetch, fs as Required<DownloadFs>, url, file, destPath, signal);
+  }
+  const resp = await fetchWithHostContext(job.fetch, url, { method: 'GET', signal });
   if (resp.status < 200 || resp.status >= 300) {
     throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${file}`);
   }
@@ -162,6 +178,71 @@ async function fetchOne(
   await ensureParentDirs(fs, destPath);
   await fs.writeFile(destPath, resp.body);
   return resp.body.byteLength;
+}
+
+async function fetchStreamed(
+  streamFetch: StreamingFetch,
+  fs: Required<DownloadFs>,
+  url: string,
+  file: string,
+  destPath: string,
+  signal: AbortSignal
+): Promise<number> {
+  const resp: StreamedFetchResponse = await withHostContext(url, () =>
+    streamFetch(url, { method: 'GET', signal })
+  );
+  if (resp.status < 200 || resp.status >= 300) {
+    await resp.cancel();
+    throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${file}`);
+  }
+  if (signal.aborted) {
+    await resp.cancel();
+    throw new Error('aborted');
+  }
+  const marker = `${destPath}${HF_INCOMPLETE_SUFFIX}`;
+  await ensureParentDirs(fs, destPath);
+  await fs.writeFile(marker, new Uint8Array(0));
+  await fs.writeFile(destPath, new Uint8Array(0));
+  const written = await appendInPieces(fs, destPath, resp.body, signal);
+
+  if (resp.contentLength !== undefined && written < resp.contentLength) {
+    throw new Error(`short read for ${file}: got ${written} of ${resp.contentLength} bytes`);
+  }
+  await fs.rm(marker);
+  return written;
+}
+
+async function appendInPieces(
+  fs: Required<DownloadFs>,
+  destPath: string,
+  body: AsyncIterable<Uint8Array>,
+  signal: AbortSignal
+): Promise<number> {
+  let piece = new Uint8Array(HF_STREAM_WRITE_BYTES);
+  let filled = 0;
+  let written = 0;
+  for await (const chunk of body) {
+    if (signal.aborted) throw new Error('aborted');
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      const take = Math.min(chunk.byteLength - offset, piece.byteLength - filled);
+      piece.set(chunk.subarray(offset, offset + take), filled);
+      filled += take;
+      offset += take;
+      if (filled === piece.byteLength) {
+        await fs.appendFile(destPath, piece);
+        written += filled;
+
+        piece = new Uint8Array(HF_STREAM_WRITE_BYTES);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) {
+    await fs.appendFile(destPath, piece.subarray(0, filled));
+    written += filled;
+  }
+  return written;
 }
 
 class ByteBudget {
@@ -221,6 +302,8 @@ export interface HfRepoDownloadProgress {
 
 export interface DownloadHfRepoOptions {
   fetch: SecureFetch;
+
+  streamFetch?: StreamingFetch;
   fs: DownloadFs;
   repo: string;
 
@@ -263,6 +346,7 @@ export class HfFileDownloadError extends Error {
 
 interface PoolJob {
   fetch: SecureFetch;
+  streamFetch?: StreamingFetch;
   fs: DownloadFs;
   urlFor: (file: string) => string;
   targetDir: string;
@@ -318,6 +402,14 @@ class DownloadPool {
     }
   }
 
+  private weightOf(declared: number | undefined): number {
+    const { fs, streamFetch } = this.job;
+    if (!streamFetch || !fs.appendFile || !fs.rm) return declared ?? 0;
+    return declared && declared > 0
+      ? Math.min(declared, HF_STREAM_WRITE_BYTES)
+      : HF_STREAM_WRITE_BYTES;
+  }
+
   private async one(file: string): Promise<{ status: 'downloaded' | 'skipped'; bytes: number }> {
     const { job } = this;
     const destPath = `${job.targetDir}/${file}`;
@@ -325,17 +417,10 @@ class DownloadPool {
     const present = job.force ? undefined : await completeSize(job.fs, destPath, declared);
     if (present !== undefined) return { status: 'skipped', bytes: present };
 
-    const weight = await this.budget.acquire(declared ?? 0);
+    const weight = await this.budget.acquire(this.weightOf(declared));
     try {
       if (this.abort.signal.aborted) throw new Error('aborted');
-      const bytes = await fetchOne(
-        job.fetch,
-        job.fs,
-        job.urlFor(file),
-        file,
-        destPath,
-        this.abort.signal
-      );
+      const bytes = await fetchOne(job, job.urlFor(file), file, destPath, this.abort.signal);
       return { status: 'downloaded', bytes };
     } finally {
       this.budget.release(weight);
@@ -396,6 +481,7 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
   const pool = new DownloadPool(
     {
       fetch: opts.fetch,
+      streamFetch: opts.streamFetch,
       fs: opts.fs,
       urlFor: (file) => hfResolveUrl(endpoint, opts.repo, revision, file),
       targetDir: opts.targetDir,

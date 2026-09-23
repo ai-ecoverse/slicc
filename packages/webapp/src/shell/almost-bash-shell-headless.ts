@@ -47,7 +47,11 @@ import {
   wrapCommandForProgress,
   wrapTimeoutForProgress,
 } from './progress/index.js';
-import { createProxiedFetch } from './proxied-fetch.js';
+import {
+  createProxiedFetch,
+  createProxiedStreamingFetch,
+  type StreamingFetch,
+} from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { commandSudoSubject, enforceCommandSudo } from './sudo/command-guard.js';
@@ -298,7 +302,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private buildSupplementalCommands(
     options: HeadlessShellOptions,
-    fetchFn: ReturnType<typeof createProxiedFetch>
+    fetchFn: ReturnType<typeof createProxiedFetch>,
+    streamFetch: StreamingFetch
   ) {
     return createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
@@ -313,6 +318,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       ],
       fs: options.fs,
       fetch: fetchFn,
+      streamFetch,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
       webhook: options.webhook,
@@ -392,7 +398,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const fetchFn = createProxiedFetch({
       progress: createFetchProgressObserver(this.progress),
     });
-    const supplementalCommands = this.buildSupplementalCommands(options, fetchFn);
+    const streamFetch = createProxiedStreamingFetch({
+      progress: createFetchProgressObserver(this.progress),
+    });
+    const supplementalCommands = this.buildSupplementalCommands(options, fetchFn, streamFetch);
     const mountCommand = this.createMountCustomCommand();
     const umountCommand = this.createUmountCustomCommand();
 

@@ -442,6 +442,124 @@ export async function collectViaExtensionDelegate(
   );
 }
 
+export interface StreamedFetchResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  url: string;
+
+  contentLength?: number;
+
+  body: AsyncIterable<Uint8Array>;
+
+  cancel(): Promise<void>;
+}
+
+export type StreamingFetch = (
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+) => Promise<StreamedFetchResponse>;
+
+function usesFetchProxyEndpoint(): boolean {
+  if (getChromeExtensionRealm()) return false;
+  if (!getExtensionDelegateId()) return true;
+  if (typeof chrome === 'undefined') return false;
+  return typeof chrome?.runtime?.connect !== 'function';
+}
+
+async function* singleChunk(bytes: Uint8Array): AsyncGenerator<Uint8Array> {
+  if (bytes.byteLength > 0) yield bytes;
+}
+
+function streamProxyBody(
+  resp: Response,
+  url: string,
+  total: number | undefined,
+  progress?: FetchProgressObserver
+): Pick<StreamedFetchResponse, 'body' | 'cancel'> {
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    progress?.end(url);
+  };
+  const cancel = async () => {
+    await resp.body?.cancel().catch(() => undefined);
+    end();
+  };
+  if (NULL_BODY_STATUSES.has(resp.status) || !resp.body) {
+    void cancel();
+    return { body: singleChunk(new Uint8Array(0)), cancel };
+  }
+  const stream = resp.body;
+  async function* body(): AsyncGenerator<Uint8Array> {
+    const reader = stream.getReader();
+    let finished = false;
+    try {
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        loaded += value.byteLength;
+        progress?.chunk(url, loaded, total);
+        yield value;
+      }
+      finished = true;
+    } finally {
+      if (!finished) await reader.cancel().catch(() => undefined);
+      end();
+    }
+  }
+  return { body: body(), cancel };
+}
+
+export function createProxiedStreamingFetch(
+  fetchOptions: ProxiedFetchOptions = {}
+): StreamingFetch {
+  const progress = fetchOptions.progress;
+  if (!usesFetchProxyEndpoint()) {
+    const buffered = createProxiedFetch(fetchOptions);
+    return async (url, options) => {
+      const resp = await buffered(url, options);
+      return {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+        url: resp.url,
+        contentLength: resp.body.byteLength,
+        body: singleChunk(resp.body),
+        cancel: async () => undefined,
+      };
+    };
+  }
+  return async (url, options) => {
+    const encoded = encodeForbiddenRequestHeaders(headersToRecord(options?.headers));
+    const init: RequestInit = {
+      method: options?.method ?? 'GET',
+      headers: apiHeaders({ ...encoded, 'X-Target-URL': url }),
+      cache: 'no-store',
+    };
+    const signal = requestAbortSignal(options);
+    if (signal) init.signal = signal;
+    const resp = await fetch(resolveFetchProxyUrl(), init);
+    if (isProxyError(resp)) throw new Error(await readProxyErrorMessage(resp));
+    const rawHeaders: Record<string, string> = {};
+    resp.headers.forEach((v, k) => {
+      rawHeaders[k] = v;
+    });
+    const contentLength = contentLengthOf(resp.headers);
+    progress?.start(url, contentLength);
+    return {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: decodeForbiddenResponseHeaders(rawHeaders),
+      url,
+      contentLength,
+      ...streamProxyBody(resp, url, contentLength, progress),
+    };
+  };
+}
+
 export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): SecureFetch {
   const progress = fetchOptions.progress;
 

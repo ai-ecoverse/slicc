@@ -14,10 +14,22 @@ index 1e20478..51f47b7 100644
                  if (metadata.size < data.byteLength)
                      data.fill(0, metadata.size);
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 26aaf3a..a7c5417 100644
+index 26aaf3a..82d80c0 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
-@@ -129,9 +129,74 @@ export function Async(FS) {
+@@ -54,7 +54,10 @@ var __disposeResources = (this && this.__disposeResources) || (function (Suppres
+ import { withErrno } from 'kerium';
+ import { crit, debug, err } from 'kerium/log';
+ import { StoreFS } from '../backends/store/fs.js';
+-import { isDirectory } from '../internal/inode.js';
++import { _inode_fields, isDirectory } from '../internal/inode.js';
++// PATCH(slicc#3441, upstream zen-fs/core#322): largest body the sync mirror
++// holds. Same cap as the crossCopy preload below and realm-host.ts SYNC_FS_MAX_FILE_BYTES.
++const SYNC_MIRROR_MAX_FILE_BYTES = 1048576;
+ import { join } from '../path.js';
+ import { _asyncFSKeys } from './shared.js';
+ /**
+@@ -129,9 +132,163 @@ export function Async(FS) {
                  throw crit(withErrno('ENOTSUP', 'No sync cache is attached to this async file system'));
              }
          }
@@ -85,6 +97,95 @@ index 26aaf3a..a7c5417 100644
 +            this._sync.touchSync(path, { size: offset || 0, metaOnly: true });
 +            this._metaOnly.delete(path);
 +        }
++        /**
++         * PATCH(slicc#3441, upstream zen-fs/core#322): the preload keeps bodies above the cap out of the
++         * mirror, but an async write used to copy every byte it wrote into it,
++         * and nothing ever let go. A long download kept each file it saved in
++         * worker memory until the worker ran out. Writes and touches that
++         * leave a file above the cap (or that land on a path that is already
++         * metadata-only) now record name and size only, the
++         * same shape crossCopy gives a large file at mount. Async reads hit
++         * the backend; readSync on such a path throws EIO instead of zeros.
++         * @returns whether the mirror update was handled here
++         * @internal
++         */
++        _mirrorMetaOnly(op, args) {
++            if (op !== 'write' && op !== 'touch')
++                return false;
++            const path = args[0];
++            const metaOnly = this._metaOnly?.has(path) ?? false;
++            if (op === 'touch') {
++                const size = args[1]?.size;
++                if (!metaOnly && !(size > SYNC_MIRROR_MAX_FILE_BYTES))
++                    return false;
++                if (!metaOnly && !this._markMetaOnly(path))
++                    return false;
++                const metadata = { metaOnly: true };
++                for (const field of _inode_fields) {
++                    if (field !== 'ino' && field !== 'data' && args[1]?.[field] !== undefined)
++                        metadata[field] = args[1][field];
++                }
++                this._sync.touchSync(path, metadata);
++                return true;
++            }
++            let size;
++            try {
++                size = this._sync.statSync(path).size;
++            }
++            catch {
++                return false;
++            }
++            const end = args[2] + args[1].byteLength;
++            // A metadata-only size is not backed by bytes; an offset-0 write
++            // replaces the body (the _prepareMetaWrite rule). Small results
++            // fall through to it so the mirror gets the real bytes back.
++            const next = metaOnly && !args[2] ? end : Math.max(size, end);
++            if (next <= SYNC_MIRROR_MAX_FILE_BYTES)
++                return false;
++            if (!metaOnly && !this._markMetaOnly(path))
++                return false;
++            this._sync.touchSync(path, { size: next, mtimeMs: Date.now(), metaOnly: true });
++            return true;
++        }
++        /**
++         * Drop the mirror's body for `path` and mark it metadata-only.
++         * @returns false when the mirror has no entry for `path`
++         * @internal
++         */
++        _markMetaOnly(path) {
++            try {
++                if (this._sync.statSync(path).size > 0)
++                    this._dropMirrorPayload(path);
++            }
++            catch {
++                return false;
++            }
++            this._metaOnly ??= new Set();
++            this._metaOnly.add(path);
++            return true;
++        }
++        /**
++         * Replace the mirror's body for `path` with an empty buffer. A
++         * `touchSync({ size: 0 })` would keep a zero-length view of the old
++         * buffer, which still pins every byte.
++         * @internal
++         */
++        _dropMirrorPayload(path) {
++            const sync = this._sync;
++            if (typeof sync.transaction !== 'function' || typeof sync.findInodeSync !== 'function') {
++                sync.touchSync(path, { size: 0 });
++                return;
++            }
++            const tx = sync.transaction();
++            try {
++                const inode = sync.findInodeSync(tx, path);
++                tx.setSync(inode.data, new Uint8Array(0));
++                tx.commitSync();
++            }
++            finally {
++                tx[Symbol.dispose]();
++            }
++        }
          renameSync(oldPath, newPath) {
              this.checkSync();
              this._sync.renameSync(oldPath, newPath);
@@ -92,7 +193,7 @@ index 26aaf3a..a7c5417 100644
              this._async(() => this.rename(oldPath, newPath));
          }
          statSync(path) {
-@@ -152,11 +217,13 @@ export function Async(FS) {
+@@ -152,11 +309,13 @@ export function Async(FS) {
          unlinkSync(path) {
              this.checkSync();
              this._sync.unlinkSync(path);
@@ -106,7 +207,7 @@ index 26aaf3a..a7c5417 100644
              this._async(() => this.rmdir(path));
          }
          mkdirSync(path, options) {
-@@ -189,10 +256,15 @@ export function Async(FS) {
+@@ -189,10 +348,15 @@ export function Async(FS) {
          }
          readSync(path, buffer, offset, end) {
              this.checkSync();
@@ -122,7 +223,7 @@ index 26aaf3a..a7c5417 100644
              this._sync.writeSync(path, buffer, offset);
              this._async(() => this.write(path, buffer, offset));
          }
-@@ -219,37 +291,76 @@ export function Async(FS) {
+@@ -219,37 +383,76 @@ export function Async(FS) {
          /** @internal @protected */
          _crossCopySemaphore;
          /** @internal */
@@ -156,7 +257,7 @@ index 26aaf3a..a7c5417 100644
 +                    // new Uint8Array(stats.size) plus a File snapshot of every
 +                    // shard is what fails mount on a multi-gigabyte tree
 +                    // (NotReadableError, then Array buffer allocation failed).
-+                    if (stats.size > 1048576) {
++                    if (stats.size > SYNC_MIRROR_MAX_FILE_BYTES) {
 +                        // Name and size stay visible to readdir/stat. The body
 +                        // does not: touchSync would otherwise zero-fill it.
 +                        this._metaOnly ??= new Set();
@@ -224,9 +325,13 @@ index 26aaf3a..a7c5417 100644
          }
          /**
           * @internal
-@@ -284,7 +395,10 @@ export function Async(FS) {
+@@ -283,8 +486,14 @@ export function Async(FS) {
+                         return result;
                      }
                      try {
++                        // PATCH(slicc#3441, upstream zen-fs/core#322): keep large bodies out of the mirror.
++                        if (this._mirrorMetaOnly(key, args))
++                            return result;
                          // @ts-expect-error 2556 - The type of `args` is not narrowed
 +                        if (key === 'write')
 +                            this._prepareMetaWrite(args[0], args[2]);

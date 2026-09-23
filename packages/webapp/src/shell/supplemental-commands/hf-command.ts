@@ -1,4 +1,5 @@
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
+import type { StreamingFetch } from '../proxied-fetch.js';
 import {
   DEFAULT_HF_CONCURRENCY,
   DEFAULT_HF_MAX_BYTES_IN_FLIGHT,
@@ -34,8 +35,9 @@ Notes:
   - With no [files...], every file in the repo tree is downloaded.
   - Existing files at the destination with a matching byte length are skipped
     unless --force is passed.
-  - Downloads are held in memory until written: a file starts only while the
-    ones in flight fit --max-in-flight-mb (larger or unsized files run alone).
+  - A file starts only while the ones in flight fit --max-in-flight-mb. Where
+    bodies stream to disk (CLI), each file counts as one 8 MiB write piece;
+    where they are buffered whole, larger or unsized files run alone.
   - The first failed file stops the rest.
   - Background-job logs get a progress line every few seconds.
   - Weights are read by the speech engines via the preview SW from the
@@ -199,7 +201,7 @@ function liveSinkOf(ctx: CommandContext): ((chunk: string) => void) | undefined 
 async function runDownload(
   args: string[],
   ctx: CommandContext,
-  fetchFn: SecureFetch,
+  deps: HfCommandDeps,
   now: () => number
 ): Promise<ExecResult> {
   const parsed = parseDownloadArgs(args);
@@ -212,7 +214,8 @@ async function runDownload(
   let stderr = '';
   try {
     const result = await downloadHfRepo({
-      fetch: fetchFn,
+      fetch: deps.fetch,
+      streamFetch: deps.streamFetch,
       fs: ctx.fs,
       repo: parsed.repo,
       targetDir,
@@ -263,6 +266,8 @@ export interface HfCommandDeps {
   fetch: SecureFetch;
 
   now?: () => number;
+
+  streamFetch?: StreamingFetch;
 }
 
 const VALUE_FLAGS = ['--to', '--revision', '--rev', '--concurrency', '-j', '--max-in-flight-mb'];
@@ -276,7 +281,7 @@ export function createHfCommand(deps: HfCommandDeps): Command {
         return help(args.length === 0 ? 1 : 0);
       }
       const sub = args[0];
-      if (sub === 'download') return runDownload(args.slice(1), ctx, deps.fetch, now);
+      if (sub === 'download') return runDownload(args.slice(1), ctx, deps, now);
       return failure(`unknown subcommand: ${sub}`);
     },
   };
