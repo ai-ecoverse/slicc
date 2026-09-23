@@ -219,7 +219,16 @@ describe('realm RPC: browser channel — screenshotTab', () => {
     const png = await client.call<string>('browser', 'screenshotTab', ['t-1']);
     expect(png).toBe('base64-png-data');
     expect(state.attachedTargets).toContain('t-1');
-    expect(state.bringToFrontCallCount).toBe(1);
+    dispose();
+  });
+
+  it('does not bring the tab to the front (no window-focus steal)', async () => {
+    const state = makeBrowserState();
+    const { client, dispose } = setup(state);
+    await client.call('browser', 'screenshotTab', ['t-1']);
+    expect(state.bringToFrontCallCount).toBe(0);
+
+    expect(state.screenshotOptions[0]?.['foregroundFallback']).not.toBe(false);
     dispose();
   });
 

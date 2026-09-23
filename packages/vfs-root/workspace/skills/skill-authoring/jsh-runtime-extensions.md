@@ -220,7 +220,7 @@ browser.openWindow(url: string, opts?: {
   left?: number; top?: number;
   state?: 'normal' | 'minimized' | 'maximized' | 'fullscreen';
   decorated?: boolean;               // default true; false → extension popup chrome
-  focus?: boolean;                   // default true
+  focus?: boolean;                   // default true; false opens it unfocused so the user's typing stays in SLICC
 }): Promise<TabHandle>
 browser.windowBounds(tab): Promise<{
   left: number; top: number; width: number; height: number;

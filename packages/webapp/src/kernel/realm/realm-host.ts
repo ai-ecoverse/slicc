@@ -922,10 +922,8 @@ async function dispatchBrowser(
     case 'screenshotTab': {
       const targetId = args[0] as string;
       const screenshotOpts = args[1] as { fullPage?: boolean } | undefined;
-      return browser.withTab(targetId, async (page) => {
-        await page.bringToFront();
-        return page.screenshot(screenshotOpts);
-      });
+
+      return browser.withTab(targetId, (page) => page.screenshot(screenshotOpts));
     }
     case 'waitForLoadState': {
       const targetId = args[0] as string;
