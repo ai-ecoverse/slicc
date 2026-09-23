@@ -93,6 +93,35 @@ describe('fsBridge extended operations', () => {
     expect(out.stdout.trim()).toBe('false');
   });
 
+  it('rm with recursive removes the directory itself, not just its files', async () => {
+    const ctx = makeCtx({
+      files: { '/workspace/tree/sub/a.txt': 'a', '/workspace/keep.txt': 'k' },
+    });
+    const out = await runCode(
+      `const fs = require('fs');
+       await fs.rm('/workspace/tree', { recursive: true });
+       console.log(await fs.exists('/workspace/tree'), await fs.exists('/workspace/tree/sub'));
+       console.log(JSON.stringify(await fs.readdir('/workspace')));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual(['false false', '["keep.txt"]']);
+    expect(await ctx.fs.exists('/workspace/tree')).toBe(false);
+  });
+
+  it('mkdir creates an empty directory that exists and lists', async () => {
+    const ctx = makeCtx({ files: { '/workspace/keep.txt': 'k' } });
+    const out = await runCode(
+      `const fs = require('fs');
+       await fs.mkdir('/workspace/empty');
+       console.log(await fs.exists('/workspace/empty'), (await fs.stat('/workspace/empty')).isDirectory);
+       console.log(JSON.stringify((await fs.readdir('/workspace')).sort()));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual(['true true', '["empty","keep.txt"]']);
+  });
+
   it('rm with force does not throw on missing path', async () => {
     const ctx = makeCtx();
     const out = await runCode(

@@ -59,6 +59,7 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
         path,
         (store.get(path) || '') + (typeof c === 'string' ? c : new TextDecoder().decode(c))
       );
+      addAncestorDirs(path);
     },
     async exists(p: string): Promise<boolean> {
       const path = normalizePath(p);
@@ -70,7 +71,12 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
       if (dirs.has(path)) return fileStat(0, true);
       throw new Error(`ENOENT: ${p}`);
     },
-    async mkdir(): Promise<void> {},
+    async mkdir(p: string): Promise<void> {
+      const path = normalizePath(p);
+      if (store.has(path)) throw Object.assign(new Error(`EEXIST: ${p}`), { code: 'EEXIST' });
+      addAncestorDirs(path);
+      dirs.add(path);
+    },
     async readdir(p: string): Promise<string[]> {
       const path = normalizePath(p);
       const prefix = path === '/' ? '/' : `${path}/`;
@@ -82,8 +88,22 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
       }
       return [...names];
     },
-    async rm(p: string): Promise<void> {
-      store.delete(normalizePath(p));
+    async rm(p: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void> {
+      const path = normalizePath(p);
+      if (store.delete(path)) return;
+      if (!dirs.has(path)) {
+        if (opts?.force) return;
+        throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+      }
+      const prefix = path === '/' ? '/' : `${path}/`;
+      const under = (key: string) => key.startsWith(prefix);
+      const hasChildren = [...store.keys()].some(under) || [...dirs].some(under);
+      if (hasChildren && !opts?.recursive) {
+        throw Object.assign(new Error(`ENOTEMPTY: ${p}`), { code: 'ENOTEMPTY' });
+      }
+      for (const key of [...store.keys()]) if (under(key)) store.delete(key);
+      for (const dir of [...dirs]) if (under(dir)) dirs.delete(dir);
+      if (path !== '/') dirs.delete(path);
     },
     async cp(): Promise<void> {},
     async mv(src: string, dest: string): Promise<void> {
