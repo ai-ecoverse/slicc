@@ -10,9 +10,11 @@
  * mounts included, with the realm's path ACLs.
  *
  * Coherence with the realm's own sync `fs` cache: pending `fs.writeFileSync`
- * mutations are flushed before the mount, and every write the tool makes
- * flushes-then-invalidates that cache (only when the script used it), so a
- * later `fs.readFileSync` in the same script sees the tool's output.
+ * mutations are flushed before the mount and before every write the tool
+ * makes, and each tool write then invalidates that cache (even if it threw,
+ * and even before the script's first sync `fs` call, so the boot snapshot
+ * can't serve stale bytes), so a later `fs.readFileSync` in the same script
+ * sees the tool's output.
  */
 
 import {
@@ -65,27 +67,40 @@ const MUTATING = [
 
 /**
  * Wrap `bridge` so each mutation keeps the realm's sync `fs` cache coherent.
- * The flush comes first: `invalidate` drops pending cache writes, so they
- * must reach the VFS before it runs.
+ * Pending cache writes are flushed BEFORE the op — so the tool sees a pending
+ * `mkdirSync`, and a pending `rmSync` can't later delete the tool's output —
+ * and the cache is invalidated after it, in a `finally`: the bridge is
+ * at-least-once, so a mutation that threw may still have landed. The
+ * invalidate is unconditional: a never-used cache still holds the boot
+ * snapshot, which the tool's write may have made stale.
  */
 function coherentBridge(bridge: SyncFsPosixBridge, syncFs: SyncFsCache): SyncFsPosixBridge {
   const wrapped: SyncFsPosixBridge = { ...bridge };
   for (const name of MUTATING) {
     const op = bridge[name] as (...args: unknown[]) => void;
     (wrapped[name] as (...args: unknown[]) => void) = (...args: unknown[]) => {
-      op.apply(bridge, args);
-      if (!syncFs.wasUsed()) return;
-      flushBeforeSyncExec(syncFs, bridge);
-      syncFs.invalidate();
+      if (syncFs.wasUsed()) flushBeforeSyncExec(syncFs, bridge);
+      try {
+        op.apply(bridge, args);
+      } finally {
+        syncFs.invalidate();
+      }
     };
   }
   return wrapped;
 }
 
 /** Every top-level VFS directory the module should see. */
-function topLevelDirs(bridge: SyncFsPosixBridge): string[] {
+function topLevelDirs(bridge: SyncFsPosixBridge, warn: (message: string) => void): string[] {
+  let names: string[];
+  try {
+    names = bridge.readdir('/');
+  } catch (err) {
+    warn(`cannot list the VFS root, nothing mounted: ${String(err)}`);
+    return [];
+  }
   const dirs: string[] = [];
-  for (const name of bridge.readdir('/')) {
+  for (const name of names) {
     if (!name || name.includes('/') || MODULE_OWNED_DIRS.has(name)) continue;
     try {
       if (bridge.stat(`/${name}`).isDirectory) dirs.push(`/${name}`);
@@ -107,7 +122,7 @@ export function mountVfsIntoEmscripten(
   const { plugin, mounted } = mountLiveVfsDirs(
     Fs,
     coherentBridge(bridge, syncFs),
-    topLevelDirs(bridge),
+    topLevelDirs(bridge, warn),
     warn
   );
   try {

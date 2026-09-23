@@ -351,9 +351,11 @@ mounts included, under the realm's ACLs — with no copy in or out.
 The returned handle has `flush()` (write back the tool's open dirty buffers —
 call before spawning a child) and `invalidate()` (drop cached nodes — call after
 a child ran). Coherence with the realm's own `SyncFsCache`: pending sync writes
-are flushed before the mount, and each tool mutation flushes then invalidates
-the cache (only if the script used sync `fs`), so a later `fs.readFileSync` sees
-the tool's output. Large modules compile host-side through
+are flushed before the mount and before each tool mutation (so the tool sees a
+pending `mkdirSync`, and a pending `rmSync` can't later delete its output), and
+every tool mutation then invalidates the cache — in a `finally`, and even before
+the script's first sync `fs` call (the boot snapshot may be stale) — so a later
+`fs.readFileSync` sees the tool's output. Large modules compile host-side through
 `__slicc_compileWasm`; a 68 MB `clang.wasm` compiled and instantiated in
 ~90 ms on an isolated leader.
 

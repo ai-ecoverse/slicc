@@ -136,7 +136,7 @@ describe('mountVfsIntoEmscripten', () => {
     expect(FS.cwd()).toBe('/proj');
   });
 
-  it('flushes pending realm fs writes first, and resyncs the cache after each tool write', () => {
+  it('flushes pending realm fs writes first, and resyncs the cache around each tool write', () => {
     const { cache, events } = fakeSyncFs(true, [
       { path: '/proj/from-script.txt', content: new TextEncoder().encode('script wrote this') },
     ]);
@@ -156,7 +156,33 @@ describe('mountVfsIntoEmscripten', () => {
     expect(events.slice(-3)).toEqual(['getMutations', 'resetBaseline', 'invalidate']);
   });
 
-  it('leaves the realm cache alone when the script never used sync fs', () => {
+  it('flushes a pending sync write before the tool mutation runs', () => {
+    const pending = [{ path: '/proj/gen', content: new TextEncoder().encode('x') }];
+    const { cache } = fakeSyncFs(true);
+    const handle = mountVfsIntoEmscripten(FS, {
+      bridge: {
+        ...bridge,
+        mkdir: (p) => {
+          // The pending write must already be live when the tool's op runs.
+          expect(nodeFs.existsSync(at('/proj/gen'))).toBe(true);
+          bridge.mkdir(p);
+        },
+      },
+      syncFs: Object.assign(cache, {
+        getMutations: () => {
+          const created = pending.splice(0).map((e) => ({ ...e, isDirectory: false }));
+          return { deleted: [], created, modified: [] };
+        },
+      }),
+      cwd: '/proj',
+      warn: () => {},
+    });
+    mounted = handle.mounted;
+    py(`import os; os.mkdir('/proj/outdir')`);
+    expect(nodeFs.statSync(at('/proj/outdir')).isDirectory()).toBe(true);
+  });
+
+  it('invalidates the boot snapshot even when the script never used sync fs', () => {
     const { cache, events } = fakeSyncFs(false);
     mounted = mountVfsIntoEmscripten(FS, {
       bridge,
@@ -165,7 +191,45 @@ describe('mountVfsIntoEmscripten', () => {
       warn: () => {},
     }).mounted;
     py(`open('/proj/out.o', 'w').write('obj')`);
-    expect(events).toEqual([]);
+    // No flush (nothing pending), but the stale snapshot is dropped.
+    expect(events).not.toContain('getMutations');
+    expect(events).toContain('invalidate');
+  });
+
+  it('invalidates the cache even when the mutation throws', () => {
+    const { cache, events } = fakeSyncFs(false);
+    mounted = mountVfsIntoEmscripten(FS, {
+      bridge: {
+        ...bridge,
+        mkdir: () => {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        },
+      },
+      syncFs: cache,
+      cwd: '/proj',
+      warn: () => {},
+    }).mounted;
+    expect(() => py(`import os; os.mkdir('/proj/boom')`)).toThrow();
+    expect(events).toEqual(['invalidate']);
+  });
+
+  it('warns and mounts nothing when the VFS root listing fails', () => {
+    const { cache } = fakeSyncFs(false);
+    const handle = mountVfsIntoEmscripten(FS, {
+      bridge: {
+        ...bridge,
+        readdir: (p) => {
+          if (p === '/') throw Object.assign(new Error('EIO'), { code: 'EIO' });
+          return bridge.readdir(p);
+        },
+      },
+      syncFs: cache,
+      cwd: '/',
+      warn: (m) => warnings.push(m),
+    });
+    mounted = handle.mounted;
+    expect(handle.mounted).toEqual([]);
+    expect(warnings[0]).toContain('cannot list the VFS root');
   });
 
   it('warns and stays at / when the cwd is not reachable', () => {
