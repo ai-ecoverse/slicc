@@ -13,10 +13,13 @@ final class SecretAPIRoutesTests: XCTestCase {
 
     private func secretName(_ base: String) -> String { prefix + base }
 
+    override func setUp() {
+        super.setUp()
+        InMemoryKeychain.install()
+    }
+
     override func tearDown() {
-        for entry in SecretStore.list() where entry.name.hasPrefix(prefix) {
-            try? SecretStore.delete(name: entry.name)
-        }
+        InMemoryKeychain.uninstall()
         super.tearDown()
     }
 
