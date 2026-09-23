@@ -12,6 +12,7 @@ import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
 import { iframeFocusGuardSource } from './iframe-focus-guard.js';
 import { iframeThemeBridgeSource } from './iframe-theme.js';
+import { guardInlineFocus } from './inline-focus-guard.js';
 import {
   iframeFetchResponseSource,
   type SprinkleAgentOptions,
@@ -455,6 +456,7 @@ export class SprinkleRenderer {
   private visibilityObserver: IntersectionObserver | null = null;
   private bridgeLifecycleReady = false;
   private pendingBridgeLifecycle: Array<() => void> = [];
+  private releaseInlineFocusGuard: (() => void) | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
     this.container = container;
@@ -997,6 +999,9 @@ export class SprinkleRenderer {
     // Content is user/agent-authored .shtml — trusted, not external input.
     const wrapper = document.createElement('div');
     wrapper.className = 'sprinkle-content';
+    // Inline scripts run in the SLICC document, where no frame guard can
+    // reach them: reject focus they pull into the sprinkle (see the module).
+    this.releaseInlineFocusGuard = guardInlineFocus(wrapper);
     wrapper.innerHTML = content;
     this.container.appendChild(wrapper);
 
@@ -1031,6 +1036,8 @@ export class SprinkleRenderer {
       script.remove();
     }
     this.scripts = [];
+    this.releaseInlineFocusGuard?.();
+    this.releaseInlineFocusGuard = null;
     const wrapper = this.container.querySelector('.sprinkle-content');
     if (wrapper) wrapper.remove();
     if (window.__slicc_sprinkles) {
