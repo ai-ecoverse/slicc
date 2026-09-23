@@ -37,6 +37,7 @@ import { buildThreadChildren, messageEls } from './wc-message-view.js';
 import { wireShellKeyboard } from './wc-shortcut-surfaces.js';
 import type { ShortcutHandles } from './wc-shortcuts.js';
 import { wireBase64Previews } from './wire-base64-previews.js';
+import { wireMentionPreviews } from './wire-mention-previews.js';
 
 // Side-effect import registers every element composed below.
 import '@slicc/webcomponents';
@@ -524,6 +525,15 @@ export function buildWcShellFrame(root: HTMLElement, options: WcShellOptions): W
   // `wc-follower.ts`). File mentions genuinely belong in the client phase;
   // they need a VFS reader a follower has no worker for.
   wireBase64Previews({ thread, log: createLogger('base64-preview') });
+  // Hover previews for links, GitHub references, dates and agent questions.
+  // Wired here for the same reason: none of it needs a client. The one
+  // VFS-backed input (a checkout's git remote) is attached later by floats
+  // that have a VFS (`attachMentionPreviewFs` in `wc-live`).
+  wireMentionPreviews({
+    thread,
+    isReadOnly: () => composer.hasAttribute('hidden'),
+    log: createLogger('mention-preview'),
+  });
 
   return {
     frame,
