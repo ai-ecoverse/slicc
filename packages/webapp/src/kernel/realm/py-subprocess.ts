@@ -6,7 +6,9 @@
  * version that runs the child through the realm's blocking exec bridge — the
  * same `ctx.exec` path, sudo guard and path ACLs as `child_process.execSync` in
  * the JS realm. Everything built on `Popen` (`run`, `call`, `check_call`,
- * `check_output`, `getoutput`, `os.popen`) follows.
+ * `check_output`, `getoutput`, `os.popen`) follows, and so does the `os.exec*`
+ * family: there is no process image to replace, so exec runs the child with
+ * inherited stdio and ends the program with its status (`emcc -c` execs clang).
  *
  * The child runs to completion before `Popen` returns (or, with
  * `stdin=PIPE`, when the caller first waits / communicates / closes stdin),
@@ -281,8 +283,20 @@ def __slicc_install_subprocess():
         code = SliccPopen(command, shell=True).wait()
         return (code & 0xff) << 8
 
+    def execute(file, args, env=None):
+        argv = [to_str(a) for a in args]
+        if not argv:
+            raise ValueError('exec: argv must not be empty')
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # Never returns, like a real exec: SystemExit skips except Exception.
+        raise SystemExit(SliccPopen([to_str(file)] + argv[1:], env=env).wait())
+
     subprocess.Popen = SliccPopen
     os.system = system
+    # os.execl* call these through the os module, so they follow.
+    os.execv = os.execvp = lambda file, args: execute(file, args)
+    os.execve = os.execvpe = lambda file, args, env: execute(file, args, env)
 
 __slicc_install_subprocess()
 del __slicc_install_subprocess
