@@ -17,6 +17,7 @@ import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import { appendPipelineStatus } from '../shell/pipe-status.js';
+import type { BashJobJournal, BashJobRecord } from './bash-job-journal.js';
 import type {
   BashJobHost,
   BashJobProcess,
@@ -324,9 +325,10 @@ export interface BashToolOptions {
    * Emit the completion lick for a detached job. `ScoopContext` wires this to
    * the orchestrator's lick handler; when absent (tests, contexts without a
    * lick manager) a job still detaches and still writes its output file — only
-   * the notification is dropped, with a warning.
+   * the notification is dropped, with a warning. Returning `false` means no
+   * lick sink was attached yet; a restart report is then retried.
    */
-  fireLick?: (event: LickEvent) => void;
+  fireLick?: (event: LickEvent) => boolean | void;
   /**
    * Scoop this tool belongs to, as `LickEvent.targetScoop` — the lick is routed
    * back to the scoop that spawned the run. `undefined` for the cone (untargeted
@@ -366,6 +368,9 @@ interface BashRunContext {
   defaultBackgroundAfter: number;
   nextOutputSeq: () => number;
   nextJobId: () => string;
+  journal: Promise<BashJobJournal>;
+  /** Settles once jobs orphaned by an earlier kernel boot have been reported. */
+  swept: Promise<unknown>;
 }
 
 /** A started run: its kernel process, its cancel handle, and its outcome. */
@@ -549,6 +554,9 @@ function startRun(
     startPersisting: (outputPath, jobId) => {
       persistPath = outputPath;
       persistJobId = jobId;
+      // Job ids restart at bg-1 each boot: let the restart sweep append its
+      // notice to an orphan's file before a new job with the same id reuses it.
+      persistChain = persistChain.then(() => ctx.swept).then(() => undefined);
       persistTeed();
     },
     flushPersist: () => persistChain,
@@ -624,6 +632,15 @@ export function createBashTool(
 ): ToolDefinition {
   let outputSeq = 0;
   let jobSeq = 0;
+  // Loaded lazily: the journal only matters once a job detaches or a boot
+  // finds orphans, and keeping it out of the kernel worker's eager graph
+  // keeps first-load small.
+  const journalModule = import('./bash-job-journal.js');
+  const journal = journalModule.then(({ createBashJobJournal }) =>
+    createBashJobJournal(fs, tempDir, undefined, (message, error) =>
+      log.warn(message, { tempDir, error: error instanceof Error ? error.message : String(error) })
+    )
+  );
   const ctx: BashRunContext = {
     shell,
     fs,
@@ -633,7 +650,14 @@ export function createBashTool(
       readSeconds(options.defaultBackgroundAfterSeconds) ?? DEFAULT_BASH_BACKGROUND_AFTER_SECONDS,
     nextOutputSeq: () => (outputSeq += 1),
     nextJobId: () => `bg-${(jobSeq += 1)}`,
+    journal,
+    swept: Promise.resolve(),
   };
+  ctx.swept = Promise.all([journalModule, journal])
+    .then(([{ KERNEL_RESTART_EXIT_CODE }, j]) =>
+      j.sweep((record, notice) => reportOrphanedJob(ctx, record, notice, KERNEL_RESTART_EXIT_CODE))
+    )
+    .catch((error) => log.warn('Could not sweep orphaned bash jobs', { tempDir, error }));
 
   return {
     name: 'bash',
@@ -643,12 +667,61 @@ export function createBashTool(
   };
 }
 
+/** How long a restart report waits for the orchestrator to attach its lick sink. */
+const ORPHAN_LICK_RETRY_MS = 2_000;
+const ORPHAN_LICK_ATTEMPTS = 30;
+
 /**
- * Persist a detached job's full (untruncated) output and announce it as a `bash`
- * lick carrying a bounded preview. Runs long after the tool call returned, so
- * every failure is contained here: a lost output file must not cost the agent
- * its completion notification.
+ * Tell the agent that a job it was waiting on died with the previous kernel
+ * worker. The report arrives as the same `bash` lick a finished job sends, so
+ * the agent's "wait for the Background Command lick" loop ends with a failure
+ * instead of waiting forever. At boot the lick sink may not be attached yet,
+ * so a refused delivery is retried for a bounded time.
  */
+function reportOrphanedJob(
+  ctx: BashRunContext,
+  record: BashJobRecord,
+  notice: string,
+  exitCode: number
+): void {
+  const event: LickEvent = {
+    type: 'bash',
+    bashJobId: record.jobId,
+    bashCommand: record.command,
+    bashExitCode: exitCode,
+    ...(record.pid !== undefined ? { bashJobPid: record.pid } : {}),
+    resultPath: record.outputPath,
+    preview: notice,
+    ...(ctx.options.targetScoop ? { targetScoop: ctx.options.targetScoop } : {}),
+    timestamp: new Date().toISOString(),
+    body: {
+      jobId: record.jobId,
+      pid: record.pid ?? null,
+      command: record.command,
+      exitCode,
+      resultPath: record.outputPath,
+      killedByKernelRestart: true,
+    },
+  };
+  log.warn('Background bash job was killed by a kernel restart', {
+    jobId: record.jobId,
+    command: record.command,
+    startedAt: record.startedAt,
+  });
+  const attempt = (left: number): void => {
+    if (ctx.options.fireLick?.(event) !== false) return;
+    if (left <= 1) {
+      log.warn('No lick sink for a kernel-restart job report; output file still has it', {
+        jobId: record.jobId,
+        outputPath: record.outputPath,
+      });
+      return;
+    }
+    setTimeout(() => attempt(left - 1), ORPHAN_LICK_RETRY_MS);
+  };
+  attempt(ORPHAN_LICK_ATTEMPTS);
+}
+
 /**
  * Apply the configured secret scrub to a detached job's output.
  *
@@ -801,6 +874,22 @@ function detachRun(
   // Start teeing to disk immediately so a kill before the next command settles
   // still leaves whatever already landed in the buffer.
   run.startPersisting(outputPath, jobId);
+  // Only the journal survives the worker: if it dies, the next boot's sweep
+  // reports this job as killed instead of letting it vanish.
+  const recorded = Promise.all([ctx.journal, ctx.swept]).then(([journal]) =>
+    journal.record({
+      jobId,
+      pid,
+      command,
+      outputPath,
+      startedAt: new Date().toISOString(),
+    })
+  );
+  const unjournal = (): Promise<void> =>
+    recorded
+      .then(() => ctx.journal)
+      .then((journal) => journal.clear(jobId))
+      .catch((error) => log.warn('Could not journal a detached bash job', { jobId, error }));
   const killAfter = timeoutSeconds === undefined ? undefined : timeoutSeconds - backgroundAfter;
   const killTimer =
     killAfter === undefined
@@ -823,7 +912,8 @@ function detachRun(
         timeoutSeconds
       );
     })
-    .catch((err) => log.error('Background bash delivery failed', { jobId, error: err }));
+    .catch((err) => log.error('Background bash delivery failed', { jobId, error: err }))
+    .then(unjournal);
 
   log.info('Bash command detached to background', { command, jobId, pid, killAfter });
   return detachedResult(jobId, pid, waitSeconds, outputPath, timeoutSeconds);

@@ -529,19 +529,23 @@ skips the network call and does not verify that the remote exists.
 
 `hf download` (`hf-command.ts` over `hf-download.ts`) runs a bounded pool: at
 most `--concurrency`/`-j` files (default 4) at once, and a new file starts only
-while the declared bytes in flight fit `--max-in-flight-mb` (default 128). Every
-response is buffered whole in memory before the VFS write (`proxied-fetch.ts`,
-#3441), so the byte budget, not the file count, bounds peak memory. A file larger
-than the budget still downloads, alone.
+while the bytes in flight fit `--max-in-flight-mb` (default 128). Where a
+streaming fetch is available (the CLI `/api/fetch-proxy` path), each body is
+appended to the VFS in 8 MiB pieces as it arrives, so a file is charged at most
+one piece and several large files stream at once. Elsewhere (extension realms)
+a response is buffered whole before the write and is charged its declared size,
+so the byte budget, not the file count, bounds peak memory (#3441). A buffered
+file larger than the budget still downloads, alone.
 
 Sizes come from the tree listing. With an explicit file list, `hf` lists each
 parent directory once (non-recursive `…/tree/<rev>/<dir>`) instead of the whole
 repo. A file whose size is still unknown (listing failed, or paginated past it)
-is charged the whole budget, so it runs alone; a small file finishing says
-nothing about the next one.
+is charged the whole budget when buffered (one piece when streamed), so it runs
+alone; a small file finishing says nothing about the next one.
 
 Resume: a file already at its listed byte length is skipped and a short one is
-fetched again; without a size, presence is enough to skip. The first failure
+fetched again; without a size, presence is enough to skip unless a streamed
+download left its `<file>.hf-incomplete` marker behind. The first failure
 aborts the requests in flight, starts no new ones, and names the file
 (`hf: failed <file>: …`); a body that arrives after the abort is not written.
 The command's abort signal (`kill`, Ctrl-C) cancels the listing and in-flight

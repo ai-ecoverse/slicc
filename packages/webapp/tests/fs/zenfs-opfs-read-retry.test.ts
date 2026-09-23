@@ -1,3 +1,4 @@
+import { Inode } from '@zenfs/core';
 import { WebAccessFS } from '@zenfs/dom';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +17,10 @@ function setupReader(reads: Array<() => Promise<ArrayBuffer>>) {
     output,
     read: () => backend.read('/race.txt', output, 0, bytes.length),
   };
+}
+
+function seedFile(backend: WebAccessFS, path: string) {
+  backend.index.set(path, new Inode({ mode: 0o100644, ino: 2, data: 3, nlink: 1 }));
 }
 
 const readable = () => Promise.resolve(bytes.slice().buffer);
@@ -114,6 +119,46 @@ describe('WebAccess File snapshot retry', () => {
     expect(Array.from(output)).toEqual([2, 3, 4, 5]);
     expect(getFile).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('writes in place through a sync access handle without copying the file', async () => {
+    const write = vi.fn((data: Uint8Array) => data.byteLength);
+    const flush = vi.fn();
+    const close = vi.fn();
+    const createWritable = vi.fn();
+    const handle = {
+      kind: 'file',
+      getFile: vi.fn(async () => ({ size: 12, lastModified: 1 })),
+      createWritable,
+      createSyncAccessHandle: vi.fn(async () => ({ write, flush, close })),
+    };
+    const getFileHandle = vi.fn().mockResolvedValue(handle);
+    const backend = new WebAccessFS({ getFileHandle } as unknown as FileSystemDirectoryHandle);
+    seedFile(backend, '/big.bin');
+    await backend.write('/big.bin', new Uint8Array(4), 8);
+    expect(write).toHaveBeenCalledWith(expect.any(Uint8Array), { at: 8 });
+    expect(flush).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(createWritable).not.toHaveBeenCalled();
+    expect(backend.index.get('/big.bin')?.size).toBe(12);
+  });
+
+  it('falls back to createWritable when the sync access handle is locked on write', async () => {
+    const writable = { write: vi.fn(), seek: vi.fn(), close: vi.fn() };
+    const handle = {
+      kind: 'file',
+      getFile: vi.fn(async () => ({ size: 4, lastModified: 1 })),
+      createWritable: vi.fn(async () => writable),
+      createSyncAccessHandle: vi.fn(async () => {
+        throw new DOMException('locked', 'NoModificationAllowedError');
+      }),
+    };
+    const getFileHandle = vi.fn().mockResolvedValue(handle);
+    const backend = new WebAccessFS({ getFileHandle } as unknown as FileSystemDirectoryHandle);
+    seedFile(backend, '/big.bin');
+    await backend.write('/big.bin', new Uint8Array(4), 0);
+    expect(handle.createWritable).toHaveBeenCalledWith({ keepExistingData: true });
+    expect(writable.write).toHaveBeenCalledOnce();
   });
 
   it('falls back to a snapshot when the sync access handle is locked', async () => {

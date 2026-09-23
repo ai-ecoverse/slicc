@@ -2,6 +2,7 @@ import type { Command, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import type { JshProcessConfig } from '../jsh-executor.js';
+import type { StreamingFetch } from '../proxied-fetch.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
@@ -136,6 +137,11 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * registry-backed `ipk` commands are not registered.
    */
   fetch?: SecureFetch;
+  /**
+   * Streaming twin of `fetch` (`createProxiedStreamingFetch()`). `hf download`
+   * uses it to write weights in bounded pieces instead of buffering each file.
+   */
+  streamFetch?: StreamingFetch;
   /** Shared script discovery service for `.jsh`/`.bsh` lookup. */
   scriptCatalog?: ScriptCatalog;
   /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
@@ -271,7 +277,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     ...packageManagerCommands(options),
     ...(options.fs ? [createGelatiereCommand({ fs: options.fs })] : []),
     ...(options.fs ? [createMemoryCommand({ fs: options.fs })] : []),
-    ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
+    ...(options.fetch
+      ? [createHfCommand({ fetch: options.fetch, streamFetch: options.streamFetch })]
+      : []),
     createFfmpegCommand(),
     createFfprobeCommand(),
     createWebhookCommand(options.webhook),

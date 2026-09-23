@@ -2,9 +2,12 @@ import 'fake-indexeddb/auto';
 import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
+import type { StreamingFetch } from '../../../src/shell/proxied-fetch.js';
 import {
   DEFAULT_HF_CONCURRENCY,
   downloadHfRepo,
+  HF_INCOMPLETE_SUFFIX,
+  HF_STREAM_WRITE_BYTES,
   HfFileDownloadError,
   type HfFileEvent,
 } from '../../../src/shell/supplemental-commands/hf-download.js';
@@ -600,6 +603,193 @@ describe('downloadHfRepo download pool', () => {
     await waitFor(() => g.inFlight().length === 2, 'both in flight');
     for (const f of g.inFlight()) g.release(f);
     await expect(run).resolves.toMatchObject({ downloaded: 2 });
+  });
+});
+
+/** A streaming fetch that yields `body` in `chunk`-sized pieces, optionally dying part-way. */
+function makeStreamFetch(
+  files: Record<string, Uint8Array>,
+  opts: { chunk?: number; dieAfter?: number; contentLength?: number } = {}
+): { fetch: StreamingFetch; cancelled: string[] } {
+  const cancelled: string[] = [];
+  const fetch: StreamingFetch = async (url) => {
+    const m = url.match(/\/resolve\/[^/]+\/(.+)$/);
+    const body = m ? files[m[1]] : undefined;
+    const chunk = opts.chunk ?? 3;
+    async function* gen(): AsyncGenerator<Uint8Array> {
+      for (let at = 0; body && at < body.byteLength; at += chunk) {
+        if (opts.dieAfter !== undefined && at >= opts.dieAfter) {
+          throw new TypeError('network error');
+        }
+        yield body.slice(at, at + chunk);
+      }
+    }
+    return {
+      status: body ? 200 : 404,
+      statusText: body ? 'OK' : 'Not Found',
+      headers: {},
+      url,
+      contentLength: body ? (opts.contentLength ?? body.byteLength) : undefined,
+      body: gen(),
+      cancel: async () => {
+        cancelled.push(url);
+      },
+    };
+  };
+  return { fetch, cancelled };
+}
+
+describe('downloadHfRepo streamed path (#3441)', () => {
+  let fs: VirtualFS;
+  beforeEach(async () => {
+    fs = await newFs();
+  });
+
+  it('writes the body in bounded pieces and never buffers the whole file', async () => {
+    const size = HF_STREAM_WRITE_BYTES * 2 + 5;
+    const big = new Uint8Array(size);
+    for (let i = 0; i < size; i += 997) big[i] = i & 0xff;
+    const { fetch: streamFetch } = makeStreamFetch({ 'model.bin': big }, { chunk: 1 << 20 });
+    const buffered = makeFetch({});
+    const appended: number[] = [];
+    const appendFile = fs.appendFile.bind(fs);
+    fs.appendFile = async (path, data) => {
+      if (path === '/m/model.bin') appended.push((data as Uint8Array).byteLength);
+      return appendFile(path, data);
+    };
+    const r = await downloadHfRepo({
+      fetch: buffered,
+      streamFetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      files: ['model.bin'],
+    });
+    expect(r).toMatchObject({ downloaded: 1, totalBytes: size });
+    expect(appended).toEqual([HF_STREAM_WRITE_BYTES, HF_STREAM_WRITE_BYTES, 5]);
+    const back = (await fs.readFile('/m/model.bin', { encoding: 'binary' })) as Uint8Array;
+    expect(back.byteLength).toBe(size);
+    expect(Buffer.compare(Buffer.from(back), Buffer.from(big))).toBe(0);
+    expect(await fs.exists(`/m/model.bin${HF_INCOMPLETE_SUFFIX}`)).toBe(false);
+  });
+
+  it('charges a streamed file one write piece, so large files share the budget', async () => {
+    // Unsized files: the buffered path charges each the whole budget and runs
+    // them one at a time. A streamed body only ever holds one piece.
+    let active = 0;
+    let peak = 0;
+    const release: Array<() => void> = [];
+    const streamFetch: StreamingFetch = async (url) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => release.push(resolve));
+      async function* body(): AsyncGenerator<Uint8Array> {
+        yield bytes('x');
+        active -= 1;
+      }
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        url,
+        contentLength: 1,
+        body: body(),
+        cancel: async () => undefined,
+      };
+    };
+    const run = downloadHfRepo({
+      fetch: makeFetch({}),
+      streamFetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      files: ['a.bin', 'b.bin', 'c.bin'],
+      concurrency: 3,
+      maxBytesInFlight: 3 * HF_STREAM_WRITE_BYTES,
+    });
+    await waitFor(() => release.length === 3, 'three streams in flight');
+    for (const r of release) r();
+    await expect(run).resolves.toMatchObject({ downloaded: 3 });
+    expect(peak).toBe(3);
+  });
+
+  it('leaves an incomplete marker when the transfer dies, and re-fetches on the next run', async () => {
+    const files = { 'a.bin': bytes('0123456789') };
+    const dying = makeStreamFetch(files, { dieAfter: 6 });
+    await expect(
+      downloadHfRepo({
+        fetch: makeFetch({}),
+        streamFetch: dying.fetch,
+        fs,
+        repo: 'owner/name',
+        targetDir: '/m',
+        files: ['a.bin'],
+      })
+    ).rejects.toMatchObject({ name: 'HfFileDownloadError', file: 'a.bin' });
+    // Without a declared size, presence alone used to skip this torn file.
+    expect(await fs.exists(`/m/a.bin${HF_INCOMPLETE_SUFFIX}`)).toBe(true);
+
+    const r = await downloadHfRepo({
+      fetch: makeFetch({}),
+      streamFetch: makeStreamFetch(files).fetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      files: ['a.bin'],
+    });
+    expect(r).toMatchObject({ downloaded: 1, skipped: 0 });
+    expect(await fs.readFile('/m/a.bin')).toBe('0123456789');
+    expect(await fs.exists(`/m/a.bin${HF_INCOMPLETE_SUFFIX}`)).toBe(false);
+  });
+
+  it('fails a body shorter than its declared length', async () => {
+    const { fetch: streamFetch } = makeStreamFetch(
+      { 'a.bin': bytes('abc') },
+      { contentLength: 10 }
+    );
+    await expect(
+      downloadHfRepo({
+        fetch: makeFetch({}),
+        streamFetch,
+        fs,
+        repo: 'owner/name',
+        targetDir: '/m',
+        files: ['a.bin'],
+      })
+    ).rejects.toThrow(/short read for a\.bin: got 3 of 10 bytes/);
+    expect(await fs.exists(`/m/a.bin${HF_INCOMPLETE_SUFFIX}`)).toBe(true);
+  });
+
+  it('cancels the body of an error status without touching the VFS', async () => {
+    const { fetch: streamFetch, cancelled } = makeStreamFetch({});
+    await expect(
+      downloadHfRepo({
+        fetch: makeFetch({}),
+        streamFetch,
+        fs,
+        repo: 'owner/name',
+        targetDir: '/m',
+        files: ['missing.bin'],
+      })
+    ).rejects.toThrow(/HTTP 404 Not Found for missing\.bin/);
+    expect(cancelled).toHaveLength(1);
+    expect(await fs.exists('/m/missing.bin')).toBe(false);
+  });
+
+  it('attaches the host to a transport failure', async () => {
+    const streamFetch: StreamingFetch = async () => {
+      throw new TypeError('Failed to fetch');
+    };
+    await expect(
+      downloadHfRepo({
+        fetch: makeFetch({}),
+        streamFetch,
+        fs,
+        repo: 'owner/name',
+        targetDir: '/m',
+        files: ['a.bin'],
+      })
+    ).rejects.toThrow(/request to huggingface\.co failed \(Failed to fetch\)/);
   });
 });
 
