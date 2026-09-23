@@ -585,6 +585,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       webhook: options.webhook,
       crontask: options.crontask,
       getParentJid: options.getParentJid,
+      isScoop: options.isScoop,
       buildProcessConfig: this.resolveJshProcessConfig,
       // Thread the manager into `ps` / `kill`. When the
       // shell is constructed without one (extension offscreen,

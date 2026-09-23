@@ -154,8 +154,8 @@ export interface PlaywrightState {
   appTabId: string | null;
   /** HAR recorder instance (created lazily) */
   harRecorder: HarRecorder | null;
-  /** Whether /.playwright/ directories have been created */
-  sessionDirsCreated: boolean;
+  /** Session roots whose log/snapshot/screenshot directories have been created. */
+  sessionDirsCreated: Set<string>;
   /** Active teleport watchers keyed by targetId. */
   teleportWatchers: Map<string, TeleportWatcher>;
   /** Captured console messages keyed by targetId. Populated lazily on first `console` call. */
@@ -249,6 +249,12 @@ export interface PlaywrightHandlerCtx {
    * (#2267). An explicit `--filename` still wins.
    */
   scratchDir: string;
+  /**
+   * Root for the best-effort session log, snapshot/screenshot archives and the
+   * default `state-save` file: `/.playwright` for the cone and terminal, the
+   * scoop's own `<scratchDir>/.playwright` in a scoop (`sessionRootFor`).
+   */
+  sessionRoot: string;
   /**
    * `browser.withTab` with this invocation's {@link signal} already bound —
    * the way a handler takes a tab hold.

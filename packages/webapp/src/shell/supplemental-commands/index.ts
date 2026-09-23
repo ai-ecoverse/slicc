@@ -149,6 +149,12 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    */
   getParentJid?: () => string | undefined;
   /**
+   * True when the shell is owned by a scoop. Moves playwright-cli's
+   * best-effort session log into the scoop's scratch directory so it never
+   * raises a write approval (#3440).
+   */
+  isScoop?: () => boolean;
+  /**
    * Process manager threaded into `ps` / `kill`. When omitted,
    * those commands fall back to `globalThis.__slicc_pm`
    * (published by `createKernelHost`). Tests prefer DI; production
@@ -372,7 +378,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     wireTeleportSelectionFromShim();
     commands.push(
       ...PLAYWRIGHT_COMMAND_NAMES.map((name) =>
-        createPlaywrightCommand(name, options.browserAPI, options.fs!)
+        createPlaywrightCommand(name, options.browserAPI, options.fs!, {
+          isScoop: options.isScoop,
+        })
       )
     );
   }

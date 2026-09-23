@@ -1044,7 +1044,7 @@ retried safely. Neither errors nor the rotation receipt print credentials.
 
 Browser automation is also exposed as shell commands: `playwright-cli`, `playwright`, and `puppeteer`.
 
-- **Shared state across aliases**: all three names operate on the same current tab, snapshot cache, cookies/storage context, and `/.playwright/session.md` history.
+- **Shared state across aliases**: all three names operate on the same current tab, snapshot cache, cookies/storage context, and `session.md` history (see [Session files](#session-files)).
 - **Default targeting**: `open` / `tab-new` open in the background by default, but if there is no current browser target yet, the first opened tab becomes current so `snapshot` works immediately.
 - **Fresh refs required**: `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, and similar state-changing commands invalidate prior snapshot refs. After history navigation or reload, run `snapshot` again before using refs.
 - **Cookie convenience forms**: `cookie-set <name> <value>` and `cookie-delete <name>` use the current page URL when `--domain` and `--path` are omitted.
@@ -1067,9 +1067,12 @@ playwright-cli cookie-set theme dark
 
 ### Session files
 
-- `/.playwright/session.md` — chronological command log
-- `/.playwright/snapshots/` — saved accessibility snapshots for state-changing commands that auto-snapshot
-- `/.playwright/screenshots/` — saved screenshots
+Session files live under a per-unit session root: `/.playwright/` for the cone and the terminal, and `$TMPDIR/.playwright/` (`/tmp/<cone>/<scoop>/.playwright/`) in a scoop. A scoop can always write its own scratch directory, so this best-effort logging never raises a sudo approval, and scoops never overwrite each other's logs (#3440).
+
+- `<root>/session.md` — chronological command log
+- `<root>/snapshots/` — saved accessibility snapshots for state-changing commands that auto-snapshot
+- `<root>/screenshots/` — saved screenshots
+- `<root>/storage-state.json` — default `state-save` output when no filename is given
 
 Use the skill doc at `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
 

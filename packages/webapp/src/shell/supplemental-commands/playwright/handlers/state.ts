@@ -19,6 +19,7 @@ export const stateSaveHandler: PlaywrightHandler = async ({
   fs,
   positional,
   flags,
+  sessionRoot,
   onTab,
 }) => {
   const tab = requireTab(flags);
@@ -26,7 +27,7 @@ export const stateSaveHandler: PlaywrightHandler = async ({
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
 
-  const savePath = flags['filename'] ?? positional[0] ?? '/.playwright/storage-state.json';
+  const savePath = flags['filename'] ?? positional[0] ?? `${sessionRoot}/storage-state.json`;
 
   let cookies: unknown[] = [];
   let localStorageItems: Array<{ name: string; value: string }> = [];

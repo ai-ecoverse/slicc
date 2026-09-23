@@ -131,7 +131,7 @@ Subtleties:
 - **`writablePaths` are always readable too.** A true read-nothing sandbox needs both `visiblePaths: []` AND `writablePaths: []`.
 - **Mounts remain readable in `shared-readonly`** (the default) regardless of `visiblePaths`. `private` does **not** auto-include mounts — name a mount in `visiblePaths` / `writablePaths` if the scoop needs it. That's how a mount cannot silently expand every child's authority.
 - **`allowedCommands` applies recursively** — pipelines, command substitutions, and network commands are all gated. Pass `["*"]` for explicit unrestricted.
-- **List every absolute root the scoop's tools write to.** Some tool families write outside the scratch dir — `playwright-cli` logs sessions and screenshots to `/.playwright/` — so include those roots in `writablePaths` (any spelling works: `/x`, `/x/`, `/x/**`), or every such write escalates to you for approval. Prefer pointing skills at `/scoops/<folder>/`, `/shared/`, or `/tmp/` over inventing new VFS roots.
+- **List every absolute root the scoop's tools write to.** Include any root outside the scoop's folder and `/tmp/` in `writablePaths` (any spelling works: `/x`, `/x/`, `/x/**`), or every such write escalates to you for approval. `playwright-cli` needs nothing here: in a scoop its session log, snapshots and screenshot archive go to the scoop's own `$TMPDIR/.playwright/`, not `/.playwright/`. Prefer pointing skills at `/scoops/<folder>/`, `/shared/`, or `/tmp/` over inventing new VFS roots.
 
 ### How to choose
 
