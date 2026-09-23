@@ -252,3 +252,89 @@ describe('sync FS bridge (integration)', () => {
     expect(out.stdout.trim()).toBe('original original');
   });
 });
+
+describe('sync FS bridge: Node PathLike arguments', () => {
+  it('readFileSync accepts a file: URL (percent-decoded, query/hash dropped)', async () => {
+    const ctx = makeCtx({ files: { '/workspace/my data.json': '{"ok":true}' } });
+    const out = await runCode(
+      `const fs = require('fs');
+       const u = new URL('file:///workspace/my%20data.json?v=1#x');
+       console.log(fs.readFileSync(u, 'utf8'));`,
+      ctx
+    );
+    expect(out.stderr).toBe('');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('{"ok":true}');
+  });
+
+  it('every path-taking sync method accepts URL and Buffer paths', async () => {
+    const ctx = makeCtx({ files: { '/workspace/src.txt': 'abc' } });
+    const out = await runCode(
+      `const fs = require('fs');
+       const U = (p) => new URL('file://' + p);
+       const B = (p) => Buffer.from(p);
+       fs.mkdirSync(U('/workspace/d'), { recursive: true });
+       fs.writeFileSync(U('/workspace/d/a.txt'), 'hi');
+       fs.appendFileSync(B('/workspace/d/a.txt'), '!');
+       fs.copyFileSync(U('/workspace/src.txt'), B('/workspace/d/b.txt'));
+       fs.renameSync(B('/workspace/d/b.txt'), U('/workspace/d/c.txt'));
+       fs.accessSync(U('/workspace/d/c.txt'));
+       fs.chmodSync(U('/workspace/d/c.txt'), 0o644);
+       fs.truncateSync(U('/workspace/d/c.txt'), 2);
+       console.log(fs.readFileSync(B('/workspace/d/a.txt'), 'utf8'));
+       console.log(fs.readFileSync(U('/workspace/d/c.txt'), 'utf8'));
+       console.log(fs.existsSync(U('/workspace/d/c.txt')), fs.statSync(U('/workspace/d')).isDirectory(),
+         fs.lstatSync(B('/workspace/d/a.txt')).isFile());
+       console.log(fs.realpathSync(U('/workspace/d/../d')));
+       console.log(JSON.stringify(fs.readdirSync(U('/workspace/d')).sort()));
+       fs.cpSync(U('/workspace/d'), U('/workspace/e'));
+       fs.unlinkSync(U('/workspace/e/a.txt'));
+       fs.rmSync(U('/workspace/e'), { recursive: true });
+       fs.rmdirSync(B('/workspace/d'), { recursive: true });
+       console.log(fs.existsSync('/workspace/d'), fs.existsSync('/workspace/e'));
+       console.log(fs.mkdtempSync(U('/tmp/x-')).startsWith('/tmp/x-'));`,
+      ctx
+    );
+    expect(out.stderr).toBe('');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual([
+      'hi!',
+      'ab',
+      'true true true',
+      '/workspace/d',
+      '["a.txt","c.txt"]',
+      'false false',
+      'true',
+    ]);
+  });
+
+  it('a file:///dev/stdin URL reaches the stdio overlay', async () => {
+    const ctx = makeCtx({ stdin: 'piped' });
+    const out = await runCode(
+      `const fs = require('fs');
+       console.log(fs.readFileSync(new URL('file:///dev/stdin'), 'utf8').trim());`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('piped');
+  });
+
+  it('rejects non-file URLs and non-PathLike values like Node', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const fs = require('fs');
+       for (const p of [new URL('https://example.com/x'), undefined, {}]) {
+         try { fs.statSync(p); console.log('NO'); } catch (e) { console.log(e.code); }
+       }
+       console.log(fs.existsSync(undefined), fs.existsSync(new URL('https://x.test/')));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual([
+      'ERR_INVALID_URL_SCHEME',
+      'ERR_INVALID_ARG_TYPE',
+      'ERR_INVALID_ARG_TYPE',
+      'false false',
+    ]);
+  });
+});

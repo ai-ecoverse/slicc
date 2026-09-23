@@ -1,6 +1,7 @@
 import { bufferFrom } from './buffer-from.js';
 import { EventEmitter } from './node-events.js';
 import { Readable } from './node-stream.js';
+import { nodeUrl } from './node-url.js';
 import { UTIL_PROMISIFY_CUSTOM } from './node-util.js';
 
 export interface CpExecResult {
@@ -118,8 +119,15 @@ function cpNormalizeEnv(env: unknown): Record<string, string> | undefined {
 
 function cpNormalizeCwd(cwd: unknown): string | undefined {
   if (cwd === undefined) return undefined;
-  if (typeof cwd !== 'string') throw invalidArgType('options.cwd', 'string', cwd);
-  return cwd;
+  if (typeof cwd === 'string') return cwd;
+  if (typeof cwd === 'object' && cwd !== null && typeof (cwd as URL).href === 'string') {
+    try {
+      return nodeUrl.fileURLToPath((cwd as URL).href);
+    } catch {
+      throw invalidArgType('options.cwd', 'string or an instance of URL (file:)', cwd);
+    }
+  }
+  throw invalidArgType('options.cwd', 'string or an instance of URL', cwd);
 }
 
 function cpEncodeChunk(text: string, encoding: string | null | undefined): CpChunk {

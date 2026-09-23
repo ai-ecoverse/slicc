@@ -280,3 +280,49 @@ describe('fsBridge extended operations', () => {
     expect(out.stdout.trim()).toBe('string abc');
   });
 });
+
+describe('fsBridge async ops: Node PathLike arguments', () => {
+  it('fs.promises methods accept URL and Buffer paths', async () => {
+    const ctx = makeCtx({ files: { '/workspace/src.txt': 'abc' } });
+    const out = await runCode(
+      `const fs = require('fs/promises');
+       const U = (p) => new URL('file://' + p);
+       const B = (p) => Buffer.from(p);
+       await fs.mkdir(U('/workspace/d'));
+       await fs.writeFile(U('/workspace/d/a.txt'), 'hi');
+       await fs.appendFile(B('/workspace/d/a.txt'), '!');
+       await fs.copyFile(U('/workspace/src.txt'), B('/workspace/d/b.txt'));
+       await fs.rename(B('/workspace/d/b.txt'), U('/workspace/d/c.txt'));
+       await fs.access(U('/workspace/d/c.txt'));
+       await fs.cp(U('/workspace/d'), U('/workspace/e'), { recursive: true });
+       console.log(await fs.readFile(U('/workspace/d/a.txt'), 'utf8'));
+       console.log((await fs.stat(U('/workspace/e'))).isDirectory, await fs.exists(U('/workspace/e/c.txt')));
+       console.log(JSON.stringify((await fs.readdir(U('/workspace/e'))).sort()));
+       await fs.unlink(U('/workspace/e/a.txt'));
+       await fs.rm(U('/workspace/e'), { recursive: true });
+       console.log(await fs.exists('/workspace/e/c.txt'));`,
+      ctx
+    );
+    expect(out.stderr).toBe('');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual([
+      'hi!',
+      'true true',
+      '["a.txt","c.txt"]',
+      'false',
+    ]);
+  });
+
+  it('an invalid path rejects instead of throwing synchronously', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const fs = require('fs');
+       const p = fs.promises.readFile(new URL('https://example.com/x'));
+       console.log(p instanceof Promise);
+       try { await p; } catch (e) { console.log(e.code); }`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual(['true', 'ERR_INVALID_URL_SCHEME']);
+  });
+});

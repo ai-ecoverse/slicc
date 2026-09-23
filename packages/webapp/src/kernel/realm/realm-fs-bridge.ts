@@ -1,3 +1,4 @@
+import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
 import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
@@ -308,9 +309,54 @@ export function createFsBridge(
     promises: null as unknown,
   };
   overlayAsyncStdio(bridge, stdio);
+  acceptPathLikeArgs(bridge, ASYNC_PATH_ARGS, { promises: true });
   bridge.promises = bridge;
   return bridge;
 }
+
+const ASYNC_PATH_ARGS: { [K in keyof ReturnType<typeof createFsBridge>]?: PathArgLayout } = {
+  readFile: 'fd',
+  readFileBinary: 'fd',
+  writeFile: 'fd',
+  writeFileBinary: 'fd',
+  appendFile: 'fd',
+  cp: 'pair',
+  rm: 'path',
+  readDir: 'path',
+  readdir: 'path',
+  exists: 'path',
+  stat: 'path',
+  mkdir: 'path',
+  mkdtemp: 'path',
+  rename: 'pair',
+  access: 'path',
+  unlink: 'path',
+  rmdir: 'path',
+  copyFile: 'pair',
+  fetchToFile: 'second',
+};
+
+const SYNC_PATH_ARGS: { [K in keyof ReturnType<typeof createSyncFsBridge>]?: PathArgLayout } = {
+  readFileSync: 'fd',
+  writeFileSync: 'fd',
+  appendFileSync: 'fd',
+  truncateSync: 'path',
+  existsSync: 'path',
+  accessSync: 'path',
+  mkdirSync: 'path',
+  statSync: 'path',
+  lstatSync: 'path',
+  realpathSync: 'path',
+  readdirSync: 'path',
+  copyFileSync: 'pair',
+  cpSync: 'pair',
+  chmodSync: 'path',
+  mkdtempSync: 'path',
+  rmSync: 'path',
+  rmdirSync: 'path',
+  unlinkSync: 'path',
+  renameSync: 'pair',
+};
 
 function syncFsErr(code: string, resolved: string, verb = ''): Error & { code: string } {
   return Object.assign(new Error(`${code}: sync-fs, ${verb ? `${verb} ` : ''}'${resolved}'`), {
@@ -695,5 +741,15 @@ export function createSyncFsBridge(
     },
   };
   overlaySyncStdio(ops, stdio);
+  acceptPathLikeArgs(ops, SYNC_PATH_ARGS);
+  const existsSync = ops.existsSync;
+
+  ops.existsSync = (path) => {
+    try {
+      return existsSync(path);
+    } catch {
+      return false;
+    }
+  };
   return ops;
 }
