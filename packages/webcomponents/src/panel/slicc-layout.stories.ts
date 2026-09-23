@@ -9,10 +9,8 @@ import { SliccPanel } from './slicc-panel.js';
 /**
  * Stories for the panel system — `<slicc-layout>` plus `SliccPanel`.
  *
- * These exist so the arrangement is REVIEWABLE. The PR screenshot workflow
- * (`.github/workflows/storybook-screenshots.yml`) captures affected stories in light
- * and dark on every PR touching this package, selected by directory: a change under
- * `src/panel/` picks up the stories declared here. Without them the whole panel
+ * These exist so the arrangement is REVIEWABLE. Agents can capture these stories in
+ * light and dark for PRs touching this package. Without them the whole panel
  * system was invisible in review, which is how a status bar rendered beside the price
  * counter for a full session before anyone saw it.
  *

@@ -11,10 +11,9 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } 
  *   4. Launch Playwright Chromium at a fixed desktop viewport (1280×900).
  *   5. For each affected story × {light, dark} navigate to
  *      `iframe.html?id=<id>&globals=theme:<theme>` and screenshot to `<out>`.
- *   6. Emit `<out>/manifest.json` (schema below) so the CI workflow (Task 2)
- *      can upload the PNGs and build the sticky PR comment.
+ *   6. Emit `<out>/manifest.json` (schema below) for review and optional upload.
  *
- * Manifest schema (v2) — Task 2 reads this:
+ * Manifest schema (v2):
  *   {
  *     "version": 2,
  *     "generatedAt": ISO8601,

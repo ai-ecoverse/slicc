@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Capture every screen in packages/ios-app/screenshot-screens.json from a
 // built SliccFollower.app on an iOS Simulator, writing PNGs + a
-// manifest.json in the Storybook-screenshots shape for the R2 upload and
-// sticky-comment steps of .github/workflows/ios-screenshots.yml.
+// manifest.json in the Storybook-screenshots shape for local review and sharing.
 //
 // Usage:
 //   node packages/dev-tools/tools/ios-screenshots.mjs \

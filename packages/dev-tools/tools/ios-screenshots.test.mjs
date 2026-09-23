@@ -1,4 +1,4 @@
-// Pins the pure logic of the iOS PR screenshots job: registry validation
+// Pins the pure logic of local iOS screenshot capture: registry validation
 // (a bad edit fails legibly), version-sorted simulator selection (dict order
 // is unspecified and older runtimes fail at launch), and the manifest shape
 // the workflow's upload + comment steps rely on. The live registry is also

@@ -348,8 +348,7 @@ What runs on a stack:
   `cloudflare-worker` job (`RUN_CLOUDFLARE_STAGING`), not only in
   `worker-staging.yml`. Stacked runs still build, dry-run, typecheck, and
   coverage-gate the Worker; they skip turnstyle, R2 archive, deploy,
-  secrets, and smoke. `worker-staging.yml`, `ios-screenshots.yml`, and
-  `storybook-screenshots.yml` stay `branches: [main]`.
+  secrets, and smoke. `worker-staging.yml` stays `branches: [main]`.
 
 CI measures a stacked PR's first-load delta against its own base
 (`origin/<base>`). Locally on a stack, pass `--baseline=origin/<parent>` to

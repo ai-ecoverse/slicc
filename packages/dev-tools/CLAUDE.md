@@ -52,8 +52,8 @@ Each bold gate is an `npm run` script unless the raw command is shown.
 ### Other tools
 
 - **Cross-impl vectors**: `tools/gen-mask-vectors.mjs` (mask parity), `gen-theme-vectors.mjs` (`npx tsx`; regen after `theme-engine.ts`, asserted by `theme-vectors.test.ts`/`ThemeEngineTests.swift`).
-- **iOS PR screenshots**: `tools/ios-screenshots.mjs` (+ `-lib.mjs`) reads `screenshot-screens.json`. Optional `appearance` (`light`/`dark`) pins the simulator; omitted screens are captured dark.
-- **Storybook PR screenshots**: `tools/storybook-affected-screenshots.mjs` (+ `storybook-affected-stories-lib.mjs`); pair with `build-storybook -w @slicc/webcomponents`; R2 `storybook-screenshots-upload.mjs`. [details](../../docs/dev-tools-details.md#storybook-screenshots-upload).
+- **iOS screenshots**: `tools/ios-screenshots.mjs` (+ `-lib.mjs`) reads `screenshot-screens.json` for local captures. Optional `appearance` (`light`/`dark`) pins the simulator; omitted screens are captured dark.
+- **Storybook screenshots**: `tools/storybook-affected-screenshots.mjs` (+ `storybook-affected-stories-lib.mjs`); pair with `build-storybook -w @slicc/webcomponents`. Agents can use `storybook-screenshots-upload.mjs` to share selected captures through R2. [details](../../docs/webcomponents-details.md#storybook-pr-screenshots).
 - **Agent merch grid**: `tools/agent-merch.mjs` (+ `agent-merch-lib.mjs`) — hash-stable `<slicc-agent-avatar>` grid → 300-dpi PNGs in `dist/merch/` (Playwright; build `@slicc/webcomponents` first, `--help`). [details](../../docs/dev-tools-details.md#agent-merch-grid).
 - **CI phase timings**: `tools/ci-job-timing.mjs` (+ `-lib.mjs`) — step timestamps → Markdown summary + JSON artifact; both Cloudflare staging workflows.
 - **Preflight deps check**: `tools/preflight-deps.mjs` (via `pretypecheck`/`pretest`).

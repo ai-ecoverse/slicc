@@ -129,10 +129,9 @@ objects each within three minutes, each releasing the queue seconds after its fi
 Runs Dependabot triggers skip every Cloudflare step (`RUN_CLOUDFLARE_STAGING`), like fork
 PRs: they receive only Dependabot secrets, so the API token is empty there.
 
-The limit is account-wide, so the other R2 uploaders share it and carry the same
-backoff: `packages/dev-tools/tools/storybook-screenshots-upload.mjs` (bucket
-`slicc-pr-screenshots`) and the inline uploader in
-`.github/workflows/ios-screenshots.yml`. Change one, check the others.
+The limit is account-wide, so manual uploads through
+`packages/dev-tools/tools/storybook-screenshots-upload.mjs` (bucket
+`slicc-pr-screenshots`) share it. Keep that uploader's backoff in sync.
 
 ### Maintain age-based garbage collection
 

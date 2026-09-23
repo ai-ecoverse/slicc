@@ -4,7 +4,7 @@ import { type QuickLookOptions, SliccQuickLook } from './slicc-quick-look.js';
 /**
  * Render the overlay immediately rather than behind a click.
  *
- * The PR screenshot job captures a story as it mounts, so a click-to-open story
+ * Screenshot capture records a story as it mounts, so a click-to-open story
  * photographs the button and never the preview. Stories that exist to show what
  * the preview LOOKS like open themselves.
  */
