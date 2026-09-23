@@ -112,6 +112,16 @@ export interface VfsAdapterOptions {
   listingStatsTtlMs?: number;
 }
 
+/**
+ * `/bin` is the merged-`/usr` alias of the synthetic `/usr/bin` (as on modern
+ * Linux, where `/bin -> usr/bin`): `/bin/sh` is where make, `SHELL=/bin/sh`
+ * and `posix_spawn` callers look for the shell.
+ */
+function binAlias(normalized: string): string {
+  if (normalized === '/bin') return '/usr/bin';
+  return normalized.startsWith('/bin/') ? `/usr${normalized}` : normalized;
+}
+
 export class VfsAdapter implements IFileSystem {
   private registeredCommandsFn: (() => string[]) | null = null;
   /**
@@ -236,7 +246,8 @@ export class VfsAdapter implements IFileSystem {
    * `stat` and `lstat` share one answer: none of these paths can be a
    * symlink, so following links changes nothing.
    */
-  private virtualUsrStat(normalized: string): FsStat | null {
+  private virtualUsrStat(path: string): FsStat | null {
+    const normalized = binAlias(path);
     if (normalized === '/usr' || normalized === '/usr/bin') {
       return {
         isFile: false,
@@ -486,7 +497,7 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
       if (normalized === '/usr') return ['bin'];
-      if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
+      if (binAlias(normalized) === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
       // Fast path: synchronous CacheFS read for non-mounted paths
       const fast = this.vfs.readDirSync(normalized);
       if (fast !== null) return fast.map((e) => e.name);
@@ -505,7 +516,7 @@ export class VfsAdapter implements IFileSystem {
       if (normalized === '/usr') {
         return [{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }];
       }
-      if (normalized === '/usr/bin') {
+      if (binAlias(normalized) === '/usr/bin') {
         return this.getVirtualBinCommands()
           .slice()
           .sort()
