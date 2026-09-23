@@ -61,8 +61,9 @@ Notes:
   - With no [files...], every file in the repo tree is downloaded.
   - Existing files at the destination with a matching byte length are skipped
     unless --force is passed.
-  - Downloads are held in memory until written: a file starts only while the
-    ones in flight fit --max-in-flight-mb (larger or unsized files run alone).
+  - A file starts only while the ones in flight fit --max-in-flight-mb. Where
+    bodies stream to disk (CLI), each file counts as one 8 MiB write piece;
+    where they are buffered whole, larger or unsized files run alone.
   - The first failed file stops the rest.
   - Background-job logs get a progress line every few seconds.
   - Weights are read by the speech engines via the preview SW from the
