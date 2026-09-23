@@ -1,10 +1,10 @@
 import type { PyodideInterface } from 'pyodide';
 import {
-  createLiveVfsPlugin,
   flushLiveVfs,
   invalidateLiveVfs,
-  type LiveFsApi,
+  type LiveMountFsApi,
   type LiveVfsPlugin,
+  mountLiveVfsDirs,
 } from './live-vfs-fs.js';
 import { installPySubprocess } from './py-subprocess.js';
 import type { RealmPortLike } from './realm-rpc.js';
@@ -15,23 +15,12 @@ import { createSyncExecSabTransport } from './sync-sab-bridge.js';
 
 export const PY_FS_ENV = 'SLICC_PY_FS';
 
-interface PyodideFsForLive extends LiveFsApi {
-  filesystems: { SLICC_LIVE_FS?: LiveVfsPlugin };
-  mkdirTree(path: string): void;
-  mount(type: LiveVfsPlugin, opts: unknown, mountpoint: string): unknown;
-}
-
 export interface PyLiveVfs {
   plugin: LiveVfsPlugin;
 
   flush(): void;
 
   mounted: string[];
-}
-
-function outermostDirs(dirs: readonly string[]): string[] {
-  const norm = [...new Set(dirs.map((d) => d.replace(/\/+$/, '') || '/'))].sort();
-  return norm.filter((d) => !norm.some((o) => o !== d && (o === '/' || d.startsWith(`${o}/`))));
 }
 
 export function mountPyLiveVfs(
@@ -45,21 +34,13 @@ export function mountPyLiveVfs(
   const bridge = resolveSyncFsBridge(init, sab);
   if (!bridge || !init.syncFsToken) return undefined;
 
-  const FS = pyodide.FS as unknown as PyodideFsForLive;
-  const plugin = FS.filesystems.SLICC_LIVE_FS ?? createLiveVfsPlugin(FS);
-  FS.filesystems.SLICC_LIVE_FS = plugin;
-
-  const mounted: string[] = [];
-  for (const dir of outermostDirs(init.pyodideMountDirs ?? [init.cwd, '/tmp'])) {
-    if (dir === '/') continue;
-    try {
-      FS.mkdirTree(dir);
-      FS.mount(plugin, { root: dir, bridge }, dir);
-      mounted.push(dir);
-    } catch (err) {
-      warn(`live VFS mount of ${dir} failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  const FS = pyodide.FS as unknown as LiveMountFsApi;
+  const { plugin, mounted } = mountLiveVfsDirs(
+    FS,
+    bridge,
+    init.pyodideMountDirs ?? [init.cwd, '/tmp'],
+    warn
+  );
   if (mounted.length === 0) return undefined;
 
   const exec = createSyncExecXhrBridge(init.syncFsToken, {

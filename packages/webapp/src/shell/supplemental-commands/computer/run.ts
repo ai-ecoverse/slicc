@@ -444,6 +444,17 @@ async function verbAddUrl(
   return ok(`registered ${registered.id} (${name ?? registered.title})\n`);
 }
 
+function nativeChannelForSshAdd(
+  deps: ComputerCommandDeps,
+  follower: ConnectedFollowerInfo,
+  sim: string | undefined
+): ReturnType<NonNullable<ComputerCommandDeps['nativeComputer']>> | undefined {
+  if (!follower.computer || sim) return undefined;
+  return (
+    deps.nativeComputer?.(follower.runtimeId) ?? nativeChannelFromRpc(deps, follower.runtimeId)
+  );
+}
+
 async function verbAddSsh(
   args: string[],
   ctx: CommandContext,
@@ -476,9 +487,7 @@ async function verbAddSsh(
     return fail('add ssh: --sim needs an exec-capable Mac follower');
   }
   const { SshComputerBackend, probeSsh } = await import('../../../computers/adapters/ssh.js');
-  const native = follower.computer
-    ? (deps.nativeComputer?.(follower.runtimeId) ?? nativeChannelFromRpc(deps, follower.runtimeId))
-    : undefined;
+  const native = nativeChannelForSshAdd(deps, follower, sim);
   const exec = follower.exec
     ? (command: string, opts?: { timeoutMs?: number }) =>
         execOnFollower(deps, follower.runtimeId, command, opts?.timeoutMs)

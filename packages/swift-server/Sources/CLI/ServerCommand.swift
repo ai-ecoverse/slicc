@@ -80,6 +80,9 @@ struct ServerCommand: AsyncParsableCommand {
     var mount: [String] = []
 
     mutating func run() async throws {
+        
+        
+        BrokenPipeSignal.ignore()
         let config = ServerConfig.resolve(from: self)
         let logLevel = Self.loggerLevel(from: config.logLevel)
         let logDirectory = config.logDirectoryURL ?? FileLogger.defaultLogDirectory

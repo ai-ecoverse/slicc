@@ -138,7 +138,11 @@ export async function probeSsh(exec: SshExec, sim?: string): Promise<SshProbe> {
       `xcrun simctl list devices 2>/dev/null | grep -F ${shQuote(sim)} || true`,
       { timeoutMs: 15_000 }
     );
-    if (!listed.stdout.includes(sim)) throw new Error(`simulator '${sim}' not found`);
+    const rows = listed.stdout.split('\n').filter((row) => row.includes(sim));
+    if (rows.length === 0) throw new Error(`simulator '${sim}' not found`);
+    if (!rows.some((row) => row.includes('(Booted)'))) {
+      throw new Error(`simulator '${sim}' is not booted (xcrun simctl boot ${sim})`);
+    }
     return {
       ...parsed,
       capture: 'simctl',
@@ -269,12 +273,13 @@ export class SshComputerBackend implements ComputerBackend {
     this.sim = opts.sim;
     this.display = opts.display;
     this.probe = opts.probe;
-    this.native = opts.native;
-    this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!opts.native);
+
+    this.native = opts.sim ? undefined : opts.native;
+    this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!this.native);
     this.title = opts.title;
     this.frameTimeoutMs = opts.frameTimeoutMs ?? SSH_NATIVE_FRAME_TIMEOUT_MS;
     this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim, opts.display));
-    this.screenshotServesStream = !!opts.native?.onFrame;
+    this.screenshotServesStream = !!this.native?.onFrame;
     if (this.screenshotServesStream) {
       this.subscribe = (fps, onFrame, maxWidth) => this.bindSubscribe(fps, onFrame, maxWidth);
     }

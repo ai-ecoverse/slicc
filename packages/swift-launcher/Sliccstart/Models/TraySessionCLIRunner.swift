@@ -21,11 +21,11 @@ enum TraySessionCLIRunner {
         do {
             var data = try TraySessionCLI.encode(sessions, reveal: request.reveal)
             data.append(0x0A)
-            FileHandle.standardOutput.write(data)
+            try? FileHandle.standardOutput.write(contentsOf: data)
             return 0
         } catch {
             log.error("encode failed: \(error.localizedDescription, privacy: .public)")
-            FileHandle.standardError.write(Data("Sliccstart: failed to encode sessions\n".utf8))
+            try? FileHandle.standardError.write(contentsOf: Data("Sliccstart: failed to encode sessions\n".utf8))
             return 1
         }
     }
@@ -45,7 +45,7 @@ enum TraySessionCLIRunner {
         case .allow:
             return true
         case .deny:
-            FileHandle.standardError.write(Data(TraySessionCLI.deniedMessage(guiAvailable: gui).utf8))
+            try? FileHandle.standardError.write(contentsOf: Data(TraySessionCLI.deniedMessage(guiAvailable: gui).utf8))
             return false
         case .prompt:
             let (allow, persist) = TraySessionCLI.effect(of: promptForReveal(caller: caller))
@@ -53,7 +53,7 @@ enum TraySessionCLIRunner {
                 consentStore.save(persist, forConsentKey: key)
             }
             if !allow {
-                FileHandle.standardError.write(Data(TraySessionCLI.deniedMessage(guiAvailable: gui).utf8))
+                try? FileHandle.standardError.write(contentsOf: Data(TraySessionCLI.deniedMessage(guiAvailable: gui).utf8))
             }
             return allow
         }

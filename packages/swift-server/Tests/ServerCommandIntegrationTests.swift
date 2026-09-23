@@ -70,6 +70,98 @@ final class ServerCommandIntegrationTests: XCTestCase {
         )
     }
 
+    
+    
+    
+    func testServerSurvivesClosedStdoutAndStderrPipes() async throws {
+        let port = try await findAvailablePort(
+            startingFrom: 50_000 + Int.random(in: 0..<10_000)
+        )
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slicc-server-sigpipe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        let process = Process()
+        process.executableURL = serverBinaryURL()
+        process.currentDirectoryURL = packageRootURL()
+        process.arguments = ["--serve-only", "--cdp-port", "1", "--log-dir", temporaryDirectory.path]
+        process.environment = serverEnvironment(port: port)
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        let stdoutCapture = OutputCapture()
+        stdoutPipe.fileHandleForReading.readabilityHandler = { stdoutCapture.append($0.availableData) }
+        stderrPipe.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
+
+        try process.run()
+        defer {
+            if process.isRunning { process.terminate() }
+        }
+        try await waitForStatus(port: port, process: process)
+        
+        
+        try await waitForStartupOutput(process: process) { stdoutCapture.text }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        try stdoutPipe.fileHandleForReading.close()
+        try stderrPipe.fileHandleForReading.close()
+
+        
+        let statusURL = URL(string: "http://localhost:\(port)/api/status")!
+        for _ in 0..<5 {
+            _ = try? await URLSession.shared.data(from: statusURL)
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(
+            process.isRunning,
+            "slicc-server died after its stdout reader went away (status \(process.terminationStatus), "
+                + "reason \(process.terminationReason.rawValue))"
+        )
+        guard process.isRunning else { return }
+        try await waitForStatus(port: port, process: process)
+
+        let terminated = expectation(description: "orphaned slicc-server still shuts down on SIGTERM")
+        process.terminationHandler = { _ in terminated.fulfill() }
+        process.terminate()
+        await fulfillment(of: [terminated], timeout: 10)
+        XCTAssertEqual(process.terminationReason, .exit)
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    private func packageRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func serverBinaryURL() -> URL {
+        let binary = Bundle(for: Self.self).bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("slicc-server")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: binary.path), binary.path)
+        return binary
+    }
+
+    private func serverEnvironment(port: Int) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["PORT"] = String(port)
+        environment["SLICC_KEYCHAIN_NONINTERACTIVE"] = "1"
+        if let profilePath = environment["LLVM_PROFILE_FILE"] {
+            let profileDirectory = URL(fileURLWithPath: profilePath).deletingLastPathComponent()
+            environment["LLVM_PROFILE_FILE"] =
+                profileDirectory
+                .appendingPathComponent("slicc-server-\(UUID().uuidString)-%c.%p.profraw")
+                .path
+        }
+        return environment
+    }
+
     private func makeFakeBrowserExecutable(at url: URL) throws {
         let script = #"""
             #!/bin/sh
@@ -129,13 +221,8 @@ final class ServerCommandIntegrationTests: XCTestCase {
                 try? FileManager.default.removeItem(at: chromeProfileURL)
             }
         }
-        let packageRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let binary = Bundle(for: Self.self).bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("slicc-server")
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: binary.path), binary.path)
+        let packageRoot = packageRootURL()
+        let binary = serverBinaryURL()
 
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("slicc-server-integration-\(UUID().uuidString)", isDirectory: true)
@@ -150,16 +237,7 @@ final class ServerCommandIntegrationTests: XCTestCase {
         process.executableURL = binary
         process.currentDirectoryURL = packageRoot
         process.arguments = arguments + ["--log-dir", temporaryDirectory.path]
-        var environment = ProcessInfo.processInfo.environment
-        environment["PORT"] = String(port)
-        environment["SLICC_KEYCHAIN_NONINTERACTIVE"] = "1"
-        if let profilePath = environment["LLVM_PROFILE_FILE"] {
-            let profileDirectory = URL(fileURLWithPath: profilePath).deletingLastPathComponent()
-            environment["LLVM_PROFILE_FILE"] =
-                profileDirectory
-                .appendingPathComponent("slicc-server-\(UUID().uuidString)-%c.%p.profraw")
-                .path
-        }
+        var environment = serverEnvironment(port: port)
         for (name, value) in additions { environment[name] = value }
         process.environment = environment
         process.standardOutput = outputHandle
@@ -214,12 +292,21 @@ final class ServerCommandIntegrationTests: XCTestCase {
         outputURL: URL,
         process: Process
     ) async throws {
+        try await waitForStartupOutput(process: process) {
+            (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+        }
+    }
+
+    private func waitForStartupOutput(
+        process: Process,
+        readOutput: () -> String
+    ) async throws {
         
         
         
         let deadline = Date().addingTimeInterval(30)
         while Date() < deadline {
-            let output = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+            let output = readOutput()
             if output.contains("CDP proxy at ws://localhost:")
                 || output.contains("CDP proxy pre-warm failed")
             {
@@ -234,7 +321,7 @@ final class ServerCommandIntegrationTests: XCTestCase {
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        let output = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+        let output = readOutput()
         throw NSError(
             domain: "ServerCommandIntegrationTests",
             code: 2,
@@ -243,5 +330,22 @@ final class ServerCommandIntegrationTests: XCTestCase {
                     "timed out waiting for server startup output; captured: \(output)"
             ]
         )
+    }
+}
+
+private final class OutputCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(bytes: data, encoding: .utf8) ?? ""
     }
 }

@@ -515,3 +515,36 @@ export function invalidateLiveVfs(Fs: LiveFsApi, plugin: LiveVfsPlugin): void {
   if (!Fs.hashRemoveNode) return;
   for (const node of drop) Fs.hashRemoveNode(node);
 }
+
+export interface LiveMountFsApi extends LiveFsApi {
+  filesystems: { SLICC_LIVE_FS?: LiveVfsPlugin };
+  mkdirTree(path: string): void;
+  mount(type: LiveVfsPlugin, opts: LiveFsMountOpts, mountpoint: string): unknown;
+}
+
+function outermostDirs(dirs: readonly string[]): string[] {
+  const norm = [...new Set(dirs.map((d) => d.replace(/\/+$/, '') || '/'))].sort();
+  return norm.filter((d) => !norm.some((o) => o !== d && (o === '/' || d.startsWith(`${o}/`))));
+}
+
+export function mountLiveVfsDirs(
+  Fs: LiveMountFsApi,
+  bridge: SyncFsPosixBridge,
+  dirs: readonly string[],
+  warn: (message: string) => void
+): { plugin: LiveVfsPlugin; mounted: string[] } {
+  const plugin = Fs.filesystems.SLICC_LIVE_FS ?? createLiveVfsPlugin(Fs);
+  Fs.filesystems.SLICC_LIVE_FS = plugin;
+  const mounted: string[] = [];
+  for (const dir of outermostDirs(dirs)) {
+    if (dir === '/') continue;
+    try {
+      Fs.mkdirTree(dir);
+      Fs.mount(plugin, { root: dir, bridge }, dir);
+      mounted.push(dir);
+    } catch (err) {
+      warn(`live VFS mount of ${dir} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { plugin, mounted };
+}

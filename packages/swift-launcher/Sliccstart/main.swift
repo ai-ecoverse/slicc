@@ -2,6 +2,10 @@ import Foundation
 
 
 
+BrokenPipeSignal.ignore()
+
+
+
 
 
 if let request = TraySessionCLI.parse(CommandLine.arguments) {
@@ -20,7 +24,7 @@ do {
         exit(ComputerFollowCLIRunner.run(request))
     }
 } catch let error as ComputerFollowCLI.ParseError {
-    FileHandle.standardError.write(Data(error.message.utf8))
+    try? FileHandle.standardError.write(contentsOf: Data(error.message.utf8))
     exit(ComputerFollowCLI.usageExitCode)
 }
 

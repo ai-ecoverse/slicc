@@ -206,8 +206,9 @@ public final class SecretInjector: @unchecked Sendable {
         
         let store = persistedStore
         guard let persisted = await BoundedStoreCall.run({ store.loadAll() }) else {
-            FileHandle.standardError.write(
-                Data("[slicc:secrets] \(BoundedStoreCall.timeoutMessage) Keeping the previous snapshot.\n".utf8)
+            try? FileHandle.standardError.write(
+                contentsOf:
+                    Data("[slicc:secrets] \(BoundedStoreCall.timeoutMessage) Keeping the previous snapshot.\n".utf8)
             )
             return
         }
@@ -224,10 +225,11 @@ public final class SecretInjector: @unchecked Sendable {
                 
                 
                 if entry.value.utf16.count < minMaskableSecretLength {
-                    FileHandle.standardError.write(
-                        Data(
-                            "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                        ))
+                    try? FileHandle.standardError.write(
+                        contentsOf:
+                            Data(
+                                "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                            ))
                     let shortEntry = LoadedSecret(
                         name: entry.name,
                         realValue: entry.value,
@@ -262,10 +264,11 @@ public final class SecretInjector: @unchecked Sendable {
         let persistedNames = Set(loaded.map(\.name))
         for entry in await sessionStore.listAll() where !persistedNames.contains(entry.name) {
             if entry.value.utf16.count < minMaskableSecretLength {
-                FileHandle.standardError.write(
-                    Data(
-                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                    ))
+                try? FileHandle.standardError.write(
+                    contentsOf:
+                        Data(
+                            "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                        ))
                 loaded.append(
                     LoadedSecret(
                         name: entry.name,
@@ -328,10 +331,11 @@ public final class SecretInjector: @unchecked Sendable {
             
             
             if secret.value.utf16.count < minMaskableSecretLength {
-                FileHandle.standardError.write(
-                    Data(
-                        "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                    ))
+                try? FileHandle.standardError.write(
+                    contentsOf:
+                        Data(
+                            "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                        ))
                 loaded.append(
                     LoadedSecret(
                         name: secret.name,
@@ -355,10 +359,11 @@ public final class SecretInjector: @unchecked Sendable {
         
         for secret in _envFileSecrets {
             if secret.value.utf16.count < minMaskableSecretLength {
-                FileHandle.standardError.write(
-                    Data(
-                        "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                    ))
+                try? FileHandle.standardError.write(
+                    contentsOf:
+                        Data(
+                            "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                        ))
                 
                 
                 
@@ -711,10 +716,11 @@ public final class SecretInjector: @unchecked Sendable {
         if let timestampHeader, timestampHeader.isEmpty { return empty() }
 
         guard let secret = secrets.first(where: { $0.name == secretName }) else {
-            FileHandle.standardError.write(
-                Data(
-                    "[slicc:secrets] signHmac: no secret named \"\(secretName)\"\n".utf8
-                ))
+            try? FileHandle.standardError.write(
+                contentsOf:
+                    Data(
+                        "[slicc:secrets] signHmac: no secret named \"\(secretName)\"\n".utf8
+                    ))
             return empty()
         }
         guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else {

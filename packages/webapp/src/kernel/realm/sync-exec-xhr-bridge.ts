@@ -58,7 +58,7 @@ function xhrExecTransport(token: string): SyncExecTransport {
   };
 }
 
-function flushBeforeSyncExec(syncFs: SyncFsCache, fsBridge: SyncFsXhrMutatingBridge): void {
+export function flushBeforeSyncExec(syncFs: SyncFsCache, fsBridge: SyncFsXhrMutatingBridge): void {
   const mutations = syncFs.getMutations();
 
   for (const path of mutations.deleted) fsBridge.rm(path);

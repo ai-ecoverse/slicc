@@ -3,6 +3,7 @@ import { uint8ToBase64 } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComputerBackend, ComputerScreenshotOpts } from '../../../src/computers/backend.js';
 import { MINIMAL_JPEG } from '../../../src/computers/encode-frame.js';
+import { DECODABLE_PNG } from '../../../src/computers/frame-bytes.js';
 import {
   ComputerRegistry,
   resetComputerRegistryForTests,
@@ -1446,6 +1447,69 @@ describe('computer parse', () => {
     const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1', '--sim', 'UDID'], ctx);
     expect(added.exitCode).toBe(1);
     expect(added.stderr).toContain('--sim needs an exec-capable');
+  });
+
+  it('add ssh --sim on a native-capable follower captures the simulator, not the Mac desktop (#3390)', async () => {
+    const b64 = uint8ToBase64(DECODABLE_PNG);
+    const ok = (stdout: string) => ({ stdout, stderr: '', exitCode: 0 });
+    const sshExec = vi.fn(async (_runtimeId: string, command: string) => {
+      if (command.includes('SLICC_SSH_PROBE')) {
+        return ok('SLICC_SSH_PROBE Darwin screencapture xcrun idb \n');
+      }
+      if (command.includes('simctl list')) return ok('    iPhone 17 Pro Max (UDID-1) (Booted)\n');
+      if (command.includes('SLICC_SSH_B64')) return ok(`SLICC_SSH_B64 ${b64.length}\n`);
+      if (command.startsWith('dd ')) return ok(b64);
+      return ok('');
+    });
+    const capture = vi.fn();
+    const nativeComputer = vi.fn(() => ({ capture, input: vi.fn(), unwatch: vi.fn() }));
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [
+        { runtimeId: 'mac-studio', computer: true, exec: true, floatType: 'standalone' },
+      ],
+      sshExec,
+      nativeComputer,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(
+      ['add', 'ssh', 'mac-studio', '--sim', 'UDID-1', '-n', 'simphone'],
+      ctx
+    );
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('ssh:mac-studio:sim:UDID-1');
+    const shot = await cmd.execute(['screenshot'], ctx);
+    expect(shot.exitCode).toBe(0);
+    expect(nativeComputer).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(
+      sshExec.mock.calls.some((c) => c[1].includes("xcrun simctl io 'UDID-1' screenshot"))
+    ).toBe(true);
+  });
+
+  it('add ssh --sim on a native-capable follower fails loudly when the simulator is missing', async () => {
+    const sshExec = vi.fn(async (_runtimeId: string, command: string) => ({
+      stdout: command.includes('SLICC_SSH_PROBE')
+        ? 'SLICC_SSH_PROBE Darwin screencapture xcrun \n'
+        : '',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const nativeComputer = vi.fn(() => ({ capture: vi.fn(), input: vi.fn(), unwatch: vi.fn() }));
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        { runtimeId: 'mac-studio', computer: true, exec: true, floatType: 'standalone' },
+      ],
+      sshExec,
+      nativeComputer,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'mac-studio', '--sim', 'GONE'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain("simulator 'GONE' not found");
+    expect(nativeComputer).not.toHaveBeenCalled();
   });
 
   it('add url probes GET /computer through the injected fetch', async () => {

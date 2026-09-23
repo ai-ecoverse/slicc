@@ -29,8 +29,8 @@ enum ComputerFollowCLIRunner {
         NSApplication.shared.setActivationPolicy(.accessory)
         return ComputerFollowCLI.preflight(
             using: .live, json: json,
-            writeOut: { FileHandle.standardOutput.write($0) },
-            writeErr: { FileHandle.standardError.write($0) })
+            writeOut: { try? FileHandle.standardOutput.write(contentsOf: $0) },
+            writeErr: { try? FileHandle.standardError.write(contentsOf: $0) })
     }
 
     
