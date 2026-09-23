@@ -301,12 +301,14 @@ export class SshComputerBackend implements ComputerBackend {
     this.sim = opts.sim;
     this.display = opts.display;
     this.probe = opts.probe;
-    this.native = opts.native;
-    this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!opts.native);
+    // The native channel captures the host desktop and has no udid: a
+    // simulator must never be served by it (#3390).
+    this.native = opts.sim ? undefined : opts.native;
+    this.inputAllowed = opts.inputAllowed && (opts.probe.input !== 'none' || !!this.native);
     this.title = opts.title;
     this.frameTimeoutMs = opts.frameTimeoutMs ?? SSH_NATIVE_FRAME_TIMEOUT_MS;
     this.tmpBase = sshTempBase(sshComputerId(opts.runtimeId, opts.sim, opts.display));
-    this.screenshotServesStream = !!opts.native?.onFrame;
+    this.screenshotServesStream = !!this.native?.onFrame;
     if (this.screenshotServesStream) {
       this.subscribe = (fps, onFrame, maxWidth) => this.bindSubscribe(fps, onFrame, maxWidth);
     }
