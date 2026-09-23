@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { typingElement } from '../internal/typing-focus.js';
 
 import './slicc-dialog.js';
 
@@ -325,8 +326,12 @@ export class SliccSecretDialog extends HTMLElement {
 
     this.#options.open = true;
     this.#syncHints();
+
+    const userTyping = typingElement(this.ownerDocument) !== null;
     this.#dialog.show?.();
-    requestAnimationFrame(() => (this.#name.value ? this.#value : this.#name).focus());
+    if (!userTyping) {
+      requestAnimationFrame(() => (this.#name.value ? this.#value : this.#name).focus());
+    }
     return new Promise((resolve) => {
       this.#resolve = resolve;
     });

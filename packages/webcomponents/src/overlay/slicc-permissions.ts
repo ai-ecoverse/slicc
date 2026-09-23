@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { deepFocus, typingElement } from '../internal/typing-focus.js';
 import type { CameraMediaProvider } from './slicc-camera-dialog.js';
 
 export type { CameraMediaProvider } from './slicc-camera-dialog.js';
@@ -786,13 +787,15 @@ export class SliccPermissions extends HTMLElement {
     }
 
     let settled = false;
-    const previouslyFocused = (this.ownerDocument.activeElement as HTMLElement | null) ?? null;
+    const focus = this.#promptFocus(panel, grantBtn);
 
     const close = (): void => {
       panel.removeEventListener('keydown', onKeydown);
+      const { previouslyFocused, owned } = focus.release();
 
       panel.remove();
-      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+
+      if (owned && previouslyFocused && typeof previouslyFocused.focus === 'function') {
         try {
           previouslyFocused.focus();
         } catch {}
@@ -834,8 +837,8 @@ export class SliccPermissions extends HTMLElement {
     };
 
     cancelBtn.addEventListener('click', () => cancelAll('cancelled'));
-    grantBtn.addEventListener('click', async () => {
-      if (settled) return;
+    grantBtn.addEventListener('click', async (event) => {
+      if (settled || !focus.allowsClick(event)) return;
       settled = true;
       grantBtn.disabled = true;
       cancelBtn.disabled = true;
@@ -869,8 +872,51 @@ export class SliccPermissions extends HTMLElement {
 
     requestAnimationFrame(() => {
       panel.setAttribute('data-open', '');
-      grantBtn.focus();
+      focus.enter();
     });
+  }
+
+  #promptFocus(
+    panel: HTMLElement,
+    grantBtn: HTMLButtonElement
+  ): {
+    enter: () => void;
+    allowsClick: (event: MouseEvent) => boolean;
+    release: () => { previouslyFocused: HTMLElement | null; owned: boolean };
+  } {
+    const doc = this.ownerDocument;
+    const previouslyFocused = deepFocus(doc) as HTMLElement | null;
+    let armed = false;
+    let released = false;
+    const onArmKey = (event: KeyboardEvent): void => {
+      if (event.target !== grantBtn || event.repeat) return;
+      if (event.key === 'Enter' || event.key === ' ') armed = true;
+    };
+    const onOutsideEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (event.composedPath().includes(panel)) return;
+      event.preventDefault();
+      panel.focus();
+    };
+    panel.addEventListener('keydown', onArmKey, true);
+    return {
+      enter: () => {
+        if (released) return;
+        if (typingElement(doc)) doc.addEventListener('keydown', onOutsideEscape);
+        else grantBtn.focus();
+      },
+
+      allowsClick: (event) => armed || !event.isTrusted || event.detail !== 0,
+      release: () => {
+        released = true;
+
+        const focused = deepFocus(doc);
+        const owned = !focused || focused === doc.body || panel.contains(focused);
+        panel.removeEventListener('keydown', onArmKey, true);
+        doc.removeEventListener('keydown', onOutsideEscape);
+        return { previouslyFocused, owned };
+      },
+    };
   }
 }
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import {
   type SecretDialogSubmitDetail,
   type SecretDialogSubmitSummary,
@@ -424,5 +425,54 @@ describe('slicc-secret-dialog', () => {
     void el.open({ name: 'OTHER' });
     expect(valueInput(el).value).toBe('');
     expect(valueInput(el).type).toBe('password');
+  });
+});
+
+describe('slicc-secret-dialog — focus when the agent opens it', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  function mountComposer(): HTMLTextAreaElement {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const textarea = document.createElement('textarea');
+    host.attachShadow({ mode: 'open' }).appendChild(textarea);
+    return textarea;
+  }
+
+  it('does not focus a field while the user is typing; keystrokes do not reach the secret', async () => {
+    const textarea = mountComposer();
+    textarea.focus();
+    const el = mount();
+    const submitHandler = vi.fn(() => null);
+    el.submitHandler = submitHandler;
+    const pending = el.open({ name: 'GITHUB_TOKEN', domains: ['api.github.com'] });
+    await flush();
+    await flush();
+    const deep = (el.querySelector('slicc-dialog') as HTMLElement).shadowRoot?.activeElement;
+
+    expect(deep?.getAttribute('part')).toBe('dialog');
+    expect(document.activeElement).toBe(el.querySelector('slicc-dialog'));
+    await userEvent.keyboard('rest of my message{Enter}');
+    expect(valueInput(el).value).toBe('');
+    expect(nameInput(el).value).toBe('GITHUB_TOKEN');
+    expect(submitHandler).not.toHaveBeenCalled();
+
+    await userEvent.keyboard('{Tab}');
+    expect(el.contains(document.activeElement)).toBe(true);
+    cancelBtn(el).click();
+    expect(await pending).toBeNull();
+  });
+
+  it('still focuses the first empty field when nothing typable holds the focus', async () => {
+    const el = mount();
+    const pending = el.open({ name: 'GITHUB_TOKEN', domains: ['api.github.com'] });
+    await flush();
+    await flush();
+    expect(document.activeElement).toBe(valueInput(el));
+    cancelBtn(el).click();
+    expect(await pending).toBeNull();
   });
 });
