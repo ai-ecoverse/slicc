@@ -40,6 +40,8 @@ export interface ComputerCommandDeps {
   encodeRecordedFrames?: (args: {
     frames: Uint8Array[];
     fps: number;
+    /** Measured `-framerate` rational (`frames/seconds`) for the clip. */
+    frameRate?: string;
     dest: string;
     width: number;
     height: number;

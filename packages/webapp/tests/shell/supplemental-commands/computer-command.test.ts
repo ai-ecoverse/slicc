@@ -719,6 +719,50 @@ describe('computer command', () => {
     expect(polled.written.get('/jsh.webm')).toEqual(encoded);
   });
 
+  it('reports the measured frame count and fps when a backend cannot keep up (#3382)', async () => {
+    class SlowBackend extends FakeBackend {
+      override async screenshot(opts?: ComputerScreenshotOpts): Promise<ComputerFrame> {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return super.screenshot(opts);
+      }
+    }
+    const registry = new ComputerRegistry(null);
+    registry.register(new SlowBackend());
+    let frameRate: string | undefined;
+    const cmd = createComputerCommand({
+      registry,
+      encodeRecordedFrames: async (args) => {
+        frameRate = args.frameRate;
+        await args.ctx.fs.writeFile(args.dest, Uint8Array.of(1));
+        return { mime: 'video/webm' };
+      },
+    });
+    const { ctx } = makeCtx();
+    const rec = await cmd.execute(
+      ['--json', 'record', '-V', '0.3', '--fps', '10', 'slow.webm'],
+      ctx
+    );
+    expect(rec.exitCode).toBe(0);
+    const out = JSON.parse(rec.stdout) as {
+      frames: number;
+      fps: number;
+      requestedFps: number;
+      durationMs: number;
+      slow?: boolean;
+    };
+    expect(out.requestedFps).toBe(10);
+    expect(out.slow).toBe(true);
+    expect(out.frames).toBeLessThanOrEqual(3);
+    expect(out.fps).toBeLessThan(9);
+    expect(out.durationMs).toBeGreaterThanOrEqual(out.frames * 100);
+    expect(frameRate).toBeDefined();
+    const [num, den] = (frameRate as string).split('/').map(Number);
+    expect((out.frames * den) / num).toBeCloseTo(out.durationMs / 1000, 3);
+
+    const text = await cmd.execute(['record', '-V', '0.3', '--fps', '10', 'slow2.webm'], ctx);
+    expect(text.stdout).toMatch(/\(\d+ frames at [\d.]+ fps, below --fps 10\)/);
+  });
+
   it('record on a native Mac reads ONE stream instead of polling captures', async () => {
     // #3386: every poll used to re-enter ScreenCaptureKit setup. Now `record`
     // holds one `watch: true` capture open and reads its pushed frames.
