@@ -431,8 +431,11 @@ export function createPython3LikeCommand(
   options: PythonCommandOptions = {}
 ): Command {
   return defineCommand(name, async (args, ctx) => {
-    if (args.includes('--help') || args.includes('-h')) return pythonHelp();
-    if (args.includes('--version') || args.includes('-V')) return pythonVersion();
+    // Interpreter flags only; after `-c code` or a script path they belong
+    // to sys.argv (`python3 emcc.py --version` must reach emcc).
+    const flag = args[0];
+    if (flag === '--help' || flag === '-h') return pythonHelp();
+    if (flag === '--version' || flag === '-V') return pythonVersion();
 
     const parsed = await parsePythonInvocation(name, args, ctx);
     if (parsed.kind === 'result') return parsed.result;
