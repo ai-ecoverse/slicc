@@ -1300,6 +1300,70 @@ describe('computer parse', () => {
     expect(added.stderr).toContain('--display needs a native-capture');
   });
 
+  // #3387: the launcher used to hardcode `capabilities.computer: true`. Now that
+  // it advertises the Screen Recording grant honestly, an ungranted Mac drops
+  // off the computer-capable list — so `add ssh` must name the missing grant
+  // (which rides in the MOTD) instead of claiming the follower does not exist.
+  it('add ssh names the missing grant when a launcher advertises no capture', async () => {
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: false,
+          exec: false,
+          floatType: 'standalone',
+          motd: 'studio.local: no native screen capture — grant Screen Recording in System Settings → Privacy & Security',
+        },
+      ],
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'sliccstart-computer-1'], ctx);
+    expect(added.exitCode).toBe(1);
+    expect(added.stderr).toContain('Screen Recording');
+    expect(added.stderr).toContain('System Settings');
+  });
+
+  // The point of the honest flag: with the launcher off the computer list, the
+  // Mac's `slicc … follow` CLI is what `add ssh` resolves to, and the
+  // `screencapture` tray-exec fallback that would have worked is reached.
+  it('add ssh falls back to screencapture when the launcher claims no capture', async () => {
+    const sshExec = vi.fn(async (_runtimeId: string, command: string) => {
+      if (command.includes('SLICC_SSH_PROBE')) {
+        return {
+          stdout: 'SLICC_SSH_PROBE Darwin screencapture cliclick \n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const nativeComputer = vi.fn();
+    const cmd = createComputerCommand({
+      registry: new ComputerRegistry(null),
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: false,
+          exec: false,
+          floatType: 'standalone',
+          motd: 'studio.local: no native screen capture — grant Screen Recording',
+        },
+        { runtimeId: 'follower-abc', exec: true, computer: false, floatType: 'standalone' },
+      ],
+      sshExec,
+      nativeComputer,
+    });
+    const { ctx } = makeCtx();
+    const added = await cmd.execute(['add', 'ssh', 'follower-abc'], ctx);
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain('ssh:follower-abc');
+    expect(nativeComputer).not.toHaveBeenCalled();
+    expect(sshExec.mock.calls.some(([, command]) => command.includes('SLICC_SSH_PROBE'))).toBe(
+      true
+    );
+  });
+
   it('add ssh --allow-input on a computer follower does not need cliclick', async () => {
     const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
     const input = vi.fn();

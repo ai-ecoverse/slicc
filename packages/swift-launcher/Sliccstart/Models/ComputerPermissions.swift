@@ -51,11 +51,37 @@ enum ComputerPermissionError: Error, Equatable {
         "Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again."
 }
 
+/// Both TCC grants as they stand right now.
+///
+/// Read without prompting, so it is safe to poll: `hello` carries it to the
+/// leader, and the leader's `computer add ssh` reads `capabilities.computer` to
+/// decide whether to skip the `screencapture`/`cliclick` tray-exec fallback
+/// (#3387). Advertising a grant this peer does not hold costs the agent a
+/// working fallback.
+struct ComputerGrants: Equatable {
+    var screenRecording: Bool
+    var accessibility: Bool
+
+    /// What `capabilities.computer` is defined to mean: this peer can capture
+    /// its own screen. Input rides on Accessibility and is reported in the MOTD
+    /// instead — the wire has one boolean, and capture is what the leader's
+    /// fallback decision turns on.
+    var canCaptureNatively: Bool { screenRecording }
+}
+
 struct ComputerPermissions {
     var probe: ComputerPermissionProbe
 
     init(probe: ComputerPermissionProbe = .live) {
         self.probe = probe
+    }
+
+    /// Non-prompting read of both grants. Never call `request*` here: this runs
+    /// on a poll, and a prompt per tick would be unusable.
+    func grants() -> ComputerGrants {
+        ComputerGrants(
+            screenRecording: probe.screenRecordingGranted(),
+            accessibility: probe.accessibilityGranted())
     }
 
     /// First capture: prompt if needed, then fail with a System Settings path.

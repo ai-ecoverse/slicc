@@ -592,6 +592,11 @@ export class LeaderSyncManager {
     return this.followerRegistry.getFollowerMotds();
   }
 
+  /** Primary → its `hello.pairId` partner's MOTD (see `FollowerRegistry.getPartnerMotds`). */
+  getPartnerMotds(): Map<string, string> {
+    return this.followerRegistry.getPartnerMotds();
+  }
+
   getFollowerDetails(): FollowerDetails[] {
     return this.followerRegistry.getFollowerDetails();
   }

@@ -193,6 +193,12 @@ export interface TraySyncCapabilities {
    * to skip the `screencapture`/`cliclick` tray-exec fallback on
    * `computer add ssh`. Additive — legacy peers omit it. iOS never sets it
    * (viewer only, not a driven computer).
+   *
+   * A live fact, not a build-time one: the macOS peer derives it from its
+   * Screen Recording grant and re-sends `hello` when that grant flips, so a
+   * peer that claims it while ungranted costs the agent a fallback that would
+   * have worked (issue #3387). Input rides on a separate Accessibility grant
+   * the peer reports in its `motd`.
    */
   computer?: boolean;
 }

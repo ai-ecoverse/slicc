@@ -317,6 +317,24 @@ export class FollowerRegistry {
     return motds;
   }
 
+  /**
+   * Primary → the MOTD its folded partner advertised. Kept apart from
+   * `getFollowerMotds()` rather than merged into the primary's own line: the
+   * CLI's MOTD says what the shell target is, the launcher's says what state the
+   * screen half is in (a missing Screen Recording or Accessibility grant), and
+   * each stays attributed to the peer that said it. Without this, folding the
+   * launcher off the agent-facing roster would drop the only place that names
+   * a missing grant.
+   */
+  getPartnerMotds(): Map<string, string> {
+    const motds = new Map<string, string>();
+    for (const [primary, partner] of this.followerPairing().partner) {
+      const motd = this.followers.get(partner)?.peerMotd;
+      if (motd) motds.set(primary, motd);
+    }
+    return motds;
+  }
+
   getExecCapableBootstrapIds(): Set<string> {
     const ids = new Set<string>();
     for (const [bootstrapId, follower] of this.followers) {

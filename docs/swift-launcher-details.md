@@ -157,6 +157,43 @@ Pure logic in `Models/ComputerFollowCLI.swift` is unit-tested
 (`ComputerFollowCLITests`); the untestable glue (NSApplication, the run loop,
 the live permission probes) sits in `ComputerFollowCLIRunner`.
 
+**Preflight run by hand tells you nothing.** `Sliccstart --computer-preflight
+--json` invoked straight from a terminal answers
+`{"accessibility":false,"screenRecording":false}` and draws no dialog, however
+well-granted the machine is: TCC attributes the check to the _responsible_
+process — the terminal — not to the bundle, the same attribution problem
+`packages/slicc-cli/internal/computer/computer.go` documents for the CLI itself.
+Preflight output is only meaningful when the Go CLI spawns it.
+
+**`capabilities.computer` is derived, never asserted (#3387).**
+`ComputerTrayFollower` builds its `hello` from `ComputerPermissions.grants()`
+through `Models/ComputerCapabilityAdvertisement.swift`, so a Mac whose Screen
+Recording grant is missing or revoked does not claim native capture and the
+leader's `computer add ssh` reaches the `screencapture` + `cliclick` tray-exec
+fallback instead of picking a native backend that can only error. TCC has no
+change notification, so a grant watch re-reads both grants every
+`ComputerGrantWatch.intervalSeconds` while the channel is open and re-sends
+`hello` when either flips — the leader's `handleFollowerHello` overwrites
+`peerCapabilities` and re-notifies the follower-selection sites, which is what
+makes a box ticked mid-session land without a reconnect. Accessibility gates
+input rather than capture and the wire has one boolean, so it travels in the
+MOTD, which the leader already shows beside a roster entry. The watch is
+injectable (`ComputerGrantTick`) so tests drive beats instead of sleeping.
+
+The leader folds on the shared `hello.pairId`, not on the capability: an
+ungranted launcher advertising `computer: false` still folds into its CLI's
+roster entry (`resolveFollowerPairs` in
+`webapp/src/scoops/tray-leader/follower-pairing.ts`), but lends it no capture —
+the entry reads `[ssh]` only, so `add ssh` reaches the `screencapture`
+fallback. The folded launcher's MOTD survives as the entry's `computerMotd`,
+printed on its own line under the CLI's MOTD in `host` and `ssh --list`, which is
+how a missing Screen Recording or Accessibility grant stays readable once the
+launcher is off the roster. A refused `hello` (the channel's `send` returned
+false) is not cached as advertised, so the next watch beat retries it.
+
+The menu-bar (GUI) Sliccstart sends no `pairId` — no CLI minted one for it — so
+beside a plain `slicc … follow` it is still a second roster row.
+
 **Dev-build caveat:** TCC keys a grant to the code signature, so an ad-hoc
 re-signed local build re-prompts on every rebuild. Released, Developer
 ID-signed Sliccstart builds keep the grant across CLI restarts and updates.
