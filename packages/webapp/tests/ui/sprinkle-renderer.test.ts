@@ -225,6 +225,32 @@ describe('SprinkleRenderer', () => {
       expect(btnB?.getAttribute('onclick')).toContain('__slicc_sprinkles["sprinkle-b"]');
     });
   });
+
+  describe('inline focus guard', () => {
+    const stealing = `<input id="steal"><script>document.getElementById('steal').focus();</script>`;
+
+    it('an inline script focusing on load does not take the caret from the composer', async () => {
+      const doc = dom.window.document;
+      const composer = doc.createElement('textarea');
+      doc.body.appendChild(composer);
+      composer.focus();
+
+      await new SprinkleRenderer(container, makeBridge('stealer')).render(stealing, 'stealer');
+
+      expect(container.querySelector('#steal')).not.toBeNull();
+      expect(doc.activeElement).toBe(composer);
+    });
+
+    it('releases the guard on dispose', async () => {
+      const doc = dom.window.document;
+      const renderer = new SprinkleRenderer(container, makeBridge('stealer'));
+      await renderer.render(`<input id="kept">`, 'stealer');
+      const removed = vi.spyOn(doc, 'removeEventListener');
+      renderer.dispose();
+      const types = removed.mock.calls.map(([type]) => type);
+      expect(types).toEqual(expect.arrayContaining(['keydown', 'focusin', 'focusout']));
+    });
+  });
 });
 
 describe('isFullDocument detection', () => {

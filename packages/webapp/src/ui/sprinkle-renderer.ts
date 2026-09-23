@@ -2,6 +2,7 @@ import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
 import { iframeFocusGuardSource } from './iframe-focus-guard.js';
 import { iframeThemeBridgeSource } from './iframe-theme.js';
+import { guardInlineFocus } from './inline-focus-guard.js';
 import {
   iframeFetchResponseSource,
   type SprinkleAgentOptions,
@@ -389,6 +390,7 @@ export class SprinkleRenderer {
   private visibilityObserver: IntersectionObserver | null = null;
   private bridgeLifecycleReady = false;
   private pendingBridgeLifecycle: Array<() => void> = [];
+  private releaseInlineFocusGuard: (() => void) | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
     this.container = container;
@@ -831,6 +833,8 @@ export class SprinkleRenderer {
 
     const wrapper = document.createElement('div');
     wrapper.className = 'sprinkle-content';
+
+    this.releaseInlineFocusGuard = guardInlineFocus(wrapper);
     wrapper.innerHTML = content;
     this.container.appendChild(wrapper);
 
@@ -864,6 +868,8 @@ export class SprinkleRenderer {
       script.remove();
     }
     this.scripts = [];
+    this.releaseInlineFocusGuard?.();
+    this.releaseInlineFocusGuard = null;
     const wrapper = this.container.querySelector('.sprinkle-content');
     if (wrapper) wrapper.remove();
     if (window.__slicc_sprinkles) {
