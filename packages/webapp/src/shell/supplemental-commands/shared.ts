@@ -265,14 +265,20 @@ async function describeTypeScriptMiss(ipk: TypeScriptIpkContext): Promise<string
   if (Number.isFinite(major) && major !== 6) {
     // Only the native port (7+) dropped `lib/typescript.js`; older majors do
     // ship the JS compiler API and are refused solely by the pin.
-    const why =
-      major > 6
-        ? 'which ships no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`)'
-        : 'which predates the pinned 6.x line this build loads';
+    const dir = splitPath(manifestPath).dir;
+    if (major > 6) {
+      // The loader skips a copy without the JS API, so a global 6.x is enough.
+      return (
+        `TypeScript 6 is required but ${dir} holds typescript@${String(version)}, which ships ` +
+        'no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`): ' +
+        `run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` (copies without it are skipped)`
+      );
+    }
     return (
-      `TypeScript 6 is required but ${splitPath(manifestPath).dir} holds typescript@${String(version)}, ` +
-      `${why}: ${TYPESCRIPT_VFS_REPLACE_COMMAND} to replace the local copy ` +
-      '(cwd-local node_modules is searched before global; `ipk add -g` will not override it)'
+      `TypeScript 6 is required but ${dir} holds typescript@${String(version)}, ` +
+      `which predates the pinned 6.x line this build loads: ${TYPESCRIPT_VFS_REPLACE_COMMAND} ` +
+      'to replace the local copy (cwd-local node_modules is searched before global; ' +
+      '`ipk add -g` will not override it)'
     );
   }
   return TYPESCRIPT_NOT_INSTALLED;
@@ -331,21 +337,20 @@ async function loadTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScriptMod
 export async function tryLoadTypeScriptSourceFromNodeModules(
   ipk: TypeScriptIpkContext
 ): Promise<string | null> {
-  let resolved;
-  try {
-    resolved = await ipkResolve('typescript/package.json', ipk.fromDir, ipk.reader);
-  } catch {
-    return null;
+  // The nearest copy that ships the JS compiler API wins. A closer
+  // TypeScript 7 (the native port, no `lib/typescript.js`) — say a tool's own
+  // devDependency beside a script run under `node` — must not hide a usable
+  // 6.x further up or in the global prefix.
+  for (const dir of nodeModulesSearchPath(ipk.fromDir)) {
+    const entryPath = `${dir}/typescript/lib/typescript.js`;
+    if (!(await ipk.reader.exists(entryPath))) continue;
+    try {
+      return await ipk.reader.readFile(entryPath);
+    } catch {
+      // unreadable: keep looking
+    }
   }
-  if (resolved.type !== 'file') return null;
-  const pkgDir = splitPath(resolved.path).dir;
-  const entryPath = `${pkgDir}/lib/typescript.js`;
-  if (!(await ipk.reader.exists(entryPath))) return null;
-  try {
-    return await ipk.reader.readFile(entryPath);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /**
