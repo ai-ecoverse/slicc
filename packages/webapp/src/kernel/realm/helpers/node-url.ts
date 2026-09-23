@@ -7,9 +7,20 @@ export interface NodeUrl {
 
 function fileURLToPath(url: string | URL): string {
   const str = typeof url === 'string' ? url : url.href;
-  if (!str.startsWith('file://')) throw new TypeError('fileURLToPath: not a file URL');
-  const pathname = str.slice('file://'.length);
-  return decodeURIComponent(pathname);
+  if (!str.startsWith('file:')) throw new TypeError('fileURLToPath: not a file URL');
+  // Parse rather than slice so `?query` / `#hash` are dropped, as in Node.
+  const parsed = new URL(str);
+  if (parsed.hostname !== '' && parsed.hostname !== 'localhost') {
+    throw Object.assign(new TypeError('File URL host must be "localhost" or empty on posix'), {
+      code: 'ERR_INVALID_FILE_URL_HOST',
+    });
+  }
+  if (/%2f/i.test(parsed.pathname)) {
+    throw Object.assign(new TypeError('File URL path must not include encoded / characters'), {
+      code: 'ERR_INVALID_FILE_URL_PATH',
+    });
+  }
+  return decodeURIComponent(parsed.pathname);
 }
 
 function pathToFileURL(path: string): URL {

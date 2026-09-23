@@ -590,6 +590,26 @@ describe('node:url shim', () => {
     expect(out.stdout.trim()).toBe('/workspace/hello world.txt');
   });
 
+  it('fileURLToPath drops query/hash and rejects a remote host or encoded slash', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { fileURLToPath } = require('url');
+       console.log(fileURLToPath(new URL('file:///workspace/a.json?v=1#top')));
+       console.log(fileURLToPath('file://localhost/workspace/b'));
+       for (const u of ['file://remote/x', 'file:///a%2Fb']) {
+         try { fileURLToPath(u); console.log('NO'); } catch (e) { console.log(e.code); }
+       }`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim().split('\n')).toEqual([
+      '/workspace/a.json',
+      '/workspace/b',
+      'ERR_INVALID_FILE_URL_HOST',
+      'ERR_INVALID_FILE_URL_PATH',
+    ]);
+  });
+
   it('pathToFileURL produces a file:// URL', async () => {
     const ctx = makeCtx();
     const out = await runCode(

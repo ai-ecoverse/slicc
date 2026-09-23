@@ -83,6 +83,13 @@ killed realm returns that captured output plus a
 marked `truncated` and throw `ENOSYNC` on sync read (use the async API for
 large files).
 
+**Path arguments** (sync and async) accept any Node `PathLike`: a string, a
+`Buffer`/`Uint8Array`, or a `file:` `URL`
+(`fs.readFileSync(new URL('file:///workspace/data.json'))` works). A URL is percent-decoded with its query and hash
+dropped; a non-`file:` URL throws `ERR_INVALID_URL_SCHEME`, and any other type
+throws `ERR_INVALID_ARG_TYPE` (`existsSync` returns `false` instead, as in
+Node). `child_process` `options.cwd` likewise takes a `file:` URL.
+
 **Not available:** `watch`, `watchFile`, `createReadStream`, `createWriteStream`,
 `chown`, `symlink`, `readlink`, `Dirent`-returning readdir. `lstat`, `realpath`,
 and `chmod` exist only as the sync variants above — they have no async
