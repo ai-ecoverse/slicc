@@ -56,6 +56,7 @@ import {
   createNodeConsole,
   createProcessShim,
   dirnameOf,
+  installGlobalProcess,
   NodeExitError,
 } from './realm-node-shims.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
@@ -404,8 +405,12 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     // that `process.env` exposes, so one script cannot see two machines.
     nodeOsModule: createNodeOs(init.env),
     // And `util`, so `util.deprecate`'s one-shot DeprecationWarning reaches
-    // THIS realm's stderr instead of the kernel worker's console.
-    nodeUtilModule: createNodeUtil((message) => writeStderr(`${message}\n`)),
+    // THIS realm's stderr instead of the kernel worker's console, and a bare
+    // `util.parseArgs()` reads THIS realm's `process.argv` (at call time).
+    nodeUtilModule: createNodeUtil(
+      (message) => writeStderr(`${message}\n`),
+      () => proc.processShim.argv.slice(2)
+    ),
   });
   const requireShim = moduleSystem.require;
 
@@ -481,6 +486,7 @@ async function finishJsRealm(opts: {
   const bodyReads = createBodyReadHandleTracker(globalThis);
   timers.install();
   bodyReads.install();
+  const restoreProcess = installGlobalProcess(globalThis, opts.proc.processShim);
   try {
     const exitCode = await runEntryThenDrain({
       entryCode: opts.entryCode,
@@ -515,6 +521,7 @@ async function finishJsRealm(opts: {
     timers.clearPending();
     timers.restore();
     bodyReads.restore();
+    restoreProcess();
   }
 }
 

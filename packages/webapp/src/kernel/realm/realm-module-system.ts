@@ -25,6 +25,7 @@ import {
   nodeTty,
   nodeUrl,
   nodeUtil,
+  nodeVm,
   nodeZlib,
   pickBarePackage,
   pickExistingCandidate,
@@ -262,30 +263,25 @@ export function createModuleSystem(opts: {
     // Register before evaluation so a require cycle sees the partial exports.
     cache.set(path, moduleObj);
     const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id, path);
-    const moduleDir = dirnameOf(path);
-    const compiled = new Function(
-      'module',
-      'exports',
-      'require',
-      '__dirname',
-      '__filename',
-      'process',
-      'console',
-      'Buffer',
-      'global',
-      source
-    ) as (...args: unknown[]) => void;
-    compiled(
+    const names = ['module', 'exports', 'require', 'process', 'console', 'Buffer', 'global'];
+    const values: unknown[] = [
       moduleObj,
       moduleObj.exports,
       childRequire,
-      moduleDir,
-      path,
       processShim,
       nodeConsole,
       (globalThis as GlobalWithBuffer).Buffer,
-      globalThis
-    );
+      globalThis,
+    ];
+    // ESM has no __dirname/__filename, so an ES module may declare its own
+    // (`const __dirname = dirname(fileURLToPath(import.meta.url))`), which a
+    // same-named wrapper parameter would turn into a SyntaxError.
+    if (kindByPath.get(path) !== 'esm') {
+      names.push('__dirname', '__filename');
+      values.push(dirnameOf(path), path);
+    }
+    const compiled = new Function(...names, source) as (...args: unknown[]) => void;
+    compiled(...values);
     if (kindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
     return moduleObj.exports;
   }
@@ -385,6 +381,7 @@ function resolveServedBuiltin(
   if (bareId === 'stream') return { hit: true, value: nodeStream };
   if (bareId === 'url') return { hit: true, value: nodeUrl };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+  if (bareId === 'vm') return { hit: true, value: nodeVm };
   // Per-realm (question() echoes to the realm's stdout), so a realm booted
   // without one (none today) falls through to the unavailable-builtin error.
   if (bareId === 'readline' && nodeReadline) return { hit: true, value: nodeReadline };
@@ -453,7 +450,11 @@ export async function runUserCode(
   writeStderr: (value: unknown) => void,
   isEsmEntry: boolean
 ): Promise<number> {
-  const names = Object.keys(bridges);
+  // As for required modules: an ES-module entry may declare its own
+  // __dirname/__filename, so they are not parameters there (nor in Node).
+  const names = Object.keys(bridges).filter(
+    (n) => !isEsmEntry || (n !== '__dirname' && n !== '__filename')
+  );
   const values = names.map((n) => bridges[n]);
   const AsyncFn = Object.getPrototypeOf(async function () {
     /* noop */

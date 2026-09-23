@@ -1,3 +1,5 @@
+import { nodeParseArgs, type ParseArgsConfig, type ParseArgsResult } from './node-parse-args.js';
+
 const UTIL_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom');
 export const UTIL_PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
 
@@ -281,6 +283,7 @@ export interface NodeUtil {
   inherits(ctor: Function, superCtor: Function): void;
   promisify: { (original: Function): Function; custom: symbol };
   deprecate<T extends Function>(fn: T, msg: string, code?: string): T;
+  parseArgs(config?: ParseArgsConfig): ParseArgsResult;
 }
 
 const utilInspect = nodeInspect as NodeUtil['inspect'];
@@ -291,10 +294,15 @@ utilPromisify.custom = UTIL_PROMISIFY_CUSTOM;
 /**
  * Build the per-realm `util` module. `warn` receives one already-formatted
  * `DeprecationWarning` line (no trailing newline) and should put it on THIS
- * realm's stderr. Everything else on the module is stateless and shared.
+ * realm's stderr; `defaultArgs` is what `parseArgs()` reads without `args`
+ * (Node: `process.argv.slice(2)`). Everything else is stateless and shared.
  */
-export function createNodeUtil(warn: (message: string) => void): NodeUtil {
+export function createNodeUtil(
+  warn: (message: string) => void,
+  defaultArgs: () => string[] = () => []
+): NodeUtil {
   return {
+    parseArgs: (config) => nodeParseArgs(config, defaultArgs),
     format: nodeFormat,
     formatWithOptions: nodeFormatWithOptions,
     inspect: utilInspect,

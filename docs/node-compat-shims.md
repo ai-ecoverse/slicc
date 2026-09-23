@@ -209,7 +209,10 @@ self-reference.
 ### `util`
 
 `promisify` (with `promisify.custom`), `inspect` (with `inspect.custom`),
-`inherits`, `format`, `formatWithOptions`, `deprecate`.
+`inherits`, `format`, `formatWithOptions`, `deprecate`, `parseArgs` (Node's
+semantics incl. short groups, `multiple`, `default`, `allowNegative`, `tokens`
+and the strict-mode `ERR_PARSE_ARGS_*` errors; without `args` it reads the
+realm's `process.argv.slice(2)`).
 
 **Per-realm**: `deprecate`'s one-shot `DeprecationWarning` goes to the calling
 realm's stderr, so a shared module-scope shim would misroute it to the kernel
@@ -293,6 +296,25 @@ Backed by `pako` (pure JS):
 
 **Not available:** Streaming classes (`createGzip`, `createGunzip`, etc.).
 
+### `vm`
+
+Best effort: a worker cannot create a fresh JS realm synchronously, so a
+context is the contextified object itself, and code runs through a `with`
+scope proxy over it. Enough for evaluating config and library files against a
+settings object (emscripten's JS compiler, `helpers/node-vm.ts`):
+
+- `createContext`, `isContext`, `runInContext`, `runInNewContext`,
+  `runInThisContext` (indirect `eval`), `Script`, `compileFunction`
+- `var` initializers, bare assignments, `this.x` and `globalThis.x` land on the
+  context; top-level function declarations are copied onto it after the run
+- `filename` shows up in stack traces (`sourceURL`)
+
+**Not isolated:** builtins (`Map`, `Object`, …) are the realm's own. Top-level
+`let`/`const`/`class` do not persist between runs, a bare `var x;` without an
+initializer is not added, and an unknown name reads as `undefined` instead of
+throwing `ReferenceError`. No timeouts, `measureMemory`, or modules
+(`SourceTextModule`).
+
 ---
 
 ## Shimmed Third-Party Packages
@@ -370,7 +392,7 @@ environment" on `require()`:
 - `worker_threads` — incompatible with realm model
 - `cluster` — OS-only
 - `dns` — OS-only
-- `v8` / `vm` / `inspector` — engine internals
+- `v8` / `inspector` — engine internals
 
 ---
 

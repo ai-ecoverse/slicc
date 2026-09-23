@@ -3,6 +3,7 @@
  * small path/exit helpers used to bootstrap a JS realm. Extracted from
  * `js-realm-shared.ts`; no behavior change.
  */
+import { EventEmitter } from './helpers/node-events.js';
 import { attachArgvParseFlags, nodeStream } from './js-realm-helpers.js';
 import { NODE_SHIM_VERSION } from './node-builtins.js';
 import type { RealmInitMsg } from './realm-types.js';
@@ -241,11 +242,34 @@ export function createNodeConsole(writeStdout: ConsoleSink, writeStderr: Console
   };
 }
 
-/** The `process.stdout` / `process.stderr` write sinks handed to user code. */
-interface RealmWritableShim {
+/**
+ * Publish the realm's `process` as `globalThis.process`, for code that sniffs
+ * the global (emscripten's runtime: `globalThis.process?.versions?.node`)
+ * rather than the free `process` it is handed. Only where the host has none:
+ * an in-process realm (vitest) must not shadow the real Node process. Returns
+ * the undo.
+ */
+export function installGlobalProcess(g: { process?: unknown }, shim: object): () => void {
+  if (g.process !== undefined) return () => undefined;
+  g.process = shim;
+  return () => {
+    if (g.process === shim) delete g.process;
+  };
+}
+
+/**
+ * The `process.stdout` / `process.stderr` write sinks handed to user code.
+ * Event emitters like Node's, so `once('drain', …)` / `on('error', …)` attach
+ * (writes never back up, so nothing fires).
+ */
+interface RealmWritableShim extends EventEmitter {
   write: (value: unknown) => void;
   end: () => undefined;
   isTTY: boolean;
+}
+
+function writableShim(write: (value: unknown) => void, isTTY: boolean): RealmWritableShim {
+  return Object.assign(new EventEmitter(), { write, end: () => undefined, isTTY });
 }
 
 /**
@@ -302,8 +326,8 @@ export function createProcessShim(
   // uncaught error).
   const stdinShim = createStdinShim(init.stdin ?? '', recordExit);
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
-  const stdout = { write: writeStdout, end: () => undefined, isTTY: !noColor };
-  const stderr = { write: writeStderr, end: () => undefined, isTTY: !noColor };
+  const stdout = writableShim(writeStdout, !noColor);
+  const stderr = writableShim(writeStderr, !noColor);
   const processShim: RealmProcessShim = {
     argv: argvWithParseFlags,
     env: init.env,

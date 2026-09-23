@@ -44,6 +44,7 @@ export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'readline',
   'readline/promises',
   'module',
+  'vm',
 ]);
 
 /**
