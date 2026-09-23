@@ -193,6 +193,16 @@ describe('ssh probe', () => {
     expect(probe).toMatchObject({ capture: 'simctl', input: 'idb', sim: 'UDID-1' });
   });
 
+  it('refuses a --sim udid that is listed but not booted', async () => {
+    const exec = vi.fn(async (command: string) => {
+      if (command.includes('SLICC_SSH_PROBE')) {
+        return ok('SLICC_SSH_PROBE Darwin screencapture xcrun idb \n');
+      }
+      return ok('    iPhone 16 (UDID-1) (Shutdown)\n');
+    });
+    await expect(probeSsh(exec, 'UDID-1')).rejects.toThrow("simulator 'UDID-1' is not booted");
+  });
+
   it('refuses --sim on Linux', async () => {
     const exec = vi.fn(async () => ok('SLICC_SSH_PROBE Linux grim xdotool\n'));
     await expect(probeSsh(exec, 'UDID-1')).rejects.toThrow('--sim requires a Mac follower');

@@ -162,7 +162,11 @@ export async function probeSsh(exec: SshExec, sim?: string): Promise<SshProbe> {
       `xcrun simctl list devices 2>/dev/null | grep -F ${shQuote(sim)} || true`,
       { timeoutMs: 15_000 }
     );
-    if (!listed.stdout.includes(sim)) throw new Error(`simulator '${sim}' not found`);
+    const rows = listed.stdout.split('\n').filter((row) => row.includes(sim));
+    if (rows.length === 0) throw new Error(`simulator '${sim}' not found`);
+    if (!rows.some((row) => row.includes('(Booted)'))) {
+      throw new Error(`simulator '${sim}' is not booted (xcrun simctl boot ${sim})`);
+    }
     return {
       ...parsed,
       capture: 'simctl',
