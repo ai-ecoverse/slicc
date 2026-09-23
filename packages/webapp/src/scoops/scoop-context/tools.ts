@@ -170,9 +170,10 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
           log.warn('No lick handler for background bash completion', {
             folder: scoop.folder,
           });
-          return;
+          return false;
         }
         handler(event);
+        return true;
       },
     }),
     ...scoopManagementTools,
