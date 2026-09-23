@@ -10,6 +10,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import type { StreamedFetchResponse, StreamingFetch } from '../proxied-fetch.js';
 import { DEFAULT_HF_CONCURRENCY, DEFAULT_HF_MAX_BYTES_IN_FLIGHT } from './hf-defaults.js';
 
 export {
@@ -28,7 +29,26 @@ export interface DownloadFs {
   stat(path: string): Promise<{ size: number }>;
   mkdir(path: string, options: { recursive: boolean }): Promise<unknown>;
   writeFile(path: string, data: Uint8Array): Promise<unknown>;
+  /** Needed, with `rm`, for the streamed path (`DownloadHfRepoOptions.streamFetch`). */
+  appendFile?(path: string, data: Uint8Array): Promise<unknown>;
+  rm?(path: string): Promise<unknown>;
 }
+
+/**
+ * The streamed path appends to the destination in pieces of this size, so a
+ * download holds at most about this much (plus one network chunk) however
+ * large the file is. It is also what a streamed file is charged against the
+ * bytes-in-flight budget, so several large files can stream at once.
+ */
+export const HF_STREAM_WRITE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Suffix of the marker a streamed download keeps next to its file until the
+ * last byte is written. A present marker means the file is torn (the worker
+ * died, or the transfer failed), so a later run re-downloads it even when no
+ * declared size is known to compare against.
+ */
+export const HF_INCOMPLETE_SUFFIX = '.hf-incomplete';
 
 const HF_HOST = ['huggingface', 'co'].join('.');
 /** Default hub origin; `HF_ENDPOINT` (the Hugging Face convention) overrides it. */
@@ -84,8 +104,12 @@ async function fetchWithHostContext(
   url: string,
   init?: Parameters<SecureFetch>[1]
 ): ReturnType<SecureFetch> {
+  return withHostContext(url, () => fetchFn(url, init));
+}
+
+async function withHostContext<T>(url: string, run: () => Promise<T>): Promise<T> {
   try {
-    return await fetchFn(url, init);
+    return await run();
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -188,14 +212,16 @@ async function completeSize(
 ): Promise<number | undefined> {
   if (!(await fs.exists(destPath))) return undefined;
   try {
+    // A streamed download that never finished left its marker behind.
+    if (await fs.exists(`${destPath}${HF_INCOMPLETE_SUFFIX}`)) return undefined;
     const stat = await fs.stat(destPath);
     // Skip only a COMPLETE file. When the tree listing told us the declared
     // byte length, a present file of any other size is a torn write — a
     // download that died mid-stream, or a concurrent stager still writing
     // it — and "skipping" it would hand the caller a truncated weight file
     // that later fails to load with a size-mismatch EIO. Without a declared
-    // size (a listing that failed or carried no size) presence is the best
-    // we can check.
+    // size (a listing that failed or carried no size) the incomplete marker
+    // above is the only tell, so presence without one counts as complete.
     const complete = declaredSize === undefined || declaredSize <= 0 || stat.size === declaredSize;
     return complete ? (stat.size ?? 0) : undefined;
   } catch {
@@ -204,14 +230,17 @@ async function completeSize(
 }
 
 async function fetchOne(
-  fetchFn: SecureFetch,
-  fs: DownloadFs,
+  job: PoolJob,
   url: string,
   file: string,
   destPath: string,
   signal: AbortSignal
 ): Promise<number> {
-  const resp = await fetchWithHostContext(fetchFn, url, { method: 'GET', signal });
+  const { fs } = job;
+  if (job.streamFetch && fs.appendFile && fs.rm) {
+    return fetchStreamed(job.streamFetch, fs as Required<DownloadFs>, url, file, destPath, signal);
+  }
+  const resp = await fetchWithHostContext(job.fetch, url, { method: 'GET', signal });
   if (resp.status < 200 || resp.status >= 300) {
     throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${file}`);
   }
@@ -221,6 +250,83 @@ async function fetchOne(
   await ensureParentDirs(fs, destPath);
   await fs.writeFile(destPath, resp.body);
   return resp.body.byteLength;
+}
+
+/**
+ * Write a response body to `destPath` in {@link HF_STREAM_WRITE_BYTES}
+ * pieces as it arrives, so memory stays bounded whatever the file size (and
+ * however many downloads run at once). The incomplete marker is written
+ * before the first byte and removed after the last, so a download killed with
+ * the kernel worker, or aborted by the pool, is re-fetched on the next run
+ * instead of skipped.
+ */
+async function fetchStreamed(
+  streamFetch: StreamingFetch,
+  fs: Required<DownloadFs>,
+  url: string,
+  file: string,
+  destPath: string,
+  signal: AbortSignal
+): Promise<number> {
+  const resp: StreamedFetchResponse = await withHostContext(url, () =>
+    streamFetch(url, { method: 'GET', signal })
+  );
+  if (resp.status < 200 || resp.status >= 300) {
+    await resp.cancel();
+    throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${file}`);
+  }
+  if (signal.aborted) {
+    await resp.cancel();
+    throw new Error('aborted');
+  }
+  const marker = `${destPath}${HF_INCOMPLETE_SUFFIX}`;
+  await ensureParentDirs(fs, destPath);
+  await fs.writeFile(marker, new Uint8Array(0));
+  await fs.writeFile(destPath, new Uint8Array(0));
+  const written = await appendInPieces(fs, destPath, resp.body, signal);
+  // Only a SHORT body is an error: a proxy that inflates an undeclared gzip
+  // body legitimately delivers more than the upstream length.
+  if (resp.contentLength !== undefined && written < resp.contentLength) {
+    throw new Error(`short read for ${file}: got ${written} of ${resp.contentLength} bytes`);
+  }
+  await fs.rm(marker);
+  return written;
+}
+
+/** Coalesce network chunks into bounded pieces and append each one. */
+async function appendInPieces(
+  fs: Required<DownloadFs>,
+  destPath: string,
+  body: AsyncIterable<Uint8Array>,
+  signal: AbortSignal
+): Promise<number> {
+  let piece = new Uint8Array(HF_STREAM_WRITE_BYTES);
+  let filled = 0;
+  let written = 0;
+  for await (const chunk of body) {
+    // Breaking out of the loop cancels the body; the marker stays behind.
+    if (signal.aborted) throw new Error('aborted');
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      const take = Math.min(chunk.byteLength - offset, piece.byteLength - filled);
+      piece.set(chunk.subarray(offset, offset + take), filled);
+      filled += take;
+      offset += take;
+      if (filled === piece.byteLength) {
+        await fs.appendFile(destPath, piece);
+        written += filled;
+        // The VFS may keep a reference to what it was handed until the write
+        // syncs, so never refill a buffer that was just appended.
+        piece = new Uint8Array(HF_STREAM_WRITE_BYTES);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) {
+    await fs.appendFile(destPath, piece.subarray(0, filled));
+    written += filled;
+  }
+  return written;
 }
 
 /**
@@ -300,6 +406,12 @@ export interface HfRepoDownloadProgress {
 
 export interface DownloadHfRepoOptions {
   fetch: SecureFetch;
+  /**
+   * Streaming fetch for file bodies. When given (and `fs` has `appendFile` +
+   * `rm`), each file is written in bounded pieces as it arrives instead of
+   * being buffered whole; the tree listing still uses `fetch`.
+   */
+  streamFetch?: StreamingFetch;
   fs: DownloadFs;
   repo: string;
   /** Absolute VFS dir to download into (e.g. `/workspace/models/<repo>`). */
@@ -356,6 +468,7 @@ export class HfFileDownloadError extends Error {
 
 interface PoolJob {
   fetch: SecureFetch;
+  streamFetch?: StreamingFetch;
   fs: DownloadFs;
   urlFor: (file: string) => string;
   targetDir: string;
@@ -419,6 +532,19 @@ class DownloadPool {
     }
   }
 
+  /**
+   * Bytes a download holds in memory, for the budget. A buffered body is the
+   * whole file (0 = unknown, charged the full budget). A streamed body is at
+   * most one write piece, whatever the file size.
+   */
+  private weightOf(declared: number | undefined): number {
+    const { fs, streamFetch } = this.job;
+    if (!streamFetch || !fs.appendFile || !fs.rm) return declared ?? 0;
+    return declared && declared > 0
+      ? Math.min(declared, HF_STREAM_WRITE_BYTES)
+      : HF_STREAM_WRITE_BYTES;
+  }
+
   private async one(file: string): Promise<{ status: 'downloaded' | 'skipped'; bytes: number }> {
     const { job } = this;
     const destPath = `${job.targetDir}/${file}`;
@@ -426,17 +552,10 @@ class DownloadPool {
     const present = job.force ? undefined : await completeSize(job.fs, destPath, declared);
     if (present !== undefined) return { status: 'skipped', bytes: present };
 
-    const weight = await this.budget.acquire(declared ?? 0);
+    const weight = await this.budget.acquire(this.weightOf(declared));
     try {
       if (this.abort.signal.aborted) throw new Error('aborted');
-      const bytes = await fetchOne(
-        job.fetch,
-        job.fs,
-        job.urlFor(file),
-        file,
-        destPath,
-        this.abort.signal
-      );
+      const bytes = await fetchOne(job, job.urlFor(file), file, destPath, this.abort.signal);
       return { status: 'downloaded', bytes };
     } finally {
       this.budget.release(weight);
@@ -506,6 +625,7 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
   const pool = new DownloadPool(
     {
       fetch: opts.fetch,
+      streamFetch: opts.streamFetch,
       fs: opts.fs,
       urlFor: (file) => hfResolveUrl(endpoint, opts.repo, revision, file),
       targetDir: opts.targetDir,

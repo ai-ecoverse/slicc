@@ -642,6 +642,147 @@ export async function collectViaExtensionDelegate(
   );
 }
 
+/** A proxied response whose body arrives as chunks instead of one buffer. */
+export interface StreamedFetchResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  url: string;
+  /** Upstream byte count when the proxy or server reported one. */
+  contentLength?: number;
+  /**
+   * Body chunks in order. Iterate it once; breaking out early cancels the
+   * transfer.
+   */
+  body: AsyncIterable<Uint8Array>;
+  /** Drop a body the caller will not read (e.g. after an error status). */
+  cancel(): Promise<void>;
+}
+
+export type StreamingFetch = (
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+) => Promise<StreamedFetchResponse>;
+
+/**
+ * Whether this realm reaches the network through the bridge's
+ * `/api/fetch-proxy` endpoint (branch 4 of {@link createProxiedFetch}) rather
+ * than an extension Port. Keep in step with that function's branch order.
+ */
+function usesFetchProxyEndpoint(): boolean {
+  if (getChromeExtensionRealm()) return false;
+  if (!getExtensionDelegateId()) return true;
+  if (typeof chrome === 'undefined') return false;
+  return typeof chrome?.runtime?.connect !== 'function';
+}
+
+async function* singleChunk(bytes: Uint8Array): AsyncGenerator<Uint8Array> {
+  if (bytes.byteLength > 0) yield bytes;
+}
+
+/**
+ * Wrap a `/api/fetch-proxy` response body. Only the chunk in hand is held, so
+ * a multi-GB download costs the same memory as a small one. The progress
+ * observer's `end` fires exactly once, whether the body is drained,
+ * abandoned mid-way, or cancelled unread.
+ */
+function streamProxyBody(
+  resp: Response,
+  url: string,
+  total: number | undefined,
+  progress?: FetchProgressObserver
+): Pick<StreamedFetchResponse, 'body' | 'cancel'> {
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    progress?.end(url);
+  };
+  const cancel = async () => {
+    await resp.body?.cancel().catch(() => undefined);
+    end();
+  };
+  if (NULL_BODY_STATUSES.has(resp.status) || !resp.body) {
+    void cancel();
+    return { body: singleChunk(new Uint8Array(0)), cancel };
+  }
+  const stream = resp.body;
+  async function* body(): AsyncGenerator<Uint8Array> {
+    const reader = stream.getReader();
+    let finished = false;
+    try {
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        loaded += value.byteLength;
+        progress?.chunk(url, loaded, total);
+        yield value;
+      }
+      finished = true;
+    } finally {
+      if (!finished) await reader.cancel().catch(() => undefined);
+      end();
+    }
+  }
+  return { body: body(), cancel };
+}
+
+/**
+ * Streaming sibling of {@link createProxiedFetch} for callers that write a
+ * large body somewhere as it arrives (`hf download`) instead of holding it.
+ * On the `/api/fetch-proxy` path the body is never assembled, so the
+ * {@link getResponseBodyCap} ceiling does not apply. Extension Port paths
+ * still collect the whole body inside the Port collector; they fall back to
+ * the buffered fetch and yield it as one chunk.
+ */
+export function createProxiedStreamingFetch(
+  fetchOptions: ProxiedFetchOptions = {}
+): StreamingFetch {
+  const progress = fetchOptions.progress;
+  if (!usesFetchProxyEndpoint()) {
+    const buffered = createProxiedFetch(fetchOptions);
+    return async (url, options) => {
+      const resp = await buffered(url, options);
+      return {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+        url: resp.url,
+        contentLength: resp.body.byteLength,
+        body: singleChunk(resp.body),
+        cancel: async () => undefined,
+      };
+    };
+  }
+  return async (url, options) => {
+    const encoded = encodeForbiddenRequestHeaders(headersToRecord(options?.headers));
+    const init: RequestInit = {
+      method: options?.method ?? 'GET',
+      headers: apiHeaders({ ...encoded, 'X-Target-URL': url }),
+      cache: 'no-store',
+    };
+    const signal = requestAbortSignal(options);
+    if (signal) init.signal = signal;
+    const resp = await fetch(resolveFetchProxyUrl(), init);
+    if (isProxyError(resp)) throw new Error(await readProxyErrorMessage(resp));
+    const rawHeaders: Record<string, string> = {};
+    resp.headers.forEach((v, k) => {
+      rawHeaders[k] = v;
+    });
+    const contentLength = contentLengthOf(resp.headers);
+    progress?.start(url, contentLength);
+    return {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: decodeForbiddenResponseHeaders(rawHeaders),
+      url,
+      contentLength,
+      ...streamProxyBody(resp, url, contentLength, progress),
+    };
+  };
+}
+
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.

@@ -24,6 +24,7 @@
  */
 
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
+import type { StreamingFetch } from '../proxied-fetch.js';
 import {
   DEFAULT_HF_CONCURRENCY,
   DEFAULT_HF_MAX_BYTES_IN_FLIGHT,
@@ -243,7 +244,7 @@ function liveSinkOf(ctx: CommandContext): ((chunk: string) => void) | undefined 
 async function runDownload(
   args: string[],
   ctx: CommandContext,
-  fetchFn: SecureFetch,
+  deps: HfCommandDeps,
   now: () => number
 ): Promise<ExecResult> {
   const parsed = parseDownloadArgs(args);
@@ -256,7 +257,8 @@ async function runDownload(
   let stderr = '';
   try {
     const result = await downloadHfRepo({
-      fetch: fetchFn,
+      fetch: deps.fetch,
+      streamFetch: deps.streamFetch,
       fs: ctx.fs,
       repo: parsed.repo,
       targetDir,
@@ -309,6 +311,8 @@ export interface HfCommandDeps {
   fetch: SecureFetch;
   /** Clock for rate and progress throttling; injectable for tests. */
   now?: () => number;
+  /** When set, file bodies stream to the VFS in bounded pieces. */
+  streamFetch?: StreamingFetch;
 }
 
 const VALUE_FLAGS = ['--to', '--revision', '--rev', '--concurrency', '-j', '--max-in-flight-mb'];
@@ -322,7 +326,7 @@ export function createHfCommand(deps: HfCommandDeps): Command {
         return help(args.length === 0 ? 1 : 0);
       }
       const sub = args[0];
-      if (sub === 'download') return runDownload(args.slice(1), ctx, deps.fetch, now);
+      if (sub === 'download') return runDownload(args.slice(1), ctx, deps, now);
       return failure(`unknown subcommand: ${sub}`);
     },
   };
