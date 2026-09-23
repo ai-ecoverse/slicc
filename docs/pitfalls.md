@@ -659,8 +659,9 @@ preloaded every shard of an 8.8 GB tree allocated each body twice (the
 `Array buffer allocation failed`, before the kernel worker posted ready.
 `readdir` / `stat` still see those paths. A sync read of the mirror throws
 rather than returning zeros. A later rename moves that guard with the inode,
-an unlink or rmdir drops it, and a write collapses the fictional size and
-then stores the new bytes, so the path can be read again. Async reads hit
+an unlink or rmdir drops it, and a small rewrite from offset 0 collapses the
+fictional size and then stores the new bytes, so the path can be read again.
+Writes that leave the file above 1 MiB stay metadata-only (next section). Async reads hit
 the backend. The realm snapshot already stores them as `truncated` /
 `ENOSYNC` and bridges `readFileSync` to a live read.
 
@@ -668,6 +669,32 @@ Run the [standalone browser reproduction](../packages/webapp/tests/e2e/zenfs-pre
 `tests/fs/zenfs-preload-concurrency.test.ts` in `packages/webapp` guards the global
 limit, synchronous cached data, cancellation of queued work, and completion of
 active copies on failure.
+
+## OPFS Runtime Writes: Keep Large Bodies Out of the Sync Mirror
+
+The preload cap alone was not enough. ZenFS's `Async` mixin also mirrors every
+async **write** into the same in-memory `_sync` store before queuing it to OPFS,
+and it never frees that copy. A 60-file, 1.5 GB `hf download` kept about 1.5 GB of
+`ArrayBuffer` backing store alive in the kernel worker after GC, growing in step
+with the bytes written. A multi-GB download then OOMed the worker, and later
+allocations failed with `EINVAL: Array buffer allocation failed` (#3441). The
+`@zenfs/core` patch applies the preload rule to writes and touches: once a file
+passes 1 MiB, the mirror keeps only its name and size and drops the body. The same
+download now holds a flat ~16 MB of backing store.
+
+Streamed writes expose a second cost. `WebAccessFS.write` opened
+`createWritable({ keepExistingData: true })` for every write, and Chromium copies
+the whole file into a swap file first. Appending a large file in pieces was
+therefore quadratic in disk I/O. The `@zenfs/dom` patch writes in place through
+`createSyncAccessHandle` in a worker, and falls back to `createWritable` when the
+handle is locked or when it runs on the main thread.
+
+`hf download` streams each body in 8 MiB appends when a streaming fetch is
+available (the CLI `/api/fetch-proxy` path). An empty `<file>.hf-incomplete`
+marker sits next to the file until the last byte lands, so a rerun after an
+interrupted download fetches the file again instead of skipping it. Tests: `tests/fs/zenfs-sync-mirror-write-cap.test.ts`,
+`tests/fs/zenfs-opfs-read-retry.test.ts`, and
+`tests/shell/supplemental-commands/hf-download.test.ts`.
 
 ## OPFS Writes: Serialize Per Mount, Across Contexts
 
