@@ -44,7 +44,7 @@ export interface LinkPreview {
 /** The subset of `SecureFetch` this needs. */
 export type PreviewFetch = (
   url: string,
-  options?: { method?: string; headers?: Record<string, string> }
+  options?: { method?: string; headers?: Record<string, string>; signal?: AbortSignal }
 ) => Promise<{ status: number; headers: Record<string, string>; body: Uint8Array; url?: string }>;
 
 export interface LinkPreviewFetcherOptions {
@@ -60,6 +60,14 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i;
 
 /** Bytes of a page decoded for the head scan; `og:` tags live well inside it. */
 const MAX_HTML_BYTES = 512 * 1024;
+
+/**
+ * The most a preview may download. The proxied fetch buffers a whole body
+ * before handing it over, so this must be enforced by the fetch itself (see
+ * `maxResponseBytes`), not by slicing afterwards. A page larger than this gets
+ * no card, which beats a hover pulling down a multi-megabyte response.
+ */
+export const LINK_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_ENTRIES = 200;
@@ -134,10 +142,11 @@ export class LinkPreviewFetcher {
     }
 
     const fetchFn = await this.#getFetch();
-    const res = await this.#withTimeout(
+    const res = await this.#withTimeout((signal) =>
       fetchFn(parsed.href, {
         method: 'GET',
         headers: { accept: 'text/html,application/xhtml+xml;q=0.9,image/*;q=0.8,*/*;q=0.5' },
+        signal,
       })
     );
     if (res.status < 200 || res.status >= 300) return { url, state: 'error' };
@@ -154,11 +163,16 @@ export class LinkPreviewFetcher {
     return { url, state: 'ready', ...card };
   }
 
-  #withTimeout<T>(promise: Promise<T>): Promise<T> {
+  /** Run `start` with a signal that aborts the request itself once the timeout fires. */
+  #withTimeout<T>(start: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('link preview timed out')), this.#timeoutMs);
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error('link preview timed out'));
+      }, this.#timeoutMs);
     });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    return Promise.race([start(controller.signal), timeout]).finally(() => clearTimeout(timer));
   }
 }

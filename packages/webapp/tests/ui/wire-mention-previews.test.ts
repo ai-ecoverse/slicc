@@ -246,6 +246,33 @@ describe('wireMentionPreviews', () => {
     dispose();
   });
 
+  it("resolves relative times against the message's send time, not now", async () => {
+    const thread = document.createElement('div');
+    document.body.append(thread);
+    const bubble = agent('<p>Ship it tomorrow at 9am.</p>');
+    bubble.setAttribute('data-msg-time', String(Date.parse('2026-08-01T12:00:00Z')));
+    const fresh = agent('<p>And again tomorrow at 9am.</p>');
+    thread.append(bubble, fresh);
+    const references: string[] = [];
+    const dispose = wireMentionPreviews({
+      thread,
+      isReadOnly: () => false,
+      log: silentLog,
+      getCard: () => card,
+      now: () => new Date('2026-09-23T10:00:00Z'),
+      getTimeParser: async () => ({
+        parseMany: async (texts, context) => {
+          references.push(context.reference);
+          return texts.map(() => ({ spans: [], occurrences: [], rrules: [] }));
+        },
+      }),
+    });
+    await settle();
+    expect(references).toContain('2026-08-01T12:00:00.000Z');
+    expect(references).toContain('2026-09-23T10:00:00.000Z');
+    dispose();
+  });
+
   it('answers the latest question and dispatches the answer on the thread', async () => {
     const thread = document.createElement('div');
     document.body.append(thread);

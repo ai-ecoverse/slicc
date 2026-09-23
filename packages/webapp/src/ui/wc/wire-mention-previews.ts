@@ -40,6 +40,7 @@ import { parsePathHints, TOOL_PATH_HINTS_ATTR } from '../../core/tool-call-paths
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import {
   githubPreview,
+  LINK_PREVIEW_MAX_BYTES,
   type LinkPreview,
   LinkPreviewFetcher,
   type PreviewFetch,
@@ -87,6 +88,18 @@ const HINT_LOOKBACK = 40;
 const HINT_TEXT_CAP = 20_000;
 
 const DEFAULT_HOVER_DELAY_MS = 280;
+
+/** Epoch-ms send time `wc-message-view.ts` stamps on each agent bubble. */
+const MESSAGE_TIME_ATTR = 'data-msg-time';
+
+/**
+ * The instant relative phrases in `bubble` were written against: its send
+ * time, so "tomorrow" in last month's message is last month's tomorrow.
+ */
+function writtenAt(bubble: Element, now: () => Date): Date {
+  const sent = Number(bubble.getAttribute(MESSAGE_TIME_ATTR));
+  return Number.isFinite(sent) && sent > 0 ? new Date(sent) : now();
+}
 
 /** How long an answered card lingers so the confirmation is seen. */
 const ANSWERED_LINGER_MS = 900;
@@ -154,7 +167,7 @@ function collectPathHints(thread: ParentNode, bubble: Element): string[] {
 
 function defaultFetch(): Promise<PreviewFetch> {
   return import('../../shell/proxied-fetch.js').then(({ createProxiedFetch }) => {
-    const secure = createProxiedFetch();
+    const secure = createProxiedFetch({ maxResponseBytes: LINK_PREVIEW_MAX_BYTES });
     return (url, options) => secure(url, options);
   });
 }
@@ -556,7 +569,7 @@ function wireMentionPreviewsUnsafe(deps: MentionPreviewWiringDeps): () => void {
           repoHints: collectRepoHints(thread, bubble),
           resolveRepoFallback: repoFallbackFor(bubble),
           getTimeParser,
-          timeContext: currentTimeContext(now()),
+          timeContext: currentTimeContext(writtenAt(bubble, now)),
           questions: true,
         },
         (stepName, err) => log.error(`Mention preview step "${stepName}" failed`, err)

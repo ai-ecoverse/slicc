@@ -23,6 +23,19 @@ describe('wireQuestionAnswerLicks', () => {
     );
   });
 
+  it('adds the viewer time zone to date and date-time answers only', () => {
+    const thread = new EventTarget();
+    const send = vi.fn();
+    wireQuestionAnswerLicks(thread, send, () => 'c');
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    answer(thread, { question: 'When?', kind: 'datetime', answer: '2026-09-24T10:00+02:00' });
+    answer(thread, { question: 'Which day?', kind: 'date', answer: '2026-09-24' });
+    answer(thread, { question: 'How many?', kind: 'number', answer: '3' });
+    expect(send.mock.calls[0]?.[1].data.timeZone).toBe(zone);
+    expect(send.mock.calls[1]?.[1].data.timeZone).toBe(zone);
+    expect(send.mock.calls[2]?.[1].data).not.toHaveProperty('timeZone');
+  });
+
   it('omits an unknown origin and ignores malformed events', () => {
     const thread = new EventTarget();
     const send = vi.fn();

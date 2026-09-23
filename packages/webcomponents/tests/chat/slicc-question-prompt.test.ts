@@ -80,6 +80,28 @@ describe('slicc-question-prompt', () => {
     expect(seen).toEqual([{ question: 'Which branch?', kind: 'text', answer: 'main' }]);
   });
 
+  it('pins a date-time answer to the local UTC offset', () => {
+    const el = mount({ question: 'When?', kind: 'datetime' });
+    const seen = answers(el);
+    const input = q(el, '[part="input"]') as HTMLInputElement;
+    input.value = '2026-09-24T09:00';
+    q(el, '[part="send"]')?.click();
+    const minutes = -new Date('2026-09-24T09:00').getTimezoneOffset();
+    const abs = Math.abs(minutes);
+    const offset = `${minutes < 0 ? '-' : '+'}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+    expect(seen).toEqual([
+      { question: 'When?', kind: 'datetime', answer: `2026-09-24T09:00${offset}` },
+    ]);
+  });
+
+  it('leaves a date answer without an offset', () => {
+    const el = mount({ question: 'Which day?', kind: 'date' });
+    const seen = answers(el);
+    (q(el, '[part="input"]') as HTMLInputElement).value = '2026-09-24';
+    q(el, '[part="send"]')?.click();
+    expect(seen[0]?.answer).toBe('2026-09-24');
+  });
+
   it('shows the answer in the answered state', () => {
     const el = mount({ question: 'Ship it?', state: 'answered', answer: 'yes' });
     expect(q(el, '[part="answered"]')?.textContent).toContain('yes');

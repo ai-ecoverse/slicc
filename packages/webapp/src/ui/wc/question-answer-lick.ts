@@ -18,7 +18,18 @@ export const QUESTION_LICK_NAME = 'question';
 /** The body of a `question` lick, as the cone receives it. */
 export interface QuestionLickBody {
   action: 'answer';
-  data: Pick<AgentQuestionAnswerDetail, 'question' | 'kind' | 'answer'>;
+  data: Pick<AgentQuestionAnswerDetail, 'question' | 'kind' | 'answer'> & {
+    /** The answerer's IANA zone, on date and date-time answers. */
+    timeZone?: string;
+  };
+}
+
+function viewerTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type SendLick = (
@@ -40,9 +51,12 @@ export function wireQuestionAnswerLicks(
     const detail = (event as CustomEvent<AgentQuestionAnswerDetail>).detail;
     if (!detail || typeof detail.answer !== 'string') return;
     const { question, kind, answer } = detail;
+    // A date-time carries its UTC offset already; the zone name tells the cone
+    // which rules (DST) the answerer lives by, and what "that day" means.
+    const timeZone = kind === 'datetime' || kind === 'date' ? viewerTimeZone() : undefined;
     send(
       QUESTION_LICK_NAME,
-      { action: 'answer', data: { question, kind, answer } },
+      { action: 'answer', data: { question, kind, answer, ...(timeZone ? { timeZone } : {}) } },
       undefined,
       originUnitId() ?? undefined
     );

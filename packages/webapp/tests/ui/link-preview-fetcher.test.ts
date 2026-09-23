@@ -104,6 +104,19 @@ describe('LinkPreviewFetcher', () => {
     expect((await fetcher.preview('https://slow.test/')).state).toBe('error');
   });
 
+  it('aborts the underlying request when it times out', async () => {
+    let seen: AbortSignal | undefined;
+    const fetcher = new LinkPreviewFetcher({
+      getFetch: () => (_url, options) => {
+        seen = options?.signal;
+        return new Promise(() => {});
+      },
+      timeoutMs: 10,
+    });
+    await fetcher.preview('https://slow.test/');
+    expect(seen?.aborted).toBe(true);
+  });
+
   it('evicts the oldest entry past its size cap', async () => {
     const fetcher = new LinkPreviewFetcher({
       getFetch: () => async () => htmlResponse('<title>t</title>'),

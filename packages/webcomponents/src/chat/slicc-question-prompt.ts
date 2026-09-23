@@ -27,6 +27,24 @@ const INPUT_TYPE: Record<Exclude<QuestionKind, 'yes-no'>, string> = {
   email: 'email',
 };
 
+/**
+ * `datetime-local` yields a wall-clock value with no zone ("2026-09-24T09:00"),
+ * which the recipient cannot place on the timeline. Pin it to the answerer's
+ * UTC offset at that instant ("2026-09-24T09:00+02:00"). Anything that is not
+ * a parseable local date-time is returned unchanged.
+ */
+function withLocalOffset(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value)) return value;
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
+  const minutes = -at.getTimezoneOffset();
+  const sign = minutes < 0 ? '-' : '+';
+  const abs = Math.abs(minutes);
+  const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+  const mm = String(abs % 60).padStart(2, '0');
+  return `${value}${sign}${hh}:${mm}`;
+}
+
 const STYLE = `
 :host{display:block;width:300px;max-width:100%;color:var(--ink);}
 :host([hidden]){display:none;}
@@ -141,8 +159,9 @@ export class SliccQuestionPrompt extends HTMLElement {
   }
 
   #submit(answer: string): void {
-    const value = answer.trim();
-    if (!value || this.state !== 'open') return;
+    const trimmed = answer.trim();
+    if (!trimmed || this.state !== 'open') return;
+    const value = this.kind === 'datetime' ? withLocalOffset(trimmed) : trimmed;
     const detail: QuestionAnswerDetail = {
       question: this.question,
       kind: this.kind,
