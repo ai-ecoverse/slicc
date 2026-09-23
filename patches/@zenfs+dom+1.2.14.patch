@@ -145,7 +145,7 @@ index ac0cbbd..4b6938f 100644
              log.crit(withErrno('EIO', 'Mismatch in entry kind on write'));
              return;
          }
-+        // PATCH: createWritable({ keepExistingData }) copies the whole file
++        // PATCH(slicc#3441, upstream zen-fs/dom#47): createWritable({ keepExistingData }) copies the whole file
 +        // into a swap file before every write, so appending a multi-GB
 +        // download in pieces costs O(n^2) disk I/O and briefly doubles quota.
 +        // A worker writes in place through a sync access handle instead. A

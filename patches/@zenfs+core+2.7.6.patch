@@ -23,8 +23,8 @@ index 26aaf3a..82d80c0 100644
  import { StoreFS } from '../backends/store/fs.js';
 -import { isDirectory } from '../internal/inode.js';
 +import { _inode_fields, isDirectory } from '../internal/inode.js';
-+// PATCH(slicc#3441): largest body the sync mirror holds. Same cap as the
-+// crossCopy preload below and realm-host.ts SYNC_FS_MAX_FILE_BYTES.
++// PATCH(slicc#3441, upstream zen-fs/core#322): largest body the sync mirror
++// holds. Same cap as the crossCopy preload below and realm-host.ts SYNC_FS_MAX_FILE_BYTES.
 +const SYNC_MIRROR_MAX_FILE_BYTES = 1048576;
  import { join } from '../path.js';
  import { _asyncFSKeys } from './shared.js';
@@ -98,7 +98,7 @@ index 26aaf3a..82d80c0 100644
 +            this._metaOnly.delete(path);
 +        }
 +        /**
-+         * PATCH(slicc#3441): the preload keeps bodies above the cap out of the
++         * PATCH(slicc#3441, upstream zen-fs/core#322): the preload keeps bodies above the cap out of the
 +         * mirror, but an async write used to copy every byte it wrote into it,
 +         * and nothing ever let go. A long download kept each file it saved in
 +         * worker memory until the worker ran out. Writes and touches that
@@ -329,7 +329,7 @@ index 26aaf3a..82d80c0 100644
                          return result;
                      }
                      try {
-+                        // PATCH(slicc#3441): keep large bodies out of the mirror.
++                        // PATCH(slicc#3441, upstream zen-fs/core#322): keep large bodies out of the mirror.
 +                        if (this._mirrorMetaOnly(key, args))
 +                            return result;
                          // @ts-expect-error 2556 - The type of `args` is not narrowed

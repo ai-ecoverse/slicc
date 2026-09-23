@@ -680,14 +680,17 @@ with the bytes written. A multi-GB download then OOMed the worker, and later
 allocations failed with `EINVAL: Array buffer allocation failed` (#3441). The
 `@zenfs/core` patch applies the preload rule to writes and touches: once a file
 passes 1 MiB, the mirror keeps only its name and size and drops the body. The same
-download now holds a flat ~16 MB of backing store.
+download now holds a flat ~16 MB of backing store. Upstream report:
+[zen-fs/core#322](https://github.com/zen-fs/core/issues/322).
 
 Streamed writes expose a second cost. `WebAccessFS.write` opened
 `createWritable({ keepExistingData: true })` for every write, and Chromium copies
 the whole file into a swap file first. Appending a large file in pieces was
 therefore quadratic in disk I/O. The `@zenfs/dom` patch writes in place through
 `createSyncAccessHandle` in a worker, and falls back to `createWritable` when the
-handle is locked or when it runs on the main thread.
+handle is locked or when it runs on the main thread. Upstream report:
+[zen-fs/dom#47](https://github.com/zen-fs/dom/issues/47) (256 MiB in 4 MiB appends:
+about 25 s through `createWritable`, about 0.5 s in place).
 
 `hf download` streams each body in 8 MiB appends when a streaming fetch is
 available (the CLI `/api/fetch-proxy` path). An empty `<file>.hf-incomplete`
