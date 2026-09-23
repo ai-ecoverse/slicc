@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
-import { modelCatalogProviderId } from '../src/model-catalog.js';
+import { MODEL_CATALOG_UPSTREAM_TIMEOUT_MS, modelCatalogProviderId } from '../src/model-catalog.js';
 import { makeEnv } from './helpers/fake-env.js';
 
 const CATALOG_BODY = JSON.stringify({
@@ -116,6 +116,31 @@ describe('GET /api/models/providers/:id', () => {
       }) as unknown as typeof fetch
     );
     expect(unreachable.status).toBe(502);
+  });
+
+  it('bounds the upstream fetch so a hung origin fails fast into a 502', async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    try {
+      const fetchImpl = vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          })
+      ) as unknown as typeof fetch;
+      const pending = handleWorkerRequest(
+        request('/api/models/providers/anthropic'),
+        makeEnv(),
+        fetchImpl
+      );
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+      controller.abort();
+      const res = await pending;
+      expect(res.status).toBe(502);
+      expect(timeout).toHaveBeenCalledWith(MODEL_CATALOG_UPSTREAM_TIMEOUT_MS);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it('answers preflight and refuses writes', async () => {

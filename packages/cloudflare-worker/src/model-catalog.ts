@@ -16,6 +16,8 @@ export const MODEL_CATALOG_ROUTE_PREFIX = '/api/models/providers/';
 export const PI_MODEL_CATALOG_ORIGIN = 'https://pi.dev';
 
 const MODEL_CATALOG_CACHE_TTL_SECONDS = 300;
+/** Below the webapp's 4 s client timeout, so a hung origin surfaces as a 502. */
+export const MODEL_CATALOG_UPSTREAM_TIMEOUT_MS = 3_000;
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const PASSTHROUGH_HEADERS = [
   'content-type',
@@ -71,6 +73,7 @@ export async function handleModelCatalogRequest(
       `${PI_MODEL_CATALOG_ORIGIN}${MODEL_CATALOG_ROUTE_PREFIX}${providerId}`,
       {
         headers: { Accept: 'application/json', 'User-Agent': 'slicc-tray-hub' },
+        signal: AbortSignal.timeout(MODEL_CATALOG_UPSTREAM_TIMEOUT_MS),
         cf: { cacheTtl: MODEL_CATALOG_CACHE_TTL_SECONDS, cacheEverything: true },
       } as RequestInit
     );

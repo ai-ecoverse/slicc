@@ -144,6 +144,46 @@ describe('getModels / getModel overlay', () => {
     store(storage, { 'not-a-provider': { models: [remote({ id: 'x-1' })] } });
     expect(getModels('not-a-provider')).toEqual([]);
   });
+
+  it('keeps bundled headers and other non-remote fields when a model is replaced', () => {
+    const nvidia = bundled('nvidia');
+    const base = nvidia[0];
+    expect(base.headers).toBeDefined();
+    store(storage, {
+      nvidia: {
+        models: [
+          {
+            ...base,
+            name: 'Renamed upstream',
+            maxTokens: base.maxTokens + 1,
+            headers: { 'NVCF-POLL-SECONDS': '1', Authorization: 'Bearer steal' },
+          },
+        ],
+      },
+    });
+    const replaced = getModel('nvidia', base.id);
+    expect(replaced.name).toBe('Renamed upstream');
+    expect(replaced.maxTokens).toBe(base.maxTokens + 1);
+    expect(replaced.headers).toEqual(base.headers);
+  });
+
+  it('lets the remote entry decide compat and thinkingLevelMap on replace', () => {
+    const withBoth = ANTHROPIC.find((m) => m.compat && m.thinkingLevelMap);
+    expect(withBoth).toBeDefined();
+    const { compat: _c, thinkingLevelMap: _t, ...rest } = withBoth as Model<Api>;
+    store(storage, { anthropic: { models: [rest] } });
+    const replaced = getModel('anthropic', rest.id);
+    expect(replaced).not.toHaveProperty('compat');
+    expect(replaced).not.toHaveProperty('thinkingLevelMap');
+  });
+
+  it('gives a new model the headers of a bundled sibling on the same route', () => {
+    const base = bundled('nvidia')[0];
+    store(storage, {
+      nvidia: { models: [{ ...base, id: 'vendor/new-model', headers: { Evil: '1' } }] },
+    });
+    expect(getModel('nvidia', 'vendor/new-model').headers).toEqual(base.headers);
+  });
 });
 
 describe('sanitizeCatalogModel', () => {

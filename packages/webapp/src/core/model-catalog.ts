@@ -141,6 +141,11 @@ function bundledShape(bundled: readonly AnyModel[]): BundledShape {
 /**
  * A remote catalogue entry as a pi-ai `Model`, or null when it is malformed or
  * would send requests somewhere the bundled catalogue never does.
+ *
+ * The copied fields are a whitelist of pi-ai's `Model` shape and must stay in
+ * step with `REMOTE_OWNED_FIELDS`. A `Model` field left off it is not lost on
+ * merge — `overBundled` keeps the bundled value — but a new model never gets
+ * it from the remote entry.
  */
 export function sanitizeCatalogModel(
   providerId: string,
@@ -213,16 +218,60 @@ function isFresh(entry: ModelCatalogEntry | undefined): entry is ModelCatalogEnt
   return typeof entry.lastModified === 'number' && entry.lastModified > generatedAt;
 }
 
+/** Fields a remote entry decides outright: present or absent, the remote value wins. */
+const REMOTE_OWNED_FIELDS = new Set<string>([
+  'id',
+  'name',
+  'api',
+  'provider',
+  'baseUrl',
+  'reasoning',
+  'input',
+  'cost',
+  'contextWindow',
+  'maxTokens',
+  'thinkingLevelMap',
+  'compat',
+]);
+
+/**
+ * Lay a sanitized remote model over bundled data. Every field outside the
+ * sanitizer's whitelist (`headers`, `samplingParams`, or a future pi-ai
+ * `Model` field) comes from bundled data only, never from the remote entry:
+ * from the same-id bundled model when there is one, else `headers` from a
+ * bundled sibling on the same `api` + `baseUrl` route. pi-ai's NVIDIA models
+ * need `NVCF-POLL-SECONDS` and its Copilot models their editor headers, so
+ * dropping them on replace would break those routes.
+ */
+function overBundled(
+  model: AnyModel,
+  sameId: AnyModel | undefined,
+  bundled: readonly AnyModel[]
+): AnyModel {
+  if (sameId) {
+    const inherited = Object.fromEntries(
+      Object.entries(sameId).filter(([key]) => !REMOTE_OWNED_FIELDS.has(key))
+    );
+    return { ...inherited, ...model } as AnyModel;
+  }
+  const sibling = bundled.find(
+    (m) => m.headers && m.api === model.api && m.baseUrl === model.baseUrl
+  );
+  return sibling?.headers ? { ...model, headers: { ...sibling.headers } } : model;
+}
+
 function mergeProvider(providerId: string, entry: ModelCatalogEntry): AnyModel[] {
   const bundled = bundledModels(providerId);
   if (bundled.length === 0) return bundled;
   const shape = bundledShape(bundled);
   const merged = [...bundled];
   const index = new Map(merged.map((m, i) => [m.id, i]));
+  const bundledById = new Map(bundled.map((m) => [m.id, m]));
   for (const raw of entry.models) {
-    const model = sanitizeCatalogModel(providerId, raw, shape);
-    if (!model) continue;
-    const at = index.get(model.id);
+    const sanitized = sanitizeCatalogModel(providerId, raw, shape);
+    if (!sanitized) continue;
+    const at = index.get(sanitized.id);
+    const model = overBundled(sanitized, bundledById.get(sanitized.id), bundled);
     if (at === undefined) {
       index.set(model.id, merged.length);
       merged.push(model);
