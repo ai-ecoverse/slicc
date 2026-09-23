@@ -307,25 +307,30 @@ describe('main', () => {
     const outDir = join(dir, 'out');
     const quiet = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { exec } = leader({ failOn: /^rm -rf \/tmp\/bench\// });
-    await main(['--set', setFile(dir), '--models', 'm', '--out', outDir, '--no-judge'], {
+    const failed = main(['--set', setFile(dir), '--models', 'm', '--out', outDir, '--no-judge'], {
       exec,
       log: () => {},
       leaderScript: 's',
     });
+    expect(await failed).toBe(1);
     const record = JSON.parse(
       readFileSync(recordPath(outDir, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8')
     );
     expect(record.error).toMatch(/leader went away/);
     expect(existsSync(tracePath(outDir, 'Own', 'builtin', 'm', 'own-1', 1, false))).toBe(false);
     const ok = leader();
-    await main(['--set', setFile(dir), '--models', 'm', '--out', outDir, '--no-judge'], {
-      exec: ok.exec,
-      log: () => {},
-      leaderScript: 's',
-    });
+    const retry = await main(
+      ['--set', setFile(dir), '--models', 'm', '--out', outDir, '--no-judge'],
+      {
+        exec: ok.exec,
+        log: () => {},
+        leaderScript: 's',
+      }
+    );
     const retried = JSON.parse(
       readFileSync(recordPath(outDir, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8')
     );
+    expect(retry).toBe(0);
     expect(retried.error).toBeUndefined();
     expect(retried.score).toBeUndefined();
     quiet.mockRestore();

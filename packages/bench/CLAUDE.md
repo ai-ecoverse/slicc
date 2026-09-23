@@ -32,7 +32,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges every 
 2. Each task runs as a fresh `agent --model <m> --persist-session` scoop, not in the cone's chat, so no task sees another's context and one leader serves every model. The prompt is the task text plus upstream's closing instruction (a `FINAL ANSWER:` line, no clarifying questions); how to drive the browser is left to SLICC and the installed skills, because that is what the skills axis measures.
 3. `run-task.jsh` captures screenshots while the agent works (a tab whose address changed, or every 15 s), because agents close their tabs when done. Cost is the scoops' delta in `cost --json`, never the cone's.
 4. Runs are ordered skills → repeat → task → model, so both models meet the live web at about the same moment.
-5. A run that never reached the judge is recorded with `error` and retried on the next invocation. It is reported, never counted as a fail: #3180's matrix is sparse.
+5. A run that never reached the judge is recorded with `error` and retried on the next invocation. It is reported, never counted as a fail: #3180's matrix is sparse. The invocation still exits 1, so a CI job does not go green on runs that never reached the judge.
 
 ## Build and Test
 

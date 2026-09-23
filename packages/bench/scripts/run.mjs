@@ -300,9 +300,11 @@ function alreadyDone(opts, r) {
   return existsSync(rp) && !JSON.parse(readFileSync(rp, 'utf8')).error;
 }
 
+/** Run every planned run; returns how many errored before reaching the judge. */
 async function runAll(runs, ctx, log) {
   const { exec, opts } = ctx;
   let staged = null;
+  let errors = 0;
   try {
     for (const [i, r] of runs.entries()) {
       if (alreadyDone(opts, r)) {
@@ -317,6 +319,7 @@ async function runAll(runs, ctx, log) {
         log(`skills ${staged}: ${count} entries in /workspace/skills`);
       }
       const outcomeOfRun = await runOne(r, ctx);
+      if (outcomeOfRun.record.error) errors += 1;
       log(describeRun(i, runs.length, r, outcomeOfRun.record));
       writeRun(opts, r, outcomeOfRun);
     }
@@ -326,6 +329,7 @@ async function runAll(runs, ctx, log) {
         log(`could not restore /workspace/skills: ${err.message}`)
       );
   }
+  return errors;
 }
 
 function writeOutputs(opts, runStart) {
@@ -367,9 +371,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const spec = judge ? (deps.spec ?? (await loadFindingsSpec())) : null;
   const runStart = new Date().toISOString();
   await installLeaderScript(exec, deps.leaderScript);
-  await runAll(runs, { exec, opts, judge, spec }, log);
+  const errors = await runAll(runs, { exec, opts, judge, spec }, log);
   console.log(writeOutputs(opts, runStart));
-  return 0;
+  // The report is written either way; a non-zero exit keeps a CI job from passing on runs
+  // that never reached the judge. Rerunning with the same --out retries only those.
+  if (errors)
+    log(`${errors} run(s) errored before the judge; rerun with the same --out to retry them`);
+  return errors ? 1 : 0;
 }
 
 const isMain =

@@ -35,7 +35,7 @@ AWS_BEARER_TOKEN_BEDROCK=… node packages/bench/scripts/run.mjs \
   --executor cdp --cdp http://127.0.0.1:<cdp-port> --ui localhost:<ui-port> --out bench-out
 ```
 
-Against any leader with a join URL: `SLICC_JOIN_URL=… SLICC_CLI=… node packages/bench/scripts/run.mjs --set …`. `--plan` prints the runs without starting any. A second invocation with the same `--out` skips the runs that finished and retries the ones that errored.
+Against any leader with a join URL: `SLICC_JOIN_URL=… SLICC_CLI=… node packages/bench/scripts/run.mjs --set …`. `--plan` prints the runs without starting any. A second invocation with the same `--out` skips the runs that finished and retries the ones that errored. The command exits 1 when a run errored before reaching the judge, so a CI job cannot pass on runs that never happened; the report is written either way.
 
 ## The task format
 
