@@ -242,7 +242,18 @@ import traceback
 
 __slicc_exit_code = 0
 try:
-    sys.argv = __slicc_argv
+    # A real list: the JS array arrives as a JsProxy, whose slices
+    # (sys.argv[1:], what argparse-style CLIs read) are not lists of str.
+    sys.argv = list(__slicc_argv)
+    # Like CPython: a script's own directory replaces Pyodide's leading ''
+    # (the cwd, kept for -c and stdin), so it can import its sibling package.
+    if __slicc_filename not in ("-c", "<stdin>"):
+        import os.path
+        __slicc_dir = os.path.dirname(os.path.abspath(__slicc_filename))
+        if sys.path and sys.path[0] == "":
+            sys.path[0] = __slicc_dir
+        else:
+            sys.path.insert(0, __slicc_dir)
     exec(compile(__slicc_code, __slicc_filename, "exec"), {"__name__": "__main__", "__file__": __slicc_filename})
 except SystemExit as exc:
     code = exc.code

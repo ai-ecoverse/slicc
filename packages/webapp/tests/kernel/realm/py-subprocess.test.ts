@@ -138,6 +138,42 @@ shell_code = subprocess.run('nosuchtool -v', shell=True, capture_output=True).re
     expect(py(`__import__('os').system('fail')`)).toBe(3 << 8);
   });
 
+  it('os.exec* runs the program and ends with its status (never returns)', () => {
+    py(`
+import os
+def status(fn):
+    try:
+        fn()
+        return 'returned'
+    except Exception as e:
+        return f'caught {e!r}'
+    except SystemExit as e:
+        return e.code
+os.environ['EXEC_ENV'] = 'inherited'
+execvp = status(lambda: os.execvp('fail', ['argv0-ignored', '-x']))
+execl = status(lambda: os.execl('echo', 'echo-argv0', 'a', 'b'))
+execve = status(lambda: os.execve('echo', ['echo'], {'ONLY': '1'}))
+`);
+    expect(py('execvp')).toBe(3);
+    expect(calls[0].command).toEqual(['fail', '-x']);
+    expect(calls[0].opts.env?.EXEC_ENV).toBe('inherited');
+    expect(py('execl')).toBe(0);
+    expect(calls[1].command).toEqual(['echo', 'a', 'b']);
+    expect(py('execve')).toBe(0);
+    expect(calls[2].opts.env).toEqual({ ONLY: '1' });
+  });
+
+  it('os.exec* raises FileNotFoundError for a missing program', () => {
+    py(`
+try:
+    os.execvp('nosuchtool', ['nosuchtool'])
+    exec_missing = None
+except FileNotFoundError as e:
+    exec_missing = e.filename
+`);
+    expect(py('exec_missing')).toBe('nosuchtool');
+  });
+
   it('turns a bridge failure into OSError with the matching errno', () => {
     failWith = 'ETIMEDOUT';
     py(`

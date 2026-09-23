@@ -298,6 +298,12 @@ export interface RealmGraphResult {
    * syntax; absent for plain CJS entries (the realm then runs `init.code`).
    */
   entrySource?: string;
+  /**
+   * True when the entry has static ESM syntax (a real ES module), as opposed
+   * to a CJS entry transpiled only for a dynamic `import()`: only a module
+   * lacks the CJS `__dirname` / `__filename`.
+   */
+  entryIsModule?: boolean;
 }
 
 export interface BuildRealmModuleGraphOptions {
@@ -413,5 +419,6 @@ export async function buildRealmModuleGraph(
     errors,
   };
   if (entrySource !== undefined) result.entrySource = entrySource;
+  if (entrySource !== undefined && hasEsmSyntax(entryCode)) result.entryIsModule = true;
   return result;
 }
