@@ -92,6 +92,13 @@ describe('guardInlineFocus', () => {
     expect(doc.activeElement).toBe(later);
   });
 
+  it('keeps the restore target across a window blur (the holder stays active)', () => {
+    composer.dispatchEvent(new win.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+    field.focus();
+    expect(doc.activeElement).toBe(composer);
+    expect(composer.selectionStart).toBe(5);
+  });
+
   it('stops guarding once released', () => {
     release();
     field.focus();

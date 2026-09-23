@@ -70,9 +70,14 @@ export function guardInlineFocus(scope: HTMLElement, now: () => number = Date.no
   const onDocFocusIn = (event: FocusEvent): void => {
     if (!event.composedPath().includes(scope)) lastOutside = deepTarget(event);
   };
-  // ...and forget it when the focus leaves it for nowhere (a blur).
+  // ...and forget it when the focus leaves it for nowhere (a blur). A window
+  // blur (switching apps) also fires `focusout` with no `relatedTarget`, but
+  // the element stays the active one and gets the focus back on return, so it
+  // is still the restore target.
   const onDocFocusOut = (event: FocusEvent): void => {
-    if (!event.relatedTarget && !event.composedPath().includes(scope)) lastOutside = null;
+    if (event.relatedTarget || event.composedPath().includes(scope)) return;
+    if (deepTarget(event) === deepActiveElement(doc)) return;
+    lastOutside = null;
   };
   const onFocusIn = (event: FocusEvent): void => {
     if (isWithin(scope, event.relatedTarget)) return;
