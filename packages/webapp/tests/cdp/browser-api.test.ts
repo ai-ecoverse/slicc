@@ -1644,7 +1644,11 @@ describe('BrowserAPI', () => {
         })
         .mockResolvedValueOnce({
           nodes: [
-            { role: { value: 'combobox' }, name: { value: 'Where from? ' }, backendDOMNodeId: 2719 },
+            {
+              role: { value: 'combobox' },
+              name: { value: 'Where from? ' },
+              backendDOMNodeId: 2719,
+            },
             {
               role: { value: 'button' },
               name: { value: '  Search  for\nflights ' },
