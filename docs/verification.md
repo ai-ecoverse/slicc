@@ -21,7 +21,7 @@ topic-branch stacks, runs the workflow from the PR's merge commit.
 | Aggregate check name                                           | `ci-stack`              | `ci`                                           |
 | `ci.yml` `cloudflare-worker` local gates (build/dry-run/tests) | yes                     | yes                                            |
 | Staging mutation (R2 / deploy / secrets / smoke)               | no                      | yes (trusted PRs; queue leader only)           |
-| `worker-staging.yml` / screenshot workflows                    | no (`branches: [main]`) | yes, when their paths match                    |
+| `worker-staging.yml`                                           | no (`branches: [main]`) | yes, when its paths match                      |
 
 Stacked runs never mutate staging. The deploy lives in `ci.yml`'s
 `cloudflare-worker` job (`RUN_CLOUDFLARE_STAGING`), not only in

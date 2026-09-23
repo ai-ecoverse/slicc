@@ -19,7 +19,7 @@
  * primitives that really do change how every component renders, so a change
  * there fans out to every story in the library. This is a pure string helper
  * that alters two chips, and filing it there made a one-line refactor request
- * 952 screenshots and time the upload job out.
+ * 952 screenshots from the affected-story resolver.
  */
 
 /**

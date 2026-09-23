@@ -57,8 +57,8 @@ Per-file internals for `src/panel/` beyond the summary in the package guide.
   run — fixed zones at actual width, the flexible one at a 48px floor;
   reserving one floor let a drag crush the center to 0px. No grip on
   locked/docked panels; no seam beside an empty or locked zone.
-- **Stories** (`panel/*.stories.ts`) — needed for PR screenshots to cover
-  panels at all (the affected-story heuristic is directory-level). Includes
+- **Stories** (`panel/*.stories.ts`) — make panel layouts available for
+  visual review (the affected-story heuristic is directory-level). Includes
   `Stacked Docks`, which shows a dock spanning OVER the rails vs `zones.top`
   between them — the distinction that gets layouts authored wrong.
 - **`<slicc-layout>`** (`panel/slicc-layout.ts`) — renders a document by MOVING
@@ -642,20 +642,13 @@ even when it IS hidden; rAF is the only scheduler that pauses with visibility.
 
 ## Storybook PR screenshots
 
-Extended reference for the workflow summary in the package guide.
-
-**Trigger.** `.github/workflows/storybook-screenshots.yml` is event-filtered to
-`packages/webcomponents/**`, its screenshot tooling, and the workflow
-definition on a `pull_request` to `main`. Unrelated PRs do not start the
-workflow.
-
-**Running it locally** (flags are `--flag=value` only; manifest is always
-`<out>/manifest.json`; empty diff → empty `shots[]` + a "no affected stories"
-comment):
+Agents can capture affected Storybook stories and attach useful screenshots to
+their PRs. The capture script takes `--flag=value` arguments and writes
+`<out>/manifest.json`; an empty diff produces an empty `shots[]` array.
 
 ```bash
 npm run build-storybook -w @slicc/webcomponents
-git diff --name-only main... > /tmp/changed.txt
+git diff --name-only origin/main...HEAD > /tmp/changed.txt
 npx playwright install chromium   # once
 node packages/dev-tools/tools/storybook-affected-screenshots.mjs \
   --changed-files=/tmp/changed.txt \
@@ -676,30 +669,16 @@ reason about, no module-graph plumbing):
 Each affected story is screenshotted at the desktop viewport (1280×900) for
 both the `light` and `dark` theme globals.
 
-**Hosting.** PNGs are uploaded to the Cloudflare R2 bucket
-`slicc-pr-screenshots` under the key `pr-<number>/<head-sha>/<file>.png` and
-embedded inline in the comment via the public r2.dev base URL. The bucket has
-a 30-day object lifecycle rule (`expire-30d`) so screenshots self-clean.
+Attach the useful PNGs when opening the PR with `gh pr create --attach <file>`
+(repeat `--attach` for multiple images), or add them later with
+`gh pr comment <number> --attach <file>`. The agent chooses which story states
+help reviewers understand the change.
 
-**Fork PRs / missing secret.** When `CLOUDFLARE_API_TOKEN` is unavailable
-(typical for fork PRs) the job degrades to attaching the PNGs as a workflow
-artifact and the comment links to the run instead of embedding images. The
-artifact upload always runs, R2 or not, and the R2 upload step is
-`continue-on-error: true` so a single failed object put still leaves the
-artifact + comment intact.
-
-**Ops secrets/vars.** The repo needs `CLOUDFLARE_API_TOKEN` (R2 read+write on
-the `slicc-pr-screenshots` bucket) as an Actions secret. The account ID,
-bucket name, and public base URL have sensible defaults baked into the
-workflow but can be overridden via the `CLOUDFLARE_ACCOUNT_ID`, `R2_BUCKET`,
-and `R2_PUBLIC_BASE_URL` repo variables.
-
-**Manifest** (`<out>/manifest.json`, schema v1, consumed by the workflow's
-comment builder):
+**Manifest** (`<out>/manifest.json`, schema v2):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "generatedAt": "<ISO8601>",
   "viewport": { "width": 1280, "height": 900 },
   "shots": [
@@ -711,6 +690,7 @@ comment builder):
       "importPath": "./src/pill/slicc-pill.stories.ts",
       "theme": "light",
       "file": "pill-pill--cone-open-idle.light.png",
+      "contentHash": "<SHA-256 of the PNG>",
       "triggeredBy": ["packages/webcomponents/src/pill/slicc-pill.ts"]
     }
   ]
@@ -719,15 +699,9 @@ comment builder):
 
 The schema is **flat**: one `shots[]` entry per (story × theme). Consumers
 group by `storyId` themselves (no `stories[].screenshots[]` nesting). The
-capture script is the source of truth for the schema and the CLI; the
-workflow YAML follows.
+capture script is the source of truth for the schema and the CLI.
 
-**R2 upload — dedupe + retry.** Uploads are driven by
-`packages/dev-tools/tools/storybook-screenshots-upload.mjs` (+ pure lib
-`storybook-screenshots-upload-lib.mjs`). Sequential per-file `wrangler`
-subprocess spawns previously took ~4s/file and timed out CI on large PRs,
-so uploads run through an injectable `r2` client with bounded concurrency
-(`--concurrency`, default 4) and content-hash deduplication. Each shot
-retries up to 5 times with jittered exponential backoff, since R2
-rate-limits upload bursts with `429` / code 971. Driven by the workflow's
-"Upload screenshots to Cloudflare R2" step.
+For an R2 link, the optional
+`packages/dev-tools/tools/storybook-screenshots-upload.mjs` uploads the manifest
+with content-hash deduplication and retries. The agent then links the selected
+images in the PR description or a comment.

@@ -364,8 +364,8 @@ final class PttController: ObservableObject {
 
     #if DEBUG
         /// Screenshot seam (`-uiTestPttStage`): pin the overlay to a stage
-        /// without a touch. The overlay only exists mid-hold, so the PR
-        /// screenshots job could not reach it otherwise. DEBUG-only — a
+        /// without a touch. The overlay only exists mid-hold, so a local
+        /// screenshot capture cannot reach it otherwise. DEBUG-only — a
         /// shipped binary must not carry a flag that fakes recording UI.
         func forceStage(_ stage: PttStage, caption: String = "") {
             self.stage = stage

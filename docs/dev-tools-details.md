@@ -741,11 +741,10 @@ bucket, content-hash deduplicated, with bounded concurrency
 process.
 
 Sequential per-file `wrangler` subprocess spawns previously took ~4s per
-file — timing out the CI job on large PRs (many affected stories). Each
-shot retries up to 5 times with jittered exponential backoff, since R2
-rate-limits upload bursts with `429` / code 971. Driven by the "Upload
-screenshots to Cloudflare R2" step in
-`.github/workflows/storybook-screenshots.yml`.
+file on large sets of affected stories. Each shot retries up to 5 times with
+jittered exponential backoff, since R2 rate-limits upload bursts with `429` /
+code 971. Agents can run this tool when they choose to share captured stories
+through R2.
 
 ## knip-production-suffix-discipline
 

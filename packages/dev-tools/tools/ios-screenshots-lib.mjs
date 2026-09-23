@@ -1,4 +1,4 @@
-// Pure logic for the iOS PR screenshots job — validation, simulator
+// Pure logic for local iOS screenshot capture — validation, simulator
 // selection, and manifest building — kept free of child_process / fs so
 // ios-screenshots.test.mjs can pin the behavior without a simulator.
 // The manifest deliberately matches the Storybook screenshots shape
