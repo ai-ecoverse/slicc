@@ -60,6 +60,26 @@ function isFixtureRequested(href: string): boolean {
   }
 }
 
+/**
+ * Live model catalogue (pi's hosted list via the tray worker). Best-effort and
+ * off the boot path; the bundled catalogue serves until it lands. Needs the
+ * provider registry, so call it after `registerProviders()`.
+ */
+function startLiveModelCatalog(): void {
+  void import('./boot/setup-model-catalog.js')
+    .then(({ setupModelCatalog }) =>
+      setupModelCatalog({
+        locationHref: window.location.href,
+        storage: window.localStorage,
+        envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+        isDev: __DEV__,
+      })
+    )
+    .catch(() => {
+      // Remote catalogue is best-effort; the bundled pi-ai catalogue stays active.
+    });
+}
+
 async function main(): Promise<void> {
   // Recover a long-lived tab that crashes on a now-gone content-hashed chunk
   // after a deploy (#1330). Installed before any dynamic import() so page-owned
@@ -162,6 +182,7 @@ async function main(): Promise<void> {
   // resolved provider list. See `providers/index.ts:registerProviders`.
   await registerProviders();
   applyProviderDefaults();
+  startLiveModelCatalog();
 
   // Wire the local /api base + bridge token for THIS realm before the OAuth
   // bootstrap below, not just later in `setupStandalonePrelude`. The bootstrap

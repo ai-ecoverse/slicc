@@ -14,7 +14,8 @@ export type FeatureFlagId =
   | 'agentic-memory'
   | 'multiple-cones'
   | 'compact-on-idle'
-  | 'memory-v2';
+  | 'memory-v2'
+  | 'live-model-catalog';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -113,6 +114,19 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'off',
     userToggleable: true,
     since: '2026-09-10',
+  }),
+  Object.freeze({
+    id: 'live-model-catalog',
+    label: 'Live model catalogue',
+    description:
+      "Refresh model lists from pi's hosted catalogue, so newly launched models appear without a release.",
+    // On everywhere. Not `userToggleable`: this is an operator kill switch for
+    // remotely sourced model data, flipped through the worker's central
+    // `FEATURE_FLAGS`. Off means the bundled pi-ai catalogue only — the stored
+    // overlay is ignored, not deleted.
+    defaultValue: 'on',
+    userToggleable: false,
+    since: '2026-09-22',
   }),
 ]);
 

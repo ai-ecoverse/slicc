@@ -35,9 +35,6 @@ export type {
 } from '@earendil-works/pi-ai';
 export {
   EventStream,
-  getModel,
-  getModels,
-  getProviders,
   registerApiProvider,
   stream,
   streamSimple,
@@ -58,6 +55,8 @@ export {
 export type { CompactionConfig } from './context-compaction.js';
 export { compactContext, createCompactContext } from './context-compaction.js';
 export { getMimeType } from './mime-types.js';
+// Catalogue reads go through the live overlay, not pi-ai's static tables.
+export { getModel, getModels, getProviders } from './model-catalog.js';
 export {
   getIdentityToolResultScrubber,
   getToolResultScrubber,

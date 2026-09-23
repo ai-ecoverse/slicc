@@ -3,6 +3,8 @@ declare const __SLICC_EXT_DEV__: boolean;
 declare const __SLICC_VERSION__: string;
 declare const __SLICC_RELEASED_AT__: string | null;
 declare const __SLICC_BUILD_ID__: string;
+/** pi-ai's bundled catalogue generation time, epoch ms (`vite-plugins/pi-ai-model-data.ts`). */
+declare const __PI_AI_MODELS_GENERATED_AT__: number | null;
 // Wasm dependency versions baked from packages/webapp/package.json at build
 // time (Vite `define` / vitest `define`). See the wasm-wrapping commands that
 // derive their `ipk add <pkg>@<version>` guidance from these.
