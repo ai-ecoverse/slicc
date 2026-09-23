@@ -532,15 +532,20 @@ most `--concurrency`/`-j` files (default 4) at once, and a new file starts only
 while the declared bytes in flight fit `--max-in-flight-mb` (default 128). Every
 response is buffered whole in memory before the VFS write (`proxied-fetch.ts`,
 #3441), so the byte budget, not the file count, bounds peak memory. A file larger
-than the budget still downloads, alone. Files from an explicit list have no
-declared size; each is weighed as the largest file seen so far in the run, so the
-first one runs alone.
+than the budget still downloads, alone.
 
-Resume is unchanged: a file already at its listed byte length is skipped, a short
-one is fetched again, and an explicit file list skips on presence. The first
-failure aborts the requests in flight, starts no new ones, and names the file
+Sizes come from the tree listing. With an explicit file list, `hf` lists each
+parent directory once (non-recursive `…/tree/<rev>/<dir>`) instead of the whole
+repo. A file whose size is still unknown (listing failed, or paginated past it)
+is charged the whole budget, so it runs alone; a small file finishing says
+nothing about the next one.
+
+Resume: a file already at its listed byte length is skipped and a short one is
+fetched again; without a size, presence is enough to skip. The first failure
+aborts the requests in flight, starts no new ones, and names the file
 (`hf: failed <file>: …`); a body that arrives after the abort is not written.
-The command's abort signal (`kill`, Ctrl-C) cancels in-flight requests too.
+The command's abort signal (`kill`, Ctrl-C) cancels the listing and in-flight
+requests too.
 
 Progress: when the shell attaches a live output sink (the agent's bash tool,
 background-job logs, `jshd`), `hf` writes `hf: 12/325 files, 324.0 MB of 8.8 GB,

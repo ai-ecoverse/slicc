@@ -10,6 +10,13 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import { DEFAULT_HF_CONCURRENCY, DEFAULT_HF_MAX_BYTES_IN_FLIGHT } from './hf-defaults.js';
+
+export {
+  DEFAULT_HF_CONCURRENCY,
+  DEFAULT_HF_MAX_BYTES_IN_FLIGHT,
+  resolveTargetDir,
+} from './hf-defaults.js';
 
 /**
  * Minimal filesystem surface the download core needs. Kept structural (rather
@@ -108,19 +115,58 @@ export async function listRepoTree(
   fetchFn: SecureFetch,
   repo: string,
   revision: string,
-  endpoint: string = DEFAULT_HF_ENDPOINT
+  endpoint: string = DEFAULT_HF_ENDPOINT,
+  signal?: AbortSignal
 ): Promise<HfRepoFile[]> {
   const resp = await fetchWithHostContext(fetchFn, hfApiUrl(endpoint, repo, revision), {
     method: 'GET',
+    signal,
   });
   if (resp.status < 200 || resp.status >= 300) {
     throw new Error(`HF API ${resp.status} ${resp.statusText} for ${repo}@${revision}`);
   }
-  const text = new TextDecoder('utf-8').decode(resp.body);
-  const parsed = JSON.parse(text) as HfTreeEntry[];
+  return fileEntries(resp.body);
+}
+
+function fileEntries(body: Uint8Array): HfRepoFile[] {
+  const parsed = JSON.parse(new TextDecoder('utf-8').decode(body)) as HfTreeEntry[];
   return parsed
     .filter((e) => e.type === 'file')
     .map((e) => ({ path: e.path, size: typeof e.size === 'number' ? e.size : 0 }));
+}
+
+/**
+ * Declared sizes for an explicit file list, from one non-recursive tree
+ * listing per parent directory. Best effort: a directory whose listing fails
+ * (or is paginated past the requested file) leaves those files unsized, and
+ * the pool then charges each of them the whole byte budget.
+ */
+async function lookupDeclaredSizes(
+  fetchFn: SecureFetch,
+  endpoint: string,
+  repo: string,
+  revision: string,
+  files: readonly string[],
+  signal: AbortSignal | undefined
+): Promise<Map<string, number>> {
+  const wanted = new Set(files);
+  const dirs = new Set(files.map((f) => (f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '')));
+  const sizes = new Map<string, number>();
+  await Promise.all(
+    [...dirs].map(async (dir) => {
+      const url = `${endpoint}/api/models/${repo}/tree/${revision}${dir ? `/${dir}` : ''}`;
+      try {
+        const resp = await fetchFn(url, { method: 'GET', signal });
+        if (resp.status < 200 || resp.status >= 300) return;
+        for (const e of fileEntries(resp.body)) {
+          if (wanted.has(e.path) && e.size > 0) sizes.set(e.path, e.size);
+        }
+      } catch {
+        // Unsized files still download, just one at a time.
+      }
+    })
+  );
+  return sizes;
 }
 
 /** Ensure every parent dir along `path` exists (mkdir -p semantics). */
@@ -148,8 +194,8 @@ async function completeSize(
     // download that died mid-stream, or a concurrent stager still writing
     // it — and "skipping" it would hand the caller a truncated weight file
     // that later fails to load with a size-mismatch EIO. Without a declared
-    // size (explicit file list, or a listing without sizes) presence is the
-    // best we can check.
+    // size (a listing that failed or carried no size) presence is the best
+    // we can check.
     const complete = declaredSize === undefined || declaredSize <= 0 || stat.size === declaredSize;
     return complete ? (stat.size ?? 0) : undefined;
   } catch {
@@ -177,60 +223,37 @@ async function fetchOne(
   return resp.body.byteLength;
 }
 
-/** Files fetched at once when the caller does not say. */
-export const DEFAULT_HF_CONCURRENCY = 4;
-
-/**
- * Declared bytes allowed in flight at once when the caller does not say.
- * `proxied-fetch.ts` buffers every response whole and the VFS holds another
- * copy until the write syncs (#3441), so peak memory is a small multiple of
- * this budget — which is why the pool is sized by bytes, not only by file
- * count. A single file larger than the budget still downloads, alone.
- */
-export const DEFAULT_HF_MAX_BYTES_IN_FLIGHT = 128 * 1024 * 1024;
-
 /**
  * Weighted FIFO admission: a job enters when the bytes already in flight plus
  * its own weight fit the budget, or when nothing else is running (so an
  * oversized file still makes progress). FIFO keeps a large file from starving
- * behind a stream of small ones.
+ * behind a stream of small ones. An unknown size (0) is charged the whole
+ * budget: nothing bounds what it will buffer.
  *
- * The weight is asked for at admission time, not when the job starts
- * waiting: an unsized file's estimate improves as other files finish.
  * Resolves with the weight taken, which the caller hands back to `release`.
  */
 class ByteBudget {
   private inFlight = 0;
   private running = 0;
-  private readonly waiters: Array<{ weigh: () => number; admit: (w: number) => void }> = [];
+  private readonly waiters: Array<{ weight: number; admit: () => void }> = [];
 
   constructor(readonly capacity: number) {}
 
-  acquire(weigh: () => number): Promise<number> {
-    if (this.waiters.length === 0) {
-      const weight = this.clamp(weigh());
-      if (this.fits(weight)) {
-        this.take(weight);
-        return Promise.resolve(weight);
-      }
-    }
-    return new Promise((admit) => this.waiters.push({ weigh, admit }));
+  async acquire(size: number): Promise<number> {
+    const weight = size > 0 ? Math.min(size, this.capacity) : this.capacity;
+    if (this.waiters.length === 0 && this.fits(weight)) this.take(weight);
+    else await new Promise<void>((admit) => this.waiters.push({ weight, admit }));
+    return weight;
   }
 
   release(weight: number): void {
     this.inFlight -= weight;
     this.running -= 1;
-    for (let next = this.waiters[0]; next; next = this.waiters[0]) {
-      const w = this.clamp(next.weigh());
-      if (!this.fits(w)) break;
+    for (let next = this.waiters[0]; next && this.fits(next.weight); next = this.waiters[0]) {
       this.waiters.shift();
-      this.take(w);
-      next.admit(w);
+      this.take(next.weight);
+      next.admit();
     }
-  }
-
-  private clamp(weight: number): number {
-    return weight > 0 ? Math.min(weight, this.capacity) : this.capacity;
   }
 
   private fits(weight: number): boolean {
@@ -245,17 +268,6 @@ class ByteBudget {
 
 function positiveOr(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
-}
-
-/**
- * Resolve the target VFS dir for `--to` (defaults to
- * `/workspace/models/<repo>/`). Trims any trailing slash for joining and
- * always returns an absolute path.
- */
-export function resolveTargetDir(repo: string, to: string | null, cwd: string): string {
-  const raw = to ?? `/workspace/models/${repo}`;
-  const absolute = raw.startsWith('/') ? raw : `${cwd.replace(/\/+$/, '')}/${raw}`;
-  return absolute.replace(/\/+$/, '');
 }
 
 /** Per-file lifecycle event surfaced as `downloadHfRepo` progresses. */
@@ -308,9 +320,9 @@ export interface DownloadHfRepoOptions {
   concurrency?: number;
   /**
    * Byte budget for downloads in flight. Defaults to
-   * {@link DEFAULT_HF_MAX_BYTES_IN_FLIGHT}. A file without a declared size
-   * (explicit file list) is weighed as the largest file seen so far in this
-   * run, or as the whole budget before any size is known.
+   * {@link DEFAULT_HF_MAX_BYTES_IN_FLIGHT}. Sizes come from the tree listing
+   * (for an explicit file list, one listing per parent directory); a file
+   * whose size is still unknown is charged the whole budget.
    */
   maxBytesInFlight?: number;
   /** Cancels the download; in-flight requests are aborted. */
@@ -367,7 +379,6 @@ interface PoolTotals {
 class DownloadPool {
   private next = 0;
   private finished = 0;
-  private largestSeen = 0;
   private failure: HfFileDownloadError | undefined;
   private readonly abort = new AbortController();
   private readonly totals: PoolTotals = { downloaded: 0, skipped: 0, totalBytes: 0 };
@@ -415,9 +426,7 @@ class DownloadPool {
     const present = job.force ? undefined : await completeSize(job.fs, destPath, declared);
     if (present !== undefined) return { status: 'skipped', bytes: present };
 
-    const weight = await this.budget.acquire(() =>
-      declared !== undefined && declared > 0 ? declared : this.largestSeen
-    );
+    const weight = await this.budget.acquire(declared ?? 0);
     try {
       if (this.abort.signal.aborted) throw new Error('aborted');
       const bytes = await fetchOne(
@@ -428,8 +437,6 @@ class DownloadPool {
         destPath,
         this.abort.signal
       );
-      // Before `release`, so the waiters it admits are weighed with this size.
-      this.largestSeen = Math.max(this.largestSeen, bytes);
       return { status: 'downloaded', bytes };
     } finally {
       this.budget.release(weight);
@@ -437,7 +444,6 @@ class DownloadPool {
   }
 
   private record(file: string, r: { status: 'downloaded' | 'skipped'; bytes: number }): void {
-    this.largestSeen = Math.max(this.largestSeen, r.bytes);
     this.totals.totalBytes += r.bytes;
     if (r.status === 'downloaded') this.totals.downloaded += 1;
     else this.totals.skipped += 1;
@@ -466,11 +472,16 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
   const force = opts.force ?? false;
   const endpoint = resolveHfEndpoint(opts.endpoint);
 
+  const { signal } = opts;
   let files = opts.files ?? [];
-  /** Declared byte length per file, known only after a tree listing. */
-  const declaredSizes = new Map<string, number>();
+  /** Declared byte length per file, from a tree listing. */
+  let declaredSizes = new Map<string, number>();
   if (files.length === 0) {
-    const tree = await listRepoTree(opts.fetch, opts.repo, revision, endpoint);
+    const tree = await listRepoTree(opts.fetch, opts.repo, revision, endpoint, signal).catch(
+      (err: unknown) => {
+        throw signal?.aborted ? new Error('download aborted') : err;
+      }
+    );
     if (tree.length === 0) {
       throw new Error(`repo ${opts.repo}@${revision} has no files`);
     }
@@ -478,7 +489,17 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
     for (const e of tree) declaredSizes.set(e.path, e.size);
     const totalBytes = tree.reduce((sum, e) => sum + e.size, 0);
     opts.progress?.onListed?.({ files, totalBytes });
+  } else {
+    declaredSizes = await lookupDeclaredSizes(
+      opts.fetch,
+      endpoint,
+      opts.repo,
+      revision,
+      files,
+      signal
+    );
   }
+  if (signal?.aborted) throw new Error('download aborted');
 
   await opts.fs.mkdir(opts.targetDir, { recursive: true });
 

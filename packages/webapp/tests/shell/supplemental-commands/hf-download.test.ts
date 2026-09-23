@@ -74,7 +74,7 @@ describe('downloadHfRepo', () => {
     expect(await fs.exists('/m/model.bin')).toBe(true);
   });
 
-  it('does not list when an explicit file set is provided', async () => {
+  it('does not list the whole tree when an explicit file set is provided', async () => {
     const recorder = { calls: [] as string[] };
     const fetch = makeFetch({ 'a.txt': bytes('A'), 'b.txt': bytes('B') }, recorder);
     const listed: unknown[] = [];
@@ -87,7 +87,10 @@ describe('downloadHfRepo', () => {
       progress: { onListed: (i) => listed.push(i) },
     });
     expect(listed).toEqual([]);
-    expect(recorder.calls.some((c) => c.includes('/api/models/'))).toBe(false);
+    // Only the parent directory is listed (non-recursive), for declared sizes.
+    expect(recorder.calls.filter((c) => c.includes('/api/models/'))).toEqual([
+      'https://huggingface.co/api/models/owner/name/tree/main',
+    ]);
     expect(result.downloaded).toBe(1);
     expect(await fs.exists('/m/b.txt')).toBe(false);
   });
@@ -166,8 +169,32 @@ describe('downloadHfRepo', () => {
     expect(events[0]).toMatchObject({ file: 'model.onnx', status: 'downloaded', bytes: 8 });
   });
 
-  it('keeps presence-only skipping for an explicit file list (no declared sizes)', async () => {
-    const fetch = makeFetch({ 'a.txt': bytes('A') });
+  it('re-fetches a short file from an explicit list once its directory listing sizes it', async () => {
+    const recorder = { calls: [] as string[] };
+    const fetch = makeFetch({ 'sub/a.bin': bytes('FULL'), 'sub/b.bin': bytes('BB') }, recorder);
+    await fs.mkdir('/m/sub', { recursive: true });
+    await fs.writeFile('/m/sub/a.bin', bytes('FU'));
+    await fs.writeFile('/m/sub/b.bin', bytes('bb'));
+    const r = await downloadHfRepo({
+      fetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      files: ['sub/a.bin', 'sub/b.bin'],
+    });
+    expect(r).toMatchObject({ downloaded: 1, skipped: 1 });
+    expect(await fs.readFile('/m/sub/a.bin')).toBe('FULL');
+    expect(recorder.calls).toContain('https://huggingface.co/api/models/owner/name/tree/main/sub');
+  });
+
+  it('keeps presence-only skipping for an explicit file list when sizes are unavailable', async () => {
+    const inner = makeFetch({ 'a.txt': bytes('A') });
+    const fetch = (async (url: string, opts?: SecureFetchOptions): Promise<FetchResult> => {
+      if (url.includes('/api/models/')) {
+        return { status: 500, statusText: 'Server Error', headers: {}, body: bytes(''), url };
+      }
+      return inner(url, opts);
+    }) as unknown as SecureFetch;
     await fs.mkdir('/m', { recursive: true });
     await fs.writeFile('/m/a.txt', bytes('PRE'));
     const r = await downloadHfRepo({
@@ -334,8 +361,8 @@ describe('downloadHfRepo download pool', () => {
     await expect(run).resolves.toMatchObject({ downloaded: 2 });
   });
 
-  it('weighs unsized files (explicit list) by the largest file seen so far', async () => {
-    const g = gatedFetch(shards(4, 30), { list: false });
+  it('sizes an explicit file list from its directory listing and pools it', async () => {
+    const g = gatedFetch(shards(4, 30));
     const run = downloadHfRepo({
       fetch: g.fetch,
       fs,
@@ -344,15 +371,73 @@ describe('downloadHfRepo download pool', () => {
       files: Object.keys(shards(4, 30)),
       maxBytesInFlight: 100,
     });
-    // No size known yet: the first file runs alone.
-    await waitFor(() => g.inFlight().length === 1, 'first file');
+    // 30 bytes each: three fit in 100.
+    await waitFor(() => g.inFlight().length === 3, 'three sized files');
     await new Promise((r) => setTimeout(r, 10));
-    expect(g.inFlight()).toEqual(['shard_0']);
-    g.release('shard_0');
-    // Now each is assumed 30 bytes: three fit in 100.
-    await waitFor(() => g.inFlight().length === 3, 'three sized-by-estimate files');
+    expect(g.inFlight()).toHaveLength(3);
     for (const f of g.inFlight()) g.release(f);
+    await waitFor(() => g.inFlight().length === 1, 'the fourth');
+    g.release(g.inFlight()[0]);
     await expect(run).resolves.toMatchObject({ downloaded: 4 });
+  });
+
+  it('charges each unsized file the whole budget, even after small files finish', async () => {
+    // No size metadata: a small file finishing says nothing about the next
+    // one, which may be a 500 MB shard, so every unsized file runs alone.
+    const g = gatedFetch({ 'config.json': 1, big_0: 90, big_1: 90 }, { list: false });
+    const run = downloadHfRepo({
+      fetch: g.fetch,
+      fs,
+      repo: 'o/n',
+      targetDir: '/m',
+      files: ['config.json', 'big_0', 'big_1'],
+      maxBytesInFlight: 100,
+    });
+    for (const f of ['config.json', 'big_0', 'big_1']) {
+      await waitFor(() => g.inFlight().length === 1, f);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(g.inFlight()).toEqual([f]);
+      g.release(f);
+    }
+    await expect(run).resolves.toMatchObject({ downloaded: 3 });
+    expect(g.state.maxActive).toBe(1);
+  });
+
+  it('aborts a slow tree listing when the caller cancels', async () => {
+    const controller = new AbortController();
+    const fetch = ((_url: string, init?: SecureFetchOptions): Promise<FetchResult> =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as unknown as SecureFetch;
+    const run = downloadHfRepo({
+      fetch,
+      fs,
+      repo: 'o/n',
+      targetDir: '/m',
+      signal: controller.signal,
+    }).catch((e: unknown) => e);
+    await new Promise((r) => setTimeout(r, 5));
+    controller.abort();
+    expect(String(await run)).toMatch(/download aborted/);
+  });
+
+  it('stops before downloading when cancelled during the size lookup', async () => {
+    const controller = new AbortController();
+    const g = gatedFetch({ a: 1 });
+    const fetch = (async (url: string, init?: SecureFetchOptions) => {
+      if (url.includes('/api/models/')) controller.abort();
+      return g.fetch(url, init);
+    }) as unknown as SecureFetch;
+    const err = await downloadHfRepo({
+      fetch,
+      fs,
+      repo: 'o/n',
+      targetDir: '/m',
+      files: ['a'],
+      signal: controller.signal,
+    }).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/download aborted/);
+    expect(g.state.started).toEqual([]);
   });
 
   it('reports every file whatever order they finish in', async () => {

@@ -215,8 +215,10 @@ describe('createHfCommand', () => {
     expect(r.exitCode).toBe(0);
     expect(await fs.exists('/m/a.txt')).toBe(true);
     expect(await fs.exists('/m/b.txt')).toBe(false);
-    // No tree probe when files are explicit.
-    expect(recorder.calls.some((c) => c.includes('/api/models/'))).toBe(false);
+    // Explicit files: no recursive tree listing, only the parent directory's
+    // (for declared sizes).
+    const apiCalls = recorder.calls.filter((c) => c.includes('/api/models/'));
+    expect(apiCalls).toEqual(['https://huggingface.co/api/models/owner/name/tree/main']);
   });
 
   it('skips existing files by default and re-downloads under --force', async () => {
@@ -224,7 +226,8 @@ describe('createHfCommand', () => {
     const fetch = makeFetch({ 'owner/name': { files: { 'a.txt': bytes('A') } } }, recorder);
     const cmd = createHfCommand({ fetch });
     await fs.mkdir('/m', { recursive: true });
-    await fs.writeFile('/m/a.txt', bytes('PREEXISTING'));
+    // Same length as the listed file, so it counts as complete.
+    await fs.writeFile('/m/a.txt', bytes('P'));
 
     const skipRun = await cmd.execute(
       ['download', 'owner/name', 'a.txt', '--to', '/m'],
@@ -232,7 +235,7 @@ describe('createHfCommand', () => {
     );
     expect(skipRun.exitCode).toBe(0);
     expect(skipRun.stderr).toMatch(/skipped a\.txt/);
-    expect(await fs.readFile('/m/a.txt')).toBe('PREEXISTING');
+    expect(await fs.readFile('/m/a.txt')).toBe('P');
 
     const forceRun = await cmd.execute(
       ['download', 'owner/name', 'a.txt', '--to', '/m', '--force'],

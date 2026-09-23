@@ -27,15 +27,12 @@ import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash
 import {
   DEFAULT_HF_CONCURRENCY,
   DEFAULT_HF_MAX_BYTES_IN_FLIGHT,
-  downloadHfRepo,
-  HfFileDownloadError,
   resolveTargetDir,
-} from './hf-download.js';
+} from './hf-defaults.js';
 import { isHelpRequest } from './subcommand-help.js';
 
-// `resolveTargetDir` now lives in the reusable core; re-export it so existing
-// importers (and tests) keep resolving it from this module.
-export { resolveTargetDir } from './hf-download.js';
+// Re-exported so existing importers (and tests) keep resolving it here.
+export { resolveTargetDir } from './hf-defaults.js';
 
 function help(exitCode: number): ExecResult {
   return {
@@ -63,12 +60,10 @@ Notes:
   - With no [files...], every file in the repo tree is downloaded.
   - Existing files at the destination with a matching byte length are skipped
     unless --force is passed.
-  - Each download is held in memory until it is written, so a new download
-    starts only while the files in flight fit --max-in-flight-mb. A file
-    larger than that downloads on its own.
-  - The first failed file stops the rest and is named in the error.
-  - A long download prints a progress line (files, bytes, rate) every few
-    seconds to background-job logs and agent output.
+  - Downloads are held in memory until written: a file starts only while the
+    ones in flight fit --max-in-flight-mb (larger or unsized files run alone).
+  - The first failed file stops the rest.
+  - Background-job logs get a progress line every few seconds.
   - Weights are read by the speech engines via the preview SW from the
     target directory; transformers expects <localModelPath>/<repo>/.
 `,
@@ -255,6 +250,7 @@ async function runDownload(
   if ('error' in parsed) return failure(parsed.error);
 
   const targetDir = resolveTargetDir(parsed.repo, parsed.to, ctx.cwd);
+  const { downloadHfRepo, HfFileDownloadError } = await import('./hf-download.js');
   const live = liveSinkOf(ctx);
   const tally = new DownloadProgress(parsed.files.length, undefined, now);
   let stderr = '';
