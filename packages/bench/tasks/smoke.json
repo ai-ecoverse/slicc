@@ -1,0 +1,26 @@
+{
+  "benchmark": "SLICC_Smoke",
+  "last_updated": "2026-09-23",
+  "n_tasks": 2,
+  "notice": "Two short live-web tasks that exercise the whole runner: leader, browser, transcript, screenshots, judge. Facts verified 2026-09-23.",
+  "tasks": [
+    {
+      "id": "smoke-001",
+      "title": "Read a page's heading and link",
+      "summary": "Open example.com and report its main heading and where its only link goes.",
+      "task": "Open https://example.com in the browser. Tell me the page's main heading and the full address its only link points to.",
+      "rubric": "# Rubric: smoke-001\n\n## How to judge (applies to every item)\nJudge from the trajectory, the final result, and the screenshots. Credit a value only if the trajectory shows it on the page.\n\n## Source facts (verified live 2026-09-23)\n- The main heading is \"Example Domain\".\n- The only link points to https://iana.org/domains/example.\n\n## Items\nA1_heading — The final result gives the heading \"Example Domain\".\nA2_link — The final result gives the link address https://iana.org/domains/example (http/https or a trailing slash may differ).\nA3_grounded — The trajectory shows the agent loading example.com in the browser, not recalling the page.\n",
+      "weights": { "A1_heading": 40, "A2_link": 40, "A3_grounded": 20 },
+      "slicc": { "website": "https://example.com", "timeoutSeconds": 300 }
+    },
+    {
+      "id": "smoke-002",
+      "title": "Search Wikipedia and read one fact",
+      "summary": "Use Wikipedia's search box to find Kurt Gödel's article and report his date of birth.",
+      "task": "Go to https://en.wikipedia.org, use the site's search box to find the article about Kurt Gödel, open it, and tell me his date of birth as the article states it.",
+      "rubric": "# Rubric: smoke-002\n\n## How to judge (applies to every item)\nJudge from the trajectory, the final result, and the screenshots. Credit a value only if the trajectory shows it on the page.\n\n## Source facts (verified live 2026-09-23)\n- The article is https://en.wikipedia.org/wiki/Kurt_G%C3%B6del.\n- Its infobox gives his birth date as 28 April 1906 (April 28, 1906).\n\n## Rulings\n- Navigating straight to the article URL without the search box violates A1 but not A2 or A3.\n\n## Items\nA1_search_used — The trajectory shows a query typed into Wikipedia's search box and the article reached from it.\nA2_article_opened — The trajectory shows the Kurt Gödel article open.\nA3_birth_date — The final result gives 28 April 1906 in any date format.\n",
+      "weights": { "A1_search_used": 30, "A2_article_opened": 30, "A3_birth_date": 40 },
+      "slicc": { "website": "https://en.wikipedia.org", "timeoutSeconds": 400 }
+    }
+  ]
+}
