@@ -477,6 +477,10 @@ export class LeaderSyncManager {
     return this.followerRegistry.getFollowerMotds();
   }
 
+  getPartnerMotds(): Map<string, string> {
+    return this.followerRegistry.getPartnerMotds();
+  }
+
   getFollowerDetails(): FollowerDetails[] {
     return this.followerRegistry.getFollowerDetails();
   }

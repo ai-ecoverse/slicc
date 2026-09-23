@@ -18,6 +18,71 @@ extension ComputerPermissionProbe {
         accessibilityGranted: { false },
         requestAccessibility: { false }
     )
+
+    
+    
+    static let captureOnly = ComputerPermissionProbe(
+        screenRecordingGranted: { true },
+        requestScreenRecording: { true },
+        accessibilityGranted: { false },
+        requestAccessibility: { false }
+    )
+}
+
+
+
+
+
+
+final class MutableGrantProbe: @unchecked Sendable {
+    var screenRecording: Bool
+    var accessibility: Bool
+
+    init(screenRecording: Bool, accessibility: Bool) {
+        self.screenRecording = screenRecording
+        self.accessibility = accessibility
+    }
+
+    var probe: ComputerPermissionProbe {
+        ComputerPermissionProbe(
+            screenRecordingGranted: { [self] in screenRecording },
+            requestScreenRecording: { [self] in screenRecording },
+            accessibilityGranted: { [self] in accessibility },
+            requestAccessibility: { [self] in accessibility }
+        )
+    }
+}
+
+
+
+
+
+
+func scriptedGrantTick(_ beats: [@Sendable () async -> Void]) -> ComputerGrantTick {
+    final class Cursor: @unchecked Sendable {
+        var index = 0
+    }
+    let cursor = Cursor()
+    return {
+        guard cursor.index < beats.count else { return false }
+        let beat = beats[cursor.index]
+        cursor.index += 1
+        await beat()
+        return true
+    }
+}
+
+
+
+
+
+
+final class StopBox: @unchecked Sendable {
+    var stop: (@MainActor () -> Void)?
+
+    func callStop() async {
+        await MainActor.run { stop?() }
+    }
 }
 
 final class RecordingEventSink: ComputerEventSink {

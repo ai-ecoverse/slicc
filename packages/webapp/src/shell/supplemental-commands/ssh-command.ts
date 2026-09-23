@@ -56,6 +56,8 @@ function formatTargets(followers: ConnectedFollowerInfo[]): string {
     lines.push(`  - ${parts.join(' ')}`);
 
     if (f.motd) lines.push(`      ${f.motd}`);
+
+    if (f.computerMotd) lines.push(`      ${f.computerMotd}`);
   }
   return `${lines.join('\n')}\n`;
 }

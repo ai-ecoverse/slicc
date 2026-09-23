@@ -277,6 +277,15 @@ export class FollowerRegistry {
     return motds;
   }
 
+  getPartnerMotds(): Map<string, string> {
+    const motds = new Map<string, string>();
+    for (const [primary, partner] of this.followerPairing().partner) {
+      const motd = this.followers.get(partner)?.peerMotd;
+      if (motd) motds.set(primary, motd);
+    }
+    return motds;
+  }
+
   getExecCapableBootstrapIds(): Set<string> {
     const ids = new Set<string>();
     for (const [bootstrapId, follower] of this.followers) {

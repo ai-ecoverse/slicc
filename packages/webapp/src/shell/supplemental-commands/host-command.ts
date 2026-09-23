@@ -32,6 +32,8 @@ export interface ConnectedFollowerInfo {
   cdp?: boolean;
 
   motd?: string;
+
+  computerMotd?: string;
 }
 
 let connectedFollowersGetter: (() => ConnectedFollowerInfo[]) | null = null;
@@ -149,6 +151,7 @@ function formatFollowerEntry(f: ConnectedFollowerInfo): string[] {
   const lines = [`  - ${parts.join(' ')}`];
 
   if (f.motd) lines.push(`      ${f.motd}`);
+  if (f.computerMotd) lines.push(`      ${f.computerMotd}`);
   return lines;
 }
 

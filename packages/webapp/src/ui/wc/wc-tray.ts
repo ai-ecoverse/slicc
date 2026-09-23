@@ -180,6 +180,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
   const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
+  const partnerMotds = handle.sync.getPartnerMotds();
 
   const absorbed = handle.sync.getAbsorbedBootstrapIds();
   return getLeaderFollowerStates(handle.peers, handle.sync)
@@ -201,6 +202,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
         computer: computerIds.has(follower.bootstrapId),
         teleportEligible: teleportIds.has(follower.bootstrapId),
         motd: motds.get(follower.bootstrapId),
+        computerMotd: partnerMotds.get(follower.bootstrapId),
       };
     });
 }

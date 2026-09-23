@@ -19,6 +19,12 @@ enum ComputerFollowCLIRunner {
     
     
     
+    
+    
+    
+    
+    
+    
     private static func runPreflight(json: Bool) -> Int32 {
         NSApplication.shared.setActivationPolicy(.accessory)
         return ComputerFollowCLI.preflight(

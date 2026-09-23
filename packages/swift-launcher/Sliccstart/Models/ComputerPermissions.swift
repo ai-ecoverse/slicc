@@ -51,11 +51,37 @@ enum ComputerPermissionError: Error, Equatable {
         "Accessibility is not allowed. Grant it in System Settings → Privacy & Security → Accessibility, then try again."
 }
 
+
+
+
+
+
+
+
+struct ComputerGrants: Equatable {
+    var screenRecording: Bool
+    var accessibility: Bool
+
+    
+    
+    
+    
+    var canCaptureNatively: Bool { screenRecording }
+}
+
 struct ComputerPermissions {
     var probe: ComputerPermissionProbe
 
     init(probe: ComputerPermissionProbe = .live) {
         self.probe = probe
+    }
+
+    
+    
+    func grants() -> ComputerGrants {
+        ComputerGrants(
+            screenRecording: probe.screenRecordingGranted(),
+            accessibility: probe.accessibilityGranted())
     }
 
     

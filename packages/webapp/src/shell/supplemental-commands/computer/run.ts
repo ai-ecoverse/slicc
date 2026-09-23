@@ -254,12 +254,21 @@ function resolveSshFollower(
   query: string,
   followers: ConnectedFollowerInfo[]
 ): ConnectedFollowerInfo | { error: string } {
+  const matches = (f: ConnectedFollowerInfo) =>
+    f.runtimeId.endsWith(query) || f.runtimeId.includes(query);
   const capable = followers.filter((f) => f.exec || f.computer);
   const exact = capable.find((f) => f.runtimeId === query);
   if (exact) return exact;
-  const hits = capable.filter((f) => f.runtimeId.endsWith(query) || f.runtimeId.includes(query));
+  const hits = capable.filter(matches);
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return { error: `add ssh: ambiguous follower '${query}'` };
+
+  const ungranted = followers.find((f) => !f.exec && !f.computer && f.motd && matches(f));
+  if (ungranted) {
+    return {
+      error: `add ssh: follower '${ungranted.runtimeId}' advertises no shell and no native capture — ${ungranted.motd}`,
+    };
+  }
   return {
     error: `add ssh: no exec-capable or computer-capable follower '${query}' — try \`host\` (an entry tagged [ssh] or [computer] is eligible; \`ssh --list\` shows exec targets only)`,
   };

@@ -142,6 +142,31 @@ describe('FollowerRegistry', () => {
     registry.removeFollower('launcher');
   });
 
+  it('folds an ungranted launcher on its pairId but lends the CLI no capture', () => {
+    const registry = createRegistry();
+    const cli = registry.addFollower('cli', new FakeChannel());
+    const launcher = registry.addFollower('launcher', new FakeChannel());
+    cli.peerCapabilities = { exec: true };
+    cli.peerPairId = 'pair-a';
+    cli.peerMotd = 'slicc-cli exec target';
+    launcher.peerCapabilities = { exec: false, computer: false };
+    launcher.peerPairId = 'pair-a';
+    launcher.peerMotd = 'mac: no native screen capture — grant Screen Recording';
+
+    expect(registry.getAbsorbedBootstrapIds()).toEqual(new Set(['launcher']));
+    expect(registry.getComputerCapableBootstrapIds()).toEqual(new Set());
+    expect(registry.resolveComputerBootstrapId('cli')).toBe('cli');
+
+    expect(registry.getFollowerMotds().get('cli')).toBe('slicc-cli exec target');
+    expect(registry.getPartnerMotds()).toEqual(
+      new Map([['cli', 'mac: no native screen capture — grant Screen Recording']])
+    );
+
+    registry.removeFollower('cli');
+    expect(registry.getPartnerMotds()).toEqual(new Map());
+    registry.removeFollower('launcher');
+  });
+
   it('stops folding as soon as the paired CLI disconnects', () => {
     const registry = createRegistry();
     const cli = registry.addFollower('cli', new FakeChannel());

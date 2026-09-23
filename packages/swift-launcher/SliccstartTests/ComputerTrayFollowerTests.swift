@@ -20,7 +20,10 @@ final class ComputerTrayFollowerTests: XCTestCase {
         capturer: StubCapturer? = nil,
         permissions: ComputerPermissions = ComputerPermissions(probe: .alwaysGranted),
         sink: RecordingEventSink? = nil,
-        pairId: String? = nil
+        pairId: String? = nil,
+        
+        
+        grantTick: @escaping ComputerGrantTick = { false }
     ) -> (ComputerTrayFollower, StubCapturer, RecordingEventSink) {
         let capturer = capturer ?? StubCapturer()
         let sink = sink ?? RecordingEventSink()
@@ -30,7 +33,8 @@ final class ComputerTrayFollowerTests: XCTestCase {
             permissions: permissions,
             eventSink: sink,
             pairId: pairId,
-            makeDisplayGeometry: { [capturer] _ in capturer.geometry })
+            makeDisplayGeometry: { [capturer] _ in capturer.geometry },
+            grantTick: grantTick)
         return (follower, capturer, sink)
     }
 
@@ -264,38 +268,6 @@ final class ComputerTrayFollowerTests: XCTestCase {
         XCTAssertEqual(capturer.started, 1)
         XCTAssertNil(capturer.lastMaxWidth)
         XCTAssertEqual(frames(in: sent).count, 1)
-    }
-
-    private func connect(_ follower: ComputerTrayFollower) throws -> [Data] {
-        var sent: [Data] = []
-        follower.connector(
-            connectorStandIn(),
-            didConnect: { data in
-                sent.append(data)
-                return true
-            })
-        let hello = expectation(description: "hello")
-        Task { @MainActor in hello.fulfill() }
-        wait(for: [hello], timeout: 2)
-        return sent
-    }
-
-    func testOpeningTheChannelAdvertisesComputerCapability() throws {
-        let (follower, _, _) = makeFollower()
-        let sent = try connect(follower)
-        XCTAssertEqual(sent.count, 1)
-        let decoded = try XCTUnwrap(
-            try? JSONSerialization.jsonObject(with: XCTUnwrap(sent.first)) as? [String: Any]
-        )
-        XCTAssertEqual(decoded["type"] as? String, "hello")
-        XCTAssertEqual(decoded["runtime"] as? String, "sliccstart-computer")
-        let caps = decoded["capabilities"] as? [String: Any]
-        XCTAssertEqual(caps?["computer"] as? Bool, true)
-        XCTAssertEqual(caps?["exec"] as? Bool, false)
-        XCTAssertEqual(decoded["protocolVersion"] as? Int, traySyncProtocolVersion)
-        XCTAssertNil(
-            decoded["pairId"],
-            "the menu-bar follower has no CLI to be folded with and must not claim a pair")
     }
 
     
@@ -1057,6 +1029,198 @@ extension ComputerTrayFollowerTests {
                 $0.hasPrefix("display 99 is not attached")
                     || $0 == ComputerCaptureError.noDisplay.message
             }, "\(errs)")
+    }
+}
+
+extension ComputerTrayFollowerTests {
+    
+    private func hellos(in sent: [Data]) -> [[String: Any]] {
+        sent.compactMap { data -> [String: Any]? in
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                obj["type"] as? String == "hello"
+            else { return nil }
+            return obj
+        }
+    }
+
+    private func claimsComputer(_ hello: [String: Any]) -> Bool? {
+        (hello["capabilities"] as? [String: Any])?["computer"] as? Bool
+    }
+
+    private func connect(_ follower: ComputerTrayFollower) throws -> [Data] {
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        let hello = expectation(description: "hello")
+        Task { @MainActor in hello.fulfill() }
+        wait(for: [hello], timeout: 2)
+        return sent
+    }
+
+    func testOpeningTheChannelAdvertisesComputerCapability() throws {
+        let (follower, _, _) = makeFollower()
+        let sent = try connect(follower)
+        XCTAssertEqual(sent.count, 1)
+        let decoded = try XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: XCTUnwrap(sent.first)) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["type"] as? String, "hello")
+        XCTAssertEqual(decoded["runtime"] as? String, "sliccstart-computer")
+        let caps = decoded["capabilities"] as? [String: Any]
+        XCTAssertEqual(caps?["computer"] as? Bool, true)
+        XCTAssertEqual(caps?["exec"] as? Bool, false)
+        XCTAssertEqual(decoded["protocolVersion"] as? Int, traySyncProtocolVersion)
+        XCTAssertNil(
+            decoded["pairId"],
+            "the menu-bar follower has no CLI to be folded with and must not claim a pair")
+    }
+
+    
+    
+    
+    
+    func testAnUngrantedMacDoesNotClaimNativeCapture() throws {
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: .alwaysDenied))
+        let hello = try XCTUnwrap(hellos(in: try connect(follower)).first)
+
+        XCTAssertEqual(claimsComputer(hello), false)
+        let motd = try XCTUnwrap(hello["motd"] as? String)
+        XCTAssertTrue(motd.contains("Screen Recording"), motd)
+        XCTAssertTrue(motd.contains("Accessibility"), motd)
+        XCTAssertTrue(motd.contains("System Settings"), motd)
+    }
+
+    
+    
+    
+    
+    func testAMissingAccessibilityGrantIsNamedInTheMotdButStillClaimsCapture() throws {
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: .captureOnly))
+        let hello = try XCTUnwrap(hellos(in: try connect(follower)).first)
+
+        XCTAssertEqual(claimsComputer(hello), true)
+        let motd = try XCTUnwrap(hello["motd"] as? String)
+        XCTAssertTrue(motd.contains("Accessibility"), motd)
+        XCTAssertTrue(motd.contains("System Settings"), motd)
+    }
+
+    
+    
+    
+    
+    func testAGrantGivenMidSessionIsReAdvertisedWithoutAReconnect() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{}, { grants.screenRecording = true }, {}]))
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(hellos(in: sent).first)), false)
+        await follower._testing_settleGrantWatch()
+
+        let published = hellos(in: sent)
+        XCTAssertEqual(published.count, 2, "the grant change must be published, not waited for")
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
+        let motd = try XCTUnwrap(published.last?["motd"] as? String)
+        XCTAssertTrue(motd.contains("Native screen capture"), motd)
+    }
+
+    
+    
+    func testARevokedGrantIsRepublishedAndTheWatchIsOtherwiseSilent() async throws {
+        let grants = MutableGrantProbe(screenRecording: true, accessibility: true)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{}, {}, { grants.screenRecording = false }, {}]))
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(hellos(in: sent).first)), true)
+        await follower._testing_settleGrantWatch()
+
+        let published = hellos(in: sent)
+        XCTAssertEqual(
+            published.count, 2,
+            "four ticks around one change must produce exactly one re-advertisement")
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), false)
+    }
+
+    
+    
+    
+    func testARefusedHelloIsRetriedOnTheNextBeat() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([{ grants.screenRecording = true }, {}, {}]))
+        var attempts: [Data] = []
+        var delivered: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                attempts.append(data)
+                
+                guard attempts.count != 2 else { return false }
+                delivered.append(data)
+                return true
+            })
+        await settle()
+        await follower._testing_settleGrantWatch()
+
+        XCTAssertEqual(hellos(in: attempts).count, 3, "one refused send, then exactly one retry")
+        let published = hellos(in: delivered)
+        XCTAssertEqual(published.count, 2)
+        XCTAssertEqual(claimsComputer(try XCTUnwrap(published.last)), true)
+    }
+
+    
+    
+    func testStoppingEndsTheGrantWatch() async throws {
+        let grants = MutableGrantProbe(screenRecording: false, accessibility: false)
+        
+        
+        
+        let box = StopBox()
+        let (follower, _, _) = makeFollower(
+            permissions: ComputerPermissions(probe: grants.probe),
+            grantTick: scriptedGrantTick([
+                {
+                    await box.callStop()
+                    grants.screenRecording = true
+                },
+                
+                
+                { await Task.yield() },
+            ]))
+        box.stop = { [weak follower] in follower?.stop() }
+        var sent: [Data] = []
+        follower.connector(
+            connectorStandIn(),
+            didConnect: { data in
+                sent.append(data)
+                return true
+            })
+        await settle()
+        await follower._testing_settleGrantWatch()
+
+        XCTAssertEqual(hellos(in: sent).count, 1, "no hello after stop()")
     }
 }
 

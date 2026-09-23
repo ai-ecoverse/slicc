@@ -12,6 +12,7 @@ const hoisted = vi.hoisted(() => ({
     exec?: boolean;
     computer?: boolean;
     motd?: string;
+    computerMotd?: string;
   }>,
 }));
 
@@ -72,6 +73,23 @@ describe('ssh command', () => {
     expect(r.stdout).toContain('  - follower-a');
     expect(r.stdout).toContain(
       '      slicc-cli exec target · alice@studio · darwin/arm64 · runner: sh -c'
+    );
+  });
+
+  it('shows a paired launcher’s MOTD under the CLI’s, so a missing grant stays visible', async () => {
+    hoisted.followers = [
+      {
+        runtimeId: 'follower-a',
+        runtime: 'slicc-cli',
+        exec: true,
+        computer: true,
+        motd: 'slicc-cli exec target · alice@studio',
+        computerMotd: 'Native screen capture on studio — input needs Accessibility',
+      },
+    ];
+    const r = await createSshCommand().execute(['--list'], ctx());
+    expect(r.stdout).toContain(
+      '      slicc-cli exec target · alice@studio\n      Native screen capture on studio — input needs Accessibility\n'
     );
   });
 

@@ -12,6 +12,7 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "ComputerT
 
 
 
+
 @MainActor
 final class ComputerTrayFollower: NSObject {
     static let runtime = "sliccstart-computer"
@@ -19,6 +20,7 @@ final class ComputerTrayFollower: NSObject {
     private let makeConnector: (URL) -> TrayFollowerConnecting
     private let makeCapturer: () -> ComputerCapturing
     private var permissions: ComputerPermissions
+    private let grantTick: ComputerGrantTick
     private let eventSink: ComputerEventSink
     
     
@@ -61,6 +63,11 @@ final class ComputerTrayFollower: NSObject {
     
     private var geometries: [Int: ComputerDisplayGeometry] = [:]
     private var lastInput: Task<Void, Never>?
+    
+    
+    private var advertisedGrants: ComputerGrants?
+    private var grantWatch: Task<Void, Never>?
+    private var lastGrantWatch: Task<Void, Never>?
 
     init(
         makeConnector: @escaping (URL) -> TrayFollowerConnecting = {
@@ -72,7 +79,8 @@ final class ComputerTrayFollower: NSObject {
         pairId: String? = nil,
         makeDisplayGeometry: @escaping (Int?) throws -> ComputerDisplayGeometry = {
             try ScreenCaptureKitCapturer.liveGeometry(index: $0)
-        }
+        },
+        grantTick: @escaping ComputerGrantTick = ComputerGrantWatch.liveTick
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
@@ -80,6 +88,7 @@ final class ComputerTrayFollower: NSObject {
         self.permissions = permissions
         self.eventSink = eventSink
         self.pairId = pairId
+        self.grantTick = grantTick
         super.init()
     }
 
@@ -113,6 +122,12 @@ final class ComputerTrayFollower: NSObject {
         }
     }
 
+    
+    
+    func _testing_settleGrantWatch() async {
+        await lastGrantWatch?.value
+    }
+
     func stop() {
         startTask?.cancel()
         startTask = nil
@@ -120,6 +135,9 @@ final class ComputerTrayFollower: NSObject {
     }
 
     private func teardownConnection() {
+        grantWatch?.cancel()
+        grantWatch = nil
+        advertisedGrants = nil
         stopAllCaptures()
         geometries.removeAll()
         connector?.stop()
@@ -146,6 +164,47 @@ final class ComputerTrayFollower: NSObject {
             if self.connector === connector { self.connector = nil }
             onGaveUp?(error.localizedDescription)
         }
+    }
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    private func advertise() {
+        let grants = permissions.grants()
+        let sent = send(
+            .hello(
+                protocolVersion: traySyncProtocolVersion,
+                runtime: ComputerTrayFollower.runtime,
+                capabilities: ComputerCapabilityAdvertisement.capabilities(for: grants),
+                motd: ComputerCapabilityAdvertisement.motd(
+                    host: ProcessInfo.processInfo.hostName, grants: grants),
+                pairId: pairId))
+        if sent { advertisedGrants = grants }
+    }
+
+    private func startGrantWatch() {
+        grantWatch?.cancel()
+        let tick = grantTick
+        let task = Task { @MainActor [weak self] in
+            while await tick() {
+                guard !Task.isCancelled, let self, self.sendData != nil else { return }
+                let grants = self.permissions.grants()
+                guard grants != self.advertisedGrants else { continue }
+                log.info("Computer permission grants changed — re-advertising capabilities")
+                self.advertise()
+            }
+        }
+        grantWatch = task
+        lastGrantWatch = task
     }
 
     private func send(_ message: FollowerToLeaderMessage) -> Bool {
@@ -348,23 +407,20 @@ extension ComputerTrayFollower: TrayFollowerConnectorDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             sendData = channelSend
-            let host = ProcessInfo.processInfo.hostName
-            _ = send(
-                .hello(
-                    protocolVersion: traySyncProtocolVersion,
-                    runtime: ComputerTrayFollower.runtime,
-                    capabilities: TraySyncCapabilities(exec: false, computer: true),
-                    motd: "Native screen capture on \(host)",
-                    pairId: pairId))
+            advertise()
             
             
             onConnected?()
+            startGrantWatch()
         }
     }
 
     nonisolated func connectorDidDisconnect(_ connector: TrayFollowerConnector, reason: String) {
         Task { @MainActor [weak self] in
             self?.sendData = nil
+            self?.grantWatch?.cancel()
+            self?.grantWatch = nil
+            self?.advertisedGrants = nil
             self?.stopAllCaptures()
         }
     }
