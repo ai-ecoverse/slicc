@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 import { writeTar } from '../../../src/shell/ipk/tar.js';
@@ -72,6 +72,50 @@ describe('tar command', () => {
     expect((await shell.executeCommand('tar -xf /tmp/modes.tar -C /tmp/modes')).exitCode).toBe(0);
     expect(((await fs.stat('/tmp/modes/pkg/run.sh')).mode ?? 0) & 0o777).toBe(0o755);
     expect(((await fs.stat('/tmp/modes/pkg/secret')).mode ?? 0) & 0o777).toBe(0o600);
+  });
+
+  it('finishes extracting where the backend has no mode bits (a mount: ENOSYS)', async () => {
+    await fs.writeFile(
+      '/tmp/mounted.tar',
+      writeTar([
+        { path: 'pkg/configure', bytes: new TextEncoder().encode('#!/bin/sh'), mode: 0o755 },
+        { path: 'pkg/after.txt', bytes: new TextEncoder().encode('after') },
+      ])
+    );
+    vi.spyOn(fs, 'chmod').mockRejectedValue(
+      Object.assign(new Error('metadata changes are not supported by this mount'), {
+        code: 'ENOSYS',
+      })
+    );
+    const out = await shell.executeCommand('tar -xf /tmp/mounted.tar -C /tmp/mounted');
+    expect(out.exitCode).toBe(0);
+    expect(await fs.readFile('/tmp/mounted/pkg/after.txt')).toBe('after');
+  });
+
+  it('resets an existing executable to the archived 0644', async () => {
+    await fs.mkdir('/tmp/over/pkg', { recursive: true });
+    await fs.writeFile('/tmp/over/pkg/tool', 'old');
+    await shell.executeCommand('chmod 755 /tmp/over/pkg/tool');
+    await fs.writeFile(
+      '/tmp/over.tar',
+      writeTar([{ path: 'pkg/tool', bytes: new TextEncoder().encode('new'), mode: 0o644 }])
+    );
+    expect((await shell.executeCommand('tar -xf /tmp/over.tar -C /tmp/over')).exitCode).toBe(0);
+    expect(((await fs.stat('/tmp/over/pkg/tool')).mode ?? 0) & 0o777).toBe(0o644);
+  });
+
+  it('keeps directory modes, applied after the tree is filled', async () => {
+    await fs.mkdir('/workspace/dirs/private/ro', { recursive: true });
+    await fs.writeFile('/workspace/dirs/private/ro/file.txt', 'inside');
+    await shell.executeCommand(
+      'chmod 700 /workspace/dirs/private && chmod 555 /workspace/dirs/private/ro'
+    );
+    await shell.executeCommand('cd /workspace && tar -cf /tmp/dirs.tar dirs');
+    const out = await shell.executeCommand('tar -xf /tmp/dirs.tar -C /tmp/dirs-out');
+    expect(out.exitCode).toBe(0);
+    expect(await fs.readFile('/tmp/dirs-out/dirs/private/ro/file.txt')).toBe('inside');
+    expect(((await fs.stat('/tmp/dirs-out/dirs/private')).mode ?? 0) & 0o777).toBe(0o700);
+    expect(((await fs.stat('/tmp/dirs-out/dirs/private/ro')).mode ?? 0) & 0o777).toBe(0o555);
   });
 
   it('accepts the traditional dashless form (tar xzf, tar czf)', async () => {

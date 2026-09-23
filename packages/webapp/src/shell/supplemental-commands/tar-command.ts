@@ -140,7 +140,13 @@ async function addPathToTar(
   }
   if (!stat.isDirectory) throw new Error(`unsupported file type: ${fsPath}`);
   const directoryPath = archivePath.endsWith('/') ? archivePath : `${archivePath}/`;
-  entries.push({ path: directoryPath, bytes: new Uint8Array(0), directory: true });
+  const mode = typeof stat.mode === 'number' ? stat.mode & 0o777 : undefined;
+  entries.push({
+    path: directoryPath,
+    bytes: new Uint8Array(0),
+    directory: true,
+    ...(mode === undefined ? {} : { mode }),
+  });
   for (const name of await ctx.fs.readdir(fsPath)) {
     await addPathToTar(ctx, joinPath(fsPath, name), `${directoryPath}${name}`, entries);
   }
@@ -168,6 +174,43 @@ function safeOutputPath(ctx: CommandContext, root: string, entryPath: string): s
   }
   const outputPath = ctx.fs.resolvePath(root, normalized);
   return ensureWithinRoot(root, outputPath) ? outputPath : undefined;
+}
+
+/** `chmod` that tolerates a backend without mode bits (a mount answers ENOSYS). */
+async function applyMode(ctx: CommandContext, path: string, mode: number): Promise<void> {
+  try {
+    await ctx.fs.chmod(path, mode);
+  } catch (err) {
+    const code = (err as { code?: unknown })?.code;
+    if (code === 'ENOSYS' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') return;
+    throw err;
+  }
+}
+
+/**
+ * Write one entry. A directory's mode is queued for after the tree is
+ * written (a read-only directory must still be filled); a file's mode is
+ * applied now, except the 0644 a new file already has.
+ */
+async function extractEntry(
+  ctx: CommandContext,
+  outputPath: string,
+  entry: TarEntry,
+  dirModes: Array<[string, number]>
+): Promise<void> {
+  const defaultMode = entry.directory ? 0o755 : 0o644;
+  // An existing destination keeps its old mode, so the default must be set too.
+  const resetsDefault = entry.mode === defaultMode && (await ctx.fs.exists(outputPath));
+  const needsMode = entry.mode !== undefined && (entry.mode !== defaultMode || resetsDefault);
+  if (entry.directory) {
+    await ctx.fs.mkdir(outputPath, { recursive: true });
+    if (needsMode) dirModes.push([outputPath, entry.mode as number]);
+    return;
+  }
+  const parent = dirname(outputPath);
+  if (parent !== '/') await ctx.fs.mkdir(parent, { recursive: true });
+  await ctx.fs.writeFile(outputPath, entry.bytes);
+  if (needsMode) await applyMode(ctx, outputPath, entry.mode as number);
 }
 
 async function createArchive(options: TarOptions, ctx: CommandContext): Promise<CommandResult> {
@@ -203,22 +246,15 @@ async function readArchiveCommand(
   const outputRoot = ctx.fs.resolvePath(ctx.cwd, options.directory);
   await ctx.fs.mkdir(outputRoot, { recursive: true });
   const extracted: string[] = [];
+  const dirModes: Array<[string, number]> = [];
   for (const entry of entries) {
     const outputPath = safeOutputPath(ctx, outputRoot, entry.path);
     if (!outputPath) return tarError(`blocked suspicious path ${entry.path}`);
-    if (entry.directory) {
-      await ctx.fs.mkdir(outputPath, { recursive: true });
-    } else {
-      const parent = dirname(outputPath);
-      if (parent !== '/') await ctx.fs.mkdir(parent, { recursive: true });
-      await ctx.fs.writeFile(outputPath, entry.bytes);
-      // Keep executable bits (./configure); 0644 is what a new file gets anyway.
-      if (entry.mode !== undefined && entry.mode !== 0o644) {
-        await ctx.fs.chmod(outputPath, entry.mode);
-      }
-    }
+    await extractEntry(ctx, outputPath, entry, dirModes);
     extracted.push(entry.path);
   }
+  // Deepest first, so a restrictive parent does not block its children.
+  for (const [path, mode] of dirModes.reverse()) await applyMode(ctx, path, mode);
   return {
     stdout: options.verbose ? `${extracted.join('\n')}\n` : '',
     stderr: '',
