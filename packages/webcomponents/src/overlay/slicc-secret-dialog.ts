@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { typingElement } from '../internal/typing-focus.js';
 // Composed by tag — owns its registration.
 import './slicc-dialog.js';
 
@@ -413,8 +414,18 @@ export class SliccSecretDialog extends HTMLElement {
     // one, which — with no default scope — is every time.
     this.#options.open = true;
     this.#syncHints();
+    // The agent's `request_secret` opens this while the user may be typing in
+    // the composer. Focusing a field then would pour the rest of their chat
+    // message into it — the SECRET field when the name is prefilled — and
+    // their Enter would submit it. So read the focus BEFORE `show()` (whose
+    // own frame moves it to the card) and, if the user is typing, leave the
+    // focus on the card `<slicc-dialog>` gives it: this is a true modal, so
+    // keystrokes there go nowhere, Tab walks into the fields, Escape cancels.
+    const userTyping = typingElement(this.ownerDocument) !== null;
     this.#dialog.show?.();
-    requestAnimationFrame(() => (this.#name.value ? this.#value : this.#name).focus());
+    if (!userTyping) {
+      requestAnimationFrame(() => (this.#name.value ? this.#value : this.#name).focus());
+    }
     return new Promise((resolve) => {
       this.#resolve = resolve;
     });
