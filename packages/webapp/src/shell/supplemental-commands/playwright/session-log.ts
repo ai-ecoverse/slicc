@@ -1,6 +1,7 @@
 /**
- * Best-effort `/.playwright/` session logging and snapshot archiving for the
- * playwright-cli command family.
+ * Best-effort session logging and snapshot archiving for the playwright-cli
+ * command family, under the calling unit's session root (see
+ * {@link sessionRootFor}).
  */
 
 import type { VirtualFS } from '../../../fs/index.js';
@@ -12,10 +13,33 @@ import type { CmdResult, PlaywrightHandlerCtx, PlaywrightState, TabSnapshot } fr
 // module stays inside the shell layer (see layer-stack import direction).
 type BrowserAPI = PlaywrightHandlerCtx['browser'];
 
-/** Ensure /.playwright/ directories exist. */
-export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState): Promise<void> {
-  if (state.sessionDirsCreated) return;
-  for (const dir of ['/.playwright', '/.playwright/snapshots', '/.playwright/screenshots']) {
+/** Session root for the cone and for shells with no work unit (the terminal). */
+export const DEFAULT_SESSION_ROOT = '/.playwright';
+
+/**
+ * Where a unit's session log, snapshot/screenshot archives and default
+ * storage-state file go.
+ *
+ * A sandboxed scoop cannot write `/.playwright/` without an approval, and a
+ * best-effort log must never cost one (#3440) — so a scoop logs under its own
+ * scratch directory (`$TMPDIR`, `/tmp/<cone>/<scoop>`), which every scoop can
+ * write. Granting scoops a shared `/.playwright/**` instead would let them
+ * overwrite each other's logs.
+ */
+export function sessionRootFor(isScoop: boolean, scratchDir: string): string {
+  if (!isScoop) return DEFAULT_SESSION_ROOT;
+  const base = scratchDir.replace(/\/+$/, '');
+  return `${base}${DEFAULT_SESSION_ROOT}`;
+}
+
+/** Ensure `<root>`, `<root>/snapshots` and `<root>/screenshots` exist. */
+export async function ensureSessionDirs(
+  vfs: VirtualFS,
+  state: PlaywrightState,
+  root: string
+): Promise<void> {
+  if (state.sessionDirsCreated.has(root)) return;
+  for (const dir of [root, `${root}/snapshots`, `${root}/screenshots`]) {
     try {
       await vfs.mkdir(dir, { recursive: true });
     } catch (err) {
@@ -24,11 +48,11 @@ export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState):
       }
     }
   }
-  state.sessionDirsCreated = true;
+  state.sessionDirsCreated.add(root);
 }
 
 /**
- * Take a fresh snapshot, persist it to /.playwright/snapshots/, and update
+ * Take a fresh snapshot, persist it to `<root>/snapshots/`, and update
  * `state.snapshots` so subsequent commands can resolve refs without requiring a
  * manual re-snapshot. Returns the VFS path written, or null on any error.
  */
@@ -36,7 +60,8 @@ export async function autoSaveSnapshot(
   browser: BrowserAPI,
   vfs: VirtualFS,
   targetId: string,
-  state: PlaywrightState
+  state: PlaywrightState,
+  root: string
 ): Promise<string | null> {
   try {
     return await browser.withTab(targetId, async (page) => {
@@ -56,7 +81,7 @@ export async function autoSaveSnapshot(
 
       const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', text].join('\n');
       const ts = filenameSafeTimestamp(new Date());
-      const path = `/.playwright/snapshots/page-${ts}.yml`;
+      const path = `${root}/snapshots/page-${ts}.yml`;
       await vfs.writeFile(path, output);
       return path;
     });
@@ -65,10 +90,11 @@ export async function autoSaveSnapshot(
   }
 }
 
-/** Append a session log entry to /.playwright/session.md. */
+/** Append a session log entry to `<root>/session.md`. */
 export async function logSession(
   vfs: VirtualFS,
   state: PlaywrightState,
+  root: string,
   opts: {
     command: string;
     args: string[];
@@ -78,7 +104,7 @@ export async function logSession(
     targetId?: string | null;
   }
 ): Promise<void> {
-  await ensureSessionDirs(vfs, state);
+  await ensureSessionDirs(vfs, state, root);
   const ts = new Date().toISOString();
   const cmdLine = `playwright-cli ${opts.command}${opts.args.length ? ' ' + opts.args.join(' ') : ''}`;
   const resultSummary =
@@ -100,7 +126,7 @@ export async function logSession(
   lines.push('---', '');
 
   const entry = lines.join('\n') + '\n';
-  const sessionPath = '/.playwright/session.md';
+  const sessionPath = `${root}/session.md`;
   let existing = '';
   try {
     const content = await vfs.readFile(sessionPath);

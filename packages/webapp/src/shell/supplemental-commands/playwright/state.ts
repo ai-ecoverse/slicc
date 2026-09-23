@@ -66,7 +66,7 @@ export function getSharedState(browser: PlaywrightBrowserAPI, fs: VirtualFS): Pl
       snapshots: new Map(),
       appTabId: null,
       harRecorder: null,
-      sessionDirsCreated: false,
+      sessionDirsCreated: new Set(),
       teleportWatchers: new Map(),
       consoleMessages: new Map(),
       consoleCleanup: new Map(),
