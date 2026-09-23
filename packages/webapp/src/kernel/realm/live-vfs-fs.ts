@@ -570,3 +570,46 @@ export function invalidateLiveVfs(Fs: LiveFsApi, plugin: LiveVfsPlugin): void {
   if (!Fs.hashRemoveNode) return;
   for (const node of drop) Fs.hashRemoveNode(node);
 }
+
+/** The slice of an Emscripten `FS` the mount step drives on top of {@link LiveFsApi}. */
+export interface LiveMountFsApi extends LiveFsApi {
+  filesystems: { SLICC_LIVE_FS?: LiveVfsPlugin };
+  mkdirTree(path: string): void;
+  mount(type: LiveVfsPlugin, opts: LiveFsMountOpts, mountpoint: string): unknown;
+}
+
+/**
+ * Drop any dir nested under another listed dir: the outer mount already
+ * mirrors it, and a nested mount would shadow it with a second node tree.
+ */
+function outermostDirs(dirs: readonly string[]): string[] {
+  const norm = [...new Set(dirs.map((d) => d.replace(/\/+$/, '') || '/'))].sort();
+  return norm.filter((d) => !norm.some((o) => o !== d && (o === '/' || d.startsWith(`${o}/`))));
+}
+
+/**
+ * Mount `SLICC_LIVE_FS` at each of `dirs` (same path inside the module as in
+ * the VFS), registering the plugin on first use. `/` itself is never mounted:
+ * it is the module's own root. Returns the plugin and the dirs that mounted.
+ */
+export function mountLiveVfsDirs(
+  Fs: LiveMountFsApi,
+  bridge: SyncFsPosixBridge,
+  dirs: readonly string[],
+  warn: (message: string) => void
+): { plugin: LiveVfsPlugin; mounted: string[] } {
+  const plugin = Fs.filesystems.SLICC_LIVE_FS ?? createLiveVfsPlugin(Fs);
+  Fs.filesystems.SLICC_LIVE_FS = plugin;
+  const mounted: string[] = [];
+  for (const dir of outermostDirs(dirs)) {
+    if (dir === '/') continue;
+    try {
+      Fs.mkdirTree(dir);
+      Fs.mount(plugin, { root: dir, bridge }, dir);
+      mounted.push(dir);
+    } catch (err) {
+      warn(`live VFS mount of ${dir} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { plugin, mounted };
+}

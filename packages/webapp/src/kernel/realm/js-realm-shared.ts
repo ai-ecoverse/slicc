@@ -20,6 +20,7 @@
 
 import '../../shims/buffer-polyfill.js';
 import { readSliccVersion } from '../../base/slicc-version.js';
+import type { EmscriptenFsForHook, EmscriptenVfsHandle } from './emscripten-vfs-hook.js';
 import { createNodeReadline } from './helpers/node-readline.js';
 import { createHttpGlobal } from './http-global.js';
 import {
@@ -73,6 +74,7 @@ import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
+import type { SyncFsPosixBridge } from './sync-fs-xhr-bridge.js';
 import { createSyncExecSabTransport } from './sync-sab-bridge.js';
 
 const OUTPUT_TAIL_MAX = 64 * 1024;
@@ -129,6 +131,27 @@ function syncFsSnapshotErrorSink(
 }
 
 /**
+ * Publish `__slicc_mountVfs` (see `emscripten-vfs-hook.ts`) so an Emscripten
+ * tool running in this realm can mount the live VFS into its `FS`. The hook
+ * module loads on first call, keeping it off the kernel-worker boot graph.
+ */
+function installMountVfsHook(
+  bridge: SyncFsPosixBridge,
+  syncFs: SyncFsCache,
+  cwd: string,
+  stdio: RealmStdioBridge
+): void {
+  (globalThis as GlobalWithWasmCompile).__slicc_mountVfs = async (fs, opts) => {
+    const { mountVfsIntoEmscripten } = await import('./emscripten-vfs-hook.js');
+    return mountVfsIntoEmscripten(
+      fs,
+      { bridge, syncFs, cwd, warn: (m) => stdio.writeStderr(`slicc: ${m}\n`) },
+      opts
+    );
+  };
+}
+
+/**
  * Install both synchronous bridges, built off the ONE per-realm capability
  * token. The sync `fs` shim is merged into `fsBridge`; the `child_process` sync
  * forms ride their own blocking channel but share the fs bridge and the cache,
@@ -154,6 +177,7 @@ function installSyncBridges(
     },
   };
   Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio, persist));
+  if (syncFsXhr) installMountVfsHook(syncFsXhr, syncFs, init.cwd, stdio);
   if (!init.syncFsToken) return undefined;
   return createSyncExecXhrBridge(init.syncFsToken, {
     syncFs,
@@ -168,6 +192,10 @@ function installSyncBridges(
  */
 type GlobalWithWasmCompile = typeof globalThis & {
   __slicc_compileWasm?: (path: string) => Promise<WebAssembly.Module>;
+  __slicc_mountVfs?: (
+    fs: EmscriptenFsForHook,
+    opts?: { cwd?: string }
+  ) => Promise<EmscriptenVfsHandle>;
   SLICC_VERSION?: string;
 };
 
@@ -475,6 +503,7 @@ async function finishJsRealm(opts: {
       bodyReads,
     });
     delete g.__slicc_compileWasm;
+    delete g.__slicc_mountVfs;
     opts.rpc.dispose();
     opts.port.postMessage({
       type: 'realm-done',
