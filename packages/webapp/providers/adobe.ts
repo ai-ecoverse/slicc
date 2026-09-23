@@ -12,14 +12,13 @@ import type {
 } from '@earendil-works/pi-ai';
 import {
   createAssistantMessageEventStream,
-  getModels,
-  getProviders,
   registerApiProvider,
   streamAnthropic,
   streamOpenAICompletions,
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/compat';
+import { getModels, getProviders } from '../src/core/model-catalog.js';
 import { getPanelRpcClient } from '../src/kernel/panel-rpc.js';
 import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
 import {

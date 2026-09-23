@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
+import { piAiModelDataGeneratedAt } from './vite-plugins/pi-ai-model-data';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
@@ -342,6 +343,8 @@ export default defineConfig(({ mode }) => ({
     __DEV__: JSON.stringify(mode !== 'production'),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
+
+    __PI_AI_MODELS_GENERATED_AT__: JSON.stringify(piAiModelDataGeneratedAt(workspaceRoot)),
 
     __SLICC_BUILD_ID__: JSON.stringify(`${rootPkg.version}-${Date.now().toString(36)}`),
 

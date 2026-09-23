@@ -9,13 +9,13 @@ import type {
 } from '@earendil-works/pi-ai';
 import {
   createAssistantMessageEventStream,
-  getModels,
   registerApiProvider,
   streamOpenAICompletions,
   streamOpenAIResponses,
   streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
+import { getModels } from '../src/core/model-catalog.js';
 import {
   bridgeRefreshBlocked,
   noteBridgeTokenRequired,

@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } fro
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
+import { piAiModelDataGeneratedAt } from '../webapp/vite-plugins/pi-ai-model-data';
 import { stripBiomeWasmAssetPlugin } from '../webapp/vite-plugins/strip-biome-wasm-asset';
 import { stripOrtWasmAssetPlugin } from '../webapp/vite-plugins/strip-ort-wasm-asset';
 import { devReloadPlugin } from './vite-plugins/dev-reload';
@@ -232,6 +233,8 @@ export default defineConfig(({ mode }) => ({
     __SLICC_EXT_DEV__: JSON.stringify(isExtDev),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
+
+    __PI_AI_MODELS_GENERATED_AT__: JSON.stringify(piAiModelDataGeneratedAt(repoRoot)),
 
     __SLICC_BUILD_ID__: JSON.stringify(`${rootPkg.version}-ext-${Date.now().toString(36)}`),
   },

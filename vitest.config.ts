@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { defineConfig } from 'vitest/config';
+import { piAiModelDataGeneratedAt } from './packages/webapp/vite-plugins/pi-ai-model-data';
 
 const webappDir = resolve(__dirname, 'packages/webapp');
 const workspaceRoot = __dirname;
@@ -77,6 +78,7 @@ export default defineConfig({
           __DEV__: 'true',
           __SLICC_VERSION__: JSON.stringify(rootPkg.version),
           __SLICC_RELEASED_AT__: 'null',
+          __PI_AI_MODELS_GENERATED_AT__: JSON.stringify(piAiModelDataGeneratedAt(workspaceRoot)),
           __SLICC_BUILD_ID__: JSON.stringify('test-build'),
           ...wasmVersionDefines,
           global: 'globalThis',

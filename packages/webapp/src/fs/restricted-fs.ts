@@ -651,6 +651,12 @@ export class RestrictedFS {
     return all.filter((p) => this.isAllowedStrict(p));
   }
 
+  listMountPoints(): ReturnType<VirtualFS['listMountPoints']> {
+    const all = this.vfs.listMountPoints();
+    if (this.includeMounts) return all;
+    return all.filter((m) => this.isAllowed(m.path));
+  }
+
   getMountIndex(): ReturnType<VirtualFS['getMountIndex']> {
     return this.vfs.getMountIndex();
   }

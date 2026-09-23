@@ -364,6 +364,43 @@ describe('RestrictedFS', () => {
     });
   });
 
+  describe('listMountPoints forwarding (#3434)', () => {
+    let mpVfs: VirtualFS;
+
+    beforeAll(async () => {
+      mpVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-list-mps', wipe: true });
+      await mpVfs.mkdir('/scoops/editor/da-site', { recursive: true });
+      await mpVfs.mkdir('/mnt/other', { recursive: true });
+      await mpVfs.mount('/scoops/editor/da-site', fakeMountBackend());
+      await mpVfs.mount('/mnt/other', fakeMountBackend());
+    });
+
+    it('forwards the VFS mount table with kind by default', () => {
+      const rfs = new RestrictedFS(mpVfs, ['/scoops/editor/']);
+      expect(rfs.listMountPoints()).toEqual(mpVfs.listMountPoints());
+      const daSite = rfs.listMountPoints().find((m) => m.path === '/scoops/editor/da-site');
+      expect(daSite?.kind).toBe('da');
+    });
+
+    it('filters to granted mounts under private isolation (includeMounts: false)', () => {
+      const rfs = new RestrictedFS(mpVfs, ['/scoops/editor/'], [], 'hard', {
+        includeMounts: false,
+      });
+      const paths = rfs.listMountPoints().map((m) => m.path);
+      expect(paths).toContain('/scoops/editor/da-site');
+      expect(paths).not.toContain('/mnt/other');
+    });
+
+    it('keeps a covering mount when the grant is a descendant of it (#3434)', () => {
+      const rfs = new RestrictedFS(mpVfs, ['/scoops/editor/da-site/subdir/'], [], 'hard', {
+        includeMounts: false,
+      });
+      const paths = rfs.listMountPoints().map((m) => m.path);
+      expect(paths).toContain('/scoops/editor/da-site');
+      expect(paths).not.toContain('/mnt/other');
+    });
+  });
+
   describe('symlink target validation', () => {
     let symlinkVfs: VirtualFS;
     let symlinkRestricted: RestrictedFS;

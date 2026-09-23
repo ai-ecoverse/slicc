@@ -34,6 +34,19 @@ function isFixtureRequested(href: string): boolean {
   }
 }
 
+function startLiveModelCatalog(): void {
+  void import('./boot/setup-model-catalog.js')
+    .then(({ setupModelCatalog }) =>
+      setupModelCatalog({
+        locationHref: window.location.href,
+        storage: window.localStorage,
+        envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+        isDev: __DEV__,
+      })
+    )
+    .catch(() => {});
+}
+
 async function main(): Promise<void> {
   setupPreloadErrorReload();
 
@@ -84,6 +97,7 @@ async function main(): Promise<void> {
 
   await registerProviders();
   applyProviderDefaults();
+  startLiveModelCatalog();
 
   if (bridge?.apiBaseUrl && !extensionDelegate) {
     setLocalApiBaseUrl(bridge.apiBaseUrl);

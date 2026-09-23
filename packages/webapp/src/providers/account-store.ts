@@ -1149,6 +1149,16 @@ function resolveEffectiveProvider(providerId: string, providerConfig: ProviderCo
   return providerId;
 }
 
+export function getModelCatalogProviderIds(): string[] {
+  const ids = new Set<string>();
+  for (const account of getAccounts()) {
+    if (account.loggedOut) continue;
+    ids.add(account.providerId);
+    ids.add(resolveEffectiveProvider(account.providerId, getProviderConfig(account.providerId)));
+  }
+  return [...ids];
+}
+
 function providerCatalogueModel(
   providerId: string,
   modelId: string,

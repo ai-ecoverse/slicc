@@ -4,6 +4,8 @@ declare const __SLICC_VERSION__: string;
 declare const __SLICC_RELEASED_AT__: string | null;
 declare const __SLICC_BUILD_ID__: string;
 
+declare const __PI_AI_MODELS_GENERATED_AT__: number | null;
+
 declare const __MAGICK_WASM_VERSION__: string;
 declare const __BIOME_WASM_WEB_VERSION__: string;
 declare const __BIOME_JS_API_VERSION__: string;

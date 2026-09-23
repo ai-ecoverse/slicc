@@ -84,6 +84,12 @@ describe('feature flag registry', () => {
         defaultValue: 'off',
         userToggleable: true,
       }),
+      expect.objectContaining({
+        id: 'live-model-catalog',
+        label: 'Live model catalogue',
+        defaultValue: 'on',
+        userToggleable: false,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
@@ -228,6 +234,7 @@ describe('feature flag registry', () => {
       'multiple-cones': 'on',
       'compact-on-idle': 'on',
       'memory-v2': 'off',
+      'live-model-catalog': 'on',
     });
     expect(
       resolveFlags(
@@ -242,6 +249,7 @@ describe('feature flag registry', () => {
       'multiple-cones': 'on',
       'compact-on-idle': 'on',
       'memory-v2': 'off',
+      'live-model-catalog': 'on',
     });
   });
 

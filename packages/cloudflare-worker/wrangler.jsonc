@@ -52,7 +52,9 @@
         "agentic-memory": "off",
 
         "compact-on-idle": "on",
-        "memory-v2": "off"
+        "memory-v2": "off",
+
+        "live-model-catalog": "on"
       },
       "floats": {
         "standalone": {},
@@ -139,7 +141,8 @@
             "agentic-memory": "off",
 
             "compact-on-idle": "on",
-            "memory-v2": "off"
+            "memory-v2": "off",
+            "live-model-catalog": "on"
           },
           "floats": {
             "standalone": {},

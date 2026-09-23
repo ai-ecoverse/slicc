@@ -14,7 +14,8 @@ export type FeatureFlagId =
   | 'agentic-memory'
   | 'multiple-cones'
   | 'compact-on-idle'
-  | 'memory-v2';
+  | 'memory-v2'
+  | 'live-model-catalog';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -88,6 +89,16 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'off',
     userToggleable: true,
     since: '2026-09-10',
+  }),
+  Object.freeze({
+    id: 'live-model-catalog',
+    label: 'Live model catalogue',
+    description:
+      "Refresh model lists from pi's hosted catalogue, so newly launched models appear without a release.",
+
+    defaultValue: 'on',
+    userToggleable: false,
+    since: '2026-09-22',
   }),
 ]);
 
