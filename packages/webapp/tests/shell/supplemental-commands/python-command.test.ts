@@ -16,6 +16,7 @@ import {
   createPython3LikeCommand,
   pyodideVersionMismatchMessage,
   readInstalledPyodideVersion,
+  stripNoopInterpreterFlags,
 } from '../../../src/shell/supplemental-commands/python-command.js';
 
 function makeFs(
@@ -181,6 +182,22 @@ describe('createPython3LikeCommand — interpreter flags', () => {
   it('answers --version and -h given before any script', async () => {
     expect((await run(['--version'])).stdout).toContain('(Pyodide)');
     expect((await run(['-h'])).exitCode).toBe(0);
+  });
+
+  it('skips no-op interpreter flags (emcc runs `python3 -E emcc.py`)', async () => {
+    expect(stripNoopInterpreterFlags(['-E', 'emcc.py', '-c', 'x.c'])).toEqual([
+      'emcc.py',
+      '-c',
+      'x.c',
+    ]);
+    expect(stripNoopInterpreterFlags(['-Es', '-u', '-W', 'ignore', '-c', '1'])).toEqual([
+      '-c',
+      '1',
+    ]);
+    expect(stripNoopInterpreterFlags(['-E', '--version'])).toEqual(['--version']);
+    // Anything else stays for the command to handle or reject.
+    expect(stripNoopInterpreterFlags(['-m', 'pip'])).toEqual(['-m', 'pip']);
+    expect((await run(['-E', '--version'])).stdout).toContain('(Pyodide)');
   });
 
   it('leaves --version and -h after a script or -c to the program (sys.argv)', async () => {
