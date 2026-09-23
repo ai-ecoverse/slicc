@@ -525,6 +525,30 @@ booleans, so they may appear **before** the remote (`git push -q origin branch`)
 without consuming it as a flag value (#2864). `--dry-run` is a local no-op: it
 skips the network call and does not verify that the remote exists.
 
+### `hf download` fetches several files at once
+
+`hf download` (`hf-command.ts` over `hf-download.ts`) runs a bounded pool: at
+most `--concurrency`/`-j` files (default 4) at once, and a new file starts only
+while the declared bytes in flight fit `--max-in-flight-mb` (default 128). Every
+response is buffered whole in memory before the VFS write (`proxied-fetch.ts`,
+#3441), so the byte budget, not the file count, bounds peak memory. A file larger
+than the budget still downloads, alone. Files from an explicit list have no
+declared size; each is weighed as the largest file seen so far in the run, so the
+first one runs alone.
+
+Resume is unchanged: a file already at its listed byte length is skipped, a short
+one is fetched again, and an explicit file list skips on presence. The first
+failure aborts the requests in flight, starts no new ones, and names the file
+(`hf: failed <file>: …`); a body that arrives after the abort is not written.
+The command's abort signal (`kill`, Ctrl-C) cancels in-flight requests too.
+
+Progress: when the shell attaches a live output sink (the agent's bash tool,
+background-job logs, `jshd`), `hf` writes `hf: 12/325 files, 324.0 MB of 8.8 GB,
+5.4 MB/s, ~25m left` on the first file, then at most every 5 s, and on the last
+file. These lines are not repeated in the result, which keeps its per-file lines
+and ends with the elapsed time and average rate. The human terminal has no live
+sink and shows the result when the command exits.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared
