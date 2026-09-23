@@ -1,5 +1,7 @@
 import type { BrowserAPI } from '../../cdp/index.js';
+import type { ComputerNativeFramePayload } from '../../kernel/panel-rpc.js';
 import { getAccounts } from '../../providers/account-store.js';
+import type { NativeComputerCaptureResult } from '../../scoops/tray-leader/computers-router.js';
 import type { LeaderTraySession } from '../../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
@@ -145,18 +147,31 @@ function truncatePreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
   };
 }
 
-function createComputerNativeBridge(getLeader: StandalonePanelRpcDeps['getLeader']) {
+export function createComputerNativeBridge(
+  getLeader: StandalonePanelRpcDeps['getLeader'],
+  emitFrame: (payload: ComputerNativeFramePayload) => void
+) {
   return async (
     payload: Parameters<NonNullable<StandalonePanelRpcHandlerOptions['computerNative']>>[0]
   ) => {
     const sync = getLeader()?.currentLeaderSync;
     if (!sync) throw new Error('computer native: no active leader tray');
     if (payload.action === 'capture') {
-      const frame = await sync.captureNativeComputer(payload.runtimeId, {
+      const { runtimeId, display } = payload;
+      const frame = await sync.captureNativeComputer(runtimeId, {
         fps: payload.fps,
         maxWidth: payload.maxWidth,
         display: payload.display,
         watch: payload.watch,
+
+        ...(payload.watch
+          ? {
+              onFrame: (pushed: NativeComputerCaptureResult) =>
+                emitFrame({ runtimeId, display, ...pushed }),
+              onEnd: (error: Error) =>
+                emitFrame({ runtimeId, display, ended: true, error: error.message }),
+            }
+          : {}),
       });
       return { ok: true as const, ...frame };
     }
@@ -166,7 +181,7 @@ function createComputerNativeBridge(getLeader: StandalonePanelRpcDeps['getLeader
       });
       return { ok: true as const };
     }
-    sync.unwatchNativeComputer(payload.runtimeId);
+    sync.unwatchNativeComputer(payload.runtimeId, { display: payload.display });
     return { ok: true as const };
   };
 }
@@ -236,9 +251,8 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
     window: win,
   } = deps;
 
-  const { installPanelRpcHandler, createPanelRpcEventEmitter } = await import(
-    '../../kernel/panel-rpc.js'
-  );
+  const { installPanelRpcHandler, createPanelRpcEventEmitter, COMPUTER_NATIVE_FRAME_CHANNEL } =
+    await import('../../kernel/panel-rpc.js');
   const { createStandalonePanelRpcHandlers } = await import('../panel-rpc-handlers.js');
   const { getLeaderPermissionsSurface } = await import('../wc/wc-permissions-registry.js');
   const panelRpcEventEmitter = createPanelRpcEventEmitter({ instanceId });
@@ -266,7 +280,9 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
       execOnRemote: remoteExec.execOnRemote,
       signalRemoteExec: remoteExec.signalRemoteExec,
-      computerNative: createComputerNativeBridge(getLeader),
+      computerNative: createComputerNativeBridge(getLeader, (payload) =>
+        panelRpcEventEmitter.emit(COMPUTER_NATIVE_FRAME_CHANNEL, payload)
+      ),
       sliccSidecar: createSidecarBridge(),
       ...biscottoHandlers(),
       rotateWebhook: async () => {

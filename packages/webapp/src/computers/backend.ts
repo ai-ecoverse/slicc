@@ -18,5 +18,7 @@ export interface ComputerBackend {
   exec?(command: string): Promise<ComputerExecResult>;
 
   subscribe?(fps: number, onFrame: (frame: ComputerFrame) => void, maxWidth?: number): () => void;
+
+  readonly screenshotServesStream?: boolean;
   close(): Promise<void>;
 }

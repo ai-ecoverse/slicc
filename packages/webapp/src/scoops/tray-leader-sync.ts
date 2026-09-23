@@ -432,6 +432,10 @@ export class LeaderSyncManager {
       display?: number;
       watch?: boolean;
       timeoutMs?: number;
+
+      onFrame?: (frame: NativeComputerCaptureResult) => void;
+
+      onEnd?: (error: Error) => void;
     } = {}
   ): Promise<NativeComputerCaptureResult> {
     return this.computersRouter.captureNative(runtimeId, opts);
@@ -445,8 +449,8 @@ export class LeaderSyncManager {
     return this.computersRouter.inputNative(runtimeId, events, opts);
   }
 
-  unwatchNativeComputer(runtimeId: string): void {
-    this.computersRouter.unwatchNative(runtimeId);
+  unwatchNativeComputer(runtimeId: string, opts: { display?: number } = {}): void {
+    this.computersRouter.unwatchNative(runtimeId, opts);
   }
 
   getExecCapableBootstrapIds(): Set<string> {

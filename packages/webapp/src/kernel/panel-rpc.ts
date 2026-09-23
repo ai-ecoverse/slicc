@@ -744,6 +744,25 @@ export interface HidInputReportEventPayload {
   bytes: ArrayBuffer;
 }
 
+export const COMPUTER_NATIVE_FRAME_CHANNEL = 'computer-native-frame';
+
+export type ComputerNativeFramePayload = {
+  runtimeId: string;
+
+  display?: number;
+} & (
+  | {
+      ended?: undefined;
+      jpeg: string;
+      mime: string;
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+    }
+  | { ended: true; error: string }
+);
+
 export type { UsbClaimEvent as UsbClaimEventPayload } from './usb-device-registry.js';
 
 export type PanelRpcOp = PanelRpcRequest['op'];

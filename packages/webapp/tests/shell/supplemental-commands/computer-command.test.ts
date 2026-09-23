@@ -713,6 +713,113 @@ describe('computer command', () => {
     expect(polled.written.get('/jsh.webm')).toEqual(encoded);
   });
 
+  it('record on a native Mac reads ONE stream instead of polling captures', async () => {
+    const payloads: Array<{ action: string; watch?: boolean; display?: number }> = [];
+    const channel: { emit?: (payload: unknown) => void } = {};
+    const call = vi.fn(async (op: string, payload: { action: string; watch?: boolean }) => {
+      expect(op).toBe('tray-computer-native');
+      payloads.push(payload);
+      if (payload.action !== 'capture') return { ok: true };
+      return {
+        ok: true,
+        jpeg: uint8ToBase64(MINIMAL_JPEG),
+        mime: 'image/jpeg',
+        width: 4,
+        height: 2,
+        nativeWidth: 5120,
+        nativeHeight: 2880,
+      };
+    });
+    const panelRpc = {
+      call,
+      onEvent: (name: string, handler: (payload: unknown) => void) => {
+        expect(name).toBe('computer-native-frame');
+        channel.emit = handler;
+        return () => {
+          channel.emit = undefined;
+        };
+      },
+    };
+    const registry = new ComputerRegistry(null);
+    const cmd = createComputerCommand({
+      registry,
+      listFollowers: () => [
+        {
+          runtimeId: 'sliccstart-computer-1',
+          computer: true,
+          exec: false,
+          floatType: 'standalone',
+        },
+      ],
+      panelRpc: panelRpc as never,
+      encodeRecordedFrames: async ({ dest, ctx: encodeCtx }) => {
+        await encodeCtx.fs.writeFile(dest, Uint8Array.of(7));
+        return { mime: 'video/webm' };
+      },
+    });
+    const { ctx, written } = makeCtx();
+    expect((await cmd.execute(['add', 'ssh', 'sliccstart-computer-1'], ctx)).exitCode).toBe(0);
+    const recording = cmd.execute(['record', '-V', '0.3', 'clip.webm'], ctx);
+    await vi.waitFor(() => expect(channel.emit).toBeTypeOf('function'));
+
+    channel.emit?.({
+      runtimeId: 'someone-else',
+      jpeg: uint8ToBase64(MINIMAL_JPEG),
+      width: 1,
+      height: 1,
+    });
+    channel.emit?.({
+      runtimeId: 'sliccstart-computer-1',
+      jpeg: uint8ToBase64(MINIMAL_JPEG),
+      mime: 'image/jpeg',
+      width: 4,
+      height: 2,
+      nativeWidth: 5120,
+      nativeHeight: 2880,
+    });
+
+    channel.emit?.({
+      runtimeId: 'sliccstart-computer-1',
+      display: 4,
+      jpeg: uint8ToBase64(MINIMAL_JPEG),
+      mime: 'image/jpeg',
+      width: 2,
+      height: 4,
+      nativeWidth: 2880,
+      nativeHeight: 5120,
+    });
+    const rec = await recording;
+    expect(rec.exitCode).toBe(0);
+    expect(written.get('/clip.webm')).toEqual(Uint8Array.of(7));
+    const captures = payloads.filter((p) => p.action === 'capture');
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toMatchObject({ watch: true });
+    expect(payloads.filter((p) => p.action === 'unwatch')).toHaveLength(1);
+    expect(registry.list()[0]?.size).toEqual({ width: 5120, height: 2880 });
+  });
+
+  it('record holds a stream open only where screenshot serves it', async () => {
+    for (const servesStream of [false, true]) {
+      const backend = new FakePushBackend(`push-${servesStream}`);
+      backend.emit(1);
+      const subscribe = vi.spyOn(backend, 'subscribe');
+      Object.assign(backend, { screenshotServesStream: servesStream });
+      const registry = new ComputerRegistry(null);
+      registry.register(backend);
+      const cmd = createComputerCommand({
+        registry,
+        encodeRecordedFrames: async ({ dest, ctx: encodeCtx }) => {
+          await encodeCtx.fs.writeFile(dest, Uint8Array.of(7));
+          return { mime: 'video/webm' };
+        },
+      });
+      const { ctx } = makeCtx();
+      const rec = await cmd.execute(['record', '-V', '0.1', 'clip.webm'], ctx);
+      expect(rec.exitCode).toBe(0);
+      expect(subscribe).toHaveBeenCalledTimes(servesStream ? 1 : 0);
+    }
+  });
+
   it('record rejects --fps above 10', async () => {
     const registry = new ComputerRegistry(null);
     registry.register(new FakeBackend());

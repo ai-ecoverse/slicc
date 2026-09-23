@@ -137,7 +137,7 @@ function createHarness(computers?: TrayComputersSource) {
   };
   const router = new ComputersRouter(context);
   router.start();
-  return { router, addFollower, sent, log };
+  return { router, addFollower, sent, log, followers };
 }
 
 describe('ComputersRouter', () => {
@@ -297,7 +297,11 @@ describe('ComputersRouter', () => {
     addFollower('cli', 'full', { exec: true, pairId: 'pair-a' });
     addFollower('mac', 'full', { computer: true, pairId: 'pair-a' });
 
-    const pending = router.captureNative('cli', { timeoutMs: 5_000 });
+    const pending = router.captureNative('cli', {
+      watch: true,
+      timeoutMs: 5_000,
+      onFrame: () => {},
+    });
     expect(sent.get('cli')).toEqual([]);
     const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
     if (capture?.type !== 'computer.native.capture') {
@@ -317,7 +321,10 @@ describe('ComputersRouter', () => {
     await expect(pending).resolves.toMatchObject({ jpeg: 'abc' });
 
     router.unwatchNative('cli');
-    expect(sent.get('mac')?.some((m) => m.type === 'computer.native.unwatch')).toBe(true);
+    expect(sent.get('mac')).toContainEqual({
+      type: 'computer.native.unwatch',
+      requestId: capture.requestId,
+    });
   });
 
   it('still refuses an exec follower with no paired launcher', async () => {
@@ -339,17 +346,17 @@ describe('ComputersRouter', () => {
     await expect(router.captureNative('mac', { timeoutMs: 20 })).rejects.toThrow('timed out');
   });
 
-  it('sends computer.native.input and unwatch to a computer follower', async () => {
+  it('sends computer.native.input, and no unwatch when nothing is streaming', async () => {
     const { router, addFollower, sent } = createHarness();
     addFollower('mac', 'full', { computer: true });
     const pending = router.inputNative('mac', [{ type: 'key', keysym: 'Return' }]);
+
     router.unwatchNative('mac');
     expect(sent.get('mac')).toEqual([
       expect.objectContaining({
         type: 'computer.native.input',
         events: [{ type: 'key', keysym: 'Return' }],
       }),
-      { type: 'computer.native.unwatch' },
     ]);
     const input = sent.get('mac')?.find((m) => m.type === 'computer.native.input');
     if (input?.type !== 'computer.native.input') throw new Error('missing native input');
@@ -405,6 +412,169 @@ describe('ComputersRouter', () => {
     await expect(pending).rejects.toThrow(/Accessibility is not allowed/);
   });
 
+  it('feeds every frame of a watch to onFrame, over one requestId', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pushed: { jpeg: string; width: number }[] = [];
+    const pending = router.captureNative('mac', {
+      fps: 10,
+      maxWidth: 1536,
+      display: 3,
+      watch: true,
+      timeoutMs: 5_000,
+      onFrame: (f) => pushed.push({ jpeg: f.jpeg, width: f.width }),
+    });
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    expect(capture).toMatchObject({ watch: true, display: 3, fps: 10 });
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+    const nativeFrame = (seq: number, data: string) =>
+      ({
+        type: 'computer.native.frame',
+        requestId: capture.requestId,
+        seq,
+        mime: 'image/jpeg',
+        width: 1536,
+        height: 864,
+        nativeWidth: 5120,
+        nativeHeight: 2880,
+        data,
+      }) as const;
+    router.handleNative('mac', nativeFrame(1, 'one'));
+
+    await expect(pending).resolves.toMatchObject({ jpeg: 'one' });
+    router.handleNative('mac', nativeFrame(2, 'two'));
+    router.handleNative('mac', nativeFrame(3, 'three'));
+    expect(pushed).toEqual([
+      { jpeg: 'one', width: 1536 },
+      { jpeg: 'two', width: 1536 },
+      { jpeg: 'three', width: 1536 },
+    ]);
+
+    router.unwatchNative('mac', { display: 3 });
+    router.handleNative('mac', nativeFrame(4, 'after-unwatch'));
+    expect(pushed).toHaveLength(3);
+  });
+
+  it('reassembles chunked stream frames per seq, so a big display streams', () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pushed: string[] = [];
+    void router
+      .captureNative('mac', { watch: true, timeoutMs: 5_000, onFrame: (f) => pushed.push(f.jpeg) })
+      .catch(() => {});
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+    const chunk = (seq: number, chunkData: string, chunkIndex: number) => {
+      router.handleNative('mac', {
+        type: 'computer.native.frame',
+        requestId: capture.requestId,
+        seq,
+        mime: 'image/jpeg',
+        width: 5120,
+        height: 2880,
+        nativeWidth: 5120,
+        nativeHeight: 2880,
+        chunkData,
+        chunkIndex,
+        totalChunks: 2,
+      });
+    };
+
+    chunk(1, 'A', 0);
+    chunk(2, 'C', 0);
+    expect(pushed).toEqual([]);
+    chunk(1, 'B', 1);
+    chunk(2, 'D', 1);
+    expect(pushed).toEqual(['AB', 'CD']);
+  });
+
+  it('clears a watch sink even when the follower has already gone', async () => {
+    const { router, addFollower, sent, followers } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pushed: string[] = [];
+    void router
+      .captureNative('mac', { watch: true, timeoutMs: 20, onFrame: (f) => pushed.push(f.jpeg) })
+      .catch(() => {});
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+
+    followers.followers.delete('mac');
+    expect(() => router.unwatchNative('mac')).toThrow('No connected follower');
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 8,
+      nativeHeight: 8,
+      data: 'zz',
+    });
+    expect(pushed).toEqual([]);
+  });
+
+  it('drops a watch sink when the follower reports a capture error', async () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pushed: string[] = [];
+    const pending = router.captureNative('mac', {
+      watch: true,
+      timeoutMs: 5_000,
+      onFrame: (f) => pushed.push(f.jpeg),
+    });
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+    router.handleNative('mac', {
+      type: 'computer.native.error',
+      requestId: capture.requestId,
+      error: 'Screen Recording is off',
+    });
+    await expect(pending).rejects.toThrow('Screen Recording is off');
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 8,
+      nativeHeight: 8,
+      data: 'zz',
+    });
+    expect(pushed).toEqual([]);
+  });
+
+  it('keeps streaming when a watch sink throws', async () => {
+    const { router, addFollower, sent, log } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.captureNative('mac', {
+      watch: true,
+      timeoutMs: 5_000,
+      onFrame: () => {
+        throw new Error('sink blew up');
+      },
+    });
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 8,
+      height: 8,
+      nativeWidth: 8,
+      nativeHeight: 8,
+      data: 'zz',
+    });
+    await expect(pending).resolves.toMatchObject({ jpeg: 'zz' });
+    expect(log.warn).toHaveBeenCalledWith(
+      'computer.native watch sink failed',
+      expect.objectContaining({ runtimeId: 'mac' })
+    );
+  });
+
   it('drops incomplete native frames when the follower is removed', async () => {
     const { router, addFollower, sent } = createHarness();
     addFollower('mac', 'full', { computer: true });
@@ -438,6 +608,170 @@ describe('ComputersRouter', () => {
       chunkIndex: 1,
       totalChunks: 2,
     });
-    await expect(pending).rejects.toThrow('timed out');
+
+    await expect(pending).rejects.toThrow('computer follower disconnected');
+  });
+
+  describe('native streams of several displays on one runtime', () => {
+    const frameFor = (requestId: string, seq: number, data: string) =>
+      ({
+        type: 'computer.native.frame',
+        requestId,
+        seq,
+        mime: 'image/jpeg',
+        width: 8,
+        height: 8,
+        nativeWidth: 16,
+        nativeHeight: 16,
+        data,
+      }) as const;
+
+    function twoDisplayWatches() {
+      const harness = createHarness();
+      harness.addFollower('mac', 'full', { computer: true });
+      const pushed: Record<number, string[]> = { 3: [], 4: [] };
+      const ended: Record<number, string[]> = { 3: [], 4: [] };
+      const pending: Promise<unknown>[] = [];
+      for (const display of [3, 4]) {
+        pending.push(
+          harness.router
+            .captureNative('mac', {
+              display,
+              watch: true,
+              timeoutMs: 5_000,
+              onFrame: (f) => pushed[display].push(f.jpeg),
+              onEnd: (e) => ended[display].push(e.message),
+            })
+            .catch((e: Error) => e.message)
+        );
+      }
+      const captures = (harness.sent.get('mac') ?? []).filter(
+        (m) => m.type === 'computer.native.capture'
+      );
+      const requestIdOf = (display: number) => {
+        const found = captures.find(
+          (m) => m.type === 'computer.native.capture' && m.display === display
+        );
+        if (found?.type !== 'computer.native.capture') throw new Error(`no capture for ${display}`);
+        return found.requestId;
+      };
+      return { ...harness, pushed, ended, pending, requestIdOf };
+    }
+
+    it('unwatching one display stops only that stream', () => {
+      const { router, sent, pushed, requestIdOf } = twoDisplayWatches();
+      router.handleNative('mac', frameFor(requestIdOf(3), 1, 'd3-a'));
+      router.handleNative('mac', frameFor(requestIdOf(4), 2, 'd4-a'));
+      router.unwatchNative('mac', { display: 3 });
+      expect(sent.get('mac')).toContainEqual({
+        type: 'computer.native.unwatch',
+        requestId: requestIdOf(3),
+      });
+      expect(sent.get('mac')?.filter((m) => m.type === 'computer.native.unwatch')).toHaveLength(1);
+      router.handleNative('mac', frameFor(requestIdOf(4), 3, 'd4-b'));
+      expect(pushed).toEqual({ 3: ['d3-a'], 4: ['d4-a', 'd4-b'] });
+    });
+
+    it('ends every stream of a follower that disconnects, and says why', async () => {
+      const { router, ended, pending, requestIdOf } = twoDisplayWatches();
+      router.handleNative('mac', frameFor(requestIdOf(3), 1, 'd3-a'));
+      router.removeFollower('mac');
+      expect(ended).toEqual({
+        3: ['computer follower disconnected'],
+
+        4: [],
+      });
+      await expect(Promise.all(pending)).resolves.toEqual([
+        expect.objectContaining({ jpeg: 'd3-a' }),
+        'computer follower disconnected',
+      ]);
+
+      router.handleNative('mac', frameFor(requestIdOf(3), 2, 'late'));
+    });
+
+    it('ends a stream the follower reports an error for after its first frame', () => {
+      const { router, ended, pushed, requestIdOf } = twoDisplayWatches();
+      router.handleNative('mac', frameFor(requestIdOf(3), 1, 'd3-a'));
+      router.handleNative('mac', {
+        type: 'computer.native.error',
+        requestId: requestIdOf(3),
+        error: 'screen recording denied',
+      });
+      expect(ended[3]).toEqual(['screen recording denied']);
+      expect(ended[4]).toEqual([]);
+      router.handleNative('mac', frameFor(requestIdOf(3), 2, 'after-error'));
+      expect(pushed[3]).toEqual(['d3-a']);
+    });
+  });
+
+  it('fails an in-flight native input as soon as its follower leaves', async () => {
+    const { router, addFollower } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const pending = router.inputNative('mac', [{ type: 'key', keysym: 'a' }], {
+      timeoutMs: 60_000,
+    });
+    router.removeFollower('mac');
+    await expect(pending).rejects.toThrow('computer follower disconnected');
+  });
+
+  it('ends a paired stream when the launcher that holds the screen leaves', () => {
+    const { router, addFollower, sent } = createHarness();
+    addFollower('cli', 'full', { exec: true, pairId: 'pair-a' });
+    addFollower('mac', 'full', { computer: true, pairId: 'pair-a' });
+    const ended: string[] = [];
+    void router
+      .captureNative('cli', {
+        watch: true,
+        timeoutMs: 5_000,
+        onFrame: () => {},
+        onEnd: (e) => ended.push(e.message),
+      })
+      .catch(() => {});
+    const capture = sent.get('mac')?.find((m) => m.type === 'computer.native.capture');
+    if (capture?.type !== 'computer.native.capture') throw new Error('missing native capture');
+    router.handleNative('mac', {
+      type: 'computer.native.frame',
+      requestId: capture.requestId,
+      seq: 1,
+      mime: 'image/jpeg',
+      width: 1,
+      height: 1,
+      nativeWidth: 1,
+      nativeHeight: 1,
+      data: 'x',
+    });
+    router.removeFollower('mac');
+    expect(ended).toEqual(['computer follower disconnected']);
+  });
+
+  it('hands onNative listeners whole frames, never chunk pieces', () => {
+    const { router, addFollower } = createHarness();
+    addFollower('mac', 'full', { computer: true });
+    const seen: { type: string; data?: string; chunkIndex?: number }[] = [];
+    router.onNative((_id, message) => {
+      seen.push(
+        message.type === 'computer.native.frame'
+          ? { type: message.type, data: message.data, chunkIndex: message.chunkIndex }
+          : { type: message.type }
+      );
+    });
+    for (const [chunkIndex, chunkData] of ['AB', 'CD', 'EF'].entries()) {
+      router.handleNative('mac', {
+        type: 'computer.native.frame',
+        requestId: 'ncap-x',
+        seq: 7,
+        mime: 'image/jpeg',
+        width: 8,
+        height: 8,
+        nativeWidth: 8,
+        nativeHeight: 8,
+        chunkData,
+        chunkIndex,
+        totalChunks: 3,
+      });
+    }
+    expect(seen).toEqual([
+      { type: 'computer.native.frame', data: 'ABCDEF', chunkIndex: undefined },
+    ]);
   });
 });

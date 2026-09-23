@@ -1,5 +1,9 @@
 import type { ComputerFrame } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
+import type {
+  NativeComputerChannel,
+  NativeComputerShot,
+} from '../../../src/computers/adapters/ssh.js';
 import {
   parseSshProbe,
   probeSsh,
@@ -48,6 +52,87 @@ function pngWithSize(width: number, height: number): Uint8Array {
   bytes[22] = (height >>> 8) & 0xff;
   bytes[23] = height & 0xff;
   return bytes;
+}
+
+function nativeStreamBackend(
+  opts: { onFrame?: undefined; frameTimeoutMs?: number; captureRejects?: string } = {}
+) {
+  let listener: ((shot: NativeComputerShot) => void) | null = null;
+  let onEnd: ((error: Error) => void) | undefined;
+  let frameDisplay: number | undefined;
+  let offFrameCalls = 0;
+  const capture = vi.fn(async () => {
+    if (opts.captureRejects) throw new Error(opts.captureRejects);
+    return {
+      bytes: new Uint8Array([1]),
+      mime: 'image/jpeg' as const,
+      width: 1536,
+      height: 864,
+      nativeWidth: 5120,
+      nativeHeight: 2880,
+    };
+  });
+  const unwatch = vi.fn();
+  const input = vi.fn();
+  const pushes = 'onFrame' in opts ? undefined : true;
+  const native: NativeComputerChannel = {
+    capture,
+    unwatch,
+    input,
+    ...(pushes
+      ? {
+          onFrame(
+            next: (shot: NativeComputerShot) => void,
+            o?: { display?: number; onEnd?: (error: Error) => void }
+          ) {
+            listener = next;
+            onEnd = o?.onEnd;
+            frameDisplay = o?.display;
+            return () => {
+              offFrameCalls += 1;
+              listener = null;
+            };
+          },
+        }
+      : {}),
+  };
+  const backend = new SshComputerBackend(
+    vi.fn(async () => ok('')),
+    {
+      runtimeId: 'sliccstart-computer-1',
+      title: 'desk',
+      probe: { platform: 'darwin', tools: [], capture: null, input: 'none' },
+      inputAllowed: true,
+      display: 3,
+      native,
+      ...(opts.frameTimeoutMs === undefined ? {} : { frameTimeoutMs: opts.frameTimeoutMs }),
+    }
+  );
+  return {
+    backend,
+    capture,
+    unwatch,
+    input,
+    get frameDisplay() {
+      return frameDisplay;
+    },
+
+    end(message = 'computer follower disconnected'): void {
+      onEnd?.(new Error(message));
+    },
+    get offFrameCalls() {
+      return offFrameCalls;
+    },
+    emit(size: { width: number; height: number } = { width: 1536, height: 864 }): void {
+      listener?.({
+        bytes: new Uint8Array([7]),
+        mime: 'image/jpeg',
+        ...size,
+        nativeWidth: 5120,
+        nativeHeight: 2880,
+      });
+    },
+  };
 }
 
 describe('ssh adapter helpers', () => {
@@ -278,6 +363,191 @@ describe('ssh backend', () => {
     expect(input).toHaveBeenCalledWith([{ type: 'click', button: 1, count: 1, x: 5, y: 5 }], {
       display: 3,
     });
+  });
+
+  it('stays polled when the native channel cannot push frames', () => {
+    const backend = nativeStreamBackend({ onFrame: undefined }).backend;
+    expect(backend.subscribe).toBeUndefined();
+    expect(backend.describe().capabilities.frames).toBe('poll');
+  });
+
+  it('consumes one SCStream instead of polling one-shot captures', async () => {
+    const stream = nativeStreamBackend();
+    expect(stream.backend.describe().capabilities.frames).toBe('push');
+    const seen: ComputerFrame[] = [];
+    stream.backend.subscribe?.(10, (frame) => seen.push(frame), 1536);
+    expect(stream.capture).toHaveBeenCalledTimes(1);
+    expect(stream.capture).toHaveBeenCalledWith({
+      fps: 10,
+      maxWidth: 1536,
+      display: 3,
+      watch: true,
+    });
+    stream.emit({ width: 1536, height: 864 });
+    stream.emit({ width: 1536, height: 864 });
+
+    expect(stream.capture).toHaveBeenCalledTimes(1);
+    expect(seen.map((f) => f.seq)).toEqual([1, 2]);
+    expect(stream.backend.describe().size).toEqual({ width: 5120, height: 2880 });
+    await stream.backend.close();
+  });
+
+  it('keeps the survivor streaming when one of two watchers drops, and stops on the last', () => {
+    const stream = nativeStreamBackend();
+    const first: ComputerFrame[] = [];
+    const second: ComputerFrame[] = [];
+    const offFirst = stream.backend.subscribe?.(2, (f) => first.push(f), 768);
+    const offSecond = stream.backend.subscribe?.(2, (f) => second.push(f), 768);
+    expect(stream.capture).toHaveBeenCalledTimes(1);
+    stream.emit();
+    offFirst?.();
+    expect(stream.unwatch).not.toHaveBeenCalled();
+    stream.emit();
+    expect(first).toHaveLength(1);
+    expect(second.map((f) => f.seq)).toEqual([1, 2]);
+
+    const late: ComputerFrame[] = [];
+    const offLate = stream.backend.subscribe?.(2, (f) => late.push(f), 768);
+    expect(late.map((f) => f.seq)).toEqual([2]);
+    offLate?.();
+    offSecond?.();
+    expect(stream.unwatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-subscribing after the last drop starts a fresh stream', () => {
+    const stream = nativeStreamBackend();
+    stream.backend.subscribe?.(2, () => {}, 768)?.();
+    expect(stream.unwatch).toHaveBeenCalledTimes(1);
+    stream.backend.subscribe?.(2, () => {}, 768);
+    expect(stream.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves screenshots off the live stream, never a one-shot that would kill it', async () => {
+    const stream = nativeStreamBackend();
+    stream.backend.subscribe?.(4, () => {}, 768);
+    expect(stream.capture).toHaveBeenCalledTimes(1);
+    const pending = stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    stream.emit({ width: 640, height: 360 });
+    await expect(pending).resolves.toMatchObject({ width: 640, height: 360 });
+
+    await expect(
+      stream.backend.screenshot({ format: 'jpeg', maxWidth: 768, pull: true })
+    ).resolves.toMatchObject({ seq: 1 });
+    expect(stream.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up on a stream frame that never arrives', async () => {
+    const stream = nativeStreamBackend({ frameTimeoutMs: 5 });
+    stream.backend.subscribe?.(2, () => {}, 768);
+    await expect(stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 })).rejects.toThrow(
+      'native computer frame timed out'
+    );
+  });
+
+  it('stops the stream when the follower refuses the watch', async () => {
+    const stream = nativeStreamBackend({ captureRejects: 'screen recording denied' });
+    stream.backend.subscribe?.(2, () => {}, 768);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stream.unwatch).toHaveBeenCalledTimes(1);
+    expect(stream.offFrameCalls).toBe(1);
+  });
+
+  it('listens and unwatches for its own display only, so a sibling screen keeps streaming', () => {
+    const stream = nativeStreamBackend();
+    stream.backend.subscribe?.(2, () => {}, 768)?.();
+    expect(stream.frameDisplay).toBe(3);
+    expect(stream.unwatch).toHaveBeenCalledWith({ display: 3 });
+  });
+
+  it('fails a parked screenshot at once with the reason the watch was refused', async () => {
+    const stream = nativeStreamBackend({ captureRejects: 'screen recording denied' });
+    stream.backend.subscribe?.(2, () => {}, 768);
+    const started = Date.now();
+    await expect(stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 })).rejects.toThrow(
+      'screen recording denied'
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('after input, waits for a frame newer than the input instead of the cached one', async () => {
+    const stream = nativeStreamBackend();
+    stream.backend.subscribe?.(2, () => {}, 768);
+    stream.emit();
+    await stream.backend.input([{ type: 'click', button: 1, count: 1, x: 5, y: 5 }]);
+    const pending = stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    stream.emit({ width: 640, height: 360 });
+    await expect(pending).resolves.toMatchObject({ seq: 2, width: 640 });
+
+    await expect(
+      stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 })
+    ).resolves.toMatchObject({ seq: 2 });
+  });
+
+  it('after input on a screen that did not change, settles for the cached frame', async () => {
+    const stream = nativeStreamBackend({ frameTimeoutMs: 5 });
+    stream.backend.subscribe?.(2, () => {}, 768);
+    stream.emit();
+    await stream.backend.input([{ type: 'key', keysym: 'Shift_L' }]);
+    await expect(
+      stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 })
+    ).resolves.toMatchObject({ seq: 1 });
+  });
+
+  it('restarts the stream for a subscriber that needs more fps or width', () => {
+    const stream = nativeStreamBackend();
+    stream.backend.subscribe?.(2, () => {}, 480);
+
+    stream.backend.subscribe?.(10, () => {}, 768);
+    expect(stream.capture).toHaveBeenCalledTimes(2);
+    expect(stream.capture).toHaveBeenLastCalledWith({
+      fps: 10,
+      maxWidth: 768,
+      display: 3,
+      watch: true,
+    });
+    expect(stream.unwatch).toHaveBeenCalledTimes(1);
+
+    stream.backend.subscribe?.(4, () => {}, 600);
+    expect(stream.capture).toHaveBeenCalledTimes(2);
+
+    stream.backend.subscribe?.(2, () => {});
+    expect(stream.capture).toHaveBeenLastCalledWith({
+      fps: 10,
+      maxWidth: undefined,
+      display: 3,
+      watch: true,
+    });
+  });
+
+  it('a stream that ends under live subscribers restarts on the next screenshot', async () => {
+    const stream = nativeStreamBackend();
+    const seen: number[] = [];
+    stream.backend.subscribe?.(2, (f) => seen.push(f.seq), 768);
+    stream.emit();
+    stream.end();
+
+    expect(stream.unwatch).not.toHaveBeenCalled();
+    const pending = stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    expect(stream.capture).toHaveBeenCalledTimes(2);
+    stream.emit({ width: 800, height: 450 });
+    await expect(pending).resolves.toMatchObject({ seq: 2, width: 800 });
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it('unwatches once when closed mid-stream', async () => {
+    const stream = nativeStreamBackend();
+    stream.backend.subscribe?.(2, () => {}, 768);
+    const parked = stream.backend.screenshot({ format: 'jpeg', maxWidth: 768 });
+    await stream.backend.close();
+    expect(stream.unwatch).toHaveBeenCalledTimes(1);
+    await expect(parked).rejects.toThrow('computer closed');
   });
 
   it('keeps the plain id for the default display so one registration is unchanged', () => {

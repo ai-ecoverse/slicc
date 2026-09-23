@@ -1,6 +1,6 @@
-import type { ComputerInputEvent } from '@slicc/shared-ts';
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { NativeComputerChannel } from '../../computers/adapters/ssh.js';
 import type { ComputerRegistry } from '../../computers/registry.js';
 import type { BrowserAPI } from '../../kernel/browser-api.js';
 import type { PanelRpcClient } from '../../kernel/panel-rpc.js';
@@ -27,24 +27,7 @@ export interface ComputerCommandDeps {
     timeoutMs?: number
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
-  nativeComputer?: (runtimeId: string) => {
-    capture(opts: {
-      fps?: number;
-      maxWidth?: number;
-
-      display?: number;
-      watch?: boolean;
-    }): Promise<{
-      bytes: Uint8Array;
-      mime: 'image/jpeg';
-      width: number;
-      height: number;
-      nativeWidth: number;
-      nativeHeight: number;
-    }>;
-    unwatch(): void;
-    input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
-  };
+  nativeComputer?: (runtimeId: string) => NativeComputerChannel;
 
   encodeRecordedFrames?: (args: {
     frames: Uint8Array[];
