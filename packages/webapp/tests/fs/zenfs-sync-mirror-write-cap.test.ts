@@ -59,7 +59,9 @@ describe('ZenFS sync mirror keeps large async writes out of memory (#3441)', () 
     // Async reads still come from the backend, byte for byte.
     const back = new Uint8Array(size);
     await backend.read('/shard_1', back, 0, size);
-    expect(back).toEqual(payload(size, 1));
+    // Buffer.equals, not toEqual: a per-element diff of 2 MiB is slow enough
+    // under coverage instrumentation to hit the test timeout.
+    expect(Buffer.from(back).equals(Buffer.from(payload(size, 1)))).toBe(true);
   });
 
   it('keeps a chunked write metadata-only and tracks its growing size', async () => {
