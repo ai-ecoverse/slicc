@@ -516,6 +516,15 @@ describe('child_process unit: cwd and env (#3156)', () => {
     );
   });
 
+  it('accepts a file: URL cwd like Node', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
+    const cwd = new URL('file:///shared') as unknown as string;
+    expect(String(cp.execSync('pwd', { cwd, encoding: 'utf8' })).trim()).toBe('/shared');
+    expect(() =>
+      cp.execSync('pwd', { cwd: new URL('https://x.test/') as unknown as string })
+    ).toThrow(expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }));
+  });
+
   it('an invalid cwd/env type throws ERR_INVALID_ARG_TYPE rather than being dropped', () => {
     const cp = createNodeChildProcess(makeFakeBridge(), makeHonoringSyncBridge());
     expect(() => cp.spawnSync('pwd', [], { cwd: 12 as unknown as string })).toThrow(
