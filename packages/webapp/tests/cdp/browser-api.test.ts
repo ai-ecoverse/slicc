@@ -1622,6 +1622,41 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].value).toBe('0');
       expect(tree.children![0].description).toBe('["composer"]');
     });
+
+    // Google Flights, 2026-09-22: CDP reports the combobox as "Where from? "
+    // while the injected snapshot trims it to "Where from?". An exact join
+    // left the ref without a backendNodeId, so click/fill missed.
+    it('joins backendNodeIds when CDP names carry extra whitespace', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Flights',
+              children: [
+                { role: 'combobox', name: 'Where from?' },
+                { role: 'button', name: 'Search for flights' },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          nodes: [
+            { role: { value: 'combobox' }, name: { value: 'Where from? ' }, backendDOMNodeId: 2719 },
+            {
+              role: { value: 'button' },
+              name: { value: '  Search  for\nflights ' },
+              backendDOMNodeId: 2800,
+            },
+          ],
+        });
+
+      const tree = await page.getAccessibilityTree();
+      expect(tree.children![0].backendNodeId).toBe(2719);
+      expect(tree.children![1].backendNodeId).toBe(2800);
+    });
   });
 
   describe('viewport override persistence', () => {
