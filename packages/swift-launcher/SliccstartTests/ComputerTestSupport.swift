@@ -226,3 +226,24 @@ final class RecordingConnector: TrayFollowerConnecting {
 
     func stop() { stopped += 1 }
 }
+
+
+
+@MainActor
+final class ManualInputDelay {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}

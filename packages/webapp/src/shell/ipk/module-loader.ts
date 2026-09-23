@@ -210,6 +210,8 @@ export interface RealmGraphResult {
   errors: Record<string, string>;
 
   entrySource?: string;
+
+  entryIsModule?: boolean;
 }
 
 export interface BuildRealmModuleGraphOptions {
@@ -301,5 +303,6 @@ export async function buildRealmModuleGraph(
     errors,
   };
   if (entrySource !== undefined) result.entrySource = entrySource;
+  if (entrySource !== undefined && hasEsmSyntax(entryCode)) result.entryIsModule = true;
   return result;
 }

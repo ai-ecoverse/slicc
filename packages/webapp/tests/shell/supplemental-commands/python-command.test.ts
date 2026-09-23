@@ -146,6 +146,39 @@ describe('computeOverlappingMountPoints', () => {
   });
 });
 
+describe('createPython3LikeCommand — interpreter flags', () => {
+  function run(args: string[]) {
+    const fs: Partial<IFileSystem> = {
+      resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
+      exists: vi.fn().mockResolvedValue(false),
+      stat: vi.fn().mockRejectedValue(new Error('ENOENT')),
+      readdir: vi.fn().mockResolvedValue([]),
+      readFile: vi.fn().mockRejectedValue(new Error('ENOENT')),
+    };
+    const cmd = createPython3LikeCommand('python3');
+    const ctx = {
+      fs: fs as IFileSystem,
+      cwd: '/workspace',
+      env: new Map<string, string>(),
+      stdin: '',
+    } as unknown as Parameters<typeof cmd.execute>[1];
+    return cmd.execute(args, ctx);
+  }
+
+  it('answers --version and -h given before any script', async () => {
+    expect((await run(['--version'])).stdout).toContain('(Pyodide)');
+    expect((await run(['-h'])).exitCode).toBe(0);
+  });
+
+  it('leaves --version and -h after a script or -c to the program (sys.argv)', async () => {
+    const script = await run(['/workspace/emcc.py', '--version']);
+    expect(script.stdout).not.toContain('(Pyodide)');
+    expect(script.exitCode).not.toBe(0);
+    const inline = await run(['-c', 'print(1)', '-h']);
+    expect(inline.stdout).not.toContain('usage');
+  });
+});
+
 describe('createPython3LikeCommand — Wave 13c standalone install guidance', () => {
   const PKG_DIR = '/workspace/node_modules/pyodide';
   const ASSET_FILES = [

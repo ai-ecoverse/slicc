@@ -1,3 +1,5 @@
+import { nodeParseArgs, type ParseArgsConfig, type ParseArgsResult } from './node-parse-args.js';
+
 const UTIL_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom');
 export const UTIL_PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
 
@@ -258,6 +260,7 @@ export interface NodeUtil {
   inherits(ctor: Function, superCtor: Function): void;
   promisify: { (original: Function): Function; custom: symbol };
   deprecate<T extends Function>(fn: T, msg: string, code?: string): T;
+  parseArgs(config?: ParseArgsConfig): ParseArgsResult;
 }
 
 const utilInspect = nodeInspect as NodeUtil['inspect'];
@@ -265,8 +268,12 @@ utilInspect.custom = UTIL_INSPECT_CUSTOM;
 const utilPromisify = nodePromisify as NodeUtil['promisify'];
 utilPromisify.custom = UTIL_PROMISIFY_CUSTOM;
 
-export function createNodeUtil(warn: (message: string) => void): NodeUtil {
+export function createNodeUtil(
+  warn: (message: string) => void,
+  defaultArgs: () => string[] = () => []
+): NodeUtil {
   return {
+    parseArgs: (config) => nodeParseArgs(config, defaultArgs),
     format: nodeFormat,
     formatWithOptions: nodeFormatWithOptions,
     inspect: utilInspect,

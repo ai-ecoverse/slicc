@@ -19,6 +19,7 @@ export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'readline',
   'readline/promises',
   'module',
+  'vm',
 ]);
 
 export const NODE_BUILTINS: ReadonlySet<string> = new Set([

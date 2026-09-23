@@ -199,14 +199,19 @@ async function describeTypeScriptMiss(ipk: TypeScriptIpkContext): Promise<string
   }
   const major = typeof version === 'string' ? Number.parseInt(version, 10) : Number.NaN;
   if (Number.isFinite(major) && major !== 6) {
-    const why =
-      major > 6
-        ? 'which ships no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`)'
-        : 'which predates the pinned 6.x line this build loads';
+    const dir = splitPath(manifestPath).dir;
+    if (major > 6) {
+      return (
+        `TypeScript 6 is required but ${dir} holds typescript@${String(version)}, which ships ` +
+        'no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`): ' +
+        `run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` (copies without it are skipped)`
+      );
+    }
     return (
-      `TypeScript 6 is required but ${splitPath(manifestPath).dir} holds typescript@${String(version)}, ` +
-      `${why}: ${TYPESCRIPT_VFS_REPLACE_COMMAND} to replace the local copy ` +
-      '(cwd-local node_modules is searched before global; `ipk add -g` will not override it)'
+      `TypeScript 6 is required but ${dir} holds typescript@${String(version)}, ` +
+      `which predates the pinned 6.x line this build loads: ${TYPESCRIPT_VFS_REPLACE_COMMAND} ` +
+      'to replace the local copy (cwd-local node_modules is searched before global; ' +
+      '`ipk add -g` will not override it)'
     );
   }
   return TYPESCRIPT_NOT_INSTALLED;
@@ -257,21 +262,14 @@ async function loadTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScriptMod
 export async function tryLoadTypeScriptSourceFromNodeModules(
   ipk: TypeScriptIpkContext
 ): Promise<string | null> {
-  let resolved;
-  try {
-    resolved = await ipkResolve('typescript/package.json', ipk.fromDir, ipk.reader);
-  } catch {
-    return null;
+  for (const dir of nodeModulesSearchPath(ipk.fromDir)) {
+    const entryPath = `${dir}/typescript/lib/typescript.js`;
+    if (!(await ipk.reader.exists(entryPath))) continue;
+    try {
+      return await ipk.reader.readFile(entryPath);
+    } catch {}
   }
-  if (resolved.type !== 'file') return null;
-  const pkgDir = splitPath(resolved.path).dir;
-  const entryPath = `${pkgDir}/lib/typescript.js`;
-  if (!(await ipk.reader.exists(entryPath))) return null;
-  try {
-    return await ipk.reader.readFile(entryPath);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function evaluateTypeScriptModule(source: string): TypeScriptModule {

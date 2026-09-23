@@ -254,8 +254,20 @@ def __slicc_install_subprocess():
         code = SliccPopen(command, shell=True).wait()
         return (code & 0xff) << 8
 
+    def execute(file, args, env=None):
+        argv = [to_str(a) for a in args]
+        if not argv:
+            raise ValueError('exec: argv must not be empty')
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # Never returns, like a real exec: SystemExit skips except Exception.
+        raise SystemExit(SliccPopen([to_str(file)] + argv[1:], env=env).wait())
+
     subprocess.Popen = SliccPopen
     os.system = system
+    # os.execl* call these through the os module, so they follow.
+    os.execv = os.execvp = lambda file, args: execute(file, args)
+    os.execve = os.execvpe = lambda file, args, env: execute(file, args, env)
 
 __slicc_install_subprocess()
 del __slicc_install_subprocess

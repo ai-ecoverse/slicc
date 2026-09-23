@@ -1,3 +1,4 @@
+import { EventEmitter } from './helpers/node-events.js';
 import { attachArgvParseFlags, nodeStream } from './js-realm-helpers.js';
 import { NODE_SHIM_VERSION } from './node-builtins.js';
 import type { RealmInitMsg } from './realm-types.js';
@@ -223,10 +224,26 @@ export function createNodeConsole(writeStdout: ConsoleSink, writeStderr: Console
   };
 }
 
-interface RealmWritableShim {
-  write: (value: unknown) => void;
+export function installGlobalProcess(g: { process?: unknown }, shim: object): () => void {
+  if (g.process !== undefined) return () => undefined;
+  g.process = shim;
+  return () => {
+    if (g.process === shim) delete g.process;
+  };
+}
+
+interface RealmWritableShim extends EventEmitter {
+  write: (value: unknown) => boolean;
   end: () => undefined;
   isTTY: boolean;
+}
+
+function writableShim(write: (value: unknown) => void, isTTY: boolean): RealmWritableShim {
+  const sink = (value: unknown): boolean => {
+    write(value);
+    return true;
+  };
+  return Object.assign(new EventEmitter(), { write: sink, end: () => undefined, isTTY });
 }
 
 export interface RealmProcessShim {
@@ -268,8 +285,8 @@ export function createProcessShim(
 
   const stdinShim = createStdinShim(init.stdin ?? '', recordExit);
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
-  const stdout = { write: writeStdout, end: () => undefined, isTTY: !noColor };
-  const stderr = { write: writeStderr, end: () => undefined, isTTY: !noColor };
+  const stdout = writableShim(writeStdout, !noColor);
+  const stderr = writableShim(writeStderr, !noColor);
   const processShim: RealmProcessShim = {
     argv: argvWithParseFlags,
     env: init.env,

@@ -90,6 +90,8 @@ export interface RealmModuleGraph {
   errors: Record<string, string>;
 
   entrySource?: string;
+
+  entryIsModule?: boolean;
 }
 
 export interface TabHandle {

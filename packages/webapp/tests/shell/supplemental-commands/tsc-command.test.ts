@@ -239,6 +239,20 @@ describe('install-required guidance (browser branch)', () => {
     expect(result).toBeNull();
   });
 
+  it('skips a nearer TypeScript 7 for a TypeScript 6 further out (global prefix)', async () => {
+    const ctx = createMockCtx({ cwd: '/workspace/tool' });
+    await ctx.fs.writeFile(
+      '/workspace/tool/node_modules/typescript/package.json',
+      JSON.stringify({ name: 'typescript', version: '7.0.2', main: 'lib/version.cjs' })
+    );
+    await ctx.fs.writeFile(
+      '/shared/lib/node_modules/typescript/lib/typescript.js',
+      "module.exports = { version: '6.0.3' };"
+    );
+    const result = await tryLoadTypeScriptSourceFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toContain("version: '6.0.3'");
+  });
+
   it('surfaces the pinned TypeScript 6 install command when the browser compiler is absent', async () => {
     resetTypeScriptForTests();
     vi.stubGlobal('process', undefined);
@@ -285,9 +299,9 @@ describe('install-required guidance (browser branch)', () => {
       expect(result.stderr).toContain('typescript@7.0.2');
       expect(result.stderr).toContain('/workspace/node_modules/typescript');
       expect(result.stderr).toContain('no JS compiler API');
-      expect(result.stderr).toContain('ipk uninstall typescript');
-      expect(result.stderr).toContain('ipk add typescript@6.0.3');
-      expect(result.stderr).not.toContain('ipk add -g typescript@6.0.3');
+
+      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
+      expect(result.stderr).not.toContain('ipk uninstall typescript');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();

@@ -18,6 +18,7 @@ import {
   nodeTty,
   nodeUrl,
   nodeUtil,
+  nodeVm,
   nodeZlib,
   pickBarePackage,
   pickExistingCandidate,
@@ -175,30 +176,23 @@ export function createModuleSystem(opts: {
 
     cache.set(path, moduleObj);
     const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id, path);
-    const moduleDir = dirnameOf(path);
-    const compiled = new Function(
-      'module',
-      'exports',
-      'require',
-      '__dirname',
-      '__filename',
-      'process',
-      'console',
-      'Buffer',
-      'global',
-      source
-    ) as (...args: unknown[]) => void;
-    compiled(
+    const names = ['module', 'exports', 'require', 'process', 'console', 'Buffer', 'global'];
+    const values: unknown[] = [
       moduleObj,
       moduleObj.exports,
       childRequire,
-      moduleDir,
-      path,
       processShim,
       nodeConsole,
       (globalThis as GlobalWithBuffer).Buffer,
-      globalThis
-    );
+      globalThis,
+    ];
+
+    if (kindByPath.get(path) !== 'esm') {
+      names.push('__dirname', '__filename');
+      values.push(dirnameOf(path), path);
+    }
+    const compiled = new Function(...names, source) as (...args: unknown[]) => void;
+    compiled(...values);
     if (kindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
     return moduleObj.exports;
   }
@@ -277,6 +271,7 @@ function resolveServedBuiltin(
   if (bareId === 'stream') return { hit: true, value: nodeStream };
   if (bareId === 'url') return { hit: true, value: nodeUrl };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+  if (bareId === 'vm') return { hit: true, value: nodeVm };
 
   if (bareId === 'readline' && nodeReadline) return { hit: true, value: nodeReadline };
   if (bareId === 'readline/promises' && nodeReadline) {

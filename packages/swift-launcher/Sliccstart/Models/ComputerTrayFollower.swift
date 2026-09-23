@@ -21,6 +21,9 @@ final class ComputerTrayFollower: NSObject {
     private let makeCapturer: () -> ComputerCapturing
     private var permissions: ComputerPermissions
     private let grantTick: ComputerGrantTick
+    
+    
+    private let inputDelay: (Double) async -> Void
     private let eventSink: ComputerEventSink
     
     
@@ -80,7 +83,8 @@ final class ComputerTrayFollower: NSObject {
         makeDisplayGeometry: @escaping (Int?) throws -> ComputerDisplayGeometry = {
             try ScreenCaptureKitCapturer.liveGeometry(index: $0)
         },
-        grantTick: @escaping ComputerGrantTick = ComputerGrantWatch.liveTick
+        grantTick: @escaping ComputerGrantTick = ComputerGrantWatch.liveTick,
+        inputDelay: @escaping (Double) async -> Void = ComputerInputDelay.sleep
     ) {
         self.makeConnector = makeConnector
         self.makeCapturer = makeCapturer ?? { ScreenCaptureKitCapturer() }
@@ -89,6 +93,7 @@ final class ComputerTrayFollower: NSObject {
         self.eventSink = eventSink
         self.pairId = pairId
         self.grantTick = grantTick
+        self.inputDelay = inputDelay
         super.init()
     }
 
@@ -389,7 +394,8 @@ final class ComputerTrayFollower: NSObject {
             let index = try Self.displayIndex(display)
             let geometry = try geometries[index ?? 0] ?? makeDisplayGeometry(index)
             var injector = ComputerInputInjector(
-                sink: eventSink, encodedSize: geometry.pixelSize, display: geometry)
+                sink: eventSink, encodedSize: geometry.pixelSize, display: geometry,
+                delay: inputDelay)
             try await injector.apply(events)
             _ = send(.computerNativeInputResult(requestId: requestId, error: nil))
         } catch {

@@ -284,8 +284,9 @@ export function createPython3LikeCommand(
   options: PythonCommandOptions = {}
 ): Command {
   return defineCommand(name, async (args, ctx) => {
-    if (args.includes('--help') || args.includes('-h')) return pythonHelp();
-    if (args.includes('--version') || args.includes('-V')) return pythonVersion();
+    const flag = args[0];
+    if (flag === '--help' || flag === '-h') return pythonHelp();
+    if (flag === '--version' || flag === '-V') return pythonVersion();
 
     const parsed = await parsePythonInvocation(name, args, ctx);
     if (parsed.kind === 'result') return parsed.result;
