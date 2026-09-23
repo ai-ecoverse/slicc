@@ -965,6 +965,29 @@ export class RestrictedFS {
     return all.filter((p) => this.isAllowedStrict(p));
   }
 
+  /**
+   * Forward the underlying VFS's `{ path, kind }` mount table, filtered to
+   * the mounts this sandbox can see. Without this, a scoop's `MountProbeFs`
+   * (the `mount info` probe) never sees a covering mount and reports every
+   * host-backed mount as plain `vfs` / `host-backed: no`, which is the only
+   * signal a scoop has for whether a mount is safe to write to (#3434).
+   *
+   * The visibility rule is `isAllowed` (NOT the stricter one {@link listMounts}
+   * uses): a mount is included when the sandbox can reach at or below it OR
+   * when it is an ancestor that COVERS a granted prefix. A private scoop spawned
+   * with a cwd *inside* a mount (e.g. `/mnt/repo/subdir`) is granted only that
+   * subdir, so `isAllowedStrict('/mnt/repo')` is false and the covering mount
+   * would be dropped — leaving the probe blind to the mount it lives on.
+   * `isAllowed`'s ancestor branch keeps `/mnt/repo` while still excluding
+   * unrelated mounts like `/mnt/other`. This list is informational only — it
+   * never feeds `getAllPrefixes`, so it cannot re-admit a mount into the ACL.
+   */
+  listMountPoints(): ReturnType<VirtualFS['listMountPoints']> {
+    const all = this.vfs.listMountPoints();
+    if (this.includeMounts) return all;
+    return all.filter((m) => this.isAllowed(m.path));
+  }
+
   getMountIndex(): ReturnType<VirtualFS['getMountIndex']> {
     return this.vfs.getMountIndex();
   }
