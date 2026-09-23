@@ -63,7 +63,7 @@ Six specialized components carry non-obvious host contracts — full tables/rule
 
 - **Tests** (`@vitest/browser`, real Chromium): `tests/<area>/<name>.test.ts`, `globals: true`. Assert registration, attribute↔property reflection, shadow structure, events, lifecycle cleanup, and `getComputedStyle`/geometry; stub `ResizeObserver`/`IntersectionObserver` only when asserting reflow. `npm run test -w @slicc/webcomponents` (needs `npx playwright install chromium`); kept OUT of root `vitest run` so `npm test` is browser-free.
 - **Stories** (`@storybook/web-components-vite`): `src/<area>/<name>.stories.ts`, the **state matrix** variant/state × light/dark × size. `npm run storybook`; `npm run build-storybook` (`-w @slicc/webcomponents`).
-- **PR screenshots** — agents can capture **affected** stories in light and dark at 1280×900 with the scripts under `packages/dev-tools/tools/`, then attach useful images with `gh pr create --attach` or `gh pr comment --attach`. Full recipe: `docs/webcomponents-details.md`.
+- **PR screenshots** — agents can capture **affected** stories in light and dark at 1280×900 with the scripts under `packages/dev-tools/tools/`, then attach useful images with `gh` >= 2.99 (`pr create/comment --attach`) or the GitHub PR editor. Full recipe: `docs/webcomponents-details.md`.
 
 ## Build / typecheck
 

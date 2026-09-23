@@ -669,10 +669,12 @@ reason about, no module-graph plumbing):
 Each affected story is screenshotted at the desktop viewport (1280×900) for
 both the `light` and `dark` theme globals.
 
-Attach the useful PNGs when opening the PR with `gh pr create --attach <file>`
-(repeat `--attach` for multiple images), or add them later with
-`gh pr comment <number> --attach <file>`. The agent chooses which story states
-help reviewers understand the change.
+With **gh >= 2.99** (`gh --version`), attach useful PNGs when opening the PR
+with `gh pr create --attach <file>` (repeat `--attach` for multiple images), or
+add them later with
+`gh pr comment <number> --body "Screenshots" --attach <file>`. Upgrade an older
+`gh` or drag the PNGs into the GitHub PR comment editor. The agent chooses
+which story states help reviewers understand the change.
 
 **Manifest** (`<out>/manifest.json`, schema v2):
 
