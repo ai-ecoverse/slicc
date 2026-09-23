@@ -242,6 +242,11 @@ export interface RealmModuleGraph {
    * plain-CJS entry, in which case the realm runs `init.code` verbatim.
    */
   entrySource?: string;
+  /**
+   * True when the entry has static ESM syntax. A CJS entry transpiled only for
+   * a dynamic `import()` keeps `__dirname` / `__filename`; a module has neither.
+   */
+  entryIsModule?: boolean;
 }
 
 /**

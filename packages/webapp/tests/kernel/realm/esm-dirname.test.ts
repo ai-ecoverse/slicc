@@ -50,3 +50,18 @@ describe('ESM declaring its own __dirname / __filename', () => {
     expect(r.stdout.trim()).toBe('/workspace/app/lib /workspace/app/main.js');
   });
 });
+
+describe('a CommonJS entry that only uses dynamic import()', () => {
+  it('keeps __dirname / __filename (it is transpiled, but not a module)', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/app/plugin.js': 'module.exports = { name: "plugin" };',
+        '/workspace/app/main.js':
+          "console.log(__dirname, __filename);\nimport('./plugin.js').then((m) => console.log(m.default.name));",
+      },
+    });
+    const r = await runScript('/workspace/app/main.js', ctx);
+    expect(r.stderr).toBe('');
+    expect(r.stdout.trim()).toBe('/workspace/app /workspace/app/main.js\nplugin');
+  });
+});

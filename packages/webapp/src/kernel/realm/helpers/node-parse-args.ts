@@ -186,17 +186,41 @@ function store(
   values[name] = Array.isArray(prior) ? [...prior, value] : [value];
 }
 
-/** `--no-x` for a boolean `x` under `allowNegative` sets `x` to false. */
+/**
+ * `--no-x` under `allowNegative` sets `x` to false (any `x` in non-strict
+ * mode; strict mode accepts it only for a declared boolean `x`).
+ */
 function resolveNegation(
   name: string,
   options: NonNullable<ParseArgsConfig['options']>,
   allowNegative: boolean
 ): { name: string; negated: boolean } {
   const base = name.slice(3);
-  if (allowNegative && name.startsWith('no-') && options[base]?.type === 'boolean') {
+  if (allowNegative && name.startsWith('no-')) {
     return { name: base, negated: true };
   }
   return { name, negated: false };
+}
+
+/** Validate one option token (strict mode) and store its value. */
+function applyOption(
+  values: ParseArgsResult['values'],
+  token: OptionToken,
+  options: NonNullable<ParseArgsConfig['options']>,
+  strict: boolean,
+  allowNegative: boolean
+): void {
+  const { name, negated } = resolveNegation(token.name, options, allowNegative);
+  // Node reports the negated option under its own name (rawName keeps --no-x).
+  token.name = name;
+  const optionConfig = options[name];
+  if (strict) {
+    // Node: a negation is only known for a declared boolean.
+    const known = negated && optionConfig?.type !== 'boolean' ? undefined : optionConfig;
+    checkStrictOption(token, known);
+  }
+  const value: OptionValue = negated ? false : (token.value ?? true);
+  store(values, name, value, optionConfig?.multiple === true);
 }
 
 export function nodeParseArgs(
@@ -226,12 +250,7 @@ export function nodeParseArgs(
       positionals.push(token.value);
       continue;
     }
-    if (token.kind !== 'option') continue;
-    const { name, negated } = resolveNegation(token.name, options, allowNegative);
-    const optionConfig = options[name];
-    if (strict) checkStrictOption({ ...token, name }, optionConfig);
-    const value: OptionValue = negated ? false : (token.value ?? true);
-    store(values, name, value, optionConfig?.multiple === true);
+    if (token.kind === 'option') applyOption(values, token, options, strict, allowNegative);
   }
 
   for (const [long, optionConfig] of Object.entries(options)) {

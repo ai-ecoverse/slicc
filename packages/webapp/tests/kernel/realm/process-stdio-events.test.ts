@@ -26,6 +26,19 @@ describe('process stdio streams', () => {
     expect(r.exitCode).toBe(3);
   });
 
+  it("write() reports no backpressure, so a 'drain' wait never starts", async () => {
+    const r = await runCode(
+      [
+        "if (!process.stdout.write('chunk\\n')) {",
+        "  await new Promise((resolve) => process.stdout.once('drain', resolve));",
+        '}',
+        "console.log(process.stderr.write('') === true ? 'done' : 'stuck');",
+      ].join('\n'),
+      makeCtx()
+    );
+    expect(r.stdout).toBe('chunk\ndone\n');
+  });
+
   it('emit to their own listeners', async () => {
     const r = await runCode(
       "process.stdout.on('custom', (v) => process.stdout.write(`got ${v}\\n`)); process.stdout.emit('custom', 7);",

@@ -450,11 +450,7 @@ export async function runUserCode(
   writeStderr: (value: unknown) => void,
   isEsmEntry: boolean
 ): Promise<number> {
-  // As for required modules: an ES-module entry may declare its own
-  // __dirname/__filename, so they are not parameters there (nor in Node).
-  const names = Object.keys(bridges).filter(
-    (n) => !isEsmEntry || (n !== '__dirname' && n !== '__filename')
-  );
+  const names = Object.keys(bridges);
   const values = names.map((n) => bridges[n]);
   const AsyncFn = Object.getPrototypeOf(async function () {
     /* noop */

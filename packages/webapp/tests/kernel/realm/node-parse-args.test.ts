@@ -62,6 +62,14 @@ describe('util.parseArgs matches Node', () => {
 
   it('negates booleans with allowNegative', () => {
     same({ args: ['--no-color', '--verbose'], options: OPTIONS, allowNegative: true });
+    same({ args: ['--no-color'], options: OPTIONS, allowNegative: true, tokens: true });
+    // Non-strict: an undeclared --no-x negates x; a string option does not.
+    same({
+      args: ['--no-cache', '--no-output'],
+      options: OPTIONS,
+      strict: false,
+      allowNegative: true,
+    });
   });
 
   it.each([
@@ -71,6 +79,9 @@ describe('util.parseArgs matches Node', () => {
     [{ args: ['--output', '--verbose'] }],
     [{ args: ['--verbose=yes'] }],
     [{ args: ['stray'] }],
+    [{ args: ['--no-output'], allowNegative: true }],
+    [{ args: ['--no-cache'], allowNegative: true }],
+    [{ args: ['--no-color=x'], allowNegative: true }],
   ])('throws like Node for %j', (partial) => {
     sameError({ ...partial, options: OPTIONS });
   });

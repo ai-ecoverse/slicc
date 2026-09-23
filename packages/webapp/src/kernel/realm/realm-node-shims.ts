@@ -259,17 +259,22 @@ export function installGlobalProcess(g: { process?: unknown }, shim: object): ()
 
 /**
  * The `process.stdout` / `process.stderr` write sinks handed to user code.
- * Event emitters like Node's, so `once('drain', …)` / `on('error', …)` attach
- * (writes never back up, so nothing fires).
+ * Event emitters like Node's, so `once('drain', …)` / `on('error', …)` attach.
+ * Writes never back up: `write()` returns true (so backpressure-aware code
+ * never waits) and no `drain` ever fires.
  */
 interface RealmWritableShim extends EventEmitter {
-  write: (value: unknown) => void;
+  write: (value: unknown) => boolean;
   end: () => undefined;
   isTTY: boolean;
 }
 
 function writableShim(write: (value: unknown) => void, isTTY: boolean): RealmWritableShim {
-  return Object.assign(new EventEmitter(), { write, end: () => undefined, isTTY });
+  const sink = (value: unknown): boolean => {
+    write(value);
+    return true;
+  };
+  return Object.assign(new EventEmitter(), { write: sink, end: () => undefined, isTTY });
 }
 
 /**

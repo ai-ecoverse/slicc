@@ -426,6 +426,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   await finishJsRealm({
     entryCode,
     isEsmEntry,
+    entryIsModule: graph.entryIsModule === true,
     filename,
     dirname,
     proc,
@@ -454,6 +455,8 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 async function finishJsRealm(opts: {
   entryCode: string;
   isEsmEntry: boolean;
+  /** Static ESM entry: no `__dirname` / `__filename` (it may declare its own). */
+  entryIsModule: boolean;
   filename: string;
   dirname: string;
   proc: ReturnType<typeof createProcessShim>;
@@ -497,8 +500,9 @@ async function finishJsRealm(opts: {
         module: opts.moduleShim,
         exports: opts.moduleShim.exports,
         fetch: opts.realmFetch,
-        __dirname: opts.dirname,
-        __filename: opts.filename,
+        // An ES module has neither, and may declare its own
+        // (`const __dirname = dirname(fileURLToPath(import.meta.url))`).
+        ...(opts.entryIsModule ? {} : { __dirname: opts.dirname, __filename: opts.filename }),
       },
       writeStderr: opts.writeStderr,
       isEsmEntry: opts.isEsmEntry,
