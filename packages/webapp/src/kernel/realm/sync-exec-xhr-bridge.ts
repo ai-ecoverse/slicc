@@ -104,7 +104,7 @@ function xhrExecTransport(token: string): SyncExecTransport {
  * bridge, then rebase the baseline so the end-of-script flush doesn't reapply
  * them. Mirrors `createExecBridge`'s `flushBeforeExec`, minus the `await`.
  */
-function flushBeforeSyncExec(syncFs: SyncFsCache, fsBridge: SyncFsXhrMutatingBridge): void {
+export function flushBeforeSyncExec(syncFs: SyncFsCache, fsBridge: SyncFsXhrMutatingBridge): void {
   const mutations = syncFs.getMutations();
   // Order matches `applySyncFsMutations`: a path deleted then recreated with a
   // different type must tear the old node down before the new one is written.

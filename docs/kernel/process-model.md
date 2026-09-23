@@ -337,6 +337,32 @@ host round-trip, so the sync forms throw a message naming `promisify(exec)`.
 the sync token, which aborts the in-flight `ctx.exec` too (`trackSyncExec`), so
 a killed realm cannot strand a running command.
 
+## Emscripten tools in the JS realm (`__slicc_mountVfs`)
+
+A realm with a sync fs bridge publishes `globalThis.__slicc_mountVfs(FS, { cwd })`
+(`emscripten-vfs-hook.ts`, lazily imported). A wasm tool built with a classic
+Emscripten `FS` (`-sFORCE_FILESYSTEM`, `FS` + `callMain` exported,
+`-sINVOKE_RUN=0`) calls it after runtime init and before `callMain`: every
+top-level VFS dir (except `/dev`, `/proc`) is mounted through `SLICC_LIVE_FS`
+(`live-vfs-fs.ts`, the same plugin the Pyodide realm uses) at its own path, and
+the module chdirs to `cwd`. The tool then reads and writes the live VFS —
+mounts included, under the realm's ACLs — with no copy in or out.
+
+The returned handle has `flush()` (write back the tool's open dirty buffers —
+call before spawning a child) and `invalidate()` (drop cached nodes — call after
+a child ran). Coherence with the realm's own `SyncFsCache`: pending sync writes
+are flushed before the mount and before each tool mutation (so the tool sees a
+pending `mkdirSync`, and a pending `rmSync` can't later delete its output), and
+every tool mutation then invalidates the cache — in a `finally`, and even before
+the script's first sync `fs` call (the boot snapshot may be stale) — so a later
+`fs.readFileSync` sees the tool's output. Large modules compile host-side through
+`__slicc_compileWasm`; a 68 MB `clang.wasm` compiled and instantiated in
+~90 ms on an isolated leader.
+
+just-bash runs any executable file as a **bash** script (it ignores `#!`), so a
+tool's launcher on `PATH` is a one-line bash script, e.g.
+`node /opt/toolchain/run.js clang "$@"`.
+
 ## Wiring map
 
 `createKernelHost` builds the manager and threads it explicitly through:
