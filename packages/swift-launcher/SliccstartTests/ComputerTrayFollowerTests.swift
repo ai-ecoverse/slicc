@@ -683,7 +683,18 @@ final class ComputerTrayFollowerTests: XCTestCase {
     }
 
     func testWaitYieldsTheMainActorSoPingIsAnsweredBeforeAck() async throws {
-        let (follower, _, _) = makeFollower()
+        // The wait is held open until the test releases it, so the pong-before-ack
+        // ordering does not race the runner's clock (a fixed 20 ms sleep against
+        // an 80 ms wait flaked on a loaded CI runner).
+        let gate = ManualInputDelay()
+        let follower = ComputerTrayFollower(
+            makeConnector: { _ in RecordingConnector() },
+            makeCapturer: { StubCapturer() },
+            permissions: ComputerPermissions(probe: .alwaysGranted),
+            eventSink: RecordingEventSink(),
+            makeDisplayGeometry: { _ in StubCapturer().geometry },
+            grantTick: { false },
+            inputDelay: { _ in await gate.wait() })
         var sent: [Data] = []
         follower.connector(
             connectorStandIn(),
@@ -698,25 +709,19 @@ final class ComputerTrayFollowerTests: XCTestCase {
                 (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
             }
         }
-        // A long wait and a poll for the pong, not a fixed 20 ms sleep against
-        // an 80 ms wait: on a loaded CI runner the sleep woke after the wait
-        // had already finished, so the ack was there too and the test flaked.
         follower.route(
             try encode(
                 .computerNativeInput(
-                    requestId: "in-wait", events: [.wait(ms: 500)])))
-        await Task.yield()
-        await Task.yield()
+                    requestId: "in-wait", events: [.wait(ms: 80)])))
+        for _ in 0..<1000 where !gate.isWaiting { await Task.yield() }
+        XCTAssertTrue(gate.isWaiting, "the input wait never reached its delay")
         follower.route(try encode(.ping))
-        var typesBeforeAck = sentTypes()
-        for _ in 0..<100 where !typesBeforeAck.contains("pong") {
-            try await Task.sleep(nanoseconds: 5_000_000)
-            typesBeforeAck = sentTypes()
-        }
+        for _ in 0..<100 where !sentTypes().contains("pong") { await Task.yield() }
         XCTAssertTrue(
-            typesBeforeAck.contains("pong"),
+            sentTypes().contains("pong"),
             "a wait must not Thread.sleep on MainActor and starve ping")
-        XCTAssertFalse(typesBeforeAck.contains("computer.native.input.result"))
+        XCTAssertFalse(sentTypes().contains("computer.native.input.result"))
+        gate.release()
         await follower._testing_settle()
         XCTAssertTrue(sentTypes().contains("computer.native.input.result"))
     }
