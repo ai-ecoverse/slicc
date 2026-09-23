@@ -35,8 +35,12 @@ import {
   toLastShot,
 } from '../../../computers/scale.js';
 import type { BrowserAPI } from '../../../kernel/browser-api.js';
-import type { PanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { getPanelRpcClient, PANEL_RPC_DEFAULT_TIMEOUT_MS } from '../../../kernel/panel-rpc.js';
+import type { ComputerNativeFramePayload, PanelRpcClient } from '../../../kernel/panel-rpc.js';
+import {
+  COMPUTER_NATIVE_FRAME_CHANNEL,
+  getPanelRpcClient,
+  PANEL_RPC_DEFAULT_TIMEOUT_MS,
+} from '../../../kernel/panel-rpc.js';
 import type { ProcessManager } from '../../../kernel/process-manager.js';
 import { sudoRefusalMessage } from '../../../sudo/approval-timeout.js';
 import type { SudoBroker } from '../../../sudo/types.js';
@@ -129,8 +133,39 @@ function nativeChannelFromRpc(
         nativeHeight: result.nativeHeight ?? result.height ?? 0,
       };
     },
-    unwatch() {
-      void rpc.call('tray-computer-native', { runtimeId, action: 'unwatch' }).catch(() => {});
+    onFrame(listener, opts) {
+      // Page → worker push for a live `SCStream`: the page emits every
+      // reassembled `computer.native.frame` on this one channel for all
+      // followers AND displays, so filter on both — one runtime may stream
+      // several screens (#3386). The decoder promise is hoisted out of the
+      // listener so frames stay in arrival order.
+      const decoder = import('../../../computers/encode-frame.js');
+      return rpc.onEvent(COMPUTER_NATIVE_FRAME_CHANNEL, (raw) => {
+        const payload = raw as ComputerNativeFramePayload | null;
+        if (!payload || payload.runtimeId !== runtimeId) return;
+        if (payload.display !== opts?.display) return;
+        if (payload.ended) {
+          opts?.onEnd?.(new Error(payload.error));
+          return;
+        }
+        const frame = payload;
+        if (!frame.jpeg) return;
+        void decoder.then(({ bytesFromBase64 }) => {
+          listener({
+            bytes: bytesFromBase64(frame.jpeg),
+            mime: 'image/jpeg' as const,
+            width: frame.width ?? 0,
+            height: frame.height ?? 0,
+            nativeWidth: frame.nativeWidth ?? frame.width ?? 0,
+            nativeHeight: frame.nativeHeight ?? frame.height ?? 0,
+          });
+        });
+      });
+    },
+    unwatch(opts) {
+      void rpc
+        .call('tray-computer-native', { runtimeId, action: 'unwatch', display: opts?.display })
+        .catch(() => {});
     },
     async input(events, opts) {
       await rpc.call('tray-computer-native', {
@@ -765,14 +800,25 @@ async function recordWorkerHostedClip(
   ctx: CommandContext,
   deps: ComputerCommandDeps
 ) {
-  return recordPolledClip({
-    screenshot: () => backend.screenshot({ format: 'jpeg', maxWidth: COMPUTER_RECORD_MAX_WIDTH }),
-    durationMs,
-    fps,
-    dest,
-    ctx,
-    encode: deps.encodeRecordedFrames,
-  });
+  // Hold ONE stream open for the clip where `screenshot` serves that stream's
+  // cache, instead of a fresh full capture per poll (on a native Mac, a whole
+  // ScreenCaptureKit setup per frame — #3386). A push backend whose
+  // `screenshot` captures anyway (url) would just run a second, unused stream.
+  const unsubscribe = backend.screenshotServesStream
+    ? backend.subscribe?.(fps, () => {}, COMPUTER_RECORD_MAX_WIDTH)
+    : undefined;
+  try {
+    return await recordPolledClip({
+      screenshot: () => backend.screenshot({ format: 'jpeg', maxWidth: COMPUTER_RECORD_MAX_WIDTH }),
+      durationMs,
+      fps,
+      dest,
+      ctx,
+      encode: deps.encodeRecordedFrames,
+    });
+  } finally {
+    unsubscribe?.();
+  }
 }
 
 function resolveWatchControl(deps: ComputerCommandDeps): {

@@ -354,9 +354,14 @@ export type PanelRpcRequest =
       payload: { execToken: string };
     }
   | {
-      // One-shot ScreenCaptureKit / CGEvent hop to a computer-capable follower
+      // ScreenCaptureKit / CGEvent hop to a computer-capable follower
       // (`capabilities.computer`). The kernel `computer add ssh` command
       // bridges here because native frames live on the page's tray channel.
+      //
+      // `watch: true` starts a live `SCStream`: this call still resolves with
+      // the FIRST frame, and every frame (that one included) is also pushed on
+      // the `computer-native-frame` event channel (see
+      // {@link ComputerNativeFramePayload}) until `action: 'unwatch'`.
       op: 'tray-computer-native';
       payload: {
         runtimeId: string;
@@ -1120,6 +1125,38 @@ export interface HidInputReportEventPayload {
   reportId: number;
   bytes: ArrayBuffer;
 }
+
+/**
+ * Event channel carrying {@link ComputerNativeFramePayload} page → worker.
+ * Both ends import this rather than repeating the string, because a typo
+ * degrades silently into "the stream never delivers".
+ */
+export const COMPUTER_NATIVE_FRAME_CHANNEL = 'computer-native-frame';
+
+/**
+ * Payload pushed on the `computer-native-frame` event channel for each frame
+ * of a live `tray-computer-native` watch. `runtimeId` AND `display` name the
+ * stream the frame came from: one leader can stream several followers, and
+ * one follower several displays. `jpeg` is base64 (the wire form, already
+ * reassembled from its chunks). An `ended` payload says that stream died —
+ * the follower errored or disconnected — and carries no frame.
+ */
+export type ComputerNativeFramePayload = {
+  runtimeId: string;
+  /** Absent for the follower's main display, as in `tray-computer-native`. */
+  display?: number;
+} & (
+  | {
+      ended?: undefined;
+      jpeg: string;
+      mime: string;
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+    }
+  | { ended: true; error: string }
+);
 
 /**
  * Payload pushed on the `usb-claim-event` channel when a force close/reset

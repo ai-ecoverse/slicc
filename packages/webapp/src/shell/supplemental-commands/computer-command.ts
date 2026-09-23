@@ -3,9 +3,9 @@
  * `./computer/run.ts` so they stay out of the worker first-load graph.
  */
 
-import type { ComputerInputEvent } from '@slicc/shared-ts';
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { NativeComputerChannel } from '../../computers/adapters/ssh.js';
 import type { ComputerRegistry } from '../../computers/registry.js';
 import type { BrowserAPI } from '../../kernel/browser-api.js';
 import type { PanelRpcClient } from '../../kernel/panel-rpc.js';
@@ -32,24 +32,7 @@ export interface ComputerCommandDeps {
     timeoutMs?: number
   ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Injected native capture for a `capabilities.computer` follower. */
-  nativeComputer?: (runtimeId: string) => {
-    capture(opts: {
-      fps?: number;
-      maxWidth?: number;
-      /** 1-based OS display index on the follower; omitted means its main display. */
-      display?: number;
-      watch?: boolean;
-    }): Promise<{
-      bytes: Uint8Array;
-      mime: 'image/jpeg';
-      width: number;
-      height: number;
-      nativeWidth: number;
-      nativeHeight: number;
-    }>;
-    unwatch(): void;
-    input(events: ComputerInputEvent[], opts?: { display?: number }): Promise<void> | void;
-  };
+  nativeComputer?: (runtimeId: string) => NativeComputerChannel;
   /**
    * Injected in tests so `computer record` does not boot `@ffmpeg/core`.
    * Production concatenates JPEG stills and runs `ffmpeg -f image2pipe`.

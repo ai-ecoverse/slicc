@@ -29,6 +29,7 @@ export class JshComputerBackend implements ComputerBackend {
     onFrame: (frame: ComputerFrame) => void,
     maxWidth?: number
   ) => () => void;
+  readonly screenshotServesStream: boolean;
   private lastFrame: ComputerFrame | null = null;
   private readonly sinks = new Set<(frame: ComputerFrame) => void>();
   private readonly waiters = new Set<(frame: ComputerFrame) => void>();
@@ -39,7 +40,8 @@ export class JshComputerBackend implements ComputerBackend {
     private readonly call: JshComputerCall,
     private readonly frameTimeoutMs = JSH_FRAME_TIMEOUT_MS
   ) {
-    if (descriptor.capabilities.frames === 'push') {
+    this.screenshotServesStream = descriptor.capabilities.frames === 'push';
+    if (this.screenshotServesStream) {
       this.subscribe = (fps, onFrame, maxWidth) => this.bindSubscribe(fps, onFrame, maxWidth);
     }
   }
