@@ -3,7 +3,7 @@ import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { scratchDir } from '../tmpdir-env.js';
 import { playwrightHandlers } from './playwright/handlers/index.js';
-import { autoSaveSnapshot, logSession } from './playwright/session-log.js';
+import { autoSaveSnapshot, logSession, sessionRootFor } from './playwright/session-log.js';
 import {
   AUTO_SNAPSHOT_COMMANDS,
   frameIdUsedAsTabError,
@@ -195,10 +195,15 @@ async function parseSubcommandArgs(
   return { positional: known.positionals, flags };
 }
 
+export interface PlaywrightCommandOptions {
+  isScoop?: () => boolean;
+}
+
 export function createPlaywrightCommand(
   name: string,
   browser: PlaywrightBrowser | null | undefined,
-  fs: VirtualFS
+  fs: VirtualFS,
+  options: PlaywrightCommandOptions = {}
 ): Command {
   const state = browser ? getSharedState(browser, fs) : null;
   const knownFlagSpec = playwrightKnownFlagSpec();
@@ -227,13 +232,16 @@ export function createPlaywrightCommand(
     const contendedTargetId = flags['tab'] ?? null;
     const lockStatsBefore = tabLockStatsSnapshot(browser, contendedTargetId);
 
+    const unitScratchDir = scratchDir(ctx.env);
+    const sessionRoot = sessionRootFor(options.isScoop?.() ?? false, unitScratchDir);
     const result = await runSubcommand(name, subcommand, {
       browser,
       fs,
       state,
       positional,
       flags,
-      scratchDir: scratchDir(ctx.env),
+      scratchDir: unitScratchDir,
+      sessionRoot,
 
       onTab: (targetId, fn) => browser.withTab(targetId, fn, { signal: ctx.signal }),
       signal: ctx.signal,
@@ -243,11 +251,11 @@ export function createPlaywrightCommand(
     let snapshotPath: string | null = null;
 
     if (AUTO_SNAPSHOT_COMMANDS.has(subcommand) && result.exitCode === 0 && targetId) {
-      snapshotPath = await autoSaveSnapshot(browser, fs, targetId, state);
+      snapshotPath = await autoSaveSnapshot(browser, fs, targetId, state, sessionRoot);
     }
 
     try {
-      await logSession(fs, state, {
+      await logSession(fs, state, sessionRoot, {
         command: subcommand,
         args: subArgs,
         result,

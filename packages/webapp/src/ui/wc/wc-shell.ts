@@ -22,6 +22,7 @@ import { buildThreadChildren, messageEls } from './wc-message-view.js';
 import { wireShellKeyboard } from './wc-shortcut-surfaces.js';
 import type { ShortcutHandles } from './wc-shortcuts.js';
 import { wireBase64Previews } from './wire-base64-previews.js';
+import { wireMentionPreviews } from './wire-mention-previews.js';
 
 import '@slicc/webcomponents';
 
@@ -334,6 +335,12 @@ export function buildWcShellFrame(root: HTMLElement, options: WcShellOptions): W
   root.replaceChildren(frame);
 
   wireBase64Previews({ thread, log: createLogger('base64-preview') });
+
+  wireMentionPreviews({
+    thread,
+    isReadOnly: () => composer.hasAttribute('hidden'),
+    log: createLogger('mention-preview'),
+  });
 
   return {
     frame,

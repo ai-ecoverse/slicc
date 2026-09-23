@@ -241,6 +241,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
   positional,
   flags,
   scratchDir,
+  sessionRoot,
   onTab,
 }) => {
   const tab = requireTab(flags);
@@ -289,10 +290,9 @@ export const screenshotHandler: PlaywrightHandler = async ({
     const savePath = flags['filename'] || `${scratchDir}/screenshot-${Date.now()}.${extension}`;
     const bytes = base64ToBytes(base64);
     await fs.writeFile(savePath, bytes);
-
     try {
-      await ensureSessionDirs(fs, state);
-      const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.${extension}`;
+      await ensureSessionDirs(fs, state, sessionRoot);
+      const archivePath = `${sessionRoot}/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.${extension}`;
       await fs.writeFile(archivePath, bytes);
     } catch {}
     const sizeKB = Math.round(bytes.length / 1024);

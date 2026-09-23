@@ -14,7 +14,7 @@ export function createPlaywrightState(): PlaywrightState {
     snapshots: new Map(),
     appTabId: null,
     harRecorder: null,
-    sessionDirsCreated: false,
+    sessionDirsCreated: new Set(),
     teleportWatchers: new Map(),
     consoleMessages: new Map(),
     consoleCleanup: new Map(),
@@ -140,6 +140,7 @@ export function createHandlerCtx(opts?: {
   positional?: string[];
   flags?: Record<string, string>;
   scratchDir?: string;
+  sessionRoot?: string;
   signal?: AbortSignal;
 }): PlaywrightHandlerCtx {
   const browser = opts?.browser ?? createMockBrowser().browser;
@@ -151,6 +152,7 @@ export function createHandlerCtx(opts?: {
     flags: opts?.flags ?? {},
 
     scratchDir: opts?.scratchDir ?? '/tmp',
+    sessionRoot: opts?.sessionRoot ?? '/.playwright',
 
     onTab: (targetId, fn) => browser.withTab(targetId, fn, { signal: opts?.signal }),
     ...(opts?.signal ? { signal: opts.signal } : {}),

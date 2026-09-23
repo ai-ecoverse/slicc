@@ -33,6 +33,16 @@ slicc-agent-message .body a:hover { text-decoration: underline; }
 slicc-agent-message .body a.file-mention { font-family: var(--mono); font-size: .94em; text-decoration: underline dotted color-mix(in srgb, var(--ctx) 45%, transparent); text-underline-offset: 2px; cursor: pointer; border-radius: 3px; }
 slicc-agent-message .body a.file-mention:hover { text-decoration: underline solid var(--accent); background: color-mix(in srgb, var(--ctx) 10%, transparent); }
 slicc-agent-message .body code a.file-mention { font-family: inherit; font-size: inherit; color: inherit; }
+/* Hover-preview marks (webapp ui/mention-previews.ts). A GitHub reference is a
+   real link; a date and a question are not, so they get a dotted underline that
+   says "hover me" without claiming to navigate anywhere. */
+slicc-agent-message .body a.github-mention { white-space: nowrap; font-variant-numeric: tabular-nums; }
+slicc-agent-message .body .time-mention { text-decoration: underline dotted color-mix(in srgb, var(--ctx) 55%, transparent); text-underline-offset: 3px; border-radius: 3px; cursor: default; }
+slicc-agent-message .body .time-mention:hover { background: color-mix(in srgb, var(--ctx) 10%, transparent); }
+slicc-agent-message .body .agent-question { text-decoration: underline solid color-mix(in srgb, var(--ctx) 38%, transparent); text-decoration-thickness: 1.5px; text-underline-offset: 3px; cursor: pointer; border-radius: 3px; }
+slicc-agent-message .body .agent-question:hover { background: color-mix(in srgb, var(--ctx) 8%, transparent); }
+slicc-agent-message .body .agent-question:focus-visible { outline: 2px solid var(--ctx); outline-offset: 1px; }
+slicc-agent-message .body .agent-question[data-answered] { text-decoration-style: dotted; text-decoration-color: color-mix(in srgb, var(--ink) 25%, transparent); }
 slicc-agent-message .body ul:not(.plan):not(.check), slicc-agent-message .body ol { margin: 0.45em 0; padding-left: 1.4em; }
 slicc-agent-message .body li { margin: 3px 0; }
 slicc-agent-message .body blockquote { margin: 0.45em 0; border-left: 3px solid var(--accent); padding-left: 12px; color: var(--txt-2); }

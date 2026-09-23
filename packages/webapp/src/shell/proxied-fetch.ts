@@ -30,8 +30,12 @@ export function getResponseBodyCap(): number {
 
 export const BINARY_CACHE_BODY_CAP = 32 * 1024 * 1024;
 
-export function responseTooLargeError(url: string, size: number | undefined): Error {
-  const limitMiB = Math.round(responseBodyCap / (1024 * 1024));
+export function responseTooLargeError(
+  url: string,
+  size: number | undefined,
+  limit: number = responseBodyCap
+): Error {
+  const limitMiB = Math.round(limit / (1024 * 1024));
   const sizeNote = size === undefined ? '' : ` (${size} bytes)`;
   return new Error(
     `proxied-fetch: response body for ${url} exceeds the ${limitMiB} MiB download limit${sizeNote}; ` +
@@ -72,15 +76,16 @@ export async function readResponseBody(
   resp: Response,
   url?: string,
   onChunk?: (loaded: number) => void,
-  expectedLength?: number
+  expectedLength?: number,
+  limit: number = responseBodyCap
 ): Promise<Uint8Array> {
   const contentType = resp.headers.get('content-type') ?? '';
   const hinted = expectedLength ?? contentLengthOf(resp.headers);
-  if (hinted !== undefined && hinted > responseBodyCap) {
+  if (hinted !== undefined && hinted > limit) {
     await resp.body?.cancel().catch(() => undefined);
-    throw responseTooLargeError(url ?? resp.url, hinted);
+    throw responseTooLargeError(url ?? resp.url, hinted, limit);
   }
-  const bytes = await readBodyBytes(resp, url ?? resp.url, onChunk, hinted);
+  const bytes = await readBodyBytes(resp, url ?? resp.url, onChunk, hinted, limit);
   parkBinaryBody(bytes, contentType, url);
   return bytes;
 }
@@ -103,13 +108,16 @@ async function readBodyBytes(
   resp: Response,
   url: string,
   onChunk?: (loaded: number) => void,
-  expectedLength?: number
+  expectedLength?: number,
+  limit: number = responseBodyCap
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (!resp.body) return new Uint8Array(await resp.arrayBuffer());
   const reader = resp.body.getReader();
 
   let target =
-    expectedLength !== undefined && expectedLength > 0 ? new Uint8Array(expectedLength) : null;
+    expectedLength !== undefined && expectedLength > 0 && expectedLength <= limit
+      ? new Uint8Array(expectedLength)
+      : null;
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   let loaded = 0;
   for (;;) {
@@ -127,9 +135,9 @@ async function readBodyBytes(
       chunks.push(chunk);
     }
     loaded += chunk.byteLength;
-    if (loaded > responseBodyCap) {
+    if (loaded > limit) {
       await reader.cancel().catch(() => undefined);
-      throw responseTooLargeError(url, undefined);
+      throw responseTooLargeError(url, undefined, limit);
     }
     onChunk?.(loaded);
   }
@@ -147,6 +155,8 @@ export interface FetchProgressObserver {
 
 export interface ProxiedFetchOptions {
   progress?: FetchProgressObserver;
+
+  maxResponseBytes?: number;
 }
 
 export const PROXY_CONTENT_LENGTH_HEADER = 'x-proxy-content-length';
@@ -296,7 +306,8 @@ async function collectViaPort(
   connect: () => FetchProxyPort,
   url: string,
   options?: ProxyRequestOptions,
-  progress?: FetchProgressObserver
+  progress?: FetchProgressObserver,
+  limit: number = responseBodyCap
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const { method, transportHeaders, bodyBase64, requestBodyTooLarge } =
     await buildPortRequest(options);
@@ -324,8 +335,8 @@ async function collectViaPort(
     const onHead = (msg: Extract<FetchProxyResponseMsg, { type: 'response-head' }>) => {
       headInfo = { status: msg.status, statusText: msg.statusText, headers: msg.headers };
       total = contentLengthOf(msg.headers);
-      if (total !== undefined && total > responseBodyCap) {
-        fail(responseTooLargeError(url, total));
+      if (total !== undefined && total > limit) {
+        fail(responseTooLargeError(url, total, limit));
         return;
       }
       progress?.start(url, total);
@@ -334,8 +345,8 @@ async function collectViaPort(
       if (ended) return;
       const chunk = decodeBase64Chunk(msg.dataBase64);
       loaded += chunk.byteLength;
-      if (loaded > responseBodyCap) {
-        fail(responseTooLargeError(url, undefined));
+      if (loaded > limit) {
+        fail(responseTooLargeError(url, undefined, limit));
         return;
       }
       chunks.push(chunk);
@@ -383,23 +394,26 @@ async function collectViaPort(
 export function collectViaExtensionPort(
   url: string,
   options?: ProxyRequestOptions,
-  progress?: FetchProgressObserver
+  progress?: FetchProgressObserver,
+  limit?: number
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   return collectViaPort(
     () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' }),
     url,
     options,
-    progress
+    progress,
+    limit
   );
 }
 
 async function extensionPortFetch(
   url: string,
   options?: Parameters<SecureFetch>[1],
-  progress?: FetchProgressObserver
+  progress?: FetchProgressObserver,
+  limit?: number
 ): ReturnType<SecureFetch> {
   const { head, body } = await withProgressEnd(progress, url, () =>
-    collectViaExtensionPort(url, options, progress)
+    collectViaExtensionPort(url, options, progress, limit)
   );
   return finalizeProxyResponse(head, new Uint8Array(body), url);
 }
@@ -407,7 +421,8 @@ async function extensionPortFetch(
 export async function collectViaExtensionDelegate(
   url: string,
   options?: ProxyRequestOptions,
-  progress?: FetchProgressObserver
+  progress?: FetchProgressObserver,
+  limit?: number
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const id = getExtensionDelegateId();
   if (!id) {
@@ -418,14 +433,25 @@ export async function collectViaExtensionDelegate(
       connect: (extensionId: string, info: { name: string }) => FetchProxyPort;
     }
   ).connect;
-  return collectViaPort(() => connect(id, { name: 'fetch-proxy.fetch' }), url, options, progress);
+  return collectViaPort(
+    () => connect(id, { name: 'fetch-proxy.fetch' }),
+    url,
+    options,
+    progress,
+    limit
+  );
 }
 
 export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): SecureFetch {
   const progress = fetchOptions.progress;
 
+  const limitNow = (): number =>
+    fetchOptions.maxResponseBytes === undefined
+      ? responseBodyCap
+      : Math.min(fetchOptions.maxResponseBytes, responseBodyCap);
+
   if (getChromeExtensionRealm()) {
-    return (url, options) => extensionPortFetch(url, options, progress);
+    return (url, options) => extensionPortFetch(url, options, progress, limitNow());
   }
 
   if (
@@ -435,7 +461,7 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
   ) {
     return async (url, options) => {
       const { head, body } = await withProgressEnd(progress, url, () =>
-        collectViaExtensionDelegate(url, options, progress)
+        collectViaExtensionDelegate(url, options, progress, limitNow())
       );
       return finalizeProxyResponse(head, new Uint8Array(body), url);
     };
@@ -470,6 +496,8 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
           { timeoutMs: 120_000, signal: requestAbortSignal(options) }
         )
       );
+      if (body.byteLength > limitNow())
+        throw responseTooLargeError(url, body.byteLength, limitNow());
       return finalizeProxyResponse(head, new Uint8Array(body), url);
     };
   }
@@ -512,7 +540,8 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
         resp,
         url,
         progress ? (loaded) => progress.chunk(url, loaded, total) : undefined,
-        total
+        total,
+        limitNow()
       );
       const rawHeaders: Record<string, string> = {};
       resp.headers.forEach((v, k) => {

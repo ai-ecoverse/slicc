@@ -131,6 +131,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 
   getParentJid?: () => string | undefined;
 
+  isScoop?: () => boolean;
+
   processManager?: ProcessManager;
 
   cherryRuntimeRegistry?: CherryRuntimeRegistry;
@@ -308,7 +310,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     wireTeleportSelectionFromShim();
     commands.push(
       ...PLAYWRIGHT_COMMAND_NAMES.map((name) =>
-        createPlaywrightCommand(name, options.browserAPI, options.fs!)
+        createPlaywrightCommand(name, options.browserAPI, options.fs!, {
+          isScoop: options.isScoop,
+        })
       )
     );
   }

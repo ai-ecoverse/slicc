@@ -60,6 +60,7 @@ import {
 } from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 import { wireFileMentions } from './wire-file-mentions.js';
+import { attachMentionPreviewFs } from './wire-mention-previews.js';
 
 export {
   createWcLiveCallbacks,
@@ -876,6 +877,8 @@ export function attachWcWorkbench(
   }
 
   wireFileMentions({ thread: refs.thread, openFs: openReader, log });
+
+  attachMentionPreviewFs(refs.thread, openReader);
 
   refs.floatbar.addEventListener('click', () => {
     const dock = refs.dock as HTMLElement & {

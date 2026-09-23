@@ -1,0 +1,195 @@
+export type GithubRefKind = 'issue' | 'pull' | 'unknown';
+
+export interface GithubRef {
+  owner: string;
+  repo: string;
+  number: number;
+  kind: GithubRefKind;
+}
+
+export interface GithubMention {
+  start: number;
+  end: number;
+  raw: string;
+  number: number;
+  kind: GithubRefKind;
+  owner?: string;
+  repo?: string;
+}
+
+const OWNER = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})';
+const REPO = '[A-Za-z0-9._-]{1,100}';
+
+const RESERVED_OWNERS = new Set([
+  'about',
+  'apps',
+  'collections',
+  'customer-stories',
+  'enterprise',
+  'events',
+  'explore',
+  'features',
+  'login',
+  'marketplace',
+  'new',
+  'notifications',
+  'orgs',
+  'organizations',
+  'pricing',
+  'pulls',
+  'issues',
+  'search',
+  'security',
+  'settings',
+  'sponsors',
+  'topics',
+  'trending',
+]);
+
+function isRepoName(owner: string, repo: string): boolean {
+  return !RESERVED_OWNERS.has(owner.toLowerCase()) && repo !== '.' && repo !== '..';
+}
+
+function normalizeRepo(repo: string): string {
+  return repo.replace(/\.git$/i, '');
+}
+
+export function parseGithubUrl(url: string): GithubRef | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') return null;
+  const match = new RegExp(`^/(${OWNER})/(${REPO})/(issues|pull)/(\\d{1,7})(?:/|$)`).exec(
+    parsed.pathname
+  );
+  if (!match) return null;
+  const [, owner = '', repo = '', segment, number = '0'] = match;
+  if (!isRepoName(owner, repo)) return null;
+  return {
+    owner,
+    repo: normalizeRepo(repo),
+    number: Number(number),
+    kind: segment === 'pull' ? 'pull' : 'issue',
+  };
+}
+
+export function githubRefUrl(ref: GithubRef): string {
+  return `https://github.com/${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`;
+}
+
+export function githubCardImage(ref: GithubRef): string {
+  return `https://opengraph.githubassets.com/slicc/${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`;
+}
+
+export function githubRefLabel(ref: Pick<GithubRef, 'kind' | 'number'>): string {
+  if (ref.kind === 'pull') return `PR #${ref.number}`;
+  if (ref.kind === 'issue') return `Issue #${ref.number}`;
+  return `#${ref.number}`;
+}
+
+const QUALIFIED_RE = new RegExp(`(^|[^\\w/.-])(${OWNER})/(${REPO})#(\\d{1,7})\\b`, 'g');
+const WORDED_RE = /\b(PRs?|pull requests?|issues?)\s+#?(\d{1,7})\b/gi;
+
+const BARE_RE = /(^|[^\w&/#])#(\d{1,6})\b/g;
+
+function kindOfWord(word: string): GithubRefKind {
+  return /^p/i.test(word) ? 'pull' : 'issue';
+}
+
+export function findGithubMentions(text: string): GithubMention[] {
+  const found: GithubMention[] = [];
+  const taken = (start: number, end: number): boolean =>
+    found.some((m) => start < m.end && end > m.start);
+
+  for (const match of text.matchAll(QUALIFIED_RE)) {
+    const [whole, lead = '', owner = '', repo = '', number = '0'] = match;
+    const start = (match.index ?? 0) + lead.length;
+    const raw = whole.slice(lead.length);
+    if (!isRepoName(owner, repo)) continue;
+    found.push({
+      start,
+      end: start + raw.length,
+      raw,
+      number: Number(number),
+      kind: 'unknown',
+      owner,
+      repo: normalizeRepo(repo),
+    });
+  }
+  for (const match of text.matchAll(WORDED_RE)) {
+    const [raw, word = '', number = '0'] = match;
+    const start = match.index ?? 0;
+    if (taken(start, start + raw.length)) continue;
+    found.push({
+      start,
+      end: start + raw.length,
+      raw,
+      number: Number(number),
+      kind: kindOfWord(word),
+    });
+  }
+  for (const match of text.matchAll(BARE_RE)) {
+    const [whole, lead = '', number = '0'] = match;
+    const start = (match.index ?? 0) + lead.length;
+    const raw = whole.slice(lead.length);
+    if (taken(start, start + raw.length)) continue;
+    found.push({ start, end: start + raw.length, raw, number: Number(number), kind: 'unknown' });
+  }
+  return found.sort((a, b) => a.start - b.start);
+}
+
+const URL_REPO_RE = new RegExp(
+  `github\\.com[/:](${OWNER})/(${REPO}?)(?:\\.git)?(?=$|[/\\s#?"'\`)\\]>,;])`,
+  'g'
+);
+const FLAG_REPO_RE = new RegExp(`(?:^|\\s)(?:-R|--repo)(?:\\s+|=)(${OWNER})/(${REPO})`, 'g');
+const GH_REPO_CMD_RE = new RegExp(
+  `\\bgh\\s+repo\\s+(?:clone|view|fork|sync)\\s+(${OWNER})/(${REPO})`,
+  'g'
+);
+
+export function githubRepoHints(text: string): string[] {
+  const hits: Array<{ index: number; slug: string }> = [];
+
+  const sources: Array<[RegExp, number, number]> = [
+    [URL_REPO_RE, 1, 2],
+    [FLAG_REPO_RE, 1, 2],
+    [GH_REPO_CMD_RE, 1, 2],
+    [QUALIFIED_RE, 2, 3],
+  ];
+  for (const [re, ownerGroup, repoGroup] of sources) {
+    for (const match of text.matchAll(re)) {
+      const owner = match[ownerGroup] ?? '';
+      const repo = normalizeRepo(match[repoGroup] ?? '');
+      if (!owner || !repo || !isRepoName(owner, repo)) continue;
+      hits.push({ index: match.index ?? 0, slug: `${owner}/${repo}` });
+    }
+  }
+  hits.sort((a, b) => a.index - b.index);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const { slug } of hits) {
+    const key = slug.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(slug);
+  }
+  return out;
+}
+
+export function resolveGithubMention(
+  mention: GithubMention,
+  repoHints: readonly string[]
+): GithubRef | null {
+  if (mention.owner && mention.repo) {
+    return { owner: mention.owner, repo: mention.repo, number: mention.number, kind: mention.kind };
+  }
+  const slug = repoHints[repoHints.length - 1];
+  if (!slug) return null;
+  const [owner, repo] = slug.split('/');
+  if (!owner || !repo) return null;
+  return { owner, repo, number: mention.number, kind: mention.kind };
+}

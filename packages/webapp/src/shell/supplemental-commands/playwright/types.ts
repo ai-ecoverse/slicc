@@ -124,7 +124,7 @@ export interface PlaywrightState {
 
   harRecorder: HarRecorder | null;
 
-  sessionDirsCreated: boolean;
+  sessionDirsCreated: Set<string>;
 
   teleportWatchers: Map<string, TeleportWatcher>;
 
@@ -197,6 +197,8 @@ export interface PlaywrightHandlerCtx {
   flags: Record<string, string>;
 
   scratchDir: string;
+
+  sessionRoot: string;
 
   onTab: <T>(targetId: string, fn: (tab: TabHandle) => Promise<T>) => Promise<T>;
 

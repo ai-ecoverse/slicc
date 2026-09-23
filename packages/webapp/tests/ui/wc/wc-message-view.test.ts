@@ -95,6 +95,18 @@ describe('buildThreadChildren', () => {
     expect(card.textContent).toContain('Mount recovery required');
   });
 
+  it('stamps an agent bubble with its machine-readable send time', () => {
+    const [bubble] = messageEls({
+      id: 'a-time',
+      role: 'assistant',
+      content: 'See you tomorrow.',
+      timestamp: 1_780_000_000_000,
+    });
+    expect(bubble.getAttribute('data-msg-time')).toBe('1780000000000');
+    const [untimed] = messageEls({ id: 'a-0', role: 'assistant', content: 'x', timestamp: 0 });
+    expect(untimed.hasAttribute('data-msg-time')).toBe(false);
+  });
+
   it('renders a preview-channel message as a collapsed lick card', () => {
     const [card] = messageEls({
       id: 'preview-1',

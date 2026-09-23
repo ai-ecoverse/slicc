@@ -37,8 +37,17 @@ export { SliccDip } from './chat/slicc-dip.js';
 export { SliccErrorCard } from './chat/slicc-error-card.js';
 export { SliccHandoffCard } from './chat/slicc-handoff-card.js';
 export { SliccLickCard } from './chat/slicc-lick-card.js';
+export { type LinkPreviewState, SliccLinkPreview } from './chat/slicc-link-preview.js';
+export {
+  type QuestionAnswerDetail,
+  type QuestionKind,
+  type QuestionState,
+  SliccQuestionPrompt,
+} from './chat/slicc-question-prompt.js';
+export { SliccTimePreview } from './chat/slicc-time-preview.js';
 export { SliccToolCluster } from './chat/slicc-tool-cluster.js';
 export { SliccUserMessage } from './chat/slicc-user-message.js';
+export type { TimeOccurrence, TimePreviewData } from './chat/time-preview-model.js';
 export { HOLD_TO_ENABLE_MS, SliccComposer } from './composer/slicc-composer.js';
 export {
   type CameraMediaProvider,
@@ -126,6 +135,13 @@ export {
 } from './overflow-menu/slicc-overflow-menu.js';
 export { SliccCameraDialog } from './overlay/slicc-camera-dialog.js';
 export { SliccDialog } from './overlay/slicc-dialog.js';
+export {
+  type HoverCardPlacement,
+  type HoverCardPosition,
+  type HoverCardRect,
+  placeHoverCard,
+  SliccHoverCard,
+} from './overlay/slicc-hover-card.js';
 export {
   type FilesystemPermissionProvider,
   type HidPermissionProvider,

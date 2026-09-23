@@ -5,9 +5,21 @@ import type { CmdResult, PlaywrightHandlerCtx, PlaywrightState, TabSnapshot } fr
 
 type BrowserAPI = PlaywrightHandlerCtx['browser'];
 
-export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState): Promise<void> {
-  if (state.sessionDirsCreated) return;
-  for (const dir of ['/.playwright', '/.playwright/snapshots', '/.playwright/screenshots']) {
+export const DEFAULT_SESSION_ROOT = '/.playwright';
+
+export function sessionRootFor(isScoop: boolean, scratchDir: string): string {
+  if (!isScoop) return DEFAULT_SESSION_ROOT;
+  const base = scratchDir.replace(/\/+$/, '');
+  return `${base}${DEFAULT_SESSION_ROOT}`;
+}
+
+export async function ensureSessionDirs(
+  vfs: VirtualFS,
+  state: PlaywrightState,
+  root: string
+): Promise<void> {
+  if (state.sessionDirsCreated.has(root)) return;
+  for (const dir of [root, `${root}/snapshots`, `${root}/screenshots`]) {
     try {
       await vfs.mkdir(dir, { recursive: true });
     } catch (err) {
@@ -16,14 +28,15 @@ export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState):
       }
     }
   }
-  state.sessionDirsCreated = true;
+  state.sessionDirsCreated.add(root);
 }
 
 export async function autoSaveSnapshot(
   browser: BrowserAPI,
   vfs: VirtualFS,
   targetId: string,
-  state: PlaywrightState
+  state: PlaywrightState,
+  root: string
 ): Promise<string | null> {
   try {
     return await browser.withTab(targetId, async (page) => {
@@ -43,7 +56,7 @@ export async function autoSaveSnapshot(
 
       const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', text].join('\n');
       const ts = filenameSafeTimestamp(new Date());
-      const path = `/.playwright/snapshots/page-${ts}.yml`;
+      const path = `${root}/snapshots/page-${ts}.yml`;
       await vfs.writeFile(path, output);
       return path;
     });
@@ -55,6 +68,7 @@ export async function autoSaveSnapshot(
 export async function logSession(
   vfs: VirtualFS,
   state: PlaywrightState,
+  root: string,
   opts: {
     command: string;
     args: string[];
@@ -64,7 +78,7 @@ export async function logSession(
     targetId?: string | null;
   }
 ): Promise<void> {
-  await ensureSessionDirs(vfs, state);
+  await ensureSessionDirs(vfs, state, root);
   const ts = new Date().toISOString();
   const cmdLine = `playwright-cli ${opts.command}${opts.args.length ? ' ' + opts.args.join(' ') : ''}`;
   const resultSummary =
@@ -86,7 +100,7 @@ export async function logSession(
   lines.push('---', '');
 
   const entry = lines.join('\n') + '\n';
-  const sessionPath = '/.playwright/session.md';
+  const sessionPath = `${root}/session.md`;
   let existing = '';
   try {
     const content = await vfs.readFile(sessionPath);

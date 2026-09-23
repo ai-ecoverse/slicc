@@ -223,3 +223,91 @@ describe('binary-cache ceiling', () => {
     expect(consumeCachedBinaryByUrl('https://example.com/large.bin')).toBeNull();
   });
 });
+
+describe('per-fetch maxResponseBytes', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => {
+    setResponseBodyCap(null);
+    setLocalApiBaseUrl(null);
+    vi.unstubAllGlobals();
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    setChromeExtensionRealm(null);
+  });
+
+  it('refuses a hinted body over the per-fetch cap under the global default', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(new Uint8Array(32), {
+        status: 200,
+        headers: { 'content-type': 'text/html', 'x-proxy-content-length': '32' },
+      })
+    );
+    await expect(createProxiedFetch({ maxResponseBytes: 16 })(url)).rejects.toThrow(
+      /download limit \(32 bytes\)/
+    );
+  });
+
+  it('cancels the stream once an unhinted body passes the per-fetch cap', async () => {
+    const cancelled = vi.fn();
+    fetchSpy.mockResolvedValue(
+      streamResponse(
+        [new Uint8Array(8), new Uint8Array(8), new Uint8Array(8), new Uint8Array(8)],
+        { 'content-type': 'text/html' },
+        cancelled
+      )
+    );
+    await expect(createProxiedFetch({ maxResponseBytes: 16 })(url)).rejects.toThrow(
+      /download limit/
+    );
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it('never loosens the global ceiling', async () => {
+    setResponseBodyCap(16);
+    fetchSpy.mockResolvedValue(
+      streamResponse([new Uint8Array(10), new Uint8Array(10)], { 'content-type': 'text/html' })
+    );
+    await expect(createProxiedFetch({ maxResponseBytes: 1024 })(url)).rejects.toThrow(
+      /download limit/
+    );
+  });
+
+  it('passes a body under the per-fetch cap through', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(new Uint8Array(12), { status: 200, headers: { 'content-type': 'text/html' } })
+    );
+    const res = await createProxiedFetch({ maxResponseBytes: 16 })(url);
+    expect(res.body.byteLength).toBe(12);
+  });
+
+  it('applies to the extension Port path and disconnects', async () => {
+    const listeners: Array<(m: unknown) => void> = [];
+    const port = {
+      postMessage: vi.fn(),
+      disconnect: vi.fn(),
+      onMessage: { addListener: (fn: (m: unknown) => void) => listeners.push(fn) },
+      onDisconnect: { addListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: { connect: vi.fn(() => port), id: 'test-id' },
+    };
+    setChromeExtensionRealm(true);
+    const pending = createProxiedFetch({ maxResponseBytes: 16 })(url);
+    await new Promise((r) => setTimeout(r, 0));
+    for (const l of listeners) {
+      l({
+        type: 'response-head',
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'text/html', 'content-length': '64' },
+      });
+    }
+    await expect(pending).rejects.toThrow(/download limit \(64 bytes\)/);
+    expect(port.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
