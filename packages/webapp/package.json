@@ -71,7 +71,7 @@
   },
   "devDependencies": {
     "@biomejs/js-api": "6.0.0",
-    "@biomejs/wasm-web": "2.5.13",
+    "@biomejs/wasm-web": "2.5.14",
     "@ffmpeg/core": "0.12.10",
     "@ffmpeg/core-mt": "0.12.10",
     "@types/jsdom": "30.0.0",
