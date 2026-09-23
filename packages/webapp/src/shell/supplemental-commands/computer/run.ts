@@ -760,14 +760,7 @@ async function verbRecord(
   const durationMs = clampVideoDurationMs(seconds * 1000);
   const file = positionals(args)[0] ?? 'clip.webm';
   const dest = ctx.fs.resolvePath(ctx.cwd, file);
-  let clip: {
-    bytes: Uint8Array;
-    mime: string;
-    width: number;
-    height: number;
-    durationMs?: number;
-    truncated?: boolean;
-  };
+  let clip: RecordedClipResult;
   try {
     clip = hasRecordClip(target.backend)
       ? await target.backend.recordClip(durationMs)
@@ -784,12 +777,34 @@ async function verbRecord(
         path: dest,
         durationMs: elapsed,
         mime: clip.mime,
+        ...(clip.frames !== undefined ? { frames: clip.frames } : {}),
+        ...(clip.fps !== undefined ? { fps: clip.fps } : {}),
+        ...(clip.requestedFps !== undefined ? { requestedFps: clip.requestedFps } : {}),
         ...(clip.truncated ? { truncated: true } : {}),
+        ...(clip.slow ? { slow: true } : {}),
       })}\n`
     );
   }
-  const note = clip.truncated ? ' (truncated)' : '';
-  return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height}${note} → ${dest}\n`);
+  return ok(`recorded ${elapsed}ms ${clip.width}x${clip.height}${recordNote(clip)} → ${dest}\n`);
+}
+
+type RecordedClipResult = Awaited<ReturnType<ScreenClipper['recordClip']>> & {
+  truncated?: boolean;
+  frames?: number;
+  fps?: number;
+  requestedFps?: number;
+  slow?: boolean;
+};
+
+function recordNote(clip: RecordedClipResult): string {
+  const notes: string[] = [];
+  if (clip.frames !== undefined && clip.fps !== undefined) {
+    const below =
+      clip.slow && clip.requestedFps !== undefined ? `, below --fps ${clip.requestedFps}` : '';
+    notes.push(`${clip.frames} frames at ${clip.fps} fps${below}`);
+  }
+  if (clip.truncated) notes.push('truncated');
+  return notes.length > 0 ? ` (${notes.join('; ')})` : '';
 }
 
 async function recordWorkerHostedClip(

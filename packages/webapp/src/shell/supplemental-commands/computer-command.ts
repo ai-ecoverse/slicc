@@ -32,6 +32,8 @@ export interface ComputerCommandDeps {
   encodeRecordedFrames?: (args: {
     frames: Uint8Array[];
     fps: number;
+
+    frameRate?: string;
     dest: string;
     width: number;
     height: number;
