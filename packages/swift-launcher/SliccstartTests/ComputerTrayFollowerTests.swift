@@ -693,26 +693,32 @@ final class ComputerTrayFollowerTests: XCTestCase {
             })
         await follower._testing_settle()
         sent.removeAll()
+        let sentTypes = {
+            sent.compactMap { data -> String? in
+                (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+            }
+        }
+        // A long wait and a poll for the pong, not a fixed 20 ms sleep against
+        // an 80 ms wait: on a loaded CI runner the sleep woke after the wait
+        // had already finished, so the ack was there too and the test flaked.
         follower.route(
             try encode(
                 .computerNativeInput(
-                    requestId: "in-wait", events: [.wait(ms: 80)])))
+                    requestId: "in-wait", events: [.wait(ms: 500)])))
         await Task.yield()
         await Task.yield()
         follower.route(try encode(.ping))
-        try await Task.sleep(nanoseconds: 20_000_000)
-        let typesBeforeAck = sent.compactMap { data -> String? in
-            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
+        var typesBeforeAck = sentTypes()
+        for _ in 0..<100 where !typesBeforeAck.contains("pong") {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            typesBeforeAck = sentTypes()
         }
         XCTAssertTrue(
             typesBeforeAck.contains("pong"),
             "a wait must not Thread.sleep on MainActor and starve ping")
         XCTAssertFalse(typesBeforeAck.contains("computer.native.input.result"))
         await follower._testing_settle()
-        let types = sent.compactMap { data -> String? in
-            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["type"] as? String
-        }
-        XCTAssertTrue(types.contains("computer.native.input.result"))
+        XCTAssertTrue(sentTypes().contains("computer.native.input.result"))
     }
 
     func testPingAnswersPong() async throws {
