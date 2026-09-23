@@ -807,6 +807,9 @@ export interface PanelRpcResults {
     bytes: ArrayBuffer;
     width: number;
     height: number;
+    /** Source track pixels behind a session `frame` (independent of `maxWidth`). */
+    nativeWidth?: number;
+    nativeHeight?: number;
     mimeType: string;
     durationMs?: number;
     /** Live session handle from `session: 'start'`. */

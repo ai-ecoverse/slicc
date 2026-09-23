@@ -69,6 +69,9 @@ export interface DisplayCaptureResult {
   mimeType: string;
   width: number;
   height: number;
+  /** Source (track) pixels a still was scaled from — the display, not the encode. */
+  nativeWidth?: number;
+  nativeHeight?: number;
   durationMs?: number;
   /** Session handle returned by `action: 'start'` (and echoed by stop). */
   handle?: string;
