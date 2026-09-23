@@ -428,6 +428,18 @@ describe('RestrictedFS', () => {
       expect(paths).toContain('/scoops/editor/da-site');
       expect(paths).not.toContain('/mnt/other');
     });
+
+    it('keeps a covering mount when the grant is a descendant of it (#3434)', () => {
+      // Private scoop spawned with cwd INSIDE a mount: only the subdir is
+      // granted, but the covering mount must still surface so the probe can
+      // report the mount `kind` / host-backed status of the subtree.
+      const rfs = new RestrictedFS(mpVfs, ['/scoops/editor/da-site/subdir/'], [], 'hard', {
+        includeMounts: false,
+      });
+      const paths = rfs.listMountPoints().map((m) => m.path);
+      expect(paths).toContain('/scoops/editor/da-site');
+      expect(paths).not.toContain('/mnt/other');
+    });
   });
 
   // ── Symlink target validation ─────────────────────────────────────
