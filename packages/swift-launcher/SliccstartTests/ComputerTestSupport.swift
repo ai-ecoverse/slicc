@@ -226,3 +226,24 @@ final class RecordingConnector: TrayFollowerConnecting {
 
     func stop() { stopped += 1 }
 }
+
+/// An input `wait` the test holds open: `wait()` suspends until `release()`,
+/// so a test can observe the main actor while a wait is in flight.
+@MainActor
+final class ManualInputDelay {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
