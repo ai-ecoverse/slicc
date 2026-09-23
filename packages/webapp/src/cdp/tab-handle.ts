@@ -979,10 +979,21 @@ function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
     const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
     const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
     if (!role) continue;
-    const key = `${role}|${name}`;
+    const key = axIndexKey(role, name);
     if (!index.has(key)) index.set(key, backendNodeId);
   }
   return index;
+}
+
+/**
+ * Join key for the two accessibility trees. The injected ARIA snapshot
+ * collapses and trims whitespace in accessible names, and CDP's
+ * Accessibility domain reports them raw. Google Flights labels its inputs
+ * "Where from? " (trailing space), so an exact match dropped the
+ * backendNodeId, and click/fill then missed with the CSS fallback too.
+ */
+function axIndexKey(role: string, name: string): string {
+  return `${role.toLowerCase()}|${name.replace(/\s+/g, ' ').trim()}`;
 }
 
 /**
@@ -990,7 +1001,7 @@ function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
  * from the CDP Accessibility index (matched by role + accessible name).
  */
 function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<string, number>): void {
-  const key = `${node.role.toLowerCase()}|${node.name}`;
+  const key = axIndexKey(node.role, node.name);
   const id = index.get(key);
   if (id !== undefined) node.backendNodeId = id;
   if (node.children) {
