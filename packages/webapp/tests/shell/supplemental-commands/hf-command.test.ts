@@ -215,8 +215,10 @@ describe('createHfCommand', () => {
     expect(r.exitCode).toBe(0);
     expect(await fs.exists('/m/a.txt')).toBe(true);
     expect(await fs.exists('/m/b.txt')).toBe(false);
-    // No tree probe when files are explicit.
-    expect(recorder.calls.some((c) => c.includes('/api/models/'))).toBe(false);
+    // Explicit files: no recursive tree listing, only the parent directory's
+    // (for declared sizes).
+    const apiCalls = recorder.calls.filter((c) => c.includes('/api/models/'));
+    expect(apiCalls).toEqual(['https://huggingface.co/api/models/owner/name/tree/main']);
   });
 
   it('skips existing files by default and re-downloads under --force', async () => {
@@ -224,7 +226,8 @@ describe('createHfCommand', () => {
     const fetch = makeFetch({ 'owner/name': { files: { 'a.txt': bytes('A') } } }, recorder);
     const cmd = createHfCommand({ fetch });
     await fs.mkdir('/m', { recursive: true });
-    await fs.writeFile('/m/a.txt', bytes('PREEXISTING'));
+    // Same length as the listed file, so it counts as complete.
+    await fs.writeFile('/m/a.txt', bytes('P'));
 
     const skipRun = await cmd.execute(
       ['download', 'owner/name', 'a.txt', '--to', '/m'],
@@ -232,7 +235,7 @@ describe('createHfCommand', () => {
     );
     expect(skipRun.exitCode).toBe(0);
     expect(skipRun.stderr).toMatch(/skipped a\.txt/);
-    expect(await fs.readFile('/m/a.txt')).toBe('PREEXISTING');
+    expect(await fs.readFile('/m/a.txt')).toBe('P');
 
     const forceRun = await cmd.execute(
       ['download', 'owner/name', 'a.txt', '--to', '/m', '--force'],
@@ -301,5 +304,146 @@ describe('createHfCommand', () => {
     expect(r.exitCode).toBe(0);
     expect(recorder.calls.some((c) => c.includes('/tree/v9'))).toBe(true);
     expect(recorder.calls.some((c) => c.includes('/resolve/v9/'))).toBe(true);
+  });
+
+  it('streams throttled progress lines to a live sink and keeps them out of the result', async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 4 }, (_, i) => [`s${i}`, new Uint8Array(1024 * 1024)])
+    );
+    let clock = 0;
+    const fetch = makeFetch({ 'owner/name': { files } });
+    // Each fetch "takes" 3 s on the injected clock.
+    const slowFetch = (async (url: string, opts?: SecureFetchOptions) => {
+      if (url.includes('/resolve/')) clock += 3000;
+      return fetch(url, opts);
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch: slowFetch, now: () => clock });
+    const live: string[] = [];
+    const ctx = { ...ctxOf(fs), writeStdout: (c: string) => live.push(c) };
+    const r = await cmd.execute(['download', 'owner/name', '-j', '1'], ctx as never);
+    expect(r.exitCode).toBe(0);
+    const progress = live.filter((l) => /files,/.test(l));
+    // First file prints, then at most one line per 5 s, and the last file always prints.
+    expect(progress).toEqual([
+      'hf: 1/4 files, 1.0 MB of 4.0 MB, 341.3 KB/s, ~9s left\n',
+      'hf: 3/4 files, 3.0 MB of 4.0 MB, 341.3 KB/s, ~3s left\n',
+      'hf: 4/4 files, 4.0 MB of 4.0 MB, 341.3 KB/s\n',
+    ]);
+    expect(live[0]).toMatch(/4 file\(s\) listed/);
+    expect(r.stderr).not.toMatch(/files,/);
+    expect(r.stderr).toMatch(
+      /4 downloaded, 0 skipped, 4\.0 MB total into .* in 12s \(341\.3 KB\/s\)/
+    );
+  });
+
+  it('prints no progress lines without a live sink, and no rate when nothing downloaded', async () => {
+    const fetch = makeFetch({ 'owner/name': { files: { 'a.txt': bytes('A') } } });
+    await fs.mkdir('/m', { recursive: true });
+    await fs.writeFile('/m/a.txt', bytes('A'));
+    const cmd = createHfCommand({ fetch });
+    const r = await cmd.execute(['download', 'owner/name', '--to', '/m'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).not.toMatch(/files,/);
+    expect(r.stderr).toMatch(/0 downloaded, 1 skipped, 1 B total into \/m\n$/);
+  });
+
+  it('passes the command abort signal through so a kill stops the downloads', async () => {
+    const controller = new AbortController();
+    const seen: Array<AbortSignal | undefined> = [];
+    const fetch = (async (url: string, opts?: SecureFetchOptions): Promise<FetchResult> => {
+      seen.push(opts?.signal);
+      if (url.includes('/api/models/')) {
+        return {
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          body: bytes(JSON.stringify([{ type: 'file', path: 'a', size: 1 }])),
+          url,
+        };
+      }
+      controller.abort();
+      throw new Error('The operation was aborted');
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch });
+    const ctx = { ...ctxOf(fs), signal: controller.signal };
+    const r = await cmd.execute(['download', 'owner/name'], ctx as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/download aborted/);
+    expect(seen.at(-1)).toBeInstanceOf(AbortSignal);
+  });
+
+  it('formats multi-gigabyte totals in GB', async () => {
+    const big = { byteLength: 3 * 1024 ** 3 } as Uint8Array;
+    const fetch = (async (url: string): Promise<FetchResult> => {
+      if (url.includes('/api/models/')) {
+        return {
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          body: bytes(JSON.stringify([{ type: 'file', path: 'w', size: big.byteLength }])),
+          url,
+        };
+      }
+      return { status: 200, statusText: 'OK', headers: {}, body: big, url };
+    }) as unknown as SecureFetch;
+    const fakeFs = {
+      ...ctxOf(fs).fs,
+      writeFile: async () => undefined,
+    };
+    const cmd = createHfCommand({ fetch });
+    const r = await cmd.execute(['download', 'owner/name'], { ...ctxOf(fs), fs: fakeFs } as never);
+    expect(r.stderr).toMatch(/downloaded w \(3\.00 GB\)/);
+  });
+});
+
+describe('hf-command download pool flags', () => {
+  it('parses --concurrency, -j and --max-in-flight-mb', () => {
+    expect(parseDownloadArgs(['o/n', '--concurrency', '8'])).toMatchObject({ concurrency: 8 });
+    expect(parseDownloadArgs(['o/n', '-j', '2'])).toMatchObject({ concurrency: 2 });
+    expect(parseDownloadArgs(['o/n', '--max-in-flight-mb', '512'])).toMatchObject({
+      maxInFlightMb: 512,
+    });
+  });
+
+  it('rejects a missing, zero, negative or fractional value', () => {
+    expect(parseDownloadArgs(['o/n', '--concurrency'])).toEqual({
+      error: '--concurrency requires a value',
+    });
+    for (const bad of ['0', '-1', '1.5', 'many']) {
+      expect(parseDownloadArgs(['o/n', '-j', bad])).toEqual({
+        error: `-j must be a positive integer, got '${bad}'`,
+      });
+    }
+  });
+
+  it('documents the pool flags and their defaults in --help', async () => {
+    const cmd = createHfCommand({ fetch: makeFetch({}) });
+    const fs = await newFs();
+    const r = await cmd.execute(['download', '--help'], ctxOf(fs) as never);
+    expect(r.stdout).toMatch(/--concurrency, -j\s+4 files at once/);
+    expect(r.stdout).toMatch(/--max-in-flight-mb\s+128 MB/);
+  });
+
+  it('limits a real download to the requested concurrency', async () => {
+    const fs = await newFs();
+    let active = 0;
+    let maxActive = 0;
+    const files = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`f${i}`, bytes('x')]));
+    const inner = makeFetch({ 'owner/name': { files } });
+    const fetch = (async (url: string, opts?: SecureFetchOptions) => {
+      if (!url.includes('/resolve/')) return inner(url, opts);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active -= 1;
+      return inner(url, opts);
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch });
+    const r = await cmd.execute(
+      ['download', 'owner/name', '--concurrency', '2'],
+      ctxOf(fs) as never
+    );
+    expect(r.exitCode).toBe(0);
+    expect(maxActive).toBe(2);
   });
 });
