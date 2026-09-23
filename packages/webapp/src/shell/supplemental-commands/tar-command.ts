@@ -93,7 +93,14 @@ function parseTarOption(args: string[], index: number, options: TarOptions): Fla
   return { nextIndex: index };
 }
 
-function parseTarArgs(args: string[]): TarOptions | CommandResult {
+/** A first argument like `xzf` is the traditional dashless form of `-xzf`. */
+const TRADITIONAL_BUNDLE = /^[cxtzvfC]+$/;
+
+function parseTarArgs(rawArgs: string[]): TarOptions | CommandResult {
+  const args =
+    rawArgs.length > 0 && TRADITIONAL_BUNDLE.test(rawArgs[0])
+      ? [`-${rawArgs[0]}`, ...rawArgs.slice(1)]
+      : rawArgs;
   const options: TarOptions = { gzip: false, verbose: false, directory: '.', paths: [] };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -126,7 +133,9 @@ async function addPathToTar(
 ): Promise<void> {
   const stat = await ctx.fs.stat(fsPath);
   if (stat.isFile) {
-    entries.push({ path: archivePath, bytes: await ctx.fs.readFileBuffer(fsPath) });
+    const bytes = await ctx.fs.readFileBuffer(fsPath);
+    const mode = typeof stat.mode === 'number' ? stat.mode & 0o777 : undefined;
+    entries.push({ path: archivePath, bytes, ...(mode === undefined ? {} : { mode }) });
     return;
   }
   if (!stat.isDirectory) throw new Error(`unsupported file type: ${fsPath}`);
@@ -203,6 +212,10 @@ async function readArchiveCommand(
       const parent = dirname(outputPath);
       if (parent !== '/') await ctx.fs.mkdir(parent, { recursive: true });
       await ctx.fs.writeFile(outputPath, entry.bytes);
+      // Keep executable bits (./configure); 0644 is what a new file gets anyway.
+      if (entry.mode !== undefined && entry.mode !== 0o644) {
+        await ctx.fs.chmod(outputPath, entry.mode);
+      }
     }
     extracted.push(entry.path);
   }

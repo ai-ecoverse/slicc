@@ -51,6 +51,39 @@ describe('tar command', () => {
     expect(await fs.stat('/tmp/plain-out/source/empty')).toMatchObject({ type: 'directory' });
   });
 
+  it('keeps executable bits across create and extract (./configure stays runnable)', async () => {
+    await fs.writeFile('/workspace/source/configure', '#!/bin/sh\necho configured\n');
+    expect((await shell.executeCommand('chmod 755 /workspace/source/configure')).exitCode).toBe(0);
+    await shell.executeCommand('cd /workspace && tar -czf /tmp/exec.tgz source');
+    const out = await shell.executeCommand('tar -xzf /tmp/exec.tgz -C /tmp/exec-out');
+    expect(out.exitCode).toBe(0);
+    expect((await fs.stat('/tmp/exec-out/source/configure')).mode & 0o777).toBe(0o755);
+    expect((await fs.stat('/tmp/exec-out/source/hello.txt')).mode & 0o777).toBe(0o644);
+  });
+
+  it("applies an archive's own modes on extract", async () => {
+    await fs.writeFile(
+      '/tmp/modes.tar',
+      writeTar([
+        { path: 'pkg/run.sh', bytes: new TextEncoder().encode('echo hi'), mode: 0o755 },
+        { path: 'pkg/secret', bytes: new TextEncoder().encode('s'), mode: 0o600 },
+      ])
+    );
+    expect((await shell.executeCommand('tar -xf /tmp/modes.tar -C /tmp/modes')).exitCode).toBe(0);
+    expect((await fs.stat('/tmp/modes/pkg/run.sh')).mode & 0o777).toBe(0o755);
+    expect((await fs.stat('/tmp/modes/pkg/secret')).mode & 0o777).toBe(0o600);
+  });
+
+  it('accepts the traditional dashless form (tar xzf, tar czf)', async () => {
+    const created = await shell.executeCommand('cd /workspace && tar czf /tmp/trad.tgz source');
+    expect(created.exitCode).toBe(0);
+    const extracted = await shell.executeCommand(
+      'cd /tmp && mkdir trad && cd trad && tar xzf /tmp/trad.tgz'
+    );
+    expect(extracted.exitCode).toBe(0);
+    expect(await fs.readFile('/tmp/trad/source/hello.txt')).toBe('hello tar');
+  });
+
   it('round-trips gzip archives, auto-detects gzip, and reports verbose paths', async () => {
     const created = await shell.executeCommand('cd /workspace && tar -czvf /tmp/source.tgz source');
     expect(created.exitCode).toBe(0);
