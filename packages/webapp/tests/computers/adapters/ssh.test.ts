@@ -193,6 +193,16 @@ describe('ssh probe', () => {
     expect(probe).toMatchObject({ capture: 'simctl', input: 'idb', sim: 'UDID-1' });
   });
 
+  it('refuses a --sim udid that is listed but not booted', async () => {
+    const exec = vi.fn(async (command: string) => {
+      if (command.includes('SLICC_SSH_PROBE')) {
+        return ok('SLICC_SSH_PROBE Darwin screencapture xcrun idb \n');
+      }
+      return ok('    iPhone 16 (UDID-1) (Shutdown)\n');
+    });
+    await expect(probeSsh(exec, 'UDID-1')).rejects.toThrow("simulator 'UDID-1' is not booted");
+  });
+
   it('refuses --sim on Linux', async () => {
     const exec = vi.fn(async () => ok('SLICC_SSH_PROBE Linux grim xdotool\n'));
     await expect(probeSsh(exec, 'UDID-1')).rejects.toThrow('--sim requires a Mac follower');
@@ -335,6 +345,51 @@ describe('ssh backend', () => {
     });
     await backend.close();
     expect(unwatch).toHaveBeenCalled();
+  });
+
+  it('captures and drives the simulator, never the host desktop, when native is also wired (#3390)', async () => {
+    const png = pngWithSize(1206, 2622);
+    const b64 = base64FromBytes(png);
+    const exec = vi.fn(async (command: string) => {
+      if (command.includes('SLICC_SSH_B64')) return ok(`SLICC_SSH_B64 ${b64.length}\n`);
+      if (command.startsWith('dd ')) return ok(b64);
+      return ok('');
+    });
+    const capture = vi.fn();
+    const input = vi.fn();
+    const unwatch = vi.fn();
+    const onFrame = vi.fn(() => () => {});
+    const backend = new SshComputerBackend(exec, {
+      runtimeId: 'mac-studio',
+      title: 'simphone',
+      probe: {
+        platform: 'darwin',
+        tools: ['xcrun', 'idb'],
+        capture: 'simctl',
+        input: 'idb',
+        sim: 'UDID-1',
+      },
+      inputAllowed: true,
+      sim: 'UDID-1',
+      native: { capture, input, unwatch, onFrame },
+    });
+    expect(backend.subscribe).toBeUndefined();
+    expect(backend.screenshotServesStream).toBe(false);
+    expect(backend.describe()).toMatchObject({
+      id: 'ssh:mac-studio:sim:UDID-1',
+      capabilities: { frames: 'poll', mouse: 'touch' },
+    });
+    const frame = await backend.screenshot({ format: 'png' });
+    expect(frame).toMatchObject({ width: 1206, height: 2622 });
+    expect(backend.describe().size).toEqual({ width: 1206, height: 2622 });
+    expect(String(exec.mock.calls[0]?.[0])).toContain("xcrun simctl io 'UDID-1' screenshot");
+    await backend.input([{ type: 'click', button: 1, count: 1, x: 10, y: 20 }]);
+    expect(exec.mock.calls.some((c) => String(c[0]).includes("--udid 'UDID-1'"))).toBe(true);
+    await backend.close();
+    expect(capture).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+    expect(onFrame).not.toHaveBeenCalled();
+    expect(unwatch).not.toHaveBeenCalled();
   });
 
   it('carries the picked display into every native capture and into the id', async () => {
