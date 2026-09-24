@@ -10,6 +10,7 @@ import {
   mintSyncFsToken,
   revokeSyncFsToken,
 } from '../../../src/kernel/realm/sync-fs-token-registry.js';
+import { SYNC_EXEC_MAX_TIMEOUT_MS } from '../../../src/kernel/realm/sync-fs-wire.js';
 import { attachSyncSabResponder } from '../../../src/kernel/realm/sync-sab-responder.js';
 import {
   decodeSabResult,
@@ -225,5 +226,35 @@ describe('attachSyncSabResponder', () => {
     w = readWindow(sab);
     expect(decodeSabResult(w.status, w.bytes)).toMatchObject({ ok: false, errno: 'EACCES' });
     handle.dispose();
+  });
+
+  it('an exec with no budget runs past the wire ceiling (Atomics.wait has no deadline)', async () => {
+    const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + WINDOW);
+    const { header } = sabViews(sab);
+    const port = fakePort();
+    let release = (): void => {};
+    const exec = (async (_cmd: string, opts: { signal: AbortSignal }) =>
+      new Promise((resolve, reject) => {
+        release = () => resolve({ stdout: 'done\n', stderr: '', exitCode: 0 });
+        opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as never;
+    const token = mintSyncFsToken({ fs: {} as never, exec, cwd: '/workspace' });
+    const handle = attachSyncSabResponder(port, sab, token);
+    vi.useFakeTimers();
+    Atomics.store(header, SAB_I_STATE, SAB_STATE_PENDING);
+    port.emit({ type: SYNC_SAB_REQ_MSG, id: 1, req: { channel: 'exec', command: 'make' } });
+    await vi.advanceTimersByTimeAsync(SYNC_EXEC_MAX_TIMEOUT_MS * 2);
+    expect(Atomics.load(header, SAB_I_STATE)).toBe(SAB_STATE_PENDING);
+    vi.useRealTimers();
+    release();
+    await untilReady(header);
+    const w = readWindow(sab);
+    expect(decodeSabResult(w.status, w.bytes)).toEqual({
+      ok: true,
+      kind: 'json',
+      json: { stdout: 'done\n', stderr: '', exitCode: 0 },
+    });
+    handle.dispose();
+    revokeSyncFsToken(token);
   });
 });

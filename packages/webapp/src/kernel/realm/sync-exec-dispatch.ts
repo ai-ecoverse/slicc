@@ -127,16 +127,31 @@ export function normalizeSyncExecEnv(
   return { ok: true, env: out };
 }
 
+/** Whether `timeoutMs` is a real budget; Node reads `0` as "no timeout". */
+export function hasSyncExecBudget(timeoutMs: number | undefined): timeoutMs is number {
+  return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0;
+}
+
 /**
  * Clamp the caller's budget into `(0, SYNC_EXEC_MAX_TIMEOUT_MS]`. A blocked
  * realm worker cannot be interrupted, so an unbounded or absent budget would
  * make a runaway command unkillable short of terminating the realm.
  */
 export function clampSyncExecTimeout(timeoutMs: number | undefined, fallbackMs: number): number {
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  if (!hasSyncExecBudget(timeoutMs)) {
     return Math.min(fallbackMs, SYNC_EXEC_MAX_TIMEOUT_MS);
   }
   return Math.min(timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS);
+}
+
+export interface SyncExecDispatchOptions {
+  /**
+   * The request arrived on a transport whose waiter blocks without a deadline
+   * (the SAB channel's `Atomics.wait`), so a request with no `timeoutMs` runs
+   * to completion, as Node's `execSync` does. Realm disposal still aborts it.
+   * The SW route cannot offer this: its fetch event must settle.
+   */
+  allowNoDeadline?: boolean;
 }
 
 /**
@@ -144,7 +159,10 @@ export function clampSyncExecTimeout(timeoutMs: number | undefined, fallbackMs: 
  * `{ stdout, stderr, exitCode }` payload, or an errno result. An unknown /
  * revoked token fails closed with `EACCES` — never the ambient shell.
  */
-export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResult> {
+export async function dispatchSyncExec(
+  req: SyncExecRequest,
+  opts: SyncExecDispatchOptions = {}
+): Promise<SyncFsResult> {
   const entry = resolveSyncFsToken(req.token);
   if (!entry) {
     return { ok: false, errno: 'EACCES', message: 'sync-exec: unknown or revoked token' };
@@ -168,13 +186,16 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   // the realm's blocked XHR and keep running with no consumer for its result.
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(
-    () => {
-      timedOut = true;
-      controller.abort();
-    },
-    clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS)
-  );
+  const timer =
+    opts.allowNoDeadline && req.timeoutMs === undefined
+      ? undefined
+      : setTimeout(
+          () => {
+            timedOut = true;
+            controller.abort();
+          },
+          clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS)
+        );
   // Register with the token so realm disposal (SIGKILL and friends) aborts the
   // command too — a sync exec has no `spawnId` for the host to track.
   const untrack = trackSyncExec(req.token, controller);

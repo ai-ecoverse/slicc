@@ -297,7 +297,11 @@ the exec channel derives its budget from Node's `timeout` option (default 2
 minutes, capped at 10). The responder aborts the in-flight `ctx.exec` at the
 budget, and its dedupe TTL is derived from the larger of the two channel
 budgets so a late SW re-post replays the cached result instead of re-running
-the command.
+the command. On the SAB transport (a cross-origin-isolated page) a call with
+no `timeout` has **no** deadline, as in Node: `Atomics.wait` can block
+indefinitely, and a build's `$(MAKE) -C sub` or a Python `os.exec` hand-off to
+`cmake` outlives any default. Realm disposal (SIGKILL, Ctrl+C) still aborts it.
+The SW route keeps the default, because its fetch event must settle.
 
 **Liveness deadline (no responder)**: those budgets bound how long a responder
 that TOOK the work may take; a separate, much shorter deadline bounds the case

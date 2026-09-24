@@ -285,6 +285,49 @@ describe('createSyncExecSabTransport — plugs into createSyncExecXhrBridge', ()
     expect(seen).toEqual([5000 + SYNC_EXEC_XHR_MARGIN_MS]);
   });
 
+  it('with noDefaultDeadline, a call without a budget waits with no deadline', () => {
+    const seen: number[] = [];
+    const transport = {
+      call: (_req: unknown, timeoutMs: number) => {
+        seen.push(timeoutMs);
+        return {
+          ok: true as const,
+          kind: 'json' as const,
+          json: { stdout: '', stderr: '', exitCode: 0 },
+        };
+      },
+    };
+    const exec = createSyncExecXhrBridge('t', {
+      transport: createSyncExecSabTransport(transport),
+      noDefaultDeadline: true,
+    });
+    exec.run('make');
+    expect(seen).toEqual([Number.POSITIVE_INFINITY]);
+  });
+
+  it('an infinite deadline blocks in Atomics.wait with an infinite timeout', () => {
+    const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + WINDOW);
+    const k = fakeKernel(sab, () => ({
+      ok: true,
+      kind: 'json',
+      json: { stdout: '', stderr: '', exitCode: 0 },
+    }));
+    const waits: Array<number | undefined> = [];
+    const transport = createSyncSabTransport(sab, k.port, {
+      wait: (a, i, v, t) => {
+        waits.push(t);
+        return Atomics.wait(a, i, v, 0);
+      },
+    });
+    const exec = createSyncExecXhrBridge('t', {
+      transport: createSyncExecSabTransport(transport),
+      noDefaultDeadline: true,
+    });
+    expect(exec.run('make').exitCode).toBe(0);
+    expect(waits.length).toBeGreaterThan(0);
+    expect(waits.every((t) => t === Number.POSITIVE_INFINITY)).toBe(true);
+  });
+
   it('surfaces ETIMEDOUT from the dispatcher as an errno error', () => {
     const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + WINDOW);
     const k = fakeKernel(sab, () => ({ ok: false, errno: 'ETIMEDOUT', message: 'slow' }));
