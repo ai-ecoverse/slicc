@@ -12,6 +12,9 @@ first run.
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output, exit
+slicc <join-url> new-session [--save|--skip|--erase]
+                                                Start a fresh cone conversation, like "New chat"
+slicc <join-url> model [--json] [<model>]       List the leader's models, or switch the cone to one
 slicc <join-url> watch [--plain] [scoop]        Tail the agent's output live (a scoop jid filters), until Ctrl+C
 slicc <join-url> follow [--no-banner] [--plain] [runner]
                                                 Stay connected; let the leader run commands on THIS machine
@@ -27,6 +30,25 @@ with the error on stderr.
 
 `watch` is read-only: it prints the leader's agent output as it streams (a
 `tail -f` on what the cone is doing) and sends nothing back.
+
+`new-session` and `model` let a script drive the cone the way a person does in
+the browser. `new-session` starts a fresh conversation and returns once the
+transcript holds no user message:
+
+- `--save` (the default) freezes the old chat and extracts memories;
+- `--skip` freezes it without extracting memories;
+- `--erase` discards it outright.
+
+`model` with no argument lists the models, marking the cone's with `*`. With a
+model, it switches the cone and returns once the leader confirms. It accepts the
+exact id (`bedrock-camp:global.anthropic.claude-sonnet-5`), the part after the
+provider, or a suffix such as `claude-sonnet-5`. When the only difference
+between matches is the Bedrock region (`global.` vs `us.`), it picks the global
+one. Any other ambiguity fails and lists the candidates.
+
+```sh
+slicc <url> new-session --erase && slicc <url> model claude-opus-5-5 && slicc <url> prompt @task.md
+```
 
 `<join-url>` is a leader's `https://…/join/<token>` link — the join link. Get it
 from the leader's avatar menu → **Enable multi-browser sync** → the **Terminal**

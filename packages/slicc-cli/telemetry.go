@@ -20,6 +20,7 @@ const telemetryAppID = "slicc-cli"
 // webapp's `fill` (shell command name) checkpoint.
 var knownSubcommands = map[string]bool{
 	"prompt": true, "exec": true, "watch": true, "follow": true, "update": true,
+	"new-session": true, "model": true,
 	"list-sessions": true, "follow-cloud": true, "prompt-cloud": true,
 	"exec-cloud": true, "watch-cloud": true,
 }

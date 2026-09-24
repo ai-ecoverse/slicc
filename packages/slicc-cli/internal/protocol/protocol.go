@@ -171,6 +171,73 @@ type UserMessageEcho struct {
 	ScoopJid  string `json:"scoopJid,omitempty"`
 }
 
+// NewSession asks the leader to start a fresh conversation on the cone this
+// follower is viewing (follower→leader), like the browser's "New chat". Action
+// is "save" (freeze the old chat and extract memories), "skip" (freeze it, no
+// memories) or "erase" (discard it: no freezer, no memories).
+type NewSession struct {
+	Type   string `json:"type"` // "new_session"
+	Action string `json:"action"`
+}
+
+// RequestSnapshot asks for a unit's transcript (follower→leader). Peek reads it
+// without moving the leader's record of what this follower is viewing.
+type RequestSnapshot struct {
+	Type     string `json:"type"` // "request_snapshot"
+	ScoopJid string `json:"scoopJid,omitempty"`
+	Peek     bool   `json:"peek,omitempty"`
+}
+
+// Snapshot is a unit's transcript (leader→follower). Messages stay raw: the CLI
+// reads only each message's role, and raw keeps every field a leader sends.
+type Snapshot struct {
+	Type     string            `json:"type"` // "snapshot"
+	Messages []json.RawMessage `json:"messages"`
+	ScoopJid string            `json:"scoopJid"`
+}
+
+// ModelsRequest asks for the leader's model catalogue (follower→leader).
+type ModelsRequest struct {
+	Type string `json:"type"` // "models.request"
+}
+
+// ModelCatalogEntry is one model a follower may pick (TrayModelCatalogEntry).
+// ModelID is provider-qualified ("provider:model"), the exact id model.select takes.
+type ModelCatalogEntry struct {
+	ProviderName string `json:"providerName"`
+	ModelID      string `json:"modelId"`
+	ModelName    string `json:"modelName"`
+	Reasoning    bool   `json:"reasoning"`
+}
+
+// ModelsList is the leader's model catalogue (leader→follower).
+type ModelsList struct {
+	Type   string              `json:"type"` // "models.list"
+	Models []ModelCatalogEntry `json:"models"`
+}
+
+// ModelSelect picks the model of a cone (follower→leader). The leader applies
+// only an exact catalogue ModelID and answers with a model.state broadcast.
+type ModelSelect struct {
+	Type     string `json:"type"` // "model.select"
+	ModelID  string `json:"modelId"`
+	ScoopJid string `json:"scoopJid,omitempty"`
+}
+
+// ModelSelectionState is TrayModelSelectionState: the model a cone runs now.
+type ModelSelectionState struct {
+	ActiveModelID  string `json:"activeModelId"`
+	ScoopJid       string `json:"scoopJid"`
+	ThinkingLevel  string `json:"thinkingLevel,omitempty"`
+	EffortOverride string `json:"effortOverride,omitempty"`
+}
+
+// ModelState reports the model of the cone this follower views (leader→follower).
+type ModelState struct {
+	Type  string              `json:"type"` // "model.state"
+	State ModelSelectionState `json:"state"`
+}
+
 // Envelope is used to sniff the discriminant `type` before full decoding.
 type Envelope struct {
 	Type string `json:"type"`
@@ -207,6 +274,13 @@ const (
 	TypeAgentEvent      = "agent_event"
 	TypeUserMessageEcho = "user_message_echo"
 	TypeStatus          = "status"
+	TypeNewSession      = "new_session"
+	TypeRequestSnapshot = "request_snapshot"
+	TypeSnapshot        = "snapshot"
+	TypeModelsRequest   = "models.request"
+	TypeModelsList      = "models.list"
+	TypeModelSelect     = "model.select"
+	TypeModelState      = "model.state"
 	TypeError           = "error"
 
 	// TypeChunk is the transport-level chunk frame (see ChunkFrame). The `__`

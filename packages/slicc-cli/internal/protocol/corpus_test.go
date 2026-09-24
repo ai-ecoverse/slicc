@@ -55,6 +55,20 @@ func target(typ string) any {
 		return &ExecSignal{}
 	case TypeStatus:
 		return &Status{}
+	case TypeNewSession:
+		return &NewSession{}
+	case TypeRequestSnapshot:
+		return &RequestSnapshot{}
+	case TypeSnapshot:
+		return &Snapshot{}
+	case TypeModelsRequest:
+		return &ModelsRequest{}
+	case TypeModelsList:
+		return &ModelsList{}
+	case TypeModelSelect:
+		return &ModelSelect{}
+	case TypeModelState:
+		return &ModelState{}
 	default:
 		return nil
 	}
@@ -95,9 +109,10 @@ func TestCorpusExecAndHelloRoundTrip(t *testing.T) {
 		}
 	}
 
-	// exec.* in both directions (8) + hello in both directions (2) + status (1).
-	if modeled < 11 {
-		t.Fatalf("expected >=11 modeled corpus fixtures, found %d — did exec.*/hello/status move?", modeled)
+	// exec.* in both directions (8) + hello in both directions (2) + status (1)
+	// + the session/model control set new-session and model use (7).
+	if modeled < 18 {
+		t.Fatalf("expected >=18 modeled corpus fixtures, found %d — did exec.*/hello/status/session/model move?", modeled)
 	}
 }
 
