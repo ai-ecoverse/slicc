@@ -117,73 +117,126 @@ export function pairedDelta(records, a, b, field = 'score') {
   };
 }
 
-const fmt = (x, d = 2) => (x == null ? '–' : x.toFixed(d));
-const signed = (x, d = 2) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${x.toFixed(d)}`);
-
-function deltaLine(label, records, from, to) {
-  const d = pairedDelta(records, from, to);
-  const t = pairedDelta(records, from, to, 'duration');
-  const c = pairedDelta(records, from, to, 'cost');
-  return `- ${label}: score ${signed(d.delta)}, time ${signed(t.delta, 0)} s, cost ${signed(c.delta, 3)} $ (n=${d.n})`;
-}
-
-function configRow(c, cs) {
+function configStats(c, cs) {
   const done = cs.filter(ran);
   const scored = cs.filter(judged);
   const n = (o) => scored.filter((r) => r.outcome === o).length;
-  return `| ${c.model} | ${c.skills} | ${cs.length} | ${n('pass')} | ${n('partial')} | ${n('fail')} | ${done.length - scored.length} | ${cs.length - done.length} | ${fmt(mean(scored.map((r) => r.score)))} | ${fmt(mean(done.map((r) => r.metrics?.duration ?? 0)), 0)} | ${fmt(mean(done.map((r) => r.metrics?.cost ?? 0)), 3)} |`;
+  return {
+    model: c.model,
+    skills: c.skills,
+    harness: c.harness ?? null,
+    runs: cs.length,
+    pass: n('pass'),
+    partial: n('partial'),
+    fail: n('fail'),
+    not_judged: done.length - scored.length,
+    errors: cs.length - done.length,
+    mean_score: round(mean(scored.map((r) => r.score))),
+    mean_duration: round(mean(done.map((r) => r.metrics?.duration ?? 0)), 3),
+    mean_cost: round(mean(done.map((r) => r.metrics?.cost ?? 0))),
+  };
 }
 
-/** Markdown for the job summary: one row per configuration, then skill and model deltas. */
-export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
-  const lines = [`## ${title}`, ''];
-  const judges = judgeModels(records);
-  if (judges.length)
-    lines.push(
-      `Judge: ${judges.map((m) => `\`${m}\``).join(', ')}. Scores are rubric fractions; pass = every item met.`,
-      ''
-    );
-  const benchmarks = [...new Set(records.map((r) => r.benchmark))];
-  for (const bench of benchmarks) {
-    const rs = records.filter((r) => r.benchmark === bench);
+function delta(records, from, to, extra) {
+  const d = pairedDelta(records, from, to);
+  const t = pairedDelta(records, from, to, 'duration');
+  const c = pairedDelta(records, from, to, 'cost');
+  return {
+    ...extra,
+    score: round(d.delta),
+    duration: round(t.delta, 3),
+    cost: round(c.delta),
+    n: d.n,
+  };
+}
+
+/**
+ * The report as data, the source of both report.md and report.json: per benchmark, one row per
+ * configuration, then paired skill deltas (against the first condition) and model deltas
+ * (against the first model).
+ */
+export function reportData(records) {
+  const benchmarks = [...new Set(records.map((r) => r.benchmark))].map((benchmark) => {
+    const rs = records.filter((r) => r.benchmark === benchmark);
     const configs = [...new Map(rs.map((r) => [configKey(r.config), r.config])).values()];
-    lines.push(
-      `### ${bench}`,
-      '',
-      '| model | skills | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
-      '|---|---|---|---|---|---|---|---|---|---|---|'
-    );
-    for (const c of configs) {
-      lines.push(
-        configRow(
-          c,
-          rs.filter((r) => configKey(r.config) === configKey(c))
-        )
-      );
-    }
     const models = [...new Set(configs.map((c) => c.model))];
     const skills = [...new Set(configs.map((c) => c.skills))];
     const harness = configs[0]?.harness;
     const cfg = (model, s) => ({ harness, model, skills: s });
-    if (skills.length > 1) {
-      lines.push(
-        '',
-        `**What skills change** (paired by task and repeat, against \`${skills[0]}\`):`,
-        ''
-      );
-      for (const m of models) {
-        for (const s of skills.slice(1)) {
-          lines.push(deltaLine(`${m}, \`${s}\``, rs, cfg(m, skills[0]), cfg(m, s)));
-        }
+    const skillDeltas = [];
+    for (const m of models) {
+      for (const s of skills.slice(1)) {
+        skillDeltas.push(
+          delta(rs, cfg(m, skills[0]), cfg(m, s), { model: m, from: skills[0], to: s })
+        );
       }
     }
-    if (models.length > 1) {
-      lines.push('', `**What models change** (paired, against \`${models[0]}\`):`, '');
-      for (const s of skills) {
-        for (const m of models.slice(1)) {
-          lines.push(deltaLine(`\`${s}\`, ${m}`, rs, cfg(models[0], s), cfg(m, s)));
-        }
+    const modelDeltas = [];
+    for (const s of skills) {
+      for (const m of models.slice(1)) {
+        modelDeltas.push(
+          delta(rs, cfg(models[0], s), cfg(m, s), { skills: s, from: models[0], to: m })
+        );
       }
+    }
+    return {
+      benchmark,
+      configs: configs.map((c) =>
+        configStats(
+          c,
+          rs.filter((r) => configKey(r.config) === configKey(c))
+        )
+      ),
+      skill_deltas: skillDeltas,
+      model_deltas: modelDeltas,
+    };
+  });
+  return { judges: judgeModels(records), benchmarks };
+}
+
+const fmt = (x, d = 2) => (x == null ? '–' : x.toFixed(d));
+const signed = (x, d = 2) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${x.toFixed(d)}`);
+
+function deltaLine(label, d) {
+  return `- ${label}: score ${signed(d.score)}, time ${signed(d.duration, 0)} s, cost ${signed(d.cost, 3)} $ (n=${d.n})`;
+}
+
+function configRow(c) {
+  return `| ${c.model} | ${c.skills} | ${c.runs} | ${c.pass} | ${c.partial} | ${c.fail} | ${c.not_judged} | ${c.errors} | ${fmt(c.mean_score)} | ${fmt(c.mean_duration, 0)} | ${fmt(c.mean_cost, 3)} |`;
+}
+
+/** Markdown for the job summary: one row per configuration, then skill and model deltas. */
+export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
+  const data = reportData(records);
+  const lines = [`## ${title}`, ''];
+  if (data.judges.length)
+    lines.push(
+      `Judge: ${data.judges.map((m) => `\`${m}\``).join(', ')}. Scores are rubric fractions; pass = every item met.`,
+      ''
+    );
+  for (const b of data.benchmarks) {
+    lines.push(
+      `### ${b.benchmark}`,
+      '',
+      '| model | skills | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
+      '|---|---|---|---|---|---|---|---|---|---|---|',
+      ...b.configs.map(configRow)
+    );
+    if (b.skill_deltas.length) {
+      lines.push(
+        '',
+        `**What skills change** (paired by task and repeat, against \`${b.skill_deltas[0].from}\`):`,
+        '',
+        ...b.skill_deltas.map((d) => deltaLine(`${d.model}, \`${d.to}\``, d))
+      );
+    }
+    if (b.model_deltas.length) {
+      lines.push(
+        '',
+        `**What models change** (paired, against \`${b.model_deltas[0].from}\`):`,
+        '',
+        ...b.model_deltas.map((d) => deltaLine(`\`${d.skills}\`, ${d.to}`, d))
+      );
     }
     lines.push('');
   }

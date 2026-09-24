@@ -16,12 +16,14 @@ Measures what skills and models change in SLICC. It runs task sets on a SLICC le
 | `limit`       | all                               | First N tasks of each set                                                           |
 | `timeout`     | `900`                             | Seconds one agent run may take                                                      |
 | `judge-model` | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                           |
+| `publish`     | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                         |
 
-The job summary shows the report. The `bench-<run id>` artifact holds:
+The job summary shows the report. Two artifacts:
 
-- `results/`: one file per configuration, in browser-use's result format plus rubric scores,
-- `records/`: one file per run,
-- `traces/`: transcripts and screenshots, encrypted for upstream sets.
+- `bench-report-<run id>`: `report.md`, `report.json` (the same report as data), and `results/`, one file per configuration in browser-use's result format plus rubric scores.
+- `bench-<run id>`: all of that, plus `records/` (one file per run) and `traces/` (transcripts and screenshots, encrypted for upstream sets).
+
+With `publish` on (the default), the run is also published to the Hugging Face dataset [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench). The dataset card carries the combined report across every configuration published so far. SLICC's own task sets and traces are Fernet-encrypted there as browser-use encrypts theirs. For browser-use's own sets, only scores are published.
 
 A pull request that touches the runner runs one smoke task on both models.
 

@@ -30,7 +30,7 @@ import {
   validateEnvelope,
 } from './format.mjs';
 import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
-import { reportMarkdown, summarize } from './results.mjs';
+import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   parseSkillsCondition,
   restoreSkills,
@@ -187,7 +187,8 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function readRecords(out) {
+/** Every run record under `<out>/records/`. */
+export function readRecords(out) {
   const root = join(out, 'records');
   if (!existsSync(root)) return [];
   const records = [];
@@ -415,6 +416,7 @@ function writeOutputs(opts, runStart) {
   }
   const report = reportMarkdown(records);
   writeFileSync(join(opts.out, 'report.md'), `${report}\n`);
+  writeJson(join(opts.out, 'report.json'), { run_start: runStart, ...reportData(records) });
   if (process.env.GITHUB_STEP_SUMMARY)
     writeFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`, { flag: 'a' });
   return report;

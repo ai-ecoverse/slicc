@@ -318,6 +318,10 @@ describe('main', () => {
     expect(record.metrics.cost).toBeCloseTo(0.01, 6);
     expect(readdirSync(join(outDir, 'results'))).toHaveLength(4);
     expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain('**What skills change**');
+    const reportJson = JSON.parse(readFileSync(join(outDir, 'report.json'), 'utf8'));
+    expect(reportJson.judges).toEqual(['global.openai.gpt-5.6-luna']);
+    expect(reportJson.benchmarks[0].skill_deltas).toHaveLength(2);
+    expect(reportJson.benchmarks[0].model_deltas).toHaveLength(2);
     expect(readFileSync(stepSummary, 'utf8')).toContain('### Own');
     const trace = readTrace(
       tracePath(outDir, 'Own', 'none', 'claude-sonnet-5', 'own-1', 1, false),

@@ -14,16 +14,18 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges every 
 
 ## Layout
 
-| Path                        | Purpose                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------ |
-| `scripts/format.mjs`        | Task format: validation, `outcome()` (pass / partial / fail), BU V1 and skill-creator converters |
-| `scripts/upstream.mjs`      | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                      |
-| `scripts/judge.mjs`         | Findings judge over Converse: request, validation, `score()`, text-only retry                    |
-| `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace         |
-| `scripts/executors.mjs`     | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt     |
-| `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report             |
-| `scripts/run.mjs`           | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`              |
-| `tasks/smoke.json`          | Two short live tasks in the shared format; the PR smoke run uses the first                       |
+| Path                        | Purpose                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `scripts/format.mjs`        | Task format: validation, `outcome()` (pass / partial / fail), BU V1 and skill-creator converters                    |
+| `scripts/upstream.mjs`      | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                                         |
+| `scripts/judge.mjs`         | Findings judge over Converse: request, validation, `score()`, text-only retry                                       |
+| `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace                            |
+| `scripts/executors.mjs`     | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt                        |
+| `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report                                |
+| `scripts/publish.mjs`       | Stage a run for the Hugging Face dataset `ai-ecoverse/slicc-bench`: encrypted traces and task sets, combined report |
+| `dataset/README.md`         | The dataset card template; `publish.mjs` puts the combined report in place of `<!-- report -->`                     |
+| `scripts/run.mjs`           | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`                                 |
+| `tasks/smoke.json`          | Two short live tasks in the shared format; the PR smoke run uses the first                                          |
 
 ## How a run works
 
@@ -39,6 +41,15 @@ Everything is driven from outside, through the Go `slicc` CLI against the leader
    - `run`: the agent failed, or the task text changed.
 
    An errored run is reported, never counted as a fail: #3180's matrix is sparse. The invocation still exits 1, so a CI job does not go green on runs that never happened. Scores and outcomes use only judged runs; time and cost use every finished run. Summaries name the judge from the records, never from the command line.
+
+## Publishing
+
+`report.md` and `report.json` (`reportData()`, the source of both) are written with every run. `bench.yml` uploads them with `results/` as the `bench-report-<run>` artifact, and everything as `bench-<run>`. A dispatch run then publishes to [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench) with the repo's `HF_TOKEN` secret. It downloads the dataset's `records/`, stages this run over them with `publish.mjs`, and sends one `hf upload` commit.
+
+- The encryption is browser-use's: a `.enc` file is the base64 of a Fernet token whose key is `sha256(<benchmark>)`.
+- Our own task sets go to `tasks/<benchmark>.enc`, and their traces to `runs/<run>/traces/…`, encrypted.
+- Upstream sets publish scores only: no traces, and their rubric item ids reduced to status counts.
+- Published records never carry `metrics.tabs`, because open tabs can name the site or the search.
 
 ## Build and Test
 

@@ -10,6 +10,11 @@
 #
 # Traces of upstream sets hold decrypted task text; the runner Fernet-encrypts them with the set's
 # own key before they are uploaded, as browser-use publishes its tasks.
+#
+# Artifacts: `bench-report-<run>` (report.md, report.json, results/) and `bench-<run>` (everything,
+# with traces). A dispatch run also publishes to the Hugging Face dataset ai-ecoverse/slicc-bench
+# (packages/bench/scripts/publish.mjs): scores for every set, and encrypted traces and task sets
+# for SLICC's own sets only.
 name: Benchmark
 
 on:
@@ -45,6 +50,10 @@ on:
       duration:
         description: 'Leader lifetime (max 350m)'
         default: '5h'
+      publish:
+        description: 'Publish the results to the Hugging Face dataset ai-ecoverse/slicc-bench'
+        type: boolean
+        default: true
   pull_request:
     paths:
       - 'packages/bench/**'
@@ -132,6 +141,17 @@ jobs:
           if [ -n "$BENCH_LIMIT" ]; then args+=(--limit "$BENCH_LIMIT"); fi
           node packages/bench/scripts/run.mjs "${args[@]}"
 
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-report-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/bench-out/report.md
+            ${{ runner.temp }}/bench-out/report.json
+            ${{ runner.temp }}/bench-out/results
+          if-no-files-found: ignore
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -139,6 +159,30 @@ jobs:
           name: bench-${{ github.run_id }}
           path: ${{ runner.temp }}/bench-out
           if-no-files-found: ignore
+
+      # Publishes whatever finished, even when some runs errored (the run step then exits 1).
+      # The combined report is rebuilt from the dataset's records plus this run's.
+      - name: Publish to Hugging Face
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_HUB_DISABLE_TELEMETRY: '1'
+          BENCH_DATASET: ai-ecoverse/slicc-bench
+        run: |
+          set -euo pipefail
+          if [ -z "$HF_TOKEN" ]; then echo "::error::HF_TOKEN secret is not set"; exit 1; fi
+          if [ ! -d "$RUNNER_TEMP/bench-out/records" ]; then echo "no records to publish"; exit 0; fi
+          python3 -m pip install --quiet 'huggingface_hub==2.0.0'
+          run_name="$(date -u +%Y%m%d)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          hf download "$BENCH_DATASET" --repo-type dataset --include 'records/**' \
+            --local-dir "$RUNNER_TEMP/hf-current"
+          args=(--out "$RUNNER_TEMP/bench-out" --stage "$RUNNER_TEMP/hf-stage" --run "$run_name"
+                --dataset "$RUNNER_TEMP/hf-current")
+          for set in $BENCH_SETS; do args+=(--set "$set"); done
+          node packages/bench/scripts/publish.mjs "${args[@]}"
+          hf upload "$BENCH_DATASET" "$RUNNER_TEMP/hf-stage" . --repo-type dataset \
+            --commit-message "Run $run_name: $BENCH_MODELS × $BENCH_SKILLS"
+          echo "Published to https://huggingface.co/datasets/$BENCH_DATASET/tree/main/runs/$run_name" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stop leader
         if: always()
