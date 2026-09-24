@@ -7,6 +7,8 @@ export interface TarEntry {
   directory?: boolean;
   /** Permission bits (`0o755`), from the header on read; written when set. */
   mode?: number;
+  /** Modification time in whole seconds since the epoch (the header's mtime). */
+  mtime?: number;
 }
 
 export interface ReadTarOptions {
@@ -59,7 +61,11 @@ export function writeTar(entries: TarEntry[]): Uint8Array {
         name: entry.path,
         ...(entry.directory ? {} : { data: entry.bytes }),
         // nanotar would default to 664/775 (group-writable).
-        attrs: { mode: (entry.mode ?? (entry.directory ? 0o755 : 0o644)).toString(8) },
+        attrs: {
+          mode: (entry.mode ?? (entry.directory ? 0o755 : 0o644)).toString(8),
+          // nanotar takes milliseconds here but reads seconds back.
+          ...(entry.mtime === undefined ? {} : { mtime: entry.mtime * 1000 }),
+        },
       }))
     );
   } catch (err) {
@@ -214,6 +220,7 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
       bytes: item.data ? item.data.slice() : new Uint8Array(0),
       ...(directory ? { directory: true } : {}),
       ...(Number.isFinite(mode) ? { mode: mode & 0o777 } : {}),
+      ...(typeof item.attrs?.mtime === 'number' ? { mtime: item.attrs.mtime } : {}),
     });
   });
   return entries;

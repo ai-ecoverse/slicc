@@ -125,6 +125,12 @@ function archiveEntryRoot(input: string, resolved: string): string {
   return normalized === '.' ? '.' : normalized.replace(/\/+$/, '');
 }
 
+/** A stat's mtime as whole epoch seconds, the tar header's unit. */
+function mtimeOf(stat: { mtime?: Date }): { mtime?: number } {
+  const ms = stat.mtime?.getTime();
+  return ms === undefined || Number.isNaN(ms) ? {} : { mtime: Math.floor(ms / 1000) };
+}
+
 async function addPathToTar(
   ctx: CommandContext,
   fsPath: string,
@@ -135,7 +141,12 @@ async function addPathToTar(
   if (stat.isFile) {
     const bytes = await ctx.fs.readFileBuffer(fsPath);
     const mode = typeof stat.mode === 'number' ? stat.mode & 0o777 : undefined;
-    entries.push({ path: archivePath, bytes, ...(mode === undefined ? {} : { mode }) });
+    entries.push({
+      path: archivePath,
+      bytes,
+      ...(mode === undefined ? {} : { mode }),
+      ...mtimeOf(stat),
+    });
     return;
   }
   if (!stat.isDirectory) throw new Error(`unsupported file type: ${fsPath}`);
@@ -146,6 +157,7 @@ async function addPathToTar(
     bytes: new Uint8Array(0),
     directory: true,
     ...(mode === undefined ? {} : { mode }),
+    ...mtimeOf(stat),
   });
   for (const name of await ctx.fs.readdir(fsPath)) {
     await addPathToTar(ctx, joinPath(fsPath, name), `${directoryPath}${name}`, entries);
@@ -176,14 +188,30 @@ function safeOutputPath(ctx: CommandContext, root: string, entryPath: string): s
   return ensureWithinRoot(root, outputPath) ? outputPath : undefined;
 }
 
-/** `chmod` that tolerates a backend without mode bits (a mount answers ENOSYS). */
-async function applyMode(ctx: CommandContext, path: string, mode: number): Promise<void> {
+/** Run a metadata change, tolerating a backend without it (a mount answers ENOSYS). */
+async function bestEffortMetadata(change: () => Promise<void>): Promise<void> {
   try {
-    await ctx.fs.chmod(path, mode);
+    await change();
   } catch (err) {
     const code = (err as { code?: unknown })?.code;
     if (code === 'ENOSYS' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') return;
     throw err;
+  }
+}
+
+async function applyMode(ctx: CommandContext, path: string, mode: number): Promise<void> {
+  await bestEffortMetadata(() => ctx.fs.chmod(path, mode));
+}
+
+/**
+ * Restore archived mtimes, as tar does: automake's Makefiles compare
+ * Makefile.in against configure.ac and friends, and extraction-order times
+ * would make `make` try to regenerate them.
+ */
+async function applyMtimes(ctx: CommandContext, times: Array<[string, number]>): Promise<void> {
+  for (const [path, seconds] of times) {
+    const when = new Date(seconds * 1000);
+    await bestEffortMetadata(() => ctx.fs.utimes(path, when, when));
   }
 }
 
@@ -247,14 +275,18 @@ async function readArchiveCommand(
   await ctx.fs.mkdir(outputRoot, { recursive: true });
   const extracted: string[] = [];
   const dirModes: Array<[string, number]> = [];
+  const mtimes: Array<[string, number]> = [];
   for (const entry of entries) {
     const outputPath = safeOutputPath(ctx, outputRoot, entry.path);
     if (!outputPath) return tarError(`blocked suspicious path ${entry.path}`);
     await extractEntry(ctx, outputPath, entry, dirModes);
+    if (entry.mtime !== undefined) mtimes.push([outputPath, entry.mtime]);
     extracted.push(entry.path);
   }
-  // Deepest first, so a restrictive parent does not block its children.
+  // Deepest first, so a restrictive parent does not block its children; times
+  // last, since writing into a directory bumps its mtime.
   for (const [path, mode] of dirModes.reverse()) await applyMode(ctx, path, mode);
+  await applyMtimes(ctx, mtimes.reverse());
   return {
     stdout: options.verbose ? `${extracted.join('\n')}\n` : '',
     stderr: '',
