@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  composerHoldsDraft,
   defaultRootOf,
   isReadOnlyRole,
   orderForSwitcher,
@@ -133,6 +134,33 @@ describe('wc-unit-context', () => {
     expect(selectScoopForContext(all, 'scoop:', primary.id, select)).toBe(false);
     expect(selectScoopForContext(all, 'cone:', primary.id, select)).toBe(false);
     expect(select).not.toHaveBeenCalled();
+  });
+
+  it('selectScoopForContext holds a switch while the user is mid-draft', () => {
+    const all = [worker, research, primary, helper];
+    const select = vi.fn();
+    expect(selectScoopForContext(all, 'scoop:helper', primary.id, select, () => true)).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+    // Nothing has to move for the unit already on screen, so it still answers true.
+    expect(selectScoopForContext(all, 'cone', primary.id, select, () => true)).toBe(true);
+    expect(select).not.toHaveBeenCalled();
+    expect(selectScoopForContext(all, 'scoop:helper', primary.id, select, () => false)).toBe(true);
+    expect(select).toHaveBeenCalledWith(helper);
+  });
+
+  it('composerHoldsDraft needs both the focus and a non-empty draft', () => {
+    const textarea = {};
+    const composer = (value: string, active: unknown) =>
+      ({
+        value,
+        getRootNode: () => ({ activeElement: active }),
+        contains: (node: unknown) => node === textarea,
+      }) as unknown as Element & { value?: string };
+    expect(composerHoldsDraft(composer('half a sent', textarea))).toBe(true);
+    expect(composerHoldsDraft(composer('   ', textarea))).toBe(false);
+    expect(composerHoldsDraft(composer('half a sent', {}))).toBe(false);
+    expect(composerHoldsDraft(composer('half a sent', null))).toBe(false);
+    expect(composerHoldsDraft(null)).toBe(false);
   });
 
   it('selectScoopForContext accepts a bare cone as the default root', () => {

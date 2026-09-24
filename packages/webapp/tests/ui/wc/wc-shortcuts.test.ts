@@ -1492,6 +1492,45 @@ describe('carrying the mode across a unit switch', () => {
     expect(focusComposer).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * A switch the user did not make — a sprinkle's `slicc.selectScoop`, a
+   * follower re-pointed off a unit that left the roster — lands while they are
+   * typing. A user's own switch never finds a text field focused (a tab click
+   * leaves the focus on the tab, a digit only runs in the mode), so a focused
+   * field is the tell, and the switch must leave both the caret and the mode
+   * alone.
+   */
+  it('never pulls the caret out of another text field the user is typing in', async () => {
+    const { handles, composerField, focusComposer, switchTo } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.intent()).toBe('composer');
+    const terminal = document.createElement('textarea');
+    document.body.append(terminal);
+    terminal.focus();
+    await flush();
+
+    await switchTo('cone_2');
+    expect(focusComposer).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(terminal);
+    expect(handles.active()).toBe(false);
+  });
+
+  it('never turns the mode on under a text field the user is typing in', async () => {
+    const { handles, switchTo } = harness({ composerAvailable: () => false });
+    escape();
+    expect(handles.active()).toBe(true);
+    const terminal = document.createElement('textarea');
+    document.body.append(terminal);
+    terminal.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+
+    await switchTo('scoop_a');
+    expect(document.activeElement).toBe(terminal);
+    expect(handles.active()).toBe(false);
+  });
+
   it('a scoop detour cannot invent a composer intent either', async () => {
     let available = true;
     const { handles, focusComposer, switchTo } = harness({

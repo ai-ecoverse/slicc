@@ -89,6 +89,12 @@ function ensureInputCardStyle(doc: Document): void {
 /** Prototype placeholder copy for the composer textarea. */
 const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
 
+/** Nothing holds the focus: the document's fallback, never a place the user chose. */
+function focusIsNowhere(doc: Document): boolean {
+  const active = doc.activeElement;
+  return !active || active === doc.body || active === doc.documentElement;
+}
+
 /**
  * `<slicc-input-card>` — the lifted white input card from the prototype composer
  * (`.inputcard`): a rounded `var(--canvas)` surface with a 1px `var(--line)`
@@ -133,7 +139,9 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  * @attr suggestion - a suggested follow-up prompt; shown as the placeholder
  *   when the composer is empty, accepted into the textarea on Tab; consumed
  *   by acceptance and by any submit
- * @attr disabled - boolean; disables the textarea
+ * @attr disabled - boolean; disables the textarea. Disabling a FOCUSED
+ *   textarea remembers the caret the browser drops, and re-enabling puts it
+ *   back — unless the focus has gone somewhere since
  * @csspart card - the rounded white card surface (carries the focus ring)
  * @csspart textarea - the borderless autosizing `<textarea>`
  * @csspart toolbar - the control row below the textarea
@@ -158,6 +166,8 @@ export class SliccInputCard extends HTMLElement {
   #textarea!: HTMLTextAreaElement;
   #toolbar!: HTMLDivElement;
   #built = false;
+  /** The caret a disable took from a focused textarea; see `#syncDisabled`. */
+  #lostCaret: { start: number; end: number } | null = null;
 
   connectedCallback(): void {
     ensureInputCardStyle(this.ownerDocument);
@@ -287,9 +297,38 @@ export class SliccInputCard extends HTMLElement {
     // A pending suggestion takes the placeholder slot — it only shows while
     // the textarea is empty, which is exactly when Tab can accept it.
     ta.placeholder = this.suggestion ?? this.placeholder;
-    ta.disabled = this.disabled;
+    this.#syncDisabled(ta);
     const value = this.getAttribute('value') ?? '';
     if (ta.value !== value) ta.value = value;
+  }
+
+  /**
+   * Apply `disabled`, keeping the caret of a user who was typing.
+   *
+   * The browser drops the focus of a control that becomes disabled — silently
+   * (no `blur` in Chromium), onto nothing — and re-enabling it brings nothing
+   * back. A host disables the card under a typing user for reasons that are
+   * not the user's (a follower losing its leader, a thawed archive), so the
+   * card remembers the caret it lost and puts it back on re-enable. Only when
+   * the focus is still on nothing: a user who has since gone somewhere keeps
+   * the focus where they put it.
+   */
+  #syncDisabled(ta: HTMLTextAreaElement): void {
+    const disabled = this.disabled;
+    if (disabled === ta.disabled) return;
+    if (disabled) {
+      const root = ta.getRootNode() as Partial<DocumentOrShadowRoot>;
+      this.#lostCaret =
+        root.activeElement === ta ? { start: ta.selectionStart, end: ta.selectionEnd } : null;
+      ta.disabled = true;
+      return;
+    }
+    ta.disabled = false;
+    const caret = this.#lostCaret;
+    this.#lostCaret = null;
+    if (!caret || !focusIsNowhere(this.ownerDocument)) return;
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(caret.start, caret.end);
   }
 
   #onInput = (e: Event): void => {

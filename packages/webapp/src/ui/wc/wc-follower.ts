@@ -36,7 +36,11 @@ import {
   WELCOME_HANDOFF_CARD_CLASS,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
-import { selectedScoopTarget, selectScoopForContext } from './wc-unit-context.js';
+import {
+  composerHoldsDraft,
+  selectedScoopTarget,
+  selectScoopForContext,
+} from './wc-unit-context.js';
 
 const log = createLogger('wc-follower');
 
@@ -1037,10 +1041,15 @@ export async function bootFollowerFloat(
       // Same as a switcher-chip click: resolve against this follower's roster
       // and call `boot.selectScoop`, which also asks the leader to mirror
       // the unit. Answering false (unresolvable) lets the panel fall back
-      // to a lick rather than throwing.
+      // to a lick rather than throwing. Held while the user is mid-draft,
+      // like the leader's (`wc-sprinkles.ts`).
       onSelectScoop: (target) =>
-        selectScoopForContext(workUnits.currentUnits(), target, boot.getSelected()?.id, (unit) =>
-          boot.selectScoop(unit)
+        selectScoopForContext(
+          workUnits.currentUnits(),
+          target,
+          boot.getSelected()?.id,
+          (unit) => boot.selectScoop(unit),
+          () => composerHoldsDraft(boot.refs.inputCard)
         ),
       // Same grammar as selectScoop, read from this follower's own selection.
       // A panel can ask where the view is without switching it.

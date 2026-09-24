@@ -565,7 +565,9 @@ export interface SprinkleBridgeAPI {
    * including when that unit is already selected (the view is already
    * where the caller asked to go). Resolves `false` — never throws —
    * when the grammar does not match or nothing in the roster matches, so
-   * a panel can fall back to emitting a lick.
+   * a panel can fall back to emitting a lick. Also `false` while the user
+   * is mid-draft in the focused composer (`composerHoldsDraft`): the view
+   * does not move out from under what they are typing.
    */
   selectScoop(target: string): Promise<boolean>;
   /**

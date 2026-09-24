@@ -21,6 +21,7 @@ import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-m
 import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
 import type { WcShellRefs } from './wc-shell.js';
 import {
+  composerHoldsDraft,
   defaultRootOf,
   rootForSelection,
   selectedScoopTarget,
@@ -595,6 +596,21 @@ interface SprinkleManagerGlobal {
   __slicc_sprinkleManager?: import('../sprinkle-manager.js').SprinkleManager;
 }
 
+/**
+ * `slicc.selectScoop` for the leader's panels: the switcher-chip click, held
+ * while the user is mid-draft — a sprinkle's own script must not readdress
+ * (or hide behind a read-only scoop) what they are typing.
+ */
+function sprinkleSelectScoop(
+  deps: WireWcSprinklesDeps,
+  selectScoop: (unit: WorkUnitSummary) => void
+): (target: string) => boolean {
+  return (target) =>
+    selectScoopForContext(deps.getUnits(), target, deps.getSelected()?.id, selectScoop, () =>
+      composerHoldsDraft(deps.refs.inputCard)
+    );
+}
+
 export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
   const {
     refs,
@@ -651,12 +667,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       onAttachImage: onAttachImage ?? (() => {}),
       resolveLickOriginUnitId: (target) => matchLickTargetAlias(deps.getUnits(), target)?.id,
       selectedScoopHandler: () => selectedScoopTarget(deps.getUnits(), deps.getSelected()?.id),
-      ...(selectScoop
-        ? {
-            selectScoopHandler: (target: string) =>
-              selectScoopForContext(deps.getUnits(), target, deps.getSelected()?.id, selectScoop),
-          }
-        : {}),
+      ...(selectScoop ? { selectScoopHandler: sprinkleSelectScoop(deps, selectScoop) } : {}),
     }
   );
   (window as unknown as SprinkleManagerGlobal).__slicc_sprinkleManager = manager;

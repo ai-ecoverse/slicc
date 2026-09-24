@@ -86,6 +86,19 @@
  * at all (#2312): the forced keyboard mode there is not a choice the user
  * made, so it must not overwrite the intent — otherwise cone → scoop → cone
  * would swallow the caret the user left behind.
+ *
+ * Not every switch is the user's. A sprinkle's script can call
+ * `slicc.selectScoop`, a follower re-points itself when its unit leaves the
+ * roster, a boot selects the first cone. None of those may take the keyboard
+ * from a user who is typing, and a user's OWN switch never finds a text field
+ * focused (a tab click leaves the focus on the tab; a digit only runs inside
+ * the mode) — so a restore that finds one focused moves neither the caret nor
+ * the mode. The draft is the other half: it is not per unit, so a scripted
+ * switch would readdress a half-typed message to the other cone. The sprinkle
+ * bridge therefore refuses one while the focused composer holds a draft
+ * (`composerHoldsDraft` in `wc-unit-context.ts`), and a composer the host
+ * disables under a typing user (a follower losing its leader) gives the caret
+ * back itself on re-enable — `<slicc-input-card>`'s own contract.
  */
 
 /** The bit of `<slicc-agent-tabs>` the mode drives. */
@@ -1849,6 +1862,18 @@ function createSettler(
     schedule,
     restore: () => {
       if (hasOpenOverlay(doc)) return;
+      // A switch never takes the keyboard away from a field that holds it.
+      // A user's own switch cannot find one focused — a tab click leaves the
+      // focus on the tab, a digit only runs in the mode — so a text field
+      // holding the focus here means the selection moved under the user
+      // (a sprinkle's `slicc.selectScoop`, a follower re-pointed off a unit
+      // that left the roster, a first cone selected at boot) while they were
+      // typing somewhere: in this composer, the terminal, a settings field.
+      // Neither the caret nor the mode moves; the settle reads the focus.
+      if (isTypingTarget(deepActiveElement(doc))) {
+        schedule();
+        return;
+      }
       const trigger = readTrigger();
       if (intent === 'composer' && composerAvailable()) {
         mode.set(false);

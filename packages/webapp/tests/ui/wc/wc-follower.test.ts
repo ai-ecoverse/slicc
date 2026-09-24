@@ -607,6 +607,42 @@ describe('bootFollowerFloat', () => {
     loadMessages.mockRestore();
   });
 
+  it("holds a sprinkle's slicc.selectScoop while the user is mid-draft", async () => {
+    // The draft is not per unit, so a scripted switch would readdress the
+    // half-typed message to the other cone. A click inside the sprinkle moves
+    // the focus into its frame first, so only a script finds it here.
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const selectScoop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop,
+      sendMessage: vi.fn(),
+      stop: vi.fn(),
+    };
+    opts.onScoopsList?.(
+      [
+        { assistantLabel: 'sliccy', folder: 'cone', jid: 'cone_a', name: 'a', parentId: null },
+        { assistantLabel: 'sliccy', folder: 'cone-b', jid: 'cone_b', name: 'b', parentId: null },
+      ] as never,
+      'cone_a'
+    );
+    opts.onConnectionChange?.(true);
+    selectScoop.mockClear();
+
+    const inputCard = app.querySelector('slicc-input-card') as HTMLElement & { value: string };
+    const textarea = inputCard.querySelector('textarea')!;
+    inputCard.value = 'half a sent';
+    textarea.focus();
+    expect(await opts.onSelectScoop?.('cone:cone-b')).toBe(false);
+    expect(selectScoop).not.toHaveBeenCalled();
+
+    textarea.blur();
+    expect(await opts.onSelectScoop?.('cone:cone-b')).toBe(true);
+    expect(selectScoop).toHaveBeenCalledWith('cone_b');
+  });
+
   it('keeps showing a guest thread the roster never describes (#2382 D2b)', async () => {
     // A biscotto seat is pinned to one thread and deliberately never sent
     // `scoops.list`, so there is no summary to select. Its transcript still

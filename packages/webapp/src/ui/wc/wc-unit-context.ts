@@ -91,20 +91,51 @@ function isSelectScoopTarget(ctx: string): boolean {
  * Returns `true` when the target resolved against `units`, including when
  * that unit is already selected (the view is already where the caller asked
  * to go). Returns `false` when the string is outside that grammar or nothing
- * in the roster matches, so a panel can fall back to emitting a lick. Never
- * throws.
+ * in the roster matches, so a panel can fall back to emitting a lick — and
+ * also when `held` says the view must not move right now (the user is
+ * mid-draft, see {@link composerHoldsDraft}); an already-selected target is
+ * still `true`, since nothing has to move for it. Never throws.
  */
 export function selectScoopForContext(
   units: readonly WorkUnitSummary[],
   ctx: string,
   selectedId: string | null | undefined,
-  select: (unit: WorkUnitSummary) => void
+  select: (unit: WorkUnitSummary) => void,
+  held?: () => boolean
 ): boolean {
   if (!isSelectScoopTarget(ctx)) return false;
   const unit = unitForContext(units, ctx);
   if (!unit) return false;
-  if (unit.id !== selectedId) select(unit);
+  if (unit.id === selectedId) return true;
+  // A switch that would move the view out from under the user resolves
+  // `false`, exactly like one that found nothing: the view stayed where it
+  // was, and the panel's lick fallback is the right answer to both.
+  if (held?.()) return false;
+  select(unit);
   return true;
+}
+
+/**
+ * The composer the user is writing in right now: it holds the focus AND a
+ * non-empty draft.
+ *
+ * The hold on a switch nobody at this keyboard asked for — a sprinkle calling
+ * `slicc.selectScoop` from its own script. The draft is not per unit (the
+ * band is hidden, never rebuilt, on a switch), so a cone→cone switch would
+ * readdress a half-typed message to the other cone, and a cone→scoop switch
+ * would hide it and drop the user into keyboard mode mid-word. A sprinkle the
+ * user actually CLICKED cannot trip this: the click moved the focus into its
+ * frame, out of the composer. An empty focused composer (the resting state
+ * after a send) holds nothing, so an automated sprinkle still works.
+ */
+export function composerHoldsDraft(
+  composer: (Element & { value?: string }) | null | undefined
+): boolean {
+  if (!composer) return false;
+  if ((composer.value ?? '').trim() === '') return false;
+  const root = composer.getRootNode() as Partial<DocumentOrShadowRoot>;
+  const active = root.activeElement ?? null;
+  return !!active && composer.contains(active);
 }
 
 /**
