@@ -200,14 +200,59 @@ describe('sidepanel-entry controller', () => {
     vi.useRealTimers();
   });
 
-  it('boot watchdog: stuck on booting escalates to disconnected', () => {
+  it('boot watchdog: stuck on booting escalates to slow, not disconnected', () => {
+    // A background leader tab boots at the lowest OS priority; on a busy
+    // machine it is slow, not dead, so the panel offers to bring it forward.
     vi.useFakeTimers();
     make();
     port._emit({ kind: 'join-url', state: 'booting' });
     expect(statuses).toContain('starting');
     vi.advanceTimersByTime(20_000); // BOOT_TIMEOUT_MS
-    expect(statuses[statuses.length - 1]).toBe('disconnected');
+    expect(statuses[statuses.length - 1]).toBe('slow');
+    expect(statuses).not.toContain('disconnected');
     vi.useRealTimers();
+  });
+
+  it('a booting replay while slow stays slow instead of restarting the spinner', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    vi.advanceTimersByTime(20_000);
+    statuses.length = 0;
+    port._emit({ kind: 'join-url', state: 'booting' }); // SW wake / Port reconnect replay
+    expect(statuses).toEqual(['slow']);
+    vi.advanceTimersByTime(20_000);
+    expect(statuses).toEqual(['slow']); // no second watchdog lap
+    vi.useRealTimers();
+  });
+
+  it('a slow leader that finally delivers its join URL mounts the follower', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    vi.advanceTimersByTime(20_000);
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    expect(mountSlicc).toHaveBeenCalledTimes(1);
+    expect(statuses[statuses.length - 1]).toBe('live');
+    vi.useRealTimers();
+  });
+
+  it('a fresh boot after a disconnect starts at starting again, not slow', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    vi.advanceTimersByTime(20_000);
+    port._emit({ kind: 'join-url', state: 'disconnected' });
+    statuses.length = 0;
+    port._emit({ kind: 'join-url', state: 'booting' });
+    expect(statuses).toEqual(['starting']);
+    vi.useRealTimers();
+  });
+
+  it('focusLeader() asks the SW for a plain leader focus', () => {
+    const controller = make();
+    controller.focusLeader();
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: false });
   });
 
   it('iframe watchdog: a follower that never loads escalates to disconnected', () => {

@@ -13,21 +13,36 @@ const sliccOriginDefault = __SLICC_EXT_DEV__ ? 'http://localhost:8787' : SLICC_H
 
 // Panel-chrome status = which overlay (if any) covers the follower iframe:
 //  - 'starting'     → "Starting SLICC…" overlay (pre-mount: no follower yet)
+//  - 'slow'         → still no follower after BOOT_TIMEOUT_MS: the leader tab is
+//                     still booting, so offer to bring it to the front
 //  - 'live'         → overlay hidden; the follower iframe is shown and owns its
 //                     OWN sub-status (connecting → connected → "reload to retry"
 //                     on terminal failure — rendered by wc-follower inside the
 //                     iframe, so the panel must NOT cover it)
 //  - 'disconnected' → "Disconnected — reopen to retry" overlay (iframe blanked)
-export type PanelStatus = 'starting' | 'live' | 'disconnected';
+export type PanelStatus = 'starting' | 'slow' | 'live' | 'disconnected';
 
 // A leader that boots but never becomes a tray leader (worker unreachable, or it
 // resolves as a follower) would leave the SW at 'booting' with no join-url, so
-// the panel can't rely on the SW to escalate. Bound the spinner here.
+// the panel can't rely on the SW to escalate. Bound the spinner here — but with
+// 'slow', not 'disconnected': the usual cause is a leader that is merely slow.
+// The pinned leader is a background tab, and on macOS Chrome runs a background
+// tab's renderer at the lowest scheduler priority (CPU- and I/O-throttled), so
+// on a busy machine a cold boot can take minutes and finishes within seconds of
+// the tab being brought to the front. "Reopen to retry" never helped here: the
+// SW is still 'booting', so a reconnect just replays it.
 const BOOT_TIMEOUT_MS = 20_000;
 // After mounting, the follower iframe must actually load; a CSP/network failure
 // that never loads the document (so wc-follower's own UI never renders) would
 // leave a blank pane. Escalate to a recoverable 'disconnected' if it doesn't.
 const IFRAME_LOAD_TIMEOUT_MS = 15_000;
+
+const PANEL_STATUS_TEXT: Record<PanelStatus, string> = {
+  starting: 'Starting SLICC…',
+  slow: 'SLICC is still starting in its tab. Chrome slows down background tabs, so bringing it to the front usually lets it finish.',
+  live: '',
+  disconnected: 'Disconnected — reopen to retry',
+};
 
 export interface SidePanelDeps {
   connect: () => ChromeRuntimePort;
@@ -37,13 +52,22 @@ export interface SidePanelDeps {
   sliccOrigin: string;
 }
 
-export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
+export interface SidePanelController {
+  dispose(): void;
+  /** Bring the leader tab to the front (the 'slow' / 'disconnected' overlay button). */
+  focusLeader(): void;
+}
+
+export function createSidePanelController(deps: SidePanelDeps): SidePanelController {
   let handle: SliccHandle | null = null;
   let currentJoinUrl: string | null = null;
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
   let reconnectDelay = 250;
   let bootTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set once the boot watchdog fired for this boot; a `booting` replay (SW wake,
+  // Port reconnect) keeps 'slow' instead of restarting the 20s spinner.
+  let bootSlow = false;
   let iframeLoadTimer: ReturnType<typeof setTimeout> | null = null;
 
   const clearBootTimer = () => {
@@ -64,6 +88,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   };
   const teardown = () => {
     clearBootTimer();
+    bootSlow = false;
     clearIframeLoadTimer();
     handle?.destroy();
     handle = null;
@@ -113,11 +138,17 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
         deps.setStatus('live');
         return;
       }
+      if (bootSlow) {
+        deps.setStatus('slow');
+        return;
+      }
       deps.setStatus('starting');
       clearBootTimer();
       bootTimer = setTimeout(() => {
         bootTimer = null;
-        if (!disposed) goDisconnected();
+        if (disposed) return;
+        bootSlow = true;
+        deps.setStatus('slow');
       }, BOOT_TIMEOUT_MS);
       return;
     }
@@ -131,6 +162,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     // cancels the boot watchdog.
     reconnectDelay = 250;
     clearBootTimer();
+    bootSlow = false;
     if (msg.joinUrl === currentJoinUrl && handle) {
       // Idempotent (e.g. a `booting` blip replayed the same ready): the follower
       // is already mounted → just re-show it. No remount.
@@ -200,6 +232,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   wire();
 
   return {
+    focusLeader: () => requestLeaderFocus(false),
     dispose() {
       disposed = true;
       teardown();
@@ -217,17 +250,20 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
 if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
   const iframe = document.getElementById('cherry-follower') as HTMLIFrameElement;
   const statusEl = document.getElementById('cherry-status');
+  const statusText = document.getElementById('cherry-status-text');
+  const focusButton = document.getElementById('cherry-status-focus') as HTMLButtonElement | null;
   const setStatus = (s: PanelStatus) => {
     if (!statusEl) return;
-    statusEl.textContent =
-      s === 'live' ? '' : s === 'starting' ? 'Starting SLICC…' : 'Disconnected — reopen to retry';
-    statusEl.dataset.state = s; // CSS shows the overlay only for starting/disconnected
+    if (statusText) statusText.textContent = PANEL_STATUS_TEXT[s];
+    if (focusButton) focusButton.hidden = s !== 'slow' && s !== 'disconnected';
+    statusEl.dataset.state = s; // CSS shows the overlay for every state but 'live'
   };
-  createSidePanelController({
+  const controller = createSidePanelController({
     connect: () => chrome.runtime.connect({ name: CHERRY_PANEL_PORT_NAME }),
     mountSlicc,
     iframe,
     setStatus,
     sliccOrigin: sliccOriginDefault,
   });
+  focusButton?.addEventListener('click', () => controller.focusLeader());
 }
