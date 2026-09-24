@@ -1,11 +1,12 @@
 name: Renovate Bundle-Size Reconcile
 
-# The webapp's `webapp: total JS payload` size-limit budget is re-measured to
-# the byte by every feature PR that grows it, so main carries well under 1 kB
-# of headroom. Any dependency bump that adds a few hundred bytes therefore
-# fails the `bundle-size` job, and because nobody edits a Renovate PR the PR
-# sits red and never automerges — #3424 (codemirror, +163 B), #3449
-# (mediabunny, +3.19 kB) and #3455 (lucide, +5.49 kB) all stalled that way.
+# Nobody edits a Renovate PR, so a dependency bump that pushes any size-limit
+# budget over — even by a few hundred bytes — sits red on `bundle-size` and
+# never automerges. #3424 (codemirror, +163 B), #3449 (mediabunny, +3.19 kB)
+# and #3455 (lucide, +5.49 kB) all stalled that way while the webapp total-JS
+# budget was re-measured to the byte by every feature PR. That budget now has
+# MiB-scale headroom, but the extension budgets are still tight (the service
+# worker sits within ~0.2 kB of 60 kB), so this stays as the backstop.
 #
 # This workflow builds a Renovate PR exactly like the CI `bundle-size` job,
 # and when a budget is exceeded by at most MAX_GROWTH_KB it raises the budget

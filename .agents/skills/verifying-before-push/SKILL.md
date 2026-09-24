@@ -219,10 +219,10 @@ which builds both apps itself.
 The size-limit budgets are ratchets like the duplication threshold: tighten them as payloads
 shrink. Raising one needs a justification in the PR body.
 
-Renovate PRs are the exception: the total-JS budget carries under 1 kB of headroom, so any
-growing dependency bump would stall red. `.github/workflows/renovate-bundle-size-reconcile.yml`
+Renovate PRs are the exception: nobody edits them, so a bump that overshoots a tight budget
+(e.g. the extension service worker) would stall red. `.github/workflows/renovate-bundle-size-reconcile.yml`
 builds each npm Renovate PR and runs `packages/dev-tools/tools/bundle-budget-reconcile.mjs
---write`, which raises an exceeded budget to the measured size (next kB up) when the overshoot
+--write`, which raises an exceeded budget to the measured size (rounded up, same unit) when the overshoot
 is ≤ 50 kB, and comments/fails for a human above that.
 
 ## Boy-scout debt gate (`check-touched-exemptions.mjs`)
