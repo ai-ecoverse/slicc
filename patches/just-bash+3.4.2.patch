@@ -110,6 +110,19 @@ index 3a191c5..40f06e8 100644
  `}}catch{return{name:z,line:`-rw-r--r-- 1 user user     0 Jan  1 00:00 ${z}
  `}}}));P.push(...v)}let w=new Map(M.map(($,W)=>[$,W]));P.sort(($,W)=>(w.get($.name)??0)-(w.get(W.name)??0));for(let{line:$}of P)A=N(t,A,$)}else if(u){let x=[],M=S.filter(w=>w!=="."&&w!==".."),P=S.filter(w=>w==="."||w==="..");for(let w of P)x.push(`${w}/`);for(let w=0;w<M.length;w+=100){let $=M.slice(w,w+100),W=await Promise.all($.map(async v=>{let z=y==="/"?`/${v}`:`${y}/${v}`;try{let j=await t.fs.lstat(z);return`${v}${G(j)}`}catch{return v}}));x.push(...W)}A=N(t,A,U(t,x))}else A=N(t,A,U(t,S));if(r){let x=S.filter(w=>w!=="."&&w!==".."),M=[];if(t.fs.readdirWithFileTypes)M=(await t.fs.readdirWithFileTypes(y)).filter($=>$.isDirectory&&x.includes($.name)).map($=>({name:$.name,isDirectory:!0}));else for(let w=0;w<x.length;w+=100){let $=x.slice(w,w+100),W=await Promise.all($.map(async v=>{let z=y==="/"?`/${v}`:`${y}/${v}`;try{let j=await t.fs.stat(z);return{name:v,isDirectory:j.isDirectory}}catch{return{name:v,isDirectory:!1}}}));M.push(...W.filter(v=>v.isDirectory))}M.sort((w,$)=>w.name.localeCompare($.name)),a&&M.reverse();let P=[];for(let w=0;w<M.length;w+=100){let $=M.slice(w,w+100),W=await Promise.all($.map(async v=>{let z=i==="."?`./${v.name}`:`${i}/${v.name}`,j=await zt(z,t,e,s,n,r,!1,a,l,c,u,!0,d,g+1,E);return{name:v.name,result:j}}));P.push(...W)}P.sort((w,$)=>w.name.localeCompare($.name)),a&&P.reverse();for(let{result:w}of P)A=N(t,A,`
  `),A=N(t,A,w.stdout),D=N(t,D,w.stderr),w.exitCode!==0&&(B=w.exitCode)}return{stdout:A,stderr:D,exitCode:B}}catch(m){if(m instanceof Y||m instanceof lt)throw m;return{stdout:"",stderr:`ls: ${i}: No such file or directory
+diff --git a/node_modules/just-bash/dist/bin/chunks/chunk-MHAGHCSO.js b/node_modules/just-bash/dist/bin/chunks/chunk-MHAGHCSO.js
+index 79fd330..ee99b22 100644
+--- a/node_modules/just-bash/dist/bin/chunks/chunk-MHAGHCSO.js
++++ b/node_modules/just-bash/dist/bin/chunks/chunk-MHAGHCSO.js
+@@ -26,7 +26,7 @@ ${h}`,e.lineNumber=t.currentLineIndex+e.linesConsumedInCycle+1}else{e.quit=!0;br
+ `?this.peek()===n&&!a?s+=this.advance():(s+="\\",s+=this.advance()):s+="\\";else{if(o===`
+ `)break;o==="["&&!a?(a=!0,s+=this.advance(),this.peek()==="^"&&(s+=this.advance()),this.peek()==="]"&&(s+=this.advance())):o==="]"&&a?(a=!1,s+=this.advance()):s+=this.advance()}}if(this.peek()!==n)return{type:c.ERROR,value:"unterminated substitution pattern",line:e,column:t};this.advance();let r="";for(;this.pos<this.input.length&&this.peek()!==n;)if(this.peek()==="\\")if(this.advance(),this.pos<this.input.length){let o=this.peek();o==="\\"?(this.advance(),this.pos<this.input.length&&this.peek()===`
+ `?(r+=`
+-`,this.advance()):r+="\\"):o===`
++`,this.advance()):r+="\\\\"):o===`
+ `?(r+=`
+ `,this.advance()):r+=`\\${this.advance()}`}else r+="\\";else{if(this.peek()===`
+ `)break;r+=this.advance()}this.peek()===n&&this.advance();let u="";for(;this.pos<this.input.length;){let o=this.peek();if(o==="g"||o==="i"||o==="p"||o==="I"||this.isDigit(o))u+=this.advance();else break}return{type:c.SUBSTITUTE,value:`s${n}${s}${n}${r}${n}${u}`,pattern:s,replacement:r,flags:u,line:e,column:t}}readTransliterate(e,t){let n=this.advance();if(!n||n===`
 diff --git a/node_modules/just-bash/dist/bin/chunks/chunk-ROFYAVPF.js b/node_modules/just-bash/dist/bin/chunks/chunk-ROFYAVPF.js
 index 36f5d04..9e7d887 100644
 --- a/node_modules/just-bash/dist/bin/chunks/chunk-ROFYAVPF.js
@@ -379,6 +392,19 @@ index 3a191c5..40f06e8 100644
  `}}catch{return{name:z,line:`-rw-r--r-- 1 user user     0 Jan  1 00:00 ${z}
  `}}}));P.push(...v)}let w=new Map(M.map(($,W)=>[$,W]));P.sort(($,W)=>(w.get($.name)??0)-(w.get(W.name)??0));for(let{line:$}of P)A=N(t,A,$)}else if(u){let x=[],M=S.filter(w=>w!=="."&&w!==".."),P=S.filter(w=>w==="."||w==="..");for(let w of P)x.push(`${w}/`);for(let w=0;w<M.length;w+=100){let $=M.slice(w,w+100),W=await Promise.all($.map(async v=>{let z=y==="/"?`/${v}`:`${y}/${v}`;try{let j=await t.fs.lstat(z);return`${v}${G(j)}`}catch{return v}}));x.push(...W)}A=N(t,A,U(t,x))}else A=N(t,A,U(t,S));if(r){let x=S.filter(w=>w!=="."&&w!==".."),M=[];if(t.fs.readdirWithFileTypes)M=(await t.fs.readdirWithFileTypes(y)).filter($=>$.isDirectory&&x.includes($.name)).map($=>({name:$.name,isDirectory:!0}));else for(let w=0;w<x.length;w+=100){let $=x.slice(w,w+100),W=await Promise.all($.map(async v=>{let z=y==="/"?`/${v}`:`${y}/${v}`;try{let j=await t.fs.stat(z);return{name:v,isDirectory:j.isDirectory}}catch{return{name:v,isDirectory:!1}}}));M.push(...W.filter(v=>v.isDirectory))}M.sort((w,$)=>w.name.localeCompare($.name)),a&&M.reverse();let P=[];for(let w=0;w<M.length;w+=100){let $=M.slice(w,w+100),W=await Promise.all($.map(async v=>{let z=i==="."?`./${v.name}`:`${i}/${v.name}`,j=await zt(z,t,e,s,n,r,!1,a,l,c,u,!0,d,g+1,E);return{name:v.name,result:j}}));P.push(...W)}P.sort((w,$)=>w.name.localeCompare($.name)),a&&P.reverse();for(let{result:w}of P)A=N(t,A,`
  `),A=N(t,A,w.stdout),D=N(t,D,w.stderr),w.exitCode!==0&&(B=w.exitCode)}return{stdout:A,stderr:D,exitCode:B}}catch(m){if(m instanceof Y||m instanceof lt)throw m;return{stdout:"",stderr:`ls: ${i}: No such file or directory
+diff --git a/node_modules/just-bash/dist/bin/shell/chunks/chunk-MHAGHCSO.js b/node_modules/just-bash/dist/bin/shell/chunks/chunk-MHAGHCSO.js
+index 79fd330..ee99b22 100644
+--- a/node_modules/just-bash/dist/bin/shell/chunks/chunk-MHAGHCSO.js
++++ b/node_modules/just-bash/dist/bin/shell/chunks/chunk-MHAGHCSO.js
+@@ -26,7 +26,7 @@ ${h}`,e.lineNumber=t.currentLineIndex+e.linesConsumedInCycle+1}else{e.quit=!0;br
+ `?this.peek()===n&&!a?s+=this.advance():(s+="\\",s+=this.advance()):s+="\\";else{if(o===`
+ `)break;o==="["&&!a?(a=!0,s+=this.advance(),this.peek()==="^"&&(s+=this.advance()),this.peek()==="]"&&(s+=this.advance())):o==="]"&&a?(a=!1,s+=this.advance()):s+=this.advance()}}if(this.peek()!==n)return{type:c.ERROR,value:"unterminated substitution pattern",line:e,column:t};this.advance();let r="";for(;this.pos<this.input.length&&this.peek()!==n;)if(this.peek()==="\\")if(this.advance(),this.pos<this.input.length){let o=this.peek();o==="\\"?(this.advance(),this.pos<this.input.length&&this.peek()===`
+ `?(r+=`
+-`,this.advance()):r+="\\"):o===`
++`,this.advance()):r+="\\\\"):o===`
+ `?(r+=`
+ `,this.advance()):r+=`\\${this.advance()}`}else r+="\\";else{if(this.peek()===`
+ `)break;r+=this.advance()}this.peek()===n&&this.advance();let u="";for(;this.pos<this.input.length;){let o=this.peek();if(o==="g"||o==="i"||o==="p"||o==="I"||this.isDigit(o))u+=this.advance();else break}return{type:c.SUBSTITUTE,value:`s${n}${s}${n}${r}${n}${u}`,pattern:s,replacement:r,flags:u,line:e,column:t}}readTransliterate(e,t){let n=this.advance();if(!n||n===`
 diff --git a/node_modules/just-bash/dist/bin/shell/chunks/chunk-ROFYAVPF.js b/node_modules/just-bash/dist/bin/shell/chunks/chunk-ROFYAVPF.js
 index 36f5d04..9e7d887 100644
 --- a/node_modules/just-bash/dist/bin/shell/chunks/chunk-ROFYAVPF.js
@@ -550,7 +576,7 @@ index 65e270a..0c2605b 100755
  `),this.prompt()}),process.stdin.isTTY&&this.rl.on("close",()=>{this.running=!1,console.log(`
  Goodbye!`),process.exit(0)})}async seedFiles(t,n){if(n)for(let[r,s]of Object.entries(n)){if(typeof s!="string")throw new TypeError(`Invalid --files content for ${r}`);let i=t.resolvePath("/",r);await t.mkdir(kf.posix.dirname(i),{recursive:!0}),await t.writeFile(i,s)}}syncHistory(){let t=this.env.getEnv();t.BASH_HISTORY=JSON.stringify(this.history)}getPrompt(){let t=this.env.getCwd(),n=this.env.getEnv().HOME||"/home/user",r=t;return t===n?r="~":t.startsWith(`${n}/`)&&(r=`~${t.slice(n.length)}`),`${ke.green}${ke.bold}user@virtual${ke.reset}:${ke.blue}${ke.bold}${r}${ke.reset}$ `}async executeCommand(t){let n=t.trim();if(n){if(this.history.push(n),n==="exit"||n.startsWith("exit ")){let r=n.split(/\s+/),s=r[1]?parseInt(r[1],10):0;console.log("exit"),process.exit(s)}this.syncHistory();try{let r=await this.env.exec(n);r.stdout&&process.stdout.write(r.stdout),r.stderr&&process.stderr.write(`${ke.red}${r.stderr}${ke.reset}`)}catch(r){console.error(`${ke.red}Error: ${tt(r)}${ke.reset}`)}}}printWelcome(){console.log(`
 diff --git a/node_modules/just-bash/dist/bundle/browser.js b/node_modules/just-bash/dist/bundle/browser.js
-index 6ab2d2b..6cb6552 100644
+index 6ab2d2b..77ca631 100644
 --- a/node_modules/just-bash/dist/bundle/browser.js
 +++ b/node_modules/just-bash/dist/bundle/browser.js
 @@ -1,3 +1,5 @@
@@ -615,6 +641,15 @@ index 6ab2d2b..6cb6552 100644
  `:`grep: option '--file' requires an argument
  `,exitCode:2};break}if(pe==="i"||pe==="--ignore-case")n=!0;else if(pe==="n"||pe==="--line-number")r=!0;else if(pe==="v"||pe==="--invert-match")s=!0;else if(pe==="c"||pe==="--count")i=!0;else if(pe==="l"||pe==="--files-with-matches")o=!0;else if(pe==="L"||pe==="--files-without-match")a=!0;else if(pe==="r"||pe==="R"||pe==="--recursive")l=!0;else if(pe==="w"||pe==="--word-regexp")c=!0;else if(pe==="x"||pe==="--line-regexp")u=!0;else if(pe==="E"||pe==="--extended-regexp")f=!0;else if(pe==="P"||pe==="--perl-regexp")d=!0;else if(pe==="F"||pe==="--fixed-strings")p=!0;else if(pe==="o"||pe==="--only-matching")h=!0;else if(pe==="h"||pe==="--no-filename")m=!0;else if(pe==="q"||pe==="--quiet"||pe==="--silent")g=!0;else{if(pe.startsWith("--"))return re("grep",pe);if(pe.length===1)return re("grep",`-${pe}`)}}}else R.push(fe)}if(A===null&&O.length===0&&(A=R.shift()??null,A===null))return{stdout:"",stderr:`grep: missing pattern
  `,exitCode:2};let I=R,T=A===null?[]:Xb(A),W=!1;for(let se of O){let fe;if(se==="")return{stdout:"",stderr:`grep: : No such file or directory
+@@ -268,7 +270,7 @@ ${c}`,t.lineNumber=n.currentLineIndex+t.linesConsumedInCycle+1}else{t.quit=!0;br
+ `?this.peek()===r&&!i?s+=this.advance():(s+="\\",s+=this.advance()):s+="\\";else{if(l===`
+ `)break;l==="["&&!i?(i=!0,s+=this.advance(),this.peek()==="^"&&(s+=this.advance()),this.peek()==="]"&&(s+=this.advance())):l==="]"&&i?(i=!1,s+=this.advance()):s+=this.advance()}}if(this.peek()!==r)return{type:le.ERROR,value:"unterminated substitution pattern",line:t,column:n};this.advance();let o="";for(;this.pos<this.input.length&&this.peek()!==r;)if(this.peek()==="\\")if(this.advance(),this.pos<this.input.length){let l=this.peek();l==="\\"?(this.advance(),this.pos<this.input.length&&this.peek()===`
+ `?(o+=`
+-`,this.advance()):o+="\\"):l===`
++`,this.advance()):o+="\\\\"):l===`
+ `?(o+=`
+ `,this.advance()):o+=`\\${this.advance()}`}else o+="\\";else{if(this.peek()===`
+ `)break;o+=this.advance()}this.peek()===r&&this.advance();let a="";for(;this.pos<this.input.length;){let l=this.peek();if(l==="g"||l==="i"||l==="p"||l==="I"||this.isDigit(l))a+=this.advance();else break}return{type:le.SUBSTITUTE,value:`s${r}${s}${r}${o}${r}${a}`,pattern:s,replacement:o,flags:a,line:t,column:n}}readTransliterate(t,n){let r=this.advance();if(!r||r===`
 @@ -354,11 +356,11 @@ Addresses:
  `,line:t,column:n}):r==='"'?this.readString():r==="/"&&this.canBeRegex()?this.readRegex():this.isDigit(r)||r==="."&&this.isDigit(this.peek(1))?this.readNumber():this.isAlpha(r)||r==="_"?this.readIdentifier():this.readOperator()}canBeRegex(){return new Set([null,k.NEWLINE,k.SEMICOLON,k.LBRACE,k.RBRACE,k.LPAREN,k.LBRACKET,k.COMMA,k.ASSIGN,k.PLUS_ASSIGN,k.MINUS_ASSIGN,k.STAR_ASSIGN,k.SLASH_ASSIGN,k.PERCENT_ASSIGN,k.CARET_ASSIGN,k.AND,k.OR,k.NOT,k.MATCH,k.NOT_MATCH,k.QUESTION,k.COLON,k.LT,k.GT,k.LE,k.GE,k.EQ,k.NE,k.PLUS,k.MINUS,k.STAR,k.PERCENT,k.CARET,k.PRINT,k.PRINTF,k.IF,k.WHILE,k.DO,k.FOR,k.RETURN]).has(this.lastTokenType)}readString(){let t=this.line,n=this.column;this.advance();let r="";for(;this.pos<this.input.length&&this.peek()!=='"';)if(this.peek()==="\\"){this.advance();let s=this.advance();switch(s){case"n":r+=`
  `;break;case"t":r+="	";break;case"r":r+="\r";break;case"f":r+="\f";break;case"b":r+="\b";break;case"v":r+="\v";break;case"a":r+="\x07";break;case"\\":r+="\\";break;case'"':r+='"';break;case"/":r+="/";break;case"x":{let i="";for(;i.length<2&&/[0-9a-fA-F]/.test(this.peek());)i+=this.advance();i.length>0?r+=String.fromCharCode(parseInt(i,16)):r+="x";break}default:if(/[0-7]/.test(s)){let i=s;for(;i.length<3&&/[0-7]/.test(this.peek());)i+=this.advance();r+=String.fromCharCode(parseInt(i,8))}else r+=s}}else r+=this.advance();return this.peek()==='"'&&this.advance(),{type:k.STRING,value:r,line:t,column:n}}readRegex(){let t=this.line,n=this.column;this.advance();let r="";for(;this.pos<this.input.length&&this.peek()!=="/";)if(this.peek()==="\\")r+=this.advance(),this.pos<this.input.length&&(r+=this.advance());else{if(this.peek()===`
@@ -824,6 +859,19 @@ index c03b266..1a71620 100644
 +`),i&&(await a.fs.stat(m)).isDirectory&&await I(a,m,o?s:void 0,o?void 0:r,f,u)}catch(h){w(h),l+=`chmod: cannot access '${t}': ${h instanceof Error?h.message:String(h)}
  `,c=!0}}return{stdout:u.build(),stderr:l,exitCode:c?1:0}}};async function I(e,a,i,f,n,r){let d=new S({limits:e.limits,signal:e.signal,executionScope:e.executionScope,site:"chmod"});await F({fs:e.fs,root:a,symlinks:"never",budget:d,limits:e.limits,signal:e.signal,executionScope:e.executionScope,site:"chmod"},async o=>{if(o.depth===0||o.phase!=="enter")return;let s=i!==void 0?i:f!==void 0?p(f,o.stat.mode):420;await e.fs.chmod(o.path,s),n&&r.append(`mode of '${o.path}' changed to ${s.toString(8).padStart(4,"0")}
  `)})}function p(e,a=420){if(/^[0-7]+$/.test(e))return parseInt(e,8);let i=a&4095,f=e.split(",");for(let n of f){let r=n.match(/^([ugoa]*)([+\-=])([rwxXst]*)$/);if(!r)throw new Error(`Invalid mode: ${e}`);let d=r[1]||"a",o=r[2],s=r[3];(d==="a"||d==="")&&(d="ugo");let u=0;s.includes("r")&&(u|=4),s.includes("w")&&(u|=2),(s.includes("x")||s.includes("X"))&&(u|=1);let l=0;s.includes("s")&&(d.includes("u")&&(l|=2048),d.includes("g")&&(l|=1024)),s.includes("t")&&(l|=512);for(let c of d){let t=0;c==="u"?t=6:c==="g"?t=3:c==="o"&&(t=0);let m=u<<t;o==="+"?i|=m:o==="-"?i&=~m:o==="="&&(i&=~(7<<t),c==="u"&&(i&=-2049),c==="g"&&(i&=-1025),c==="o"&&(i&=-513),i|=m)}o==="+"?i|=l:o==="-"?i&=~l:o==="="&&(s.includes("s")&&(d.includes("u")&&(i|=l&2048),d.includes("g")&&(i|=l&1024)),s.includes("t")&&(i|=l&512))}return i}var k={name:"chmod",flags:[{flag:"-R",type:"boolean"},{flag:"-v",type:"boolean"}],needsArgs:!0,minArgs:2};export{O as a,k as b};
+diff --git a/node_modules/just-bash/dist/bundle/chunks/chunk-CFBEDNHJ.js b/node_modules/just-bash/dist/bundle/chunks/chunk-CFBEDNHJ.js
+index 526fc1e..4fdd973 100644
+--- a/node_modules/just-bash/dist/bundle/chunks/chunk-CFBEDNHJ.js
++++ b/node_modules/just-bash/dist/bundle/chunks/chunk-CFBEDNHJ.js
+@@ -25,7 +25,7 @@ ${h}`,e.lineNumber=t.currentLineIndex+e.linesConsumedInCycle+1}else{e.quit=!0;br
+ `?this.peek()===n&&!a?s+=this.advance():(s+="\\",s+=this.advance()):s+="\\";else{if(o===`
+ `)break;o==="["&&!a?(a=!0,s+=this.advance(),this.peek()==="^"&&(s+=this.advance()),this.peek()==="]"&&(s+=this.advance())):o==="]"&&a?(a=!1,s+=this.advance()):s+=this.advance()}}if(this.peek()!==n)return{type:c.ERROR,value:"unterminated substitution pattern",line:e,column:t};this.advance();let r="";for(;this.pos<this.input.length&&this.peek()!==n;)if(this.peek()==="\\")if(this.advance(),this.pos<this.input.length){let o=this.peek();o==="\\"?(this.advance(),this.pos<this.input.length&&this.peek()===`
+ `?(r+=`
+-`,this.advance()):r+="\\"):o===`
++`,this.advance()):r+="\\\\"):o===`
+ `?(r+=`
+ `,this.advance()):r+=`\\${this.advance()}`}else r+="\\";else{if(this.peek()===`
+ `)break;r+=this.advance()}this.peek()===n&&this.advance();let u="";for(;this.pos<this.input.length;){let o=this.peek();if(o==="g"||o==="i"||o==="p"||o==="I"||this.isDigit(o))u+=this.advance();else break}return{type:c.SUBSTITUTE,value:`s${n}${s}${n}${r}${n}${u}`,pattern:s,replacement:r,flags:u,line:e,column:t}}readTransliterate(e,t){let n=this.advance();if(!n||n===`
 diff --git a/node_modules/just-bash/dist/bundle/chunks/chunk-EQQGPAXI.js b/node_modules/just-bash/dist/bundle/chunks/chunk-EQQGPAXI.js
 index 868679c..685ec78 100644
 --- a/node_modules/just-bash/dist/bundle/chunks/chunk-EQQGPAXI.js
@@ -943,7 +991,7 @@ index 933c3fb..97d743c 100644
 +`:"",exitCode:22};let m=(r.outputFile||r.useRemoteName)&&!r.verbose?"":N(r,l,o);if(r.outputFile||r.useRemoteName){let w=r.outputFile||S(o),A=e.fs.resolvePath(e.cwd,w);await e.fs.writeFile(A,r.headOnly?"":l.body),r.verbose||(m=""),r.writeOut&&(m=b(r.writeOut,{status:l.status,headers:l.headers,url:l.url,bodyLength:l.body.byteLength}))}return{stdout:m,stderr:"",exitCode:0,stdoutKind:"bytes"}}catch(t){let a=x(t),n=1;return a.includes("Network access denied")?n=7:a.includes("HTTP method")&&a.includes("not allowed")?n=3:a.includes("Redirect target not in allow-list")||a.includes("Too many redirects")?n=47:a.includes("aborted")&&(n=28),{stdout:"",stderr:!r.silent||r.showError?`curl: (${n}) ${a}
  `:"",exitCode:n}}}};export{Y as curlCommand};
 diff --git a/node_modules/just-bash/dist/bundle/index.cjs b/node_modules/just-bash/dist/bundle/index.cjs
-index d9b46ab..9589bb4 100644
+index d9b46ab..3180f26 100644
 --- a/node_modules/just-bash/dist/bundle/index.cjs
 +++ b/node_modules/just-bash/dist/bundle/index.cjs
 @@ -1,4 +1,6 @@
@@ -1010,6 +1058,15 @@ index d9b46ab..9589bb4 100644
  `:`grep: option '--file' requires an argument
  `,exitCode:2};break}if(be==="i"||be==="--ignore-case")r=!0;else if(be==="n"||be==="--line-number")n=!0;else if(be==="v"||be==="--invert-match")s=!0;else if(be==="c"||be==="--count")i=!0;else if(be==="l"||be==="--files-with-matches")o=!0;else if(be==="L"||be==="--files-without-match")a=!0;else if(be==="r"||be==="R"||be==="--recursive")l=!0;else if(be==="w"||be==="--word-regexp")c=!0;else if(be==="x"||be==="--line-regexp")u=!0;else if(be==="E"||be==="--extended-regexp")f=!0;else if(be==="P"||be==="--perl-regexp")h=!0;else if(be==="F"||be==="--fixed-strings")d=!0;else if(be==="o"||be==="--only-matching")A=!0;else if(be==="h"||be==="--no-filename")p=!0;else if(be==="q"||be==="--quiet"||be==="--silent")g=!0;else{if(be.startsWith("--"))return ae("grep",be);if(be.length===1)return ae("grep",`-${be}`)}}}else N.push(fe)}if(b===null&&x.length===0&&(b=N.shift()??null,b===null))return{stdout:"",stderr:`grep: missing pattern
  `,exitCode:2};let R=N,S=b===null?[]:Pre(b),D=!1;for(let ie of x){let fe;if(ie==="")return{stdout:"",stderr:`grep: : No such file or directory
+@@ -268,7 +270,7 @@ ${c}`,e.lineNumber=r.currentLineIndex+e.linesConsumedInCycle+1}else{e.quit=!0;br
+ `?this.peek()===n&&!i?s+=this.advance():(s+="\\",s+=this.advance()):s+="\\";else{if(l===`
+ `)break;l==="["&&!i?(i=!0,s+=this.advance(),this.peek()==="^"&&(s+=this.advance()),this.peek()==="]"&&(s+=this.advance())):l==="]"&&i?(i=!1,s+=this.advance()):s+=this.advance()}}if(this.peek()!==n)return{type:Ee.ERROR,value:"unterminated substitution pattern",line:e,column:r};this.advance();let o="";for(;this.pos<this.input.length&&this.peek()!==n;)if(this.peek()==="\\")if(this.advance(),this.pos<this.input.length){let l=this.peek();l==="\\"?(this.advance(),this.pos<this.input.length&&this.peek()===`
+ `?(o+=`
+-`,this.advance()):o+="\\"):l===`
++`,this.advance()):o+="\\\\"):l===`
+ `?(o+=`
+ `,this.advance()):o+=`\\${this.advance()}`}else o+="\\";else{if(this.peek()===`
+ `)break;o+=this.advance()}this.peek()===n&&this.advance();let a="";for(;this.pos<this.input.length;){let l=this.peek();if(l==="g"||l==="i"||l==="p"||l==="I"||this.isDigit(l))a+=this.advance();else break}return{type:Ee.SUBSTITUTE,value:`s${n}${s}${n}${o}${n}${a}`,pattern:s,replacement:o,flags:a,line:e,column:r}}readTransliterate(e,r){let n=this.advance();if(!n||n===`
 @@ -354,11 +356,11 @@ Addresses:
  `,line:e,column:r}):n==='"'?this.readString():n==="/"&&this.canBeRegex()?this.readRegex():this.isDigit(n)||n==="."&&this.isDigit(this.peek(1))?this.readNumber():this.isAlpha(n)||n==="_"?this.readIdentifier():this.readOperator()}canBeRegex(){return new Set([null,T.NEWLINE,T.SEMICOLON,T.LBRACE,T.RBRACE,T.LPAREN,T.LBRACKET,T.COMMA,T.ASSIGN,T.PLUS_ASSIGN,T.MINUS_ASSIGN,T.STAR_ASSIGN,T.SLASH_ASSIGN,T.PERCENT_ASSIGN,T.CARET_ASSIGN,T.AND,T.OR,T.NOT,T.MATCH,T.NOT_MATCH,T.QUESTION,T.COLON,T.LT,T.GT,T.LE,T.GE,T.EQ,T.NE,T.PLUS,T.MINUS,T.STAR,T.PERCENT,T.CARET,T.PRINT,T.PRINTF,T.IF,T.WHILE,T.DO,T.FOR,T.RETURN]).has(this.lastTokenType)}readString(){let e=this.line,r=this.column;this.advance();let n="";for(;this.pos<this.input.length&&this.peek()!=='"';)if(this.peek()==="\\"){this.advance();let s=this.advance();switch(s){case"n":n+=`
  `;break;case"t":n+="	";break;case"r":n+="\r";break;case"f":n+="\f";break;case"b":n+="\b";break;case"v":n+="\v";break;case"a":n+="\x07";break;case"\\":n+="\\";break;case'"':n+='"';break;case"/":n+="/";break;case"x":{let i="";for(;i.length<2&&/[0-9a-fA-F]/.test(this.peek());)i+=this.advance();i.length>0?n+=String.fromCharCode(parseInt(i,16)):n+="x";break}default:if(/[0-7]/.test(s)){let i=s;for(;i.length<3&&/[0-7]/.test(this.peek());)i+=this.advance();n+=String.fromCharCode(parseInt(i,8))}else n+=s}}else n+=this.advance();return this.peek()==='"'&&this.advance(),{type:T.STRING,value:n,line:e,column:r}}readRegex(){let e=this.line,r=this.column;this.advance();let n="";for(;this.pos<this.input.length&&this.peek()!=="/";)if(this.peek()==="\\")n+=this.advance(),this.pos<this.input.length&&(n+=this.advance());else{if(this.peek()===`
