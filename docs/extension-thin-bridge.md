@@ -116,9 +116,8 @@ connection:
   discard the pinned background leader, and lazy session restore restores it
   without loading it (`discarded` / `status: 'unloaded'`). Such a tab runs no
   JS, so it can never dial the bridge Port or deliver `leader.join-url` —
-  adopting it as-is strands the side panel on "Disconnected — reopen to
-  retry" (the panel's 20s boot watchdog fires, and reopening re-adopts the
-  same dead tab). `adoptSingleLeaderTab` therefore prefers a live match over
+  adopting it as-is strands the side panel on its boot watchdog (the 20s
+  timer fires, and reopening re-adopts the same dead tab). `adoptSingleLeaderTab` therefore prefers a live match over
   an unloaded duplicate when deduping and `chrome.tabs.reload`s an unloaded
   keeper (skipped when the `ext=` stamp already navigated — and thereby
   loaded — it).
@@ -192,6 +191,19 @@ The side panel is opened on demand by the toolbar icon. Full flow:
    bridge message) to all hello'd ports so the follower can connect to the tray.
    The SW sends `null` when the leader disconnects, and the panel shows a
    "Disconnected" state.
+   **Slow leader boot**: if no join URL arrives within 20s
+   (`BOOT_TIMEOUT_MS`), the panel switches from "Starting SLICC…" to a `slow`
+   state: "still starting in its tab" plus a **Show SLICC tab** button (a plain
+   `focus-leader`). It does not declare the leader disconnected. The pinned
+   leader is a background tab, and on macOS Chrome runs a background tab's
+   renderer at the lowest scheduler priority (MAXPRI_THROTTLE: CPU and I/O
+   throttled). On a loaded machine a cold boot then takes minutes, while
+   bringing the tab forward lets it finish in seconds. `booting` replays keep
+   `slow`, and a late `ready` still mounts the follower. The Disconnected
+   overlay offers **Retry** instead: it reconnects the `cherry-panel` Port,
+   which the SW treats exactly like reopening the panel (disconnected goes
+   back to booting, `ensureLeaderTab` runs, and a leader whose tray gave up
+   is reloaded). The panel never steals focus on its own.
 6. **Login hand-off**: provider login can't complete in the cross-origin panel
    iframe (OAuth / device-code / provider-settings run on the leader). The
    follower detects the side panel by its ancestor origin

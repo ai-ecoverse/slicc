@@ -59,6 +59,11 @@ over the tray.
   follower detects the side-panel via `location.ancestorOrigins` and shortcuts
   onboarding to a "Set up SLICC in the main tab" card. Its avatar-menu "bring leader
   to front" arrives as `focus-leader` (`openSettings: false`).
+- **Slow boot**: no join URL after 20s → `slow` overlay with a "Show SLICC tab"
+  button, not "Disconnected". A background leader boots at the lowest macOS
+  priority, so it is usually just slow. Never auto-focus the leader. The
+  Disconnected overlay's button is **Retry** (a Port reconnect, which the SW
+  treats as a reopen). Rationale: `docs/extension-thin-bridge.md`.
 
 ## Key Files
 

@@ -13,21 +13,43 @@ const sliccOriginDefault = __SLICC_EXT_DEV__ ? 'http://localhost:8787' : SLICC_H
 
 // Panel-chrome status = which overlay (if any) covers the follower iframe:
 //  - 'starting'     → "Starting SLICC…" overlay (pre-mount: no follower yet)
+//  - 'slow'         → still no follower after BOOT_TIMEOUT_MS: the leader tab is
+//                     still booting, so offer to bring it to the front
 //  - 'live'         → overlay hidden; the follower iframe is shown and owns its
 //                     OWN sub-status (connecting → connected → "reload to retry"
 //                     on terminal failure — rendered by wc-follower inside the
 //                     iframe, so the panel must NOT cover it)
 //  - 'disconnected' → "Disconnected — reopen to retry" overlay (iframe blanked)
-export type PanelStatus = 'starting' | 'live' | 'disconnected';
+export type PanelStatus = 'starting' | 'slow' | 'live' | 'disconnected';
 
 // A leader that boots but never becomes a tray leader (worker unreachable, or it
 // resolves as a follower) would leave the SW at 'booting' with no join-url, so
-// the panel can't rely on the SW to escalate. Bound the spinner here.
+// the panel can't rely on the SW to escalate. Bound the spinner here — but with
+// 'slow', not 'disconnected': the usual cause is a leader that is merely slow.
+// The pinned leader is a background tab, and on macOS Chrome runs a background
+// tab's renderer at the lowest scheduler priority (CPU- and I/O-throttled), so
+// on a busy machine a cold boot can take minutes and finishes within seconds of
+// the tab being brought to the front. "Reopen to retry" never helped here: the
+// SW is still 'booting', so a reconnect just replays it.
 const BOOT_TIMEOUT_MS = 20_000;
 // After mounting, the follower iframe must actually load; a CSP/network failure
 // that never loads the document (so wc-follower's own UI never renders) would
 // leave a blank pane. Escalate to a recoverable 'disconnected' if it doesn't.
 const IFRAME_LOAD_TIMEOUT_MS = 15_000;
+
+const PANEL_STATUS_TEXT: Record<PanelStatus, string> = {
+  starting: 'Starting SLICC…',
+  slow: 'SLICC is still starting in its tab. Chrome slows down background tabs, so bringing it to the front usually lets it finish.',
+  live: '',
+  disconnected: 'Disconnected from SLICC.',
+};
+
+// The overlay button per state: 'slow' brings the booting leader forward;
+// 'disconnected' retries (see `retry()`). Hidden for the other states.
+const PANEL_ACTION_LABEL: Partial<Record<PanelStatus, string>> = {
+  slow: 'Show SLICC tab',
+  disconnected: 'Retry',
+};
 
 export interface SidePanelDeps {
   connect: () => ChromeRuntimePort;
@@ -37,34 +59,65 @@ export interface SidePanelDeps {
   sliccOrigin: string;
 }
 
-export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
+export interface SidePanelController {
+  dispose(): void;
+  /** Bring the leader tab to the front (the 'slow' / 'disconnected' overlay button). */
+  focusLeader(): void;
+  /** Reconnect the Port (the 'disconnected' overlay button). A fresh connect +
+   *  hello is what the SW treats as a user retry (`handleCherryPanelConnect`:
+   *  disconnected → booting, ensureLeaderTab, reload a leader whose tray gave up)
+   *  and it replays the current state, so a panel-local disconnect (iframe
+   *  watchdog) remounts on the replayed ready. */
+  retry(): void;
+}
+
+/** A restartable one-shot timer: `start` replaces any pending run. */
+function oneShotTimer() {
+  let id: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (id) clearTimeout(id);
+    id = null;
+  };
+  return {
+    clear,
+    start(ms: number, fn: () => void) {
+      clear();
+      id = setTimeout(() => {
+        id = null;
+        fn();
+      }, ms);
+    },
+  };
+}
+
+/** `disconnect()` on a dead Port throws; either way the Port is gone. */
+function disconnectQuietly(port: ChromeRuntimePort | null): void {
+  try {
+    port?.disconnect();
+  } catch {
+    /* already gone */
+  }
+}
+
+export function createSidePanelController(deps: SidePanelDeps): SidePanelController {
   let handle: SliccHandle | null = null;
   let currentJoinUrl: string | null = null;
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
   let reconnectDelay = 250;
-  let bootTimer: ReturnType<typeof setTimeout> | null = null;
-  let iframeLoadTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const clearBootTimer = () => {
-    if (bootTimer) {
-      clearTimeout(bootTimer);
-      bootTimer = null;
-    }
-  };
-  const clearIframeLoadTimer = () => {
-    if (iframeLoadTimer) {
-      clearTimeout(iframeLoadTimer);
-      iframeLoadTimer = null;
-    }
-  };
+  const bootTimer = oneShotTimer();
+  const iframeLoadTimer = oneShotTimer();
+  // Set once the boot watchdog fired for this boot; a `booting` replay (SW wake,
+  // Port reconnect) keeps 'slow' instead of restarting the 20s spinner.
+  let bootSlow = false;
 
   const blankIframe = () => {
     deps.iframe.setAttribute('src', 'about:blank');
   };
   const teardown = () => {
-    clearBootTimer();
-    clearIframeLoadTimer();
+    bootTimer.clear();
+    bootSlow = false;
+    iframeLoadTimer.clear();
     handle?.destroy();
     handle = null;
     currentJoinUrl = null;
@@ -81,7 +134,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   // attaches or the page reloads.
   const onIframeLoad = () => {
     if (deps.iframe.getAttribute('src') === 'about:blank') return;
-    clearIframeLoadTimer();
+    iframeLoadTimer.clear();
     nudgeIframeRepaint(deps.iframe);
   };
   deps.iframe.addEventListener('load', onIframeLoad);
@@ -113,12 +166,16 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
         deps.setStatus('live');
         return;
       }
+      if (bootSlow) {
+        deps.setStatus('slow');
+        return;
+      }
       deps.setStatus('starting');
-      clearBootTimer();
-      bootTimer = setTimeout(() => {
-        bootTimer = null;
-        if (!disposed) goDisconnected();
-      }, BOOT_TIMEOUT_MS);
+      bootTimer.start(BOOT_TIMEOUT_MS, () => {
+        if (disposed) return;
+        bootSlow = true;
+        deps.setStatus('slow');
+      });
       return;
     }
 
@@ -130,7 +187,8 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     // state === 'ready' — any successful ready resets the reconnect backoff and
     // cancels the boot watchdog.
     reconnectDelay = 250;
-    clearBootTimer();
+    bootTimer.clear();
+    bootSlow = false;
     if (msg.joinUrl === currentJoinUrl && handle) {
       // Idempotent (e.g. a `booting` blip replayed the same ready): the follower
       // is already mounted → just re-show it. No remount.
@@ -141,11 +199,9 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     handle = null;
     blankIframe(); // clear the stale follower before remount (destroy() keeps caller iframes)
     currentJoinUrl = msg.joinUrl;
-    clearIframeLoadTimer();
-    iframeLoadTimer = setTimeout(() => {
-      iframeLoadTimer = null;
+    iframeLoadTimer.start(IFRAME_LOAD_TIMEOUT_MS, () => {
       if (!disposed && handle) goDisconnected();
-    }, IFRAME_LOAD_TIMEOUT_MS);
+    });
     handle = deps.mountSlicc({
       iframe: deps.iframe,
       joinToken: msg.joinUrl,
@@ -200,15 +256,20 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   wire();
 
   return {
+    focusLeader: () => requestLeaderFocus(false),
+    retry() {
+      if (disposed) return;
+      // Our own disconnect() does not fire our onDisconnect, so re-wire here.
+      disconnectQuietly(port);
+      port = null;
+      reconnectDelay = 250;
+      wire();
+    },
     dispose() {
       disposed = true;
       teardown();
       deps.iframe.removeEventListener('load', onIframeLoad);
-      try {
-        port?.disconnect();
-      } catch {
-        /* already gone */
-      }
+      disconnectQuietly(port);
     },
   };
 }
@@ -217,17 +278,29 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
 if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
   const iframe = document.getElementById('cherry-follower') as HTMLIFrameElement;
   const statusEl = document.getElementById('cherry-status');
+  const statusText = document.getElementById('cherry-status-text');
+  const actionButton = document.getElementById('cherry-status-action') as HTMLButtonElement | null;
+  let current: PanelStatus = 'starting';
   const setStatus = (s: PanelStatus) => {
+    current = s;
     if (!statusEl) return;
-    statusEl.textContent =
-      s === 'live' ? '' : s === 'starting' ? 'Starting SLICC…' : 'Disconnected — reopen to retry';
-    statusEl.dataset.state = s; // CSS shows the overlay only for starting/disconnected
+    if (statusText) statusText.textContent = PANEL_STATUS_TEXT[s];
+    if (actionButton) {
+      const label = PANEL_ACTION_LABEL[s];
+      actionButton.hidden = !label;
+      actionButton.textContent = label ?? '';
+    }
+    statusEl.dataset.state = s; // CSS shows the overlay for every state but 'live'
   };
-  createSidePanelController({
+  const controller = createSidePanelController({
     connect: () => chrome.runtime.connect({ name: CHERRY_PANEL_PORT_NAME }),
     mountSlicc,
     iframe,
     setStatus,
     sliccOrigin: sliccOriginDefault,
+  });
+  actionButton?.addEventListener('click', () => {
+    if (current === 'disconnected') controller.retry();
+    else controller.focusLeader();
   });
 }
