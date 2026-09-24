@@ -30,7 +30,7 @@
 
 import {
   clampSyncExecTimeout,
-  hasSyncExecBudget,
+  requestsNoSyncExecTimeout,
   SYNC_EXEC_CHANNEL,
   type SyncExecRequestPayload,
   type SyncExecResultPayload,
@@ -154,7 +154,8 @@ export function createSyncExecXhrBridge(
       // (the SW's own fallback) rather than a 0 that makes the XHR give up in
       // SYNC_EXEC_XHR_MARGIN_MS; an oversized one must hit the wire ceiling
       // here too, or the XHR waits long past the command the SW already killed.
-      const unbounded = opts.noDefaultDeadline === true && !hasSyncExecBudget(runOpts.timeout);
+      const unbounded =
+        opts.noDefaultDeadline === true && requestsNoSyncExecTimeout(runOpts.timeout);
       const timeoutMs = unbounded
         ? Number.POSITIVE_INFINITY
         : clampSyncExecTimeout(runOpts.timeout, defaultTimeoutMs);

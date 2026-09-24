@@ -135,6 +135,26 @@ describe('tar command', () => {
     expect(await secs('/tmp/times/pkg')).toBe(1600000000);
   });
 
+  it("gives a path archived twice the last member's content, mode and mtime", async () => {
+    const bytes = (s: string) => new TextEncoder().encode(s);
+    await fs.writeFile(
+      '/tmp/dup.tar',
+      writeTar([
+        { path: 'pkg/', bytes: new Uint8Array(0), directory: true, mode: 0o700, mtime: 1500000000 },
+        { path: 'pkg/f', bytes: bytes('old'), mode: 0o600, mtime: 1600000000 },
+        { path: 'pkg/f', bytes: bytes('new'), mode: 0o644, mtime: 1700000000 },
+        { path: 'pkg/', bytes: new Uint8Array(0), directory: true, mode: 0o755, mtime: 1650000000 },
+      ])
+    );
+    expect((await shell.executeCommand('tar -xf /tmp/dup.tar -C /tmp/dup')).exitCode).toBe(0);
+    const secs = async (p: string) => Math.floor(Number((await fs.stat(p)).mtime) / 1000);
+    expect(await fs.readFile('/tmp/dup/pkg/f')).toBe('new');
+    expect(await secs('/tmp/dup/pkg/f')).toBe(1700000000);
+    expect(((await fs.stat('/tmp/dup/pkg/f')).mode ?? 0) & 0o777).toBe(0o644);
+    expect(await secs('/tmp/dup/pkg')).toBe(1650000000);
+    expect(((await fs.stat('/tmp/dup/pkg')).mode ?? 0) & 0o777).toBe(0o755);
+  });
+
   it('records mtimes on create', async () => {
     await shell.executeCommand('touch -d "2021-06-01 00:00:00" /workspace/source/hello.txt');
     await shell.executeCommand('cd /workspace && tar -cf /tmp/rec.tar source');

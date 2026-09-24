@@ -128,8 +128,17 @@ export function normalizeSyncExecEnv(
 }
 
 /** Whether `timeoutMs` is a real budget; Node reads `0` as "no timeout". */
-export function hasSyncExecBudget(timeoutMs: number | undefined): timeoutMs is number {
+function hasSyncExecBudget(timeoutMs: number | undefined): timeoutMs is number {
   return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0;
+}
+
+/**
+ * Whether the caller asked for no timeout: omitted, or Node's `0`. A negative
+ * or non-finite value is a bad budget, not a request to wait forever, so it
+ * keeps the bounded fallback.
+ */
+export function requestsNoSyncExecTimeout(timeoutMs: number | undefined): boolean {
+  return timeoutMs === undefined || timeoutMs === 0;
 }
 
 /**

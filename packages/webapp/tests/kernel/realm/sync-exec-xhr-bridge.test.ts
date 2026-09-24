@@ -157,6 +157,21 @@ test('noDefaultDeadline: no caller budget sends no timeoutMs and waits without a
   ]);
 });
 
+test('noDefaultDeadline: a negative or NaN timeout keeps the bounded default', () => {
+  const seen: number[] = [];
+  const bridge = createSyncExecXhrBridge('t', {
+    noDefaultDeadline: true,
+    timeoutMs: 60_000,
+    transport: (_payload, timeoutMs) => {
+      seen.push(timeoutMs);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  });
+  bridge.run('make', { timeout: -1 });
+  bridge.run('make', { timeout: Number.NaN });
+  expect(seen).toEqual([60_000, 60_000]);
+});
+
 test('an errno reply throws an Error carrying .code', () => {
   installFakeXhr();
   reply = { status: 403, errno: 'EACCES' };

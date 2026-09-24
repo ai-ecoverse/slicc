@@ -3,9 +3,9 @@ import { expect, test, vi } from 'vitest';
 import {
   clampSyncExecTimeout,
   dispatchSyncExec,
-  hasSyncExecBudget,
   isSyncExecRequest,
   normalizeSyncExecEnv,
+  requestsNoSyncExecTimeout,
   resolveSyncExecCwd,
   SYNC_EXEC_CHANNEL,
 } from '../../../src/kernel/realm/sync-exec-dispatch.js';
@@ -451,10 +451,11 @@ test('clampSyncExecTimeout bounds the caller budget and falls back on garbage', 
   expect(clampSyncExecTimeout(1e12, 5_000)).toBe(SYNC_EXEC_MAX_TIMEOUT_MS);
 });
 
-test('hasSyncExecBudget reads 0, negatives and non-numbers as "no timeout"', () => {
-  expect(hasSyncExecBudget(1)).toBe(true);
-  for (const v of [undefined, 0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
-    expect(hasSyncExecBudget(v)).toBe(false);
+test('only an omitted timeout or 0 requests no timeout', () => {
+  expect(requestsNoSyncExecTimeout(undefined)).toBe(true);
+  expect(requestsNoSyncExecTimeout(0)).toBe(true);
+  for (const v of [1, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(requestsNoSyncExecTimeout(v)).toBe(false);
   }
 });
 

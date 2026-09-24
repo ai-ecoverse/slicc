@@ -259,6 +259,23 @@ async function createArchive(options: TarOptions, ctx: CommandContext): Promise<
   };
 }
 
+/**
+ * Reverse `list` (deepest paths first), keeping one entry per path: the LAST
+ * archive member's, the one whose content extraction left in place. Reversing
+ * alone would apply a duplicate path's earlier metadata last.
+ */
+function lastMemberWins(list: Array<[string, number]>): Array<[string, number]> {
+  const seen = new Set<string>();
+  const out: Array<[string, number]> = [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const [path, value] = list[i];
+    if (seen.has(path)) continue;
+    seen.add(path);
+    out.push([path, value]);
+  }
+  return out;
+}
+
 async function readArchiveCommand(
   options: TarOptions,
   ctx: CommandContext
@@ -285,8 +302,8 @@ async function readArchiveCommand(
   }
   // Deepest first, so a restrictive parent does not block its children; times
   // last, since writing into a directory bumps its mtime.
-  for (const [path, mode] of dirModes.reverse()) await applyMode(ctx, path, mode);
-  await applyMtimes(ctx, mtimes.reverse());
+  for (const [path, mode] of lastMemberWins(dirModes)) await applyMode(ctx, path, mode);
+  await applyMtimes(ctx, lastMemberWins(mtimes));
   return {
     stdout: options.verbose ? `${extracted.join('\n')}\n` : '',
     stderr: '',
