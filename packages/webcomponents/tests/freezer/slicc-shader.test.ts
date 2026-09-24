@@ -374,12 +374,16 @@ describe('slicc-shader', () => {
     });
 
     it('cone with speed=0 renders once and stops', async () => {
+      // Count from before mount: under CI throttling the connect frame can land
+      // after a quiet `settle()` window (nothing had drawn yet), and a spy
+      // installed after it would count that one expected draw as a stray.
+      const spy = spyDraws();
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await settle(); // connect renders exactly one frame, then stops
-      const spy = spyDraws();
-      await wait(250);
-      expect(spy.mock.calls.length).toBe(0);
+      const deadline = Date.now() + 3000;
+      while (spy.mock.calls.length === 0 && Date.now() < deadline) await wait(20);
+      expect(spy.mock.calls.length).toBeGreaterThan(0); // it rendered
+      await expectStopped(spy); // and then stopped
     });
 
     it('an attribute change re-renders a static field', async () => {
