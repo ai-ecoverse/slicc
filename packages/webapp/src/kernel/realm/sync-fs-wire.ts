@@ -10,10 +10,12 @@
  * **dependency-free** (only string constants + wire types) so every side can
  * import it without dragging logic across bundle boundaries, and a rename can't
  * silently desync the two ends (which would fail at runtime, not compile time).
+ *
+ * This module owns the wire-payload types themselves (`SyncFsRequest` /
+ * `SyncFsResult` / `SyncExecRequest` / `SyncExecRequestPayload` + the
+ * `SYNC_EXEC_CHANNEL` discriminant) so it stays a genuine leaf: the dispatch
+ * modules and the token registry import DOWN from here, never the reverse.
  */
-
-import type { SyncExecRequest } from './sync-exec-dispatch.js';
-import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
 
 /**
  * The two security-critical strings in this bridge, branded so the compiler
@@ -108,6 +110,89 @@ export const SYNC_FS_NO_RESPONDER_HEADER = 'x-slicc-fs-no-responder';
 export const SYNC_FS_REQ_MSG = 'sync-fs-req';
 export const SYNC_FS_ACK_MSG = 'sync-fs-ack';
 export const SYNC_FS_RES_MSG = 'sync-fs-res';
+
+/** The fs ops the synchronous bridge carries. */
+export type SyncFsOp =
+  | 'read'
+  | 'write'
+  | 'exists'
+  | 'stat'
+  | 'lstat'
+  | 'readdir'
+  | 'mkdir'
+  | 'rm'
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'symlink'
+  | 'readlink'
+  | 'chmod'
+  | 'utimes';
+
+/** SW → responder envelope for one synchronous fs op. */
+export interface SyncFsRequest {
+  token: string;
+  op: SyncFsOp;
+  path: string;
+  /** Write payload for `op: 'write'`. */
+  body?: Uint8Array;
+  /**
+   * Second argument: the destination for `op: 'rename'`, the link target for
+   * `op: 'symlink'` (whose `path` is the new link itself).
+   */
+  arg2?: string;
+  /** Permission bits for `op: 'chmod'`. */
+  mode?: number;
+  /** Access / modification times (ms since epoch) for `op: 'utimes'`. */
+  atimeMs?: number;
+  mtimeMs?: number;
+}
+
+/**
+ * A dispatch result. The success arm is a discriminated sub-union on `kind` so
+ * a consumer (e.g. the SW `buildResponse`) is forced to handle every payload
+ * shape: `bytes` (a `read`), `json` (a phase-2 `stat`/`readdir`/`exists`), or
+ * `void` (a `write`/`mkdir`/`rm`/`rename`). The old shape had independent
+ * `bytes?`/`json?` optionals, which let `buildResponse` silently drop a `json`
+ * result — a latent bug once phase-2 wires metadata through the SW.
+ */
+export type SyncFsResult =
+  | { ok: true; kind: 'bytes'; bytes: Uint8Array }
+  | { ok: true; kind: 'json'; json: unknown }
+  | { ok: true; kind: 'void' }
+  | { ok: false; errno: string; message: string };
+
+/** Discriminator distinguishing an exec request from an fs one on the wire. */
+export const SYNC_EXEC_CHANNEL = 'exec';
+
+/** POST body the realm bridge sends on the `exec` route. */
+export interface SyncExecRequestPayload {
+  /** Command string (shell form) or argv (shell-free form, argv[0] = program). */
+  command: string | string[];
+  /** Shell-free argv tail for the string form — mirrors `exec.spawn`'s `args`. */
+  args?: string[];
+  /** Buffered stdin for the one-shot command. */
+  stdin?: string;
+  /** Caller budget in ms, clamped to {@link SYNC_EXEC_MAX_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /** Child working directory. Absent → the realm's cwd. */
+  cwd?: string;
+  /** Child environment (Node replace semantics). Absent → inherit the parent. */
+  env?: Record<string, string>;
+}
+
+/** SW → responder envelope for one synchronous exec. */
+export interface SyncExecRequest extends SyncExecRequestPayload {
+  token: string;
+  channel: typeof SYNC_EXEC_CHANNEL;
+}
+
+/** Buffered outcome of a synchronous exec, JSON-encoded back to the realm. */
+export interface SyncExecResultPayload {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
 
 /** SW → responder: a request to run one op against the token's realm. */
 export type SyncFsReqMsg = (SyncFsRequest | SyncExecRequest) & {

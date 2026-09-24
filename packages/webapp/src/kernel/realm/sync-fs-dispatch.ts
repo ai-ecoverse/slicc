@@ -25,55 +25,13 @@
 
 import type { FsStat } from 'just-bash';
 import { resolveSyncFsToken, type SyncFsTokenEntry } from './sync-fs-token-registry.js';
+// The wire-payload types live in the dependency-free wire module (their single
+// source of truth); import them DOWN from there and re-export so this module's
+// existing consumers keep their import site. This is a forward edge — never a
+// back-edge into wire.
+import type { SyncFsRequest, SyncFsResult } from './sync-fs-wire.js';
 
-export type SyncFsOp =
-  | 'read'
-  | 'write'
-  | 'exists'
-  | 'stat'
-  | 'lstat'
-  | 'readdir'
-  | 'mkdir'
-  | 'rm'
-  | 'rename'
-  | 'unlink'
-  | 'rmdir'
-  | 'symlink'
-  | 'readlink'
-  | 'chmod'
-  | 'utimes';
-
-export interface SyncFsRequest {
-  token: string;
-  op: SyncFsOp;
-  path: string;
-  /** Write payload for `op: 'write'`. */
-  body?: Uint8Array;
-  /**
-   * Second argument: the destination for `op: 'rename'`, the link target for
-   * `op: 'symlink'` (whose `path` is the new link itself).
-   */
-  arg2?: string;
-  /** Permission bits for `op: 'chmod'`. */
-  mode?: number;
-  /** Access / modification times (ms since epoch) for `op: 'utimes'`. */
-  atimeMs?: number;
-  mtimeMs?: number;
-}
-
-/**
- * A dispatch result. The success arm is a discriminated sub-union on `kind` so
- * a consumer (e.g. the SW `buildResponse`) is forced to handle every payload
- * shape: `bytes` (a `read`), `json` (a phase-2 `stat`/`readdir`/`exists`), or
- * `void` (a `write`/`mkdir`/`rm`/`rename`). The old shape had independent
- * `bytes?`/`json?` optionals, which let `buildResponse` silently drop a `json`
- * result — a latent bug once phase-2 wires metadata through the SW.
- */
-export type SyncFsResult =
-  | { ok: true; kind: 'bytes'; bytes: Uint8Array }
-  | { ok: true; kind: 'json'; json: unknown }
-  | { ok: true; kind: 'void' }
-  | { ok: false; errno: string; message: string };
+export type { SyncFsOp, SyncFsRequest, SyncFsResult } from './sync-fs-wire.js';
 
 /**
  * Map any thrown error to a POSIX errno result. Shared with the exec channel
