@@ -17,6 +17,17 @@
  *    the first). Backoff is exponential, but `Retry-After` (when
  *    present and parseable) takes precedence — the server knows
  *    its own rate limit better than the client.
+ *  - `retry.methods` is the closed set of HTTP methods eligible
+ *    for a retry. It defaults to the RFC 9110 idempotent set
+ *    (GET/HEAD/OPTIONS/TRACE/PUT/DELETE), so a 5xx never silently
+ *    replays a non-idempotent write (POST/PATCH): a 503 does not
+ *    prove the first attempt had no effect — if the write landed
+ *    and only the response was lost, retrying duplicates it. A
+ *    caller that knows a POST is safe to repeat (e.g. it carries
+ *    an idempotency key) opts in with `methods: ['POST', ...]`.
+ *    429 is exempt from this gate and retries for EVERY method:
+ *    the server rejected the request before acting on it, so no
+ *    write could have occurred.
  */
 
 /** Scalar serialized into a query string via `encodeURIComponent(String(v))`. */
@@ -30,6 +41,13 @@ export type HttpQueryParams = Record<string, HttpQueryParamValue>;
 export interface HttpRetryConfig {
   on: number[];
   maxAttempts: number;
+  /**
+   * HTTP methods eligible for a retry. Defaults to the RFC 9110 idempotent set
+   * ({@link IDEMPOTENT_RETRY_METHODS}). Case-insensitive. Add a non-idempotent
+   * method here only when repeating it is provably safe (e.g. it carries an
+   * idempotency key). Does NOT gate 429 — see {@link statusRetriesAnyMethod}.
+   */
+  methods?: string[];
 }
 
 export interface HttpTokenRequest {
@@ -273,11 +291,46 @@ function retryWaitMs(resp: Response, attempt: number): number {
   return DEFAULT_BACKOFF_BASE_MS * 2 ** attempt;
 }
 
+/**
+ * The RFC 9110 idempotent methods — repeating one cannot cause an effect beyond
+ * the first. The default retry-method set: a lost response on any other method
+ * (POST / PATCH) may have followed a write that already landed, so replaying it
+ * would duplicate the write.
+ */
+export const IDEMPOTENT_RETRY_METHODS: ReadonlySet<string> = new Set([
+  'GET',
+  'HEAD',
+  'OPTIONS',
+  'TRACE',
+  'PUT',
+  'DELETE',
+]);
+
+/**
+ * Statuses whose retry is safe regardless of method: the server rejected the
+ * request before acting on it, so no write could have occurred. `429 Too Many
+ * Requests` is the canonical case — GitHub (and every conformant limiter)
+ * refuses the request whole, unlike a `503` that a proxy can emit AFTER the
+ * upstream write succeeded.
+ */
+export const ANY_METHOD_RETRY_STATUSES: ReadonlySet<number> = new Set([429]);
+
+/**
+ * Whether a failed response is eligible to be retried for `method`. A status in
+ * {@link ANY_METHOD_RETRY_STATUSES} retries for every method; otherwise the
+ * method must be in the configured idempotent-or-opted-in set.
+ */
+function isRetryableForMethod(status: number, method: string, retryMethods: Set<string>): boolean {
+  if (ANY_METHOD_RETRY_STATUSES.has(status)) return true;
+  return retryMethods.has(method.toUpperCase());
+}
+
 interface HttpRequestLoopContext {
   fetch: HttpGlobalDeps['fetch'];
   sleep: (ms: number) => Promise<void>;
   maxAttempts: number;
   retryOn: Set<number>;
+  retryMethods: Set<string>;
   timeoutMs?: number;
 }
 
@@ -302,7 +355,11 @@ async function executeRequestLoop(
     }
     lastResponse = resp;
     if (resp.ok) return unwrapOkResponse(resp, opts.raw);
-    const willRetry = attempt + 1 < ctx.maxAttempts && ctx.retryOn.has(resp.status);
+    const method = init.method ?? 'GET';
+    const willRetry =
+      attempt + 1 < ctx.maxAttempts &&
+      ctx.retryOn.has(resp.status) &&
+      isRetryableForMethod(resp.status, method, ctx.retryMethods);
     if (!willRetry) return throwForResponse(resp, url);
     await ctx.sleep(retryWaitMs(resp, attempt));
   }
@@ -316,6 +373,11 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
   function makeClient(config: HttpClientConfig): HttpClient {
     const retryOn = new Set(config.retry?.on ?? []);
     const maxAttempts = Math.max(1, Math.trunc(config.retry?.maxAttempts ?? 1));
+    // Default to the idempotent set; a caller opts a non-idempotent method in
+    // explicitly. Uppercased so the set membership test is case-insensitive.
+    const retryMethods = config.retry?.methods
+      ? new Set(config.retry.methods.map((m) => m.toUpperCase()))
+      : new Set(IDEMPOTENT_RETRY_METHODS);
 
     async function request(
       method: string,
@@ -337,6 +399,7 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
           sleep,
           maxAttempts,
           retryOn,
+          retryMethods,
           timeoutMs: config.timeoutMs,
         },
         url,
