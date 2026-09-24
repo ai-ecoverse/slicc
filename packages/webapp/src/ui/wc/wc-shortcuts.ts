@@ -1167,6 +1167,11 @@ function createSettler(
     schedule,
     restore: () => {
       if (hasOpenOverlay(doc)) return;
+
+      if (isTypingTarget(deepActiveElement(doc))) {
+        schedule();
+        return;
+      }
       const trigger = readTrigger();
       if (intent === 'composer' && composerAvailable()) {
         mode.set(false);

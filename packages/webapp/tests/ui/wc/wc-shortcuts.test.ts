@@ -1354,6 +1354,37 @@ describe('carrying the mode across a unit switch', () => {
     expect(focusComposer).toHaveBeenCalledTimes(1);
   });
 
+  it('never pulls the caret out of another text field the user is typing in', async () => {
+    const { handles, composerField, focusComposer, switchTo } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.intent()).toBe('composer');
+    const terminal = document.createElement('textarea');
+    document.body.append(terminal);
+    terminal.focus();
+    await flush();
+
+    await switchTo('cone_2');
+    expect(focusComposer).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(terminal);
+    expect(handles.active()).toBe(false);
+  });
+
+  it('never turns the mode on under a text field the user is typing in', async () => {
+    const { handles, switchTo } = harness({ composerAvailable: () => false });
+    escape();
+    expect(handles.active()).toBe(true);
+    const terminal = document.createElement('textarea');
+    document.body.append(terminal);
+    terminal.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+
+    await switchTo('scoop_a');
+    expect(document.activeElement).toBe(terminal);
+    expect(handles.active()).toBe(false);
+  });
+
   it('a scoop detour cannot invent a composer intent either', async () => {
     let available = true;
     const { handles, focusComposer, switchTo } = harness({

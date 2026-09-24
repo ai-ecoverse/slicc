@@ -54,13 +54,27 @@ export function selectScoopForContext(
   units: readonly WorkUnitSummary[],
   ctx: string,
   selectedId: string | null | undefined,
-  select: (unit: WorkUnitSummary) => void
+  select: (unit: WorkUnitSummary) => void,
+  held?: () => boolean
 ): boolean {
   if (!isSelectScoopTarget(ctx)) return false;
   const unit = unitForContext(units, ctx);
   if (!unit) return false;
-  if (unit.id !== selectedId) select(unit);
+  if (unit.id === selectedId) return true;
+
+  if (held?.()) return false;
+  select(unit);
   return true;
+}
+
+export function composerHoldsDraft(
+  composer: (Element & { value?: string }) | null | undefined
+): boolean {
+  if (!composer) return false;
+  if ((composer.value ?? '').trim() === '') return false;
+  const root = composer.getRootNode() as Partial<DocumentOrShadowRoot>;
+  const active = root.activeElement ?? null;
+  return !!active && composer.contains(active);
 }
 
 export function selectedScoopTarget(

@@ -72,6 +72,11 @@ function ensureInputCardStyle(doc: Document): void {
 
 const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
 
+function focusIsNowhere(doc: Document): boolean {
+  const active = doc.activeElement;
+  return !active || active === doc.body || active === doc.documentElement;
+}
+
 export class SliccInputCard extends HTMLElement {
   static readonly observedAttributes = ['value', 'placeholder', 'suggestion', 'disabled'];
 
@@ -79,6 +84,8 @@ export class SliccInputCard extends HTMLElement {
   #textarea!: HTMLTextAreaElement;
   #toolbar!: HTMLDivElement;
   #built = false;
+
+  #lostCaret: { start: number; end: number } | null = null;
 
   connectedCallback(): void {
     ensureInputCardStyle(this.ownerDocument);
@@ -186,9 +193,27 @@ export class SliccInputCard extends HTMLElement {
     const ta = this.#textarea;
 
     ta.placeholder = this.suggestion ?? this.placeholder;
-    ta.disabled = this.disabled;
+    this.#syncDisabled(ta);
     const value = this.getAttribute('value') ?? '';
     if (ta.value !== value) ta.value = value;
+  }
+
+  #syncDisabled(ta: HTMLTextAreaElement): void {
+    const disabled = this.disabled;
+    if (disabled === ta.disabled) return;
+    if (disabled) {
+      const root = ta.getRootNode() as Partial<DocumentOrShadowRoot>;
+      this.#lostCaret =
+        root.activeElement === ta ? { start: ta.selectionStart, end: ta.selectionEnd } : null;
+      ta.disabled = true;
+      return;
+    }
+    ta.disabled = false;
+    const caret = this.#lostCaret;
+    this.#lostCaret = null;
+    if (!caret || !focusIsNowhere(this.ownerDocument)) return;
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(caret.start, caret.end);
   }
 
   #onInput = (e: Event): void => {
