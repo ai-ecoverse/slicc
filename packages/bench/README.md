@@ -6,17 +6,18 @@ Measures what skills and models change in SLICC. It runs task sets on a SLICC le
 
 **Actions → Benchmark → Run workflow**. The inputs:
 
-| Input         | Default                           | Meaning                                                                             |
-| ------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| `sets`        | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                           |
-| `models`      | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                     |
-| `skills`      | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills) |
-| `repeats`     | `1`                               | Runs per task and configuration                                                     |
-| `tasks`       | all                               | Task ids, comma-separated                                                           |
-| `limit`       | all                               | First N tasks of each set                                                           |
-| `timeout`     | `900`                             | Seconds one agent run may take                                                      |
-| `judge-model` | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                           |
-| `publish`     | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                         |
+| Input                | Default                           | Meaning                                                                             |
+| -------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                           |
+| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                     |
+| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills) |
+| `repeats`            | `1`                               | Runs per task and configuration                                                     |
+| `tasks`              | all                               | Task ids, comma-separated                                                           |
+| `limit`              | all                               | First N tasks of each set                                                           |
+| `timeout`            | `900`                             | Seconds one agent run may take                                                      |
+| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                           |
+| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                         |
+| `fresh-leader-every` | `5`                               | Restart the leader every N tasks; `0` keeps one leader for the whole job            |
 
 The job summary shows the report. Two artifacts:
 
@@ -42,6 +43,13 @@ Each task starts a fresh chat with erased memories, selects the model and sends 
 - **Kept:** runs whose task, rubric, weights and judge are unchanged.
 - **Re-judged from the saved trace, without running the agent again:** runs whose judgement no longer stands. That means another `--judge-model`, a changed rubric or weights, or a judge call that failed.
 - **Run again:** runs that errored, and runs whose task text changed.
+
+**When the leader stops answering.** A run that cannot reach the leader is recorded with `leader_down`, never judged as a fail. In CI the runner then restarts the leader and retries the run once. After `--leader-down-limit` (default 2) such runs in a row it stops, so a resume can pick up the rest. Every record notes which leader ran it (`leader.generation`, `leader.age_s`). A cost the leader could not report is recorded as unknown (null), never as a difference from zero. The out dir keeps a journal for diagnosing the leader:
+
+- `events.jsonl`: each task with its phases and the leader's `uptime`, memory and process count before and after, plus restarts and stops.
+- `calls.jsonl`: every leader call, with how long it took and how it ended.
+- `diagnostics/`: the CLI's `SLICC_DEBUG` output from dials that failed.
+- `leader-infra.log` (CI): the leader's tray, signaling and WebRTC log lines, interleaved with `[bench-event]` markers from the runner.
 
 The command exits 1 when any run ended in an error, so a CI job cannot pass on runs that never happened. The report is written either way. Result files and the report name the judge that actually produced each score, taken from the records.
 

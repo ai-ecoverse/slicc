@@ -7,6 +7,7 @@ import {
   costTotals,
   exportTranscript,
   FINAL_INSTRUCTION,
+  leaderHealth,
   parseSkillsCondition,
   parseTabList,
   quote,
@@ -14,6 +15,7 @@ import {
   restoreSkills,
   restoreSkillsCommand,
   runTask,
+  spendDelta,
   stageSkills,
   stageSkillsCommand,
   startCapture,
@@ -174,7 +176,8 @@ describe('leader output parsing', () => {
       ],
     });
     expect(costTotals(cost)).toEqual({ cost: 0.3, tokens: 150, turns: 4 });
-    expect(costTotals('not json')).toEqual({ cost: 0, tokens: 0, turns: 0 });
+    expect(costTotals('not json')).toBeNull();
+    expect(costTotals('null')).toBeNull();
     expect(costTotals('{}')).toEqual({ cost: 0, tokens: 0, turns: 0 });
   });
 
@@ -373,7 +376,8 @@ describe('runTask', () => {
       capture: { pollMs: 5 },
     });
 
-    expect(calls.slice(0, 7).map(label)).toEqual([
+    expect(calls.slice(0, 8).map(label)).toEqual([
+      'uptime; meminfo',
       'rm -rf',
       'mkdir -p',
       'playwright-cli tab-list',
@@ -382,7 +386,7 @@ describe('runTask', () => {
       'slicc model claude-sonnet-5',
       'cost --json',
     ]);
-    expect(calls[1].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
+    expect(calls[2].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
     const prompt = calls.find((c) => c.kind === 'cli' && c.args[0] === 'prompt');
     expect(prompt.args).toEqual(['prompt', '-']);
     expect(prompt.opts).toEqual({ stdin: buildPrompt(task), timeoutMs: 60000, interrupt: true });
@@ -406,6 +410,104 @@ describe('runTask', () => {
     });
     expect(result.costUsd).toBeCloseTo(0.25);
     expect(result.screenshots[0]).toMatchObject({ format: 'png', base64: 'UE5H' });
+    expect(Object.keys(result.phases)).toEqual(['setupMs', 'promptMs', 'collectMs']);
+    expect(result.health.before).toMatchObject({ ok: true, leaderDown: false });
+    expect(result.health.after).toMatchObject({ ok: true });
+    // Tabs are closed right after the prompt, before the cost reading and the export.
+    const promptAt = calls.indexOf(prompt);
+    const closeAt = calls.findIndex(
+      (c, i) => i > promptAt && label(c) === 'playwright-cli tab-close'
+    );
+    const exportAt = calls.findIndex((c) => c.command?.startsWith('session export'));
+    expect(closeAt).toBeGreaterThan(promptAt);
+    expect(closeAt).toBeLessThan(exportAt);
+  });
+
+  it('turns a prompt that never reached the leader into a leader-down error', async () => {
+    const down = {
+      stdout: '',
+      stderr: 'tray connect timed out after 30s',
+      status: 1,
+      timedOut: false,
+      leaderDown: true,
+    };
+    const { leader } = leaderFor({ prompt: down });
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r5',
+      model: 'm',
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err.message).toMatch(/slicc prompt exited 1: tray connect timed out/);
+    expect(err.leaderDown).toBe(true);
+    const setup = fakeLeader({ commands: [[/^rm -rf/, { ...down }]] });
+    const setupErr = await runTask({
+      leader: setup.leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r6',
+      model: 'm',
+    }).catch((e) => e);
+    expect(setupErr.leaderDown).toBe(true);
+    const plain = fakeLeader({ commands: [[/^rm -rf/, fail('rm: denied')]] });
+    const plainErr = await runTask({
+      leader: plain.leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r7',
+      model: 'm',
+    }).catch((e) => e);
+    expect(plainErr.leaderDown).toBe(false);
+  });
+
+  it('records spend as unknown when a reading fails, never as a negative delta', async () => {
+    const { leader } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('FINAL ANSWER: x') },
+      commands: [[/^cost --json --all$/, fail('cost: busy')]],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r8',
+      model: 'm',
+      capture: { pollMs: 5 },
+    });
+    expect(result).toMatchObject({ costUsd: null, tokens: null, turns: null });
+    expect(traceFromResult(result).metrics.cost).toBeNull();
+    const t = { cost: 0.5, tokens: 10, turns: 2 };
+    expect(spendDelta(t, { cost: 0.2, tokens: 3, turns: 1 })).toEqual({
+      costUsd: null,
+      tokens: null,
+      turns: null,
+    });
+    expect(spendDelta(null, t)).toEqual({ costUsd: null, tokens: null, turns: null });
+    expect(spendDelta({ cost: 0.1, tokens: 4, turns: 1 }, t)).toEqual({
+      costUsd: 0.4,
+      tokens: 6,
+      turns: 1,
+    });
+  });
+
+  it('reads the leader health, and reports it failing without throwing', async () => {
+    const good = fakeLeader({ commands: [[/^uptime/, ok('up 1:02, load 0.5\nprocesses: 12\n')]] });
+    const now = vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(1250);
+    expect(await leaderHealth(good.leader, now)).toEqual({
+      at: new Date(1000).toISOString(),
+      ok: true,
+      ms: 250,
+      leaderDown: false,
+      text: 'up 1:02, load 0.5\nprocesses: 12',
+    });
+    expect(good.calls[0].opts.timeoutMs).toBe(60000);
+    const bad = fakeLeader({
+      commands: [
+        [/^uptime/, { stdout: '', stderr: 'tray connect timed out', status: 1, leaderDown: true }],
+      ],
+    });
+    expect(await leaderHealth(bad.leader)).toMatchObject({
+      ok: false,
+      leaderDown: true,
+      text: 'tray connect timed out',
+    });
   });
 
   it('returns a timed-out prompt for judging, and still tears down', async () => {

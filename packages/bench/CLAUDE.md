@@ -20,6 +20,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges every 
 | `scripts/upstream.mjs`      | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                                         |
 | `scripts/judge.mjs`         | Findings judge over Converse: request, validation, `score()`, text-only retry                                       |
 | `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace                            |
+| `scripts/lifecycle.mjs`     | Restart the CI leader with the start/stop-leader scripts; the diagnostic journal; redaction                         |
 | `scripts/executors.mjs`     | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt                        |
 | `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report                                |
 | `scripts/html.mjs`          | Records → one self-contained `report.html`: cards, table, deltas, task matrix, time × cost                          |
@@ -42,6 +43,15 @@ Everything is driven from outside, through the Go `slicc` CLI against the leader
    - `run`: the agent failed, or the task text changed.
 
    An errored run is reported, never counted as a fail: #3180's matrix is sparse. The invocation still exits 1, so a CI job does not go green on runs that never happened. Scores and outcomes use only judged runs; time and cost use every finished run. Summaries name the judge from the records, never from the command line.
+
+## Leader lifecycle and diagnostics
+
+The first BU V1 dispatch lost 4 of 5 leaders about 70 minutes into their jobs. Each lost leader stopped accepting `slicc` connections (`tray connect timed out`), while its Chrome kept running. The cause is not known yet, so the runner defends against it and records what the next occurrence needs:
+
+- Every call has a timeout (`DEFAULT_CALL_TIMEOUT_MS`), dial retries run with `SLICC_DEBUG=1`, and a result that never dialed carries `leaderDown`. `runTask` throws such runs; they are errors, never fails.
+- `--fresh-leader-every N` (CI: `BENCH_LEADER_SCRIPTS`) restarts the leader every N tasks with the github-workflow scripts; an unreachable leader is restarted once and the run retried; `--leader-down-limit` consecutive leader-down runs stop the job for a resume. Skills are staged again on every new leader.
+- Journal in the out dir: `calls.jsonl`, `events.jsonl` (per task: phases, leader generation and age, `uptime`/`meminfo`/`ps` before and after), `diagnostics/`; with `BENCH_LEADER_LOG`, events are also marked in the leader's log, and `bench.yml` keeps its infrastructure lines as `leader-infra.log`. All redacted of join tokens; none holds task text.
+- Cost is null when a `cost` reading fails or the counters went backwards; means, totals and pairs skip unknown values, and result files count them (`cost_unknown`).
 
 ## Publishing
 
