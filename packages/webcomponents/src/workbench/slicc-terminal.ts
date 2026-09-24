@@ -1,29 +1,24 @@
-import type { FitAddon as FitAddonType } from '@xterm/addon-fit';
-import type { ITheme, Terminal as TerminalType } from '@xterm/xterm';
-// `?raw` so the stylesheet text is injected into THIS component's shadow root —
-// xterm's chrome (the `.xterm` rows / viewport / cursor layers) does not pierce
-// the shadow boundary, so a global `<link>`/side-effect import would not style
-// rows rendered inside the shadow tree. The `*.css?raw` module shape is declared
-// in `src/css.d.ts`.
-import XTERM_CSS from '@xterm/xterm/css/xterm.css?raw';
+import type { WTerm } from '@wterm/dom';
+import WTERM_CSS from '@wterm/dom/css?raw';
+import type { GhosttyCore } from '@wterm/ghostty';
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
 import { resolveTerminalTheme, watchTerminalThemeScope } from './terminal-theme.js';
 
 /**
- * Dark xterm theme resolved from theme CSS variables on `scope`. Background /
+ * Dark terminal theme resolved from theme CSS variables on `scope`. Background /
  * foreground stay locked to the dark terminal surface in BOTH page themes;
  * ANSI / cursor colors follow `--rose` / `--cyan` / `--ctx` etc. so active
  * theme preferences (including scoop/freezer `--ctx` on `.wcui-frame`)
  * propagate. See `terminal-theme.ts`.
  */
-function currentTerminalTheme(scope: Element): ITheme {
+function currentTerminalTheme(scope: Element) {
   const { border: _border, ...theme } = resolveTerminalTheme(scope);
   return theme;
 }
 
-/** Component chrome (shadow root) — frame + header + the xterm mount host. */
+/** Component chrome (shadow root) — frame + header + the wterm mount host. */
 const STYLE = `
 :host {
   display: flex;
@@ -54,7 +49,7 @@ const STYLE = `
 .hd svg { display: block; color: #8a8a93; }
 .hd .title { letter-spacing: -0.01em; }
 .hd .spacer { flex: 1 1 auto; }
-/* The xterm mount host fills the remaining height; xterm paints into it. */
+/* The wterm mount host fills the remaining height. */
 .host {
   flex: 1 1 auto;
   min-height: 0;
@@ -62,13 +57,18 @@ const STYLE = `
   padding: 8px 0 8px 10px;
   background: var(--term-bg, #0c0c0e);
 }
-/* xterm.js wants its container to size the canvas; let it fill. */
-.host .xterm { height: 100%; }
-.host .xterm-viewport { overflow-y: auto; }
+.host.wterm {
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  font-family: 'IBM Plex Mono', 'Source Code Pro', 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.25;
+}
 `;
 
 /**
- * The xterm chrome (third-party CSS) + component CSS as shared constructable
+ * The wterm chrome (third-party CSS) + component CSS as shared constructable
  * stylesheets, built LAZILY on first connect. Constructing them at module scope
  * would call `new CSSStyleSheet()` at import time and break this module's
  * non-DOM importability (the package barrel / kernel-worker typecheck); building
@@ -77,48 +77,48 @@ const STYLE = `
  */
 let SHEETS: CSSStyleSheet[] | null = null;
 function chromeSheets(): CSSStyleSheet[] {
-  if (!SHEETS) SHEETS = [sheet(XTERM_CSS), sheet(STYLE)];
+  if (!SHEETS) SHEETS = [sheet(WTERM_CSS), sheet(STYLE)];
   return SHEETS;
 }
 
 /**
- * `<slicc-terminal>` — a self-contained xterm.js terminal panel, the reusable
+ * `<slicc-terminal>` — a self-contained wterm terminal panel, the reusable
  * extraction of the prototype's one dark shell surface (`proto/.term`) and the
  * webapp's `TerminalPanel` / `AlmostBashShell.mount` setup. It owns the
- * `@xterm/xterm` + `@xterm/addon-fit` lifecycle: the xterm stylesheet is
- * injected into the shadow root (xterm renders inside shadow DOM only if its
- * CSS lives there), the terminal is constructed with the dark prototype theme,
- * and a `ResizeObserver` keeps the buffer fit to the host on every size change.
+ * Ghostty-backed wterm lifecycle. Its stylesheet is injected into the shadow
+ * root, and wterm's ResizeObserver fits the buffer to the host.
  *
  * It is a presentation surface, not a shell — there is no command execution.
  * Hosts drive it with the imperative API (`write` / `writeln` / `clear` /
  * `focus`) and observe user keystrokes via the `terminal-data` event, wiring
  * those to whatever backend (a real shell, a websocket, a fixture) they own.
  *
- * The xterm modules are dynamically imported on connect so the module stays
+ * The wterm modules are dynamically imported on connect so the module stays
  * importable in non-DOM contexts (the package barrel, kernel-worker typecheck).
  *
  * @attr hide-header - boolean; hides the title bar (terminal fills the frame)
  * @attr label - the header title text (default `Terminal`)
  * @csspart header - the title bar
- * @csspart host - the xterm mount container
+ * @csspart host - the wterm mount container
  * @fires terminal-data - composed + bubbling `CustomEvent<string>` for each
- *   chunk of user input (xterm `onData`); `detail` is the raw keystroke data
+ *   chunk of user input (wterm `onData`); `detail` is the raw keystroke data
+ * @fires terminal-ready - emitted after the WASM core initializes and queued writes flush
+ * @fires terminal-error - emitted if the WASM core cannot initialize
  */
 export class SliccTerminal extends HTMLElement {
   static readonly observedAttributes = ['label', 'hide-header'];
 
   readonly #root: ShadowRoot;
   #hostEl: HTMLElement | null = null;
-  #term: TerminalType | null = null;
-  #fit: FitAddonType | null = null;
-  #ro: ResizeObserver | null = null;
+  #term: WTerm | null = null;
+  #core: GhosttyCore | null = null;
   /** Disconnects theme-scope observers (html / body / `.wcui-frame`). */
   #unwatchTheme: (() => void) | null = null;
-  /** Buffered writes issued before xterm finished loading (async import). */
+  /** Buffered writes issued before wterm finished loading (async import/WASM). */
   #pending: string[] = [];
   /** Guards against a late async open after the element has disconnected. */
   #disposed = false;
+  #loadGeneration = 0;
 
   constructor() {
     super();
@@ -127,8 +127,13 @@ export class SliccTerminal extends HTMLElement {
 
   connectedCallback(): void {
     this.#disposed = false;
+    this.#loadGeneration++;
     this.#renderChrome();
-    void this.#ensureTerminal();
+    void this.#ensureTerminal().catch((error: unknown) => {
+      this.dispatchEvent(
+        new CustomEvent('terminal-error', { detail: error, bubbles: true, composed: true })
+      );
+    });
   }
 
   disconnectedCallback(): void {
@@ -164,11 +169,9 @@ export class SliccTerminal extends HTMLElement {
   }
 
   /**
-   * The live xterm `Terminal`, or `null` before it has loaded / after
-   * disconnect. Hosts that need direct xterm features (addons, selection) can
-   * reach it, but the imperative methods below cover the common surface.
+   * The live wterm instance, or `null` before load / after disconnect.
    */
-  get terminal(): TerminalType | null {
+  get terminal(): WTerm | null {
     return this.#term;
   }
 
@@ -178,15 +181,15 @@ export class SliccTerminal extends HTMLElement {
     else this.#pending.push(data);
   }
 
-  /** Write a line (xterm appends CRLF). */
+  /** Write a line with CRLF. */
   writeln(line: string): void {
-    if (this.#term) this.#term.writeln(line);
+    if (this.#term) this.#term.write(`${line}\r\n`);
     else this.#pending.push(`${line}\r\n`);
   }
 
-  /** Clear the viewport (keeps the prompt line, like xterm `clear`). */
+  /** Clear the viewport and move the cursor home. */
   clear(): void {
-    if (this.#term) this.#term.clear();
+    if (this.#term) this.#term.write('\x1b[2J\x1b[H');
     else this.#pending.length = 0;
   }
 
@@ -197,7 +200,19 @@ export class SliccTerminal extends HTMLElement {
 
   /** Re-fit the terminal buffer to its current host size. */
   fit(): void {
-    this.#fit?.fit();
+    if (!this.#term || !this.#hostEl) return;
+    const probe = document.createElement('span');
+    probe.textContent = 'M';
+    this.#hostEl.appendChild(probe);
+    const width = probe.getBoundingClientRect().width;
+    const rowHeight = parseFloat(getComputedStyle(this.#hostEl).fontSize) * 1.25;
+    probe.remove();
+    if (width > 0 && rowHeight > 0) {
+      this.#term.resize(
+        Math.max(1, Math.floor(this.#hostEl.clientWidth / width)),
+        Math.max(1, Math.floor(this.#hostEl.clientHeight / rowHeight))
+      );
+    }
   }
 
   /** Render the shadow-root chrome (style + header + mount host). */
@@ -216,65 +231,68 @@ export class SliccTerminal extends HTMLElement {
     this.#hostEl = host;
   }
 
-  /** Load xterm + addon-fit, construct the terminal, and open it. */
+  /** Load wterm + Ghostty, construct the terminal, and open it. */
   async #ensureTerminal(): Promise<void> {
     if (this.#term || this.#disposed) return;
-    const [{ Terminal }, { FitAddon }] = await Promise.all([
-      import('@xterm/xterm'),
-      import('@xterm/addon-fit'),
+    const generation = this.#loadGeneration;
+    const [{ WTerm }, { GhosttyCore }] = await Promise.all([
+      import('@wterm/dom'),
+      import('@wterm/ghostty'),
     ]);
-    // The element may have disconnected while the dynamic imports were in
-    // flight — bail rather than open into a detached host.
-    if (this.#disposed || !this.#hostEl) return;
-
-    const term = new Terminal({
+    if (this.#disposed || generation !== this.#loadGeneration || !this.#hostEl) return;
+    const theme = currentTerminalTheme(this);
+    const core = await GhosttyCore.load({
+      foregroundColor: theme.foreground,
+      backgroundColor: theme.background,
+    });
+    if (this.#disposed || generation !== this.#loadGeneration || !this.#hostEl) {
+      core.dispose();
+      return;
+    }
+    this.#core = core;
+    this.#applyTheme();
+    const term = new WTerm(this.#hostEl, {
+      core,
       cursorBlink: !prefersReducedMotion(),
-      fontSize: 12,
-      lineHeight: 1.25,
-      fontFamily: "'IBM Plex Mono', 'Source Code Pro', 'JetBrains Mono', ui-monospace, monospace",
-      theme: currentTerminalTheme(this),
-      convertEol: true,
-      scrollback: 2000,
+      onData: (data) =>
+        this.dispatchEvent(
+          new CustomEvent('terminal-data', { detail: data, bubbles: true, composed: true })
+        ),
     });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(this.#hostEl);
-
-    // Re-emit user keystrokes as a composed/bubbling DOM event so hosts can
-    // wire the terminal to any backend without reaching into xterm.
-    term.onData((data) => {
-      this.dispatchEvent(
-        new CustomEvent('terminal-data', { detail: data, bubbles: true, composed: true })
-      );
-    });
-
+    try {
+      await term.init();
+    } catch (error) {
+      core.dispose();
+      if (this.#core === core) this.#core = null;
+      if (this.#disposed || generation !== this.#loadGeneration) return;
+      throw error;
+    }
+    if (this.#disposed || generation !== this.#loadGeneration) {
+      term.destroy();
+      core.dispose();
+      if (this.#core === core) this.#core = null;
+      return;
+    }
     this.#term = term;
-    this.#fit = fit;
     this.#watchTheme();
-
-    // Initial fit, then flush any writes buffered before the async load.
-    fit.fit();
+    this.fit();
     if (this.#pending.length) {
       for (const chunk of this.#pending) term.write(chunk);
       this.#pending.length = 0;
     }
-
-    if (typeof ResizeObserver === 'function') {
-      this.#ro = new ResizeObserver(() => this.#fit?.fit());
-      this.#ro.observe(this.#hostEl);
-    }
+    this.dispatchEvent(new CustomEvent('terminal-ready', { bubbles: true, composed: true }));
   }
 
-  /** Dispose the terminal, addon, and observer (idempotent). */
+  /** Dispose the terminal and WASM core (idempotent). */
   #teardown(): void {
     this.#disposed = true;
+    this.#loadGeneration++;
     this.#unwatchTheme?.();
     this.#unwatchTheme = null;
-    this.#ro?.disconnect();
-    this.#ro = null;
-    this.#term?.dispose();
+    this.#term?.destroy();
+    this.#core?.dispose();
     this.#term = null;
-    this.#fit = null;
+    this.#core = null;
     this.#pending.length = 0;
   }
 
@@ -285,8 +303,36 @@ export class SliccTerminal extends HTMLElement {
   #watchTheme(): void {
     this.#unwatchTheme?.();
     this.#unwatchTheme = watchTerminalThemeScope(this, () => {
-      if (!this.#term) return;
-      this.#term.options.theme = currentTerminalTheme(this);
+      this.#applyTheme();
+    });
+  }
+
+  #applyTheme(): void {
+    if (!this.#hostEl) return;
+    const theme = currentTerminalTheme(this);
+    const colors = [
+      theme.black,
+      theme.red,
+      theme.green,
+      theme.yellow,
+      theme.blue,
+      theme.magenta,
+      theme.cyan,
+      theme.white,
+      theme.brightBlack,
+      theme.brightRed,
+      theme.brightGreen,
+      theme.brightYellow,
+      theme.brightBlue,
+      theme.brightMagenta,
+      theme.brightCyan,
+      theme.brightWhite,
+    ];
+    this.#hostEl.style.setProperty('--term-bg', theme.background);
+    this.#hostEl.style.setProperty('--term-fg', theme.foreground);
+    this.#hostEl.style.setProperty('--term-cursor', theme.cursor);
+    colors.forEach((color, index) => {
+      this.#hostEl?.style.setProperty(`--term-color-${index}`, color);
     });
   }
 }

@@ -7,13 +7,13 @@
  * DedicatedWorker. The panel terminal can't keep using the inline
  * `AlmostBashShell` view-class — that ships a local `Bash` instance the
  * worker never sees. This view is the panel-side counterpart to
- * the worker-side `TerminalSessionHost`: xterm renders here,
+ * the worker-side `TerminalSessionHost`: wterm renders here,
  * keystrokes assemble into committed lines locally, and Enter
  * dispatches each line via `terminal-exec` to the worker.
  *
  * What it does today:
- *   - Mount xterm.js + theme sync + refit.
- *   - Line editing via the `xterm-readline` addon: typing, Backspace,
+ *   - Mount Ghostty-backed wterm + theme sync + refit.
+ *   - Local line editing: typing, Backspace,
  *     Delete, ←/→ arrows (wrap-aware across long input that spans
  *     multiple visual rows), ↑/↓ history, Home/End, Ctrl+C → SIGINT.
  *   - Tab completion via a silent `compgen` round-trip to the
@@ -29,7 +29,7 @@
  *     just renders a static `$ ` prompt. A future event can carry
  *     `cwd` updates from the host.
  *
- * Worker safety: this file dynamically imports xterm and only loads
+ * Worker safety: this file dynamically imports the DOM component and only loads
  * on the page side — never in the worker bundle.
  */
 
@@ -38,16 +38,8 @@ import type {
   PermissionGrant,
   PermissionKind,
   PermissionRequestOptions,
+  SliccTerminal,
 } from '@slicc/webcomponents';
-// Deep import — the package barrel constructs CSSStyleSheet at load time and
-// breaks Node vitest (no CSSStyleSheet). This module is DOM-free.
-import {
-  resolveTerminalTheme,
-  watchTerminalThemeScope,
-} from '@slicc/webcomponents/workbench/terminal-theme';
-import type { FitAddon } from '@xterm/addon-fit';
-import type { Terminal } from '@xterm/xterm';
-import type { Readline } from 'xterm-readline';
 import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
 import { parseEsptoolArgs } from '../shell/supplemental-commands/esptool-command.js';
@@ -68,6 +60,7 @@ import {
   type SerialFilter,
   type SerialPort,
 } from './serial-port-registry.js';
+import { TerminalLineEditor } from './terminal-line-editor.js';
 import {
   type TerminalExecResult,
   TerminalSessionClient,
@@ -87,54 +80,23 @@ export interface RemoteTerminalViewOptions {
   env?: Record<string, string>;
 }
 
-/** Always-dark xterm theme; ANSI accents follow the active scope's CSS vars. */
-function resolvePanelTerminalTheme(scope?: Element | null) {
-  const { border: _border, ...theme } = resolveTerminalTheme(scope);
-  return theme;
-}
-
 const PROMPT = '\x1b[34m/\x1b[0m \x1b[90m$\x1b[0m ';
-
-/**
- * Minimal structural views into `xterm-readline` internals we depend on.
- * The addon exposes no public API to (a) disable its localStorage history
- * persistence or (b) re-anchor its renderer after we print tab-completion
- * candidates, so we reach in through these narrow shapes. Pinned to
- * `xterm-readline@1.2.2`; revisit on upgrade. Upstreaming a `persist:false`
- * option plus a completion hook would remove the need for both.
- */
-interface ReadlineHistoryInternals {
-  entries: string[];
-  cursor: number;
-  saveToLocalStorage: () => void;
-  restoreFromLocalStorage: () => void;
-}
-interface ReadlineStateInternals {
-  getTty(): { anchorRow: number };
-  refresh(): void;
-}
 
 export class RemoteTerminalView {
   private readonly client: TerminalSessionClient;
-  private terminal: Terminal | null = null;
-  private fitAddon: FitAddon | null = null;
+  private terminal: SliccTerminal | null = null;
   private terminalHost: HTMLElement | null = null;
   private previewHost: HTMLElement | null = null;
   private previewUrls: string[] = [];
   private hasPreview = false;
   private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private unwatchTheme: (() => void) | null = null;
-  /** Mount container — theme resolution / observation scope. */
-  private mountRoot: HTMLElement | null = null;
-
-  // Line editor — the xterm-readline addon owns the buffer, cursor, and
-  // history (including wrap-aware ←/→ navigation across visual rows).
-  private readline: Readline | null = null;
+  /** Unblocks `mount()` if the panel closes during wterm WASM initialization. */
+  private rejectTerminalReady: ((reason: unknown) => void) | null = null;
+  /** Session-local command buffer, cursor, and history. */
+  private editor: TerminalLineEditor | null = null;
   /** Set true by `dispose()` so the prompt loop exits. */
   private disposed = false;
-  /** Rejects the pending `read()` so `dispose()` can unblock the loop. */
-  private abortPromptLoop: ((reason: unknown) => void) | null = null;
   /** Resolves a programmatic `executeCommandInTerminal` caller's result. */
   private programmaticResolve: ((result: TerminalExecResult) => void) | null = null;
   private isExecuting = false;
@@ -162,35 +124,13 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Mount the xterm view in `container` and open a worker-side
+   * Mount the wterm view in `container` and open a worker-side
    * shell session. Resolves when the session is opened (or rejects
    * with the `error` text from a `terminal-status: error` event).
    */
   async mount(container: HTMLElement): Promise<void> {
-    const { Terminal } = await import('@xterm/xterm');
-    const { FitAddon } = await import('@xterm/addon-fit');
-    const { Readline } = await import('xterm-readline');
-    await import('@xterm/xterm/css/xterm.css');
-
-    this.mountRoot = container;
-    this.terminal = new Terminal({
-      cursorBlink: true,
-      fontSize: 11,
-      fontFamily: "'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      theme: resolvePanelTerminalTheme(container),
-      convertEol: true,
-    });
-
-    this.unwatchTheme?.();
-    this.unwatchTheme = watchTerminalThemeScope(container, () => {
-      if (!this.terminal) return;
-      // Always dark bg / light text; ANSI accents track the scoped theme
-      // (page presets on <html>, scoop/freezer --ctx on .wcui-frame).
-      this.terminal.options.theme = resolvePanelTerminalTheme(this.mountRoot);
-    });
-
-    this.fitAddon = new FitAddon();
-    this.terminal.loadAddon(this.fitAddon);
+    await import('@slicc/webcomponents');
+    if (this.disposed) return;
 
     container.replaceChildren();
     this.terminalHost = document.createElement('div');
@@ -201,20 +141,59 @@ export class RemoteTerminalView {
     this.previewHost.className = 'terminal-panel__preview';
     container.appendChild(this.previewHost);
 
-    this.terminal.open(this.terminalHost);
-    this.fitAddon.fit();
+    const terminal = document.createElement('slicc-terminal') as SliccTerminal;
+    terminal.hideHeader = true;
+    terminal.style.width = '100%';
+    terminal.style.height = '100%';
+    this.terminal = terminal;
+    const ready = new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        terminal.removeEventListener('terminal-ready', onReady);
+        terminal.removeEventListener('terminal-error', onError);
+        this.rejectTerminalReady = null;
+      };
+      const onReady = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (event: Event) => {
+        cleanup();
+        reject((event as CustomEvent<unknown>).detail);
+      };
+      this.rejectTerminalReady = (reason) => {
+        cleanup();
+        reject(reason);
+      };
+      terminal.addEventListener('terminal-ready', onReady);
+      terminal.addEventListener('terminal-error', onError);
+    });
+    terminal.addEventListener('terminal-data', (event) => {
+      const data = (event as CustomEvent<string>).detail;
+      if (data === '\t') {
+        if (!this.tabBusy) void this.handleTab();
+      } else if (data === '\x03' && this.isExecuting) {
+        this.signalInterruptDuringExec();
+      } else if (!this.tabBusy) {
+        this.editor?.feed(data);
+      }
+    });
+    this.terminalHost.appendChild(terminal);
+    await ready;
+    if (this.disposed) return;
+    terminal.fit();
+
+    this.editor = new TerminalLineEditor({
+      write: (data) => terminal.write(data),
+      getCursor: () => terminal.terminal?.bridge?.getCursor() ?? { row: 0, col: 0 },
+      getScrollbackCount: () => terminal.terminal?.bridge?.getScrollbackCount() ?? 0,
+    });
 
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    this.readline = new Readline();
-    this.neutralizeReadlineHistoryPersistence();
-    this.terminal.loadAddon(this.readline);
-    this.readline.setCtrlCHandler(() => this.signalInterruptDuringExec());
-    this.setupInput();
-
-    this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
-    this.terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m\n');
+    terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
+    terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
+    terminal.writeln('');
 
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });
     void this.runPromptLoop();
@@ -222,7 +201,7 @@ export class RemoteTerminalView {
 
   /** Re-fit the terminal to its container. */
   refit(): void {
-    this.fitAddon?.fit();
+    this.terminal?.fit();
   }
 
   /** Clear the terminal screen. */
@@ -238,18 +217,22 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
-    if (!this.terminal || !this.readline) return this.client.exec(trimmed);
-    if (this.isExecuting || this.programmaticResolve || this.readline.getLine().length > 0) {
+    if (!this.terminal || !this.editor) return this.client.exec(trimmed);
+    if (
+      this.isExecuting ||
+      this.programmaticResolve ||
+      !this.editor.isReading ||
+      this.editor.text
+    ) {
       return { stdout: '', stderr: 'terminal is busy; finish current input first\n', exitCode: 1 };
     }
-    // Render the command in the active prompt line and commit it through
-    // readline (as if the user typed it, then Enter). The prompt loop's
+    // Render the command in the active prompt line and commit it. The prompt loop's
     // `processLine` runs it and resolves this promise with the result.
     const result = new Promise<TerminalExecResult>((resolve) => {
       this.programmaticResolve = resolve;
     });
-    this.readline.updateLine(trimmed);
-    this.terminal.input('\r');
+    this.editor.setLine(trimmed);
+    this.editor.accept();
     return result;
   }
 
@@ -261,18 +244,14 @@ export class RemoteTerminalView {
   /** Tear down the view + close the worker session. */
   dispose(): void {
     this.disposed = true;
-    this.abortPromptLoop?.(new Error('terminal disposed'));
-    this.abortPromptLoop = null;
+    this.rejectTerminalReady?.(new Error('terminal disposed'));
+    this.editor?.abort(new Error('terminal disposed'));
     this.clearMediaPreview();
-    this.unwatchTheme?.();
-    this.unwatchTheme = null;
-    this.mountRoot = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
-    this.terminal?.dispose();
+    this.terminal?.remove();
     this.terminal = null;
-    this.readline = null;
-    this.fitAddon = null;
+    this.editor = null;
     this.terminalHost = null;
     this.previewHost = null;
     this.client.close();
@@ -286,10 +265,6 @@ export class RemoteTerminalView {
   private renderMediaPreview(event: TerminalEventMsg & { type: 'terminal-media-preview' }): void {
     if (!this.previewHost) return;
 
-    const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
-    this.previewUrls.push(url);
-
     const previewItem = document.createElement('div');
     previewItem.className = 'terminal-panel__preview-item';
 
@@ -299,7 +274,36 @@ export class RemoteTerminalView {
     label.textContent = `${name} · ${event.mediaType}`;
     previewItem.appendChild(label);
 
-    if (event.mediaType.startsWith('video/')) {
+    if (event.mediaType === 'image/png') {
+      const terminal = document.createElement('slicc-terminal') as SliccTerminal;
+      terminal.hideHeader = true;
+      terminal.style.width = '100%';
+      terminal.style.height = '180px';
+      terminal.style.pointerEvents = 'none';
+      terminal.setAttribute('aria-label', `Kitty graphics preview of ${name}`);
+      terminal.addEventListener(
+        'terminal-ready',
+        () =>
+          requestAnimationFrame(() => {
+            const viewport = terminal.shadowRoot?.querySelector<HTMLElement>('.host');
+            if (viewport) viewport.scrollTop = 0;
+            this.terminal?.focus();
+          }),
+        { once: true }
+      );
+      previewItem.appendChild(terminal);
+      // Kitty direct PNG transport. Continuation chunks stay below the
+      // protocol's 4096-byte payload limit; Ghostty places the decoded image.
+      for (let offset = 0; offset < event.data.length; offset += 4096) {
+        const first = offset === 0;
+        const last = offset + 4096 >= event.data.length;
+        const control = first ? `a=T,f=100,t=d,m=${last ? 0 : 1}` : `m=${last ? 0 : 1}`;
+        terminal.write(`\x1b_G${control};${event.data.slice(offset, offset + 4096)}\x1b\\`);
+      }
+    } else if (event.mediaType.startsWith('video/')) {
+      const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
+      this.previewUrls.push(url);
       const video = document.createElement('video');
       video.className = 'terminal-panel__preview-media';
       video.controls = true;
@@ -311,6 +315,9 @@ export class RemoteTerminalView {
       video.addEventListener('loadedmetadata', () => this.refit(), { once: true });
       previewItem.appendChild(video);
     } else {
+      const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
+      this.previewUrls.push(url);
       const image = document.createElement('img');
       image.className = 'terminal-panel__preview-media';
       image.alt = name;
@@ -337,27 +344,22 @@ export class RemoteTerminalView {
   }
 
   // ---------------------------------------------------------------------------
-  // Internal — line editor (xterm-readline)
+  // Internal — line editor
   // ---------------------------------------------------------------------------
 
   /**
-   * Prompt/execute loop. `readline.read()` owns ALL line editing — the
-   * buffer, cursor, history (↑/↓), Home/End, Backspace/Delete, and
-   * (crucially) ←/→ navigation that stays correct across long input that
-   * wraps onto multiple visual rows, which the previous hand-rolled
-   * editor could not do. Each committed line is dispatched through
+   * Prompt/execute loop. The editor owns the buffer, cursor, and history.
+   * Each committed line is dispatched through
    * `processLine`; the next iteration re-renders the prompt.
    */
   private async runPromptLoop(): Promise<void> {
-    while (!this.disposed && this.readline && this.terminal) {
+    while (!this.disposed && this.editor && this.terminal) {
       let line: string;
       try {
         line = await this.readNextLine();
       } catch {
         // `dispose()` rejected the pending read to unblock the loop.
         break;
-      } finally {
-        this.abortPromptLoop = null;
       }
       // `executeCommandInTerminal` sets `programmaticResolve` before it
       // feeds a line, so a non-null resolver marks THIS line as a
@@ -374,42 +376,12 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Await the next committed line, racing a `dispose()` abort so the
-   * loop can unblock (readline has no `abortRead`). Extracted from the
-   * loop body so the abort promise's closure isn't re-created inline on
-   * every iteration.
-   *
-   * Preserves unterminated output from the previous command. `readline.read`
-   * anchors the prompt at the current row and issues a carriage-return + line
-   * clear before drawing, which erases anything the last `terminal-output`
-   * event wrote without a trailing newline (`echo -n ABC`, `cat` on a file
-   * missing its final `\n`, …). If the cursor isn't already at column 0, emit
-   * the zsh-style reverse-video `%` marker followed by `\r\n` so the partial
-   * line survives and the marker signals it was unterminated.
-   *
-   * `terminal.write()` queues into the parser and updates `cursorX`
-   * asynchronously, so the cursor check has to run inside an empty-write
-   * flush callback — otherwise pending `terminal-output` bytes from the
-   * previous command may not have been parsed yet and `cursorX` reads stale.
+   * Await a committed line. The editor checks Ghostty's synchronous cursor
+   * state before drawing the next prompt, preserving unterminated output.
    */
   private readNextLine(): Promise<string> {
-    const terminal = this.terminal;
-    const readline = this.readline;
-    if (!terminal || !readline) {
-      return Promise.reject(new Error('terminal not mounted'));
-    }
-    const aborted = new Promise<never>((_resolve, reject) => {
-      this.abortPromptLoop = reject;
-    });
-    const read = new Promise<string>((resolve, reject) => {
-      terminal.write('', () => {
-        if (terminal.buffer.active.cursorX > 0) {
-          terminal.write('\x1b[7m%\x1b[0m\r\n');
-        }
-        readline.read(PROMPT).then(resolve, reject);
-      });
-    });
-    return Promise.race([read, aborted]);
+    if (!this.editor) return Promise.reject(new Error('terminal not mounted'));
+    return this.editor.read(PROMPT);
   }
 
   /**
@@ -421,7 +393,7 @@ export class RemoteTerminalView {
    * `showDirectoryPicker` / `requestDevice` / `requestPort` fire. A
    * `programmatic` line (from `executeCommandInTerminal`) has no gesture,
    * so it skips the pickers and runs directly — matching the
-   * pre-readline path, which called `runRemote` without pre-intercepts.
+   * original programmatic path, which called `runRemote` without pre-intercepts.
    */
   private async processLine(rawLine: string, programmatic = false): Promise<TerminalExecResult> {
     const command = rawLine.trim();
@@ -473,73 +445,13 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Wire the Tab-completion keystroke tap and the mid-completion Enter
-   * guard. readline itself ignores Tab, so a second `onData` listener
-   * owns completion without racing the addon. The custom key handler
-   * (attached after the addon, so it wins) blocks Enter while a compgen
-   * round-trip is in flight, so a second exec can't race the worker's
-   * single exec slot.
-   *
-   * NOTE: `attachCustomKeyEventHandler` is single-slot, so this replaces
-   * the addon's own handler (which maps Shift+Enter -> multi-line input).
-   * That's intentional: the panel shell is single-line (the previous
-   * hand-rolled editor had no Shift+Enter either), and blocking the
-   * tab/Enter race needs a keydown-level hook that only this API gives.
-   * To restore Shift+Enter, replicate the addon's ShiftEnter branch here
-   * before returning true.
-   */
-  private setupInput(): void {
-    if (!this.terminal) return;
-    this.terminal.onData((data) => {
-      if (data === '\t') void this.handleTab();
-    });
-    this.terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === 'keydown' && event.key === 'Enter' && this.tabBusy) return false;
-      return true;
-    });
-  }
-
-  /**
-   * Ctrl+C handler invoked by readline only BETWEEN reads — i.e. while a
-   * command is executing (no active `read()`). Forwards SIGINT to the
-   * worker session so a running job can be interrupted. While a line is
-   * being edited, readline handles Ctrl+C itself (clears the line).
+   * Ctrl+C during execution forwards SIGINT to the worker. At a prompt,
+   * the editor cancels the current line locally.
    */
   private signalInterruptDuringExec(): void {
     if (!this.isExecuting) return;
     this.terminal?.writeln('^C');
     this.client.signal('SIGINT');
-  }
-
-  /**
-   * xterm-readline persists command history to `localStorage['history']`
-   * by default (restoring it in its constructor and saving on every
-   * commit). SLICC keeps shell history in-memory per session and relies
-   * on secret masking, so a command typed into the terminal must not be
-   * written to disk under a generic, collision-prone key. Neutralize
-   * both sides and clear anything a prior load may have restored.
-   */
-  private neutralizeReadlineHistoryPersistence(): void {
-    const history = (this.readline as unknown as { history?: ReadlineHistoryInternals }).history;
-    if (!history) return;
-    history.entries = [];
-    history.cursor = -1;
-    history.saveToLocalStorage = () => undefined;
-    history.restoreFromLocalStorage = () => undefined;
-  }
-
-  /**
-   * Re-anchor readline's renderer to the current cursor row and redraw
-   * the input line. Used after we print tab-completion candidates with
-   * direct `println` calls, which move the real cursor without updating
-   * the addon's tracked anchor row.
-   */
-  private reanchorReadline(): void {
-    if (!this.terminal || !this.readline) return;
-    const state = (this.readline as unknown as { state?: ReadlineStateInternals }).state;
-    if (!state) return;
-    state.getTty().anchorRow = this.terminal.buffer.active.cursorY;
-    state.refresh();
   }
 
   /**
@@ -553,20 +465,18 @@ export class RemoteTerminalView {
    * insert + trailing space/slash, multi hit → insert the longest common
    * prefix, listing fallback when there's no shared extension.
    *
-   * Completion targets the committed buffer as the "before cursor" text
-   * (cursor-at-end); a mid-line Tab completes the final token. Resolved
-   * text is fed back through `terminal.input()` so the readline addon
-   * inserts it and keeps its wrap-aware layout model in sync.
+   * Completion targets text before the cursor. The editor inserts the
+   * resolved suffix and redraws any text following the cursor.
    */
   private async handleTab(): Promise<void> {
-    if (!this.terminal || !this.readline) return;
+    if (!this.terminal || !this.editor) return;
     if (this.isExecuting || this.tabBusy) return;
     this.tabBusy = true;
     // Share the `isExecuting` gate so a Ctrl+C during the round-trip
     // routes to the worker and the single exec slot isn't double-booked.
     this.isExecuting = true;
     try {
-      const beforeCursor = this.readline.getLine();
+      const beforeCursor = this.editor.beforeCursor;
       const { currentWord, isFirstWord, compgenCmd } = buildCompgenPlan(beforeCursor);
 
       this.suppressOutput = true;
@@ -584,7 +494,7 @@ export class RemoteTerminalView {
       if (matches.length === 1) {
         const completion = matches[0];
         const suffix = completion.slice(currentWord.length);
-        if (suffix) this.terminal.input(suffix);
+        if (suffix) this.editor.insert(suffix);
         // Decide between trailing space (commands / regular files) and
         // trailing slash (directories) via a second silent compgen.
         let trail = ' ';
@@ -597,22 +507,20 @@ export class RemoteTerminalView {
             this.suppressOutput = false;
           }
         }
-        this.terminal.input(trail);
+        this.editor.insert(trail);
         return;
       }
 
       // Multi-match: insert the longest common prefix. If there's no
       // shared extension beyond what the user typed, list the candidates
-      // and re-anchor so readline redraws the line below the listing.
+      // and redraw the active line below the listing.
       const prefix = longestCommonPrefix(matches);
       const suffix = prefix.slice(currentWord.length);
       if (suffix) {
-        this.terminal.input(suffix);
+        this.editor.insert(suffix);
         return;
       }
-      this.readline.println('');
-      this.readline.println(matches.map((m) => m.split('/').pop() ?? m).join('  '));
-      this.reanchorReadline();
+      this.editor.list(matches.map((m) => m.split('/').pop() ?? m));
     } catch (err) {
       console.warn(
         '[RemoteTerminal] Tab completion failed:',
@@ -912,10 +820,13 @@ export class RemoteTerminalView {
         // Stderr renders red; stdout in default. Terminals usually
         // don't distinguish, but tinting stderr makes errors obvious
         // in the panel.
+        // xterm's former convertEol option reset the column for bare LF.
+        // Ghostty preserves VT semantics, so normalize shell output here.
+        const output = event.data.replace(/\r?\n/g, '\r\n');
         if (event.stream === 'stderr') {
-          this.terminal.write(`\x1b[31m${event.data}\x1b[0m`);
+          this.terminal.write(`\x1b[31m${output}\x1b[0m`);
         } else {
-          this.terminal.write(event.data);
+          this.terminal.write(output);
         }
         return;
       case 'terminal-exit':

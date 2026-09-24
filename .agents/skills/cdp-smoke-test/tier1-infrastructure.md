@@ -70,7 +70,5 @@ Proves IndexedDB durability and re-exercises boot + bridge reattach:
   hidden (blind "Terminal" clicks TOGGLE — they close an open panel),
   waits up to 15 s for the kernel prompt, verifies the echo, and retries
   once. If it still fails, the kernel session is genuinely stuck.
-- Command output **without a trailing newline** is currently invisible in
-  the interactive terminal (erased by the readline prompt redraw,
-  issue #1583, fix: PR #1584) — keep assertions on newline-terminated output, or append
-  `; echo` to the command.
+- Command output without a trailing newline is marked with a reverse-video `%`
+  before the next prompt, preserving the output (issue #1583).

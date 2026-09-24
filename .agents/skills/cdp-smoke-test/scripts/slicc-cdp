@@ -314,13 +314,13 @@ if (cmd === 'targets') {
   const finder =
     cmd === 'prompt'
       ? `(() => { let box = null; const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) walk(el.shadowRoot); if (!box && el.matches('textarea, [contenteditable=\\'true\\']') && el.getBoundingClientRect().height > 0) box = el; } }; walk(document); return box; })()`
-      : `(() => { let el = null; const walk = (root) => { for (const e of root.querySelectorAll('*')) { if (e.shadowRoot) walk(e.shadowRoot); if (!el && e.classList?.contains('xterm')) el = e; } }; walk(document); return el; })()`;
+      : `document.querySelector('.terminal-panel__terminal-host slicc-terminal')?.shadowRoot?.querySelector('.host')`;
   if (cmd === 'term') {
     // The panel state persists across reloads and the rail button TOGGLES,
     // so a blind "Terminal" click can CLOSE an open panel — input then goes
-    // into a hidden stale xterm. The rail button exposes the truth via
+    // into a hidden stale terminal. The rail button exposes the truth via
     // aria-pressed; only click when the panel is actually closed. (Don't
-    // use xterm width — slide-out panels keep their layout width when
+    // use terminal width — slide-out panels keep their layout width when
     // hidden.)
     const panelOpen = () =>
       session.evaluate(`(() => {
@@ -380,7 +380,7 @@ if (cmd === 'targets') {
     // interactions occasionally drop without this.
     await new Promise((r) => setTimeout(r, 500));
     if (cmd === 'term') {
-      // A previously dropped send can leave residue in readline's input
+      // A previously dropped send can leave residue in the editor's input
       // buffer, which would prefix-corrupt this command (echo-verify
       // checks containment, so it wouldn't catch it). Ctrl+U kills the
       // pending line first.
@@ -400,21 +400,14 @@ if (cmd === 'targets') {
     await pressEnter(session);
   };
   // Terminal sends are verifiable: the shell echoes the typed command into
-  // the xterm buffer (wrapped at panel width). Count whitespace-stripped
+  // the wterm buffer (wrapped at panel width). Count whitespace-stripped
   // occurrences BEFORE and AFTER the send — the count must increase, so a
   // matching echo from an earlier identical command can't false-pass, and
   // a delayed echo is polled for (not blind-retried, which would
   // double-execute side-effecting commands).
   const echoCount = async () => {
     const buf = await session.evaluate(`(() => {
-      let el = null;
-      const walk = (root) => {
-        for (const e of root.querySelectorAll('*')) {
-          if (e.shadowRoot) walk(e.shadowRoot);
-          if (!el && e.classList?.contains('xterm')) el = e;
-        }
-      };
-      walk(document);
+      const el = document.querySelector('.terminal-panel__terminal-host slicc-terminal')?.shadowRoot?.querySelector('.host');
       return el ? el.innerText : '';
     })()`);
     const needle = text.replace(/\s/g, '');
@@ -452,14 +445,7 @@ if (cmd === 'targets') {
   const session = await connect();
   const lines = Number(rest[0]) || 15;
   const text = await session.evaluate(`(() => {
-    let el = null;
-    const walk = (root) => {
-      for (const e of root.querySelectorAll('*')) {
-        if (e.shadowRoot) walk(e.shadowRoot);
-        if (!el && e.classList?.contains('xterm')) el = e;
-      }
-    };
-    walk(document);
+    const el = document.querySelector('.terminal-panel__terminal-host slicc-terminal')?.shadowRoot?.querySelector('.host');
     if (!el) return null;
     return el.innerText.split('\\n').map((l) => l.trimEnd()).filter(Boolean).slice(-${lines}).join('\\n');
   })()`);

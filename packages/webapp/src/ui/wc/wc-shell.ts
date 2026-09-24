@@ -189,13 +189,14 @@ const CSS = [
   'box-sizing:border-box;padding-left:var(--rail-w,44px);',
   'transition:padding-left .4s cubic-bezier(.4,0,.2,1);}',
   '@media (max-width:560px){.wcui-appcol{padding-left:44px;}}',
-  // Terminal surface: one uniform dark canvas — matches xterm's always-dark
-  // theme (even under light page themes like vanilla). The host div flexes to
-  // fill so xterm's fit gets real height.
+  // Terminal surface: one uniform dark canvas in every page theme. The host
+  // div flexes to fill so wterm measures its available height.
   '.wcui-term{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 4px 8px 10px;',
   'box-sizing:border-box;background:var(--term-bg,#0c0c0e);}',
   '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}',
+  '.wcui-term .terminal-panel__terminal-host slicc-terminal{display:block;border-radius:0;}',
   '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
+  '.wcui-term .terminal-panel__preview-label{color:var(--term-fg,#e7e7ea);font:11px var(--ui,ui-sans-serif,system-ui,sans-serif);padding:4px 0;}',
   // The files surface is the tree: no dead second column, no divider.
   //
   // The row rules that used to live here (`.f` / `.dir` positioning and the

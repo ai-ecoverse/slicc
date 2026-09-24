@@ -855,7 +855,8 @@ interface KernelReadyHolder {
 async function mountWorkbenchTerminal(
   boot: WcShellBoot,
   client: OffscreenClient,
-  container: HTMLElement
+  container: HTMLElement,
+  openWriter: () => Promise<WcPageVfs['writer']>
 ): Promise<void> {
   const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
   const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
@@ -869,10 +870,21 @@ async function mountWorkbenchTerminal(
   await view.mount(container);
   // E2E seam: publish the mounted view so Playwright can drive
   // `executeCommandInTerminal` directly (mirrors the chat panel's "run
-  // in terminal" affordance and avoids xterm-canvas scraping). Same
+  // in terminal" affordance and avoids terminal-DOM scraping). Same
   // unconditional-publish pattern as `__slicc_pm` / `__slicc_browser`.
   (globalThis as unknown as TerminalViewHolder).__slicc_terminal_view = view;
   window.addEventListener('beforeunload', () => view.dispose(), { once: true });
+  if (new URLSearchParams(location.search).has('wterm-image-demo')) {
+    // Exercise the real imgcat command and its worker → panel preview event
+    // with a bundled PNG. The flag is only for the local graphics comparison.
+    const response = await fetch('/logos/sliccy-color-10scoops-128x128.png');
+    if (!response.ok) throw new Error(`wterm demo image: HTTP ${response.status}`);
+    const png = new Uint8Array(await response.arrayBuffer());
+    const writer = await openWriter();
+    await writer.writeFile('/tmp/wterm-graphics-demo.png', png);
+    const result = await view.executeCommandInTerminal('imgcat /tmp/wterm-graphics-demo.png');
+    if (result.exitCode !== 0) throw new Error(`wterm demo image: ${result.stderr}`);
+  }
 }
 
 /**
@@ -1243,7 +1255,8 @@ export function attachWcWorkbench(
         clearSelection: boot.clearSelection,
         selectedId: boot.getSelected()?.id,
       }),
-    mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
+    mountTerminal: (container) =>
+      mountWorkbenchTerminal(boot, client, container, async () => (await openVfs()).writer),
     insertReference: (path: string) => {
       const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
       const current = card.value.trim();

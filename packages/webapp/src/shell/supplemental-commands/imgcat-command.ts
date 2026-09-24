@@ -46,13 +46,6 @@ export function createImgcatCommand(options: ImgcatCommandOptions = {}): Command
       return imgcatHelp();
     }
 
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return {
-        stdout: '',
-        stderr: 'imgcat: browser APIs are unavailable in this environment\n',
-        exitCode: 1,
-      };
-    }
     if (!options.onMediaPreview) {
       return {
         stdout: '',

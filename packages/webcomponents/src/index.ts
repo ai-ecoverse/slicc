@@ -337,6 +337,6 @@ export {
   buildTerminalTheme,
   resolveTerminalTheme,
   TERMINAL_THEME_DEFAULTS,
-  type TerminalXtermTheme,
+  type TerminalTheme,
   watchTerminalThemeScope,
 } from './workbench/terminal-theme.js';

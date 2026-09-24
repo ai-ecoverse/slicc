@@ -85,15 +85,18 @@ describe('imgcat command', () => {
     expect(onMediaPreview).toHaveBeenCalledOnce();
   });
 
-  it('errors when browser APIs are unavailable', async () => {
+  it('sends image bytes through a preview handler without browser APIs', async () => {
     vi.stubGlobal('window', undefined);
     vi.stubGlobal('document', undefined);
 
-    const cmd = createImgcatCommand({ onMediaPreview: vi.fn() });
+    const onMediaPreview = vi.fn();
+    const cmd = createImgcatCommand({ onMediaPreview });
     const result = await cmd.execute(['/img.png'], createMockCtx());
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('browser APIs are unavailable');
+    expect(result.exitCode).toBe(0);
+    expect(onMediaPreview).toHaveBeenCalledWith([
+      { path: '/img.png', mimeType: 'image/png', bytes: new Uint8Array([1, 2, 3]) },
+    ]);
   });
 
   it('errors when no preview handler is wired', async () => {

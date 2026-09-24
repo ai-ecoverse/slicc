@@ -895,6 +895,10 @@ layout reset
 layout edit
 ```
 
+For PNG files, `imgcat` sends bytes from the worker to the panel, where wterm's
+Ghostty core renders a direct Kitty PNG image. Other supported images and
+videos use the existing media preview. The worker needs no browser DOM APIs.
+
 ---
 
 ## workflow

@@ -16,14 +16,11 @@
  * time.
  *
  * Why a custom protocol instead of just streaming raw stdout?
- * Because the existing terminal renders things xterm doesn't speak
- * natively — the `imgcat` command shows inline images and PDFs via
- * a separate "preview host" `<div>` that lives next to the xterm
- * instance. The current `almost-bash-shell.ts` calls into a
- * `previewHost.appendChild(...)` from within the same class as the
- * Bash exec — the worker can't do that. So `imgcat` (and any
- * future media-emitting command) must produce a `media-preview`
- * envelope that the panel-side terminal-view materializes into DOM.
+ * Because some media cannot be represented as terminal text — the `imgcat`
+ * command shows images and videos via a separate preview host next to the
+ * terminal. The worker cannot mount DOM nodes, so `imgcat` (and any future
+ * media-emitting command) produces a `media-preview` envelope that the
+ * panel-side view materializes.
  */
 
 // ---------------------------------------------------------------------------
@@ -64,7 +61,7 @@ export interface TerminalCloseMsg {
 }
 
 /**
- * Send raw input from xterm to the worker. The panel-side line
+ * Send raw input from wterm to the worker. The panel-side line
  * editor handles arrow keys / history / tab completion locally and
  * only forwards committed lines (with a trailing `\n`) here. This
  * keeps editor latency at sub-ms even when the worker is busy.
@@ -128,7 +125,7 @@ export type TerminalControlMsg =
 
 /**
  * stdout / stderr chunk. The panel-side `terminal-view` writes
- * directly to xterm; ANSI escapes pass through unchanged.
+ * directly to wterm; ANSI escapes pass through unchanged.
  *
  * `execId` matches the originating `terminal-exec`. The protocol
  * still allows only one in-flight exec per session today, but
@@ -156,7 +153,7 @@ export interface TerminalOutputMsg {
  * Worker-side commands that produce inline media (today: `imgcat`,
  * tomorrow potentially `chartjs`, `mermaid-cli`, …) emit this. The
  * panel-side terminal-view materializes the bytes into a DOM
- * preview element next to xterm.
+ * preview element next to wterm.
  *
  * `mediaType` mirrors a MIME type. `data` is base64-encoded so the
  * envelope survives `structuredClone` and JSON serialization (which

@@ -15,7 +15,7 @@
  * the DOM-bound CDP transports.
  *
  * The view layer — `AlmostBashShell` in `almost-bash-shell.ts` — extends this
- * class and adds xterm mounting, the line editor, history, and
+ * class and adds terminal mounting, the line editor, history, and
  * media-preview rendering. Worker-resident shells construct
  * `AlmostBashShellHeadless` directly (or — equivalently for now —
  * `AlmostBashShell`, which inherits the headless behavior and only

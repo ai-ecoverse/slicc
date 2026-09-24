@@ -7,7 +7,7 @@ interface TerminalArgs {
   hideHeader?: boolean;
 }
 
-// ANSI helpers so the canned sessions read like a real shell. xterm renders
+// ANSI helpers so the canned sessions read like a real shell. wterm renders
 // these; the story writes them with the public `write` API after connect.
 const RESET = '\x1b[0m';
 const DIM = (s: string) => `\x1b[90m${s}${RESET}`;
@@ -55,7 +55,7 @@ function grepSession(term: SliccTerminal): void {
 /**
  * Re-run the writer whenever the element (re)connects — Storybook may mount the
  * same node across HMR / docs renders, and the terminal clears its buffer on
- * disconnect. `requestAnimationFrame` lets xterm `open()` settle first.
+ * disconnect. `requestAnimationFrame` lets wterm initialization settle first.
  */
 function withSession(el: SliccTerminal, paint: (t: SliccTerminal) => void): SliccTerminal {
   requestAnimationFrame(() => requestAnimationFrame(() => paint(el)));
@@ -83,9 +83,9 @@ const meta: Meta<TerminalArgs> = {
     docs: {
       description: {
         component:
-          'xterm.js-backed dark terminal surface. The xterm stylesheet is injected ' +
-          'into the shadow root so rows render inside shadow DOM; FitAddon keeps the ' +
-          'buffer sized to the host. Sessions below are pre-populated via the public ' +
+          'Ghostty-backed wterm dark terminal surface. The wterm stylesheet is injected ' +
+          'into the shadow root so rows render inside shadow DOM; wterm fits the ' +
+          'buffer to the host. Sessions below are pre-populated via the public ' +
           '`write`/`writeln` API.',
       },
     },

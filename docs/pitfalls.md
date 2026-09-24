@@ -1810,7 +1810,7 @@ Every float that hosts the cone runs the agent engine in a `DedicatedWorker` (th
 
 | Context           | Location                                      | Purpose                                | Window globals                  |
 | ----------------- | --------------------------------------------- | -------------------------------------- | ------------------------------- |
-| **Page realm**    | `packages/webapp/src/ui/main.ts` (`main()`)   | xterm.js terminal UI, Layout, DOM      | Has Layout + DOM                |
+| **Page realm**    | `packages/webapp/src/ui/main.ts` (`main()`)   | wterm terminal UI, Layout, DOM         | Has Layout + DOM                |
 | **Kernel worker** | `packages/webapp/src/kernel/kernel-worker.ts` | Agent loop + `AlmostBashShellHeadless` | Has Orchestrator, no DOM/Layout |
 
 The two communicate via a `KernelTransport` over `MessagePort` — `Bridge` on the worker side, `OffscreenClient` on the page side.
