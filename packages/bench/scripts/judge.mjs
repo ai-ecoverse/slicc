@@ -23,10 +23,25 @@ export function truncateMiddle(text, limit) {
 }
 
 /** The user-message sections, in upstream's order and with its caps. */
-export function buildJudgeText({ task, trace, caps }) {
+/**
+ * The `<screenshots>` note must match what the request carries. When the judge model refuses
+ * images the run's screenshots are dropped, and saying they are attached would have the judge
+ * mark grounding items violated for an infrastructure limit, not for the agent's behavior.
+ */
+export function screenshotsNote(captured, attached) {
+  if (attached > 0) {
+    return `${attached} screenshots are attached below in chronological order. The harness captured them automatically while the agent worked, whenever a tab's address changed and at intervals, and removed identical consecutive frames; the agent did not choose them. Images labeled "saved by the agent" are ones the agent took itself. Each label gives the time into the run and the tab's address.`;
+  }
+  if (captured > 0) {
+    return `No screenshots are attached. The harness captured ${captured}, but this judge model does not accept images, so they were left out. Judge from the trajectory and the final result, and do not mark an item violated only because no screenshot is shown.`;
+  }
+  return 'No screenshots are attached: the harness captured none, because no browser tab was open while it watched the agent work.';
+}
+
+export function buildJudgeText({ task, trace, caps, includeImages = true }) {
   const trajectory = trace.steps.map((s, i) => `[step ${i + 1}] ${s}`).join('\n');
   const files = trace.outputFilesText;
-  const n = trace.screenshots.length;
+  const captured = trace.screenshots.length;
   return `
 <task>
 ${truncateMiddle(task.task, caps.task) || 'No task provided'}
@@ -53,7 +68,7 @@ ${truncateMiddle(trace.finalResult, caps.finalResult) || 'No final result provid
 </final_result>
 ${files ? `\n<output_files>\n${truncateMiddle(files, caps.files)}\n</output_files>\n` : ''}
 <screenshots>
-${n} screenshots are attached below in chronological order. The harness captured them automatically while the agent worked, whenever a tab's address changed and at intervals, and removed identical consecutive frames; the agent did not choose them. Images labeled "saved by the agent" are ones the agent took itself. Each label gives the time into the run and the tab's address.
+${screenshotsNote(captured, includeImages ? captured : 0)}
 </screenshots>
 `;
 }
@@ -96,7 +111,7 @@ export function findingsSchema(itemIds) {
 
 /** A Converse request body: system prompt, text + images, and the forced findings tool. */
 export function buildConverseBody({ spec, task, trace, includeImages = true, maxTokens = 8000 }) {
-  const content = [{ text: buildJudgeText({ task, trace, caps: spec.caps }) }];
+  const content = [{ text: buildJudgeText({ task, trace, caps: spec.caps, includeImages }) }];
   if (includeImages) {
     trace.screenshots.forEach((shot, i) => {
       content.push({ text: `Screenshot ${i + 1} of ${trace.screenshots.length}: ${shot.label}.` });
@@ -184,10 +199,13 @@ export function bedrockBase(region) {
   return /^https?:\/\//.test(raw) ? raw : `https://bedrock-runtime.${raw}.amazonaws.com`;
 }
 
+/** Per-attempt limit on a judge call: a connection that hangs open must not stall the run loop. */
+export const JUDGE_TIMEOUT_MS = 180_000;
+
 /**
- * One Converse call. Returns `{ input, usage }` for the forced tool. Retries 429/5xx twice;
- * a 4xx that mentions images is reported as `imageUnsupported` so the caller can retry
- * text-only.
+ * One Converse call. Returns `{ input, usage }` for the forced tool. Each attempt is bounded by
+ * `timeoutMs`; a timeout, a network error, 429 or 5xx is retried twice. A 4xx that mentions
+ * images is reported as `imageUnsupported` so the caller can retry text-only.
  */
 export async function converse({
   model,
@@ -196,17 +214,30 @@ export async function converse({
   region,
   fetchImpl = fetch,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  timeoutMs = JUDGE_TIMEOUT_MS,
 }) {
   if (!apiKey) throw new Error('the judge needs a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK)');
   const url = `${bedrockBase(region)}/model/${encodeURIComponent(model)}/converse`;
   let last = '';
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
+    let res;
+    let text;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      text = await res.text();
+    } catch (err) {
+      last =
+        err?.name === 'TimeoutError' || err?.name === 'AbortError'
+          ? `no response within ${Math.round(timeoutMs / 1000)} s`
+          : `request failed: ${err?.message ?? err}`;
+      if (attempt < 3) await sleep(2000 * attempt);
+      continue;
+    }
     if (res.ok) {
       const data = JSON.parse(text);
       const use = (data.output?.message?.content ?? []).find((c) => c.toolUse)?.toolUse;
@@ -237,6 +268,7 @@ export async function judgeRun({
   region,
   fetchImpl,
   sleep,
+  timeoutMs,
 }) {
   const itemIds = Object.keys(task.weights);
   let imagesSent = trace.screenshots.length > 0;
@@ -248,6 +280,7 @@ export async function judgeRun({
       region,
       fetchImpl,
       sleep,
+      timeoutMs,
       body: buildConverseBody({ spec, task, trace, includeImages: imagesSent }),
     });
   } catch (err) {
@@ -259,6 +292,7 @@ export async function judgeRun({
       region,
       fetchImpl,
       sleep,
+      timeoutMs,
       body: buildConverseBody({ spec, task, trace, includeImages: false }),
     });
   }

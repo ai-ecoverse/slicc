@@ -159,6 +159,16 @@ export function createCdpExec({
       `window.__slicc_sprinkleManager.bridge.execHandler(${JSON.stringify(line)})`,
       WebSocketImpl
     );
-    return { stdout: r?.stdout ?? '', stderr: r?.stderr ?? '', status: r?.exitCode ?? 1 };
+    // The bridge's execHandler resolves TerminalExecResult, whose exitCode is always a number
+    // (it throws rather than returning a partial result). If that contract ever changes, say so
+    // instead of passing the run off as an ordinary failed command.
+    if (typeof r?.exitCode !== 'number') {
+      return {
+        stdout: r?.stdout ?? '',
+        stderr: `sprinkle exec bridge returned no exit code (got ${JSON.stringify(r)?.slice(0, 200)})`,
+        status: 1,
+      };
+    }
+    return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.exitCode };
   };
 }

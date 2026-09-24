@@ -24,6 +24,17 @@ export function sha256(text) {
 }
 
 /**
+ * One filesystem-safe path segment per distinct value. Characters outside `[A-Za-z0-9._+-]`
+ * become `-`, and a value that had any appends 8 hex digits of its SHA-256, so `a/b` and `a b`
+ * never share a record file. A value that is already safe is kept as it is.
+ */
+export function pathSegment(value) {
+  const text = String(value);
+  const safe = text.replace(/[^A-Za-z0-9._+-]+/g, '-');
+  return safe === text ? text : `${safe}-${sha256(text).slice(0, 8)}`;
+}
+
+/**
  * #3180's scale from a 0–1 rubric score: every item met is a pass, some weight earned is
  * partial, none is a fail.
  */
@@ -158,14 +169,18 @@ export function equalWeights(ids) {
   return weights;
 }
 
-/** Fill in the `*_sha` digests the way BU Bench V2 records them. */
-export function withDigests(task) {
+/** The task, rubric and weights digests, computed from the text (never trusted from the file). */
+export function taskDigests(task) {
   return {
-    ...task,
     task_sha: sha256(task.task),
     rubric_sha: sha256(task.rubric),
     weights_sha: sha256(JSON.stringify(task.weights)),
   };
+}
+
+/** Fill in the `*_sha` digests the way BU Bench V2 records them. */
+export function withDigests(task) {
+  return { ...task, ...taskDigests(task) };
 }
 
 /**

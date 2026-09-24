@@ -35,7 +35,13 @@ AWS_BEARER_TOKEN_BEDROCK=… node packages/bench/scripts/run.mjs \
   --executor cdp --cdp http://127.0.0.1:<cdp-port> --ui localhost:<ui-port> --out bench-out
 ```
 
-Against any leader with a join URL: `SLICC_JOIN_URL=… SLICC_CLI=… node packages/bench/scripts/run.mjs --set …`. `--plan` prints the runs without starting any. A second invocation with the same `--out` skips the runs that finished and retries the ones that errored. The command exits 1 when a run errored before reaching the judge, so a CI job cannot pass on runs that never happened; the report is written either way.
+Against any leader with a join URL: `SLICC_JOIN_URL=… SLICC_CLI=… node packages/bench/scripts/run.mjs --set …`. `--plan` prints the runs without starting any. A second invocation with the same `--out` resumes, run by run:
+
+- **Kept:** runs whose task, rubric, weights and judge are unchanged.
+- **Re-judged from the saved trace, without running the agent again:** runs whose judgement no longer stands. That means another `--judge-model`, a changed rubric or weights, or a judge call that failed.
+- **Run again:** runs that errored, and runs whose task text changed.
+
+The command exits 1 when any run ended in an error, so a CI job cannot pass on runs that never happened. The report is written either way. Result files and the report name the judge that actually produced each score, taken from the records.
 
 ## The task format
 

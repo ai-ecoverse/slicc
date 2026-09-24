@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { withDigests } from './format.mjs';
+import { taskDigests, withDigests } from './format.mjs';
 import {
   DEFAULT_MODELS,
   loadSet,
@@ -11,6 +11,7 @@ import {
   planRuns,
   readTrace,
   recordPath,
+  resumeAction,
   selectTasks,
   tracePath,
 } from './run.mjs';
@@ -166,8 +167,12 @@ describe('planning', () => {
   });
 
   it('keeps record and trace paths filesystem-safe', () => {
-    expect(recordPath('/o', 'BU_Bench_V1', 'builtin+x', 'claude-sonnet-5', 'a/b c', 2)).toBe(
-      '/o/records/BU_Bench_V1/builtin+x/claude-sonnet-5/a-b-c-r2.json'
+    const seg = recordPath('/o', 'BU_Bench_V1', 'builtin+x', 'claude-sonnet-5', 'a/b c', 2);
+    expect(seg).toMatch(
+      /^\/o\/records\/BU_Bench_V1\/builtin\+x\/claude-sonnet-5\/a-b-c-[0-9a-f]{8}-r2\.json$/
+    );
+    expect(recordPath('/o', 'B', 'none', 'm', 'a b/c', 1)).not.toBe(
+      recordPath('/o', 'B', 'none', 'm', 'a/b c', 1)
     );
     expect(tracePath('/o', 'B', 'none', 'm', 't', 1, true)).toBe(
       '/o/traces/B/none/m/t-r1.json.enc'
@@ -448,5 +453,168 @@ describe('main defaults', () => {
     out.mockRestore();
     if (key === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK;
     else process.env.AWS_BEARER_TOKEN_BEDROCK = key;
+  });
+});
+
+describe('resumeAction', () => {
+  const done = (extra = {}) => ({
+    digests: taskDigests(TASK),
+    score: 1,
+    judge: { model: 'j1' },
+    ...extra,
+  });
+  const ctx = { judge: true, judgeModel: 'j1', traceExists: true };
+
+  it('runs what never ran, what the agent failed, and what a changed task invalidated', () => {
+    expect(resumeAction(null, TASK, ctx)).toBe('run');
+    expect(resumeAction(done({ error: 'x', error_stage: 'run' }), TASK, ctx)).toBe('run');
+    expect(resumeAction(done({ digests: undefined }), TASK, ctx)).toBe('run');
+    expect(resumeAction(done(), { ...TASK, task: 'Something else.' }, ctx)).toBe('run');
+  });
+
+  it('re-judges when the judgement no longer stands', () => {
+    expect(resumeAction(done(), TASK, { ...ctx, judgeModel: 'j2' })).toBe('rejudge');
+    expect(
+      resumeAction(
+        done({ error: 'judge HTTP 500', error_stage: 'judge', score: undefined }),
+        TASK,
+        ctx
+      )
+    ).toBe('rejudge');
+    expect(resumeAction(done({ score: undefined, judge: undefined }), TASK, ctx)).toBe('rejudge');
+    expect(
+      resumeAction(done(), { ...TASK, rubric: `${TASK.rubric}\nRuling: stricter.` }, ctx)
+    ).toBe('rejudge');
+    expect(
+      resumeAction(
+        done(),
+        { ...TASK, weights: { A1_heading: 100 }, rubric: TASK.rubric },
+        { ...ctx, judgeModel: 'j1' }
+      )
+    ).toBe('done');
+  });
+
+  it('starts over when the trace to re-judge is gone, and leaves finished runs alone', () => {
+    expect(resumeAction(done(), TASK, { ...ctx, judgeModel: 'j2', traceExists: false })).toBe(
+      'run'
+    );
+    expect(resumeAction(done(), TASK, ctx)).toBe('done');
+    expect(resumeAction(done({ score: undefined }), TASK, { ...ctx, judge: false })).toBe('done');
+    expect(
+      resumeAction(done({ error: 'judge down', error_stage: 'judge' }), TASK, {
+        ...ctx,
+        judge: false,
+      })
+    ).toBe('done');
+  });
+});
+
+describe('re-judging on resume', () => {
+  it('re-judges saved traces for a new judge model without running the agent again', async () => {
+    const dir = tmp();
+    const outDir = join(dir, 'out');
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const path = join(dir, 'set.json');
+    writeFileSync(path, JSON.stringify({ benchmark: 'Own', tasks: [TASK] }));
+    const judgeAs = (score) =>
+      vi.fn(async () => ({
+        judgement: { infra_error: false, reward_hacking_suspected: false },
+        result: { score, verdict: score === 1, statuses: {}, canary_leak: false },
+        usage: null,
+        imagesSent: false,
+      }));
+    const common = ['--set', path, '--models', 'm', '--out', outDir];
+    const first = leader();
+    await main([...common, '--judge-model', 'j1'], {
+      exec: first.exec,
+      judge: judgeAs(1),
+      spec: {},
+      log: () => {},
+      leaderScript: 's',
+    });
+    const rp = recordPath(outDir, 'Own', 'builtin', 'm', 'own-1', 1);
+    expect(JSON.parse(readFileSync(rp, 'utf8'))).toMatchObject({
+      score: 1,
+      judge: { model: 'j1' },
+    });
+
+    const second = leader();
+    const j2 = judgeAs(0.5);
+    const log = vi.fn();
+    await main([...common, '--judge-model', 'j2'], {
+      exec: second.exec,
+      judge: j2,
+      spec: {},
+      log,
+      leaderScript: 's',
+    });
+    expect(second.commands.filter((c) => c.startsWith('node '))).toHaveLength(0);
+    expect(j2).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /partial 0\.50 5 s \$0\.010 \(re-judged\)/
+    );
+    const record = JSON.parse(readFileSync(rp, 'utf8'));
+    expect(record).toMatchObject({ score: 0.5, outcome: 'partial', judge: { model: 'j2' } });
+    expect(record.error).toBeUndefined();
+    const summary = JSON.parse(
+      readFileSync(join(outDir, 'results', readdirSync(join(outDir, 'results'))[0]), 'utf8')
+    );
+    expect(summary[0].judge_model).toBe('j2');
+    expect(
+      readTrace(tracePath(outDir, 'Own', 'builtin', 'm', 'own-1', 1, false), 'Own').record.judge
+        .model
+    ).toBe('j2');
+    quiet.mockRestore();
+  });
+
+  it('keeps the run when only judging failed, and re-judges it next time', async () => {
+    const dir = tmp();
+    const outDir = join(dir, 'out');
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const path = join(dir, 'set.json');
+    writeFileSync(path, JSON.stringify({ benchmark: 'Own', tasks: [TASK] }));
+    const broken = vi.fn(async () => {
+      throw new Error('judge HTTP 503');
+    });
+    const code = await main(['--set', path, '--models', 'm', '--out', outDir], {
+      exec: leader().exec,
+      judge: broken,
+      spec: {},
+      log: () => {},
+      leaderScript: 's',
+    });
+    expect(code).toBe(1);
+    const rp = recordPath(outDir, 'Own', 'builtin', 'm', 'own-1', 1);
+    expect(JSON.parse(readFileSync(rp, 'utf8'))).toMatchObject({
+      error: 'judge HTTP 503',
+      error_stage: 'judge',
+      metrics: { duration: 5 },
+    });
+    expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain(
+      '| m | builtin | 1 | 0 | 0 | 0 | 1 | 0 | – | 5 | 0.010 |'
+    );
+
+    const again = leader();
+    const stillBroken = await main(['--set', path, '--models', 'm', '--out', outDir], {
+      exec: again.exec,
+      judge: broken,
+      spec: {},
+      log: () => {},
+      leaderScript: 's',
+    });
+    expect(stillBroken).toBe(1);
+    expect(again.commands.filter((c) => c.startsWith('node '))).toHaveLength(0);
+    const fixed = await main(['--set', path, '--models', 'm', '--out', outDir], {
+      exec: leader().exec,
+      judge: fakeJudge,
+      spec: {},
+      log: () => {},
+      leaderScript: 's',
+    });
+    expect(fixed).toBe(0);
+    const record = JSON.parse(readFileSync(rp, 'utf8'));
+    expect(record).toMatchObject({ score: 1, outcome: 'pass' });
+    expect(record.error_stage).toBeUndefined();
+    quiet.mockRestore();
   });
 });

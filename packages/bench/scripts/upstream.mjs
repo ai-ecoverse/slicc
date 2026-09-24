@@ -83,8 +83,11 @@ export function encryptJson(value, name, options) {
   return Buffer.from(token, 'utf8').toString('base64');
 }
 
+/** Bound on each upstream fetch: the task sets are a few MB, and a hung download must fail. */
+export const UPSTREAM_TIMEOUT_MS = 60_000;
+
 async function fetchText(url, fetchImpl) {
-  const res = await fetchImpl(url);
+  const res = await fetchImpl(url, { signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`GET ${url} → HTTP ${res.status}`);
   return res.text();
 }

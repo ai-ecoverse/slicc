@@ -6,8 +6,10 @@ import {
   converse,
   DEFAULT_JUDGE_MODEL,
   findingsSchema,
+  JUDGE_TIMEOUT_MS,
   judgeRun,
   score,
+  screenshotsNote,
   truncateMiddle,
   validateJudgement,
 } from './judge.mjs';
@@ -96,6 +98,35 @@ describe('request building', () => {
       buildConverseBody({ spec: SPEC, task: TASK, trace: TRACE, includeImages: false }).messages[0]
         .content
     ).toHaveLength(1);
+  });
+});
+
+describe('screenshotsNote', () => {
+  it('describes exactly what the request carries', () => {
+    expect(screenshotsNote(3, 3)).toMatch(/^3 screenshots are attached below/);
+    expect(screenshotsNote(3, 0)).toMatch(
+      /^No screenshots are attached\. The harness captured 3, but this judge model does not accept images/
+    );
+    expect(screenshotsNote(3, 0)).toContain(
+      'do not mark an item violated only because no screenshot is shown'
+    );
+    expect(screenshotsNote(0, 0)).toMatch(/captured none, because no browser tab was open/);
+  });
+
+  it('is what the judge text says, with and without images', () => {
+    expect(buildJudgeText({ task: TASK, trace: TRACE, caps: CAPS })).toContain(
+      '1 screenshots are attached'
+    );
+    const textOnly = buildConverseBody({
+      spec: SPEC,
+      task: TASK,
+      trace: TRACE,
+      includeImages: false,
+    });
+    expect(textOnly.messages[0].content[0].text).toContain(
+      'The harness captured 1, but this judge model does not accept images'
+    );
+    expect(textOnly.messages[0].content[0].text).not.toContain('1 screenshots are attached');
   });
 });
 
@@ -214,6 +245,72 @@ describe('converse', () => {
     await expect(
       converse({ model: 'm', body: {}, apiKey: 'k', fetchImpl: bad, sleep })
     ).rejects.toMatchObject({ imageUnsupported: true });
+  });
+
+  it('bounds each attempt and retries a hung or failed connection', async () => {
+    const sleep = vi.fn(async () => {});
+    const seen = [];
+    const hung = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+    });
+    const fetchImpl = vi.fn(async (_url, init) => {
+      seen.push(init.signal);
+      if (seen.length === 1) throw hung;
+      if (seen.length === 2) throw new TypeError('fetch failed');
+      return reply(200, TOOL_REPLY);
+    });
+    await expect(
+      converse({ model: 'm', body: {}, apiKey: 'k', fetchImpl, sleep, timeoutMs: 5 })
+    ).resolves.toMatchObject({ input: JUDGEMENT });
+    expect(seen.every((s) => s instanceof AbortSignal)).toBe(true);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    const neverAnswers = vi.fn(async () => {
+      throw hung;
+    });
+    await expect(
+      converse({
+        model: 'm',
+        body: {},
+        apiKey: 'k',
+        fetchImpl: neverAnswers,
+        sleep,
+        timeoutMs: 120000,
+      })
+    ).rejects.toThrow('judge no response within 120 s');
+    const aborted = vi.fn(async () => {
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    });
+    await expect(
+      converse({ model: 'm', body: {}, apiKey: 'k', fetchImpl: aborted, sleep })
+    ).rejects.toThrow(`judge no response within ${JUDGE_TIMEOUT_MS / 1000} s`);
+    const refused = vi.fn(async () => {
+      throw new TypeError('connect ECONNREFUSED');
+    });
+    await expect(
+      converse({ model: 'm', body: {}, apiKey: 'k', fetchImpl: refused, sleep })
+    ).rejects.toThrow('judge request failed: connect ECONNREFUSED');
+  });
+
+  it('times out a real request that never answers', async () => {
+    const { createServer } = await import('node:http');
+    const server = createServer(() => {});
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address();
+    try {
+      await expect(
+        converse({
+          model: 'm',
+          body: {},
+          apiKey: 'k',
+          region: `http://127.0.0.1:${port}`,
+          sleep: async () => {},
+          timeoutMs: 50,
+        })
+      ).rejects.toThrow('judge no response within 0 s');
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
   });
 
   it('refuses without a key and when the tool was not called', async () => {

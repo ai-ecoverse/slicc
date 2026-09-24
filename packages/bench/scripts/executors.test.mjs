@@ -172,8 +172,19 @@ describe('createCdpExec', () => {
     await expect(mk(() => ({}), { failOpen: true })('x')).rejects.toThrow(/cannot open ws:\/\/ui/);
     expect(await mk(() => ({ result: { result: { value: null } } }))('x')).toEqual({
       stdout: '',
-      stderr: '',
+      stderr: 'sprinkle exec bridge returned no exit code (got null)',
       status: 1,
+    });
+    expect(await mk(() => ({ result: { result: { value: { stdout: 'o' } } } }))('x')).toMatchObject(
+      {
+        stdout: 'o',
+        status: 1,
+      }
+    );
+    expect(await mk(() => ({ result: { result: { value: { exitCode: 0 } } } }))('x')).toEqual({
+      stdout: '',
+      stderr: '',
+      status: 0,
     });
     const none = createCdpExec({
       cdpUrl: 'http://x',

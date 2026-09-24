@@ -20,7 +20,14 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createCdpExec, createCliExec } from './executors.mjs';
-import { fromBuV1, fromSkillCreatorEvals, outcome, validateEnvelope } from './format.mjs';
+import {
+  fromBuV1,
+  fromSkillCreatorEvals,
+  outcome,
+  pathSegment,
+  taskDigests,
+  validateEnvelope,
+} from './format.mjs';
 import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
 import { reportMarkdown, summarize } from './results.mjs';
 import {
@@ -160,7 +167,7 @@ export function planRuns(sets, { models, skills, repeats }) {
   return runs;
 }
 
-const safe = (s) => String(s).replace(/[^A-Za-z0-9._+-]+/g, '-');
+const safe = pathSegment;
 
 export function recordPath(out, benchmark, condition, model, taskId, repeat) {
   return join(
@@ -233,8 +240,38 @@ function makeJudge(opts, deps) {
   return (a) => judgeRun({ ...a, model: opts.judgeModel, apiKey, region });
 }
 
-/** Run one task on the leader and judge it. Returns `{ record, result }`; never throws. */
-async function runOne(r, { exec, opts, judge, spec }) {
+/** Judge a finished run into its record. Clears an earlier judge error on success. */
+async function judgeInto(record, result, task, { judge, spec, opts }) {
+  const j = await judge({ spec, task, trace: traceFromResult(result) });
+  Object.assign(record, {
+    score: j.result.score,
+    verdict: j.result.verdict,
+    outcome: outcome(j.result.score),
+    statuses: j.result.statuses,
+    flags: {
+      infra_error: j.judgement.infra_error,
+      reward_hacking_suspected: j.judgement.reward_hacking_suspected,
+      canary_leak: j.result.canary_leak,
+    },
+    judge: { model: opts.judgeModel, images: j.imagesSent, usage: j.usage },
+  });
+  record.digests = taskDigests(task);
+  delete record.error;
+  delete record.error_stage;
+  result.judgement = j.judgement;
+}
+
+function failInto(record, stage, err) {
+  record.error = String(err?.message ?? err).slice(0, 500);
+  record.error_stage = stage;
+}
+
+/**
+ * Run one task on the leader and judge it. Returns `{ record, result }`; never throws. A judge
+ * failure keeps the result, so the next invocation re-judges it instead of re-running the agent.
+ */
+async function runOne(r, ctx) {
+  const { exec, opts, judge } = ctx;
   const config = { harness: opts.harness, model: r.model, skills: r.condition.name };
   const runId = `${safe(r.task.id).slice(0, 40)}-${safe(r.model)}-${safe(config.skills)}-r${r.repeat}-${Date.now().toString(36)}`;
   const record = {
@@ -243,8 +280,9 @@ async function runOne(r, { exec, opts, judge, spec }) {
     repeat: r.repeat,
     config,
     run_id: runId,
+    digests: taskDigests(r.task),
   };
-  let result = null;
+  let result;
   try {
     result = await runTask({
       exec,
@@ -254,28 +292,56 @@ async function runOne(r, { exec, opts, judge, spec }) {
       thinking: opts.thinking,
       timeoutSeconds: opts.timeout,
     });
-    const trace = traceFromResult(result);
-    record.metrics = trace.metrics;
-    if (judge) {
-      const j = await judge({ spec, task: r.task, trace });
-      Object.assign(record, {
-        score: j.result.score,
-        verdict: j.result.verdict,
-        outcome: outcome(j.result.score),
-        statuses: j.result.statuses,
-        flags: {
-          infra_error: j.judgement.infra_error,
-          reward_hacking_suspected: j.judgement.reward_hacking_suspected,
-          canary_leak: j.result.canary_leak,
-        },
-        judge: { model: opts.judgeModel, images: j.imagesSent, usage: j.usage },
-      });
-      result.judgement = j.judgement;
-    }
   } catch (err) {
-    record.error = String(err?.message ?? err).slice(0, 500);
+    failInto(record, 'run', err);
+    return { record, result: null };
+  }
+  record.metrics = traceFromResult(result).metrics;
+  if (judge) {
+    try {
+      await judgeInto(record, result, r.task, ctx);
+    } catch (err) {
+      failInto(record, 'judge', err);
+    }
   }
   return { record, result };
+}
+
+/**
+ * What a resume does with a planned run, given its earlier record:
+ * - `run`: no record, the agent failed, or the task text changed since (the old trace answers a
+ *   different question);
+ * - `rejudge`: the agent's run still stands but its judgement does not — judging failed or was
+ *   skipped, another judge model is asked for, or the rubric or weights changed;
+ * - `done`: nothing changed.
+ * A rejudge needs the saved trace; without it the run starts over.
+ */
+export function resumeAction(record, task, { judge, judgeModel, traceExists }) {
+  if (!record) return 'run';
+  const d = taskDigests(task);
+  if (!record.digests || record.digests.task_sha !== d.task_sha) return 'run';
+  if (record.error && record.error_stage !== 'judge') return 'run';
+  if (!judge) return 'done';
+  const stale =
+    record.error_stage === 'judge' ||
+    typeof record.score !== 'number' ||
+    record.judge?.model !== judgeModel ||
+    record.digests.rubric_sha !== d.rubric_sha ||
+    record.digests.weights_sha !== d.weights_sha;
+  if (!stale) return 'done';
+  return traceExists ? 'rejudge' : 'run';
+}
+
+/** Re-judge a saved trace without running the agent again. */
+async function rejudgeOne(r, ctx, record) {
+  const where = [ctx.opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat];
+  const saved = readTrace(tracePath(...where, r.set.encrypted), r.set.benchmark);
+  try {
+    await judgeInto(record, saved.result, r.task, ctx);
+  } catch (err) {
+    failInto(record, 'judge', err);
+  }
+  return { record, result: saved.result };
 }
 
 function describeRun(i, total, r, record) {
@@ -295,22 +361,39 @@ function writeRun(opts, r, { record, result }) {
   writeFileSync(tp, r.set.encrypted ? encryptJson(trace, r.set.benchmark) : JSON.stringify(trace));
 }
 
-function alreadyDone(opts, r) {
-  const rp = recordPath(opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat);
-  return existsSync(rp) && !JSON.parse(readFileSync(rp, 'utf8')).error;
+function previous(opts, r) {
+  const where = [opts.out, r.set.benchmark, r.condition.name, r.model, r.task.id, r.repeat];
+  const rp = recordPath(...where);
+  return {
+    record: existsSync(rp) ? JSON.parse(readFileSync(rp, 'utf8')) : null,
+    traceExists: existsSync(tracePath(...where, r.set.encrypted)),
+  };
 }
 
-/** Run every planned run; returns how many errored before reaching the judge. */
+/** Run every planned run; returns how many ended in an error (running or judging). */
 async function runAll(runs, ctx, log) {
   const { exec, opts } = ctx;
   let staged = null;
   let errors = 0;
   try {
     for (const [i, r] of runs.entries()) {
-      if (alreadyDone(opts, r)) {
+      const before = previous(opts, r);
+      const action = resumeAction(before.record, r.task, {
+        judge: Boolean(ctx.judge),
+        judgeModel: opts.judgeModel,
+        traceExists: before.traceExists,
+      });
+      if (action === 'done') {
         log(
           `[${i + 1}/${runs.length}] ${r.task.id} ${r.model} ${r.condition.name} r${r.repeat}: done before, skipped`
         );
+        continue;
+      }
+      if (action === 'rejudge') {
+        const rejudged = await rejudgeOne(r, ctx, before.record);
+        if (rejudged.record.error) errors += 1;
+        log(`${describeRun(i, runs.length, r, rejudged.record)} (re-judged)`);
+        writeRun(opts, r, rejudged);
         continue;
       }
       if (staged !== r.condition.name) {
@@ -334,11 +417,10 @@ async function runAll(runs, ctx, log) {
 
 function writeOutputs(opts, runStart) {
   const records = readRecords(opts.out);
-  const judgeModel = opts.judge ? opts.judgeModel : null;
-  for (const s of summarize(records, { runStart, judgeModel })) {
+  for (const s of summarize(records, { runStart })) {
     writeJson(join(opts.out, 'results', s.file), s.body);
   }
-  const report = reportMarkdown(records, { judgeModel });
+  const report = reportMarkdown(records);
   writeFileSync(join(opts.out, 'report.md'), `${report}\n`);
   if (process.env.GITHUB_STEP_SUMMARY)
     writeFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`, { flag: 'a' });

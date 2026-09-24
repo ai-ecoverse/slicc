@@ -5,7 +5,9 @@ import {
   fromBuV1,
   fromSkillCreatorEvals,
   outcome,
+  pathSegment,
   sha256,
+  taskDigests,
   validateEnvelope,
   validateTask,
   withDigests,
@@ -18,6 +20,26 @@ const TASK = {
   rubric: '## Items\nA1_one — first\nA2_two — second\n',
   weights: { A1_one: 60, A2_two: 40 },
 };
+
+describe('pathSegment', () => {
+  it('keeps safe names and makes unsafe ones distinct', () => {
+    expect(pathSegment('claude-opus-5-5')).toBe('claude-opus-5-5');
+    expect(pathSegment('builtin+x')).toBe('builtin+x');
+    expect(pathSegment('a/b')).toMatch(/^a-b-[0-9a-f]{8}$/);
+    expect(pathSegment('a/b')).not.toBe(pathSegment('a b'));
+    expect(pathSegment(3)).toBe('3');
+  });
+});
+
+describe('taskDigests', () => {
+  it('hashes the text, not whatever digest the file claims', () => {
+    expect(taskDigests({ ...TASK, task_sha: 'lie' })).toEqual({
+      task_sha: sha256(TASK.task),
+      rubric_sha: sha256(TASK.rubric),
+      weights_sha: sha256(JSON.stringify(TASK.weights)),
+    });
+  });
+});
 
 describe('outcome', () => {
   it('maps a rubric score onto pass / partial / fail', () => {
