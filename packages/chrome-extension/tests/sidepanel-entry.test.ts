@@ -195,14 +195,89 @@ describe('sidepanel-entry controller', () => {
     vi.useRealTimers();
   });
 
-  it('boot watchdog: stuck on booting escalates to disconnected', () => {
+  it('boot watchdog: stuck on booting escalates to slow, not disconnected', () => {
     vi.useFakeTimers();
     make();
     port._emit({ kind: 'join-url', state: 'booting' });
     expect(statuses).toContain('starting');
     vi.advanceTimersByTime(20_000);
-    expect(statuses[statuses.length - 1]).toBe('disconnected');
+    expect(statuses[statuses.length - 1]).toBe('slow');
+    expect(statuses).not.toContain('disconnected');
     vi.useRealTimers();
+  });
+
+  it('a booting replay while slow stays slow instead of restarting the spinner', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    vi.advanceTimersByTime(20_000);
+    statuses.length = 0;
+    port._emit({ kind: 'join-url', state: 'booting' });
+    expect(statuses).toEqual(['slow']);
+    vi.advanceTimersByTime(20_000);
+    expect(statuses).toEqual(['slow']);
+    vi.useRealTimers();
+  });
+
+  it('a slow leader that finally delivers its join URL mounts the follower', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    vi.advanceTimersByTime(20_000);
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    expect(mountSlicc).toHaveBeenCalledTimes(1);
+    expect(statuses[statuses.length - 1]).toBe('live');
+    vi.useRealTimers();
+  });
+
+  it('a fresh boot after a disconnect starts at starting again, not slow', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    vi.advanceTimersByTime(20_000);
+    port._emit({ kind: 'join-url', state: 'disconnected' });
+    statuses.length = 0;
+    port._emit({ kind: 'join-url', state: 'booting' });
+    expect(statuses).toEqual(['starting']);
+    vi.useRealTimers();
+  });
+
+  it('retry() reconnects the Port (the SW-side user retry) and remounts on the replayed ready', () => {
+    vi.useFakeTimers();
+    const ports = [makePort(), makePort()];
+    let i = 0;
+    const controller = createSidePanelController({
+      connect: () => ports[i++] as never,
+      mountSlicc: mountSlicc as never,
+      iframe,
+      setStatus: (s) => statuses.push(s),
+      sliccOrigin: 'https://www.sliccy.ai',
+    });
+    ports[0]._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    vi.advanceTimersByTime(15_000);
+    expect(statuses[statuses.length - 1]).toBe('disconnected');
+
+    controller.retry();
+    expect(ports[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(ports[1].postMessage).toHaveBeenCalledWith({ kind: 'hello' });
+    ports[1]._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    expect(mountSlicc).toHaveBeenCalledTimes(2);
+    expect(statuses[statuses.length - 1]).toBe('live');
+    vi.useRealTimers();
+  });
+
+  it('retry() survives a port that is already gone', () => {
+    const controller = make();
+    port.disconnect.mockImplementation(() => {
+      throw new Error('Attempting to use a disconnected port object');
+    });
+    expect(() => controller.retry()).not.toThrow();
+  });
+
+  it('focusLeader() asks the SW for a plain leader focus', () => {
+    const controller = make();
+    controller.focusLeader();
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: false });
   });
 
   it('iframe watchdog: a follower that never loads escalates to disconnected', () => {

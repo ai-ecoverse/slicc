@@ -10,11 +10,23 @@ import {
 declare const __SLICC_EXT_DEV__: boolean;
 const sliccOriginDefault = __SLICC_EXT_DEV__ ? 'http://localhost:8787' : SLICC_HOSTED_ORIGIN;
 
-export type PanelStatus = 'starting' | 'live' | 'disconnected';
+export type PanelStatus = 'starting' | 'slow' | 'live' | 'disconnected';
 
 const BOOT_TIMEOUT_MS = 20_000;
 
 const IFRAME_LOAD_TIMEOUT_MS = 15_000;
+
+const PANEL_STATUS_TEXT: Record<PanelStatus, string> = {
+  starting: 'Starting SLICC…',
+  slow: 'SLICC is still starting in its tab. Chrome slows down background tabs, so bringing it to the front usually lets it finish.',
+  live: '',
+  disconnected: 'Disconnected from SLICC.',
+};
+
+const PANEL_ACTION_LABEL: Partial<Record<PanelStatus, string>> = {
+  slow: 'Show SLICC tab',
+  disconnected: 'Retry',
+};
 
 export interface SidePanelDeps {
   connect: () => ChromeRuntimePort;
@@ -24,34 +36,56 @@ export interface SidePanelDeps {
   sliccOrigin: string;
 }
 
-export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
+export interface SidePanelController {
+  dispose(): void;
+
+  focusLeader(): void;
+
+  retry(): void;
+}
+
+function oneShotTimer() {
+  let id: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (id) clearTimeout(id);
+    id = null;
+  };
+  return {
+    clear,
+    start(ms: number, fn: () => void) {
+      clear();
+      id = setTimeout(() => {
+        id = null;
+        fn();
+      }, ms);
+    },
+  };
+}
+
+function disconnectQuietly(port: ChromeRuntimePort | null): void {
+  try {
+    port?.disconnect();
+  } catch {}
+}
+
+export function createSidePanelController(deps: SidePanelDeps): SidePanelController {
   let handle: SliccHandle | null = null;
   let currentJoinUrl: string | null = null;
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
   let reconnectDelay = 250;
-  let bootTimer: ReturnType<typeof setTimeout> | null = null;
-  let iframeLoadTimer: ReturnType<typeof setTimeout> | null = null;
+  const bootTimer = oneShotTimer();
+  const iframeLoadTimer = oneShotTimer();
 
-  const clearBootTimer = () => {
-    if (bootTimer) {
-      clearTimeout(bootTimer);
-      bootTimer = null;
-    }
-  };
-  const clearIframeLoadTimer = () => {
-    if (iframeLoadTimer) {
-      clearTimeout(iframeLoadTimer);
-      iframeLoadTimer = null;
-    }
-  };
+  let bootSlow = false;
 
   const blankIframe = () => {
     deps.iframe.setAttribute('src', 'about:blank');
   };
   const teardown = () => {
-    clearBootTimer();
-    clearIframeLoadTimer();
+    bootTimer.clear();
+    bootSlow = false;
+    iframeLoadTimer.clear();
     handle?.destroy();
     handle = null;
     currentJoinUrl = null;
@@ -64,7 +98,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
 
   const onIframeLoad = () => {
     if (deps.iframe.getAttribute('src') === 'about:blank') return;
-    clearIframeLoadTimer();
+    iframeLoadTimer.clear();
     nudgeIframeRepaint(deps.iframe);
   };
   deps.iframe.addEventListener('load', onIframeLoad);
@@ -87,12 +121,16 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
         deps.setStatus('live');
         return;
       }
+      if (bootSlow) {
+        deps.setStatus('slow');
+        return;
+      }
       deps.setStatus('starting');
-      clearBootTimer();
-      bootTimer = setTimeout(() => {
-        bootTimer = null;
-        if (!disposed) goDisconnected();
-      }, BOOT_TIMEOUT_MS);
+      bootTimer.start(BOOT_TIMEOUT_MS, () => {
+        if (disposed) return;
+        bootSlow = true;
+        deps.setStatus('slow');
+      });
       return;
     }
 
@@ -102,7 +140,8 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     }
 
     reconnectDelay = 250;
-    clearBootTimer();
+    bootTimer.clear();
+    bootSlow = false;
     if (msg.joinUrl === currentJoinUrl && handle) {
       deps.setStatus('live');
       return;
@@ -111,11 +150,9 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     handle = null;
     blankIframe();
     currentJoinUrl = msg.joinUrl;
-    clearIframeLoadTimer();
-    iframeLoadTimer = setTimeout(() => {
-      iframeLoadTimer = null;
+    iframeLoadTimer.start(IFRAME_LOAD_TIMEOUT_MS, () => {
       if (!disposed && handle) goDisconnected();
-    }, IFRAME_LOAD_TIMEOUT_MS);
+    });
     handle = deps.mountSlicc({
       iframe: deps.iframe,
       joinToken: msg.joinUrl,
@@ -158,13 +195,20 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   wire();
 
   return {
+    focusLeader: () => requestLeaderFocus(false),
+    retry() {
+      if (disposed) return;
+
+      disconnectQuietly(port);
+      port = null;
+      reconnectDelay = 250;
+      wire();
+    },
     dispose() {
       disposed = true;
       teardown();
       deps.iframe.removeEventListener('load', onIframeLoad);
-      try {
-        port?.disconnect();
-      } catch {}
+      disconnectQuietly(port);
     },
   };
 }
@@ -172,17 +216,29 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
 if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
   const iframe = document.getElementById('cherry-follower') as HTMLIFrameElement;
   const statusEl = document.getElementById('cherry-status');
+  const statusText = document.getElementById('cherry-status-text');
+  const actionButton = document.getElementById('cherry-status-action') as HTMLButtonElement | null;
+  let current: PanelStatus = 'starting';
   const setStatus = (s: PanelStatus) => {
+    current = s;
     if (!statusEl) return;
-    statusEl.textContent =
-      s === 'live' ? '' : s === 'starting' ? 'Starting SLICC…' : 'Disconnected — reopen to retry';
+    if (statusText) statusText.textContent = PANEL_STATUS_TEXT[s];
+    if (actionButton) {
+      const label = PANEL_ACTION_LABEL[s];
+      actionButton.hidden = !label;
+      actionButton.textContent = label ?? '';
+    }
     statusEl.dataset.state = s;
   };
-  createSidePanelController({
+  const controller = createSidePanelController({
     connect: () => chrome.runtime.connect({ name: CHERRY_PANEL_PORT_NAME }),
     mountSlicc,
     iframe,
     setStatus,
     sliccOrigin: sliccOriginDefault,
+  });
+  actionButton?.addEventListener('click', () => {
+    if (current === 'disconnected') controller.retry();
+    else controller.focusLeader();
   });
 }
