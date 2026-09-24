@@ -1,0 +1,166 @@
+name: Renovate Bundle-Size Reconcile
+
+# The webapp's `webapp: total JS payload` size-limit budget is re-measured to
+# the byte by every feature PR that grows it, so main carries well under 1 kB
+# of headroom. Any dependency bump that adds a few hundred bytes therefore
+# fails the `bundle-size` job, and because nobody edits a Renovate PR the PR
+# sits red and never automerges — #3424 (codemirror, +163 B), #3449
+# (mediabunny, +3.19 kB) and #3455 (lucide, +5.49 kB) all stalled that way.
+#
+# This workflow builds a Renovate PR exactly like the CI `bundle-size` job,
+# and when a budget is exceeded by at most MAX_GROWTH_KB it raises the budget
+# to the measured size (rounded up to the next kB) and pushes the
+# package.json change. A bigger jump is not raised: the workflow comments and
+# fails so a human reviews the growth, the same bar as any hand-raised budget.
+# The first-load check (check-first-load-size.mjs, relative to the
+# merge-base) still runs in CI on the pushed commit, so a bump that pulls a
+# lazy chunk into the boot graph stays red regardless of this raise.
+#
+# Budgets are ONE line per package.json, so two raised Renovate PRs conflict
+# once the first merges. That is self-healing: `rebaseWhen: conflicted`
+# makes Renovate rebase the loser (the bot commit is authored by
+# github-actions[bot], listed in renovate.json `gitIgnoredAuthors`, so it is
+# not a foreign edit that blocks rebasing), and the rebase fires
+# `synchronize`, which re-runs this workflow against the new main budget.
+#
+# Required repository secret:
+#   BOT_PAT  Fine-grained PAT (contents + pull-requests write). Pushed with
+#            BOT_PAT — NOT GITHUB_TOKEN — so the PR's `synchronize` event
+#            fires and the full check suite re-runs on the raised budget.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  # The push below is itself a `synchronize` and cancels this run via the
+  # successor, so everything (verify, comment) happens before the push.
+  group: renovate-bundle-size-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the budget commit to the PR branch
+  pull-requests: write # comment the outcome on the PR
+
+env:
+  MAX_GROWTH_KB: '50'
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.BOT_PAT }}
+
+      # Only npm bumps can move the JS payload. Swift/Go/Actions PRs skip the
+      # (multi-minute) build entirely.
+      - name: Detect an npm dependency change
+        id: scope
+        run: |
+          if git diff --name-only "origin/${{ github.event.pull_request.base.ref }}...HEAD" \
+              | grep -qE '(^|/)package(-lock)?\.json$'; then
+            echo "npm=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json / package-lock.json change — nothing to measure." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.scope.outputs.npm == 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      # A stale lockfile fails `npm ci`; renovate-lockfile-reconcile.yml owns
+      # that repair and its push re-triggers this workflow.
+      - uses: ./.github/actions/npm-ci
+        if: steps.scope.outputs.npm == 'true'
+
+      - name: Build webapp
+        if: steps.scope.outputs.npm == 'true'
+        run: npm run build -w @slicc/webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+
+      - name: Build extension
+        if: steps.scope.outputs.npm == 'true'
+        run: npm run build -w @slicc/chrome-extension
+
+      - name: Raise exceeded budgets
+        id: raise
+        if: steps.scope.outputs.npm == 'true'
+        run: |
+          set +e
+          node packages/dev-tools/tools/bundle-budget-reconcile.mjs --write \
+            --max-growth-kb="$MAX_GROWTH_KB" | tee reconcile.log
+          status=${PIPESTATUS[0]}
+          set -e
+          { echo '### Bundle budgets'; echo '```'; cat reconcile.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -eq 2 ]; then
+            echo "outcome=blocked" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          elif git diff --quiet -- packages/webapp/package.json packages/chrome-extension/package.json; then
+            echo "outcome=unchanged" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=raised" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Re-run size-limit on the raised budgets before pushing (the push
+      # cancels this run). Only size-limit: the first-load delta gate is
+      # enforced by CI on the pushed commit.
+      - name: Verify the raised budgets
+        if: steps.raise.outputs.outcome == 'raised'
+        run: |
+          (cd packages/webapp && npx size-limit)
+          (cd packages/chrome-extension && npx size-limit)
+
+      - name: Comment a blocked raise
+        if: steps.raise.outputs.outcome == 'blocked'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file - <<EOF
+          📦 This bump grows a bundle budget by more than ${MAX_GROWTH_KB} kB, so I did not raise it automatically. A human needs to justify the growth (or shrink it) and raise the \`size-limit\` budget by hand.
+
+          \`\`\`
+          $(cat reconcile.log)
+          \`\`\`
+
+          See \`.github/workflows/renovate-bundle-size-reconcile.yml\`.
+          EOF
+          exit 1
+
+      # Best-effort: a transient `gh` failure must not strand a verified raise.
+      - name: Comment the raise
+        if: steps.raise.outputs.outcome == 'raised'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file - <<EOF
+          📦 This dependency bump grows the bundle past its \`size-limit\` budget by less than ${MAX_GROWTH_KB} kB, so I raised the budget to the measured size (rounded up to the next kB) and am pushing it:
+
+          \`\`\`
+          $(cat reconcile.log)
+          \`\`\`
+
+          See \`.github/workflows/renovate-bundle-size-reconcile.yml\`.
+          EOF
+
+      # Last step: fires `synchronize`, re-running CI and cancelling this run.
+      - name: Push the raised budgets
+        if: steps.raise.outputs.outcome == 'raised'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/webapp/package.json packages/chrome-extension/package.json
+          git commit -m "chore(deps): raise bundle-size budget for dependency bump (renovate-bundle-size-reconcile)"
+          git push

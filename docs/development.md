@@ -176,18 +176,19 @@ disagreement.
 
 ### Companion reconcile workflows
 
-The Mend-hosted Renovate app cannot run `postUpgradeTasks`. Four workflows
+The Mend-hosted Renovate app cannot run `postUpgradeTasks`. Six workflows
 clean up after it, pushing as `github-actions[bot]` (listed in
 `renovate.json` `gitIgnoredAuthors` so Renovate does not treat the push as a
 foreign edit):
 
-| Workflow                           | Label                | What it does                                                            |
-| ---------------------------------- | -------------------- | ----------------------------------------------------------------------- |
-| `renovate-lockfile-reconcile.yml`  | _(none — all PRs)_   | Runs `npm install` and pushes `package-lock.json` when it is stale      |
-| `renovate-format-reconcile.yml`    | `formatter-bump`     | Runs biome + prettier after a formatter bump                            |
-| `renovate-patch-reconcile.yml`     | `patched-dependency` | Regenerates or removes an orphaned `patch-package` patch                |
-| `renovate-swift-pin-reconcile.yml` | `swift-pin`          | Syncs GitHub SPM pins across `Package.swift` and xcodegen `project.yml` |
-| `renovate-skill-pin-reconcile.yml` | `skill-pin`          | Syncs agent-skill `ipk add` pins (e.g. v86) with `package.json`         |
+| Workflow                             | Label                | What it does                                                                    |
+| ------------------------------------ | -------------------- | ------------------------------------------------------------------------------- |
+| `renovate-lockfile-reconcile.yml`    | _(none — all PRs)_   | Runs `npm install` and pushes `package-lock.json` when it is stale              |
+| `renovate-format-reconcile.yml`      | `formatter-bump`     | Runs biome + prettier after a formatter bump                                    |
+| `renovate-patch-reconcile.yml`       | `patched-dependency` | Regenerates or removes an orphaned `patch-package` patch                        |
+| `renovate-swift-pin-reconcile.yml`   | `swift-pin`          | Syncs GitHub SPM pins across `Package.swift` and xcodegen `project.yml`         |
+| `renovate-skill-pin-reconcile.yml`   | `skill-pin`          | Syncs agent-skill `ipk add` pins (e.g. v86) with `package.json`                 |
+| `renovate-bundle-size-reconcile.yml` | _(none — npm PRs)_   | Raises a `size-limit` budget a bump overshoots by ≤ 50 kB; larger needs a human |
 
 `npm run lint:lockfile`, `npm run lint:patches` and `npm run lint:swift-pins`
 are the CI backstops for the lockfile, patches, and SPM dual-pins. The v86 skill pin's CI backstop is the live canary
