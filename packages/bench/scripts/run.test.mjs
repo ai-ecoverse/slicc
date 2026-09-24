@@ -37,13 +37,12 @@ describe('parseCli', () => {
       repeats: 1,
       timeout: 900,
       judge: true,
-      executor: 'cli',
       taskIds: null,
       limit: null,
     });
   });
 
-  it('parses the matrix and the leader options', () => {
+  it('parses the matrix', () => {
     const o = parseCli([
       '--set',
       'a.json',
@@ -59,13 +58,7 @@ describe('parseCli', () => {
       't1,t2',
       '--limit',
       '5',
-      '--executor',
-      'cdp',
-      '--cdp',
-      'http://127.0.0.1:9',
       '--no-judge',
-      '--thinking',
-      'low',
     ]);
     expect(o.sets).toEqual(['a.json', 'bu-v2']);
     expect(o.models).toEqual(['m1', 'm2']);
@@ -74,10 +67,7 @@ describe('parseCli', () => {
       repeats: 3,
       taskIds: ['t1', 't2'],
       limit: 5,
-      executor: 'cdp',
-      cdp: 'http://127.0.0.1:9',
       judge: false,
-      thinking: 'low',
     });
   });
 
@@ -85,7 +75,7 @@ describe('parseCli', () => {
     expect(() => parseCli([])).toThrow(/--set/);
     expect(() => parseCli(['--set', 'x', '--repeats', '0'])).toThrow(/--repeats/);
     expect(() => parseCli(['--set', 'x', '--timeout', '5'])).toThrow(/--timeout/);
-    expect(() => parseCli(['--set', 'x', '--executor', 'ssh'])).toThrow(/--executor/);
+    expect(() => parseCli(['--set', 'x', '--executor', 'cdp'])).toThrow(/executor/);
     expect(parseCli(['--help']).help).toBe(true);
   });
 });
@@ -181,33 +171,64 @@ describe('planning', () => {
   });
 });
 
-/** A fake leader that answers the adapter's commands with a canned result.json. */
+const TRANSCRIPT = {
+  schemaVersion: 1,
+  conversations: [
+    {
+      id: 'cone',
+      kind: 'cone',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Report the heading.' }] },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'FINAL ANSWER: Example' }],
+          model: { id: 'global.anthropic.m' },
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * A fake leader behind the `slicc` CLI: each prompt takes five seconds on its own clock and
+ * spends a cent. Calls are recorded as `slicc <verb …>` or as the shell command given to exec.
+ */
 function leader({ failOn } = {}) {
   const commands = [];
+  let clock = 0;
+  let spent = 0;
+  const reply = (command, stdout = '') =>
+    failOn?.test(command)
+      ? { stdout: '', stderr: 'leader went away', status: 1, timedOut: false }
+      : { stdout, stderr: '', status: 0, timedOut: false };
+  const cli = vi.fn(async (args) => {
+    const command = `slicc ${args.join(' ')}`;
+    commands.push(command);
+    if (args[0] === 'model') return reply(command, `bedrock:global.anthropic.${args[1]}\n`);
+    if (args[0] === 'prompt') {
+      clock += 5000;
+      spent += 0.01;
+      return reply(command, 'FINAL ANSWER: Example\n');
+    }
+    return reply(command);
+  });
   const exec = vi.fn(async (command) => {
     commands.push(command);
-    if (failOn?.test(command)) return { stdout: '', stderr: 'leader went away', status: 1 };
-    if (command.includes('| wc -l')) return { stdout: '3\n', stderr: '', status: 0 };
-    if (/^cat \/tmp\/bench\/.*\/result\.json$/.test(command)) {
-      return {
-        stdout: JSON.stringify({
-          exitCode: 0,
-          finalText: 'FINAL ANSWER: Example',
-          archive: '## assistant\nread the page',
-          durationMs: 5000,
-          costUsd: 0.01,
-          tokens: 10,
-          screenshots: [],
-          outputFiles: [],
-        }),
-        stderr: '',
-        status: 0,
-      };
-    }
-    return { stdout: '', stderr: '', status: 0 };
+    if (command.includes('| wc -l')) return reply(command, '3\n');
+    if (command === 'cost --json --all')
+      return reply(
+        command,
+        JSON.stringify({
+          scoops: [{ type: 'cone', turns: 1, usage: { totalTokens: 10, cost: { total: spent } } }],
+        })
+      );
+    if (command.startsWith('session export')) return reply(command, JSON.stringify(TRANSCRIPT));
+    return reply(command);
   });
-  return { exec, commands };
+  return { deps: { leader: { cli, exec }, now: () => clock }, commands };
 }
+
+const PROMPT = 'slicc prompt -';
 
 const fakeJudge = vi.fn(async ({ task }) => ({
   judgement: { infra_error: false, reward_hacking_suspected: false },
@@ -254,7 +275,7 @@ describe('main', () => {
     const outDir = join(dir, 'out');
     const stepSummary = join(dir, 'summary.md');
     process.env.GITHUB_STEP_SUMMARY = stepSummary;
-    const { exec, commands } = leader();
+    const run = leader();
     const quiet = vi.spyOn(console, 'log').mockImplementation(() => {});
     const args = [
       '--set',
@@ -268,10 +289,19 @@ describe('main', () => {
       '--harness',
       'test',
     ];
-    expect(
-      await main(args, { exec, judge: fakeJudge, spec: {}, log: () => {}, leaderScript: 'script' })
-    ).toBe(0);
-    expect(commands[0]).toBe('mkdir -p /tmp/bench && cat > /tmp/bench/run-task.jsh');
+    expect(await main(args, { ...run.deps, judge: fakeJudge, spec: {}, log: () => {} })).toBe(0);
+    const { commands } = run;
+    expect(commands.filter((c) => c === PROMPT)).toHaveLength(8);
+    // Per run: fresh session, pick the model, snapshot cost, prompt, snapshot cost, export.
+    const order = [
+      'slicc new-session --erase',
+      'slicc model claude-sonnet-5',
+      'cost --json --all',
+      PROMPT,
+      'cost --json --all',
+    ].map((c, i, all) => commands.indexOf(c, i ? commands.indexOf(all[i - 1]) + 1 : 0));
+    expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]))).toBe(true);
+    expect(commands.findIndex((c) => c.startsWith('session export'))).toBeGreaterThan(order[4]);
     expect(commands.filter((c) => c.includes('| wc -l'))).toHaveLength(2);
     expect(commands.at(-1)).toContain('.bench-skills-builtin/. /workspace/skills/');
     const record = JSON.parse(
@@ -282,8 +312,10 @@ describe('main', () => {
       outcome: 'partial',
       verdict: false,
       config: { harness: 'test', model: 'claude-sonnet-5', skills: 'none' },
+      model_id: 'bedrock:global.anthropic.claude-sonnet-5',
     });
-    expect(record.metrics.duration).toBe(5);
+    expect(record.metrics).toMatchObject({ duration: 5, modelsUsed: ['global.anthropic.m'] });
+    expect(record.metrics.cost).toBeCloseTo(0.01, 6);
     expect(readdirSync(join(outDir, 'results'))).toHaveLength(4);
     expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain('**What skills change**');
     expect(readFileSync(stepSummary, 'utf8')).toContain('### Own');
@@ -296,14 +328,13 @@ describe('main', () => {
     const again = leader();
     expect(
       await main(args, {
-        exec: again.exec,
+        ...again.deps,
         judge: fakeJudge,
         spec: {},
         log: () => {},
-        leaderScript: 'script',
       })
     ).toBe(0);
-    expect(again.commands.filter((c) => c.startsWith('node '))).toHaveLength(0);
+    expect(again.commands.filter((c) => c === PROMPT)).toHaveLength(0);
     quiet.mockRestore();
   });
 
@@ -311,11 +342,10 @@ describe('main', () => {
     const dir = tmp();
     const outDir = join(dir, 'out');
     const quiet = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { exec } = leader({ failOn: /^rm -rf \/tmp\/bench\// });
+    const down = leader({ failOn: /^rm -rf \/tmp\/bench\// });
     const failed = main(['--set', setFile(dir), '--models', 'm', '--out', outDir, '--no-judge'], {
-      exec,
+      ...down.deps,
       log: () => {},
-      leaderScript: 's',
     });
     expect(await failed).toBe(1);
     const record = JSON.parse(
@@ -327,9 +357,8 @@ describe('main', () => {
     const retry = await main(
       ['--set', setFile(dir), '--models', 'm', '--out', outDir, '--no-judge'],
       {
-        exec: ok.exec,
+        ...ok.deps,
         log: () => {},
-        leaderScript: 's',
       }
     );
     const retried = JSON.parse(
@@ -349,12 +378,11 @@ describe('main', () => {
       { task_id: 'u1', confirmed_task: 'Q?', category: 'GAIA', answer: '7' },
     ];
     await main(['--set', 'bu-v1', '--models', 'm', '--out', outDir], {
-      exec: leader().exec,
+      ...leader().deps,
       judge: fakeJudge,
       spec: {},
       loadUpstream,
       log: () => {},
-      leaderScript: 's',
     });
     const path = tracePath(outDir, 'BU_Bench_V1', 'builtin', 'm', 'u1', 1, true);
     expect(readFileSync(path, 'utf8')).not.toContain('Q?');
@@ -369,7 +397,7 @@ describe('main', () => {
     delete process.env.BEDROCK_API_KEY;
     await expect(
       main(['--set', setFile(dir), '--models', 'm', '--out', join(dir, 'o')], {
-        exec: leader().exec,
+        ...leader().deps,
         spec: {},
         log: () => {},
       })
@@ -378,9 +406,8 @@ describe('main', () => {
     const log = vi.fn();
     const quiet = vi.spyOn(console, 'log').mockImplementation(() => {});
     await main(['--set', setFile(dir), '--models', 'm', '--out', join(dir, 'o2'), '--no-judge'], {
-      exec: leader({ failOn: /^if \[ -d/ }).exec,
+      ...leader({ failOn: /^if \[ -d/ }).deps,
       log,
-      leaderScript: 's',
     });
     expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
       /could not restore \/workspace\/skills/
@@ -422,7 +449,7 @@ describe('main defaults', () => {
     const path = join(dir, 'set.json');
     writeFileSync(path, JSON.stringify({ benchmark: 'Own', tasks: [TASK] }));
     await main(['--set', path, '--models', 'm', '--out', join(dir, 'o')], {
-      exec: leader().exec,
+      ...leader().deps,
       spec: {
         systemPrompt: 'S',
         caps: {
@@ -434,7 +461,6 @@ describe('main defaults', () => {
           files: 9e9,
         },
       },
-      leaderScript: 's',
     });
     expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('Bearer test-key');
     expect(
@@ -526,11 +552,10 @@ describe('re-judging on resume', () => {
     const common = ['--set', path, '--models', 'm', '--out', outDir];
     const first = leader();
     await main([...common, '--judge-model', 'j1'], {
-      exec: first.exec,
+      ...first.deps,
       judge: judgeAs(1),
       spec: {},
       log: () => {},
-      leaderScript: 's',
     });
     const rp = recordPath(outDir, 'Own', 'builtin', 'm', 'own-1', 1);
     expect(JSON.parse(readFileSync(rp, 'utf8'))).toMatchObject({
@@ -542,13 +567,12 @@ describe('re-judging on resume', () => {
     const j2 = judgeAs(0.5);
     const log = vi.fn();
     await main([...common, '--judge-model', 'j2'], {
-      exec: second.exec,
+      ...second.deps,
       judge: j2,
       spec: {},
       log,
-      leaderScript: 's',
     });
-    expect(second.commands.filter((c) => c.startsWith('node '))).toHaveLength(0);
+    expect(second.commands.filter((c) => c === PROMPT)).toHaveLength(0);
     expect(j2).toHaveBeenCalledTimes(1);
     expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
       /partial 0\.50 5 s \$0\.010 \(re-judged\)/
@@ -577,11 +601,10 @@ describe('re-judging on resume', () => {
       throw new Error('judge HTTP 503');
     });
     const code = await main(['--set', path, '--models', 'm', '--out', outDir], {
-      exec: leader().exec,
+      ...leader().deps,
       judge: broken,
       spec: {},
       log: () => {},
-      leaderScript: 's',
     });
     expect(code).toBe(1);
     const rp = recordPath(outDir, 'Own', 'builtin', 'm', 'own-1', 1);
@@ -596,20 +619,18 @@ describe('re-judging on resume', () => {
 
     const again = leader();
     const stillBroken = await main(['--set', path, '--models', 'm', '--out', outDir], {
-      exec: again.exec,
+      ...again.deps,
       judge: broken,
       spec: {},
       log: () => {},
-      leaderScript: 's',
     });
     expect(stillBroken).toBe(1);
-    expect(again.commands.filter((c) => c.startsWith('node '))).toHaveLength(0);
+    expect(again.commands.filter((c) => c === PROMPT)).toHaveLength(0);
     const fixed = await main(['--set', path, '--models', 'm', '--out', outDir], {
-      exec: leader().exec,
+      ...leader().deps,
       judge: fakeJudge,
       spec: {},
       log: () => {},
-      leaderScript: 's',
     });
     expect(fixed).toBe(0);
     const record = JSON.parse(readFileSync(rp, 'utf8'));

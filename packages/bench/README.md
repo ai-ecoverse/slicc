@@ -27,15 +27,15 @@ A pull request that touches the runner runs one smoke task on both models.
 
 ## Run it locally
 
-Against a local dev harness, over Chrome DevTools:
+The runner drives any leader from outside with the Go `slicc` CLI: it needs the leader's join URL (run `host` in a SLICC terminal) and a CLI with the `new-session` and `model` verbs, built from this checkout until a release ships them:
 
 ```bash
-AWS_BEARER_TOKEN_BEDROCK=… node packages/bench/scripts/run.mjs \
-  --set packages/bench/tasks/smoke.json --skills builtin,none \
-  --executor cdp --cdp http://127.0.0.1:<cdp-port> --ui localhost:<ui-port> --out bench-out
+(cd packages/slicc-cli && go build -o /tmp/slicc-dev .)
+SLICC_CLI=/tmp/slicc-dev SLICC_JOIN_URL=… AWS_BEARER_TOKEN_BEDROCK=… \
+  node packages/bench/scripts/run.mjs --set packages/bench/tasks/smoke.json --skills builtin,none --out bench-out
 ```
 
-Against any leader with a join URL: `SLICC_JOIN_URL=… SLICC_CLI=… node packages/bench/scripts/run.mjs --set …`. `--plan` prints the runs without starting any. A second invocation with the same `--out` resumes, run by run:
+Each task starts a fresh chat with erased memories, selects the model and sends the task to the cone, as a person would. Time and cost cover the cone and every scoop it spawns. `--plan` prints the runs without starting any. A second invocation with the same `--out` resumes, run by run:
 
 - **Kept:** runs whose task, rubric, weights and judge are unchanged.
 - **Re-judged from the saved trace, without running the agent again:** runs whose judgement no longer stands. That means another `--judge-model`, a changed rubric or weights, or a judge call that failed.

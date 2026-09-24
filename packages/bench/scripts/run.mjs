@@ -11,15 +11,16 @@
  * pinned browser-use/benchmark commit and never written in plaintext: run traces for them are
  * Fernet-encrypted with the set's own key, as upstream publishes its tasks.
  *
- * Leader: `--executor cli` (default; SLICC_JOIN_URL + SLICC_CLI, as in CI) or
- * `--executor cdp --cdp http://127.0.0.1:<port> --ui <origin>` for a local dev harness.
+ * Leader: driven from outside with the Go `slicc` CLI (SLICC_CLI) against its join URL
+ * (SLICC_JOIN_URL): each task is a prompt to the cone after `new-session --erase` and
+ * `model <m>` — see slicc-adapter.mjs.
  * Judge: Bedrock Converse with AWS_BEARER_TOKEN_BEDROCK (or BEDROCK_API_KEY) and BEDROCK_REGION.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createCdpExec, createCliExec } from './executors.mjs';
+import { createLeader } from './executors.mjs';
 import {
   fromBuV1,
   fromSkillCreatorEvals,
@@ -31,7 +32,6 @@ import {
 import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
 import { reportMarkdown, summarize } from './results.mjs';
 import {
-  installLeaderScript,
   parseSkillsCondition,
   restoreSkills,
   runTask,
@@ -53,14 +53,10 @@ export function parseCli(argv) {
       tasks: { type: 'string' },
       limit: { type: 'string' },
       timeout: { type: 'string', default: '900' },
-      thinking: { type: 'string' },
       'judge-model': { type: 'string', default: DEFAULT_JUDGE_MODEL },
       'no-judge': { type: 'boolean', default: false },
       out: { type: 'string', default: 'bench-out' },
       harness: { type: 'string', default: 'dev' },
-      executor: { type: 'string', default: 'cli' },
-      cdp: { type: 'string' },
-      ui: { type: 'string', default: 'localhost' },
       plan: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -78,7 +74,6 @@ export function parseCli(argv) {
     throw new Error('--repeats must be a positive integer');
   if (!Number.isInteger(timeout) || timeout < 30)
     throw new Error('--timeout must be at least 30 seconds');
-  if (!['cli', 'cdp'].includes(values.executor)) throw new Error('--executor is cli or cdp');
   return {
     help: values.help,
     sets: values.set ?? [],
@@ -88,14 +83,10 @@ export function parseCli(argv) {
     taskIds: values.tasks ? list(values.tasks) : null,
     limit: values.limit ? Number.parseInt(values.limit, 10) : null,
     timeout,
-    thinking: values.thinking ?? null,
     judgeModel: values['judge-model'],
     judge: !values['no-judge'],
     out: resolve(values.out),
     harness: values.harness,
-    executor: values.executor,
-    cdp: values.cdp ?? null,
-    ui: values.ui,
     plan: values.plan,
   };
 }
@@ -271,7 +262,7 @@ function failInto(record, stage, err) {
  * failure keeps the result, so the next invocation re-judges it instead of re-running the agent.
  */
 async function runOne(r, ctx) {
-  const { exec, opts, judge } = ctx;
+  const { leader, opts, judge } = ctx;
   const config = { harness: opts.harness, model: r.model, skills: r.condition.name };
   const runId = `${safe(r.task.id).slice(0, 40)}-${safe(r.model)}-${safe(config.skills)}-r${r.repeat}-${Date.now().toString(36)}`;
   const record = {
@@ -285,18 +276,20 @@ async function runOne(r, ctx) {
   let result;
   try {
     result = await runTask({
-      exec,
+      leader,
       task: r.task,
       runId,
       model: r.model,
-      thinking: opts.thinking,
       timeoutSeconds: opts.timeout,
+      ...(ctx.capture ? { capture: ctx.capture } : {}),
+      ...(ctx.now ? { now: ctx.now } : {}),
     });
   } catch (err) {
     failInto(record, 'run', err);
     return { record, result: null };
   }
   record.metrics = traceFromResult(result).metrics;
+  record.model_id = result.modelId ?? null;
   if (judge) {
     try {
       await judgeInto(record, result, r.task, ctx);
@@ -372,7 +365,7 @@ function previous(opts, r) {
 
 /** Run every planned run; returns how many ended in an error (running or judging). */
 async function runAll(runs, ctx, log) {
-  const { exec, opts } = ctx;
+  const { leader, opts } = ctx;
   let staged = null;
   let errors = 0;
   try {
@@ -397,7 +390,7 @@ async function runAll(runs, ctx, log) {
         continue;
       }
       if (staged !== r.condition.name) {
-        const count = await stageSkills(exec, r.condition);
+        const count = await stageSkills(leader, r.condition);
         staged = r.condition.name;
         log(`skills ${staged}: ${count} entries in /workspace/skills`);
       }
@@ -408,7 +401,7 @@ async function runAll(runs, ctx, log) {
     }
   } finally {
     if (staged)
-      await restoreSkills(exec).catch((err) =>
+      await restoreSkills(leader).catch((err) =>
         log(`could not restore /workspace/skills: ${err.message}`)
       );
   }
@@ -444,16 +437,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       );
     return 0;
   }
-  const exec =
-    deps.exec ??
-    (opts.executor === 'cdp'
-      ? createCdpExec({ cdpUrl: opts.cdp, uiMatch: opts.ui })
-      : createCliExec({ url: process.env.SLICC_JOIN_URL }));
+  const leader = deps.leader ?? createLeader({ url: process.env.SLICC_JOIN_URL });
   const judge = makeJudge(opts, deps);
   const spec = judge ? (deps.spec ?? (await loadFindingsSpec())) : null;
   const runStart = new Date().toISOString();
-  await installLeaderScript(exec, deps.leaderScript);
-  const errors = await runAll(runs, { exec, opts, judge, spec }, log);
+  const errors = await runAll(
+    runs,
+    { leader, opts, judge, spec, capture: deps.capture, now: deps.now },
+    log
+  );
   console.log(writeOutputs(opts, runStart));
   // The report is written either way; a non-zero exit keeps a CI job from passing on runs
   // that never reached the judge. Rerunning with the same --out retries only those.

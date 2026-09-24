@@ -14,23 +14,24 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges every 
 
 ## Layout
 
-| Path                        | Purpose                                                                                             |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `scripts/format.mjs`        | Task format: validation, `outcome()` (pass / partial / fail), BU V1 and skill-creator converters    |
-| `scripts/upstream.mjs`      | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                         |
-| `scripts/judge.mjs`         | Findings judge over Converse: request, validation, `score()`, text-only retry                       |
-| `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask`, result.json → trace                                              |
-| `leader/run-task.jsh`       | Runs on the leader: one `agent` scoop per task, screenshots while it works, cost, transcript, files |
-| `scripts/executors.mjs`     | Leader access: Go CLI + join URL (CI) or CDP to a local dev harness                                 |
-| `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report                |
-| `scripts/run.mjs`           | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`                 |
-| `tasks/smoke.json`          | Two short live tasks in the shared format; the PR smoke run uses the first                          |
+| Path                        | Purpose                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `scripts/format.mjs`        | Task format: validation, `outcome()` (pass / partial / fail), BU V1 and skill-creator converters |
+| `scripts/upstream.mjs`      | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                      |
+| `scripts/judge.mjs`         | Findings judge over Converse: request, validation, `score()`, text-only retry                    |
+| `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace         |
+| `scripts/executors.mjs`     | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt     |
+| `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report             |
+| `scripts/run.mjs`           | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`              |
+| `tasks/smoke.json`          | Two short live tasks in the shared format; the PR smoke run uses the first                       |
 
 ## How a run works
 
-1. `run.mjs` copies `leader/run-task.jsh` to `/tmp/bench/` and stages `/workspace/skills` for the skills condition. Scoops read that directory through the shared filesystem, so `--read-only` cannot hide skills. The leader's own skills are stashed once in `/workspace/.bench-skills-builtin` and restored at the end. Conditions: `none`, `builtin`, and either joined with `+` to extra sets under `/workspace/bench-skills/<name>/`.
-2. Each task runs as a fresh `agent --model <m> --persist-session` scoop, not in the cone's chat, so no task sees another's context and one leader serves every model. The prompt is the task text plus upstream's closing instruction (a `FINAL ANSWER:` line, no clarifying questions); how to drive the browser is left to SLICC and the installed skills, because that is what the skills axis measures.
-3. `run-task.jsh` captures screenshots while the agent works (a tab whose address changed, or every 15 s), because agents close their tabs when done. Cost is the scoops' delta in `cost --json`, never the cone's.
+Everything is driven from outside, through the Go `slicc` CLI against the leader's join URL; nothing bench-specific runs on the leader. A task is what a person would do: open a fresh chat, pick a model, type the task into the cone.
+
+1. `run.mjs` stages `/workspace/skills` for the skills condition with `slicc exec`. The cone and any scoop it spawns read that directory. The leader's own skills are stashed once in `/workspace/.bench-skills-builtin` and restored at the end. Conditions: `none`, `builtin`, and either joined with `+` to extra sets under `/workspace/bench-skills/<name>/`.
+2. Per task, `runTask` puts the task's files in the VFS, closes open tabs, then runs `slicc new-session --erase` and `slicc model <m>`. `--erase` also drops the cone's memories, so no task sees what an earlier one learned. `model` resolves the alias against the leader's catalogue and prints the provider-qualified id, recorded as `model_id`. Then `slicc prompt -` sends the task text plus upstream's closing instruction (a `FINAL ANSWER:` line, no clarifying questions). How to drive the browser is left to SLICC and the installed skills, because that is what the skills axis measures. On timeout the runner sends the CLI SIGINT, which aborts the cone.
+3. While the cone works, the runner polls `playwright-cli tab-list` and screenshots a tab whose address changed, or every 15 s, because agents close their tabs when done. Cost, tokens and turns are the delta of `cost --json --all` across the prompt: the cone plus every scoop it spawned, dropped ones included. The judge's trajectory comes from `session export`; its per-message model ids fill `modelsUsed`, which shows when scoops ran on another model.
 4. Runs are ordered skills → repeat → task → model, so both models meet the live web at about the same moment.
 5. Records store the task, rubric and weights digests and the judge model, and `resumeAction()` decides each run on resume:
    - `done`: nothing changed.
@@ -47,11 +48,12 @@ npm run test:coverage:bench
 actionlint .github/workflows/bench.yml
 ```
 
-Live check against a local dev harness (`packages/dev-tools/tools/dev-standalone-fresh.sh`; the CDP port is in its log):
+Live check against a local dev harness (`packages/dev-tools/tools/dev-standalone-fresh.sh`): run `host` in its terminal for a join URL, and build the CLI from this checkout so it has `new-session` and `model`:
 
 ```bash
-AWS_BEARER_TOKEN_BEDROCK=… node packages/bench/scripts/run.mjs --set packages/bench/tasks/smoke.json \
-  --executor cdp --cdp http://127.0.0.1:<cdp-port> --ui localhost:<ui-port> --out /tmp/bench-out
+(cd packages/slicc-cli && go build -o /tmp/slicc-dev .)
+SLICC_CLI=/tmp/slicc-dev SLICC_JOIN_URL=… AWS_BEARER_TOKEN_BEDROCK=… \
+  node packages/bench/scripts/run.mjs --set packages/bench/tasks/smoke.json --out /tmp/bench-out
 ```
 
 ## Design Rules
@@ -59,7 +61,8 @@ AWS_BEARER_TOKEN_BEDROCK=… node packages/bench/scripts/run.mjs --set packages/
 - **Never commit or print upstream task text.** Load it with `loadUpstreamSet`, keep it in memory, and encrypt traces with `encryptJson`. `records/` and `results/` hold ids, scores and metrics only.
 - **The judge never scores.** Weights stay out of its prompt; `score()` is upstream's arithmetic (met weight / total, worst-wins duplicates, canary leak or suspected reward hacking zeroes the run).
 - **Executors never throw on a non-zero status**; callers decide. Dial failures retry, executions never do.
-- **Pure vs I/O split**, as in github-workflow: decisions live in exported functions with injected `exec`, `fetchImpl`, `judge`, `loadUpstream`.
+- **Drive the leader only through its public surface**: CLI verbs and shell commands a person could type. A leader-side helper script would benchmark a harness nobody uses.
+- **Pure vs I/O split**, as in github-workflow: decisions live in exported functions with injected `leader`, `fetchImpl`, `judge`, `loadUpstream`, `now`.
 
 ## Related
 

@@ -4,8 +4,8 @@
 # - workflow_dispatch: a full run. Sets are `bu-v1` (BU Bench V1, answered tasks), `bu-v2`, or a
 #   task-set JSON path in this repo; skills conditions are `none`, `builtin`, and `builtin+ecoverse`
 #   (the leader's skills plus ai-ecoverse/skills, mounted from a checkout).
-# - pull_request touching the runner: one smoke task on both models, so the whole path (leader,
-#   agent, screenshots, judge, report) is exercised before merge. Same-repo heads only: fork PRs
+# - pull_request touching the runner (or the CLI verbs it drives): one smoke task on both models,
+#   so the whole path (leader, cone, screenshots, judge, report) is exercised before merge. Same-repo heads only: fork PRs
 #   get no Bedrock key.
 #
 # Traces of upstream sets hold decrypted task text; the runner Fernet-encrypts them with the set's
@@ -48,6 +48,7 @@ on:
   pull_request:
     paths:
       - 'packages/bench/**'
+      - 'packages/slicc-cli/session.go'
       - '.github/workflows/bench.yml'
 
 concurrency:
@@ -103,8 +104,17 @@ jobs:
           provider-base-url: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
           model: bedrock-camp:global.anthropic.claude-sonnet-5
 
-      - name: Install the slicc CLI
+      # The runner drives the leader with `new-session` and `model`, which ship with this ref's
+      # CLI and not necessarily with the last release: build it from the checkout.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+
+      - name: Install the slicc CLI (built from this checkout)
         uses: ./packages/github-workflow/actions/install-cli
+        with:
+          source: build
 
       - name: Run and judge
         env:
