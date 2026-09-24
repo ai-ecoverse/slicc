@@ -129,7 +129,7 @@ function installSyncBridges(
   return createSyncExecXhrBridge(init.syncFsToken, {
     syncFs,
     ...(syncFsXhr ? { fsBridge: syncFsXhr } : {}),
-    ...(sab ? { transport: createSyncExecSabTransport(sab) } : {}),
+    ...(sab ? { transport: createSyncExecSabTransport(sab), noDefaultDeadline: true } : {}),
   });
 }
 

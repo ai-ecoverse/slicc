@@ -230,6 +230,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected lastEnv: Record<string, string>;
   protected cwd: string;
 
+  protected umask = 0o022;
+
   protected builtinCommandNames: Set<string>;
 
   protected readonly staticBuiltinNames: Set<string>;
@@ -566,6 +568,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           this.bash.exec(cmd, {
             env: opts?.env ?? this.lastEnv,
             cwd: opts?.cwd ?? this.cwd,
+            umask: this.umask,
             ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
           }),
       },
@@ -612,7 +615,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       const result = await this.bash.exec(`. "$HOME/.profile"`, {
         env: this.lastEnv,
         cwd: this.cwd,
+        umask: this.umask,
       });
+
+      if (typeof result.umask === 'number') this.umask = result.umask;
       if (result.env) {
         const { PWD: _ignoredPwd, ...profileEnv } = result.env;
         this.lastEnv = { ...profileEnv, PWD: this.lastEnv.PWD ?? this.cwd };
@@ -671,6 +677,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const execOptions: BashExecOptionsWithSignal = {
       env: taggedEnv,
       cwd: this.cwd,
+      umask: this.umask,
       signal,
       ...(stdin !== EMPTY_BYTES
         ? { stdin: stdin as unknown as string, stdinKind: 'bytes' as const }
@@ -692,6 +699,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
     await this.flushPendingCommandGrants();
     result = applyCapturedPipeStatus(result, capturePipeStatus);
+    if (typeof result.umask === 'number') this.umask = result.umask;
     if (result.env) {
       this.lastEnv = stripRunPid(result.env);
     }
@@ -1110,6 +1118,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           this.bash.exec(cmd, {
             env: opts?.env ?? this.lastEnv,
             cwd: opts?.cwd ?? this.cwd,
+            umask: this.umask,
             ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
           }),
       },

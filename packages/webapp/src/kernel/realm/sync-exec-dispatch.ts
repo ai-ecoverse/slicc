@@ -93,14 +93,29 @@ export function normalizeSyncExecEnv(
   return { ok: true, env: out };
 }
 
+function hasSyncExecBudget(timeoutMs: number | undefined): timeoutMs is number {
+  return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0;
+}
+
+export function requestsNoSyncExecTimeout(timeoutMs: number | undefined): boolean {
+  return timeoutMs === undefined || timeoutMs === 0;
+}
+
 export function clampSyncExecTimeout(timeoutMs: number | undefined, fallbackMs: number): number {
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  if (!hasSyncExecBudget(timeoutMs)) {
     return Math.min(fallbackMs, SYNC_EXEC_MAX_TIMEOUT_MS);
   }
   return Math.min(timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS);
 }
 
-export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResult> {
+export interface SyncExecDispatchOptions {
+  allowNoDeadline?: boolean;
+}
+
+export async function dispatchSyncExec(
+  req: SyncExecRequest,
+  opts: SyncExecDispatchOptions = {}
+): Promise<SyncFsResult> {
   const entry = resolveSyncFsToken(req.token);
   if (!entry) {
     return { ok: false, errno: 'EACCES', message: 'sync-exec: unknown or revoked token' };
@@ -123,13 +138,16 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
 
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(
-    () => {
-      timedOut = true;
-      controller.abort();
-    },
-    clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS)
-  );
+  const timer =
+    opts.allowNoDeadline && req.timeoutMs === undefined
+      ? undefined
+      : setTimeout(
+          () => {
+            timedOut = true;
+            controller.abort();
+          },
+          clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS)
+        );
 
   const untrack = trackSyncExec(req.token, controller);
   try {

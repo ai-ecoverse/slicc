@@ -179,6 +179,56 @@ describe('createBodyReadHandleTracker', () => {
     await pending;
     expect(bodyReads.pendingCount).toBe(0);
   });
+
+  function withWasmAndMount(): {
+    g: typeof globalThis & { __slicc_mountVfs?: () => Promise<string> };
+    bodyReads: ReturnType<typeof createBodyReadHandleTracker>;
+    originals: { instantiate: unknown; mount: unknown };
+  } {
+    const later = <T>(value: T): Promise<T> =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve(value), 0);
+      });
+    const wasm = {
+      instantiate: () => later('instance'),
+      compile: () => later('module'),
+      validate: () => true,
+    };
+    const mount = () => later('mounted');
+    const g = { WebAssembly: wasm, __slicc_mountVfs: mount } as unknown as typeof globalThis & {
+      __slicc_mountVfs?: () => Promise<string>;
+    };
+    const originals = { instantiate: wasm.instantiate, mount };
+    const bodyReads = createBodyReadHandleTracker(g);
+    bodyReads.install();
+    trackers.push(bodyReads);
+    return { g, bodyReads, originals };
+  }
+
+  it('counts WebAssembly.instantiate until the module is instantiated', async () => {
+    const { g, bodyReads } = withWasmAndMount();
+    const pending = (g.WebAssembly.instantiate as unknown as () => Promise<string>)();
+    expect(bodyReads.pendingCount).toBe(1);
+    await expect(pending).resolves.toBe('instance');
+    expect(bodyReads.pendingCount).toBe(0);
+    expect(g.WebAssembly.validate(new Uint8Array())).toBe(true);
+  });
+
+  it('counts a pending __slicc_mountVfs (an Emscripten --pre-js mounting the VFS)', async () => {
+    const { g, bodyReads } = withWasmAndMount();
+    const pending = g.__slicc_mountVfs!();
+    expect(bodyReads.pendingCount).toBe(1);
+    await expect(pending).resolves.toBe('mounted');
+    expect(bodyReads.pendingCount).toBe(0);
+  });
+
+  it('restore puts WebAssembly back but does not resurrect a hook the realm deleted', () => {
+    const { g, bodyReads, originals } = withWasmAndMount();
+    delete g.__slicc_mountVfs;
+    bodyReads.restore();
+    expect(g.WebAssembly.instantiate).toBe(originals.instantiate);
+    expect('__slicc_mountVfs' in g).toBe(false);
+  });
 });
 
 describe('attachBufferedBodyReaders', () => {

@@ -344,12 +344,13 @@ describe('slicc-shader', () => {
     });
 
     it('cone with speed=0 renders once and stops', async () => {
+      const spy = spyDraws();
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await settle();
-      const spy = spyDraws();
-      await wait(250);
-      expect(spy.mock.calls.length).toBe(0);
+      const deadline = Date.now() + 3000;
+      while (spy.mock.calls.length === 0 && Date.now() < deadline) await wait(20);
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      await expectStopped(spy);
     });
 
     it('an attribute change re-renders a static field', async () => {

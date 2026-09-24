@@ -53,7 +53,9 @@ export function attachSyncSabResponder(
   const dispatch =
     opts.dispatch ??
     ((req: SyncFsRequest | SyncExecRequest) =>
-      isSyncExecRequest(req) ? dispatchSyncExec(req) : dispatchSyncFs(req));
+      isSyncExecRequest(req)
+        ? dispatchSyncExec(req, { allowNoDeadline: true })
+        : dispatchSyncFs(req));
 
   function drop(id: number): void {
     const entry = pending.get(id);

@@ -14,7 +14,6 @@ export const BASH_BUILTIN_COMMAND_NAMES: readonly string[] = [
   'times',
   'trap',
   'ulimit',
-  'umask',
 ];
 
 export function createBashBuiltinCommands(): Command[] {

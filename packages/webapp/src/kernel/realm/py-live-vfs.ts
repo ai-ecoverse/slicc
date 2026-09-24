@@ -44,7 +44,7 @@ export function mountPyLiveVfs(
   if (mounted.length === 0) return undefined;
 
   const exec = createSyncExecXhrBridge(init.syncFsToken, {
-    ...(sab ? { transport: createSyncExecSabTransport(sab) } : {}),
+    ...(sab ? { transport: createSyncExecSabTransport(sab), noDefaultDeadline: true } : {}),
   });
   installPySubprocess(pyodide, {
     exec,

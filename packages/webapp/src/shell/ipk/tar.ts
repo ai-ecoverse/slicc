@@ -7,6 +7,8 @@ export interface TarEntry {
   directory?: boolean;
 
   mode?: number;
+
+  mtime?: number;
 }
 
 export interface ReadTarOptions {
@@ -59,7 +61,11 @@ export function writeTar(entries: TarEntry[]): Uint8Array {
         name: entry.path,
         ...(entry.directory ? {} : { data: entry.bytes }),
 
-        attrs: { mode: (entry.mode ?? (entry.directory ? 0o755 : 0o644)).toString(8) },
+        attrs: {
+          mode: (entry.mode ?? (entry.directory ? 0o755 : 0o644)).toString(8),
+
+          ...(entry.mtime === undefined ? {} : { mtime: entry.mtime * 1000 }),
+        },
       }))
     );
   } catch (err) {
@@ -196,6 +202,7 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
       bytes: item.data ? item.data.slice() : new Uint8Array(0),
       ...(directory ? { directory: true } : {}),
       ...(Number.isFinite(mode) ? { mode: mode & 0o777 } : {}),
+      ...(typeof item.attrs?.mtime === 'number' ? { mtime: item.attrs.mtime } : {}),
     });
   });
   return entries;

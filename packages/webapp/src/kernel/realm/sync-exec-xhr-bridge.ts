@@ -1,5 +1,6 @@
 import {
   clampSyncExecTimeout,
+  requestsNoSyncExecTimeout,
   SYNC_EXEC_CHANNEL,
   type SyncExecRequestPayload,
   type SyncExecResultPayload,
@@ -78,6 +79,8 @@ export function createSyncExecXhrBridge(
     timeoutMs?: number;
 
     transport?: SyncExecTransport;
+
+    noDefaultDeadline?: boolean;
   } = {}
 ): SyncExecXhrBridge {
   const defaultTimeoutMs = opts.timeoutMs ?? SYNC_EXEC_DEFAULT_TIMEOUT_MS;
@@ -90,14 +93,19 @@ export function createSyncExecXhrBridge(
       if (coherent) flushBeforeSyncExec(syncFs!, fsBridge!);
       const label = `sync-exec bridge, '${Array.isArray(command) ? command.join(' ') : command}'`;
 
-      const timeoutMs = clampSyncExecTimeout(runOpts.timeout, defaultTimeoutMs);
+      const unbounded =
+        opts.noDefaultDeadline === true && requestsNoSyncExecTimeout(runOpts.timeout);
+      const timeoutMs = unbounded
+        ? Number.POSITIVE_INFINITY
+        : clampSyncExecTimeout(runOpts.timeout, defaultTimeoutMs);
       const payload: SyncExecRequestPayload = {
         command,
         ...(runOpts.args !== undefined ? { args: runOpts.args } : {}),
         ...(runOpts.input !== undefined ? { stdin: runOpts.input } : {}),
         ...(runOpts.cwd !== undefined ? { cwd: runOpts.cwd } : {}),
         ...(runOpts.env !== undefined ? { env: runOpts.env } : {}),
-        timeoutMs,
+
+        ...(unbounded ? {} : { timeoutMs }),
       };
       try {
         return transport(payload, timeoutMs, label);
