@@ -249,6 +249,8 @@ export function buildChromeLaunchArgs(options: {
   launchUrl: string;
   profile: ChromeLaunchProfile;
   hosted?: boolean;
+  /** Throwaway-profile harnesses only (`SLICC_CHROME_MOCK_KEYCHAIN=1`); see below. */
+  mockKeychain?: boolean;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -303,6 +305,18 @@ export function buildChromeLaunchArgs(options: {
     '--disable-renderer-backgrounding',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
+
+  if (options.mockKeychain) {
+    // The dev `*-fresh` harnesses launch an ad-hoc re-signed Chrome clone
+    // (clone-labeled-chrome.sh) whose code identity is not on the Keychain ACL
+    // of the shared "Chrome Safe Storage" item. On a fresh profile Chrome then
+    // raises a SecurityAgent prompt the backgrounded harness never shows, and
+    // until it is answered every navigation hangs with an empty history. A
+    // mock keychain avoids the prompt, but it re-keys cookie/password
+    // encryption, so it is opt-in and only for throwaway profiles — a real
+    // profile would lose every saved cookie.
+    args.push('--use-mock-keychain', '--password-store=basic');
+  }
 
   if (options.profile.extensionPath) {
     args.push(`--disable-extensions-except=${options.profile.extensionPath}`);

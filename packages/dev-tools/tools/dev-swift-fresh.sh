@@ -218,10 +218,14 @@ echo ""
 # the server starts without Keychain secrets and prints an actionable hint.
 # Override with SLICC_KEYCHAIN_NONINTERACTIVE=0 for a one-time INTERACTIVE run
 # (foreground terminal) to answer the prompt and establish the durable grant.
+# SLICC_CHROME_MOCK_KEYCHAIN=1 is the Chrome-side twin: the throwaway profile +
+# ad-hoc re-signed clone would otherwise block every navigation on an invisible
+# "Chrome Safe Storage" Keychain prompt.
 CHROME_PATH="$CHROME_BIN" \
 WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
 BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
 SLICC_KEYCHAIN_NONINTERACTIVE="${SLICC_KEYCHAIN_NONINTERACTIVE:-1}" \
+SLICC_CHROME_MOCK_KEYCHAIN=1 \
 PORT="$BRIDGE_PORT" \
   "$SWIFT_BIN" --cdp-port "$CDP_PORT" &
 SWIFT_PID=$!

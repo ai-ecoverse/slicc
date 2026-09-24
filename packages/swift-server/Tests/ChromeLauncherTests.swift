@@ -123,6 +123,36 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertTrue(args.contains("--disable-renderer-backgrounding"))
     }
 
+    func testBuildLaunchArgsOmitsMockKeychainByDefault() {
+        // A real profile's cookies are encrypted with the Keychain-held key;
+        // the mock keychain would make every one of them unreadable.
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil
+        )
+
+        XCTAssertFalse(args.contains("--use-mock-keychain"))
+        XCTAssertFalse(args.contains("--password-store=basic"))
+    }
+
+    func testBuildLaunchArgsAddsMockKeychainForThrowawayProfiles() {
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            mockKeychain: true
+        )
+
+        XCTAssertTrue(args.contains("--use-mock-keychain"))
+        XCTAssertTrue(args.contains("--password-store=basic"))
+        XCTAssertEqual(args.last, "https://www.sliccy.ai")
+    }
+
     func testSeedProfilePreferencesCreatesSeededFileOnFreshProfile() throws {
         // Pre-first-run seeding: the freeze/discard opt-outs must exist before
         // Chrome ever reads the profile — an unprotected leader freezes in the

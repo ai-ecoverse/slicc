@@ -290,6 +290,15 @@ profile collisions.
   `lsregister` so concurrent floats get separate ⌘-Tab entries. Override
   the label with `CHROME_LABEL=…`; falls back to the unlabeled bundle on
   failure or non-darwin.
+- **Mock keychain**: the ad-hoc re-signed clone is not on the Keychain ACL of
+  the shared "Chrome Safe Storage" item, so a fresh profile raises a
+  SecurityAgent prompt that nobody sees, and every tab (including extension
+  pages) hangs on a pending navigation until it is answered. All three
+  Chrome harnesses therefore pass `--use-mock-keychain` and
+  `--password-store=basic`: the extension harness sets them directly;
+  standalone and swift set `SLICC_CHROME_MOCK_KEYCHAIN=1`, which node-server
+  and swift-server honor. Never set it for a real profile — the mock keychain
+  re-keys cookie encryption, so every saved cookie becomes unreadable.
 
 **Standalone** (`dev-standalone-fresh.sh`, bridge `:$PORT`, OS-assigned CDP,
 label `SLICC-Node`):

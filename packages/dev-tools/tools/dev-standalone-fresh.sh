@@ -348,6 +348,9 @@ echo ""
 # so the node-server accepts cross-origin /api requests from it. Empty string
 # for the hosted-origin mode — the node-server treats that as an empty set,
 # and https://www.sliccy.ai is already in the hard-coded BRIDGE_ALLOWED_ORIGINS.
+# SLICC_CHROME_MOCK_KEYCHAIN: the throwaway profile + ad-hoc re-signed clone
+# would otherwise block every navigation on an invisible "Chrome Safe Storage"
+# Keychain prompt; never set it for a real profile (it re-keys cookies).
 if [ "$USE_LOCAL_WRANGLER" -eq 1 ]; then
 	BRIDGE_DEV_ALLOWED_ORIGINS_VAL="$EFFECTIVE_WORKER_BASE_URL"
 else
@@ -359,6 +362,7 @@ CHROME_PATH="$CHROME_BIN" \
 	SLICC_CDP_LAUNCH_TIMEOUT_MS=30000 \
 	BRIDGE_DEV_ALLOWED_ORIGINS="$BRIDGE_DEV_ALLOWED_ORIGINS_VAL" \
 	SLICC_USER_DATA_DIR="$FRESH_PROFILE" \
+	SLICC_CHROME_MOCK_KEYCHAIN=1 \
 	PORT="$BRIDGE_PORT" \
 	node "${REPO_ROOT}/dist/node-server/index.js" "$@" &
 NODE_PID=$!
