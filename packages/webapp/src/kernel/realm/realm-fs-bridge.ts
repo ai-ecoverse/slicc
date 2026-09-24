@@ -1,4 +1,5 @@
 import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
+import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
 import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
@@ -476,7 +477,7 @@ interface SyncStatLike {
   size: number;
 }
 
-interface SyncStdioTargets {
+interface SyncStdioTargets extends StdioFdOps {
   readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown;
   writeFileSync(path: string, data: unknown): void;
   appendFileSync(path: string, data: unknown): void;
@@ -517,6 +518,7 @@ function overlaySyncStdio(ops: SyncStdioTargets, stdio: RealmStdioBridge | undef
   };
   ops.statSync = (path) => (isDevStdioPath(path) ? devStdioStat() : base.statSync(path));
   ops.lstatSync = (path) => (isDevStdioPath(path) ? devStdioStat() : base.lstatSync(path));
+  Object.assign(ops, createStdioFdOps(stdio));
 }
 
 function overlayReaddir(
@@ -740,16 +742,17 @@ export function createSyncFsBridge(
       return syncFs.mkdtemp(resolve(prefix));
     },
   };
-  overlaySyncStdio(ops, stdio);
-  acceptPathLikeArgs(ops, SYNC_PATH_ARGS);
-  const existsSync = ops.existsSync;
+  const withFds = Object.assign(ops, createNoFdOps());
+  overlaySyncStdio(withFds, stdio);
+  acceptPathLikeArgs(withFds, SYNC_PATH_ARGS);
+  const existsSync = withFds.existsSync;
 
-  ops.existsSync = (path) => {
+  withFds.existsSync = (path) => {
     try {
       return existsSync(path);
     } catch {
       return false;
     }
   };
-  return ops;
+  return withFds;
 }

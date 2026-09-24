@@ -249,6 +249,13 @@ describe('AlmostBashShellHeadless playwright command discoverability', () => {
     expect(usrBinResult.stdout).toContain('playwright-cli');
   });
 
+  it('runs commands by their /bin path (make and posix_spawn use /bin/sh)', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand('/bin/sh -c "echo via bin sh" && /bin/echo plain');
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe('via bin sh\nplain\n');
+  });
+
   it('keeps playwright aliases and host discoverable even without browserAPI', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
 

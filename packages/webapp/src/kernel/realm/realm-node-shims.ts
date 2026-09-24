@@ -233,17 +233,22 @@ export function installGlobalProcess(g: { process?: unknown }, shim: object): ()
 }
 
 interface RealmWritableShim extends EventEmitter {
+  fd: number;
   write: (value: unknown) => boolean;
   end: () => undefined;
   isTTY: boolean;
 }
 
-function writableShim(write: (value: unknown) => void, isTTY: boolean): RealmWritableShim {
+function writableShim(
+  fd: number,
+  write: (value: unknown) => void,
+  isTTY: boolean
+): RealmWritableShim {
   const sink = (value: unknown): boolean => {
     write(value);
     return true;
   };
-  return Object.assign(new EventEmitter(), { write: sink, end: () => undefined, isTTY });
+  return Object.assign(new EventEmitter(), { fd, write: sink, end: () => undefined, isTTY });
 }
 
 export interface RealmProcessShim {
@@ -285,8 +290,8 @@ export function createProcessShim(
 
   const stdinShim = createStdinShim(init.stdin ?? '', recordExit);
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
-  const stdout = writableShim(writeStdout, !noColor);
-  const stderr = writableShim(writeStderr, !noColor);
+  const stdout = writableShim(1, writeStdout, !noColor);
+  const stderr = writableShim(2, writeStderr, !noColor);
   const processShim: RealmProcessShim = {
     argv: argvWithParseFlags,
     env: init.env,
@@ -328,6 +333,8 @@ export function createProcessShim(
 
 class StdinShim extends nodeStream.Stream {
   isTTY = false;
+
+  readonly fd = 0;
   private consumed = false;
   private flowScheduled = false;
   private paused = false;

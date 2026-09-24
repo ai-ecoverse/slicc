@@ -138,10 +138,16 @@ describe('writeTar', () => {
       includeDirectories: true,
       preserveRawPaths: true,
     });
+
     expect(entries).toEqual([
-      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true },
-      { path: 'package/file.txt', bytes: bytes('contents') },
+      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true, mode: 0o755 },
+      { path: 'package/file.txt', bytes: bytes('contents'), mode: 0o644 },
     ]);
+  });
+
+  it('round-trips an explicit mode', () => {
+    const archive = writeTar([{ path: 'bin/run', bytes: bytes('#!/bin/sh'), mode: 0o755 }]);
+    expect(readTar(archive, { stripNpmPrefix: false })[0].mode).toBe(0o755);
   });
 });
 
@@ -154,7 +160,7 @@ describe('readTar', () => {
     const view = padded.subarray(11, 11 + archive.length);
 
     expect(view.byteOffset).toBe(11);
-    expect(readTar(view)).toEqual([{ path: 'index.js', bytes: bytes('export {};') }]);
+    expect(readTar(view)).toEqual([{ path: 'index.js', bytes: bytes('export {};'), mode: 0o644 }]);
   });
 
   it('preserves package prefixes and raw paths when requested', () => {

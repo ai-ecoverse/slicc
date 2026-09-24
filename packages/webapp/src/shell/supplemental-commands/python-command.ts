@@ -279,11 +279,29 @@ async function resolveStandalonePyodideAssetRoot(
   return { kind: 'ok', assetRoot: resolved };
 }
 
+const NOOP_INTERPRETER_FLAGS = new Set('EsSuBIPqObdR');
+
+export function stripNoopInterpreterFlags(args: string[]): string[] {
+  let index = 0;
+  while (index < args.length && /^-[A-Za-z]+$/.test(args[index])) {
+    const flags = args[index].slice(1);
+    if (flags === 'W' || flags === 'X') {
+      index += 2;
+      continue;
+    }
+    if (![...flags].every((flag) => NOOP_INTERPRETER_FLAGS.has(flag))) break;
+    index++;
+  }
+  return index === 0 ? args : args.slice(index);
+}
+
 export function createPython3LikeCommand(
   name: 'python3' | 'python',
   options: PythonCommandOptions = {}
 ): Command {
-  return defineCommand(name, async (args, ctx) => {
+  return defineCommand(name, async (rawArgs, ctx) => {
+    const args = stripNoopInterpreterFlags(rawArgs);
+
     const flag = args[0];
     if (flag === '--help' || flag === '-h') return pythonHelp();
     if (flag === '--version' || flag === '-V') return pythonVersion();

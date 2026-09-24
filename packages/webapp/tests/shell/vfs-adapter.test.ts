@@ -162,6 +162,15 @@ describe('VfsAdapter', () => {
       expect(s.mode).toBe(0o755);
     });
 
+    it('/bin aliases /usr/bin (merged /usr), so /bin/sh exists', async () => {
+      expect(await adapter.exists('/bin')).toBe(true);
+      expect(await adapter.exists('/bin/ls')).toBe(true);
+      expect(await adapter.exists('/bin/nonexistent')).toBe(false);
+      expect((await adapter.stat('/bin')).isDirectory).toBe(true);
+      expect((await adapter.stat('/bin/cat')).mode).toBe(0o755);
+      expect(await adapter.readdir('/bin')).toEqual(await adapter.readdir('/usr/bin'));
+    });
+
     it('readdir /usr returns ["bin"]', async () => {
       const entries = await adapter.readdir('/usr');
       expect(entries).toEqual(['bin']);
