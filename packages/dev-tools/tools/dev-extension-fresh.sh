@@ -247,6 +247,11 @@ CHROME_ARGS=(
   --no-first-run
   --no-default-browser-check
   --disable-crash-reporter
+
+
+
+  --use-mock-keychain
+  --password-store=basic
   --disable-extensions-except="$EXT_PATH"
   --load-extension="$EXT_PATH"
   "http://localhost:${WRANGLER_PORT}/?slicc=leader"

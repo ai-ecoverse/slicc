@@ -217,6 +217,8 @@ export function buildChromeLaunchArgs(options: {
   launchUrl: string;
   profile: ChromeLaunchProfile;
   hosted?: boolean;
+
+  mockKeychain?: boolean;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -233,6 +235,10 @@ export function buildChromeLaunchArgs(options: {
     '--disable-renderer-backgrounding',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
+
+  if (options.mockKeychain) {
+    args.push('--use-mock-keychain', '--password-store=basic');
+  }
 
   if (options.profile.extensionPath) {
     args.push(`--disable-extensions-except=${options.profile.extensionPath}`);

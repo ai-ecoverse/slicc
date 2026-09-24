@@ -123,6 +123,36 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertTrue(args.contains("--disable-renderer-backgrounding"))
     }
 
+    func testBuildLaunchArgsOmitsMockKeychainByDefault() {
+        
+        
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil
+        )
+
+        XCTAssertFalse(args.contains("--use-mock-keychain"))
+        XCTAssertFalse(args.contains("--password-store=basic"))
+    }
+
+    func testBuildLaunchArgsAddsMockKeychainForThrowawayProfiles() {
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            mockKeychain: true
+        )
+
+        XCTAssertTrue(args.contains("--use-mock-keychain"))
+        XCTAssertTrue(args.contains("--password-store=basic"))
+        XCTAssertEqual(args.last, "https://www.sliccy.ai")
+    }
+
     func testSeedProfilePreferencesCreatesSeededFileOnFreshProfile() throws {
         
         

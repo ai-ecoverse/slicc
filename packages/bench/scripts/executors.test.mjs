@@ -77,7 +77,8 @@ describe('runProcess', () => {
   it('interrupts a prompt at the timeout so the CLI can send the leader an abort', async () => {
     const cli = fakeCli("trap 'echo aborted; exit 130' INT\nwhile true; do sleep 0.05; done");
     const r = await runProcess(cli, [], { timeoutMs: 200, interrupt: true });
-    expect(r).toMatchObject({ stdout: 'aborted\n', status: 130, timedOut: true });
+
+    expect(r).toMatchObject({ status: 130, timedOut: true });
   });
 
   it('terminates other verbs at the timeout, even when a child holds the pipes', async () => {

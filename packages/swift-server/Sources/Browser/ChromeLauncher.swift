@@ -201,7 +201,8 @@ struct ChromeLauncher: Sendable {
         launchUrl: String,
         userDataDir: String,
         extensionPath: String?,
-        restoreUrls: [String] = []
+        restoreUrls: [String] = [],
+        mockKeychain: Bool = false
     ) -> [String] {
         var args = [
             "--remote-debugging-port=\(cdpPort)",
@@ -243,6 +244,18 @@ struct ChromeLauncher: Sendable {
             "--disable-renderer-backgrounding",
             "--user-data-dir=\(userDataDir)",
         ]
+
+        
+        
+        
+        
+        
+        
+        
+        if mockKeychain {
+            args.append("--use-mock-keychain")
+            args.append("--password-store=basic")
+        }
 
         if let extensionPath, !extensionPath.isEmpty {
             args.append("--disable-extensions-except=\(extensionPath)")
@@ -511,7 +524,8 @@ struct ChromeLauncher: Sendable {
             launchUrl: config.launchUrl,
             userDataDir: config.userDataDir,
             extensionPath: config.extensionPath,
-            restoreUrls: config.restoreUrls
+            restoreUrls: config.restoreUrls,
+            mockKeychain: config.environment["SLICC_CHROME_MOCK_KEYCHAIN"] == "1"
         )
         process.environment = config.environment.merging(["GOOGLE_CRASHPAD_DISABLE": "1"]) { _, new in new }
         if let currentDirectoryPath = normalizedPath(config.currentDirectoryPath) {

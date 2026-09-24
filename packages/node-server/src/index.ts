@@ -523,6 +523,7 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
     launchUrl: browserLaunchUrl,
     profile: chromeProfile,
     hosted: RUNTIME_FLAGS.hosted,
+    mockKeychain: process.env.SLICC_CHROME_MOCK_KEYCHAIN === '1',
   });
 
   await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
