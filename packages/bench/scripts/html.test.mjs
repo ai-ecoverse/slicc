@@ -88,7 +88,9 @@ describe('reportHtml', () => {
     expect(repeated).toContain('m · s r2</th>');
     expect(reportHtml([])).toContain('No runs yet.');
     expect(reportHtml([])).toContain('Judge: none yet.');
-    expect(reportHtml([RECORDS[5]])).toContain('No finished runs.');
+    expect(reportHtml([RECORDS[5]])).toContain('No finished runs with a measured time and cost.');
+    const unknownCost = record('m', 's', 't', { metrics: { duration: 20, cost: null } });
+    expect(reportHtml([unknownCost])).toContain('No finished runs with a measured time and cost.');
   });
 });
 
