@@ -20,41 +20,26 @@
  */
 
 import type { CommandContext } from 'just-bash';
-import { type SyncFsRequest, type SyncFsResult, toErrno } from './sync-fs-dispatch.js';
+import { toErrno } from './sync-fs-dispatch.js';
 import { resolveSyncFsToken, trackSyncExec } from './sync-fs-token-registry.js';
-import { SYNC_EXEC_MAX_TIMEOUT_MS } from './sync-fs-wire.js';
+// Wire-payload types (and the `SYNC_EXEC_CHANNEL` discriminant) live in the
+// dependency-free wire module; import them DOWN from there and re-export so
+// this module's existing consumers keep their import site. Forward edges only.
+import {
+  SYNC_EXEC_CHANNEL,
+  SYNC_EXEC_MAX_TIMEOUT_MS,
+  type SyncExecRequest,
+  type SyncExecResultPayload,
+  type SyncFsRequest,
+  type SyncFsResult,
+} from './sync-fs-wire.js';
 
-/** Discriminator distinguishing an exec request from an fs one on the wire. */
-export const SYNC_EXEC_CHANNEL = 'exec';
-
-/** POST body the realm bridge sends on the `exec` route. */
-export interface SyncExecRequestPayload {
-  /** Command string (shell form) or argv (shell-free form, argv[0] = program). */
-  command: string | string[];
-  /** Shell-free argv tail for the string form — mirrors `exec.spawn`'s `args`. */
-  args?: string[];
-  /** Buffered stdin for the one-shot command. */
-  stdin?: string;
-  /** Caller budget in ms, clamped to {@link SYNC_EXEC_MAX_TIMEOUT_MS}. */
-  timeoutMs?: number;
-  /** Child working directory. Absent → the realm's cwd. */
-  cwd?: string;
-  /** Child environment (Node replace semantics). Absent → inherit the parent. */
-  env?: Record<string, string>;
-}
-
-/** SW → responder envelope for one synchronous exec. */
-export interface SyncExecRequest extends SyncExecRequestPayload {
-  token: string;
-  channel: typeof SYNC_EXEC_CHANNEL;
-}
-
-/** Buffered outcome of a synchronous exec, JSON-encoded back to the realm. */
-export interface SyncExecResultPayload {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
+export {
+  SYNC_EXEC_CHANNEL,
+  type SyncExecRequest,
+  type SyncExecRequestPayload,
+  type SyncExecResultPayload,
+} from './sync-fs-wire.js';
 
 /** Narrow a wire request to the exec channel. */
 export function isSyncExecRequest(req: SyncFsRequest | SyncExecRequest): req is SyncExecRequest {
