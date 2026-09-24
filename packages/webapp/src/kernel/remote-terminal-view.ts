@@ -113,6 +113,8 @@ export class RemoteTerminalView {
    * resolves; without this, holding Tab would queue redundant execs.
    */
   private tabBusy = false;
+  /** Keystrokes received during async completion, replayed in arrival order. */
+  private pendingTabInput: string[] = [];
 
   constructor(private readonly options: RemoteTerminalViewOptions) {
     const sid = options.sid ?? `panel-terminal-${Date.now()}`;
@@ -168,14 +170,7 @@ export class RemoteTerminalView {
       terminal.addEventListener('terminal-error', onError);
     });
     terminal.addEventListener('terminal-data', (event) => {
-      const data = (event as CustomEvent<string>).detail;
-      if (data === '\t') {
-        if (!this.tabBusy) void this.handleTab();
-      } else if (data === '\x03' && this.isExecuting) {
-        this.signalInterruptDuringExec();
-      } else if (!this.tabBusy) {
-        this.editor?.feed(data);
-      }
+      this.handleTerminalData((event as CustomEvent<string>).detail);
     });
     this.terminalHost.appendChild(terminal);
     await ready;
@@ -252,6 +247,7 @@ export class RemoteTerminalView {
     this.terminal?.remove();
     this.terminal = null;
     this.editor = null;
+    this.pendingTabInput = [];
     this.terminalHost = null;
     this.previewHost = null;
     this.client.close();
@@ -381,7 +377,27 @@ export class RemoteTerminalView {
    */
   private readNextLine(): Promise<string> {
     if (!this.editor) return Promise.reject(new Error('terminal not mounted'));
-    return this.editor.read(PROMPT);
+    const line = this.editor.read(PROMPT);
+    this.flushPendingTabInput();
+    return line;
+  }
+
+  private flushPendingTabInput(): void {
+    while (this.editor?.isReading && this.pendingTabInput.length > 0) {
+      this.editor.feed(this.pendingTabInput.shift() ?? '');
+    }
+  }
+
+  private handleTerminalData(data: string): void {
+    if (data === '\t') {
+      if (!this.tabBusy) void this.handleTab();
+    } else if (data === '\x03' && this.isExecuting) {
+      this.signalInterruptDuringExec();
+    } else if (this.tabBusy) {
+      this.pendingTabInput.push(data);
+    } else {
+      this.editor?.feed(data);
+    }
   }
 
   /**
@@ -529,6 +545,7 @@ export class RemoteTerminalView {
     } finally {
       this.tabBusy = false;
       this.isExecuting = false;
+      this.flushPendingTabInput();
     }
   }
 

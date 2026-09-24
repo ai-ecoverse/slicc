@@ -77,4 +77,16 @@ describe('TerminalLineEditor', () => {
     editor.feed('\r');
     expect(await read).toBe('echo first second');
   });
+
+  it('restores the insertion point after listing ambiguous completions', async () => {
+    const editor = new TerminalLineEditor(display());
+    const read = editor.read('$ ');
+    editor.insert('cat fo tail');
+    for (let n = 0; n < 5; n++) editor.feed('\x1b[D');
+    editor.list(['foo', 'forest']);
+    expect(editor.beforeCursor).toBe('cat fo');
+    editor.insert('X');
+    editor.accept();
+    expect(await read).toBe('cat foX tail');
+  });
 });

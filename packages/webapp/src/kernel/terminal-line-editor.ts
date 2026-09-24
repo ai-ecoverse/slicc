@@ -74,10 +74,12 @@ export class TerminalLineEditor {
   /** List ambiguous completions and redraw the active prompt below them. */
   list(matches: string[]): void {
     if (!this.isReading) return;
+    const cursor = this.cursor;
     this.cursor = this.line.length;
     this.redraw();
     this.display.write(`\r\n${matches.join('  ')}\r\n`);
     this.anchorRow = this.display.getCursor().row;
+    this.cursor = cursor;
     this.redraw();
   }
 
