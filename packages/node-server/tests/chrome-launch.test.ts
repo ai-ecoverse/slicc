@@ -225,6 +225,21 @@ describe('chrome-launch', () => {
       );
     });
 
+    it('omits the mock keychain unless opted in', () => {
+      // A real profile's cookies are encrypted with the Keychain-held key; the
+      // mock keychain would make every one of them unreadable.
+      const args = buildChromeLaunchArgs(baseOpts);
+      expect(args).not.toContain('--use-mock-keychain');
+      expect(args).not.toContain('--password-store=basic');
+    });
+
+    it('mockKeychain: true adds the throwaway-profile keychain flags before the URL', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, mockKeychain: true });
+      expect(args).toContain('--use-mock-keychain');
+      expect(args).toContain('--password-store=basic');
+      expect(args.at(-1)).toBe('http://localhost:5710/');
+    });
+
     it('hosted mode preserves existing flags (user-data-dir, etc.)', () => {
       const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
       expect(args).toContain('--user-data-dir=/tmp/x');

@@ -247,6 +247,11 @@ CHROME_ARGS=(
   --no-first-run
   --no-default-browser-check
   --disable-crash-reporter
+  # Throwaway profile + ad-hoc re-signed clone: without a mock keychain Chrome
+  # blocks every navigation on an invisible "Chrome Safe Storage" Keychain
+  # prompt (see buildChromeLaunchArgs `mockKeychain` in node-server).
+  --use-mock-keychain
+  --password-store=basic
   --disable-extensions-except="$EXT_PATH"
   --load-extension="$EXT_PATH"
   "http://localhost:${WRANGLER_PORT}/?slicc=leader"
