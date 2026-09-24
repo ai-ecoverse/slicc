@@ -71,6 +71,8 @@ still keeps them):
 | `mkdtempSync(prefix)`                |                                                       |
 | `unlinkSync(path)`                   |                                                       |
 | `renameSync(oldPath, newPath)`       |                                                       |
+| `readSync(fd, buffer, …)`            | Stdio only: fd 0 walks the buffered stdin; else EBADF |
+| `writeSync(fd, data, …)`             | Stdio only: fd 1/2 → stdout/stderr; else EBADF        |
 
 The sync cache is populated from a VFS snapshot before user code runs and
 flushed back on completion. `writeFileSync` / `appendFileSync` /
@@ -89,6 +91,10 @@ large files).
 dropped; a non-`file:` URL throws `ERR_INVALID_URL_SCHEME`, and any other type
 throws `ERR_INVALID_ARG_TYPE` (`existsSync` returns `false` instead, as in
 Node). `child_process` `options.cwd` likewise takes a `file:` URL.
+
+`process.stdin.fd` / `process.stdout.fd` / `process.stderr.fd` are 0 / 1 / 2, so
+Emscripten programs read their terminal with `fs.readSync(process.stdin.fd, …)`.
+There is no general file-descriptor table (`openSync` is not available).
 
 **Not available:** `watch`, `watchFile`, `createReadStream`, `createWriteStream`,
 `chown`, `symlink`, `readlink`, `Dirent`-returning readdir. `lstat`, `realpath`,

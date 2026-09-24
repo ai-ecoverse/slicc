@@ -426,11 +426,35 @@ async function resolveStandalonePyodideAssetRoot(
   return { kind: 'ok', assetRoot: resolved };
 }
 
+/** CPython flags with no effect in the realm (environment, buffering, bytecode, site…). */
+const NOOP_INTERPRETER_FLAGS = new Set('EsSuBIPqObdR');
+
+/**
+ * Drop leading interpreter flags the realm has no use for (`python3 -E x.py`:
+ * emscripten's emcc launcher), including bundles (`-Es`) and `-W`/`-X` with
+ * their argument, so the remaining argv starts at `-c`, a script, or a flag
+ * the command handles itself.
+ */
+export function stripNoopInterpreterFlags(args: string[]): string[] {
+  let index = 0;
+  while (index < args.length && /^-[A-Za-z]+$/.test(args[index])) {
+    const flags = args[index].slice(1);
+    if (flags === 'W' || flags === 'X') {
+      index += 2;
+      continue;
+    }
+    if (![...flags].every((flag) => NOOP_INTERPRETER_FLAGS.has(flag))) break;
+    index++;
+  }
+  return index === 0 ? args : args.slice(index);
+}
+
 export function createPython3LikeCommand(
   name: 'python3' | 'python',
   options: PythonCommandOptions = {}
 ): Command {
-  return defineCommand(name, async (args, ctx) => {
+  return defineCommand(name, async (rawArgs, ctx) => {
+    const args = stripNoopInterpreterFlags(rawArgs);
     // Interpreter flags only; after `-c code` or a script path they belong
     // to sys.argv (`python3 emcc.py --version` must reach emcc).
     const flag = args[0];

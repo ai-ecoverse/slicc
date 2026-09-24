@@ -5,6 +5,8 @@ export interface TarEntry {
   path: string;
   bytes: Uint8Array;
   directory?: boolean;
+  /** Permission bits (`0o755`), from the header on read; written when set. */
+  mode?: number;
 }
 
 export interface ReadTarOptions {
@@ -56,6 +58,8 @@ export function writeTar(entries: TarEntry[]): Uint8Array {
       entries.map((entry) => ({
         name: entry.path,
         ...(entry.directory ? {} : { data: entry.bytes }),
+        // nanotar would default to 664/775 (group-writable).
+        attrs: { mode: (entry.mode ?? (entry.directory ? 0o755 : 0o644)).toString(8) },
       }))
     );
   } catch (err) {
@@ -204,10 +208,12 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
     if (!directory && item.type !== 'file' && item.type !== 'contiguousFile') return;
     if (directory && !includeDirectories) return;
     const path = aligned ? resolvedPaths[index] : item.name;
+    const mode = Number.parseInt(item.attrs?.mode ?? '', 8);
     entries.push({
       path: stripPrefix ? stripNpmPrefix(path) : path,
       bytes: item.data ? item.data.slice() : new Uint8Array(0),
       ...(directory ? { directory: true } : {}),
+      ...(Number.isFinite(mode) ? { mode: mode & 0o777 } : {}),
     });
   });
   return entries;
