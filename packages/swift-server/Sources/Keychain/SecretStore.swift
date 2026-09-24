@@ -274,23 +274,25 @@ enum SecretStore {
             
             
             
-            try? FileHandle.standardError.write(
-                contentsOf:
-                    Data(
-                        ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "
-                            + "\(keychainService)/\(keychainAccount); continuing without stored secrets. "
-                            + "Durable fix: sign the binary with a stable identity and click "
-                            + "\"Always Allow\" once — see packages/dev-tools/tools/setup-dev-cert.sh. "
-                            + "(One-off non-interactive grant for the stable identity: "
-                            + "security set-generic-password-partition-list "
-                            + "-S apple-tool:,apple: -s \(keychainService) -a \(keychainAccount) "
-                            + "-k <login-password>.)\n").utf8
-                    ))
+            try? FileHandle.standardError.write(contentsOf: Data(interactionBlockedWarning.utf8))
             return []
         } catch {
             return []
         }
     }
+
+    
+    
+    private static let interactionBlockedWarning = [
+        "[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for ",
+        "\(keychainService)/\(keychainAccount); continuing without stored secrets. ",
+        "Durable fix: sign the binary with a stable identity and click ",
+        "\"Always Allow\" once — see packages/dev-tools/tools/setup-dev-cert.sh. ",
+        "(One-off non-interactive grant for the stable identity: ",
+        "security set-generic-password-partition-list ",
+        "-S apple-tool:,apple: -s \(keychainService) -a \(keychainAccount) ",
+        "-k <login-password>.)\n",
+    ].joined()
 
     private static func mutate(_ change: (inout [Secret]) -> Void) throws {
         lock.lock()

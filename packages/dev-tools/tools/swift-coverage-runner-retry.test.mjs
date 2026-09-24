@@ -182,25 +182,33 @@ printf 'sources=%s\\n' "\${COVERAGE_SOURCE_PATHS[*]}"`,
   });
 });
 
-describe('swift-coverage-check SPM invocation', () => {
-  it('reports coverage when optional coverage argument arrays are empty', () => {
-    const packageRoot = join(dir, 'spm-package');
-    const bundleName = 'FixturePackageTests';
-    const coverageDir = join(packageRoot, '.build/coverage');
-    const testBinary = join(
-      packageRoot,
-      `.build/debug/${bundleName}.xctest/Contents/MacOS/${bundleName}`
-    );
-    const binDir = join(dir, 'bin');
+function runSpmFixture({ binRel, bundles, requested }) {
+  const packageRoot = join(dir, 'spm-package');
+  const binPath = join(packageRoot, binRel);
+  const codecovDir = join(binPath, 'codecov');
+  const binDir = join(dir, 'bin');
+  mkdirSync(codecovDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  for (const bundle of bundles) {
+    const testBinary = join(binPath, `${bundle}.xctest/Contents/MacOS/${bundle}`);
     mkdirSync(dirname(testBinary), { recursive: true });
-    mkdirSync(coverageDir, { recursive: true });
-    mkdirSync(binDir, { recursive: true });
     writeFileSync(testBinary, 'fixture test binary');
-    writeFileSync(join(coverageDir, 'default.profdata'), 'fixture profile');
-    writeFileSync(join(binDir, 'swift'), '#!/bin/bash\nexit 0\n');
-    writeFileSync(
-      join(binDir, 'xcrun'),
-      `#!/bin/bash
+    chmodSync(testBinary, 0o755);
+  }
+  writeFileSync(join(codecovDir, 'default.profdata'), 'fixture profile');
+  writeFileSync(
+    join(binDir, 'swift'),
+    `#!/bin/bash
+case "$*" in
+  *--show-bin-path*) echo ${JSON.stringify(binPath)} ;;
+  *--show-codecov-path*) echo ${JSON.stringify(join(codecovDir, 'Fixture.json'))} ;;
+esac
+exit 0
+`
+  );
+  writeFileSync(
+    join(binDir, 'xcrun'),
+    `#!/bin/bash
 shift
 for arg in "$@"; do
   [[ -n "$arg" ]] || exit 90
@@ -209,21 +217,56 @@ if [[ "$1" == "report" ]]; then
   echo "TOTAL 1 0 100 1 0 100 1 0 100 1 0 100"
 fi
 `
-    );
-    chmodSync(testBinary, 0o755);
-    chmodSync(join(binDir, 'swift'), 0o755);
-    chmodSync(join(binDir, 'xcrun'), 0o755);
+  );
+  chmodSync(join(binDir, 'swift'), 0o755);
+  chmodSync(join(binDir, 'xcrun'), 0o755);
 
-    const result = spawnSync(
-      '/bin/bash',
-      [coverageScriptPath, packageRoot, bundleName, '0', '0', '0'],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
-      }
-    );
+  const result = spawnSync(
+    '/bin/bash',
+    [coverageScriptPath, packageRoot, requested, '0', '0', '0'],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    }
+  );
+  return { ...result, binPath };
+}
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('Coverage summary:');
+describe('swift-coverage-check SPM invocation', () => {
+  it('reports coverage for the native build system layout (<Package>PackageTests)', () => {
+    const { status, stdout, stderr, binPath } = runSpmFixture({
+      binRel: '.build/arm64-apple-macosx/debug',
+      bundles: ['FixturePackageTests'],
+      requested: 'FixturePackageTests',
+    });
+
+    expect(status, stderr).toBe(0);
+    expect(stdout).toContain(
+      `report ${binPath}/FixturePackageTests.xctest/Contents/MacOS/FixturePackageTests`
+    );
+    expect(stdout).toContain('Coverage summary:');
+  });
+
+  it('falls back to the only bundle under the swift-build layout (Swift 6.4+)', () => {
+    const { status, stdout, stderr, binPath } = runSpmFixture({
+      binRel: '.build/out/Products/Debug',
+      bundles: ['FixtureTests'],
+      requested: 'FixturePackageTests',
+    });
+
+    expect(status, stderr).toBe(0);
+    expect(stdout).toContain(`report ${binPath}/FixtureTests.xctest/Contents/MacOS/FixtureTests`);
+    expect(stdout).toContain('Coverage summary:');
+  });
+
+  it('refuses to guess when the requested bundle is missing and several exist', () => {
+    const { status, stdout } = runSpmFixture({
+      binRel: '.build/out/Products/Debug',
+      bundles: ['FixtureTests', 'OtherTests'],
+      requested: 'FixturePackageTests',
+    });
+
+    expect(status).toBe(1);
+    expect(stdout).toContain('exactly one .xctest bundle');
   });
 });

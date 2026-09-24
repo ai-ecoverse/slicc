@@ -7,12 +7,14 @@ final class SessionPersistenceTests: XCTestCase {
     private var tmpDir: URL!
 
     override func setUpWithError() throws {
+        InMemoryKeychain.install()
         let base = URL(fileURLWithPath: NSTemporaryDirectory())
         tmpDir = base.appendingPathComponent("slicc-session-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
+        InMemoryKeychain.uninstall()
         if let tmpDir, FileManager.default.fileExists(atPath: tmpDir.path) {
             try? FileManager.default.removeItem(at: tmpDir)
         }

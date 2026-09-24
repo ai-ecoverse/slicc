@@ -207,21 +207,35 @@ else
   swift test --enable-code-coverage --xunit-output .build/coverage/test-timings.xunit.xml \
     2>&1 | tee .build/coverage/test-timings.log
 
-  PROFDATA=$(find .build -name "default.profdata" -type f 2>/dev/null | head -1)
-  if [[ -z "$PROFDATA" ]]; then
-    echo "::error::No profdata produced by swift test"
+
+
+
+
+  BIN_PATH=$(swift build --show-bin-path)
+  PROFDATA="$(dirname "$(swift test --show-codecov-path)")/default.profdata"
+  if [[ ! -f "$PROFDATA" ]]; then
+    echo "::error::No profdata produced by swift test (expected $PROFDATA)"
     exit 1
   fi
 
 
 
-  TEST_BUNDLE=$(find .build -name "${TEST_BUNDLE_NAME}.xctest" 2>/dev/null | head -1)
-  if [[ -z "$TEST_BUNDLE" ]]; then
-    echo "::error::Test bundle ${TEST_BUNDLE_NAME}.xctest not found under .build/"
-    exit 1
+
+  TEST_BUNDLE="$BIN_PATH/${TEST_BUNDLE_NAME}.xctest"
+  if [[ ! -e "$TEST_BUNDLE" ]]; then
+    shopt -s nullglob
+    TEST_BUNDLES=("$BIN_PATH"/*.xctest)
+    shopt -u nullglob
+    if [[ ${#TEST_BUNDLES[@]} -ne 1 ]]; then
+      echo "::error::Expected ${TEST_BUNDLE_NAME}.xctest or exactly one .xctest bundle in $BIN_PATH, found ${#TEST_BUNDLES[@]}"
+      exit 1
+    fi
+    TEST_BUNDLE="${TEST_BUNDLES[0]}"
   fi
+
+
   if [[ -d "$TEST_BUNDLE" ]]; then
-    BINARY="$TEST_BUNDLE/Contents/MacOS/${TEST_BUNDLE_NAME}"
+    BINARY="$TEST_BUNDLE/Contents/MacOS/$(basename "$TEST_BUNDLE" .xctest)"
   else
     BINARY="$TEST_BUNDLE"
   fi

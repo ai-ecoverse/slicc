@@ -8,11 +8,15 @@ final class KeychainSecretStoreTests: XCTestCase {
 
     private func secretName(_ base: String) -> String { prefix + base }
 
+    private var keychain: InMemoryKeychain!
+
+    override func setUp() {
+        super.setUp()
+        keychain = InMemoryKeychain.install()
+    }
+
     override func tearDown() {
-        
-        for entry in SecretStore.list() where entry.name.hasPrefix(prefix) {
-            try? SecretStore.delete(name: entry.name)
-        }
+        InMemoryKeychain.uninstall()
         super.tearDown()
     }
 
@@ -130,10 +134,7 @@ final class KeychainSecretStoreTests: XCTestCase {
     
     
     func testReadBlobReturnsEmptyForMissingItem() throws {
-        
-        
-        
-        XCTAssertNoThrow(try SecretStore.readBlob())
+        XCTAssertEqual(try SecretStore.readBlob(), "")
     }
 
     
@@ -152,6 +153,10 @@ final class KeychainSecretStoreTests: XCTestCase {
 
         XCTAssertNoThrow(try SecretStore.readBlob())
         XCTAssertEqual(SecretStore.get(name: name)?.value, "ghp_noninteractive")
+        XCTAssertEqual(
+            keychain.lastReadQuery?[kSecUseAuthenticationUI as String] as? String,
+            kSecUseAuthenticationUIFail as String
+        )
     }
 
     

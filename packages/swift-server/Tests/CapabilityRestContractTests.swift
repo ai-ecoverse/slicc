@@ -20,6 +20,17 @@ import XCTest
 
 
 final class CapabilityRestContractTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        
+        InMemoryKeychain.install()
+    }
+
+    override func tearDown() {
+        InMemoryKeychain.uninstall()
+        super.tearDown()
+    }
+
     
 
     private struct Expectation {

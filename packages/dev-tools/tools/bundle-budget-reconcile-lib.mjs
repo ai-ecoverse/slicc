@@ -1,22 +1,19 @@
-const UNIT_BYTES = { b: 1, kb: 1000, mb: 1000 * 1000 };
+const UNIT_BYTES = { b: 1, kb: 1000, mb: 1000 ** 2, kib: 1024, mib: 1024 ** 2 };
+const UNIT_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*(b|kb|mb|kib|mib)\s*$/i;
 
 export function parseLimit(limit) {
-  const match = /^\s*(\d+(?:\.\d+)?)\s*(b|kb|mb)\s*$/i.exec(String(limit));
+  const match = UNIT_PATTERN.exec(String(limit));
   if (!match) throw new Error(`Unsupported size-limit limit: ${JSON.stringify(limit)}`);
   return Math.round(Number(match[1]) * UNIT_BYTES[match[2].toLowerCase()]);
 }
 
 export function formatLimit(bytes, previous) {
-  const unit = /(b|kb|mb)\s*$/i.exec(String(previous))?.[1] ?? 'kB';
-  const kb = Math.ceil(bytes / 1000);
-  switch (unit.toLowerCase()) {
-    case 'mb':
-      return `${(kb / 1000).toFixed(3)} MB`;
-    case 'b':
-      return `${kb * 1000} B`;
-    default:
-      return `${kb} kB`;
-  }
+  const unit = UNIT_PATTERN.exec(String(previous))?.[2] ?? 'kB';
+  const lower = unit.toLowerCase();
+  const scale = lower === 'mb' || lower === 'mib' ? 1000 : 1;
+
+  const value = Math.ceil((bytes / UNIT_BYTES[lower]) * scale - 1e-9) / scale;
+  return `${value.toFixed(scale === 1 ? 0 : 3)} ${unit}`;
 }
 
 export function planBudgetRaises(budgets, results, { maxGrowthBytes }) {
