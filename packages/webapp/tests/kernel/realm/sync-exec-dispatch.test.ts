@@ -5,6 +5,7 @@ import {
   dispatchSyncExec,
   isSyncExecRequest,
   normalizeSyncExecEnv,
+  requestsNoSyncExecTimeout,
   resolveSyncExecCwd,
   SYNC_EXEC_CHANNEL,
 } from '../../../src/kernel/realm/sync-exec-dispatch.js';
@@ -324,6 +325,96 @@ test('the budget aborts a hung command and reports ETIMEDOUT', async () => {
   if (!r.ok) expect(r.errno).toBe('ETIMEDOUT');
 });
 
+/** A ctx.exec that settles only when released, or rejects on abort. */
+function releasableExec(): {
+  exec: CommandContext['exec'];
+  release: () => void;
+  aborted: () => boolean;
+} {
+  let release = (): void => {};
+  let aborted = false;
+  const exec = (async (_cmd: string, opts: { signal: AbortSignal }) =>
+    new Promise((resolve, reject) => {
+      release = () => resolve({ stdout: 'built\n', stderr: '', exitCode: 0 });
+      opts.signal.addEventListener('abort', () => {
+        aborted = true;
+        reject(new Error('aborted'));
+      });
+    })) as unknown as CommandContext['exec'];
+  return { exec, release: () => release(), aborted: () => aborted };
+}
+
+test('with allowNoDeadline, a request without a budget outlives the ceiling (SAB transport)', async () => {
+  // `make` spawning a recursive sub-make runs for as long as the build does.
+  const { exec, release, aborted } = releasableExec();
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+  vi.useFakeTimers();
+  try {
+    const pending = dispatchSyncExec(
+      { token, channel: SYNC_EXEC_CHANNEL, command: 'make' },
+      { allowNoDeadline: true }
+    );
+    await vi.advanceTimersByTimeAsync(SYNC_EXEC_MAX_TIMEOUT_MS * 2);
+    expect(aborted()).toBe(false);
+    release();
+    const r = await pending;
+    expect(r.ok && r.kind === 'json' ? r.json : null).toEqual({
+      stdout: 'built\n',
+      stderr: '',
+      exitCode: 0,
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('allowNoDeadline still honours an explicit budget', async () => {
+  const { exec } = releasableExec();
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+  vi.useFakeTimers();
+  try {
+    const pending = dispatchSyncExec(
+      { token, channel: SYNC_EXEC_CHANNEL, command: 'sleep 999', timeoutMs: 50 },
+      { allowNoDeadline: true }
+    );
+    await vi.advanceTimersByTimeAsync(60);
+    const r = await pending;
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errno).toBe('ETIMEDOUT');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('without allowNoDeadline, a request without a budget stops at the ceiling (SW route)', async () => {
+  const { exec, aborted } = releasableExec();
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+  vi.useFakeTimers();
+  try {
+    const pending = dispatchSyncExec({ token, channel: SYNC_EXEC_CHANNEL, command: 'make' });
+    await vi.advanceTimersByTimeAsync(SYNC_EXEC_MAX_TIMEOUT_MS + 10);
+    const r = await pending;
+    expect(aborted()).toBe(true);
+    if (!r.ok) expect(r.errno).toBe('ETIMEDOUT');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('a request with no deadline is still aborted when its realm is disposed', async () => {
+  const { exec, aborted } = releasableExec();
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+  const pending = dispatchSyncExec(
+    { token, channel: SYNC_EXEC_CHANNEL, command: 'make' },
+    { allowNoDeadline: true }
+  );
+  await Promise.resolve();
+  revokeSyncFsToken(token);
+  const r = await pending;
+  expect(aborted()).toBe(true);
+  if (!r.ok) expect(r.errno).toBe('ECANCELED');
+});
+
 test('revoking the token aborts an in-flight command (realm killed mid-execSync)', async () => {
   // A sync exec has no spawnId the realm host can track, so without the
   // registry hook a SIGKILL'd realm left its ctx.exec running — and producing
@@ -358,6 +449,14 @@ test('clampSyncExecTimeout bounds the caller budget and falls back on garbage', 
   expect(clampSyncExecTimeout(-1, 5_000)).toBe(5_000);
   expect(clampSyncExecTimeout(Number.NaN, 5_000)).toBe(5_000);
   expect(clampSyncExecTimeout(1e12, 5_000)).toBe(SYNC_EXEC_MAX_TIMEOUT_MS);
+});
+
+test('only an omitted timeout or 0 requests no timeout', () => {
+  expect(requestsNoSyncExecTimeout(undefined)).toBe(true);
+  expect(requestsNoSyncExecTimeout(0)).toBe(true);
+  for (const v of [1, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(requestsNoSyncExecTimeout(v)).toBe(false);
+  }
 });
 
 test('isSyncExecRequest discriminates the two channels', () => {

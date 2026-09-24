@@ -150,7 +150,9 @@ Sync forms (backed by the blocking sync-XHR bridge — see
 `execSync` / `execFileSync` throw on a non-zero exit with Node's
 `.status` / `.stdout` / `.stderr` / `.signal` fields; `spawnSync` never throws
 and reports on `.status` / `.error`. `opts.timeout` bounds the command (capped
-at 10 minutes); `opts.input` supplies stdin. `opts.cwd` is the child's working
+at 10 minutes). Without one the command runs to completion on a
+cross-origin-isolated page (the SAB transport), and for 2 minutes on the SW
+route; `opts.input` supplies stdin. `opts.cwd` is the child's working
 directory (a missing path is `ENOENT`, not the parent cwd). `opts.env` **replaces**
 the child's environment (Node semantics — spread `process.env` to extend), including
 when the spawned file is `sh`/`bash` with `-c`. Invalid `cwd`/`env` types throw

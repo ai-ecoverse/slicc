@@ -173,7 +173,11 @@ export interface SyncExecRequestPayload {
   args?: string[];
   /** Buffered stdin for the one-shot command. */
   stdin?: string;
-  /** Caller budget in ms, clamped to {@link SYNC_EXEC_MAX_TIMEOUT_MS}. */
+  /**
+   * Caller budget in ms, clamped to {@link SYNC_EXEC_MAX_TIMEOUT_MS}. Absent →
+   * the ceiling, except on a transport that can wait forever (the SAB
+   * responder dispatches with `allowNoDeadline`: no deadline at all).
+   */
   timeoutMs?: number;
   /** Child working directory. Absent → the realm's cwd. */
   cwd?: string;

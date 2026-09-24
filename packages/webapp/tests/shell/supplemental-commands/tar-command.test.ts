@@ -118,6 +118,55 @@ describe('tar command', () => {
     expect(((await fs.stat('/tmp/dirs-out/dirs/private/ro')).mode ?? 0) & 0o777).toBe(0o555);
   });
 
+  it("restores archived mtimes (automake's Makefiles compare them)", async () => {
+    await fs.writeFile(
+      '/tmp/times.tar',
+      writeTar([
+        { path: 'pkg/', bytes: new Uint8Array(0), directory: true, mtime: 1600000000 },
+        { path: 'pkg/configure.ac', bytes: new TextEncoder().encode('ac'), mtime: 1600000000 },
+        { path: 'pkg/Makefile.in', bytes: new TextEncoder().encode('in'), mtime: 1700000000 },
+      ])
+    );
+    expect((await shell.executeCommand('tar -xf /tmp/times.tar -C /tmp/times')).exitCode).toBe(0);
+    // VirtualFS.stat reports mtime in epoch milliseconds.
+    const secs = async (p: string) => Math.floor(Number((await fs.stat(p)).mtime) / 1000);
+    expect(await secs('/tmp/times/pkg/configure.ac')).toBe(1600000000);
+    expect(await secs('/tmp/times/pkg/Makefile.in')).toBe(1700000000);
+    expect(await secs('/tmp/times/pkg')).toBe(1600000000);
+  });
+
+  it("gives a path archived twice the last member's content, mode and mtime", async () => {
+    const bytes = (s: string) => new TextEncoder().encode(s);
+    await fs.writeFile(
+      '/tmp/dup.tar',
+      writeTar([
+        { path: 'pkg/', bytes: new Uint8Array(0), directory: true, mode: 0o700, mtime: 1500000000 },
+        { path: 'pkg/f', bytes: bytes('old'), mode: 0o600, mtime: 1600000000 },
+        { path: 'pkg/f', bytes: bytes('new'), mode: 0o644, mtime: 1700000000 },
+        { path: 'pkg/', bytes: new Uint8Array(0), directory: true, mode: 0o755, mtime: 1650000000 },
+      ])
+    );
+    expect((await shell.executeCommand('tar -xf /tmp/dup.tar -C /tmp/dup')).exitCode).toBe(0);
+    const secs = async (p: string) => Math.floor(Number((await fs.stat(p)).mtime) / 1000);
+    expect(await fs.readFile('/tmp/dup/pkg/f')).toBe('new');
+    expect(await secs('/tmp/dup/pkg/f')).toBe(1700000000);
+    expect(((await fs.stat('/tmp/dup/pkg/f')).mode ?? 0) & 0o777).toBe(0o644);
+    expect(await secs('/tmp/dup/pkg')).toBe(1650000000);
+    expect(((await fs.stat('/tmp/dup/pkg')).mode ?? 0) & 0o777).toBe(0o755);
+  });
+
+  it('records mtimes on create', async () => {
+    await shell.executeCommand('touch -d "2021-06-01 00:00:00" /workspace/source/hello.txt');
+    await shell.executeCommand('cd /workspace && tar -cf /tmp/rec.tar source');
+    const out = await shell.executeCommand('mkdir -p /tmp/rec && tar -xf /tmp/rec.tar -C /tmp/rec');
+    expect(out.exitCode).toBe(0);
+    const before = Number((await fs.stat('/workspace/source/hello.txt')).mtime);
+    const after = Number((await fs.stat('/tmp/rec/source/hello.txt')).mtime);
+    // A 2021 time, well away from "now", survives the round trip.
+    expect(Date.now() - before).toBeGreaterThan(365 * 24 * 3600 * 1000);
+    expect(Math.floor(after / 1000)).toBe(Math.floor(before / 1000));
+  });
+
   it('accepts the traditional dashless form (tar xzf, tar czf)', async () => {
     const created = await shell.executeCommand('cd /workspace && tar czf /tmp/trad.tgz source');
     expect(created.exitCode).toBe(0);

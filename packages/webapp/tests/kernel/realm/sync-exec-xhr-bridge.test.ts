@@ -137,6 +137,41 @@ test('a caller budget above the wire ceiling is clamped before it reaches the XH
   expect(JSON.parse(lastSent!.body).timeoutMs).toBe(SYNC_EXEC_MAX_TIMEOUT_MS);
 });
 
+test('noDefaultDeadline: no caller budget sends no timeoutMs and waits without a deadline', () => {
+  const seen: Array<{ payload: Record<string, unknown>; timeoutMs: number }> = [];
+  const bridge = createSyncExecXhrBridge('t', {
+    noDefaultDeadline: true,
+    transport: (payload, timeoutMs) => {
+      seen.push({ payload: { ...payload }, timeoutMs });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  });
+  bridge.run('make');
+  bridge.run('make', { timeout: 0 });
+  bridge.run('make', { timeout: 1234 });
+  expect(seen.map((s) => 'timeoutMs' in s.payload)).toEqual([false, false, true]);
+  expect(seen.map((s) => s.timeoutMs)).toEqual([
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    1234,
+  ]);
+});
+
+test('noDefaultDeadline: a negative or NaN timeout keeps the bounded default', () => {
+  const seen: number[] = [];
+  const bridge = createSyncExecXhrBridge('t', {
+    noDefaultDeadline: true,
+    timeoutMs: 60_000,
+    transport: (_payload, timeoutMs) => {
+      seen.push(timeoutMs);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  });
+  bridge.run('make', { timeout: -1 });
+  bridge.run('make', { timeout: Number.NaN });
+  expect(seen).toEqual([60_000, 60_000]);
+});
+
 test('an errno reply throws an Error carrying .code', () => {
   installFakeXhr();
   reply = { status: 403, errno: 'EACCES' };

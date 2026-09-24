@@ -53,7 +53,7 @@ Its cleanup boundary is the explicit **New session** control: **Save & start new
 
 just-bash ships bash's complete `help` topic table while implementing only part of it. Thirteen advertised names — `bg`, `caller`, `disown`, `enable`, `fc`, `fg`, `jobs`, `logout`, `suspend`, `times`, `trap`, `ulimit`, `umask` — reached command lookup and answered `command not found` (127). `trap` was the dangerous one: the parser accepted `trap 'cleanup' EXIT`, the script kept running, and a handler that was never installed looked like it had worked.
 
-`packages/webapp/src/shell/supplemental-commands/bash-builtins-command.ts` registers all thirteen; the behaviour and usage text live in `bash-builtins/run.ts`, imported on first use because `index.ts` is boot-critical. Custom commands are consulted only after builtins, so these names reach dispatch precisely because upstream has no builtin for them — they can never shadow one just-bash later implements. Two behaviours, no third:
+`packages/webapp/src/shell/supplemental-commands/bash-builtins-command.ts` registers twelve of them (`umask` is now a real builtin, see below); the behaviour and usage text live in `bash-builtins/run.ts`, imported on first use because `index.ts` is boot-critical. Custom commands are consulted only after builtins, so these names reach dispatch precisely because upstream has no builtin for them — they can never shadow one just-bash later implements. Two behaviours, no third:
 
 **Faithful** — where real bash without job control already answers with a diagnostic, this shell answers with bash's own text and exit code:
 
@@ -80,7 +80,14 @@ just-bash ships bash's complete `help` topic table while implementing only part 
 | `fc`              | no history editing; use `history`                                                                                                  |
 | `times`           | no per-process CPU accounting; use `time <command>`                                                                                |
 | `ulimit`          | interpreter limits are fixed at boot; see `df` and `meminfo`                                                                       |
-| `umask`           | the VFS has no file-creation mask; use `chmod` to change stored mode bits after creation                                           |
+
+**`umask`** is a real builtin (a just-bash patch hunk, vercel-labs/just-bash#475). `umask` prints the mask (`0022` by default), `-S` prints it symbolically (`u=rwx,g=rx,o=rx`), and `-p` prints it in reusable form. It takes octal (`umask 077`) or symbolic modes (`umask u=rwx,g=,o=`, `umask g-w`), with bash's messages and exit codes. Files the shell creates get `0666 & ~umask` and directories `0777 & ~umask`: redirections, `touch`, `mkdir`, and `mkdir -p` (whose parents also keep `u+wx`). Existing files keep their mode. The mask is shell state, like the working directory:
+
+- `( … )`, `$( … )` and scripts run by path get their own copy;
+- `bash -c` / `sh script` inherit the caller's mask;
+- the terminal keeps it between commands, and a `umask` in `~/.profile` applies to the session.
+
+Node, Python and wasm tools do not see it yet: their files keep the VFS defaults (`0644` / `0755`).
 
 `select` is a separate gap: it is a missing shell **keyword**, not a builtin, so it fails in just-bash's parser (`syntax error near unexpected token 'select'`, exit 2) before command lookup happens and no registration can reach it. It is not in the `help` table either, so nothing advertises it.
 
@@ -2008,7 +2015,11 @@ constructors are left as the platform's, so `instanceof Request` and
 `req.clone()` keep working. Native stream I/O (`Request`/`Response`/
 `Blob`/`File` body reads, `FormData`, `ReadableStream` `read`/`pipeTo`,
 `body.getReader()`) keeps the realm alive until the native read settles,
-so a second stream read cannot silently exit 0 (#3227). An uncleared
+so a second stream read cannot silently exit 0 (#3227). A pending
+`WebAssembly.compile` / `instantiate` and a pending `__slicc_mountVfs`
+count the same way. That lets an Emscripten program built in slicc run as
+`node prog.js`: its glue starts `main` only after instantiation, and after
+its `--pre-js` has mounted the live VFS. An uncleared
 `setInterval` or hung I/O hangs until the shell job is SIGKILL'd, the
 same way hung I/O hangs real Node.
 

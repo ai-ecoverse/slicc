@@ -5,7 +5,13 @@
  * `realm-done` before the next continuation runs (silent exit 0 — #3227,
  * leftover of #2862).
  *
- * Prototype methods are wrapped and restored when the realm finishes
+ * Two more promise-only waits count the same way, as they do in Node:
+ * `WebAssembly.compile` / `instantiate` (an Emscripten program's glue starts
+ * `main` only once its module instantiates) and `__slicc_mountVfs` (its
+ * `--pre-js` mounts the live VFS before `main`). Without them a program run
+ * as `node prog.js` exits 0 before `main` ever runs.
+ *
+ * Methods are wrapped and restored when the realm finishes
  * (in-process tests share an isolate with vitest). Constructors are left
  * alone so `instanceof Request` / `req.clone()` keep platform identity.
  * Fetch reconstruction still attaches microtask readers in
@@ -16,14 +22,23 @@ const BODY_METHODS = ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text'
 const BLOB_METHODS = ['arrayBuffer', 'bytes', 'text'] as const;
 const STREAM_METHODS = ['cancel', 'pipeTo'] as const;
 const READER_METHODS = ['cancel', 'read'] as const;
+const WASM_METHODS = [
+  'compile',
+  'compileStreaming',
+  'instantiate',
+  'instantiateStreaming',
+] as const;
+/** Realm globals whose promise is a pending handle (`js-realm-shared.ts`). */
+const REALM_HOOKS = ['__slicc_mountVfs'] as const;
 
 type StreamMethod = (...args: unknown[]) => unknown;
 type MethodCtor = { prototype: object };
 
 interface SavedStreamMethod {
-  proto: object;
+  target: object;
   name: string;
   descriptor: PropertyDescriptor;
+  wrapper: StreamMethod;
 }
 
 export interface BodyReadHandleTracker {
@@ -59,20 +74,19 @@ export function createBodyReadHandleTracker(
     return result;
   };
 
-  const wrapNamedMethods = (ctor: MethodCtor | undefined, names: readonly string[]): void => {
-    if (!ctor) return;
-    const proto = ctor.prototype;
+  const wrapNamedMethods = (target: object | undefined, names: readonly string[]): void => {
+    if (!target) return;
     for (const name of names) {
-      const descriptor = Object.getOwnPropertyDescriptor(proto, name);
-      if (!descriptor || typeof descriptor.value !== 'function') continue;
-      savedMethods.push({ proto, name, descriptor });
+      const descriptor = Object.getOwnPropertyDescriptor(target, name);
+      if (!descriptor || typeof descriptor.value !== 'function' || !descriptor.configurable) {
+        continue;
+      }
       const orig = descriptor.value as StreamMethod;
-      Object.defineProperty(proto, name, {
-        ...descriptor,
-        value: function wrappedStreamRead(this: unknown, ...args: unknown[]): unknown {
-          return track(orig.apply(this, args));
-        },
-      });
+      const wrapper = function wrappedStreamRead(this: unknown, ...args: unknown[]): unknown {
+        return track(orig.apply(this, args));
+      };
+      savedMethods.push({ target, name, descriptor, wrapper });
+      Object.defineProperty(target, name, { ...descriptor, value: wrapper });
     }
   };
 
@@ -84,20 +98,25 @@ export function createBodyReadHandleTracker(
     install() {
       if (installed) return;
       installed = true;
-      wrapNamedMethods(asMethodCtor(g.Request), BODY_METHODS);
-      wrapNamedMethods(asMethodCtor(g.Response), BODY_METHODS);
-      wrapNamedMethods(asMethodCtor(g.Blob), BLOB_METHODS);
-      wrapNamedMethods(asMethodCtor(g.File), BLOB_METHODS);
-      wrapNamedMethods(asMethodCtor(g.ReadableStream), STREAM_METHODS);
-      wrapNamedMethods(asMethodCtor(readableStreamReaderCtor(g, 'default')), READER_METHODS);
-      wrapNamedMethods(asMethodCtor(readableStreamReaderCtor(g, 'byob')), READER_METHODS);
+      wrapNamedMethods(protoOf(g.Request), BODY_METHODS);
+      wrapNamedMethods(protoOf(g.Response), BODY_METHODS);
+      wrapNamedMethods(protoOf(g.Blob), BLOB_METHODS);
+      wrapNamedMethods(protoOf(g.File), BLOB_METHODS);
+      wrapNamedMethods(protoOf(g.ReadableStream), STREAM_METHODS);
+      wrapNamedMethods(protoOf(readableStreamReaderCtor(g, 'default')), READER_METHODS);
+      wrapNamedMethods(protoOf(readableStreamReaderCtor(g, 'byob')), READER_METHODS);
+      wrapNamedMethods(g.WebAssembly, WASM_METHODS);
+      wrapNamedMethods(g, REALM_HOOKS);
     },
 
     restore() {
       if (!installed) return;
       installed = false;
-      for (const { proto, name, descriptor } of savedMethods) {
-        Object.defineProperty(proto, name, descriptor);
+      for (const { target, name, descriptor, wrapper } of savedMethods) {
+        // Leave a property the realm already replaced or deleted (it drops
+        // `__slicc_mountVfs` at teardown) instead of resurrecting it.
+        if (Object.getOwnPropertyDescriptor(target, name)?.value !== wrapper) continue;
+        Object.defineProperty(target, name, descriptor);
       }
       savedMethods.length = 0;
       pending = 0;
@@ -122,8 +141,8 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-function asMethodCtor(value: unknown): MethodCtor | undefined {
-  return typeof value === 'function' ? (value as MethodCtor) : undefined;
+function protoOf(value: unknown): object | undefined {
+  return typeof value === 'function' ? (value as MethodCtor).prototype : undefined;
 }
 
 function readableStreamReaderCtor(g: typeof globalThis, kind: 'default' | 'byob'): unknown {

@@ -9,7 +9,7 @@
  * just-bash ships bash's full `help` topic table while implementing only
  * part of it, so `help` listed thirteen names — `bg`, `caller`, `disown`,
  * `enable`, `fc`, `fg`, `jobs`, `logout`, `suspend`, `times`, `trap`,
- * `ulimit`, `umask` — that every invocation answered with
+ * `ulimit`, and `umask` (now a real builtin in the just-bash patch) — that every invocation answered with
  * `command not found` (127). `trap` was the dangerous one: the parser
  * accepted `trap 'cleanup' EXIT` and the script kept running, so a
  * cleanup handler that was never installed looked like it worked
@@ -330,13 +330,6 @@ const REFUSED: readonly RefusedBuiltin[] = [
     usage: 'ulimit [-SHabcdefiklmnpqrstuvxPT] [limit]',
     reason: 'resource limits are not configurable in this shell',
     hint: "interpreter limits are fixed at boot; 'df' and 'meminfo' report usage",
-  },
-  {
-    name: 'umask',
-    summary: 'display or set the file mode mask',
-    usage: 'umask [-p] [-S] [mode]',
-    reason: 'file-creation masks are not supported by the virtual filesystem',
-    hint: 'use chmod to change stored mode bits after creating a file',
   },
 ];
 

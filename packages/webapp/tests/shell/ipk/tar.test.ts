@@ -140,9 +140,25 @@ describe('writeTar', () => {
     });
     // Conventional modes when none is given (not nanotar's group-writable 664/775).
     expect(entries).toEqual([
-      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true, mode: 0o755 },
-      { path: 'package/file.txt', bytes: bytes('contents'), mode: 0o644 },
+      {
+        path: 'package/empty/',
+        bytes: new Uint8Array(0),
+        directory: true,
+        mode: 0o755,
+        mtime: expect.any(Number),
+      },
+      {
+        path: 'package/file.txt',
+        bytes: bytes('contents'),
+        mode: 0o644,
+        mtime: expect.any(Number),
+      },
     ]);
+  });
+
+  it('round-trips an mtime in seconds', () => {
+    const archive = writeTar([{ path: 'a', bytes: bytes('x'), mtime: 1705804171 }]);
+    expect(readTar(archive, { stripNpmPrefix: false })[0].mtime).toBe(1705804171);
   });
 
   it('round-trips an explicit mode', () => {
@@ -160,7 +176,9 @@ describe('readTar', () => {
     const view = padded.subarray(11, 11 + archive.length);
 
     expect(view.byteOffset).toBe(11);
-    expect(readTar(view)).toEqual([{ path: 'index.js', bytes: bytes('export {};'), mode: 0o644 }]);
+    expect(readTar(view)).toEqual([
+      { path: 'index.js', bytes: bytes('export {};'), mode: 0o644, mtime: expect.any(Number) },
+    ]);
   });
 
   it('preserves package prefixes and raw paths when requested', () => {

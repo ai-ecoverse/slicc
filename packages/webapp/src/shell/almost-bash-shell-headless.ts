@@ -385,6 +385,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   /** Accumulated env state from successive exec() calls. */
   protected lastEnv: Record<string, string>;
   protected cwd: string;
+  /**
+   * The shell's file-creation mask (`umask`), carried between `exec` calls
+   * like `lastEnv`: just-bash reports the final mask of each run.
+   */
+  protected umask = 0o022;
   /** Set of all built-in + custom command names (for shadowing protection). */
   protected builtinCommandNames: Set<string>;
   /** Built-in/custom command names captured BEFORE any .jsh/workflow registration. */
@@ -915,6 +920,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           this.bash.exec(cmd, {
             env: opts?.env ?? this.lastEnv,
             cwd: opts?.cwd ?? this.cwd,
+            umask: this.umask,
             ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
           }),
       },
@@ -1030,7 +1036,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       const result = await this.bash.exec(`. "$HOME/.profile"`, {
         env: this.lastEnv,
         cwd: this.cwd,
+        umask: this.umask,
       });
+      // A profile's `umask 077` is the classic case for carrying the mask.
+      if (typeof result.umask === 'number') this.umask = result.umask;
       if (result.env) {
         // Adopt the sourced env WHOLESALE (not merged over the old one): the
         // profile received the full env as input, so its result already
@@ -1127,6 +1136,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       // pid from their own `ctx.env` under concurrency (see `RUN_PID_ENV`).
       env: taggedEnv,
       cwd: this.cwd,
+      umask: this.umask,
       signal,
       ...(stdin !== EMPTY_BYTES
         ? { stdin: stdin as unknown as string, stdinKind: 'bytes' as const }
@@ -1149,6 +1159,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // are outside just-bash's execution box (where VFS async timers are blocked).
     await this.flushPendingCommandGrants();
     result = applyCapturedPipeStatus(result, capturePipeStatus);
+    if (typeof result.umask === 'number') this.umask = result.umask;
     if (result.env) {
       // Drop the per-run tag: it belongs to the run that just finished, and a
       // later untagged run must not inherit its pid.
@@ -1697,6 +1708,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           this.bash.exec(cmd, {
             env: opts?.env ?? this.lastEnv,
             cwd: opts?.cwd ?? this.cwd,
+            umask: this.umask,
             ...(opts?.env !== undefined ? { replaceEnv: true } : {}),
           }),
       },
