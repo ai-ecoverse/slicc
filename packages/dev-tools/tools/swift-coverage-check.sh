@@ -207,21 +207,35 @@ else
   swift test --enable-code-coverage --xunit-output .build/coverage/test-timings.xunit.xml \
     2>&1 | tee .build/coverage/test-timings.log
 
-  PROFDATA=$(find .build -name "default.profdata" -type f 2>/dev/null | head -1)
-  if [[ -z "$PROFDATA" ]]; then
-    echo "::error::No profdata produced by swift test"
+  # Ask SwiftPM where it put things rather than searching .build/: the native
+  # build system (Swift <= 6.3) uses .build/<triple>/debug/, the swift-build
+  # backend (Swift 6.4+) uses .build/out/Products/Debug/, and a checkout that
+  # has seen both keeps a stale profile in the other tree.
+  BIN_PATH=$(swift build --show-bin-path)
+  PROFDATA="$(dirname "$(swift test --show-codecov-path)")/default.profdata"
+  if [[ ! -f "$PROFDATA" ]]; then
+    echo "::error::No profdata produced by swift test (expected $PROFDATA)"
     exit 1
   fi
 
+  # The native build system names the bundle <Package>PackageTests; the
+  # swift-build backend names it after the test target. Every package here has
+  # one test target, so fall back to the bin path's only bundle.
+  TEST_BUNDLE="$BIN_PATH/${TEST_BUNDLE_NAME}.xctest"
+  if [[ ! -e "$TEST_BUNDLE" ]]; then
+    shopt -s nullglob
+    TEST_BUNDLES=("$BIN_PATH"/*.xctest)
+    shopt -u nullglob
+    if [[ ${#TEST_BUNDLES[@]} -ne 1 ]]; then
+      echo "::error::Expected ${TEST_BUNDLE_NAME}.xctest or exactly one .xctest bundle in $BIN_PATH, found ${#TEST_BUNDLES[@]}"
+      exit 1
+    fi
+    TEST_BUNDLE="${TEST_BUNDLES[0]}"
+  fi
   # Test bundle layout differs between Darwin (.xctest as a directory bundle)
   # and Linux (.xctest as a flat executable). Resolve the binary path once.
-  TEST_BUNDLE=$(find .build -name "${TEST_BUNDLE_NAME}.xctest" 2>/dev/null | head -1)
-  if [[ -z "$TEST_BUNDLE" ]]; then
-    echo "::error::Test bundle ${TEST_BUNDLE_NAME}.xctest not found under .build/"
-    exit 1
-  fi
   if [[ -d "$TEST_BUNDLE" ]]; then
-    BINARY="$TEST_BUNDLE/Contents/MacOS/${TEST_BUNDLE_NAME}"
+    BINARY="$TEST_BUNDLE/Contents/MacOS/$(basename "$TEST_BUNDLE" .xctest)"
   else
     BINARY="$TEST_BUNDLE"
   fi

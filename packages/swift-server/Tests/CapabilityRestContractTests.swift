@@ -20,6 +20,17 @@ import XCTest
 /// counted: today that is `POST /api/secrets` (persisted secret creation),
 /// which this server does not implement. The fixture records why.
 final class CapabilityRestContractTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        // `GET /api/secrets` lists the injector's default persisted store.
+        InMemoryKeychain.install()
+    }
+
+    override func tearDown() {
+        InMemoryKeychain.uninstall()
+        super.tearDown()
+    }
+
     // MARK: - Fixture
 
     private struct Expectation {

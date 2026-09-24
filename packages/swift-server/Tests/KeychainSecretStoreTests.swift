@@ -8,11 +8,15 @@ final class KeychainSecretStoreTests: XCTestCase {
 
     private func secretName(_ base: String) -> String { prefix + base }
 
+    private var keychain: InMemoryKeychain!
+
+    override func setUp() {
+        super.setUp()
+        keychain = InMemoryKeychain.install()
+    }
+
     override func tearDown() {
-        // Clean up any leftover test secrets.
-        for entry in SecretStore.list() where entry.name.hasPrefix(prefix) {
-            try? SecretStore.delete(name: entry.name)
-        }
+        InMemoryKeychain.uninstall()
         super.tearDown()
     }
 
@@ -130,19 +134,16 @@ final class KeychainSecretStoreTests: XCTestCase {
     /// not collapse other failures into "" or set/delete would silently
     /// wipe stored secrets after a transient auth failure.
     func testReadBlobReturnsEmptyForMissingItem() throws {
-        // After tearDown, the test prefix's secrets are gone, but the shared
-        // blob may still hold unrelated user data. Just verify readBlob does
-        // not throw on a normal read.
-        XCTAssertNoThrow(try SecretStore.readBlob())
+        XCTAssertEqual(try SecretStore.readBlob(), "")
     }
 
     // MARK: - non-interactive fail-fast guard
 
     /// With `SLICC_KEYCHAIN_NONINTERACTIVE=1`, `readBlob` adds
     /// `kSecUseAuthenticationUIFail` so a headless launch fails fast instead of
-    /// hanging on the ACL dialog. For an item the test runner already has
-    /// access to, no UI is needed, so the read/round-trip must STILL succeed —
-    /// i.e. the guard is non-regressive on the already-granted path.
+    /// hanging on the ACL dialog. For an item the process already has access
+    /// to, no UI is needed, so the read/round-trip must STILL succeed — i.e.
+    /// the guard is non-regressive on the already-granted path.
     func testNonInteractiveFlagDoesNotBreakAccessibleItem() throws {
         setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
         defer { unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE") }
@@ -152,10 +153,14 @@ final class KeychainSecretStoreTests: XCTestCase {
 
         XCTAssertNoThrow(try SecretStore.readBlob())
         XCTAssertEqual(SecretStore.get(name: name)?.value, "ghp_noninteractive")
+        XCTAssertEqual(
+            keychain.lastReadQuery?[kSecUseAuthenticationUI as String] as? String,
+            kSecUseAuthenticationUIFail as String
+        )
     }
 
-    /// The test above cannot catch the hang it describes: the runner already
-    /// holds ACL access, so no dialog is raised either way. What actually keeps
+    /// The test above cannot catch the hang it describes: the in-memory
+    /// Keychain never raises a dialog either way. What actually keeps
     /// a headless launch from blocking inside `SecItemCopyMatching` on the
     /// legacy file-based keychain is `SecKeychainSetUserInteractionAllowed` —
     /// `kSecUseAuthenticationUIFail` only covers the data-protection keychain.

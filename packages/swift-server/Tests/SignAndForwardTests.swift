@@ -31,16 +31,17 @@ final class SignAndForwardTests: XCTestCase {
         }
     }
 
-    // Per-run profile name keeps Keychain state isolated when these tests run
-    // alongside `SecretAPIRoutesTests` (or against a developer's real Keychain).
     private let profilePrefix = "SAF_TEST_\(UUID().uuidString.prefix(8))_"
 
     private func makeProfileName() -> String { profilePrefix + "profile" }
 
+    override func setUp() {
+        super.setUp()
+        InMemoryKeychain.install()
+    }
+
     override func tearDown() {
-        for entry in SecretStore.list() where entry.name.hasPrefix("s3.\(profilePrefix)") {
-            try? SecretStore.delete(name: entry.name)
-        }
+        InMemoryKeychain.uninstall()
         super.tearDown()
     }
 
