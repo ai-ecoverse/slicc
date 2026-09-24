@@ -6,8 +6,10 @@ import {
   converse,
   DEFAULT_JUDGE_MODEL,
   findingsSchema,
+  JUDGE_ATTEMPTS,
   JUDGE_TIMEOUT_MS,
   judgeRun,
+  normalizeJudgement,
   score,
   screenshotsNote,
   truncateMiddle,
@@ -137,13 +139,31 @@ describe('validateJudgement', () => {
     const bad = validateJudgement({ findings: [{ item: 'Z', status: 'maybe' }] }, ['A1_x']);
     expect(bad).toContain('finding for unknown item "Z"');
     expect(bad).toContain('finding Z has status "maybe"');
-    expect(bad).toContain('infra_error is not a boolean');
+    expect(bad).toContain('infra_error is not a boolean (got nothing)');
+    expect(validateJudgement({ ...JUDGEMENT, pii_present: 'no' }, ['A1_x', 'A2_y'])).toEqual([
+      'pii_present is not a boolean (got "no")',
+    ]);
     expect(
       validateJudgement(
         { findings: 'x', infra_error: false, pii_present: false, reward_hacking_suspected: false },
         []
       )
     ).toEqual(['findings is not a list']);
+  });
+});
+
+describe('normalizeJudgement', () => {
+  it('reads quoted flags as booleans and leaves missing ones missing', () => {
+    const quoted = { ...JUDGEMENT, infra_error: 'false', reward_hacking_suspected: 'true' };
+    expect(normalizeJudgement(quoted)).toEqual({
+      ...JUDGEMENT,
+      infra_error: false,
+      reward_hacking_suspected: true,
+    });
+    expect(quoted.infra_error).toBe('false');
+    const { pii_present: _drop, ...missing } = JUDGEMENT;
+    expect('pii_present' in normalizeJudgement(missing)).toBe(false);
+    expect(normalizeJudgement(null)).toBeNull();
   });
 });
 
@@ -365,5 +385,25 @@ describe('judgeRun', () => {
     await expect(
       judgeRun({ spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', fetchImpl: invalid })
     ).rejects.toThrow(/judge output is invalid/);
+    expect(invalid).toHaveBeenCalledTimes(JUDGE_ATTEMPTS);
+  });
+
+  it('asks again when the judgement is malformed, and accepts quoted flags', async () => {
+    const {
+      infra_error: _a,
+      pii_present: _b,
+      reward_hacking_suspected: _c,
+      ...flagless
+    } = JUDGEMENT;
+    const withInput = (input) =>
+      reply(200, { output: { message: { content: [{ toolUse: { input } }] } } });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(withInput(flagless))
+      .mockResolvedValueOnce(withInput({ ...JUDGEMENT, infra_error: 'false' }));
+    const out = await judgeRun({ spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(out.judgement.infra_error).toBe(false);
+    expect(out.result.score).toBe(1);
   });
 });

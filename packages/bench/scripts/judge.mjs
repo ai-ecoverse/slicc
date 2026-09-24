@@ -151,11 +151,30 @@ export function validateJudgement(j, itemIds) {
         errors.push(`finding ${f?.item} has status ${JSON.stringify(f?.status)}`);
     }
   }
-  for (const flag of ['infra_error', 'pii_present', 'reward_hacking_suspected']) {
-    if (typeof j[flag] !== 'boolean') errors.push(`${flag} is not a boolean`);
+  for (const flag of FLAGS) {
+    if (typeof j[flag] !== 'boolean')
+      errors.push(`${flag} is not a boolean (got ${JSON.stringify(j[flag]) ?? 'nothing'})`);
   }
   return errors;
 }
+
+const FLAGS = ['infra_error', 'pii_present', 'reward_hacking_suspected'];
+
+/**
+ * Read flags the model quoted (`"false"`) as the booleans they name. A flag it left out stays
+ * missing: defaulting it to false would quietly switch off the reward-hacking check.
+ */
+export function normalizeJudgement(j) {
+  if (!j || typeof j !== 'object') return j;
+  const out = { ...j };
+  for (const flag of FLAGS) {
+    if (out[flag] === 'true' || out[flag] === 'false') out[flag] = out[flag] === 'true';
+  }
+  return out;
+}
+
+/** Attempts at a well-formed judgement: the judge is sampled, so a malformed one is asked again. */
+export const JUDGE_ATTEMPTS = 2;
 
 /**
  * Findings → score, as upstream's `score()`: met weight / total weight; a missing item and
@@ -271,38 +290,40 @@ export async function judgeRun({
   timeoutMs,
 }) {
   const itemIds = Object.keys(task.weights);
+  const ask = (includeImages) =>
+    converse({
+      model,
+      apiKey,
+      region,
+      fetchImpl,
+      sleep,
+      timeoutMs,
+      body: buildConverseBody({ spec, task, trace, includeImages }),
+    });
   let imagesSent = trace.screenshots.length > 0;
-  let reply;
-  try {
-    reply = await converse({
-      model,
-      apiKey,
-      region,
-      fetchImpl,
-      sleep,
-      timeoutMs,
-      body: buildConverseBody({ spec, task, trace, includeImages: imagesSent }),
-    });
-  } catch (err) {
-    if (!err.imageUnsupported || !imagesSent) throw err;
-    imagesSent = false;
-    reply = await converse({
-      model,
-      apiKey,
-      region,
-      fetchImpl,
-      sleep,
-      timeoutMs,
-      body: buildConverseBody({ spec, task, trace, includeImages: false }),
-    });
+  let judgement;
+  let usage;
+  let errors = [];
+  for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt += 1) {
+    let reply;
+    try {
+      reply = await ask(imagesSent);
+    } catch (err) {
+      if (!err.imageUnsupported || !imagesSent) throw err;
+      imagesSent = false;
+      reply = await ask(false);
+    }
+    judgement = normalizeJudgement(reply.input);
+    usage = reply.usage;
+    errors = validateJudgement(judgement, itemIds);
+    if (!errors.length) break;
   }
-  const errors = validateJudgement(reply.input, itemIds);
   if (errors.length) throw new Error(`judge output is invalid: ${errors.join('; ')}`);
   const agentTexts = [trace.finalResult, ...trace.steps];
   return {
-    judgement: reply.input,
-    result: score(task, reply.input, agentTexts),
-    usage: reply.usage,
+    judgement,
+    result: score(task, judgement, agentTexts),
+    usage,
     imagesSent,
   };
 }
