@@ -11,7 +11,7 @@
 # Traces of upstream sets hold decrypted task text; the runner Fernet-encrypts them with the set's
 # own key before they are uploaded, as browser-use publishes its tasks.
 #
-# Artifacts: `bench-report-<run>` (report.md, report.json, results/) and `bench-<run>` (everything,
+# Artifacts: `bench-report-<run>` (report.md, report.json, report.html, results/) and `bench-<run>` (everything,
 # with traces). A dispatch run also publishes to the Hugging Face dataset ai-ecoverse/slicc-bench
 # (packages/bench/scripts/publish.mjs): scores for every set, and encrypted traces and task sets
 # for SLICC's own sets only.
@@ -149,6 +149,7 @@ jobs:
           path: |
             ${{ runner.temp }}/bench-out/report.md
             ${{ runner.temp }}/bench-out/report.json
+            ${{ runner.temp }}/bench-out/report.html
             ${{ runner.temp }}/bench-out/results
           if-no-files-found: ignore
 

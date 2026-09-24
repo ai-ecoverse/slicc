@@ -22,6 +22,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges every 
 | `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace                            |
 | `scripts/executors.mjs`     | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt                        |
 | `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report                                |
+| `scripts/html.mjs`          | Records → one self-contained `report.html`: cards, table, deltas, task matrix, time × cost                          |
 | `scripts/publish.mjs`       | Stage a run for the Hugging Face dataset `ai-ecoverse/slicc-bench`: encrypted traces and task sets, combined report |
 | `dataset/README.md`         | The dataset card template; `publish.mjs` puts the combined report in place of `<!-- report -->`                     |
 | `scripts/run.mjs`           | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`                                 |
@@ -44,7 +45,7 @@ Everything is driven from outside, through the Go `slicc` CLI against the leader
 
 ## Publishing
 
-`report.md` and `report.json` (`reportData()`, the source of both) are written with every run. `bench.yml` uploads them with `results/` as the `bench-report-<run>` artifact, and everything as `bench-<run>`. A dispatch run then publishes to [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench) with the repo's `HF_TOKEN` secret. It downloads the dataset's `records/`, stages this run over them with `publish.mjs`, and sends one `hf upload` commit.
+`report.md`, `report.json` and `report.html` are written with every run; `reportData()` is the source of all three. `bench.yml` uploads them with `results/` as the `bench-report-<run>` artifact, and everything as `bench-<run>`. A dispatch run then publishes to [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench) with the repo's `HF_TOKEN` secret. It downloads the dataset's `records/`, stages this run over them with `publish.mjs`, and sends one `hf upload` commit.
 
 - The encryption is browser-use's: a `.enc` file is the base64 of a Fernet token whose key is `sha256(<benchmark>)`.
 - Our own task sets go to `tasks/<benchmark>.enc`, and their traces to `runs/<run>/traces/…`, encrypted.
