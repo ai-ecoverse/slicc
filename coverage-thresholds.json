@@ -140,6 +140,21 @@
         "**/*.test.mjs"
       ],
       "coverageInclude": ["packages/github-workflow/scripts/**"]
+    },
+    "bench": {
+      "lines": 99,
+      "statements": 98,
+      "functions": 96,
+      "branches": 93,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/*.test.mjs"
+      ],
+      "coverageInclude": ["packages/bench/scripts/**"]
     }
   },
   "swift": {

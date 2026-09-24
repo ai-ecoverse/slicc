@@ -1,43 +1,9 @@
 import type { FsStat } from 'just-bash';
 import { resolveSyncFsToken, type SyncFsTokenEntry } from './sync-fs-token-registry.js';
 
-export type SyncFsOp =
-  | 'read'
-  | 'write'
-  | 'exists'
-  | 'stat'
-  | 'lstat'
-  | 'readdir'
-  | 'mkdir'
-  | 'rm'
-  | 'rename'
-  | 'unlink'
-  | 'rmdir'
-  | 'symlink'
-  | 'readlink'
-  | 'chmod'
-  | 'utimes';
+import type { SyncFsRequest, SyncFsResult } from './sync-fs-wire.js';
 
-export interface SyncFsRequest {
-  token: string;
-  op: SyncFsOp;
-  path: string;
-
-  body?: Uint8Array;
-
-  arg2?: string;
-
-  mode?: number;
-
-  atimeMs?: number;
-  mtimeMs?: number;
-}
-
-export type SyncFsResult =
-  | { ok: true; kind: 'bytes'; bytes: Uint8Array }
-  | { ok: true; kind: 'json'; json: unknown }
-  | { ok: true; kind: 'void' }
-  | { ok: false; errno: string; message: string };
+export type { SyncFsOp, SyncFsRequest, SyncFsResult } from './sync-fs-wire.js';
 
 export function toErrno(err: unknown): SyncFsResult {
   const message = err instanceof Error ? err.message : String(err);

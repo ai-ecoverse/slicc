@@ -323,13 +323,15 @@ Skills cannot supply an arbitrary URL, cannot supply page-context code (the `fil
 
 `require('sliccy:http')` exposes `http.client({ baseUrl, token, headers, retry, timeoutMs })`. Standardizes the `build URL → merge headers → resolve auth → fetch → unwrap JSON → throw on !ok` boilerplate. `token` is **lazy** — resolved freshly per request so token rotation / refresh hooks are picked up without recreating the client. Backoff is exponential, but **`Retry-After` (when present and parseable, in seconds or HTTP date) takes precedence** — the server knows its own rate limit.
 
+**Retries are gated by method.** `retry.methods` defaults to the RFC 9110 idempotent set (`GET`/`HEAD`/`OPTIONS`/`TRACE`/`PUT`/`DELETE`), so a `503` (or any status other than `429`) never silently replays a `POST`/`PATCH`: a `503` does not prove the first attempt had no effect — if the write landed and only the response was lost, a retry would duplicate it. `429` is exempt and retries for **every** method (the server rejected the request before acting). To opt a non-idempotent method into retries (e.g. a `POST` carrying an idempotency key), pass `retry: { on: [...], maxAttempts, methods: ['POST', ...] }`.
+
 ```typescript
 const http = require('sliccy:http');
 http.client(config: {
   baseUrl?: string;
   token?: (req?: { method: string; path: string; url: string }) => string | Promise<string | null | undefined>;
   headers?: Record<string, string>;
-  retry?: { on: number[]; maxAttempts: number };  // maxAttempts is total (including first)
+  retry?: { on: number[]; maxAttempts: number; methods?: string[] };  // maxAttempts total (incl. first); methods defaults to the idempotent set (429 retries any method)
   timeoutMs?: number;                              // per-attempt timeout; aborts the fetch
 }): {
   get(path, opts?):    Promise<unknown>;

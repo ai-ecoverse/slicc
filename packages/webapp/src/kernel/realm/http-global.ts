@@ -7,6 +7,8 @@ export type HttpQueryParams = Record<string, HttpQueryParamValue>;
 export interface HttpRetryConfig {
   on: number[];
   maxAttempts: number;
+
+  methods?: string[];
 }
 
 export interface HttpTokenRequest {
@@ -249,11 +251,28 @@ function retryWaitMs(resp: Response, attempt: number): number {
   return DEFAULT_BACKOFF_BASE_MS * 2 ** attempt;
 }
 
+export const IDEMPOTENT_RETRY_METHODS: ReadonlySet<string> = new Set([
+  'GET',
+  'HEAD',
+  'OPTIONS',
+  'TRACE',
+  'PUT',
+  'DELETE',
+]);
+
+export const ANY_METHOD_RETRY_STATUSES: ReadonlySet<number> = new Set([429]);
+
+function isRetryableForMethod(status: number, method: string, retryMethods: Set<string>): boolean {
+  if (ANY_METHOD_RETRY_STATUSES.has(status)) return true;
+  return retryMethods.has(method.toUpperCase());
+}
+
 interface HttpRequestLoopContext {
   fetch: HttpGlobalDeps['fetch'];
   sleep: (ms: number) => Promise<void>;
   maxAttempts: number;
   retryOn: Set<number>;
+  retryMethods: Set<string>;
   timeoutMs?: number;
 }
 
@@ -278,7 +297,11 @@ async function executeRequestLoop(
     }
     lastResponse = resp;
     if (resp.ok) return unwrapOkResponse(resp, opts.raw);
-    const willRetry = attempt + 1 < ctx.maxAttempts && ctx.retryOn.has(resp.status);
+    const method = init.method ?? 'GET';
+    const willRetry =
+      attempt + 1 < ctx.maxAttempts &&
+      ctx.retryOn.has(resp.status) &&
+      isRetryableForMethod(resp.status, method, ctx.retryMethods);
     if (!willRetry) return throwForResponse(resp, url);
     await ctx.sleep(retryWaitMs(resp, attempt));
   }
@@ -292,6 +315,10 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
   function makeClient(config: HttpClientConfig): HttpClient {
     const retryOn = new Set(config.retry?.on ?? []);
     const maxAttempts = Math.max(1, Math.trunc(config.retry?.maxAttempts ?? 1));
+
+    const retryMethods = config.retry?.methods
+      ? new Set(config.retry.methods.map((m) => m.toUpperCase()))
+      : new Set(IDEMPOTENT_RETRY_METHODS);
 
     async function request(
       method: string,
@@ -313,6 +340,7 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
           sleep,
           maxAttempts,
           retryOn,
+          retryMethods,
           timeoutMs: config.timeoutMs,
         },
         url,

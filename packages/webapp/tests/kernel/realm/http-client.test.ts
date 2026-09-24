@@ -389,6 +389,110 @@ describe('http.client — retries', () => {
   });
 });
 
+describe('http.client — retry method gating', () => {
+  it('does NOT retry a POST on 503 (non-idempotent: a lost response may have written)', async () => {
+    const deps = makeDeps(
+      () => new Response('busy', { status: 503, statusText: 'Service Unavailable' })
+    );
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      retry: { on: [429, 503], maxAttempts: 3 },
+    });
+    await expect(
+      client.post('/repos/o/r/issues/1/comments', { body: { body: 'hi' } })
+    ).rejects.toBeInstanceOf(HttpError);
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.sleep).not.toHaveBeenCalled();
+  });
+
+  it('does NOT retry a PATCH on 503', async () => {
+    const deps = makeDeps(() => new Response('busy', { status: 503 }));
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      retry: { on: [503], maxAttempts: 3 },
+    });
+    await expect(client.patch('/items/1', { body: { name: 'x' } })).rejects.toBeInstanceOf(
+      HttpError
+    );
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('DOES retry a POST on 429 (server rejected before acting — safe for any method)', async () => {
+    let n = 0;
+    const deps = makeDeps(() => {
+      n++;
+      if (n === 1) return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+      return jsonResponse({ ok: true });
+    });
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      retry: { on: [429, 503], maxAttempts: 3 },
+    });
+    const out = await client.post('/items', { body: { name: 'x' } });
+    expect(out).toEqual({ ok: true });
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('still retries idempotent GET/PUT/DELETE on 503 by default', async () => {
+    for (const verb of ['get', 'put', 'delete'] as const) {
+      let n = 0;
+      const deps = makeDeps(() => {
+        n++;
+        if (n === 1) return new Response('busy', { status: 503 });
+        return jsonResponse({ ok: true });
+      });
+      const client = createHttpGlobal(deps).client({
+        baseUrl: 'https://api.example.com',
+        retry: { on: [503], maxAttempts: 3 },
+      });
+      await client[verb]('/x');
+      expect(deps.fetch, `${verb} should retry on 503`).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('retries a POST on 503 when the caller opts POST into retry.methods', async () => {
+    let n = 0;
+    const deps = makeDeps(() => {
+      n++;
+      if (n === 1) return new Response('busy', { status: 503 });
+      return jsonResponse({ ok: true });
+    });
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      retry: { on: [503], maxAttempts: 3, methods: ['POST'] },
+    });
+    const out = await client.post('/idempotent-keyed', { body: { name: 'x' } });
+    expect(out).toEqual({ ok: true });
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('matches retry.methods case-insensitively', async () => {
+    let n = 0;
+    const deps = makeDeps(() => {
+      n++;
+      if (n === 1) return new Response('busy', { status: 503 });
+      return jsonResponse({ ok: true });
+    });
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      retry: { on: [503], maxAttempts: 3, methods: ['post'] },
+    });
+    await client.post('/x', { body: { a: 1 } });
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('an explicit retry.methods set NOT including PUT stops a PUT retry on 503', async () => {
+    const deps = makeDeps(() => new Response('busy', { status: 503 }));
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      retry: { on: [503], maxAttempts: 3, methods: ['GET'] },
+    });
+    await expect(client.put('/x', { body: { a: 1 } })).rejects.toBeInstanceOf(HttpError);
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('http.client — methods', () => {
   it('routes get/post/put/patch/delete to the correct HTTP method', async () => {
     const deps = makeDeps(() => jsonResponse({}));

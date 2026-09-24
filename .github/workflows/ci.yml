@@ -36,6 +36,7 @@ jobs:
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
       github-workflow: ${{ steps.filter.outputs.github-workflow }}
+      bench: ${{ steps.filter.outputs.bench }}
       capability-contract: ${{ steps.filter.outputs.capability-contract }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
@@ -136,6 +137,11 @@ jobs:
               - 'packages/github-workflow/**'
               - '.github/workflows/slicc-*.yml'
               - '.github/workflows/github-workflow-smoke.yml'
+
+            bench:
+              - 'packages/bench/**'
+              - 'packages/github-workflow/scripts/gh-io.mjs'
+              - '.github/workflows/bench.yml'
 
 
 
@@ -389,6 +395,7 @@ jobs:
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.github-workflow == 'true' ||
+      needs.changes.outputs.bench == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
 
@@ -1094,6 +1101,39 @@ jobs:
               if (!/^runs:\n  using: composite/m.test(text)) { console.error(process.argv[1] + ": not a composite action"); process.exit(1); }
             ' "$f"
           done
+
+  bench:
+    needs: changes
+    if: >-
+      needs.changes.outputs.bench == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:bench
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-bench
+          path: coverage/
+          if-no-files-found: ignore
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: stable
+          cache: false
+      - name: actionlint (bench.yml)
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+          "$(go env GOPATH)/bin/actionlint" -no-color .github/workflows/bench.yml
 
   go-optel:
     needs: changes
@@ -2045,6 +2085,7 @@ jobs:
         go-optel,
         slicc-cli,
         github-workflow,
+        bench,
       ]
     runs-on: ubuntu-latest
     steps:

@@ -172,6 +172,73 @@ type UserMessageEcho struct {
 }
 
 
+
+
+
+type NewSession struct {
+	Type   string `json:"type"` 
+	Action string `json:"action"`
+}
+
+
+
+type RequestSnapshot struct {
+	Type     string `json:"type"` 
+	ScoopJid string `json:"scoopJid,omitempty"`
+	Peek     bool   `json:"peek,omitempty"`
+}
+
+
+
+type Snapshot struct {
+	Type     string            `json:"type"` 
+	Messages []json.RawMessage `json:"messages"`
+	ScoopJid string            `json:"scoopJid"`
+}
+
+
+type ModelsRequest struct {
+	Type string `json:"type"` 
+}
+
+
+
+type ModelCatalogEntry struct {
+	ProviderName string `json:"providerName"`
+	ModelID      string `json:"modelId"`
+	ModelName    string `json:"modelName"`
+	Reasoning    bool   `json:"reasoning"`
+}
+
+
+type ModelsList struct {
+	Type   string              `json:"type"` 
+	Models []ModelCatalogEntry `json:"models"`
+}
+
+
+
+type ModelSelect struct {
+	Type     string `json:"type"` 
+	ModelID  string `json:"modelId"`
+	ScoopJid string `json:"scoopJid,omitempty"`
+}
+
+
+type ModelSelectionState struct {
+	ActiveModelID  string `json:"activeModelId"`
+	ScoopJid       string `json:"scoopJid"`
+	ThinkingLevel  string `json:"thinkingLevel,omitempty"`
+	EffortOverride string `json:"effortOverride,omitempty"`
+}
+
+
+type ModelState struct {
+	Type  string              `json:"type"` 
+	State ModelSelectionState `json:"state"`
+}
+
+
 type Envelope struct {
 	Type string `json:"type"`
 }
@@ -207,6 +274,13 @@ const (
 	TypeAgentEvent      = "agent_event"
 	TypeUserMessageEcho = "user_message_echo"
 	TypeStatus          = "status"
+	TypeNewSession      = "new_session"
+	TypeRequestSnapshot = "request_snapshot"
+	TypeSnapshot        = "snapshot"
+	TypeModelsRequest   = "models.request"
+	TypeModelsList      = "models.list"
+	TypeModelSelect     = "model.select"
+	TypeModelState      = "model.state"
 	TypeError           = "error"
 
 	

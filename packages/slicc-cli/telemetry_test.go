@@ -7,13 +7,15 @@ import (
 
 func TestClassifySubcommand(t *testing.T) {
 	cases := map[string]string{
-		"prompt": "prompt",
-		"exec":   "exec",
-		"watch":  "watch",
-		"follow": "follow",
-		"update": "update",
-		"bogus":  "unknown",
-		"":       "unknown",
+		"new-session": "new-session",
+		"model":       "model",
+		"prompt":      "prompt",
+		"exec":        "exec",
+		"watch":       "watch",
+		"follow":      "follow",
+		"update":      "update",
+		"bogus":       "unknown",
+		"":            "unknown",
 	}
 	for sub, want := range cases {
 		if got := classifySubcommand(sub); got != want {

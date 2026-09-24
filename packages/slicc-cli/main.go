@@ -10,6 +10,8 @@
 
 
 
+
+
 package main
 
 import (
@@ -112,6 +114,28 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 			return 1
 		}
 		return cmdExec(ctx, joinURL, command)
+	case "new-session":
+		a := parseNewSessionArgs(rest)
+		if a.help {
+			usage(os.Stdout)
+			return 0
+		}
+		if a.err != "" {
+			fmt.Fprintf(os.Stderr, "slicc new-session: %s\n", a.err)
+			return 2
+		}
+		return cmdNewSession(ctx, joinURL, a)
+	case "model":
+		a := parseModelArgs(rest)
+		if a.help {
+			usage(os.Stdout)
+			return 0
+		}
+		if a.err != "" {
+			fmt.Fprintf(os.Stderr, "slicc model: %s\n", a.err)
+			return 2
+		}
+		return cmdModel(ctx, joinURL, a)
 	case "watch":
 		
 		
@@ -149,6 +173,17 @@ func usage(w *os.File) {
 Usage:
   slicc <join-url> prompt "<text>"    Stream one assistant turn from the leader, then exit
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
+  slicc <join-url> new-session [--save|--skip|--erase] [--timeout 30s]
+                                      Start a fresh conversation on the cone, like "New chat":
+                                      --save freezes the old one and extracts memories (default),
+                                      --skip freezes it without memories, --erase discards it.
+                                      Waits until the conversation holds no user message.
+  slicc <join-url> model [--json] [--timeout 20s] [<model>]
+                                      With no model, list the leader's models ("*" = the cone's).
+                                      With one, switch the cone to it and wait for the leader to
+                                      confirm. Takes the exact id or its model part, or a suffix
+                                      such as claude-sonnet-5 (Bedrock's global profile wins over
+                                      us./eu. twins of the same model).
   slicc <join-url> watch [--plain] [scoop]
                                       Tail the leader's live agent output (a scoop jid filters) until Ctrl+C
   slicc <join-url> follow [--no-banner] [--plain] [runner...]

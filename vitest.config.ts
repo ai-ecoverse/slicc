@@ -222,6 +222,13 @@ export default defineConfig({
           include: ['packages/github-workflow/**/*.test.mjs'],
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'bench',
+          include: ['packages/bench/**/*.test.mjs'],
+        },
+      },
     ],
   },
 });

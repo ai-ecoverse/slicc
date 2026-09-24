@@ -1,6 +1,3 @@
-import type { SyncExecRequest } from './sync-exec-dispatch.js';
-import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
-
 export type SyncFsToken = string & { readonly __syncFsToken: unique symbol };
 export type SyncFsNonce = string & { readonly __syncFsNonce: unique symbol };
 
@@ -37,6 +34,71 @@ export const SYNC_FS_NO_RESPONDER_HEADER = 'x-slicc-fs-no-responder';
 export const SYNC_FS_REQ_MSG = 'sync-fs-req';
 export const SYNC_FS_ACK_MSG = 'sync-fs-ack';
 export const SYNC_FS_RES_MSG = 'sync-fs-res';
+
+export type SyncFsOp =
+  | 'read'
+  | 'write'
+  | 'exists'
+  | 'stat'
+  | 'lstat'
+  | 'readdir'
+  | 'mkdir'
+  | 'rm'
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'symlink'
+  | 'readlink'
+  | 'chmod'
+  | 'utimes';
+
+export interface SyncFsRequest {
+  token: string;
+  op: SyncFsOp;
+  path: string;
+
+  body?: Uint8Array;
+
+  arg2?: string;
+
+  mode?: number;
+
+  atimeMs?: number;
+  mtimeMs?: number;
+}
+
+export type SyncFsResult =
+  | { ok: true; kind: 'bytes'; bytes: Uint8Array }
+  | { ok: true; kind: 'json'; json: unknown }
+  | { ok: true; kind: 'void' }
+  | { ok: false; errno: string; message: string };
+
+export const SYNC_EXEC_CHANNEL = 'exec';
+
+export interface SyncExecRequestPayload {
+  command: string | string[];
+
+  args?: string[];
+
+  stdin?: string;
+
+  timeoutMs?: number;
+
+  cwd?: string;
+
+  env?: Record<string, string>;
+}
+
+export interface SyncExecRequest extends SyncExecRequestPayload {
+  token: string;
+  channel: typeof SYNC_EXEC_CHANNEL;
+}
+
+export interface SyncExecResultPayload {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
 
 export type SyncFsReqMsg = (SyncFsRequest | SyncExecRequest) & {
   type: typeof SYNC_FS_REQ_MSG;

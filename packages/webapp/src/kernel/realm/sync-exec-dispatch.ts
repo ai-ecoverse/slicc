@@ -1,34 +1,22 @@
 import type { CommandContext } from 'just-bash';
-import { type SyncFsRequest, type SyncFsResult, toErrno } from './sync-fs-dispatch.js';
+import { toErrno } from './sync-fs-dispatch.js';
 import { resolveSyncFsToken, trackSyncExec } from './sync-fs-token-registry.js';
-import { SYNC_EXEC_MAX_TIMEOUT_MS } from './sync-fs-wire.js';
 
-export const SYNC_EXEC_CHANNEL = 'exec';
+import {
+  SYNC_EXEC_CHANNEL,
+  SYNC_EXEC_MAX_TIMEOUT_MS,
+  type SyncExecRequest,
+  type SyncExecResultPayload,
+  type SyncFsRequest,
+  type SyncFsResult,
+} from './sync-fs-wire.js';
 
-export interface SyncExecRequestPayload {
-  command: string | string[];
-
-  args?: string[];
-
-  stdin?: string;
-
-  timeoutMs?: number;
-
-  cwd?: string;
-
-  env?: Record<string, string>;
-}
-
-export interface SyncExecRequest extends SyncExecRequestPayload {
-  token: string;
-  channel: typeof SYNC_EXEC_CHANNEL;
-}
-
-export interface SyncExecResultPayload {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
+export {
+  SYNC_EXEC_CHANNEL,
+  type SyncExecRequest,
+  type SyncExecRequestPayload,
+  type SyncExecResultPayload,
+} from './sync-fs-wire.js';
 
 export function isSyncExecRequest(req: SyncFsRequest | SyncExecRequest): req is SyncExecRequest {
   return (req as SyncExecRequest).channel === SYNC_EXEC_CHANNEL;
