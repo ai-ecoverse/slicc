@@ -111,6 +111,12 @@ function fakeCli(script) {
 }
 
 describe('runProcess', () => {
+  it('survives a CLI that exits without reading its stdin', async () => {
+    const cli = fakeCli('echo early; exit 1');
+    const r = await runProcess(cli, [], { stdin: 'x'.repeat(4 * 1024 * 1024) });
+    expect(r).toMatchObject({ stdout: 'early\n', status: 1 });
+  });
+
   it('passes extra environment to the CLI', async () => {
     const cli = fakeCli('echo "debug=$SLICC_DEBUG tui=$SLICC_NO_TUI"');
     expect((await runProcess(cli, [], { env: { SLICC_DEBUG: '1' } })).stdout).toBe(

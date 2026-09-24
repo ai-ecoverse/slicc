@@ -43,9 +43,11 @@ export function runNode(script, { env, timeoutMs = RESTART_TIMEOUT_MS } = {}) {
 export function currentLeader(read = readState) {
   const state = read();
   if (!state?.joinUrl) return null;
+  // start-leader records `startedAt` as epoch milliseconds.
+  const started = state.startedAt;
   return {
     url: state.joinUrl,
-    startedAt: state.startedAt ?? null,
+    startedAt: typeof started === 'number' ? new Date(started).toISOString() : (started ?? null),
     sliccVersion: state.sliccVersion ?? null,
   };
 }

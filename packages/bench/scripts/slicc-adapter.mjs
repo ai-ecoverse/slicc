@@ -177,8 +177,7 @@ export function spendDelta(before, after) {
 }
 
 /** What the leader says about itself: page age and load, memory, and its process count. */
-export const HEALTH_COMMAND =
-  'uptime; meminfo 2>/dev/null | head -4; echo "processes: $(ps | wc -l)"';
+export const HEALTH_COMMAND = 'uptime; meminfo 2>&1 | head -4; echo "processes: $(ps | wc -l)"';
 
 /** A health reading, never throwing: `{ at, ok, ms, text }`, text clipped. */
 export async function leaderHealth(leader, now = Date.now) {

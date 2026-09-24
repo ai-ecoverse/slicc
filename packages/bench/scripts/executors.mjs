@@ -72,6 +72,8 @@ export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env
       if (timedOut) finish(code, signal);
     });
     child.on('close', finish);
+    // A CLI that exits without reading its stdin (a failed dial) must not crash the runner.
+    child.stdin.on('error', () => {});
     child.stdin.end(stdin ?? '');
   });
 }

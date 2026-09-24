@@ -384,11 +384,17 @@ function previous(opts, r) {
   };
 }
 
+/** Seconds since a start given as ISO text or epoch ms; null when it cannot be read. */
+export function ageSeconds(startedAt, now = Date.now()) {
+  const t = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt ?? '');
+  return Number.isFinite(t) ? Math.round((now - t) / 1000) : null;
+}
+
 /** Which leader serves a run: its generation, age in seconds, and its how-manieth task. */
 function leaderStamp(lane) {
   return {
     generation: lane.generation,
-    age_s: lane.startedAt ? Math.round((Date.now() - Date.parse(lane.startedAt)) / 1000) : null,
+    age_s: ageSeconds(lane.startedAt),
     task: lane.tasks + 1,
   };
 }

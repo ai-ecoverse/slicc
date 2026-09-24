@@ -38,6 +38,9 @@ describe('currentLeader', () => {
       startedAt: null,
       sliccVersion: null,
     });
+    expect(currentLeader(() => ({ joinUrl: 'u', startedAt: 0 })).startedAt).toBe(
+      '1970-01-01T00:00:00.000Z'
+    );
     expect(currentLeader(() => null)).toBeNull();
   });
 });

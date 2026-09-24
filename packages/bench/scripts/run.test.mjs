@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { taskDigests, withDigests } from './format.mjs';
 import {
+  ageSeconds,
   DEFAULT_MODELS,
   loadSet,
   main,
@@ -670,6 +671,13 @@ describe('re-judging on resume', () => {
 });
 
 describe('leader lifecycle', () => {
+  it('reads a leader age from ISO text or epoch ms', () => {
+    expect(ageSeconds('1970-01-01T00:01:00.000Z', 90_000)).toBe(30);
+    expect(ageSeconds(60_000, 90_000)).toBe(30);
+    expect(ageSeconds('not a date', 90_000)).toBeNull();
+    expect(ageSeconds(undefined, 90_000)).toBeNull();
+  });
+
   const quiet = () => vi.spyOn(console, 'log').mockImplementation(() => {});
   const events = (out) =>
     readFileSync(join(out, 'events.jsonl'), 'utf8')
