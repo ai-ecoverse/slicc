@@ -200,7 +200,10 @@ The side panel is opened on demand by the toolbar icon. Full flow:
    throttled). On a loaded machine a cold boot then takes minutes, while
    bringing the tab forward lets it finish in seconds. `booting` replays keep
    `slow`, and a late `ready` still mounts the follower. The Disconnected
-   overlay carries the same button. The panel never steals focus on its own.
+   overlay offers **Retry** instead: it reconnects the `cherry-panel` Port,
+   which the SW treats exactly like reopening the panel (disconnected goes
+   back to booting, `ensureLeaderTab` runs, and a leader whose tray gave up
+   is reloaded). The panel never steals focus on its own.
 6. **Login hand-off**: provider login can't complete in the cross-origin panel
    iframe (OAuth / device-code / provider-settings run on the leader). The
    follower detects the side panel by its ancestor origin

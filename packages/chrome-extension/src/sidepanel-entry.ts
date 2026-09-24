@@ -41,7 +41,14 @@ const PANEL_STATUS_TEXT: Record<PanelStatus, string> = {
   starting: 'Starting SLICC…',
   slow: 'SLICC is still starting in its tab. Chrome slows down background tabs, so bringing it to the front usually lets it finish.',
   live: '',
-  disconnected: 'Disconnected — reopen to retry',
+  disconnected: 'Disconnected from SLICC.',
+};
+
+// The overlay button per state: 'slow' brings the booting leader forward;
+// 'disconnected' retries (see `retry()`). Hidden for the other states.
+const PANEL_ACTION_LABEL: Partial<Record<PanelStatus, string>> = {
+  slow: 'Show SLICC tab',
+  disconnected: 'Retry',
 };
 
 export interface SidePanelDeps {
@@ -56,6 +63,40 @@ export interface SidePanelController {
   dispose(): void;
   /** Bring the leader tab to the front (the 'slow' / 'disconnected' overlay button). */
   focusLeader(): void;
+  /** Reconnect the Port (the 'disconnected' overlay button). A fresh connect +
+   *  hello is what the SW treats as a user retry (`handleCherryPanelConnect`:
+   *  disconnected → booting, ensureLeaderTab, reload a leader whose tray gave up)
+   *  and it replays the current state, so a panel-local disconnect (iframe
+   *  watchdog) remounts on the replayed ready. */
+  retry(): void;
+}
+
+/** A restartable one-shot timer: `start` replaces any pending run. */
+function oneShotTimer() {
+  let id: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (id) clearTimeout(id);
+    id = null;
+  };
+  return {
+    clear,
+    start(ms: number, fn: () => void) {
+      clear();
+      id = setTimeout(() => {
+        id = null;
+        fn();
+      }, ms);
+    },
+  };
+}
+
+/** `disconnect()` on a dead Port throws; either way the Port is gone. */
+function disconnectQuietly(port: ChromeRuntimePort | null): void {
+  try {
+    port?.disconnect();
+  } catch {
+    /* already gone */
+  }
 }
 
 export function createSidePanelController(deps: SidePanelDeps): SidePanelController {
@@ -64,32 +105,19 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
   let reconnectDelay = 250;
-  let bootTimer: ReturnType<typeof setTimeout> | null = null;
+  const bootTimer = oneShotTimer();
+  const iframeLoadTimer = oneShotTimer();
   // Set once the boot watchdog fired for this boot; a `booting` replay (SW wake,
   // Port reconnect) keeps 'slow' instead of restarting the 20s spinner.
   let bootSlow = false;
-  let iframeLoadTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const clearBootTimer = () => {
-    if (bootTimer) {
-      clearTimeout(bootTimer);
-      bootTimer = null;
-    }
-  };
-  const clearIframeLoadTimer = () => {
-    if (iframeLoadTimer) {
-      clearTimeout(iframeLoadTimer);
-      iframeLoadTimer = null;
-    }
-  };
 
   const blankIframe = () => {
     deps.iframe.setAttribute('src', 'about:blank');
   };
   const teardown = () => {
-    clearBootTimer();
+    bootTimer.clear();
     bootSlow = false;
-    clearIframeLoadTimer();
+    iframeLoadTimer.clear();
     handle?.destroy();
     handle = null;
     currentJoinUrl = null;
@@ -106,7 +134,7 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
   // attaches or the page reloads.
   const onIframeLoad = () => {
     if (deps.iframe.getAttribute('src') === 'about:blank') return;
-    clearIframeLoadTimer();
+    iframeLoadTimer.clear();
     nudgeIframeRepaint(deps.iframe);
   };
   deps.iframe.addEventListener('load', onIframeLoad);
@@ -143,13 +171,11 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
         return;
       }
       deps.setStatus('starting');
-      clearBootTimer();
-      bootTimer = setTimeout(() => {
-        bootTimer = null;
+      bootTimer.start(BOOT_TIMEOUT_MS, () => {
         if (disposed) return;
         bootSlow = true;
         deps.setStatus('slow');
-      }, BOOT_TIMEOUT_MS);
+      });
       return;
     }
 
@@ -161,7 +187,7 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
     // state === 'ready' — any successful ready resets the reconnect backoff and
     // cancels the boot watchdog.
     reconnectDelay = 250;
-    clearBootTimer();
+    bootTimer.clear();
     bootSlow = false;
     if (msg.joinUrl === currentJoinUrl && handle) {
       // Idempotent (e.g. a `booting` blip replayed the same ready): the follower
@@ -173,11 +199,9 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
     handle = null;
     blankIframe(); // clear the stale follower before remount (destroy() keeps caller iframes)
     currentJoinUrl = msg.joinUrl;
-    clearIframeLoadTimer();
-    iframeLoadTimer = setTimeout(() => {
-      iframeLoadTimer = null;
+    iframeLoadTimer.start(IFRAME_LOAD_TIMEOUT_MS, () => {
       if (!disposed && handle) goDisconnected();
-    }, IFRAME_LOAD_TIMEOUT_MS);
+    });
     handle = deps.mountSlicc({
       iframe: deps.iframe,
       joinToken: msg.joinUrl,
@@ -233,15 +257,19 @@ export function createSidePanelController(deps: SidePanelDeps): SidePanelControl
 
   return {
     focusLeader: () => requestLeaderFocus(false),
+    retry() {
+      if (disposed) return;
+      // Our own disconnect() does not fire our onDisconnect, so re-wire here.
+      disconnectQuietly(port);
+      port = null;
+      reconnectDelay = 250;
+      wire();
+    },
     dispose() {
       disposed = true;
       teardown();
       deps.iframe.removeEventListener('load', onIframeLoad);
-      try {
-        port?.disconnect();
-      } catch {
-        /* already gone */
-      }
+      disconnectQuietly(port);
     },
   };
 }
@@ -251,11 +279,17 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
   const iframe = document.getElementById('cherry-follower') as HTMLIFrameElement;
   const statusEl = document.getElementById('cherry-status');
   const statusText = document.getElementById('cherry-status-text');
-  const focusButton = document.getElementById('cherry-status-focus') as HTMLButtonElement | null;
+  const actionButton = document.getElementById('cherry-status-action') as HTMLButtonElement | null;
+  let current: PanelStatus = 'starting';
   const setStatus = (s: PanelStatus) => {
+    current = s;
     if (!statusEl) return;
     if (statusText) statusText.textContent = PANEL_STATUS_TEXT[s];
-    if (focusButton) focusButton.hidden = s !== 'slow' && s !== 'disconnected';
+    if (actionButton) {
+      const label = PANEL_ACTION_LABEL[s];
+      actionButton.hidden = !label;
+      actionButton.textContent = label ?? '';
+    }
     statusEl.dataset.state = s; // CSS shows the overlay for every state but 'live'
   };
   const controller = createSidePanelController({
@@ -265,5 +299,8 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
     setStatus,
     sliccOrigin: sliccOriginDefault,
   });
-  focusButton?.addEventListener('click', () => controller.focusLeader());
+  actionButton?.addEventListener('click', () => {
+    if (current === 'disconnected') controller.retry();
+    else controller.focusLeader();
+  });
 }

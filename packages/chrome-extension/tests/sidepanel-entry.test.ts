@@ -249,6 +249,38 @@ describe('sidepanel-entry controller', () => {
     vi.useRealTimers();
   });
 
+  it('retry() reconnects the Port (the SW-side user retry) and remounts on the replayed ready', () => {
+    vi.useFakeTimers();
+    const ports = [makePort(), makePort()];
+    let i = 0;
+    const controller = createSidePanelController({
+      connect: () => ports[i++] as never,
+      mountSlicc: mountSlicc as never,
+      iframe,
+      setStatus: (s) => statuses.push(s),
+      sliccOrigin: 'https://www.sliccy.ai',
+    });
+    ports[0]._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    vi.advanceTimersByTime(15_000); // iframe watchdog → panel-local disconnect
+    expect(statuses[statuses.length - 1]).toBe('disconnected');
+
+    controller.retry();
+    expect(ports[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(ports[1].postMessage).toHaveBeenCalledWith({ kind: 'hello' });
+    ports[1]._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    expect(mountSlicc).toHaveBeenCalledTimes(2);
+    expect(statuses[statuses.length - 1]).toBe('live');
+    vi.useRealTimers();
+  });
+
+  it('retry() survives a port that is already gone', () => {
+    const controller = make();
+    port.disconnect.mockImplementation(() => {
+      throw new Error('Attempting to use a disconnected port object');
+    });
+    expect(() => controller.retry()).not.toThrow();
+  });
+
   it('focusLeader() asks the SW for a plain leader focus', () => {
     const controller = make();
     controller.focusLeader();
