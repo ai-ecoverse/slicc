@@ -20,7 +20,7 @@ Measures what skills and models change in SLICC. It runs task sets on a SLICC le
 
 The job summary shows the report. Two artifacts:
 
-- `bench-report-<run id>`: `report.md`, `report.json` (the same report as data), and `results/`, one file per configuration in browser-use's result format plus rubric scores.
+- `bench-report-<run id>`: `report.md`, `report.json` (the same report as data), `report.html` (cards, a task × configuration matrix, time against cost), and `results/`, one file per configuration in browser-use's result format plus rubric scores.
 - `bench-<run id>`: all of that, plus `records/` (one file per run) and `traces/` (transcripts and screenshots, encrypted for upstream sets).
 
 With `publish` on (the default), the run is also published to the Hugging Face dataset [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench). The dataset card carries the combined report across every configuration published so far. SLICC's own task sets and traces are Fernet-encrypted there as browser-use encrypts theirs. For browser-use's own sets, only scores are published.
@@ -80,3 +80,10 @@ For each set, the report has a row per configuration: runs, pass / partial / fai
 - **What models change:** the same comparison between models, for each skills condition.
 
 Only runs that both configurations judged, for the same task and repeat, are compared. A run that errored (for example, the leader was unreachable) is listed but never counted as a fail.
+
+`report.html` shows the same data with a task × configuration score matrix and time against cost per run. To see every published configuration side by side, render it from the dataset:
+
+```bash
+hf download ai-ecoverse/slicc-bench --repo-type dataset --include 'records/**' --local-dir slicc-bench
+node packages/bench/scripts/html.mjs --records slicc-bench --out report.html
+```

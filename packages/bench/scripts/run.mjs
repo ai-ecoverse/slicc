@@ -29,6 +29,7 @@ import {
   taskDigests,
   validateEnvelope,
 } from './format.mjs';
+import { reportHtml } from './html.mjs';
 import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
@@ -417,6 +418,7 @@ function writeOutputs(opts, runStart) {
   const report = reportMarkdown(records);
   writeFileSync(join(opts.out, 'report.md'), `${report}\n`);
   writeJson(join(opts.out, 'report.json'), { run_start: runStart, ...reportData(records) });
+  writeFileSync(join(opts.out, 'report.html'), reportHtml(records));
   if (process.env.GITHUB_STEP_SUMMARY)
     writeFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`, { flag: 'a' });
   return report;
