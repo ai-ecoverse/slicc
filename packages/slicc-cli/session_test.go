@@ -181,7 +181,7 @@ func snapshotFrame(messages ...string) protocol.Snapshot {
 func TestCLINewSessionWaitsForAnEmptyConversation(t *testing.T) {
 	var mu sync.Mutex
 	reset := false
-	leader := newControlLeader(t, func(typ string, msg map[string]any) []any {
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
 		mu.Lock()
 		defer mu.Unlock()
 		switch typ {
@@ -209,7 +209,7 @@ func TestCLINewSessionWaitsForAnEmptyConversation(t *testing.T) {
 }
 
 func TestCLINewSessionFailsWhenTheOldConversationStays(t *testing.T) {
-	leader := newControlLeader(t, func(typ string, msg map[string]any) []any {
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
 		if typ == protocol.TypeRequestSnapshot {
 			return []any{snapshotFrame(`{"id":"m1","role":"user","content":"still here"}`)}
 		}

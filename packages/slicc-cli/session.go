@@ -261,32 +261,46 @@ type modelListing struct {
 	Models   []protocol.ModelCatalogEntry `json:"models"`
 }
 
-// cmdModel prints the cone's model and the catalogue, or selects a model and
-// waits for the leader's model.state to confirm it.
-func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
-	lists := make(chan []protocol.ModelCatalogEntry, 4)
-	states := make(chan protocol.ModelSelectionState, 16)
-	handler := func(typ string, raw []byte) {
-		switch typ {
-		case protocol.TypeModelsList:
-			var l protocol.ModelsList
-			if json.Unmarshal(raw, &l) == nil {
-				select {
-				case lists <- l.Models:
-				default:
-				}
+// modelChannels routes models.list and model.state messages to channels;
+// full channels drop, since only the latest answers matter.
+type modelChannels struct {
+	lists  chan []protocol.ModelCatalogEntry
+	states chan protocol.ModelSelectionState
+}
+
+func newModelChannels() modelChannels {
+	return modelChannels{
+		lists:  make(chan []protocol.ModelCatalogEntry, 4),
+		states: make(chan protocol.ModelSelectionState, 16),
+	}
+}
+
+func (c modelChannels) handle(typ string, raw []byte) {
+	switch typ {
+	case protocol.TypeModelsList:
+		var l protocol.ModelsList
+		if json.Unmarshal(raw, &l) == nil {
+			select {
+			case c.lists <- l.Models:
+			default:
 			}
-		case protocol.TypeModelState:
-			var s protocol.ModelState
-			if json.Unmarshal(raw, &s) == nil {
-				select {
-				case states <- s.State:
-				default:
-				}
+		}
+	case protocol.TypeModelState:
+		var s protocol.ModelState
+		if json.Unmarshal(raw, &s) == nil {
+			select {
+			case c.states <- s.State:
+			default:
 			}
 		}
 	}
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+}
+
+// cmdModel prints the cone's model and the catalogue, or selects a model and
+// waits for the leader's model.state to confirm it.
+func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
+	ch := newModelChannels()
+	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: ch.handle, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
 	if err != nil {
 		errLine("model", "%s", err)
 		reportRuntimeError("dial", err)
@@ -300,27 +314,13 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 	deadline := time.NewTimer(a.timeout)
 	defer deadline.Stop()
-	var catalog []protocol.ModelCatalogEntry
-	var state *protocol.ModelSelectionState
-	for catalog == nil || state == nil {
-		select {
-		case l := <-lists:
-			catalog = l
-		case s := <-states:
-			state = &s
-		case <-deadline.C:
-			errLine("model", "the leader sent no model list within %s", a.timeout)
-			return 1
-		case <-conn.Done():
-			errLine("model", "connection closed")
-			return 1
-		case <-ctx.Done():
-			return 130
-		}
+	catalog, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout)
+	if code >= 0 {
+		return code
 	}
-
 	if a.query == "" {
-		return printModels(a.json, *state, catalog)
+		printModels(a.json, state, catalog)
+		return 0
 	}
 	want, err := resolveModel(a.query, catalog)
 	if err != nil {
@@ -335,11 +335,40 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 		errLine("model", "%s", err)
 		return 1
 	}
-	last := state.ActiveModelID
+	return awaitSwitch(ctx, conn, ch, deadline.C, a.timeout, want, state)
+}
+
+// awaitCatalog waits for both the catalogue and the cone's model state. A
+// non-negative code means the command is over with that exit status.
+func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration) ([]protocol.ModelCatalogEntry, protocol.ModelSelectionState, int) {
+	var catalog []protocol.ModelCatalogEntry
+	var state *protocol.ModelSelectionState
+	for catalog == nil || state == nil {
+		select {
+		case l := <-ch.lists:
+			catalog = l
+		case s := <-ch.states:
+			state = &s
+		case <-deadline:
+			errLine("model", "the leader sent no model list within %s", timeout)
+			return nil, protocol.ModelSelectionState{}, 1
+		case <-conn.Done():
+			errLine("model", "connection closed")
+			return nil, protocol.ModelSelectionState{}, 1
+		case <-ctx.Done():
+			return nil, protocol.ModelSelectionState{}, 130
+		}
+	}
+	return catalog, *state, -1
+}
+
+// awaitSwitch waits for a model.state for the cone's scoop naming want.
+func awaitSwitch(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, want string, before protocol.ModelSelectionState) int {
+	last := before.ActiveModelID
 	for {
 		select {
-		case s := <-states:
-			if s.ScoopJid != "" && state.ScoopJid != "" && s.ScoopJid != state.ScoopJid {
+		case s := <-ch.states:
+			if s.ScoopJid != "" && before.ScoopJid != "" && s.ScoopJid != before.ScoopJid {
 				continue
 			}
 			last = s.ActiveModelID
@@ -347,8 +376,8 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 				fmt.Println(want)
 				return 0
 			}
-		case <-deadline.C:
-			errLine("model", "the leader did not switch to %s within %s (still %s)", want, a.timeout, last)
+		case <-deadline:
+			errLine("model", "the leader did not switch to %s within %s (still %s)", want, timeout, last)
 			return 1
 		case <-conn.Done():
 			errLine("model", "connection closed")
@@ -359,11 +388,11 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 	}
 }
 
-func printModels(asJSON bool, state protocol.ModelSelectionState, catalog []protocol.ModelCatalogEntry) int {
+func printModels(asJSON bool, state protocol.ModelSelectionState, catalog []protocol.ModelCatalogEntry) {
 	if asJSON {
 		out, _ := json.MarshalIndent(modelListing{Active: state.ActiveModelID, ScoopJid: state.ScoopJid, Models: catalog}, "", "  ")
 		fmt.Println(string(out))
-		return 0
+		return
 	}
 	for _, m := range catalog {
 		mark := "  "
@@ -372,5 +401,4 @@ func printModels(asJSON bool, state protocol.ModelSelectionState, catalog []prot
 		}
 		fmt.Fprintf(os.Stdout, "%s%s\t%s\n", mark, m.ModelID, m.ModelName)
 	}
-	return 0
 }
