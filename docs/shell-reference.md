@@ -2008,7 +2008,11 @@ constructors are left as the platform's, so `instanceof Request` and
 `req.clone()` keep working. Native stream I/O (`Request`/`Response`/
 `Blob`/`File` body reads, `FormData`, `ReadableStream` `read`/`pipeTo`,
 `body.getReader()`) keeps the realm alive until the native read settles,
-so a second stream read cannot silently exit 0 (#3227). An uncleared
+so a second stream read cannot silently exit 0 (#3227). A pending
+`WebAssembly.compile` / `instantiate` and a pending `__slicc_mountVfs`
+count the same way. That lets an Emscripten program built in slicc run as
+`node prog.js`: its glue starts `main` only after instantiation, and after
+its `--pre-js` has mounted the live VFS. An uncleared
 `setInterval` or hung I/O hangs until the shell job is SIGKILL'd, the
 same way hung I/O hangs real Node.
 
