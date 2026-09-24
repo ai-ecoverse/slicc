@@ -8,6 +8,9 @@ Deep-dive: [`docs/slicc-cli-details.md`](../../docs/slicc-cli-details.md).
 ```
 slicc <join-url> prompt "<text>"                Stream one assistant turn, then exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output
+slicc <join-url> new-session [--save|--skip|--erase]
+                                                Fresh cone conversation ("New chat"), verified empty
+slicc <join-url> model [--json] [<model>]       List models, or switch the cone and await model.state
 slicc <join-url> watch [--plain] [scoop]        Tail the leader's live agent output, read-only
 slicc <join-url> follow [--no-banner] [--plain] [runner]
                                                 Stay connected; run leader commands via <runner>
@@ -24,6 +27,14 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL fro
   `ready` after every assistant _message_, so a tool-using turn flips twice;
   exiting on the first flip returned an empty reply (`promptTurn` in
   `commands.go`).
+- `new-session`/`model` (`session.go`) send the follower control messages the
+  browser/iOS followers already use (`new_session`, `models.request`,
+  `model.select`):
+  - `new-session` polls `request_snapshot` until the transcript has no user
+    message, because the leader sends no acknowledgement.
+  - `model` resolves the query to an exact catalogue id (the leader applies only
+    exact ids) and waits for the `model.state` broadcast that confirms it.
+  - Their structs are in `internal/protocol` and round-trip the tray-sync corpus.
 - `watch` — passive `tail -f` mirror; sends nothing, reconnects with backoff.
   **Does NOT filter by scoop by default** — the cone's `scoopJid` is a generated
   uid (not `"cone"`); pass a scoop jid to filter.

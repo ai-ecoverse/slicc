@@ -28,6 +28,7 @@ this file when a category grows; keep the root file to bare titles.
 | `packages/slicc-cli/`          | `slicc` — headless Go (pion) follower CLI (`prompt`/`exec`/`follow`; Go module, not npm)      |
 | `packages/dev-tools/`          | Repo tooling: build helpers, QA, providers filter, e2b template                               |
 | `packages/github-workflow/`    | GitHub Actions: hosted leader on a runner + `slicc` CLI wrappers (composite actions, not npm) |
+| `packages/bench/`              | Benchmark runner: task sets × models × skills on a leader, rubric judge, reports (not npm)    |
 | `packages/assets/`             | Shared static files (logos, fonts, favicon); folder, not an npm workspace                     |
 
 ## Automated PR Review Checklist — Descriptions

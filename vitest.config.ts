@@ -298,6 +298,16 @@ export default defineConfig({
           include: ['packages/github-workflow/**/*.test.mjs'],
         },
       },
+      {
+        // Benchmark runner: zero-dependency .mjs, like github-workflow (it
+        // imports that package's gh-io helpers). Co-located *.test.mjs cover
+        // the task format, judge scoring, adapter and runner with fakes.
+        extends: true,
+        test: {
+          name: 'bench',
+          include: ['packages/bench/**/*.test.mjs'],
+        },
+      },
     ],
   },
 });
