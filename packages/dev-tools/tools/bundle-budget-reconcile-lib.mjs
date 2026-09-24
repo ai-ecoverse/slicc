@@ -3,35 +3,34 @@
  * decide which exceeded budgets a dependency bump may raise, and rewrite the
  * `limit` strings in a package.json without reformatting the file.
  *
- * size-limit parses limits with decimal units (1 kB = 1000 B, 1 MB = 1000 kB),
- * so "25.917 MB" is 25,917,000 bytes. Raised limits are rounded UP to whole
- * kilobytes and keep the unit the budget was written in.
+ * size-limit parses decimal units (1 kB = 1000 B, 1 MB = 1000 kB, so
+ * "25.917 MB" is 25,917,000 bytes) and binary units (1 KiB = 1024 B,
+ * 1 MiB = 1024 KiB). Raised limits keep the unit the budget was written in and
+ * are rounded UP.
  */
 
-const UNIT_BYTES = { b: 1, kb: 1000, mb: 1000 * 1000 };
+const UNIT_BYTES = { b: 1, kb: 1000, mb: 1000 ** 2, kib: 1024, mib: 1024 ** 2 };
+const UNIT_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*(b|kb|mb|kib|mib)\s*$/i;
 
-/** Parse a size-limit `limit` string ("25.917 MB", "60 kB", "512 B") to bytes. */
+/** Parse a size-limit `limit` string ("25.917 MB", "27 MiB", "60 kB") to bytes. */
 export function parseLimit(limit) {
-  const match = /^\s*(\d+(?:\.\d+)?)\s*(b|kb|mb)\s*$/i.exec(String(limit));
+  const match = UNIT_PATTERN.exec(String(limit));
   if (!match) throw new Error(`Unsupported size-limit limit: ${JSON.stringify(limit)}`);
   return Math.round(Number(match[1]) * UNIT_BYTES[match[2].toLowerCase()]);
 }
 
 /**
- * Format `bytes` in the same unit as `previous`, rounded up to the next whole
- * kilobyte so the result is never below the measured size.
+ * Format `bytes` in the same unit as `previous`, rounded UP (three decimals for
+ * MB/MiB, whole units otherwise) so the result is never below `bytes`.
  */
 export function formatLimit(bytes, previous) {
-  const unit = /(b|kb|mb)\s*$/i.exec(String(previous))?.[1] ?? 'kB';
-  const kb = Math.ceil(bytes / 1000);
-  switch (unit.toLowerCase()) {
-    case 'mb':
-      return `${(kb / 1000).toFixed(3)} MB`;
-    case 'b':
-      return `${kb * 1000} B`;
-    default:
-      return `${kb} kB`;
-  }
+  const unit = UNIT_PATTERN.exec(String(previous))?.[2] ?? 'kB';
+  const lower = unit.toLowerCase();
+  const scale = lower === 'mb' || lower === 'mib' ? 1000 : 1;
+  // The epsilon keeps an exact fit (e.g. 25,923,000 B → 25.923 MB) from
+  // ceiling up a step on floating-point noise.
+  const value = Math.ceil((bytes / UNIT_BYTES[lower]) * scale - 1e-9) / scale;
+  return `${value.toFixed(scale === 1 ? 0 : 3)} ${unit}`;
 }
 
 /**

@@ -14,6 +14,11 @@ describe('parseLimit', () => {
     expect(parseLimit('25.70 MB')).toBe(25_700_000);
   });
 
+  it('uses size-limit binary units', () => {
+    expect(parseLimit('27 MiB')).toBe(28_311_552);
+    expect(parseLimit('1.5 KiB')).toBe(1_536);
+  });
+
   it('rejects unknown formats', () => {
     expect(() => parseLimit('1 GiB')).toThrow(/Unsupported/);
     expect(() => parseLimit('')).toThrow(/Unsupported/);
@@ -25,13 +30,16 @@ describe('formatLimit', () => {
     expect(formatLimit(25_922_494, '25.917 MB')).toBe('25.923 MB');
     expect(formatLimit(25_923_000, '25.917 MB')).toBe('25.923 MB');
     expect(formatLimit(60_001, '60 kB')).toBe('61 kB');
-    expect(formatLimit(1_234, '1000 B')).toBe('2000 B');
+    expect(formatLimit(1_234, '1000 B')).toBe('1234 B');
+    expect(formatLimit(28_311_553, '27 MiB')).toBe('27.001 MiB');
+    expect(formatLimit(2_049, '2 KiB')).toBe('3 KiB');
   });
 
   it('never formats below the measured size', () => {
-    for (const size of [1, 999, 1000, 25_700_163, 104_079]) {
-      expect(parseLimit(formatLimit(size, '1 MB'))).toBeGreaterThanOrEqual(size);
-      expect(parseLimit(formatLimit(size, '1 kB'))).toBeGreaterThanOrEqual(size);
+    for (const size of [1, 999, 1000, 25_700_163, 104_079, 28_311_553, 30_000_001]) {
+      for (const unit of ['1 MB', '1 kB', '1 MiB', '1 KiB', '1 B']) {
+        expect(parseLimit(formatLimit(size, unit))).toBeGreaterThanOrEqual(size);
+      }
     }
   });
 });
