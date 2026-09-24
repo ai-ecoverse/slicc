@@ -130,6 +130,7 @@ jobs:
           path: |
             ${{ runner.temp }}/bench-out/report.md
             ${{ runner.temp }}/bench-out/report.json
+            ${{ runner.temp }}/bench-out/report.html
             ${{ runner.temp }}/bench-out/results
           if-no-files-found: ignore
 
