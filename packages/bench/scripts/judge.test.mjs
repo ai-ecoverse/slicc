@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  addUsage,
   bedrockBase,
   buildConverseBody,
   buildJudgeText,
@@ -149,6 +150,26 @@ describe('validateJudgement', () => {
         []
       )
     ).toEqual(['findings is not a list']);
+  });
+});
+
+describe('addUsage', () => {
+  it('sums numeric fields and keeps whichever side reported', () => {
+    expect(addUsage(null, null)).toBeNull();
+    expect(addUsage(null, { totalTokens: 3 })).toEqual({ totalTokens: 3 });
+    expect(addUsage({ totalTokens: 3 }, undefined)).toEqual({ totalTokens: 3 });
+    expect(
+      addUsage(
+        { inputTokens: 10, outputTokens: 2, totalTokens: 12, note: 'a' },
+        { inputTokens: 5, outputTokens: 1, totalTokens: 6, cacheReadInputTokens: 4, note: 'b' }
+      )
+    ).toEqual({
+      inputTokens: 15,
+      outputTokens: 3,
+      totalTokens: 18,
+      cacheReadInputTokens: 4,
+      note: 'a',
+    });
   });
 });
 
@@ -396,7 +417,10 @@ describe('judgeRun', () => {
       ...flagless
     } = JUDGEMENT;
     const withInput = (input) =>
-      reply(200, { output: { message: { content: [{ toolUse: { input } }] } } });
+      reply(200, {
+        output: { message: { content: [{ toolUse: { input } }] } },
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+      });
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(withInput(flagless))
@@ -405,5 +429,6 @@ describe('judgeRun', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(out.judgement.infra_error).toBe(false);
     expect(out.result.score).toBe(1);
+    expect(out.usage).toEqual({ inputTokens: 200, outputTokens: 40, totalTokens: 240 });
   });
 });

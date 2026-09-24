@@ -173,6 +173,21 @@ export function normalizeJudgement(j) {
   return out;
 }
 
+/**
+ * Converse usage summed over calls: every numeric field (inputTokens, outputTokens,
+ * totalTokens, cache counts) adds up. Null when no call reported any.
+ */
+export function addUsage(a, b) {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  const sum = { ...a };
+  for (const [k, v] of Object.entries(b)) {
+    if (typeof v === 'number') sum[k] = (typeof sum[k] === 'number' ? sum[k] : 0) + v;
+    else if (!(k in sum)) sum[k] = v;
+  }
+  return sum;
+}
+
 /** Attempts at a well-formed judgement: the judge is sampled, so a malformed one is asked again. */
 export const JUDGE_ATTEMPTS = 2;
 
@@ -276,7 +291,8 @@ export async function converse({
 
 /**
  * Judge one run: build the request, call the model (text-only if images are refused), validate
- * the findings, and score them. Returns `{ judgement, result, usage, imagesSent }`.
+ * the findings, and score them. Returns `{ judgement, result, usage, imagesSent }`, with `usage`
+ * summed over every call that answered, so a retried judgement reports all it cost.
  */
 export async function judgeRun({
   spec,
@@ -302,7 +318,7 @@ export async function judgeRun({
     });
   let imagesSent = trace.screenshots.length > 0;
   let judgement;
-  let usage;
+  let usage = null;
   let errors = [];
   for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt += 1) {
     let reply;
@@ -314,7 +330,7 @@ export async function judgeRun({
       reply = await ask(false);
     }
     judgement = normalizeJudgement(reply.input);
-    usage = reply.usage;
+    usage = addUsage(usage, reply.usage);
     errors = validateJudgement(judgement, itemIds);
     if (!errors.length) break;
   }
