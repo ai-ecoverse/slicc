@@ -118,7 +118,52 @@ func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Dur
 }
 
 
+
+func (p *promptTurn) agentEvent(ev protocol.AgentEvent, finish func(int)) {
+	switch ev.Type {
+	case protocol.AgentContentDelta:
+		fmt.Print(ev.Text)
+		p.activity()
+	case protocol.AgentToolUseStart:
+		p.toolStart()
+	case protocol.AgentToolResult:
+		p.toolResult()
+	case protocol.AgentMessageStart, protocol.AgentContentDone:
+		p.activity()
+	case protocol.AgentTurnEnd:
+		finish(0)
+	case protocol.AgentError:
+		errLineAfterStream("prompt", "%s", ev.Error)
+		finish(1)
+	}
+}
+
+
+
+
+
+func promptAckRejection(raw []byte, messageID string) (string, bool) {
+	var ack protocol.UserMessageAck
+	if json.Unmarshal(raw, &ack) != nil || ack.MessageID != messageID {
+		return "", false
+	}
+	switch ack.State {
+	case protocol.AckRejected:
+		if ack.Error == "" {
+			return "the leader rejected the prompt", true
+		}
+		return "the leader rejected the prompt: " + ack.Error, true
+	case protocol.AckAccepted:
+		debugLogf("prompt: leader accepted the prompt (scoop %q)", ack.ScoopJid)
+	default:
+		debugLogf("prompt: ignoring user_message_ack state %q", ack.State)
+	}
+	return "", false
+}
+
+
 func cmdPrompt(ctx context.Context, joinURL, text string) int {
+	messageID := newID()
 	done := make(chan int, 1)
 	finish := func(code int) {
 		select {
@@ -144,22 +189,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 				return
 			}
 			debugLogf("prompt: agent_event %s", env.Event.Type)
-			switch env.Event.Type {
-			case protocol.AgentContentDelta:
-				fmt.Print(env.Event.Text)
-				turn.activity()
-			case protocol.AgentToolUseStart:
-				turn.toolStart()
-			case protocol.AgentToolResult:
-				turn.toolResult()
-			case protocol.AgentMessageStart, protocol.AgentContentDone:
-				turn.activity()
-			case protocol.AgentTurnEnd:
-				finish(0)
-			case protocol.AgentError:
-				errLineAfterStream("prompt", "%s", env.Event.Error)
-				finish(1)
-			}
+			turn.agentEvent(env.Event, finish)
 			wake()
 		case protocol.TypeStatus:
 			var s protocol.Status
@@ -169,6 +199,11 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
 			turn.status(s.ScoopStatus, time.Now())
 			wake()
+		case protocol.TypeUserMessageAck:
+			if reason, rejected := promptAckRejection(raw, messageID); rejected {
+				errLine("prompt", "%s", reason)
+				finish(1)
+			}
 		case protocol.TypeError:
 			var e struct {
 				Error string `json:"error"`
@@ -188,7 +223,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	defer conn.Close()
 
 	if err := conn.SendJSON(protocol.UserMessage{
-		Type: "user_message", Text: text, MessageID: newID(),
+		Type: "user_message", Text: text, MessageID: messageID,
 	}); err != nil {
 		errLine("prompt", "%s", err)
 		return 1

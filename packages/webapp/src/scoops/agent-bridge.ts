@@ -374,7 +374,7 @@ async function writeOutcomeReceipt(
   path: string,
   result: AgentSpawnResult,
   merge?: MergeOutcome
-): Promise<void> {
+): Promise<boolean> {
   try {
     const dir = path.slice(0, path.lastIndexOf('/'));
     if (dir) await sharedFs.mkdir(dir, { recursive: true });
@@ -395,8 +395,10 @@ async function writeOutcomeReceipt(
         2
       )
     );
+    return true;
   } catch (err) {
     log.warn('outcome receipt write failed', { path, error: errText(err) });
+    return false;
   }
 }
 
@@ -408,6 +410,41 @@ async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<v
   } catch (err) {
     log.warn('success receipt write failed', { path, error: errText(err) });
   }
+}
+
+async function notifyPassOutcome(
+  ctx: BridgeContext,
+  jid: string,
+  receiptPath: string | undefined,
+  outcome: AgentSpawnResult
+): Promise<void> {
+  try {
+    await ctx.orchestrator.notifyScoopOutcome(jid, {
+      exitCode: outcome.exitCode,
+      ...(receiptPath ? { receiptPath } : {}),
+
+      ...(outcome.exitCode !== 0 || isRunBoundTrip(outcome.finalText)
+        ? { reason: outcome.finalText.slice(0, 500) }
+        : {}),
+    });
+  } catch (err) {
+    log.warn('pass outcome notify failed', { jid, error: errText(err) });
+  }
+}
+
+async function maybeNotifyPassOutcome(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  jid: string,
+  finished: { outcome: AgentSpawnResult; receiptWritten: boolean }
+): Promise<void> {
+  if (options.notifyOnComplete !== true || !options.outcomeReceiptPath) return;
+  await notifyPassOutcome(
+    ctx,
+    jid,
+    finished.receiptWritten ? options.outcomeReceiptPath : undefined,
+    finished.outcome
+  );
 }
 
 const AGENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -596,7 +633,7 @@ async function runScoopToOutcome(
   scoop: RegisteredScoop,
   jid: string,
   observerHandle: ReturnType<typeof registerScoopObserver>
-): Promise<AgentSpawnResult> {
+): Promise<{ outcome: AgentSpawnResult; receiptWritten: boolean }> {
   let outcome = await runScoopToOutcomeInner(ctx, options, scoop, jid, observerHandle);
 
   let merge: MergeOutcome | undefined;
@@ -627,10 +664,16 @@ async function runScoopToOutcome(
   if (outcome.exitCode === 0 && options.successReceiptPath) {
     await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
   }
+  let receiptWritten = false;
   if (options.outcomeReceiptPath) {
-    await writeOutcomeReceipt(ctx.sharedFs, options.outcomeReceiptPath, outcome, merge);
+    receiptWritten = await writeOutcomeReceipt(
+      ctx.sharedFs,
+      options.outcomeReceiptPath,
+      outcome,
+      merge
+    );
   }
-  return outcome;
+  return { outcome, receiptWritten };
 }
 
 async function runScoopToOutcomeInner(
@@ -734,6 +777,8 @@ export function createAgentBridge(
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
       notifyOnComplete: options.notifyOnComplete === true,
       parentJid,
+
+      ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
@@ -755,7 +800,10 @@ export function createAgentBridge(
 
     let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
     try {
-      outcome = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+      const finished = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+      outcome = finished.outcome;
+
+      await maybeNotifyPassOutcome(ctx, options, jid, finished);
       return outcome;
     } finally {
       options.signal?.removeEventListener('abort', onAbort);

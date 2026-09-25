@@ -60,6 +60,8 @@ export interface RegisteredScoop {
 
   notifyOnComplete?: boolean;
 
+  outcomeReceiptPath?: string;
+
   onParentClose?: 'cascade' | 'detach';
 }
 

@@ -132,6 +132,8 @@ export interface ScoopLifecycleDeps {
     appendResponseChunk(jid: string, chunk: string): void;
     setResponseFull(jid: string, text: string): void;
     notifyCompletion(jid: string): Promise<void> | void;
+
+    recordFailure(jid: string, reason: string): void;
     forgetScoop(jid: string, reason: 'unregister' | 'fatal-error' | 'close'): void;
     clearResponse(jid: string): void;
   };
@@ -865,16 +867,7 @@ export class ScoopLifecycleManager {
         this.units.get(jid)?.touch();
         callbacks.onResponseDone(jid);
       },
-      onError: (error) => {
-        if (!scoops().has(jid)) return;
-
-        this.units.get(jid)?.transition('error', { error });
-        emitScoopLifecycle('error', scoop.folder, error);
-        callbacks.onError(jid, error);
-        callbacks.onStatusChange(jid, 'error');
-        this.dispatch(jid, 'onError', error);
-        this.dispatch(jid, 'onStatusChange', 'error');
-      },
+      onError: (error) => this.handleScoopTurnError(jid, scoop, error),
       onFatalError: (error) => this.handleFatalError(jid, error),
       onStatusChange: (status) => {
         if (!scoops().has(jid)) return;
@@ -974,6 +967,18 @@ export class ScoopLifecycleManager {
         : undefined,
       getBrowserAPI: () => callbacks.getBrowserAPI(),
     };
+  }
+
+  private handleScoopTurnError(jid: string, scoop: RegisteredScoop, error: string): void {
+    if (!this.deps.getScoops().has(jid)) return;
+
+    this.deps.completionService.recordFailure(jid, error);
+    this.units.get(jid)?.transition('error', { error });
+    emitScoopLifecycle('error', scoop.folder, error);
+    this.deps.callbacks.onError(jid, error);
+    this.deps.callbacks.onStatusChange(jid, 'error');
+    this.dispatch(jid, 'onError', error);
+    this.dispatch(jid, 'onStatusChange', 'error');
   }
 
   private handleFatalError(jid: string, error: string): void {

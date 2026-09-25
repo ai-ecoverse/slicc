@@ -153,6 +153,7 @@ function makeMockOrchestrator(): {
         if (s.size === 0) observers.delete(jid);
       };
     }),
+    notifyScoopOutcome: vi.fn(async () => {}),
     getScoops: vi.fn(() => knownScoops),
     getScoopContext: vi.fn(() => undefined),
   };
@@ -2162,6 +2163,104 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
     expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
     expect(status.reason).toContain('provider exploded');
     expect(status.merge).toBeUndefined();
+  });
+
+  it('notifies the cone of a failed pass after writing the outcome receipt (#3460)', async () => {
+    const { orchestrator, scripts, registerCalls } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: { [MERGE.basePath]: 'old\n', [MERGE.draftPath]: 'old\n' },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'sour-gelato',
+    });
+    scripts.set('agent_sour_gelato', (obs) => obs.onError?.('network error'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      notifyOnComplete: true,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(registerCalls[0]?.outcomeReceiptPath).toBe(STATUS);
+    expect(orchestrator.notifyScoopOutcome).toHaveBeenCalledWith(
+      registerCalls[0]?.jid,
+      expect.objectContaining({
+        exitCode: 1,
+        receiptPath: STATUS,
+        reason: expect.stringContaining('network error'),
+      })
+    );
+  });
+
+  it('notifies truncated-success after promoting a bound-trip draft (#3460)', async () => {
+    const { orchestrator, scripts, registerCalls } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: {
+        [MERGE.basePath]: 'old memory\n',
+        [MERGE.draftPath]: 'compacted memory\n',
+        [MERGE.targetPath]: 'old memory\n',
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'warm-parfait',
+    });
+    scripts.set('agent_warm_parfait', (obs) =>
+      obs.onError?.('agent run terminated: wall-clock bound (900000 ms) exceeded')
+    );
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      notifyOnComplete: true,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(orchestrator.notifyScoopOutcome).toHaveBeenCalledWith(
+      registerCalls[0]?.jid,
+      expect.objectContaining({
+        exitCode: 0,
+        receiptPath: STATUS,
+        reason: expect.stringContaining('wall-clock bound'),
+      })
+    );
+  });
+
+  it('omits status.json from the cone notify when the receipt write fails (#3460)', async () => {
+    const { orchestrator, scripts, registerCalls } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: { [MERGE.basePath]: 'old\n', [MERGE.draftPath]: 'new\n', [MERGE.targetPath]: 'old\n' },
+      writeFile: async (path) => {
+        if (path === STATUS) throw new Error('quota exceeded');
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'dry-sorbet',
+    });
+    scripts.set('agent_dry_sorbet', (obs) => obs.onSendMessage?.('curated'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      notifyOnComplete: true,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(shared.files.has(STATUS)).toBe(false);
+    expect(orchestrator.notifyScoopOutcome).toHaveBeenCalledWith(
+      registerCalls[0]?.jid,
+      expect.objectContaining({ exitCode: 0 })
+    );
+    const notified = vi.mocked(orchestrator.notifyScoopOutcome).mock.calls[0]?.[1] as {
+      receiptPath?: string;
+    };
+    expect(notified.receiptPath).toBeUndefined();
   });
 
   it('promotes a diverged draft when the run tripped its bound', async () => {

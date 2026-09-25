@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -408,6 +409,96 @@ func TestCLIPromptErrorAfterReady(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Not signed in to Provider") {
 		t.Fatalf("stderr = %q, want the agent error", stderr)
+	}
+}
+
+
+
+func ackLeader(t *testing.T, ack func(messageID string) protocol.UserMessageAck, frames []any) *bridgedLeader {
+	t.Helper()
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var um protocol.UserMessage
+		if json.Unmarshal(msg.Data, &um) != nil || um.Type != "user_message" {
+			return
+		}
+		go func() {
+			_ = sendJSON(leader.dc, ack(um.MessageID))
+			for _, f := range frames {
+				if d, ok := f.(time.Duration); ok {
+					time.Sleep(d)
+					continue
+				}
+				_ = sendJSON(leader.dc, f)
+			}
+		}()
+	})
+	return leader
+}
+
+func ackFrame(messageID, state, errMsg string) protocol.UserMessageAck {
+	return protocol.UserMessageAck{
+		Type: protocol.TypeUserMessageAck, MessageID: messageID, ScoopJid: "cone",
+		State: state, Error: errMsg,
+	}
+}
+
+
+
+
+func TestCLIPromptRejectedAckExits(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		return ackFrame(id, protocol.AckRejected, "no agent to deliver to")
+	}, nil)
+	_, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("prompt err = %v, want exit 1; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr, "the leader rejected the prompt: no agent to deliver to") {
+		t.Fatalf("stderr = %q, want the leader's rejection", stderr)
+	}
+}
+
+
+
+func TestCLIPromptAcceptedAckKeepsWaiting(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		return ackFrame(id, protocol.AckAccepted, "")
+	}, []any{
+		500 * time.Millisecond,
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m1", "ACCEPTED-OK"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "ACCEPTED-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply streamed after the ack", stdout)
+	}
+}
+
+
+
+func TestCLIPromptIgnoresOtherMessagesAck(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(string) protocol.UserMessageAck {
+		return ackFrame("someone-else", protocol.AckRejected, "not yours")
+	}, []any{
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m1", "OWN-TURN-OK"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "OWN-TURN-OK") || strings.Contains(stderr, "not yours") {
+		t.Fatalf("stdout = %q, stderr = %q; want the turn, not the foreign rejection", stdout, stderr)
 	}
 }
 

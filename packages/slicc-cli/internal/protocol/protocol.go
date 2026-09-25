@@ -30,6 +30,8 @@ import "encoding/json"
 
 
 
+
+
 const TraySyncProtocolVersion = 10
 
 
@@ -178,6 +180,18 @@ type UserMessageEcho struct {
 
 
 
+type UserMessageAck struct {
+	Type      string `json:"type"` 
+	MessageID string `json:"messageId"`
+	ScoopJid  string `json:"scoopJid"`
+	State     string `json:"state"` 
+	Error     string `json:"error,omitempty"`
+}
+
+
+
+
+
 type NewSession struct {
 	Type   string `json:"type"` 
 	Action string `json:"action"`
@@ -276,6 +290,7 @@ const (
 	TypeExecSignal      = "exec.signal"
 	TypeAgentEvent      = "agent_event"
 	TypeUserMessageEcho = "user_message_echo"
+	TypeUserMessageAck  = "user_message_ack"
 	TypeStatus          = "status"
 	TypeNewSession      = "new_session"
 	TypeRequestSnapshot = "request_snapshot"
@@ -295,6 +310,9 @@ const (
 	StreamStderr = "stderr"
 
 	ScoopStatusProcessing = "processing"
+
+	AckAccepted = "accepted"
+	AckRejected = "rejected"
 
 	AgentMessageStart = "message_start"
 	AgentContentDelta = "content_delta"
