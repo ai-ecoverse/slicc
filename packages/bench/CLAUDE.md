@@ -14,20 +14,22 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges every 
 
 ## Layout
 
-| Path                        | Purpose                                                                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `scripts/format.mjs`        | Task format: validation, `outcome()` (pass / partial / fail), BU V1 and skill-creator converters                    |
-| `scripts/upstream.mjs`      | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                                         |
-| `scripts/judge.mjs`         | Findings judge over Converse: request, validation, `score()`, text-only retry                                       |
-| `scripts/slicc-adapter.mjs` | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace                            |
-| `scripts/lifecycle.mjs`     | Restart the CI leader with the start/stop-leader scripts; the diagnostic journal; redaction                         |
-| `scripts/executors.mjs`     | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt                        |
-| `scripts/results.mjs`       | Records → browser-use-style result files, paired skill/model deltas, markdown report                                |
-| `scripts/html.mjs`          | Records → one self-contained `report.html`: cards, table, deltas, task matrix, time × cost                          |
-| `scripts/publish.mjs`       | Stage a run for the Hugging Face dataset `ai-ecoverse/slicc-bench`: encrypted traces and task sets, combined report |
-| `dataset/README.md`         | The dataset card template; `publish.mjs` puts the combined report in place of `<!-- report -->`                     |
-| `scripts/run.mjs`           | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`                                 |
-| `tasks/smoke.json`          | Two short live tasks in the shared format; the PR smoke run uses the first                                          |
+| Path                         | Purpose                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `scripts/format.mjs`         | Task format: validation, `outcome()` (pass / partial / fail), BU V1 and skill-creator converters                    |
+| `scripts/upstream.mjs`       | Pinned upstream: Fernet decrypt/encrypt, set loading, judge-spec extraction                                         |
+| `scripts/judge.mjs`          | Findings judge over Converse: request, validation, `score()`, text-only retry                                       |
+| `scripts/slicc-adapter.mjs`  | Prompt, skills staging, `runTask` (setup, prompt, capture, teardown), transcript → trace                            |
+| `scripts/lifecycle.mjs`      | Restart the CI leader with the start/stop-leader scripts; the diagnostic journal; redaction                         |
+| `scripts/executors.mjs`      | Leader access: the Go `slicc` CLI against a join URL, with dial retries and prompt interrupt                        |
+| `scripts/results.mjs`        | Records → browser-use-style result files, paired skill/model deltas, markdown report                                |
+| `scripts/charts.mjs`         | report.html's charts: ranking, score vs. cost per task (quadrant, Pareto line), tool use                            |
+| `scripts/backfill-tools.mjs` | Add tool-use metrics to records from saved traces (runs recorded before they existed)                               |
+| `scripts/html.mjs`           | Records → one self-contained `report.html`: cards, table, deltas, task matrix, time × cost                          |
+| `scripts/publish.mjs`        | Stage a run for the Hugging Face dataset `ai-ecoverse/slicc-bench`: encrypted traces and task sets, combined report |
+| `dataset/README.md`          | The dataset card template; `publish.mjs` puts the combined report in place of `<!-- report -->`                     |
+| `scripts/run.mjs`            | CLI: plan, run, judge, resume, write `records/`, `traces/`, `results/`, `report.md`                                 |
+| `tasks/smoke.json`           | Two short live tasks in the shared format; the PR smoke run uses the first                                          |
 
 ## How a run works
 

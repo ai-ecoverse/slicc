@@ -14,8 +14,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
 import { listFiles } from './publish.mjs';
-import { configKey, reportData } from './results.mjs';
+import { configKey, percent, reportData } from './results.mjs';
 
 const esc = (v) =>
   String(v ?? '').replace(
@@ -79,10 +80,72 @@ function deltaList(title, deltas, label) {
   const items = deltas
     .map((d) => {
       const tone = d.score == null ? '' : d.score > 0 ? 'up' : d.score < 0 ? 'down' : '';
-      return `<li><strong>${esc(label(d))}</strong>: score <span class="${tone}">${signed(d.score)}</span>, time ${signed(d.duration, 0)} s, cost ${signed(d.cost, 3)} $ <span class="muted">(n=${d.n})</span></li>`;
+      return `<li><strong>${esc(label(d))}</strong>: score <span class="${tone}">${percent(d.score_pct)}</span> <span class="muted">(${num(d.score_from)} → ${num(d.score_to)})</span>, time ${tradeoff(d.duration, d.duration_pct, 'time')}, cost ${tradeoff(d.cost, d.cost_pct, 'cost')} <span class="muted">(n=${d.n})</span></li>`;
     })
     .join('\n');
   return `<h3>${esc(title)}</h3><ul class="deltas">${items}</ul>`;
+}
+
+/** Below this many paired tasks, a lift is flagged as a small sample. */
+export const SMALL_SAMPLE = 10;
+
+/**
+ * A paired time or cost difference in words, relative first: "22% faster (71 s)",
+ * "11% cheaper ($0.035)". Without a relative change (a zero baseline), the absolute one alone.
+ */
+export function tradeoff(value, pct, kind) {
+  if (value == null || Number.isNaN(value)) return '–';
+  const abs = Math.abs(value);
+  const amount = kind === 'time' ? `${abs.toFixed(0)} s` : `$${abs.toFixed(3)}`;
+  if (amount === '0 s' || amount === '$0.000') return 'about the same';
+  const [less, more] = kind === 'time' ? ['faster', 'slower'] : ['cheaper', 'more expensive'];
+  const word = value < 0 ? less : more;
+  const head = pct == null ? `${amount} ${word}` : `${Math.abs(pct * 100).toFixed(0)}% ${word}`;
+  const tail = pct == null ? '' : ` <span class="muted">(${amount})</span>`;
+  return value < 0 ? `<span class="up">${head}</span>${tail}` : `${head}${tail}`;
+}
+
+/** Paired mean score without and with, on a 0–1 track. */
+function dumbbell(from, to) {
+  if (from == null || to == null) return '';
+  const W = 240;
+  const P = 8;
+  const x = (v) => (P + v * (W - 2 * P)).toFixed(1);
+  const tone = to > from ? 'up' : to < from ? 'down' : 'flat';
+  return `<svg class="dumbbell ${tone}" viewBox="0 0 ${W} 20" role="img" aria-label="mean score ${num(from)} without, ${num(to)} with">
+  <line x1="${P}" y1="10" x2="${W - P}" y2="10" class="track"/>
+  <line x1="${x(from)}" y1="10" x2="${x(to)}" y2="10" class="span"/>
+  <circle cx="${x(from)}" cy="10" r="5" class="from"/>
+  <circle cx="${x(to)}" cy="10" r="6" class="to"/>
+</svg>`;
+}
+
+function liftCard(d) {
+  const tone = d.score == null ? '' : d.score > 0 ? 'up' : d.score < 0 ? 'down' : '';
+  const small = d.n < SMALL_SAMPLE ? ' <span class="chip warn">small sample</span>' : '';
+  return `<article class="card lift">
+  <h3>${esc(d.model)} <span class="chip">${esc(d.to)} over ${esc(d.from)}</span></h3>
+  <p class="big ${tone}">${percent(d.score_pct)}<small> score lift</small></p>
+  ${dumbbell(d.score_from, d.score_to)}
+  <p class="pair">${esc(d.from)} ${num(d.score_from)} → ${esc(d.to)} ${num(d.score_to)} (${signed(d.score)})</p>
+  <dl>
+    <dt>time</dt><dd>${tradeoff(d.duration, d.duration_pct, 'time')}</dd>
+    <dt>cost</dt><dd>${tradeoff(d.cost, d.cost_pct, 'cost')}</dd>
+    <dt>paired tasks</dt><dd>${d.n}${small}</dd>
+  </dl>
+</article>`;
+}
+
+/**
+ * What the skills add: per model, the paired mean score without and with, its lift, and what it
+ * does to time and cost. Measured over tasks both sides judged, so an easy task only one side
+ * finished cannot move it.
+ */
+function skillLift(b) {
+  if (!b.skill_deltas.length) return '';
+  const base = b.skill_deltas[0].from;
+  return `<h3>Skills lift <small>relative to ${esc(base)}; paired by task, counting only tasks both sides judged</small></h3>
+<div class="cards">${b.skill_deltas.map(liftCard).join('\n')}</div>`;
 }
 
 /** Task × configuration grid, hardest tasks (lowest mean score) first. */
@@ -132,13 +195,12 @@ ${body}
 </tbody></table></div>`;
 }
 
-const PALETTE = ['#2f6fdf', '#d9480f', '#2b8a3e', '#9c36b5', '#c2255c', '#0b7285', '#e67700'];
-
 /**
  * Time (x) against cost (y), one dot per finished run whose time and cost were both measured,
- * colored by configuration. A run with an unknown cost is left out, not drawn at $0.
+ * colored by model and outlined without skills. A run with an unknown cost is left out, not
+ * drawn at $0.
  */
-function scatter(records, configs) {
+function scatter(records, slots) {
   const measured = (r) =>
     typeof r.metrics?.duration === 'number' && typeof r.metrics?.cost === 'number';
   const runs = records.filter((r) => (!r.error || r.error_stage === 'judge') && measured(r));
@@ -150,36 +212,34 @@ function scatter(records, configs) {
   const maxY = Math.max(...runs.map((r) => r.metrics?.cost ?? 0), 0.001);
   const x = (v) => P + (v / maxX) * (W - P * 1.5);
   const y = (v) => H - P - (v / maxY) * (H - P * 1.5);
-  const color = new Map(configs.map((c, i) => [configKey(c), PALETTE[i % PALETTE.length]]));
   const dots = runs
     .map((r) => {
       const state = cellState(r);
       const tip = `${configLabel(r.config)} · ${r.task_id} · ${state} · ${num(r.metrics?.duration, 0)} s · $${num(r.metrics?.cost, 3)}`;
-      return `<circle cx="${x(r.metrics?.duration ?? 0).toFixed(1)}" cy="${y(r.metrics?.cost ?? 0).toFixed(1)}" r="5" fill="${color.get(configKey(r.config))}" stroke="${color.get(configKey(r.config))}" class="${state === 'pass' ? 'solid' : 'hollow'}"><title>${esc(tip)}</title></circle>`;
+      const kind = r.config.skills === 'none' ? 'without' : 'with';
+      return `<circle cx="${x(r.metrics?.duration ?? 0).toFixed(1)}" cy="${y(r.metrics?.cost ?? 0).toFixed(1)}" r="5" class="mark ${kind}" style="--c: var(--series-${slots.get(r.config.model)})"><title>${esc(tip)}</title></circle>`;
     })
     .join('\n');
-  const legend = configs
-    .map(
-      (c) =>
-        `<li><span class="swatch" style="background:${color.get(configKey(c))}"></span>${esc(configLabel(c))}</li>`
-    )
-    .join('');
-  return `<svg viewBox="0 0 ${W} ${H}" class="scatter" role="img" aria-label="Time against cost per run">
+  return `${chartLegend(slots)}
+<svg viewBox="0 0 ${W} ${H}" class="scatter" role="img" aria-label="Time against cost per run">
   <line x1="${P}" y1="${H - P}" x2="${W - P / 2}" y2="${H - P}" class="axis"/>
   <line x1="${P}" y1="${P / 2}" x2="${P}" y2="${H - P}" class="axis"/>
   <text x="${W - P / 2}" y="${H - P + 28}" text-anchor="end" class="label">time, s (max ${num(maxX, 0)})</text>
   <text x="${P - 8}" y="${P / 2 + 4}" text-anchor="end" class="label">$${num(maxY, 2)}</text>
   <text x="${P - 8}" y="${H - P + 4}" text-anchor="end" class="label">0</text>
 ${dots}
-</svg>
-<ul class="legend">${legend}<li><span class="swatch hollow-key"></span>hollow: not a pass</li></ul>`;
+</svg>`;
 }
 
 const STYLE = `
 :root { color-scheme: light dark; --bg:#fff; --fg:#1b1f24; --muted:#5f6b7a; --line:#d8dee4; --card:#f6f8fa;
-  --pass:#2b8a3e; --partial:#e8a200; --fail:#d6336c; --error:#868e96; --unjudged:#adb5bd; }
+  --pass:#2b8a3e; --partial:#e8a200; --fail:#d6336c; --error:#868e96; --unjudged:#adb5bd;
+  --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100;
+  --series-5:#e87ba4; --series-6:#008300; --series-7:#4a3aa7; --series-8:#e34948; }
 @media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --fg:#e6e9ee; --muted:#9aa5b1; --line:#2d333b;
-  --card:#171b21; --pass:#51cf66; --partial:#fcc419; --fail:#ff6b8b; --error:#868e96; --unjudged:#5c636b; } }
+  --card:#171b21; --pass:#51cf66; --partial:#fcc419; --fail:#ff6b8b; --error:#868e96; --unjudged:#5c636b;
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500;
+  --series-5:#d55181; --series-6:#008300; --series-7:#9085e9; --series-8:#e66767; } }
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1200px; padding: 24px; background: var(--bg); color: var(--fg);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -206,13 +266,43 @@ table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .matrix tbody th { text-align: left; font-weight: 400; }
 .cell { min-width: 44px; color: #fff; border: 2px solid var(--bg); border-radius: 6px; }
 .cell.partial { color: #1b1f24; } .cell.missing { color: var(--muted); background: transparent; }
+.big.up { color: var(--pass); } .big.down { color: var(--fail); }
+.chip.warn { border-color: var(--partial); }
+.dumbbell { display: block; width: 100%; height: auto; margin: 6px 0 2px; }
+.dumbbell .track { stroke: var(--line); stroke-width: 2; }
+.dumbbell .span { stroke-width: 4; stroke-linecap: round; }
+.dumbbell .from { fill: var(--bg); stroke: var(--muted); stroke-width: 2; }
+.dumbbell.up .span { stroke: var(--pass); } .dumbbell.up .to { fill: var(--pass); }
+.dumbbell.down .span { stroke: var(--fail); } .dumbbell.down .to { fill: var(--fail); }
+.dumbbell.flat .span { stroke: var(--muted); } .dumbbell.flat .to { fill: var(--muted); }
+.pair { margin: 0; font-size: 12px; color: var(--muted); }
 .deltas li { margin: 3px 0; } .up { color: var(--pass); font-weight: 600; } .down { color: var(--fail); font-weight: 600; }
 .scatter { width: 100%; max-width: 760px; height: auto; } .axis { stroke: var(--muted); }
+.value { width: 100%; max-width: 900px; height: auto; } .ranking { max-width: 100%; height: auto; }
 .label { fill: var(--muted); font-size: 12px; }
-.scatter .solid { stroke: var(--bg); stroke-width: 1; } .scatter .hollow { fill-opacity: .15; stroke-width: 2; }
-.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0; font-size: 13px; }
+.mark { fill: var(--c); stroke: var(--c); }
+.mark.with { stroke: var(--bg); stroke-width: 2; }
+.mark.without { fill-opacity: .18; stroke-width: 2; }
+.grid { stroke: var(--line); stroke-dasharray: 3 3; }
+.bar-value { fill: var(--fg); font-size: 14px; font-weight: 650; }
+.tick-name, .point-label { fill: var(--fg); font-size: 12px; }
+.axis-title { fill: var(--muted); font-size: 12px; }
+.quad-good { fill: var(--pass); fill-opacity: .1; } .quad-rest { fill: var(--muted); fill-opacity: .06; }
+.quad-label { fill: var(--pass); font-size: 12px; font-weight: 600; }
+.pareto { fill: none; stroke: var(--fg); stroke-width: 2; stroke-dasharray: 1 5; stroke-linecap: round; }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0; margin: 6px 0; font-size: 13px; }
 .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
-.hollow-key { border: 2px solid var(--muted); }
+.swatch.series { background: var(--c); }
+.tooluse { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 8px; }
+.tooluse-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(8rem, 1fr) auto; gap: 12px; align-items: center; font-size: 13px; }
+.tooluse-name { overflow-wrap: anywhere; } .tooluse-text { color: var(--muted); }
+.tooluse-text strong { color: var(--fg); }
+.tooluse-bar { height: 12px; } .seg.bare { background: var(--unjudged); }
+.seg.with, .seg.without { background: var(--c); } .seg.without { opacity: .45; }
+@media (max-width: 640px) { .tooluse-row { grid-template-columns: 1fr; gap: 4px; } }
+.swatch.outline { border: 2px solid var(--muted); }
+.swatch.quad { border-radius: 2px; background: color-mix(in srgb, var(--pass) 18%, transparent); }
+.swatch.pareto-key { width: 18px; height: 0; border-radius: 0; border-top: 2px dotted var(--fg); vertical-align: 3px; }
 footer { margin-top: 40px; font-size: 13px; color: var(--muted); }
 `;
 
@@ -233,17 +323,25 @@ export function reportHtml(
         model: c.model,
         skills: c.skills,
       }));
+      const slots = modelSlots(b.configs.map((c) => c.model));
       return `<section>
 <h2>${esc(b.benchmark)} <small>${rs.length} runs, ${new Set(rs.map((r) => r.task_id)).size} tasks</small></h2>
-<div class="cards">${b.configs.map(card).join('\n')}</div>
+<h3>Ranking <small>score = mean rubric score × 100, over judged runs</small></h3>
+${chartLegend(slots)}
+${rankingChart(b.configs, slots)}
+<h3>Score vs. cost per task <small>mean cost of the runs that finished</small></h3>
+${valueChart(b.configs, slots)}
+${skillLift(b)}
+<h3>Answered without tools <small>runs with no tool call at all: the agent answered from what it knew</small></h3>
+${toolUseChart(b.configs, slots)}
 <h3>Configurations</h3>
+<div class="cards">${b.configs.map(card).join('\n')}</div>
 ${configTable(b)}
-${deltaList(`What skills change (paired, against ${b.skill_deltas[0]?.from ?? ''})`, b.skill_deltas, (d) => `${d.model}, ${d.to}`)}
 ${deltaList(`What models change (paired, against ${b.model_deltas[0]?.from ?? ''})`, b.model_deltas, (d) => `${d.skills}, ${d.to}`)}
 <h3>Tasks <small>hardest first; hover a cell for time and cost</small></h3>
 ${matrix(rs, configs)}
 <h3>Time and cost per run</h3>
-${scatter(rs, configs)}
+${scatter(rs, slots)}
 </section>`;
     })
     .join('\n');

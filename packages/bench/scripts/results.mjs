@@ -95,9 +95,10 @@ export function summarize(records, { runStart } = {}) {
 }
 
 /**
- * Mean difference of `b` over `a`, paired by task and repeat. Scores pair only runs both sides
- * judged; time and cost pair runs both sides finished and measured. Pairing keeps an easy task that only one
- * side ran from moving the delta.
+ * Mean difference of `b` over `a`, paired by task and repeat, with each side's mean over the same
+ * pairs (`from`, `to`). Scores pair only runs both sides judged; time and cost pair runs both
+ * sides finished and measured. Pairing keeps an easy task that only one side ran from moving the
+ * delta.
  */
 export function pairedDelta(records, a, b, field = 'score') {
   const keep = field === 'score' ? judged : ran;
@@ -111,14 +112,42 @@ export function pairedDelta(records, a, b, field = 'score') {
     return m;
   };
   const ib = index(b);
-  const diffs = [];
+  const pairs = [];
   for (const [k, ra] of index(a)) {
     const rb = ib.get(k);
-    if (rb && value(ra) !== null && value(rb) !== null) diffs.push(value(rb) - value(ra));
+    if (rb && value(ra) !== null && value(rb) !== null) pairs.push([value(ra), value(rb)]);
   }
   return {
-    n: diffs.length,
-    delta: diffs.length ? diffs.reduce((x, y) => x + y, 0) / diffs.length : null,
+    n: pairs.length,
+    delta: mean(pairs.map(([x, y]) => y - x)),
+    from: mean(pairs.map(([x]) => x)),
+    to: mean(pairs.map(([, y]) => y)),
+  };
+}
+
+/**
+ * The skills condition the others are measured against: `none` when it ran, so a delta reads as
+ * the lift the skills give; otherwise the first condition.
+ */
+export function skillsBaseline(skills) {
+  return skills.includes('none') ? 'none' : skills[0];
+}
+
+/**
+ * Tool use across finished runs whose transcript was counted: how many answered without a single
+ * tool call, and the mean judged score of those against the runs that used tools.
+ */
+function toolStats(done) {
+  const known = done.filter((r) => typeof r.metrics?.answered_without_tools === 'boolean');
+  const bare = known.filter((r) => r.metrics.answered_without_tools);
+  const tooled = known.filter((r) => !r.metrics.answered_without_tools);
+  const score = (rs) => round(mean(rs.filter(judged).map((r) => r.score)));
+  return {
+    tool_known: known.length,
+    no_tool_runs: bare.length,
+    no_tool_rate: known.length ? round(bare.length / known.length) : null,
+    no_tool_mean_score: score(bare),
+    tool_mean_score: score(tooled),
   };
 }
 
@@ -139,7 +168,13 @@ function configStats(c, cs) {
     mean_score: round(mean(scored.map((r) => r.score))),
     mean_duration: round(mean(knownValues(done, 'duration')), 3),
     mean_cost: round(mean(knownValues(done, 'cost'))),
+    ...toolStats(done),
   };
+}
+
+/** A paired change relative to its baseline mean; null when the baseline is zero or unknown. */
+export function relative(p) {
+  return p.from ? round(p.delta / p.from) : null;
 }
 
 function delta(records, from, to, extra) {
@@ -149,16 +184,21 @@ function delta(records, from, to, extra) {
   return {
     ...extra,
     score: round(d.delta),
+    score_pct: relative(d),
+    score_from: round(d.from),
+    score_to: round(d.to),
     duration: round(t.delta, 3),
+    duration_pct: relative(t),
     cost: round(c.delta),
+    cost_pct: relative(c),
     n: d.n,
   };
 }
 
 /**
  * The report as data, the source of both report.md and report.json: per benchmark, one row per
- * configuration, then paired skill deltas (against the first condition) and model deltas
- * (against the first model).
+ * configuration, then paired skill deltas (the lift over `none`, or over the first condition
+ * when `none` did not run) and model deltas (against the first model).
  */
 export function reportData(records) {
   const benchmarks = [...new Set(records.map((r) => r.benchmark))].map((benchmark) => {
@@ -168,12 +208,11 @@ export function reportData(records) {
     const skills = [...new Set(configs.map((c) => c.skills))];
     const harness = configs[0]?.harness;
     const cfg = (model, s) => ({ harness, model, skills: s });
+    const base = skillsBaseline(skills);
     const skillDeltas = [];
     for (const m of models) {
-      for (const s of skills.slice(1)) {
-        skillDeltas.push(
-          delta(rs, cfg(m, skills[0]), cfg(m, s), { model: m, from: skills[0], to: s })
-        );
+      for (const s of skills.filter((x) => x !== base)) {
+        skillDeltas.push(delta(rs, cfg(m, base), cfg(m, s), { model: m, from: base, to: s }));
       }
     }
     const modelDeltas = [];
@@ -201,9 +240,11 @@ export function reportData(records) {
 
 const fmt = (x, d = 2) => (x == null ? '–' : x.toFixed(d));
 const signed = (x, d = 2) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${x.toFixed(d)}`);
+/** A relative change as a signed percentage: 0.129 → "+12.9%". */
+export const percent = (x) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`);
 
 function deltaLine(label, d) {
-  return `- ${label}: score ${signed(d.score)}, time ${signed(d.duration, 0)} s, cost ${signed(d.cost, 3)} $ (n=${d.n})`;
+  return `- ${label}: score ${percent(d.score_pct)} (${fmt(d.score_from)} → ${fmt(d.score_to)}), time ${percent(d.duration_pct)} (${signed(d.duration, 0)} s), cost ${percent(d.cost_pct)} (${signed(d.cost, 3)} $) (n=${d.n})`;
 }
 
 function configRow(c) {
@@ -227,10 +268,22 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
       '|---|---|---|---|---|---|---|---|---|---|---|',
       ...b.configs.map(configRow)
     );
+    const toolKnown = b.configs.filter((c) => c.tool_known);
+    if (toolKnown.length) {
+      lines.push(
+        '',
+        '**Answered without tools** (no tool call in the whole run: the agent answered from what it knew; of finished runs with a transcript):',
+        '',
+        ...toolKnown.map(
+          (c) =>
+            `- ${c.model}, \`${c.skills}\`: ${c.no_tool_runs}/${c.tool_known} (${(c.no_tool_rate * 100).toFixed(0)}%), mean score ${fmt(c.no_tool_mean_score)} without tools vs ${fmt(c.tool_mean_score)} with`
+        )
+      );
+    }
     if (b.skill_deltas.length) {
       lines.push(
         '',
-        `**What skills change** (paired by task and repeat, against \`${b.skill_deltas[0].from}\`):`,
+        `**What skills add** (lift over \`${b.skill_deltas[0].from}\`, paired by task and repeat):`,
         '',
         ...b.skill_deltas.map((d) => deltaLine(`${d.model}, \`${d.to}\``, d))
       );

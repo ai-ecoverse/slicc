@@ -84,12 +84,18 @@ It is browser-use's BU Bench V2 format, so public sets and our own evals share o
 
 For each set, the report has a row per configuration: runs, pass / partial / fail, errors, mean score, mean time and mean cost. After the rows come two lists:
 
-- **What skills change:** for each model, how the score, time and cost of each skills condition differ from the first condition.
+- **What skills add:** for each model, the lift each skills condition gives over `none` (over the first condition when `none` did not run), as percentages of the baseline: score, time and cost, with the absolute change beside each. `report.html` shows it as the paired mean score without and with the skills, the lift, and the time and cost it saves. A lift from fewer than 10 paired tasks is flagged as a small sample.
 - **What models change:** the same comparison between models, for each skills condition.
+- **Answered without tools:** per configuration, how many runs made no tool call at all, and so answered from what the model already knew, with their mean score against the runs that used tools. It's a cheap check for an agent winging it. Records carry `tool_calls`, `tool_kinds` (browser, fetch, code, shell, file, skill, other: categories only, never commands), `web_calls` and `answered_without_tools`. A run whose transcript could not be exported counts as unknown, never as "no tools". For runs recorded before these metrics existed, `node packages/bench/scripts/backfill-tools.mjs --out <run dir>` fills them in from the saved traces.
 
 Only runs that both configurations judged, for the same task and repeat, are compared. A run that errored (for example, the leader was unreachable) is listed but never counted as a fail.
 
-`report.html` shows the same data with a task × configuration score matrix and time against cost per run. To see every published configuration side by side, render it from the dataset:
+`report.html` opens with two charts after Artificial Analysis' Intelligence Index:
+
+- **Ranking:** every configuration by score (mean rubric score × 100, over judged runs), best first.
+- **Score vs. cost per task:** score against the mean cost of the runs that finished, on a log scale, with the most attractive quadrant (cheaper and better than the median configuration) and the Pareto line of configurations no cheaper one beats.
+
+Color follows the model. The skills condition is the fill: `none` is outlined, and any skills solid. The page then shows the skills lift, the configurations, the model comparison, a task × configuration score matrix, and time against cost per run. To see every published configuration side by side, render it from the dataset:
 
 ```bash
 hf download ai-ecoverse/slicc-bench --repo-type dataset --include 'records/**' --local-dir slicc-bench
