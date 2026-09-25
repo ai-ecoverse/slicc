@@ -602,6 +602,22 @@ Without `-g`, uninstall removes entries from the cwd `package.json` and reconcil
 versions. `npm root -g` prints `/shared/lib/node_modules`; `npm root` without `-g`
 prints `<cwd>/node_modules`.
 
+### `ipk mamba` (conda / emscripten-forge)
+
+`ipk mamba install <pkg>[=<version>]` installs **emscripten-wasm32** packages from
+conda channels into the shared prefix `/shared/lib/conda` (alongside npm's
+`/shared/lib/node_modules`). Default channels are
+`https://repo.prefix.dev/emscripten-forge-4x` and
+`https://repo.prefix.dev/conda-forge` (noarch). Records land in
+`/shared/lib/conda/conda-meta/`; `ipk mamba list` and `ipk mamba uninstall <pkg>`
+read and remove them.
+
+This is a **thin** installer (repodata lookup → download `.tar.bz2` → extract), not
+a full mamba/rattler SAT solve: virtual packages such as `emscripten-abi` are
+skipped, and hard depends are not auto-installed. It does **not** replace the npm
+`ipk install` path used by `convert` / `ffmpeg` / `python` (pyodide). See
+`ipk mamba --help` for the current limitations.
+
 ### `ipx` / `npx` built-in redirects
 
 `ipx` runs JavaScript package bins from the nearest installed `node_modules`, then the
