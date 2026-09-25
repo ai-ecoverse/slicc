@@ -380,6 +380,9 @@ docs under the workspace are not memory).
   draft folded in as a truncated success: exit 0, `merge.promotedOnTrip: true`, and the bound
   note kept under `reason` in `status.json`. A draft that never diverged, or any other failure
   (provider error, abort), keeps the staging pair for a post-mortem and the live file untouched.
+  The cone's `scoop-notify` for these passes is deferred until that receipt is written (#3460): a
+  non-zero exit headlines as `[@… failed]` with `status` / `exitCode` / `reason` and a
+  `status.json:` path; a truncated success still headlines as `completed` (with the bound note).
 
 ## Frozen Sessions ("New session" flow)
 

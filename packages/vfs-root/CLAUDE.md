@@ -70,7 +70,8 @@ Design, pieces table, and sprinkle details: `docs/gelatiere.md`.
   let it install into `/workspace/skills/` (it can still `upskill`). Reads still cover `/workspace/`.
   Single-file `writablePaths` work because `generateScoopSudoers` emits the bare path + `/**`.
 - The pass is detached, so it spawns with `notifyOnComplete`; its closing message reaches the cone
-  on `scoop-notify` (where skill suggestions land), else the report is lost.
+  on `scoop-notify` after `status.json` is written (where skill suggestions land) — a non-zero exit
+  headlines as `failed` with the reason and receipt path (#3460), else the report is lost.
 - Turn count is the cost (every turn re-reads the whole context as a cache read). Two prompt-side
   levers keep it down: `thinkingLevel` (default `medium`; spawned agents otherwise resolve to `off`)
   so the curator plans the cut rather than converging by trial and error, and archive-reading

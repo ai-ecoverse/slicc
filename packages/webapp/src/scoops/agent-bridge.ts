@@ -682,14 +682,15 @@ async function applyMergeOnSuccess(
 /**
  * Write the caller's durable per-spawn outcome record (see
  * {@link AgentSpawnOptions.outcomeReceiptPath}). Best-effort — a failure
- * is logged and the spawn result stands.
+ * is logged and the spawn result stands. Returns whether the receipt was
+ * actually persisted so callers do not advertise a missing path (#3460).
  */
 async function writeOutcomeReceipt(
   sharedFs: VirtualFS,
   path: string,
   result: AgentSpawnResult,
   merge?: MergeOutcome
-): Promise<void> {
+): Promise<boolean> {
   try {
     const dir = path.slice(0, path.lastIndexOf('/'));
     if (dir) await sharedFs.mkdir(dir, { recursive: true });
@@ -712,8 +713,10 @@ async function writeOutcomeReceipt(
         2
       )
     );
+    return true;
   } catch (err) {
     log.warn('outcome receipt write failed', { path, error: errText(err) });
+    return false;
   }
 }
 
@@ -725,6 +728,49 @@ async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<v
   } catch (err) {
     log.warn('success receipt write failed', { path, error: errText(err) });
   }
+}
+
+/**
+ * Tell the cone the final pass outcome after attempting `status.json`.
+ * Best-effort — a notify failure must not flip the spawn result.
+ * `receiptPath` is omitted when the receipt was not actually written.
+ */
+async function notifyPassOutcome(
+  ctx: BridgeContext,
+  jid: string,
+  receiptPath: string | undefined,
+  outcome: AgentSpawnResult
+): Promise<void> {
+  try {
+    await ctx.orchestrator.notifyScoopOutcome(jid, {
+      exitCode: outcome.exitCode,
+      ...(receiptPath ? { receiptPath } : {}),
+      // Failures and bound-trip promotions both carry a useful note in
+      // finalText; a clean success leaves reason off so the cone sees a
+      // short completed card.
+      ...(outcome.exitCode !== 0 || isRunBoundTrip(outcome.finalText)
+        ? { reason: outcome.finalText.slice(0, 500) }
+        : {}),
+    });
+  } catch (err) {
+    log.warn('pass outcome notify failed', { jid, error: errText(err) });
+  }
+}
+
+/** Cone notify for receipt-bearing passes — only when notifyOnComplete is set. */
+async function maybeNotifyPassOutcome(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  jid: string,
+  finished: { outcome: AgentSpawnResult; receiptWritten: boolean }
+): Promise<void> {
+  if (options.notifyOnComplete !== true || !options.outcomeReceiptPath) return;
+  await notifyPassOutcome(
+    ctx,
+    jid,
+    finished.receiptWritten ? options.outcomeReceiptPath : undefined,
+    finished.outcome
+  );
 }
 
 /** A valid fixed agent name: one or more lowercase tokens joined by dashes. */
@@ -956,7 +1002,7 @@ async function runScoopToOutcome(
   scoop: RegisteredScoop,
   jid: string,
   observerHandle: ReturnType<typeof registerScoopObserver>
-): Promise<AgentSpawnResult> {
+): Promise<{ outcome: AgentSpawnResult; receiptWritten: boolean }> {
   let outcome = await runScoopToOutcomeInner(ctx, options, scoop, jid, observerHandle);
   // Durable bookkeeping in run order, all written BEFORE the spawn resolves
   // so they land strictly earlier than any caller-side bookkeeping: fold a
@@ -1005,10 +1051,16 @@ async function runScoopToOutcome(
   if (outcome.exitCode === 0 && options.successReceiptPath) {
     await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
   }
+  let receiptWritten = false;
   if (options.outcomeReceiptPath) {
-    await writeOutcomeReceipt(ctx.sharedFs, options.outcomeReceiptPath, outcome, merge);
+    receiptWritten = await writeOutcomeReceipt(
+      ctx.sharedFs,
+      options.outcomeReceiptPath,
+      outcome,
+      merge
+    );
   }
-  return outcome;
+  return { outcome, receiptWritten };
 }
 
 /** The run itself; every failure path returns an exit-1 result. */
@@ -1130,6 +1182,9 @@ export function createAgentBridge(
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
       notifyOnComplete: options.notifyOnComplete === true,
       parentJid,
+      // Defer the ready-path cone notify until after the receipt is written
+      // so a non-zero exit is not reported as `completed` (#3460).
+      ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
@@ -1158,7 +1213,13 @@ export function createAgentBridge(
     // code, whatever path `runScoopToOutcome` leaves through.
     let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
     try {
-      outcome = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+      const finished = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+      outcome = finished.outcome;
+      // Publish the final outcome to the cone AFTER status.json is written
+      // (when it actually landed) and AFTER any bound-trip draft promotion,
+      // so the headline matches the durable receipt (#3460). Must run before
+      // cleanup unregisters the scoop (notifyWithOutcome looks it up).
+      await maybeNotifyPassOutcome(ctx, options, jid, finished);
       return outcome;
     } finally {
       options.signal?.removeEventListener('abort', onAbort);

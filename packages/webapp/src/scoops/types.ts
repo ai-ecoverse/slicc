@@ -177,6 +177,17 @@ export interface RegisteredScoop {
    */
   notifyOnComplete?: boolean;
   /**
+   * Absolute VFS path of the durable outcome receipt the agent bridge
+   * writes on both exit paths (`status.json` for memory curator/dreamer
+   * passes). When set, the ready-path cone notification is deferred until
+   * {@link ScoopCompletionService.notifyWithOutcome} runs with the final
+   * exit code — so a non-zero exit is reported as `failed` rather than
+   * `completed`, and a wall-clock trip that later promotes its draft still
+   * reports `completed` (#3460). Not persisted — ephemeral bridge scoops
+   * only.
+   */
+  outcomeReceiptPath?: string;
+  /**
    * What happens to this unit when its parent closes (#2278). `'cascade'`
    * (default / absent) tears it down with the parent — today's behaviour.
    * `'detach'` promotes it to an independent root instead. Ignored on a

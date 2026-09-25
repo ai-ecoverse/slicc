@@ -1239,7 +1239,9 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
   still reads no archive. Instructions come from the same user-editable `/etc/MEMORY.md` as curation (the runtime
   fills `{{TASK}}` with which pass it is; `dreamTimeoutSeconds` bounds it); the pass uses the same staged
   base/draft snapshot and three-way merge as curation, keyed `dream-<date>-<folder>.md`, with the
-  outcome in that key's `/sessions/.curation/…/status.json`. Default is detached; `--wait` blocks
+  outcome in that key's `/sessions/.curation/…/status.json`. The cone's completion notice waits for
+  that receipt: a non-zero exit is `[@… failed]` with the reason and `status.json` path, not a
+  false `completed` (#3460). Default is detached; `--wait` blocks
   and prints each pass's report (exit 1 if any failed). The gelatiere's nightly runs
   `memory dream --all`.
 

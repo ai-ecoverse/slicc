@@ -720,7 +720,9 @@ function buildSpawnOptions(
     ...(cone?.jid ? { parentJid: cone.jid } : {}),
     // The pass is detached, so the caller's return value goes nowhere. Without
     // this the curator's report — including any skill it found — is discarded
-    // and the cone never learns the pass happened at all.
+    // and the cone never learns the pass happened at all. Paired with
+    // outcomeReceiptPath so the ready-path notify waits for the final exit
+    // (#3460: a network death must not look like `completed`).
     notifyOnComplete: true,
     successReceiptPath: curatorReceiptPath(sessionArchivePath),
     // On exit 0 the bridge folds the curator's base→draft rewrite onto the
