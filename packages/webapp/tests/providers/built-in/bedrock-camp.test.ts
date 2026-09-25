@@ -540,7 +540,9 @@ describe('allowlisted non-Claude models get no Claude-shaped fields', () => {
     expect(serialized).not.toContain('cachePoint');
   });
 
-  it.each(NON_CLAUDE)(
+  // gpt-5.6 400s on every shape and kimi-k3 ignores them all. GPT-6 is the
+  // exception: it gets `reasoning.effort` (below).
+  it.each(NON_CLAUDE.filter(([id]) => !id.includes('gpt-6')))(
     'sends no thinking fields for %s even at reasoning=high',
     async (id, name) => {
       const payload = await capturePayload(baseModel({ id, name, reasoning: true }), {
@@ -585,5 +587,65 @@ describe('Claude Fable 5.1 request shape', () => {
   it('omits temperature', async () => {
     const payload = await capturePayload(fable(), { temperature: 0.3 });
     expect(payload.inferenceConfig.temperature).toBeUndefined();
+  });
+});
+
+// GPT-6 on Bedrock accepts only `additionalModelRequestFields.reasoning.effort`
+// (every Claude shape and `reasoning_effort` 400 with `unknown_parameter`).
+// Accepted values, verified live: low/medium/high/xhigh/max on every variant,
+// `none` on Sol and Luna only, `minimal` on none.
+describe('GPT-6 reasoning effort', () => {
+  const gpt6 = (variant: 'sol' | 'luna' | 'astra') =>
+    baseModel({ id: `global.openai.gpt-6-${variant}`, name: `GPT-6 ${variant}`, reasoning: true });
+
+  it.each([
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['xhigh', 'xhigh'],
+    ['max', 'max'],
+  ])('maps reasoning=%s to effort %s on every variant', async (level, effort) => {
+    for (const variant of ['sol', 'luna', 'astra'] as const) {
+      const payload = await capturePayload(gpt6(variant), { reasoning: level });
+      expect(payload.additionalModelRequestFields, variant).toEqual({ reasoning: { effort } });
+    }
+  });
+
+  it('rounds the unsupported minimal level up to low', async () => {
+    const payload = await capturePayload(gpt6('luna'), { reasoning: 'minimal' });
+    expect(payload.additionalModelRequestFields).toEqual({ reasoning: { effort: 'low' } });
+  });
+
+  it('honours the composer max override that arrives as xhigh + effort=max', async () => {
+    const payload = await capturePayload(gpt6('sol'), { reasoning: 'xhigh', effort: 'max' });
+    expect(payload.additionalModelRequestFields).toEqual({ reasoning: { effort: 'max' } });
+  });
+
+  it('turns reasoning off with effort none on Sol and Luna', async () => {
+    for (const variant of ['sol', 'luna'] as const) {
+      const payload = await capturePayload(gpt6(variant), {});
+      expect(payload.additionalModelRequestFields, variant).toEqual({
+        reasoning: { effort: 'none' },
+      });
+    }
+  });
+
+  it('sends nothing when off on Astra, which 400s on none', async () => {
+    const payload = await capturePayload(gpt6('astra'), {});
+    expect(payload.additionalModelRequestFields).toBeUndefined();
+  });
+
+  it('never sends the Claude thinking shape or a cachePoint', async () => {
+    const payload = await capturePayload(gpt6('sol'), { reasoning: 'high' });
+    expect(payload.additionalModelRequestFields).not.toHaveProperty('thinking');
+    expect(JSON.stringify(payload)).not.toContain('cachePoint');
+  });
+
+  it('leaves the Claude path ignoring the effort override', async () => {
+    const payload = await capturePayload(
+      baseModel({ id: 'us.anthropic.claude-opus-5', name: 'Claude Opus 5', reasoning: true }),
+      { reasoning: 'xhigh', effort: 'max' }
+    );
+    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: 'xhigh' });
   });
 });

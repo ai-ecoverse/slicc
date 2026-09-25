@@ -17,6 +17,9 @@ import {
   bedrockCampRegionFromBaseUrl as providerRegionFromBaseUrl,
 } from '../../src/providers/built-in/bedrock-camp.js';
 import {
+  BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
+  BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
@@ -254,6 +257,49 @@ describe('isBedrockCampClaudeModel', () => {
     // Still selectable — it just must not advertise a thinking-level control.
     expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(true);
     expect(isBedrockCampClaudeModel({ id })).toBe(false);
+  });
+});
+
+// Verified live on bedrock-runtime.us-west-2 with `reasoning: { effort }`:
+// none (Sol/Luna only), low, medium, high, xhigh, max; minimal 400s everywhere.
+describe('bedrockCampOpenAIEffortMap', () => {
+  it.each([['global.openai.gpt-6-sol'], ['us.openai.gpt-6-sol'], ['global.openai.gpt-6-luna']])(
+    'lets %s turn reasoning off with none',
+    (id) => {
+      expect(bedrockCampOpenAIEffortMap({ id })).toBe(BEDROCK_CAMP_GPT6_EFFORT_MAP);
+    }
+  );
+
+  it('has no off level for Astra', () => {
+    expect(bedrockCampOpenAIEffortMap({ id: 'us.openai.gpt-6-astra' })).toBe(
+      BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP
+    );
+    expect(BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP.off).toBeNull();
+  });
+
+  it('marks minimal unsupported and maps the rest one to one', () => {
+    expect(BEDROCK_CAMP_GPT6_EFFORT_MAP).toEqual({
+      off: 'none',
+      minimal: null,
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: 'max',
+    });
+  });
+
+  it.each([
+    // gpt-5.6 400s on `reasoning` like every other shape.
+    ['global.openai.gpt-5.6-sol'],
+    // Bedrock ignores every shape Kimi K3 is sent.
+    ['global.moonshotai.kimi-k3'],
+    ['us.anthropic.claude-opus-5'],
+    // Unverified GPT-6 spellings get nothing.
+    ['global.openai.gpt-6-terra'],
+    ['global.openai.gpt-6-sol-pro'],
+  ])('is null for %s', (id) => {
+    expect(bedrockCampOpenAIEffortMap({ id })).toBeNull();
   });
 });
 

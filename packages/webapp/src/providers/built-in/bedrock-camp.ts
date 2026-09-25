@@ -48,6 +48,7 @@ import {
 } from '../claude-model-version.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
+import { type BedrockCampEffortMap, bedrockCampOpenAIEffortMap } from './bedrock-camp-compat.js';
 
 export const config: ProviderConfig = {
   id: 'bedrock-camp',
@@ -102,10 +103,10 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // turn. Re-measure before adding it.
 //
 // All of them reject `temperature` (`temperature-support.ts` strips it).
-// gpt-5.6 rejects every `additionalModelRequestFields` thinking shape; gpt-6
-// accepts only `reasoning.effort`, and kimi-k3 ignores every shape. None of
-// that reaches the wire, because `buildAdditionalModelRequestFields` is
-// Claude-only. gpt-5.6 does not accept an explicit `cachePoint` block either —
+// gpt-5.6 rejects every `additionalModelRequestFields` thinking shape, and
+// kimi-k3 ignores every shape, so neither gets one. gpt-6 accepts only
+// `reasoning.effort`, which `buildAdditionalModelRequestFields` sends (see
+// `bedrockCampOpenAIEffortMap`). gpt-5.6 does not accept an explicit `cachePoint` block either —
 // caching is automatic and sending one 403s — and `supportsPromptCaching` is
 // Claude-only too, so none of them gets one.
 //
@@ -258,9 +259,14 @@ type BedrockCampLegacyThinkingFields = {
   anthropic_beta?: ['interleaved-thinking-2025-05-14'];
 };
 
+type BedrockCampOpenAIReasoningFields = {
+  reasoning: { effort: string };
+};
+
 type BedrockCampAdditionalModelRequestFields =
   | BedrockCampAdaptiveFields
-  | BedrockCampLegacyThinkingFields;
+  | BedrockCampLegacyThinkingFields
+  | BedrockCampOpenAIReasoningFields;
 
 type BedrockCampInferenceConfig = {
   maxTokens?: number;
@@ -340,6 +346,12 @@ interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload' | 'onRespon
    * @see https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
    */
   requestMetadata?: Record<string, string>;
+  /**
+   * Raw effort above pi-ai's ThinkingLevel range. The composer's `max` level
+   * arrives as `reasoning: 'xhigh'` plus `effort: 'max'`
+   * (`scoop-context/session-helpers.ts`). Honoured for GPT-6 only.
+   */
+  effort?: string;
 }
 
 type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload' | 'onResponse'> & {
@@ -349,6 +361,7 @@ type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload' | 'onRespo
   thinkingDisplay?: BedrockCampThinkingDisplay;
   interleavedThinking?: boolean;
   requestMetadata?: Record<string, string>;
+  effort?: string;
 };
 
 function pickCampExtras(
@@ -361,6 +374,7 @@ function pickCampExtras(
   | 'thinkingDisplay'
   | 'interleavedThinking'
   | 'requestMetadata'
+  | 'effort'
 > {
   return {
     onPayload: options.onPayload,
@@ -369,6 +383,7 @@ function pickCampExtras(
     thinkingDisplay: options.thinkingDisplay,
     interleavedThinking: options.interleavedThinking,
     requestMetadata: options.requestMetadata,
+    effort: options.effort,
   };
 }
 
@@ -677,10 +692,35 @@ function isGovCloudTarget(model: Model<Api>): boolean {
   return id.startsWith('us-gov.') || id.startsWith('arn:aws-us-gov:');
 }
 
+const OPENAI_EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+// No level means the thinking pill is `off`, which GPT-6 Sol/Luna express as
+// `none`; Astra cannot turn reasoning off, so it gets no field and runs at its
+// default. An unsupported level (`minimal`) rounds up to the next one the
+// model has rather than failing the request with a 400.
+function openAIReasoningEffort(
+  map: BedrockCampEffortMap,
+  options: BedrockCampOptions
+): string | undefined {
+  if (!options.reasoning) return map.off ?? undefined;
+  if (options.effort === 'max' && map.max) return map.max;
+  const start = OPENAI_EFFORT_ORDER.indexOf(options.reasoning);
+  for (const level of OPENAI_EFFORT_ORDER.slice(Math.max(start, 0))) {
+    const mapped = map[level];
+    if (mapped) return mapped;
+  }
+  return undefined;
+}
+
 function buildAdditionalModelRequestFields(
   model: Model<Api>,
   options: BedrockCampOptions
 ): BedrockCampAdditionalModelRequestFields | undefined {
+  const effortMap = bedrockCampOpenAIEffortMap(model);
+  if (effortMap) {
+    const effort = openAIReasoningEffort(effortMap, options);
+    return effort === undefined ? undefined : { reasoning: { effort } };
+  }
   if (!options.reasoning || !model.reasoning) return undefined;
   if (!isAnthropicClaudeModel(model)) return undefined;
 

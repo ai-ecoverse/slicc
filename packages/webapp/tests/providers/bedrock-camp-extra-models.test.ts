@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isBedrockCampCompatible } from '../../src/providers/built-in/bedrock-camp-compat.js';
+import {
+  BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
+  BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  isBedrockCampCompatible,
+} from '../../src/providers/built-in/bedrock-camp-compat.js';
 import {
   BEDROCK_CAMP_EXTRA_MODELS,
   mergeBedrockCampCatalogue,
@@ -197,6 +201,17 @@ describe('models admitted for the benchmark', () => {
     expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
     expect(claudeSupportsPromptCaching(id)).toBe(true);
     expect(byId(id)?.thinkingLevelMap).toEqual({ off: null, xhigh: 'xhigh', max: 'max' });
+  });
+
+  it("gives GPT-6 the live-verified effort levels, not pi's xhigh-only map", () => {
+    for (const v of ['sol', 'luna']) {
+      expect(byId(`global.openai.gpt-6-${v}`)?.thinkingLevelMap).toEqual(
+        BEDROCK_CAMP_GPT6_EFFORT_MAP
+      );
+    }
+    expect(byId('us.openai.gpt-6-astra')?.thinkingLevelMap).toEqual(
+      BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP
+    );
   });
 
   it('gives Kimi K3 no thinkingLevelMap, since Bedrock ignores every effort shape', () => {

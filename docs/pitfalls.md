@@ -2206,22 +2206,25 @@ mid-loop:
 | `temperature`  | rejected from Opus 4.7 / Sonnet 5.0               | rejected                                         | rejected                                       | rejected                             |
 | thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter`      | only `reasoning.effort` (`none` 400s on Astra) | every shape accepted **and ignored** |
 
-So enabling them required removing nothing and adding nothing to the
-request — `supportsPromptCaching` and `buildAdditionalModelRequestFields`
-already gate on `isAnthropicClaudeModel`, and both stay correct. The one real
-change was the `temperature` reject-list, which was Claude-only.
+`supportsPromptCaching` gates on `isAnthropicClaudeModel`, so caching needed
+no change. `buildAdditionalModelRequestFields` emits nothing for gpt-5.6 and
+kimi-k3, and a `reasoning.effort` block only for gpt-6. The `temperature`
+reject-list, previously Claude-only, also had to grow.
 
-Two consequences of that gating, easy to miss:
+Consequences of that gating, easy to miss:
 
-- **Effort control is Claude-only.** Because `buildAdditionalModelRequestFields`
-  emits nothing off the Claude path, low/medium/high/xhigh all produce a
-  byte-identical request for every non-Claude model. gpt-6 would honour
-  `additionalModelRequestFields.reasoning.effort` (low … max), but nothing
-  sends it yet, so it runs at the model's default effort. The composer gates its thinking-level
-  selector on `model.reasoning`, so `account-store.ts` clears that flag for
-  non-Claude picker entries via `isBedrockCampClaudeModel`. This does not
-  suppress `reasoningContent` — gpt-5.6 still reasons, it just cannot be told
-  how hard.
+- **Effort control is Claude and gpt-6 only.** gpt-6 gets
+  `additionalModelRequestFields.reasoning.effort` from
+  `BEDROCK_CAMP_GPT6_EFFORT_MAP` (`bedrock-camp-compat.ts`): off → `none`,
+  minimal rounds up to `low` (`minimal` 400s), low … xhigh pass through, and
+  the UI's `max` (which reaches the provider as `xhigh` plus `effort: 'max'`)
+  sends `max`. Astra 400s `none`, so its map has no off entry and off sends
+  no field (model default). For gpt-5.6 and kimi-k3 every level produces a
+  byte-identical request. The composer gates its thinking-level selector on
+  `model.reasoning`, so `account-store.ts` (`toBedrockCampPickerModel`) keeps
+  that flag only for Claude and gpt-6 and swaps in the gpt-6 effort map. This
+  does not suppress `reasoningContent` — gpt-5.6 still reasons, it just
+  cannot be told how hard.
 - **The allowlist is anchored per variant** (`sol|terra|luna`), not a
   `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
   catalogue gains without anyone measuring its caching, which is the

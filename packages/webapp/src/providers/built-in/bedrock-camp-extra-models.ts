@@ -16,6 +16,11 @@
  * loaded `account-store.ts` imports it, so it must not pull in pi-ai.
  */
 
+import {
+  BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
+  BEDROCK_CAMP_GPT6_EFFORT_MAP,
+} from './bedrock-camp-compat.js';
+
 interface BedrockCampCostRates {
   input: number;
   output: number;
@@ -139,8 +144,9 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
   },
   // GPT-6: implicit prompt caching and tool calls verified live (see
   // `BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE`). The only thinking shape accepted
-  // is `additionalModelRequestFields.reasoning.effort`, which
-  // `buildAdditionalModelRequestFields` does not send (it is Claude-only).
+  // is `additionalModelRequestFields.reasoning.effort`; the levels are the
+  // live-verified maps in `bedrock-camp-compat.ts` (pi's Bedrock entries list
+  // only `xhigh`).
   // The long-context tier (input above 272k tokens) is from models.dev;
   // pi's catalogue omits it for Bedrock, and leaving it out would under-bill
   // long turns.
@@ -157,7 +163,7 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     },
     contextWindow: 1_050_000,
     maxTokens: 128_000,
-    thinkingLevelMap: { xhigh: 'xhigh' },
+    thinkingLevelMap: BEDROCK_CAMP_GPT6_EFFORT_MAP,
   },
   {
     baseId: 'openai.gpt-6-luna',
@@ -174,7 +180,7 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     },
     contextWindow: 1_050_000,
     maxTokens: 128_000,
-    thinkingLevelMap: { xhigh: 'xhigh' },
+    thinkingLevelMap: BEDROCK_CAMP_GPT6_EFFORT_MAP,
   },
   {
     baseId: 'openai.gpt-6-astra',
@@ -189,7 +195,7 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     },
     contextWindow: 1_050_000,
     maxTokens: 128_000,
-    thinkingLevelMap: { xhigh: 'xhigh' },
+    thinkingLevelMap: BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
   },
   {
     // Open weights. Implicit caching and tool calls verified live. Accepts

@@ -25,6 +25,7 @@ import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 // the full provider statically drags pi-ai's compat layer (~400 kB) into
 // this eagerly-loaded module's graph in both realms (#first-load ratchet).
 import {
+  bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
@@ -387,6 +388,24 @@ function applyModelMetadata(
   }
 }
 
+/**
+ * A bedrock-camp picker entry. Effort control only reaches the wire for Claude
+ * and GPT-6, so no other model may advertise a thinking-level selector that
+ * would produce an identical request at every level. GPT-6's levels come from
+ * the live-verified map rather than the catalogue: pi's Bedrock entries list
+ * only `xhigh`, which would hide `max` and the Sol/Luna `off` → `none` mapping.
+ */
+function toBedrockCampPickerModel(m: Model<Api>): Model<Api> {
+  const effortMap = bedrockCampOpenAIEffortMap(m);
+  return {
+    ...m,
+    api: 'bedrock-camp-converse' as Api,
+    provider: 'bedrock-camp',
+    reasoning: m.reasoning === true && (isBedrockCampClaudeModel(m) || effortMap !== null),
+    ...(effortMap ? { thinkingLevelMap: { ...effortMap } } : {}),
+  };
+}
+
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
@@ -403,15 +422,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         BEDROCK_CAMP_EXTRA_MODELS as unknown as Model<Api>[]
       )
         .filter((m) => isBedrockCampCompatible(m, region))
-        .map((m) => ({
-          ...m,
-          api: 'bedrock-camp-converse' as Api,
-          provider: 'bedrock-camp',
-          // Effort control only reaches the wire for Claude, so don't let a
-          // non-Claude model advertise a thinking-level selector that would
-          // produce an identical request at every level.
-          reasoning: m.reasoning === true && isBedrockCampClaudeModel(m),
-        }));
+        .map(toBedrockCampPickerModel);
     }
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);

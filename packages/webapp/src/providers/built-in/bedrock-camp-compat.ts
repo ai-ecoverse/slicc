@@ -58,10 +58,10 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // turn. Re-measure before adding it.
 //
 // All of them reject `temperature` (`temperature-support.ts` strips it).
-// gpt-5.6 rejects every `additionalModelRequestFields` thinking shape; gpt-6
-// accepts only `reasoning.effort`, and kimi-k3 ignores every shape. None of
-// that reaches the wire, because `buildAdditionalModelRequestFields` is
-// Claude-only. gpt-5.6 does not accept an explicit `cachePoint` block either —
+// gpt-5.6 rejects every `additionalModelRequestFields` thinking shape, and
+// kimi-k3 ignores every shape, so neither gets one. gpt-6 accepts only
+// `reasoning.effort`, which `buildAdditionalModelRequestFields` sends (see
+// `bedrockCampOpenAIEffortMap`). gpt-5.6 does not accept an explicit `cachePoint` block either —
 // caching is automatic and sending one 403s — and `supportsPromptCaching` is
 // Claude-only too, so none of them gets one.
 //
@@ -103,17 +103,56 @@ function profileMatchesRegion(prefix: string, region: string): boolean {
 /**
  * True when a picker-visible id is an Anthropic Claude model.
  *
- * `buildAdditionalModelRequestFields` emits a thinking shape ONLY for Claude,
- * so effort control (low/medium/high/xhigh) never reaches the wire for the
- * allowlisted non-Claude models — every level would produce a byte-identical
+ * `buildAdditionalModelRequestFields` emits a thinking shape only for Claude
+ * and GPT-6 (see {@link bedrockCampOpenAIEffortMap}), so for the other
+ * allowlisted non-Claude models every level would produce a byte-identical
  * request. The UI gates its thinking-level selector on `model.reasoning`
  * (`no-thinking` in `wc-nav.ts` / `wc-live-thinking-hydration.ts`), so
- * `account-store.ts` uses this to clear that flag and hide a control that
+ * `account-store.ts` uses these two to clear that flag and hide a control that
  * does nothing. It does NOT suppress rendering of `reasoningContent` — gpt-5.6
  * still reasons, it just cannot be told how hard.
  */
 export function isBedrockCampClaudeModel(model: { id: string }): boolean {
   return BEDROCK_CAMP_CLAUDE_RE.test(model.id);
+}
+
+type EffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type BedrockCampEffortMap = Readonly<Record<EffortLevel, string | null>>;
+
+/**
+ * `additionalModelRequestFields.reasoning.effort` values GPT-6 accepts on
+ * Bedrock, verified live on `bedrock-runtime.us-west-2`: `low`, `medium`,
+ * `high`, `xhigh` and `max` on every variant, `none` on Sol and Luna only
+ * (Astra 400s), and `minimal` on none of them. In pi-ai's `thinkingLevelMap`
+ * shape, where `null` marks an unsupported level; pi's `openai` catalogue
+ * lists the same maps for these models.
+ */
+export const BEDROCK_CAMP_GPT6_EFFORT_MAP: BedrockCampEffortMap = Object.freeze({
+  off: 'none',
+  minimal: null,
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
+});
+
+export const BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP: BedrockCampEffortMap = Object.freeze({
+  ...BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  off: null,
+});
+
+const BEDROCK_CAMP_GPT6_RE = /\.openai\.gpt-6-(sol|luna|astra)$/;
+
+/**
+ * The effort map for a model that takes OpenAI-style `reasoning.effort`
+ * (GPT-6), or null. gpt-5.6 is deliberately not covered: it rejects every
+ * `additionalModelRequestFields` thinking shape, `reasoning` included.
+ */
+export function bedrockCampOpenAIEffortMap(model: { id: string }): BedrockCampEffortMap | null {
+  const variant = BEDROCK_CAMP_GPT6_RE.exec(model.id)?.[1];
+  if (!variant) return null;
+  return variant === 'astra' ? BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP : BEDROCK_CAMP_GPT6_EFFORT_MAP;
 }
 
 export function isBedrockCampCompatible(model: { id: string }, region?: string | null): boolean {
