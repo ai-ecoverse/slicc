@@ -42,6 +42,7 @@ describe('sudo command', () => {
       const result = await cmd.execute(['--help'], createMockCtx());
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('usage: sudo');
+      expect(result.stdout).toContain('exits 77');
       expect(broker.requestApproval).not.toHaveBeenCalled();
     });
 
@@ -103,14 +104,14 @@ describe('sudo command', () => {
       expect(result).toEqual({ stdout: 'pushed\n', stderr: '', exitCode: 0 });
     });
 
-    it('on deny: blocks the inner command and exits 1', async () => {
+    it('on deny: blocks the inner command and exits 77', async () => {
       const broker = brokerReturning({ decision: 'deny' });
       const exec = vi.fn(async () => execResult());
       const cmd = createSudoCommand({ broker });
 
       const result = await cmd.execute(['rm', '-rf', '/tmp/x'], createMockCtx({ exec }));
 
-      expect(result.exitCode).toBe(1);
+      expect(result.exitCode).toBe(77);
       expect(result.stderr).toContain('approval denied');
       expect(exec).not.toHaveBeenCalled();
     });
@@ -122,7 +123,7 @@ describe('sudo command', () => {
 
       const result = await cmd.execute(['rm', '-rf', '/tmp/x'], createMockCtx({ exec }));
 
-      expect(result.exitCode).toBe(1);
+      expect(result.exitCode).toBe(77);
       expect(result.stderr).toContain('timed out');
       expect(result.stderr).toContain('not a denial');
       expect(result.stderr).not.toContain('approval denied');

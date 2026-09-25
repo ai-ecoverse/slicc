@@ -472,9 +472,16 @@ must too — telling a scoop to wait for a human who was never prompted is wrong
 Every gate renders both through one helper, `sudoRefusalMessage(prefix, decision)`,
 so denial and timeout wording can never drift apart:
 
+An explicit `sudo <command>` refusal or timeout, and an implicit command-level
+gate refusal or timeout, exits **77** (`EX_NOPERM`). This gives agents a status
+they can branch on without confusing a refused approval with ordinary exit 1
+results such as `diff` finding different files or `grep` finding no matches.
+Other command results keep their original status. The `sudo --help` output
+documents this contract.
+
 | Layer                        | Denied                         | Timed out                                     |
 | ---------------------------- | ------------------------------ | --------------------------------------------- |
-| Command guard / `sudo <cmd>` | `sudo: approval denied`        | `sudo: approval request timed out — …`        |
+| Command guard / `sudo <cmd>` | `sudo: approval denied` (77)   | `sudo: approval request timed out — …` (77)   |
 | `SudoFS`                     | `EACCES sudo: approval denied` | `EACCES sudo: approval request timed out — …` |
 | `secret` command             | `secret: approval denied`      | `secret: approval request timed out — …`      |
 
