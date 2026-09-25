@@ -123,7 +123,7 @@ jobs:
       job-minutes: ${{ steps.plan.outputs.job-minutes }}
     env:
       SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
-      DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '30' }}
+      DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -171,7 +171,7 @@ jobs:
       BENCH_JUDGE_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.judge-model || 'global.openai.gpt-5.6-luna' }}
       BENCH_FRESH_LEADER_EVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.fresh-leader-every || '1' }}
       BENCH_LEADERS: ${{ github.event_name == 'workflow_dispatch' && inputs.leaders || '2' }}
-      BENCH_DEADLINE_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '30' }}
+      BENCH_DEADLINE_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
       BENCH_MAX_TASK_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-task-cost || '2' }}
       BENCH_MAX_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-cost || '10' }}
       BENCH_SHARD: ${{ matrix.shard }}/${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
@@ -344,10 +344,15 @@ jobs:
         id: merge
         run: |
           set -euo pipefail
-          if ! ls -d "$RUNNER_TEMP"/shards/*/ >/dev/null 2>&1; then
-            echo "::error::no shard left an artifact"; exit 1
+          shards=()
+          for d in "$RUNNER_TEMP"/shards/bench-*-shard-*/; do [ -d "$d" ] && shards+=("$d"); done
+          # A single matching artifact is extracted straight into the path, without its own
+          # directory.
+          if [ ${#shards[@]} -eq 0 ] && [ -n "$(ls -A "$RUNNER_TEMP/shards" 2>/dev/null)" ]; then
+            shards=("$RUNNER_TEMP/shards")
           fi
-          node packages/bench/scripts/merge.mjs --out "$RUNNER_TEMP/bench-out" "$RUNNER_TEMP"/shards/*/
+          if [ ${#shards[@]} -eq 0 ]; then echo "::error::no shard left an artifact"; exit 1; fi
+          node packages/bench/scripts/merge.mjs --out "$RUNNER_TEMP/bench-out" "${shards[@]}"
 
       - name: Upload the report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

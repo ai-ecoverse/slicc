@@ -1015,6 +1015,9 @@ describe('lanes and guardrails', () => {
     expect(() => parseCli(['--set', 'x', '--deadline-minutes', '-5'])).toThrow(
       /--deadline-minutes/
     );
+    expect(() => parseCli(['--set', 'x', '--timeout', '3600', '--deadline-minutes', '60'])).toThrow(
+      '--deadline-minutes 60 leaves no time for a run: one takes up to 80 (the timeout plus 20'
+    );
     expect(() => parseCli(['--set', 'x', '--max-cost', 'lots'])).toThrow(/--max-cost/);
     expect(parseCli(['--set', 'x', '--shard', '1/4']).shard).toEqual({ index: 1, count: 4 });
   });

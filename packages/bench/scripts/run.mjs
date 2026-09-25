@@ -117,6 +117,11 @@ export function parseCli(argv) {
   const deadlineMinutes = Number.parseInt(values['deadline-minutes'], 10);
   if (!Number.isInteger(deadlineMinutes) || deadlineMinutes < 0)
     throw new Error('--deadline-minutes must be 0 (none) or a positive number of minutes');
+  const runMinutes = Math.ceil((timeout * 1000 + RUN_OVERHEAD_MS) / 60_000);
+  if (deadlineMinutes && deadlineMinutes <= runMinutes)
+    throw new Error(
+      `--deadline-minutes ${deadlineMinutes} leaves no time for a run: one takes up to ${runMinutes} (the timeout plus ${RUN_OVERHEAD_MS / 60_000} for the restart, collection and judge)`
+    );
   const shard = parseShard(values.shard);
   const money = (flag) => {
     const v = Number(values[flag]);
