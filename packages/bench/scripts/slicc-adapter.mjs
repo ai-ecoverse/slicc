@@ -275,6 +275,13 @@ export const TRANSCRIPT_EXPORT_TIMEOUT_MS = 600_000;
 export const TRANSCRIPT_READ_TIMEOUT_MS = 120_000;
 export const TRANSCRIPT_EXPORT_ATTEMPTS = 2;
 export const TRANSCRIPT_READ_ATTEMPTS = 3;
+/**
+ * All of a transcript's collection, export and reads with their retries: without a cap, slow
+ * reads of a large transcript kept one BU V1 run collecting for 113 minutes (2026-09-25).
+ */
+export const TRANSCRIPT_BUDGET_MS = 15 * 60_000;
+/** A call with less time left than this is not started. */
+const MIN_CALL_MS = 5_000;
 
 /**
  * The shell command that exports the session and splits transcript.json into parts, then prints
@@ -348,15 +355,23 @@ function callFailure(r) {
   return `exit ${r.status}`;
 }
 
+/** The budget ran out; keeps the last call's failure as the detail. */
+const overBudget = (last) => ({
+  stage: 'budget',
+  reason: 'out of time',
+  ...(last ? { detail: `${last.stage}: ${last.reason}` } : {}),
+});
+
 /**
  * Run the export until it prints a complete listing: `{ listing }` or `{ failure }`. A timed-out
  * export is not repeated (it would only time out again), nor one that never reached the leader.
  */
-async function runExport(leader, command, info, { partBytes, timeoutMs, attempts }) {
+async function runExport(leader, command, info, { partBytes, timeoutMs, attempts, left }) {
   let failure = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (left() < MIN_CALL_MS) return { failure: overBudget(failure) };
     info.exports = attempt;
-    const r = await leader.exec(command, { timeoutMs });
+    const r = await leader.exec(command, { timeoutMs: Math.min(timeoutMs, left()) });
     if (r.status !== 0) {
       failure = { stage: 'export', reason: callFailure(r), detail: clipDetail(r) };
       if (r.timedOut || r.leaderDown) break;
@@ -370,11 +385,14 @@ async function runExport(leader, command, info, { partBytes, timeoutMs, attempts
 }
 
 /** Read one part until it arrives intact: `{ buf }` or `{ failure }`. */
-async function readPart(leader, part, info, { timeoutMs, attempts }) {
+async function readPart(leader, part, info, { timeoutMs, attempts, left }) {
   let failure = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (left() < MIN_CALL_MS) return { failure: overBudget(failure) };
     info.reads += 1;
-    const r = await leader.exec(`base64 ${quote(part.path)}`, { timeoutMs });
+    const r = await leader.exec(`base64 ${quote(part.path)}`, {
+      timeoutMs: Math.min(timeoutMs, left()),
+    });
     if (r.status !== 0) {
       failure = { stage: 'read', reason: callFailure(r), detail: clipDetail(r) };
       // The CLI already retried the dial; a leader that stays unreachable will not send the rest.
@@ -395,7 +413,8 @@ async function readPart(leader, part, info, { timeoutMs, attempts }) {
  * throws for a leader failure.
  *
  * A failed export is tried again, unless it timed out or never reached the leader; a part that
- * fails to arrive intact (a dropped connection, a short or corrupted read) is read again.
+ * fails to arrive intact (a dropped connection, a short or corrupted read) is read again. All
+ * of it shares `budgetMs`: each call gets at most what is left, and none starts on less than 5 s.
  */
 export async function exportTranscript(
   leader,
@@ -406,10 +425,12 @@ export async function exportTranscript(
     readTimeoutMs = TRANSCRIPT_READ_TIMEOUT_MS,
     exportAttempts = TRANSCRIPT_EXPORT_ATTEMPTS,
     readAttempts = TRANSCRIPT_READ_ATTEMPTS,
+    budgetMs = TRANSCRIPT_BUDGET_MS,
     now = Date.now,
   } = {}
 ) {
   const started = now();
+  const left = () => started + budgetMs - now();
   const info = { ok: false, bytes: null, parts: 0, exports: 0, reads: 0, ms: 0 };
   const done = (doc, failure) => {
     info.ms = now() - started;
@@ -423,6 +444,7 @@ export async function exportTranscript(
     partBytes,
     timeoutMs: exportTimeoutMs,
     attempts: exportAttempts,
+    left,
   });
   if (exported.failure) return done(null, exported.failure);
   const { listing } = exported;
@@ -434,6 +456,7 @@ export async function exportTranscript(
     const read = await readPart(leader, part, info, {
       timeoutMs: readTimeoutMs,
       attempts: readAttempts,
+      left,
     });
     if (read.failure) return done(null, read.failure);
     bufs.push(read.buf);

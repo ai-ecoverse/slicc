@@ -61,9 +61,9 @@ export const MAX_LEADERS = 8;
 
 /**
  * What a run costs beyond its prompt time limit, for the deadline: a leader restart, collection
- * (transcript export, screenshots) and judging.
+ * (the transcript alone may take TRANSCRIPT_BUDGET_MS, 15 min; screenshots) and judging.
  */
-export const RUN_OVERHEAD_MS = 10 * 60_000;
+export const RUN_OVERHEAD_MS = 20 * 60_000;
 
 export function parseCli(argv) {
   const { values } = parseArgs({

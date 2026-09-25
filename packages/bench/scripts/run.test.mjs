@@ -1125,7 +1125,7 @@ describe('lanes and guardrails', () => {
     const log = vi.fn();
     let t = 0;
     const stop = guardrails(
-      { deadlineMinutes: 30, timeout: 900, maxCost: 0 },
+      { deadlineMinutes: 40, timeout: 900, maxCost: 0 },
       { startedMs: 0, now: () => t, journal, log }
     );
     const state = { spent: 0, reasons: [], stopped: false };

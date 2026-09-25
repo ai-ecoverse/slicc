@@ -591,6 +591,51 @@ describe('transcript export', () => {
     });
   });
 
+  it('stops collecting when its budget runs out, giving each call only what is left', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+    const files = leaderFiles(doc, 1000);
+    // Every leader call takes five minutes of a fifteen-minute budget; the parts arrive short.
+    let t = 0;
+    const slow = (reply) => (cmd, opts) => {
+      t += 5 * 60_000;
+      return typeof reply === 'function' ? reply(cmd, opts) : reply;
+    };
+    const { leader, calls } = fakeLeader({
+      commands: [[/^base64/, ok('QUFB')], ...files.commands].map(([p, r]) => [p, slow(r)]),
+    });
+    const { doc: read, info } = await exportTranscript(leader, '/d', {
+      partBytes: 1000,
+      now: () => t,
+    });
+    expect(read).toBeNull();
+    expect(info).toMatchObject({
+      ok: false,
+      stage: 'budget',
+      reason: 'out of time',
+      detail: 'read: 3 of 1000 bytes',
+      exports: 1,
+      reads: 2,
+      ms: 15 * 60_000,
+    });
+    expect(calls.map((c) => c.opts.timeoutMs)).toEqual([
+      TRANSCRIPT_EXPORT_TIMEOUT_MS,
+      TRANSCRIPT_READ_TIMEOUT_MS,
+      TRANSCRIPT_READ_TIMEOUT_MS,
+    ]);
+    t = 0;
+    const tight = fakeLeader({ commands: files.commands.map(([p, r]) => [p, slow(r)]) });
+    const cut = await exportTranscript(tight.leader, '/d', {
+      partBytes: 1000,
+      budgetMs: 5 * 60_000 + 10_000,
+      now: () => t,
+    });
+    expect(tight.calls[1].opts.timeoutMs).toBe(10_000);
+    expect(cut.info).toMatchObject({ stage: 'budget', reads: 1 });
+    expect(cut.info.detail).toBeUndefined();
+    const none = await exportTranscript(tight.leader, '/d', { budgetMs: 0 });
+    expect(none.info).toMatchObject({ stage: 'budget', exports: 0 });
+  });
+
   it('tries a failed export again, but not one that timed out or never reached the leader', async () => {
     const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
     const files = leaderFiles(doc);
