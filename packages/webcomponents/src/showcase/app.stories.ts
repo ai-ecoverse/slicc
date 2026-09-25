@@ -304,7 +304,7 @@ function workbenchTree(open: boolean): SliccDockTree {
 
   const termSurface = el('slicc-surface', { 'surface-id': 'term', layout: 'flex' });
   const term = el('slicc-terminal') as HTMLElement & { writeln?: (s: string) => void };
-  // Pre-populate after connect (xterm needs to be in the DOM first).
+  // Pre-populate after connect (wterm needs to be in the DOM first).
   queueMicrotask(() => {
     const t = term as { writeln?: (s: string) => void };
     t.writeln?.('\x1b[2m$\x1b[0m npm run test -w @slicc/webcomponents');

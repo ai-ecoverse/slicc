@@ -670,7 +670,7 @@ const vfs = await VirtualFS.create({
 
 Acceptable to skip tests:
 
-- DOM-dependent code (UI panels, xterm.js)
+- DOM-dependent code (UI panels, wterm)
 - `chrome.debugger` API code (DebuggerClient)
 - These should be manually verified in both modes
 
@@ -679,7 +679,7 @@ Acceptable to skip tests:
 ```
 packages/webapp/src/
   fs/              Virtual filesystem + RestrictedFS
-  shell/           just-bash (TypeScript bash interpreter) + xterm.js terminal
+  shell/           just-bash (TypeScript bash interpreter) + wterm terminal
   cdp/             Chrome DevTools Protocol client
   tools/           Agent tools (bash, file, browser, js)
   core/            Agent loop, logging, types

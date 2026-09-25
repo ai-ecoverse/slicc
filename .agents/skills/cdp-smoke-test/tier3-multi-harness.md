@@ -108,7 +108,7 @@ Re-verify production PIDs are unchanged after every launch, not just the first.
 ## Driving the terminal
 
 `slicc-cdp term` sends Ctrl+U then types then presses Enter. Sending commands
-back-to-back interleaves with readline and wedges the session
+back-to-back can interleave with the prompt editor and wedge the session
 (`terminal prompt never appeared — kernel session not ready`, and residue like
 `hosto` / `ut` in the buffer). Wait for `term-text` to show the previous
 command's output before sending the next, and treat a `send failed` as
@@ -122,8 +122,8 @@ SLICC's UI is web components, so `document.body.innerText` sees almost none of
 it. Checking `innerText.includes(...)` to answer "did the message arrive?" or
 "did the command run?" returns **false for things that are plainly on screen** —
 a false negative that reads exactly like a broken feature. Walk the tree
-instead, recursing into every `shadowRoot`, and read the terminal from the
-`xterm-screen` element's rows:
+instead, recursing into every `shadowRoot`. Read terminal rows from
+`.terminal-panel__terminal-host slicc-terminal`'s shadow `.host`:
 
 ```js
 const walk = (root, hit) => {

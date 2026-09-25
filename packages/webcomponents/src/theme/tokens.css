@@ -48,7 +48,7 @@
   --ctl-h: 30px;
   /* Terminal surface is always dark (even under light page themes). ANSI /
      accent colors still resolve from --rose / --cyan / --ctx etc. so active
-     theme preferences propagate into xterm. */
+     theme preferences propagate into wterm. */
   --term-bg: #0c0c0e;
   --term-fg: #e7e7ea;
   --term-border: #232329;

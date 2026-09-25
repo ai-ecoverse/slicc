@@ -904,6 +904,13 @@ covers.
 
 ## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
 
+The real Kokoro speech E2E uses a fresh persistent Playwright profile. A
+regular Playwright test context is off-the-record; Chromium gives it a memory
+based storage pool that can fill while `navigator.storage.estimate()` still
+reports ample quota. Model weights plus CacheStorage then make the tiny final
+WAV write fail with `ENOSPC`. Keep the persistent profile scoped to that test
+and close it after the run so other E2E specs retain their isolated contexts.
+
 **Files**: `packages/webapp/src/ui/boot/setup-storage-persistence.ts`,
 `packages/webapp/src/shell/supplemental-commands/df-command.ts`.
 
@@ -1810,7 +1817,7 @@ Every float that hosts the cone runs the agent engine in a `DedicatedWorker` (th
 
 | Context           | Location                                      | Purpose                                | Window globals                  |
 | ----------------- | --------------------------------------------- | -------------------------------------- | ------------------------------- |
-| **Page realm**    | `packages/webapp/src/ui/main.ts` (`main()`)   | xterm.js terminal UI, Layout, DOM      | Has Layout + DOM                |
+| **Page realm**    | `packages/webapp/src/ui/main.ts` (`main()`)   | wterm terminal UI, Layout, DOM         | Has Layout + DOM                |
 | **Kernel worker** | `packages/webapp/src/kernel/kernel-worker.ts` | Agent loop + `AlmostBashShellHeadless` | Has Orchestrator, no DOM/Layout |
 
 The two communicate via a `KernelTransport` over `MessagePort` — `Bridge` on the worker side, `OffscreenClient` on the page side.

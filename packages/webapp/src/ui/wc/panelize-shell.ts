@@ -164,7 +164,7 @@ function ensurePanelizeStyles(doc: Document): void {
  * `[active]` alone is NOT enough: the reveal rule `slicc-surface[active]` has the
  * same specificity as the base `slicc-surface` rule, so which wins depends on
  * sheet order. Measured inside a panel it stayed `display:none` at 0px with a
- * mounted-but-invisible xterm whose textarea refused focus — the terminal
+ * mounted-but-invisible terminal whose textarea refused focus — the terminal
  * silently swallowed every keystroke. Setting `display` inline removes the race,
  * and relative positioning stops `inset:0` collapsing against a panel that has no
  * intrinsic height.
@@ -420,7 +420,7 @@ export function panelizeShell(
   // `position:absolute; inset:0; display:none` until `[active]` — it was built for
   // the show-one workbench, where exactly one sibling was revealed at a time. In a
   // panel the WRAPPER owns visibility, so an inactive surface just renders an
-  // empty box: measured 0px tall with a mounted-but-invisible xterm, and its
+  // empty box: measured 0px tall with a mounted-but-invisible terminal, and its
   // textarea refused focus, so the terminal silently accepted no input.
   for (const id of [
     PANEL_IDS.files,

@@ -1,9 +1,7 @@
 /**
  * Workbench wiring for the live WC shell: the VFS-backed file tree and the
- * panel terminal. The terminal reuses `RemoteTerminalView` — the same
- * worker-shell xterm the legacy layout mounts — inside the workbench's
- * `term` surface; `<slicc-terminal>` replaces it once the library terminal
- * learns session attachment.
+ * panel terminal. `RemoteTerminalView` attaches the worker shell to the
+ * Ghostty-backed `<slicc-terminal>` in the workbench's `term` surface.
  */
 
 import type { SliccFileTree, SliccMonitor } from '@slicc/webcomponents';

@@ -2,7 +2,7 @@
  * Always-dark terminal palette. The page chrome may be light (vanilla) or dark;
  * the terminal surface stays a dark canvas with light body text. Accent / ANSI
  * colors resolve from theme CSS variables so active theme preferences propagate
- * into xterm and the dock-tree's dark terminal chrome.
+ * into wterm and the dock-tree's dark terminal chrome.
  *
  * DOM-free except for `resolveTerminalTheme`, which reads computed styles from
  * an optional element (defaults to `document.documentElement`).
@@ -38,8 +38,8 @@ export const TERMINAL_THEME_DEFAULTS = {
   border: '#232329',
 } as const;
 
-/** xterm.js `ITheme`-compatible shape (no xterm import — keeps this module DOM/worker safe). */
-export type TerminalXtermTheme = {
+/** Resolved terminal palette. This module remains DOM/worker safe. */
+export type TerminalTheme = {
   background: string;
   foreground: string;
   cursor: string;
@@ -69,17 +69,17 @@ type CssVarReader = (name: string) => string;
 function firstColor(read: CssVarReader, names: readonly string[], fallback: string): string {
   for (const name of names) {
     const value = read(name).trim();
-    // Reject empty / unresolved `var()` leftovers; xterm needs concrete colors.
+    // Reject empty / unresolved `var()` leftovers; Ghostty needs concrete colors.
     if (value && !value.startsWith('var(')) return value;
   }
   return fallback;
 }
 
 /**
- * Build the always-dark xterm theme from a CSS-variable reader. Exported for
+ * Build the always-dark terminal theme from a CSS-variable reader. Exported for
  * unit tests that supply a fake reader without a document.
  */
-export function buildTerminalTheme(read: CssVarReader): TerminalXtermTheme {
+export function buildTerminalTheme(read: CssVarReader): TerminalTheme {
   const d = TERMINAL_THEME_DEFAULTS;
   // Background / foreground stay locked to the dark surface — never follow
   // page `--canvas` / `--ink`, which flip with light themes.
@@ -120,7 +120,7 @@ export function buildTerminalTheme(read: CssVarReader): TerminalXtermTheme {
 }
 
 /** Resolve the live terminal palette from an element's computed theme scope. */
-export function resolveTerminalTheme(el?: Element | null): TerminalXtermTheme & { border: string } {
+export function resolveTerminalTheme(el?: Element | null): TerminalTheme & { border: string } {
   const target = el ?? (typeof document !== 'undefined' ? document.documentElement : null);
   const style = target ? getComputedStyle(target) : null;
   const read: CssVarReader = (name) => (style ? style.getPropertyValue(name) : '');

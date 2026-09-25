@@ -833,8 +833,8 @@ Two gesture paths:
   `mount /<path>` line and runs `showDirectoryPicker` in the page realm while
   the Enter keystroke's transient activation is still live, stashes the handle
   in IDB, and forwards a rewritten command so the worker-side `mountLocal`
-  adopts the already-granted handle. The line editor is the `xterm-readline`
-  addon, so Enter resolves the addon's `read()` promise; the picker runs in the
+  adopts the already-granted handle. The terminal line editor's Enter handler
+  resolves its `read()` promise; the picker runs in the
   microtask that resolution schedules, which is still the same task as the
   keydown, so the activation carries through.
 - **Agent-driven** — the `mount` shell command (run via `bash`) renders a Tool

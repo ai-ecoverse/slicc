@@ -7,7 +7,7 @@
  *
  * The palette mirrors `TERMINAL_THEME` in
  * `packages/webcomponents/src/workbench/slicc-terminal.ts` so the inline chat
- * output matches the live xterm surface.
+ * output matches the live wterm surface.
  */
 
 const ESC = '\x1b';
