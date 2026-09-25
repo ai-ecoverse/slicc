@@ -153,6 +153,11 @@ function configStats(c, cs) {
   };
 }
 
+/** A paired change relative to its baseline mean; null when the baseline is zero or unknown. */
+export function relative(p) {
+  return p.from ? round(p.delta / p.from) : null;
+}
+
 function delta(records, from, to, extra) {
   const d = pairedDelta(records, from, to);
   const t = pairedDelta(records, from, to, 'duration');
@@ -160,10 +165,13 @@ function delta(records, from, to, extra) {
   return {
     ...extra,
     score: round(d.delta),
+    score_pct: relative(d),
     score_from: round(d.from),
     score_to: round(d.to),
     duration: round(t.delta, 3),
+    duration_pct: relative(t),
     cost: round(c.delta),
+    cost_pct: relative(c),
     n: d.n,
   };
 }
@@ -213,9 +221,11 @@ export function reportData(records) {
 
 const fmt = (x, d = 2) => (x == null ? '–' : x.toFixed(d));
 const signed = (x, d = 2) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${x.toFixed(d)}`);
+/** A relative change as a signed percentage: 0.129 → "+12.9%". */
+export const percent = (x) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`);
 
 function deltaLine(label, d) {
-  return `- ${label}: score ${signed(d.score)}, time ${signed(d.duration, 0)} s, cost ${signed(d.cost, 3)} $ (n=${d.n})`;
+  return `- ${label}: score ${percent(d.score_pct)} (${fmt(d.score_from)} → ${fmt(d.score_to)}), time ${percent(d.duration_pct)} (${signed(d.duration, 0)} s), cost ${percent(d.cost_pct)} (${signed(d.cost, 3)} $) (n=${d.n})`;
 }
 
 function configRow(c) {

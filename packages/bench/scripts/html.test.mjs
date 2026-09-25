@@ -57,12 +57,16 @@ describe('cells', () => {
 
 describe('tradeoff', () => {
   it('says what a paired time or cost difference means', () => {
-    expect(tradeoff(-71.2, 'time')).toBe('<span class="up">71 s faster</span>');
-    expect(tradeoff(5, 'time')).toBe('5 s slower');
-    expect(tradeoff(-0.035, 'cost')).toBe('<span class="up">$0.035 cheaper</span>');
-    expect(tradeoff(0.2, 'cost')).toBe('$0.200 more');
-    expect(tradeoff(0.0001, 'cost')).toBe('about the same');
-    expect(tradeoff(null, 'time')).toBe('–');
+    expect(tradeoff(-71.2, -0.26, 'time')).toBe(
+      '<span class="up">26% faster</span> <span class="muted">(71 s)</span>'
+    );
+    expect(tradeoff(5, 0.1, 'time')).toBe('10% slower <span class="muted">(5 s)</span>');
+    expect(tradeoff(-0.035, null, 'cost')).toBe('<span class="up">$0.035 cheaper</span>');
+    expect(tradeoff(0.2, 0.5, 'cost')).toBe(
+      '50% more expensive <span class="muted">($0.200)</span>'
+    );
+    expect(tradeoff(0.0001, 0.01, 'cost')).toBe('about the same');
+    expect(tradeoff(null, null, 'time')).toBe('–');
   });
 });
 
@@ -72,11 +76,21 @@ describe('reportHtml', () => {
     expect(html).toMatch(/^<!doctype html>/);
     expect(html).toContain('<h2>B <small>6 runs, 2 tasks</small></h2>');
     expect(html.match(/<article class="card">/g)).toHaveLength(4);
-    expect(html).toContain('Skills lift <small>over none; paired by task');
+    expect(html).toContain('Skills lift <small>relative to none; paired by task');
+    const order = [
+      '<h3>Ranking',
+      'Score vs. cost per task',
+      'Skills lift',
+      '<h3>Configurations</h3>',
+    ];
+    const at = order.map((s) => html.indexOf(s));
+    expect(at.every((v, i) => v > 0 && (i === 0 || v > at[i - 1]))).toBe(true);
+    expect(html).toContain('class="bar-value">100</text>');
+    expect(html).toContain('<svg viewBox="0 0 760 380" class="value"');
     expect(html.match(/<article class="card lift">/g)).toHaveLength(2);
-    expect(html).toContain('<p class="big up">+0.20<small> score lift</small></p>');
+    expect(html).toContain('<p class="big up">+25.0%<small> score lift</small></p>');
     expect(html).toContain('<svg class="dumbbell up"');
-    expect(html).toContain('<p class="pair">none 0.80 → builtin 1.00</p>');
+    expect(html).toContain('<p class="pair">none 0.80 → builtin 1.00 (+0.20)</p>');
     expect(html).toContain('<dd>1 <span class="chip warn">small sample</span></dd>');
     expect(html.indexOf('Skills lift')).toBeLessThan(html.indexOf('<h3>Configurations</h3>'));
     expect(html).toContain('What models change (paired, against opus)');
@@ -85,7 +99,8 @@ describe('reportHtml', () => {
     expect(html).toContain('<td class="cell unjudged"');
     expect(html).toContain('<code>t2-long-</code>');
     expect(html).toContain('<td class="cell missing" title="not run">');
-    expect(html.match(/<circle [^>]*><title>/g)).toHaveLength(5);
+    // Per-run dots (r=5) in the time-and-cost scatter; the value chart's are r=7.
+    expect(html.match(/<circle [^>]*r="5"[^>]*><title>/g)).toHaveLength(5);
     expect(html).toContain('Generated now.');
     const t1 = html.indexOf('title="t1"');
     expect(t1).toBeGreaterThan(-1);

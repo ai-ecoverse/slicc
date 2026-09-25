@@ -236,9 +236,9 @@ describe('reportMarkdown', () => {
     expect(md).toContain('Judge: `judge`');
     expect(md).toContain('| sonnet | none | 3 | 0 | 1 | 1 | 0 | 1 | 0.25 | 10 | 0.100 |');
     expect(md).toContain('**What skills add** (lift over `none`, paired by task and repeat):');
-    expect(md).toContain('- sonnet, `builtin`: score +0.75');
+    expect(md).toContain('- sonnet, `builtin`: score +300.0% (0.25 → 1.00)');
     expect(md).toContain('**What models change**');
-    expect(md).toContain('- `builtin`, opus: score -0.25');
+    expect(md).toMatch(/- `builtin`, opus: score -\d+\.\d% \(\d\.\d\d → \d\.\d\d\)/);
     expect(md).toContain('(n=0)');
   });
 
@@ -247,7 +247,9 @@ describe('reportMarkdown', () => {
     expect(md).not.toContain('NaN');
     expect(md).not.toContain('Judge:');
     expect(md).toContain('| m | none | 1 | 0 | 0 | 0 | 1 | 0 | – | 30 | 0.200 |');
-    expect(md).toContain('- m, `builtin`: score –, time +0 s, cost +0.000 $ (n=0)');
+    expect(md).toContain(
+      '- m, `builtin`: score – (– → –), time +0.0% (+0 s), cost +0.0% (+0.000 $) (n=0)'
+    );
   });
 
   it('omits deltas for a single configuration', () => {
