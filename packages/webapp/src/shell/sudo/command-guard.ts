@@ -35,6 +35,9 @@ import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 /** stderr message emitted (and shown to the agent) when approval is denied. */
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';
 
+/** Exit status for a sudo approval that was refused or timed out (EX_NOPERM). */
+export const SUDO_REFUSED_EXIT_CODE = 77;
+
 const COMMAND_POLICY_ALIASES = new Map([['jsh', 'node']]);
 
 /** Build the canonical sudoers subject for one tokenized command dispatch. */
@@ -87,6 +90,8 @@ export interface CommandSudoResult {
   allowed: boolean;
   /** stderr message to emit when `allowed` is false. */
   message?: string;
+  /** Exit status used when approval was refused or timed out. */
+  exitCode?: number;
 }
 
 /**
@@ -120,7 +125,11 @@ export async function enforceCommandSudo(
   });
 
   if (decision.decision === 'deny') {
-    return { allowed: false, message: commandSudoMessage(decision) };
+    return {
+      allowed: false,
+      message: commandSudoMessage(decision),
+      exitCode: SUDO_REFUSED_EXIT_CODE,
+    };
   }
   if (decision.decision === 'always') {
     const pattern = decision.pattern?.trim() || trimmed;

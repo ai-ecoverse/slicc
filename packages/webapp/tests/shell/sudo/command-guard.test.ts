@@ -54,6 +54,7 @@ describe('enforceCommandSudo', () => {
 
     expect(result.allowed).toBe(false);
     expect(result.message).toBe(COMMAND_DENIED_MESSAGE);
+    expect(result.exitCode).toBe(77);
   });
 
   it('match -> unanswered prompt -> block with the timeout message', async () => {
@@ -66,6 +67,7 @@ describe('enforceCommandSudo', () => {
     });
 
     expect(result.allowed).toBe(false);
+    expect(result.exitCode).toBe(77);
     expect(result.message).toBe(commandSudoMessage({ decision: 'deny', reason: 'user-timeout' }));
     // The agent must not read an absent human as a refusal.
     expect(result.message).not.toBe(COMMAND_DENIED_MESSAGE);
