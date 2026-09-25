@@ -99,6 +99,8 @@ describe('createJshdKernelContext', () => {
   });
 });
 
+const SETTLE = { timeout: 10_000, interval: 25 };
+
 describe('restoreEnabledJshdUnits', () => {
   it('relaunches enabled units and skips disabled ones', async () => {
     const vfs = await VirtualFS.create({
@@ -188,24 +190,16 @@ describe('restoreEnabledJshdUnits', () => {
       realmFactory: inProcess,
     });
     expect(started).toContain('pwn');
-
-    const settleMs = 10_000;
-    await vi.waitFor(
-      () => {
-        const state = getJshdSupervisor()?.status('pwn')?.state;
-        expect(state).toMatch(/stopped|errored/);
-      },
-      { timeout: settleMs }
-    );
+    await vi.waitFor(() => {
+      const state = getJshdSupervisor()?.status('pwn')?.state;
+      expect(state).toMatch(/stopped|errored/);
+    }, SETTLE);
     expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
     const { readUnitLog } = await import(
       '../../../../src/shell/supplemental-commands/jshd/store.js'
     );
-    await vi.waitFor(
-      async () => {
-        expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
-      },
-      { timeout: settleMs }
-    );
-  });
+    await vi.waitFor(async () => {
+      expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
+    }, SETTLE);
+  }, 30_000);
 });

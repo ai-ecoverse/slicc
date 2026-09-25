@@ -1,3 +1,4 @@
+import { findBlindNegativeClaim } from '../base/blind-reads.js';
 import { computeBudget, isMemoryFilePath } from '../base/memory-budget.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
@@ -71,6 +72,15 @@ export function memoryWriteVerdict(
   };
 }
 
+function blindClaimRefusal(path: string, line: string): string {
+  return (
+    `Rejected: this line records ${path} as absent or refuted, but ${path} is outside this ` +
+    'pass\'s visiblePaths — every read of it answered "not visible", which means UNKNOWN, ' +
+    'never absent. Keep the stored claim as it was, or name the unverifiable pair in your ' +
+    `closing report instead. Line: ${line}`
+  );
+}
+
 async function readCurrent(fs: VirtualFS, path: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path, { encoding: 'utf-8' });
@@ -126,6 +136,13 @@ export async function executeMemoryWrite(
     const budget = computeBudget(await deps.readSessionCount());
     const verdict = memoryWriteVerdict(current?.length ?? 0, resolved.next.length, budget);
     if (!verdict.allowed) return { content: `memory_write: ${verdict.reason}`, isError: true };
+    const blind = findBlindNegativeClaim(current ?? '', resolved.next, deps.blindPaths?.() ?? []);
+    if (blind) {
+      return {
+        content: `memory_write: ${blindClaimRefusal(blind.path, blind.line)}`,
+        isError: true,
+      };
+    }
     await fs.writeFile(path, resolved.next);
     const durabilityError = await verifyWriteLanded(fs, path, resolved.next);
     if (durabilityError) return { content: durabilityError, isError: true };

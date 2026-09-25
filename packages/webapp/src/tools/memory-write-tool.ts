@@ -4,6 +4,8 @@ import type { ToolDefinition, ToolInputSchema, ToolResult } from './types.js';
 
 export interface MemoryWriteToolDeps {
   readSessionCount: () => Promise<number>;
+
+  blindPaths?: () => readonly string[];
 }
 
 export interface MemoryWriteInput {

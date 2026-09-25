@@ -14,19 +14,33 @@ export function computeBudget(sessionCount: number): number {
   return Math.round(MEMORY_BASE_CHARS + MEMORY_PER_LOG_CHARS * Math.log2(n + 2));
 }
 
+const CURATION_DRAFT_PATTERN = /^\/sessions\/\.curation\/[^/]+\/draft\.md$/;
+
 const MEMORY_FILE_PATTERNS: readonly RegExp[] = [
   /^\/workspace\/CLAUDE\.md$/,
   /^\/shared\/CLAUDE\.md$/,
   /^\/(?:cones|scoops)\/[^/]+\/CLAUDE\.md$/,
-  /^\/sessions\/\.curation\/[^/]+\/draft\.md$/,
+  CURATION_DRAFT_PATTERN,
 ];
 
-export function isMemoryFilePath(path: string): boolean {
-  const normalized = `/${path}`
+function tidyMemoryPath(path: string): string {
+  return `/${path}`
     .replace(/\/+/g, '/')
     .replace(/\/\.(?=\/)/g, '')
     .replace(/\/$/, '');
+}
+
+export function isMemoryFilePath(path: string): boolean {
+  const normalized = tidyMemoryPath(path);
   return MEMORY_FILE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function isCurationDraftPath(path: string): boolean {
+  return CURATION_DRAFT_PATTERN.test(tidyMemoryPath(path));
+}
+
+export function isMemoryPassSandbox(writablePaths: readonly string[]): boolean {
+  return writablePaths.some(isCurationDraftPath);
 }
 
 export const MEMORY_WRITE_TOOL_NAME = 'memory_write';

@@ -1,10 +1,13 @@
+import { BlindReadLog } from '../../base/blind-reads.js';
+import { isMemoryPassSandbox } from '../../base/memory-budget.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import { createLogger } from '../../core/index.js';
 import { buildEnvFromMaskedEntries } from '../../core/secret-env.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
+import { createBlindReadFs } from '../../fs/blind-read-fs.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { createMemoryGuardedFs } from '../../fs/memory-guard-fs.js';
-import type { RestrictedFS } from '../../fs/restricted-fs.js';
+import { RestrictedFS } from '../../fs/restricted-fs.js';
 import { createSudoFs } from '../../fs/sudo-fs.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
@@ -51,7 +54,19 @@ export interface ShellAndSkills {
   gatedFs: VirtualFS;
 
   memoryFs: VirtualFS;
+
+  blindReads: BlindReadLog | null;
   skills: Skill[];
+}
+
+function blindReadLogFor(
+  unit: WorkUnitDescriptor,
+  fs: VirtualFS | RestrictedFS
+): BlindReadLog | null {
+  const policy = unit.policy.filesystem;
+  if (policy.kind !== 'restricted' || !(fs instanceof RestrictedFS)) return null;
+  if (!isMemoryPassSandbox(policy.writablePaths)) return null;
+  return new BlindReadLog(policy.visiblePaths);
 }
 
 async function loadSecretEnv(broker: CapabilityBroker): Promise<Record<string, string>> {
@@ -103,7 +118,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
     folder: scoop.folder,
     onSudoRequest: deps.onSudoRequest,
   });
-  const memoryFs = (
+  const sudoFs = (
     sudoWiring
       ? createSudoFs(fs, {
           broker: sudoWiring.broker,
@@ -114,6 +129,9 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
         })
       : fs
   ) as VirtualFS;
+
+  const blindReads = blindReadLogFor(unit, fs);
+  const memoryFs = blindReads ? createBlindReadFs(sudoFs, fs as RestrictedFS, blindReads) : sudoFs;
 
   const gatedFs = createMemoryGuardedFs(memoryFs);
 
@@ -149,5 +167,5 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
   log.info('AlmostBashShell initialized', { folder: scoop.folder });
   const skills = await loadSkills(effectiveSkillsFs, SKILLS_LIBRARY_DIR);
-  return { shell, gatedFs, memoryFs, skills };
+  return { shell, gatedFs, memoryFs, blindReads, skills };
 }

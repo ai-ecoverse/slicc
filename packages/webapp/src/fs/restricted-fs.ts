@@ -17,6 +17,8 @@ import type { VirtualFS } from './virtual-fs.js';
 
 export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
 
+export type RestrictedReadAccess = 'inside' | 'parent' | 'outside';
+
 export interface RestrictedFsOptions {
   includeMounts?: boolean;
 }
@@ -141,6 +143,12 @@ export class RestrictedFS {
     return [...this.allowedPrefixes, ...ALWAYS_WRITABLE_PREFIXES].some(
       (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
     );
+  }
+
+  readAccess(path: string): RestrictedReadAccess {
+    if (VIRTUAL_DEVICES[normalizePath(path)] || EphemeralFdStore.handles(path)) return 'inside';
+    if (this.isAllowedStrict(path)) return 'inside';
+    return this.isAllowed(path) ? 'parent' : 'outside';
   }
 
   canWrite(path: string): boolean {

@@ -854,3 +854,50 @@ describe('RestrictedFS ephemeral shell descriptors', () => {
     expect(await restricted.exists('/dev/null')).toBe(true);
   });
 });
+
+describe('RestrictedFS.readAccess (#3459)', () => {
+  let vfs: VirtualFS;
+  let restricted: RestrictedFS;
+
+  beforeAll(async () => {
+    vfs = await VirtualFS.create({ dbName: 'test-restricted-fs-read-access', wipe: true });
+    await vfs.mkdir('/cones/cone-helix/workspace', { recursive: true });
+    await vfs.mkdir('/etc', { recursive: true });
+    await vfs.writeFile('/etc/llmstxtignore', 'x');
+    restricted = new RestrictedFS(
+      vfs,
+      ['/sessions/.curation/dream-x.md/draft.md'],
+      ['/sessions/', '/cones/cone-helix/workspace/']
+    );
+  });
+
+  it('tells inside, parent and outside apart without touching the tree', () => {
+    expect(restricted.readAccess('/sessions/index.json')).toBe('inside');
+    expect(restricted.readAccess('/sessions')).toBe('inside');
+    expect(restricted.readAccess('/sessions/.curation/dream-x.md/draft.md')).toBe('inside');
+    expect(restricted.readAccess('/cones/cone-helix/workspace/CLAUDE.md')).toBe('inside');
+    expect(restricted.readAccess('/')).toBe('parent');
+    expect(restricted.readAccess('/cones')).toBe('parent');
+    expect(restricted.readAccess('/cones/cone-helix/')).toBe('parent');
+
+    expect(restricted.readAccess('/etc/llmstxtignore')).toBe('outside');
+    expect(restricted.readAccess('/etc')).toBe('outside');
+    expect(restricted.readAccess('/cones/cone-other/workspace/CLAUDE.md')).toBe('outside');
+
+    expect(restricted.readAccess('/dev/null')).toBe('inside');
+    expect(restricted.readAccess('/tmp/x')).toBe('inside');
+  });
+
+  it('follows a sudoers read grant and its ancestors', () => {
+    restricted.setReadGrants(['/etc/sudoers.d/**']);
+    expect(restricted.readAccess('/etc/sudoers.d/granted')).toBe('inside');
+
+    expect(restricted.readAccess('/etc/sudoers.d')).toBe('inside');
+
+    expect(restricted.readAccess('/etc')).toBe('parent');
+    expect(restricted.readAccess('/etc/llmstxtignore')).toBe('outside');
+    restricted.setReadGrants([]);
+    expect(restricted.readAccess('/etc/sudoers.d/granted')).toBe('outside');
+    expect(restricted.readAccess('/etc/llmstxtignore')).toBe('outside');
+  });
+});

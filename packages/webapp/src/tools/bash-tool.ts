@@ -203,6 +203,14 @@ export interface BashToolOptions {
   jobHost?: BashJobHost;
 
   scrubOutput?: (text: string) => Promise<string>;
+
+  annotateResult?: () => string | undefined;
+}
+
+function annotate(ctx: BashRunContext, output: string): string {
+  const note = ctx.options.annotateResult?.();
+  if (!note) return output;
+  return `${output.endsWith('\n') || output.length === 0 ? output : `${output}\n`}${note}\n`;
 }
 
 interface BashRunContext {
@@ -551,7 +559,7 @@ async function deliverBackgroundJob(
     }
   }
 
-  const output = await scrubJobOutput(ctx, jobId, raw);
+  const output = await scrubJobOutput(ctx, jobId, annotate(ctx, raw));
 
   let persistedPath: string | undefined;
   try {
@@ -659,7 +667,7 @@ async function foregroundResult(
   if (result.stdout) output += result.stdout;
   if (result.stderr) output += result.stderr;
   if (!output) output = `(exit code: ${result.exitCode})`;
-  output = appendPipelineStatus(output, result.pipeStatus);
+  output = annotate(ctx, appendPipelineStatus(output, result.pipeStatus));
 
   return {
     content: await boundBashOutput(output, ctx.fs, ctx.tempDir, ctx.nextOutputSeq),

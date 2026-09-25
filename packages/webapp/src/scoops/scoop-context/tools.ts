@@ -1,3 +1,4 @@
+import type { BlindReadLog } from '../../base/blind-reads.js';
 import { providerLabel } from '../../base/provider-labels.js';
 import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
@@ -39,6 +40,8 @@ export interface ScoopToolsDeps {
   gatedFs: VirtualFS;
 
   memoryFs: VirtualFS;
+
+  blindReads?: BlindReadLog | null;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
   getTurnPid: () => number | undefined;
@@ -95,11 +98,14 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
   const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
   const fileTools = createFileTools(deps.gatedFs, unit.workspace.root);
 
+  const blindReads = deps.blindReads ?? null;
   const memoryWriteTool = createMemoryWriteTool(deps.memoryFs, {
     readSessionCount: async () => {
       const { readSessionCount } = await import('../cone-memory-budget.js');
       return readSessionCount(deps.fs);
     },
+
+    ...(blindReads ? { blindPaths: () => blindReads.outsidePaths() } : {}),
   });
 
   const legacyTools = [
@@ -114,6 +120,8 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
       jobHost: { spawn: (command) => deps.spawnBashJob(command) },
 
       scrubOutput: getToolResultScrubber(),
+
+      ...(blindReads ? { annotateResult: () => blindReads.takeNote() } : {}),
 
       fireLick: (event) => {
         const handler = (globalThis as SliccLickGlobal).__slicc_lick_handler;
