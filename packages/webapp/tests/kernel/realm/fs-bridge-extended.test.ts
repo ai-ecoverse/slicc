@@ -52,7 +52,7 @@ describe('fsBridge extended operations', () => {
          fs.appendFile('/workspace/log.txt', 'A'),
          fs.appendFile('/workspace/log.txt', 'B'),
        ]);
-       console.log(await fs.readFile('/workspace/log.txt'));`,
+       console.log(await fs.readFile('/workspace/log.txt', 'utf8'));`,
       ctx
     );
     expect(out.exitCode).toBe(0);
@@ -71,7 +71,7 @@ describe('fsBridge extended operations', () => {
            fs.appendFile('/workspace/log.txt', String(i) + '\\n')
          )
        );
-       console.log(await fs.readFile('/workspace/log.txt'));`,
+       console.log(await fs.readFile('/workspace/log.txt', 'utf8'));`,
       ctx
     );
     expect(out.exitCode).toBe(0);
@@ -258,13 +258,13 @@ describe('fsBridge extended operations', () => {
     expect(out.stdout.trim()).toBe('a.txt,b.txt');
   });
 
-  // fs.promises is Node's (stat resolves to a Stats with methods), no longer
-  // the promise-API object itself; see realm-fs-node-callbacks.test.ts.
+  // fs.promises is Node's (stat resolves to a Stats with methods; readFile
+  // defaults to Buffer); see realm-fs-node-callbacks.test.ts.
   it('fs.promises reads through the same bridge', async () => {
     const ctx = makeCtx({ files: { '/workspace/x.txt': 'y' } });
     const out = await runCode(
       `const fs = require('fs');
-       const content = await fs.promises.readFile('/workspace/x.txt');
+       const content = await fs.promises.readFile('/workspace/x.txt', 'utf8');
        console.log(content);`,
       ctx
     );

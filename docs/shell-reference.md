@@ -2152,7 +2152,7 @@ fs.rm(path): Promise<void> // Recursive delete
 fs.fetchToFile(url, path): Promise<number> // Download and save, returns byte count
 ```
 
-Node programs get Node's calling conventions on the same object. A trailing callback runs as `cb(err, result)` (errors carry `err.code`, such as `ENOENT`), so `fs.readdir(dir, cb)` and `util.promisify(fs.stat)` work. A `stat` / `lstat` callback gets a `Stats` with methods (`isDirectory()`), and `fs.exists(path, cb)` gets a boolean. `fs.promises` is Node's too: its `stat` resolves to a `Stats`. Without a callback, the promise API above is unchanged.
+Node programs get Node's calling conventions on the same object. A trailing callback runs as `cb(err, result)` (errors carry `err.code`, such as `ENOENT`), so `fs.readdir(dir, cb)` and `util.promisify(fs.stat)` work. A `stat` / `lstat` callback gets a `Stats` with methods (`isDirectory()`), and `fs.exists(path, cb)` gets a boolean. `fs.promises` is Node's too: its `stat` resolves to a `Stats`, and `readFile(path)` with no encoding resolves to a `Buffer` (pass `'utf8'` / `{ encoding: 'utf8' }` for text). Without a callback, the promise API above is unchanged — including `fs.readFile(path)` returning decoded text for `.jsh` back-compat.
 
 #### exec (shell command bridge)
 

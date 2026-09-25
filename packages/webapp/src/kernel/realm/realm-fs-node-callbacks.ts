@@ -13,7 +13,8 @@
  *   `Stats` with methods from `stat` / `lstat`, and `cb(exists)` from the
  *   deprecated `fs.exists`.
  * - Without one, the documented promise API is unchanged.
- * - `fs.promises` is Node's: `stat` / `lstat` resolve to a `Stats`.
+ * - `fs.promises` is Node's: `stat` / `lstat` resolve to a `Stats`;
+ *   `readFile(path)` with no encoding resolves to a `Buffer`.
  */
 
 type FsFn = (...args: unknown[]) => unknown;
@@ -68,6 +69,23 @@ export function toNodeStats(st: BridgeStat): NodeStatsLike {
 
 const STAT_METHODS = new Set(['stat', 'lstat']);
 
+/**
+ * Node's `readFile(path)` / `readFile(path, cb)` with no encoding returns a
+ * Buffer. The bridge's no-encoding path returns decoded text for `.jsh`
+ * back-compat, so Node callers must pass `null` (or `{ encoding: null }`) to
+ * request raw bytes — matching `overlayAsyncStdio`'s encoding note.
+ */
+export function nodeReadFileArgs(args: unknown[]): unknown[] {
+  if (args.length === 0) return args;
+  if (args.length === 1 || args[1] === undefined) return [args[0], null];
+  const opts = args[1];
+  if (opts !== null && typeof opts === 'object' && !ArrayBuffer.isView(opts)) {
+    const enc = (opts as { encoding?: string | null }).encoding;
+    if (enc === undefined) return [args[0], { ...opts, encoding: null }];
+  }
+  return args;
+}
+
 /** Node code branches on `err.code`; the bridge puts the errno in the message. */
 function withErrnoCode(err: unknown): unknown {
   if (err instanceof Error && (err as { code?: unknown }).code === undefined) {
@@ -81,6 +99,11 @@ function nodeResult(name: string, result: unknown): unknown {
   return STAT_METHODS.has(name) ? toNodeStats(result as BridgeStat) : result;
 }
 
+function callBridge(name: string, fn: FsFn, thisArg: unknown, args: unknown[]): unknown {
+  const callArgs = name === 'readFile' ? nodeReadFileArgs(args) : args;
+  return fn.apply(thisArg, callArgs);
+}
+
 /** Node's `fs.promises` over the bridge's promise methods. */
 export function nodeFsPromises<T extends object>(bridge: T): T {
   const api: FsMethodTable = {};
@@ -90,7 +113,7 @@ export function nodeFsPromises<T extends object>(bridge: T): T {
       typeof fn === 'function'
         ? async (...args: unknown[]) => {
             try {
-              return nodeResult(name, await (fn as FsFn)(...args));
+              return nodeResult(name, await callBridge(name, fn as FsFn, bridge, args));
             } catch (err) {
               throw withErrnoCode(err);
             }
@@ -111,7 +134,7 @@ export function acceptNodeCallbacks<T extends object>(bridge: T): void {
       args.pop();
       let pending: Promise<unknown>;
       try {
-        pending = Promise.resolve((fn as FsFn).apply(this, args));
+        pending = Promise.resolve(callBridge(name, fn as FsFn, this, args));
       } catch (err) {
         pending = Promise.reject(err);
       }

@@ -120,6 +120,8 @@ function decodeFileBytes(bytes: Uint8Array, encoding: string | null | undefined)
 function encodingOf(
   opts: string | { encoding?: string | null } | null | undefined
 ): string | null | undefined {
+  // Bare `null` is Node's "return a Buffer" (same as `{ encoding: null }`).
+  if (opts === null) return null;
   return typeof opts === 'string' ? opts : opts?.encoding;
 }
 
@@ -234,7 +236,7 @@ export function createFsBridge(
     path: string,
     opts?: string | { encoding?: string | null } | null
   ): Promise<unknown> {
-    const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+    const encoding = encodingOf(opts);
     // null encoding explicitly requests raw bytes (Buffer); no opts or any
     // string encoding returns decoded text. This keeps backwards compat with
     // existing .jsh scripts while matching Node's readFile(path, null) → Buffer.
