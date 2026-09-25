@@ -212,7 +212,9 @@ describe('chrome-launch', () => {
     });
 
     it('hosted mode publishes literal host candidates; other launches keep mDNS', () => {
-      const headed = buildChromeLaunchArgs(baseOpts).find((a) => a.startsWith('--disable-features='));
+      const headed = buildChromeLaunchArgs(baseOpts).find((a) =>
+        a.startsWith('--disable-features=')
+      );
       const hosted = buildChromeLaunchArgs({ ...baseOpts, hosted: true }).find((a) =>
         a.startsWith('--disable-features=')
       );
