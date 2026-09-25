@@ -219,7 +219,8 @@ type MetadataBatchFs = {
  * Apply collected modes/times in one VFS sidecar write when a batch API is
  * available (the registered VirtualFS, not `ctx.fs` — just-bash's umask
  * wrapper omits non-IFileSystem methods); otherwise fall back to per-path
- * chmod/utimes (still best-effort for mounts).
+ * chmod/utimes (still best-effort for mounts). The batch API skips mount
+ * members itself so a mixed VFS+mount extract still applies local metadata.
  */
 async function applyMetadataBatch(
   ctx: CommandContext,

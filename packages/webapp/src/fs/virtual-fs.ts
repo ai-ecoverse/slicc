@@ -2210,11 +2210,21 @@ export class VirtualFS {
 
   /** Persist permissions where the backend supports them. */
   async chmod(path: string, mode: number): Promise<void> {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) {
+      await this.stat(normalized);
+      throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
+    }
     await this.updateMetadataBatch([{ path, mode }]);
   }
 
   /** Persist access and modification times where the backend supports them. */
   async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) {
+      await this.stat(normalized);
+      throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
+    }
     await this.updateMetadataBatch([{ path, atime, mtime }]);
   }
 
@@ -2222,10 +2232,13 @@ export class VirtualFS {
    * Apply many mode/time updates under one write lock and **one** sidecar
    * persist. Used by `tar x` so extracting N members is not N full sidecar
    * rewrites. A single {@link chmod}/{@link utimes} is this with one entry —
-   * still durable before return.
+   * still durable before return (those entry points still throw `ENOSYS` on
+   * mounts).
    *
-   * Mount paths report `ENOSYS` (after confirming the path exists), same as
-   * a lone chmod/utimes. Empty input is a no-op (no lock, no sidecar write).
+   * Mount paths in a multi-path batch are **skipped** after confirming they
+   * exist (missing mounts still `ENOENT`), so a mixed VFS+mount extract does
+   * not abort the rest of the batch on the first unsupported member. Empty
+   * input / all-skipped is a no-op (no sidecar write).
    */
   async updateMetadataBatch(updates: readonly MetadataUpdate[]): Promise<void> {
     if (updates.length === 0) return;
@@ -2240,35 +2253,47 @@ export class VirtualFS {
           entryType: 'directory' | 'file';
         }> = [];
         for (const update of prepared) {
-          if (this.findMount(update.normalized)) {
-            await this.stat(update.normalized);
-            throw new FsError(
-              'ENOSYS',
-              'metadata changes are not supported by this mount',
-              update.normalized
-            );
-          }
-          const resolved = await this.resolveSymlinks(update.normalized);
-          try {
-            const stat = await this.lfs.stat(resolved);
-            this.markSidecarDirty(resolved);
-            if (update.mode !== undefined) await this.lfs.chmod(resolved, update.mode);
-            if (update.atime !== undefined && update.mtime !== undefined) {
-              await this.lfs.utimes(resolved, update.atime, update.mtime);
-            }
-            notifications.push({
-              type: 'modify',
-              path: resolved,
-              entryType: stat.isDirectory() ? 'directory' : 'file',
-            });
-          } catch (err) {
-            throw convertError(err, update.normalized);
-          }
+          const notification = await this.applyPreparedMetadataUpdate(update);
+          if (notification) notifications.push(notification);
         }
+        if (notifications.length === 0) return;
         await this.writeOpfsMetadataSidecarUnlocked();
         this.watcher?.notify(notifications);
       })
     );
+  }
+
+  /**
+   * Apply one prepared metadata update under the write lock. Mount paths are
+   * existence-checked then skipped (`null`); local updates return a watcher
+   * notification.
+   */
+  private async applyPreparedMetadataUpdate(update: {
+    normalized: string;
+    mode?: number;
+    atime?: Date;
+    mtime?: Date;
+  }): Promise<{ type: 'modify'; path: string; entryType: 'directory' | 'file' } | null> {
+    if (this.findMount(update.normalized)) {
+      await this.stat(update.normalized);
+      return null;
+    }
+    const resolved = await this.resolveSymlinks(update.normalized);
+    try {
+      const stat = await this.lfs.stat(resolved);
+      this.markSidecarDirty(resolved);
+      if (update.mode !== undefined) await this.lfs.chmod(resolved, update.mode);
+      if (update.atime !== undefined && update.mtime !== undefined) {
+        await this.lfs.utimes(resolved, update.atime, update.mtime);
+      }
+      return {
+        type: 'modify',
+        path: resolved,
+        entryType: stat.isDirectory() ? 'directory' : 'file',
+      };
+    } catch (err) {
+      throw convertError(err, update.normalized);
+    }
   }
 
   private prepareMetadataUpdate(update: MetadataUpdate): {

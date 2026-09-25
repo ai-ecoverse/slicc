@@ -4,8 +4,9 @@
  */
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { createMutableDirectoryHandle } from './fsa-test-helpers.js';
+import { createDirectoryHandle, createMutableDirectoryHandle } from './fsa-test-helpers.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -46,6 +47,55 @@ describe('VirtualFS.updateMetadataBatch', () => {
         expect(entries[`/f${i}`].mtimeMs).toBe(when.getTime());
         expect(((await fs.stat(`/f${i}`)).mode ?? 0) & 0o777).toBe(0o600 + (i % 7));
       }
+    } finally {
+      await fs.dispose();
+    }
+  });
+
+  it('skips mount members and still applies later VFS updates', async () => {
+    const root = createMutableDirectoryHandle({});
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => root.handle } });
+    const dbName = 'metadata-batch-mixed-mount';
+    const fs = await VirtualFS.create({ dbName, backend: 'opfs', wipe: true });
+    const directory = await root.handle.getDirectoryHandle(dbName);
+    const readSidecar = async () => {
+      const file = await (await directory.getFileHandle('.metadata.json')).getFile();
+      return JSON.parse(await file.text()) as {
+        entries: Record<string, { mode?: number; mtimeMs?: number }>;
+      };
+    };
+    try {
+      await fs.writeFile('/local-a', 'a');
+      await fs.writeFile('/local-b', 'b');
+      await fs.mount(
+        '/mnt',
+        LocalMountBackend.fromHandle(createDirectoryHandle({ file: 'mounted' }), {
+          mountId: 'metadata-batch-mount',
+        })
+      );
+      const flushSpy = vi.spyOn(
+        fs as unknown as { writeOpfsMetadataSidecarUnlocked(): Promise<void> },
+        'writeOpfsMetadataSidecarUnlocked'
+      );
+      const when = new Date(1_700_000_000_000);
+      await fs.updateMetadataBatch([
+        { path: '/local-a', mode: 0o640, atime: when, mtime: when },
+        { path: '/mnt/file', mode: 0o755, atime: when, mtime: when },
+        { path: '/local-b', mode: 0o711, atime: when, mtime: when },
+      ]);
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      const entries = (await readSidecar()).entries;
+      expect(entries['/local-a'].mode! & 0o777).toBe(0o640);
+      expect(entries['/local-b'].mode! & 0o777).toBe(0o711);
+      expect(entries['/local-a'].mtimeMs).toBe(when.getTime());
+      expect(entries['/local-b'].mtimeMs).toBe(when.getTime());
+      expect(((await fs.stat('/local-a')).mode ?? 0) & 0o777).toBe(0o640);
+      expect(((await fs.stat('/local-b')).mode ?? 0) & 0o777).toBe(0o711);
+      // Mount metadata is unsupported — lone APIs still ENOSYS.
+      await expect(fs.chmod('/mnt/file', 0o700)).rejects.toMatchObject({ code: 'ENOSYS' });
+      await expect(
+        fs.updateMetadataBatch([{ path: '/mnt/missing', mode: 0o700 }])
+      ).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await fs.dispose();
     }
