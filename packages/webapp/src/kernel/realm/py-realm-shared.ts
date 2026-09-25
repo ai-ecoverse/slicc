@@ -841,6 +841,37 @@ async function registerSliccFsModuleSafe(
   }
 }
 
+/**
+ * A Pyodide stdout/stderr writer that keeps exactly what Python wrote. The
+ * `batched` handler it replaces added a newline to every line and dropped an
+ * unterminated last line: `sys.stdout.write("3;14;2")` printed nothing, so
+ * CMake's FindPython read no version from `python3 -c …`.
+ */
+export function textSink(chunks: string[]): { write: (buffer: Uint8Array) => number } {
+  const decoder = new TextDecoder();
+  return {
+    write: (buffer: Uint8Array) => {
+      const text = decoder.decode(buffer, { stream: true });
+      if (text) chunks.push(text);
+      return buffer.length;
+    },
+  };
+}
+
+/**
+ * Flush Python's own stream buffers (a non-tty stdout is block-buffered), so
+ * output still in them when the program ends reaches the {@link textSink}.
+ */
+export function flushPythonStreams(pyodide: PyodideInterface): void {
+  try {
+    pyodide.runPython(
+      'import sys as __slicc_sys\nfor __slicc_s in (__slicc_sys.stdout, __slicc_sys.stderr):\n    try:\n        __slicc_s.flush()\n    except Exception:\n        pass\ndel __slicc_sys, __slicc_s'
+    );
+  } catch {
+    /* a fatally failed Pyodide cannot flush; nothing more to recover */
+  }
+}
+
 /** Configure stdout, stderr, stdin, and globals for user code execution. */
 function configurePyodideIo(
   pyodide: PyodideInterface,
@@ -848,8 +879,8 @@ function configurePyodideIo(
   stdoutChunks: string[],
   stderrChunks: string[]
 ): void {
-  pyodide.setStdout({ batched: (msg: string) => stdoutChunks.push(msg + '\n') });
-  pyodide.setStderr({ batched: (msg: string) => stderrChunks.push(msg + '\n') });
+  pyodide.setStdout(textSink(stdoutChunks));
+  pyodide.setStderr(textSink(stderrChunks));
 
   let stdinConsumed = false;
   pyodide.setStdin({
@@ -907,6 +938,7 @@ async function executePythonCode(
     exitCode = 1;
   }
 
+  flushPythonStreams(pyodide);
   try {
     pyodide.runPython('del __slicc_code, __slicc_filename, __slicc_argv, __slicc_exit_code');
   } catch {
