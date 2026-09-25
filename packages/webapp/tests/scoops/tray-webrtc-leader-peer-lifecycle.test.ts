@@ -208,6 +208,39 @@ describe('LeaderTrayPeerManager peer lifecycle (#3477)', () => {
     );
   });
 
+  it('keeps a peer that recovers from disconnected, but releases one stuck there', async () => {
+    vi.useFakeTimers();
+    const factory = new CappedPeerFactory(10);
+    const { manager, onPeerTransportClosed } = createManager(factory);
+
+    await manager.handleControlMessage(joinRequest());
+    const recovering = factory.created[0]!;
+    recovering.channel.open();
+    recovering.setConnectionState('disconnected');
+    await vi.advanceTimersByTimeAsync(30_000);
+    recovering.setConnectionState('connected');
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(recovering.closed).toBe(false);
+
+    const stuckRequest = joinRequest();
+    await manager.handleControlMessage(stuckRequest);
+    const stuck = factory.created[1]!;
+    stuck.channel.open();
+    stuck.setConnectionState('disconnected');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(stuck.closed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(stuck.closed).toBe(true);
+    expect(manager.getPeers()).toEqual([
+      expect.objectContaining({ bootstrapId: expect.not.stringMatching(stuckRequest.bootstrapId) }),
+    ]);
+    expect(onPeerTransportClosed).toHaveBeenCalledWith(
+      stuckRequest.bootstrapId,
+      'Peer connection did not recover from disconnected'
+    );
+  });
+
   it('closes a peer whose follower never answered once the bootstrap has expired', async () => {
     vi.useFakeTimers();
     const factory = new CappedPeerFactory(10);

@@ -209,6 +209,12 @@ const LEADER_PEER_CONNECT_GRACE_MS = 10_000;
 const LEADER_PEER_CONNECT_FALLBACK_MS = 30_000;
 /** Upper bound on a connect deadline, whatever `expiresAt` claims. */
 const LEADER_PEER_CONNECT_MAX_MS = 5 * 60_000;
+/**
+ * How long a connected peer may sit in `disconnected` before the leader gives
+ * up on it. Browsers normally escalate a dead transport to `failed` well
+ * within this; the backstop covers one that never does.
+ */
+const LEADER_PEER_DISCONNECTED_GRACE_MS = 60_000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -218,8 +224,8 @@ function errorMessage(error: unknown): string {
  * Owns one `RTCPeerConnection` per follower bootstrap on the leader.
  *
  * Every peer is closed and forgotten once it can no longer carry traffic: its
- * data channel closed, its connection failed or closed, or it never connected
- * before its bootstrap expired. The browser caps live peer connections per page
+ * data channel closed, its connection failed or closed (or stayed
+ * `disconnected` too long), or it never connected before its bootstrap expired. The browser caps live peer connections per page
  * (Chrome: 500, "Cannot create so many PeerConnections"), and a long-running
  * leader serves a new peer per `slicc exec`, so a peer that outlives its
  * follower eventually makes the leader refuse every new one (#3477).
@@ -230,7 +236,10 @@ export class LeaderTrayPeerManager {
   private readonly peers = new Map<string, ActiveLeaderPeer>();
   /** Per-peer biscotto expiry deadlines, cancelled when the peer goes away. */
   private readonly expiryTimers = new Map<string, { cancel: () => void }>();
-  /** Per-peer connect deadlines, cancelled once the data channel opens. */
+  /**
+   * Per-peer liveness deadlines: the connect deadline until the data channel
+   * opens, then a recovery deadline while the connection is `disconnected`.
+   */
   private readonly connectTimers = new Map<string, { cancel: () => void }>();
   private iceServers: TrayIceServerConfig[] | undefined;
 
@@ -421,7 +430,22 @@ export class LeaderTrayPeerManager {
     // the leader never ICE-restarts a follower peer.
     if (connectionState === 'failed' || connectionState === 'closed') {
       this.releasePeer(message.bootstrapId, `Peer connection ${connectionState}`);
+    } else if (connectionState === 'disconnected') {
+      this.armDisconnectedDeadline(message.bootstrapId);
+    } else if (connectionState === 'connected') {
+      this.cancelConnectDeadline(message.bootstrapId);
     }
+  }
+
+  private armDisconnectedDeadline(bootstrapId: string): void {
+    if (this.connectTimers.has(bootstrapId)) return;
+    const handle = setTimeout(() => {
+      this.connectTimers.delete(bootstrapId);
+      if (this.peers.get(bootstrapId)?.peer.connectionState !== 'disconnected') return;
+      log.warn('Leader peer stayed disconnected; releasing it', { bootstrapId });
+      this.releasePeer(bootstrapId, 'Peer connection did not recover from disconnected');
+    }, LEADER_PEER_DISCONNECTED_GRACE_MS);
+    this.connectTimers.set(bootstrapId, { cancel: () => clearTimeout(handle) });
   }
 
   /**
