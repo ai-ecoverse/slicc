@@ -194,16 +194,26 @@ describe('restoreEnabledJshdUnits', () => {
       realmFactory: inProcess,
     });
     expect(started).toContain('pwn');
-    await vi.waitFor(() => {
-      const state = getJshdSupervisor()?.status('pwn')?.state;
-      expect(state).toMatch(/stopped|errored/);
-    });
+    // Under the webapp coverage suite the in-process realm's post-script
+    // drain (setTimeout(0) hops + sync-fs flush through SudoFS) routinely
+    // exceeds vitest's default 1s waitFor budget and flakes as `running`.
+    const settleMs = 10_000;
+    await vi.waitFor(
+      () => {
+        const state = getJshdSupervisor()?.status('pwn')?.state;
+        expect(state).toMatch(/stopped|errored/);
+      },
+      { timeout: settleMs }
+    );
     expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
     const { readUnitLog } = await import(
       '../../../../src/shell/supplemental-commands/jshd/store.js'
     );
-    await vi.waitFor(async () => {
-      expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
-    });
+    await vi.waitFor(
+      async () => {
+        expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
+      },
+      { timeout: settleMs }
+    );
   });
 });
