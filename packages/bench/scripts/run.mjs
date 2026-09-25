@@ -728,18 +728,26 @@ async function laneLoop(runs, lc, queue, state, shared, log) {
   }
 }
 
+/** Prompt time limit for a planned run: the task's `slicc.timeoutSeconds`, else the CLI default. */
+export function runTimeoutSeconds(run, timeout) {
+  return run?.task?.slicc?.timeoutSeconds ?? timeout;
+}
+
 /**
  * The guardrails that stop taking new runs, checked before each one: past the deadline (a run
  * started now could not finish, be collected and judged in time), or over the spend budget.
- * Each reason is journaled once. Returns the reason, or null to go on.
+ * The deadline uses the next run's effective timeout, matching `runTask`. Each reason is
+ * journaled once. Returns the reason, or null to go on.
  */
-export function guardrails(opts, { startedMs, now = Date.now, journal, log }) {
+export function guardrails(opts, { startedMs, now = Date.now, journal, log, runs = [] }) {
   const deadline = opts.deadlineMinutes ? startedMs + opts.deadlineMinutes * 60_000 : null;
-  const perRunMs = opts.timeout * 1000 + RUN_OVERHEAD_MS;
   return (state, queue) => {
     let why = null;
-    if (deadline && now() + perRunMs > deadline) why = 'deadline';
-    else if (opts.maxCost && state.spent >= opts.maxCost) why = 'budget';
+    if (deadline) {
+      const perRunMs = runTimeoutSeconds(runs[queue.next], opts.timeout) * 1000 + RUN_OVERHEAD_MS;
+      if (now() + perRunMs > deadline) why = 'deadline';
+    }
+    if (!why && opts.maxCost && state.spent >= opts.maxCost) why = 'budget';
     if (why && !state.reasons.includes(why)) {
       state.reasons.push(why);
       state.stopped = true;
@@ -829,7 +837,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       now: deps.now,
       journal,
       laneCount: lanes.length,
-      stopWhy: guardrails(opts, { startedMs: Date.parse(runStart), journal, log }),
+      stopWhy: guardrails(opts, { startedMs: Date.parse(runStart), journal, log, runs }),
     };
     outcome = await runAll(runs, lanes, shared, log);
   } finally {

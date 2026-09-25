@@ -1176,6 +1176,30 @@ describe('lanes and guardrails', () => {
     expect(log.mock.calls[0][0]).toMatch(/past the deadline for another run; 7 run\(s\) left/);
   });
 
+  it("uses the next task's slicc.timeoutSeconds for the deadline", () => {
+    const journal = { event: vi.fn() };
+    const log = vi.fn();
+    const t = 0;
+    const runs = [
+      { task: { id: 'short' } },
+      { task: { id: 'long', slicc: { timeoutSeconds: 3600 } } },
+    ];
+    const stop = guardrails(
+      { deadlineMinutes: 40, timeout: 900, maxCost: 0 },
+      { startedMs: 0, now: () => t, journal, log, runs }
+    );
+    const state = { spent: 0, reasons: [], stopped: false };
+    // Default 900s + 20 min overhead still fits in a 40 min deadline at t=0.
+    expect(stop(state, { next: 0, total: 2 })).toBeNull();
+    // The long task needs 60 + 20 min; starting it at t=0 already overruns a 40 min deadline.
+    expect(stop(state, { next: 1, total: 2 })).toBe('deadline');
+    expect(journal.event).toHaveBeenCalledWith('stopped', {
+      reason: 'deadline',
+      runs_left: 1,
+      spent: 0,
+    });
+  });
+
   it('stops at the spend budget, counting only runs paid for here', async () => {
     const journal = { event: vi.fn() };
     const log = vi.fn();

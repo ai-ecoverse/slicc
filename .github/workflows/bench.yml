@@ -398,7 +398,10 @@ jobs:
                 --dataset "$RUNNER_TEMP/hf-current")
           for set in $BENCH_SETS; do args+=(--set "$set"); done
           node packages/bench/scripts/publish.mjs "${args[@]}"
+          # publish.mjs writes the full cleaned records/ tree; --delete drops Hub paths that
+          # a new upstream pin left behind so the next download cannot mix task versions.
           hf upload "$BENCH_DATASET" "$RUNNER_TEMP/hf-stage" . --repo-type dataset \
+            --delete 'records/**' \
             --commit-message "Run $run_name: $BENCH_MODELS × $BENCH_SKILLS"
           echo "Published to https://huggingface.co/datasets/$BENCH_DATASET/tree/main/runs/$run_name" >> "$GITHUB_STEP_SUMMARY"
 
