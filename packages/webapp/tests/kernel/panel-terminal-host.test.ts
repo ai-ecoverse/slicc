@@ -734,6 +734,19 @@ describe('panel terminal execution deadline', () => {
     }
   });
 
+  it('lets a panel command run more than the default 100,000 commands and loop iterations', async () => {
+    const w = await wirePanelHost();
+    try {
+      await w.client.open();
+      const r = await w.client.exec(
+        'i=0; while [ $i -lt 110000 ]; do i=$((i+1)); done; echo done $i'
+      );
+      expect(r.stdout).toBe('done 110000\n');
+    } finally {
+      w.stop();
+    }
+  }, 60_000);
+
   it('the default limits would have stopped it (the case the constant exists for)', async () => {
     const r = await runAcrossTwoHours();
     expect(r.stdout).not.toContain('b');

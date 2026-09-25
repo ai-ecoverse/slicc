@@ -100,13 +100,18 @@ class PanelTerminalShell extends AlmostBashShellHeadless {
 }
 
 /**
- * The human terminal has no execution deadline. just-bash's default caps one
- * command at an hour, which a build inside slicc outruns (a `./configure &&
- * make` of an autoconf library); the person at the terminal can Ctrl+C
- * instead. Agent and scoop shells keep the default.
+ * The human terminal has no work budget: no execution deadline, command count
+ * or loop-iteration cap. just-bash's defaults (an hour, 100,000 commands per
+ * top-level command, 100,000 iterations per loop) stop a build inside slicc
+ * partway: every recipe make spawns counts against the one command budget, so
+ * a recursive `make` of an autoconf library dies with "too many commands
+ * executed". The person at the terminal stops a command with Ctrl+C instead.
+ * Agent and scoop shells keep the defaults, and memory/size limits still apply.
  */
 export const PANEL_TERMINAL_EXECUTION_LIMITS = {
   maxExecutionTimeMs: Number.POSITIVE_INFINITY,
+  maxCommandCount: Number.POSITIVE_INFINITY,
+  maxLoopIterations: Number.POSITIVE_INFINITY,
 } as const;
 
 export function createPanelTerminalHost(

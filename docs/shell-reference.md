@@ -16,7 +16,7 @@ custom `tar`, `unzip`, JavaScript, Python, Git, and browser commands have separa
 implementations; these settings do not bound all their work. They also do not set
 an OPFS storage quota. A limit error means the task should process a smaller tree
 or input in separate calls. Shell environment variables cannot raise these limits.
-The panel terminal has no execution deadline (`PANEL_TERMINAL_EXECUTION_LIMITS` in `kernel/panel-terminal-host.ts`). just-bash's default caps one command at an hour, which a build inside slicc outruns (a `./configure && make` of an autoconf library); the person at the terminal stops a command with Ctrl+C instead.
+The panel terminal has no work budget (`PANEL_TERMINAL_EXECUTION_LIMITS` in `kernel/panel-terminal-host.ts`): no execution deadline, command count or loop-iteration cap. just-bash's defaults (an hour, 100,000 commands per top-level command, 100,000 iterations per loop) stop a build inside slicc partway. Every recipe `make` spawns counts against the one command budget, so a recursive `make` of an autoconf library dies with "too many commands executed". The person at the terminal stops a command with Ctrl+C instead; memory and size limits still apply.
 
 The cone retains the upstream defaults; command timeout and detachment behavior
 are unchanged.
