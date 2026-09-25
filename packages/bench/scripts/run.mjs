@@ -37,7 +37,13 @@ import {
 } from './format.mjs';
 import { reportHtml } from './html.mjs';
 import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
-import { createJournal, createRecycler, currentLeader } from './lifecycle.mjs';
+import {
+  bootLane,
+  createJournal,
+  createLock,
+  createRecycler,
+  currentLeader,
+} from './lifecycle.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   parseSkillsCondition,
@@ -50,6 +56,15 @@ import { decryptSetFile, encryptJson, loadFindingsSpec, loadUpstreamSet } from '
 
 export const DEFAULT_MODELS = ['claude-sonnet-5', 'claude-opus-5-5'];
 
+/** Leaders one job can run side by side: each is a Chrome plus a node-server. */
+export const MAX_LEADERS = 8;
+
+/**
+ * What a run costs beyond its prompt time limit, for the deadline: a leader restart, collection
+ * (transcript export, screenshots) and judging.
+ */
+export const RUN_OVERHEAD_MS = 10 * 60_000;
+
 export function parseCli(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -60,9 +75,15 @@ export function parseCli(argv) {
       repeats: { type: 'string', default: '1' },
       tasks: { type: 'string' },
       limit: { type: 'string' },
+      shard: { type: 'string' },
       timeout: { type: 'string', default: '900' },
       'fresh-leader-every': { type: 'string', default: '0' },
       'leader-down-limit': { type: 'string', default: '2' },
+      leaders: { type: 'string', default: '1' },
+      'boot-leaders': { type: 'boolean', default: false },
+      'deadline-minutes': { type: 'string', default: '0' },
+      'max-task-cost': { type: 'string', default: '0' },
+      'max-cost': { type: 'string', default: '0' },
       'judge-model': { type: 'string', default: DEFAULT_JUDGE_MODEL },
       'no-judge': { type: 'boolean', default: false },
       out: { type: 'string', default: 'bench-out' },
@@ -90,6 +111,18 @@ export function parseCli(argv) {
     throw new Error('--fresh-leader-every must be 0 (never) or a positive number of tasks');
   if (!Number.isInteger(leaderDownLimit) || leaderDownLimit < 1)
     throw new Error('--leader-down-limit must be a positive integer');
+  const leaders = Number.parseInt(values.leaders, 10);
+  if (!Number.isInteger(leaders) || leaders < 1 || leaders > MAX_LEADERS)
+    throw new Error(`--leaders must be 1 to ${MAX_LEADERS}`);
+  const deadlineMinutes = Number.parseInt(values['deadline-minutes'], 10);
+  if (!Number.isInteger(deadlineMinutes) || deadlineMinutes < 0)
+    throw new Error('--deadline-minutes must be 0 (none) or a positive number of minutes');
+  const shard = parseShard(values.shard);
+  const money = (flag) => {
+    const v = Number(values[flag]);
+    if (!Number.isFinite(v) || v < 0) throw new Error(`--${flag} must be 0 (none) or dollars`);
+    return v;
+  };
   return {
     help: values.help,
     sets: values.set ?? [],
@@ -98,6 +131,7 @@ export function parseCli(argv) {
     repeats,
     taskIds: values.tasks ? list(values.tasks) : null,
     limit: values.limit ? Number.parseInt(values.limit, 10) : null,
+    shard,
     timeout,
     judgeModel: values['judge-model'],
     judge: !values['no-judge'],
@@ -106,6 +140,11 @@ export function parseCli(argv) {
     plan: values.plan,
     freshLeaderEvery,
     leaderDownLimit,
+    leaders,
+    bootLeaders: values['boot-leaders'] || leaders > 1,
+    deadlineMinutes,
+    maxTaskCost: money('max-task-cost'),
+    maxCost: money('max-cost'),
   };
 }
 
@@ -158,6 +197,33 @@ export async function loadSet(
       `${spec}: ${errors.slice(0, 5).join('; ')}${errors.length > 5 ? ` (+${errors.length - 5} more)` : ''}`
     );
   return { benchmark: envelope.benchmark, tasks: envelope.tasks, encrypted, upstream };
+}
+
+/** `--shard K/N` (K from 1) → `{ index, count }`, or null for no sharding. */
+export function parseShard(value) {
+  if (!value) return null;
+  const m = /^(\d+)\/(\d+)$/.exec(value);
+  const index = m ? Number(m[1]) : 0;
+  const count = m ? Number(m[2]) : 0;
+  if (!m || count < 1 || index < 1 || index > count)
+    throw new Error('--shard must be K/N with 1 <= K <= N, e.g. 2/5');
+  return { index, count };
+}
+
+/**
+ * The runs shard K of N takes: every Nth task of the plan's task order, so each shard gets all
+ * models and repeats of its tasks and a resume of one shard never touches another's records.
+ */
+export function shardRuns(runs, shard) {
+  if (!shard) return runs;
+  const order = new Map();
+  for (const r of runs) {
+    const key = `${r.set.benchmark}\u0000${r.task.id}`;
+    if (!order.has(key)) order.set(key, order.size);
+  }
+  return runs.filter(
+    (r) => order.get(`${r.set.benchmark}\u0000${r.task.id}`) % shard.count === shard.index - 1
+  );
 }
 
 export function selectTasks(tasks, { taskIds, limit }) {
@@ -243,9 +309,10 @@ async function loadAndPlan(opts, deps, log) {
     sets.push({ ...set, tasks: selectTasks(set.tasks, opts) });
     log(`${set.benchmark}: ${sets.at(-1).tasks.length} of ${set.tasks.length} tasks`);
   }
-  const runs = planRuns(sets, opts);
+  const runs = shardRuns(planRuns(sets, opts), opts.shard);
+  const shard = opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.count})` : '';
   log(
-    `${runs.length} runs: ${opts.models.join(', ')} × skills ${opts.skills.map((s) => s.name).join(', ')} × ${opts.repeats} repeat(s)`
+    `${runs.length} runs${shard}: ${opts.models.join(', ')} × skills ${opts.skills.map((s) => s.name).join(', ')} × ${opts.repeats} repeat(s)`
   );
   return runs;
 }
@@ -301,7 +368,7 @@ async function runOne(r, ctx) {
     run_id: runId,
     digests: taskDigests(r.task),
     ...(r.set.upstream ? { upstream: r.set.upstream } : {}),
-    leader: leaderStamp(ctx.lane),
+    leader: leaderStamp(ctx.lane, ctx.id),
   };
   let result;
   try {
@@ -311,6 +378,7 @@ async function runOne(r, ctx) {
       runId,
       model: r.model,
       timeoutSeconds: opts.timeout,
+      ...(opts.maxTaskCost ? { maxCost: opts.maxTaskCost } : {}),
       ...(ctx.capture ? { capture: ctx.capture } : {}),
       ...(ctx.now ? { now: ctx.now } : {}),
     });
@@ -403,8 +471,9 @@ export function ageSeconds(startedAt, now = Date.now()) {
 }
 
 /** Which leader serves a run: its generation, age in seconds, and its how-manieth task. */
-function leaderStamp(lane) {
+function leaderStamp(lane, id = 0) {
   return {
+    lane: id,
     generation: lane.generation,
     age_s: ageSeconds(lane.startedAt),
     task: lane.tasks + 1,
@@ -415,7 +484,12 @@ function leaderStamp(lane) {
 async function restartLeader(ctx, reason, log) {
   const { lane, journal } = ctx;
   const t0 = Date.now();
-  journal.event('leader-restart', { reason, generation: lane.generation, tasks: lane.tasks });
+  journal.event('leader-restart', {
+    lane: ctx.id,
+    reason,
+    generation: lane.generation,
+    tasks: lane.tasks,
+  });
   log(`restarting the leader (${reason})`);
   const next = await ctx.recycle();
   ctx.leader.setUrl(next.url);
@@ -426,6 +500,7 @@ async function restartLeader(ctx, reason, log) {
     staged: null,
   });
   journal.event('leader-ready', {
+    lane: ctx.id,
     generation: lane.generation,
     slicc_version: next.sliccVersion,
     boot_ms: Date.now() - t0,
@@ -461,8 +536,9 @@ async function runFresh(r, ctx, log) {
   return outcome;
 }
 
-function taskEvent(r, { record, result }) {
+function taskEvent(r, { record, result }, lane = 0) {
   return {
+    lane,
     task_id: r.task.id,
     model: r.model,
     skills: r.condition.name,
@@ -477,65 +553,198 @@ function taskEvent(r, { record, result }) {
 }
 
 /**
- * Run every planned run. Returns `{ errors, stopped }`: how many ended in an error (running or
- * judging), and whether the runs stopped early because the leader stayed unreachable.
+ * The lanes to run on: leaders this invocation boots (`--boot-leaders`, `--leaders N`), or the
+ * one the job started (SLICC_JOIN_URL), restartable when BENCH_LEADER_SCRIPTS is set.
  */
-async function runAll(runs, ctx, log) {
-  const { opts, lane, journal } = ctx;
-  let errors = 0;
-  let downStreak = 0;
-  let stopped = false;
-  try {
-    for (const [i, r] of runs.entries()) {
-      const before = previous(opts, r);
-      const action = resumeAction(before.record, r.task, {
-        judge: Boolean(ctx.judge),
-        judgeModel: opts.judgeModel,
-        traceExists: before.traceExists,
+async function setupLanes(opts, deps, journal, log, runStart) {
+  const scriptsDir = process.env.BENCH_LEADER_SCRIPTS;
+  const canBoot = Boolean(deps.bootLane || scriptsDir);
+  if (opts.bootLeaders && !canBoot)
+    throw new Error('--leaders and --boot-leaders need BENCH_LEADER_SCRIPTS (set in CI)');
+  const recycle = deps.recycle ?? (scriptsDir ? createRecycler({ scriptsDir }) : null);
+  if (opts.freshLeaderEvery && !opts.bootLeaders && !recycle)
+    throw new Error(
+      '--fresh-leader-every needs a leader it can restart (BENCH_LEADER_SCRIPTS, set in CI)'
+    );
+  if (opts.bootLeaders) return bootLanes(opts, deps, journal, log);
+  const first = deps.firstLeader ?? (scriptsDir ? currentLeader() : null);
+  return [
+    {
+      id: 0,
+      leader:
+        deps.leader ?? createLeader({ url: process.env.SLICC_JOIN_URL, onCall: journal.call }),
+      recycle,
+      lane: { generation: 0, startedAt: first?.startedAt ?? runStart, tasks: 0, staged: null },
+      leaderLog: process.env.BENCH_LEADER_LOG || null,
+      sliccVersion: first?.sliccVersion ?? null,
+    },
+  ];
+}
+
+/**
+ * Boot `--leaders` leaders, one per lane, in their own homes and ports (`laneEnv`). A lane whose
+ * leader does not come up is journaled and left out; with none up, the invocation fails.
+ */
+async function bootLanes(opts, deps, journal, log) {
+  const lock = createLock();
+  const claims = new Map();
+  const lanes = [];
+  for (let i = 0; i < opts.leaders; i += 1) {
+    const t0 = Date.now();
+    try {
+      const l = deps.bootLane
+        ? await deps.bootLane(i, { lock, claims })
+        : await bootLane(i, {
+            scriptsDir: process.env.BENCH_LEADER_SCRIPTS,
+            lock,
+            claims,
+            makeLeader: createLeader,
+            onCall: journal.call,
+          });
+      lanes.push({
+        id: i,
+        ...l,
+        lane: {
+          generation: 0,
+          startedAt: l.startedAt ?? new Date().toISOString(),
+          tasks: 0,
+          staged: null,
+        },
       });
-      if (action === 'done') {
-        log(
-          `[${i + 1}/${runs.length}] ${r.task.id} ${r.model} ${r.condition.name} r${r.repeat}: done before, skipped`
-        );
-        continue;
-      }
-      if (action === 'rejudge') {
-        const rejudged = await rejudgeOne(r, ctx, before.record);
-        if (rejudged.record.error) errors += 1;
-        log(`${describeRun(i, runs.length, r, rejudged.record)} (re-judged)`);
-        writeRun(opts, r, rejudged);
-        continue;
-      }
-      const outcome = await runFresh(r, ctx, log);
-      if (outcome.record.error) errors += 1;
-      log(describeRun(i, runs.length, r, outcome.record));
-      writeRun(opts, r, outcome);
-      journal.event('task', taskEvent(r, outcome));
+      journal.event('leader-ready', {
+        lane: i,
+        generation: 0,
+        slicc_version: l.sliccVersion ?? null,
+        boot_ms: Date.now() - t0,
+      });
+      log(`lane ${i}: leader up`);
+    } catch (err) {
+      journal.event('lane-failed', { lane: i, reason: String(err?.message ?? err).slice(0, 400) });
+      log(`lane ${i}: its leader did not come up: ${err.message}`);
+    }
+  }
+  if (!lanes.length) throw new Error('no leader came up');
+  return lanes;
+}
+
+/** Run one planned run on a lane: resume logic, then run or re-judge it, and record it. */
+async function processRun(i, r, runs, ctx, say) {
+  const { opts, journal } = ctx;
+  const before = previous(opts, r);
+  const action = resumeAction(before.record, r.task, {
+    judge: Boolean(ctx.judge),
+    judgeModel: opts.judgeModel,
+    traceExists: before.traceExists,
+  });
+  if (action === 'done') {
+    say(
+      `[${i + 1}/${runs.length}] ${r.task.id} ${r.model} ${r.condition.name} r${r.repeat}: done before, skipped`
+    );
+    return null;
+  }
+  if (action === 'rejudge') {
+    const rejudged = await rejudgeOne(r, ctx, before.record);
+    say(`${describeRun(i, runs.length, r, rejudged.record)} (re-judged)`);
+    writeRun(opts, r, rejudged);
+    return { ...rejudged, rejudged: true };
+  }
+  const outcome = await runFresh(r, ctx, say);
+  say(describeRun(i, runs.length, r, outcome.record));
+  writeRun(opts, r, outcome);
+  journal.event('task', taskEvent(r, outcome, ctx.id));
+  return outcome;
+}
+
+/**
+ * One lane: its own leader, pulling runs from the shared queue until the queue is empty, a
+ * guardrail says stop, or its leader stays unreachable.
+ */
+async function laneLoop(runs, lc, queue, state, shared, log) {
+  const ctx = { ...shared, ...lc };
+  const say = shared.laneCount > 1 ? (line) => log(`[L${lc.id}] ${line}`) : log;
+  let downStreak = 0;
+  try {
+    while (queue.next < runs.length && !shared.stopWhy(state, queue)) {
+      const i = queue.next++;
+      const outcome = await processRun(i, runs[i], runs, ctx, say);
+      if (!outcome) continue;
+      if (outcome.record.error) state.errors += 1;
+      // A re-judged run's agent was paid for in an earlier invocation.
+      if (!outcome.rejudged && typeof outcome.record.metrics?.cost === 'number')
+        state.spent += outcome.record.metrics.cost;
       downStreak = outcome.record.leader_down ? downStreak + 1 : 0;
-      if (downStreak >= opts.leaderDownLimit) {
-        stopped = true;
-        journal.event('stopped', { reason: 'leader unreachable', runs_left: runs.length - i - 1 });
-        log(
-          `stopping: the leader was unreachable for ${downStreak} run(s) in a row; ${runs.length - i - 1} run(s) left for a resume`
+      if (downStreak >= shared.opts.leaderDownLimit) {
+        state.stopped = true;
+        const left = runs.length - queue.next;
+        shared.journal.event('stopped', {
+          lane: lc.id,
+          reason: 'leader unreachable',
+          runs_left: left,
+        });
+        say(
+          `stopping: the leader was unreachable for ${downStreak} run(s) in a row; ${left} run(s) left for a resume`
         );
         break;
       }
     }
   } catch (err) {
-    stopped = true;
-    errors += 1;
-    journal.event('stopped', { reason: String(err?.message ?? err).slice(0, 400) });
-    log(`stopping: ${err.message}`);
+    state.stopped = true;
+    state.errors += 1;
+    shared.journal.event('stopped', {
+      lane: lc.id,
+      reason: String(err?.message ?? err).slice(0, 400),
+    });
+    say(`stopping this lane: ${err.message}`);
   } finally {
-    if (lane.staged)
-      await restoreSkills(ctx.leader).catch((err) =>
-        log(`could not restore /workspace/skills: ${err.message}`)
+    if (lc.lane.staged)
+      await restoreSkills(lc.leader).catch((err) =>
+        say(`could not restore /workspace/skills: ${err.message}`)
       );
   }
-  return { errors, stopped };
 }
 
-function writeOutputs(opts, runStart) {
+/**
+ * The guardrails that stop taking new runs, checked before each one: past the deadline (a run
+ * started now could not finish, be collected and judged in time), or over the spend budget.
+ * Each reason is journaled once. Returns the reason, or null to go on.
+ */
+export function guardrails(opts, { startedMs, now = Date.now, journal, log }) {
+  const deadline = opts.deadlineMinutes ? startedMs + opts.deadlineMinutes * 60_000 : null;
+  const perRunMs = opts.timeout * 1000 + RUN_OVERHEAD_MS;
+  return (state, queue) => {
+    let why = null;
+    if (deadline && now() + perRunMs > deadline) why = 'deadline';
+    else if (opts.maxCost && state.spent >= opts.maxCost) why = 'budget';
+    if (why && !state.reasons.includes(why)) {
+      state.reasons.push(why);
+      state.stopped = true;
+      const left = queue.total - queue.next;
+      journal.event('stopped', { reason: why, runs_left: left, spent: state.spent });
+      log(
+        why === 'deadline'
+          ? `stopping: past the deadline for another run; ${left} run(s) left for a resume`
+          : `stopping: spent $${state.spent.toFixed(2)} of the $${opts.maxCost} budget; ${left} run(s) left for a resume`
+      );
+    }
+    return why;
+  };
+}
+
+/**
+ * Run every planned run across the lanes, each with its own leader, from one queue. Returns
+ * `{ errors, stopped, spent, reasons }`: runs that ended in an error, whether anything stopped
+ * early (a guardrail, or a lane whose leader stayed down), the spend of runs recorded here.
+ */
+async function runAll(runs, lanes, shared, log) {
+  const queue = { next: 0, total: runs.length };
+  const state = { errors: 0, stopped: false, spent: 0, reasons: [] };
+  await Promise.all(lanes.map((lc) => laneLoop(runs, lc, queue, state, shared, log)));
+  if (queue.next < runs.length && !state.stopped) state.stopped = true;
+  return state;
+}
+
+/** Rebuild results/, report.md, report.json and report.html from `<out>/records/`. */
+export function writeOutputs(opts, runStart) {
   const records = readRecords(opts.out);
   for (const s of summarize(records, { runStart })) {
     writeJson(join(opts.out, 'results', s.file), s.body);
@@ -566,35 +775,49 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       );
     return 0;
   }
-  const scriptsDir = process.env.BENCH_LEADER_SCRIPTS;
-  const recycle = deps.recycle ?? (scriptsDir ? createRecycler({ scriptsDir }) : null);
-  if (opts.freshLeaderEvery && !recycle)
-    throw new Error(
-      '--fresh-leader-every needs a leader it can restart (BENCH_LEADER_SCRIPTS, set in CI)'
-    );
   const runStart = new Date().toISOString();
-  const first = deps.firstLeader ?? (scriptsDir ? currentLeader() : null);
-  let leader;
+  const lanes = [];
   const journal = createJournal(opts.out, {
-    urls: () => [leader?.url],
-    leaderLog: process.env.BENCH_LEADER_LOG || null,
+    urls: () => lanes.map((l) => l.leader?.url),
+    leaderLog: (data) => lanes.find((l) => l.id === (data.lane ?? 0))?.leaderLog ?? null,
   });
-  leader = deps.leader ?? createLeader({ url: process.env.SLICC_JOIN_URL, onCall: journal.call });
   const judge = makeJudge(opts, deps);
   const spec = judge ? (deps.spec ?? (await loadFindingsSpec())) : null;
-  const lane = { generation: 0, startedAt: first?.startedAt ?? runStart, tasks: 0, staged: null };
-  journal.event('start', {
-    runs: runs.length,
-    fresh_leader_every: opts.freshLeaderEvery,
-    leader_started_at: lane.startedAt,
-    slicc_version: first?.sliccVersion ?? null,
+  let outcome;
+  try {
+    lanes.push(...(await setupLanes(opts, deps, journal, log, runStart)));
+    journal.event('start', {
+      runs: runs.length,
+      lanes: lanes.length,
+      fresh_leader_every: opts.freshLeaderEvery,
+      deadline_minutes: opts.deadlineMinutes || null,
+      max_task_cost: opts.maxTaskCost || null,
+      max_cost: opts.maxCost || null,
+      leader_started_at: lanes[0].lane.startedAt,
+      slicc_version: lanes[0].sliccVersion ?? null,
+    });
+    const shared = {
+      opts,
+      judge,
+      spec,
+      capture: deps.capture,
+      now: deps.now,
+      journal,
+      laneCount: lanes.length,
+      stopWhy: guardrails(opts, { startedMs: Date.parse(runStart), journal, log }),
+    };
+    outcome = await runAll(runs, lanes, shared, log);
+  } finally {
+    // Leaders this invocation booted are its own to stop.
+    for (const l of lanes)
+      await l.stop?.().catch((err) => log(`could not stop lane ${l.id}: ${err.message}`));
+  }
+  const { errors, stopped } = outcome;
+  journal.event('end', {
+    errors,
+    stopped,
+    generations: lanes.reduce((n, l) => n + l.lane.generation + 1, 0),
   });
-  const { errors, stopped } = await runAll(
-    runs,
-    { leader, opts, judge, spec, capture: deps.capture, now: deps.now, recycle, lane, journal },
-    log
-  );
-  journal.event('end', { errors, stopped, generations: lane.generation + 1 });
   console.log(writeOutputs(opts, runStart));
   // The report is written either way; a non-zero exit keeps a CI job from passing on runs
   // that never reached the judge. Rerunning with the same --out retries only those.

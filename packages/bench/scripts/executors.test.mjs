@@ -165,6 +165,26 @@ describe('runProcess', () => {
     expect(r).toMatchObject({ status: 130, timedOut: true });
   });
 
+  it('stops the CLI when its signal aborts, before or during the call', async () => {
+    const cli = fakeCli("trap 'exit 130' INT\nwhile true; do sleep 0.05; done");
+    const ac = new AbortController();
+    const running = runProcess(cli, [], { interrupt: true, signal: ac.signal });
+    setTimeout(() => ac.abort(), 150);
+    expect(await running).toMatchObject({ status: 130, timedOut: false, aborted: true });
+    const pre = new AbortController();
+    pre.abort();
+    expect(await runProcess(cli, [], { signal: pre.signal })).toMatchObject({ aborted: true });
+    const done = new AbortController();
+    const quick = fakeCli('echo ok');
+    expect(await runProcess(quick, [], { signal: done.signal })).toEqual({
+      stdout: 'ok\n',
+      stderr: '',
+      status: 0,
+      timedOut: false,
+    });
+    done.abort();
+  });
+
   it('terminates other verbs at the timeout, even when a child holds the pipes', async () => {
     const cli = fakeCli('sleep 5');
     const r = await runProcess(cli, [], { timeoutMs: 100 });

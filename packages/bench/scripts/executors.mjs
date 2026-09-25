@@ -46,7 +46,7 @@ const KILL_GRACE_MS = 10_000;
 /** Bound on any call that does not bring its own (a prompt does): generous, never infinite. */
 export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
 
-export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env } = {}) {
+export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env, signal } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cli, args, {
       env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1', ...env },
@@ -56,18 +56,31 @@ export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env
     const err = [];
     const timers = [];
     let timedOut = false;
+    let aborted = false;
     let settled = false;
-    const finish = (code, signal) => {
+    const finish = (code, sig) => {
       if (settled) return;
       settled = true;
       for (const t of timers) clearTimeout(t);
+      signal?.removeEventListener('abort', onAbort);
       resolve({
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8'),
-        status: code ?? (signal ? 128 + (signal === 'SIGINT' ? 2 : 15) : 1),
+        status: code ?? (sig ? 128 + (sig === 'SIGINT' ? 2 : 15) : 1),
         timedOut,
+        ...(aborted ? { aborted: true } : {}),
       });
     };
+    // An abort (e.g. a cost cap) stops the CLI like a timeout does: SIGINT when it can pass the
+    // leader an `abort`, then SIGKILL after the grace.
+    function onAbort() {
+      if (settled) return;
+      aborted = true;
+      child.kill(interrupt ? 'SIGINT' : 'SIGTERM');
+      timers.push(setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS));
+    }
+    if (signal?.aborted) queueMicrotask(onAbort);
+    else signal?.addEventListener('abort', onAbort, { once: true });
     if (timeoutMs) {
       timers.push(
         setTimeout(() => {
@@ -81,8 +94,8 @@ export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env
     child.stderr.on('data', (b) => err.push(b));
     child.on('error', reject);
     // After a timeout, a grandchild can keep the pipes open: settle on exit, not close.
-    child.on('exit', (code, signal) => {
-      if (timedOut) finish(code, signal);
+    child.on('exit', (code, sig) => {
+      if (timedOut || aborted) finish(code, sig);
     });
     child.on('close', finish);
     // A CLI that exits without reading its stdin (a failed dial) must not crash the runner.

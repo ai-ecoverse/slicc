@@ -6,27 +6,39 @@ Measures what skills and models change in SLICC. It runs task sets on a SLICC le
 
 **Actions → Benchmark → Run workflow**. The inputs:
 
-| Input                | Default                           | Meaning                                                                                                            |
-| -------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                                                          |
-| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                                                    |
-| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills)                                |
-| `repeats`            | `1`                               | Runs per task and configuration                                                                                    |
-| `tasks`              | all                               | Task ids, comma-separated                                                                                          |
-| `limit`              | all                               | First N tasks of each set                                                                                          |
-| `timeout`            | `900`                             | Seconds one agent run may take                                                                                     |
-| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                                                          |
-| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                                                        |
-| `fresh-leader-every` | `1`                               | Restart the leader, with a wiped profile, every N tasks; `1` isolates every task, `0` keeps one leader for the job |
+| Input                | Default                           | Meaning                                                                                            |
+| -------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                                          |
+| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                                    |
+| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills)                |
+| `repeats`            | `1`                               | Runs per task and configuration                                                                    |
+| `tasks`              | all                               | Task ids, comma-separated                                                                          |
+| `limit`              | all                               | First N tasks of each set                                                                          |
+| `timeout`            | `900`                             | Seconds one agent run may take (BU Bench V2.1: `3600`)                                             |
+| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                                          |
+| `shards`             | `3`                               | Matrix jobs (1–20); shard K of N takes every Nth task, with all its models, skills and repeats     |
+| `max-parallel`       | `3`                               | Shards running at once                                                                             |
+| `leaders`            | `4`                               | Leaders per shard, side by side (1–8), sharing the shard's queue                                   |
+| `runner`             | `gcp-ubuntu-24-04-8core`          | GCE instance template the shards run on                                                            |
+| `deadline-minutes`   | `300`                             | Minutes a shard takes new runs for; its job limit is this plus 45                                  |
+| `max-task-cost`      | `5`                               | Dollars one run may spend before it is stopped (`0`: no cap)                                       |
+| `max-cost`           | `150`                             | Dollars one shard may spend before it stops taking runs (`0`: no cap)                              |
+| `fresh-leader-every` | `1`                               | Restart a leader, with a wiped profile, every N tasks; `1` isolates every task, `0` never restarts |
+| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                                        |
 
-The job summary shows the report. Two artifacts:
+**Where it runs.** The shards run on self-hosted runners in the GCP project `ai-ecoverse-493315` ([Cyclenerd/google-cloud-github-runner](https://github.com/Cyclenerd/google-cloud-github-runner)): each job gets its own VM from the GCE instance template that `runner` names, deleted when the job ends. So a benchmark leaves the org's GitHub-hosted runners to everyone else. The project's quota allows 24 E2 vCPUs, which is three `8core` shards at once. Each leader is a Chrome plus a node-server, about 2 vCPU, so an `8core` shard runs 4. For BU Bench V2.1 (200 tasks, up to an hour each), plan `shards` × `leaders` × `deadline-minutes` / 70 ≥ runs.
+
+**Guardrails.** A shard stops taking runs once the next might not finish before its deadline (the run's `timeout` plus 10 minutes for the restart, collection and judge). It stops a run that has spent `max-task-cost` (the record says `cost_capped`, and the judge is told), and stops taking runs at `max-cost`. The run step's time limit sits 20 minutes past the deadline, below the job's, so the diagnostics and the upload always run. **Re-run failed jobs** resumes a shard from its artifact. `bench-reaper.yml` runs every 30 minutes. It cancels a run whose shards have waited over an hour for a runner while none of its jobs run, and force-cancels one with a job running for over 25 hours.
+
+The `Report` job merges the shards (`scripts/merge.mjs`) and shows the report in its summary. Artifacts:
 
 - `bench-report-<run id>`: `report.md`, `report.json` (the same report as data), `report.html` (cards, a task × configuration matrix, time against cost), and `results/`, one file per configuration in browser-use's result format plus rubric scores.
-- `bench-<run id>`: all of that, plus `records/` (one file per run) and `traces/` (transcripts and screenshots, encrypted for upstream sets).
+- `bench-<run id>`: all of that, plus `records/` (one file per run), `traces/` (transcripts and screenshots, encrypted for upstream sets) and `shards/<name>/`, each shard's journal.
+- `bench-<run id>-shard-<k>`: each shard's own out dir, as it left it.
 
 With `publish` on (the default), the run is also published to the Hugging Face dataset [ai-ecoverse/slicc-bench](https://huggingface.co/datasets/ai-ecoverse/slicc-bench). The dataset card carries the combined report across every configuration published so far. SLICC's own task sets and traces are Fernet-encrypted there as browser-use encrypts theirs. For browser-use's own sets, only scores are published.
 
-A pull request that touches the runner runs one smoke task on both models.
+A pull request that touches the runner runs the smoke task twice on both models, on two leaders in one shard (`vars.BENCH_PR_RUNNER`, default `gcp-ubuntu-24-04-4core`).
 
 ## Run it locally
 
@@ -49,7 +61,9 @@ Each task starts a fresh chat with erased memories, selects the model and sends 
 - `events.jsonl`: each task with its phases and the leader's `uptime`, memory and process count before and after, plus restarts and stops.
 - `calls.jsonl`: every leader call, with how long it took and how it ended.
 - `diagnostics/`: the CLI's `SLICC_DEBUG` output from dials that failed.
-- `leader-infra.log` (CI): the leader's tray, signaling and WebRTC log lines, interleaved with `[bench-event]` markers from the runner.
+- `leader-infra-slicc-gw-lane<i>.log` (CI): each leader's tray, signaling and WebRTC log lines, interleaved with `[bench-event]` markers from the runner.
+
+**Several leaders.** `--leaders N` (up to 8) boots N leaders, each with its own home (`$SLICC_GW_HOME-lane<i>`) and port (`BENCH_LEADER_BASE_PORT` + i, default 5710), and runs the queue on all of them. Boots, restarts and stops take turns, because every leader shares `/slicc/cone-config.json` and `/tmp/slicc-join.json`; a lane handed another lane's join URL restarts. A lane that keeps failing to reach its leader stops, and the others carry on. `--shard K/N` runs only shard K's tasks. `--deadline-minutes`, `--max-task-cost` and `--max-cost` are the guardrails above.
 
 The command exits 1 when any run ended in an error, so a CI job cannot pass on runs that never happened. The report is written either way. Result files and the report name the judge that actually produced each score, taken from the records.
 

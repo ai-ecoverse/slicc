@@ -34,6 +34,7 @@ import {
   traceFromResult,
   transcriptSteps,
   transcriptSummary,
+  watchSpend,
 } from './slicc-adapter.mjs';
 
 const ok = (stdout = '') => ({ stdout, stderr: '', status: 0, timedOut: false });
@@ -763,7 +764,12 @@ describe('runTask', () => {
     expect(calls[2].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
     const prompt = calls.find((c) => c.kind === 'cli' && c.args[0] === 'prompt');
     expect(prompt.args).toEqual(['prompt', '-']);
-    expect(prompt.opts).toEqual({ stdin: buildPrompt(task), timeoutMs: 60000, interrupt: true });
+    expect(prompt.opts).toMatchObject({
+      stdin: buildPrompt(task),
+      timeoutMs: 60000,
+      interrupt: true,
+    });
+    expect(prompt.opts.signal).toBeInstanceOf(AbortSignal);
     expect(calls.slice(-4).map(label)).toEqual([
       'playwright-cli tab-list',
       'playwright-cli tab-close',
@@ -944,5 +950,60 @@ describe('runTask', () => {
       capture: { pollMs: 5 },
     });
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('cost cap', () => {
+  const costAt = (total) =>
+    ok(
+      JSON.stringify({
+        scoops: [{ type: 'cone', turns: 1, usage: { totalTokens: 1, cost: { total } } }],
+      })
+    );
+
+  it('aborts once spend since the start passes the cap, and skips failed readings', async () => {
+    const readings = [fail('busy'), costAt(0.5), costAt(2.6)];
+    const { leader } = fakeLeader({
+      commands: [[/^cost --json --all$/, () => readings.shift() ?? costAt(3)]],
+    });
+    const abort = new AbortController();
+    const w = watchSpend(leader, { cost: 0.5, tokens: 0, turns: 0 }, 2, abort, 5);
+    await vi.waitFor(() => expect(abort.signal.aborted).toBe(true));
+    await w.stop();
+    const idle = new AbortController();
+    const quiet = watchSpend(leader, { cost: 0, tokens: 0, turns: 0 }, 100, idle, 5);
+    await quiet.stop();
+    expect(idle.signal.aborted).toBe(false);
+  });
+
+  it('stops a runaway prompt at its cap and says so to the judge', async () => {
+    let spent = 0.1;
+    const { leader } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: (_args, opts) =>
+          new Promise((resolve) => {
+            const t = setInterval(() => (spent += 1), 5);
+            opts.signal.addEventListener('abort', () => {
+              clearInterval(t);
+              resolve({ stdout: '', stderr: '', status: 130, timedOut: false, aborted: true });
+            });
+          }),
+      },
+      commands: [[/^cost --json --all$/, () => costAt(spent)]],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rc',
+      model: 'm',
+      maxCost: 2,
+      costPollMs: 5,
+      capture: { pollMs: 5 },
+    });
+    expect(result).toMatchObject({ costCapped: true, timedOut: false, exitCode: 130 });
+    const trace = traceFromResult(result);
+    expect(trace.finalResult).toBe('The run was stopped at its cost cap before the cone answered.');
+    expect(trace.metrics.cost_capped).toBe(true);
   });
 });
