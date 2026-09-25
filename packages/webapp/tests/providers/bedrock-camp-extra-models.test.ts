@@ -220,4 +220,43 @@ describe('mergeBedrockCampCatalogue', () => {
     );
     expect(merged).toEqual([{ id: 'us.anthropic.claude-opus-5-5', v: 'pi-ai' }]);
   });
+
+  // pi's hosted Bedrock catalogue (the default-on live overlay) lists GPT-6
+  // without its long-context tier, and its entry wins the collision.
+  describe('long-context tiers', () => {
+    const extra = byId('us.openai.gpt-6-sol')!;
+    const base = { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 };
+
+    it('grafts the extra tiers onto a same-priced catalogue entry that has none', () => {
+      const [merged] = mergeBedrockCampCatalogue(
+        [{ ...extra, name: 'from pi', cost: { ...base } }],
+        [extra]
+      );
+      expect(merged.name).toBe('from pi');
+      expect(merged.cost).toEqual({ ...base, tiers: extra.cost.tiers });
+      expect(merged.cost.tiers).not.toBe(extra.cost.tiers);
+    });
+
+    it("keeps the catalogue's own tiers", () => {
+      const own = [{ inputTokensAbove: 200_000, input: 9, output: 9, cacheRead: 9, cacheWrite: 9 }];
+      const [merged] = mergeBedrockCampCatalogue(
+        [{ ...extra, cost: { ...base, tiers: own } }],
+        [extra]
+      );
+      expect(merged.cost.tiers).toBe(own);
+    });
+
+    it('does not graft onto a catalogue entry whose base prices differ', () => {
+      const repriced = { ...base, input: 1.1 };
+      const [merged] = mergeBedrockCampCatalogue([{ ...extra, cost: repriced }], [extra]);
+      expect(merged.cost).toEqual(repriced);
+    });
+
+    it('leaves collisions without extra tiers untouched', () => {
+      const kimi = byId('us.moonshotai.kimi-k3')!;
+      const fromPi = { ...kimi, cost: { ...kimi.cost } };
+      const [merged] = mergeBedrockCampCatalogue([fromPi], [kimi]);
+      expect(merged).toBe(fromPi);
+    });
+  });
 });

@@ -226,15 +226,54 @@ function expandSpec(spec: ExtraModelSpec): BedrockCampExtraModel[] {
 export const BEDROCK_CAMP_EXTRA_MODELS: readonly BedrockCampExtraModel[] =
   EXTRA_MODEL_SPECS.flatMap(expandSpec);
 
+interface MergeableModel {
+  id: string;
+  cost?: BedrockCampCostRates & { tiers?: readonly BedrockCampCostTier[] };
+}
+
+function sameBaseRates(a: BedrockCampCostRates, b: BedrockCampCostRates): boolean {
+  return (
+    a.input === b.input &&
+    a.output === b.output &&
+    a.cacheRead === b.cacheRead &&
+    a.cacheWrite === b.cacheWrite
+  );
+}
+
+/**
+ * Tiers are the one thing an extra keeps after pi-ai learns its model: pi's
+ * Bedrock entries omit long-context tiers (and the live-catalogue overlay
+ * strips any it gets), so without this GPT-6 turns above 272k input would
+ * bill at base rates. Only grafted onto a price sheet identical to ours; if
+ * pi's base rates differ, ours are stale and so are our tiers.
+ */
+function withExtraTiers<T extends MergeableModel>(model: T, extra: T | undefined): T {
+  const extraCost = extra?.cost;
+  if (
+    !extraCost?.tiers ||
+    !model.cost ||
+    model.cost.tiers ||
+    !sameBaseRates(model.cost, extraCost)
+  ) {
+    return model;
+  }
+  return { ...model, cost: { ...model.cost, tiers: extraCost.tiers.map((t) => ({ ...t })) } };
+}
+
 /**
  * pi-ai's catalogue plus the extras it does not know yet. pi-ai's entry wins
  * on an id collision, so a pi-ai bump that learns a model supersedes the
- * hand-written entry without an edit here.
+ * hand-written entry without an edit here — apart from cost tiers, see
+ * {@link withExtraTiers}.
  */
-export function mergeBedrockCampCatalogue<T extends { id: string }>(
+export function mergeBedrockCampCatalogue<T extends MergeableModel>(
   catalogue: readonly T[],
   extras: readonly T[]
 ): T[] {
+  const extrasById = new Map(extras.map((m) => [m.id, m]));
   const known = new Set(catalogue.map((m) => m.id));
-  return [...catalogue, ...extras.filter((m) => !known.has(m.id))];
+  return [
+    ...catalogue.map((m) => withExtraTiers(m, extrasById.get(m.id))),
+    ...extras.filter((m) => !known.has(m.id)),
+  ];
 }

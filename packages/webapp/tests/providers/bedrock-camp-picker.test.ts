@@ -148,6 +148,42 @@ describe('bedrock-camp picker contents', () => {
     expect(model.cost.input).toBeGreaterThan(0);
   });
 
+  it("keeps GPT-6's long-context tier when pi's live overlay supplies the model", async () => {
+    // pi's hosted amazon-bedrock entry, as served: no `cost.tiers`.
+    const { getBuiltinModelDataGeneratedAt } = await import('@earendil-works/pi-ai/providers/all');
+    const { MODEL_CATALOG_STORAGE_KEY } = await import('../../src/core/model-catalog.js');
+    storage.set(
+      MODEL_CATALOG_STORAGE_KEY,
+      JSON.stringify({
+        'amazon-bedrock': {
+          models: [
+            {
+              id: 'us.openai.gpt-6-sol',
+              name: 'GPT-6 Sol (US)',
+              api: 'bedrock-converse-stream',
+              provider: 'amazon-bedrock',
+              baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+              reasoning: true,
+              input: ['text', 'image'],
+              cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
+              contextWindow: 1_050_000,
+              maxTokens: 128_000,
+              thinkingLevelMap: { xhigh: 'xhigh' },
+            },
+          ],
+          checkedAt: 0,
+          lastModified: (getBuiltinModelDataGeneratedAt() ?? 0) + 1,
+        },
+      })
+    );
+    const gpt = (await pickerModels()).find((m) => m.id === 'us.openai.gpt-6-sol') as
+      | { cost?: { tiers?: Array<{ inputTokensAbove: number; input: number }> } }
+      | undefined;
+    expect(gpt?.cost?.tiers).toEqual([
+      { inputTokensAbove: 272_000, input: 4.4, output: 16.5, cacheRead: 0.44, cacheWrite: 5.5 },
+    ]);
+  });
+
   it('keeps unverified non-Claude models out entirely', async () => {
     const ids = (await pickerModels()).map((m) => m.id);
     for (const needle of ['grok', 'glm', 'minimax', 'nova', 'llama', 'deepseek', 'palmyra']) {
