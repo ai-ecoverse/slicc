@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   callLabel,
+  connectionLost,
   createLeader,
   DEFAULT_CALL_TIMEOUT_MS,
   runProcess,
@@ -112,6 +113,24 @@ describe('createLeader', () => {
     expect(unreachable(1, 'terminal-open timed out after 10000ms')).toBe(true);
     expect(unreachable(0, 'terminal-open timed out')).toBe(false);
     expect(unreachable(1, 'no model matches')).toBe(false);
+  });
+
+  it('marks a call whose connection closed as leader-down, without repeating it', async () => {
+    const run = vi.fn(async () => ({
+      stdout: '',
+      stderr: 'slicc new-session: io: read/write on closed pipe\n',
+      status: 1,
+    }));
+    const onCall = vi.fn();
+    const leader = createLeader({ url: 'https://x', run, retryDelayMs: 0, onCall });
+    expect(await leader.cli(['new-session', '--erase'])).toMatchObject({
+      status: 1,
+      leaderDown: true,
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onCall.mock.lastCall[0]).toMatchObject({ attempts: 1, leaderDown: true });
+    expect(connectionLost(0, 'read/write on closed pipe')).toBe(false);
+    expect(connectionLost(1, 'no model matches')).toBe(false);
   });
 
   it('names calls without their arguments', () => {

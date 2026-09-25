@@ -40,6 +40,18 @@ export function unreachable(status, stderr) {
   );
 }
 
+/**
+ * The connection to the leader closed mid-call (the CLI's `io: read/write on closed pipe`). The
+ * command may already have run, so it is not repeated here, but the leader counts as down: the
+ * runner restarts it and runs the task again. Seen live on a leader that failed every call until
+ * its restart (2026-09-25).
+ */
+const CONNECTION_LOST_RE = /read\/write on closed pipe/i;
+
+export function connectionLost(status, stderr) {
+  return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));
+}
+
 /** Grace between the timeout signal and SIGKILL, for the CLI to deliver its `abort`. */
 const KILL_GRACE_MS = 10_000;
 
@@ -141,7 +153,8 @@ export function createLeader({
         await sleep(retryDelayMs);
         continue;
       }
-      const out = { ...result, leaderDown: dialFailed };
+      const leaderDown = dialFailed || connectionLost(result.status, result.stderr);
+      const out = { ...result, leaderDown };
       onCall({
         at: new Date(started).toISOString(),
         call: callLabel(args),
@@ -149,7 +162,7 @@ export function createLeader({
         status: result.status,
         timedOut: Boolean(result.timedOut),
         attempts: attempt,
-        leaderDown: dialFailed,
+        leaderDown,
         ...(result.status !== 0 ? { stderr: String(result.stderr).slice(-400) } : {}),
         ...(diagnostics.length ? { diagnostics } : {}),
       });
