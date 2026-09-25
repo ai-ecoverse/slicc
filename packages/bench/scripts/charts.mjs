@@ -187,3 +187,29 @@ ${marks}
 <text transform="translate(14 ${(top + H - bottom) / 2}) rotate(-90)" text-anchor="middle" class="axis-title">Score (mean rubric score × 100)</text>
 </svg></div>${dominant}`;
 }
+
+const score2 = (x) => (x == null ? '–' : x.toFixed(2));
+
+/**
+ * How often each configuration answered without a single tool call, and what that did to its
+ * score. One row per configuration with counted transcripts, most tool-free first: a split bar
+ * (grey: without tools; the model's color: with tools) and the two mean scores.
+ */
+export function toolUseChart(configs, slots) {
+  const rows = configs
+    .filter((c) => c.tool_known)
+    .sort((a, b) => b.no_tool_rate - a.no_tool_rate || a.model.localeCompare(b.model));
+  if (!rows.length) return '<p class="muted">No transcripts counted yet.</p>';
+  const items = rows
+    .map((c) => {
+      const tooled = c.tool_known - c.no_tool_runs;
+      const label = `${c.no_tool_runs} of ${c.tool_known} runs without tools, ${tooled} with`;
+      return `<li class="tooluse-row">
+  <span class="tooluse-name">${esc(c.model)} · ${esc(c.skills)}</span>
+  <span class="bar tooluse-bar" role="img" aria-label="${esc(label)}" title="${esc(label)}"><span class="seg bare" style="flex:${c.no_tool_runs}"></span><span class="seg ${withSkills(c) ? 'with' : 'without'}" style="flex:${tooled}; --c: var(--series-${slots.get(c.model)})"></span></span>
+  <span class="tooluse-text"><strong>${(c.no_tool_rate * 100).toFixed(0)}%</strong> without tools · mean score ${score2(c.no_tool_mean_score)} without vs ${score2(c.tool_mean_score)} with</span>
+</li>`;
+    })
+    .join('\n');
+  return `<ul class="tooluse">${items}</ul>`;
+}

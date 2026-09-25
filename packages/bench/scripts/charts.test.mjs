@@ -6,6 +6,7 @@ import {
   modelSlots,
   paretoFront,
   rankingChart,
+  toolUseChart,
   valueChart,
 } from './charts.mjs';
 
@@ -66,6 +67,71 @@ describe('rankingChart', () => {
     expect(svg).toMatch(/d="M\d+(\.\d+)?,226H\d+(\.\d+)?Z"/);
     expect(rankingChart([cfg('a', 'none', null, 1)], modelSlots(['a']))).toContain(
       'No judged runs yet.'
+    );
+  });
+});
+
+describe('toolUseChart', () => {
+  it('rows configurations most tool-free first, with both means', () => {
+    const slots = modelSlots(['opus']);
+    const html = toolUseChart(
+      [
+        {
+          model: 'opus',
+          skills: 'none',
+          tool_known: 20,
+          no_tool_runs: 8,
+          no_tool_rate: 0.4,
+          no_tool_mean_score: 0.7,
+          tool_mean_score: 0.93,
+        },
+        {
+          model: 'opus',
+          skills: 'builtin',
+          tool_known: 19,
+          no_tool_runs: 10,
+          no_tool_rate: 0.5263,
+          no_tool_mean_score: 0.56,
+          tool_mean_score: 0.93,
+        },
+        { model: 'opus', skills: 'x', tool_known: 0 },
+      ],
+      slots
+    );
+    expect(html.match(/class="tooluse-row"/g)).toHaveLength(2);
+    expect(html.indexOf('opus · builtin')).toBeLessThan(html.indexOf('opus · none'));
+    expect(html).toContain(
+      '<strong>53%</strong> without tools · mean score 0.56 without vs 0.93 with'
+    );
+    expect(html).toContain('aria-label="10 of 19 runs without tools, 9 with"');
+    expect(html).toContain('class="seg without" style="flex:12; --c: var(--series-1)"');
+    const ties = toolUseChart(
+      [
+        {
+          model: 'b',
+          skills: 'none',
+          tool_known: 1,
+          no_tool_runs: 0,
+          no_tool_rate: 0,
+          no_tool_mean_score: null,
+          tool_mean_score: 1,
+        },
+        {
+          model: 'a',
+          skills: 'none',
+          tool_known: 1,
+          no_tool_runs: 0,
+          no_tool_rate: 0,
+          no_tool_mean_score: null,
+          tool_mean_score: 1,
+        },
+      ],
+      modelSlots(['a', 'b'])
+    );
+    expect(ties.indexOf('a · none')).toBeLessThan(ties.indexOf('b · none'));
+    expect(ties).toContain('mean score – without vs 1.00 with');
+    expect(toolUseChart([{ model: 'a', skills: 'none', tool_known: 0 }], slots)).toContain(
+      'No transcripts counted yet.'
     );
   });
 });

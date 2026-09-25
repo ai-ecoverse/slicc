@@ -94,6 +94,7 @@ describe('reportHtml', () => {
     expect(html).toContain('<dd>1 <span class="chip warn">small sample</span></dd>');
     expect(html.indexOf('Skills lift')).toBeLessThan(html.indexOf('<h3>Configurations</h3>'));
     expect(html).toContain('What models change (paired, against opus)');
+    expect(html).toContain('<h3>Answered without tools');
     expect(html).toContain('<td class="cell pass"');
     expect(html).toContain('<td class="cell error" title="error · error: leader went away');
     expect(html).toContain('<td class="cell unjudged"');

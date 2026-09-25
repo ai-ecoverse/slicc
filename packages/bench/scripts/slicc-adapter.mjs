@@ -315,6 +315,56 @@ export function transcriptSteps(doc) {
   return { steps, models: [...models].sort(), assistantTurns };
 }
 
+/** What a tool call did, as a coarse category: the command or path itself is never kept. */
+export function toolKind(part) {
+  const target = String(part.input?.command ?? part.input?.path ?? part.input?.file ?? '');
+  if (/SKILL\.md|\/skills\//.test(target)) return 'skill';
+  if (part.name !== 'bash') return /file|edit|write|read/i.test(part.name) ? 'file' : 'other';
+  if (/playwright-cli|\bbrowser\b|screenshot|tab-(list|new|close)/.test(target)) return 'browser';
+  if (/\b(curl|wget|http|fetch)\b/.test(target)) return 'fetch';
+  if (/\b(python3?|node|jq|awk|sed|grep)\b/.test(target)) return 'code';
+  return 'shell';
+}
+
+const TOOL_KINDS = ['browser', 'fetch', 'code', 'shell', 'file', 'skill', 'other'];
+
+/**
+ * How a run used tools, from its exported transcript: every conversation, cone and scoops.
+ * Counts only; no command text. Null when there is no transcript to count from (a failed export
+ * is unknown, never "no tools"). `answeredWithoutTools` marks a run that answered without a
+ * single tool call: the agent answered from what it already knew.
+ */
+export function toolUsage(doc) {
+  const conversations = doc?.conversations ?? [];
+  const turns = conversations.reduce(
+    (n, c) => n + (c.messages ?? []).filter((m) => m.role === 'assistant').length,
+    0
+  );
+  if (!turns) return null;
+  const kinds = Object.fromEntries(TOOL_KINDS.map((k) => [k, 0]));
+  for (const c of conversations)
+    for (const m of c.messages ?? [])
+      for (const p of m.content ?? []) if (p.type === 'tool-call') kinds[toolKind(p)] += 1;
+  const calls = Object.values(kinds).reduce((a, b) => a + b, 0);
+  return {
+    toolCalls: calls,
+    toolKinds: kinds,
+    webCalls: kinds.browser + kinds.fetch,
+    answeredWithoutTools: calls === 0,
+  };
+}
+
+/** The record fields for a run's tool use: nulls when there is no transcript. */
+export function toolMetrics(transcript) {
+  const u = toolUsage(transcript);
+  return {
+    tool_calls: u?.toolCalls ?? null,
+    tool_kinds: u?.toolKinds ?? null,
+    web_calls: u?.webCalls ?? null,
+    answered_without_tools: u ? u.answeredWithoutTools : null,
+  };
+}
+
 /** A run's result → the trace shape `judge.mjs` reads. */
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
@@ -339,6 +389,7 @@ export function traceFromResult(result) {
       tabs: result.tabs ?? [],
       model: result.modelId ?? null,
       modelsUsed: t.models,
+      ...toolMetrics(result.transcript),
       ...(result.phases ? { phases: result.phases } : {}),
     },
   };

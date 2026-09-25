@@ -133,6 +133,24 @@ export function skillsBaseline(skills) {
   return skills.includes('none') ? 'none' : skills[0];
 }
 
+/**
+ * Tool use across finished runs whose transcript was counted: how many answered without a single
+ * tool call, and the mean judged score of those against the runs that used tools.
+ */
+function toolStats(done) {
+  const known = done.filter((r) => typeof r.metrics?.answered_without_tools === 'boolean');
+  const bare = known.filter((r) => r.metrics.answered_without_tools);
+  const tooled = known.filter((r) => !r.metrics.answered_without_tools);
+  const score = (rs) => round(mean(rs.filter(judged).map((r) => r.score)));
+  return {
+    tool_known: known.length,
+    no_tool_runs: bare.length,
+    no_tool_rate: known.length ? round(bare.length / known.length) : null,
+    no_tool_mean_score: score(bare),
+    tool_mean_score: score(tooled),
+  };
+}
+
 function configStats(c, cs) {
   const done = cs.filter(ran);
   const scored = cs.filter(judged);
@@ -150,6 +168,7 @@ function configStats(c, cs) {
     mean_score: round(mean(scored.map((r) => r.score))),
     mean_duration: round(mean(knownValues(done, 'duration')), 3),
     mean_cost: round(mean(knownValues(done, 'cost'))),
+    ...toolStats(done),
   };
 }
 
@@ -249,6 +268,18 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
       '|---|---|---|---|---|---|---|---|---|---|---|',
       ...b.configs.map(configRow)
     );
+    const toolKnown = b.configs.filter((c) => c.tool_known);
+    if (toolKnown.length) {
+      lines.push(
+        '',
+        '**Answered without tools** (no tool call in the whole run: the agent answered from what it knew; of finished runs with a transcript):',
+        '',
+        ...toolKnown.map(
+          (c) =>
+            `- ${c.model}, \`${c.skills}\`: ${c.no_tool_runs}/${c.tool_known} (${(c.no_tool_rate * 100).toFixed(0)}%), mean score ${fmt(c.no_tool_mean_score)} without tools vs ${fmt(c.tool_mean_score)} with`
+        )
+      );
+    }
     if (b.skill_deltas.length) {
       lines.push(
         '',

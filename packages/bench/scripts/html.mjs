@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { chartLegend, modelSlots, rankingChart, valueChart } from './charts.mjs';
+import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
 import { listFiles } from './publish.mjs';
 import { configKey, percent, reportData } from './results.mjs';
 
@@ -293,6 +293,13 @@ table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0; margin: 6px 0; font-size: 13px; }
 .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
 .swatch.series { background: var(--c); }
+.tooluse { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 8px; }
+.tooluse-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(8rem, 1fr) auto; gap: 12px; align-items: center; font-size: 13px; }
+.tooluse-name { overflow-wrap: anywhere; } .tooluse-text { color: var(--muted); }
+.tooluse-text strong { color: var(--fg); }
+.tooluse-bar { height: 12px; } .seg.bare { background: var(--unjudged); }
+.seg.with, .seg.without { background: var(--c); } .seg.without { opacity: .45; }
+@media (max-width: 640px) { .tooluse-row { grid-template-columns: 1fr; gap: 4px; } }
 .swatch.outline { border: 2px solid var(--muted); }
 .swatch.quad { border-radius: 2px; background: color-mix(in srgb, var(--pass) 18%, transparent); }
 .swatch.pareto-key { width: 18px; height: 0; border-radius: 0; border-top: 2px dotted var(--fg); vertical-align: 3px; }
@@ -325,6 +332,8 @@ ${rankingChart(b.configs, slots)}
 <h3>Score vs. cost per task <small>mean cost of the runs that finished</small></h3>
 ${valueChart(b.configs, slots)}
 ${skillLift(b)}
+<h3>Answered without tools <small>runs with no tool call at all: the agent answered from what it knew</small></h3>
+${toolUseChart(b.configs, slots)}
 <h3>Configurations</h3>
 <div class="cards">${b.configs.map(card).join('\n')}</div>
 ${configTable(b)}

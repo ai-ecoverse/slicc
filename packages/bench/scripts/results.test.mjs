@@ -207,6 +207,43 @@ describe('pairedDelta', () => {
   });
 });
 
+describe('tool use', () => {
+  const tooled = (task, skills, score, withoutTools) =>
+    rec(task, 'm', skills, score, {
+      metrics: {
+        duration: 10,
+        cost: 0.1,
+        answered_without_tools: withoutTools,
+        tool_calls: withoutTools ? 0 : 3,
+      },
+    });
+  it('counts runs that answered without tools, and scores them apart', () => {
+    const records = [
+      tooled('t1', 'none', 0.8, true),
+      tooled('t2', 'none', 1, false),
+      tooled('t3', 'none', 0, true),
+      rec('t4', 'm', 'none', 1),
+    ];
+    const [c] = reportData(records).benchmarks[0].configs;
+    expect(c).toMatchObject({
+      tool_known: 3,
+      no_tool_runs: 2,
+      no_tool_rate: 0.6667,
+      no_tool_mean_score: 0.4,
+      tool_mean_score: 1,
+    });
+    const md = reportMarkdown(records);
+    expect(md).toContain('**Answered without tools**');
+    expect(md).toContain('- m, `none`: 2/3 (67%), mean score 0.40 without tools vs 1.00 with');
+    expect(reportMarkdown([rec('t1', 'm', 'none', 1)])).not.toContain('Answered without tools');
+    expect(reportData([rec('t1', 'm', 'none', 1)]).benchmarks[0].configs[0]).toMatchObject({
+      tool_known: 0,
+      no_tool_rate: null,
+      no_tool_mean_score: null,
+    });
+  });
+});
+
 describe('skills lift', () => {
   it('measures from none whenever it ran, whatever order the conditions came in', () => {
     expect(skillsBaseline(['builtin', 'none'])).toBe('none');
