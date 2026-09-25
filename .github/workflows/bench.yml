@@ -13,7 +13,8 @@
 # on a self-hosted GCP runner (Cyclenerd/google-cloud-github-runner in ai-ecoverse-493315;
 # `runs-on` names its GCE instance template) that takes every Nth task (`run.mjs --shard K/N`)
 # and runs it on `leaders` leaders side by side; `report` merges the shards' out dirs
-# (merge.mjs), and publishes once. The shards stay off the org's GitHub-hosted runner pool.
+# (merge.mjs), and publishes once. Every job runs on GCP (`plan` and `report` on
+# `vars.BENCH_SMALL_RUNNER`, default gcp-ubuntu-24-04-2core), off the org's GitHub-hosted pool.
 #
 # Guardrails, so a job never goes stale or runs out its time limit with nothing saved:
 # - run.mjs stops taking runs once one might not finish before `--deadline-minutes`, stops a run
@@ -111,8 +112,10 @@ jobs:
   plan:
     name: Plan
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Small jobs go on a small GCP VM too: behind a busy GitHub-hosted pool they would hold up
+    # the whole run.
+    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    timeout-minutes: 15
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
       slicc-version: ${{ steps.plan.outputs.slicc-version }}
@@ -122,6 +125,10 @@ jobs:
       SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
       DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '30' }}
     steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
       # Every shard and every leader restart runs the same sliccy, even if one is published
       # mid-run: the records are comparable only within one harness version.
       - name: Pin the sliccy version and list the shards
@@ -315,7 +322,7 @@ jobs:
     name: Report
     needs: [plan, bench]
     if: ${{ always() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
     timeout-minutes: 30
     env:
       BENCH_SETS: ${{ github.event_name == 'workflow_dispatch' && inputs.sets || 'packages/bench/tasks/smoke.json' }}
@@ -359,6 +366,12 @@ jobs:
           name: bench-${{ github.run_id }}
           path: ${{ runner.temp }}/bench-out
           if-no-files-found: ignore
+
+      # Ubuntu 24.04 refuses a system-wide pip install (PEP 668); the hf CLI gets its own Python.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        with:
+          python-version: '3.13'
 
       # Publishes whatever finished, even when some shards errored or stopped early. The combined
       # report is rebuilt from the dataset's records plus this run's.
