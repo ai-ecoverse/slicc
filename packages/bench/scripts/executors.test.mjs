@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   callLabel,
+  connectionLost,
   createLeader,
   DEFAULT_CALL_TIMEOUT_MS,
   runProcess,
@@ -114,6 +115,24 @@ describe('createLeader', () => {
     expect(unreachable(1, 'no model matches')).toBe(false);
   });
 
+  it('marks a call whose connection closed as leader-down, without repeating it', async () => {
+    const run = vi.fn(async () => ({
+      stdout: '',
+      stderr: 'slicc new-session: io: read/write on closed pipe\n',
+      status: 1,
+    }));
+    const onCall = vi.fn();
+    const leader = createLeader({ url: 'https://x', run, retryDelayMs: 0, onCall });
+    expect(await leader.cli(['new-session', '--erase'])).toMatchObject({
+      status: 1,
+      leaderDown: true,
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onCall.mock.lastCall[0]).toMatchObject({ attempts: 1, leaderDown: true });
+    expect(connectionLost(0, 'read/write on closed pipe')).toBe(false);
+    expect(connectionLost(1, 'no model matches')).toBe(false);
+  });
+
   it('names calls without their arguments', () => {
     expect(callLabel(['exec', '  base64 /tmp/secret.png'])).toBe('exec base64');
     expect(callLabel(['exec'])).toBe('exec ');
@@ -163,6 +182,26 @@ describe('runProcess', () => {
     // 130 either way: the trap's own exit, or death by SIGINT before the trap was set. SIGTERM
     // would be 143. The trap's output is not asserted, because that races the shell's startup.
     expect(r).toMatchObject({ status: 130, timedOut: true });
+  });
+
+  it('stops the CLI when its signal aborts, before or during the call', async () => {
+    const cli = fakeCli("trap 'exit 130' INT\nwhile true; do sleep 0.05; done");
+    const ac = new AbortController();
+    const running = runProcess(cli, [], { interrupt: true, signal: ac.signal });
+    setTimeout(() => ac.abort(), 150);
+    expect(await running).toMatchObject({ status: 130, timedOut: false, aborted: true });
+    const pre = new AbortController();
+    pre.abort();
+    expect(await runProcess(cli, [], { signal: pre.signal })).toMatchObject({ aborted: true });
+    const done = new AbortController();
+    const quick = fakeCli('echo ok');
+    expect(await runProcess(quick, [], { signal: done.signal })).toEqual({
+      stdout: 'ok\n',
+      stderr: '',
+      status: 0,
+      timedOut: false,
+    });
+    done.abort();
   });
 
   it('terminates other verbs at the timeout, even when a child holds the pipes', async () => {

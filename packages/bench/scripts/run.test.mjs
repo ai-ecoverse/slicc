@@ -7,14 +7,17 @@ import { taskDigests, withDigests } from './format.mjs';
 import {
   ageSeconds,
   DEFAULT_MODELS,
+  guardrails,
   loadSet,
   main,
   parseCli,
+  parseShard,
   planRuns,
   readTrace,
   recordPath,
   resumeAction,
   selectTasks,
+  shardRuns,
   tracePath,
 } from './run.mjs';
 
@@ -166,6 +169,27 @@ describe('planning', () => {
       runs.slice(0, 4).map((r) => `${r.condition.name}/${r.repeat}/${r.task.id}/${r.model}`)
     ).toEqual(['none/1/a/s', 'none/1/a/o', 'none/1/b/s', 'none/1/b/o']);
     expect(runs[8].condition.name).toBe('builtin');
+  });
+
+  it('shards a plan by task, keeping every model and repeat of a task together', () => {
+    expect(parseShard(undefined)).toBeNull();
+    expect(parseShard('2/5')).toEqual({ index: 2, count: 5 });
+    for (const bad of ['0/3', '4/3', '1/0', 'x', '1-3'])
+      expect(() => parseShard(bad)).toThrow(/--shard must be K\/N/);
+    const tasks = ['a', 'b', 'c', 'd'].map((id) => ({ id }));
+    const runs = planRuns(
+      [
+        { benchmark: 'B', tasks },
+        { benchmark: 'C', tasks: [{ id: 'a' }] },
+      ],
+      { models: ['s', 'o'], skills: [{ name: 'none' }], repeats: 2 }
+    );
+    expect(shardRuns(runs, null)).toBe(runs);
+    const parts = [1, 2, 3].map((index) => shardRuns(runs, { index, count: 3 }));
+    expect(parts.map((p) => p.length).reduce((a, b) => a + b)).toBe(runs.length);
+    const ids = (p) => [...new Set(p.map((r) => `${r.set.benchmark}/${r.task.id}`))];
+    expect(parts.map(ids)).toEqual([['B/a', 'B/d'], ['B/b', 'C/a'], ['B/c']]);
+    expect(parts[0]).toHaveLength(8);
   });
 
   it('keeps record and trace paths filesystem-safe', () => {
@@ -872,6 +896,35 @@ describe('leader lifecycle', () => {
     q.mockRestore();
   });
 
+  it('restarts a leader that cannot be reached while its skills are staged', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    let healthy = false;
+    const fake = leader({ down: (c) => !healthy && c.includes('.bench-skills-builtin') });
+    const recycle = recycler(() => {
+      healthy = true;
+    });
+    const log = vi.fn();
+    const code = await main(['--set', twoTasks(dir), '--models', 'm', '--no-judge', '--out', out], {
+      ...fake.deps,
+      recycle,
+      log,
+    });
+    expect(code).toBe(0);
+    expect(recycle).toHaveBeenCalledTimes(1);
+    expect(events(out).find((e) => e.type === 'leader-down')).toMatchObject({
+      stage: 'prepare',
+      task_id: 'own-1',
+    });
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    expect(r1.error).toBeUndefined();
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /restarting the leader \(leader unreachable while preparing\)/
+    );
+    q.mockRestore();
+  });
+
   it('stops after the leader stays unreachable, leaving the rest for a resume', async () => {
     const dir = tmp();
     const out = join(dir, 'o');
@@ -922,6 +975,256 @@ describe('leader lifecycle', () => {
     expect(code).toBe(1);
     expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-2', 1))).toBe(false);
     expect(events(out).find((e) => e.type === 'stopped').reason).toMatch(/chrome did not start/);
+    q.mockRestore();
+  });
+});
+
+describe('lanes and guardrails', () => {
+  const quiet = () => vi.spyOn(console, 'log').mockImplementation(() => {});
+  const events = (out) =>
+    readFileSync(join(out, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+  function setOf(dir, n) {
+    const path = join(dir, 'set.json');
+    const tasks = Array.from({ length: n }, (_, i) => withDigests({ ...TASK, id: `own-${i + 1}` }));
+    writeFileSync(path, JSON.stringify({ benchmark: 'Own', tasks }));
+    return path;
+  }
+  /** Lanes backed by fake leaders; `failOn` lanes never boot. */
+  function lanesOf(n, { failOn = [] } = {}) {
+    const fakes = Array.from({ length: n }, () => leader());
+    const stops = fakes.map(() => vi.fn(async () => {}));
+    const bootLane = vi.fn(async (i, { lock }) => {
+      expect(typeof lock).toBe('function');
+      if (failOn.includes(i)) throw new Error(`lane ${i} chrome did not start`);
+      return {
+        leader: fakes[i].deps.leader,
+        recycle: async () => ({ url: `https://w/join/l${i}`, startedAt: new Date().toISOString() }),
+        stop: stops[i],
+        startedAt: new Date().toISOString(),
+        sliccVersion: '9.9',
+        leaderLog: null,
+      };
+    });
+    return { fakes, stops, bootLane };
+  }
+
+  it('parses lanes, the deadline and the budgets', () => {
+    expect(
+      parseCli([
+        '--set',
+        'x',
+        '--leaders',
+        '3',
+        '--deadline-minutes',
+        '300',
+        '--max-task-cost',
+        '2.5',
+        '--max-cost',
+        '40',
+      ])
+    ).toMatchObject({
+      leaders: 3,
+      bootLeaders: true,
+      deadlineMinutes: 300,
+      maxTaskCost: 2.5,
+      maxCost: 40,
+    });
+    expect(parseCli(['--set', 'x'])).toMatchObject({
+      leaders: 1,
+      bootLeaders: false,
+      deadlineMinutes: 0,
+      maxCost: 0,
+    });
+    expect(parseCli(['--set', 'x', '--boot-leaders']).bootLeaders).toBe(true);
+    expect(() => parseCli(['--set', 'x', '--leaders', '0'])).toThrow(/--leaders/);
+    expect(() => parseCli(['--set', 'x', '--leaders', '99'])).toThrow(/--leaders/);
+    expect(() => parseCli(['--set', 'x', '--deadline-minutes', '-5'])).toThrow(
+      /--deadline-minutes/
+    );
+    expect(() => parseCli(['--set', 'x', '--timeout', '3600', '--deadline-minutes', '60'])).toThrow(
+      '--deadline-minutes 60 leaves no time for a run: one takes up to 80 (the timeout plus 20'
+    );
+    expect(() => parseCli(['--set', 'x', '--max-cost', 'lots'])).toThrow(/--max-cost/);
+    expect(parseCli(['--set', 'x', '--shard', '1/4']).shard).toEqual({ index: 1, count: 4 });
+  });
+
+  it('plans only its shard', async () => {
+    const dir = tmp();
+    const q = quiet();
+    const log = vi.fn();
+    const code = await main(
+      ['--set', setOf(dir, 4), '--models', 'a,b', '--plan', '--shard', '2/3'],
+      { log }
+    );
+    expect(code).toBe(0);
+    expect(q.mock.calls.map((c) => c[0].split('\t').slice(2).join(' '))).toEqual([
+      'a r1 own-2',
+      'b r1 own-2',
+    ]);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^2 runs \(shard 2\/3\): a, b/));
+    q.mockRestore();
+  });
+
+  it('shares one queue between lanes, stamps each run with its lane, and stops the leaders it booted', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const { fakes, stops, bootLane } = lanesOf(2);
+    const log = vi.fn();
+    const code = await main(
+      ['--set', setOf(dir, 4), '--models', 'm', '--no-judge', '--leaders', '2', '--out', out],
+      {
+        bootLane,
+        now: fakes[0].deps.now,
+        log,
+      }
+    );
+    expect(code).toBe(0);
+    const lanesUsed = [1, 2, 3, 4].map(
+      (n) =>
+        JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', `own-${n}`, 1), 'utf8'))
+          .leader.lane
+    );
+    expect(lanesUsed.sort()).toEqual([0, 0, 1, 1].sort());
+    expect(fakes.every((f) => f.commands.includes('slicc prompt -'))).toBe(true);
+    expect(stops.every((s) => s.mock.calls.length === 1)).toBe(true);
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(/\[L1\] \[\d\/4\] own-/);
+    const ev = events(out);
+    expect(ev.filter((e) => e.type === 'leader-ready').map((e) => e.lane)).toEqual([0, 1]);
+    expect(ev.find((e) => e.type === 'start')).toMatchObject({ lanes: 2 });
+    q.mockRestore();
+  });
+
+  it('runs on the lanes that came up, and fails when none did', async () => {
+    const dir = tmp();
+    const q = quiet();
+    const partial = lanesOf(2, { failOn: [0] });
+    const out = join(dir, 'o');
+    expect(
+      await main(
+        ['--set', setOf(dir, 2), '--models', 'm', '--no-judge', '--leaders', '2', '--out', out],
+        {
+          bootLane: partial.bootLane,
+          log: () => {},
+        }
+      )
+    ).toBe(0);
+    expect(events(out).find((e) => e.type === 'lane-failed')).toMatchObject({ lane: 0 });
+    const none = lanesOf(1, { failOn: [0] });
+    await expect(
+      main(
+        [
+          '--set',
+          setOf(dir, 1),
+          '--models',
+          'm',
+          '--no-judge',
+          '--boot-leaders',
+          '--out',
+          join(dir, 'o2'),
+        ],
+        {
+          bootLane: none.bootLane,
+          log: () => {},
+        }
+      )
+    ).rejects.toThrow(/no leader came up/);
+    await expect(
+      main(
+        [
+          '--set',
+          setOf(dir, 1),
+          '--models',
+          'm',
+          '--no-judge',
+          '--boot-leaders',
+          '--out',
+          join(dir, 'o3'),
+        ],
+        {
+          log: () => {},
+        }
+      )
+    ).rejects.toThrow(/need BENCH_LEADER_SCRIPTS/);
+    q.mockRestore();
+  });
+
+  it('stops taking runs past the deadline, and journals it once', () => {
+    const journal = { event: vi.fn() };
+    const log = vi.fn();
+    let t = 0;
+    const stop = guardrails(
+      { deadlineMinutes: 40, timeout: 900, maxCost: 0 },
+      { startedMs: 0, now: () => t, journal, log }
+    );
+    const state = { spent: 0, reasons: [], stopped: false };
+    const queue = { next: 3, total: 10 };
+    expect(stop(state, queue)).toBeNull();
+    t = 6 * 60_000;
+    expect(stop(state, queue)).toBe('deadline');
+    expect(stop(state, queue)).toBe('deadline');
+    expect(journal.event).toHaveBeenCalledTimes(1);
+    expect(journal.event).toHaveBeenCalledWith('stopped', {
+      reason: 'deadline',
+      runs_left: 7,
+      spent: 0,
+    });
+    expect(state.stopped).toBe(true);
+    expect(log.mock.calls[0][0]).toMatch(/past the deadline for another run; 7 run\(s\) left/);
+  });
+
+  it("uses the next task's slicc.timeoutSeconds for the deadline", () => {
+    const journal = { event: vi.fn() };
+    const log = vi.fn();
+    const t = 0;
+    const runs = [
+      { task: { id: 'short' } },
+      { task: { id: 'long', slicc: { timeoutSeconds: 3600 } } },
+    ];
+    const stop = guardrails(
+      { deadlineMinutes: 40, timeout: 900, maxCost: 0 },
+      { startedMs: 0, now: () => t, journal, log, runs }
+    );
+    const state = { spent: 0, reasons: [], stopped: false };
+    // Default 900s + 20 min overhead still fits in a 40 min deadline at t=0.
+    expect(stop(state, { next: 0, total: 2 })).toBeNull();
+    // The long task needs 60 + 20 min; starting it at t=0 already overruns a 40 min deadline.
+    expect(stop(state, { next: 1, total: 2 })).toBe('deadline');
+    expect(journal.event).toHaveBeenCalledWith('stopped', {
+      reason: 'deadline',
+      runs_left: 1,
+      spent: 0,
+    });
+  });
+
+  it('stops at the spend budget, counting only runs paid for here', async () => {
+    const journal = { event: vi.fn() };
+    const log = vi.fn();
+    const stop = guardrails(
+      { deadlineMinutes: 0, timeout: 900, maxCost: 1 },
+      { startedMs: 0, journal, log }
+    );
+    const state = { spent: 1.2, reasons: [], stopped: false };
+    expect(stop(state, { next: 2, total: 5 })).toBe('budget');
+    expect(log.mock.calls[0][0]).toMatch(/spent \$1\.20 of the \$1 budget; 3 run\(s\) left/);
+
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const code = await main(
+      ['--set', setOf(dir, 3), '--models', 'm', '--no-judge', '--max-cost', '0.01', '--out', out],
+      {
+        ...leader().deps,
+        log: () => {},
+      }
+    );
+    expect(code).toBe(1);
+    expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1))).toBe(true);
+    expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-3', 1))).toBe(false);
+    expect(events(out).find((e) => e.type === 'stopped')).toMatchObject({ reason: 'budget' });
     q.mockRestore();
   });
 });

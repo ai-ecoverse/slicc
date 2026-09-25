@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { withDigests } from './format.mjs';
 import {
   datasetCard,
+  dropStaleUpstreamRecords,
   listFiles,
   main,
   parsePublishCli,
@@ -145,7 +146,13 @@ describe('stage', () => {
     const target = join(dir, 'stage');
 
     const s = stage({ out, stage: target, run: 'r1', dataset, sets: ['bu-v1', setFile(dir)] });
-    expect(s).toEqual({ records: 2, traces: 1, combined: 3, taskSets: ['SLICC_Smoke'] });
+    expect(s).toEqual({
+      records: 2,
+      traces: 1,
+      combined: 3,
+      dropped: 0,
+      taskSets: ['SLICC_Smoke'],
+    });
 
     const files = listFiles(target);
     expect(files).toContain('runs/r1/traces/SLICC_Smoke/builtin/claude-opus-5-5/own-1-r1.json.enc');
@@ -189,9 +196,75 @@ describe('stage', () => {
     expect(readFileSync(join(target, 'README.md'), 'utf8')).toMatch(
       /slicc-bench canary GUID[\s\S]*### SLICC_Smoke/
     );
+    // Surviving dataset records are rewritten so `hf upload --delete 'records/**'` can replace
+    // the Hub tree without dropping configurations this run did not touch.
     expect(
       existsSync(join(target, 'records/SLICC_Smoke/builtin/claude-sonnet-5/own-1-r1.json'))
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it('drops earlier-pin upstream records when a partial new pin publishes', () => {
+    const oldPin = {
+      repo: 'browser-use/benchmark',
+      tag: 'v2.0.0',
+      commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      file: 'BU_Bench_V2.enc',
+      sha256: '0'.repeat(64),
+    };
+    const newPin = {
+      ...oldPin,
+      tag: 'v2.1.1',
+      commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    };
+    const dataset = tmp();
+    write(
+      join(dataset, 'records/BU_Bench_V2/builtin/m/old-task-r1.json'),
+      record('BU_Bench_V2', 'm', 'old-task', { upstream: oldPin, score: 0.5 })
+    );
+    write(
+      join(dataset, 'records/BU_Bench_V2/builtin/m/shared-r1.json'),
+      record('BU_Bench_V2', 'm', 'shared', { upstream: oldPin, score: 0.2 })
+    );
+    write(
+      join(dataset, 'records/SLICC_Smoke/builtin/m/own-1-r1.json'),
+      record('SLICC_Smoke', 'm', 'own-1')
+    );
+    const out = tmp();
+    write(
+      join(out, 'records/BU_Bench_V2/builtin/m/shared-r1.json'),
+      record('BU_Bench_V2', 'm', 'shared', { upstream: newPin, score: 1 })
+    );
+    write(
+      join(out, 'records/BU_Bench_V2/builtin/m/new-task-r1.json'),
+      record('BU_Bench_V2', 'm', 'new-task', { upstream: newPin, score: 0.8 })
+    );
+    const target = join(tmp(), 'stage');
+    const s = stage({ out, stage: target, run: 'r-new', dataset, sets: [] });
+    expect(s).toMatchObject({ records: 2, combined: 3, dropped: 2 });
+    expect(existsSync(join(target, 'records/BU_Bench_V2/builtin/m/old-task-r1.json'))).toBe(false);
+    expect(
+      JSON.parse(readFileSync(join(target, 'records/BU_Bench_V2/builtin/m/shared-r1.json'), 'utf8'))
+    ).toMatchObject({ score: 1, upstream: { commit: newPin.commit } });
+    expect(existsSync(join(target, 'records/SLICC_Smoke/builtin/m/own-1-r1.json'))).toBe(true);
+    const report = JSON.parse(readFileSync(join(target, 'report.json'), 'utf8'));
+    const bu = report.benchmarks.find((b) => b.benchmark === 'BU_Bench_V2');
+    expect(bu.upstream.commit).toBe(newPin.commit);
+    expect(bu.configs[0].runs).toBe(2);
+  });
+
+  it('dropStaleUpstreamRecords keeps matching pins and non-upstream benchmarks', () => {
+    const pin = { commit: 'c1', tag: 'v1' };
+    const merged = new Map([
+      ['BU_Bench_V2/a.json', record('BU_Bench_V2', 'm', 'a', { upstream: { commit: 'old' } })],
+      ['BU_Bench_V2/b.json', record('BU_Bench_V2', 'm', 'b', { upstream: pin })],
+      ['SLICC_Smoke/c.json', record('SLICC_Smoke', 'm', 'c')],
+    ]);
+    const incoming = new Map([
+      ['BU_Bench_V2/b.json', record('BU_Bench_V2', 'm', 'b', { upstream: pin })],
+    ]);
+    expect(dropStaleUpstreamRecords(merged, incoming)).toEqual(['BU_Bench_V2/a.json']);
+    expect([...merged.keys()].sort()).toEqual(['BU_Bench_V2/b.json', 'SLICC_Smoke/c.json']);
+    expect(dropStaleUpstreamRecords(merged, new Map())).toEqual([]);
   });
 
   it('rebuilds only the combined files from the dataset when there is no run', () => {
@@ -207,6 +280,7 @@ describe('stage', () => {
       records: 0,
       traces: 0,
       combined: 1,
+      dropped: 0,
       taskSets: [],
     });
     expect(listFiles(target).filter((f) => !f.startsWith('results/'))).toEqual([
