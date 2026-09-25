@@ -2423,6 +2423,9 @@ jobs:
   # measured exactly main's number and all patched the same line). The
   # absolute ceilings in packages/webapp/first-load-budget.json remain as the
   # backstop against many small under-threshold changes creeping upward.
+  # The all-JS payload also has a per-PR delta check: large new lazy chunks
+  # are attributed to the change that added them, while the 27 MiB absolute
+  # cap has meaningful headroom for routine changes (issue #3429).
   #
   # `dev-tools` is in the filter list because the webapp inlines
   # `packages/dev-tools/providers.build.json` at build time to decide which
