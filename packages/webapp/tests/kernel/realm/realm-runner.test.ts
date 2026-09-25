@@ -18,8 +18,8 @@ import type { RealmDoneMsg, RealmErrorMsg } from '../../../src/kernel/realm/real
 interface MockRealm extends Realm {
   /** Test helper: deliver a `message` to subscribers. */
   fireMessage(data: unknown): void;
-  /** Test helper: deliver an `error`. */
-  fireError(message: string): void;
+  /** Test helper: deliver an `error`; returns the event's preventDefault spy. */
+  fireError(message: string): Mock<() => void>;
   /** Test helper: deliver a `messageerror` (un-deserializable post). */
   fireMessageError(): void;
   /** Was `terminate()` called? */
@@ -62,8 +62,10 @@ function makeMockRealm(): MockRealm {
     fireMessage(data: unknown): void {
       for (const h of [...messageHandlers]) h({ data } as MessageEvent);
     },
-    fireError(message: string): void {
-      for (const h of [...errorHandlers]) h({ message } as ErrorEvent);
+    fireError(message: string): Mock<() => void> {
+      const preventDefault = vi.fn();
+      for (const h of [...errorHandlers]) h({ message, preventDefault } as unknown as ErrorEvent);
+      return preventDefault;
     },
     fireMessageError(): void {
       for (const h of [...messageErrorHandlers]) h({} as MessageEvent);
@@ -261,6 +263,32 @@ describe('runInRealm', () => {
     const result = await promise;
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('uncaught syntax error');
+  });
+
+  // A realm worker's uncaught error (a throw in a timer, a wasm trap) that
+  // the runner leaves uncanceled propagates to the kernel worker's global
+  // scope, and the page reloads on any uncaught kernel-worker error.
+  it('cancels the realm error event so it cannot reach the kernel worker', async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const promise = runInRealm({
+      pm,
+      realmFactory: async () => realm,
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code: 'setTimeout(() => { throw new Error("late") })',
+      argv: ['node'],
+      env: {},
+      cwd: '/',
+      filename: '<eval>',
+      ctx,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const preventDefault = realm.fireError('Uncaught Error: late');
+    const result = await promise;
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ exitCode: 1, stderr: 'Uncaught Error: late\n' });
   });
 
   // Regression (PR #1085 EXT5/NS2): a worker/sandbox that dies mid-post

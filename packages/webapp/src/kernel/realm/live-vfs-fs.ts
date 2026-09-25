@@ -228,6 +228,21 @@ function createHelpers(Fs: LiveFsApi, ops: LiveOpsTables) {
     }
   }
 
+  /**
+   * A metadata change (chmod / utimes). A mount that stores no metadata
+   * (hostfs, File System Access) answers ENOSYS, and the change is dropped:
+   * stat keeps reporting the mount's own mode and times, as FAT does.
+   * Failing instead broke file creation there: Emscripten's open(O_CREAT)
+   * chmods every file it creates.
+   */
+  function metadataCall(fn: () => void): void {
+    try {
+      call(fn);
+    } catch (err) {
+      if ((err as { errno?: number }).errno !== ERRNO_BY_CODE.ENOSYS) throw err;
+    }
+  }
+
   function freshState(stat?: SyncFsBridgeStat): LiveNodeState {
     return { ...(stat ? { stat } : {}), len: 0, loaded: false, dirty: false, openCount: 0 };
   }
@@ -310,6 +325,7 @@ function createHelpers(Fs: LiveFsApi, ops: LiveOpsTables) {
     Fs,
     bridgeOf,
     call,
+    metadataCall,
     makeNode,
     statOf,
     childPath,
@@ -323,7 +339,7 @@ function createHelpers(Fs: LiveFsApi, ops: LiveOpsTables) {
 type LiveHelpers = ReturnType<typeof createHelpers>;
 
 function createNodeOps(h: LiveHelpers): LiveNodeOps {
-  const { Fs, bridgeOf, call, makeNode, statOf, childPath, flushNode, truncate } = h;
+  const { Fs, bridgeOf, call, metadataCall, makeNode, statOf, childPath, flushNode, truncate } = h;
   return {
     getattr(node) {
       const st = statOf(node);
@@ -351,7 +367,7 @@ function createNodeOps(h: LiveHelpers): LiveNodeOps {
       if (attr.mode !== undefined && attr.mode !== null) {
         const perm = attr.mode & PERM_MASK;
         if (perm !== (node.mode & PERM_MASK)) {
-          call(() => bridgeOf(node).chmod(path, perm));
+          metadataCall(() => bridgeOf(node).chmod(path, perm));
           node.mode = (node.mode & ~PERM_MASK) | perm;
         }
       }
@@ -362,7 +378,7 @@ function createNodeOps(h: LiveHelpers): LiveNodeOps {
       if (mtime !== undefined) {
         const atime = toMs(attr.atime) ?? mtime;
         flushNode(node);
-        call(() => bridgeOf(node).utimes(path, atime, mtime));
+        metadataCall(() => bridgeOf(node).utimes(path, atime, mtime));
       }
       node.live.stat = undefined;
     },

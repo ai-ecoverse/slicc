@@ -490,6 +490,12 @@ async function finishJsRealm(opts: {
   timers.install();
   bodyReads.install();
   const restoreProcess = installGlobalProcess(globalThis, opts.proc.processShim);
+  const { watchUnhandledRejections } = await import('./realm-unhandled-rejections.js');
+  const rejections = watchUnhandledRejections(globalThis, {
+    writeStderr: opts.writeStderr,
+    didExit: opts.proc.getDidCallProcessExit,
+    recordExit: opts.proc.recordExit,
+  });
   try {
     const exitCode = await runEntryThenDrain({
       entryCode: opts.entryCode,
@@ -511,6 +517,7 @@ async function finishJsRealm(opts: {
       proc: opts.proc,
       timers,
       bodyReads,
+      fatal: rejections.fatal,
     });
     delete g.__slicc_compileWasm;
     delete g.__slicc_mountVfs;
@@ -522,6 +529,7 @@ async function finishJsRealm(opts: {
       exitCode,
     } satisfies RealmDoneMsg);
   } finally {
+    rejections.dispose();
     timers.clearPending();
     timers.restore();
     bodyReads.restore();
@@ -545,6 +553,8 @@ async function runEntryThenDrain(opts: {
   proc: ReturnType<typeof createProcessShim>;
   timers: TimerHandleTracker;
   bodyReads: BodyReadHandleTracker;
+  /** Resolves when an unhandled rejection ended the program (exit 1). */
+  fatal: Promise<void>;
 }): Promise<number> {
   const exitCode = await runUserCode(
     opts.entryCode,
@@ -557,7 +567,7 @@ async function runEntryThenDrain(opts: {
     opts.timers.clearPending();
     return opts.proc.getExitCode();
   }
-  await drainEventLoop(opts.rpc, opts.timers, opts.bodyReads, opts.proc);
+  await drainEventLoop(opts.rpc, opts.timers, opts.bodyReads, opts.proc, opts.fatal);
   if (opts.proc.getDidCallProcessExit()) {
     opts.timers.clearPending();
   }
@@ -610,6 +620,9 @@ async function flushSyncFsCache(
   }
 }
 
+/** Macrotask hops an idle drain waits for a trailing unhandled rejection. */
+const IDLE_SETTLE_HOPS = 2;
+
 /**
  * Keep the realm alive the way Node keeps a process alive: while there are
  * ref'd handles. I/O is `rpc.pendingCount` (fs/exec/fetch plus active
@@ -628,26 +641,37 @@ async function flushSyncFsCache(
  * (the `then` after `await fetch()`, including `await res.json()`) runs
  * before we re-check handles. Without that hop, drain can post `realm-done`
  * in the same turn the fetch RPC resolved and kill the rest of an
- * unawaited IIFE (#2862).
+ * unawaited IIFE (#2862). An unhandled rejection ends the drain like
+ * `process.exit(1)` (see realm-unhandled-rejections.ts).
  */
 async function drainEventLoop(
   rpc: RealmRpcClient,
   timers: TimerHandleTracker,
   bodyReads: BodyReadHandleTracker,
-  proc: ReturnType<typeof createProcessShim>
+  proc: ReturnType<typeof createProcessShim>,
+  fatal: Promise<void>
 ): Promise<void> {
   // One macrotask hop so microtasks queued in the user body (and a single
   // setTimeout(0) already registered) run before we inspect handles.
   await timers.tick();
-  while (
-    !proc.getDidCallProcessExit() &&
-    (rpc.pendingCount > 0 || timers.pendingCount > 0 || bodyReads.pendingCount > 0)
-  ) {
+  let idleHops = 0;
+  while (!proc.getDidCallProcessExit() && idleHops < IDLE_SETTLE_HOPS) {
     const waits: Promise<void>[] = [];
     if (rpc.pendingCount > 0) waits.push(rpc.waitForProgress());
     if (timers.pendingCount > 0) waits.push(timers.waitForProgress());
     if (bodyReads.pendingCount > 0) waits.push(bodyReads.waitForProgress());
-    if (waits.length === 0) break;
+    if (waits.length === 0) {
+      // Idle. Chrome reports an unhandled rejection from the last microtasks
+      // in a task of its own that can trail one setTimeout(0) hop, so settle
+      // a couple of hops before calling the program done.
+      idleHops += 1;
+      await timers.tick();
+      continue;
+    }
+    idleHops = 0;
+    // An unhandled rejection ends the program the way process.exit(1) does,
+    // even while a timer or request is still pending.
+    waits.push(fatal);
     await Promise.race(waits);
     if (!proc.getDidCallProcessExit()) await timers.tick();
   }
