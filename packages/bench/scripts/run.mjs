@@ -14,6 +14,7 @@ import {
 } from './format.mjs';
 import { reportHtml } from './html.mjs';
 import { DEFAULT_JUDGE_MODEL, judgeRun } from './judge.mjs';
+import { createJournal, createRecycler, currentLeader } from './lifecycle.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
   parseSkillsCondition,
@@ -37,6 +38,8 @@ export function parseCli(argv) {
       tasks: { type: 'string' },
       limit: { type: 'string' },
       timeout: { type: 'string', default: '900' },
+      'fresh-leader-every': { type: 'string', default: '0' },
+      'leader-down-limit': { type: 'string', default: '2' },
       'judge-model': { type: 'string', default: DEFAULT_JUDGE_MODEL },
       'no-judge': { type: 'boolean', default: false },
       out: { type: 'string', default: 'bench-out' },
@@ -58,6 +61,12 @@ export function parseCli(argv) {
     throw new Error('--repeats must be a positive integer');
   if (!Number.isInteger(timeout) || timeout < 30)
     throw new Error('--timeout must be at least 30 seconds');
+  const freshLeaderEvery = Number.parseInt(values['fresh-leader-every'], 10);
+  const leaderDownLimit = Number.parseInt(values['leader-down-limit'], 10);
+  if (!Number.isInteger(freshLeaderEvery) || freshLeaderEvery < 0)
+    throw new Error('--fresh-leader-every must be 0 (never) or a positive number of tasks');
+  if (!Number.isInteger(leaderDownLimit) || leaderDownLimit < 1)
+    throw new Error('--leader-down-limit must be a positive integer');
   return {
     help: values.help,
     sets: values.set ?? [],
@@ -72,6 +81,8 @@ export function parseCli(argv) {
     out: resolve(values.out),
     harness: values.harness,
     plan: values.plan,
+    freshLeaderEvery,
+    leaderDownLimit,
   };
 }
 
@@ -244,6 +255,7 @@ async function runOne(r, ctx) {
     config,
     run_id: runId,
     digests: taskDigests(r.task),
+    leader: leaderStamp(ctx.lane),
   };
   let result;
   try {
@@ -258,6 +270,7 @@ async function runOne(r, ctx) {
     });
   } catch (err) {
     failInto(record, 'run', err);
+    if (err?.leaderDown) record.leader_down = true;
     return { record, result: null };
   }
   record.metrics = traceFromResult(result).metrics;
@@ -303,7 +316,7 @@ function describeRun(i, total, r, record) {
   const head = `[${i + 1}/${total}] ${r.task.id} ${r.model} ${r.condition.name} r${r.repeat}:`;
   if (record.error) return `${head} ERROR ${record.error}`;
   const score = record.score == null ? '' : ` ${record.score.toFixed(2)}`;
-  return `${head} ${record.outcome ?? 'ran'}${score} ${record.metrics.duration.toFixed(0)} s $${(record.metrics.cost ?? 0).toFixed(3)}`;
+  return `${head} ${record.outcome ?? 'ran'}${score} ${record.metrics.duration.toFixed(0)} s ${typeof record.metrics.cost === 'number' ? `$${record.metrics.cost.toFixed(3)}` : 'cost unknown'}`;
 }
 
 function writeRun(opts, r, { record, result }) {
@@ -325,10 +338,82 @@ function previous(opts, r) {
   };
 }
 
+export function ageSeconds(startedAt, now = Date.now()) {
+  const t = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt ?? '');
+  return Number.isFinite(t) ? Math.round((now - t) / 1000) : null;
+}
+
+function leaderStamp(lane) {
+  return {
+    generation: lane.generation,
+    age_s: ageSeconds(lane.startedAt),
+    task: lane.tasks + 1,
+  };
+}
+
+async function restartLeader(ctx, reason, log) {
+  const { lane, journal } = ctx;
+  const t0 = Date.now();
+  journal.event('leader-restart', { reason, generation: lane.generation, tasks: lane.tasks });
+  log(`restarting the leader (${reason})`);
+  const next = await ctx.recycle();
+  ctx.leader.setUrl(next.url);
+  Object.assign(lane, {
+    generation: lane.generation + 1,
+    startedAt: next.startedAt ?? new Date().toISOString(),
+    tasks: 0,
+    staged: null,
+  });
+  journal.event('leader-ready', {
+    generation: lane.generation,
+    slicc_version: next.sliccVersion,
+    boot_ms: Date.now() - t0,
+  });
+}
+
+async function prepareLeader(r, ctx, log) {
+  const { lane, opts } = ctx;
+  if (opts.freshLeaderEvery && lane.tasks >= opts.freshLeaderEvery)
+    await restartLeader(ctx, `fresh leader every ${opts.freshLeaderEvery} tasks`, log);
+  if (lane.staged !== r.condition.name) {
+    const count = await stageSkills(ctx.leader, r.condition);
+    lane.staged = r.condition.name;
+    log(`skills ${lane.staged}: ${count} entries in /workspace/skills`);
+  }
+}
+
+async function runFresh(r, ctx, log) {
+  await prepareLeader(r, ctx, log);
+  let outcome = await runOne(r, ctx);
+  if (outcome.record.leader_down && ctx.recycle) {
+    ctx.journal.event('leader-down', { task_id: r.task.id, leader: outcome.record.leader });
+    await restartLeader(ctx, 'leader unreachable', log);
+    await prepareLeader(r, ctx, log);
+    outcome = await runOne(r, ctx);
+  }
+  ctx.lane.tasks += 1;
+  return outcome;
+}
+
+function taskEvent(r, { record, result }) {
+  return {
+    task_id: r.task.id,
+    model: r.model,
+    skills: r.condition.name,
+    outcome: record.error ? 'error' : (record.outcome ?? 'ran'),
+    error: record.error,
+    leader_down: record.leader_down,
+    leader: record.leader,
+    phases: result?.phases,
+    health: result?.health,
+  };
+}
+
 async function runAll(runs, ctx, log) {
-  const { leader, opts } = ctx;
-  let staged = null;
+  const { opts, lane, journal } = ctx;
   let errors = 0;
+  let downStreak = 0;
+  let stopped = false;
   try {
     for (const [i, r] of runs.entries()) {
       const before = previous(opts, r);
@@ -350,23 +435,33 @@ async function runAll(runs, ctx, log) {
         writeRun(opts, r, rejudged);
         continue;
       }
-      if (staged !== r.condition.name) {
-        const count = await stageSkills(leader, r.condition);
-        staged = r.condition.name;
-        log(`skills ${staged}: ${count} entries in /workspace/skills`);
+      const outcome = await runFresh(r, ctx, log);
+      if (outcome.record.error) errors += 1;
+      log(describeRun(i, runs.length, r, outcome.record));
+      writeRun(opts, r, outcome);
+      journal.event('task', taskEvent(r, outcome));
+      downStreak = outcome.record.leader_down ? downStreak + 1 : 0;
+      if (downStreak >= opts.leaderDownLimit) {
+        stopped = true;
+        journal.event('stopped', { reason: 'leader unreachable', runs_left: runs.length - i - 1 });
+        log(
+          `stopping: the leader was unreachable for ${downStreak} run(s) in a row; ${runs.length - i - 1} run(s) left for a resume`
+        );
+        break;
       }
-      const outcomeOfRun = await runOne(r, ctx);
-      if (outcomeOfRun.record.error) errors += 1;
-      log(describeRun(i, runs.length, r, outcomeOfRun.record));
-      writeRun(opts, r, outcomeOfRun);
     }
+  } catch (err) {
+    stopped = true;
+    errors += 1;
+    journal.event('stopped', { reason: String(err?.message ?? err).slice(0, 400) });
+    log(`stopping: ${err.message}`);
   } finally {
-    if (staged)
-      await restoreSkills(leader).catch((err) =>
+    if (lane.staged)
+      await restoreSkills(ctx.leader).catch((err) =>
         log(`could not restore /workspace/skills: ${err.message}`)
       );
   }
-  return errors;
+  return { errors, stopped };
 }
 
 function writeOutputs(opts, runStart) {
@@ -400,20 +495,40 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       );
     return 0;
   }
-  const leader = deps.leader ?? createLeader({ url: process.env.SLICC_JOIN_URL });
+  const scriptsDir = process.env.BENCH_LEADER_SCRIPTS;
+  const recycle = deps.recycle ?? (scriptsDir ? createRecycler({ scriptsDir }) : null);
+  if (opts.freshLeaderEvery && !recycle)
+    throw new Error(
+      '--fresh-leader-every needs a leader it can restart (BENCH_LEADER_SCRIPTS, set in CI)'
+    );
+  const runStart = new Date().toISOString();
+  const first = deps.firstLeader ?? (scriptsDir ? currentLeader() : null);
+  let leader;
+  const journal = createJournal(opts.out, {
+    urls: () => [leader?.url],
+    leaderLog: process.env.BENCH_LEADER_LOG || null,
+  });
+  leader = deps.leader ?? createLeader({ url: process.env.SLICC_JOIN_URL, onCall: journal.call });
   const judge = makeJudge(opts, deps);
   const spec = judge ? (deps.spec ?? (await loadFindingsSpec())) : null;
-  const runStart = new Date().toISOString();
-  const errors = await runAll(
+  const lane = { generation: 0, startedAt: first?.startedAt ?? runStart, tasks: 0, staged: null };
+  journal.event('start', {
+    runs: runs.length,
+    fresh_leader_every: opts.freshLeaderEvery,
+    leader_started_at: lane.startedAt,
+    slicc_version: first?.sliccVersion ?? null,
+  });
+  const { errors, stopped } = await runAll(
     runs,
-    { leader, opts, judge, spec, capture: deps.capture, now: deps.now },
+    { leader, opts, judge, spec, capture: deps.capture, now: deps.now, recycle, lane, journal },
     log
   );
+  journal.event('end', { errors, stopped, generations: lane.generation + 1 });
   console.log(writeOutputs(opts, runStart));
 
   if (errors)
     log(`${errors} run(s) errored before the judge; rerun with the same --out to retry them`);
-  return errors ? 1 : 0;
+  return errors || stopped ? 1 : 0;
 }
 
 const isMain =

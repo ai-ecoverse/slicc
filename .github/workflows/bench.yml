@@ -37,6 +37,9 @@ on:
         description: 'Publish the results to the Hugging Face dataset ai-ecoverse/slicc-bench'
         type: boolean
         default: true
+      fresh-leader-every:
+        description: 'Restart the leader every N tasks (0: one leader for the whole job)'
+        default: '5'
   pull_request:
     paths:
       - 'packages/bench/**'
@@ -65,6 +68,7 @@ jobs:
       BENCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '' }}
       BENCH_TIMEOUT: ${{ github.event_name == 'workflow_dispatch' && inputs.timeout || '600' }}
       BENCH_JUDGE_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.judge-model || 'global.openai.gpt-5.6-luna' }}
+      BENCH_FRESH_LEADER_EVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.fresh-leader-every || '1' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -112,15 +116,44 @@ jobs:
           SLICC_VERSION: ${{ steps.start.outputs.slicc-version }}
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           BEDROCK_REGION: ${{ vars.RUM_AWS_REGION || 'us-west-2' }}
+          BENCH_LEADER_SCRIPTS: packages/github-workflow/scripts
+          BENCH_LEADER_LOG: ${{ steps.start.outputs.log-path }}
+          INPUT_SLICC_VERSION: ${{ steps.start.outputs.slicc-version }}
+          INPUT_DURATION: ${{ github.event_name == 'workflow_dispatch' && inputs.duration || '40m' }}
+          INPUT_MOUNTS: ${{ steps.mounts.outputs.mounts }}
+          INPUT_PROVIDER: bedrock-camp
+          INPUT_PROVIDER_API_KEY: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          INPUT_PROVIDER_BASE_URL: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
+          INPUT_MODEL: bedrock-camp:global.anthropic.claude-sonnet-5
         run: |
           set -euo pipefail
           args=(--models "$BENCH_MODELS" --skills "$BENCH_SKILLS" --repeats "$BENCH_REPEATS"
                 --timeout "$BENCH_TIMEOUT" --judge-model "$BENCH_JUDGE_MODEL"
+                --fresh-leader-every "$BENCH_FRESH_LEADER_EVERY"
                 --harness "${SLICC_VERSION:-unknown}" --out "$RUNNER_TEMP/bench-out")
           for set in $BENCH_SETS; do args+=(--set "$set"); done
           if [ -n "$BENCH_TASKS" ]; then args+=(--tasks "$BENCH_TASKS"); fi
           if [ -n "$BENCH_LIMIT" ]; then args+=(--limit "$BENCH_LIMIT"); fi
           node packages/bench/scripts/run.mjs "${args[@]}"
+
+      - name: Collect leader diagnostics
+        if: always()
+        env:
+          LEADER_LOG: ${{ steps.start.outputs.log-path }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/bench-out"
+          mkdir -p "$out"
+          if [ ! -f "$LEADER_LOG" ]; then echo "no leader log"; exit 0; fi
+          grep -v '\[cdp-proxy\]' "$LEADER_LOG" \
+            | grep -iE 'bench-event|tray|signal|follower|controller|bootstrap|webrtc|ice|turn|dtls|sctp|data ?channel|peer|reconnect|disconnect|websocket|heartbeat|start-leader|stop-leader' \
+            | sed -E 's#/(join|controller|webhook)/[^ /"?]+#/\1/<token>#g' \
+            | cut -c1-400 > "$out/leader-infra.log" || true
+          {
+            echo "leader log lines: $(wc -l < "$LEADER_LOG")"
+            echo "cdp-proxy lines: $(grep -c '\[cdp-proxy\]' "$LEADER_LOG" || true)"
+            echo "infra lines kept: $(wc -l < "$out/leader-infra.log")"
+          } | tee "$out/leader-log-stats.txt"
 
       - name: Upload the report
         if: always()

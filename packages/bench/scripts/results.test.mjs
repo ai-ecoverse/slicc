@@ -172,8 +172,20 @@ describe('pairedDelta', () => {
         S('a', 's'),
         S('b', 's'),
         'duration'
-      ).delta
-    ).toBe(30);
+      )
+    ).toEqual({ n: 0, delta: null });
+  });
+
+  it('leaves unmeasured cost out of means, totals and pairs, and counts it', () => {
+    const records = [
+      rec('t1', 'a', 's', 1, { metrics: { duration: 10, cost: 0.2 } }),
+      rec('t2', 'a', 's', 1, { metrics: { duration: 30, cost: null } }),
+      rec('t1', 'b', 's', 1, { metrics: { duration: 20, cost: null } }),
+    ];
+    const [a] = summarize(records).filter((s) => s.body[0].model === 'a');
+    expect(a.body[0]).toMatchObject({ total_cost: 0.2, cost_unknown: 1, total_duration: 40 });
+    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'cost')).toEqual({ n: 0, delta: null });
+    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'duration')).toEqual({ n: 1, delta: 10 });
   });
 });
 

@@ -121,8 +121,10 @@ ${body}
 const PALETTE = ['#2f6fdf', '#d9480f', '#2b8a3e', '#9c36b5', '#c2255c', '#0b7285', '#e67700'];
 
 function scatter(records, configs) {
-  const runs = records.filter((r) => !r.error || r.error_stage === 'judge');
-  if (!runs.length) return '<p class="muted">No finished runs.</p>';
+  const measured = (r) =>
+    typeof r.metrics?.duration === 'number' && typeof r.metrics?.cost === 'number';
+  const runs = records.filter((r) => (!r.error || r.error_stage === 'judge') && measured(r));
+  if (!runs.length) return '<p class="muted">No finished runs with a measured time and cost.</p>';
   const W = 640;
   const H = 320;
   const P = 44;

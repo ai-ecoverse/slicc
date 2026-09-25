@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { taskDigests, withDigests } from './format.mjs';
 import {
+  ageSeconds,
   DEFAULT_MODELS,
   loadSet,
   main,
@@ -76,6 +77,16 @@ describe('parseCli', () => {
     expect(() => parseCli(['--set', 'x', '--repeats', '0'])).toThrow(/--repeats/);
     expect(() => parseCli(['--set', 'x', '--timeout', '5'])).toThrow(/--timeout/);
     expect(() => parseCli(['--set', 'x', '--executor', 'cdp'])).toThrow(/executor/);
+    expect(() => parseCli(['--set', 'x', '--fresh-leader-every', '-1'])).toThrow(
+      /--fresh-leader-every/
+    );
+    expect(() => parseCli(['--set', 'x', '--leader-down-limit', '0'])).toThrow(
+      /--leader-down-limit/
+    );
+    expect(parseCli(['--set', 'x', '--fresh-leader-every', '5'])).toMatchObject({
+      freshLeaderEvery: 5,
+      leaderDownLimit: 2,
+    });
     expect(parseCli(['--help']).help).toBe(true);
   });
 });
@@ -189,14 +200,24 @@ const TRANSCRIPT = {
   ],
 };
 
-function leader({ failOn } = {}) {
+function leader({ failOn, down = () => false } = {}) {
   const commands = [];
+  const urls = [];
   let clock = 0;
   let spent = 0;
-  const reply = (command, stdout = '') =>
-    failOn?.test(command)
+  const reply = (command, stdout = '') => {
+    if (down(command))
+      return {
+        stdout: '',
+        stderr: 'tray connect timed out after 30s',
+        status: 1,
+        timedOut: false,
+        leaderDown: true,
+      };
+    return failOn?.test(command)
       ? { stdout: '', stderr: 'leader went away', status: 1, timedOut: false }
       : { stdout, stderr: '', status: 0, timedOut: false };
+  };
   const cli = vi.fn(async (args) => {
     const command = `slicc ${args.join(' ')}`;
     commands.push(command);
@@ -221,7 +242,11 @@ function leader({ failOn } = {}) {
     if (command.startsWith('session export')) return reply(command, JSON.stringify(TRANSCRIPT));
     return reply(command);
   });
-  return { deps: { leader: { cli, exec }, now: () => clock }, commands };
+  const setUrl = (u) => {
+    urls.push(u);
+    commands.push(`(leader ${u})`);
+  };
+  return { deps: { leader: { cli, exec, setUrl }, now: () => clock }, commands, urls };
 }
 
 const PROMPT = 'slicc prompt -';
@@ -298,7 +323,7 @@ describe('main', () => {
     ].map((c, i, all) => commands.indexOf(c, i ? commands.indexOf(all[i - 1]) + 1 : 0));
     expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]))).toBe(true);
     expect(commands.findIndex((c) => c.startsWith('session export'))).toBeGreaterThan(order[4]);
-    expect(commands.filter((c) => c.includes('| wc -l'))).toHaveLength(2);
+    expect(commands.filter((c) => c.includes('ls /workspace/skills | wc -l'))).toHaveLength(2);
     expect(commands.at(-1)).toContain('.bench-skills-builtin/. /workspace/skills/');
     const record = JSON.parse(
       readFileSync(recordPath(outDir, 'Own', 'none', 'claude-sonnet-5', 'own-2', 1), 'utf8')
@@ -638,5 +663,189 @@ describe('re-judging on resume', () => {
     expect(record).toMatchObject({ score: 1, outcome: 'pass' });
     expect(record.error_stage).toBeUndefined();
     quiet.mockRestore();
+  });
+});
+
+describe('leader lifecycle', () => {
+  it('reads a leader age from ISO text or epoch ms', () => {
+    expect(ageSeconds('1970-01-01T00:01:00.000Z', 90_000)).toBe(30);
+    expect(ageSeconds(60_000, 90_000)).toBe(30);
+    expect(ageSeconds('not a date', 90_000)).toBeNull();
+    expect(ageSeconds(undefined, 90_000)).toBeNull();
+  });
+
+  const quiet = () => vi.spyOn(console, 'log').mockImplementation(() => {});
+  const events = (out) =>
+    readFileSync(join(out, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+  function twoTasks(dir) {
+    const path = join(dir, 'set.json');
+    writeFileSync(
+      path,
+      JSON.stringify({ benchmark: 'Own', tasks: [TASK, withDigests({ ...TASK, id: 'own-2' })] })
+    );
+    return path;
+  }
+  const recycler = (fn = () => {}) => {
+    let n = 0;
+    return vi.fn(async () => {
+      n += 1;
+      fn(n);
+      return {
+        url: `https://w/join/new-${n}`,
+        startedAt: new Date().toISOString(),
+        sliccVersion: '9.9',
+      };
+    });
+  };
+
+  it('needs a restartable leader for --fresh-leader-every', async () => {
+    const dir = tmp();
+    await expect(
+      main(
+        [
+          '--set',
+          twoTasks(dir),
+          '--models',
+          'm',
+          '--no-judge',
+          '--fresh-leader-every',
+          '1',
+          '--out',
+          join(dir, 'o'),
+        ],
+        {
+          ...leader().deps,
+          log: () => {},
+        }
+      )
+    ).rejects.toThrow(/needs a leader it can restart/);
+  });
+
+  it('boots a fresh leader every N tasks and stages skills on it again', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const fake = leader();
+    const recycle = recycler();
+    const code = await main(
+      [
+        '--set',
+        twoTasks(dir),
+        '--models',
+        'm',
+        '--no-judge',
+        '--fresh-leader-every',
+        '1',
+        '--out',
+        out,
+      ],
+      {
+        ...fake.deps,
+        recycle,
+        firstLeader: { startedAt: '2026-09-24T17:00:00.000Z' },
+        log: () => {},
+      }
+    );
+    expect(code).toBe(0);
+    expect(recycle).toHaveBeenCalledTimes(1);
+    expect(fake.urls).toEqual(['https://w/join/new-1']);
+    expect(fake.commands.filter((c) => c.includes('ls /workspace/skills | wc -l'))).toHaveLength(2);
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    const r2 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-2', 1), 'utf8'));
+    expect(r1.leader).toMatchObject({ generation: 0, task: 1 });
+    expect(r1.leader.age_s).toBeGreaterThan(0);
+    expect(r2.leader).toMatchObject({ generation: 1, task: 1 });
+    const types = events(out).map((e) => e.type);
+    expect(types).toEqual(['start', 'task', 'leader-restart', 'leader-ready', 'task', 'end']);
+    expect(events(out)[0]).toMatchObject({
+      leader_started_at: '2026-09-24T17:00:00.000Z',
+      fresh_leader_every: 1,
+    });
+    expect(events(out)[3]).toMatchObject({ generation: 1, slicc_version: '9.9' });
+    expect(events(out)[1].health.before.ok).toBe(true);
+    q.mockRestore();
+  });
+
+  it('restarts an unreachable leader and retries the run once', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    let healthy = false;
+    const fake = leader({ down: (c) => !healthy && c.startsWith('rm -rf /tmp/bench/') });
+    const recycle = recycler(() => {
+      healthy = true;
+    });
+    const log = vi.fn();
+    const code = await main(['--set', twoTasks(dir), '--models', 'm', '--no-judge', '--out', out], {
+      ...fake.deps,
+      recycle,
+      log,
+    });
+    expect(code).toBe(0);
+    expect(recycle).toHaveBeenCalledTimes(1);
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    expect(r1.error).toBeUndefined();
+    expect(r1.leader.generation).toBe(1);
+    expect(events(out).map((e) => e.type)).toContain('leader-down');
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /restarting the leader \(leader unreachable\)/
+    );
+    q.mockRestore();
+  });
+
+  it('stops after the leader stays unreachable, leaving the rest for a resume', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const fake = leader({ down: (c) => c.startsWith('rm -rf /tmp/bench/') });
+    const log = vi.fn();
+    const code = await main(
+      ['--set', twoTasks(dir), '--models', 'a,b', '--no-judge', '--out', out],
+      { ...fake.deps, log }
+    );
+    expect(code).toBe(1);
+    const r = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'a', 'own-1', 1), 'utf8'));
+    expect(r).toMatchObject({ leader_down: true, error_stage: 'run' });
+    expect(r.error).toMatch(/tray connect timed out/);
+    expect(existsSync(recordPath(out, 'Own', 'builtin', 'a', 'own-2', 1))).toBe(false);
+    expect(events(out).find((e) => e.type === 'stopped')).toMatchObject({
+      reason: 'leader unreachable',
+      runs_left: 2,
+    });
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /stopping: the leader was unreachable for 2 run\(s\) in a row; 2 run\(s\) left/
+    );
+    q.mockRestore();
+  });
+
+  it('stops when a fresh leader will not come up', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const recycle = vi.fn(async () => {
+      throw new Error('start-leader exited 1: chrome did not start');
+    });
+    const log = vi.fn();
+    const code = await main(
+      [
+        '--set',
+        twoTasks(dir),
+        '--models',
+        'm',
+        '--no-judge',
+        '--fresh-leader-every',
+        '1',
+        '--out',
+        out,
+      ],
+      { ...leader().deps, recycle, log }
+    );
+    expect(code).toBe(1);
+    expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-2', 1))).toBe(false);
+    expect(events(out).find((e) => e.type === 'stopped').reason).toMatch(/chrome did not start/);
+    q.mockRestore();
   });
 });

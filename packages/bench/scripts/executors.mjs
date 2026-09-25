@@ -9,10 +9,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const KILL_GRACE_MS = 10_000;
 
-export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false } = {}) {
+export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
+
+export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cli, args, {
-      env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1' },
+      env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1', ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const out = [];
@@ -48,8 +50,19 @@ export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false } = 
       if (timedOut) finish(code, signal);
     });
     child.on('close', finish);
+
+    child.stdin.on('error', () => {});
     child.stdin.end(stdin ?? '');
   });
+}
+
+export function callLabel(args) {
+  if (args[0] !== 'exec') return args.join(' ').slice(0, 80);
+  return `exec ${
+    String(args[1] ?? '')
+      .trim()
+      .split(/\s+/)[0]
+  }`;
 }
 
 export function createLeader({
@@ -57,19 +70,51 @@ export function createLeader({
   cli = process.env.SLICC_CLI || 'slicc',
   run = runProcess,
   retryDelayMs = CONNECT_RETRY_DELAY_MS,
+  defaultTimeoutMs = DEFAULT_CALL_TIMEOUT_MS,
+  onCall = () => {},
+  now = Date.now,
 } = {}) {
   if (!url) throw new Error('driving the leader needs its join URL (SLICC_JOIN_URL)');
+  let joinUrl = url;
   async function call(args, opts = {}) {
+    const options = { ...opts, timeoutMs: opts.timeoutMs ?? defaultTimeoutMs };
+    const diagnostics = [];
+    const started = now();
     for (let attempt = 1; ; attempt += 1) {
-      const result = await run(cli, [url, ...args], opts);
-      if (isConnectFailure(result.status, result.stderr) && attempt < CONNECT_RETRIES) {
+      const retrying = attempt > 1;
+      const result = await run(cli, [joinUrl, ...args], {
+        ...options,
+        ...(retrying ? { env: { ...options.env, SLICC_DEBUG: '1' } } : {}),
+      });
+      const dialFailed = isConnectFailure(result.status, result.stderr);
+      if (dialFailed && retrying) diagnostics.push(result.stderr);
+      if (dialFailed && attempt < CONNECT_RETRIES) {
         await sleep(retryDelayMs);
         continue;
       }
-      return result;
+      const out = { ...result, leaderDown: dialFailed };
+      onCall({
+        at: new Date(started).toISOString(),
+        call: callLabel(args),
+        ms: now() - started,
+        status: result.status,
+        timedOut: Boolean(result.timedOut),
+        attempts: attempt,
+        leaderDown: dialFailed,
+        ...(result.status !== 0 ? { stderr: String(result.stderr).slice(-400) } : {}),
+        ...(diagnostics.length ? { diagnostics } : {}),
+      });
+      return out;
     }
   }
   return {
+    get url() {
+      return joinUrl;
+    },
+    setUrl(next) {
+      if (!next) throw new Error('a recycled leader needs a join URL');
+      joinUrl = next;
+    },
     cli: call,
     exec: (command, opts) => call(['exec', command], opts),
   };

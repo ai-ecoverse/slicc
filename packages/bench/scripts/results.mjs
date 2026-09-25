@@ -16,6 +16,10 @@ const judged = (r) => !r.error && typeof r.score === 'number' && !Number.isNaN(r
 export function judgeModels(records) {
   return [...new Set(records.filter(judged).map((r) => r.judge?.model ?? 'unknown'))].sort();
 }
+
+const known = (r, field) => (typeof r.metrics?.[field] === 'number' ? r.metrics[field] : null);
+const knownValues = (rs, field) => rs.map((r) => known(r, field)).filter((v) => v !== null);
+
 const round = (x, d = 4) => (x == null ? null : Math.round(x * 10 ** d) / 10 ** d);
 
 export function summarize(records, { runStart } = {}) {
@@ -43,7 +47,8 @@ export function summarize(records, { runStart } = {}) {
             done.reduce((a, r) => a + (r.metrics?.duration ?? 0), 0),
             3
           ),
-          total_cost: round(done.reduce((a, r) => a + (r.metrics?.cost ?? 0), 0)),
+          total_cost: round(knownValues(done, 'cost').reduce((a, b) => a + b, 0)),
+          cost_unknown: done.length - knownValues(done, 'cost').length,
           benchmark: rs[0].benchmark,
           harness: rs[0].config.harness,
           model: rs[0].config.model,
@@ -70,7 +75,7 @@ export function summarize(records, { runStart } = {}) {
 
 export function pairedDelta(records, a, b, field = 'score') {
   const keep = field === 'score' ? judged : ran;
-  const value = (r) => (field === 'score' ? r.score : (r.metrics?.[field] ?? 0));
+  const value = (r) => (field === 'score' ? r.score : known(r, field));
   const index = (cfg) => {
     const m = new Map();
     for (const r of records) {
@@ -83,7 +88,7 @@ export function pairedDelta(records, a, b, field = 'score') {
   const diffs = [];
   for (const [k, ra] of index(a)) {
     const rb = ib.get(k);
-    if (rb) diffs.push(value(rb) - value(ra));
+    if (rb && value(ra) !== null && value(rb) !== null) diffs.push(value(rb) - value(ra));
   }
   return {
     n: diffs.length,
@@ -106,8 +111,8 @@ function configStats(c, cs) {
     not_judged: done.length - scored.length,
     errors: cs.length - done.length,
     mean_score: round(mean(scored.map((r) => r.score))),
-    mean_duration: round(mean(done.map((r) => r.metrics?.duration ?? 0)), 3),
-    mean_cost: round(mean(done.map((r) => r.metrics?.cost ?? 0))),
+    mean_duration: round(mean(knownValues(done, 'duration')), 3),
+    mean_cost: round(mean(knownValues(done, 'cost'))),
   };
 }
 

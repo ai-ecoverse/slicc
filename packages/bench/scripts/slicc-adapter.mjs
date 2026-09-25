@@ -5,8 +5,9 @@ export const SKILLS_DIR = '/workspace/skills';
 export const SKILLS_STASH = '/workspace/.bench-skills-builtin';
 export const EXTRA_SKILLS_ROOT = '/workspace/bench-skills';
 export const MAX_SCREENSHOTS = 10;
-const POLL_MS = 5000;
-const RECAPTURE_MS = 15000;
+
+const POLL_MS = 10_000;
+const RECAPTURE_MS = 30_000;
 const STEP_CHARS = 4000;
 
 export const FINAL_INSTRUCTION = [
@@ -25,7 +26,11 @@ export function quote(word) {
 }
 
 function failure(what, r) {
-  return new Error(`${what} exited ${r.status}: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
+  const err = new Error(
+    `${what} exited ${r.status}: ${(r.stderr || r.stdout).trim().slice(0, 400)}`
+  );
+  err.leaderDown = Boolean(r.leaderDown);
+  return err;
 }
 
 async function must(leader, command, options) {
@@ -99,13 +104,14 @@ async function closeTabs(leader) {
 }
 
 export function costTotals(costJson) {
-  const totals = { cost: 0, tokens: 0, turns: 0 };
   let data;
   try {
     data = JSON.parse(costJson);
   } catch {
-    return totals;
+    return null;
   }
+  if (!data || typeof data !== 'object') return null;
+  const totals = { cost: 0, tokens: 0, turns: 0 };
   for (const s of data.scoops ?? []) {
     totals.cost += s.usage?.cost?.total || 0;
     totals.tokens += s.usage?.totalTokens || 0;
@@ -116,7 +122,33 @@ export function costTotals(costJson) {
 
 async function spend(leader) {
   const r = await leader.exec('cost --json --all');
-  return costTotals(r.status === 0 ? r.stdout : '');
+  return r.status === 0 ? costTotals(r.stdout) : null;
+}
+
+export function spendDelta(before, after) {
+  const unknown = { costUsd: null, tokens: null, turns: null };
+  if (!before || !after || after.cost < before.cost - 1e-9) return unknown;
+  return {
+    costUsd: after.cost - before.cost,
+    tokens: after.tokens - before.tokens,
+    turns: after.turns - before.turns,
+  };
+}
+
+export const HEALTH_COMMAND = 'uptime; meminfo 2>&1 | head -4; echo "processes: $(ps | wc -l)"';
+
+export async function leaderHealth(leader, now = Date.now) {
+  const started = now();
+  const r = await leader.exec(HEALTH_COMMAND, { timeoutMs: 60_000 });
+  return {
+    at: new Date(started).toISOString(),
+    ok: r.status === 0,
+    ms: now() - started,
+    leaderDown: Boolean(r.leaderDown),
+    text: String(r.status === 0 ? r.stdout : r.stderr)
+      .trim()
+      .slice(0, 600),
+  };
 }
 
 export function startCapture(
@@ -253,6 +285,7 @@ export function traceFromResult(result) {
       tabs: result.tabs ?? [],
       model: result.modelId ?? null,
       modelsUsed: t.models,
+      ...(result.phases ? { phases: result.phases } : {}),
     },
   };
 }
@@ -270,6 +303,8 @@ export async function runTask({
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
   const timeout = task.slicc?.timeoutSeconds ?? timeoutSeconds;
+  const t0 = now();
+  const health = { before: await leaderHealth(leader, now) };
   try {
     await must(leader, `rm -rf ${dir} && mkdir -p ${dir}`);
     for (const f of task.slicc?.files ?? []) {
@@ -291,11 +326,16 @@ export async function runTask({
     });
     const durationMs = now() - started;
     const shots = await shooter.stop();
+    if (reply.leaderDown) throw failure('slicc prompt', reply);
     const openTabs = (await tabs(leader)).map((t) => t.url);
+
+    await closeTabs(leader).catch(() => {});
 
     const after = await spend(leader);
     const transcript = await exportTranscript(leader, dir);
     const { taken, images } = await readShots(leader, shots);
+    health.after = await leaderHealth(leader, now);
+    const done = now();
     return {
       runId,
       model,
@@ -305,13 +345,17 @@ export async function runTask({
       finalText: reply.stdout,
       stderr: reply.stderr.slice(-4000),
       durationMs,
-      costUsd: after.cost - before.cost,
-      tokens: after.tokens - before.tokens,
-      turns: after.turns - before.turns,
+      ...spendDelta(before, after),
       transcript,
       tabs: openTabs,
       screenshots: images,
       screenshotsTaken: taken,
+      phases: {
+        setupMs: started - t0,
+        promptMs: durationMs,
+        collectMs: done - started - durationMs,
+      },
+      health,
     };
   } finally {
     await closeTabs(leader).catch(() => {});
