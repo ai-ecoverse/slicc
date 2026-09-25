@@ -174,8 +174,10 @@ Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`,
 ### Follower prompt silence hint
 
 A leader at tray protocol 10 or later acks each follower prompt with
-`user_message_ack`, sent to the sending follower alone once its kernel took
-(`accepted`) or refused (`rejected`, with an `error`) the prompt. The leader
+`user_message_ack`, sent to the sending follower alone once it handed the
+prompt to its kernel (`accepted`) or could not (`rejected`, with an `error`).
+`accepted` does not mean the agent started: the handoff succeeds at once even
+while the kernel is busy or starved. The leader
 side is `deliverFollowerMessage` in `ui/wc/wc-tray.ts`, which resolves the
 outcome off `workUnits.send()`, and `FollowerDispatch.ackUserMessage`
 (`scoops/tray-leader/follower-dispatch.ts`), which sends it once it settles. A
@@ -186,18 +188,19 @@ An older leader sends no ack. Its main thread still echoes the message at once,
 but whether its agent ever picks it up only shows as later status frames and
 agent events. `ui/wc/follower-prompt-watch.ts` arms on every accepted send
 (`RemoteWorkUnitClient`'s `onSend`, which names the addressed unit) and disarms
-on **any** reaction from the leader: an `accepted` ack, an agent event, a
-biscotto review-state frame, or a status frame. A dropped connection also
-disarms it. A `rejected` ack disarms it too and posts the leader's error as a
+on **any** reaction from the leader: an agent event, a biscotto review-state
+frame, or a status frame. A dropped connection also disarms it. An `accepted`
+ack does NOT disarm it; it counts like an echo. A `rejected` ack disarms it and
+posts the leader's error as a
 local note ("_The leader got that message but could not start it — …_") in the
 addressed unit's thread. After 30 s of total silence it posts one local note to
-the follower's thread, and the note depends on whether the leader echoed the
-prompt:
+the follower's thread, and the note depends on whether the leader echoed or
+`accepted` the prompt:
 
-- **No echo**: the leader tab itself is not responding. It may still be
+- **No echo or ack**: the leader tab itself is not responding. It may still be
   starting, or be a background tab the OS has deprioritized.
-- **Echo, no reaction**: the leader tab got the message, but its agent has not
-  started on it. `FollowerSyncManager` still suppresses the duplicate bubble for
+- **Echo or `accepted`, no reaction**: the leader tab got the message, but its
+  agent has not started on it. `FollowerSyncManager` still suppresses the duplicate bubble for
   its own echo, and reports the echo through `onOwnUserMessageEcho` instead.
 
 In the extension side panel both variants point at **Bring leader to front**.

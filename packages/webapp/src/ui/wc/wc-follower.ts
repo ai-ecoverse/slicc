@@ -421,8 +421,8 @@ export async function bootFollowerFloat(
   /**
    * Says so when a sent prompt gets no reaction at all from the leader, or
    * when the leader refuses it (see `follower-prompt-watch.ts`). Armed by
-   * `workUnits`' send, disarmed by an ack, any agent event, status frame or
-   * dropped connection.
+   * `workUnits`' send, disarmed by a `rejected` ack, any agent event, status
+   * frame or dropped connection. An `accepted` ack only marks it received.
    */
   const promptWatch = new FollowerPromptWatch({
     // Only into the thread of the unit the prompt went to: `addAssistantMessage`

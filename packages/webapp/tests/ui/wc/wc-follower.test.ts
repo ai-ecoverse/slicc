@@ -604,20 +604,26 @@ describe('bootFollowerFloat', () => {
 
     vi.useFakeTimers();
     try {
-      // Accepted: the leader's agent took it, so no note at all.
+      // Accepted, then silence: the kernel has it, its agent never started.
       inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'first' } }));
-      opts.onOwnUserMessageEcho?.('m1', 'cone_1');
       opts.onUserMessageAck?.({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
-      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
+      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(textOf(app)).toContain(received));
+    const afterAck = textOf(app).split(received).length;
 
-      // Echoed, then silence: the leader tab got it, its agent never started.
+    vi.useFakeTimers();
+    try {
+      // Echoed, then silence: the same note again.
       inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'second' } }));
       opts.onOwnUserMessageEcho?.('m2', 'cone_1');
       vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     } finally {
       vi.useRealTimers();
     }
-    await vi.waitFor(() => expect(textOf(app)).toContain(received));
+    await vi.waitFor(() => expect(textOf(app).split(received).length).toBeGreaterThan(afterAck));
     expect(textOf(app)).not.toContain(unreached);
 
     // Rejected: the leader's own error, in this unit's thread.

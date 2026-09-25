@@ -105,12 +105,29 @@ describe('FollowerPromptWatch', () => {
     expect(onSilence).not.toHaveBeenCalled();
   });
 
-  it('an accepted ack disarms it without reporting anything', () => {
+  it('an accepted ack keeps it armed and marks it received', () => {
+    // `accepted` only means the leader handed the prompt to its kernel; a busy
+    // or starved kernel still has to show real activity.
     watch.noteSent('cone_1');
+    watch.noteAck({ scoopJid: 'cone_1', state: 'accepted' });
+    vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(onSilence).toHaveBeenCalledTimes(1);
+    expect(onSilence).toHaveBeenCalledWith('cone_1', true);
+    expect(onRejected).not.toHaveBeenCalled();
+  });
+
+  it('an accepted ack followed by real activity posts nothing', () => {
+    watch.noteSent('cone_1');
+    watch.noteAck({ scoopJid: 'cone_1', state: 'accepted' });
+    watch.noteLeaderActivity('cone_1');
+    vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
+    expect(onSilence).not.toHaveBeenCalled();
+  });
+
+  it('an accepted ack with nothing armed arms nothing', () => {
     watch.noteAck({ scoopJid: 'cone_1', state: 'accepted' });
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
-    expect(onRejected).not.toHaveBeenCalled();
   });
 
   it('an accepted ack for ANOTHER unit leaves this prompt armed', () => {

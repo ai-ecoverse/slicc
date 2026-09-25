@@ -25,8 +25,9 @@ export interface FollowerSyncManagerOptions {
     state: 'pending' | 'approved' | 'rejected' | 'unanswered'
   ) => void;
   /**
-   * A v10+ leader's verdict on a message THIS follower sent: its kernel took
-   * the prompt (`accepted`) or refused it (`rejected`, with `error`). Sent to
+   * A v10+ leader's verdict on a message THIS follower sent: it handed the
+   * prompt to its kernel (`accepted`) or could not (`rejected`, with `error`).
+   * `accepted` does not mean the agent started on it. Sent to
    * the sender alone, so it is never about another peer's message.
    */
   onUserMessageAck?: (ack: {

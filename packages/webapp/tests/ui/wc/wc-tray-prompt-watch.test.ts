@@ -134,13 +134,13 @@ describe('tray role-switch follower: prompt silence hint', () => {
     expect(said(PROMPT_RECEIVED_SILENCE_NOTE)).toHaveLength(1);
   });
 
-  it('an accepted ack disarms the hint', async () => {
+  it('an accepted ack followed by silence says the leader got it', async () => {
     const { role, handle, notes, said } = mountRole();
     handle.sendMessage('taken', 'm1');
     role.options.onUserMessageAck?.({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
-    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS * 2);
+    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);
     expect(notes()).toHaveLength(0);
-    expect(said(PROMPT_RECEIVED_SILENCE_NOTE)).toHaveLength(0);
+    expect(said(PROMPT_RECEIVED_SILENCE_NOTE)).toHaveLength(1);
   });
 
   it('a rejected ack adds the leader error to the addressed thread, and no silence note', async () => {

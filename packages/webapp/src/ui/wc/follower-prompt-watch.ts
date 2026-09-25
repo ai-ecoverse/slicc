@@ -2,7 +2,8 @@
  * Notices a follower prompt the leader never reacts to.
  *
  * A leader at tray protocol 10 or later acks each follower prompt
- * (`user_message_ack`) once its agent took or refused it. An older leader
+ * (`user_message_ack`) once it handed the prompt to its kernel (`accepted`)
+ * or could not (`rejected`). An older leader
  * sends no ack: its main thread echoes the message straight back, but whether
  * its agent ever picks it up only shows as later status frames and agent
  * events. When the leader is still booting, or is a background tab Chrome has
@@ -11,11 +12,12 @@
  * The prompt then sits in the queued pile with no reply and no explanation.
  *
  * The rule is deliberately narrow: after a send, ANY reaction from the leader
- * disarms the watch: an `accepted` ack, an agent event, a biscotto
+ * disarms the watch: a `rejected` ack, an agent event, a biscotto
  * review-state frame, or a status frame. A prompt queued behind a visibly
  * running turn therefore never trips it; only total silence does. The leader's
- * echo of the prompt does NOT disarm it: it only proves the leader's page got
- * the text, so it changes what the note says, not whether it is posted.
+ * echo of the prompt and an `accepted` ack do NOT disarm it: they only prove
+ * the leader's page got the text, so they change what the note says, not
+ * whether it is posted.
  *
  * It is scoped to the addressed unit where the wire allows: a frame that names
  * ANOTHER unit does not disarm it, and the mount posts the note only while that
@@ -109,14 +111,16 @@ export class FollowerPromptWatch {
   }
 
   /**
-   * The leader acked one of this follower's prompts. `accepted` is a reaction
-   * like any other; `rejected` also disarms, and is reported so the mount can
-   * say why the prompt went nowhere.
+   * The leader acked one of this follower's prompts. `accepted` only means the
+   * leader handed the prompt to its kernel, which it does at once even while
+   * the kernel is busy or starved, so it counts like an echo and keeps the
+   * watch armed. `rejected` disarms, and is reported so the mount can say why
+   * the prompt went nowhere.
    */
   noteAck(ack: FollowerPromptAck): void {
     const named = ack.scoopJid.length > 0 ? ack.scoopJid : null;
     if (ack.state === 'accepted') {
-      this.noteLeaderActivity(named);
+      this.noteReceived(named);
       return;
     }
     const unitId = named ?? this.#unitId;
