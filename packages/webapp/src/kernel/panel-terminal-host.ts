@@ -99,6 +99,16 @@ class PanelTerminalShell extends AlmostBashShellHeadless {
   }
 }
 
+/**
+ * The human terminal has no execution deadline. just-bash's default caps one
+ * command at an hour, which a build inside slicc outruns (a `./configure &&
+ * make` of an autoconf library); the person at the terminal can Ctrl+C
+ * instead. Agent and scoop shells keep the default.
+ */
+export const PANEL_TERMINAL_EXECUTION_LIMITS = {
+  maxExecutionTimeMs: Number.POSITIVE_INFINITY,
+} as const;
+
 export function createPanelTerminalHost(
   options: PanelTerminalHostOptions
 ): PanelTerminalHostHandle {
@@ -127,6 +137,7 @@ export function createPanelTerminalHost(
         processManager,
         processOwner: { kind: 'system' },
         sudo: shellSudo,
+        executionLimits: PANEL_TERMINAL_EXECUTION_LIMITS,
       }),
     logger,
   });
