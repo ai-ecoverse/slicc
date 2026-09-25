@@ -1,9 +1,24 @@
+import { chromium } from '@playwright/test';
 import { ORT_WEB_VERSION } from '../../src/speech/ort-version.js';
-import { expect, test } from './fixtures.js';
+import { test as baseTest, expect } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { LEADER_ORIGIN } from './playwright.config.js';
 import { type ExecResult, execInTerminal, openTerminal } from './two-instance-helpers.js';
 
 const RUN = process.env['RUN_REAL_SPEECH_E2E'] === '1';
+
+const test = baseTest.extend({
+  context: async ({ baseURL }, use) => {
+    const context = await chromium.launchPersistentContext('', {
+      baseURL: baseURL ?? LEADER_ORIGIN,
+    });
+    try {
+      await use(context);
+    } finally {
+      await context.close();
+    }
+  },
+});
 
 async function exec(page: import('@playwright/test').Page, cmd: string): Promise<ExecResult> {
   return execInTerminal(page, cmd);

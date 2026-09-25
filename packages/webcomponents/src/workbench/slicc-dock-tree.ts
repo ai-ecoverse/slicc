@@ -115,7 +115,7 @@ slicc-dock-tree .dock-tree__tile {
    \`<slicc-workbench-pane>\` used to compose via \`<slicc-pane elevated>\`:
    --canvas surface, 1px --line border, 14px radius, the elevated two-layer
    shadow, 12px float margin. \`overflow: hidden\` clips full-bleed content
-   (xterm's dark surface, iframes) to the rounded corners. The chat tile stays
+   (the terminal's dark surface, iframes) to the rounded corners. The chat tile stays
    FLAT (full-bleed over the shader), exactly like the prototype's .chatpane. */
 slicc-dock-tree .dock-tree__tile--chrome {
   margin: 12px;
@@ -138,7 +138,7 @@ slicc-dock-tree .dock-tree__tile--chrome {
     rgba(0, 0, 0, 0.3) 0 4px 10px -4px;
 }
 /* Terminal leaf: same floating geometry, but always-dark chrome so a light
-   page theme (vanilla) does not paint a cream card border around xterm. */
+   page theme (vanilla) does not paint a cream card border around the terminal. */
 slicc-dock-tree .dock-tree__tile--chrome-dark {
   background: var(--term-bg, #0c0c0e);
   border-color: var(--term-border, #232329);

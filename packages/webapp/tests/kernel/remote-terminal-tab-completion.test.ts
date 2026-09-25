@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   bashSingleQuote,
   buildCompgenDirCheck,
   buildCompgenPlan,
   longestCommonPrefix,
+  RemoteTerminalView,
 } from '../../src/kernel/remote-terminal-view.js';
+import { TerminalLineEditor } from '../../src/kernel/terminal-line-editor.js';
 
 describe('bashSingleQuote', () => {
   it("wraps empty input as `''` so compgen still has a token", () => {
@@ -86,5 +88,40 @@ describe('longestCommonPrefix', () => {
 
   it('handles paths correctly (no special treatment of /)', () => {
     expect(longestCommonPrefix(['src/foo.ts', 'src/foo-bar.ts'])).toBe('src/foo');
+  });
+});
+
+describe('completion input', () => {
+  it('replays typing and Enter received while compgen is pending', async () => {
+    let finishCompgen!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    const compgen = new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      finishCompgen = resolve;
+    });
+    const view = new RemoteTerminalView({
+      client: { sendRaw: vi.fn(), onTerminalEvent: () => vi.fn() },
+    });
+    const editor = new TerminalLineEditor({
+      write: vi.fn(),
+      getCursor: () => ({ row: 0, col: 0 }),
+      getScrollbackCount: () => 0,
+    });
+    const state = view as unknown as {
+      terminal: { writeln: () => void; remove: () => void };
+      editor: TerminalLineEditor;
+      client: { exec: () => Promise<{ stdout: string; stderr: string; exitCode: number }> };
+    };
+    state.terminal = { writeln: vi.fn(), remove: vi.fn() };
+    state.editor = editor;
+    state.client.exec = vi.fn(() => compgen);
+    const read = editor.read('$ ');
+    editor.insert('ec');
+    const input = Reflect.get(view, 'handleTerminalData') as (data: string) => void;
+    input.call(view, '\t');
+    input.call(view, 'h');
+    input.call(view, '\r');
+    expect(editor.text).toBe('ec');
+    finishCompgen({ stdout: 'echo\n', stderr: '', exitCode: 0 });
+    expect(await read).toBe('echo h');
+    view.dispose();
   });
 });

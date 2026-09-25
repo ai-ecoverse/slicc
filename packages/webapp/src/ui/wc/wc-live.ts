@@ -594,7 +594,8 @@ interface KernelReadyHolder {
 async function mountWorkbenchTerminal(
   boot: WcShellBoot,
   client: OffscreenClient,
-  container: HTMLElement
+  container: HTMLElement,
+  openWriter: () => Promise<WcPageVfs['writer']>
 ): Promise<void> {
   const { RemoteTerminalView } = await import('../../kernel/remote-terminal-view.js');
   const { fetchSecretEnvVars } = await import('../../core/secret-env.js');
@@ -609,6 +610,15 @@ async function mountWorkbenchTerminal(
 
   (globalThis as unknown as TerminalViewHolder).__slicc_terminal_view = view;
   window.addEventListener('beforeunload', () => view.dispose(), { once: true });
+  if (new URLSearchParams(location.search).has('wterm-image-demo')) {
+    const response = await fetch('/logos/sliccy-color-10scoops-128x128.png');
+    if (!response.ok) throw new Error(`wterm demo image: HTTP ${response.status}`);
+    const png = new Uint8Array(await response.arrayBuffer());
+    const writer = await openWriter();
+    await writer.writeFile('/tmp/wterm-graphics-demo.png', png);
+    const result = await view.executeCommandInTerminal('imgcat /tmp/wterm-graphics-demo.png');
+    if (result.exitCode !== 0) throw new Error(`wterm demo image: ${result.stderr}`);
+  }
 }
 
 function wireWcUrlContext(
@@ -854,7 +864,8 @@ export function attachWcWorkbench(
         clearSelection: boot.clearSelection,
         selectedId: boot.getSelected()?.id,
       }),
-    mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
+    mountTerminal: (container) =>
+      mountWorkbenchTerminal(boot, client, container, async () => (await openVfs()).writer),
     insertReference: (path: string) => {
       const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
       const current = card.value.trim();

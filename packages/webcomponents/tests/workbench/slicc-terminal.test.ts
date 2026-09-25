@@ -15,24 +15,14 @@ async function mount(setup?: (el: SliccTerminal) => void): Promise<SliccTerminal
 async function waitForTerminal(el: SliccTerminal, timeoutMs = 4000): Promise<void> {
   const start = performance.now();
   while (el.terminal === null) {
-    if (performance.now() - start > timeoutMs) throw new Error('xterm did not load in time');
+    if (performance.now() - start > timeoutMs) throw new Error('wterm did not load in time');
     await new Promise((r) => setTimeout(r, 10));
   }
 }
 
-function bufferText(el: SliccTerminal): string {
-  const buf = el.terminal?.buffer.active;
-  if (!buf) return '';
-  let out = '';
-  for (let i = 0; i < buf.length; i++) {
-    out += `${buf.getLine(i)?.translateToString(true) ?? ''}\n`;
-  }
-  return out;
-}
-
 function renderedText(el: SliccTerminal): string {
-  const rows = el.shadowRoot?.querySelector('.xterm-rows');
-  return rows?.textContent ?? '';
+  const rows = el.shadowRoot?.querySelectorAll('.term-row');
+  return Array.from(rows ?? [], (row) => row.textContent ?? '').join('\n');
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 4000): Promise<void> {
@@ -54,24 +44,35 @@ describe('slicc-terminal', () => {
     expect(customElements.get('slicc-terminal')).toBe(SliccTerminal);
   });
 
-  it('attaches a shadow root with the xterm mount host', async () => {
+  it('attaches a shadow root with the wterm mount host', async () => {
     const el = await mount();
     expect(el.shadowRoot).not.toBeNull();
     const host = el.shadowRoot?.querySelector('.host[part="host"]');
     expect(host).not.toBeNull();
-
-    expect(host?.querySelector('.xterm')).not.toBeNull();
+    expect(host?.classList.contains('wterm')).toBe(true);
+    expect(host?.querySelector('.term-grid')).not.toBeNull();
   });
 
-  it('injects the xterm stylesheet into the shadow root (so rows render in shadow DOM)', async () => {
+  it('injects the wterm stylesheet into the shadow root', async () => {
     const el = await mount();
 
     const styleText = (el.shadowRoot?.adoptedStyleSheets ?? [])
       .flatMap((s) => Array.from(s.cssRules).map((r) => r.cssText))
       .join('\n');
+    expect(styleText).toContain('.wterm');
+    expect(styleText).toContain('.term-row');
+  });
 
-    expect(styleText).toContain('.xterm');
-    expect(styleText).toContain('xterm-viewport');
+  it('announces when buffered output has reached the initialized renderer', async () => {
+    const el = document.createElement('slicc-terminal') as SliccTerminal;
+    const ready = vi.fn();
+    el.addEventListener('terminal-ready', ready);
+    el.writeln('before-connect');
+    document.body.appendChild(el);
+    await waitForTerminal(el);
+    expect(ready).toHaveBeenCalledOnce();
+    await waitFor(() => renderedText(el).includes('before-connect'));
+    expect(renderedText(el)).toContain('before-connect');
   });
 
   describe('header', () => {
@@ -103,15 +104,22 @@ describe('slicc-terminal', () => {
   });
 
   describe('write API', () => {
-    it('write()/writeln() land in the xterm buffer and render in the rows', async () => {
+    it('renders direct Kitty RGB graphics through the Ghostty core', async () => {
+      const el = await mount();
+
+      el.write('\x1b_Ga=T,f=24,s=1,v=1,i=7,c=1,r=1;/wAA\x1b\\');
+      await waitFor(() => el.shadowRoot?.querySelector('.term-image') !== null);
+      expect(el.shadowRoot?.querySelector('.term-image')).not.toBeNull();
+    });
+
+    it('write()/writeln() render in the rows', async () => {
       const el = await mount();
       el.writeln('hello slicc terminal');
       await waitFor(() => renderedText(el).includes('hello slicc terminal'));
-      expect(bufferText(el)).toContain('hello slicc terminal');
       expect(renderedText(el)).toContain('hello slicc terminal');
     });
 
-    it('buffers writes issued before xterm finishes loading and flushes them', async () => {
+    it('buffers writes issued before wterm finishes loading and flushes them', async () => {
       const el = document.createElement('slicc-terminal') as SliccTerminal;
       el.style.width = '480px';
       el.style.height = '240px';
@@ -119,18 +127,18 @@ describe('slicc-terminal', () => {
       el.writeln('queued-before-load');
       expect(el.terminal).toBeNull();
       await waitForTerminal(el);
-      await waitFor(() => bufferText(el).includes('queued-before-load'));
-      expect(bufferText(el)).toContain('queued-before-load');
+      await waitFor(() => renderedText(el).includes('queued-before-load'));
+      expect(renderedText(el)).toContain('queued-before-load');
     });
 
     it('clear() empties the rendered viewport text', async () => {
       const el = await mount();
       el.writeln('line-to-clear');
-      await waitFor(() => bufferText(el).includes('line-to-clear'));
-      expect(bufferText(el)).toContain('line-to-clear');
+      await waitFor(() => renderedText(el).includes('line-to-clear'));
+      expect(renderedText(el)).toContain('line-to-clear');
       el.clear();
-      await waitFor(() => !bufferText(el).includes('line-to-clear'));
-      expect(bufferText(el)).not.toContain('line-to-clear');
+      await waitFor(() => !renderedText(el).includes('line-to-clear'));
+      expect(renderedText(el)).not.toContain('line-to-clear');
     });
   });
 
@@ -140,7 +148,12 @@ describe('slicc-terminal', () => {
       const onData = vi.fn();
       el.addEventListener('terminal-data', onData);
 
-      el.terminal?.input('x');
+      el.shadowRoot?.querySelector('textarea')?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'x',
+          bubbles: true,
+        })
+      );
 
       expect(onData).toHaveBeenCalledTimes(1);
       const ev = onData.mock.calls[0][0] as CustomEvent<string>;
@@ -160,7 +173,12 @@ describe('slicc-terminal', () => {
 
       const onWrap = vi.fn();
       wrap.addEventListener('terminal-data', onWrap);
-      el.terminal?.input('y');
+      el.shadowRoot?.querySelector('textarea')?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'y',
+          bubbles: true,
+        })
+      );
       expect(onWrap).toHaveBeenCalledTimes(1);
     });
   });
@@ -173,7 +191,7 @@ describe('slicc-terminal', () => {
       expect(el.terminal).toBeNull();
     });
 
-    it('does not throw when removed before xterm finishes loading', async () => {
+    it('does not throw when removed before wterm finishes loading', async () => {
       const el = document.createElement('slicc-terminal') as SliccTerminal;
       el.style.width = '480px';
       el.style.height = '240px';

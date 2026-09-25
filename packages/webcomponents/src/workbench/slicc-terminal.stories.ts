@@ -74,9 +74,9 @@ const meta: Meta<TerminalArgs> = {
     docs: {
       description: {
         component:
-          'xterm.js-backed dark terminal surface. The xterm stylesheet is injected ' +
-          'into the shadow root so rows render inside shadow DOM; FitAddon keeps the ' +
-          'buffer sized to the host. Sessions below are pre-populated via the public ' +
+          'Ghostty-backed wterm dark terminal surface. The wterm stylesheet is injected ' +
+          'into the shadow root so rows render inside shadow DOM; wterm fits the ' +
+          'buffer to the host. Sessions below are pre-populated via the public ' +
           '`write`/`writeln` API.',
       },
     },

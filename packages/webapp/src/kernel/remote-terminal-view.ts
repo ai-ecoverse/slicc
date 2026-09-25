@@ -3,15 +3,8 @@ import type {
   PermissionGrant,
   PermissionKind,
   PermissionRequestOptions,
+  SliccTerminal,
 } from '@slicc/webcomponents';
-
-import {
-  resolveTerminalTheme,
-  watchTerminalThemeScope,
-} from '@slicc/webcomponents/workbench/terminal-theme';
-import type { FitAddon } from '@xterm/addon-fit';
-import type { Terminal } from '@xterm/xterm';
-import type { Readline } from 'xterm-readline';
 import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
 import { parseEsptoolArgs } from '../shell/supplemental-commands/esptool-command.js';
@@ -32,6 +25,7 @@ import {
   type SerialFilter,
   type SerialPort,
 } from './serial-port-registry.js';
+import { TerminalLineEditor } from './terminal-line-editor.js';
 import {
   type TerminalExecResult,
   TerminalSessionClient,
@@ -51,43 +45,23 @@ export interface RemoteTerminalViewOptions {
   env?: Record<string, string>;
 }
 
-function resolvePanelTerminalTheme(scope?: Element | null) {
-  const { border: _border, ...theme } = resolveTerminalTheme(scope);
-  return theme;
-}
-
 const PROMPT = '\x1b[34m/\x1b[0m \x1b[90m$\x1b[0m ';
-
-interface ReadlineHistoryInternals {
-  entries: string[];
-  cursor: number;
-  saveToLocalStorage: () => void;
-  restoreFromLocalStorage: () => void;
-}
-interface ReadlineStateInternals {
-  getTty(): { anchorRow: number };
-  refresh(): void;
-}
 
 export class RemoteTerminalView {
   private readonly client: TerminalSessionClient;
-  private terminal: Terminal | null = null;
-  private fitAddon: FitAddon | null = null;
+  private terminal: SliccTerminal | null = null;
   private terminalHost: HTMLElement | null = null;
   private previewHost: HTMLElement | null = null;
   private previewUrls: string[] = [];
   private hasPreview = false;
   private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private unwatchTheme: (() => void) | null = null;
 
-  private mountRoot: HTMLElement | null = null;
+  private rejectTerminalReady: ((reason: unknown) => void) | null = null;
 
-  private readline: Readline | null = null;
+  private editor: TerminalLineEditor | null = null;
 
   private disposed = false;
-
-  private abortPromptLoop: ((reason: unknown) => void) | null = null;
 
   private programmaticResolve: ((result: TerminalExecResult) => void) | null = null;
   private isExecuting = false;
@@ -95,6 +69,8 @@ export class RemoteTerminalView {
   private suppressOutput = false;
 
   private tabBusy = false;
+
+  private pendingTabInput: string[] = [];
 
   constructor(private readonly options: RemoteTerminalViewOptions) {
     const sid = options.sid ?? `panel-terminal-${Date.now()}`;
@@ -106,29 +82,8 @@ export class RemoteTerminalView {
   }
 
   async mount(container: HTMLElement): Promise<void> {
-    const { Terminal } = await import('@xterm/xterm');
-    const { FitAddon } = await import('@xterm/addon-fit');
-    const { Readline } = await import('xterm-readline');
-    await import('@xterm/xterm/css/xterm.css');
-
-    this.mountRoot = container;
-    this.terminal = new Terminal({
-      cursorBlink: true,
-      fontSize: 11,
-      fontFamily: "'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      theme: resolvePanelTerminalTheme(container),
-      convertEol: true,
-    });
-
-    this.unwatchTheme?.();
-    this.unwatchTheme = watchTerminalThemeScope(container, () => {
-      if (!this.terminal) return;
-
-      this.terminal.options.theme = resolvePanelTerminalTheme(this.mountRoot);
-    });
-
-    this.fitAddon = new FitAddon();
-    this.terminal.loadAddon(this.fitAddon);
+    await import('@slicc/webcomponents');
+    if (this.disposed) return;
 
     container.replaceChildren();
     this.terminalHost = document.createElement('div');
@@ -139,27 +94,59 @@ export class RemoteTerminalView {
     this.previewHost.className = 'terminal-panel__preview';
     container.appendChild(this.previewHost);
 
-    this.terminal.open(this.terminalHost);
-    this.fitAddon.fit();
+    const terminal = document.createElement('slicc-terminal') as SliccTerminal;
+    terminal.hideHeader = true;
+    terminal.style.width = '100%';
+    terminal.style.height = '100%';
+    this.terminal = terminal;
+    const ready = new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        terminal.removeEventListener('terminal-ready', onReady);
+        terminal.removeEventListener('terminal-error', onError);
+        this.rejectTerminalReady = null;
+      };
+      const onReady = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (event: Event) => {
+        cleanup();
+        reject((event as CustomEvent<unknown>).detail);
+      };
+      this.rejectTerminalReady = (reason) => {
+        cleanup();
+        reject(reason);
+      };
+      terminal.addEventListener('terminal-ready', onReady);
+      terminal.addEventListener('terminal-error', onError);
+    });
+    terminal.addEventListener('terminal-data', (event) => {
+      this.handleTerminalData((event as CustomEvent<string>).detail);
+    });
+    this.terminalHost.appendChild(terminal);
+    await ready;
+    if (this.disposed) return;
+    terminal.fit();
+
+    this.editor = new TerminalLineEditor({
+      write: (data) => terminal.write(data),
+      getCursor: () => terminal.terminal?.bridge?.getCursor() ?? { row: 0, col: 0 },
+      getScrollbackCount: () => terminal.terminal?.bridge?.getScrollbackCount() ?? 0,
+    });
 
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    this.readline = new Readline();
-    this.neutralizeReadlineHistoryPersistence();
-    this.terminal.loadAddon(this.readline);
-    this.readline.setCtrlCHandler(() => this.signalInterruptDuringExec());
-    this.setupInput();
-
-    this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
-    this.terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m\n');
+    terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
+    terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m');
+    terminal.writeln('');
 
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });
     void this.runPromptLoop();
   }
 
   refit(): void {
-    this.fitAddon?.fit();
+    this.terminal?.fit();
   }
 
   clearTerminal(): void {
@@ -169,16 +156,21 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
-    if (!this.terminal || !this.readline) return this.client.exec(trimmed);
-    if (this.isExecuting || this.programmaticResolve || this.readline.getLine().length > 0) {
+    if (!this.terminal || !this.editor) return this.client.exec(trimmed);
+    if (
+      this.isExecuting ||
+      this.programmaticResolve ||
+      !this.editor.isReading ||
+      this.editor.text
+    ) {
       return { stdout: '', stderr: 'terminal is busy; finish current input first\n', exitCode: 1 };
     }
 
     const result = new Promise<TerminalExecResult>((resolve) => {
       this.programmaticResolve = resolve;
     });
-    this.readline.updateLine(trimmed);
-    this.terminal.input('\r');
+    this.editor.setLine(trimmed);
+    this.editor.accept();
     return result;
   }
 
@@ -189,18 +181,15 @@ export class RemoteTerminalView {
 
   dispose(): void {
     this.disposed = true;
-    this.abortPromptLoop?.(new Error('terminal disposed'));
-    this.abortPromptLoop = null;
+    this.rejectTerminalReady?.(new Error('terminal disposed'));
+    this.editor?.abort(new Error('terminal disposed'));
     this.clearMediaPreview();
-    this.unwatchTheme?.();
-    this.unwatchTheme = null;
-    this.mountRoot = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
-    this.terminal?.dispose();
+    this.terminal?.remove();
     this.terminal = null;
-    this.readline = null;
-    this.fitAddon = null;
+    this.editor = null;
+    this.pendingTabInput = [];
     this.terminalHost = null;
     this.previewHost = null;
     this.client.close();
@@ -209,10 +198,6 @@ export class RemoteTerminalView {
 
   private renderMediaPreview(event: TerminalEventMsg & { type: 'terminal-media-preview' }): void {
     if (!this.previewHost) return;
-
-    const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
-    this.previewUrls.push(url);
 
     const previewItem = document.createElement('div');
     previewItem.className = 'terminal-panel__preview-item';
@@ -223,7 +208,35 @@ export class RemoteTerminalView {
     label.textContent = `${name} · ${event.mediaType}`;
     previewItem.appendChild(label);
 
-    if (event.mediaType.startsWith('video/')) {
+    if (event.mediaType === 'image/png') {
+      const terminal = document.createElement('slicc-terminal') as SliccTerminal;
+      terminal.hideHeader = true;
+      terminal.style.width = '100%';
+      terminal.style.height = '180px';
+      terminal.style.pointerEvents = 'none';
+      terminal.setAttribute('aria-label', `Kitty graphics preview of ${name}`);
+      terminal.addEventListener(
+        'terminal-ready',
+        () =>
+          requestAnimationFrame(() => {
+            const viewport = terminal.shadowRoot?.querySelector<HTMLElement>('.host');
+            if (viewport) viewport.scrollTop = 0;
+            this.terminal?.focus();
+          }),
+        { once: true }
+      );
+      previewItem.appendChild(terminal);
+
+      for (let offset = 0; offset < event.data.length; offset += 4096) {
+        const first = offset === 0;
+        const last = offset + 4096 >= event.data.length;
+        const control = first ? `a=T,f=100,t=d,m=${last ? 0 : 1}` : `m=${last ? 0 : 1}`;
+        terminal.write(`\x1b_G${control};${event.data.slice(offset, offset + 4096)}\x1b\\`);
+      }
+    } else if (event.mediaType.startsWith('video/')) {
+      const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
+      this.previewUrls.push(url);
       const video = document.createElement('video');
       video.className = 'terminal-panel__preview-media';
       video.controls = true;
@@ -235,6 +248,9 @@ export class RemoteTerminalView {
       video.addEventListener('loadedmetadata', () => this.refit(), { once: true });
       previewItem.appendChild(video);
     } else {
+      const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
+      this.previewUrls.push(url);
       const image = document.createElement('img');
       image.className = 'terminal-panel__preview-media';
       image.alt = name;
@@ -261,14 +277,12 @@ export class RemoteTerminalView {
   }
 
   private async runPromptLoop(): Promise<void> {
-    while (!this.disposed && this.readline && this.terminal) {
+    while (!this.disposed && this.editor && this.terminal) {
       let line: string;
       try {
         line = await this.readNextLine();
       } catch {
         break;
-      } finally {
-        this.abortPromptLoop = null;
       }
 
       const programmatic = this.programmaticResolve !== null;
@@ -282,23 +296,28 @@ export class RemoteTerminalView {
   }
 
   private readNextLine(): Promise<string> {
-    const terminal = this.terminal;
-    const readline = this.readline;
-    if (!terminal || !readline) {
-      return Promise.reject(new Error('terminal not mounted'));
+    if (!this.editor) return Promise.reject(new Error('terminal not mounted'));
+    const line = this.editor.read(PROMPT);
+    this.flushPendingTabInput();
+    return line;
+  }
+
+  private flushPendingTabInput(): void {
+    while (this.editor?.isReading && this.pendingTabInput.length > 0) {
+      this.editor.feed(this.pendingTabInput.shift() ?? '');
     }
-    const aborted = new Promise<never>((_resolve, reject) => {
-      this.abortPromptLoop = reject;
-    });
-    const read = new Promise<string>((resolve, reject) => {
-      terminal.write('', () => {
-        if (terminal.buffer.active.cursorX > 0) {
-          terminal.write('\x1b[7m%\x1b[0m\r\n');
-        }
-        readline.read(PROMPT).then(resolve, reject);
-      });
-    });
-    return Promise.race([read, aborted]);
+  }
+
+  private handleTerminalData(data: string): void {
+    if (data === '\t') {
+      if (!this.tabBusy) void this.handleTab();
+    } else if (data === '\x03' && this.isExecuting) {
+      this.signalInterruptDuringExec();
+    } else if (this.tabBusy) {
+      this.pendingTabInput.push(data);
+    } else {
+      this.editor?.feed(data);
+    }
   }
 
   private async processLine(rawLine: string, programmatic = false): Promise<TerminalExecResult> {
@@ -343,48 +362,20 @@ export class RemoteTerminalView {
     return false;
   }
 
-  private setupInput(): void {
-    if (!this.terminal) return;
-    this.terminal.onData((data) => {
-      if (data === '\t') void this.handleTab();
-    });
-    this.terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === 'keydown' && event.key === 'Enter' && this.tabBusy) return false;
-      return true;
-    });
-  }
-
   private signalInterruptDuringExec(): void {
     if (!this.isExecuting) return;
     this.terminal?.writeln('^C');
     this.client.signal('SIGINT');
   }
 
-  private neutralizeReadlineHistoryPersistence(): void {
-    const history = (this.readline as unknown as { history?: ReadlineHistoryInternals }).history;
-    if (!history) return;
-    history.entries = [];
-    history.cursor = -1;
-    history.saveToLocalStorage = () => undefined;
-    history.restoreFromLocalStorage = () => undefined;
-  }
-
-  private reanchorReadline(): void {
-    if (!this.terminal || !this.readline) return;
-    const state = (this.readline as unknown as { state?: ReadlineStateInternals }).state;
-    if (!state) return;
-    state.getTty().anchorRow = this.terminal.buffer.active.cursorY;
-    state.refresh();
-  }
-
   private async handleTab(): Promise<void> {
-    if (!this.terminal || !this.readline) return;
+    if (!this.terminal || !this.editor) return;
     if (this.isExecuting || this.tabBusy) return;
     this.tabBusy = true;
 
     this.isExecuting = true;
     try {
-      const beforeCursor = this.readline.getLine();
+      const beforeCursor = this.editor.beforeCursor;
       const { currentWord, isFirstWord, compgenCmd } = buildCompgenPlan(beforeCursor);
 
       this.suppressOutput = true;
@@ -402,7 +393,7 @@ export class RemoteTerminalView {
       if (matches.length === 1) {
         const completion = matches[0];
         const suffix = completion.slice(currentWord.length);
-        if (suffix) this.terminal.input(suffix);
+        if (suffix) this.editor.insert(suffix);
 
         let trail = ' ';
         if (!isFirstWord) {
@@ -414,19 +405,17 @@ export class RemoteTerminalView {
             this.suppressOutput = false;
           }
         }
-        this.terminal.input(trail);
+        this.editor.insert(trail);
         return;
       }
 
       const prefix = longestCommonPrefix(matches);
       const suffix = prefix.slice(currentWord.length);
       if (suffix) {
-        this.terminal.input(suffix);
+        this.editor.insert(suffix);
         return;
       }
-      this.readline.println('');
-      this.readline.println(matches.map((m) => m.split('/').pop() ?? m).join('  '));
-      this.reanchorReadline();
+      this.editor.list(matches.map((m) => m.split('/').pop() ?? m));
     } catch (err) {
       console.warn(
         '[RemoteTerminal] Tab completion failed:',
@@ -435,6 +424,7 @@ export class RemoteTerminalView {
     } finally {
       this.tabBusy = false;
       this.isExecuting = false;
+      this.flushPendingTabInput();
     }
   }
 
@@ -637,10 +627,11 @@ export class RemoteTerminalView {
       case 'terminal-output':
         if (this.suppressOutput) return;
 
+        const output = event.data.replace(/\r?\n/g, '\r\n');
         if (event.stream === 'stderr') {
-          this.terminal.write(`\x1b[31m${event.data}\x1b[0m`);
+          this.terminal.write(`\x1b[31m${output}\x1b[0m`);
         } else {
-          this.terminal.write(event.data);
+          this.terminal.write(output);
         }
         return;
       case 'terminal-exit':

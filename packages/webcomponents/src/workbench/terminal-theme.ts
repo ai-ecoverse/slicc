@@ -26,7 +26,7 @@ export const TERMINAL_THEME_DEFAULTS = {
   border: '#232329',
 } as const;
 
-export type TerminalXtermTheme = {
+export type TerminalTheme = {
   background: string;
   foreground: string;
   cursor: string;
@@ -62,7 +62,7 @@ function firstColor(read: CssVarReader, names: readonly string[], fallback: stri
   return fallback;
 }
 
-export function buildTerminalTheme(read: CssVarReader): TerminalXtermTheme {
+export function buildTerminalTheme(read: CssVarReader): TerminalTheme {
   const d = TERMINAL_THEME_DEFAULTS;
 
   const background = firstColor(read, ['--term-bg'], d.background);
@@ -101,7 +101,7 @@ export function buildTerminalTheme(read: CssVarReader): TerminalXtermTheme {
   };
 }
 
-export function resolveTerminalTheme(el?: Element | null): TerminalXtermTheme & { border: string } {
+export function resolveTerminalTheme(el?: Element | null): TerminalTheme & { border: string } {
   const target = el ?? (typeof document !== 'undefined' ? document.documentElement : null);
   const style = target ? getComputedStyle(target) : null;
   const read: CssVarReader = (name) => (style ? style.getPropertyValue(name) : '');
