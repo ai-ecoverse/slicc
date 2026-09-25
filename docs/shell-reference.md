@@ -104,8 +104,11 @@ Node, Python and wasm tools do not see it yet: their files keep the VFS defaults
 
 On the browser filesystem, `>>` serializes appends with other VFS mutations, and
 `chmod` / `touch` persist executable modes and modification times across reloads.
-Mounted filesystems currently report `ENOSYS` for unsupported metadata changes;
-a successful command always means its requested metadata operation was applied.
+`tar x` batches mode/mtime restoration into one sidecar write via
+`VirtualFS.updateMetadataBatch` so large extracts stay linear. Mounted
+paths in that batch are skipped (unsupported); lone `chmod`/`utimes` on a
+mount still report `ENOSYS`. A successful command always means its
+requested supported metadata operation was applied.
 Mounted appends serialize with each other when calls share a database. Other
 mounted mutations and external writers still need backend concurrency control.
 

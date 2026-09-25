@@ -33,7 +33,7 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 import { DEV_NULL } from './virtual-device-paths.js';
-import type { VirtualFS } from './virtual-fs.js';
+import type { MetadataUpdate, VirtualFS } from './virtual-fs.js';
 
 export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
 
@@ -739,6 +739,18 @@ export class RestrictedFS {
     this.refuseDescriptorTreeOp(path);
     await this.checkContentWrite(path);
     return this.vfs.utimes(path, atime, mtime);
+  }
+
+  /**
+   * Gate each path then apply the batch on the underlying VFS (one sidecar
+   * write). Same ACL surface as repeated {@link chmod}/{@link utimes}.
+   */
+  async updateMetadataBatch(updates: readonly MetadataUpdate[]): Promise<void> {
+    for (const update of updates) {
+      this.refuseDescriptorTreeOp(update.path);
+      await this.checkContentWrite(update.path);
+    }
+    return this.vfs.updateMetadataBatch(updates);
   }
 
   private async checkContentWrite(path: string): Promise<void> {
