@@ -171,6 +171,23 @@ Primitives live in `cdp/command-abort.ts` — its own module because `har-record
 
 Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`, `follower-registry.ts`, `follower-dispatch.ts`, `broadcast.ts`, `cdp-router.ts`, `fs-router.ts`, `tab-router.ts`, `remote-exec.ts`, `transcript-export.ts` (streaming), `preview-bridge.ts`, `cherry-router.ts`, `teleport-pool.ts`. Follower model/thinking pills share `ui/wc/wc-follower-model-surface.ts`; `wc-follower.ts` mount and `wc-tray.ts`'s `slicc:tray-join` role switch both consume it. Cherry gated by `CherryFeatureSet.modelPicker`. See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
+### Follower prompt silence hint
+
+A follower's send has no acknowledgement: the leader's main thread echoes the
+message at once, but whether its agent ever picks it up only shows as later
+status frames and agent events. `ui/wc/follower-prompt-watch.ts` arms on every
+accepted send (`RemoteWorkUnitClient`'s `onSend`) and disarms on **any** status
+frame or agent event from the leader, or on a dropped connection. After 30 s
+of total silence it posts one local note to the follower's thread: the leader
+may still be starting, or be a background tab the OS has deprioritized. In the
+extension side panel the note points at **Bring leader to front**.
+
+- A prompt queued behind a visibly running turn never trips it: that turn's
+  events count as a reaction, and the queue already explains the wait.
+- It is separate from the channel-level stall (the leader stops answering
+  pings), which disables the composer. This hint covers a live channel whose
+  agent never reacts.
+
 ### Monitor context-fill distribution
 
 `buildVitals` (`ui/wc/wc-monitor.ts`) meters the FULLEST context window and

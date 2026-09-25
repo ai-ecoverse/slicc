@@ -492,6 +492,55 @@ describe('bootFollowerFloat', () => {
     expect(selectScoop).not.toHaveBeenCalled();
   });
 
+  it('says so when a sent prompt gets no reaction from the leader', async () => {
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const { PROMPT_SILENCE_NOTE, FOLLOWER_PROMPT_SILENCE_MS } = await import(
+      '../../../src/ui/wc/follower-prompt-watch.js'
+    );
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      sendMessage: vi.fn(() => true),
+      selectScoop: vi.fn(),
+      stop: vi.fn(() => true),
+    };
+    let emit: (event: unknown) => void = () => {};
+    opts.onConnectionChange?.(true);
+    opts.setChatAgent?.({
+      sendMessage: vi.fn(),
+      onEvent: (listener: (event: unknown) => void) => {
+        emit = listener;
+        return () => {};
+      },
+      stop: () => {},
+    } as never);
+    opts.onSnapshot?.([], 'cone_1');
+    const textOf = (root: ParentNode): string =>
+      [...root.querySelectorAll('*')]
+        .map((el) => (el.shadowRoot ? textOf(el.shadowRoot) : '') + (el.textContent ?? ''))
+        .join(' ');
+    const note = PROMPT_SILENCE_NOTE.replace(/_/g, '').slice(0, 40);
+
+    vi.useFakeTimers();
+    try {
+      // The leader reacts (any agent event): no note.
+      inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'first' } }));
+      emit({ type: 'message_start', messageId: 'a1' });
+      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
+      opts.onStatus?.('ready', 'cone_1');
+      expect(textOf(app)).not.toContain(note);
+
+      // Total silence: a still-booting or background-starved leader.
+      inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'second' } }));
+      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(textOf(app)).toContain(note));
+  });
+
   it('does not treat an empty activeScoopJid as an addressable unit', async () => {
     const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

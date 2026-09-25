@@ -204,6 +204,9 @@ The side panel is opened on demand by the toolbar icon. Full flow:
    which the SW treats exactly like reopening the panel (disconnected goes
    back to booting, `ensureLeaderTab` runs, and a leader whose tray gave up
    is reloaded). The panel never steals focus on its own.
+   Once the follower is live, a prompt that gets no reaction at all from the
+   leader for 30s gets a local note pointing at **Bring leader to front**
+   (`docs/webapp-details.md`, "Follower prompt silence hint").
 6. **Login hand-off**: provider login can't complete in the cross-origin panel
    iframe (OAuth / device-code / provider-settings run on the leader). The
    follower detects the side panel by its ancestor origin

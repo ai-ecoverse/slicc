@@ -50,6 +50,22 @@ describe('RemoteWorkUnitClient over a refusing channel', () => {
     await expect(client.signal('cone_1', 'stop')).resolves.toBeUndefined();
   });
 
+  it('reports an accepted send through onSend, and never a refused one', async () => {
+    // The follower's prompt watch arms on this — a refused send never left the
+    // device, so there is no leader reaction to wait for.
+    const onSend = vi.fn();
+    const sync = {
+      selectScoop: vi.fn(),
+      sendMessage: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+    } as unknown as FollowerSyncManager;
+    const client = new RemoteWorkUnitClient({ getSync: () => sync, onSend });
+
+    await client.send('cone_1', { text: 'go' });
+    expect(onSend).toHaveBeenCalledWith('cone_1');
+    await expect(client.send('cone_1', { text: 'again' })).rejects.toThrow(/refused/);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a stop with no leader at all rather than reporting one', async () => {
     const client = new RemoteWorkUnitClient({ getSync: () => null });
 
