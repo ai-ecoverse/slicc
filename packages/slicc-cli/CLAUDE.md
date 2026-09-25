@@ -26,7 +26,11 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL fro
   resumed activity and no pending `tool_use_start`. Live leaders broadcast
   `ready` after every assistant _message_, so a tool-using turn flips twice;
   exiting on the first flip returned an empty reply (`promptTurn` in
-  `commands.go`).
+  `commands.go`). A v10 leader also sends a `user_message_ack` keyed by the
+  prompt's `messageId`: `rejected` prints the leader's error to stderr and
+  exits 1 (no turn will follow); `accepted` only logs at debug and keeps
+  waiting. A leader < 10 sends no ack, so nothing changes against it
+  (`promptAckRejection`).
 - `new-session`/`model` (`session.go`) send the follower control messages the
   browser/iOS followers already use (`new_session`, `models.request`,
   `model.select`):
@@ -120,7 +124,7 @@ map: [details](../../docs/slicc-cli-details.md#layout).
 `internal/protocol` mirrors a subset of the canonical TS union. A golden corpus
 (`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
 `packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json`)
-is decoded by `internal/protocol/corpus_test.go` for `exec.*`/`hello`/`status`,
+is decoded by `internal/protocol/corpus_test.go` for `exec.*`/`hello`/`status`/`user_message_ack`,
 so a wire change breaks `go test`. On protocol changes, regenerate the corpus
 JSON and update the Go structs alongside the TS + Swift mirrors.
 

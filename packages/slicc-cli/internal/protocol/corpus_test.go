@@ -22,7 +22,10 @@ type corpusEntry struct {
 type corpusDoc struct {
 	TraySyncProtocolVersion int           `json:"traySyncProtocolVersion"`
 	LeaderToFollower        []corpusEntry `json:"leaderToFollower"`
-	FollowerToLeader        []corpusEntry `json:"followerToLeader"`
+	// LeaderToFollowerExtra holds additional shapes of a type the keyed list
+	// already covers once (e.g. the `rejected` user_message_ack).
+	LeaderToFollowerExtra []corpusEntry `json:"leaderToFollowerExtra"`
+	FollowerToLeader      []corpusEntry `json:"followerToLeader"`
 }
 
 func loadCorpus(t *testing.T) corpusDoc {
@@ -69,6 +72,8 @@ func target(typ string) any {
 		return &ModelSelect{}
 	case TypeModelState:
 		return &ModelState{}
+	case TypeUserMessageAck:
+		return &UserMessageAck{}
 	default:
 		return nil
 	}
@@ -83,7 +88,7 @@ func TestCorpusVersionMatches(t *testing.T) {
 
 func TestCorpusExecAndHelloRoundTrip(t *testing.T) {
 	doc := loadCorpus(t)
-	all := append(append([]corpusEntry{}, doc.LeaderToFollower...), doc.FollowerToLeader...)
+	all := append(append(append([]corpusEntry{}, doc.LeaderToFollower...), doc.LeaderToFollowerExtra...), doc.FollowerToLeader...)
 
 	modeled := 0
 	for _, e := range all {
@@ -110,9 +115,39 @@ func TestCorpusExecAndHelloRoundTrip(t *testing.T) {
 	}
 
 	// exec.* in both directions (8) + hello in both directions (2) + status (1)
-	// + the session/model control set new-session and model use (7).
-	if modeled < 18 {
-		t.Fatalf("expected >=18 modeled corpus fixtures, found %d — did exec.*/hello/status/session/model move?", modeled)
+	// + the session/model control set new-session and model use (7)
+	// + user_message_ack accepted/rejected (2).
+	if modeled < 20 {
+		t.Fatalf("expected >=20 modeled corpus fixtures, found %d — did exec.*/hello/status/session/model/ack move?", modeled)
+	}
+}
+
+// TestCorpusUserMessageAckStates pins the two ack fixtures `prompt` depends
+// on: an accepted ack with no error, and a rejected one that carries it. The
+// keyed list holds one fixture per type, so the rejected shape lives in
+// leaderToFollowerExtra. ScoopJid is not required: a leader with no unit to
+// deliver to rejects with an empty one, and `prompt` matches by messageId.
+func TestCorpusUserMessageAckStates(t *testing.T) {
+	doc := loadCorpus(t)
+	states := map[string]UserMessageAck{}
+	for _, e := range append(append([]corpusEntry{}, doc.LeaderToFollower...), doc.LeaderToFollowerExtra...) {
+		if e.Type != TypeUserMessageAck {
+			continue
+		}
+		var ack UserMessageAck
+		if err := json.Unmarshal(e.Message, &ack); err != nil {
+			t.Fatalf("decode %s: %v", e.Type, err)
+		}
+		if ack.MessageID == "" {
+			t.Errorf("ack fixture missing messageId: %s", e.Message)
+		}
+		states[ack.State] = ack
+	}
+	if a, ok := states[AckAccepted]; !ok || a.Error != "" {
+		t.Errorf("want an accepted ack fixture without error, got %#v (present=%v)", a, ok)
+	}
+	if r, ok := states[AckRejected]; !ok || r.Error == "" {
+		t.Errorf("want a rejected ack fixture with error, got %#v (present=%v)", r, ok)
 	}
 }
 

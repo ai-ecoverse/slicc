@@ -29,7 +29,9 @@ import "encoding/json"
 // not using, so this is bookkeeping a third time.
 //
 // v10 is a LEADER capability too: it acks every delivered `user_message` with
-// `user_message_ack`, sent to the sender alone.
+// `user_message_ack`, sent to the sender alone. `prompt` exits non-zero on a
+// `rejected` ack instead of waiting for a turn that will never start; an older
+// leader sends none, and `prompt` behaves exactly as before.
 const TraySyncProtocolVersion = 10
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
@@ -174,6 +176,18 @@ type UserMessageEcho struct {
 	ScoopJid  string `json:"scoopJid,omitempty"`
 }
 
+// UserMessageAck settles one of this follower's own `user_message`s
+// (leader→follower, v10): the leader's delivery into its kernel resolved
+// ("accepted") or failed ("rejected", with a human-readable Error). Sent only
+// to the sender, keyed by the follower's MessageID.
+type UserMessageAck struct {
+	Type      string `json:"type"` // "user_message_ack"
+	MessageID string `json:"messageId"`
+	ScoopJid  string `json:"scoopJid"`
+	State     string `json:"state"` // "accepted" | "rejected"
+	Error     string `json:"error,omitempty"`
+}
+
 // NewSession asks the leader to start a fresh conversation on the cone this
 // follower is viewing (follower→leader), like the browser's "New chat". Action
 // is "save" (freeze the old chat and extract memories), "skip" (freeze it, no
@@ -276,6 +290,7 @@ const (
 	TypeExecSignal      = "exec.signal"
 	TypeAgentEvent      = "agent_event"
 	TypeUserMessageEcho = "user_message_echo"
+	TypeUserMessageAck  = "user_message_ack"
 	TypeStatus          = "status"
 	TypeNewSession      = "new_session"
 	TypeRequestSnapshot = "request_snapshot"
@@ -295,6 +310,9 @@ const (
 	StreamStderr = "stderr"
 
 	ScoopStatusProcessing = "processing"
+
+	AckAccepted = "accepted"
+	AckRejected = "rejected"
 
 	AgentMessageStart = "message_start"
 	AgentContentDelta = "content_delta"
