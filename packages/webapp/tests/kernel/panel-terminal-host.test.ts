@@ -3,13 +3,17 @@ import 'fake-indexeddb/auto';
 import type { BrowserAPI } from '../../src/cdp/index.js';
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { createPanelTerminalHost } from '../../src/kernel/panel-terminal-host.js';
+import {
+  createPanelTerminalHost,
+  PANEL_TERMINAL_EXECUTION_LIMITS,
+} from '../../src/kernel/panel-terminal-host.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
 import { TerminalSessionClient } from '../../src/kernel/terminal-session-client.js';
 import {
   createBridgeMessageChannelTransport,
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import { SudoManager } from '../../src/sudo/sudo-manager.js';
 import type { SudoBroker, SudoDecision } from '../../src/sudo/types.js';
 import { OffscreenClient } from '../../src/ui/offscreen-client.js';
@@ -615,5 +619,82 @@ describe('createPanelTerminalHost — sudo wiring (human terminal)', () => {
     handle.stop();
     channel.port1.close();
     channel.port2.close();
+  });
+});
+
+describe('panel terminal execution deadline', () => {
+  async function runAcrossTwoHours(
+    executionLimits?: typeof PANEL_TERMINAL_EXECUTION_LIMITS
+  ): Promise<{ stdout: string; stderr: string }> {
+    const fs = await VirtualFS.create({
+      dbName: `pthost-deadline-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const shell = new AlmostBashShellHeadless({
+      fs,
+      ...(executionLimits ? { executionLimits } : {}),
+    });
+    await shell.executeCommand('true');
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    const timer = setTimeout(() => {
+      skew = 2 * 60 * 60 * 1000;
+    }, 30);
+    try {
+      const r = await shell.executeCommand('echo a; sleep 0.1; echo b');
+      return { stdout: r.stdout, stderr: r.stderr };
+    } finally {
+      clearTimeout(timer);
+      spy.mockRestore();
+    }
+  }
+
+  it('lets a panel command run past the default hour', async () => {
+    expect(PANEL_TERMINAL_EXECUTION_LIMITS.maxExecutionTimeMs).toBe(Number.POSITIVE_INFINITY);
+    const r = await runAcrossTwoHours(PANEL_TERMINAL_EXECUTION_LIMITS);
+    expect(r.stdout).toBe('a\nb\n');
+  });
+
+  it('the factory gives panel sessions those limits', async () => {
+    const w = await wirePanelHost();
+    try {
+      await w.client.open();
+      await w.client.exec('true');
+      const realNow = Date.now.bind(Date);
+      let skew = 0;
+      const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+      const timer = setTimeout(() => {
+        skew = 2 * 60 * 60 * 1000;
+      }, 30);
+      try {
+        const r = await w.client.exec('echo a; sleep 0.1; echo b');
+        expect(r.stdout).toBe('a\nb\n');
+      } finally {
+        clearTimeout(timer);
+        spy.mockRestore();
+      }
+    } finally {
+      w.stop();
+    }
+  });
+
+  it('lets a panel command run more than the default 100,000 commands and loop iterations', async () => {
+    const w = await wirePanelHost();
+    try {
+      await w.client.open();
+      const r = await w.client.exec(
+        'i=0; while [ $i -lt 110000 ]; do i=$((i+1)); done; echo done $i'
+      );
+      expect(r.stdout).toBe('done 110000\n');
+    } finally {
+      w.stop();
+    }
+  }, 60_000);
+
+  it('the default limits would have stopped it (the case the constant exists for)', async () => {
+    const r = await runAcrossTwoHours();
+    expect(r.stdout).not.toContain('b');
+    expect(r.stderr).toMatch(/deadline/);
   });
 });

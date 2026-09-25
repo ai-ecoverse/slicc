@@ -67,6 +67,12 @@ class PanelTerminalShell extends AlmostBashShellHeadless {
   }
 }
 
+export const PANEL_TERMINAL_EXECUTION_LIMITS = {
+  maxExecutionTimeMs: Number.POSITIVE_INFINITY,
+  maxCommandCount: Number.POSITIVE_INFINITY,
+  maxLoopIterations: Number.POSITIVE_INFINITY,
+} as const;
+
 export function createPanelTerminalHost(
   options: PanelTerminalHostOptions
 ): PanelTerminalHostHandle {
@@ -91,6 +97,7 @@ export function createPanelTerminalHost(
         processManager,
         processOwner: { kind: 'system' },
         sudo: shellSudo,
+        executionLimits: PANEL_TERMINAL_EXECUTION_LIMITS,
       }),
     logger,
   });
