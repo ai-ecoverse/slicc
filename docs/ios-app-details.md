@@ -265,6 +265,8 @@ A snapshot replaces a unit's buffer wholesale and describes the moment the leade
 
 The ledger also settles `user_message_echo`: an echo of a send this device still holds is dropped whatever unit it names, because a leader older than the delivered-unit tag labels a follower's prompt with the unit the _leader_ is displaying, which appended a prompt typed under cone B to cone A's buffer.
 
+A leader at protocol ≥ 10 answers each of this device's sends with `user_message_ack` (`App/AppStateDelivery.swift`, #3482). `rejected` flags the bubble exactly like a transport refusal (`error = true`, the flagged copy in the ledger, the "Not delivered" note) and keeps the leader's reason in `AppState.deliveryRejections`, which `MessageBubble` paints under the note. It never retries. `accepted` changes nothing, and in particular does not release the ledger entry: only a snapshot that contains the send confirms it, because a snapshot built before delivery can still land after the ack. An ack whose `state` this build does not know decodes to `.unknown` and is ignored.
+
 ## Transcript per-render cost
 
 The transcript re-evaluates its rows constantly, so everything a row does per body evaluation is paid many times over. Measured on an 18-message fixture: **871 `MessageBubble` body evaluations and 227 full markdown re-parses just to scroll back two screens**, and 360 body evaluations to type one sentence.

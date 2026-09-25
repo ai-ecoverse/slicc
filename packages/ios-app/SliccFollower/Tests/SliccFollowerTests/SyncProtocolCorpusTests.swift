@@ -37,6 +37,9 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let declaredFollowerVariantCount: Int
         let declaredAgentEventVariantCount: Int
         let leaderToFollower: [(type: String, ios: String, messageData: Data)]
+        /// Further shapes of variants already keyed in `leaderToFollower`
+        /// (e.g. the `rejected` `user_message_ack`, which alone carries `error`).
+        let leaderToFollowerExtra: [(type: String, ios: String, messageData: Data)]
         let followerToLeader: [(type: String, ios: String, messageData: Data)]
         let agentEvents: [AgentEventFixture]
         let nestedPayloads: [NestedPayload]
@@ -81,6 +84,7 @@ final class SyncProtocolCorpusTests: XCTestCase {
             let followerCount = root["followerVariantCount"] as? Int,
             let agentEventCount = root["agentEventVariantCount"] as? Int,
             let leader = root["leaderToFollower"] as? [[String: Any]],
+            let leaderExtra = root["leaderToFollowerExtra"] as? [[String: Any]],
             let follower = root["followerToLeader"] as? [[String: Any]],
             let events = root["agentEvents"] as? [[String: Any]],
             let payloads = root["nestedPayloads"] as? [[String: Any]]
@@ -101,6 +105,7 @@ final class SyncProtocolCorpusTests: XCTestCase {
             declaredFollowerVariantCount: followerCount,
             declaredAgentEventVariantCount: agentEventCount,
             leaderToFollower: try entries(leader, payloadKey: "message"),
+            leaderToFollowerExtra: try entries(leaderExtra, payloadKey: "message"),
             followerToLeader: try entries(follower, payloadKey: "message"),
             agentEvents: try events.map { item in
                 AgentEventFixture(
@@ -282,7 +287,7 @@ final class SyncProtocolCorpusTests: XCTestCase {
     func testLeaderToFollowerCorpusDecodesPerExpectation() throws {
         let corpus = try loadCorpus()
         let decoder = JSONDecoder()
-        for (type, ios, messageData) in corpus.leaderToFollower {
+        for (type, ios, messageData) in corpus.leaderToFollower + corpus.leaderToFollowerExtra {
             let decoded: LeaderToFollowerMessage
             do {
                 decoded = try decoder.decode(LeaderToFollowerMessage.self, from: messageData)
@@ -305,6 +310,38 @@ final class SyncProtocolCorpusTests: XCTestCase {
                 XCTFail("'\(type)' has unexpected ios expectation '\(ios)'")
             }
         }
+    }
+
+    func testLeaderToFollowerExtraShapesExtendKeyedVariants() throws {
+        let corpus = try loadCorpus()
+        let keyed = Dictionary(uniqueKeysWithValues: corpus.leaderToFollower.map { ($0.type, $0.ios) })
+        for extra in corpus.leaderToFollowerExtra {
+            XCTAssertEqual(
+                keyed[extra.type], extra.ios,
+                "leaderToFollowerExtra '\(extra.type)' must extend a keyed fixture with the same ios expectation")
+        }
+    }
+
+    /// The keyed `user_message_ack` fixture is the `accepted` shape; only the
+    /// extra one proves `rejected` and its `error` reach the Swift case.
+    func testUserMessageAckCorpusShapesKeepStateAndError() throws {
+        let corpus = try loadCorpus()
+        let decoder = JSONDecoder()
+        var states: [UserMessageAckState: String?] = [:]
+        for fixture in corpus.leaderToFollower + corpus.leaderToFollowerExtra
+        where fixture.type == "user_message_ack" {
+            guard
+                case .userMessageAck(_, _, let state, let error) = try decoder.decode(
+                    LeaderToFollowerMessage.self, from: fixture.messageData)
+            else {
+                XCTFail("a user_message_ack fixture decoded to a different case")
+                continue
+            }
+            states[state] = error
+        }
+        XCTAssertEqual(states.keys.sorted { $0.rawValue < $1.rawValue }, [.accepted, .rejected])
+        XCTAssertEqual(states[.accepted], .some(nil), "accepted carries no error")
+        XCTAssertNotNil(states[.rejected], "rejected must keep the leader's error")
     }
 
     func testFollowerToLeaderCorpusDecodesPerExpectation() throws {
@@ -343,7 +380,8 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let corpus = try loadCorpus()
         let decoder = JSONDecoder()
         let encoder = JSONEncoder()
-        for (type, ios, messageData) in corpus.leaderToFollower where ios == "decoded" {
+        for (type, ios, messageData) in corpus.leaderToFollower + corpus.leaderToFollowerExtra
+        where ios == "decoded" {
             let decoded = try decoder.decode(LeaderToFollowerMessage.self, from: messageData)
             let reencoded = try encoder.encode(decoded)
             let obj = try JSONSerialization.jsonObject(with: reencoded) as? [String: Any]
