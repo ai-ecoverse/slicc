@@ -116,14 +116,23 @@ export async function loadSet(
 ) {
   let envelope;
   let encrypted = false;
+  let upstream = null;
+  // Upstream sets come with where they came from (release tag, commit, file checksum).
+  const fetchUpstream = async (name) => {
+    const got = await loadUpstream(name, { withProvenance: true });
+    return got?.provenance ? got : { data: got, provenance: null };
+  };
   if (spec === 'bu-v1') {
-    const v1 = await loadUpstream('BU_Bench_V1');
+    const { data: v1, provenance } = await fetchUpstream('BU_Bench_V1');
     const tasks = v1.map((t) => fromBuV1(t)).filter(Boolean);
     envelope = { benchmark: 'BU_Bench_V1', tasks };
     encrypted = true;
+    upstream = provenance;
   } else if (spec === 'bu-v2') {
-    envelope = await loadUpstream('BU_Bench_V2');
+    const { data, provenance } = await fetchUpstream('BU_Bench_V2');
+    envelope = data;
     encrypted = true;
+    upstream = provenance;
   } else {
     const doc = JSON.parse(readFile(spec, 'utf8'));
     envelope = Array.isArray(doc.evals) ? fromSkillCreatorEvals(doc) : doc;
@@ -143,12 +152,12 @@ export async function loadSet(
       ),
     };
   }
-  const errors = validateEnvelope(envelope);
+  const errors = validateEnvelope(envelope, { checkDigests: !upstream && !encrypted });
   if (errors.length)
     throw new Error(
       `${spec}: ${errors.slice(0, 5).join('; ')}${errors.length > 5 ? ` (+${errors.length - 5} more)` : ''}`
     );
-  return { benchmark: envelope.benchmark, tasks: envelope.tasks, encrypted };
+  return { benchmark: envelope.benchmark, tasks: envelope.tasks, encrypted, upstream };
 }
 
 export function selectTasks(tasks, { taskIds, limit }) {
@@ -291,6 +300,7 @@ async function runOne(r, ctx) {
     config,
     run_id: runId,
     digests: taskDigests(r.task),
+    ...(r.set.upstream ? { upstream: r.set.upstream } : {}),
     leader: leaderStamp(ctx.lane),
   };
   let result;
