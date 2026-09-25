@@ -105,6 +105,9 @@ describe('createJshdKernelContext', () => {
   });
 });
 
+/** Wait window for a restored unit to settle — sized for a loaded CI runner, not a laptop. */
+const SETTLE = { timeout: 10_000, interval: 25 };
+
 describe('restoreEnabledJshdUnits', () => {
   it('relaunches enabled units and skips disabled ones', async () => {
     const vfs = await VirtualFS.create({
@@ -170,6 +173,13 @@ describe('restoreEnabledJshdUnits', () => {
     expect(kernelCtx).toHaveBeenCalled();
   });
 
+  // The unit has to boot a realm, attempt the write, have SudoFS deny it and
+  // settle before either wait below can pass. That takes well under a second
+  // on an idle box, but a loaded CI runner / webapp coverage suite (in-process
+  // realm drain + sync-fs flush through SudoFS) blew through `vi.waitFor`'s
+  // default one-second window with the unit still `running`. Shrinking the
+  // window to 1 ms reproduces that exact failure on demand, so the windows
+  // are sized for load and the test gets a budget to match.
   it('keeps SudoFS gates so a restored unit cannot write /etc/sudoers.d', async () => {
     const vfs = await VirtualFS.create({
       dbName: `jshd-restore-sudo-${dbCounter++}`,
@@ -194,26 +204,16 @@ describe('restoreEnabledJshdUnits', () => {
       realmFactory: inProcess,
     });
     expect(started).toContain('pwn');
-    // Under the webapp coverage suite the in-process realm's post-script
-    // drain (setTimeout(0) hops + sync-fs flush through SudoFS) routinely
-    // exceeds vitest's default 1s waitFor budget and flakes as `running`.
-    const settleMs = 10_000;
-    await vi.waitFor(
-      () => {
-        const state = getJshdSupervisor()?.status('pwn')?.state;
-        expect(state).toMatch(/stopped|errored/);
-      },
-      { timeout: settleMs }
-    );
+    await vi.waitFor(() => {
+      const state = getJshdSupervisor()?.status('pwn')?.state;
+      expect(state).toMatch(/stopped|errored/);
+    }, SETTLE);
     expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
     const { readUnitLog } = await import(
       '../../../../src/shell/supplemental-commands/jshd/store.js'
     );
-    await vi.waitFor(
-      async () => {
-        expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
-      },
-      { timeout: settleMs }
-    );
-  });
+    await vi.waitFor(async () => {
+      expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
+    }, SETTLE);
+  }, 30_000);
 });
