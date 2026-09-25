@@ -550,7 +550,12 @@ describe('transcript export', () => {
           (cmd) => {
             if (dropped) return files.read(cmd);
             dropped = true;
-            return fail('slicc exec: connection closed');
+            // What the executor returns for a connection that closed mid-call.
+            return {
+              ...fail('slicc exec: connection closed'),
+              leaderDown: true,
+              connectionLost: true,
+            };
           },
         ],
         ...files.commands,

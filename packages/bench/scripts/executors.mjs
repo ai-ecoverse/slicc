@@ -41,12 +41,13 @@ export function unreachable(status, stderr) {
 }
 
 /**
- * The connection to the leader closed mid-call (the CLI's `io: read/write on closed pipe`). The
- * command may already have run, so it is not repeated here, but the leader counts as down: the
- * runner restarts it and runs the task again. Seen live on a leader that failed every call until
- * its restart (2026-09-25).
+ * The connection to the leader closed mid-call (the CLI's `io: read/write on closed pipe` or
+ * `connection closed`). The command may already have run, so it is not repeated here, but the
+ * leader counts as down: the runner restarts it and runs the task again. The result carries
+ * `connectionLost` too, so a caller whose command is safe to repeat (reading a file) can try a
+ * new connection first. Both messages seen live on 6.190.0 and 6.191.0 leaders (2026-09-25).
  */
-const CONNECTION_LOST_RE = /read\/write on closed pipe/i;
+const CONNECTION_LOST_RE = /read\/write on closed pipe|connection closed/i;
 
 export function connectionLost(status, stderr) {
   return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));
@@ -153,8 +154,9 @@ export function createLeader({
         await sleep(retryDelayMs);
         continue;
       }
-      const leaderDown = dialFailed || connectionLost(result.status, result.stderr);
-      const out = { ...result, leaderDown };
+      const lost = !dialFailed && connectionLost(result.status, result.stderr);
+      const leaderDown = dialFailed || lost;
+      const out = { ...result, leaderDown, ...(lost ? { connectionLost: true } : {}) };
       onCall({
         at: new Date(started).toISOString(),
         call: callLabel(args),
