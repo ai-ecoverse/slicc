@@ -85,6 +85,62 @@ function deltaList(title, deltas, label) {
   return `<h3>${esc(title)}</h3><ul class="deltas">${items}</ul>`;
 }
 
+/** Below this many paired tasks, a lift is flagged as a small sample. */
+export const SMALL_SAMPLE = 10;
+
+/** A paired time or cost difference in words: "71 s faster", "$0.035 cheaper". */
+export function tradeoff(value, kind) {
+  if (value == null || Number.isNaN(value)) return '–';
+  const abs = Math.abs(value);
+  const amount = kind === 'time' ? `${abs.toFixed(0)} s` : `$${abs.toFixed(3)}`;
+  if (amount === '0 s' || amount === '$0.000') return 'about the same';
+  const [less, more] = kind === 'time' ? ['faster', 'slower'] : ['cheaper', 'more'];
+  return value < 0 ? `<span class="up">${amount} ${less}</span>` : `${amount} ${more}`;
+}
+
+/** Paired mean score without and with, on a 0–1 track. */
+function dumbbell(from, to) {
+  if (from == null || to == null) return '';
+  const W = 240;
+  const P = 8;
+  const x = (v) => (P + v * (W - 2 * P)).toFixed(1);
+  const tone = to > from ? 'up' : to < from ? 'down' : 'flat';
+  return `<svg class="dumbbell ${tone}" viewBox="0 0 ${W} 20" role="img" aria-label="mean score ${num(from)} without, ${num(to)} with">
+  <line x1="${P}" y1="10" x2="${W - P}" y2="10" class="track"/>
+  <line x1="${x(from)}" y1="10" x2="${x(to)}" y2="10" class="span"/>
+  <circle cx="${x(from)}" cy="10" r="5" class="from"/>
+  <circle cx="${x(to)}" cy="10" r="6" class="to"/>
+</svg>`;
+}
+
+function liftCard(d) {
+  const tone = d.score == null ? '' : d.score > 0 ? 'up' : d.score < 0 ? 'down' : '';
+  const small = d.n < SMALL_SAMPLE ? ' <span class="chip warn">small sample</span>' : '';
+  return `<article class="card lift">
+  <h3>${esc(d.model)} <span class="chip">${esc(d.to)} over ${esc(d.from)}</span></h3>
+  <p class="big ${tone}">${signed(d.score)}<small> score lift</small></p>
+  ${dumbbell(d.score_from, d.score_to)}
+  <p class="pair">${esc(d.from)} ${num(d.score_from)} → ${esc(d.to)} ${num(d.score_to)}</p>
+  <dl>
+    <dt>time</dt><dd>${tradeoff(d.duration, 'time')}</dd>
+    <dt>cost</dt><dd>${tradeoff(d.cost, 'cost')}</dd>
+    <dt>paired tasks</dt><dd>${d.n}${small}</dd>
+  </dl>
+</article>`;
+}
+
+/**
+ * What the skills add: per model, the paired mean score without and with, its lift, and what it
+ * does to time and cost. Measured over tasks both sides judged, so an easy task only one side
+ * finished cannot move it.
+ */
+function skillLift(b) {
+  if (!b.skill_deltas.length) return '';
+  const base = b.skill_deltas[0].from;
+  return `<h3>Skills lift <small>over ${esc(base)}; paired by task, counting only tasks both sides judged</small></h3>
+<div class="cards">${b.skill_deltas.map(liftCard).join('\n')}</div>`;
+}
+
 /** Task × configuration grid, hardest tasks (lowest mean score) first. */
 function matrix(records, configs) {
   const byTask = new Map();
@@ -206,6 +262,16 @@ table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .matrix tbody th { text-align: left; font-weight: 400; }
 .cell { min-width: 44px; color: #fff; border: 2px solid var(--bg); border-radius: 6px; }
 .cell.partial { color: #1b1f24; } .cell.missing { color: var(--muted); background: transparent; }
+.big.up { color: var(--pass); } .big.down { color: var(--fail); }
+.chip.warn { border-color: var(--partial); }
+.dumbbell { display: block; width: 100%; height: auto; margin: 6px 0 2px; }
+.dumbbell .track { stroke: var(--line); stroke-width: 2; }
+.dumbbell .span { stroke-width: 4; stroke-linecap: round; }
+.dumbbell .from { fill: var(--bg); stroke: var(--muted); stroke-width: 2; }
+.dumbbell.up .span { stroke: var(--pass); } .dumbbell.up .to { fill: var(--pass); }
+.dumbbell.down .span { stroke: var(--fail); } .dumbbell.down .to { fill: var(--fail); }
+.dumbbell.flat .span { stroke: var(--muted); } .dumbbell.flat .to { fill: var(--muted); }
+.pair { margin: 0; font-size: 12px; color: var(--muted); }
 .deltas li { margin: 3px 0; } .up { color: var(--pass); font-weight: 600; } .down { color: var(--fail); font-weight: 600; }
 .scatter { width: 100%; max-width: 760px; height: auto; } .axis { stroke: var(--muted); }
 .label { fill: var(--muted); font-size: 12px; }
@@ -236,9 +302,9 @@ export function reportHtml(
       return `<section>
 <h2>${esc(b.benchmark)} <small>${rs.length} runs, ${new Set(rs.map((r) => r.task_id)).size} tasks</small></h2>
 <div class="cards">${b.configs.map(card).join('\n')}</div>
+${skillLift(b)}
 <h3>Configurations</h3>
 ${configTable(b)}
-${deltaList(`What skills change (paired, against ${b.skill_deltas[0]?.from ?? ''})`, b.skill_deltas, (d) => `${d.model}, ${d.to}`)}
 ${deltaList(`What models change (paired, against ${b.model_deltas[0]?.from ?? ''})`, b.model_deltas, (d) => `${d.skills}, ${d.to}`)}
 <h3>Tasks <small>hardest first; hover a cell for time and cost</small></h3>
 ${matrix(rs, configs)}

@@ -84,7 +84,7 @@ It is browser-use's BU Bench V2 format, so public sets and our own evals share o
 
 For each set, the report has a row per configuration: runs, pass / partial / fail, errors, mean score, mean time and mean cost. After the rows come two lists:
 
-- **What skills change:** for each model, how the score, time and cost of each skills condition differ from the first condition.
+- **What skills add:** for each model, the lift each skills condition gives over `none` (over the first condition when `none` did not run): score, time and cost. `report.html` shows it as the paired mean score without and with the skills, the lift, and the time and cost it saves. A lift from fewer than 10 paired tasks is flagged as a small sample.
 - **What models change:** the same comparison between models, for each skills condition.
 
 Only runs that both configurations judged, for the same task and repeat, are compared. A run that errored (for example, the leader was unreachable) is listed but never counted as a fail.

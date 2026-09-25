@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { cellState, main, readRecordsDir, reportHtml, shortId } from './html.mjs';
+import { cellState, main, readRecordsDir, reportHtml, shortId, tradeoff } from './html.mjs';
 
 const record = (model, skills, taskId, extra = {}) => ({
   benchmark: 'B',
@@ -55,21 +55,37 @@ describe('cells', () => {
   });
 });
 
+describe('tradeoff', () => {
+  it('says what a paired time or cost difference means', () => {
+    expect(tradeoff(-71.2, 'time')).toBe('<span class="up">71 s faster</span>');
+    expect(tradeoff(5, 'time')).toBe('5 s slower');
+    expect(tradeoff(-0.035, 'cost')).toBe('<span class="up">$0.035 cheaper</span>');
+    expect(tradeoff(0.2, 'cost')).toBe('$0.200 more');
+    expect(tradeoff(0.0001, 'cost')).toBe('about the same');
+    expect(tradeoff(null, 'time')).toBe('–');
+  });
+});
+
 describe('reportHtml', () => {
   it('renders cards, table, deltas, a matrix and a scatter', () => {
     const html = reportHtml(RECORDS, { title: 'T', generated: 'now' });
     expect(html).toMatch(/^<!doctype html>/);
     expect(html).toContain('<h2>B <small>6 runs, 2 tasks</small></h2>');
     expect(html.match(/<article class="card">/g)).toHaveLength(4);
-    expect(html).toContain('What skills change (paired, against builtin)');
+    expect(html).toContain('Skills lift <small>over none; paired by task');
+    expect(html.match(/<article class="card lift">/g)).toHaveLength(2);
+    expect(html).toContain('<p class="big up">+0.20<small> score lift</small></p>');
+    expect(html).toContain('<svg class="dumbbell up"');
+    expect(html).toContain('<p class="pair">none 0.80 → builtin 1.00</p>');
+    expect(html).toContain('<dd>1 <span class="chip warn">small sample</span></dd>');
+    expect(html.indexOf('Skills lift')).toBeLessThan(html.indexOf('<h3>Configurations</h3>'));
     expect(html).toContain('What models change (paired, against opus)');
-    expect(html).toContain('<strong>opus, none</strong>: score <span class="down">-0.20</span>');
     expect(html).toContain('<td class="cell pass"');
     expect(html).toContain('<td class="cell error" title="error · error: leader went away');
     expect(html).toContain('<td class="cell unjudged"');
     expect(html).toContain('<code>t2-long-</code>');
     expect(html).toContain('<td class="cell missing" title="not run">');
-    expect(html.match(/<circle /g)).toHaveLength(5);
+    expect(html.match(/<circle [^>]*><title>/g)).toHaveLength(5);
     expect(html).toContain('Generated now.');
     const t1 = html.indexOf('title="t1"');
     expect(t1).toBeGreaterThan(-1);

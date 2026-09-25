@@ -4,7 +4,9 @@ import {
   configKey,
   judgeModels,
   pairedDelta,
+  reportData,
   reportMarkdown,
+  skillsBaseline,
   summarize,
   summaryFileName,
 } from './results.mjs';
@@ -146,13 +148,14 @@ describe('summarize', () => {
 
 describe('pairedDelta', () => {
   it('pairs scores over runs both sides judged', () => {
-    expect(pairedDelta(RECORDS, S('sonnet', 'none'), S('sonnet', 'builtin'))).toEqual({
-      n: 2,
-      delta: 0.75,
-    });
+    const d = pairedDelta(RECORDS, S('sonnet', 'none'), S('sonnet', 'builtin'));
+    expect(d).toMatchObject({ n: 2, delta: 0.75 });
+    expect(d.to - d.from).toBeCloseTo(0.75);
     expect(pairedDelta(RECORDS, S('sonnet', 'builtin'), S('nobody', 'builtin'))).toEqual({
       n: 0,
       delta: null,
+      from: null,
+      to: null,
     });
   });
 
@@ -161,8 +164,13 @@ describe('pairedDelta', () => {
       pairedDelta(RECORDS, S('sonnet', 'builtin'), S('opus', 'builtin'), 'cost').delta
     ).toBeCloseTo(0.2);
     const records = [unjudged('t1', 'a', 's'), rec('t1', 'b', 's', 1)];
-    expect(pairedDelta(records, S('a', 's'), S('b', 's'))).toEqual({ n: 0, delta: null });
-    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'duration')).toEqual({
+    expect(pairedDelta(records, S('a', 's'), S('b', 's'))).toEqual({
+      n: 0,
+      delta: null,
+      from: null,
+      to: null,
+    });
+    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'duration')).toMatchObject({
       n: 1,
       delta: -20,
     });
@@ -173,7 +181,7 @@ describe('pairedDelta', () => {
         S('b', 's'),
         'duration'
       )
-    ).toEqual({ n: 0, delta: null });
+    ).toEqual({ n: 0, delta: null, from: null, to: null });
   });
 
   it('leaves unmeasured cost out of means, totals and pairs, and counts it', () => {
@@ -184,8 +192,41 @@ describe('pairedDelta', () => {
     ];
     const [a] = summarize(records).filter((s) => s.body[0].model === 'a');
     expect(a.body[0]).toMatchObject({ total_cost: 0.2, cost_unknown: 1, total_duration: 40 });
-    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'cost')).toEqual({ n: 0, delta: null });
-    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'duration')).toEqual({ n: 1, delta: 10 });
+    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'cost')).toEqual({
+      n: 0,
+      delta: null,
+      from: null,
+      to: null,
+    });
+    expect(pairedDelta(records, S('a', 's'), S('b', 's'), 'duration')).toEqual({
+      n: 1,
+      delta: 10,
+      from: 10,
+      to: 20,
+    });
+  });
+});
+
+describe('skills lift', () => {
+  it('measures from none whenever it ran, whatever order the conditions came in', () => {
+    expect(skillsBaseline(['builtin', 'none'])).toBe('none');
+    expect(skillsBaseline(['builtin', 'builtin+x'])).toBe('builtin');
+    const records = [
+      rec('t1', 'm', 'builtin', 1),
+      rec('t2', 'm', 'builtin', 0.8),
+      rec('t1', 'm', 'none', 0.6),
+      rec('t2', 'm', 'none', 0.8),
+    ];
+    const [lift] = reportData(records).benchmarks[0].skill_deltas;
+    expect(lift).toMatchObject({
+      model: 'm',
+      from: 'none',
+      to: 'builtin',
+      n: 2,
+      score_from: 0.7,
+      score_to: 0.9,
+    });
+    expect(lift.score).toBeCloseTo(0.2);
   });
 });
 
@@ -194,7 +235,7 @@ describe('reportMarkdown', () => {
     const md = reportMarkdown(RECORDS);
     expect(md).toContain('Judge: `judge`');
     expect(md).toContain('| sonnet | none | 3 | 0 | 1 | 1 | 0 | 1 | 0.25 | 10 | 0.100 |');
-    expect(md).toContain('**What skills change**');
+    expect(md).toContain('**What skills add** (lift over `none`, paired by task and repeat):');
     expect(md).toContain('- sonnet, `builtin`: score +0.75');
     expect(md).toContain('**What models change**');
     expect(md).toContain('- `builtin`, opus: score -0.25');
@@ -211,7 +252,7 @@ describe('reportMarkdown', () => {
 
   it('omits deltas for a single configuration', () => {
     const md = reportMarkdown([rec('t1', 'm', 's', 1)]);
-    expect(md).not.toContain('What skills change');
+    expect(md).not.toContain('What skills add');
     expect(md).not.toContain('What models change');
   });
 });
