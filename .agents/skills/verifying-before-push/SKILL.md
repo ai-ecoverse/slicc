@@ -172,8 +172,17 @@ the `size-limit` block of [`packages/webapp/package.json`](../../../packages/web
 and [`packages/chrome-extension/package.json`](../../../packages/chrome-extension/package.json),
 next to the code they guard, and are measured on raw (non-brotli) bytes.
 
-The webapp `size` script additionally runs
-`packages/dev-tools/tools/check-first-load-size.mjs`, which measures the EAGER import
+The webapp `size` script also runs
+`packages/dev-tools/tools/check-total-js-size.mjs`, which compares all emitted JS with
+the merge-base on the same machine. Its 128 KiB per-change allowance in
+[`packages/webapp/total-js-budget.json`](../../../packages/webapp/total-js-budget.json)
+flags large new dependencies or duplicate chunks, while the 27 MiB `size-limit` cap is the
+absolute backstop. The 2026-09-25 measured output was 25,707,983 B across the whole webapp,
+leaving 2,603,569 B (9.2%) under that cap. When the absolute cap needs adjustment, reset it
+with meaningful headroom rather than rounding it up by a few bytes; document the measured
+output and reason in the PR body.
+
+The script then runs `packages/dev-tools/tools/check-first-load-size.mjs`, which measures the EAGER import
 closures fetched on a cold-cache boot (the page entry graph and the kernel-worker graph).
 A static import that hoists an existing lazy chunk into the boot graph fails this gate even
 though no single file grew — make the import dynamic.
@@ -193,6 +202,7 @@ root `postinstall` runs, then the webapp build.
 node packages/dev-tools/tools/check-first-load-size.mjs                    # vs origin/main
 node packages/dev-tools/tools/check-first-load-size.mjs --baseline=none    # ceilings only
 node packages/dev-tools/tools/check-first-load-size.mjs --json             # just measure
+node packages/dev-tools/tools/check-total-js-size.mjs --json              # total JS bytes and file count
 ```
 
 If the merge-base cannot be built (shallow clone, unknown ref) the delta is reported as
