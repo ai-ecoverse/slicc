@@ -1,5 +1,13 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -65,6 +73,29 @@ describe('gh-io', () => {
     writeState({ leader: 1, followers: [] });
     expect(readState()).toEqual({ leader: 1, followers: [] });
     expect(statePath()).toBe(join(dir, 'state.json'));
+    expect(statSync(statePath()).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).not.toContainEqual(expect.stringMatching(/^\.state-.*\.tmp$/));
+  });
+
+  it('only treats a missing state file as empty', () => {
+    writeFileSync(statePath(), '{ "leader": 1,');
+    expect(() => readState()).toThrow(/invalid runner state at .*state\.json/);
+    for (const value of ['null', '[]', '1']) {
+      writeFileSync(statePath(), value);
+      expect(() => readState()).toThrow(/expected a JSON object/);
+    }
+    rmSync(statePath());
+    mkdirSync(statePath());
+    expect(() => readState()).toThrow(/EISDIR/);
+  });
+
+  it('leaves the existing state intact when a new state cannot be serialized', () => {
+    writeState({ leader: 42, secretsFile: '/runner/secrets.env' });
+    const circular = {};
+    circular.self = circular;
+    expect(() => writeState(circular)).toThrow(/circular/i);
+    expect(readState()).toEqual({ leader: 42, secretsFile: '/runner/secrets.env' });
+    expect(readdirSync(dir)).not.toContainEqual(expect.stringMatching(/^\.state-.*\.tmp$/));
   });
 
   it('appends outputs and env exports to the command files', () => {

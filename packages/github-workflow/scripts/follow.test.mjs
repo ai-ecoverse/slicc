@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setup } from '../tests/helpers.mjs';
 import { main } from './follow.mjs';
-import { isAlive, readState, terminate, writeState } from './gh-io.mjs';
+import { isAlive, readState, statePath, terminate, writeState } from './gh-io.mjs';
 
 describe('follow', () => {
   let t;
@@ -54,6 +54,28 @@ describe('follow', () => {
       'python',
       '-i',
     ]);
+  });
+
+  it('does not replace unreadable leader and credential state with follower-only state', async () => {
+    const leaderState = {
+      leader: 4242,
+      secretsFile: '/runner/secrets.env',
+      profileDir: '/runner/profile',
+      followers: [],
+      followerLogs: [],
+    };
+    writeState(leaderState, t.home);
+    const original = readFileSync(statePath(t.home), 'utf8');
+    const partial = '{ "leader": 4242,';
+    writeFileSync(statePath(t.home), partial);
+    try {
+      await expect(main({ pollMs: 20 })).rejects.toThrow(/invalid runner state/);
+      expect(readFileSync(statePath(t.home), 'utf8')).toBe(partial);
+      expect(t.calls()).toEqual([]);
+      expect(t.outputs()).toEqual({});
+    } finally {
+      writeFileSync(statePath(t.home), original);
+    }
   });
 
   it('fails when the follower exits before connecting', async () => {
