@@ -2152,6 +2152,8 @@ fs.rm(path): Promise<void> // Recursive delete
 fs.fetchToFile(url, path): Promise<number> // Download and save, returns byte count
 ```
 
+Node programs get Node's calling conventions on the same object. A trailing callback runs as `cb(err, result)` (errors carry `err.code`, such as `ENOENT`), so `fs.readdir(dir, cb)` and `util.promisify(fs.stat)` work. A `stat` / `lstat` callback gets a `Stats` with methods (`isDirectory()`), and `fs.exists(path, cb)` gets a boolean. `fs.promises` is Node's too: its `stat` resolves to a `Stats`. Without a callback, the promise API above is unchanged.
+
 #### exec (shell command bridge)
 
 Run any shell command through just-bash and get the result. Works in both CLI and extension mode.

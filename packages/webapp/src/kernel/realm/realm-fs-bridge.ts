@@ -5,6 +5,7 @@
  * `js-realm-shared.ts`; no behavior change.
  */
 import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
+import { acceptNodeCallbacks, nodeFsPromises } from './realm-fs-node-callbacks.js';
 import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
@@ -376,7 +377,10 @@ export function createFsBridge(
   };
   overlayAsyncStdio(bridge, stdio);
   acceptPathLikeArgs(bridge, ASYNC_PATH_ARGS, { promises: true });
-  bridge.promises = bridge;
+  // Node programs get Node's fs.promises and trailing callbacks; the
+  // documented promise API (no callback) is unchanged.
+  bridge.promises = nodeFsPromises(bridge);
+  acceptNodeCallbacks(bridge);
   return bridge;
 }
 
