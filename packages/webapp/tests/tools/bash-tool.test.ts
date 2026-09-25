@@ -88,6 +88,22 @@ describe('Bash Tool', () => {
     expect(bash.description).toBeTruthy();
   });
 
+  // #3459: a memory pass learns which "No such file" answers were the sandbox
+  // edge from a note on the result — the shell's commands cannot tell it.
+  it("appends the annotator's note to a foreground result, on its own line", async () => {
+    let note: string | undefined = '[not visible from this pass] /etc/llmstxtignore';
+    const annotated = createBashTool(shell, fs, '/tmp', { annotateResult: () => note });
+    const withNote = await annotated.execute({ command: 'echo hi' });
+    expect(withNote.content).toBe('hi\n[not visible from this pass] /etc/llmstxtignore\n');
+    note = undefined;
+    const plain = await annotated.execute({ command: 'echo hi' });
+    expect(plain.content).toBe('hi\n');
+    // An empty result still carries the note.
+    note = 'note';
+    const empty = await annotated.execute({ command: 'true' });
+    expect(empty.content).toBe('(exit code: 0)\nnote\n');
+  });
+
   it('caps oversized output at 40KB and writes the full output to a temp file (#2010)', async () => {
     const big = 'y'.repeat(60 * 1024); // 60KB — over the 40KB cap
     await fs.writeFile('/big.txt', big);

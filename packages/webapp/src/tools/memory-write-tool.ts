@@ -16,6 +16,13 @@ export interface MemoryWriteToolDeps {
    * so a freeze that lands mid-conversation is reflected on the next write.
    */
   readSessionCount: () => Promise<number>;
+  /**
+   * Paths this unit probed outside its visible roots so far (#3459) — a
+   * memory pass's `BlindReadLog`. A new line that records one of them as
+   * absent or refuted is refused: the miss meant unknown, never absent.
+   * Absent for units that see the whole workspace.
+   */
+  blindPaths?: () => readonly string[];
 }
 
 /**

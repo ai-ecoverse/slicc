@@ -375,6 +375,19 @@ docs under the workspace are not memory).
   re-measuring). The budget is read per call from `/sessions/index.json` via the ungated handle.
 - The runtime's own writers (the freezer's legacy append, the bridge's staged-draft merge, the
   `update_global_memory` callback) use the shared VFS directly and are not guarded.
+- **Blind reads (#3459).** A memory pass's `RestrictedFS` answers a read outside `visiblePaths` as
+  "not found", and the shell's `cat`/`ls`/`stat`/`grep`/`test` print `No such file or directory`
+  for every fs error, so two nightly dreamers read `ENOENT` on `/etc/llmstxtignore` and
+  `/etc/MEMORY.md` as proof of absence and wrote the refutation into cone memory. A unit whose
+  sandbox grants a curation draft (`isMemoryPassSandbox`, `base/memory-budget.ts`) now gets
+  `fs/blind-read-fs.ts` on its gated handle (above sudo, below the memory guard): it consults
+  `RestrictedFS.readAccess` and records every `outside` probe and every `filtered` parent
+  listing on a `BlindReadLog` (`base/blind-reads.ts`), raising `EACCES … unknown, not absent`
+  where the sandbox raised `ENOENT`. The `bash` tool appends the ledger's
+  `[not visible from this pass]` note to the next result (`annotateResult`), and `memory_write`
+  refuses a newly added line that names a recorded path with an absence marker
+  (`findBlindNegativeClaim`). `{{VISIBLE_PATHS}}` in `/etc/MEMORY.md` tells the pass its roots.
+  Every other unit keeps the silent ENOENT surface.
 - **Trip promotion.** Because the staged draft can only change through `memory_write`, a pass cut
   off at its wall-clock or turn bound (`isRunBoundTrip` in `agent-bridge.ts`) has its diverged
   draft folded in as a truncated success: exit 0, `merge.promotedOnTrip: true`, and the bound

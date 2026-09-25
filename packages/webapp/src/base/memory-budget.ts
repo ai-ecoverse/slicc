@@ -57,25 +57,53 @@ export function computeBudget(sessionCount: number): number {
  * the workspace carries developer docs of that name, and those are neither
  * memory nor subject to the memory budget.
  */
+/** A curation pass's staged draft — what `{{MEMORY_PATH}}` resolves to. */
+const CURATION_DRAFT_PATTERN = /^\/sessions\/\.curation\/[^/]+\/draft\.md$/;
+
 const MEMORY_FILE_PATTERNS: readonly RegExp[] = [
   /^\/workspace\/CLAUDE\.md$/,
   /^\/shared\/CLAUDE\.md$/,
   /^\/(?:cones|scoops)\/[^/]+\/CLAUDE\.md$/,
-  /^\/sessions\/\.curation\/[^/]+\/draft\.md$/,
+  CURATION_DRAFT_PATTERN,
 ];
 
 /**
- * Whether `path` is a budget-governed memory file (see
- * {@link MEMORY_FILE_PATTERNS}). Accepts the un-normalized spellings a shell
- * produces (`//`, `/./`, a trailing slash) but never resolves `..` — a
- * caller that needs symlink-safe resolution normalizes first.
+ * Accept the un-normalized spellings a shell produces (`//`, `/./`, a
+ * trailing slash) without resolving `..` — a caller that needs symlink-safe
+ * resolution normalizes first.
  */
-export function isMemoryFilePath(path: string): boolean {
-  const normalized = `/${path}`
+function tidyMemoryPath(path: string): string {
+  return `/${path}`
     .replace(/\/+/g, '/')
     .replace(/\/\.(?=\/)/g, '')
     .replace(/\/$/, '');
+}
+
+/**
+ * Whether `path` is a budget-governed memory file (see
+ * {@link MEMORY_FILE_PATTERNS}).
+ */
+export function isMemoryFilePath(path: string): boolean {
+  const normalized = tidyMemoryPath(path);
   return MEMORY_FILE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+/** Whether `path` is a curation pass's staged draft (`/sessions/.curation/<key>/draft.md`). */
+export function isCurationDraftPath(path: string): boolean {
+  return CURATION_DRAFT_PATTERN.test(tidyMemoryPath(path));
+}
+
+/**
+ * Whether a sandbox is a memory pass's: the only units granted a write on a
+ * staged curation draft are the curator and the dreamer (`redirectWritesToDraft`
+ * in `scoops/agentic-memory.ts` puts it there for every pass). Derived from
+ * the grant rather than from a flag so it holds for restored units and for a
+ * customized `/etc/MEMORY.md` alike — the grant is what makes the unit a pass.
+ * The bridge spells file grants with a trailing slash, which the predicate
+ * tolerates (#3459).
+ */
+export function isMemoryPassSandbox(writablePaths: readonly string[]): boolean {
+  return writablePaths.some(isCurationDraftPath);
 }
 
 /** Tool name every memory-file write is routed through. */

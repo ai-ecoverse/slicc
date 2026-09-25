@@ -38,6 +38,14 @@ import type { VirtualFS } from './virtual-fs.js';
 export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
 
 /**
+ * How a read at a path fares against the ACL (see {@link RestrictedFS.readAccess}):
+ * `inside` a readable prefix (or a device / descriptor answered beside the
+ * tree), a `parent` of one (listable, filtered to the entries that lead in),
+ * or `outside` every one — which every read method answers as "not found".
+ */
+export type RestrictedReadAccess = 'inside' | 'parent' | 'outside';
+
+/**
  * Construction options beyond the path lists and write-enforcement mode.
  *
  * `includeMounts` defaults to `true` so existing call sites (and today's
@@ -231,6 +239,25 @@ export class RestrictedFS {
     return [...this.allowedPrefixes, ...ALWAYS_WRITABLE_PREFIXES].some(
       (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
     );
+  }
+
+  /**
+   * Public read-side counterpart of {@link canWrite}: where `path` stands
+   * against the readable prefixes, mounts and sudoers read grants, WITHOUT
+   * touching the tree. Lexical only — a symlink inside a readable prefix that
+   * resolves outside still reads as `inside` here and is caught by
+   * `resolveAndCheckRead` on the actual read (VAL-FS-019), where "not found"
+   * is the right answer for an escape.
+   *
+   * Exists so a decorator can tell "not found" from "not visible" for a unit
+   * that must not mistake the sandbox edge for an absent file (#3459): the
+   * read methods below deliberately answer both the same way, because a shell
+   * probing `$PATH` must not see errors, and that default is not changed here.
+   */
+  readAccess(path: string): RestrictedReadAccess {
+    if (VIRTUAL_DEVICES[normalizePath(path)] || EphemeralFdStore.handles(path)) return 'inside';
+    if (this.isAllowedStrict(path)) return 'inside';
+    return this.isAllowed(path) ? 'parent' : 'outside';
   }
 
   /**

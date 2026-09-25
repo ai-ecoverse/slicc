@@ -10,6 +10,7 @@
  * to be read alongside the retry loop.
  */
 
+import type { BlindReadLog } from '../../base/blind-reads.js';
 import { providerLabel } from '../../base/provider-labels.js';
 import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
@@ -57,6 +58,12 @@ export interface ScoopToolsDeps {
   gatedFs: VirtualFS;
   /** Sudo-gated handle without the memory guard — `memory_write` only (#3157). */
   memoryFs: VirtualFS;
+  /**
+   * A memory pass's ledger of reads outside its visible roots (#3459);
+   * `null` for every other unit. Feeds the `bash` result note and the
+   * `memory_write` refusal.
+   */
+  blindReads?: BlindReadLog | null;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
   getTurnPid: () => number | undefined;
@@ -131,11 +138,15 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
   // ungated handle — the index is bookkeeping, not something a grant covers.
   // Lazy on both sides: the tool body and the index reader load on the
   // first memory write, never into the worker's boot graph.
+  const blindReads = deps.blindReads ?? null;
   const memoryWriteTool = createMemoryWriteTool(deps.memoryFs, {
     readSessionCount: async () => {
       const { readSessionCount } = await import('../cone-memory-budget.js');
       return readSessionCount(deps.fs);
     },
+    // A pass that probed a path it cannot see must not write that path off
+    // as absent (#3459); the ledger names exactly the paths it probed.
+    ...(blindReads ? { blindPaths: () => blindReads.outsidePaths() } : {}),
   });
 
   const legacyTools = [
@@ -160,6 +171,10 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
       // (it arrives as a lick, not a tool result), so the same real→masked
       // pass is wired in here.
       scrubOutput: getToolResultScrubber(),
+      // The shell's commands print `No such file or directory` for every fs
+      // error, so a memory pass learns which of those were the sandbox edge
+      // from this note on the result instead (#3459).
+      ...(blindReads ? { annotateResult: () => blindReads.takeNote() } : {}),
       // Same sink `fswatch` uses to raise a lick from inside the shell: the
       // orchestrator publishes it in `setLickManager`. Read per event rather
       // than captured once, so a context built before the lick manager was

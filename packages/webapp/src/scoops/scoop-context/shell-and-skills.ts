@@ -10,13 +10,16 @@
  * the context separates "how this unit is assembled" from "how it runs".
  */
 
+import { BlindReadLog } from '../../base/blind-reads.js';
+import { isMemoryPassSandbox } from '../../base/memory-budget.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import { createLogger } from '../../core/index.js';
 import { buildEnvFromMaskedEntries } from '../../core/secret-env.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
+import { createBlindReadFs } from '../../fs/blind-read-fs.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { createMemoryGuardedFs } from '../../fs/memory-guard-fs.js';
-import type { RestrictedFS } from '../../fs/restricted-fs.js';
+import { RestrictedFS } from '../../fs/restricted-fs.js';
 import { createSudoFs } from '../../fs/sudo-fs.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
@@ -77,7 +80,31 @@ export interface ShellAndSkills {
    * for memory files (#3157).
    */
   memoryFs: VirtualFS;
+  /**
+   * Ledger of the paths a memory pass probed outside its visible roots
+   * (#3459), or `null` for every other unit. The `bash` tool appends its
+   * note to each result and `memory_write` refuses to persist a refutation
+   * of a recorded path.
+   */
+  blindReads: BlindReadLog | null;
   skills: Skill[];
+}
+
+/**
+ * A memory pass is the one unit for which the sandbox's "not found" answer
+ * outside `visiblePaths` is dangerous rather than convenient: what it reads
+ * becomes durable memory. It is recognised by its grant on a staged
+ * curation draft, so a restored pass or a customized `/etc/MEMORY.md` is
+ * covered the same as a fresh spawn.
+ */
+function blindReadLogFor(
+  unit: WorkUnitDescriptor,
+  fs: VirtualFS | RestrictedFS
+): BlindReadLog | null {
+  const policy = unit.policy.filesystem;
+  if (policy.kind !== 'restricted' || !(fs instanceof RestrictedFS)) return null;
+  if (!isMemoryPassSandbox(policy.writablePaths)) return null;
+  return new BlindReadLog(policy.visiblePaths);
 }
 
 /**
@@ -153,7 +180,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
     folder: scoop.folder,
     onSudoRequest: deps.onSudoRequest,
   });
-  const memoryFs = (
+  const sudoFs = (
     sudoWiring
       ? createSudoFs(fs, {
           broker: sudoWiring.broker,
@@ -165,6 +192,13 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
         })
       : fs
   ) as VirtualFS;
+  // A memory pass must not mistake the sandbox edge for an absent file
+  // (#3459): its reads outside `visiblePaths` are recorded and answered as
+  // "not visible" instead of "not found". Above the sudo gate (a sudoers
+  // read grant widens the ACL, and `readAccess` sees it), below the memory
+  // guard (a refused write is not a read).
+  const blindReads = blindReadLogFor(unit, fs);
+  const memoryFs = blindReads ? createBlindReadFs(sudoFs, fs as RestrictedFS, blindReads) : sudoFs;
   // Memory files change through `memory_write` only (#3157); every other
   // writer — the file tools and any shell command — sees the guarded view.
   const gatedFs = createMemoryGuardedFs(memoryFs);
@@ -207,5 +241,5 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
   log.info('AlmostBashShell initialized', { folder: scoop.folder });
   const skills = await loadSkills(effectiveSkillsFs, SKILLS_LIBRARY_DIR);
-  return { shell, gatedFs, memoryFs, skills };
+  return { shell, gatedFs, memoryFs, blindReads, skills };
 }
