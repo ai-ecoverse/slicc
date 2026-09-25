@@ -18,8 +18,21 @@ export interface RunResult {
   exitCode: number;
 }
 
+/** Store bytes as a latin1 string (one JS char per byte) so binary round-trips. */
+function bytesToLatin1(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]!);
+  return s;
+}
+
+function latin1ToBytes(s: string): Uint8Array {
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
+}
+
 /** Directory-aware in-memory filesystem (models node_modules nesting). */
-export function makeTreeFs(files: Record<string, string>): IFileSystem {
+export function makeTreeFs(files: Record<string, string | Uint8Array>): IFileSystem {
   const store = new Map<string, string>();
   const dirs = new Set<string>(['/']);
   /** Register every ancestor directory of `path` so `stat`/`readdir` see them. */
@@ -36,7 +49,7 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
   }
   for (const [rawPath, content] of Object.entries(files)) {
     const path = normalizePath(rawPath);
-    store.set(path, content);
+    store.set(path, typeof content === 'string' ? content : bytesToLatin1(content));
     addAncestorDirs(path);
   }
   const fileStat = (size: number, isDir: boolean): FsStat => ({
@@ -54,11 +67,11 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
       return v;
     },
     async readFileBuffer(p: string): Promise<Uint8Array> {
-      return new TextEncoder().encode(await fs.readFile(p));
+      return latin1ToBytes(await fs.readFile(p));
     },
     async writeFile(p: string, c: string | Uint8Array): Promise<void> {
       const path = normalizePath(p);
-      store.set(path, typeof c === 'string' ? c : new TextDecoder().decode(c));
+      store.set(path, typeof c === 'string' ? c : bytesToLatin1(c));
       // A write materializes its parents, like a real VFS. Without this a file
       // written AFTER construction left `/workspace` unknown to `stat`, so a
       // second realm run's snapshot walk bailed at the root and came up empty.
@@ -66,10 +79,7 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
     },
     async appendFile(p: string, c: string | Uint8Array): Promise<void> {
       const path = normalizePath(p);
-      store.set(
-        path,
-        (store.get(path) || '') + (typeof c === 'string' ? c : new TextDecoder().decode(c))
-      );
+      store.set(path, (store.get(path) || '') + (typeof c === 'string' ? c : bytesToLatin1(c)));
       addAncestorDirs(path);
     },
     async exists(p: string): Promise<boolean> {
@@ -152,7 +162,7 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
 
 export function makeCtx(
   opts: {
-    files?: Record<string, string>;
+    files?: Record<string, string | Uint8Array>;
     cwd?: string;
     exec?: CommandContext['exec'];
     fetch?: CommandContext['fetch'];

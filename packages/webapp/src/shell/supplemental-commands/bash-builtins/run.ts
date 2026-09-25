@@ -215,10 +215,11 @@ Supported:
   trap -l              list the signals the kernel can deliver
   trap - SPEC ...      reset SPEC to its default (nothing was trapped, and
                        the default for a delivered signal is what you get)
+  trap '' EXIT         an empty exit action (nothing runs at exit anyway)
 
 NOT supported:
   trap 'command' SPEC  installing a handler
-  trap '' SPEC ...     ignoring/masking a signal
+  trap '' SIGNAL ...   ignoring/masking a signal
 
 There is no signal-delivery path into a running script in this shell, so a
 handler could never fire. Installing one exits 2 with this message rather
@@ -249,6 +250,11 @@ function isTrapReset(token: string): boolean {
   return token === '-';
 }
 
+/** EXIT (`0`) is no signal: an empty action on it asks for nothing at exit. */
+function isExitSpec(token: string): boolean {
+  return token === '0' || /^(SIG)?EXIT$/i.test(token);
+}
+
 function createTrapCommand(): Command {
   return defineCommand('trap', async (args) => {
     if (isHelpRequest(args)) return ok(TRAP_HELP);
@@ -261,6 +267,11 @@ function createTrapCommand(): Command {
     // `trap - SPEC ...` asks for the default disposition, which is what an
     // untrapped signal already gets.
     if (isTrapReset(args[0])) return ok();
+
+    // `trap '' EXIT` sets an empty exit action, and nothing runs at exit
+    // here. install-sh ends with `trap '' 0`, so refusing it made every
+    // install exit 2.
+    if (args[0] === '' && args.length > 1 && args.slice(1).every(isExitSpec)) return ok();
 
     // `trap '' SPEC ...` asks for masking. Ctrl+C and `kill` abort the run
     // through the kernel process abort regardless, so acknowledging it would
