@@ -68,11 +68,20 @@ still keeps them):
 | `copyFileSync(src, dest)`            |                                                       |
 | `cpSync(src, dest)`                  | Recursive tree copy                                   |
 | `chmodSync(path)`                    | No-op (VFS has no mode bits); keeps ENOENT-on-missing |
+| `utimesSync(path, atime, mtime)`     | Sets times live via the sync bridge; see below        |
 | `mkdtempSync(prefix)`                |                                                       |
 | `unlinkSync(path)`                   |                                                       |
 | `renameSync(oldPath, newPath)`       |                                                       |
 | `readSync(fd, buffer, …)`            | Stdio only: fd 0 walks the buffered stdin; else EBADF |
 | `writeSync(fd, data, …)`             | Stdio only: fd 1/2 → stdout/stderr; else EBADF        |
+
+`utimesSync` takes seconds, a numeric string or a `Date`, as Node does, and
+throws ENOENT for a missing path. A negative finite number means "now"
+(`utimesSync(path, -1, -1)`); `NaN` / ±`Infinity` throw `ERR_INVALID_ARG_TYPE`.
+With the SW/SAB bridge it sets the times on the live file at call time. Without
+one the cache models no times, so it's a no-op, like `chmodSync`. It also leaves
+two cases as they are: a mount that stores no times (hostfs, File System Access)
+and a file that so far exists only in the cache.
 
 The sync cache is populated from a VFS snapshot before user code runs and
 flushed back on completion. `writeFileSync` / `appendFileSync` /
