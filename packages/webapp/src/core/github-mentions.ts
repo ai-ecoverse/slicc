@@ -208,11 +208,21 @@ const REPO_COMMIT_RE = /^commit\/([0-9a-fA-F]{7,40})(?:\/|$)/;
 const REPO_RELEASE_RE = /^releases\/tag\/([^/?#]{1,128})(?:\/|$)/;
 
 /**
+ * Routes that serve the file bytes rather than a GitHub HTML page
+ * (`/raw/…`, `/releases/download/…`). These have no social card — a link to
+ * an image there should preview the image itself, not the repository card a
+ * `/blob/…` page would get.
+ */
+const REPO_RESOURCE_RE = /^(?:raw|releases\/download)\//;
+
+/**
  * The card for a page under `owner/repo`; `rest` is the path below the repo.
  * Issues and pull requests never reach here — {@link parseGithubUrl} claims
- * them first, so their grammar stays in one place.
+ * them first, so their grammar stays in one place. Resource-serving routes
+ * return `null` so the caller can fall through to a direct image preview.
  */
-function repoPageCard(owner: string, repo: string, rest: string): GithubCard {
+function repoPageCard(owner: string, repo: string, rest: string): GithubCard | null {
+  if (REPO_RESOURCE_RE.test(rest)) return null;
   const slug = `${owner}/${repo}`;
   const discussion = REPO_DISCUSSION_RE.exec(rest);
   if (discussion) {

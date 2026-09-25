@@ -22,7 +22,10 @@
  * commit, a release — previews from GitHub's own rendered card image, whose
  * address is derivable from the URL. No page fetch, so the rich card shows up
  * even in a float with no fetch route at all, where the generic host-only card
- * used to be the best anything could do.
+ * used to be the best anything could do. Resource-serving routes
+ * (`/raw/…`, `/releases/download/…`) are not pages: they decline a card so an
+ * image URL still previews itself, while a `/blob/…/image.png` page keeps the
+ * repository card.
  */
 
 import {

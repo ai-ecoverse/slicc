@@ -71,6 +71,25 @@ describe('LinkPreviewFetcher', () => {
       siteName: 'GitHub',
       image: 'https://opengraph.githubassets.com/slicc/orgs/acme/projects/4',
     });
+    // Blob pages keep the repository card even when the path ends in an image ext.
+    expect(await fetcher.preview('https://github.com/o/r/blob/main/logo.png')).toMatchObject({
+      state: 'ready',
+      badge: 'Repository',
+      image: 'https://opengraph.githubassets.com/slicc/o/r',
+    });
+    // Resource-serving image routes preview the file itself, not the repo card.
+    expect(await fetcher.preview('https://github.com/o/r/raw/main/logo.png')).toMatchObject({
+      state: 'ready',
+      image: 'https://github.com/o/r/raw/main/logo.png',
+      title: 'logo.png',
+    });
+    expect(
+      await fetcher.preview('https://github.com/o/r/releases/download/v1/shot.webp')
+    ).toMatchObject({
+      state: 'ready',
+      image: 'https://github.com/o/r/releases/download/v1/shot.webp',
+      title: 'shot.webp',
+    });
     expect(fetchFn).not.toHaveBeenCalled();
   });
 

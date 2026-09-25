@@ -90,11 +90,22 @@ describe('githubCardFor', () => {
     expect(card('/facebook/react/')).toEqual(repo);
     expect(card('/facebook/react.git')).toEqual(repo);
     expect(card('/facebook/react/blob/main/README.md')).toEqual(repo);
+    // A blob of an image is still a page — card the repository, not the file.
+    expect(card('/facebook/react/blob/main/logo.png')).toEqual(repo);
     expect(card('/facebook/react/tree/main/packages')).toEqual(repo);
     expect(card('/facebook/react/actions')).toEqual(repo);
     // A page whose path looks numbered but names no number.
     expect(card('/facebook/react/issues')).toEqual(repo);
     expect(card('/facebook/react/issues/new')).toEqual(repo);
+  });
+
+  it('declines resource-serving routes so image previews can claim them', () => {
+    expect(card('/o/r/raw/main/image.png')).toBeNull();
+    expect(card('/o/r/raw/refs/heads/main/docs/shot.webp')).toBeNull();
+    expect(card('/o/r/releases/download/v1.0.0/image.png')).toBeNull();
+    expect(card('/o/r/releases/download/v1/asset.bin')).toBeNull();
+    // A release *tag* page still has a card; only the download route declines.
+    expect(card('/o/r/releases/tag/v1.0.0')).toMatchObject({ kind: 'release' });
   });
 
   it('cards discussions, commits and releases', () => {
