@@ -131,6 +131,10 @@ describe('isBedrockCampCompatible', () => {
       'global.openai.gpt-5.6-sol',
       'global.openai.gpt-5.6-terra',
       'global.openai.gpt-5.6-luna',
+      'global.openai.gpt-6-sol',
+      'global.openai.gpt-6-luna',
+      'global.openai.gpt-6-astra',
+      'global.moonshotai.kimi-k3',
     ]) {
       expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(true);
       // `global.` is reachable from every region.
@@ -175,9 +179,43 @@ describe('isBedrockCampCompatible', () => {
     }
   });
 
+  // Same rule for the GPT-6 and Kimi K3 admissions: only the measured ids.
+  it('does not auto-admit unverified gpt-6 or kimi variants', () => {
+    for (const id of [
+      'global.openai.gpt-6-terra',
+      'global.openai.gpt-6-sol-pro',
+      'global.openai.gpt-6',
+      'global.openai.gpt-6.1-sol',
+      'global.openai.gpt-6-6-sol',
+      'global.moonshotai.kimi-k3.5',
+      'global.moonshotai.kimi-k3-thinking',
+      'global.moonshotai.kimi-k2.5',
+      // Right model name under the wrong vendor.
+      'global.openai.kimi-k3',
+      'global.moonshotai.gpt-6-sol',
+    ]) {
+      expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(false);
+    }
+  });
+
   it('still requires an inference-profile prefix for allowlisted models', () => {
     // Bare ids 400 with "on-demand throughput isn't supported".
     expect(isBedrockCampCompatible({ id: 'openai.gpt-5.6-sol' }, 'us-west-2')).toBe(false);
+    expect(isBedrockCampCompatible({ id: 'openai.gpt-6-sol' }, 'us-west-2')).toBe(false);
+    expect(isBedrockCampCompatible({ id: 'moonshotai.kimi-k3' }, 'us-west-2')).toBe(false);
+  });
+
+  it('applies the region rule to the us. profiles of the new admissions', () => {
+    for (const id of [
+      'us.anthropic.claude-fable-5-1',
+      'us.openai.gpt-6-sol',
+      'us.openai.gpt-6-luna',
+      'us.openai.gpt-6-astra',
+      'us.moonshotai.kimi-k3',
+    ]) {
+      expect(isBedrockCampCompatible({ id }, 'us-east-1'), id).toBe(true);
+      expect(isBedrockCampCompatible({ id }, 'eu-central-1'), id).toBe(false);
+    }
   });
 
   it('stays permissive when no region is configured yet', () => {
@@ -198,6 +236,7 @@ describe('isBedrockCampClaudeModel', () => {
     ['us.anthropic.claude-opus-5'],
     ['global.anthropic.claude-sonnet-5'],
     ['us.anthropic.claude-fable-5'],
+    ['global.anthropic.claude-fable-5-1'],
     ['us.anthropic.claude-haiku-4-5-20251001-v1:0'],
   ])('is true for %s', (id) => {
     expect(isBedrockCampClaudeModel({ id })).toBe(true);
@@ -207,6 +246,10 @@ describe('isBedrockCampClaudeModel', () => {
     ['global.openai.gpt-5.6-sol'],
     ['global.openai.gpt-5.6-terra'],
     ['global.openai.gpt-5.6-luna'],
+    ['global.openai.gpt-6-sol'],
+    ['us.openai.gpt-6-luna'],
+    ['global.openai.gpt-6-astra'],
+    ['us.moonshotai.kimi-k3'],
   ])('is false for the allowlisted non-Claude model %s', (id) => {
     // Still selectable — it just must not advertise a thinking-level control.
     expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(true);
@@ -251,6 +294,14 @@ describe('parity with the private copies in bedrock-camp.ts', () => {
     { id: 'eu.anthropic.claude-opus-5', region: 'us-west-2' },
     { id: 'us.anthropic.claude-3-haiku', region: 'us-west-2' },
     { id: 'us.openai.gpt-5.6-sol', region: 'us-west-2' },
+    { id: 'global.anthropic.claude-fable-5-1', region: 'eu-central-1' },
+    { id: 'us.openai.gpt-6-sol', region: 'us-west-2' },
+    { id: 'us.openai.gpt-6-sol', region: 'eu-central-1' },
+    { id: 'global.openai.gpt-6-luna', region: 'ap-northeast-1' },
+    { id: 'global.openai.gpt-6-astra', region: 'us-west-2' },
+    { id: 'global.openai.gpt-6-terra', region: 'us-west-2' },
+    { id: 'us.moonshotai.kimi-k3', region: 'us-west-2' },
+    { id: 'global.moonshotai.kimi-k3.5', region: 'us-west-2' },
     { id: 'jp.anthropic.claude-sonnet-4-6', region: 'ap-northeast-1' },
     { id: 'jp.anthropic.claude-sonnet-4-6', region: 'ap-northeast-2' },
     { id: 'au.anthropic.claude-opus-5', region: 'ap-southeast-2' },

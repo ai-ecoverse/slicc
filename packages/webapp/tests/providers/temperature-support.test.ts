@@ -86,6 +86,14 @@ describe('non-Claude Bedrock models that reject temperature', () => {
     ['global.openai.gpt-5.6-sol'],
     ['global.openai.gpt-5.6-terra'],
     ['global.openai.gpt-5.6-luna'],
+    ['global.openai.gpt-6-sol'],
+    ['us.openai.gpt-6-sol'],
+    ['global.openai.gpt-6-luna'],
+    ['us.openai.gpt-6-luna'],
+    ['global.openai.gpt-6-astra'],
+    ['us.openai.gpt-6-astra'],
+    ['global.moonshotai.kimi-k3'],
+    ['us.moonshotai.kimi-k3'],
   ])('%s does not support temperature', (id) => {
     expect(modelSupportsTemperature(id)).toBe(false);
   });
@@ -93,6 +101,29 @@ describe('non-Claude Bedrock models that reject temperature', () => {
   it('matches on the display name for opaque application-inference-profile ARNs', () => {
     const arn = 'arn:aws:bedrock:us-west-2:1:application-inference-profile/x';
     expect(modelSupportsTemperature(arn, 'GPT-5.6 Sol (Global)')).toBe(false);
+    expect(modelSupportsTemperature(arn, 'GPT-6 Astra (US)')).toBe(false);
+    expect(modelSupportsTemperature(arn, 'Kimi K3 (Global)')).toBe(false);
+  });
+
+  // Claude side of the same bar: Fable 5.1 answers
+  // `400 "temperature is deprecated for this model."`.
+  it.each([['global.anthropic.claude-fable-5-1'], ['us.anthropic.claude-fable-5-1']])(
+    '%s does not support temperature',
+    (id) => {
+      expect(modelSupportsTemperature(id)).toBe(false);
+    }
+  );
+
+  // Pinned per variant and version, like the picker allowlist, so a model
+  // nobody measured keeps its `temperature`.
+  it.each([
+    ['global.openai.gpt-6-terra'],
+    ['global.openai.gpt-6.1-sol'],
+    ['global.moonshotai.kimi-k3.5'],
+    ['global.moonshotai.kimi-k30'],
+    ['global.moonshotai.kimi-k2.5'],
+  ])('%s is not caught by the pinned patterns', (id) => {
+    expect(modelSupportsTemperature(id)).toBe(true);
   });
 
   it('strips temperature from options for those models', () => {

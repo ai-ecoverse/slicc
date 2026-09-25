@@ -519,7 +519,20 @@ describe('config.defaultModelId resolves against the real catalogue', () => {
  * widening the picker allowlist can never start emitting either field.
  */
 describe('allowlisted non-Claude models get no Claude-shaped fields', () => {
-  const NON_CLAUDE = [['global.openai.gpt-5.6-sol', 'GPT-5.6 Sol (Global)']] as const;
+  const NON_CLAUDE = [
+    ['global.openai.gpt-5.6-sol', 'GPT-5.6 Sol (Global)'],
+    ['global.openai.gpt-6-sol', 'GPT-6 Sol (Global)'],
+    ['us.openai.gpt-6-luna', 'GPT-6 Luna (US)'],
+    ['global.openai.gpt-6-astra', 'GPT-6 Astra (Global)'],
+    ['us.moonshotai.kimi-k3', 'Kimi K3 (US)'],
+  ] as const;
+
+  // Each answers `temperature` with a 400, so a quick-llm helper call at
+  // `temperature: 0.3` would fail without the reject-list entry.
+  it.each(NON_CLAUDE)('omits temperature for %s', async (id, name) => {
+    const payload = await capturePayload(baseModel({ id, name }), { temperature: 0.3 });
+    expect(payload.inferenceConfig.temperature).toBeUndefined();
+  });
 
   it.each(NON_CLAUDE)('sends no cachePoint for %s', async (id, name) => {
     const payload = await capturePayload(baseModel({ id, name }), {});
@@ -547,5 +560,30 @@ describe('allowlisted non-Claude models get no Claude-shaped fields', () => {
       type: 'adaptive',
       display: 'summarized',
     });
+  });
+});
+
+// Fable 5.1 accepts only the adaptive shape (`thinking.type.enabled` 400s) with
+// effort up to `max`, rejects `temperature`, and writes then reads cachePoint.
+describe('Claude Fable 5.1 request shape', () => {
+  const fable = () =>
+    baseModel({
+      id: 'global.anthropic.claude-fable-5-1',
+      name: 'Claude Fable 5.1 (Global)',
+      reasoning: true,
+    });
+
+  it('sends adaptive thinking with native xhigh effort and a cachePoint', async () => {
+    const payload = await capturePayload(fable(), { reasoning: 'xhigh' });
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort: 'xhigh' },
+    });
+    expect(JSON.stringify(payload.messages)).toContain('cachePoint');
+  });
+
+  it('omits temperature', async () => {
+    const payload = await capturePayload(fable(), { temperature: 0.3 });
+    expect(payload.inferenceConfig.temperature).toBeUndefined();
   });
 });

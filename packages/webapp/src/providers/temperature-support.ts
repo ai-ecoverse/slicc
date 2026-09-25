@@ -24,9 +24,10 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * Non-Claude Bedrock models that reject `temperature` the same way.
  *
  * The newest third-party models on Bedrock have followed Anthropic in
- * dropping the param: `openai.gpt-5.6-*` answers `400 "This model doesn't
- * support the temperature field. Remove temperature and try again."`
- * (verified on `bedrock-runtime.us-west-2`). Only models the bedrock-camp
+ * dropping the param: `openai.gpt-5.6-*`, `openai.gpt-6-{sol,luna,astra}` and
+ * `moonshotai.kimi-k3` answer `400 "This model doesn't support the
+ * temperature field. Remove temperature and try again."` (verified on
+ * `bedrock-runtime.us-west-2`). Only models the bedrock-camp
  * picker can actually reach need to be listed here — the allowlist in
  * `built-in/bedrock-camp-compat.ts` is the other half of this pair, so extend
  * both together.
@@ -39,9 +40,11 @@ import { claudeRejectsTemperature } from './claude-model-version.js';
  * application-inference-profile ARN ("GPT-5.6 Sol (Global)") hits the same
  * rule as the id ("global.openai.gpt-5.6-sol"). Both `.` and `-` separators
  * are accepted because the name normalizer collapses spaces to dashes.
- * The version is pinned: `gpt-5.5` still accepts `temperature`.
+ * The version is pinned: `gpt-5.5` still accepts `temperature`. GPT-6 is
+ * spelled out per variant like the allowlist, and `kimi-k3` must not also
+ * match a future `kimi-k3.5` or `kimi-k30` nobody has measured.
  */
-const NON_CLAUDE_REJECTS_TEMPERATURE_RE = /gpt-5[.-]6/;
+const NON_CLAUDE_REJECTS_TEMPERATURE_RE = /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|kimi-k3(?![\d.])/;
 
 function nonClaudeRejectsTemperature(modelId: string, modelName?: string): boolean {
   const values = modelName ? [modelId, modelName] : [modelId];

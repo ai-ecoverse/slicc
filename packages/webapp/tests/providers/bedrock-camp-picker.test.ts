@@ -104,6 +104,50 @@ describe('bedrock-camp picker contents', () => {
     for (const m of gpt) expect(m.reasoning, m.id).toBe(false);
   });
 
+  // The benchmark selects models with `slicc <join-url> model <m>`, which only
+  // resolves against this list; `claude-fable-5-1` used to fail "no model
+  // matches" even though the Claude filter admits the family.
+  it('surfaces Fable 5.1, GPT-6 and Kimi K3 on the profiles a us- endpoint reaches', async () => {
+    const ids = (await pickerModels()).map((m) => m.id);
+    for (const baseId of [
+      'anthropic.claude-fable-5-1',
+      'openai.gpt-6-sol',
+      'openai.gpt-6-luna',
+      'openai.gpt-6-astra',
+      'moonshotai.kimi-k3',
+    ]) {
+      expect(ids, baseId).toContain(`global.${baseId}`);
+      expect(ids, baseId).toContain(`us.${baseId}`);
+    }
+  });
+
+  it('keeps effort control on Fable 5.1 and clears it on GPT-6 and Kimi K3', async () => {
+    const models = await pickerModels();
+    const reasoning = (id: string) => models.find((m) => m.id === id)?.reasoning;
+    expect(reasoning('us.anthropic.claude-fable-5-1')).toBe(true);
+    for (const id of [
+      'global.openai.gpt-6-sol',
+      'global.openai.gpt-6-luna',
+      'global.openai.gpt-6-astra',
+      'global.moonshotai.kimi-k3',
+    ]) {
+      expect(reasoning(id), id).toBe(false);
+    }
+  });
+
+  it.each([
+    ['global.anthropic.claude-fable-5-1'],
+    ['us.openai.gpt-6-sol'],
+    ['global.moonshotai.kimi-k3'],
+  ])('resolves a requested %s instead of degrading to the selected model', async (id) => {
+    storage.set('selected-model', 'bedrock-camp:us.anthropic.claude-opus-5');
+    const { resolveModelById } = await import('../../src/providers/account-store.js');
+    const model = resolveModelById(id);
+    expect(model.id).toBe(id);
+    expect(model.api).toBe('bedrock-camp-converse');
+    expect(model.cost.input).toBeGreaterThan(0);
+  });
+
   it('keeps unverified non-Claude models out entirely', async () => {
     const ids = (await pickerModels()).map((m) => m.id);
     for (const needle of ['grok', 'glm', 'minimax', 'nova', 'llama', 'deepseek', 'palmyra']) {

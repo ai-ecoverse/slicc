@@ -47,26 +47,30 @@
 const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 // Verified live on `bedrock-runtime.us-west-2` (see `docs/pitfalls.md` §5):
-// openai.gpt-5.6-{sol,terra,luna} do implicit prompt caching — cacheWrite on
-// the first call, cacheRead on every repeat, including with a system prompt
-// and toolConfig attached — and emit tool calls reliably.
+// openai.gpt-5.6-{sol,terra,luna}, openai.gpt-6-{sol,luna,astra} and
+// moonshotai.kimi-k3 do implicit prompt caching — cacheWrite on the first
+// call, cacheRead on every repeat, including with a system prompt and
+// toolConfig attached — and emit tool calls reliably.
 //
 // The bar for this list is prompt caching, which is why xai.grok-4.6 is NOT
 // here: it is functional (200s, tool calls) but cached on only 2 of 15
 // attempts at ~18-20k tokens, so it would bill full input on nearly every
 // turn. Re-measure before adding it.
 //
-// gpt-5.6 rejects `temperature` and every `additionalModelRequestFields`
-// thinking shape; `temperature-support.ts` and
-// `buildAdditionalModelRequestFields` already handle both. It does not accept
-// an explicit `cachePoint` block either — caching is automatic and sending one
-// 403s.
+// All of them reject `temperature` (`temperature-support.ts` strips it).
+// gpt-5.6 rejects every `additionalModelRequestFields` thinking shape; gpt-6
+// accepts only `reasoning.effort`, and kimi-k3 ignores every shape. None of
+// that reaches the wire, because `buildAdditionalModelRequestFields` is
+// Claude-only. gpt-5.6 does not accept an explicit `cachePoint` block either —
+// caching is automatic and sending one 403s — and `supportsPromptCaching` is
+// Claude-only too, so none of them gets one.
 //
 // Anchored and spelled out per variant on purpose. A looser `gpt-5[.-]6-`
 // would auto-admit any future `*.openai.gpt-5.6-*` the catalogue gains — the
 // exact default-deny hole this list exists to avoid — and would accept the
 // `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
-const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5\.6-(?:sol|terra|luna)$/;
+const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra))|moonshotai\.kimi-k3)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
