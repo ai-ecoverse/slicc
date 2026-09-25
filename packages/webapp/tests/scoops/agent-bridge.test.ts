@@ -2318,6 +2318,39 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
     );
   });
 
+  it('omits status.json from the cone notify when the receipt write fails (#3460)', async () => {
+    const { orchestrator, scripts, registerCalls } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: { [MERGE.basePath]: 'old\n', [MERGE.draftPath]: 'new\n', [MERGE.targetPath]: 'old\n' },
+      writeFile: async (path) => {
+        if (path === STATUS) throw new Error('quota exceeded');
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'dry-sorbet',
+    });
+    scripts.set('agent_dry_sorbet', (obs) => obs.onSendMessage?.('curated'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      notifyOnComplete: true,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(shared.files.has(STATUS)).toBe(false);
+    expect(orchestrator.notifyScoopOutcome).toHaveBeenCalledWith(
+      registerCalls[0]?.jid,
+      expect.objectContaining({ exitCode: 0 })
+    );
+    const notified = vi.mocked(orchestrator.notifyScoopOutcome).mock.calls[0]?.[1] as {
+      receiptPath?: string;
+    };
+    expect(notified.receiptPath).toBeUndefined();
+  });
+
   // #3157: a run cut off at its bound has landed a whole, budget-checked
   // draft (memory files change only through `memory_write`), so the draft
   // is folded in as a truncated success instead of being discarded.

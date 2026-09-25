@@ -89,6 +89,15 @@ export interface ScoopPassOutcome {
   receiptPath?: string;
 }
 
+/** How a deferred receipt-bearing completion should land once the outcome is known. */
+type DeferredDisposition = 'notify' | 'mute' | 'wait';
+
+interface DeferredCompletion {
+  responseText: string;
+  timestamp: string;
+  disposition: DeferredDisposition;
+}
+
 export class ScoopCompletionService {
   /** Accumulates response text per scoop for routing back to cone on completion. */
   private scoopResponseBuffer: Map<string, string> = new Map();
@@ -99,9 +108,10 @@ export class ScoopCompletionService {
   /**
    * Completions deferred until {@link notifyWithOutcome} — scoops that write
    * an outcome receipt must not tell the cone "completed" before the final
-   * exit code is known (#3460).
+   * exit code is known (#3460). Disposition preserves mute / scoop_wait claims
+   * across the deferral so the final outcome does not bypass them.
    */
-  private deferredCompletions: Map<string, { responseText: string; timestamp: string }> = new Map();
+  private deferredCompletions: Map<string, DeferredCompletion> = new Map();
   /** Last `onError` reason per scoop; used when ready fires without a receipt. */
   private failureReasons: Map<string, string> = new Map();
   /** One-shot resolvers for `scoop_wait` calls. */
@@ -136,9 +146,15 @@ export class ScoopCompletionService {
     this.scoopResponseBuffer.set(jid, text);
   }
 
-  /** Drop the buffered response (e.g. starting a fresh prompt). */
+  /**
+   * Drop the buffered response and any per-turn failure reason (e.g. starting
+   * a fresh prompt). A scoop left in `error` by a wall-clock bound never
+   * reaches ready, so without this the next successful turn would inherit
+   * the previous failure headline (#3460 review).
+   */
   clearResponse(jid: string): void {
     this.scoopResponseBuffer.delete(jid);
+    this.failureReasons.delete(jid);
   }
 
   /** Mute a set of scoops. Idempotent. */
@@ -213,7 +229,8 @@ export class ScoopCompletionService {
    * artifact. Suppressed for cone scoops or when `notifyOnComplete === false`.
    * Pending waiters claim the completion exclusively; muted scoops stash it
    * in {@link pendingCompletions} for later flush. Scoops with
-   * `outcomeReceiptPath` defer delivery until {@link notifyWithOutcome}.
+   * `outcomeReceiptPath` defer delivery until {@link notifyWithOutcome},
+   * preserving mute / `scoop_wait` disposition across that gap.
    */
   async notifyCompletion(jid: string): Promise<void> {
     const scoop = this.deps.getScoop(jid);
@@ -233,47 +250,18 @@ export class ScoopCompletionService {
       return;
     }
 
-    const waiters = this.completionWaiters.get(jid);
-    if (waiters && waiters.length > 0) {
-      this.completionWaiters.delete(jid);
+    if (scoop.outcomeReceiptPath) {
+      this.deferForOutcomeReceipt(scoop, jid, responseText);
+      return;
+    }
+
+    if (this.claimWaiters(jid, responseText)) {
       this.failureReasons.delete(jid);
-      const waiterSummary = truncateForWaiter(responseText);
-      for (const w of waiters) {
-        try {
-          w(waiterSummary || null);
-        } catch (err) {
-          log.warn('completion waiter threw', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
       return;
     }
 
     if (this.mutedScoops.has(jid)) {
-      this.pendingCompletions.set(jid, { responseText, timestamp: new Date().toISOString() });
-      log.info('Scoop completion stashed (muted)', {
-        scoop: scoop.folder,
-        responseLength: responseText.length,
-      });
-      return;
-    }
-
-    // Memory curator/dreamer (and any other receipt-bearing spawn): the
-    // ready transition races the bridge's merge + status.json write. Stash
-    // and wait for {@link notifyWithOutcome} so a network death is not
-    // reported as `completed` (#3460).
-    if (scoop.outcomeReceiptPath) {
-      this.deferredCompletions.set(jid, {
-        responseText,
-        timestamp: new Date().toISOString(),
-      });
-      log.info('Scoop completion deferred pending outcome receipt', {
-        scoop: scoop.folder,
-        receiptPath: scoop.outcomeReceiptPath,
-        responseLength: responseText.length,
-      });
+      this.stashMuted(jid, scoop.folder, responseText, new Date().toISOString(), 'completion');
       return;
     }
 
@@ -290,8 +278,9 @@ export class ScoopCompletionService {
   /**
    * Deliver a previously deferred completion using the final spawn outcome
    * (after `status.json` / merge). Called by the agent bridge before the
-   * scoop is unregistered. Failure with an empty buffer still notifies —
-   * the cone must learn the pass failed even when no report was produced.
+   * scoop is unregistered. Honors the mute / `scoop_wait` disposition
+   * captured at ready so a failure cannot bypass them. Failure with an
+   * empty buffer still notifies when disposition is `notify`.
    */
   async notifyWithOutcome(jid: string, outcome: ScoopPassOutcome): Promise<void> {
     const scoop = this.deps.getScoop(jid);
@@ -306,17 +295,106 @@ export class ScoopCompletionService {
       deferred?.responseText ?? this.scoopResponseBuffer.get(jid) ?? outcome.reason ?? '';
     this.scoopResponseBuffer.delete(jid);
 
+    const summaryText = formatOutcomeAwareSummary(responseText, outcome);
+    const disposition = deferred?.disposition ?? 'notify';
+    const timestamp = deferred?.timestamp ?? new Date().toISOString();
+
+    if (this.applyDeferredDisposition(jid, scoop, disposition, summaryText, timestamp, outcome)) {
+      return;
+    }
+
     if (!responseText && outcome.exitCode === 0) return;
 
     await this.deliverCompletionToParent(scoop, responseText, {
       exitCode: outcome.exitCode,
       ...(outcome.reason ? { reason: outcome.reason } : {}),
-      ...(outcome.receiptPath
-        ? { receiptPath: outcome.receiptPath }
-        : scoop.outcomeReceiptPath
-          ? { receiptPath: scoop.outcomeReceiptPath }
-          : {}),
+      ...(outcome.receiptPath ? { receiptPath: outcome.receiptPath } : {}),
     });
+  }
+
+  /**
+   * Ready-path deferral for receipt-bearing scoops: capture mute/wait so
+   * {@link notifyWithOutcome} can apply the final exit through the same path.
+   */
+  private deferForOutcomeReceipt(scoop: RegisteredScoop, jid: string, responseText: string): void {
+    const disposition = this.currentDeferredDisposition(jid);
+    this.deferredCompletions.set(jid, {
+      responseText,
+      timestamp: new Date().toISOString(),
+      disposition,
+    });
+    log.info('Scoop completion deferred pending outcome receipt', {
+      scoop: scoop.folder,
+      receiptPath: scoop.outcomeReceiptPath,
+      disposition,
+      responseLength: responseText.length,
+    });
+  }
+
+  private currentDeferredDisposition(jid: string): DeferredDisposition {
+    const waiters = this.completionWaiters.get(jid);
+    if (waiters && waiters.length > 0) return 'wait';
+    if (this.mutedScoops.has(jid)) return 'mute';
+    return 'notify';
+  }
+
+  /** Resolve registered scoop_wait waiters; returns true when any claimed. */
+  private claimWaiters(jid: string, summary: string): boolean {
+    const waiters = this.completionWaiters.get(jid);
+    if (!waiters || waiters.length === 0) return false;
+    this.completionWaiters.delete(jid);
+    const waiterSummary = truncateForWaiter(summary);
+    for (const w of waiters) {
+      try {
+        w(waiterSummary || null);
+      } catch (err) {
+        log.warn('completion waiter threw', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return true;
+  }
+
+  private stashMuted(
+    jid: string,
+    folder: string,
+    responseText: string,
+    timestamp: string,
+    kind: 'completion' | 'outcome',
+    exitCode?: number
+  ): void {
+    this.pendingCompletions.set(jid, { responseText, timestamp });
+    log.info(
+      kind === 'outcome' ? 'Scoop outcome stashed (muted)' : 'Scoop completion stashed (muted)',
+      {
+        scoop: folder,
+        responseLength: responseText.length,
+        ...(exitCode !== undefined ? { exitCode } : {}),
+      }
+    );
+  }
+
+  /**
+   * Apply mute / wait disposition for a deferred outcome. Returns true when
+   * the outcome was consumed (no cone notify). Falls through when waiters
+   * disappeared or the scoop was unmuted after ready.
+   */
+  private applyDeferredDisposition(
+    jid: string,
+    scoop: RegisteredScoop,
+    disposition: DeferredDisposition,
+    summaryText: string,
+    timestamp: string,
+    outcome: ScoopPassOutcome
+  ): boolean {
+    if (disposition === 'wait' && this.claimWaiters(jid, summaryText)) return true;
+    if (disposition === 'mute' && this.mutedScoops.has(jid)) {
+      this.stashMuted(jid, scoop.folder, summaryText, timestamp, 'outcome', outcome.exitCode);
+      return true;
+    }
+    return false;
   }
 
   private async deliverCompletionToParent(
@@ -780,4 +858,16 @@ function outcomeLines(outcome: ScoopPassOutcome): string[] {
   if (outcome.reason) lines.push(`reason: ${outcome.reason.slice(0, 500)}`);
   if (outcome.receiptPath) lines.push(`status.json: ${outcome.receiptPath}`);
   return lines;
+}
+
+/**
+ * Summary text for mute / scoop_wait consumers that must see the final
+ * exit without a cone notify card — prefixes a failure note when needed.
+ */
+function formatOutcomeAwareSummary(responseText: string, outcome: ScoopPassOutcome): string {
+  if (outcome.exitCode === 0) return responseText;
+  const head = outcome.reason
+    ? `failed (exit ${outcome.exitCode}): ${outcome.reason}`
+    : `failed (exit ${outcome.exitCode})`;
+  return responseText ? `${head}\n${responseText}` : head;
 }
