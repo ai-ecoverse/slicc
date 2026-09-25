@@ -6,18 +6,18 @@ Measures what skills and models change in SLICC. It runs task sets on a SLICC le
 
 **Actions → Benchmark → Run workflow**. The inputs:
 
-| Input                | Default                           | Meaning                                                                             |
-| -------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                           |
-| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                     |
-| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills) |
-| `repeats`            | `1`                               | Runs per task and configuration                                                     |
-| `tasks`              | all                               | Task ids, comma-separated                                                           |
-| `limit`              | all                               | First N tasks of each set                                                           |
-| `timeout`            | `900`                             | Seconds one agent run may take                                                      |
-| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                           |
-| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                         |
-| `fresh-leader-every` | `5`                               | Restart the leader every N tasks; `0` keeps one leader for the whole job            |
+| Input                | Default                           | Meaning                                                                                                            |
+| -------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                                                          |
+| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                                                    |
+| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills)                                |
+| `repeats`            | `1`                               | Runs per task and configuration                                                                                    |
+| `tasks`              | all                               | Task ids, comma-separated                                                                                          |
+| `limit`              | all                               | First N tasks of each set                                                                                          |
+| `timeout`            | `900`                             | Seconds one agent run may take                                                                                     |
+| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                                                          |
+| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                                                        |
+| `fresh-leader-every` | `1`                               | Restart the leader, with a wiped profile, every N tasks; `1` isolates every task, `0` keeps one leader for the job |
 
 The job summary shows the report. Two artifacts:
 
