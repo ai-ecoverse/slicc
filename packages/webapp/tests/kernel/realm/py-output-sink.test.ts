@@ -45,4 +45,13 @@ describe('Python realm output', () => {
       ).out
     ).toBe('é€');
   });
+
+  it('preserves a leading UTF-8 BOM', () => {
+    const chunks: string[] = [];
+    const sink = textSink(chunks);
+    sink.write(new TextEncoder().encode('\ufefftext\n'));
+    expect(chunks.join('')).toBe('\ufefftext\n');
+
+    expect(capture('import sys; sys.stdout.write("\\ufefftext\\n")').out).toBe('\ufefftext\n');
+  });
 });

@@ -848,7 +848,9 @@ async function registerSliccFsModuleSafe(
  * CMake's FindPython read no version from `python3 -c …`.
  */
 export function textSink(chunks: string[]): { write: (buffer: Uint8Array) => number } {
-  const decoder = new TextDecoder();
+  // ignoreBOM: default TextDecoder strips a leading U+FEFF, so intentional
+  // BOM-prefixed Python output (e.g. sys.stdout.write("\ufeff…")) would be lost.
+  const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
   return {
     write: (buffer: Uint8Array) => {
       const text = decoder.decode(buffer, { stream: true });
