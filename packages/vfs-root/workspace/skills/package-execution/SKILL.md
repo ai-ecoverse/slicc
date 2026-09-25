@@ -41,7 +41,13 @@ Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<nam
 
 ## Conda / emscripten-forge (`ipk mamba`)
 
-`ipk mamba install <pkg>[=<version>]` installs emscripten-wasm32 packages from emscripten-forge / conda-forge into `/shared/lib/conda` (not `node_modules`). Use this for conda-packaged WASM libs; keep using `ipk install` / `ipk add -g` for npm packages that power `convert`, `ffmpeg`, and `python` (pyodide).
+`ipk mamba install <pkg>[=<version>]` installs emscripten-wasm32 packages from emscripten-forge / conda-forge into `/shared/lib/conda` (not `node_modules`). Prefer this for **forge C/WASM libraries** (for example `zlib`, `libpng`) that provide headers, `.a`, and SIDE_MODULE `.so` under that prefix.
+
+Keep using `ipk install` / `ipk add -g` for the **npm** packages that power these built-ins — forge names are not drop-in replacements today:
+
+- `convert` → `ipk add -g @imagemagick/magick-wasm@…` (forge `imagemagick` has no runnable `convert.wasm`)
+- `ffmpeg` → `ipk add -g @ffmpeg/core@…` (forge `ffmpeg` is libav `.a` only)
+- `python` → `ipk add pyodide@…` (no forge `pyodide`)
 
 ```bash
 ipk mamba install zlib          # newest indexed build → /shared/lib/conda

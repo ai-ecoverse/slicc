@@ -614,9 +614,20 @@ read and remove them.
 
 This is a **thin** installer (repodata lookup → download `.tar.bz2` → extract), not
 a full mamba/rattler SAT solve: virtual packages such as `emscripten-abi` are
-skipped, and hard depends are not auto-installed. It does **not** replace the npm
-`ipk install` path used by `convert` / `ffmpeg` / `python` (pyodide). See
-`ipk mamba --help` for the current limitations.
+skipped, and hard depends are not auto-installed. See `ipk mamba --help` for the
+current limitations.
+
+**When to use which installer**
+
+| Need                                                             | Command                                 | Why                                                                            |
+| ---------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| Forge C/WASM libs (`zlib`, `libpng`, …) into `/shared/lib/conda` | `ipk mamba install <pkg>`               | emscripten-wasm32 conda packages (SIDE_MODULE `.so`, headers, `.a`)            |
+| `convert` / ImageMagick                                          | `ipk add -g @imagemagick/magick-wasm@…` | npm Magick.NET wasm; forge `imagemagick` is link `.a` + CLI JS missing `.wasm` |
+| `ffmpeg` / `ffprobe`                                             | `ipk add -g @ffmpeg/core@…`             | npm `@ffmpeg/core` worker pair; forge `ffmpeg` is static libav `.a` only       |
+| `python` (Pyodide)                                               | `ipk add pyodide@…`                     | no forge `pyodide`; forge `python` is a different (xeus/pyjs) runtime          |
+
+Do not change agent guidance for convert/ffmpeg/python to `ipk mamba` until those
+commands grow loaders that consume the forge layout.
 
 ### `ipx` / `npx` built-in redirects
 

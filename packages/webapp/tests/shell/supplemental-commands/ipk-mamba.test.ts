@@ -102,10 +102,20 @@ describe('ipk mamba', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/installed zlib-1\.3\.1/);
     expect(await fs.exists(`${CONDA_PREFIX}/lib/libz.a`)).toBe(true);
+    // SIDE_MODULE used by mamba-zlib-e2e (crc32/adler32 smoke).
+    expect(await fs.exists(`${CONDA_PREFIX}/lib/libz.so.1.3.1`)).toBe(true);
 
     const listed = await cmd.execute(['mamba', 'list'], ctx() as never);
     expect(listed.exitCode).toBe(0);
     expect(listed.stdout).toMatch(/zlib-1\.3\.1/);
+  });
+
+  it('help steers convert/ffmpeg/python to npm, not mamba', async () => {
+    const cmd = createIpkCommand('ipk', { fs, fetch: mockCondaFetch(new Uint8Array()) });
+    const r = await cmd.execute(['mamba', '--help'], ctx() as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/Not a drop-in for convert\/ffmpeg\/python/);
+    expect(r.stdout).toMatch(/zlib\/libpng/);
   });
 
   it('does not treat mamba as breaking npm install help', async () => {

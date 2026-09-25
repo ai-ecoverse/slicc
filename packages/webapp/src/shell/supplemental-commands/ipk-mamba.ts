@@ -58,7 +58,12 @@ Limitations (honest):
   Thin index lookup — not a full mamba/rattler SAT solve. Virtual packages
   (emscripten-abi, __*) are skipped; hard depends are NOT auto-installed.
   Archives: .tar.bz2 (current emscripten-forge format). .conda (zip+zstd)
-  is not supported yet. Does not replace convert/ffmpeg/pyodide npm installs.
+  is not supported yet.
+
+  Not a drop-in for convert/ffmpeg/python: those built-ins still need npm
+  (@imagemagick/magick-wasm, @ffmpeg/core, pyodide). Forge imagemagick/ffmpeg
+  ship link libraries (and incomplete CLI JS without .wasm); there is no
+  forge pyodide. Use ipk mamba for forge libs such as zlib/libpng.
 
 Options:
   -h, --help        Show this help message
