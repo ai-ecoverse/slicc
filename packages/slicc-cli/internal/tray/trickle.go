@@ -21,7 +21,21 @@ type trickleQueue struct {
 
 // pushOrSend queues cand until release, then sends it immediately.
 func (q *trickleQueue) pushOrSend(cand signaling.IceCandidate, send func(signaling.IceCandidate)) {
+	q.pushOrSendIf(cand, func() bool { return true }, send)
+}
+
+// pushOrSendIf is pushOrSend, but accept runs under the queue lock together
+// with the decision to queue or drop. A peer swap cannot land between the
+// acceptance check and the insert: reset takes this same lock. accept must
+// not acquire a lock that reset or release holds while taking this one.
+// Conn's accept locks Conn.mu, and Conn never holds Conn.mu while calling
+// reset or release.
+func (q *trickleQueue) pushOrSendIf(cand signaling.IceCandidate, accept func() bool, send func(signaling.IceCandidate)) {
 	q.mu.Lock()
+	if !accept() {
+		q.mu.Unlock()
+		return
+	}
 	if !q.open {
 		q.pending = append(q.pending, cand)
 		q.mu.Unlock()

@@ -592,15 +592,22 @@ export class LeaderTrayPeerManager {
    * Chrome rejects a candidate that lands before the remote description.
    */
   private enqueuePeerSignal(bootstrapId: string, op: () => Promise<void>): Promise<void> {
+    // A follower that already hung up can still have an answer or candidate
+    // in flight. releasePeer has dropped the chain; creating a new one here
+    // would leave a map entry nothing ever removes.
+    if (!this.peers.has(bootstrapId)) return Promise.resolve();
     const prev = this.peerSignal.get(bootstrapId) ?? Promise.resolve();
     const run = prev.then(op, op);
-    this.peerSignal.set(
-      bootstrapId,
-      run.then(
-        () => undefined,
-        () => undefined
-      )
+    const settled = run.then(
+      () => undefined,
+      () => undefined
     );
+    this.peerSignal.set(bootstrapId, settled);
+    void settled.then(() => {
+      if (this.peerSignal.get(bootstrapId) === settled && !this.peers.has(bootstrapId)) {
+        this.peerSignal.delete(bootstrapId);
+      }
+    });
     return run;
   }
 
@@ -1043,7 +1050,11 @@ export class FollowerTrayManager {
       answer: normalizeSessionDescription(activePeer.peer.localDescription ?? answer, 'answer'),
       fetchImpl: this.fetchImpl,
     });
-    await this.releaseLocalIce(controllerId, bootstrapId);
+    // The answer is what the leader needs before it can take candidates.
+    // Posting them is not on the path to the open data channel: a slow
+    // candidate response must not delay the rest of bootstrap, and later
+    // srflx/relay candidates must not wait on the first POST.
+    this.releaseLocalIce(controllerId, bootstrapId);
   }
 
   private resetTrickle(): void {
@@ -1113,12 +1124,12 @@ export class FollowerTrayManager {
     void this.postLocalIce(controllerId, bootstrapId, candidate);
   }
 
-  private async releaseLocalIce(controllerId: string, bootstrapId: string): Promise<void> {
+  private releaseLocalIce(controllerId: string, bootstrapId: string): void {
     this.answerSent = true;
     const queued = this.pendingLocalIce;
     this.pendingLocalIce = [];
     for (const candidate of queued) {
-      await this.postLocalIce(controllerId, bootstrapId, candidate);
+      void this.postLocalIce(controllerId, bootstrapId, candidate);
     }
   }
 

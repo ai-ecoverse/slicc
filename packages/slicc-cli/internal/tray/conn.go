@@ -402,15 +402,10 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 		if cand == nil {
 			return
 		}
-		c.mu.Lock()
-		current := c.pc
-		c.mu.Unlock()
-		// A replaced peer can still surface a candidate. It is for the old
-		// ufrag; the new peer must not send it.
-		if current != pc {
-			return
-		}
-		c.queueLocalCandidate(c.ctx, sig, controllerID, bootstrapIDRef, cand)
+		// Belonging to this peer is rechecked under the outbound queue lock,
+		// together with the insert. A retry can pass a check here and resume
+		// only after recreatePeer has installed the replacement.
+		c.queueLocalCandidate(c.ctx, sig, controllerID, bootstrapIDRef, pc, cand)
 	})
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		switch state {
@@ -506,7 +501,7 @@ func addICECandidate(pc *webrtc.PeerConnection, cand signaling.IceCandidate) err
 // it has been posted. Gathering starts inside SetLocalDescription, which
 // returns before SendAnswer, so the first host candidate would otherwise
 // reach the leader before the answer.
-func (c *Conn) queueLocalCandidate(ctx context.Context, sig *signaling.Client, controllerID string, bootstrapIDRef *string, cand *webrtc.ICECandidate) {
+func (c *Conn) queueLocalCandidate(ctx context.Context, sig *signaling.Client, controllerID string, bootstrapIDRef *string, pc *webrtc.PeerConnection, cand *webrtc.ICECandidate) {
 	init := cand.ToJSON()
 	trayCand := signaling.IceCandidate{Candidate: init.Candidate}
 	trayCand.SDPMid = init.SDPMid
@@ -514,8 +509,18 @@ func (c *Conn) queueLocalCandidate(ctx context.Context, sig *signaling.Client, c
 		idx := int(*init.SDPMLineIndex)
 		trayCand.SDPMLineIndex = &idx
 	}
-	c.outboundTrickle.pushOrSend(trayCand, func(queued signaling.IceCandidate) {
+	c.outboundTrickle.pushOrSendIf(trayCand, func() bool {
 		c.mu.Lock()
+		defer c.mu.Unlock()
+		// Still this peer. A candidate gathered for a peer recreatePeer has
+		// replaced would carry the old ufrag and must not join the new queue.
+		return c.pc == pc
+	}, func(queued signaling.IceCandidate) {
+		c.mu.Lock()
+		if c.pc != pc {
+			c.mu.Unlock()
+			return
+		}
 		bootstrapID := ""
 		if bootstrapIDRef != nil {
 			bootstrapID = *bootstrapIDRef

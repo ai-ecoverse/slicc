@@ -428,4 +428,36 @@ describe('LeaderTrayPeerManager peer lifecycle (#3477)', () => {
 
     expect(peer.added).toEqual([candidate]);
   });
+
+  it('drops an answer or candidate that arrives after the peer was released', async () => {
+    const peer = new FakePeer(() => {});
+    const manager = new LeaderTrayPeerManager({
+      peerConnectionFactory: () => peer,
+      sendControlMessage: () => {},
+    });
+    const request = joinRequest();
+    await manager.handleControlMessage(request);
+    peer.channel.open();
+    peer.channel.close();
+    expect(manager.getPeers()).toEqual([]);
+
+    await manager.handleControlMessage({
+      type: 'bootstrap.ice_candidate',
+      trayId: 'tray-1',
+      controllerId: request.controllerId,
+      bootstrapId: request.bootstrapId,
+      candidate: { candidate: 'candidate:host 1 udp', sdpMid: '0', sdpMLineIndex: 0 },
+    });
+    await manager.handleControlMessage({
+      type: 'bootstrap.answer',
+      trayId: 'tray-1',
+      controllerId: request.controllerId,
+      bootstrapId: request.bootstrapId,
+      answer: { type: 'answer', sdp: 'answer' },
+    });
+
+    expect(peer.remoteDescription).toBeNull();
+    expect(peer.added).toEqual([]);
+    expect(manager.getPeers()).toEqual([]);
+  });
 });

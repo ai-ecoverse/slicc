@@ -35,6 +35,24 @@ func TestTrickleQueueHoldsCandidatesUntilRelease(t *testing.T) {
 	}
 }
 
+func TestTrickleQueuePushOrSendIfDropsWhenThePeerIsGone(t *testing.T) {
+	var q trickleQueue
+	var got []string
+	send := func(c signaling.IceCandidate) { got = append(got, c.Candidate) }
+
+	q.pushOrSendIf(cand("stale"), func() bool { return false }, send)
+	q.release(send)
+	if len(got) != 0 {
+		t.Fatalf("rejected candidate was sent: %v", got)
+	}
+
+	q.pushOrSendIf(cand("host"), func() bool { return true }, send)
+	q.release(send)
+	if len(got) != 1 || got[0] != "host" {
+		t.Fatalf("got %v, want [host]", got)
+	}
+}
+
 func TestTrickleQueueResetDropsWhatWasHeld(t *testing.T) {
 	var q trickleQueue
 	var got []string
