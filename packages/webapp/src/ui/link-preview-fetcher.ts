@@ -1,8 +1,8 @@
 import {
+  type GithubCard,
   type GithubRef,
-  githubCardImage,
-  githubRefLabel,
-  parseGithubUrl,
+  githubCardFor,
+  githubRefCard,
 } from '../core/github-mentions.js';
 import { parseOpenGraph } from '../core/og-meta.js';
 
@@ -51,15 +51,19 @@ function header(headers: Record<string, string>, name: string): string {
   return headers[name] ?? headers[name.toLowerCase()] ?? '';
 }
 
-export function githubPreview(url: string, ref: GithubRef): LinkPreview {
+function cardPreview(url: string, card: GithubCard): LinkPreview {
   return {
     url,
     state: 'ready',
-    title: `${ref.owner}/${ref.repo}#${ref.number}`,
-    image: githubCardImage(ref),
+    title: card.title,
+    image: card.image,
     siteName: 'GitHub',
-    badge: githubRefLabel(ref),
+    badge: card.badge,
   };
+}
+
+export function githubPreview(url: string, ref: GithubRef): LinkPreview {
+  return cardPreview(url, githubRefCard(ref));
 }
 
 export class LinkPreviewFetcher {
@@ -94,8 +98,8 @@ export class LinkPreviewFetcher {
     const parsed = isWebUrl(url);
     if (!parsed) return { url, state: 'error' };
 
-    const ref = parseGithubUrl(url);
-    if (ref) return githubPreview(url, ref);
+    const github = githubCardFor(url);
+    if (github) return cardPreview(url, github);
 
     if (IMAGE_EXT_RE.test(parsed.pathname)) {
       return { url, state: 'ready', image: parsed.href, title: parsed.pathname.split('/').pop() };

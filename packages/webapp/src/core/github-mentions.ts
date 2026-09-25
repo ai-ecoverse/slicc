@@ -22,9 +22,14 @@ const REPO = '[A-Za-z0-9._-]{1,100}';
 
 const RESERVED_OWNERS = new Set([
   'about',
+  'account',
   'apps',
+  'codespaces',
   'collections',
+  'copilot',
   'customer-stories',
+  'dashboard',
+  'discussions',
   'enterprise',
   'events',
   'explore',
@@ -36,14 +41,18 @@ const RESERVED_OWNERS = new Set([
   'orgs',
   'organizations',
   'pricing',
+  'projects',
   'pulls',
   'issues',
   'search',
   'security',
   'settings',
   'sponsors',
+  'stars',
   'topics',
   'trending',
+  'users',
+  'watching',
 ]);
 
 function isRepoName(owner: string, repo: string): boolean {
@@ -54,7 +63,7 @@ function normalizeRepo(repo: string): string {
   return repo.replace(/\.git$/i, '');
 }
 
-export function parseGithubUrl(url: string): GithubRef | null {
+function githubUrl(url: string): URL | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -62,6 +71,12 @@ export function parseGithubUrl(url: string): GithubRef | null {
     return null;
   }
   if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') return null;
+  return parsed;
+}
+
+export function parseGithubUrl(url: string): GithubRef | null {
+  const parsed = githubUrl(url);
+  if (!parsed) return null;
   const match = new RegExp(`^/(${OWNER})/(${REPO})/(issues|pull)/(\\d{1,7})(?:/|$)`).exec(
     parsed.pathname
   );
@@ -80,14 +95,133 @@ export function githubRefUrl(ref: GithubRef): string {
   return `https://github.com/${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`;
 }
 
+function cardImage(path: string): string {
+  return `https://opengraph.githubassets.com/slicc/${path}`;
+}
+
 export function githubCardImage(ref: GithubRef): string {
-  return `https://opengraph.githubassets.com/slicc/${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`;
+  return cardImage(
+    `${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`
+  );
 }
 
 export function githubRefLabel(ref: Pick<GithubRef, 'kind' | 'number'>): string {
   if (ref.kind === 'pull') return `PR #${ref.number}`;
   if (ref.kind === 'issue') return `Issue #${ref.number}`;
   return `#${ref.number}`;
+}
+
+export type GithubCardKind =
+  | 'repo'
+  | 'issue'
+  | 'pull'
+  | 'discussion'
+  | 'commit'
+  | 'release'
+  | 'project';
+
+export interface GithubCard {
+  kind: GithubCardKind;
+
+  title: string;
+
+  image: string;
+
+  badge: string;
+}
+
+export function githubRefCard(ref: GithubRef): GithubCard {
+  return {
+    kind: ref.kind === 'pull' ? 'pull' : 'issue',
+    title: `${ref.owner}/${ref.repo}#${ref.number}`,
+    image: githubCardImage(ref),
+    badge: githubRefLabel(ref),
+  };
+}
+
+function readable(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+const ACCOUNT_PAGE_RE = new RegExp(
+  `^/(orgs|users)/(${OWNER})/(projects|discussions)/(\\d{1,7})(?:/|$)`
+);
+
+const REPO_PAGE_RE = new RegExp(`^/(${OWNER})/(${REPO})(?:/(.*))?$`);
+
+const REPO_DISCUSSION_RE = /^discussions\/(\d{1,7})(?:\/|$)/;
+const REPO_COMMIT_RE = /^commit\/([0-9a-fA-F]{7,40})(?:\/|$)/;
+const REPO_RELEASE_RE = /^releases\/tag\/([^/?#]{1,128})(?:\/|$)/;
+
+const REPO_RESOURCE_RE = /^(?:raw|releases\/download)\//;
+
+function repoPageCard(owner: string, repo: string, rest: string): GithubCard | null {
+  if (REPO_RESOURCE_RE.test(rest)) return null;
+  const slug = `${owner}/${repo}`;
+  const discussion = REPO_DISCUSSION_RE.exec(rest);
+  if (discussion) {
+    const number = Number(discussion[1] ?? 0);
+    return {
+      kind: 'discussion',
+      title: `${slug}#${number}`,
+      image: cardImage(`${slug}/discussions/${number}`),
+      badge: `Discussion #${number}`,
+    };
+  }
+  const commit = REPO_COMMIT_RE.exec(rest);
+  if (commit) {
+    const sha = commit[1] ?? '';
+    return {
+      kind: 'commit',
+      title: `${slug}@${sha.slice(0, 7)}`,
+      image: cardImage(`${slug}/commit/${sha}`),
+      badge: 'Commit',
+    };
+  }
+  const release = REPO_RELEASE_RE.exec(rest);
+  if (release) {
+    const tag = release[1] ?? '';
+    return {
+      kind: 'release',
+      title: `${slug}@${readable(tag)}`,
+      image: cardImage(`${slug}/releases/tag/${tag}`),
+      badge: 'Release',
+    };
+  }
+
+  return { kind: 'repo', title: slug, image: cardImage(slug), badge: 'Repository' };
+}
+
+export function githubCardFor(url: string): GithubCard | null {
+  const ref = parseGithubUrl(url);
+  if (ref) return githubRefCard(ref);
+
+  const parsed = githubUrl(url);
+  if (!parsed) return null;
+
+  const account = ACCOUNT_PAGE_RE.exec(parsed.pathname);
+  if (account) {
+    const [, prefix = '', owner = '', page = '', number = '0'] = account;
+
+    if (page === 'discussions' && prefix !== 'orgs') return null;
+    const project = page === 'projects';
+    return {
+      kind: project ? 'project' : 'discussion',
+      title: `${owner}#${number}`,
+      image: cardImage(`${prefix}/${owner}/${page}/${number}`),
+      badge: `${project ? 'Project' : 'Discussion'} #${number}`,
+    };
+  }
+
+  const repo = REPO_PAGE_RE.exec(parsed.pathname);
+  if (!repo) return null;
+  const [, owner = '', rawRepo = '', rest = ''] = repo;
+  if (!isRepoName(owner, rawRepo)) return null;
+  return repoPageCard(owner, normalizeRepo(rawRepo), rest);
 }
 
 const QUALIFIED_RE = new RegExp(`(^|[^\\w/.-])(${OWNER})/(${REPO})#(\\d{1,7})\\b`, 'g');
