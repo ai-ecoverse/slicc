@@ -752,4 +752,39 @@ describe('panel terminal execution deadline', () => {
     expect(r.stdout).not.toContain('b');
     expect(r.stderr).toMatch(/deadline/);
   });
+
+  // 60,000 statements, 120,000 tokens: past just-bash's default parser caps
+  // (100,000 tokens, and 10,000 top-level statements per script). A generated
+  // configure is this shape; ImageMagick's is 1.3 MB.
+  const BIG_SCRIPT = `awk 'BEGIN { for (i = 0; i < 60000; i++) print "v" i "=" i; print "echo ran $v59999" }' > /tmp/big.sh`;
+
+  it('parses a script past the default parser caps, inline, sourced, via bash or by path', async () => {
+    const w = await wirePanelHost();
+    try {
+      await w.client.open();
+      expect((await w.client.exec(BIG_SCRIPT)).exitCode).toBe(0);
+      expect((await w.client.exec('. /tmp/big.sh')).stdout).toBe('ran 59999\n');
+      expect((await w.client.exec('bash /tmp/big.sh')).stdout).toBe('ran 59999\n');
+      // ./configure: run by path.
+      expect((await w.client.exec('chmod +x /tmp/big.sh && /tmp/big.sh')).stdout).toBe(
+        'ran 59999\n'
+      );
+      const inline = await w.client.exec('cat /tmp/big.sh');
+      expect((await w.client.exec(inline.stdout)).stdout).toBe('ran 59999\n');
+    } finally {
+      w.stop();
+    }
+  }, 120_000);
+
+  it('the default parser caps would have rejected that script', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `pthost-parser-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.executeCommand(BIG_SCRIPT);
+    const r = await shell.executeCommand('. /tmp/big.sh');
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/Too many tokens/);
+  }, 120_000);
 });

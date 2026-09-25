@@ -16,7 +16,7 @@ custom `tar`, `unzip`, JavaScript, Python, Git, and browser commands have separa
 implementations; these settings do not bound all their work. They also do not set
 an OPFS storage quota. A limit error means the task should process a smaller tree
 or input in separate calls. Shell environment variables cannot raise these limits.
-The panel terminal has no work budget (`PANEL_TERMINAL_EXECUTION_LIMITS` in `kernel/panel-terminal-host.ts`): no execution deadline, command count or loop-iteration cap. just-bash's defaults (an hour, 100,000 commands per top-level command, 100,000 iterations per loop) stop a build inside slicc partway. Every recipe `make` spawns counts against the one command budget, so a recursive `make` of an autoconf library dies with "too many commands executed". The person at the terminal stops a command with Ctrl+C instead; memory and size limits still apply.
+The panel terminal has no work budget (`PANEL_TERMINAL_EXECUTION_LIMITS` in `kernel/panel-terminal-host.ts`): no execution deadline, command count, loop-iteration cap or parser cap. just-bash's defaults (an hour, 100,000 commands per top-level command, 100,000 iterations per loop, 100,000 parser tokens per script) stop a build inside slicc partway. Every recipe `make` spawns counts against the one command budget, so a recursive `make` of an autoconf library dies with "too many commands executed". A large generated `configure` doesn't parse at all: ImageMagick's is 1.3 MB. The person at the terminal stops a command with Ctrl+C instead; memory and size limits still apply.
 
 The cone retains the upstream defaults; command timeout and detachment behavior
 are unchanged.
