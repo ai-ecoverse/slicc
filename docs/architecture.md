@@ -249,7 +249,7 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | File                        | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `orchestrator.ts`           | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `chat-session-store.ts`     | Chat session persistence in IndexedDB (`browser-coding-agent` / `sessions` store) — save/restore rendered conversations; conversations themselves live in `work-unit/conversation/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `chat-session-store.ts`     | Legacy `browser-coding-agent` IndexedDB reader — frozen since #2365; used only by the conversation migration (`Orchestrator.migrateConversations` → `work-unit/conversation/migration.ts`). Active persistence is `work-unit/conversation/` (`slicc-work-units`)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `scoop-context.ts`          | Per-scoop agent instance (RestrictedFS, AlmostBashShell, Agent, skills, scoop-management tools); wires file tools + `bash` only. Search, browser automation, and code intelligence all flow through shell commands (`grep`/`rg`/`find` via just-bash, `playwright-cli`, `tsc`, `biome`, `esbuild`, etc.). Since #2334 it is a coordinator: one module per responsibility under `scoops/scoop-context/` (assembly, turn loop, run bounds, recovery, persistence, event routing). Overflow recovery (`scoop-context/overflow-recovery.ts`) drops the trailing error, delegates reduction to context compaction, and resumes with deferred `continue()`; terminal failures escalate to the cone              |
 | `scoop-management-tools.ts` | Scoop tools: `send_message`; child-management tools gated on policy (`canCreateChildren` → `scoop_scoop`; `canManageChildren` → `list_scoops` / `feed_scoop` / `drop_scoop`; `canWriteSharedMemory` → `update_global_memory`). Roots hold every flag; a nested-delegation grant turns the first two on for a child.                                                                                                                                                                                                                                                                                                                                                                                       |
 | `db.ts`                     | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -297,7 +297,7 @@ Cone and scoop are roles over this one runtime; see [`docs/work-unit.md`](./work
 
 ### packages/webapp/src/ui/ — User Interface
 
-The active UI is the `@slicc/webcomponents` WC shell (`wc/wc-live.ts`), not the pre-WC split-pane stack (deleted in `d222f1385`). Terminal rendering lives in `kernel/remote-terminal-view.ts` (Ghostty/wterm). Chat session IndexedDB (`browser-coding-agent`) lives in `scoops/chat-session-store.ts`. The Electron/CDP launcher overlay IIFE is `packages/spoon/src/overlay-entry.ts` (built to `dist/ui/electron-overlay-entry.js`).
+The active UI is the `@slicc/webcomponents` WC shell (`wc/wc-live.ts`), not the pre-WC split-pane stack (deleted in `d222f1385`). Terminal rendering lives in `kernel/remote-terminal-view.ts` (Ghostty/wterm). Live conversation persistence is `work-unit/conversation/` (`slicc-work-units`); the frozen `browser-coding-agent` store is migration-only via `scoops/chat-session-store.ts`. The Electron/CDP launcher overlay IIFE is `packages/spoon/src/overlay-entry.ts` (built to `dist/ui/electron-overlay-entry.js`).
 
 | File                    | Purpose                                                                                                                                                                                                                                                                  |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -370,7 +370,8 @@ The Chrome extension is a CDP pass-through + bootstrapper — no bundled UI, no 
 ┌──────────────────────────────────────────────────────────────────┐
 │ Hosted leader tab (https://www.sliccy.ai/?slicc=leader&ext=<id>)          │
 │  Webapp UI + kernel worker + orchestrator + VFS + agent shell    │
-│  Persists chat to: browser-coding-agent IndexedDB                │
+│  Persists chat to: slicc-work-units IndexedDB (canonical)        │
+│  Legacy browser-coding-agent / agent-sessions: migration-only    │
 │  Drives CDP via:   chrome.runtime.connect({ name: 'slicc.cdp-bridge' })│
 └─────────────────────────┬────────────────────────────────────────┘
                           │ externally_connectable Port
@@ -398,8 +399,8 @@ The Chrome extension is a CDP pass-through + bootstrapper — no bundled UI, no 
 **IndexedDB persistence (in the hosted origin):**
 
 - `slicc-work-units` DB: the CANONICAL conversation record per work unit (#2275), keyed `<workspaceRoot>::<jid>`, plus the migration cursor. Pi history, the chat projection, transcripts and child summaries are derived from it (`work-unit/conversation/derive.ts`)
-- `browser-coding-agent` DB: Chat display messages, written by the page-side `Bridge`. Still written and still the read fallback while the #2275 read-old/write-new window is open
-- `agent-sessions` DB: Agent LLM conversation history (restored by ScoopContext on restart; canonical record first, this store as the fallback)
+- `browser-coding-agent` DB: Legacy chat display messages — frozen since #2365; read only by the conversation migration (`scoops/chat-session-store.ts`)
+- `agent-sessions` DB: Legacy agent LLM history — frozen since #2365; read only by the conversation migration (canonical record is `slicc-work-units`)
 - `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
 
 The legacy `chrome-extension://<id>` origin no longer holds chat or VFS state; only `chrome.storage.local` secrets and OAuth replicas live there.
@@ -787,9 +788,9 @@ Scoop removal / app clear
 | Database               | Version | Stores                                                        | Purpose                                                                                                                                                                                                          |
 | ---------------------- | ------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slicc-fs`             | 1       | (VirtualFS data)                                              | **Legacy** LightningFS backing store; no longer written or read. Deletable via the `slicc-fs-cleanup` shell command. The live VirtualFS is OPFS-backed via ZenFS `WebAccessFS` and is not an IndexedDB database. |
-| `browser-coding-agent` | 1       | sessions, settings                                            | UI-level session history + localStorage mirror                                                                                                                                                                   |
+| `browser-coding-agent` | 1       | sessions, settings                                            | **Legacy** UI chat projection — frozen since #2365; migration-only reader (`scoops/chat-session-store.ts`)                                                                                                       |
 | `slicc-groups`         | 3       | scoops, messages, sessions, tasks, state, webhooks, crontasks | Orchestrator data (scoops, messages, tasks)                                                                                                                                                                      |
-| `agent-sessions`       | 1       | sessions                                                      | Core agent session history: persisted `SessionData` (`AgentMessage[]` + config + timestamps) per scoop, keyed by JID; loaded on scoop init, saved on agent_end                                                   |
+| `agent-sessions`       | 1       | sessions                                                      | **Legacy** agent LLM history — frozen since #2365; migration-only (canonical conversations live in `slicc-work-units`)                                                                                           |
 | `slicc-fs-global`      | 1       | config                                                        | Git global config storage                                                                                                                                                                                        |
 
 ## Secrets & Secret Injection
@@ -937,15 +938,15 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### UI & Layout
 
-| I need to...                           | Modify                                                                                       |
-| -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Add a new UI panel                     | `packages/webapp/src/ui/wc/wc-live.ts` (WC shell) + `packages/webapp/src/ui/main.ts`         |
-| Change message rendering (HTML format) | `packages/webapp/src/ui/message-renderer.ts`                                                 |
-| Change voice input (push-to-talk)      | `@slicc/webcomponents` `slicc-composer.ts` + `packages/webapp/src/speech/composer-speech.ts` |
-| Change preview service worker          | `packages/webapp/src/ui/preview-sw.ts`                                                       |
-| Change provider/model selection        | `packages/webapp/src/ui/provider-settings.ts`                                                |
-| Change theme handling                  | `packages/webapp/src/ui/theme.ts`                                                            |
-| Change session storage                 | `packages/webapp/src/scoops/chat-session-store.ts`                                           |
+| I need to...                           | Modify                                                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Add a new UI panel                     | `packages/webapp/src/ui/wc/wc-live.ts` (WC shell) + `packages/webapp/src/ui/main.ts`                        |
+| Change message rendering (HTML format) | `packages/webapp/src/ui/message-renderer.ts`                                                                |
+| Change voice input (push-to-talk)      | `@slicc/webcomponents` `slicc-composer.ts` + `packages/webapp/src/speech/composer-speech.ts`                |
+| Change preview service worker          | `packages/webapp/src/ui/preview-sw.ts`                                                                      |
+| Change provider/model selection        | `packages/webapp/src/ui/provider-settings.ts`                                                               |
+| Change theme handling                  | `packages/webapp/src/ui/theme.ts`                                                                           |
+| Change session storage                 | `packages/webapp/src/work-unit/conversation/` (canonical); `scoops/chat-session-store.ts` is migration-only |
 
 ### CLI Server
 
