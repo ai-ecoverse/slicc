@@ -18,7 +18,10 @@ public enum NewSessionAction: String, Codable {
 ///
 /// Version 9 is a LEADER capability: it honours `request_snapshot.peek`. A
 /// follower reads it off the leader's `hello` before prefetching other units.
-public let traySyncProtocolVersion = 9
+///
+/// Version 10 is a LEADER capability too: it acks every delivered
+/// `user_message` with `user_message_ack`, sent to the sender alone.
+public let traySyncProtocolVersion = 10
 
 // MARK: - AgentEvent
 

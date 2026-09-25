@@ -29,7 +29,7 @@ describe('tray-sync-protocol', () => {
     // pull). v8 says this peer derives a unit's role from `ScoopSummary.parentId`
     // and does not need the deprecated `isCone` flag (#2358). The Swift mirror
     // asserts the same constant — bump both together.
-    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(9);
+    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(10);
     expect(CHERRY_RUNTIME_TAG).toBe('slicc-cherry');
   });
 

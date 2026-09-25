@@ -265,6 +265,8 @@ export const BISCOTTO_RECEIVABLE: Record<LeaderToFollowerMessage['type'], boolea
   snapshot_chunk: true,
   agent_event: true,
   user_message_echo: true,
+  // Only ever about the guest's OWN delivered message (`follower-dispatch.ts`).
+  user_message_ack: true,
   status: true,
   error: true,
   'biscotto.message.state': true,

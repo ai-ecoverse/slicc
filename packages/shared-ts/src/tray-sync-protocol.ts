@@ -68,6 +68,10 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  *
  * Version history (only what a peer must branch on):
  *
+ * - **10** — this leader acks every delivered `user_message` with a
+ *   `user_message_ack` sent to the sending follower alone, once its kernel
+ *   accepted or refused the prompt. A follower talking to a leader below 10
+ *   gets no ack and must keep treating silence as the only signal.
  * - **9** — this leader honours `request_snapshot.peek`: a snapshot of a unit
  *   is returned WITHOUT recording that unit as the peer's selection. An older
  *   leader ignores the flag and re-points the peer's selection at the requested
@@ -80,7 +84,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  *   anything older, which includes every native follower shipped before the
  *   optional-decode build ([#2358](https://github.com/ai-ecoverse/slicc/issues/2358)).
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 9;
+export const TRAY_SYNC_PROTOCOL_VERSION = 10;
 
 /**
  * An opaque Chrome DevTools Protocol payload — a `params` or `result` bag.
@@ -452,6 +456,22 @@ export type LeaderToFollowerMessage =
       messageId: string;
       scoopJid: string;
       attachments?: MessageAttachment[];
+    }
+  /**
+   * The leader's verdict on ONE follower's `user_message`, sent to that
+   * follower alone (v10) once delivery into the leader's kernel settles.
+   * Unlike `user_message_echo`, which only proves the leader's page got the
+   * text, `accepted` means its agent took the prompt. `rejected` carries a
+   * human-readable `error`, and is also sent at once when the leader has no
+   * unit to deliver to (then `scoopJid` is `''`). A biscotto gets one only for
+   * an approved message that was actually delivered.
+   */
+  | {
+      type: 'user_message_ack';
+      messageId: string;
+      scoopJid: string;
+      state: 'accepted' | 'rejected';
+      error?: string;
     }
   | { type: 'status'; scoopStatus: string; scoopJid: string }
   | { type: 'error'; error: string }

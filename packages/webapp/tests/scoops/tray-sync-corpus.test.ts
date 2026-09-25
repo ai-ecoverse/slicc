@@ -7,6 +7,7 @@ import {
   buildCorpusDocument,
   FOLLOWER_TO_LEADER_CORPUS,
   LEADER_TO_FOLLOWER_CORPUS,
+  LEADER_TO_FOLLOWER_EXTRA_CORPUS,
   NESTED_PAYLOAD_CORPUS,
 } from '../../src/scoops/tray-sync-protocol-corpus.js';
 
@@ -57,6 +58,7 @@ describe('tray sync golden-fixture corpus', () => {
   it('every fixture survives a JSON round-trip (what the data channel does)', () => {
     const all = [
       ...Object.values(LEADER_TO_FOLLOWER_CORPUS),
+      ...LEADER_TO_FOLLOWER_EXTRA_CORPUS,
       ...Object.values(FOLLOWER_TO_LEADER_CORPUS),
     ];
     for (const { message } of all) {
@@ -67,6 +69,20 @@ describe('tray sync golden-fixture corpus', () => {
         roundTripped = undefined; // the expect below fails loudly
       }
       expect(roundTripped).toEqual(message);
+    }
+  });
+
+  it('pins both user_message_ack shapes: accepted without error, rejected with one', () => {
+    const accepted = LEADER_TO_FOLLOWER_CORPUS.user_message_ack;
+    expect(accepted.message.state).toBe('accepted');
+    expect(Object.hasOwn(accepted.message, 'error')).toBe(false);
+    const rejected = LEADER_TO_FOLLOWER_EXTRA_CORPUS.find(
+      (entry) => entry.message.type === 'user_message_ack'
+    );
+    expect(rejected?.message).toMatchObject({ state: 'rejected', error: expect.any(String) });
+    // An extra shape must say the same thing about iOS as its keyed fixture.
+    for (const extra of LEADER_TO_FOLLOWER_EXTRA_CORPUS) {
+      expect(extra.ios).toBe(LEADER_TO_FOLLOWER_CORPUS[extra.message.type].ios);
     }
   });
 
