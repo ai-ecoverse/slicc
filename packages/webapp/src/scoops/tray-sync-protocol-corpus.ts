@@ -252,7 +252,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
   },
   // The `rejected` shape is in LEADER_TO_FOLLOWER_EXTRA_CORPUS below.
   user_message_ack: {
-    ios: 'unknown',
+    ios: 'decoded',
     message: { type: 'user_message_ack', messageId: 'm3', scoopJid: 'cone', state: 'accepted' },
   },
   status: {
@@ -616,7 +616,7 @@ export const LEADER_TO_FOLLOWER_EXTRA_CORPUS: ReadonlyArray<{
   message: LeaderToFollowerMessage;
 }> = [
   {
-    ios: 'unknown',
+    ios: 'decoded',
     message: {
       type: 'user_message_ack',
       messageId: 'm4',
