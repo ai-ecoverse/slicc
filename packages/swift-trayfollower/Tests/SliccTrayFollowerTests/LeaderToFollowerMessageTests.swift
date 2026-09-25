@@ -92,6 +92,62 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertNil(attachments)
     }
 
+    func testUserMessageAckAcceptedDecodes() throws {
+        let json = #"{"type":"user_message_ack","messageId":"m1","scoopJid":"s1","state":"accepted"}"#
+        guard
+            case .userMessageAck(let messageId, let scoopJid, let state, let error) =
+                try WireCodec.decode(LeaderToFollowerMessage.self, from: json)
+        else {
+            XCTFail("expected userMessageAck")
+            return
+        }
+        XCTAssertEqual(messageId, "m1")
+        XCTAssertEqual(scoopJid, "s1")
+        XCTAssertEqual(state, .accepted)
+        XCTAssertNil(error)
+    }
+
+    func testUserMessageAckRejectedCarriesItsError() throws {
+        let json =
+            #"{"type":"user_message_ack","messageId":"m1","scoopJid":"s1","state":"rejected","error":"kernel gone"}"#
+        guard
+            case .userMessageAck(_, _, let state, let error) =
+                try WireCodec.decode(LeaderToFollowerMessage.self, from: json)
+        else {
+            XCTFail("expected userMessageAck")
+            return
+        }
+        XCTAssertEqual(state, .rejected)
+        XCTAssertEqual(error, "kernel gone")
+    }
+
+    func testUserMessageAckRoundTrip() throws {
+        let message = LeaderToFollowerMessage.userMessageAck(
+            messageId: "m1", scoopJid: "s1", state: .rejected, error: "nope")
+        XCTAssertEqual(try WireCodec.discriminator(message), "user_message_ack")
+        guard
+            case .userMessageAck(let messageId, let scoopJid, let state, let error) =
+                try roundTrip(message)
+        else {
+            XCTFail("expected userMessageAck")
+            return
+        }
+        XCTAssertEqual(messageId, "m1")
+        XCTAssertEqual(scoopJid, "s1")
+        XCTAssertEqual(state, .rejected)
+        XCTAssertEqual(error, "nope")
+    }
+
+    func testUserMessageAckWithAnUnknownStateDecodesAsUnknown() throws {
+        let json = #"{"type":"user_message_ack","messageId":"m1","scoopJid":"s1","state":"queued"}"#
+        guard case .unknown(let type) = try WireCodec.decode(LeaderToFollowerMessage.self, from: json)
+        else {
+            XCTFail("an unknown ack state must not decode to a real case")
+            return
+        }
+        XCTAssertEqual(type, "user_message_ack")
+    }
+
     
 
     func testStatusWithScoopJid() throws {

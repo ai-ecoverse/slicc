@@ -607,7 +607,7 @@
     },
     {
       "type": "user_message_ack",
-      "ios": "unknown",
+      "ios": "decoded",
       "message": {
         "type": "user_message_ack",
         "messageId": "m3",
@@ -639,7 +639,7 @@
   "leaderToFollowerExtra": [
     {
       "type": "user_message_ack",
-      "ios": "unknown",
+      "ios": "decoded",
       "message": {
         "type": "user_message_ack",
         "messageId": "m4",

@@ -33,6 +33,9 @@ struct MessageListView: View {
     
     var toolProgress: [String: ToolProgressEvent] = [:]
     
+    
+    var deliveryRejections: [String: String] = [:]
+    
     var toolUICards: [ToolUIPlaceholder] = []
     
     var openApprovals: [OpenApprovalRequest] = []
@@ -49,6 +52,7 @@ struct MessageListView: View {
         messages: [ChatMessage],
         isStreaming: Bool,
         toolProgress: [String: ToolProgressEvent] = [:],
+        deliveryRejections: [String: String] = [:],
         toolUICards: [ToolUIPlaceholder] = [],
         openApprovals: [OpenApprovalRequest] = [],
         onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)? = nil,
@@ -60,6 +64,7 @@ struct MessageListView: View {
         self.messages = messages
         self.isStreaming = isStreaming
         self.toolProgress = toolProgress
+        self.deliveryRejections = deliveryRejections
         self.toolUICards = toolUICards
         self.openApprovals = openApprovals
         self.onOpenApprovalDecision = onOpenApprovalDecision
@@ -138,7 +143,8 @@ struct MessageListView: View {
                     ForEach(group.messages) { message in
                         MessageBubble(
                             message: message,
-                            toolProgress: progressSlice(for: message)
+                            toolProgress: progressSlice(for: message),
+                            deliveryError: deliveryRejections[message.id]
                         )
                         
                         

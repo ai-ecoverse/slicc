@@ -26,6 +26,13 @@ public let traySyncProtocolVersion = 10
 
 
 
+public enum UserMessageAckState: String, Codable, Equatable {
+    case accepted, rejected
+}
+
+
+
+
 public enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)
@@ -581,12 +588,17 @@ public func makeTrayFollowerCapabilities(deviceOwnerAuth: Bool) -> TraySyncCapab
 
 
 
+
 public enum LeaderToFollowerMessage: Codable {
     case snapshot(messages: [ChatMessage], scoopJid: String)
     case snapshotChunk(chunkData: String, chunkIndex: Int, totalChunks: Int, scoopJid: String)
     case agentEvent(event: AgentEvent, scoopJid: String)
     case userMessageEcho(
         text: String, messageId: String, scoopJid: String, attachments: [MessageAttachment]?)
+    
+    
+    case userMessageAck(
+        messageId: String, scoopJid: String, state: UserMessageAckState, error: String?)
     case status(scoopStatus: String, scoopJid: String? = nil)
     case error(error: String)
     case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
@@ -731,6 +743,17 @@ public enum LeaderToFollowerMessage: Codable {
                 scoopJid: try container.decode(String.self, forKey: .scoopJid),
                 attachments: try container.decodeIfPresent(
                     [MessageAttachment].self, forKey: .attachments))
+        case "user_message_ack":
+            let rawState = try container.decode(String.self, forKey: .state)
+            guard let state = UserMessageAckState(rawValue: rawState) else {
+                self = .unknown(type: type)
+                return
+            }
+            self = .userMessageAck(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                scoopJid: try container.decode(String.self, forKey: .scoopJid),
+                state: state,
+                error: try container.decodeIfPresent(String.self, forKey: .error))
         case "status":
             self = .status(
                 scoopStatus: try container.decode(String.self, forKey: .scoopStatus),
@@ -940,6 +963,12 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encode(messageId, forKey: .messageId)
             try container.encode(scoopJid, forKey: .scoopJid)
             try container.encodeIfPresent(attachments, forKey: .attachments)
+        case .userMessageAck(let messageId, let scoopJid, let state, let error):
+            try container.encode("user_message_ack", forKey: .type)
+            try container.encode(messageId, forKey: .messageId)
+            try container.encode(scoopJid, forKey: .scoopJid)
+            try container.encode(state, forKey: .state)
+            try container.encodeIfPresent(error, forKey: .error)
         case .status(let scoopStatus, let scoopJid):
             try container.encode("status", forKey: .type)
             try container.encode(scoopStatus, forKey: .scoopStatus)

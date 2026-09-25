@@ -138,6 +138,9 @@ class AppState: ObservableObject {
     var messagesByScoop: [String: [ChatMessage]] = [:]
     
     var localSends = LocalSendLedger()
+    
+    
+    @Published var deliveryRejections: [String: String] = [:]
     var threadSync = ThreadSyncPlanner()
     
     
@@ -512,6 +515,7 @@ class AppState: ObservableObject {
         modelSelectionState = nil
         messagesByScoop.removeAll()
         localSends.removeAll()
+        deliveryRejections.removeAll()
         toolProgress.removeAll()
         sprinkles = []
         sprinkleContents.removeAll()
@@ -897,23 +901,8 @@ class AppState: ObservableObject {
             logger.debug("Agent event received: scoopJid=\(scoopJid)")
             handleAgentEvent(event, scoopJid: scoopJid)
 
-        case .userMessageEcho(let text, let messageId, let scoopJid, let attachments):
-            logger.debug("User message echo: id=\(messageId)")
-            var buffer = messagesByScoop[scoopJid] ?? []
-            if !localSends.owns(messageId), !buffer.contains(where: { $0.id == messageId }) {
-                let msg = ChatMessage(
-                    id: messageId,
-                    role: .user,
-                    content: text,
-                    timestamp: Date().timeIntervalSince1970 * 1000,
-                    attachments: attachments
-                )
-                buffer.append(msg)
-                messagesByScoop[scoopJid] = buffer
-                if scoopJid == selectedScoopJid {
-                    messages = buffer
-                }
-            }
+        case .userMessageEcho, .userMessageAck:
+            handleDeliveryMessage(msg)
 
         case .status(let scoopStatus, let scoopJid):
             guard scoopJid == nil || scoopJid == selectedScoopJid else {

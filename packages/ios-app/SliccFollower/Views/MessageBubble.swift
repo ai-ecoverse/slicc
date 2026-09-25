@@ -22,6 +22,9 @@ struct MessageBubble: View, Equatable {
     
     
     var toolProgress: [String: ToolProgressEvent] = [:]
+    
+    
+    var deliveryError: String?
 
     @Environment(\.palette) private var palette
     @Environment(\.inlineSprinkleLick) private var onInlineSprinkleLick
@@ -32,6 +35,7 @@ struct MessageBubble: View, Equatable {
     
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message == rhs.message && lhs.toolProgress == rhs.toolProgress
+            && lhs.deliveryError == rhs.deliveryError
     }
 
     
@@ -89,6 +93,13 @@ struct MessageBubble: View, Equatable {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("send-failed-note")
+                    if let deliveryError {
+                        Text(deliveryError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red.opacity(0.8))
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("send-rejected-reason")
+                    }
                 }
             }
         } else {
