@@ -915,6 +915,98 @@ describe('tray-leader', () => {
     manager.stop();
   });
 
+  it('keeps retrying slowly after giving up and recovers when the hub is back', async () => {
+    // A hub outage that outlasts the fast backoff (e.g. a tray-hub deploy
+    // followed by a slow DO restart) must not strand a hosted leader forever.
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+    const attachResponse = (url: string) =>
+      new Response(
+        JSON.stringify({
+          trayId: 'tray-1',
+          controllerId: 'controller-1',
+          role: 'leader',
+          leaderKey: 'leader-key-1',
+          websocket: { url },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    // Attach 1 is the initial start; attaches 2-6 fail (3 fast + 2 slow); 7 succeeds.
+    let attachCount = 0;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      attachCount++;
+      if (attachCount === 1) return attachResponse('wss://tray.example.com/ws/1');
+      if (attachCount <= 6) throw new Error('hub unavailable');
+      return attachResponse('wss://tray.example.com/ws/2');
+    });
+
+    const sockets: FakeWebSocket[] = [];
+    const sleeps: number[] = [];
+    const onReconnectGaveUp = vi.fn();
+    const onReconnected = vi.fn();
+    const onLeaderReady = vi.fn();
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        // Answer every socket like the hub does once the leader attaches.
+        queueMicrotask(() =>
+          s.dispatch('message', {
+            data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+          })
+        );
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: {
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return new Promise<void>((resolve) => setTimeout(resolve, 0));
+        },
+        maxAttempts: 3,
+        baseDelayMs: 1,
+        maxDelayMs: 1,
+        slowDelayMs: 777,
+      },
+      onReconnectGaveUp,
+      onReconnected,
+      onLeaderReady,
+    });
+
+    await manager.start();
+    expect(onLeaderReady).toHaveBeenCalledTimes(1);
+
+    sockets[0].dispatch('close', {});
+
+    await vi.waitFor(() => {
+      expect(onReconnected).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onReconnectGaveUp).toHaveBeenCalledTimes(1);
+    expect(onReconnectGaveUp).toHaveBeenCalledWith(expect.any(String), 3);
+    expect(sleeps).toEqual([1, 1, 1, 777, 777, 777]);
+    expect(onLeaderReady).toHaveBeenCalledTimes(2);
+    expect(sockets).toHaveLength(2);
+    expect(getLeaderTrayRuntimeStatus()).toMatchObject({ state: 'leader', error: null });
+
+    manager.stop();
+  });
+
   it('does not reconnect after stop() is called explicitly', async () => {
     const store = new MemorySessionStore();
     store.value = {

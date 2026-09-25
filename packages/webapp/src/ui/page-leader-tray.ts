@@ -473,12 +473,11 @@ function buildLeaderManager(
       pushJoinUrlToSw(session.joinUrl);
     },
     onReconnectGaveUp: (lastError, attempts) => {
-      // `error`, not `warn` — sustained reconnect failure is the
-      // terminal state of the retry loop; followers will silently fail
-      // to connect from this point forward until the user reloads or
-      // resets the tray. The prod log gate is ERROR, so a `warn` here
-      // would be invisible to operators investigating "where did my
-      // tray go".
+      // `error`, not `warn` — the fast backoff is exhausted and followers
+      // cannot connect until one of the slow retries that follow succeeds
+      // (`onReconnected` then republishes the join URL). The prod log gate
+      // is ERROR, so a `warn` here would be invisible to operators
+      // investigating "where did my tray go".
       log.error('Leader tray reconnect gave up', { lastError, attempts });
       pushJoinUrlToSw(null);
     },
