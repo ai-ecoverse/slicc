@@ -8,6 +8,7 @@
 import type {
   FollowerJoinRequestedMessage,
   LeaderToWorkerControlMessage,
+  TrayIceCandidate,
   TraySessionDescription,
 } from '@slicc/shared-ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -52,7 +53,11 @@ class FakeChannel implements TrayDataChannelLike {
 class FakePeer implements TrayPeerConnectionLike {
   connectionState = 'new';
   localDescription: TraySessionDescription | null = null;
+  remoteDescription: TraySessionDescription | null = null;
+  /** When set, setLocalDescription fires one host candidate before resolving. */
+  emitLocalIce = false;
   closed = false;
+  readonly added: TrayIceCandidate[] = [];
   readonly channel = new FakeChannel();
   private readonly listeners = new Map<string, Array<AnyListener>>();
 
@@ -72,11 +77,28 @@ class FakePeer implements TrayPeerConnectionLike {
 
   async setLocalDescription(description: TraySessionDescription): Promise<void> {
     this.localDescription = description;
+    if (!this.emitLocalIce) return;
+    const listener = this.listeners.get('icecandidate')?.[0] as
+      | ((event: { candidate: unknown }) => void)
+      | undefined;
+    listener?.({
+      candidate: { candidate: 'candidate:host 1 udp', sdpMid: '0', sdpMLineIndex: 0 },
+    });
   }
 
-  async setRemoteDescription(): Promise<void> {}
+  async setRemoteDescription(description: TraySessionDescription): Promise<void> {
+    // Yield, so a candidate message that arrived in the same turn can run
+    // before the description is visible — the race Chrome loses.
+    await Promise.resolve();
+    this.remoteDescription = description;
+  }
 
-  async addIceCandidate(): Promise<void> {}
+  async addIceCandidate(candidate: TrayIceCandidate): Promise<void> {
+    if (!this.remoteDescription) {
+      throw new Error("ICE candidates can't be added without any remote session description");
+    }
+    this.added.push(candidate);
+  }
 
   addEventListener(type: string, listener: AnyListener): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
@@ -354,5 +376,56 @@ describe('LeaderTrayPeerManager peer lifecycle (#3477)', () => {
     expect(factory.live).toBe(0);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(sent.filter((message) => message.type === 'bootstrap.failed')).toEqual([]);
+  });
+
+  it('sends the offer before host candidates gathered during setLocalDescription', async () => {
+    const sent: LeaderToWorkerControlMessage[] = [];
+    const peer = new FakePeer(() => {});
+    peer.emitLocalIce = true;
+    const manager = new LeaderTrayPeerManager({
+      peerConnectionFactory: () => peer,
+      sendControlMessage: (message) => sent.push(message),
+    });
+
+    await manager.handleControlMessage(joinRequest());
+
+    const offerAt = sent.findIndex((message) => message.type === 'bootstrap.offer');
+    const iceAt = sent.findIndex((message) => message.type === 'bootstrap.ice_candidate');
+    expect(offerAt).toBeGreaterThanOrEqual(0);
+    expect(iceAt).toBeGreaterThan(offerAt);
+  });
+
+  it('applies a follower host candidate that arrives before the answer', async () => {
+    const peer = new FakePeer(() => {});
+    const manager = new LeaderTrayPeerManager({
+      peerConnectionFactory: () => peer,
+      sendControlMessage: () => {},
+    });
+    const request = joinRequest();
+    await manager.handleControlMessage(request);
+    const candidate: TrayIceCandidate = {
+      candidate: 'candidate:host 1 udp',
+      sdpMid: '0',
+      sdpMLineIndex: 0,
+    };
+
+    await Promise.all([
+      manager.handleControlMessage({
+        type: 'bootstrap.ice_candidate',
+        trayId: 'tray-1',
+        controllerId: request.controllerId,
+        bootstrapId: request.bootstrapId,
+        candidate,
+      }),
+      manager.handleControlMessage({
+        type: 'bootstrap.answer',
+        trayId: 'tray-1',
+        controllerId: request.controllerId,
+        bootstrapId: request.bootstrapId,
+        answer: { type: 'answer', sdp: 'answer' },
+      }),
+    ]);
+
+    expect(peer.added).toEqual([candidate]);
   });
 });
