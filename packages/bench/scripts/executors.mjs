@@ -4,13 +4,18 @@
  * its own cone.
  *
  * `createLeader({ url })` returns:
- * - `cli(args, { stdin, timeoutMs, interrupt })` → `{ stdout, stderr, status, timedOut }` for any
- *   verb (`prompt`, `new-session`, `model`, `exec`, …). Never throws on a non-zero status.
+ * - `cli(args, { stdin, timeoutMs, interrupt })` → `{ stdout, stderr, status, timedOut,
+ *   leaderDown }` for any verb (`prompt`, `new-session`, `model`, `exec`, …). Never throws on a
+ *   non-zero status.
  * - `exec(command, opts)`: `cli(['exec', command], opts)`.
+ * - `url` / `setUrl(url)`: the join URL, replaced when the leader is recycled.
  *
- * A dial failure (nothing reached the leader) is retried; an execution never is. A timeout sends
- * SIGINT when `interrupt` is set: `slicc prompt` answers SIGINT by sending the leader an
- * `abort`, so a stopped task does not go on spending tokens in the cone.
+ * A dial failure (nothing reached the leader) is retried, and the retries run with
+ * `SLICC_DEBUG=1` so the CLI's signaling and ICE diagnostics are kept (`onCall`'s `diagnostics`).
+ * When every attempt fails to dial, the result has `leaderDown: true`. An execution is never
+ * retried. Every call gets a timeout (`defaultTimeoutMs` unless given), so a hung connection
+ * cannot stall a run. A timeout sends SIGINT when `interrupt` is set: `slicc prompt` answers
+ * SIGINT by sending the leader an `abort`, so a stopped task does not go on spending tokens.
  */
 
 import { spawn } from 'node:child_process';
@@ -25,10 +30,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Grace between the timeout signal and SIGKILL, for the CLI to deliver its `abort`. */
 const KILL_GRACE_MS = 10_000;
 
-export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false } = {}) {
+/** Bound on any call that does not bring its own (a prompt does): generous, never infinite. */
+export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
+
+export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false, env } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cli, args, {
-      env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1' },
+      env: { ...process.env, SLICC_NO_TUI: '1', NO_COLOR: '1', ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const out = [];
@@ -64,8 +72,20 @@ export function runProcess(cli, args, { stdin, timeoutMs, interrupt = false } = 
       if (timedOut) finish(code, signal);
     });
     child.on('close', finish);
+    // A CLI that exits without reading its stdin (a failed dial) must not crash the runner.
+    child.stdin.on('error', () => {});
     child.stdin.end(stdin ?? '');
   });
+}
+
+/** A short, secret-free name for a call: the verb, and for exec the command's first word. */
+export function callLabel(args) {
+  if (args[0] !== 'exec') return args.join(' ').slice(0, 80);
+  return `exec ${
+    String(args[1] ?? '')
+      .trim()
+      .split(/\s+/)[0]
+  }`;
 }
 
 export function createLeader({
@@ -73,19 +93,51 @@ export function createLeader({
   cli = process.env.SLICC_CLI || 'slicc',
   run = runProcess,
   retryDelayMs = CONNECT_RETRY_DELAY_MS,
+  defaultTimeoutMs = DEFAULT_CALL_TIMEOUT_MS,
+  onCall = () => {},
+  now = Date.now,
 } = {}) {
   if (!url) throw new Error('driving the leader needs its join URL (SLICC_JOIN_URL)');
+  let joinUrl = url;
   async function call(args, opts = {}) {
+    const options = { ...opts, timeoutMs: opts.timeoutMs ?? defaultTimeoutMs };
+    const diagnostics = [];
+    const started = now();
     for (let attempt = 1; ; attempt += 1) {
-      const result = await run(cli, [url, ...args], opts);
-      if (isConnectFailure(result.status, result.stderr) && attempt < CONNECT_RETRIES) {
+      const retrying = attempt > 1;
+      const result = await run(cli, [joinUrl, ...args], {
+        ...options,
+        ...(retrying ? { env: { ...options.env, SLICC_DEBUG: '1' } } : {}),
+      });
+      const dialFailed = isConnectFailure(result.status, result.stderr);
+      if (dialFailed && retrying) diagnostics.push(result.stderr);
+      if (dialFailed && attempt < CONNECT_RETRIES) {
         await sleep(retryDelayMs);
         continue;
       }
-      return result;
+      const out = { ...result, leaderDown: dialFailed };
+      onCall({
+        at: new Date(started).toISOString(),
+        call: callLabel(args),
+        ms: now() - started,
+        status: result.status,
+        timedOut: Boolean(result.timedOut),
+        attempts: attempt,
+        leaderDown: dialFailed,
+        ...(result.status !== 0 ? { stderr: String(result.stderr).slice(-400) } : {}),
+        ...(diagnostics.length ? { diagnostics } : {}),
+      });
+      return out;
     }
   }
   return {
+    get url() {
+      return joinUrl;
+    },
+    setUrl(next) {
+      if (!next) throw new Error('a recycled leader needs a join URL');
+      joinUrl = next;
+    },
     cli: call,
     exec: (command, opts) => call(['exec', command], opts),
   };
