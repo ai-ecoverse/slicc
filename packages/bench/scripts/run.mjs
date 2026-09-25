@@ -372,7 +372,9 @@ function describeRun(i, total, r, record) {
   const head = `[${i + 1}/${total}] ${r.task.id} ${r.model} ${r.condition.name} r${r.repeat}:`;
   if (record.error) return `${head} ERROR ${record.error}`;
   const score = record.score == null ? '' : ` ${record.score.toFixed(2)}`;
-  return `${head} ${record.outcome ?? 'ran'}${score} ${record.metrics.duration.toFixed(0)} s ${typeof record.metrics.cost === 'number' ? `$${record.metrics.cost.toFixed(3)}` : 'cost unknown'}`;
+  const t = record.metrics.transcript;
+  const missing = t && !t.ok ? ` (no transcript: ${t.stage} ${t.reason})` : '';
+  return `${head} ${record.outcome ?? 'ran'}${score} ${record.metrics.duration.toFixed(0)} s ${typeof record.metrics.cost === 'number' ? `$${record.metrics.cost.toFixed(3)}` : 'cost unknown'}${missing}`;
 }
 
 function writeRun(opts, r, { record, result }) {
@@ -470,6 +472,7 @@ function taskEvent(r, { record, result }) {
     leader: record.leader,
     phases: result?.phases,
     health: result?.health,
+    transcript: result?.transcriptExport,
   };
 }
 

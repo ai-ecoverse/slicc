@@ -21,6 +21,7 @@
  * skills are stashed once and restored at the end.
  */
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -262,18 +263,197 @@ export async function readShots(leader, shots, max = MAX_SCREENSHOTS) {
   return { taken: images.length, images: images.slice(-max) };
 }
 
-/** The cone's conversation, as `session export` writes it (TranscriptDocumentV1). */
-export async function exportTranscript(leader, dir) {
-  const r = await leader.exec(
-    `session export --output ${dir}/transcript.zip >/dev/null && mkdir -p ${dir}/transcript && unzip ${dir}/transcript.zip -d ${dir}/transcript >/dev/null && cat ${dir}/transcript/transcript.json`,
-    { timeoutMs: 120_000 }
-  );
-  if (r.status !== 0) return null;
-  try {
-    return JSON.parse(r.stdout);
-  } catch {
-    return null;
+/**
+ * Transcript transfer bounds. One `slicc exec` delivers its whole stdout as one tray message, and
+ * the tray drops a message over 8 MiB without an error: the CLI exits 0 with empty stdout, which
+ * a 6.3 MB `cat` already hits. So the file is split on the leader and read back in parts whose
+ * base64 stays far below that ceiling.
+ */
+export const TRANSCRIPT_PART_BYTES = 3 * 1024 * 1024;
+/** `session export` of a long run's session can take minutes (120 s was not enough). */
+export const TRANSCRIPT_EXPORT_TIMEOUT_MS = 600_000;
+export const TRANSCRIPT_READ_TIMEOUT_MS = 120_000;
+export const TRANSCRIPT_EXPORT_ATTEMPTS = 2;
+export const TRANSCRIPT_READ_ATTEMPTS = 3;
+
+/**
+ * The shell command that exports the session and splits transcript.json into parts, then prints
+ * the file's size and the sha256 of the file and of every part.
+ */
+export function exportTranscriptCommand(dir, partBytes = TRANSCRIPT_PART_BYTES) {
+  const t = `${dir}/transcript`;
+  return [
+    `session export --output ${dir}/transcript.zip >/dev/null`,
+    `rm -rf ${t}`,
+    `mkdir -p ${t}/parts`,
+    `unzip ${dir}/transcript.zip -d ${t} >/dev/null`,
+    `split -b ${partBytes} ${t}/transcript.json ${t}/parts/x`,
+    `wc -c ${t}/transcript.json`,
+    `sha256sum ${t}/transcript.json ${t}/parts/*`,
+  ].join(' && ');
+}
+
+/**
+ * The export listing → `{ bytes, sha256, parts: [{ path, sha256, bytes }] }`, or null when it is
+ * incomplete: no size or file hash, or fewer or more parts than the size calls for.
+ */
+export function parseExportListing(text, partBytes = TRANSCRIPT_PART_BYTES) {
+  const lines = String(text ?? '').split('\n');
+  let bytes = null;
+  let sha256 = null;
+  const parts = [];
+  for (const line of lines) {
+    // At most 15 digits, so an all-digit sha256 line is never read as the size.
+    const size = /^\s*(\d{1,15})\s+\S*\/transcript\.json\s*$/.exec(line);
+    if (size) bytes = Number(size[1]);
+    const hash = /^([0-9a-f]{64})\s+\*?(\S+)\s*$/.exec(line);
+    if (!hash) continue;
+    if (hash[2].endsWith('/transcript.json')) sha256 = hash[1];
+    else if (/\/parts\/x[a-z]+$/.test(hash[2])) parts.push({ path: hash[2], sha256: hash[1] });
   }
+  if (!bytes || !sha256) return null;
+  parts.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  if (parts.length !== Math.ceil(bytes / partBytes)) return null;
+  for (const [i, p] of parts.entries()) {
+    p.bytes = i < parts.length - 1 ? partBytes : bytes - partBytes * (parts.length - 1);
+  }
+  return { bytes, sha256, parts };
+}
+
+const sha256Hex = (buf) => createHash('sha256').update(buf).digest('hex');
+
+/**
+ * One part's `base64` output → its bytes, or the reason it is not the part the listing named:
+ * not base64, the wrong length (a truncated transfer), or the wrong hash.
+ */
+export function decodeTranscriptPart(stdout, part) {
+  const text = String(stdout ?? '').replace(/\s+/g, '');
+  if (!text) return { error: 'empty' };
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text) || text.length % 4 !== 0) return { error: 'not base64' };
+  const buf = Buffer.from(text, 'base64');
+  if (buf.length !== part.bytes) return { error: `${buf.length} of ${part.bytes} bytes` };
+  if (sha256Hex(buf) !== part.sha256) return { error: 'checksum mismatch' };
+  return { buf };
+}
+
+const clipDetail = (r) =>
+  String(r.stderr || r.stdout || '')
+    .trim()
+    .slice(-200);
+
+/** Why a leader call failed, as a short code for the journal. */
+function callFailure(r) {
+  if (r.leaderDown) return 'leader-down';
+  if (r.timedOut) return 'timeout';
+  return `exit ${r.status}`;
+}
+
+/**
+ * Run the export until it prints a complete listing: `{ listing }` or `{ failure }`. A timed-out
+ * export is not repeated (it would only time out again), nor one that never reached the leader.
+ */
+async function runExport(leader, command, info, { partBytes, timeoutMs, attempts }) {
+  let failure = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    info.exports = attempt;
+    const r = await leader.exec(command, { timeoutMs });
+    if (r.status !== 0) {
+      failure = { stage: 'export', reason: callFailure(r), detail: clipDetail(r) };
+      if (r.timedOut || r.leaderDown) break;
+      continue;
+    }
+    const listing = parseExportListing(r.stdout, partBytes);
+    if (listing) return { listing };
+    failure = { stage: 'export', reason: 'listing', detail: String(r.stdout).trim().slice(-200) };
+  }
+  return { failure };
+}
+
+/** Read one part until it arrives intact: `{ buf }` or `{ failure }`. */
+async function readPart(leader, part, info, { timeoutMs, attempts }) {
+  let failure = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    info.reads += 1;
+    const r = await leader.exec(`base64 ${quote(part.path)}`, { timeoutMs });
+    if (r.status !== 0) {
+      failure = { stage: 'read', reason: callFailure(r), detail: clipDetail(r) };
+      // The CLI already retried the dial; a leader that stays unreachable will not send the rest.
+      if (r.leaderDown) break;
+      continue;
+    }
+    const decoded = decodeTranscriptPart(r.stdout, part);
+    if (decoded.buf) return { buf: decoded.buf };
+    failure = { stage: 'read', reason: decoded.error };
+  }
+  return { failure };
+}
+
+/**
+ * The cone's conversation, as `session export` writes it (TranscriptDocumentV1), read back in
+ * verified parts. Returns `{ doc, info }`; `doc` is null when no intact transcript arrived, and
+ * `info` says why: `{ ok, bytes, parts, exports, reads, ms, stage?, reason?, detail? }`. Never
+ * throws for a leader failure.
+ *
+ * A failed export is tried again, unless it timed out or never reached the leader; a part that
+ * fails to arrive intact (a dropped connection, a short or corrupted read) is read again.
+ */
+export async function exportTranscript(
+  leader,
+  dir,
+  {
+    partBytes = TRANSCRIPT_PART_BYTES,
+    exportTimeoutMs = TRANSCRIPT_EXPORT_TIMEOUT_MS,
+    readTimeoutMs = TRANSCRIPT_READ_TIMEOUT_MS,
+    exportAttempts = TRANSCRIPT_EXPORT_ATTEMPTS,
+    readAttempts = TRANSCRIPT_READ_ATTEMPTS,
+    now = Date.now,
+  } = {}
+) {
+  const started = now();
+  const info = { ok: false, bytes: null, parts: 0, exports: 0, reads: 0, ms: 0 };
+  const done = (doc, failure) => {
+    info.ms = now() - started;
+    if (failure) Object.assign(info, failure);
+    else info.ok = true;
+    return { doc, info };
+  };
+
+  const command = exportTranscriptCommand(dir, partBytes);
+  const exported = await runExport(leader, command, info, {
+    partBytes,
+    timeoutMs: exportTimeoutMs,
+    attempts: exportAttempts,
+  });
+  if (exported.failure) return done(null, exported.failure);
+  const { listing } = exported;
+  info.bytes = listing.bytes;
+  info.parts = listing.parts.length;
+
+  const bufs = [];
+  for (const part of listing.parts) {
+    const read = await readPart(leader, part, info, {
+      timeoutMs: readTimeoutMs,
+      attempts: readAttempts,
+    });
+    if (read.failure) return done(null, read.failure);
+    bufs.push(read.buf);
+  }
+
+  const whole = Buffer.concat(bufs);
+  if (whole.length !== listing.bytes || sha256Hex(whole) !== listing.sha256) {
+    return done(null, { stage: 'verify', reason: 'checksum mismatch' });
+  }
+  let doc;
+  try {
+    doc = JSON.parse(whole.toString('utf8'));
+  } catch {
+    // No detail: JSON.parse quotes the text it choked on, and that can be task text.
+    return done(null, { stage: 'parse', reason: 'not JSON' });
+  }
+  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.conversations)) {
+    return done(null, { stage: 'parse', reason: 'not a transcript' });
+  }
+  return done(doc);
 }
 
 function clip(text) {
@@ -365,6 +545,12 @@ export function toolMetrics(transcript) {
   };
 }
 
+/** The export's outcome for a record: codes and counts, never the leader's stderr. */
+export function transcriptSummary(info) {
+  const { detail: _detail, ...summary } = info;
+  return summary;
+}
+
 /** A run's result → the trace shape `judge.mjs` reads. */
 export function traceFromResult(result) {
   const t = transcriptSteps(result.transcript);
@@ -372,11 +558,13 @@ export function traceFromResult(result) {
     result.finalText?.trim() ||
     (result.timedOut ? 'The run was stopped at the time limit before the cone answered.' : '') ||
     (result.stderr ? `The run failed: ${result.stderr}` : '');
+  const ex = result.transcriptExport;
+  const why = ex && !ex.ok ? `: ${ex.stage} ${ex.reason}` : '';
   return {
     finalResult,
     steps: t.steps.length
       ? t.steps
-      : [`(no transcript could be exported; prompt exit code ${result.exitCode})`],
+      : [`(no transcript could be exported${why}; prompt exit code ${result.exitCode})`],
     screenshots: result.screenshots ?? [],
     outputFilesText: null,
     metrics: {
@@ -391,6 +579,7 @@ export function traceFromResult(result) {
       modelsUsed: t.models,
       ...toolMetrics(result.transcript),
       ...(result.phases ? { phases: result.phases } : {}),
+      ...(ex ? { transcript: transcriptSummary(ex) } : {}),
     },
   };
 }
@@ -445,7 +634,9 @@ export async function runTask({
     await closeTabs(leader).catch(() => {});
 
     const after = await spend(leader);
-    const transcript = await exportTranscript(leader, dir);
+    const { doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
+      now,
+    });
     const { taken, images } = await readShots(leader, shots);
     health.after = await leaderHealth(leader, now);
     const done = now();
@@ -460,6 +651,7 @@ export async function runTask({
       durationMs,
       ...spendDelta(before, after),
       transcript,
+      transcriptExport,
       tabs: openTabs,
       screenshots: images,
       screenshotsTaken: taken,

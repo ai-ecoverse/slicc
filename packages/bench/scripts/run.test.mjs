@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -199,6 +200,7 @@ const TRANSCRIPT = {
     },
   ],
 };
+const TRANSCRIPT_BYTES = Buffer.from(JSON.stringify(TRANSCRIPT));
 
 /**
  * A fake leader behind the `slicc` CLI: each prompt takes five seconds on its own clock and
@@ -243,7 +245,17 @@ function leader({ failOn, down = () => false } = {}) {
           scoops: [{ type: 'cone', turns: 1, usage: { totalTokens: 10, cost: { total: spent } } }],
         })
       );
-    if (command.startsWith('session export')) return reply(command, JSON.stringify(TRANSCRIPT));
+    if (command.startsWith('session export')) {
+      // One part: the listing `exportTranscriptCommand` prints, then `base64` of that part.
+      const t = `${/--output (\S+)\/transcript\.zip/.exec(command)[1]}/transcript`;
+      const hash = createHash('sha256').update(TRANSCRIPT_BYTES).digest('hex');
+      return reply(
+        command,
+        `${TRANSCRIPT_BYTES.length} ${t}/transcript.json\n${hash}  ${t}/transcript.json\n${hash}  ${t}/parts/xaa\n`
+      );
+    }
+    if (/^base64 '\S+\/transcript\/parts\/xaa'$/.test(command))
+      return reply(command, TRANSCRIPT_BYTES.toString('base64'));
     return reply(command);
   });
   const setUrl = (u) => {
@@ -801,6 +813,35 @@ describe('leader lifecycle', () => {
     });
     expect(events(out)[3]).toMatchObject({ generation: 1, slicc_version: '9.9' });
     expect(events(out)[1].health.before.ok).toBe(true);
+    expect(events(out)[1].transcript).toMatchObject({ ok: true, parts: 1, exports: 1, reads: 1 });
+    q.mockRestore();
+  });
+
+  it('journals why a transcript is missing, in the event, the record and the log', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const fake = leader({ failOn: /^session export/ });
+    const log = vi.fn();
+    const code = await main(['--set', twoTasks(dir), '--models', 'm', '--no-judge', '--out', out], {
+      ...fake.deps,
+      log,
+    });
+    expect(code).toBe(0);
+    const task = events(out).find((e) => e.type === 'task');
+    expect(task.transcript).toMatchObject({
+      ok: false,
+      stage: 'export',
+      reason: 'exit 1',
+      detail: 'leader went away',
+      exports: 2,
+    });
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    expect(r1.metrics.transcript).toMatchObject({ ok: false, stage: 'export', reason: 'exit 1' });
+    expect(r1.metrics.transcript.detail).toBeUndefined();
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /ran 5 s \$0\.010 \(no transcript: export exit 1\)/
+    );
     q.mockRestore();
   });
 
