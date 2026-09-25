@@ -2204,31 +2204,37 @@ That is a catalogue gap, not a filter bug.
 ### 5. Non-Claude Bedrock models: caching is implicit, and `cachePoint` 403s
 
 The picker is default-deny for non-Claude (rule 2 in
-`bedrock-camp-compat.ts`). The allowlist holds exactly one family —
-`openai.gpt-5.6-{sol,terra,luna}` — admitted only after live verification,
-because these models differ from Claude in three ways that each fail silently
-or mid-loop:
+`bedrock-camp-compat.ts`). The allowlist holds
+`openai.gpt-5.6-{sol,terra,luna}`, `openai.gpt-6-{sol,luna,astra}` and
+`moonshotai.kimi-k3`, each admitted only after live verification, because
+these models differ from Claude in three ways that each fail silently or
+mid-loop:
 
-|                | Claude                                            | gpt-5.6                                                    |
-| -------------- | ------------------------------------------------- | ---------------------------------------------------------- |
-| prompt caching | explicit `cachePoint` block                       | **implicit**; a `cachePoint` block returns `403`           |
-| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0               | rejected                                                   |
-| thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter` on every shape |
+|                | Claude                                            | gpt-5.6                                          | gpt-6                                          | kimi-k3                              |
+| -------------- | ------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------- | ------------------------------------ |
+| prompt caching | explicit `cachePoint` block                       | **implicit**; a `cachePoint` block returns `403` | **implicit**                                   | **implicit**                         |
+| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0               | rejected                                         | rejected                                       | rejected                             |
+| thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter`      | only `reasoning.effort` (`none` 400s on Astra) | every shape accepted **and ignored** |
 
-So enabling gpt-5.6 required removing nothing and adding nothing to the
-request — `supportsPromptCaching` and `buildAdditionalModelRequestFields`
-already gate on `isAnthropicClaudeModel`, and both stay correct. The one real
-change was the `temperature` reject-list, which was Claude-only.
+`supportsPromptCaching` gates on `isAnthropicClaudeModel`, so caching needed
+no change. `buildAdditionalModelRequestFields` emits nothing for gpt-5.6 and
+kimi-k3, and a `reasoning.effort` block only for gpt-6. The `temperature`
+reject-list, previously Claude-only, also had to grow.
 
-Two consequences of that gating, easy to miss:
+Consequences of that gating, easy to miss:
 
-- **Effort control is Claude-only.** Because `buildAdditionalModelRequestFields`
-  emits nothing off the Claude path, low/medium/high/xhigh all produce a
-  byte-identical request for gpt-5.6. The composer gates its thinking-level
-  selector on `model.reasoning`, so `account-store.ts` clears that flag for
-  non-Claude picker entries via `isBedrockCampClaudeModel`. This does not
-  suppress `reasoningContent` — gpt-5.6 still reasons, it just cannot be told
-  how hard.
+- **Effort control is Claude and gpt-6 only.** gpt-6 gets
+  `additionalModelRequestFields.reasoning.effort` from
+  `BEDROCK_CAMP_GPT6_EFFORT_MAP` (`bedrock-camp-compat.ts`): off → `none`,
+  minimal rounds up to `low` (`minimal` 400s), low … xhigh pass through, and
+  the UI's `max` (which reaches the provider as `xhigh` plus `effort: 'max'`)
+  sends `max`. Astra 400s `none`, so its map has no off entry and off sends
+  no field (model default). For gpt-5.6 and kimi-k3 every level produces a
+  byte-identical request. The composer gates its thinking-level selector on
+  `model.reasoning`, so `account-store.ts` (`toBedrockCampPickerModel`) keeps
+  that flag only for Claude and gpt-6 and swaps in the gpt-6 effort map. This
+  does not suppress `reasoningContent` — gpt-5.6 still reasons, it just
+  cannot be told how hard.
 - **The allowlist is anchored per variant** (`sol|terra|luna`), not a
   `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
   catalogue gains without anyone measuring its caching, which is the
@@ -2237,9 +2243,10 @@ Two consequences of that gating, easy to miss:
 **Prompt caching is the bar for this allowlist**, so measure it before adding
 a model (`bedrock-runtime.us-west-2`):
 
-- **gpt-5.6** — reliable. `cacheWriteInputTokens` on the first call, then
-  `cacheReadInputTokens` on every repeat, including with a system prompt and
-  `toolConfig` attached.
+- **gpt-5.6, gpt-6, kimi-k3** — reliable. `cacheWriteInputTokens` on the
+  first call, then `cacheReadInputTokens` on every repeat, including with a
+  system prompt and `toolConfig` attached. The cache is shared across
+  profiles: a `us.` call reads what a `global.` call wrote.
 - **grok-4.6** — NOT allowlisted. Fully functional (200s, tool calls, system
   prompts) but cached on only 2 of 15 attempts at ~18-20k tokens, so it would
   bill full input on nearly every turn.
@@ -2284,6 +2291,12 @@ Two traps when adding one:
 - **Verify live, do not copy.** Check `GET /inference-profiles` for the tiers
   and `POST /converse` for `temperature`, the thinking shape, and a
   `cachePoint` write-then-read. Regional tiers cost 10% more than `global.`.
+- **Price from pi's catalogue, then models.dev, never a guess.** pi's hosted
+  catalogue (`https://pi.dev/api/models/providers/amazon-bedrock`) often lists
+  a model before the pinned pi-ai release does. It omits long-context tiers
+  for Bedrock (GPT-6 bills more above 272k input), so take `tiers` from
+  models.dev. The benchmark bills from these numbers, so a missing price
+  makes a model look free.
 
 **Related tests:** `claude-model-version.test.ts`,
 `temperature-support.test.ts`, `adaptive-thinking.test.ts`,

@@ -16,11 +16,25 @@
  * loaded `account-store.ts` imports it, so it must not pull in pi-ai.
  */
 
-interface BedrockCampCost {
+import {
+  BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
+  BEDROCK_CAMP_GPT6_EFFORT_MAP,
+} from './bedrock-camp-compat.js';
+
+interface BedrockCampCostRates {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+}
+
+/** Mirrors pi-ai's `ModelCostTier`: `calculateCost` bills the whole request at it. */
+interface BedrockCampCostTier extends BedrockCampCostRates {
+  inputTokensAbove: number;
+}
+
+interface BedrockCampCost extends BedrockCampCostRates {
+  tiers?: BedrockCampCostTier[];
 }
 
 /** The subset of pi-ai's `Model` shape the picker and stream function read. */
@@ -45,14 +59,28 @@ export interface BedrockCampExtraModel {
  */
 const REGIONAL_PREMIUM = 1.1;
 
-function regionalCost(cost: BedrockCampCost): BedrockCampCost {
-  const bump = (n: number) => Math.round(n * REGIONAL_PREMIUM * 1000) / 1000;
+// Six decimals, not three: GPT-6 Luna's $0.125 cache write becomes $0.1375
+// regionally, which a three-decimal round would bill as $0.138.
+const round6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
+
+function scaleRates(rates: BedrockCampCostRates, factor: number): BedrockCampCostRates {
   return {
-    input: bump(cost.input),
-    output: bump(cost.output),
-    cacheRead: bump(cost.cacheRead),
-    cacheWrite: bump(cost.cacheWrite),
+    input: round6(rates.input * factor),
+    output: round6(rates.output * factor),
+    cacheRead: round6(rates.cacheRead * factor),
+    cacheWrite: round6(rates.cacheWrite * factor),
   };
+}
+
+function scaleCost(cost: BedrockCampCost, factor: number): BedrockCampCost {
+  const scaled: BedrockCampCost = scaleRates(cost, factor);
+  if (cost.tiers) {
+    scaled.tiers = cost.tiers.map((tier) => ({
+      ...scaleRates(tier, factor),
+      inputTokensAbove: tier.inputTokensAbove,
+    }));
+  }
+  return scaled;
 }
 
 const PROFILE_LABELS = {
@@ -94,6 +122,93 @@ const EXTRA_MODEL_SPECS: readonly ExtraModelSpec[] = [
     maxTokens: 128_000,
     thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
   },
+  // The five below were verified 2026-09-25 against bedrock-runtime.us-west-2.
+  // `GET /inference-profiles` lists only `global.` and `us.` for each, in
+  // us-west-2 and us-east-1; eu-central-1, ap-northeast-1 and ap-southeast-2
+  // list only `global.`. Every one answers `temperature` with a 400.
+  // Prices, context window and max tokens are pi's hosted catalogue
+  // (`https://pi.dev/api/models/providers/amazon-bedrock`, the list pi-ai's
+  // `models.generated` is built from) unless noted; models.dev's
+  // `amazon-bedrock` entries agree on every figure.
+  {
+    // Adaptive thinking only: `thinking.type.enabled` and `.disabled` both
+    // 400, effort low/high/xhigh/max accepted. The $0.25 cache read (2.5% of
+    // input, not Fable 5's 10%) is what both sources list.
+    baseId: 'anthropic.claude-fable-5-1',
+    name: 'Claude Fable 5.1',
+    profiles: ['global', 'us'],
+    globalCost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: { off: null, xhigh: 'xhigh', max: 'max' },
+  },
+  // GPT-6: implicit prompt caching and tool calls verified live (see
+  // `BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE`). The only thinking shape accepted
+  // is `additionalModelRequestFields.reasoning.effort`; the levels are the
+  // live-verified maps in `bedrock-camp-compat.ts` (pi's Bedrock entries list
+  // only `xhigh`).
+  // The long-context tier (input above 272k tokens) is from models.dev;
+  // pi's catalogue omits it for Bedrock, and leaving it out would under-bill
+  // long turns.
+  {
+    baseId: 'openai.gpt-6-sol',
+    name: 'GPT-6 Sol',
+    profiles: ['global', 'us'],
+    globalCost: {
+      input: 2,
+      output: 10,
+      cacheRead: 0.2,
+      cacheWrite: 2.5,
+      tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 }],
+    },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  },
+  {
+    baseId: 'openai.gpt-6-luna',
+    name: 'GPT-6 Luna',
+    profiles: ['global', 'us'],
+    globalCost: {
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [
+        { inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 },
+      ],
+    },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: BEDROCK_CAMP_GPT6_EFFORT_MAP,
+  },
+  {
+    baseId: 'openai.gpt-6-astra',
+    name: 'GPT-6 Astra',
+    profiles: ['global', 'us'],
+    globalCost: {
+      input: 10,
+      output: 50,
+      cacheRead: 1,
+      cacheWrite: 12.5,
+      tiers: [{ inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }],
+    },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: BEDROCK_CAMP_GPT6_ASTRA_EFFORT_MAP,
+  },
+  {
+    // Open weights. Implicit caching and tool calls verified live. Accepts
+    // every thinking shape tried and ignores all of them, so there is no
+    // thinkingLevelMap. Price also matches the AWS Bedrock pricing page
+    // (Standard tier): $3 / $15 / $0.30 read / $3.75 write, US +10%.
+    baseId: 'moonshotai.kimi-k3',
+    name: 'Kimi K3',
+    profiles: ['global', 'us'],
+    globalCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    contextWindow: 1_048_576,
+    maxTokens: 128_000,
+  },
 ];
 
 function expandSpec(spec: ExtraModelSpec): BedrockCampExtraModel[] {
@@ -107,7 +222,7 @@ function expandSpec(spec: ExtraModelSpec): BedrockCampExtraModel[] {
     baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
     reasoning: true,
     input: ['text', 'image'],
-    cost: prefix === 'global' ? { ...spec.globalCost } : regionalCost(spec.globalCost),
+    cost: scaleCost(spec.globalCost, prefix === 'global' ? 1 : REGIONAL_PREMIUM),
     contextWindow: spec.contextWindow,
     maxTokens: spec.maxTokens,
     ...(spec.thinkingLevelMap ? { thinkingLevelMap: { ...spec.thinkingLevelMap } } : {}),
@@ -117,15 +232,54 @@ function expandSpec(spec: ExtraModelSpec): BedrockCampExtraModel[] {
 export const BEDROCK_CAMP_EXTRA_MODELS: readonly BedrockCampExtraModel[] =
   EXTRA_MODEL_SPECS.flatMap(expandSpec);
 
+interface MergeableModel {
+  id: string;
+  cost?: BedrockCampCostRates & { tiers?: readonly BedrockCampCostTier[] };
+}
+
+function sameBaseRates(a: BedrockCampCostRates, b: BedrockCampCostRates): boolean {
+  return (
+    a.input === b.input &&
+    a.output === b.output &&
+    a.cacheRead === b.cacheRead &&
+    a.cacheWrite === b.cacheWrite
+  );
+}
+
+/**
+ * Tiers are the one thing an extra keeps after pi-ai learns its model: pi's
+ * Bedrock entries omit long-context tiers (and the live-catalogue overlay
+ * strips any it gets), so without this GPT-6 turns above 272k input would
+ * bill at base rates. Only grafted onto a price sheet identical to ours; if
+ * pi's base rates differ, ours are stale and so are our tiers.
+ */
+function withExtraTiers<T extends MergeableModel>(model: T, extra: T | undefined): T {
+  const extraCost = extra?.cost;
+  if (
+    !extraCost?.tiers ||
+    !model.cost ||
+    model.cost.tiers ||
+    !sameBaseRates(model.cost, extraCost)
+  ) {
+    return model;
+  }
+  return { ...model, cost: { ...model.cost, tiers: extraCost.tiers.map((t) => ({ ...t })) } };
+}
+
 /**
  * pi-ai's catalogue plus the extras it does not know yet. pi-ai's entry wins
  * on an id collision, so a pi-ai bump that learns a model supersedes the
- * hand-written entry without an edit here.
+ * hand-written entry without an edit here — apart from cost tiers, see
+ * {@link withExtraTiers}.
  */
-export function mergeBedrockCampCatalogue<T extends { id: string }>(
+export function mergeBedrockCampCatalogue<T extends MergeableModel>(
   catalogue: readonly T[],
   extras: readonly T[]
 ): T[] {
+  const extrasById = new Map(extras.map((m) => [m.id, m]));
   const known = new Set(catalogue.map((m) => m.id));
-  return [...catalogue, ...extras.filter((m) => !known.has(m.id))];
+  return [
+    ...catalogue.map((m) => withExtraTiers(m, extrasById.get(m.id))),
+    ...extras.filter((m) => !known.has(m.id)),
+  ];
 }
