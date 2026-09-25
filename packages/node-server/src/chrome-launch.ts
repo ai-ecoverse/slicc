@@ -244,6 +244,31 @@ export function resolveChromeLaunchProfile(options: {
   };
 }
 
+/**
+ * Features disabled on every Slicc-launched Chrome. Hosted leaders add
+ * `WebRtcHideLocalIpsWithMdns` so host candidates are literal addresses.
+ * Chromium honours a single `--disable-features` value (Chrome 154 still
+ * ships the feature under that name).
+ */
+const CHROME_DISABLE_FEATURES = [
+  'LocalNetworkAccessChecks',
+  'LocalNetworkAccessChecksWebSockets',
+  'IntensiveWakeUpThrottling',
+  'HighEfficiencyModeAvailable',
+  'InfiniteTabsFreezing',
+  'InfiniteTabsFreezingOnMemoryPressure',
+  'CPUMeasurementInFreezingPolicy',
+  'MemoryMeasurementInFreezingPolicy',
+  'AllowDevtoolsConnectedDiscard',
+] as const;
+
+const HOSTED_DISABLE_FEATURES = [...CHROME_DISABLE_FEATURES, 'WebRtcHideLocalIpsWithMdns'] as const;
+
+function chromeDisableFeaturesArg(hosted: boolean): string {
+  const features = hosted ? HOSTED_DISABLE_FEATURES : CHROME_DISABLE_FEATURES;
+  return `--disable-features=${features.join(',')}`;
+}
+
 export function buildChromeLaunchArgs(options: {
   cdpPort: number;
   launchUrl: string;
@@ -299,7 +324,9 @@ export function buildChromeLaunchArgs(options: {
     // trips it on a ~30 min cadence), and AllowDevtoolsConnectedDiscard
     // removed the DevTools-attached exemption the leader used to enjoy.
     // Belt: seedChromeProfilePreferences() writes the matching prefs.
-    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard',
+    // Hosted mode appends WebRtcHideLocalIpsWithMdns; keep that off this list
+    // so desktop, extension, and Electron still hide local IPs.
+    chromeDisableFeaturesArg(false),
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
@@ -324,8 +351,16 @@ export function buildChromeLaunchArgs(options: {
   }
 
   if (options.hosted) {
+    // One --disable-features switch: Chromium keeps a single value, so the
+    // hosted addition replaces the base flag rather than stacking a second.
+    const base = args.findIndex((arg) => arg.startsWith('--disable-features='));
+    if (base >= 0) args[base] = chromeDisableFeaturesArg(true);
     // Local Network Access is disabled unconditionally in the base args above
     // (every float dials the local bridge); these are the container-only flags.
+    // A hosted leader is headless Chrome on a machine the CLI shares, so its
+    // private address is not a secret worth hiding behind mDNS. A literal host
+    // candidate lets pion connect directly. The relay fallback is what dies
+    // when TURN rejects CreatePermission.
     args.push(
       '--headless=new',
       '--no-sandbox',

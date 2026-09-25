@@ -207,10 +207,18 @@ describe('chrome-launch', () => {
     });
 
     it('does not duplicate the Local Network Access flag in hosted mode', () => {
-      const lnaFlag =
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard';
       const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
-      expect(args.filter((a) => a === lnaFlag)).toHaveLength(1);
+      expect(args.filter((a) => a.startsWith('--disable-features='))).toHaveLength(1);
+    });
+
+    it('hosted mode publishes literal host candidates; other launches keep mDNS', () => {
+      const headed = buildChromeLaunchArgs(baseOpts).find((a) => a.startsWith('--disable-features='));
+      const hosted = buildChromeLaunchArgs({ ...baseOpts, hosted: true }).find((a) =>
+        a.startsWith('--disable-features=')
+      );
+      expect(headed).not.toContain('WebRtcHideLocalIpsWithMdns');
+      expect(hosted).toContain('WebRtcHideLocalIpsWithMdns');
+      expect(hosted).toContain('LocalNetworkAccessChecks');
     });
 
     it('hosted: true appends container flags', () => {
@@ -220,9 +228,8 @@ describe('chrome-launch', () => {
       expect(args).toContain('--disable-gpu');
       expect(args).toContain('--headless=new');
       expect(args).toContain('--font-render-hinting=none');
-      expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
-      );
+      expect(args.filter((a) => a.startsWith('--disable-features='))).toHaveLength(1);
+      expect(args.some((a) => a.includes('LocalNetworkAccessChecks'))).toBe(true);
     });
 
     it('omits the mock keychain unless opted in', () => {
