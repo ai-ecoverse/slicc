@@ -176,14 +176,23 @@ Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`,
 A follower's send has no acknowledgement: the leader's main thread echoes the
 message at once, but whether its agent ever picks it up only shows as later
 status frames and agent events. `ui/wc/follower-prompt-watch.ts` arms on every
-accepted send (`RemoteWorkUnitClient`'s `onSend`) and disarms on **any** status
-frame or agent event from the leader, or on a dropped connection. After 30 s
-of total silence it posts one local note to the follower's thread: the leader
-may still be starting, or be a background tab the OS has deprioritized. In the
-extension side panel the note points at **Bring leader to front**.
+accepted send (`RemoteWorkUnitClient`'s `onSend`, which names the addressed
+unit) and disarms on **any** reaction from the leader: an agent event, a
+biscotto review-state frame, or a status frame. A dropped connection also
+disarms it. After 30 s of total silence it posts one local note to the
+follower's thread: the leader may still be starting, or be a background tab the
+OS has deprioritized. In the extension side panel the note points at **Bring
+leader to front**. Both follower mounts wire it: the dedicated one
+(`wc-follower.ts`) and a leader-capable float's tray role switch
+(`wc-tray.ts` `buildFollowerOptions`, disposed with the role).
 
 - A prompt queued behind a visibly running turn never trips it: that turn's
   events count as a reaction, and the queue already explains the wait.
+- **Unit-scoped where the wire allows.** A status frame naming another unit does
+  not disarm it, and the note is posted only while the addressed unit is on
+  screen (`addAssistantMessage` writes to the shown thread). Agent events carry
+  no unit, so they disarm unconditionally. Every gap errs towards a missing
+  note, never a misplaced one.
 - It is separate from the channel-level stall (the leader stops answering
   pings), which disables the composer. This hint covers a live channel whose
   agent never reacts.

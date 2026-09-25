@@ -424,10 +424,14 @@ export async function bootFollowerFloat(
    * agent event, status frame or dropped connection.
    */
   const promptWatch = new FollowerPromptWatch({
-    onSilence: () =>
+    // Only into the thread of the unit the prompt went to: `addAssistantMessage`
+    // writes to whatever is on screen.
+    onSilence: (unitId) => {
+      if (unitId !== shownUnitId()) return;
       controller.addAssistantMessage(
         isExtensionSidePanel ? PROMPT_SILENCE_NOTE_SIDE_PANEL : PROMPT_SILENCE_NOTE
-      ),
+      );
+    },
   });
   agentEventListeners.add(() => promptWatch.noteLeaderActivity());
   /**
@@ -560,7 +564,7 @@ export async function bootFollowerFloat(
        */
       workUnits = new RemoteWorkUnitClient({
         getSync: () => follower?.currentSync ?? null,
-        onSend: () => promptWatch.noteSent(),
+        onSend: (id) => promptWatch.noteSent(id),
       });
 
       // The chat surface is the SHARED one (#2382 D2b): controller, dips, queued
@@ -947,6 +951,8 @@ export async function bootFollowerFloat(
       // having silently dropped it. These notes are local synthetic lines; the
       // approved message itself still arrives through `onUserMessage`.
       onBiscottoMessageState: (_messageId, state) => {
+        // The review gate answering IS the leader reacting to the prompt.
+        promptWatch.noteLeaderActivity();
         switch (state) {
           case 'pending':
             controller.addAssistantMessage('_Sent for review — waiting for the host._');
@@ -968,7 +974,7 @@ export async function bootFollowerFloat(
         }
       },
       onStatus: (status, scoopJid) => {
-        promptWatch.noteLeaderActivity();
+        promptWatch.noteLeaderActivity(scoopJid);
         if (shouldApplyFollowerStatus(scoopJid, shownUnitId())) {
           controller.setProcessing(status === 'processing');
         }

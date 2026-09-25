@@ -541,6 +541,43 @@ describe('bootFollowerFloat', () => {
     await vi.waitFor(() => expect(textOf(app)).toContain(note));
   });
 
+  it('counts a biscotto review-state frame as the leader reacting to the prompt', async () => {
+    // A guest's prompt is answered by the review gate (`pending`, `rejected`,
+    // `unanswered`) before — or instead of — any turn. That answer is already
+    // in the thread; a silence note after it would contradict it.
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const { FOLLOWER_PROMPT_SILENCE_MS } = await import(
+      '../../../src/ui/wc/follower-prompt-watch.js'
+    );
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      sendMessage: vi.fn(() => true),
+      selectScoop: vi.fn(),
+      stop: vi.fn(() => true),
+    };
+    opts.onConnectionChange?.(true);
+    opts.setChatAgent?.({ sendMessage: vi.fn(), onEvent: () => () => {}, stop: () => {} } as never);
+    opts.onSnapshot?.([], 'cone_1');
+    const textOf = (root: ParentNode): string =>
+      [...root.querySelectorAll('*')]
+        .map((el) => (el.shadowRoot ? textOf(el.shadowRoot) : '') + (el.textContent ?? ''))
+        .join(' ');
+
+    vi.useFakeTimers();
+    try {
+      inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'guest ask' } }));
+      opts.onBiscottoMessageState?.('m1', 'pending');
+      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(textOf(app)).toContain('Sent for review'));
+    expect(textOf(app)).not.toContain('has not picked this up');
+  });
+
   it('does not treat an empty activeScoopJid as an addressable unit', async () => {
     const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
