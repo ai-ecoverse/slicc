@@ -8,7 +8,11 @@ import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
 import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
-import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
+import type {
+  SyncFsPosixBridge,
+  SyncFsXhrBridge,
+  SyncFsXhrMutatingBridge,
+} from './sync-fs-xhr-bridge.js';
 
 type GlobalWithBuffer = typeof globalThis & {
   Buffer?: { from: (data: Uint8Array) => unknown };
@@ -415,6 +419,7 @@ const SYNC_PATH_ARGS: { [K in keyof ReturnType<typeof createSyncFsBridge>]?: Pat
   copyFileSync: 'pair',
   cpSync: 'pair',
   chmodSync: 'path',
+  utimesSync: 'path',
   mkdtempSync: 'path',
   rmSync: 'path',
   rmdirSync: 'path',
@@ -642,6 +647,71 @@ function overlayReaddir(
   for (const name of cached) names.add(name);
   for (const name of names) if (isTombstoned(child(name))) names.delete(name);
   return [...names];
+}
+
+/** A time as Node's `fs.utimes*` take it: seconds, a numeric string, or a Date. */
+type NodeTime = number | string | Date;
+
+/** Node's `toUnixTimestamp`, in ms: a non-finite number means now. */
+function nodeTimeMs(time: NodeTime, name: string): number {
+  if (time instanceof Date) return time.getTime();
+  if (typeof time === 'string' && time.trim() !== '' && Number.isFinite(Number(time))) {
+    return Number(time) * 1000;
+  }
+  if (typeof time === 'number') return Number.isFinite(time) ? time * 1000 : Date.now();
+  throw Object.assign(
+    new TypeError(`The "${name}" argument must be of type number, string or Date`),
+    { code: 'ERR_INVALID_ARG_TYPE' }
+  );
+}
+
+/**
+ * Apply times through the live sync bridge when it has the POSIX `utimes` op
+ * (the SAB / SW bridges do). The cache models no times, so without one (the
+ * snapshot path) this is a no-op, like chmodSync. Two live answers also leave
+ * the file as is: ENOENT for an entry that so far exists only in the cache
+ * (its end-of-run flush writes it), and ENOSYS from a mount that stores no
+ * times (hostfs, File System Access).
+ */
+function setTimesLive(
+  bridge: SyncFsXhrBridge | undefined,
+  syncFs: SyncFsCache,
+  resolved: string,
+  atimeMs: number,
+  mtimeMs: number
+): void {
+  const utimes = (bridge as Partial<SyncFsPosixBridge> | undefined)?.utimes;
+  if (!bridge || typeof utimes !== 'function' || syncFs.isTombstoned(resolved)) return;
+  try {
+    utimes.call(bridge, resolved, atimeMs, mtimeMs);
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'ENOSYS' || (code === 'ENOENT' && syncFs.exists(resolved))) return;
+    throw err;
+  }
+}
+
+/** chmodSync / utimesSync: metadata the cache doesn't model. */
+function metadataSyncOps(
+  resolve: (path: string) => string,
+  existsResolved: (resolved: string) => boolean,
+  bridge: SyncFsXhrBridge | undefined,
+  syncFs: SyncFsCache
+) {
+  return {
+    chmodSync(path: string): void {
+      // VFS has no mode bits — a no-op, but keep Node's ENOENT-on-missing contract.
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'chmod');
+    },
+    utimesSync(path: string, atime: NodeTime, mtime: NodeTime): void {
+      const atimeMs = nodeTimeMs(atime, 'atime');
+      const mtimeMs = nodeTimeMs(mtime, 'mtime');
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'utime');
+      setTimesLive(bridge, syncFs, resolved, atimeMs, mtimeMs);
+    },
+  };
 }
 
 /** Cache-first readdir; partial (write-synthesized) dirs re-read live (#3193). */
@@ -926,11 +996,7 @@ export function createSyncFsBridge(
     cpSync(src: string, dest: string): void {
       copyTree(resolve(src), resolve(dest));
     },
-    chmodSync(path: string): void {
-      // VFS has no mode bits — a no-op, but keep Node's ENOENT-on-missing contract.
-      const resolved = resolve(path);
-      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'chmod');
-    },
+    ...metadataSyncOps(resolve, existsResolved, bridge, syncFs),
     mkdtempSync(prefix: string): string {
       return syncFs.mkdtemp(resolve(prefix));
     },

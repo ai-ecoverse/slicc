@@ -552,6 +552,63 @@ test('chmodSync is a no-op for an existing path, ENOENT for a missing one', () =
   expect(() => shim.chmodSync('/workspace/gone.txt')).toThrow(/ENOENT/);
 });
 
+// utimesSync: through the live bridge's POSIX `utimes` when it has one;
+// otherwise (snapshot path) a no-op like chmodSync.
+function utimesBridge(
+  store: Map<string, Uint8Array>,
+  calls: [string, number, number][],
+  fail?: string
+): SyncFsXhrBridge & { utimes(path: string, atimeMs: number, mtimeMs: number): void } {
+  return {
+    ...fakeBridge(store),
+    utimes(path: string, atimeMs: number, mtimeMs: number): void {
+      if (fail) throw Object.assign(new Error(`${fail}: ${path}`), { code: fail });
+      calls.push([path, atimeMs, mtimeMs]);
+    },
+  };
+}
+
+test('utimesSync sets times through the live bridge, in ms', () => {
+  const store = new Map([['/workspace/t.txt', new TextEncoder().encode('x')]]);
+  const calls: [string, number, number][] = [];
+  const shim = createSyncFsBridge(cache(), '/workspace', utimesBridge(store, calls));
+  shim.utimesSync('t.txt', 1000, 2000);
+  shim.utimesSync('/workspace/t.txt', '3', new Date(4000));
+  expect(calls).toEqual([
+    ['/workspace/t.txt', 1_000_000, 2_000_000],
+    ['/workspace/t.txt', 3000, 4000],
+  ]);
+});
+
+test('utimesSync keeps ENOENT for a missing path and rejects bad times', () => {
+  const calls: [string, number, number][] = [];
+  const shim = createSyncFsBridge(cache(), '/workspace', utimesBridge(new Map(), calls));
+  expect(() => shim.utimesSync('/workspace/gone.txt', 1, 1)).toThrow(/ENOENT/);
+  expect(() => shim.utimesSync('/workspace', {} as unknown as number, 1)).toThrow(TypeError);
+  expect(calls).toEqual([]);
+});
+
+test('utimesSync is a no-op without a bridge (the cache models no times)', () => {
+  const shim = createSyncFsBridge(cache([textEntry('/workspace/m.txt', 'x')]), '/workspace');
+  expect(() => shim.utimesSync('/workspace/m.txt', 1, 2)).not.toThrow();
+  expect(() => shim.utimesSync('/workspace/gone.txt', 1, 2)).toThrow(/ENOENT/);
+});
+
+test('utimesSync leaves a mount without times and a cache-only entry as they are', () => {
+  const store = new Map([['/workspace/t.txt', new TextEncoder().encode('x')]]);
+  const noTimes = createSyncFsBridge(cache(), '/workspace', utimesBridge(store, [], 'ENOSYS'));
+  expect(() => noTimes.utimesSync('/workspace/t.txt', 1, 2)).not.toThrow();
+  // Only in the cache so far: the live bridge answers ENOENT.
+  const pending = createSyncFsBridge(
+    cache([textEntry('/workspace/new.txt', 'x')]),
+    '/workspace',
+    utimesBridge(new Map(), [], 'ENOENT')
+  );
+  expect(() => pending.utimesSync('/workspace/new.txt', 1, 2)).not.toThrow();
+  const denied = createSyncFsBridge(cache(), '/workspace', utimesBridge(store, [], 'EACCES'));
+  expect(() => denied.utimesSync('/workspace/t.txt', 1, 2)).toThrow(/EACCES/);
+});
+
 /** A `fakeBridge` widened with the live mkdir/rm the removal fallback needs. */
 function mutatingBridge(
   store: Map<string, Uint8Array>,
