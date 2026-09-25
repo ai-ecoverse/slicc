@@ -23,6 +23,13 @@ public enum NewSessionAction: String, Codable {
 /// `user_message` with `user_message_ack`, sent to the sender alone.
 public let traySyncProtocolVersion = 10
 
+/// Outcome of the leader's delivery of a follower's `user_message` into its
+/// kernel. A `state` this build does not know drops the whole
+/// `user_message_ack` to `.unknown`, so a newer leader cannot tear the channel.
+public enum UserMessageAckState: String, Codable, Equatable {
+    case accepted, rejected
+}
+
 // MARK: - AgentEvent
 
 /// Mirrors AgentEvent from packages/shared-ts/src/agent-wire-types.ts
@@ -570,7 +577,8 @@ public func makeTrayFollowerCapabilities(deviceOwnerAuth: Bool) -> TraySyncCapab
 // MARK: - LeaderToFollowerMessage
 
 /// Mirrors a **subset** of `LeaderToFollowerMessage` from tray-sync-protocol.ts.
-/// Implemented here: chat, scoops, model/thinking selection, sprinkles,
+/// Implemented here: chat (incl. the v10 `user_message_ack`), scoops,
+/// model/thinking selection, sprinkles,
 /// control, leader-initiated CDP
 /// (`cdp.request`, `targets.registry`, `tab.open`), the cherry host-page
 /// event fan-out (`cherry.slicc_event`), the `fs.*` pair, and all four `exec.*`
@@ -587,6 +595,10 @@ public enum LeaderToFollowerMessage: Codable {
     case agentEvent(event: AgentEvent, scoopJid: String)
     case userMessageEcho(
         text: String, messageId: String, scoopJid: String, attachments: [MessageAttachment]?)
+    /// The leader's verdict on THIS follower's own `user_message` (v10).
+    /// `error` is present iff `state == .rejected`.
+    case userMessageAck(
+        messageId: String, scoopJid: String, state: UserMessageAckState, error: String?)
     case status(scoopStatus: String, scoopJid: String? = nil)
     case error(error: String)
     case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
@@ -731,6 +743,17 @@ public enum LeaderToFollowerMessage: Codable {
                 scoopJid: try container.decode(String.self, forKey: .scoopJid),
                 attachments: try container.decodeIfPresent(
                     [MessageAttachment].self, forKey: .attachments))
+        case "user_message_ack":
+            let rawState = try container.decode(String.self, forKey: .state)
+            guard let state = UserMessageAckState(rawValue: rawState) else {
+                self = .unknown(type: type)
+                return
+            }
+            self = .userMessageAck(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                scoopJid: try container.decode(String.self, forKey: .scoopJid),
+                state: state,
+                error: try container.decodeIfPresent(String.self, forKey: .error))
         case "status":
             self = .status(
                 scoopStatus: try container.decode(String.self, forKey: .scoopStatus),
@@ -940,6 +963,12 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encode(messageId, forKey: .messageId)
             try container.encode(scoopJid, forKey: .scoopJid)
             try container.encodeIfPresent(attachments, forKey: .attachments)
+        case .userMessageAck(let messageId, let scoopJid, let state, let error):
+            try container.encode("user_message_ack", forKey: .type)
+            try container.encode(messageId, forKey: .messageId)
+            try container.encode(scoopJid, forKey: .scoopJid)
+            try container.encode(state, forKey: .state)
+            try container.encodeIfPresent(error, forKey: .error)
         case .status(let scoopStatus, let scoopJid):
             try container.encode("status", forKey: .type)
             try container.encode(scoopStatus, forKey: .scoopStatus)

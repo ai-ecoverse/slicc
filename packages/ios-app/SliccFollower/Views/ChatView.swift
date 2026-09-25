@@ -1005,6 +1005,7 @@ struct ConversationView: View {
             messages: appState.messages,
             isStreaming: appState.isStreaming,
             toolProgress: appState.toolProgress,
+            deliveryRejections: appState.deliveryRejections,
             toolUICards: appState.visibleToolUICards,
             openApprovals: appState.openApprovals,
             onOpenApprovalDecision: appState.resolveOpenApproval,

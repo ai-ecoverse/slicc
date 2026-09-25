@@ -32,6 +32,9 @@ struct MessageListView: View {
     /// Live tool-call progress units keyed by tool row id, straight from
     /// `AppState.toolProgress`. Empty for frozen sessions and plain history.
     var toolProgress: [String: ToolProgressEvent] = [:]
+    /// Leader rejection reasons keyed by message id, straight from
+    /// `AppState.deliveryRejections`.
+    var deliveryRejections: [String: String] = [:]
     /// Pending read-only approval placeholders, pinned below the transcript.
     var toolUICards: [ToolUIPlaceholder] = []
     /// Pending native external-app approvals, separate from read-only tool UI.
@@ -49,6 +52,7 @@ struct MessageListView: View {
         messages: [ChatMessage],
         isStreaming: Bool,
         toolProgress: [String: ToolProgressEvent] = [:],
+        deliveryRejections: [String: String] = [:],
         toolUICards: [ToolUIPlaceholder] = [],
         openApprovals: [OpenApprovalRequest] = [],
         onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)? = nil,
@@ -60,6 +64,7 @@ struct MessageListView: View {
         self.messages = messages
         self.isStreaming = isStreaming
         self.toolProgress = toolProgress
+        self.deliveryRejections = deliveryRejections
         self.toolUICards = toolUICards
         self.openApprovals = openApprovals
         self.onOpenApprovalDecision = onOpenApprovalDecision
@@ -138,7 +143,8 @@ struct MessageListView: View {
                     ForEach(group.messages) { message in
                         MessageBubble(
                             message: message,
-                            toolProgress: progressSlice(for: message)
+                            toolProgress: progressSlice(for: message),
+                            deliveryError: deliveryRejections[message.id]
                         )
                         // Load-bearing: the `Equatable` conformance only takes
                         // effect through this modifier. Without it SwiftUI

@@ -22,6 +22,9 @@ struct MessageBubble: View, Equatable {
     /// Sliced by `MessageListView`; empty for history and for every fixture
     /// that does not stage a run.
     var toolProgress: [String: ToolProgressEvent] = [:]
+    /// The leader's reason for rejecting THIS user message
+    /// (`user_message_ack`), shown under the "Not delivered" note.
+    var deliveryError: String?
 
     @Environment(\.palette) private var palette
     @Environment(\.inlineSprinkleLick) private var onInlineSprinkleLick
@@ -32,6 +35,7 @@ struct MessageBubble: View, Equatable {
     /// handler is identity-stable.
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message == rhs.message && lhs.toolProgress == rhs.toolProgress
+            && lhs.deliveryError == rhs.deliveryError
     }
 
     /// True when this message should render as a compact lick pill.
@@ -89,6 +93,13 @@ struct MessageBubble: View, Equatable {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("send-failed-note")
+                    if let deliveryError {
+                        Text(deliveryError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red.opacity(0.8))
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("send-rejected-reason")
+                    }
                 }
             }
         } else {
