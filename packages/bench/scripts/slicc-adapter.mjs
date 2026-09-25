@@ -374,7 +374,7 @@ async function runExport(leader, command, info, { partBytes, timeoutMs, attempts
     const r = await leader.exec(command, { timeoutMs: Math.min(timeoutMs, left()) });
     if (r.status !== 0) {
       failure = { stage: 'export', reason: callFailure(r), detail: clipDetail(r) };
-      if (r.timedOut || r.leaderDown) break;
+      if (r.timedOut || (r.leaderDown && !r.connectionLost)) break;
       continue;
     }
     const listing = parseExportListing(r.stdout, partBytes);
@@ -396,7 +396,8 @@ async function readPart(leader, part, info, { timeoutMs, attempts, left }) {
     if (r.status !== 0) {
       failure = { stage: 'read', reason: callFailure(r), detail: clipDetail(r) };
       // The CLI already retried the dial; a leader that stays unreachable will not send the rest.
-      if (r.leaderDown) break;
+      // A connection that closed mid-transfer is worth a new one: reading a part is repeatable.
+      if (r.leaderDown && !r.connectionLost) break;
       continue;
     }
     const decoded = decodeTranscriptPart(r.stdout, part);

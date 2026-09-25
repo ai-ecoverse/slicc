@@ -394,6 +394,15 @@ async function runOne(r, ctx) {
   }
   record.metrics = traceFromResult(result).metrics;
   record.model_id = result.modelId ?? null;
+  // A transcript lost to an unreachable leader would leave the judge only the final answer, and
+  // score the leader instead of the agent (a 0.00 in the 2026-09-25 smoke run): the run counts as
+  // leader-down, so it is retried on a fresh leader rather than judged without its evidence.
+  const tx = result.transcriptExport;
+  if (tx && !tx.ok && [tx.reason, tx.detail].some((s) => /leader-down/.test(s ?? ''))) {
+    failInto(record, 'collect', new Error(`transcript lost: the leader went down (${tx.stage})`));
+    record.leader_down = true;
+    return { record, result };
+  }
   if (judge) {
     try {
       await judgeInto(record, result, r.task, ctx);
