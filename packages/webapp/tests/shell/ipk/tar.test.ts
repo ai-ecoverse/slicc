@@ -167,6 +167,55 @@ describe('writeTar', () => {
   });
 });
 
+// nanotar's createTar truncated names to the 100-byte field, so `tar c`
+// silently renamed deep files. writeTar splits a long path across the ustar
+// prefix and name fields, or carries it in a PAX record.
+describe('writeTar long paths', () => {
+  const field = (archive: Uint8Array, offset: number, size: number) =>
+    new TextDecoder().decode(archive.subarray(offset, offset + size)).replace(/\0.*$/s, '');
+  const checksumOk = (header: Uint8Array) => {
+    const copy = new Uint8Array(header);
+    copy.fill(0x20, 148, 156);
+    return copy.reduce((n, b) => n + b, 0) === Number.parseInt(field(header, 148, 8), 8);
+  };
+  const deep =
+    'Magick.Native-2026.824.1923/src/Magick.Native/Q8/CMakeFiles/magick.dir/Statistics/ChannelPerceptualHash.c.o';
+
+  it('splits a path over 100 bytes across the ustar prefix and name', () => {
+    const archive = writeTar([{ path: deep, bytes: bytes('x') }]);
+    // The shortest prefix whose remainder fits the name field.
+    expect(field(archive, 0, 100)).toBe(
+      'src/Magick.Native/Q8/CMakeFiles/magick.dir/Statistics/ChannelPerceptualHash.c.o'
+    );
+    expect(field(archive, 345, 155)).toBe('Magick.Native-2026.824.1923');
+    expect(checksumOk(archive.subarray(0, 512))).toBe(true);
+    expect(readTar(archive, { preserveRawPaths: true }).map((e) => e.path)).toEqual([deep]);
+  });
+
+  it('carries a path that no split fits in a PAX record', () => {
+    // A final component over 100 bytes, and a path over 255 bytes.
+    const tooLongPart = `a/${'b'.repeat(120)}.txt`;
+    const tooLongAll = `${Array.from({ length: 40 }, (_, i) => `d${i}`).join('/')}/${'x'.repeat(60)}.o`;
+    const archive = writeTar([
+      { path: 'first', bytes: bytes('1') },
+      { path: tooLongPart, bytes: bytes('2') },
+      { path: tooLongAll, bytes: bytes('3') },
+    ]);
+    const read = readTar(archive, { preserveRawPaths: true });
+    expect(read.map((e) => e.path)).toEqual(['first', tooLongPart, tooLongAll]);
+    expect(read.map((e) => new TextDecoder().decode(e.bytes))).toEqual(['1', '2', '3']);
+    // The PAX header sits right after the first entry (header + one data block).
+    expect(field(archive, 1024 + 156, 1)).toBe('x');
+    expect(checksumOk(archive.subarray(1024, 1536))).toBe(true);
+  });
+
+  it('leaves short paths byte-identical to nanotar', () => {
+    const archive = writeTar([{ path: 'a/b.txt', bytes: bytes('x') }]);
+    expect(field(archive, 0, 100)).toBe('a/b.txt');
+    expect(field(archive, 345, 155)).toBe('');
+  });
+});
+
 describe('readTar', () => {
   it('reads only the bytes in a non-zero-offset Uint8Array view', () => {
     const archive = writeTar([{ path: 'package/index.js', bytes: bytes('export {};') }]);

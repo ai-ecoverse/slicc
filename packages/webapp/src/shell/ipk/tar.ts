@@ -56,9 +56,10 @@ export function writeTar(entries: TarEntry[]): Uint8Array {
     throw new Error('writeTar: entries must be an array');
   }
   try {
-    return createTar(
-      entries.map((entry) => ({
-        name: entry.path,
+    const names = entries.map((entry) => encodeTarPath(entry.path));
+    const archive = createTar(
+      entries.map((entry, i) => ({
+        name: names[i].name,
         ...(entry.directory ? {} : { data: entry.bytes }),
         // nanotar would default to 664/775 (group-writable).
         attrs: {
@@ -68,10 +69,128 @@ export function writeTar(entries: TarEntry[]): Uint8Array {
         },
       }))
     );
+    return applyLongPaths(archive, names);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`writeTar: failed to create tar archive (${reason})`);
   }
+}
+
+// nanotar's createTar writes only the 100-byte name field and truncates a
+// longer path, so `tar c` silently renamed deep files (a CMake object tree's
+// `…/Statistics/ChannelPerceptualHash.c.o` lost its tail). A path over 100
+// bytes is split across the ustar prefix (155 bytes) and name fields at a
+// `/`; one that doesn't fit that way gets a PAX `path` record. The reader
+// below already resolves both.
+
+const TAR_BLOCK = 512;
+const NAME_FIELD = 100;
+const PREFIX_FIELD = 155;
+const utf8 = new TextEncoder();
+
+interface EncodedTarPath {
+  /** What nanotar writes into the name field. */
+  name: string;
+  /** Goes into the ustar prefix field. */
+  prefix?: string;
+  /** The full path, carried by a PAX record ahead of the entry. */
+  pax?: string;
+}
+
+function byteLength(text: string): number {
+  return utf8.encode(text).length;
+}
+
+/** Encode `path` for a ustar header: as is, prefix + name, or via PAX. */
+export function encodeTarPath(path: string): EncodedTarPath {
+  if (byteLength(path) <= NAME_FIELD) return { name: path };
+  // The first `/` that leaves a name that fits: the shortest prefix.
+  for (let i = path.indexOf('/'); i !== -1; i = path.indexOf('/', i + 1)) {
+    const name = path.slice(i + 1);
+    const prefix = path.slice(0, i);
+    if (name !== '' && byteLength(name) <= NAME_FIELD) {
+      return byteLength(prefix) <= PREFIX_FIELD
+        ? { name, prefix }
+        : { name: tail(path), pax: path };
+    }
+  }
+  return { name: tail(path), pax: path };
+}
+
+/** The last bytes of `path` that fit the name field, for readers without PAX. */
+function tail(path: string): string {
+  let name = path;
+  while (byteLength(name) > NAME_FIELD) name = name.slice(1);
+  return name;
+}
+
+function writeField(header: Uint8Array, offset: number, size: number, text: string): void {
+  header.fill(0, offset, offset + size);
+  header.set(utf8.encode(text).subarray(0, size), offset);
+}
+
+function writeChecksum(header: Uint8Array): void {
+  header.fill(0x20, 148, 156);
+  let sum = 0;
+  for (const b of header) sum += b;
+  writeField(header, 148, 8, `${sum.toString(8).padStart(6, '0')}\0 `);
+}
+
+/** A PAX record: `<length> path=<value>\n`, the length counting itself. */
+function paxRecord(key: string, value: string): Uint8Array {
+  const body = ` ${key}=${value}\n`;
+  let length = byteLength(body) + 1;
+  while (byteLength(`${length}${body}`) !== length) length = byteLength(`${length}${body}`);
+  return utf8.encode(`${length}${body}`);
+}
+
+/** A typeflag `x` header plus its padded data blocks for `path`. */
+function paxBlocks(path: string): Uint8Array {
+  const record = paxRecord('path', path);
+  const blocks = new Uint8Array(TAR_BLOCK + Math.ceil(record.length / TAR_BLOCK) * TAR_BLOCK);
+  const header = blocks.subarray(0, TAR_BLOCK);
+  writeField(header, 0, NAME_FIELD, tail(`PaxHeaders/${path}`));
+  writeField(header, 100, 8, '0000644\0');
+  writeField(header, 108, 8, '0000000\0');
+  writeField(header, 116, 8, '0000000\0');
+  writeField(header, 124, 12, `${record.length.toString(8).padStart(11, '0')}\0`);
+  writeField(header, 136, 12, '00000000000\0');
+  writeField(header, 156, 1, 'x');
+  writeField(header, 257, 8, 'ustar\u000000');
+  writeChecksum(header);
+  blocks.set(record, TAR_BLOCK);
+  return blocks;
+}
+
+/** Fill in the prefix fields and PAX records nanotar can't write. */
+function applyLongPaths(archive: Uint8Array, names: EncodedTarPath[]): Uint8Array {
+  if (names.every((n) => !n.prefix && !n.pax)) return archive;
+  const out = new Uint8Array(archive);
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+  let copied = 0;
+  for (const encoded of names) {
+    const header = out.subarray(offset, offset + TAR_BLOCK);
+    const size = Number.parseInt(new TextDecoder().decode(header.subarray(124, 136)), 8) || 0;
+    if (encoded.prefix) {
+      writeField(header, 345, PREFIX_FIELD, encoded.prefix);
+      writeChecksum(header);
+    }
+    if (encoded.pax) {
+      chunks.push(out.subarray(copied, offset), paxBlocks(encoded.pax));
+      copied = offset;
+    }
+    offset += TAR_BLOCK + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
+  }
+  chunks.push(out.subarray(copied));
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const result = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    result.set(c, at);
+    at += c.length;
+  }
+  return result;
 }
 
 function stripNpmPrefix(path: string): string {
