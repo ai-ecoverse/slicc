@@ -101,6 +101,19 @@ script that needs a screen does not silently connect without one. Off macOS both
 forms report `ErrUnsupported` — the flag parses and dispatches everywhere rather
 than failing as an unknown option.
 
+## `prompt` exit codes
+
+`prompt` exits 0 when the turn ends (`turn_end`, or a settled processing→ready
+flip), 1 on an agent/leader `error`, a closed connection, or a `rejected`
+`user_message_ack`, and 130 on Ctrl+C (after sending `abort`). The ack is a v10
+leader's answer to the prompt's own `messageId`, sent only to this follower:
+`rejected` means the leader could not deliver it into its agent, so no turn
+will follow and waiting would hang; the leader's `error` goes to stderr as
+`slicc prompt: the leader rejected the prompt: <error>`. `accepted` changes
+nothing but a debug log line (`SLICC_DEBUG=1`). Acks for other `messageId`s and
+unknown states are ignored, and a leader < 10 sends none, so the exit rules
+above are unchanged against it.
+
 ## `watch` rendering
 
 `watch` is a passive `tail -f` on the agent, mirroring the browser thread. It
