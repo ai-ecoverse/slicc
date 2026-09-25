@@ -238,6 +238,10 @@ export interface StartPageFollowerTrayOptions {
    * gate. Only ever fires on a guest seat.
    */
   onBiscottoMessageState?: FollowerSyncManagerOptions['onBiscottoMessageState'];
+  /** A v10+ leader acked a message this follower sent (accepted or rejected). */
+  onUserMessageAck?: FollowerSyncManagerOptions['onUserMessageAck'];
+  /** The leader echoed a message this follower sent (not rendered again). */
+  onOwnUserMessageEcho?: FollowerSyncManagerOptions['onOwnUserMessageEcho'];
 
   // --- Page-side wiring callbacks ---
   /**
@@ -449,6 +453,8 @@ export function startPageFollowerTray(
       onThemeApply: applyFollowerLeaderTheme,
       onSudoApprovalRequest: options.onSudoApprovalRequest,
       onBiscottoMessageState: options.onBiscottoMessageState,
+      onUserMessageAck: options.onUserMessageAck,
+      onOwnUserMessageEcho: options.onOwnUserMessageEcho,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {

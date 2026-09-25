@@ -173,26 +173,47 @@ Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`,
 
 ### Follower prompt silence hint
 
-A follower's send has no acknowledgement: the leader's main thread echoes the
-message at once, but whether its agent ever picks it up only shows as later
-status frames and agent events. `ui/wc/follower-prompt-watch.ts` arms on every
-accepted send (`RemoteWorkUnitClient`'s `onSend`, which names the addressed
-unit) and disarms on **any** reaction from the leader: an agent event, a
+A leader at tray protocol 10 or later acks each follower prompt with
+`user_message_ack`, sent to the sending follower alone once its kernel took
+(`accepted`) or refused (`rejected`, with an `error`) the prompt. The leader
+side is `deliverFollowerMessage` in `ui/wc/wc-tray.ts`, which resolves the
+outcome off `workUnits.send()`, and `FollowerDispatch.ackUserMessage`
+(`scoops/tray-leader/follower-dispatch.ts`), which sends it once it settles. A
+prompt with no unit to deliver to is `rejected` at once with `scoopJid: ''`. A
+biscotto's message is acked only after review approved it and it was delivered.
+
+An older leader sends no ack. Its main thread still echoes the message at once,
+but whether its agent ever picks it up only shows as later status frames and
+agent events. `ui/wc/follower-prompt-watch.ts` arms on every accepted send
+(`RemoteWorkUnitClient`'s `onSend`, which names the addressed unit) and disarms
+on **any** reaction from the leader: an `accepted` ack, an agent event, a
 biscotto review-state frame, or a status frame. A dropped connection also
-disarms it. After 30 s of total silence it posts one local note to the
-follower's thread: the leader may still be starting, or be a background tab the
-OS has deprioritized. In the extension side panel the note points at **Bring
-leader to front**. Both follower mounts wire it: the dedicated one
-(`wc-follower.ts`) and a leader-capable float's tray role switch
-(`wc-tray.ts` `buildFollowerOptions`, disposed with the role).
+disarms it. A `rejected` ack disarms it too and posts the leader's error as a
+local note ("_The leader got that message but could not start it — …_") in the
+addressed unit's thread. After 30 s of total silence it posts one local note to
+the follower's thread, and the note depends on whether the leader echoed the
+prompt:
+
+- **No echo**: the leader tab itself is not responding. It may still be
+  starting, or be a background tab the OS has deprioritized.
+- **Echo, no reaction**: the leader tab got the message, but its agent has not
+  started on it. `FollowerSyncManager` still suppresses the duplicate bubble for
+  its own echo, and reports the echo through `onOwnUserMessageEcho` instead.
+
+In the extension side panel both variants point at **Bring leader to front**.
+Both follower mounts wire the watch through the options bag (`onUserMessageAck`,
+`onOwnUserMessageEcho`): the dedicated one (`wc-follower.ts`) and a
+leader-capable float's tray role switch (`wc-tray.ts` `buildFollowerOptions`,
+disposed with the role).
 
 - A prompt queued behind a visibly running turn never trips it: that turn's
   events count as a reaction, and the queue already explains the wait.
-- **Unit-scoped where the wire allows.** A status frame naming another unit does
-  not disarm it, and the note is posted only while the addressed unit is on
-  screen (`addAssistantMessage` writes to the shown thread). Agent events carry
-  no unit, so they disarm unconditionally. Every gap errs towards a missing
-  note, never a misplaced one.
+- **Unit-scoped where the wire allows.** A status frame, echo or ack naming
+  another unit does not disarm it or mark it received, and notes are posted
+  only while the addressed unit is on screen (`addAssistantMessage` writes to
+  the shown thread). Agent events carry no unit, so they disarm
+  unconditionally. Every gap errs towards a missing note, never a misplaced
+  one.
 - It is separate from the channel-level stall (the leader stops answering
   pings), which disables the composer. This hint covers a live channel whose
   agent never reacts.

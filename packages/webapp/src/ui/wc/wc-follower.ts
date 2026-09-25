@@ -22,8 +22,8 @@ import type { AgentEvent } from '../types.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import {
   FollowerPromptWatch,
-  PROMPT_SILENCE_NOTE,
-  PROMPT_SILENCE_NOTE_SIDE_PANEL,
+  promptRejectedNote,
+  promptSilenceNote,
 } from './follower-prompt-watch.js';
 import { wireWcAttach } from './wc-attach.js';
 import { createFollowerChatHost, type WcChatHost } from './wc-chat-host.js';
@@ -419,18 +419,21 @@ export async function bootFollowerFloat(
   const agentEventListeners = new Set<(event: AgentEvent) => void>();
   let detachAgentEvents: (() => void) | null = null;
   /**
-   * Says so when a sent prompt gets no reaction at all from the leader (see
-   * `follower-prompt-watch.ts`). Armed by `workUnits`' send, disarmed by any
-   * agent event, status frame or dropped connection.
+   * Says so when a sent prompt gets no reaction at all from the leader, or
+   * when the leader refuses it (see `follower-prompt-watch.ts`). Armed by
+   * `workUnits`' send, disarmed by an ack, any agent event, status frame or
+   * dropped connection.
    */
   const promptWatch = new FollowerPromptWatch({
     // Only into the thread of the unit the prompt went to: `addAssistantMessage`
     // writes to whatever is on screen.
-    onSilence: (unitId) => {
+    onSilence: (unitId, received) => {
       if (unitId !== shownUnitId()) return;
-      controller.addAssistantMessage(
-        isExtensionSidePanel ? PROMPT_SILENCE_NOTE_SIDE_PANEL : PROMPT_SILENCE_NOTE
-      );
+      controller.addAssistantMessage(promptSilenceNote(received, isExtensionSidePanel));
+    },
+    onRejected: (unitId, error) => {
+      if (unitId === null || unitId !== shownUnitId()) return;
+      controller.addAssistantMessage(promptRejectedNote(error));
     },
   });
   agentEventListeners.add(() => promptWatch.noteLeaderActivity());
@@ -945,6 +948,8 @@ export async function bootFollowerFloat(
       // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
       onUserMessage: (text, _messageId, _scoopJid, attachments) =>
         controller.addUserMessage(text, attachments),
+      onOwnUserMessageEcho: (_messageId, scoopJid) => promptWatch.noteReceived(scoopJid),
+      onUserMessageAck: (ack) => promptWatch.noteAck(ack),
       // A biscotto's messages are reviewed before they reach the cone. Without
       // this the guest's message simply never appears — it is only echoed back
       // once the leader broadcasts an APPROVED one — which reads as the app

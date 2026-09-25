@@ -420,6 +420,88 @@ describe('FollowerSyncManager', () => {
       expect(onUserMessage).toHaveBeenCalledTimes(1);
       expect(onUserMessage).toHaveBeenCalledWith('repeat test', 'msg-789', 'cone', undefined);
     });
+
+    it('reports an own echo as received without rendering it', () => {
+      const channel = new FakeChannel();
+      const onUserMessage = vi.fn();
+      const onOwnUserMessageEcho = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onUserMessage, onOwnUserMessageEcho });
+
+      follower.sendMessage('mine', 'msg-own');
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'mine',
+        messageId: 'msg-own',
+        scoopJid: 'cone_b',
+      });
+      // Someone else's echo is rendered, and is not "received" news about ours.
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'theirs',
+        messageId: 'msg-theirs',
+        scoopJid: 'cone_b',
+      });
+
+      expect(onOwnUserMessageEcho).toHaveBeenCalledTimes(1);
+      expect(onOwnUserMessageEcho).toHaveBeenCalledWith('msg-own', 'cone_b');
+      expect(onUserMessage).toHaveBeenCalledTimes(1);
+      expect(onUserMessage).toHaveBeenCalledWith('theirs', 'msg-theirs', 'cone_b', undefined);
+    });
+  });
+
+  describe('user_message_ack handling', () => {
+    it('forwards an accepted ack without an error field', () => {
+      const channel = new FakeChannel();
+      const onUserMessageAck = vi.fn();
+      new FollowerSyncManager(channel, { onUserMessageAck });
+
+      channel.simulateLeaderMessage({
+        type: 'user_message_ack',
+        messageId: 'msg-1',
+        scoopJid: 'cone',
+        state: 'accepted',
+      });
+
+      expect(onUserMessageAck).toHaveBeenCalledWith({
+        messageId: 'msg-1',
+        scoopJid: 'cone',
+        state: 'accepted',
+      });
+    });
+
+    it('forwards a rejected ack with its error', () => {
+      const channel = new FakeChannel();
+      const onUserMessageAck = vi.fn();
+      new FollowerSyncManager(channel, { onUserMessageAck });
+
+      channel.simulateLeaderMessage({
+        type: 'user_message_ack',
+        messageId: 'msg-2',
+        scoopJid: '',
+        state: 'rejected',
+        error: 'nothing to deliver to',
+      });
+
+      expect(onUserMessageAck).toHaveBeenCalledWith({
+        messageId: 'msg-2',
+        scoopJid: '',
+        state: 'rejected',
+        error: 'nothing to deliver to',
+      });
+    });
+
+    it('ignores an ack when no handler is wired', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+      expect(() =>
+        channel.simulateLeaderMessage({
+          type: 'user_message_ack',
+          messageId: 'msg-3',
+          scoopJid: 'cone',
+          state: 'accepted',
+        })
+      ).not.toThrow();
+    });
   });
 
   describe('status handling', () => {

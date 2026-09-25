@@ -23,6 +23,7 @@ import {
   getLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
 } from '../../scoops/tray-leader.js';
+import type { FollowerMessageOutcome } from '../../scoops/tray-leader-sync.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
@@ -92,7 +93,11 @@ import {
 import type { AgentHandle, ChatMessage } from '../types.js';
 import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
-import { FollowerPromptWatch, PROMPT_SILENCE_NOTE } from './follower-prompt-watch.js';
+import {
+  FollowerPromptWatch,
+  promptRejectedNote,
+  promptSilenceNote,
+} from './follower-prompt-watch.js';
 import {
   LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT,
   LEADER_MODEL_CATALOG_CHANGED_EVENT,
@@ -471,8 +476,13 @@ function watchedFollowerClient(
   shownUnitId: () => string | null
 ): { workUnits: RemoteWorkUnitClient; promptWatch: FollowerPromptWatch } {
   const promptWatch = new FollowerPromptWatch({
-    onSilence: (unitId) => {
-      if (unitId === shownUnitId()) deps.getController()?.addAssistantMessage(PROMPT_SILENCE_NOTE);
+    onSilence: (unitId, received) => {
+      if (unitId !== shownUnitId()) return;
+      deps.getController()?.addAssistantMessage(promptSilenceNote(received, false));
+    },
+    onRejected: (unitId, error) => {
+      if (unitId === null || unitId !== shownUnitId()) return;
+      deps.getController()?.addAssistantMessage(promptRejectedNote(error));
     },
   });
   const workUnits = new RemoteWorkUnitClient({
@@ -682,7 +692,19 @@ export function buildFollowerOptions(
     onModelsList: modelSurface.onModelsList,
     onModelState: modelSurface.onModelState,
   });
-  return { dispose, options };
+  return { dispose, options: withPromptAcks(options, promptWatch) };
+}
+
+/** Feed the leader's echo of our own prompt, and its ack, into the prompt watch. */
+function withPromptAcks(
+  options: FollowerRole['options'],
+  promptWatch: FollowerPromptWatch
+): FollowerRole['options'] {
+  return {
+    ...options,
+    onOwnUserMessageEcho: (_messageId, scoopJid) => promptWatch.noteReceived(scoopJid),
+    onUserMessageAck: (ack) => promptWatch.noteAck(ack),
+  };
 }
 
 /**
@@ -843,7 +865,7 @@ function deliverFollowerMessage(
   messageId: string,
   attachments: Parameters<StartPageLeaderTrayOptions['onFollowerMessage']>[2],
   options: Parameters<StartPageLeaderTrayOptions['onFollowerMessage']>[3]
-): void {
+): Promise<FollowerMessageOutcome> {
   const { client } = deps;
   // A guest's words are not the owner's. `source` carries the provenance into
   // the transcript record, and the model-visible text is fenced with the seat
@@ -863,8 +885,9 @@ function deliverFollowerMessage(
   if (target === client.selectedScoopJid) {
     deps.getController()?.addUserMessage(forAgent, attachments, source);
   }
+  let outcome: Promise<FollowerMessageOutcome>;
   if (target) {
-    void deps.workUnits
+    outcome = deps.workUnits
       .send(target, {
         text: forAgent,
         messageId,
@@ -876,21 +899,30 @@ function deliverFollowerMessage(
         // never sees the `off` case.
         ...(options?.guestGate ? { guestGate: options.guestGate } : {}),
       })
-      .catch((err) =>
-        deps.log.warn('follower message delivery failed', {
-          error: err instanceof Error ? err.message : String(err),
-        })
+      .then(
+        (): FollowerMessageOutcome => ({ scoopJid: target, state: 'accepted' }),
+        (err: unknown): FollowerMessageOutcome => {
+          const error = err instanceof Error ? err.message : String(err);
+          deps.log.warn('follower message delivery failed', { error });
+          return { scoopJid: target, state: 'rejected', error };
+        }
       );
   } else {
     // Nothing selected on either side — report it the way a local send with no
     // selection is reported, rather than dropping it silently.
     deps.agentHandle.sendMessage(forAgent, messageId, attachments, options);
+    outcome = Promise.resolve({
+      scoopJid: '',
+      state: 'rejected',
+      error: 'The leader has no conversation to deliver this message to.',
+    });
   }
   state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments, target ?? undefined);
   // The message bumped the sender's lastActivity — mirror it into the
   // worker-realm shim so kernel-side follower selection sees fresh recency (the
   // shim otherwise only refreshes on follower-count changes).
   if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
+  return outcome;
 }
 
 export function createLeaderOptionsFactory(

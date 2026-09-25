@@ -2,6 +2,7 @@ import { stripLocalPathsForRemote } from '../../core/attachments.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from '../lick-manager.js';
 import {
   type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
 } from '../tray-sync-protocol.js';
@@ -61,6 +62,16 @@ export interface FollowerDispatchCollaborators {
     registration: { platform: 'ios'; token: string; environment: 'sandbox' | 'production' }
   ) => void;
 }
+
+/**
+ * Where a follower's prompt ended up once the leader's kernel settled: the
+ * body of the `user_message_ack` sent back to its author. `scoopJid` is `''`
+ * when the leader had no unit to deliver to.
+ */
+export type FollowerMessageOutcome = Omit<
+  Extract<LeaderToFollowerMessage, { type: 'user_message_ack' }>,
+  'type' | 'messageId'
+>;
 
 /** Exhaustive follower-to-leader wire-message dispatcher. */
 export class FollowerDispatch {
@@ -355,10 +366,43 @@ export class FollowerDispatch {
     // that unit's transcript back to it, so a prompt typed under that
     // transcript has to land there too.
     const targetScoopJid = follower?.selectedScoopJid;
-    this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
-      ...(message.steer ? { steer: true } : {}),
-      ...(targetScoopJid ? { targetScoopJid } : {}),
-    });
+    const delivery = this.context.options.onFollowerMessage(
+      message.text,
+      message.messageId,
+      safeAttachments,
+      {
+        ...(message.steer ? { steer: true } : {}),
+        ...(targetScoopJid ? { targetScoopJid } : {}),
+      }
+    );
+    this.ackUserMessage(bootstrapId, message.messageId, delivery);
+  }
+
+  /**
+   * Tell the follower that sent `messageId`, and only that follower, what its
+   * delivery came to. Looked up again when the delivery settles: a peer that
+   * left meanwhile has no channel to ack on.
+   */
+  ackUserMessage(
+    bootstrapId: string,
+    messageId: string,
+    delivery: void | Promise<FollowerMessageOutcome>
+  ): void {
+    if (!(delivery instanceof Promise)) return;
+    void delivery.then(
+      (outcome) => {
+        this.context.followers.followers
+          .get(bootstrapId)
+          ?.sync.send({ type: 'user_message_ack', messageId, ...outcome });
+      },
+      (err: unknown) => {
+        this.context.log.warn('Follower message delivery outcome failed', {
+          bootstrapId,
+          messageId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    );
   }
 
   /**

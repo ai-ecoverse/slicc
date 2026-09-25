@@ -576,7 +576,7 @@ describe('WC tray follower message routing (#2382)', () => {
    * `WorkUnitClient`. Only the pieces `onFollowerMessage` / `onFollowerAbort`
    * touch are real.
    */
-  function makeLeaderOptions(leaderSelectedJid: string | null) {
+  function makeLeaderOptions(leaderSelectedJid: string | null, sendError?: Error) {
     const sends: Array<{ id: string; text: string; messageId?: string }> = [];
     const stops: string[] = [];
     const addUserMessage = vi.fn();
@@ -590,7 +590,7 @@ describe('WC tray follower message routing (#2382)', () => {
       workUnits: {
         send: (id: string, input: { text: string; messageId?: string }) => {
           sends.push({ id, text: input.text, messageId: input.messageId });
-          return Promise.resolve();
+          return sendError ? Promise.reject(sendError) : Promise.resolve();
         },
         signal: (id: string) => {
           stops.push(id);
@@ -628,8 +628,36 @@ describe('WC tray follower message routing (#2382)', () => {
       state,
       {} as Parameters<typeof createLeaderOptionsFactory>[2]
     )('https://tray.example');
-    return { addUserMessage, broadcastUserMessage, options, sends, stops };
+    return { addUserMessage, broadcastUserMessage, deps, options, sends, stops };
   }
+
+  it('resolves an accepted outcome naming the unit once the kernel takes the prompt', async () => {
+    const { options } = makeLeaderOptions('cone_a');
+    const outcome = await options.onFollowerMessage('hi', 'fm4', undefined, {
+      targetScoopJid: 'cone_b',
+    });
+    expect(outcome).toEqual({ scoopJid: 'cone_b', state: 'accepted' });
+  });
+
+  it('resolves a rejected outcome carrying the kernel error when the send fails', async () => {
+    const { options, deps } = makeLeaderOptions('cone_a', new Error('kernel gone'));
+    const outcome = await options.onFollowerMessage('hi', 'fm5', undefined, {
+      targetScoopJid: 'cone_a',
+    });
+    expect(outcome).toEqual({ scoopJid: 'cone_a', state: 'rejected', error: 'kernel gone' });
+    expect(deps.log.warn).toHaveBeenCalledWith('follower message delivery failed', {
+      error: 'kernel gone',
+    });
+  });
+
+  it('rejects at once when neither side has a unit to deliver to', async () => {
+    const { options, deps, sends } = makeLeaderOptions(null);
+    const outcome = await options.onFollowerMessage('lost', 'fm6');
+    expect(sends).toEqual([]);
+    // The local no-selection report still runs on the leader.
+    expect(deps.agentHandle.sendMessage).toHaveBeenCalledWith('lost', 'fm6', undefined, undefined);
+    expect(outcome).toMatchObject({ scoopJid: '', state: 'rejected', error: expect.any(String) });
+  });
 
   it('delivers a follower’s prompt to the unit that follower is reading', async () => {
     const { options, sends, addUserMessage, broadcastUserMessage } = makeLeaderOptions('cone_a');
