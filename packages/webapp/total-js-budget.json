@@ -1,0 +1,4 @@
+{
+  "//": "Per-PR growth allowance for every JS file in dist/ui, including lazy chunks. The absolute 27 MiB size-limit cap remains the backstop. This check catches substantial growth in the change that caused it, while ordinary small changes cannot inherit a near-zero absolute budget. 128 KiB admits routine code and dependency updates while flagging a new large library or duplicate chunk for review.",
+  "maxDeltaKb": 128
+}

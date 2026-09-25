@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts",
-    "size": "size-limit && node ../dev-tools/tools/check-first-load-size.mjs",
+    "size": "size-limit && node ../dev-tools/tools/check-total-js-size.mjs && node ../dev-tools/tools/check-first-load-size.mjs",
     "test": "vitest run --root ../.. --config vitest.config.ts --project webapp",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
