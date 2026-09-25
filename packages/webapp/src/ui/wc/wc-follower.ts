@@ -20,6 +20,11 @@ import type { UiRuntimeMode } from '../runtime-mode.js';
 import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentEvent } from '../types.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
+import {
+  FollowerPromptWatch,
+  PROMPT_SILENCE_NOTE,
+  PROMPT_SILENCE_NOTE_SIDE_PANEL,
+} from './follower-prompt-watch.js';
 import { wireWcAttach } from './wc-attach.js';
 import { createFollowerChatHost, type WcChatHost } from './wc-chat-host.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
@@ -293,6 +298,16 @@ export async function bootFollowerFloat(
   const agentEventListeners = new Set<(event: AgentEvent) => void>();
   let detachAgentEvents: (() => void) | null = null;
 
+  const promptWatch = new FollowerPromptWatch({
+    onSilence: (unitId) => {
+      if (unitId !== shownUnitId()) return;
+      controller.addAssistantMessage(
+        isExtensionSidePanel ? PROMPT_SILENCE_NOTE_SIDE_PANEL : PROMPT_SILENCE_NOTE
+      );
+    },
+  });
+  agentEventListeners.add(() => promptWatch.noteLeaderActivity());
+
   let modelSurface: ReturnType<typeof createFollowerModelSurface> | null = null;
 
   const focusLeaderTab = (): void =>
@@ -370,7 +385,10 @@ export async function bootFollowerFloat(
         )
         .catch(() => undefined);
 
-      workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
+      workUnits = new RemoteWorkUnitClient({
+        getSync: () => follower?.currentSync ?? null,
+        onSend: (id) => promptWatch.noteSent(id),
+      });
 
       const followerHost = createFollowerChatHost({
         getSync: () => follower?.currentSync ?? null,
@@ -583,6 +601,7 @@ export async function bootFollowerFloat(
         controller.addUserMessage(text, attachments),
 
       onBiscottoMessageState: (_messageId, state) => {
+        promptWatch.noteLeaderActivity();
         switch (state) {
           case 'pending':
             controller.addAssistantMessage('_Sent for review — waiting for the host._');
@@ -600,6 +619,7 @@ export async function bootFollowerFloat(
         }
       },
       onStatus: (status, scoopJid) => {
+        promptWatch.noteLeaderActivity(scoopJid);
         if (shouldApplyFollowerStatus(scoopJid, shownUnitId())) {
           controller.setProcessing(status === 'processing');
         }
@@ -637,6 +657,8 @@ export async function bootFollowerFloat(
       onConnectionChange: (connected) => {
         boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';
         if (!connected) forgetSessionSelection();
+
+        if (!connected) promptWatch.noteLeaderActivity();
         setComposerState(connected, connected ? CONNECTED : CONNECTING);
         if (!connected) modelSurface?.reset();
         if (isCherry)

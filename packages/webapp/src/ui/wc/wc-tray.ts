@@ -83,6 +83,7 @@ import {
 import type { AgentHandle, ChatMessage } from '../types.js';
 import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
+import { FollowerPromptWatch, PROMPT_SILENCE_NOTE } from './follower-prompt-watch.js';
 import {
   LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT,
   LEADER_MODEL_CATALOG_CHANGED_EVENT,
@@ -368,6 +369,23 @@ export interface FollowerRole {
   dispose(): void;
 }
 
+function watchedFollowerClient(
+  deps: WcTrayDeps,
+  getSync: () => PageFollowerTrayHandle['currentSync'],
+  shownUnitId: () => string | null
+): { workUnits: RemoteWorkUnitClient; promptWatch: FollowerPromptWatch } {
+  const promptWatch = new FollowerPromptWatch({
+    onSilence: (unitId) => {
+      if (unitId === shownUnitId()) deps.getController()?.addAssistantMessage(PROMPT_SILENCE_NOTE);
+    },
+  });
+  const workUnits = new RemoteWorkUnitClient({
+    getSync: () => getSync() ?? null,
+    onSend: (unitId) => promptWatch.noteSent(unitId),
+  });
+  return { workUnits, promptWatch };
+}
+
 export function buildFollowerOptions(
   deps: WcTrayDeps,
   joinUrl: string,
@@ -379,7 +397,7 @@ export function buildFollowerOptions(
     jid && jid.length > 0 ? jid : null;
   let selectedScoopJid: string | null = null;
 
-  const workUnits = new RemoteWorkUnitClient({ getSync: () => getSync() ?? null });
+  const { workUnits, promptWatch } = watchedFollowerClient(deps, getSync, () => selectedScoopJid);
 
   const unread = new UnreadLedger();
   const publishFollowerScoops = (): void => {
@@ -437,11 +455,13 @@ export function buildFollowerOptions(
   });
 
   const forgetSession = (): void => {
+    promptWatch.noteLeaderActivity();
     workUnits.resetSelection();
     transcript.forget();
     modelSurface.reset();
   };
   const dispose = (): void => {
+    promptWatch.dispose();
     disposeCapture();
     transcript.forget();
     workUnits.resetSelection();
@@ -461,11 +481,14 @@ export function buildFollowerOptions(
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
       getController()?.addUserMessage(text, attachments),
     onStatus: (status, scoopJid) => {
+      promptWatch.noteLeaderActivity(scoopJid);
       if (shouldApplyFollowerStatus(scoopJid, selectedScoopJid)) {
         getController()?.setProcessing(status === 'processing');
       }
     },
     setChatAgent: (agent) => {
+      promptWatch.followAgentEvents(agent);
+
       getController()?.setAgent(
         createWorkUnitAgentHandle(workUnits, {
           getSelectedId: () => usableUnitId(selectedScoopJid ?? workUnits.selectedUnitId),
@@ -487,9 +510,7 @@ export function buildFollowerOptions(
     onGaveUp: () => forgetSession(),
     onConnectionChange: (connected) => {
       deps.refs.switcher.connection = connected ? 'connected' : 'disconnected';
-      if (!connected) {
-        forgetSession();
-      }
+      if (!connected) forgetSession();
     },
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
