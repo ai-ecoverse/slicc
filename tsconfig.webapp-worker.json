@@ -33,6 +33,7 @@
     "packages/webapp/src/sudo/index.ts",
     "packages/webapp/src/sudo/sudo-manager.ts",
     "packages/webapp/src/globals.d.ts",
+    "packages/webapp/src/types/bzip2.d.ts",
     "packages/webapp/src/types/helix-rum-js.d.ts",
     "packages/webapp/src/types/pi-ai-internals.d.ts",
     "packages/webapp/src/types/pi-coding-agent-compaction.d.ts",
