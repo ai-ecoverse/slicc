@@ -186,6 +186,8 @@ export interface ScoopLifecycleDeps {
     appendResponseChunk(jid: string, chunk: string): void;
     setResponseFull(jid: string, text: string): void;
     notifyCompletion(jid: string): Promise<void> | void;
+    /** Record a turn failure so a later ready-path notify can headline as failed (#3460). */
+    recordFailure(jid: string, reason: string): void;
     forgetScoop(jid: string, reason: 'unregister' | 'fatal-error' | 'close'): void;
     clearResponse(jid: string): void;
   };
@@ -1147,16 +1149,7 @@ export class ScoopLifecycleManager {
         this.units.get(jid)?.touch();
         callbacks.onResponseDone(jid);
       },
-      onError: (error) => {
-        if (!scoops().has(jid)) return;
-
-        this.units.get(jid)?.transition('error', { error });
-        emitScoopLifecycle('error', scoop.folder, error);
-        callbacks.onError(jid, error);
-        callbacks.onStatusChange(jid, 'error');
-        this.dispatch(jid, 'onError', error);
-        this.dispatch(jid, 'onStatusChange', 'error');
-      },
+      onError: (error) => this.handleScoopTurnError(jid, scoop, error),
       onFatalError: (error) => this.handleFatalError(jid, error),
       onStatusChange: (status) => {
         if (!scoops().has(jid)) return;
@@ -1284,6 +1277,24 @@ export class ScoopLifecycleManager {
         : undefined,
       getBrowserAPI: () => callbacks.getBrowserAPI(),
     };
+  }
+
+  /**
+   * Turn-level error path. Remembers the failure so a subsequent ready-path
+   * notify can headline as `failed` rather than `completed` (#3460) —
+   * ScoopContext often stays `processing` through `onError` and then lands
+   * on `ready`. Receipt-bearing spawns defer to `notifyWithOutcome` instead.
+   */
+  private handleScoopTurnError(jid: string, scoop: RegisteredScoop, error: string): void {
+    if (!this.deps.getScoops().has(jid)) return;
+
+    this.deps.completionService.recordFailure(jid, error);
+    this.units.get(jid)?.transition('error', { error });
+    emitScoopLifecycle('error', scoop.folder, error);
+    this.deps.callbacks.onError(jid, error);
+    this.deps.callbacks.onStatusChange(jid, 'error');
+    this.dispatch(jid, 'onError', error);
+    this.dispatch(jid, 'onStatusChange', 'error');
   }
 
   /**

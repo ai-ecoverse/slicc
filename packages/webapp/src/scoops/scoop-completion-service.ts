@@ -76,6 +76,19 @@ export interface UnmuteResult {
   notificationPath: string | null;
 }
 
+/**
+ * Final pass outcome the agent bridge publishes after writing
+ * `outcomeReceiptPath` (#3460). Drives the cone notification headline
+ * (`completed` vs `failed`) once the ready-path deferral lifts.
+ */
+export interface ScoopPassOutcome {
+  exitCode: number;
+  /** Failure / bound note — included when non-empty. */
+  reason?: string;
+  /** Absolute VFS path of the durable `status.json` (or equivalent). */
+  receiptPath?: string;
+}
+
 export class ScoopCompletionService {
   /** Accumulates response text per scoop for routing back to cone on completion. */
   private scoopResponseBuffer: Map<string, string> = new Map();
@@ -83,12 +96,33 @@ export class ScoopCompletionService {
   private mutedScoops: Set<string> = new Set();
   /** Per-scoop stashed completions waiting for unmute / wait consumption. */
   private pendingCompletions: Map<string, { responseText: string; timestamp: string }> = new Map();
+  /**
+   * Completions deferred until {@link notifyWithOutcome} — scoops that write
+   * an outcome receipt must not tell the cone "completed" before the final
+   * exit code is known (#3460).
+   */
+  private deferredCompletions: Map<string, { responseText: string; timestamp: string }> = new Map();
+  /** Last `onError` reason per scoop; used when ready fires without a receipt. */
+  private failureReasons: Map<string, string> = new Map();
   /** One-shot resolvers for `scoop_wait` calls. */
   private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
   private readonly deps: ScoopCompletionServiceDeps;
 
   constructor(deps: ScoopCompletionServiceDeps) {
     this.deps = deps;
+  }
+
+  /**
+   * Remember a turn-level failure so a subsequent ready-path notify can
+   * headline as `failed` instead of `completed`. Ignored for scoops that
+   * defer to {@link notifyWithOutcome} (their receipt is authoritative).
+   */
+  recordFailure(jid: string, reason: string): void {
+    const trimmed = reason.trim();
+    if (!trimmed) return;
+    // Keep the first error of a turn — later noise (cleanup notes) must not
+    // overwrite the cause the cone needs to see.
+    if (!this.failureReasons.has(jid)) this.failureReasons.set(jid, trimmed);
   }
 
   /** Accumulate a streaming response chunk. No-op for cone scoops. */
@@ -128,6 +162,8 @@ export class ScoopCompletionService {
     this.scoopResponseBuffer.delete(jid);
     this.mutedScoops.delete(jid);
     this.pendingCompletions.delete(jid);
+    this.deferredCompletions.delete(jid);
+    this.failureReasons.delete(jid);
     const waiters = this.completionWaiters.get(jid);
     if (waiters && waiters.length > 0) {
       this.completionWaiters.delete(jid);
@@ -166,6 +202,8 @@ export class ScoopCompletionService {
     this.completionWaiters.clear();
     this.mutedScoops.clear();
     this.pendingCompletions.clear();
+    this.deferredCompletions.clear();
+    this.failureReasons.clear();
     this.scoopResponseBuffer.clear();
   }
 
@@ -174,7 +212,8 @@ export class ScoopCompletionService {
    * response to the cone as a `scoop-notify` message pointing at a VFS
    * artifact. Suppressed for cone scoops or when `notifyOnComplete === false`.
    * Pending waiters claim the completion exclusively; muted scoops stash it
-   * in {@link pendingCompletions} for later flush.
+   * in {@link pendingCompletions} for later flush. Scoops with
+   * `outcomeReceiptPath` defer delivery until {@link notifyWithOutcome}.
    */
   async notifyCompletion(jid: string): Promise<void> {
     const scoop = this.deps.getScoop(jid);
@@ -186,19 +225,22 @@ export class ScoopCompletionService {
     // of how (or whether) the cone is told about it.
     emitScoopLifecycle('complete', scoop.folder);
 
-    const responseText = this.scoopResponseBuffer.get(jid);
+    const responseText = this.scoopResponseBuffer.get(jid) ?? '';
     this.scoopResponseBuffer.delete(jid);
-    if (!responseText) return;
 
-    if (scoop.notifyOnComplete === false) return;
+    if (scoop.notifyOnComplete === false) {
+      this.failureReasons.delete(jid);
+      return;
+    }
 
     const waiters = this.completionWaiters.get(jid);
     if (waiters && waiters.length > 0) {
       this.completionWaiters.delete(jid);
+      this.failureReasons.delete(jid);
       const waiterSummary = truncateForWaiter(responseText);
       for (const w of waiters) {
         try {
-          w(waiterSummary);
+          w(waiterSummary || null);
         } catch (err) {
           log.warn('completion waiter threw', {
             jid,
@@ -218,29 +260,92 @@ export class ScoopCompletionService {
       return;
     }
 
-    await this.deliverCompletionToParent(scoop, responseText);
+    // Memory curator/dreamer (and any other receipt-bearing spawn): the
+    // ready transition races the bridge's merge + status.json write. Stash
+    // and wait for {@link notifyWithOutcome} so a network death is not
+    // reported as `completed` (#3460).
+    if (scoop.outcomeReceiptPath) {
+      this.deferredCompletions.set(jid, {
+        responseText,
+        timestamp: new Date().toISOString(),
+      });
+      log.info('Scoop completion deferred pending outcome receipt', {
+        scoop: scoop.folder,
+        receiptPath: scoop.outcomeReceiptPath,
+        responseLength: responseText.length,
+      });
+      return;
+    }
+
+    const failureReason = this.failureReasons.get(jid);
+    this.failureReasons.delete(jid);
+    if (!responseText && !failureReason) return;
+
+    await this.deliverCompletionToParent(scoop, responseText, {
+      exitCode: failureReason ? 1 : 0,
+      ...(failureReason ? { reason: failureReason } : {}),
+    });
+  }
+
+  /**
+   * Deliver a previously deferred completion using the final spawn outcome
+   * (after `status.json` / merge). Called by the agent bridge before the
+   * scoop is unregistered. Failure with an empty buffer still notifies —
+   * the cone must learn the pass failed even when no report was produced.
+   */
+  async notifyWithOutcome(jid: string, outcome: ScoopPassOutcome): Promise<void> {
+    const scoop = this.deps.getScoop(jid);
+    this.failureReasons.delete(jid);
+    const deferred = this.deferredCompletions.get(jid);
+    this.deferredCompletions.delete(jid);
+
+    if (!scoop || scoop.parentJid === null) return;
+    if (scoop.notifyOnComplete === false) return;
+
+    const responseText =
+      deferred?.responseText ?? this.scoopResponseBuffer.get(jid) ?? outcome.reason ?? '';
+    this.scoopResponseBuffer.delete(jid);
+
+    if (!responseText && outcome.exitCode === 0) return;
+
+    await this.deliverCompletionToParent(scoop, responseText, {
+      exitCode: outcome.exitCode,
+      ...(outcome.reason ? { reason: outcome.reason } : {}),
+      ...(outcome.receiptPath
+        ? { receiptPath: outcome.receiptPath }
+        : scoop.outcomeReceiptPath
+          ? { receiptPath: scoop.outcomeReceiptPath }
+          : {}),
+    });
   }
 
   private async deliverCompletionToParent(
     scoop: RegisteredScoop,
-    responseText: string
+    responseText: string,
+    outcome: ScoopPassOutcome = { exitCode: 0 }
   ): Promise<void> {
     const cone = this.deps.findParent(scoop.jid);
     if (!cone) return;
 
+    const failed = outcome.exitCode !== 0;
     const lineCount = countTextLines(responseText);
     const preview = responseText.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS);
     let notifyContent: string;
     let artifactError: string | null = null;
     let notificationPath: string | null = null;
 
+    // Persist whatever text we have; a pure failure with only a reason still
+    // gets an artifact so the cone can open something concrete.
+    const artifactBody = responseText || outcome.reason || `(exit code: ${outcome.exitCode})`;
     try {
-      notificationPath = await this.writeScoopCompletionArtifact(scoop, responseText);
+      notificationPath = await this.writeScoopCompletionArtifact(scoop, artifactBody);
       log.info('Routing scoop completion to cone', {
         scoop: scoop.folder,
         responseLength: responseText.length,
         lineCount,
         notificationPath,
+        failed,
+        exitCode: outcome.exitCode,
       });
     } catch (err) {
       artifactError = err instanceof Error ? err.message : String(err);
@@ -250,19 +355,24 @@ export class ScoopCompletionService {
       });
     }
 
+    const headline = failed ? 'failed' : 'completed';
     if (artifactError === null) {
       notifyContent = formatScoopCompletionNotification(
         scoop.assistantLabel,
+        headline,
         notificationPath ?? 'unavailable',
         lineCount,
-        preview
+        preview || artifactBody.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS),
+        outcome
       );
     } else {
       notifyContent = formatScoopCompletionFallbackNotification(
         scoop.assistantLabel,
+        headline,
         lineCount,
-        preview,
-        artifactError
+        preview || artifactBody.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS),
+        artifactError,
+        outcome
       );
     }
 
@@ -296,7 +406,7 @@ export class ScoopCompletionService {
       });
       this.deps.reportError(
         cone.jid,
-        `Scoop ${scoop.folder} completed but notification failed: ${msg}`
+        `Scoop ${scoop.folder} ${headline} but notification failed: ${msg}`
       );
     }
   }
@@ -625,12 +735,15 @@ export class ScoopCompletionService {
 
 function formatScoopCompletionNotification(
   assistantLabel: string,
+  headline: 'completed' | 'failed',
   notificationPath: string,
   lineCount: number,
-  preview: string
+  preview: string,
+  outcome: ScoopPassOutcome
 ): string {
   return [
-    `[@${assistantLabel} completed]`,
+    `[@${assistantLabel} ${headline}]`,
+    ...outcomeLines(outcome),
     `VFS path: ${notificationPath}`,
     `Total lines: ${lineCount}`,
     `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
@@ -640,16 +753,31 @@ function formatScoopCompletionNotification(
 
 function formatScoopCompletionFallbackNotification(
   assistantLabel: string,
+  headline: 'completed' | 'failed',
   lineCount: number,
   preview: string,
-  artifactError: string
+  artifactError: string,
+  outcome: ScoopPassOutcome
 ): string {
   return [
-    `[@${assistantLabel} completed]`,
+    `[@${assistantLabel} ${headline}]`,
+    ...outcomeLines(outcome),
     'VFS path: unavailable',
     `Artifact persistence error: ${artifactError}`,
     `Total lines: ${lineCount}`,
     `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
     preview,
   ].join('\n');
+}
+
+/** Extra status fields when the pass wrote a receipt or failed (#3460). */
+function outcomeLines(outcome: ScoopPassOutcome): string[] {
+  const lines: string[] = [];
+  const failed = outcome.exitCode !== 0;
+  if (!failed && !outcome.reason && !outcome.receiptPath) return lines;
+  lines.push(`status: ${failed ? 'failed' : 'ok'}`);
+  lines.push(`exitCode: ${outcome.exitCode}`);
+  if (outcome.reason) lines.push(`reason: ${outcome.reason.slice(0, 500)}`);
+  if (outcome.receiptPath) lines.push(`status.json: ${outcome.receiptPath}`);
+  return lines;
 }

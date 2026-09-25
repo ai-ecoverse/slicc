@@ -727,6 +727,32 @@ async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<v
   }
 }
 
+/**
+ * Tell the cone the final pass outcome after `status.json` is durable.
+ * Best-effort — a notify failure must not flip the spawn result.
+ */
+async function notifyPassOutcome(
+  ctx: BridgeContext,
+  jid: string,
+  receiptPath: string,
+  outcome: AgentSpawnResult
+): Promise<void> {
+  try {
+    await ctx.orchestrator.notifyScoopOutcome(jid, {
+      exitCode: outcome.exitCode,
+      receiptPath,
+      // Failures and bound-trip promotions both carry a useful note in
+      // finalText; a clean success leaves reason off so the cone sees a
+      // short completed card.
+      ...(outcome.exitCode !== 0 || isRunBoundTrip(outcome.finalText)
+        ? { reason: outcome.finalText.slice(0, 500) }
+        : {}),
+    });
+  } catch (err) {
+    log.warn('pass outcome notify failed', { jid, error: errText(err) });
+  }
+}
+
 /** A valid fixed agent name: one or more lowercase tokens joined by dashes. */
 // Digits are allowed inside a token because a per-cone curator name carries
 // the cone's storage folder (`memory-curator-cone-beta-2`, `…-cone-v86`), and
@@ -1130,6 +1156,9 @@ export function createAgentBridge(
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
       notifyOnComplete: options.notifyOnComplete === true,
       parentJid,
+      // Defer the ready-path cone notify until after the receipt is written
+      // so a non-zero exit is not reported as `completed` (#3460).
+      ...(options.outcomeReceiptPath ? { outcomeReceiptPath: options.outcomeReceiptPath } : {}),
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
@@ -1159,6 +1188,13 @@ export function createAgentBridge(
     let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
     try {
       outcome = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+      // Publish the final outcome to the cone AFTER status.json is written
+      // and AFTER any bound-trip draft promotion, so the headline matches
+      // the durable receipt (#3460). Must run before cleanup unregisters
+      // the scoop (notifyWithOutcome looks it up).
+      if (options.notifyOnComplete === true && options.outcomeReceiptPath) {
+        await notifyPassOutcome(ctx, jid, options.outcomeReceiptPath, outcome);
+      }
       return outcome;
     } finally {
       options.signal?.removeEventListener('abort', onAbort);

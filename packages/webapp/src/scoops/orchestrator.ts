@@ -85,7 +85,7 @@ import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { mapWithConcurrency, SCOOP_BOOT_CONCURRENCY } from './scoop-boot-restore.js';
-import { ScoopCompletionService } from './scoop-completion-service.js';
+import { ScoopCompletionService, type ScoopPassOutcome } from './scoop-completion-service.js';
 import type { InFlightTurn, TurnJournal } from './scoop-context/turn-journal.js';
 import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { ScoopCostTracker } from './scoop-cost-tracker.js';
@@ -1184,6 +1184,14 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Test / debug helper: returns whether the given jid is currently muted. */
   isScoopMuted(jid: string): boolean {
     return this.completionService.isScoopMuted(jid);
+  }
+
+  /**
+   * Deliver a deferred scoop-notify using the final spawn outcome (#3460).
+   * Used by the agent bridge after writing `outcomeReceiptPath`.
+   */
+  notifyScoopOutcome(jid: string, outcome: ScoopPassOutcome): Promise<void> {
+    return this.completionService.notifyWithOutcome(jid, outcome);
   }
 
   /**

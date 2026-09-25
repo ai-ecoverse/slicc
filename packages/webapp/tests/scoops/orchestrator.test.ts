@@ -1010,6 +1010,145 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     expect(captured).toHaveLength(0);
   });
 
+  it('headlines a ready-path notify as failed when onError was recorded (#3460)', async () => {
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_fail_ready_1',
+      name: 'fail-ready',
+      folder: 'fail-ready-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'fail-ready-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate & {
+      completionService: OrchestratorPrivate['completionService'] & {
+        recordFailure(jid: string, reason: string): void;
+      };
+    };
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    priv.completionService.recordFailure(notifyingScoop.jid, 'network error');
+    priv.completionService.scoopResponseBuffer.set(
+      notifyingScoop.jid,
+      "I'll start by reading the current memory draft."
+    );
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].content).toContain(`[@${notifyingScoop.assistantLabel} failed]`);
+    expect(captured[0].content).toContain('status: failed');
+    expect(captured[0].content).toContain('exitCode: 1');
+    expect(captured[0].content).toContain('reason: network error');
+    expect(captured[0].content).not.toContain('completed]');
+  });
+
+  it('defers receipt-bearing notifies until notifyWithOutcome (#3460)', async () => {
+    const receiptPath = '/sessions/.curation/dream-2026-09-22-cone.md/status.json';
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_dream_outcome_1',
+      name: 'memory-dreamer',
+      folder: 'agent-memory-dreamer',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'agent-memory-dreamer',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      notifyOnComplete: true,
+      outcomeReceiptPath: receiptPath,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate & {
+      completionService: OrchestratorPrivate['completionService'] & {
+        notifyWithOutcome(
+          jid: string,
+          outcome: { exitCode: number; reason?: string; receiptPath?: string }
+        ): Promise<void>;
+      };
+    };
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    const responseText = "I'll start by reading the current memory draft and measuring it.";
+    priv.completionService.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
+    // Ready fired first — must not look like success yet.
+    expect(captured).toHaveLength(0);
+
+    await priv.completionService.notifyWithOutcome(notifyingScoop.jid, {
+      exitCode: 1,
+      reason: 'network error',
+      receiptPath,
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].content).toContain('[@agent-memory-dreamer failed]');
+    expect(captured[0].content).toContain('status: failed');
+    expect(captured[0].content).toContain('exitCode: 1');
+    expect(captured[0].content).toContain('reason: network error');
+    expect(captured[0].content).toContain(`status.json: ${receiptPath}`);
+    expect(captured[0].content).toContain(responseText);
+  });
+
+  it('reports a promoted bound-trip as completed with the receipt path (#3460)', async () => {
+    const receiptPath = '/sessions/.curation/dream-2026-09-22-cone.md/status.json';
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_dream_ok_1',
+      name: 'memory-dreamer',
+      folder: 'agent-memory-dreamer',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'agent-memory-dreamer',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      notifyOnComplete: true,
+      outcomeReceiptPath: receiptPath,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate & {
+      completionService: OrchestratorPrivate['completionService'] & {
+        notifyWithOutcome(
+          jid: string,
+          outcome: { exitCode: number; reason?: string; receiptPath?: string }
+        ): Promise<void>;
+      };
+    };
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    priv.completionService.scoopResponseBuffer.set(notifyingScoop.jid, 'consolidated under budget');
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
+    expect(captured).toHaveLength(0);
+
+    await priv.completionService.notifyWithOutcome(notifyingScoop.jid, {
+      exitCode: 0,
+      reason:
+        'agent run terminated: wall-clock bound (900000 ms) exceeded — staged rewrite promoted',
+      receiptPath,
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].content).toContain('[@agent-memory-dreamer completed]');
+    expect(captured[0].content).toContain('status: ok');
+    expect(captured[0].content).toContain('exitCode: 0');
+    expect(captured[0].content).toContain('wall-clock bound');
+    expect(captured[0].content).toContain(`status.json: ${receiptPath}`);
+  });
+
   it('emits the complete lifecycle beacon even when the scoop produced no output', async () => {
     const { setScoopTelemetrySink } = await import('../../src/scoops/scoop-telemetry-hook.js');
     const sink = vi.fn();
