@@ -904,6 +904,13 @@ covers.
 
 ## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
 
+The real Kokoro speech E2E uses a fresh persistent Playwright profile. A
+regular Playwright test context is off-the-record; Chromium gives it a memory
+based storage pool that can fill while `navigator.storage.estimate()` still
+reports ample quota. Model weights plus CacheStorage then make the tiny final
+WAV write fail with `ENOSPC`. Keep the persistent profile scoped to that test
+and close it after the run so other E2E specs retain their isolated contexts.
+
 **Files**: `packages/webapp/src/ui/boot/setup-storage-persistence.ts`,
 `packages/webapp/src/shell/supplemental-commands/df-command.ts`.
 

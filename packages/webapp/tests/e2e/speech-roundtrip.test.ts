@@ -21,12 +21,32 @@
  * it when the `speech` path filter matches).
  */
 
+import { chromium } from '@playwright/test';
 import { ORT_WEB_VERSION } from '../../src/speech/ort-version.js';
-import { expect, test } from './fixtures.js';
+import { test as baseTest, expect } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { LEADER_ORIGIN } from './playwright.config.js';
 import { type ExecResult, execInTerminal, openTerminal } from './two-instance-helpers.js';
 
 const RUN = process.env['RUN_REAL_SPEECH_E2E'] === '1';
+
+// Playwright's normal context is off-the-record. Chromium limits its actual
+// storage pool to a fraction of RAM, even when navigator.storage.estimate()
+// reports gigabytes of headroom. Kokoro's OPFS weights and CacheStorage assets
+// can exhaust that pool before the small output WAV is written. Use a fresh
+// disk-backed profile for this storage-heavy spec and close it after each run.
+const test = baseTest.extend({
+  context: async ({ baseURL }, use) => {
+    const context = await chromium.launchPersistentContext('', {
+      baseURL: baseURL ?? LEADER_ORIGIN,
+    });
+    try {
+      await use(context);
+    } finally {
+      await context.close();
+    }
+  },
+});
 
 /**
  * Run a single command through the worker shell via the published view.
