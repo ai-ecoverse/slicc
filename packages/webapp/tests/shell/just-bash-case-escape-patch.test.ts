@@ -36,4 +36,14 @@ describe.each([
     expect(await run('x="*"; case abc in a$x) echo ok;; esac')).toBe('ok\n');
     expect(await run('case b in [!a]) echo ok;; esac')).toBe('ok\n');
   });
+
+  it('keeps an escaped backslash literal before a glob character (case and [[ ]])', async () => {
+    // Review follow-up on #3474: `\\*` is a literal backslash then a wildcard.
+    const script = [
+      'case "\\ab" in \\\\*) echo c1;; *) echo n1;; esac',
+      'case "\\x" in \\\\?) echo c2;; *) echo n2;; esac',
+      '[[ "\\ab" == \\\\* ]] && echo c3 || echo n3',
+    ].join('\n');
+    expect(await run(script)).toBe('c1\nc2\nc3\n');
+  });
 });
