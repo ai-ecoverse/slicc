@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,9 +6,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildPrompt,
   costTotals,
+  decodeTranscriptPart,
   exportTranscript,
+  exportTranscriptCommand,
   FINAL_INSTRUCTION,
   leaderHealth,
+  parseExportListing,
   parseSkillsCondition,
   parseTabList,
   quote,
@@ -19,11 +23,17 @@ import {
   stageSkills,
   stageSkillsCommand,
   startCapture,
+  TRANSCRIPT_EXPORT_ATTEMPTS,
+  TRANSCRIPT_EXPORT_TIMEOUT_MS,
+  TRANSCRIPT_PART_BYTES,
+  TRANSCRIPT_READ_ATTEMPTS,
+  TRANSCRIPT_READ_TIMEOUT_MS,
   toolKind,
   toolMetrics,
   toolUsage,
   traceFromResult,
   transcriptSteps,
+  transcriptSummary,
 } from './slicc-adapter.mjs';
 
 const ok = (stdout = '') => ({ stdout, stderr: '', status: 0, timedOut: false });
@@ -47,6 +57,43 @@ function fakeLeader({ verbs = {}, commands = [] } = {}) {
     }),
   };
   return { leader, calls };
+}
+
+const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+
+function leaderFiles(doc, partBytes = TRANSCRIPT_PART_BYTES, dir = '/d') {
+  const t = `${dir}/transcript`;
+  const parts = [];
+  for (let i = 0; i * partBytes < doc.length; i += 1) {
+    const suffix = String.fromCharCode(97 + Math.floor(i / 26), 97 + (i % 26));
+    parts.push({
+      path: `${t}/parts/x${suffix}`,
+      bytes: doc.subarray(i * partBytes, (i + 1) * partBytes),
+    });
+  }
+  const listing = [
+    `${doc.length} ${t}/transcript.json`,
+    `${sha(doc)}  ${t}/transcript.json`,
+    ...parts.map((p) => `${sha(p.bytes)}  ${p.path}`),
+    '',
+  ].join('\n');
+  const list = () => ok(listing);
+  const read = (cmd) => {
+    const part = parts.find((p) => cmd === `base64 '${p.path}'`);
+    return part
+      ? ok(`${part.bytes.toString('base64').replace(/.{76}/g, '$&\n')}\n`)
+      : fail('no such file');
+  };
+  return {
+    listing,
+    parts: parts.length,
+    list,
+    read,
+    commands: [
+      [/^session export/, list],
+      [/^base64 '\/[^']*\/transcript\/parts\/x[a-z]+'$/, read],
+    ],
+  };
 }
 
 const TRANSCRIPT = {
@@ -358,21 +405,289 @@ describe('capture', () => {
       { label: 'c', format: 'png', base64: 'Q0ND' },
     ]);
   });
+});
 
-  it('exports the conversation with session export and unzip', async () => {
-    const { leader, calls } = fakeLeader({
-      commands: [[/^session export/, ok(JSON.stringify(TRANSCRIPT))]],
-    });
-    expect(await exportTranscript(leader, '/tmp/bench/r')).toEqual(TRANSCRIPT);
-    expect(calls[0].command).toBe(
-      'session export --output /tmp/bench/r/transcript.zip >/dev/null && mkdir -p /tmp/bench/r/transcript && unzip /tmp/bench/r/transcript.zip -d /tmp/bench/r/transcript >/dev/null && cat /tmp/bench/r/transcript/transcript.json'
+describe('transcript export', () => {
+  it('exports, splits and lists the transcript in one leader command', () => {
+    expect(exportTranscriptCommand('/tmp/bench/r', 1024)).toBe(
+      [
+        'session export --output /tmp/bench/r/transcript.zip >/dev/null',
+        'rm -rf /tmp/bench/r/transcript',
+        'mkdir -p /tmp/bench/r/transcript/parts',
+        'unzip /tmp/bench/r/transcript.zip -d /tmp/bench/r/transcript >/dev/null',
+        'split -b 1024 /tmp/bench/r/transcript/transcript.json /tmp/bench/r/transcript/parts/x',
+        'wc -c /tmp/bench/r/transcript/transcript.json',
+        'sha256sum /tmp/bench/r/transcript/transcript.json /tmp/bench/r/transcript/parts/*',
+      ].join(' && ')
     );
+    expect(exportTranscriptCommand('/d')).toContain(`split -b ${TRANSCRIPT_PART_BYTES} `);
+  });
+
+  it('reads the listing, and refuses one that does not add up', () => {
+    const doc = Buffer.from('x'.repeat(25));
+    const { listing } = leaderFiles(doc, 10);
+    expect(parseExportListing(listing, 10)).toEqual({
+      bytes: 25,
+      sha256: sha(doc),
+      parts: [
+        { path: '/d/transcript/parts/xaa', sha256: sha(doc.subarray(0, 10)), bytes: 10 },
+        { path: '/d/transcript/parts/xab', sha256: sha(doc.subarray(10, 20)), bytes: 10 },
+        { path: '/d/transcript/parts/xac', sha256: sha(doc.subarray(20)), bytes: 5 },
+      ],
+    });
+    const lines = listing.split('\n');
+
+    expect(parseExportListing(lines.filter((l) => !l.endsWith('xab')).join('\n'), 10)).toBeNull();
+    expect(parseExportListing(lines.slice(1).join('\n'), 10)).toBeNull();
     expect(
-      await exportTranscript(fakeLeader({ commands: [[/./, fail('no session')]] }).leader, '/d')
+      parseExportListing(lines.filter((l) => !/^[0-9a-f]{64}\s+\S+json$/.test(l)).join('\n'), 10)
     ).toBeNull();
-    expect(
-      await exportTranscript(fakeLeader({ commands: [[/./, ok('not json')]] }).leader, '/d')
-    ).toBeNull();
+    expect(parseExportListing(undefined)).toBeNull();
+  });
+
+  it('decodes a part only when it is whole and matches its hash', () => {
+    const bytes = Buffer.from('hello, transcript');
+    const part = { path: '/p', bytes: bytes.length, sha256: sha(bytes) };
+    const b64 = bytes.toString('base64');
+    expect(decodeTranscriptPart(`${b64.slice(0, 8)}\n${b64.slice(8)}\n`, part).buf).toEqual(bytes);
+    expect(decodeTranscriptPart('', part)).toEqual({ error: 'empty' });
+    expect(decodeTranscriptPart('not base64!', part)).toEqual({ error: 'not base64' });
+    expect(decodeTranscriptPart(b64.slice(0, 8), part)).toEqual({
+      error: `6 of ${bytes.length} bytes`,
+    });
+    const other = Buffer.from('HELLO, transcript').toString('base64');
+    expect(decodeTranscriptPart(other, part)).toEqual({ error: 'checksum mismatch' });
+  });
+
+  it('reassembles a multi-megabyte transcript from verified parts', async () => {
+    const big = {
+      ...TRANSCRIPT,
+      conversations: [
+        ...TRANSCRIPT.conversations,
+        {
+          id: 'scoop-2',
+          kind: 'scoop',
+          messages: Array.from({ length: 400 }, (_, i) => ({
+            role: 'tool-result',
+            content: [{ type: 'text', text: `${i} ünïcödé ✓ ${'y'.repeat(25_000)}` }],
+          })),
+        },
+      ],
+    };
+    const doc = Buffer.from(JSON.stringify(big));
+    expect(doc.length).toBeGreaterThan(9 * 1024 * 1024);
+
+    const trayCap = (reply) => (cmd, opts) => {
+      const r = typeof reply === 'function' ? reply(cmd, opts) : reply;
+      return Buffer.byteLength(r.stdout) * (4 / 3) > 8 * 1024 * 1024 ? ok('') : r;
+    };
+    expect(trayCap(ok(doc.toString()))('cat').stdout).toBe('');
+    const { leader, calls } = fakeLeader({
+      commands: leaderFiles(doc).commands.map(([p, reply]) => [p, trayCap(reply)]),
+    });
+    const clock = vi.fn().mockReturnValueOnce(1000).mockReturnValue(4000);
+    const { doc: read, info } = await exportTranscript(leader, '/d', { now: clock });
+    expect(read).toEqual(big);
+    expect(info).toEqual({
+      ok: true,
+      bytes: doc.length,
+      parts: Math.ceil(doc.length / TRANSCRIPT_PART_BYTES),
+      exports: 1,
+      reads: Math.ceil(doc.length / TRANSCRIPT_PART_BYTES),
+      ms: 3000,
+    });
+    expect(calls[0].opts.timeoutMs).toBe(TRANSCRIPT_EXPORT_TIMEOUT_MS);
+    expect(calls[1]).toMatchObject({
+      command: "base64 '/d/transcript/parts/xaa'",
+      opts: { timeoutMs: TRANSCRIPT_READ_TIMEOUT_MS },
+    });
+  });
+
+  it('reads a truncated or corrupted part again', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+    const files = leaderFiles(doc, 1000);
+    let reads = 0;
+    const { leader } = fakeLeader({
+      commands: [
+        [
+          /parts\/xab'$/,
+          (cmd) => {
+            reads += 1;
+            const good = files.read(cmd);
+
+            if (reads === 1) return ok(good.stdout.slice(0, 400));
+            if (reads === 2)
+              return ok(`${good.stdout[0] === 'A' ? 'B' : 'A'}${good.stdout.slice(1)}`);
+            return good;
+          },
+        ],
+        ...files.commands,
+      ],
+    });
+    const { doc: read, info } = await exportTranscript(leader, '/d', { partBytes: 1000 });
+    expect(read).toEqual(TRANSCRIPT);
+    expect(info).toMatchObject({ ok: true, parts: files.parts, reads: files.parts + 2 });
+  });
+
+  it('reads a part again after the connection dropped mid-transfer', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+    const files = leaderFiles(doc, 1000);
+    let dropped = false;
+    const { leader } = fakeLeader({
+      commands: [
+        [
+          /parts\/xaa'$/,
+          (cmd) => {
+            if (dropped) return files.read(cmd);
+            dropped = true;
+            return fail('slicc exec: connection closed');
+          },
+        ],
+        ...files.commands,
+      ],
+    });
+    const { doc: read, info } = await exportTranscript(leader, '/d', { partBytes: 1000 });
+    expect(read).toEqual(TRANSCRIPT);
+    expect(info).toMatchObject({ ok: true, reads: files.parts + 1 });
+  });
+
+  it('gives up on a part that never arrives intact, and says why', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+    const files = leaderFiles(doc, 1000);
+    const { leader } = fakeLeader({
+      commands: [[/parts\/xab'$/, fail('slicc exec: connection closed')], ...files.commands],
+    });
+    const { doc: read, info } = await exportTranscript(leader, '/d', { partBytes: 1000 });
+    expect(read).toBeNull();
+    expect(info).toMatchObject({
+      ok: false,
+      stage: 'read',
+      reason: 'exit 1',
+      detail: 'slicc exec: connection closed',
+      reads: 1 + TRANSCRIPT_READ_ATTEMPTS,
+    });
+    const down = fakeLeader({
+      commands: [
+        [/^base64/, { stdout: '', stderr: 'tray connect timed out', status: 1, leaderDown: true }],
+        ...files.commands,
+      ],
+    });
+    const gone = await exportTranscript(down.leader, '/d', { partBytes: 1000 });
+    expect(gone.info).toMatchObject({ ok: false, stage: 'read', reason: 'leader-down', reads: 1 });
+    const short = fakeLeader({ commands: [[/^base64/, ok('QUFB')], ...files.commands] });
+    expect((await exportTranscript(short.leader, '/d', { partBytes: 1000 })).info).toMatchObject({
+      stage: 'read',
+      reason: '3 of 1000 bytes',
+    });
+  });
+
+  it('tries a failed export again, but not one that timed out or never reached the leader', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+    const files = leaderFiles(doc);
+    let exports = 0;
+    const flaky = fakeLeader({
+      commands: [
+        [
+          /^session export/,
+          (cmd) => (++exports === 1 ? fail('connection closed') : files.list(cmd)),
+        ],
+        ...files.commands,
+      ],
+    });
+    const again = await exportTranscript(flaky.leader, '/d');
+    expect(again.doc).toEqual(TRANSCRIPT);
+    expect(again.info).toMatchObject({ ok: true, exports: 2 });
+
+    const slow = fakeLeader({
+      commands: [[/^session export/, { stdout: '', stderr: '', status: 130, timedOut: true }]],
+    });
+    expect((await exportTranscript(slow.leader, '/d')).info).toMatchObject({
+      ok: false,
+      stage: 'export',
+      reason: 'timeout',
+      exports: 1,
+      bytes: null,
+    });
+    const down = fakeLeader({
+      commands: [[/^session export/, { stdout: '', stderr: 'x', status: 1, leaderDown: true }]],
+    });
+    expect((await exportTranscript(down.leader, '/d')).info).toMatchObject({
+      reason: 'leader-down',
+      exports: 1,
+    });
+    const broken = fakeLeader({ commands: [[/./, fail('session export: no session')]] });
+    expect((await exportTranscript(broken.leader, '/d')).info).toMatchObject({
+      stage: 'export',
+      reason: 'exit 1',
+      detail: 'session export: no session',
+      exports: TRANSCRIPT_EXPORT_ATTEMPTS,
+    });
+  });
+
+  it('reports a listing that does not add up (the old empty-stdout failure)', async () => {
+    const { leader } = fakeLeader({ commands: [[/^session export/, ok('')]] });
+    const { doc, info } = await exportTranscript(leader, '/d');
+    expect(doc).toBeNull();
+    expect(info).toMatchObject({ ok: false, stage: 'export', reason: 'listing', exports: 2 });
+  });
+
+  it('checks the reassembled file, and that it is a transcript', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+
+    const lying = leaderFiles(doc, 1000);
+    const listing = lying.listing.replace(
+      /^[0-9a-f]{64}(?=\s+\S+transcript\.json$)/m,
+      '0'.repeat(64)
+    );
+    const bad = fakeLeader({ commands: [[/^session export/, ok(listing)], ...lying.commands] });
+    expect((await exportTranscript(bad.leader, '/d', { partBytes: 1000 })).info).toMatchObject({
+      stage: 'verify',
+      reason: 'checksum mismatch',
+    });
+    for (const [text, reason] of [
+      ['{"schemaVersion":1', 'not JSON'],
+      ['{"schemaVersion":1}', 'not a transcript'],
+      ['null', 'not a transcript'],
+    ]) {
+      const { leader } = fakeLeader({ commands: leaderFiles(Buffer.from(text)).commands });
+      const { doc: read, info } = await exportTranscript(leader, '/d');
+      expect(read).toBeNull();
+      expect(info).toMatchObject({ ok: false, stage: 'parse', reason });
+      expect(info.detail).toBeUndefined();
+    }
+  });
+
+  it('keeps the export outcome in the trace, without the leader stderr', () => {
+    const transcriptExport = {
+      ok: false,
+      bytes: null,
+      parts: 0,
+      exports: 1,
+      reads: 0,
+      ms: 600000,
+      stage: 'export',
+      reason: 'timeout',
+      detail: 'stderr tail',
+    };
+    const trace = traceFromResult({ durationMs: 0, exitCode: 130, transcriptExport });
+    expect(trace.steps).toEqual([
+      '(no transcript could be exported: export timeout; prompt exit code 130)',
+    ]);
+    expect(trace.metrics.transcript).toEqual(transcriptSummary(transcriptExport));
+    expect(trace.metrics.transcript.detail).toBeUndefined();
+    const fine = traceFromResult({
+      durationMs: 0,
+      transcript: TRANSCRIPT,
+      transcriptExport: { ok: true, bytes: 10, parts: 1, exports: 1, reads: 1, ms: 5 },
+    });
+    expect(fine.metrics.transcript).toEqual({
+      ok: true,
+      bytes: 10,
+      parts: 1,
+      exports: 1,
+      reads: 1,
+      ms: 5,
+    });
   });
 });
 
@@ -400,7 +715,7 @@ describe('runTask', () => {
       commands: [
         [/^cost --json --all$/, () => COST(++costCalls === 1 ? 0.1 : 0.35)],
         [/^playwright-cli tab-list$/, ok('[T1] https://example.com/ "Example"')],
-        [/^session export/, ok(JSON.stringify(TRANSCRIPT))],
+        ...leaderFiles(Buffer.from(JSON.stringify(TRANSCRIPT))).commands,
         [/^base64 /, ok('UE5H')],
       ],
     });
@@ -456,6 +771,7 @@ describe('runTask', () => {
       tokens: 2500,
       turns: 25,
       transcript: TRANSCRIPT,
+      transcriptExport: { ok: true, parts: 1, exports: 1, reads: 1 },
       tabs: ['https://example.com/'],
     });
     expect(result.costUsd).toBeCloseTo(0.25);
