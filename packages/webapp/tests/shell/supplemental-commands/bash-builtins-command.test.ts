@@ -142,6 +142,17 @@ describe('trap', () => {
     expect(result.stderr).toContain('signals cannot be masked in this shell');
   });
 
+  // EXIT is no signal: an empty action on it asks for nothing at exit, which
+  // is what happens. install-sh ends with `trap '' 0`; refusing it made every
+  // install exit 2.
+  it("accepts an empty EXIT action (install-sh's closing `trap '' 0`)", async () => {
+    for (const spec of ['0', 'EXIT', 'exit', 'SIGEXIT']) {
+      expect(await run('trap', ['', spec])).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+    }
+    // A real signal alongside EXIT still asks for masking.
+    expect((await run('trap', ['', '0', 'INT'])).exitCode).toBe(2);
+  });
+
   it('refuses to install a handler instead of silently dropping it', async () => {
     const result = await run('trap', ['echo cleanup', 'EXIT']);
     expect(result.exitCode).toBe(2);

@@ -69,6 +69,7 @@ just-bash ships bash's complete `help` topic table while implementing only part 
 | `trap -l`          | the five signals the kernel can deliver (see `kill --help`)                                      |
 | `trap` / `trap -p` | empty trap table, exit 0                                                                         |
 | `trap - SPEC`      | exit 0 — restores the default disposition, which is what an untrapped signal already gets        |
+| `trap '' EXIT`     | exit 0 — an empty exit action; nothing runs at exit anyway (install-sh ends with `trap '' 0`)    |
 
 `jobs` is empty rather than wrong: `&` runs its command synchronously here, so a backgrounded command has already finished by the time `jobs` runs. For long-lived kernel processes use `ps` and `kill`.
 
