@@ -525,11 +525,31 @@ async function prepareLeader(r, ctx, log) {
 }
 
 /**
+ * prepareLeader, once more on a restarted leader when the leader could not be reached. On a
+ * GCP runner a leader answered its lane's first calls with a closed connection until it was
+ * restarted (2026-09-25); without this the whole lane stopped before its first run.
+ */
+async function prepareOrRestart(r, ctx, log) {
+  try {
+    await prepareLeader(r, ctx, log);
+  } catch (err) {
+    if (!err?.leaderDown || !ctx.recycle) throw err;
+    ctx.journal.event('leader-down', {
+      stage: 'prepare',
+      task_id: r.task.id,
+      leader: leaderStamp(ctx.lane, ctx.id),
+    });
+    await restartLeader(ctx, 'leader unreachable while preparing', log);
+    await prepareLeader(r, ctx, log);
+  }
+}
+
+/**
  * Run one planned run on a prepared leader. A run that could not reach the leader is retried
  * once on a restarted leader when one can be restarted.
  */
 async function runFresh(r, ctx, log) {
-  await prepareLeader(r, ctx, log);
+  await prepareOrRestart(r, ctx, log);
   let outcome = await runOne(r, ctx);
   if (outcome.record.leader_down && ctx.recycle) {
     ctx.journal.event('leader-down', { task_id: r.task.id, leader: outcome.record.leader });

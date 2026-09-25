@@ -896,6 +896,35 @@ describe('leader lifecycle', () => {
     q.mockRestore();
   });
 
+  it('restarts a leader that cannot be reached while its skills are staged', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    let healthy = false;
+    const fake = leader({ down: (c) => !healthy && c.includes('.bench-skills-builtin') });
+    const recycle = recycler(() => {
+      healthy = true;
+    });
+    const log = vi.fn();
+    const code = await main(['--set', twoTasks(dir), '--models', 'm', '--no-judge', '--out', out], {
+      ...fake.deps,
+      recycle,
+      log,
+    });
+    expect(code).toBe(0);
+    expect(recycle).toHaveBeenCalledTimes(1);
+    expect(events(out).find((e) => e.type === 'leader-down')).toMatchObject({
+      stage: 'prepare',
+      task_id: 'own-1',
+    });
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    expect(r1.error).toBeUndefined();
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /restarting the leader \(leader unreachable while preparing\)/
+    );
+    q.mockRestore();
+  });
+
   it('stops after the leader stays unreachable, leaving the rest for a resume', async () => {
     const dir = tmp();
     const out = join(dir, 'o');
