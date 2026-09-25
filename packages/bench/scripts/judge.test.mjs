@@ -43,8 +43,8 @@ const TRACE = {
 const JUDGEMENT = {
   agent_task_reading: 'r',
   findings: [
-    { item: 'A1_x', evidence: 'e', status: 'met' },
-    { item: 'A2_y', evidence: 'e', status: 'met' },
+    { item: 'A1_x', evidence: 'e', status: 'met', not_assessable_reason: null },
+    { item: 'A2_y', evidence: 'e', status: 'met', not_assessable_reason: null },
   ],
   observations: [],
   infra_error: false,
@@ -170,6 +170,65 @@ describe('addUsage', () => {
       cacheReadInputTokens: 4,
       note: 'a',
     });
+  });
+});
+
+describe('not_assessable_reason (V2.1)', () => {
+  const finding = (status, reason) => ({
+    item: 'A1_x',
+    evidence: 'e',
+    status,
+    not_assessable_reason: reason,
+  });
+  const withFindings = (...fs) => ({ ...JUDGEMENT, findings: fs });
+  it('requires a reason for not_assessable, and only for it', () => {
+    expect(
+      validateJudgement(withFindings(finding('not_assessable', 'missing_evidence')), ['A1_x'])
+    ).toEqual([]);
+    expect(
+      validateJudgement(withFindings(finding('not_assessable', 'absent_scope')), ['A1_x'])
+    ).toEqual([]);
+    expect(validateJudgement(withFindings(finding('not_assessable', null)), ['A1_x'])).toEqual([
+      'finding A1_x is not_assessable without a reason',
+    ]);
+    expect(validateJudgement(withFindings(finding('not_assessable', 'guess')), ['A1_x'])).toEqual([
+      'finding A1_x is not_assessable without a reason',
+    ]);
+    expect(validateJudgement(withFindings(finding('met', 'absent_scope')), ['A1_x'])).toEqual([
+      'finding A1_x is met but has reason "absent_scope"',
+    ]);
+  });
+
+  it('pins the reason in the schema and reads a missing or quoted null as null', () => {
+    const f = findingsSchema(['A1_x']).properties.findings.items;
+    expect(f.required).toContain('not_assessable_reason');
+    expect(f.properties.not_assessable_reason.enum).toEqual([
+      'missing_evidence',
+      'absent_scope',
+      null,
+    ]);
+    const n = normalizeJudgement(
+      withFindings(
+        { item: 'A1_x', evidence: 'e', status: 'met' },
+        finding('violated', 'null'),
+        { item: 'A1_x', evidence: 'e', status: 'not_assessable' },
+        null
+      )
+    );
+    expect(n.findings.map((x) => x?.not_assessable_reason)).toEqual([
+      null,
+      null,
+      undefined,
+      undefined,
+    ]);
+    expect(validateJudgement(n, ['A1_x'])).toContain(
+      'finding A1_x is not_assessable without a reason'
+    );
+  });
+
+  it('sends task and rubric whole when the judge has no cap for them', () => {
+    expect(truncateMiddle('x'.repeat(50), null)).toBe('x'.repeat(50));
+    expect(truncateMiddle('x'.repeat(50), 10)).toContain('[40 characters omitted]');
   });
 });
 

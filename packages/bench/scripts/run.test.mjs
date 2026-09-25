@@ -338,7 +338,7 @@ describe('main', () => {
     expect(record.metrics).toMatchObject({ duration: 5, modelsUsed: ['global.anthropic.m'] });
     expect(record.metrics.cost).toBeCloseTo(0.01, 6);
     expect(readdirSync(join(outDir, 'results'))).toHaveLength(4);
-    expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain('**What skills change**');
+    expect(readFileSync(join(outDir, 'report.md'), 'utf8')).toContain('**What skills add**');
     expect(readFileSync(join(outDir, 'report.html'), 'utf8')).toContain('<h2>Own <small>8 runs');
     const reportJson = JSON.parse(readFileSync(join(outDir, 'report.json'), 'utf8'));
     expect(reportJson.judges).toEqual(['global.openai.gpt-5.6-luna']);
@@ -413,6 +413,37 @@ describe('main', () => {
     const path = tracePath(outDir, 'BU_Bench_V1', 'builtin', 'm', 'u1', 1, true);
     expect(readFileSync(path, 'utf8')).not.toContain('Q?');
     expect(readTrace(path, 'BU_Bench_V1').task.task).toBe('Q?');
+
+    const from = {
+      repo: 'browser-use/benchmark',
+      tag: 'v2.1.1',
+      commit: 'abc1234def',
+      file: 'BU_Bench_V1.enc',
+      sha256: 'f'.repeat(64),
+    };
+    const withProvenance = async (_name, opts) => {
+      const data = await loadUpstream();
+      return opts?.withProvenance ? { data, provenance: from } : data;
+    };
+    const out2 = join(dir, 'out2');
+    await main(['--set', 'bu-v1', '--models', 'm', '--out', out2], {
+      ...leader().deps,
+      judge: fakeJudge,
+      spec: {},
+      loadUpstream: withProvenance,
+      log: () => {},
+    });
+    const rec = JSON.parse(
+      readFileSync(recordPath(out2, 'BU_Bench_V1', 'builtin', 'm', 'u1', 1), 'utf8')
+    );
+    expect(rec.upstream).toEqual(from);
+    expect(readFileSync(join(out2, 'report.md'), 'utf8')).toContain(
+      'Tasks: browser-use/benchmark v2.1.1 (abc1234), `BU_Bench_V1.enc` sha256 ffffffffffff'
+    );
+    const [resultFile] = readdirSync(join(out2, 'results'));
+    expect(JSON.parse(readFileSync(join(out2, 'results', resultFile), 'utf8'))[0].upstream).toEqual(
+      from
+    );
     quiet.mockRestore();
   });
 

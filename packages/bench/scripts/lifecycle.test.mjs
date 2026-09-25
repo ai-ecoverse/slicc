@@ -72,6 +72,30 @@ describe('createRecycler', () => {
     expect(mask).toHaveBeenCalledWith('https://x/join/new');
   });
 
+  it("wipes the old leader's profile between stop and start", async () => {
+    const profileDir = tmp();
+    writeFileSync(join(profileDir, 'scoops.db'), 'old state');
+    const seen = [];
+    const run = vi.fn(async (script) => {
+      seen.push([script.split('/').pop(), existsSync(profileDir)]);
+      return { status: 0, output: '' };
+    });
+    let reads = 0;
+    const read = () => (reads++ === 0 ? { joinUrl: 'u0', profileDir } : { joinUrl: 'u1' });
+    await createRecycler({ scriptsDir: '/s', run, read, mask: () => {} })();
+    expect(seen).toEqual([
+      ['stop-leader.mjs', true],
+      ['start-leader.mjs', false],
+    ]);
+    const noProfile = createRecycler({
+      scriptsDir: '/s',
+      run: async () => ({ status: 0, output: '' }),
+      read: () => ({ joinUrl: 'u' }),
+      mask: () => {},
+    });
+    await expect(noProfile()).resolves.toMatchObject({ url: 'u' });
+  });
+
   it('fails loudly when a script fails or no leader comes up', async () => {
     const read = () => ({ joinUrl: 'u' });
     const stopFails = createRecycler({

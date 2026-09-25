@@ -146,12 +146,26 @@ interface ActiveFollowerPeer {
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
+const LEADER_PEER_CONNECT_GRACE_MS = 10_000;
+
+const LEADER_PEER_CONNECT_FALLBACK_MS = 30_000;
+
+const LEADER_PEER_CONNECT_MAX_MS = 5 * 60_000;
+
+const LEADER_PEER_DISCONNECTED_GRACE_MS = 60_000;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class LeaderTrayPeerManager {
   private readonly peerConnectionFactory: TrayPeerConnectionFactory;
   private readonly dataChannelLabel: string;
   private readonly peers = new Map<string, ActiveLeaderPeer>();
 
   private readonly expiryTimers = new Map<string, { cancel: () => void }>();
+
+  private readonly connectTimers = new Map<string, { cancel: () => void }>();
   private iceServers: TrayIceServerConfig[] | undefined;
 
   constructor(private readonly options: LeaderTrayPeerManagerOptions) {
@@ -194,13 +208,17 @@ export class LeaderTrayPeerManager {
     }
     for (const timer of this.expiryTimers.values()) timer.cancel();
     this.expiryTimers.clear();
+    for (const timer of this.connectTimers.values()) timer.cancel();
+    this.connectTimers.clear();
     this.peers.clear();
     this.options.onPeersChanged?.();
   }
 
   private async handleJoinRequested(message: FollowerJoinRequestedMessage): Promise<void> {
     this.closeControllerPeers(message.controllerId);
-    const peer = this.peerConnectionFactory();
+    const created = this.createLeaderPeer(message);
+    if (!created) return;
+    const { peer, channel } = created;
     const state: LeaderTrayPeerState = {
       controllerId: message.controllerId,
       bootstrapId: message.bootstrapId,
@@ -211,71 +229,10 @@ export class LeaderTrayPeerManager {
       trust: message.trust ?? 'full',
       biscotto: message.biscotto,
     };
-    const channel = bindSctpLimit(peer.createDataChannel(this.dataChannelLabel), peer);
     this.peers.set(message.bootstrapId, { state, peer, channel });
+    this.armConnectDeadline(message);
     this.options.onPeersChanged?.();
-
-    peer.addEventListener('icecandidate', ({ candidate }) => {
-      const normalized = normalizeIceCandidate(candidate);
-      if (!normalized) return;
-      this.options.sendControlMessage({
-        type: 'bootstrap.ice_candidate',
-        controllerId: message.controllerId,
-        bootstrapId: message.bootstrapId,
-        candidate: normalized,
-      });
-    });
-    peer.addEventListener('connectionstatechange', () => {
-      const active = this.peers.get(message.bootstrapId);
-      if (!active) return;
-      if (active.state.state !== 'connected') {
-        if (peer.connectionState === 'failed') {
-          this.failPeer(message, 'Leader peer connection failed before the data channel opened');
-        }
-      } else {
-        if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
-          log.warn('Leader peer connection state changed post-connect', {
-            bootstrapId: message.bootstrapId,
-            state: peer.connectionState,
-          });
-          this.options.onPeerDisconnected?.(
-            message.bootstrapId,
-            `Peer connection ${peer.connectionState}`
-          );
-        }
-      }
-    });
-
-    channel.addEventListener('open', () => {
-      const active = this.peers.get(message.bootstrapId);
-      if (!active || active.state.state === 'connected') return;
-      active.state.state = 'connected';
-      active.state.connectedAt = new Date().toISOString();
-      this.armBiscottoExpiry(message.bootstrapId, active.state);
-      this.options.onPeerConnected?.({ ...active.state }, active.channel);
-      this.options.onPeersChanged?.();
-    });
-    channel.addEventListener('close', () => {
-      const active = this.peers.get(message.bootstrapId);
-      if (!active) return;
-      if (active.state.state !== 'connected') {
-        this.failPeer(message, 'Leader data channel closed before opening');
-      } else {
-        log.warn('Leader data channel closed post-connect', { bootstrapId: message.bootstrapId });
-        this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel closed');
-        this.options.onPeerTransportClosed?.(message.bootstrapId, 'Data channel closed');
-      }
-    });
-    channel.addEventListener('error', () => {
-      const active = this.peers.get(message.bootstrapId);
-      if (!active) return;
-      if (active.state.state !== 'connected') {
-        this.failPeer(message, 'Leader data channel failed before opening');
-      } else {
-        log.warn('Leader data channel error post-connect', { bootstrapId: message.bootstrapId });
-        this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel error');
-      }
-    });
+    this.bindLeaderPeerEvents(message, peer, channel);
 
     try {
       const offer = await peer.createOffer();
@@ -287,21 +244,131 @@ export class LeaderTrayPeerManager {
         offer: normalizeSessionDescription(peer.localDescription ?? offer, 'offer'),
       });
     } catch (error) {
-      this.failPeer(message, error instanceof Error ? error.message : String(error));
+      this.failPeer(message, errorMessage(error));
     }
   }
 
+  private createLeaderPeer(
+    message: FollowerJoinRequestedMessage
+  ): { peer: TrayPeerConnectionLike; channel: TrayDataChannelLike } | null {
+    let peer: TrayPeerConnectionLike | null = null;
+    try {
+      peer = this.peerConnectionFactory();
+      const channel = bindSctpLimit(peer.createDataChannel(this.dataChannelLabel), peer);
+      return { peer, channel };
+    } catch (error) {
+      try {
+        peer?.close();
+      } catch {}
+      const reason = errorMessage(error);
+      log.error('Leader could not create a peer connection for a follower', {
+        bootstrapId: message.bootstrapId,
+        livePeers: this.peers.size,
+        error: reason,
+      });
+      this.reportBootstrapFailure(message, `Leader could not create a peer connection: ${reason}`);
+      return null;
+    }
+  }
+
+  private bindLeaderPeerEvents(
+    message: FollowerJoinRequestedMessage,
+    peer: TrayPeerConnectionLike,
+    channel: TrayDataChannelLike
+  ): void {
+    peer.addEventListener('icecandidate', ({ candidate }) => {
+      const normalized = normalizeIceCandidate(candidate);
+      if (!normalized) return;
+      this.options.sendControlMessage({
+        type: 'bootstrap.ice_candidate',
+        controllerId: message.controllerId,
+        bootstrapId: message.bootstrapId,
+        candidate: normalized,
+      });
+    });
+    peer.addEventListener('connectionstatechange', () =>
+      this.onLeaderConnectionStateChange(message, peer.connectionState)
+    );
+    channel.addEventListener('open', () => {
+      const active = this.peers.get(message.bootstrapId);
+      if (!active || active.state.state === 'connected') return;
+      this.cancelConnectDeadline(message.bootstrapId);
+      active.state.state = 'connected';
+      active.state.connectedAt = new Date().toISOString();
+      this.armBiscottoExpiry(message.bootstrapId, active.state);
+      this.options.onPeerConnected?.({ ...active.state }, active.channel);
+      this.options.onPeersChanged?.();
+    });
+    channel.addEventListener('close', () => {
+      const active = this.peers.get(message.bootstrapId);
+      if (!active) return;
+      if (active.state.state !== 'connected') {
+        this.failPeer(message, 'Leader data channel closed before opening');
+        return;
+      }
+      log.warn('Leader data channel closed post-connect', { bootstrapId: message.bootstrapId });
+      this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel closed');
+      this.releasePeer(message.bootstrapId, 'Data channel closed');
+    });
+    channel.addEventListener('error', () => {
+      const active = this.peers.get(message.bootstrapId);
+      if (!active) return;
+      if (active.state.state !== 'connected') {
+        this.failPeer(message, 'Leader data channel failed before opening');
+      } else {
+        log.warn('Leader data channel error post-connect', { bootstrapId: message.bootstrapId });
+        this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel error');
+      }
+    });
+  }
+
+  private onLeaderConnectionStateChange(
+    message: FollowerJoinRequestedMessage,
+    connectionState: string | undefined
+  ): void {
+    const active = this.peers.get(message.bootstrapId);
+    if (!active) return;
+    if (active.state.state !== 'connected') {
+      if (connectionState === 'failed') {
+        this.failPeer(message, 'Leader peer connection failed before the data channel opened');
+      }
+      return;
+    }
+    if (connectionState === 'disconnected' || connectionState === 'failed') {
+      log.warn('Leader peer connection state changed post-connect', {
+        bootstrapId: message.bootstrapId,
+        state: connectionState,
+      });
+      this.options.onPeerDisconnected?.(message.bootstrapId, `Peer connection ${connectionState}`);
+    }
+
+    if (connectionState === 'failed' || connectionState === 'closed') {
+      this.releasePeer(message.bootstrapId, `Peer connection ${connectionState}`);
+    } else if (connectionState === 'disconnected') {
+      this.armDisconnectedDeadline(message.bootstrapId);
+    } else if (connectionState === 'connected') {
+      this.cancelConnectDeadline(message.bootstrapId);
+    }
+  }
+
+  private armDisconnectedDeadline(bootstrapId: string): void {
+    if (this.connectTimers.has(bootstrapId)) return;
+    const handle = setTimeout(() => {
+      this.connectTimers.delete(bootstrapId);
+      if (this.peers.get(bootstrapId)?.peer.connectionState !== 'disconnected') return;
+      log.warn('Leader peer stayed disconnected; releasing it', { bootstrapId });
+      this.releasePeer(bootstrapId, 'Peer connection did not recover from disconnected');
+    }, LEADER_PEER_DISCONNECTED_GRACE_MS);
+    this.connectTimers.set(bootstrapId, { cancel: () => clearTimeout(handle) });
+  }
+
   closeBiscottoPeers(biscottoId: string, reason: string): void {
-    for (const [bootstrapId, active] of this.peers.entries()) {
+    for (const [bootstrapId, active] of [...this.peers.entries()]) {
       if (active.state.biscotto?.id !== biscottoId) continue;
       if (active.state.state === 'connected') {
         this.options.onPeerDisconnected?.(bootstrapId, reason);
-        this.options.onPeerTransportClosed?.(bootstrapId, reason);
       }
-      active.peer.close();
-      this.peers.delete(bootstrapId);
-      this.expiryTimers.get(bootstrapId)?.cancel();
-      this.expiryTimers.delete(bootstrapId);
+      this.releasePeer(bootstrapId, reason, false);
     }
     this.options.onPeersChanged?.();
   }
@@ -326,25 +393,64 @@ export class LeaderTrayPeerManager {
     this.expiryTimers.set(bootstrapId, { cancel: () => clearTimeout(handle) });
   }
 
+  private armConnectDeadline(message: FollowerJoinRequestedMessage): void {
+    const expiresAtMs = message.expiresAt ? Date.parse(message.expiresAt) : Number.NaN;
+    const untilExpiry = Number.isNaN(expiresAtMs)
+      ? LEADER_PEER_CONNECT_FALLBACK_MS
+      : expiresAtMs - Date.now() + LEADER_PEER_CONNECT_GRACE_MS;
+    const delay = Math.min(
+      Math.max(untilExpiry, LEADER_PEER_CONNECT_GRACE_MS),
+      LEADER_PEER_CONNECT_MAX_MS
+    );
+    const handle = setTimeout(() => {
+      this.connectTimers.delete(message.bootstrapId);
+      const active = this.peers.get(message.bootstrapId);
+      if (!active || active.state.state === 'connected') return;
+      this.failPeer(message, 'Follower did not connect before the bootstrap expired');
+    }, delay);
+    this.connectTimers.set(message.bootstrapId, { cancel: () => clearTimeout(handle) });
+  }
+
+  private cancelConnectDeadline(bootstrapId: string): void {
+    this.connectTimers.get(bootstrapId)?.cancel();
+    this.connectTimers.delete(bootstrapId);
+  }
+
   private closeControllerPeers(controllerId: string): void {
-    for (const [bootstrapId, active] of this.peers.entries()) {
-      if (active.state.controllerId === controllerId) {
-        if (active.state.state === 'connected') {
-          this.options.onPeerDisconnected?.(bootstrapId, 'Controller superseded');
-          this.options.onPeerTransportClosed?.(bootstrapId, 'Controller superseded');
-        }
-        active.peer.close();
-        this.peers.delete(bootstrapId);
+    for (const [bootstrapId, active] of [...this.peers.entries()]) {
+      if (active.state.controllerId !== controllerId) continue;
+      if (active.state.state === 'connected') {
+        this.options.onPeerDisconnected?.(bootstrapId, 'Controller superseded');
       }
+      this.releasePeer(bootstrapId, 'Controller superseded', false);
     }
   }
 
-  private failPeer(message: FollowerJoinRequestedMessage, reason: string): void {
-    const active = this.peers.get(message.bootstrapId);
+  private releasePeer(bootstrapId: string, reason: string, notifyPeersChanged = true): void {
+    const active = this.peers.get(bootstrapId);
     if (!active) return;
-    active.peer.close();
-    this.peers.delete(message.bootstrapId);
-    this.options.onPeersChanged?.();
+    this.peers.delete(bootstrapId);
+    this.cancelConnectDeadline(bootstrapId);
+    this.expiryTimers.get(bootstrapId)?.cancel();
+    this.expiryTimers.delete(bootstrapId);
+    if (active.state.state === 'connected') {
+      this.options.onPeerTransportClosed?.(bootstrapId, reason);
+    }
+    try {
+      active.peer.close();
+    } catch (error) {
+      log.warn('Leader peer close failed', { bootstrapId, error: errorMessage(error) });
+    }
+    if (notifyPeersChanged) this.options.onPeersChanged?.();
+  }
+
+  private failPeer(message: FollowerJoinRequestedMessage, reason: string): void {
+    if (!this.peers.has(message.bootstrapId)) return;
+    this.releasePeer(message.bootstrapId, reason);
+    this.reportBootstrapFailure(message, reason);
+  }
+
+  private reportBootstrapFailure(message: FollowerJoinRequestedMessage, reason: string): void {
     try {
       this.options.sendControlMessage({
         type: 'bootstrap.failed',
@@ -356,9 +462,7 @@ export class LeaderTrayPeerManager {
         retryAfterMs: 1000,
       });
     } catch (error) {
-      log.warn('Failed to report tray bootstrap failure', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      log.warn('Failed to report tray bootstrap failure', { error: errorMessage(error) });
     }
   }
 }

@@ -19,6 +19,9 @@ import {
   stageSkills,
   stageSkillsCommand,
   startCapture,
+  toolKind,
+  toolMetrics,
+  toolUsage,
   traceFromResult,
   transcriptSteps,
 } from './slicc-adapter.mjs';
@@ -97,6 +100,53 @@ const TRANSCRIPT = {
     },
   ],
 };
+
+describe('tool use', () => {
+  const call = (name, input) => ({ type: 'tool-call', id: 'x', name, input });
+  it('classifies a call by what it did, never keeping the command', () => {
+    expect(toolKind(call('bash', { command: 'playwright-cli open https://a.test' }))).toBe(
+      'browser'
+    );
+    expect(toolKind(call('bash', { command: 'T=AB; playwright-cli --tab=$T snapshot' }))).toBe(
+      'browser'
+    );
+    expect(toolKind(call('bash', { command: 'curl -s https://a.test' }))).toBe('fetch');
+    expect(toolKind(call('bash', { command: 'python3 -c 1' }))).toBe('code');
+    expect(toolKind(call('bash', { command: 'ls -la' }))).toBe('shell');
+    expect(toolKind(call('bash', { command: 'cat /workspace/skills/x/SKILL.md' }))).toBe('skill');
+    expect(toolKind(call('read_file', { path: '/workspace/skills/y/SKILL.md' }))).toBe('skill');
+    expect(toolKind(call('read_file', { path: '/tmp/a' }))).toBe('file');
+    expect(toolKind(call('agent', {}))).toBe('other');
+    expect(toolKind({ type: 'tool-call', name: 'bash' })).toBe('shell');
+  });
+
+  it('counts every conversation, and knows a missing transcript from a toolless one', () => {
+    const u = toolUsage(TRANSCRIPT);
+    expect(u).toMatchObject({ toolCalls: 1, webCalls: 1, answeredWithoutTools: false });
+    expect(u.toolKinds).toMatchObject({ browser: 1, fetch: 0, skill: 0 });
+    const bare = {
+      conversations: [
+        { kind: 'cone', messages: [{ role: 'assistant', content: [{ type: 'text', text: 'x' }] }] },
+      ],
+    };
+    expect(toolUsage(bare)).toMatchObject({ toolCalls: 0, answeredWithoutTools: true });
+    expect(toolUsage(null)).toBeNull();
+    expect(
+      toolUsage({ conversations: [{ kind: 'cone', messages: [{ role: 'user' }] }] })
+    ).toBeNull();
+    expect(toolMetrics(null)).toEqual({
+      tool_calls: null,
+      tool_kinds: null,
+      web_calls: null,
+      answered_without_tools: null,
+    });
+    expect(toolMetrics(bare)).toMatchObject({
+      tool_calls: 0,
+      web_calls: 0,
+      answered_without_tools: true,
+    });
+  });
+});
 
 describe('prompt and quoting', () => {
   it('adds upstream closing instruction to the task text', () => {
@@ -222,6 +272,10 @@ describe('leader output parsing', () => {
       tabs: ['https://example.com/'],
       model: 'bedrock-camp:global.anthropic.claude-sonnet-5',
       modelsUsed: ['global.anthropic.claude-haiku-4-5', 'global.anthropic.claude-sonnet-5'],
+      tool_calls: 1,
+      tool_kinds: { browser: 1, fetch: 0, code: 0, shell: 0, file: 0, skill: 0, other: 0 },
+      web_calls: 1,
+      answered_without_tools: false,
     });
   });
 

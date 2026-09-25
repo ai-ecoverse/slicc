@@ -2,7 +2,13 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { callLabel, createLeader, DEFAULT_CALL_TIMEOUT_MS, runProcess } from './executors.mjs';
+import {
+  callLabel,
+  createLeader,
+  DEFAULT_CALL_TIMEOUT_MS,
+  runProcess,
+  unreachable,
+} from './executors.mjs';
 
 describe('createLeader', () => {
   it('puts the join URL before every verb, wraps exec, and bounds every call', async () => {
@@ -89,6 +95,23 @@ describe('createLeader', () => {
       'debug: ice failed\nsignaling failed',
       'debug: ice failed\nsignaling failed',
     ]);
+  });
+
+  it('treats a leader that never opened a terminal as down, and retries', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: 'slicc exec: terminal-open timed out after 10000ms',
+        status: 1,
+      })
+      .mockResolvedValueOnce({ stdout: 'ran', stderr: '', status: 0 });
+    const leader = createLeader({ url: 'https://x', run, retryDelayMs: 0 });
+    expect(await leader.exec('rm -rf /tmp/x')).toMatchObject({ stdout: 'ran', leaderDown: false });
+    expect(run.mock.calls[1][2].env).toEqual({ SLICC_DEBUG: '1' });
+    expect(unreachable(1, 'terminal-open timed out after 10000ms')).toBe(true);
+    expect(unreachable(0, 'terminal-open timed out')).toBe(false);
+    expect(unreachable(1, 'no model matches')).toBe(false);
   });
 
   it('names calls without their arguments', () => {

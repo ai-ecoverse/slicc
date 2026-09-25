@@ -47,6 +47,7 @@ export function createRecycler({
   },
 }) {
   return async function recycle() {
+    const profileDir = read()?.profileDir ?? null;
     const scratch = mkdtempSync(join(tmpdir(), 'bench-leader-'));
 
     const scriptEnv = { ...env, GITHUB_OUTPUT: join(scratch, 'output') };
@@ -54,6 +55,7 @@ export function createRecycler({
       const stop = await run(join(scriptsDir, 'stop-leader.mjs'), { env: scriptEnv });
       if (stop.status !== 0)
         throw new Error(`stop-leader exited ${stop.status}: ${stop.output.slice(-400)}`);
+      if (profileDir) rmSync(profileDir, { recursive: true, force: true });
       const start = await run(join(scriptsDir, 'start-leader.mjs'), { env: scriptEnv });
       if (start.status !== 0)
         throw new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);

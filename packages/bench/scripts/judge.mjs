@@ -2,9 +2,11 @@ export const DEFAULT_JUDGE_MODEL = 'global.openai.gpt-5.6-luna';
 const TOOL_NAME = 'report_findings';
 const STATUSES = ['met', 'violated', 'not_assessable'];
 
+const REASONS = ['missing_evidence', 'absent_scope'];
+
 export function truncateMiddle(text, limit) {
   const s = String(text ?? '');
-  if (s.length <= limit) return s;
+  if (limit == null || s.length <= limit) return s;
   const half = Math.floor(limit / 2);
   return `${s.slice(0, half)}\n... [${s.length - limit} characters omitted] ...\n${s.slice(-half)}`;
 }
@@ -67,8 +69,9 @@ export function findingsSchema(itemIds) {
             item: { type: 'string', enum: itemIds },
             evidence: { type: 'string' },
             status: { type: 'string', enum: STATUSES },
+            not_assessable_reason: { type: ['string', 'null'], enum: [...REASONS, null] },
           },
-          required: ['item', 'evidence', 'status'],
+          required: ['item', 'evidence', 'status', 'not_assessable_reason'],
         },
       },
       observations: { type: 'array', items: { type: 'string' } },
@@ -127,6 +130,12 @@ export function validateJudgement(j, itemIds) {
         errors.push(`finding for unknown item ${JSON.stringify(f?.item)}`);
       if (!STATUSES.includes(f?.status))
         errors.push(`finding ${f?.item} has status ${JSON.stringify(f?.status)}`);
+
+      const reason = f?.not_assessable_reason ?? null;
+      if (f?.status === 'not_assessable' && !REASONS.includes(reason))
+        errors.push(`finding ${f?.item} is not_assessable without a reason`);
+      if (f?.status !== 'not_assessable' && reason !== null)
+        errors.push(`finding ${f?.item} is ${f?.status} but has reason ${JSON.stringify(reason)}`);
     }
   }
   for (const flag of FLAGS) {
@@ -143,6 +152,16 @@ export function normalizeJudgement(j) {
   const out = { ...j };
   for (const flag of FLAGS) {
     if (out[flag] === 'true' || out[flag] === 'false') out[flag] = out[flag] === 'true';
+  }
+
+  if (Array.isArray(out.findings)) {
+    out.findings = out.findings.map((f) => {
+      if (!f || typeof f !== 'object') return f;
+      const reason = f.not_assessable_reason;
+      if (reason === 'null' || (reason === undefined && f.status !== 'not_assessable'))
+        return { ...f, not_assessable_reason: null };
+      return f;
+    });
   }
   return out;
 }

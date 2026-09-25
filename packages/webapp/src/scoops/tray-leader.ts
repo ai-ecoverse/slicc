@@ -27,6 +27,7 @@ const LEADER_TRAY_RECONNECT_BASE_DELAY_MS = 1_000;
 const LEADER_TRAY_RECONNECT_MAX_DELAY_MS = 30_000;
 const LEADER_TRAY_RECONNECT_BACKOFF_MULTIPLIER = 2;
 const LEADER_TRAY_RECONNECT_MAX_ATTEMPTS = 20;
+const LEADER_TRAY_RECONNECT_SLOW_DELAY_MS = 60_000;
 const NOTIFY_SUPERSEDED_TIMEOUT_MS = 10_000;
 
 interface CreateTrayResponse {
@@ -85,6 +86,8 @@ export interface LeaderTrayReconnectOptions {
   maxDelayMs?: number;
 
   maxAttempts?: number;
+
+  slowDelayMs?: number;
 
   sleep?: (ms: number) => Promise<void>;
 }
@@ -361,6 +364,7 @@ export class LeaderTrayManager {
   private readonly reconnectMaxDelayMs: number;
   private readonly reconnectBackoffMultiplier: number;
   private readonly reconnectMaxAttempts: number;
+  private readonly reconnectSlowDelayMs: number;
   private readonly reconnectSleep: (ms: number) => Promise<void>;
   private socket: LeaderTrayWebSocket | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -389,6 +393,7 @@ export class LeaderTrayManager {
     this.reconnectBackoffMultiplier =
       cfg.backoffMultiplier ?? LEADER_TRAY_RECONNECT_BACKOFF_MULTIPLIER;
     this.reconnectMaxAttempts = cfg.maxAttempts ?? LEADER_TRAY_RECONNECT_MAX_ATTEMPTS;
+    this.reconnectSlowDelayMs = cfg.slowDelayMs ?? LEADER_TRAY_RECONNECT_SLOW_DELAY_MS;
     this.reconnectSleep =
       cfg.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   }
@@ -527,63 +532,77 @@ export class LeaderTrayManager {
     let attempt = 0;
     let delay = this.reconnectBaseDelayMs;
     let lastError = reason;
+    const isCurrent = () => !this.stopped && generation === this.reconnectGeneration;
 
-    while (
-      !this.stopped &&
-      generation === this.reconnectGeneration &&
-      attempt < this.reconnectMaxAttempts
-    ) {
+    while (isCurrent()) {
       attempt++;
-      setLeaderTrayRuntimeStatus({
-        state: 'reconnecting',
-        session: this.currentSession,
-        error: null,
-        reconnectAttempts: attempt,
-      });
-      this.options.onReconnecting?.(attempt, lastError);
-
-      log.info('Leader reconnect attempt', { attempt, delay });
-      await this.reconnectSleep(delay);
-      if (this.stopped || generation !== this.reconnectGeneration) break;
-
-      try {
-        const session = await this.connectOnce();
-        if (this.stopped || generation !== this.reconnectGeneration) {
-          this.tearDownSocket();
-          break;
-        }
-        this.reconnecting = false;
-        log.info('Leader reconnect successful', { attempt, trayId: session.trayId });
-        this.options.onReconnected?.(session);
-        try {
-          this.options.onLeaderReady?.(session);
-        } catch (error) {
-          log.warn('onLeaderReady callback threw', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        return;
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-        log.warn('Leader reconnect attempt failed', { attempt, error: lastError });
-        this.tearDownSocket();
+      const gaveUp = attempt > this.reconnectMaxAttempts;
+      if (!gaveUp) {
+        setLeaderTrayRuntimeStatus({
+          state: 'reconnecting',
+          session: this.currentSession,
+          error: null,
+          reconnectAttempts: attempt,
+        });
+        this.options.onReconnecting?.(attempt, lastError);
       }
 
+      log.info('Leader reconnect attempt', { attempt, delay });
+      await this.reconnectSleep(gaveUp ? this.reconnectSlowDelayMs : delay);
+      if (!isCurrent()) break;
+
+      const outcome = await this.tryReconnect(attempt, isCurrent);
+      if (outcome.done) return;
+      lastError = outcome.error;
+
+      if (attempt === this.reconnectMaxAttempts) this.reportReconnectGaveUp(attempt, lastError);
       delay = Math.min(delay * this.reconnectBackoffMultiplier, this.reconnectMaxDelayMs);
     }
+  }
 
-    if (!this.stopped && generation === this.reconnectGeneration) {
+  private async tryReconnect(
+    attempt: number,
+    isCurrent: () => boolean
+  ): Promise<{ done: true } | { done: false; error: string }> {
+    try {
+      const session = await this.connectOnce();
+      if (!isCurrent()) {
+        this.tearDownSocket();
+        return { done: true };
+      }
       this.reconnecting = false;
-      this.currentSession = null;
-      setLeaderTrayRuntimeStatus({
-        state: 'error',
-        session: null,
-        error: `Leader reconnect failed after ${attempt} attempts: ${lastError}`,
-        reconnectAttempts: attempt,
-      });
-      log.warn('Leader reconnect gave up', { attempts: attempt, lastError });
-      this.options.onReconnectGaveUp?.(lastError, attempt);
+      log.info('Leader reconnect successful', { attempt, trayId: session.trayId });
+      this.options.onReconnected?.(session);
+      try {
+        this.options.onLeaderReady?.(session);
+      } catch (error) {
+        log.warn('onLeaderReady callback threw', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return { done: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('Leader reconnect attempt failed', { attempt, error: message });
+      this.tearDownSocket();
+      return { done: false, error: message };
     }
+  }
+
+  private reportReconnectGaveUp(attempts: number, lastError: string): void {
+    this.currentSession = null;
+    setLeaderTrayRuntimeStatus({
+      state: 'error',
+      session: null,
+      error: `Leader reconnect failed after ${attempts} attempts: ${lastError}`,
+      reconnectAttempts: attempts,
+    });
+    log.warn('Leader reconnect gave up; retrying slowly', {
+      attempts,
+      lastError,
+      slowDelayMs: this.reconnectSlowDelayMs,
+    });
+    this.options.onReconnectGaveUp?.(lastError, attempts);
   }
 
   async clearSession(): Promise<void> {

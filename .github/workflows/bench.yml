@@ -38,8 +38,8 @@ on:
         type: boolean
         default: true
       fresh-leader-every:
-        description: 'Restart the leader every N tasks (0: one leader for the whole job)'
-        default: '5'
+        description: 'Restart the leader every N tasks with a wiped profile (1: every task is isolated; 0: one leader for the job)'
+        default: '1'
   pull_request:
     paths:
       - 'packages/bench/**'

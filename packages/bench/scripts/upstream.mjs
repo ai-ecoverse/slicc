@@ -9,7 +9,8 @@ import {
 
 export const UPSTREAM = {
   repo: 'browser-use/benchmark',
-  commit: '421390ea7fa4708f3d89d7695f9a16debb861daf',
+  tag: 'v2.1.1',
+  commit: 'af6c7f7f6772b6985b7644f660cac87fd4b03583',
 };
 
 export const UPSTREAM_SETS = ['BU_Bench_V1', 'BU_Bench_V2', 'Stealth_Bench_V1'];
@@ -72,10 +73,26 @@ async function fetchText(url, fetchImpl) {
   return res.text();
 }
 
-export async function loadUpstreamSet(name, { fetchImpl = fetch, source = UPSTREAM } = {}) {
+export async function loadUpstreamSet(
+  name,
+  { fetchImpl = fetch, source = UPSTREAM, withProvenance = false } = {}
+) {
   if (!UPSTREAM_SETS.includes(name))
     throw new Error(`unknown upstream set ${name}; have ${UPSTREAM_SETS.join(', ')}`);
-  return decryptSetFile(await fetchText(rawUrl(`${name}.enc`, source), fetchImpl), name);
+  const text = await fetchText(rawUrl(`${name}.enc`, source), fetchImpl);
+  const data = decryptSetFile(text, name);
+  if (!withProvenance) return data;
+  return { data, provenance: provenance(name, text, source) };
+}
+
+export function provenance(name, fileText, source = UPSTREAM) {
+  return {
+    repo: source.repo,
+    tag: source.tag ?? null,
+    commit: source.commit,
+    file: `${name}.enc`,
+    sha256: createHash('sha256').update(String(fileText), 'utf8').digest('hex'),
+  };
 }
 
 export function extractPythonString(source, name) {
@@ -83,6 +100,10 @@ export function extractPythonString(source, name) {
   const match = re.exec(source);
   if (!match) throw new Error(`${name} not found`);
   return match[1].trim();
+}
+
+export function extractOptionalPythonInt(source, name) {
+  return new RegExp(`^${name}\\s*=`, 'm').test(source) ? extractPythonInt(source, name) : null;
 }
 
 export function extractPythonInt(source, name) {
@@ -96,9 +117,9 @@ export async function loadFindingsSpec({ fetchImpl = fetch, source = UPSTREAM } 
   return {
     systemPrompt: extractPythonString(py, 'FINDINGS_SYSTEM_PROMPT'),
     caps: {
-      task: extractPythonInt(py, 'TASK_MAX_CHARS'),
+      task: extractOptionalPythonInt(py, 'TASK_MAX_CHARS'),
       website: extractPythonInt(py, 'WEBSITE_MAX_CHARS'),
-      rubric: extractPythonInt(py, 'RUBRIC_MAX_CHARS'),
+      rubric: extractOptionalPythonInt(py, 'RUBRIC_MAX_CHARS'),
       finalResult: extractPythonInt(py, 'FINAL_RESULT_MAX_CHARS'),
       trajectory: extractPythonInt(py, 'TRAJECTORY_MAX_CHARS'),
       files: extractPythonInt(py, 'FILES_MAX_CHARS'),
