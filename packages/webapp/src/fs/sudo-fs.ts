@@ -182,6 +182,15 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
       return (target as FsMethodBag).copyFile(src, dest);
     };
   }
+  if (has('updateMetadataBatch')) {
+    overrides.updateMetadataBatch = async (updates: unknown) => {
+      const list = updates as ReadonlyArray<{ path: string }>;
+      for (const update of list) {
+        await gate('write', update.path);
+      }
+      return (target as FsMethodBag).updateMetadataBatch(updates);
+    };
+  }
   if (has('mount')) {
     overrides.mount = async (path: unknown, ...rest: unknown[]) => {
       await gate('write', path as string);

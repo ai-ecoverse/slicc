@@ -197,7 +197,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createImgcatCommand(options),
     createZipCommand(),
     createUnzipCommand(),
-    createTarCommand(),
+    createTarCommand(options.fs ? { fs: options.fs } : {}),
     createRmCommand(),
     createRmdirCommand(),
     createStatCommand(),

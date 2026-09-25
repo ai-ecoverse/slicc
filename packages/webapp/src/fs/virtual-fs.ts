@@ -63,6 +63,13 @@ export function resolveVfsBackendFromEnv(): VfsBackend {
   return 'memory';
 }
 
+export interface MetadataUpdate {
+  path: string;
+  mode?: number;
+  atime?: Date;
+  mtime?: Date;
+}
+
 export interface VirtualFsOptions {
   dbName?: string;
 
@@ -1467,49 +1474,103 @@ export class VirtualFS {
   }
 
   async chmod(path: string, mode: number): Promise<void> {
-    if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
-      throw new FsError('EINVAL', 'invalid file mode', normalizePath(path));
-    }
-    await this.changeMetadata(path, (resolved) => this.lfs.chmod(resolved, mode));
-  }
-
-  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
-    if (!Number.isFinite(atime.getTime()) || !Number.isFinite(mtime.getTime())) {
-      throw new FsError('EINVAL', 'invalid file time', normalizePath(path));
-    }
-    await this.changeMetadata(path, (resolved) => this.lfs.utimes(resolved, atime, mtime));
-  }
-
-  private async changeMetadata(
-    path: string,
-    update: (resolved: string) => Promise<void>
-  ): Promise<void> {
     const normalized = normalizePath(path);
     if (this.findMount(normalized)) {
       await this.stat(normalized);
       throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
     }
-    await this.withKindMismatchRetry(normalized, () =>
+    await this.updateMetadataBatch([{ path, mode }]);
+  }
+
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) {
+      await this.stat(normalized);
+      throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
+    }
+    await this.updateMetadataBatch([{ path, atime, mtime }]);
+  }
+
+  async updateMetadataBatch(updates: readonly MetadataUpdate[]): Promise<void> {
+    if (updates.length === 0) return;
+    const prepared = updates.map((update) => this.prepareMetadataUpdate(update));
+    const paths = prepared.map((update) => update.normalized);
+    await this.withKindMismatchRetryPaths(paths, () =>
       this.withWriteLock(async () => {
         await this.dropSidecarConsistency();
-        const resolved = await this.resolveSymlinks(normalized);
-        try {
-          const stat = await this.lfs.stat(resolved);
-          this.markSidecarDirty(resolved);
-          await update(resolved);
-          await this.writeOpfsMetadataSidecarUnlocked();
-          this.watcher?.notify([
-            {
-              type: 'modify',
-              path: resolved,
-              entryType: stat.isDirectory() ? 'directory' : 'file',
-            },
-          ]);
-        } catch (err) {
-          throw convertError(err, normalized);
+        const notifications: Array<{
+          type: 'modify';
+          path: string;
+          entryType: 'directory' | 'file';
+        }> = [];
+        for (const update of prepared) {
+          const notification = await this.applyPreparedMetadataUpdate(update);
+          if (notification) notifications.push(notification);
         }
+        if (notifications.length === 0) return;
+        await this.writeOpfsMetadataSidecarUnlocked();
+        this.watcher?.notify(notifications);
       })
     );
+  }
+
+  private async applyPreparedMetadataUpdate(update: {
+    normalized: string;
+    mode?: number;
+    atime?: Date;
+    mtime?: Date;
+  }): Promise<{ type: 'modify'; path: string; entryType: 'directory' | 'file' } | null> {
+    if (this.findMount(update.normalized)) {
+      await this.stat(update.normalized);
+      return null;
+    }
+    const resolved = await this.resolveSymlinks(update.normalized);
+    try {
+      const stat = await this.lfs.stat(resolved);
+      this.markSidecarDirty(resolved);
+      if (update.mode !== undefined) await this.lfs.chmod(resolved, update.mode);
+      if (update.atime !== undefined && update.mtime !== undefined) {
+        await this.lfs.utimes(resolved, update.atime, update.mtime);
+      }
+      return {
+        type: 'modify',
+        path: resolved,
+        entryType: stat.isDirectory() ? 'directory' : 'file',
+      };
+    } catch (err) {
+      throw convertError(err, update.normalized);
+    }
+  }
+
+  private prepareMetadataUpdate(update: MetadataUpdate): {
+    normalized: string;
+    mode?: number;
+    atime?: Date;
+    mtime?: Date;
+  } {
+    const normalized = normalizePath(update.path);
+    if (update.mode !== undefined) {
+      if (!Number.isInteger(update.mode) || update.mode < 0 || update.mode > 0o7777) {
+        throw new FsError('EINVAL', 'invalid file mode', normalized);
+      }
+    }
+    if (update.atime !== undefined || update.mtime !== undefined) {
+      if (update.atime === undefined || update.mtime === undefined) {
+        throw new FsError('EINVAL', 'atime and mtime must both be provided', normalized);
+      }
+      if (!Number.isFinite(update.atime.getTime()) || !Number.isFinite(update.mtime.getTime())) {
+        throw new FsError('EINVAL', 'invalid file time', normalized);
+      }
+    }
+    if (update.mode === undefined && update.atime === undefined) {
+      throw new FsError('EINVAL', 'metadata update requires mode and/or times', normalized);
+    }
+    return {
+      normalized,
+      mode: update.mode,
+      atime: update.atime,
+      mtime: update.mtime,
+    };
   }
 
   async readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]> {

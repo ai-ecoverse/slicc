@@ -1,5 +1,6 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { MetadataUpdate, VirtualFS } from '../../fs/index.js';
 import { gunzip, gzip, readTar, type TarEntry, writeTar } from '../ipk/tar.js';
 import { basename, dirname, ensureWithinRoot, joinPath } from './shared.js';
 
@@ -18,6 +19,10 @@ interface CommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+}
+
+export interface TarCommandDeps {
+  fs?: Pick<VirtualFS, 'updateMetadataBatch'>;
 }
 
 function tarHelp(): CommandResult {
@@ -196,14 +201,51 @@ async function bestEffortMetadata(change: () => Promise<void>): Promise<void> {
   }
 }
 
-async function applyMode(ctx: CommandContext, path: string, mode: number): Promise<void> {
-  await bestEffortMetadata(() => ctx.fs.chmod(path, mode));
-}
+type MetadataBatchFs = {
+  updateMetadataBatch?(updates: readonly MetadataUpdate[]): Promise<void>;
+  chmod(path: string, mode: number): Promise<void>;
+  utimes(path: string, atime: Date, mtime: Date): Promise<void>;
+};
 
-async function applyMtimes(ctx: CommandContext, times: Array<[string, number]>): Promise<void> {
+async function applyMetadataBatch(
+  ctx: CommandContext,
+  modes: Array<[string, number]>,
+  times: Array<[string, number]>,
+  batchFs?: Pick<VirtualFS, 'updateMetadataBatch'>
+): Promise<void> {
+  const modeMap = new Map(modes);
+  const timeMap = new Map(times);
+  const paths = [...new Set([...modeMap.keys(), ...timeMap.keys()])];
+  if (paths.length === 0) return;
+
+  const updates: MetadataUpdate[] = paths.map((path) => {
+    const mode = modeMap.get(path);
+    const seconds = timeMap.get(path);
+    const when = seconds === undefined ? undefined : new Date(seconds * 1000);
+    return {
+      path,
+      ...(mode === undefined ? {} : { mode }),
+      ...(when === undefined ? {} : { atime: when, mtime: when }),
+    };
+  });
+
+  if (typeof batchFs?.updateMetadataBatch === 'function') {
+    await bestEffortMetadata(() => batchFs.updateMetadataBatch!(updates));
+    return;
+  }
+
+  const fs = ctx.fs as MetadataBatchFs;
+  if (typeof fs.updateMetadataBatch === 'function') {
+    await bestEffortMetadata(() => fs.updateMetadataBatch!(updates));
+    return;
+  }
+
+  for (const [path, mode] of modes) {
+    await bestEffortMetadata(() => fs.chmod(path, mode));
+  }
   for (const [path, seconds] of times) {
     const when = new Date(seconds * 1000);
-    await bestEffortMetadata(() => ctx.fs.utimes(path, when, when));
+    await bestEffortMetadata(() => fs.utimes(path, when, when));
   }
 }
 
@@ -211,7 +253,8 @@ async function extractEntry(
   ctx: CommandContext,
   outputPath: string,
   entry: TarEntry,
-  dirModes: Array<[string, number]>
+  dirModes: Array<[string, number]>,
+  fileModes: Array<[string, number]>
 ): Promise<void> {
   const defaultMode = entry.directory ? 0o755 : 0o644;
 
@@ -225,7 +268,7 @@ async function extractEntry(
   const parent = dirname(outputPath);
   if (parent !== '/') await ctx.fs.mkdir(parent, { recursive: true });
   await ctx.fs.writeFile(outputPath, entry.bytes);
-  if (needsMode) await applyMode(ctx, outputPath, entry.mode as number);
+  if (needsMode) fileModes.push([outputPath, entry.mode as number]);
 }
 
 async function createArchive(options: TarOptions, ctx: CommandContext): Promise<CommandResult> {
@@ -260,7 +303,8 @@ function lastMemberWins(list: Array<[string, number]>): Array<[string, number]> 
 
 async function readArchiveCommand(
   options: TarOptions,
-  ctx: CommandContext
+  ctx: CommandContext,
+  batchFs?: Pick<VirtualFS, 'updateMetadataBatch'>
 ): Promise<CommandResult> {
   if (options.paths.length > 0) return tarError(`${options.mode} mode does not accept input paths`);
   const archivePath = ctx.fs.resolvePath(ctx.cwd, options.archive!);
@@ -273,18 +317,19 @@ async function readArchiveCommand(
   const outputRoot = ctx.fs.resolvePath(ctx.cwd, options.directory);
   await ctx.fs.mkdir(outputRoot, { recursive: true });
   const extracted: string[] = [];
+  const fileModes: Array<[string, number]> = [];
   const dirModes: Array<[string, number]> = [];
   const mtimes: Array<[string, number]> = [];
   for (const entry of entries) {
     const outputPath = safeOutputPath(ctx, outputRoot, entry.path);
     if (!outputPath) return tarError(`blocked suspicious path ${entry.path}`);
-    await extractEntry(ctx, outputPath, entry, dirModes);
+    await extractEntry(ctx, outputPath, entry, dirModes, fileModes);
     if (entry.mtime !== undefined) mtimes.push([outputPath, entry.mtime]);
     extracted.push(entry.path);
   }
 
-  for (const [path, mode] of lastMemberWins(dirModes)) await applyMode(ctx, path, mode);
-  await applyMtimes(ctx, lastMemberWins(mtimes));
+  const modes = [...lastMemberWins(fileModes), ...lastMemberWins(dirModes)];
+  await applyMetadataBatch(ctx, modes, lastMemberWins(mtimes), batchFs);
   return {
     stdout: options.verbose ? `${extracted.join('\n')}\n` : '',
     stderr: '',
@@ -292,7 +337,7 @@ async function readArchiveCommand(
   };
 }
 
-export function createTarCommand(): Command {
+export function createTarCommand(deps: TarCommandDeps = {}): Command {
   return defineCommand('tar', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) return tarHelp();
     const options = parseTarArgs(args);
@@ -304,6 +349,6 @@ export function createTarCommand(): Command {
     }
     return options.mode === 'create'
       ? createArchive(options, ctx)
-      : readArchiveCommand(options, ctx);
+      : readArchiveCommand(options, ctx, deps.fs);
   });
 }

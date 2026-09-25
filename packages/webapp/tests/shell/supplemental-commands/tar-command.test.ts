@@ -74,6 +74,30 @@ describe('tar command', () => {
     expect(((await fs.stat('/tmp/modes/pkg/secret')).mode ?? 0) & 0o777).toBe(0o600);
   });
 
+  it('applies extract modes and times in one metadata batch (not per member)', async () => {
+    await fs.writeFile(
+      '/tmp/batch.tar',
+      writeTar([
+        { path: 'pkg/', bytes: new Uint8Array(0), directory: true, mode: 0o700, mtime: 1600000000 },
+        { path: 'pkg/a', bytes: new TextEncoder().encode('a'), mode: 0o755, mtime: 1600000001 },
+        { path: 'pkg/b', bytes: new TextEncoder().encode('b'), mode: 0o600, mtime: 1600000002 },
+      ])
+    );
+    const batchSpy = vi.spyOn(fs, 'updateMetadataBatch');
+    expect((await shell.executeCommand('tar -xf /tmp/batch.tar -C /tmp/batch')).exitCode).toBe(0);
+
+    const archiveBatches = batchSpy.mock.calls.filter((call) => (call[0]?.length ?? 0) > 1);
+    expect(archiveBatches).toHaveLength(1);
+    expect(archiveBatches[0][0].length).toBeGreaterThanOrEqual(3);
+    expect(((await fs.stat('/tmp/batch/pkg/a')).mode ?? 0) & 0o777).toBe(0o755);
+    expect(((await fs.stat('/tmp/batch/pkg/b')).mode ?? 0) & 0o777).toBe(0o600);
+    expect(((await fs.stat('/tmp/batch/pkg')).mode ?? 0) & 0o777).toBe(0o700);
+    const secs = async (p: string) => Math.floor(Number((await fs.stat(p)).mtime) / 1000);
+    expect(await secs('/tmp/batch/pkg/a')).toBe(1600000001);
+    expect(await secs('/tmp/batch/pkg/b')).toBe(1600000002);
+    expect(await secs('/tmp/batch/pkg')).toBe(1600000000);
+  });
+
   it('finishes extracting where the backend has no mode bits (a mount: ENOSYS)', async () => {
     await fs.writeFile(
       '/tmp/mounted.tar',
@@ -82,7 +106,7 @@ describe('tar command', () => {
         { path: 'pkg/after.txt', bytes: new TextEncoder().encode('after') },
       ])
     );
-    vi.spyOn(fs, 'chmod').mockRejectedValue(
+    vi.spyOn(fs, 'updateMetadataBatch').mockRejectedValue(
       Object.assign(new Error('metadata changes are not supported by this mount'), {
         code: 'ENOSYS',
       })

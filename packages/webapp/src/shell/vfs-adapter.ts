@@ -10,7 +10,7 @@ import type {
   RmOptions,
 } from 'just-bash';
 import * as justBash from 'just-bash';
-import type { DirEntry, Stats, VirtualFS } from '../fs/index.js';
+import type { DirEntry, MetadataUpdate, Stats, VirtualFS } from '../fs/index.js';
 import { FsError, joinPath, normalizePath, statsFromDirEntry } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
 import { parkReadBytes } from './request-body-provenance.js';
@@ -79,6 +79,8 @@ export class VfsAdapter implements IFileSystem {
   ) {
     this.listingStatsMax = Math.max(1, opts?.listingStatsMax ?? MAX_LISTING_STATS);
     this.listingStatsTtlMs = opts?.listingStatsTtlMs ?? LISTING_STAT_TTL_MS;
+
+    this.updateMetadataBatch = this.updateMetadataBatch.bind(this);
   }
 
   get listingStatsSize(): number {
@@ -463,6 +465,15 @@ export class VfsAdapter implements IFileSystem {
   async chmod(path: string, mode: number): Promise<void> {
     this.dropListingStats();
     return this.trusted(() => this.vfs.chmod(normalizePath(path), mode));
+  }
+
+  async updateMetadataBatch(updates: readonly MetadataUpdate[]): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() =>
+      this.vfs.updateMetadataBatch(
+        updates.map((update) => ({ ...update, path: normalizePath(update.path) }))
+      )
+    );
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
