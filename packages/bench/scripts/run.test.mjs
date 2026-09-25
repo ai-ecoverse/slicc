@@ -891,6 +891,60 @@ describe('leader lifecycle', () => {
     q.mockRestore();
   });
 
+  it('retries a run whose transcript was lost to an unreachable leader instead of judging it', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    let healthy = false;
+    const fake = leader({ down: (c) => !healthy && c.startsWith('session export') });
+    const recycle = recycler(() => {
+      healthy = true;
+    });
+    const judge = vi.fn(async () => ({
+      result: { score: 1, verdict: true, statuses: {} },
+      judgement: { infra_error: false, reward_hacking_suspected: false },
+    }));
+    const log = vi.fn();
+    const code = await main(['--set', twoTasks(dir), '--models', 'm', '--out', out], {
+      ...fake.deps,
+      recycle,
+      judge,
+      spec: {},
+      log,
+    });
+    expect(code).toBe(0);
+    expect(recycle).toHaveBeenCalledTimes(1);
+    expect(judge).toHaveBeenCalledTimes(2);
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    expect(r1.error).toBeUndefined();
+    expect(r1.leader.generation).toBe(1);
+    expect(events(out).find((e) => e.type === 'task' && e.outcome === 'error')).toBeUndefined();
+    expect(events(out).find((e) => e.type === 'leader-down')).toMatchObject({ task_id: 'own-1' });
+    q.mockRestore();
+  });
+
+  it('records a lost transcript as leader-down when the leader cannot be restarted', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    const fake = leader({ down: (c) => c.startsWith('session export') });
+    const judge = vi.fn();
+    const code = await main(
+      ['--set', twoTasks(dir), '--models', 'm', '--out', out, '--leader-down-limit', '5'],
+      { ...fake.deps, judge, spec: {}, log: vi.fn() }
+    );
+    expect(code).toBe(1);
+    expect(judge).not.toHaveBeenCalled();
+    const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
+    expect(r1).toMatchObject({
+      error: 'transcript lost: the leader went down (export)',
+      error_stage: 'collect',
+      leader_down: true,
+    });
+    expect(typeof r1.metrics.cost).toBe('number');
+    q.mockRestore();
+  });
+
   it('restarts a leader that cannot be reached while its skills are staged', async () => {
     const dir = tmp();
     const out = join(dir, 'o');

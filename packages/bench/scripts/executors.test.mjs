@@ -129,6 +129,22 @@ describe('createLeader', () => {
     });
     expect(run).toHaveBeenCalledTimes(1);
     expect(onCall.mock.lastCall[0]).toMatchObject({ attempts: 1, leaderDown: true });
+    expect(onCall.mock.lastCall[0]).not.toHaveProperty('connectionLost');
+    const closed = createLeader({
+      url: 'https://x',
+      run: async () => ({ stdout: '', stderr: 'slicc exec: connection closed\n', status: 1 }),
+      retryDelayMs: 0,
+    });
+    expect(await closed.exec('base64 /p')).toMatchObject({
+      leaderDown: true,
+      connectionLost: true,
+    });
+    const dial = createLeader({
+      url: 'https://x',
+      run: async () => ({ stdout: '', stderr: 'signaling failed', status: 1 }),
+      retryDelayMs: 0,
+    });
+    expect(await dial.exec('ls')).not.toHaveProperty('connectionLost');
     expect(connectionLost(0, 'read/write on closed pipe')).toBe(false);
     expect(connectionLost(1, 'no model matches')).toBe(false);
   });

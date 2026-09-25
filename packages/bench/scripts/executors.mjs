@@ -15,7 +15,7 @@ export function unreachable(status, stderr) {
   );
 }
 
-const CONNECTION_LOST_RE = /read\/write on closed pipe/i;
+const CONNECTION_LOST_RE = /read\/write on closed pipe|connection closed/i;
 
 export function connectionLost(status, stderr) {
   return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));
@@ -118,8 +118,9 @@ export function createLeader({
         await sleep(retryDelayMs);
         continue;
       }
-      const leaderDown = dialFailed || connectionLost(result.status, result.stderr);
-      const out = { ...result, leaderDown };
+      const lost = !dialFailed && connectionLost(result.status, result.stderr);
+      const leaderDown = dialFailed || lost;
+      const out = { ...result, leaderDown, ...(lost ? { connectionLost: true } : {}) };
       onCall({
         at: new Date(started).toISOString(),
         call: callLabel(args),

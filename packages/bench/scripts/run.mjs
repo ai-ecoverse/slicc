@@ -348,6 +348,13 @@ async function runOne(r, ctx) {
   }
   record.metrics = traceFromResult(result).metrics;
   record.model_id = result.modelId ?? null;
+
+  const tx = result.transcriptExport;
+  if (tx && !tx.ok && [tx.reason, tx.detail].some((s) => /leader-down/.test(s ?? ''))) {
+    failInto(record, 'collect', new Error(`transcript lost: the leader went down (${tx.stage})`));
+    record.leader_down = true;
+    return { record, result };
+  }
   if (judge) {
     try {
       await judgeInto(record, result, r.task, ctx);
