@@ -13,6 +13,8 @@ export interface ExtractedCondaEntry {
   path: string;
   bytes: Uint8Array;
   directory?: boolean;
+  /** Relative symlink target when this entry is a symbolic link. */
+  symlink?: string;
 }
 
 function assertSafeRelPath(path: string, label: string): string {
@@ -28,6 +30,15 @@ function tarEntriesToExtracted(entries: TarEntry[], label: string): ExtractedCon
   for (const entry of entries) {
     if (!entry.path) continue;
     const path = assertSafeRelPath(entry.path, label);
+    if (entry.symlink !== undefined) {
+      // Relative targets must stay inside the package tree; absolute targets
+      // are rare in conda builds but are passed through as-is after a `..` check.
+      if (entry.symlink.split('/').some((seg) => seg === '..')) {
+        throw new Error(`${label}: refusing symlink '${path}' -> '${entry.symlink}' (path escape)`);
+      }
+      out.push({ path, bytes: new Uint8Array(0), symlink: entry.symlink });
+      continue;
+    }
     out.push({
       path,
       bytes: entry.bytes,
@@ -57,6 +68,7 @@ export function bunzip2(input: Uint8Array): Uint8Array {
 /**
  * Extract a conda package archive into relative path entries.
  * Supports `.tar.bz2` and plain `.tar` / `.tar.gz` (for fixtures).
+ * Symlinks are preserved (`symlink` field) so the installer can recreate them.
  */
 export function extractCondaArchive(bytes: Uint8Array, filename: string): ExtractedCondaEntry[] {
   const lower = filename.toLowerCase();
@@ -83,6 +95,7 @@ export function extractCondaArchive(bytes: Uint8Array, filename: string): Extrac
   const entries = readTar(tarBytes, {
     stripNpmPrefix: false,
     includeDirectories: false,
+    includeSymlinks: true,
     preserveRawPaths: false,
   });
   return tarEntriesToExtracted(entries, label);

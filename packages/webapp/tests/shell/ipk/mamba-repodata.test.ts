@@ -75,4 +75,79 @@ describe('mamba-repodata', () => {
     });
     expect(pinned.build).toBe('h_3');
   });
+
+  it('skips .conda artifacts when a .tar.bz2 is available', async () => {
+    const index: RepodataIndex = {
+      packages: {
+        'zlib-1.3.1-h_1.tar.bz2': {
+          name: 'zlib',
+          version: '1.3.1',
+          build: 'h_1',
+          build_number: 1,
+        },
+      },
+      'packages.conda': {
+        'zlib-1.3.1-h_9.conda': {
+          name: 'zlib',
+          version: '1.3.1',
+          build: 'h_9',
+          build_number: 9,
+        },
+      },
+    };
+    const channel = 'https://repo.prefix.dev/emscripten-forge-4x';
+    const indexes = new Map<string, RepodataIndex>([[`${channel}|emscripten-wasm32`, index]]);
+    const picked = await resolveCondaPackage('zlib=1.3.1', {
+      fetch: (async () => {
+        throw new Error('network should not be used');
+      }) as never,
+      channels: [channel],
+      includeNoarch: false,
+      indexes,
+    });
+    expect(picked.filename).toBe('zlib-1.3.1-h_1.tar.bz2');
+  });
+
+  it('prefers an earlier channel over a higher build on a later channel', async () => {
+    const forge = 'https://repo.prefix.dev/emscripten-forge-4x';
+    const condaForge = 'https://repo.prefix.dev/conda-forge';
+    const indexes = new Map<string, RepodataIndex>([
+      [
+        `${forge}|emscripten-wasm32`,
+        {
+          packages: {
+            'zlib-1.3.1-h_1.tar.bz2': {
+              name: 'zlib',
+              version: '1.3.1',
+              build: 'h_1',
+              build_number: 1,
+            },
+          },
+        },
+      ],
+      [
+        `${condaForge}|emscripten-wasm32`,
+        {
+          packages: {
+            'zlib-1.3.1-h_9.tar.bz2': {
+              name: 'zlib',
+              version: '1.3.1',
+              build: 'h_9',
+              build_number: 9,
+            },
+          },
+        },
+      ],
+    ]);
+    const picked = await resolveCondaPackage('zlib=1.3.1', {
+      fetch: (async () => {
+        throw new Error('network should not be used');
+      }) as never,
+      channels: [forge, condaForge],
+      includeNoarch: false,
+      indexes,
+    });
+    expect(picked.channel).toBe(forge);
+    expect(picked.build).toBe('h_1');
+  });
 });

@@ -201,6 +201,10 @@ function recordsFromIndex(index: RepodataIndex, channel: string): CondaPackageRe
   ] as const) {
     void bucket;
     for (const [filename, rec] of Object.entries(map)) {
+      // We only extract `.tar.bz2` / `.tar.gz` / `.tar`. Drop `.conda` here so
+      // pickNewest cannot select an artifact extractCondaArchive would reject
+      // when a usable tarball exists for the same name/version.
+      if (filename.toLowerCase().endsWith('.conda')) continue;
       out.push({
         ...rec,
         channel,
@@ -259,10 +263,23 @@ function matchingRecords(
   return out;
 }
 
-function pickNewest(candidates: CondaPackageRecord[]): CondaPackageRecord {
+function pickNewest(
+  candidates: CondaPackageRecord[],
+  channels: readonly string[]
+): CondaPackageRecord {
+  const channelRank = (channel: string): number => {
+    const idx = channels.indexOf(channel);
+    // Unknown channels sort after configured ones.
+    return idx === -1 ? channels.length : idx;
+  };
   candidates.sort((a, b) => {
     const v = compareCondaVersions(a.version, b.version);
     if (v !== 0) return v;
+    // Earlier channel in the configured list wins over build metadata from a
+    // lower-priority channel (first-channel preference).
+    const ca = channelRank(a.channel);
+    const cb = channelRank(b.channel);
+    if (ca !== cb) return cb - ca; // lower rank sorts later → wins via take-last
     return compareBuilds(a, b);
   });
   return candidates[candidates.length - 1]!;
@@ -297,7 +314,7 @@ export async function resolveCondaPackage(
     );
   }
 
-  return pickNewest(candidates);
+  return pickNewest(candidates, channels);
 }
 
 export function condaPackageDownloadUrl(record: CondaPackageRecord): string {

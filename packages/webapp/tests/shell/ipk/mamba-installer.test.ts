@@ -96,12 +96,27 @@ describe('mamba-installer', () => {
     expect(await fs.exists(`${CONDA_PREFIX}/include/zlib.h`)).toBe(true);
     expect(await fs.exists(`${CONDA_PREFIX}/conda-meta/zlib-1.3.1-h8b79025_2.json`)).toBe(true);
 
+    // Symlinks from the archive must be materialised.
+    expect(await fs.readlink(`${CONDA_PREFIX}/lib/libz.so`)).toBe('libz.so.1');
+    expect(await fs.readlink(`${CONDA_PREFIX}/lib/libz.so.1`)).toBe('libz.so.1.3.1');
+
+    // paths.json prefix_placeholder must be rewritten to the install prefix.
+    const pc = (await fs.readFile(`${CONDA_PREFIX}/share/pkgconfig/zlib.pc`, {
+      encoding: 'utf-8',
+    })) as string;
+    expect(pc).toContain(`prefix=${CONDA_PREFIX}`);
+    expect(pc).not.toMatch(/host_env_placehold/);
+
     const listed = await listInstalledCondaPackages(fs);
     expect(listed.map((p) => p.name)).toEqual(['zlib']);
+    expect(listed[0]!.files).toEqual(
+      expect.arrayContaining(['lib/libz.so', 'lib/libz.so.1', 'share/pkgconfig/zlib.pc'])
+    );
 
     const removed = await uninstallCondaPackages(['zlib'], { fs });
     expect(removed.results[0]!.removed).toBe(true);
     expect(await fs.exists(`${CONDA_PREFIX}/lib/libz.a`)).toBe(false);
+    expect(await fs.exists(`${CONDA_PREFIX}/lib/libz.so`)).toBe(false);
     expect(await listInstalledCondaPackages(fs)).toEqual([]);
   });
 });

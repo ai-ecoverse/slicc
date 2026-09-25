@@ -8,7 +8,7 @@
 
 import type { SecureFetch } from 'just-bash';
 import { FsError, type VirtualFS } from '../../fs/index.js';
-import { extractCondaArchive } from './mamba-extract.js';
+import { type ExtractedCondaEntry, extractCondaArchive } from './mamba-extract.js';
 import { CONDA_META_DIR, CONDA_PREFIX, DEFAULT_CONDA_CHANNELS } from './mamba-prefix.js';
 import {
   type CondaPackageRecord,
@@ -90,14 +90,111 @@ function metaPath(
   return joinPath(prefix, 'conda-meta', metaFilename(rec));
 }
 
+interface PathsJsonPath {
+  _path?: string;
+  prefix_placeholder?: string | null;
+  file_mode?: string | null;
+}
+
+/** Map of package-relative path → build-machine prefix placeholder to relocate. */
+function prefixPlaceholdersFromEntries(entries: ExtractedCondaEntry[]): Map<string, string> {
+  const info = entries.find((e) => e.path === 'info/paths.json' && !e.symlink);
+  if (!info) return new Map();
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(info.bytes)) as {
+      paths?: PathsJsonPath[];
+    };
+    const out = new Map<string, string>();
+    for (const p of parsed.paths ?? []) {
+      if (
+        typeof p._path === 'string' &&
+        typeof p.prefix_placeholder === 'string' &&
+        p.prefix_placeholder.length > 0
+      ) {
+        out.set(p._path, p.prefix_placeholder);
+      }
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Replace a conda `prefix_placeholder` with the install prefix.
+ * Text files: UTF-8 string replace. Binary: in-place null-padded swap when
+ * the new prefix fits (conda's classic binary rewrite).
+ */
+export function relocatePrefixBytes(
+  bytes: Uint8Array,
+  placeholder: string,
+  newPrefix: string,
+  fileMode?: string | null
+): Uint8Array {
+  const enc = new TextEncoder();
+  const needle = enc.encode(placeholder);
+  if (needle.length === 0) return bytes;
+
+  if (fileMode === 'text') {
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    if (!text.includes(placeholder)) return bytes;
+    return enc.encode(text.split(placeholder).join(newPrefix));
+  }
+
+  const replacement = enc.encode(newPrefix);
+  if (replacement.length > needle.length) {
+    // Cannot pad-shrink; fall back to textual replace when the bytes are UTF-8 text.
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    if (text.includes(placeholder)) {
+      return enc.encode(text.split(placeholder).join(newPrefix));
+    }
+    return bytes;
+  }
+
+  const out = new Uint8Array(bytes);
+  for (let i = 0; i <= out.length - needle.length; i++) {
+    let match = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (out[i + j] !== needle[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    out.set(replacement, i);
+    out.fill(0, i + replacement.length, i + needle.length);
+    i += needle.length - 1;
+  }
+  return out;
+}
+
 async function writeEntries(
   fs: VirtualFS,
   prefix: string,
-  entries: Array<{ path: string; bytes: Uint8Array; directory?: boolean }>
+  entries: ExtractedCondaEntry[]
 ): Promise<string[]> {
+  const placeholders = prefixPlaceholdersFromEntries(entries);
+  const pathsMeta = new Map<string, PathsJsonPath>();
+  const info = entries.find((e) => e.path === 'info/paths.json' && !e.symlink);
+  if (info) {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(info.bytes)) as {
+        paths?: PathsJsonPath[];
+      };
+      for (const p of parsed.paths ?? []) {
+        if (typeof p._path === 'string') pathsMeta.set(p._path, p);
+      }
+    } catch {
+      // ignore malformed paths.json; placeholders map may still be empty
+    }
+  }
+
   const written: string[] = [];
-  for (const entry of entries) {
-    if (entry.directory) continue;
+  // Files first so symlink targets exist when possible.
+  const files = entries.filter((e) => !e.symlink && !e.directory);
+  const links = entries.filter((e) => e.symlink);
+
+  for (const entry of files) {
     // Skip info/ metadata from the archive root; conda-meta JSON is enough.
     if (entry.path === 'info' || entry.path.startsWith('info/')) continue;
     const target = joinPath(prefix, entry.path);
@@ -105,9 +202,26 @@ async function writeEntries(
     if (lastSlash > 0) {
       await ensureDir(fs, target.slice(0, lastSlash));
     }
-    await fs.writeFile(target, entry.bytes);
+    let bytes = entry.bytes;
+    const placeholder = placeholders.get(entry.path);
+    if (placeholder) {
+      bytes = relocatePrefixBytes(bytes, placeholder, prefix, pathsMeta.get(entry.path)?.file_mode);
+    }
+    await fs.writeFile(target, bytes);
     written.push(entry.path);
   }
+
+  for (const entry of links) {
+    if (entry.path === 'info' || entry.path.startsWith('info/')) continue;
+    const target = joinPath(prefix, entry.path);
+    const lastSlash = target.lastIndexOf('/');
+    if (lastSlash > 0) {
+      await ensureDir(fs, target.slice(0, lastSlash));
+    }
+    await fs.symlink(entry.symlink!, target);
+    written.push(entry.path);
+  }
+
   return written;
 }
 

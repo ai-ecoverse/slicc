@@ -25,6 +25,11 @@ describe('mamba-extract', () => {
     expect(paths.some((p) => p.startsWith('info/'))).toBe(true);
     const libz = entries.find((e) => e.path === 'lib/libz.a');
     expect(libz!.bytes.length).toBeGreaterThan(100);
+
+    const so = entries.find((e) => e.path === 'lib/libz.so');
+    const so1 = entries.find((e) => e.path === 'lib/libz.so.1');
+    expect(so?.symlink).toBe('libz.so.1');
+    expect(so1?.symlink).toBe('libz.so.1.3.1');
   });
 
   it('extracts .tar.gz fixtures via gunzip', () => {
