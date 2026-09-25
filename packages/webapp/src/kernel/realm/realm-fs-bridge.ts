@@ -2,7 +2,11 @@ import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
 import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
-import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
+import type {
+  SyncFsPosixBridge,
+  SyncFsXhrBridge,
+  SyncFsXhrMutatingBridge,
+} from './sync-fs-xhr-bridge.js';
 
 type GlobalWithBuffer = typeof globalThis & {
   Buffer?: { from: (data: Uint8Array) => unknown };
@@ -352,6 +356,7 @@ const SYNC_PATH_ARGS: { [K in keyof ReturnType<typeof createSyncFsBridge>]?: Pat
   copyFileSync: 'pair',
   cpSync: 'pair',
   chmodSync: 'path',
+  utimesSync: 'path',
   mkdtempSync: 'path',
   rmSync: 'path',
   rmdirSync: 'path',
@@ -532,6 +537,67 @@ function overlayReaddir(
   for (const name of cached) names.add(name);
   for (const name of names) if (isTombstoned(child(name))) names.delete(name);
   return [...names];
+}
+
+type NodeTime = number | string | Date;
+
+function nodeTimeMs(time: NodeTime, name: string): number {
+  if (time instanceof Date) return time.getTime();
+  if (typeof time === 'string' && time.trim() !== '' && Number.isFinite(Number(time))) {
+    return Number(time) * 1000;
+  }
+  if (typeof time === 'number') {
+    if (!Number.isFinite(time)) {
+      throw Object.assign(
+        new TypeError(`The "${name}" argument must be of type number, string or Date`),
+        { code: 'ERR_INVALID_ARG_TYPE' }
+      );
+    }
+    return time < 0 ? Date.now() : time * 1000;
+  }
+  throw Object.assign(
+    new TypeError(`The "${name}" argument must be of type number, string or Date`),
+    { code: 'ERR_INVALID_ARG_TYPE' }
+  );
+}
+
+function setTimesLive(
+  bridge: SyncFsXhrBridge | undefined,
+  syncFs: SyncFsCache,
+  resolved: string,
+  atimeMs: number,
+  mtimeMs: number
+): void {
+  const utimes = (bridge as Partial<SyncFsPosixBridge> | undefined)?.utimes;
+  if (!bridge || typeof utimes !== 'function' || syncFs.isTombstoned(resolved)) return;
+  try {
+    utimes.call(bridge, resolved, atimeMs, mtimeMs);
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'ENOSYS' || (code === 'ENOENT' && syncFs.exists(resolved))) return;
+    throw err;
+  }
+}
+
+function metadataSyncOps(
+  resolve: (path: string) => string,
+  existsResolved: (resolved: string) => boolean,
+  bridge: SyncFsXhrBridge | undefined,
+  syncFs: SyncFsCache
+) {
+  return {
+    chmodSync(path: string): void {
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'chmod');
+    },
+    utimesSync(path: string, atime: NodeTime, mtime: NodeTime): void {
+      const atimeMs = nodeTimeMs(atime, 'atime');
+      const mtimeMs = nodeTimeMs(mtime, 'mtime');
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'utime');
+      setTimesLive(bridge, syncFs, resolved, atimeMs, mtimeMs);
+    },
+  };
 }
 
 function readdirFromCacheOrBridge(
@@ -734,10 +800,7 @@ export function createSyncFsBridge(
     cpSync(src: string, dest: string): void {
       copyTree(resolve(src), resolve(dest));
     },
-    chmodSync(path: string): void {
-      const resolved = resolve(path);
-      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'chmod');
-    },
+    ...metadataSyncOps(resolve, existsResolved, bridge, syncFs),
     mkdtempSync(prefix: string): string {
       return syncFs.mkdtemp(resolve(prefix));
     },

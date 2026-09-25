@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { makeCtx, runCode } from './cjs-realm-harness.js';
 
 describe('fsBridge extended operations', () => {
+  it("fs.utimesSync exists and keeps Node's ENOENT contract", async () => {
+    const out = await runCode(
+      `const fs = require('fs');
+       fs.utimesSync('/workspace/t.txt', 1, new Date(2000));
+       try { fs.utimesSync('/workspace/missing', 1, 1); } catch (e) { console.log(e.code); }`,
+      makeCtx({ files: { '/workspace/t.txt': 'x' } })
+    );
+    expect(out.stderr).toBe('');
+    expect(out.stdout.trim()).toBe('ENOENT');
+    expect(out.exitCode).toBe(0);
+  });
+
   it('appendFile creates a file if it does not exist', async () => {
     const ctx = makeCtx();
     const out = await runCode(
