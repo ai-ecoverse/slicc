@@ -1,4 +1,5 @@
 import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
+import { acceptNodeCallbacks, nodeFsPromises } from './realm-fs-node-callbacks.js';
 import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
@@ -85,6 +86,7 @@ function decodeFileBytes(bytes: Uint8Array, encoding: string | null | undefined)
 function encodingOf(
   opts: string | { encoding?: string | null } | null | undefined
 ): string | null | undefined {
+  if (opts === null) return null;
   return typeof opts === 'string' ? opts : opts?.encoding;
 }
 
@@ -177,7 +179,7 @@ export function createFsBridge(
     path: string,
     opts?: string | { encoding?: string | null } | null
   ): Promise<unknown> {
-    const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+    const encoding = encodingOf(opts);
 
     if (encoding === null || encoding === 'buffer') {
       const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [path]);
@@ -315,7 +317,9 @@ export function createFsBridge(
   };
   overlayAsyncStdio(bridge, stdio);
   acceptPathLikeArgs(bridge, ASYNC_PATH_ARGS, { promises: true });
-  bridge.promises = bridge;
+
+  bridge.promises = nodeFsPromises(bridge);
+  acceptNodeCallbacks(bridge);
   return bridge;
 }
 

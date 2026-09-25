@@ -127,6 +127,14 @@ describe('trap', () => {
     expect(result.stderr).toContain('signals cannot be masked in this shell');
   });
 
+  it("accepts an empty EXIT action (install-sh's closing `trap '' 0`)", async () => {
+    for (const spec of ['0', 'EXIT', 'exit', 'SIGEXIT']) {
+      expect(await run('trap', ['', spec])).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+    }
+
+    expect((await run('trap', ['', '0', 'INT'])).exitCode).toBe(2);
+  });
+
   it('refuses to install a handler instead of silently dropping it', async () => {
     const result = await run('trap', ['echo cleanup', 'EXIT']);
     expect(result.exitCode).toBe(2);

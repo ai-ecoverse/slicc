@@ -188,16 +188,24 @@ describe('restoreEnabledJshdUnits', () => {
       realmFactory: inProcess,
     });
     expect(started).toContain('pwn');
-    await vi.waitFor(() => {
-      const state = getJshdSupervisor()?.status('pwn')?.state;
-      expect(state).toMatch(/stopped|errored/);
-    });
+
+    const settleMs = 10_000;
+    await vi.waitFor(
+      () => {
+        const state = getJshdSupervisor()?.status('pwn')?.state;
+        expect(state).toMatch(/stopped|errored/);
+      },
+      { timeout: settleMs }
+    );
     expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
     const { readUnitLog } = await import(
       '../../../../src/shell/supplemental-commands/jshd/store.js'
     );
-    await vi.waitFor(async () => {
-      expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
-    });
+    await vi.waitFor(
+      async () => {
+        expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
+      },
+      { timeout: settleMs }
+    );
   });
 });

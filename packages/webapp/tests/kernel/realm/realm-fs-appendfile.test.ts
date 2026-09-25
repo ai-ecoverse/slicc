@@ -56,14 +56,13 @@ describe('realm fs.appendFile atomic RPC', () => {
          fs.appendFile('/workspace/log.txt', 'A'),
          fs.appendFile('/workspace/log.txt', 'B'),
        ]);
-       console.log(await fs.readFile('/workspace/log.txt'));`,
+       const raw = await fs.readFile('/workspace/log.txt');
+       const text = await fs.readFile('/workspace/log.txt', 'utf8');
+       console.log(Buffer.isBuffer(raw) ? 'buf' : typeof raw, text);`,
       ctxFor(vfs)
     );
     expect(out.exitCode).toBe(0);
-    const body = out.stdout.trim();
-    expect(body).toHaveLength(2);
-    expect(body).toContain('A');
-    expect(body).toContain('B');
+    expect(out.stdout.trim()).toBe('buf AB');
   });
 
   it('preserves concurrent appends from two realms sharing a database', async () => {

@@ -145,10 +145,11 @@ Supported:
   trap -l              list the signals the kernel can deliver
   trap - SPEC ...      reset SPEC to its default (nothing was trapped, and
                        the default for a delivered signal is what you get)
+  trap '' EXIT         an empty exit action (nothing runs at exit anyway)
 
 NOT supported:
   trap 'command' SPEC  installing a handler
-  trap '' SPEC ...     ignoring/masking a signal
+  trap '' SIGNAL ...   ignoring/masking a signal
 
 There is no signal-delivery path into a running script in this shell, so a
 handler could never fire. Installing one exits 2 with this message rather
@@ -171,6 +172,10 @@ function isTrapReset(token: string): boolean {
   return token === '-';
 }
 
+function isExitSpec(token: string): boolean {
+  return token === '0' || /^(SIG)?EXIT$/i.test(token);
+}
+
 function createTrapCommand(): Command {
   return defineCommand('trap', async (args) => {
     if (isHelpRequest(args)) return ok(TRAP_HELP);
@@ -180,6 +185,8 @@ function createTrapCommand(): Command {
     if (args.length === 0 || args.includes('-p')) return ok();
 
     if (isTrapReset(args[0])) return ok();
+
+    if (args[0] === '' && args.length > 1 && args.slice(1).every(isExitSpec)) return ok();
 
     if (args[0] === '') {
       return unsupported(
