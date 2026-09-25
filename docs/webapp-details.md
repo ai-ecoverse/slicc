@@ -383,7 +383,11 @@ docs under the workspace are not memory).
   `fs/blind-read-fs.ts` on its gated handle (above sudo, below the memory guard): it consults
   `RestrictedFS.readAccess` and records every `outside` probe and every `filtered` parent
   listing on a `BlindReadLog` (`base/blind-reads.ts`), raising `EACCES … unknown, not absent`
-  where the sandbox raised `ENOENT`. The `bash` tool appends the ledger's
+  where the sandbox raised `ENOENT`. Every route a probe can take is covered: the content
+  reads, `stat`/`lstat`/`realpath`/`readlink`, `copyFile`'s source (`cp /etc/x /tmp/y`), and
+  the synchronous `readDirSync` fast path the shell adapter serves `ls /` from. The shell's
+  own command lookup under the virtual `/usr/bin` tree is not the pass's probe and is never
+  recorded, so `command not found` stays that. The `bash` tool appends the ledger's
   `[not visible from this pass]` note to the next result (`annotateResult`), and `memory_write`
   refuses a newly added line that names a recorded path with an absence marker
   (`findBlindNegativeClaim`). `{{VISIBLE_PATHS}}` in `/etc/MEMORY.md` tells the pass its roots.

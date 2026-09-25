@@ -53,11 +53,22 @@ describe('createBlindReadFs', () => {
     await expect(fs.stat('/etc')).rejects.toMatchObject({ code: 'EACCES' });
     await expect(fs.lstat('/etc/llmstxtignore')).rejects.toMatchObject({ code: 'EACCES' });
     await expect(fs.realpath('/etc/llmstxtignore')).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(fs.readlink('/etc/link')).rejects.toMatchObject({ code: 'EACCES' });
+    // `cp /etc/x /tmp/y` reads its source: gated like readFile (Codex on #3483).
+    await expect(fs.copyFile('/etc/llmstxtignore', '/tmp/copy')).rejects.toMatchObject({
+      code: 'EACCES',
+      path: '/etc/llmstxtignore',
+    });
     // The sandbox underneath still says ENOENT — the decorator is what changed.
     await expect(restricted.readFile('/etc/llmstxtignore')).rejects.toMatchObject({
       code: 'ENOENT',
     });
-    expect(log.outsidePaths()).toEqual(['/etc/llmstxtignore', '/etc/MEMORY.md', '/etc']);
+    expect(log.outsidePaths()).toEqual([
+      '/etc/llmstxtignore',
+      '/etc/MEMORY.md',
+      '/etc',
+      '/etc/link',
+    ]);
   });
 
   it("keeps the sandbox's empty answers for the probes the shell relies on, but records them", async () => {
@@ -76,6 +87,38 @@ describe('createBlindReadFs', () => {
     const note = log.takeNote();
     expect(note).toContain('[filtered listing] /');
     expect(note).not.toContain('[not visible');
+    expect(log.outsidePaths()).toEqual([]);
+  });
+
+  // The shell's adapter lists from `readDirSync` first and only falls back to
+  // the async path on `null` — so `ls /` never reached the async override
+  // (Codex on #3483). The sync fast path records the same filtered listing.
+  it('records a filtered parent listing served by the synchronous fast path', async () => {
+    const entries = fs.readDirSync('/');
+    expect(entries?.map((entry) => entry.name).sort()).toEqual(['sessions', 'workspace']);
+    expect(log.takeNote()).toContain('[filtered listing] /');
+    // An outside path stays `null` on the fast path: the adapter then takes the
+    // async `readDir`, which is where the blind read is recorded.
+    expect(fs.readDirSync('/etc')).toBeNull();
+    expect(fs.readDirSync('/sessions')).not.toBeNull();
+    expect(log.takeNote()).toBeUndefined();
+  });
+
+  it("leaves the shell's command lookup alone: no note for an unknown command", async () => {
+    await expect(fs.stat('/usr/bin/nosuchcmd')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.exists('/bin/nosuchcmd')).toBe(false);
+    expect(log.outsidePaths()).toEqual([]);
+    expect(log.takeNote()).toBeUndefined();
+  });
+
+  it('reads a link, and copies a file, inside the roots as before', async () => {
+    await vfs.symlink('/workspace/CLAUDE.md', '/workspace/link');
+    expect(await fs.readlink('/workspace/link')).toBe('/workspace/CLAUDE.md');
+    await fs.copyFile('/workspace/CLAUDE.md', '/tmp/copy.md');
+    expect(await vfs.readFile('/tmp/copy.md', { encoding: 'utf-8' })).toBe('# Memory\n');
+    // A link inside the roots that points outside is an escape, not a blind spot.
+    await vfs.symlink('/etc/llmstxtignore', '/workspace/escape-link');
+    await expect(fs.readlink('/workspace/escape-link')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(log.outsidePaths()).toEqual([]);
   });
 

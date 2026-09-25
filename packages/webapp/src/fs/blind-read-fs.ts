@@ -21,9 +21,19 @@
  *     the ledger is what reaches the model either way;
  *   - a listing of a `parent` of a readable prefix (`/`, `/cones`) is
  *     recorded as `filtered` and forwarded unchanged — the entries it hides
- *     are the other half of the same false absence;
+ *     are the other half of the same false absence. The shell's adapter
+ *     serves such listings from the synchronous `readDirSync` fast path, so
+ *     that one is intercepted too (the other sync probes answer `null` for
+ *     an outside path and fall back to the async methods gated here);
+ *   - `copyFile` is a read of its source: `cp /etc/x /tmp/y` is how a pass
+ *     would "fetch" a file it cannot see, and the sandbox answers `ENOENT`
+ *     for the source, so the source is gated exactly like `readFile`;
  *   - everything else passes straight through, symlink escapes included
- *     (those still answer "not found": an escape is not a blind spot).
+ *     (those still answer "not found": an escape is not a blind spot);
+ *   - the shell's own command lookup is not the pass's probe: an unknown
+ *     command is looked up under the virtual `/usr/bin` tree, which no
+ *     sandbox lists, so those paths are neither recorded nor rewritten and
+ *     `command not found` stays exactly that.
  *
  * The shell's own commands swallow every fs error and print `No such file or
  * directory` regardless, so the distinct code only reaches the model through
@@ -52,7 +62,24 @@ const THROWING_READS = [
   'stat',
   'lstat',
   'realpath',
+  'readlink',
 ] as const;
+
+/**
+ * Prefixes the shell probes on its own behalf — the virtual bin tree the
+ * adapter answers for known commands and falls through to the fs for
+ * unknown ones (`binAlias` maps `/bin` onto it). A pass typing a command
+ * that does not exist must read `command not found`, not a blind-read note
+ * about `/usr/bin/<name>`.
+ */
+const SHELL_LOOKUP_PREFIXES = ['/usr/', '/bin/'];
+
+function isShellLookup(path: string): boolean {
+  const normalized = normalizePath(path);
+  return SHELL_LOOKUP_PREFIXES.some(
+    (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
+  );
+}
 
 type AnyMethod = (...args: unknown[]) => unknown;
 
@@ -63,6 +90,9 @@ export function createBlindReadFs<T extends VirtualFS>(
 ): T {
   const target = fs as unknown as Record<string, AnyMethod | undefined>;
   const has = (name: string): boolean => typeof target[name] === 'function';
+  /** `outside` for a path the pass itself probed beyond the roots; never for the shell's lookups. */
+  const readAccess = (path: unknown) =>
+    isShellLookup(path as string) ? 'inside' : acl.readAccess(path as string);
   const blind = (path: string): FsError => {
     const normalized = normalizePath(path);
     log.record(normalized, 'outside');
@@ -73,13 +103,13 @@ export function createBlindReadFs<T extends VirtualFS>(
   for (const name of THROWING_READS) {
     if (!has(name)) continue;
     overrides[name] = async (path: unknown, ...rest: unknown[]) => {
-      if (acl.readAccess(path as string) === 'outside') throw blind(path as string);
+      if (readAccess(path) === 'outside') throw blind(path as string);
       return target[name]?.(path, ...rest);
     };
   }
   if (has('exists')) {
     overrides.exists = async (path: unknown) => {
-      if (acl.readAccess(path as string) === 'outside') {
+      if (readAccess(path) === 'outside') {
         log.record(normalizePath(path as string), 'outside');
         return false;
       }
@@ -90,7 +120,7 @@ export function createBlindReadFs<T extends VirtualFS>(
     // Answers `null` like the sandbox; every caller then falls back to
     // `readFile`, which raises the blind error above.
     overrides.getNativeFile = async (path: unknown) => {
-      if (acl.readAccess(path as string) === 'outside') {
+      if (readAccess(path) === 'outside') {
         log.record(normalizePath(path as string), 'outside');
         return null;
       }
@@ -99,7 +129,7 @@ export function createBlindReadFs<T extends VirtualFS>(
   }
   if (has('readDir')) {
     overrides.readDir = async (path: unknown, ...rest: unknown[]): Promise<DirEntry[]> => {
-      const access = acl.readAccess(path as string);
+      const access = readAccess(path);
       if (access === 'outside') {
         log.record(normalizePath(path as string), 'outside');
         return [];
@@ -108,9 +138,25 @@ export function createBlindReadFs<T extends VirtualFS>(
       return (await target.readDir?.(path, ...rest)) as DirEntry[];
     };
   }
+  if (has('readDirSync')) {
+    // Synchronous, so no `await`: the adapter's `readdir` takes this answer
+    // when it is non-null, and a filtered parent listing is non-null.
+    overrides.readDirSync = (path: unknown) => {
+      if (readAccess(path) === 'parent') {
+        log.record(normalizePath(path as string), 'filtered');
+      }
+      return target.readDirSync?.(path);
+    };
+  }
+  if (has('copyFile')) {
+    overrides.copyFile = async (src: unknown, dest: unknown) => {
+      if (readAccess(src) === 'outside') throw blind(src as string);
+      return target.copyFile?.(src, dest);
+    };
+  }
   if (has('walk')) {
     overrides.walk = async function* (path: unknown, ...rest: unknown[]) {
-      const access = acl.readAccess(path as string);
+      const access = readAccess(path);
       if (access === 'outside') {
         log.record(normalizePath(path as string), 'outside');
         return;
