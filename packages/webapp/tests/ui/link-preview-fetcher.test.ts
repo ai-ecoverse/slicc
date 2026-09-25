@@ -43,7 +43,7 @@ describe('LinkPreviewFetcher', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it('needs no request for image links or GitHub issues', async () => {
+  it('needs no request for image links or any carded GitHub page', async () => {
     const { fetcher, fetchFn } = fetcherWith(async () => htmlResponse(''));
     expect(await fetcher.preview('https://cdn.test/pic.PNG')).toMatchObject({
       state: 'ready',
@@ -57,7 +57,51 @@ describe('LinkPreviewFetcher', () => {
       siteName: 'GitHub',
       image: 'https://opengraph.githubassets.com/slicc/o/r/pull/5',
     });
+    expect(await fetcher.preview('https://github.com/o/r')).toMatchObject({
+      state: 'ready',
+      title: 'o/r',
+      badge: 'Repository',
+      siteName: 'GitHub',
+      image: 'https://opengraph.githubassets.com/slicc/o/r',
+    });
+    expect(await fetcher.preview('https://github.com/orgs/acme/projects/4')).toMatchObject({
+      state: 'ready',
+      title: 'acme#4',
+      badge: 'Project #4',
+      siteName: 'GitHub',
+      image: 'https://opengraph.githubassets.com/slicc/orgs/acme/projects/4',
+    });
+    // Blob pages keep the repository card even when the path ends in an image ext.
+    expect(await fetcher.preview('https://github.com/o/r/blob/main/logo.png')).toMatchObject({
+      state: 'ready',
+      badge: 'Repository',
+      image: 'https://opengraph.githubassets.com/slicc/o/r',
+    });
+    // Resource-serving image routes preview the file itself, not the repo card.
+    expect(await fetcher.preview('https://github.com/o/r/raw/main/logo.png')).toMatchObject({
+      state: 'ready',
+      image: 'https://github.com/o/r/raw/main/logo.png',
+      title: 'logo.png',
+    });
+    expect(
+      await fetcher.preview('https://github.com/o/r/releases/download/v1/shot.webp')
+    ).toMatchObject({
+      state: 'ready',
+      image: 'https://github.com/o/r/releases/download/v1/shot.webp',
+      title: 'shot.webp',
+    });
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('still fetches a github.com page with no card of its own', async () => {
+    const { fetcher, fetchFn } = fetcherWith(async () =>
+      htmlResponse('<meta property="og:title" content="Settings">')
+    );
+    expect(await fetcher.preview('https://github.com/settings/tokens')).toMatchObject({
+      state: 'ready',
+      title: 'Settings',
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('previews an image served without an image extension', async () => {

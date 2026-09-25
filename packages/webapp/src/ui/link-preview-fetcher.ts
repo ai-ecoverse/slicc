@@ -17,16 +17,22 @@
  *
  * ## No request where none is needed
  *
- * A link that already points at an image previews itself. A GitHub issue or
- * pull request URL previews from GitHub's rendered card image, whose address is
- * derivable from the URL — no page fetch.
+ * A link that already points at an image previews itself. A github.com page —
+ * a repository, an issue, a pull request, a discussion, a project board, a
+ * commit, a release — previews from GitHub's own rendered card image, whose
+ * address is derivable from the URL. No page fetch, so the rich card shows up
+ * even in a float with no fetch route at all, where the generic host-only card
+ * used to be the best anything could do. Resource-serving routes
+ * (`/raw/…`, `/releases/download/…`) are not pages: they decline a card so an
+ * image URL still previews itself, while a `/blob/…/image.png` page keeps the
+ * repository card.
  */
 
 import {
+  type GithubCard,
   type GithubRef,
-  githubCardImage,
-  githubRefLabel,
-  parseGithubUrl,
+  githubCardFor,
+  githubRefCard,
 } from '../core/github-mentions.js';
 import { parseOpenGraph } from '../core/og-meta.js';
 
@@ -85,16 +91,21 @@ function header(headers: Record<string, string>, name: string): string {
   return headers[name] ?? headers[name.toLowerCase()] ?? '';
 }
 
-/** The preview for a GitHub issue or PR, with no network involved. */
-export function githubPreview(url: string, ref: GithubRef): LinkPreview {
+/** A derived GitHub card as a preview. */
+function cardPreview(url: string, card: GithubCard): LinkPreview {
   return {
     url,
     state: 'ready',
-    title: `${ref.owner}/${ref.repo}#${ref.number}`,
-    image: githubCardImage(ref),
+    title: card.title,
+    image: card.image,
     siteName: 'GitHub',
-    badge: githubRefLabel(ref),
+    badge: card.badge,
   };
+}
+
+/** The preview for a GitHub issue or PR reference, with no network involved. */
+export function githubPreview(url: string, ref: GithubRef): LinkPreview {
+  return cardPreview(url, githubRefCard(ref));
 }
 
 /**
@@ -134,8 +145,8 @@ export class LinkPreviewFetcher {
     const parsed = isWebUrl(url);
     if (!parsed) return { url, state: 'error' };
 
-    const ref = parseGithubUrl(url);
-    if (ref) return githubPreview(url, ref);
+    const github = githubCardFor(url);
+    if (github) return cardPreview(url, github);
 
     if (IMAGE_EXT_RE.test(parsed.pathname)) {
       return { url, state: 'ready', image: parsed.href, title: parsed.pathname.split('/').pop() };

@@ -10,6 +10,9 @@
  * GitHub URL in an earlier message, the `origin` remote of the repo it was
  * working in. {@link githubRepoHints} harvests those, and a bare reference is
  * only linked when a repository was found; otherwise it stays text.
+ *
+ * The module also derives the SOCIAL CARD GitHub already renders for one of
+ * its pages ({@link githubCardFor}) — see the note on {@link githubCardImage}.
  */
 
 /** Whether a reference is known to be an issue, a pull request, or either. */
@@ -43,9 +46,14 @@ const REPO = '[A-Za-z0-9._-]{1,100}';
  */
 const RESERVED_OWNERS = new Set([
   'about',
+  'account',
   'apps',
+  'codespaces',
   'collections',
+  'copilot',
   'customer-stories',
+  'dashboard',
+  'discussions',
   'enterprise',
   'events',
   'explore',
@@ -57,14 +65,18 @@ const RESERVED_OWNERS = new Set([
   'orgs',
   'organizations',
   'pricing',
+  'projects',
   'pulls',
   'issues',
   'search',
   'security',
   'settings',
   'sponsors',
+  'stars',
   'topics',
   'trending',
+  'users',
+  'watching',
 ]);
 
 function isRepoName(owner: string, repo: string): boolean {
@@ -75,8 +87,8 @@ function normalizeRepo(repo: string): string {
   return repo.replace(/\.git$/i, '');
 }
 
-/** `https://github.com/o/r/pull/12` → the reference it names, or `null`. */
-export function parseGithubUrl(url: string): GithubRef | null {
+/** The URL, if it is a github.com page; `null` for anything else. */
+function githubUrl(url: string): URL | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -84,6 +96,13 @@ export function parseGithubUrl(url: string): GithubRef | null {
     return null;
   }
   if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') return null;
+  return parsed;
+}
+
+/** `https://github.com/o/r/pull/12` → the reference it names, or `null`. */
+export function parseGithubUrl(url: string): GithubRef | null {
+  const parsed = githubUrl(url);
+  if (!parsed) return null;
   const match = new RegExp(`^/(${OWNER})/(${REPO})/(issues|pull)/(\\d{1,7})(?:/|$)`).exec(
     parsed.pathname
   );
@@ -107,12 +126,20 @@ export function githubRefUrl(ref: GithubRef): string {
 }
 
 /**
- * GitHub's rendered social card for a reference — the same image the page's
- * `og:image` names — derived without fetching the page. The leading path
- * segment is a cache key GitHub ignores for rendering.
+ * GitHub renders a social card for a page at `opengraph.githubassets.com`
+ * under the page's OWN path, behind a leading cache-key segment it ignores
+ * when rendering. So the card a page's `og:image` names can be addressed from
+ * the page's URL alone — no page fetch, and no API token.
  */
+function cardImage(path: string): string {
+  return `https://opengraph.githubassets.com/slicc/${path}`;
+}
+
+/** GitHub's rendered social card for a reference, derived from the reference. */
 export function githubCardImage(ref: GithubRef): string {
-  return `https://opengraph.githubassets.com/slicc/${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`;
+  return cardImage(
+    `${ref.owner}/${ref.repo}/${ref.kind === 'pull' ? 'pull' : 'issues'}/${ref.number}`
+  );
 }
 
 /** `PR #12`, `Issue #12`, or `#12`. */
@@ -120,6 +147,151 @@ export function githubRefLabel(ref: Pick<GithubRef, 'kind' | 'number'>): string 
   if (ref.kind === 'pull') return `PR #${ref.number}`;
   if (ref.kind === 'issue') return `Issue #${ref.number}`;
   return `#${ref.number}`;
+}
+
+/** What a github.com URL points at, as far as its social card is concerned. */
+export type GithubCardKind =
+  | 'repo'
+  | 'issue'
+  | 'pull'
+  | 'discussion'
+  | 'commit'
+  | 'release'
+  | 'project';
+
+/** A GitHub page's own social card, derived from its URL. */
+export interface GithubCard {
+  kind: GithubCardKind;
+  /** Heading, in GitHub's own shorthand (`owner/repo#12`, `owner/repo@abc1234`). */
+  title: string;
+  /** The rendered card image. */
+  image: string;
+  /** Short label for the kind (`PR #12`, `Repository`). */
+  badge: string;
+}
+
+/** The card for an issue or pull request reference. */
+export function githubRefCard(ref: GithubRef): GithubCard {
+  return {
+    kind: ref.kind === 'pull' ? 'pull' : 'issue',
+    title: `${ref.owner}/${ref.repo}#${ref.number}`,
+    image: githubCardImage(ref),
+    badge: githubRefLabel(ref),
+  };
+}
+
+/** A percent-encoded path segment as prose; an invalid escape stays raw. */
+function readable(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * Pages owned by an account rather than a repository: project boards
+ * (`/orgs/acme/projects/4`, `/users/ada/projects/1`) and org-wide discussions
+ * (`/orgs/acme/discussions/7`). `orgs` and `users` are reserved owner names,
+ * so these are matched BEFORE the repository shapes below.
+ */
+const ACCOUNT_PAGE_RE = new RegExp(
+  `^/(orgs|users)/(${OWNER})/(projects|discussions)/(\\d{1,7})(?:/|$)`
+);
+
+/** A page inside a repository: `/owner/repo` and everything under it. */
+const REPO_PAGE_RE = new RegExp(`^/(${OWNER})/(${REPO})(?:/(.*))?$`);
+
+/** The shapes under a repository that have a card of their own. */
+const REPO_DISCUSSION_RE = /^discussions\/(\d{1,7})(?:\/|$)/;
+const REPO_COMMIT_RE = /^commit\/([0-9a-fA-F]{7,40})(?:\/|$)/;
+const REPO_RELEASE_RE = /^releases\/tag\/([^/?#]{1,128})(?:\/|$)/;
+
+/**
+ * Routes that serve the file bytes rather than a GitHub HTML page
+ * (`/raw/…`, `/releases/download/…`). These have no social card — a link to
+ * an image there should preview the image itself, not the repository card a
+ * `/blob/…` page would get.
+ */
+const REPO_RESOURCE_RE = /^(?:raw|releases\/download)\//;
+
+/**
+ * The card for a page under `owner/repo`; `rest` is the path below the repo.
+ * Issues and pull requests never reach here — {@link parseGithubUrl} claims
+ * them first, so their grammar stays in one place. Resource-serving routes
+ * return `null` so the caller can fall through to a direct image preview.
+ */
+function repoPageCard(owner: string, repo: string, rest: string): GithubCard | null {
+  if (REPO_RESOURCE_RE.test(rest)) return null;
+  const slug = `${owner}/${repo}`;
+  const discussion = REPO_DISCUSSION_RE.exec(rest);
+  if (discussion) {
+    const number = Number(discussion[1] ?? 0);
+    return {
+      kind: 'discussion',
+      title: `${slug}#${number}`,
+      image: cardImage(`${slug}/discussions/${number}`),
+      badge: `Discussion #${number}`,
+    };
+  }
+  const commit = REPO_COMMIT_RE.exec(rest);
+  if (commit) {
+    const sha = commit[1] ?? '';
+    return {
+      kind: 'commit',
+      title: `${slug}@${sha.slice(0, 7)}`,
+      image: cardImage(`${slug}/commit/${sha}`),
+      badge: 'Commit',
+    };
+  }
+  const release = REPO_RELEASE_RE.exec(rest);
+  if (release) {
+    const tag = release[1] ?? '';
+    return {
+      kind: 'release',
+      title: `${slug}@${readable(tag)}`,
+      image: cardImage(`${slug}/releases/tag/${tag}`),
+      badge: 'Release',
+    };
+  }
+  // Every other page under a repository — a file, a tree, the actions tab —
+  // carries the repository's own card, which is what GitHub serves for them.
+  return { kind: 'repo', title: slug, image: cardImage(slug), badge: 'Repository' };
+}
+
+/**
+ * The social card for a github.com URL, or `null` when the URL names no page
+ * with one (a site page, another host, a search). Purely derived: nothing is
+ * fetched, so a hover has a rich card before any network work begins — and
+ * still has one in a float with no fetch route at all.
+ */
+export function githubCardFor(url: string): GithubCard | null {
+  const ref = parseGithubUrl(url);
+  if (ref) return githubRefCard(ref);
+
+  const parsed = githubUrl(url);
+  if (!parsed) return null;
+
+  const account = ACCOUNT_PAGE_RE.exec(parsed.pathname);
+  if (account) {
+    const [, prefix = '', owner = '', page = '', number = '0'] = account;
+    // Only an organization has account-wide discussions; `/users/…/discussions`
+    // is not a page, and a card for it would 404.
+    if (page === 'discussions' && prefix !== 'orgs') return null;
+    const project = page === 'projects';
+    return {
+      kind: project ? 'project' : 'discussion',
+      title: `${owner}#${number}`,
+      image: cardImage(`${prefix}/${owner}/${page}/${number}`),
+      badge: `${project ? 'Project' : 'Discussion'} #${number}`,
+    };
+  }
+
+  const repo = REPO_PAGE_RE.exec(parsed.pathname);
+  if (!repo) return null;
+  const [, owner = '', rawRepo = '', rest = ''] = repo;
+  if (!isRepoName(owner, rawRepo)) return null;
+  return repoPageCard(owner, normalizeRepo(rawRepo), rest);
 }
 
 // Leading boundaries are CONSUMED as group 1 rather than written as a
