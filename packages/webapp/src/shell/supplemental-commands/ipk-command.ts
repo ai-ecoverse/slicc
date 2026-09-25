@@ -28,10 +28,10 @@ import {
   uninstallPackages,
 } from '../ipk/installer.js';
 import type { ScriptCatalog } from '../script-catalog.js';
-import { runIpkMamba } from './ipk-mamba.js';
 import { LIFECYCLE_SHORTCUTS, RUN_ALIASES, runNpmScript } from './npm-run.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest as isSubHelpRequest } from './subcommand-help.js';
+// `ipk-mamba` (and its bzip2 dep) load lazily — see createIpkCommand.
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -202,7 +202,10 @@ export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
     }
 
     // Nested `mamba` owns its own --help (`ipk mamba install --help`).
+    // Dynamic import keeps bzip2 / conda extract out of the kernel-worker
+    // first-load graph (bundle-size gate).
     if (args[0] === 'mamba') {
+      const { runIpkMamba } = await import('./ipk-mamba.js');
       return runIpkMamba(name, args.slice(1), ctx, deps);
     }
 

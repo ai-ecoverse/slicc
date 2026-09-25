@@ -94,7 +94,7 @@ async function loadZlibSideModule(wasmBytes: Uint8Array): Promise<{
     return p;
   }
 
-  const env: Record<string, unknown> = {
+  const env: WebAssembly.ModuleImports = {
     memory,
     __indirect_function_table: table,
     __stack_pointer: new WebAssembly.Global({ value: 'i32', mutable: true }, 1024 * 1024 - 16),
@@ -124,7 +124,7 @@ async function loadZlibSideModule(wasmBytes: Uint8Array): Promise<{
     },
   };
 
-  const got = {
+  const got: WebAssembly.ModuleImports = {
     zcalloc: new WebAssembly.Global({ value: 'i32', mutable: true }, 0),
     zcfree: new WebAssembly.Global({ value: 'i32', mutable: true }, 0),
     z_errmsg: new WebAssembly.Global({ value: 'i32', mutable: true }, 0),
@@ -132,7 +132,9 @@ async function loadZlibSideModule(wasmBytes: Uint8Array): Promise<{
     _dist_code: new WebAssembly.Global({ value: 'i32', mutable: true }, 0),
   };
 
-  const { instance } = await WebAssembly.instantiate(wasmBytes, {
+  // Uint8Array<ArrayBufferLike> vs BufferSource (ArrayBuffer) — same cast as wasm-compiler.ts.
+  const module = await WebAssembly.compile(wasmBytes as unknown as BufferSource);
+  const instance = await WebAssembly.instantiate(module, {
     env,
     'GOT.func': got,
     'GOT.mem': got,
