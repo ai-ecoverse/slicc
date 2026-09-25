@@ -5,7 +5,16 @@
  * pure — the pure half lives in `lib.mjs`.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -107,16 +116,38 @@ export function statePath(home = homeDir()) {
 
 /** @returns {Record<string, any> | null} */
 export function readState(home = homeDir()) {
+  const path = statePath(home);
+  let contents;
   try {
-    return JSON.parse(readFileSync(statePath(home), 'utf8'));
-  } catch {
-    return null;
+    contents = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
   }
+  let state;
+  try {
+    state = JSON.parse(contents);
+  } catch (error) {
+    throw new Error(`invalid runner state at ${path}: ${error.message}`, { cause: error });
+  }
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    throw new Error(`invalid runner state at ${path}: expected a JSON object`);
+  }
+  return state;
 }
 
 export function writeState(state, home = homeDir()) {
   ensureDir(home);
-  writeFileSync(statePath(home), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  const temporaryPath = join(home, `.state-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, statePath(home));
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 export function isAlive(pid) {
