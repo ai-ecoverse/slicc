@@ -588,6 +588,29 @@ test('utimesSync keeps ENOENT for a missing path and rejects bad times', () => {
   expect(calls).toEqual([]);
 });
 
+test('utimesSync maps negative numbers to now and rejects non-finite numbers', () => {
+  const store = new Map([['/workspace/t.txt', new TextEncoder().encode('x')]]);
+  const calls: [string, number, number][] = [];
+  const shim = createSyncFsBridge(cache(), '/workspace', utimesBridge(store, calls));
+  const before = Date.now();
+  shim.utimesSync('/workspace/t.txt', -1, -1);
+  const [path, atimeMs, mtimeMs] = calls[0]!;
+  expect(path).toBe('/workspace/t.txt');
+  expect(atimeMs).toBeGreaterThanOrEqual(before);
+  expect(mtimeMs).toBeGreaterThanOrEqual(before);
+  expect(atimeMs).toBeLessThanOrEqual(Date.now());
+  expect(mtimeMs).toBeLessThanOrEqual(Date.now());
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    expect(() => shim.utimesSync('/workspace/t.txt', bad, 1)).toThrow(
+      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' })
+    );
+    expect(() => shim.utimesSync('/workspace/t.txt', 1, bad)).toThrow(
+      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' })
+    );
+  }
+  expect(calls).toHaveLength(1);
+});
+
 test('utimesSync is a no-op without a bridge (the cache models no times)', () => {
   const shim = createSyncFsBridge(cache([textEntry('/workspace/m.txt', 'x')]), '/workspace');
   expect(() => shim.utimesSync('/workspace/m.txt', 1, 2)).not.toThrow();

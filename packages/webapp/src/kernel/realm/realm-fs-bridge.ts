@@ -652,13 +652,25 @@ function overlayReaddir(
 /** A time as Node's `fs.utimes*` take it: seconds, a numeric string, or a Date. */
 type NodeTime = number | string | Date;
 
-/** Node's `toUnixTimestamp`, in ms: a non-finite number means now. */
+/**
+ * Node's `toUnixTimestamp`, in ms. A negative finite number means "now"
+ * (as with `utimesSync(path, -1, -1)`); NaN / ±Infinity throw
+ * `ERR_INVALID_ARG_TYPE`. Numeric strings keep their signed seconds value.
+ */
 function nodeTimeMs(time: NodeTime, name: string): number {
   if (time instanceof Date) return time.getTime();
   if (typeof time === 'string' && time.trim() !== '' && Number.isFinite(Number(time))) {
     return Number(time) * 1000;
   }
-  if (typeof time === 'number') return Number.isFinite(time) ? time * 1000 : Date.now();
+  if (typeof time === 'number') {
+    if (!Number.isFinite(time)) {
+      throw Object.assign(
+        new TypeError(`The "${name}" argument must be of type number, string or Date`),
+        { code: 'ERR_INVALID_ARG_TYPE' }
+      );
+    }
+    return time < 0 ? Date.now() : time * 1000;
+  }
   throw Object.assign(
     new TypeError(`The "${name}" argument must be of type number, string or Date`),
     { code: 'ERR_INVALID_ARG_TYPE' }
