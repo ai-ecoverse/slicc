@@ -54,7 +54,11 @@ import {
 } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
-import { commandSudoSubject, enforceCommandSudo } from './sudo/command-guard.js';
+import {
+  commandSudoSubject,
+  enforceCommandSudo,
+  SUDO_REFUSED_EXIT_CODE,
+} from './sudo/command-guard.js';
 import { extractLeadingCommentReason, SUDO_REASON_ENV } from './sudo/command-reason.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { sayStdioPlugin } from './supplemental-commands/say-stdio-rewrite.js';
@@ -860,7 +864,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return {
       stdout: '',
       stderr: `${result.message}\n`,
-      exitCode: 1,
+      exitCode: result.exitCode ?? SUDO_REFUSED_EXIT_CODE,
     };
   }
 

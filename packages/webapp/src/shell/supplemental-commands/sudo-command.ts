@@ -2,7 +2,7 @@ import type { Command, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { sudoRefusalMessage } from '../../sudo/approval-timeout.js';
 import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
-import { commandSudoSubject } from '../sudo/command-guard.js';
+import { commandSudoSubject, SUDO_REFUSED_EXIT_CODE } from '../sudo/command-guard.js';
 import { SUDO_REASON_ENV } from '../sudo/command-reason.js';
 
 const SUDO_HELP = `usage: sudo <command> [args...]
@@ -14,6 +14,9 @@ the inner command does NOT run.
 Choosing "Always" persists a NOPASSWD grant so future runs of the same
 pattern don't re-prompt.
 
+A refused or timed-out approval exits 77 (EX_NOPERM). Ordinary command
+results keep their own exit status.
+
 Options:
   -h, --help    Show this help message and exit.
 `;
@@ -23,7 +26,11 @@ const SUDO_UNSUPPORTED_MESSAGE = 'sudo: command-level approval is not configured
 const SUDO_NO_EXEC_MESSAGE = 'sudo: cannot dispatch inner command in this context';
 
 function refusalResult(decision: SudoDecision): ExecResult {
-  return { stdout: '', stderr: `${sudoRefusalMessage('sudo', decision)}\n`, exitCode: 1 };
+  return {
+    stdout: '',
+    stderr: `${sudoRefusalMessage('sudo', decision)}\n`,
+    exitCode: SUDO_REFUSED_EXIT_CODE,
+  };
 }
 
 export interface SudoCommandOptions {

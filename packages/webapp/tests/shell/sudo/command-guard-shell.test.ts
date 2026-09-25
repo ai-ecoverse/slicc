@@ -73,7 +73,7 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
 
     const result = await shell.executeCommand('touch /workspace/gated.txt');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(77);
     expect(result.stderr).toContain('regenerate it instead of deleting');
   });
 
@@ -83,7 +83,7 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
 
     const result = await shell.executeCommand('touch /workspace/gated.txt');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(77);
     expect(result.stderr).toContain('sudo: approval denied');
     expect(await fs.exists('/workspace/gated.txt')).toBe(false);
     expect(broker.requestApproval).toHaveBeenCalledTimes(1);
@@ -97,6 +97,17 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
 
     expect(result.exitCode).toBe(0);
     expect(await fs.exists('/workspace/gated.txt')).toBe(true);
+  });
+
+  it('preserves ordinary exit 1 results when no approval was requested', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+    await fs.writeFile('/workspace/grep.txt', 'present\n');
+
+    const result = await shell.executeCommand('grep __no_such_match__ /workspace/grep.txt');
+
+    expect(result.exitCode).toBe(1);
+    expect(broker.requestApproval).not.toHaveBeenCalled();
   });
 
   it('persists a NOPASSWD grant to /etc/sudoers.d/granted on "Always"', async () => {
@@ -164,7 +175,7 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
 
     const result = await shell.executeCommand('jsh /workspace/blocked.jsh');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(77);
     expect(result.stdout).not.toContain('should not run');
     expect(broker.requestApproval).toHaveBeenCalledWith({
       kind: 'command',
@@ -344,7 +355,7 @@ describe('AlmostBashShellHeadless command-level sudo enforcement', () => {
 
     const result = await shell.executeCommand('sudo touch /workspace/gated.txt');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(77);
     expect(result.stderr).toContain('sudo: approval denied');
     expect(await fs.exists('/workspace/gated.txt')).toBe(false);
   });
@@ -420,7 +431,7 @@ describe('AlmostBashShellHeadless sudo with transparentGating: false (human term
 
     const result = await shell.executeCommand('sudo touch /workspace/gated.txt');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(77);
     expect(result.stderr).toContain('sudo: approval denied');
     expect(await fs.exists('/workspace/gated.txt')).toBe(false);
   });

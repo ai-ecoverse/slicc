@@ -9,6 +9,8 @@ import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';
 
+export const SUDO_REFUSED_EXIT_CODE = 77;
+
 const COMMAND_POLICY_ALIASES = new Map([['jsh', 'node']]);
 
 export function commandSudoSubject(name: string, args: readonly string[]): string {
@@ -36,6 +38,8 @@ export interface CommandSudoResult {
   allowed: boolean;
 
   message?: string;
+
+  exitCode?: number;
 }
 
 export async function enforceCommandSudo(
@@ -61,7 +65,11 @@ export async function enforceCommandSudo(
   });
 
   if (decision.decision === 'deny') {
-    return { allowed: false, message: commandSudoMessage(decision) };
+    return {
+      allowed: false,
+      message: commandSudoMessage(decision),
+      exitCode: SUDO_REFUSED_EXIT_CODE,
+    };
   }
   if (decision.decision === 'always') {
     const pattern = decision.pattern?.trim() || trimmed;
