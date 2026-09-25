@@ -46,7 +46,7 @@ import {
   type TrayComputersSource,
 } from './tray-leader/computers-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
-import { FollowerDispatch } from './tray-leader/follower-dispatch.js';
+import { FollowerDispatch, type FollowerMessageOutcome } from './tray-leader/follower-dispatch.js';
 import {
   type ConnectedFollower,
   deriveFloatType,
@@ -85,7 +85,7 @@ import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
 
-export type { FloatType, RemoteExecResult };
+export type { FloatType, FollowerMessageOutcome, RemoteExecResult };
 export { deriveFloatType, isCherryTarget, labelForFollower, selectTeleportPool };
 
 export interface LeaderSyncManagerOptions {
@@ -150,7 +150,13 @@ export interface LeaderSyncManagerOptions {
    * leader's `lickManager.emitEvent`.
    */
   onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
-  /** Handle a user message arriving from a follower. */
+  /**
+   * Handle a user message arriving from a follower.
+   *
+   * Returning a delivery outcome is what makes the leader ack the prompt to
+   * the follower that sent it (`user_message_ack`, v10). Resolve it once the
+   * kernel settles; it must not reject. `void` sends no ack.
+   */
   onFollowerMessage: (
     text: string,
     messageId: string,
@@ -174,7 +180,7 @@ export interface LeaderSyncManagerOptions {
        */
       targetScoopJid?: string;
     }
-  ) => void;
+  ) => void | Promise<FollowerMessageOutcome>;
   /**
    * Handle an abort request from a follower. `targetScoopJid` is that
    * follower's own selection, for the same reason {@link onFollowerMessage}
@@ -366,16 +372,22 @@ export class LeaderSyncManager {
         // Only NOW is the guest the interaction origin: the message survived
         // review and is really entering the cone.
         this.followerDispatch.noteInteractionOrigin(pending.bootstrapId);
-        this.options.onFollowerMessage(pending.text, pending.messageId, pending.attachments, {
-          ...(pending.steer ? { steer: true } : {}),
-          biscotto: pending.biscotto,
-          ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
-          // The unit the seat is shared, captured when the guest SUBMITTED and
-          // the same one its tool gate names. Resolving it again here would
-          // let the leader's selection drift during review and deliver a gated
-          // message to a unit the gate does not cover.
-          targetScoopJid: pending.unitJid,
-        });
+        const delivery = this.options.onFollowerMessage(
+          pending.text,
+          pending.messageId,
+          pending.attachments,
+          {
+            ...(pending.steer ? { steer: true } : {}),
+            biscotto: pending.biscotto,
+            ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
+            // The unit the seat is shared, captured when the guest SUBMITTED and
+            // the same one its tool gate names. Resolving it again here would
+            // let the leader's selection drift during review and deliver a gated
+            // message to a unit the gate does not cover.
+            targetScoopJid: pending.unitJid,
+          }
+        );
+        this.followerDispatch.ackUserMessage(pending.bootstrapId, pending.messageId, delivery);
       },
       notify: (bootstrapId, messageId, state) => {
         this.followerRegistry.followers

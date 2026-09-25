@@ -24,6 +24,24 @@ export interface FollowerSyncManagerOptions {
     messageId: string,
     state: 'pending' | 'approved' | 'rejected' | 'unanswered'
   ) => void;
+  /**
+   * A v10+ leader's verdict on a message THIS follower sent: it handed the
+   * prompt to its kernel (`accepted`) or could not (`rejected`, with `error`).
+   * `accepted` does not mean the agent started on it. Sent to
+   * the sender alone, so it is never about another peer's message.
+   */
+  onUserMessageAck?: (ack: {
+    messageId: string;
+    scoopJid: string;
+    state: 'accepted' | 'rejected';
+    error?: string;
+  }) => void;
+  /**
+   * The leader echoed a message THIS follower sent. The echo is not rendered
+   * (the composer already drew the bubble), but it proves the leader's page
+   * received the prompt, which is what the silence hint splits on.
+   */
+  onOwnUserMessageEcho?: (messageId: string, scoopJid: string) => void;
   /** Called when the leader sends a snapshot (full state replacement). */
   onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
   /** Called when the leader echoes a user message (local or from any follower). */

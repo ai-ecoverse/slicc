@@ -575,7 +575,65 @@ describe('bootFollowerFloat', () => {
       vi.useRealTimers();
     }
     await vi.waitFor(() => expect(textOf(app)).toContain('Sent for review'));
-    expect(textOf(app)).not.toContain('has not picked this up');
+    expect(textOf(app)).not.toContain('is not responding yet');
+    expect(textOf(app)).not.toContain('has not started on it yet');
+  });
+
+  it('splits the silence note on the echo, and follows the leader ack', async () => {
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const { FOLLOWER_PROMPT_SILENCE_MS, PROMPT_RECEIVED_SILENCE_NOTE, PROMPT_SILENCE_NOTE } =
+      await import('../../../src/ui/wc/follower-prompt-watch.js');
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      sendMessage: vi.fn(() => true),
+      selectScoop: vi.fn(),
+      stop: vi.fn(() => true),
+    };
+    opts.onConnectionChange?.(true);
+    opts.setChatAgent?.({ sendMessage: vi.fn(), onEvent: () => () => {}, stop: () => {} } as never);
+    opts.onSnapshot?.([], 'cone_1');
+    const textOf = (root: ParentNode): string =>
+      [...root.querySelectorAll('*')]
+        .map((el) => (el.shadowRoot ? textOf(el.shadowRoot) : '') + (el.textContent ?? ''))
+        .join(' ');
+    const received = PROMPT_RECEIVED_SILENCE_NOTE.replace(/_/g, '').slice(0, 40);
+    const unreached = PROMPT_SILENCE_NOTE.replace(/_/g, '').slice(0, 40);
+
+    vi.useFakeTimers();
+    try {
+      // Accepted, then silence: the kernel has it, its agent never started.
+      inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'first' } }));
+      opts.onUserMessageAck?.({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
+      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(textOf(app)).toContain(received));
+    const afterAck = textOf(app).split(received).length;
+
+    vi.useFakeTimers();
+    try {
+      // Echoed, then silence: the same note again.
+      inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'second' } }));
+      opts.onOwnUserMessageEcho?.('m2', 'cone_1');
+      vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(textOf(app).split(received).length).toBeGreaterThan(afterAck));
+    expect(textOf(app)).not.toContain(unreached);
+
+    // Rejected: the leader's own error, in this unit's thread.
+    opts.onUserMessageAck?.({
+      messageId: 'm3',
+      scoopJid: 'cone_1',
+      state: 'rejected',
+      error: 'kernel went away',
+    });
+    await vi.waitFor(() => expect(textOf(app)).toContain('kernel went away'));
   });
 
   it('does not treat an empty activeScoopJid as an addressable unit', async () => {

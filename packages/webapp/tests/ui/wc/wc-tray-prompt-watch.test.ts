@@ -8,7 +8,9 @@ installWcDomStubs();
 
 import {
   FOLLOWER_PROMPT_SILENCE_MS,
+  PROMPT_RECEIVED_SILENCE_NOTE,
   PROMPT_SILENCE_NOTE,
+  promptRejectedNote,
 } from '../../../src/ui/wc/follower-prompt-watch.js';
 import { buildFollowerOptions } from '../../../src/ui/wc/wc-tray.js';
 
@@ -73,7 +75,9 @@ function mountRole() {
   };
   const notes = () =>
     controller.addAssistantMessage.mock.calls.filter(([text]) => text === PROMPT_SILENCE_NOTE);
-  return { role, handle, emit: () => emit(), notes };
+  const said = (text: string) =>
+    controller.addAssistantMessage.mock.calls.filter(([note]) => note === text);
+  return { role, handle, emit: () => emit(), notes, said };
 }
 
 describe('tray role-switch follower: prompt silence hint', () => {
@@ -119,5 +123,48 @@ describe('tray role-switch follower: prompt silence hint', () => {
     role.dispose();
     await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(notes()).toHaveLength(0);
+  });
+
+  it('says the leader got it when the prompt was echoed but nothing followed', async () => {
+    const { role, handle, notes, said } = mountRole();
+    handle.sendMessage('echoed', 'm1');
+    role.options.onOwnUserMessageEcho?.('m1', 'cone_1');
+    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(notes()).toHaveLength(0);
+    expect(said(PROMPT_RECEIVED_SILENCE_NOTE)).toHaveLength(1);
+  });
+
+  it('an accepted ack followed by silence says the leader got it', async () => {
+    const { role, handle, notes, said } = mountRole();
+    handle.sendMessage('taken', 'm1');
+    role.options.onUserMessageAck?.({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
+    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(notes()).toHaveLength(0);
+    expect(said(PROMPT_RECEIVED_SILENCE_NOTE)).toHaveLength(1);
+  });
+
+  it('a rejected ack adds the leader error to the addressed thread, and no silence note', async () => {
+    const { role, handle, notes, said } = mountRole();
+    handle.sendMessage('refused', 'm1');
+    role.options.onUserMessageAck?.({
+      messageId: 'm1',
+      scoopJid: 'cone_1',
+      state: 'rejected',
+      error: 'kernel gone',
+    });
+    expect(said(promptRejectedNote('kernel gone'))).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS * 2);
+    expect(notes()).toHaveLength(0);
+  });
+
+  it('a rejected ack for a unit not on screen adds nothing here', () => {
+    const { role, said } = mountRole();
+    role.options.onUserMessageAck?.({
+      messageId: 'm9',
+      scoopJid: 'cone_2',
+      state: 'rejected',
+      error: 'kernel gone',
+    });
+    expect(said(promptRejectedNote('kernel gone'))).toHaveLength(0);
   });
 });

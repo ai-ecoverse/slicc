@@ -1,6 +1,6 @@
 {
-  "traySyncProtocolVersion": 9,
-  "leaderVariantCount": 47,
+  "traySyncProtocolVersion": 10,
+  "leaderVariantCount": 48,
   "followerVariantCount": 43,
   "agentEventVariantCount": 13,
   "leaderToFollower": [
@@ -606,6 +606,16 @@
       }
     },
     {
+      "type": "user_message_ack",
+      "ios": "unknown",
+      "message": {
+        "type": "user_message_ack",
+        "messageId": "m3",
+        "scoopJid": "cone",
+        "state": "accepted"
+      }
+    },
+    {
       "type": "user_message_echo",
       "ios": "decoded",
       "message": {
@@ -623,6 +633,19 @@
             "text": "notes"
           }
         ]
+      }
+    }
+  ],
+  "leaderToFollowerExtra": [
+    {
+      "type": "user_message_ack",
+      "ios": "unknown",
+      "message": {
+        "type": "user_message_ack",
+        "messageId": "m4",
+        "scoopJid": "cone",
+        "state": "rejected",
+        "error": "The agent could not start this message"
       }
     }
   ],

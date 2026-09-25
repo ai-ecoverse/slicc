@@ -27,7 +27,10 @@ import "encoding/json"
 // v9 is a LEADER capability (`request_snapshot.peek`, a snapshot that does not
 // move the peer's selection). The CLI never requests a snapshot of a unit it is
 // not using, so this is bookkeeping a third time.
-const TraySyncProtocolVersion = 9
+//
+// v10 is a LEADER capability too: it acks every delivered `user_message` with
+// `user_message_ack`, sent to the sender alone.
+const TraySyncProtocolVersion = 10
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"

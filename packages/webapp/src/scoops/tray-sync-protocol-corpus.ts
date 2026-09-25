@@ -250,6 +250,11 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       ],
     },
   },
+  // The `rejected` shape is in LEADER_TO_FOLLOWER_EXTRA_CORPUS below.
+  user_message_ack: {
+    ios: 'unknown',
+    message: { type: 'user_message_ack', messageId: 'm3', scoopJid: 'cone', state: 'accepted' },
+  },
   status: {
     ios: 'decoded',
     message: { type: 'status', scoopStatus: 'processing', scoopJid: 'cone' },
@@ -598,6 +603,29 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
   ping: { ios: 'decoded', message: { type: 'ping' } },
   pong: { ios: 'decoded', message: { type: 'pong' } },
 };
+
+/**
+ * Further shapes of a variant already keyed above, for a variant whose optional
+ * fields change meaning with a discriminating value (`user_message_ack` carries
+ * `error` only when `rejected`). A separate list because the keyed corpus holds
+ * exactly one fixture per type (the Swift suite rejects duplicates there).
+ * Emitted as `leaderToFollowerExtra`; a decoder that predates it ignores it.
+ */
+export const LEADER_TO_FOLLOWER_EXTRA_CORPUS: ReadonlyArray<{
+  ios: IosLeaderDecodeExpectation;
+  message: LeaderToFollowerMessage;
+}> = [
+  {
+    ios: 'unknown',
+    message: {
+      type: 'user_message_ack',
+      messageId: 'm4',
+      scoopJid: 'cone',
+      state: 'rejected',
+      error: 'The agent could not start this message',
+    },
+  },
+];
 
 export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   // Transcript export request variants (follower → leader)
@@ -1455,6 +1483,7 @@ export function buildCorpusDocument(): {
   followerVariantCount: number;
   agentEventVariantCount: number;
   leaderToFollower: Array<{ type: string; ios: string; message: unknown }>;
+  leaderToFollowerExtra: Array<{ type: string; ios: string; message: unknown }>;
   followerToLeader: Array<{ type: string; ios: string; message: unknown }>;
   agentEvents: Array<{
     type: string;
@@ -1486,6 +1515,11 @@ export function buildCorpusDocument(): {
     followerVariantCount: Object.keys(FOLLOWER_TO_LEADER_CORPUS).length,
     agentEventVariantCount: Object.keys(AGENT_EVENT_CORPUS).length,
     leaderToFollower: flatten(LEADER_TO_FOLLOWER_CORPUS),
+    leaderToFollowerExtra: LEADER_TO_FOLLOWER_EXTRA_CORPUS.map(({ ios, message }) => ({
+      type: message.type,
+      ios,
+      message: message as unknown,
+    })),
     followerToLeader: flatten(FOLLOWER_TO_LEADER_CORPUS),
     agentEvents: Object.values(AGENT_EVENT_CORPUS)
       .map((entry) => ({

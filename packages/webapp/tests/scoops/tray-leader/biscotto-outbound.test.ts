@@ -25,6 +25,7 @@ const EXPECTED_RECEIVABLE = [
   'snapshot_chunk',
   'status',
   'theme.apply',
+  'user_message_ack',
   'user_message_echo',
 ];
 
