@@ -46,6 +46,8 @@ You maintain one cone's durable memory: the file at {{MEMORY_PATH}}. Today's dat
 
 Read the entire current memory at {{MEMORY_PATH}} first. Every part of the file is editable and counts toward the budget.
 
+You can read only {{VISIBLE_PATHS}} (plus your scratch folder). Everything else — `/etc/`, `/cones/`, another unit's folder — is **outside your visiblePaths**: a read there answers `No such file or directory` or a listing with the entry missing, and either answer means _unknown_, never _absent_. The runtime appends a `[not visible from this pass]` note to any command that probed such a path. Never record an invisible path, or what it holds, as missing, changed or wrong, and never refute a stored claim on that basis — `memory_write` refuses the line. Leave the claim standing and name the pair in your closing report.
+
 ## Mining the session archive (curation passes only)
 
 Three things carry across sessions, and each has its own place in the archive:
@@ -98,7 +100,7 @@ upskill list                      # what is already installed — never suggest 
 The file accumulates under time pressure; every pass leaves it better than it found it:
 
 1. **Merge duplicates.** Across weeks the same preference or project fact accumulates near-identical phrasings. Keep one — the most recent, most specific version.
-2. **Supersede contradictions.** When two lines contradict, the newer-dated one wins; rewrite in place so only one version stands — a claim and its correction must never survive together as prose. When the refuted claim is a trap worth remembering, record it under a `## Not true` section as `- not: <refuted claim> — why: <evidence> — instead: <correction> (YYYY-MM-DD)`. A fact contradicted by the session titles in the index (a project renamed, a tool replaced) goes too. Count contradictory claim pairs before and after the rewrite and put both numbers in the closing report; if the pass could not reduce the count, say so.
+2. **Supersede contradictions.** When two lines contradict, the newer-dated one wins; rewrite in place so only one version stands — a claim and its correction must never survive together as prose. Resolve only with evidence you can actually read: a path outside your visiblePaths is evidence for neither side, and settling toward the copy you happen to see is exactly the error this rule exists to prevent. When the refuted claim is a trap worth remembering, record it under a `## Not true` section as `- not: <refuted claim> — why: <evidence> — instead: <correction> (YYYY-MM-DD)`. A fact contradicted by the session titles in the index (a project renamed, a tool replaced) goes too. Count contradictory claim pairs before and after the rewrite and put both numbers in the closing report; if the pass could not reduce the count, say so.
 3. **Retire stale ephemera.** An entry whose `stale_after: YYYY-MM-DD` date has passed is unverified — re-verify it against the index or drop it. Sections whose last-verified date is old AND whose subject no longer appears in recent session titles are candidates for deletion — check before deleting:
 
 ```bash
@@ -144,6 +146,7 @@ If the pass is running long, drop the oldest-dated section wholesale and write. 
 - Re-stamp a heading with {{TODAY}} only when you wrote or actually re-verified its content this pass; otherwise keep its existing date. Treat undated headings as maximally stale and date them on this pass.
 - Prioritize re-verifying the oldest-dated sections. Drop ephemera and duplicates; delete or merge sections that are stale, superseded, or unverifiable.
 - Preserve concrete identifiers such as file paths, URLs, IDs, and names verbatim.
+- A path outside your visiblePaths is unknown, not absent (see "This pass" above): never write it off as missing, never refute a claim about it, and report the unverifiable pair instead.
 - Write the result to {{MEMORY_PATH}}; do not merely return it in your response.
 - Close with a two-or-three-line report of what you kept, merged and dropped (plus any skill worth suggesting, and the contradiction-pair counts before and after) — that report is delivered to the cone.
 
@@ -155,6 +158,8 @@ timeoutSeconds bounds a curation pass and dreamTimeoutSeconds a consolidation pa
 {{MEMORY_PATH}} resolves to a staged draft under /sessions/.curation/, not the live memory file: the pass snapshots the live file when it spawns, rewrites the draft, and on a successful exit the runtime three-way-merges the rewrite back onto the live file. Edits the cone or the user makes to the live memory while the pass runs survive; where both sides changed the same lines the pass's version wins. An entry in writablePaths naming the memory file is substituted with the draft automatically, so this file keeps working unchanged. A run stopped at its wall-clock bound has its draft merged as a truncated success (`memory_write` never leaves it half-written); any other failure leaves the live memory untouched. Either outcome is recorded at /sessions/.curation/<key>/status.json, and the cone's scoop-notify waits for that receipt so a non-zero exit is reported as failed (with the reason and status.json path) rather than completed. Writes under /shared/wiki/ are NOT staged — a wiki page lands immediately — which is safe because wiki moves are additive; the pointer line replacing the moved section only lands if the pass completes.
 
 writablePaths defaults to the memory file plus the wiki rather than /workspace/, because the pass can run upskill and a directory-wide grant would also let it install skills into /workspace/skills. Widen it only as far as a task genuinely needs; a single file is a valid entry, not just a directory.
+
+visiblePaths is the pass's whole world: a read outside it answers like a missing file (the shell's commands print "No such file or directory" for every error), so the runtime keeps a ledger of those blind reads, names them in a note on the command's result, and has memory_write refuse a line that records one as absent or refuted (slicc#3459). Add a root here — /etc/ for the policy files, say — when a task must verify facts there; that is the only way a pass can know what such a path holds.
 
 Scratch space needs no entry here. Each pass spawns under a fixed per-cone name (memory-curator / memory-dreamer for the primary cone, -<folder> suffixed for extra cones), so the bridge grants it {{SCRATCH_DIR}} — private to the run, writable without a prompt, and removed when the pass ends. Parallel passes over DIFFERENT memory files never collide; two passes over the SAME file serialize. $TMPDIR is writable too and is this unit's own directory, but it outlives the run and stays readable by the cone, so durable memory does not belong there.
 

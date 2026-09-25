@@ -115,7 +115,7 @@ allowedCommands: [cat, grep, wc, custom-text]
 model: claude-sonnet-4-6
 timeoutSeconds: 45
 ---
-Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} budget={{BUDGET_CHARS}} today={{TODAY}} unknown={{KEEP_ME}}`;
+Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} budget={{BUDGET_CHARS}} today={{TODAY}} visible={{VISIBLE_PATHS}} unknown={{KEEP_ME}}`;
     const spawn = successSpawn();
 
     const result = await runAgenticMemoryPass({
@@ -153,7 +153,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     });
     // A document without a `{{TASK}}` slot gets the pass statement appended.
     expect(options.prompt).toBe(
-      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}\n\n` +
+      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 visible=/sessions/, /shared/, /knowledge/ unknown={{KEEP_ME}}\n\n` +
         `**Curation pass**: mine the archived session at ${ARCHIVE_PATH} for what is worth carrying into future sessions, ` +
         'fold it into the memory, and consolidate the whole file in the same pass. Work fast: a pass should finish in ' +
         'well under 10 minutes and is hard-stopped after 1 minutes — mine the three signals, write, and stop, rather than ' +

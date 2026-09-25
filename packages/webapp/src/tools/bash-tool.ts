@@ -353,6 +353,22 @@ export interface BashToolOptions {
    * no scrub, matching the identity scrubber that surface already returns.
    */
   scrubOutput?: (text: string) => Promise<string>;
+  /**
+   * Extra lines appended to a run's output after it settles — foreground
+   * result and detached delivery alike. A memory pass uses it to name the
+   * paths the command probed outside its visible roots (#3459): the shell's
+   * own commands print `No such file or directory` for every fs error, so
+   * the result is the only place the model can be told which of those were
+   * the sandbox edge. `undefined` appends nothing.
+   */
+  annotateResult?: () => string | undefined;
+}
+
+/** Append the annotator's note, when it has one, on its own line. */
+function annotate(ctx: BashRunContext, output: string): string {
+  const note = ctx.options.annotateResult?.();
+  if (!note) return output;
+  return `${output.endsWith('\n') || output.length === 0 ? output : `${output}\n`}${note}\n`;
 }
 
 /**
@@ -814,7 +830,7 @@ async function deliverBackgroundJob(
   }
   // Scrub BEFORE the write, so the persisted file the agent is told to `cat` is
   // masked too — a `preview`-only scrub would just move the leak to disk.
-  const output = await scrubJobOutput(ctx, jobId, raw);
+  const output = await scrubJobOutput(ctx, jobId, annotate(ctx, raw));
 
   let persistedPath: string | undefined;
   try {
@@ -935,7 +951,7 @@ async function foregroundResult(
   if (result.stdout) output += result.stdout;
   if (result.stderr) output += result.stderr;
   if (!output) output = `(exit code: ${result.exitCode})`;
-  output = appendPipelineStatus(output, result.pipeStatus);
+  output = annotate(ctx, appendPipelineStatus(output, result.pipeStatus));
 
   return {
     content: await boundBashOutput(output, ctx.fs, ctx.tempDir, ctx.nextOutputSeq),

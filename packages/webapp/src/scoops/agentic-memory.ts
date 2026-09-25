@@ -474,6 +474,9 @@ export async function runAgenticMemoryPass(
         SESSION_COUNT: String(opts.sessionCount),
         BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
         SCRATCH_DIR: scratchDir,
+        // What the pass can read, in its own words, so the document can say
+        // where "not found" stops meaning absent (#3459).
+        VISIBLE_PATHS: config.visiblePaths.join(', '),
         TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
         TIMEOUT_MINUTES: String(timeoutMinutes),
         TASK: task,

@@ -192,4 +192,74 @@ describe('memory_write tool', () => {
     const second = await live.execute({ path: MEMORY, content: 'y' });
     expect(second.content).toContain(`${computeBudget(30)}-char budget`);
   });
+
+  // #3459: a pass that probed a path it cannot see must not write it off.
+  describe('blind paths', () => {
+    const DRAFT = '/sessions/.curation/dream-2026-09-24-cone.md/draft.md';
+    const STORED =
+      '# Memory\n\n- process: www.printful.com is in /etc/llmstxtignore (2026-09-18)\n';
+    let blind: string[];
+    let guarded: ToolDefinition;
+
+    beforeEach(async () => {
+      blind = [];
+      await fs.mkdir('/sessions/.curation/dream-2026-09-24-cone.md', { recursive: true });
+      await fs.writeFile(DRAFT, STORED);
+      guarded = createMemoryWriteTool(fs, {
+        readSessionCount: async () => 0,
+        blindPaths: () => blind,
+      });
+    });
+
+    it('refuses a new line that records a probed path as absent, leaving the file untouched', async () => {
+      blind = ['/etc/llmstxtignore'];
+      const result = await guarded.execute({
+        path: DRAFT,
+        edits: [
+          {
+            oldText: '- process: www.printful.com is in /etc/llmstxtignore (2026-09-18)',
+            newText:
+              '- not: www.printful.com is in the ignore list — why: /etc/llmstxtignore no longer exists on 6.169.0 (2026-09-24)',
+          },
+        ],
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('/etc/llmstxtignore is outside this pass');
+      expect(result.content).toContain('UNKNOWN, never absent');
+      expect(await fs.readFile(DRAFT, { encoding: 'utf-8' })).toBe(STORED);
+    });
+
+    it('applies the same rule to a whole-file rewrite', async () => {
+      blind = ['/etc/MEMORY.md'];
+      const result = await guarded.execute({
+        path: DRAFT,
+        content: `${STORED}- process: the contracts live in /shared/, not /etc/MEMORY.md (2026-09-24)\n`,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('/etc/MEMORY.md');
+    });
+
+    it('lets the stored claim stand, and a neutral note about the blind path through', async () => {
+      blind = ['/etc/llmstxtignore'];
+      const result = await guarded.execute({
+        path: DRAFT,
+        content: `${STORED}- process: /etc/llmstxtignore is outside this pass's visiblePaths; unverified here (2026-09-24)\n`,
+      });
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('does not fire for a path the pass never probed, nor without a ledger', async () => {
+      blind = ['/etc/MEMORY.md'];
+      const unrelated = await guarded.execute({
+        path: DRAFT,
+        content: `${STORED}- pitfall: /workspace/repo/dist is missing after a clean checkout\n`,
+      });
+      expect(unrelated.isError).toBeUndefined();
+      const noLedger = await tool.execute({
+        path: DRAFT,
+        content: `${STORED}- process: /etc/llmstxtignore no longer exists\n`,
+      });
+      expect(noLedger.isError).toBeUndefined();
+    });
+  });
 });

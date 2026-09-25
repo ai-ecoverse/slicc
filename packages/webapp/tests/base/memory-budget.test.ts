@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeBudget,
+  isCurationDraftPath,
   isMemoryFilePath,
+  isMemoryPassSandbox,
   MEMORY_BASE_CHARS,
   MEMORY_FILE_GUARD_MESSAGE,
   MEMORY_WRITE_TOOL_NAME,
@@ -53,5 +55,25 @@ describe('isMemoryFilePath', () => {
 
   it('names the tool in the guard message', () => {
     expect(MEMORY_FILE_GUARD_MESSAGE).toContain(MEMORY_WRITE_TOOL_NAME);
+  });
+});
+
+describe('isMemoryPassSandbox (#3459)', () => {
+  it('recognises a unit by its grant on a staged curation draft, however the bridge spells it', () => {
+    expect(isCurationDraftPath('/sessions/.curation/dream-2026-09-24-cone.md/draft.md')).toBe(true);
+    expect(isCurationDraftPath('/sessions/.curation/dream-2026-09-24-cone.md/draft.md/')).toBe(
+      true
+    );
+    expect(isCurationDraftPath('/sessions/.curation/dream-x.md/base.md')).toBe(false);
+    expect(isCurationDraftPath('/workspace/CLAUDE.md')).toBe(false);
+    expect(
+      isMemoryPassSandbox([
+        '/sessions/.curation/2026-08-05-memory.md/draft.md/',
+        '/scoops/agent-memory-curator/',
+        '/tmp/',
+      ])
+    ).toBe(true);
+    expect(isMemoryPassSandbox(['/scoops/agent-helper/', '/shared/', '/tmp/'])).toBe(false);
+    expect(isMemoryPassSandbox([])).toBe(false);
   });
 });
