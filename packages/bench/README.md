@@ -78,7 +78,7 @@ It is browser-use's BU Bench V2 format, so public sets and our own evals share o
 - `slicc` is optional and ignored by upstream runners. It can name the site, the skills a task is about, files to put in the VFS (`files: [{ from, to }]`, relative to the JSON file), a time limit, and required credentials.
 - Anthropic skill-creator `evals.json` files load directly: each expectation becomes an equally weighted item.
 
-`bu-v1` is BU Bench V1's 40 tasks that have a reference answer. Each becomes a two-item rubric: the answer, and evidence it was read from a page. `bu-v2` is BU Bench V2 as published. Both come from the browser-use/benchmark commit pinned in `scripts/upstream.mjs`. Their task text is never committed or published: upstream asks for that, and the repo has no licence.
+`bu-v1` is BU Bench V1's 40 tasks that have a reference answer. Each becomes a two-item rubric: the answer, and evidence it was read from a page. `bu-v2` is BU Bench V2.1: 200 tasks with weighted findings rubrics, from upstream's `BU_Bench_V2.enc`, which holds V2.1 since release v2.1.1. Upstream gives each V2.1 task up to 60 minutes, so pass `--timeout 3600` and shard runs to fit a job's 6 hours. Both sets come from the browser-use/benchmark release pinned in `scripts/upstream.mjs` (v2.1.1). Records and result files carry `upstream`: the repo, tag, commit, file and the file's sha256, as upstream asks results to record. Their task text is never committed or published: upstream asks for that, and the repo has no licence.
 
 ## Reading the report
 

@@ -75,6 +75,7 @@ export function summarize(records, { runStart } = {}) {
           model: rs[0].config.model,
           skills: rs[0].config.skills,
           judge_model: judgeModels(rs).join(', ') || null,
+          upstream: rs.find((r) => r.upstream)?.upstream ?? null,
           mean_score: round(mean(scored.map((r) => r.score))),
           ...counts,
           not_judged: done.length - scored.length,
@@ -186,6 +187,7 @@ export function reportData(records) {
     }
     return {
       benchmark,
+      upstream: rs.find((r) => r.upstream)?.upstream ?? null,
       configs: configs.map((c) =>
         configStats(
           c,
@@ -222,6 +224,12 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
   for (const b of data.benchmarks) {
     lines.push(
       `### ${b.benchmark}`,
+      ...(b.upstream
+        ? [
+            '',
+            `Tasks: ${b.upstream.repo} ${b.upstream.tag ?? ''} (${b.upstream.commit.slice(0, 7)}), \`${b.upstream.file}\` sha256 ${b.upstream.sha256.slice(0, 12)}`,
+          ]
+        : []),
       '',
       '| model | skills | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
       '|---|---|---|---|---|---|---|---|---|---|---|',

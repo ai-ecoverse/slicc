@@ -17,9 +17,15 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 
+/**
+ * The browser-use/benchmark release the sets and judge come from. v2.1.1 carries BU Bench V2.1
+ * (200 tasks; the file keeps its `BU_Bench_V2.enc` name) and the findings judge with
+ * `not_assessable_reason`. Upstream asks results to record the tag, commit and file checksum.
+ */
 export const UPSTREAM = {
   repo: 'browser-use/benchmark',
-  commit: '421390ea7fa4708f3d89d7695f9a16debb861daf',
+  tag: 'v2.1.1',
+  commit: 'af6c7f7f6772b6985b7644f660cac87fd4b03583',
 };
 
 /** The encrypted task sets this commit ships, by the name their key is derived from. */
@@ -96,10 +102,27 @@ async function fetchText(url, fetchImpl) {
  * One upstream task set, decrypted: V1 as its task list, V2 as its envelope.
  * `fetchImpl` is injectable for tests.
  */
-export async function loadUpstreamSet(name, { fetchImpl = fetch, source = UPSTREAM } = {}) {
+export async function loadUpstreamSet(
+  name,
+  { fetchImpl = fetch, source = UPSTREAM, withProvenance = false } = {}
+) {
   if (!UPSTREAM_SETS.includes(name))
     throw new Error(`unknown upstream set ${name}; have ${UPSTREAM_SETS.join(', ')}`);
-  return decryptSetFile(await fetchText(rawUrl(`${name}.enc`, source), fetchImpl), name);
+  const text = await fetchText(rawUrl(`${name}.enc`, source), fetchImpl);
+  const data = decryptSetFile(text, name);
+  if (!withProvenance) return data;
+  return { data, provenance: provenance(name, text, source) };
+}
+
+/** Where an upstream set came from, as upstream asks results to record it. */
+export function provenance(name, fileText, source = UPSTREAM) {
+  return {
+    repo: source.repo,
+    tag: source.tag ?? null,
+    commit: source.commit,
+    file: `${name}.enc`,
+    sha256: createHash('sha256').update(String(fileText), 'utf8').digest('hex'),
+  };
 }
 
 /**
@@ -113,6 +136,11 @@ export function extractPythonString(source, name) {
   return match[1].trim();
 }
 
+/** An integer constant that a newer judge may have dropped: null when it is absent. */
+export function extractOptionalPythonInt(source, name) {
+  return new RegExp(`^${name}\\s*=`, 'm').test(source) ? extractPythonInt(source, name) : null;
+}
+
 /** Read an integer constant such as `TRAJECTORY_MAX_CHARS = 700_000`. */
 export function extractPythonInt(source, name) {
   const match = new RegExp(`^${name}\\s*=\\s*([0-9_]+)`, 'm').exec(source);
@@ -120,15 +148,18 @@ export function extractPythonInt(source, name) {
   return Number(match[1].replace(/_/g, ''));
 }
 
-/** The findings judge as published at the pinned commit: system prompt and truncation caps. */
+/**
+ * The findings judge as published at the pinned commit: system prompt and truncation caps. V2.1
+ * dropped the task and rubric caps (they go to the judge whole), so those two may be null.
+ */
 export async function loadFindingsSpec({ fetchImpl = fetch, source = UPSTREAM } = {}) {
   const py = await fetchText(rawUrl('findings_judge.py', source), fetchImpl);
   return {
     systemPrompt: extractPythonString(py, 'FINDINGS_SYSTEM_PROMPT'),
     caps: {
-      task: extractPythonInt(py, 'TASK_MAX_CHARS'),
+      task: extractOptionalPythonInt(py, 'TASK_MAX_CHARS'),
       website: extractPythonInt(py, 'WEBSITE_MAX_CHARS'),
-      rubric: extractPythonInt(py, 'RUBRIC_MAX_CHARS'),
+      rubric: extractOptionalPythonInt(py, 'RUBRIC_MAX_CHARS'),
       finalResult: extractPythonInt(py, 'FINAL_RESULT_MAX_CHARS'),
       trajectory: extractPythonInt(py, 'TRAJECTORY_MAX_CHARS'),
       files: extractPythonInt(py, 'FILES_MAX_CHARS'),

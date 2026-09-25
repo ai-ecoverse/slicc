@@ -52,7 +52,12 @@ const ITEM_ID = /^[A-Za-z][A-Za-z0-9_]*$/;
  * the scorer rely on: an id, the task text, a rubric that names every weighted item, and
  * integer weights that sum to 100.
  */
-export function validateTask(task) {
+/**
+ * `checkDigests: false` skips the supplied task and rubric digests: upstream's sets do not keep
+ * them in step with the text (BU Bench V2.1 revised 139 task texts; its integrity check is the
+ * published file checksum, which records carry as `upstream.sha256`).
+ */
+export function validateTask(task, { checkDigests = true } = {}) {
   if (!task || typeof task !== 'object') return ['task is not an object'];
   const errors = [];
   const where = typeof task.id === 'string' && task.id ? task.id : '(no id)';
@@ -67,7 +72,7 @@ export function validateTask(task) {
     return errors;
   }
   errors.push(...validateWeights(weights, task.rubric, where));
-  errors.push(...validateDigests(task, where));
+  if (checkDigests) errors.push(...validateDigests(task, where));
   if (task.slicc !== undefined) errors.push(...validateSliccExtension(task.slicc, where));
   return errors;
 }
@@ -92,11 +97,25 @@ function validateWeights(weights, rubric, where) {
   return errors;
 }
 
+/**
+ * A supplied digest matches its text in full, or as upstream's short form: BU Bench V2.1 (v2.1.1)
+ * stores most `rubric_sha` values as the first 12 hex characters of the sha256.
+ */
+export function digestMatches(digest, text) {
+  const full = sha256(text);
+  if (digest === full) return true;
+  return typeof digest === 'string' && /^[0-9a-f]{12,63}$/.test(digest) && full.startsWith(digest);
+}
+
 function validateDigests(task, where) {
   const errors = [];
   for (const field of ['task', 'rubric']) {
     const digest = task[`${field}_sha`];
-    if (digest !== undefined && typeof task[field] === 'string' && digest !== sha256(task[field])) {
+    if (
+      digest !== undefined &&
+      typeof task[field] === 'string' &&
+      !digestMatches(digest, task[field])
+    ) {
       errors.push(`${where}: ${field}_sha does not match the ${field} text`);
     }
   }
@@ -139,7 +158,7 @@ function validateSliccExtension(ext, where) {
 }
 
 /** Problems with a whole task set: the envelope, each task, and duplicate ids. */
-export function validateEnvelope(envelope) {
+export function validateEnvelope(envelope, { checkDigests = true } = {}) {
   if (!envelope || typeof envelope !== 'object' || !Array.isArray(envelope.tasks)) {
     return ['a task set is { benchmark, tasks: [...] }'];
   }
@@ -148,7 +167,7 @@ export function validateEnvelope(envelope) {
     errors.push('benchmark name is missing');
   const seen = new Set();
   for (const task of envelope.tasks) {
-    errors.push(...validateTask(task));
+    errors.push(...validateTask(task, { checkDigests }));
     if (task && typeof task.id === 'string') {
       if (seen.has(task.id)) errors.push(`duplicate task id ${task.id}`);
       seen.add(task.id);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decryptSetFile,
   encryptJson,
+  extractOptionalPythonInt,
   extractPythonInt,
   extractPythonString,
   fernetDecrypt,
@@ -9,6 +10,7 @@ import {
   fernetKey,
   loadFindingsSpec,
   loadUpstreamSet,
+  provenance,
   rawUrl,
   UPSTREAM,
 } from './upstream.mjs';
@@ -102,5 +104,38 @@ describe('upstream files', () => {
     expect(await loadUpstreamSet('BU_Bench_V1', { fetchImpl })).toEqual([{ task_id: 'x' }]);
     await expect(loadUpstreamSet('Nope', { fetchImpl })).rejects.toThrow(/unknown upstream set/);
     await expect(loadUpstreamSet('BU_Bench_V2', { fetchImpl })).rejects.toThrow(/HTTP 404/);
+  });
+
+  it('pins the v2.1.1 release and says where a set came from', async () => {
+    expect(UPSTREAM).toMatchObject({
+      tag: 'v2.1.1',
+      commit: 'af6c7f7f6772b6985b7644f660cac87fd4b03583',
+    });
+    const file = encryptJson([{ task_id: 'x' }], 'BU_Bench_V1');
+    const got = await loadUpstreamSet('BU_Bench_V1', {
+      fetchImpl: fakeFetch({ 'BU_Bench_V1.enc': file }),
+      withProvenance: true,
+    });
+    expect(got.data).toEqual([{ task_id: 'x' }]);
+    expect(got.provenance).toEqual({
+      repo: 'browser-use/benchmark',
+      tag: 'v2.1.1',
+      commit: UPSTREAM.commit,
+      file: 'BU_Bench_V1.enc',
+      sha256: provenance('BU_Bench_V1', file).sha256,
+    });
+    expect(got.provenance.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(provenance('X', 'a', { repo: 'r', commit: 'c' })).toMatchObject({
+      tag: null,
+      commit: 'c',
+    });
+  });
+
+  it('reads the V2.1 judge, which has no task or rubric cap', async () => {
+    const v21 = PY_SOURCE.replace(/^TASK_MAX_CHARS.*\n/m, '').replace(/^RUBRIC_MAX_CHARS.*\n/m, '');
+    expect(extractOptionalPythonInt(v21, 'TASK_MAX_CHARS')).toBeNull();
+    expect(extractOptionalPythonInt(PY_SOURCE, 'TASK_MAX_CHARS')).toBe(40000);
+    const spec = await loadFindingsSpec({ fetchImpl: fakeFetch({ 'findings_judge.py': v21 }) });
+    expect(spec.caps).toMatchObject({ task: null, rubric: null, trajectory: 700000 });
   });
 });

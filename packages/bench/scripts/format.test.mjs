@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  digestMatches,
   equalWeights,
   fromBuV1,
   fromSkillCreatorEvals,
@@ -197,5 +198,32 @@ describe('fromSkillCreatorEvals', () => {
     const set = fromSkillCreatorEvals({ evals: [{ prompt: 'p', expectations: ['e'] }] });
     expect(set.tasks[0].id).toBe('skill-1');
     expect(set.tasks[0].slicc).toEqual({ skills: ['skill'] });
+  });
+});
+
+describe('upstream digests', () => {
+  const task = withDigests({
+    id: 't',
+    task: 'Do it.',
+    rubric: '## Items\nA1_x — x\n',
+    weights: { A1_x: 100 },
+  });
+  it("accepts a full digest or upstream's 12-character short form, never a wrong one", () => {
+    const full = sha256(task.rubric);
+    expect(digestMatches(full, task.rubric)).toBe(true);
+    expect(digestMatches(full.slice(0, 12), task.rubric)).toBe(true);
+    expect(digestMatches(full.slice(0, 11), task.rubric)).toBe(false);
+    expect(digestMatches('0'.repeat(12), task.rubric)).toBe(false);
+    expect(digestMatches(42, task.rubric)).toBe(false);
+    expect(validateTask({ ...task, rubric_sha: full.slice(0, 12) })).toEqual([]);
+  });
+
+  it('skips supplied digests for upstream sets, whose texts outgrow them', () => {
+    const stale = { ...task, task_sha: '0'.repeat(64) };
+    expect(validateTask(stale)).toEqual(['t: task_sha does not match the task text']);
+    expect(validateTask(stale, { checkDigests: false })).toEqual([]);
+    expect(validateEnvelope({ benchmark: 'B', tasks: [stale] }, { checkDigests: false })).toEqual(
+      []
+    );
   });
 });
