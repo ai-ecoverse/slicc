@@ -22,7 +22,7 @@ on:
         description: 'Only the first N tasks of each set (empty: all)'
         default: ''
       timeout:
-        description: 'Seconds one agent run may take'
+        description: 'Seconds one agent run may take (BU Bench V2.1: 3600)'
         default: '900'
       judge-model:
         description: 'Bedrock model that judges the runs'
@@ -30,20 +30,40 @@ on:
       skills-ref:
         description: 'ai-ecoverse/skills ref for the ecoverse skills condition'
         default: 'main'
-      duration:
-        description: 'Leader lifetime (max 350m)'
-        default: '5h'
+      shards:
+        description: 'Matrix jobs; each takes every Nth task (1-20)'
+        default: '3'
+      max-parallel:
+        description: "Shards running at once (3 × 8 vCPU fills the project's E2 quota of 24)"
+        default: '3'
+      leaders:
+        description: 'Leaders per shard, side by side (1-8; about 2 vCPU each)'
+        default: '4'
+      runner:
+        description: 'GCE instance template the shards run on (runs-on label)'
+        default: 'gcp-ubuntu-24-04-8core'
+      deadline-minutes:
+        description: 'Minutes a shard takes new runs for (its job limit is this plus 45)'
+        default: '300'
+      max-task-cost:
+        description: 'Dollars one run may spend before it is stopped (0: no cap)'
+        default: '5'
+      max-cost:
+        description: 'Dollars one shard may spend before it stops taking runs (0: no cap)'
+        default: '150'
+      fresh-leader-every:
+        description: 'Restart a leader every N tasks with a wiped profile (1: every task is isolated; 0: never)'
+        default: '1'
       publish:
         description: 'Publish the results to the Hugging Face dataset ai-ecoverse/slicc-bench'
         type: boolean
         default: true
-      fresh-leader-every:
-        description: 'Restart the leader every N tasks with a wiped profile (1: every task is isolated; 0: one leader for the job)'
-        default: '1'
   pull_request:
     paths:
       - 'packages/bench/**'
       - 'packages/slicc-cli/session.go'
+      - 'packages/github-workflow/scripts/start-leader.mjs'
+      - 'packages/github-workflow/scripts/stop-leader.mjs'
       - '.github/workflows/bench.yml'
 
 concurrency:
@@ -54,21 +74,70 @@ permissions:
   contents: read
 
 jobs:
-  bench:
-    name: Benchmark
+  plan:
+    name: Plan
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 355 || 45 }}
+
+    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    timeout-minutes: 15
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      slicc-version: ${{ steps.plan.outputs.slicc-version }}
+      run-minutes: ${{ steps.plan.outputs.run-minutes }}
+      job-minutes: ${{ steps.plan.outputs.job-minutes }}
+    env:
+      SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
+      DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      - name: Pin the sliccy version and list the shards
+        id: plan
+        run: |
+          set -euo pipefail
+          if ! [[ "$SHARDS" =~ ^[0-9]+$ ]] || [ "$SHARDS" -lt 1 ] || [ "$SHARDS" -gt 20 ]; then
+            echo "::error::shards must be 1 to 20, not '$SHARDS'"; exit 1
+          fi
+          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 1380 ]; then
+            echo "::error::deadline-minutes must be 10 to 1380, not '$DEADLINE'"; exit 1
+          fi
+
+
+          echo "run-minutes=$((DEADLINE + 20))" >> "$GITHUB_OUTPUT"
+          echo "job-minutes=$((DEADLINE + 45))" >> "$GITHUB_OUTPUT"
+          version="$(npm view sliccy@latest version)"
+          echo "slicc-version=$version" >> "$GITHUB_OUTPUT"
+          echo "shards=$(jq -cn --argjson n "$SHARDS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+          echo "sliccy $version, $SHARDS shard(s)" >> "$GITHUB_STEP_SUMMARY"
+
+  bench:
+    name: Shard ${{ matrix.shard }}
+    needs: plan
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-ubuntu-24-04-4core' }}
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.max-parallel) || 1 }}
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       BENCH_SETS: ${{ github.event_name == 'workflow_dispatch' && inputs.sets || 'packages/bench/tasks/smoke.json' }}
       BENCH_MODELS: ${{ github.event_name == 'workflow_dispatch' && inputs.models || 'claude-sonnet-5,claude-opus-5-5' }}
       BENCH_SKILLS: ${{ github.event_name == 'workflow_dispatch' && inputs.skills || 'builtin' }}
-      BENCH_REPEATS: ${{ github.event_name == 'workflow_dispatch' && inputs.repeats || '1' }}
+      BENCH_REPEATS: ${{ github.event_name == 'workflow_dispatch' && inputs.repeats || '2' }}
       BENCH_TASKS: ${{ github.event_name == 'workflow_dispatch' && inputs.tasks || 'smoke-001' }}
       BENCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '' }}
       BENCH_TIMEOUT: ${{ github.event_name == 'workflow_dispatch' && inputs.timeout || '600' }}
       BENCH_JUDGE_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.judge-model || 'global.openai.gpt-5.6-luna' }}
       BENCH_FRESH_LEADER_EVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.fresh-leader-every || '1' }}
+      BENCH_LEADERS: ${{ github.event_name == 'workflow_dispatch' && inputs.leaders || '2' }}
+      BENCH_DEADLINE_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
+      BENCH_MAX_TASK_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-task-cost || '2' }}
+      BENCH_MAX_COST: ${{ github.event_name == 'workflow_dispatch' && inputs.max-cost || '10' }}
+      BENCH_SHARD: ${{ matrix.shard }}/${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
+      SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -89,16 +158,31 @@ jobs:
             echo "mounts=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Start leader
-        id: start
-        uses: ./packages/github-workflow/actions/start-leader
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          duration: ${{ github.event_name == 'workflow_dispatch' && inputs.duration || '40m' }}
-          mounts: ${{ steps.mounts.outputs.mounts }}
-          provider: bedrock-camp
-          provider-api-key: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
-          provider-base-url: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
-          model: bedrock-camp:global.anthropic.claude-sonnet-5
+          node-version: '24'
+
+      - name: Install Chrome
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then google-chrome --version; exit 0; fi
+          curl -fsSL -o "$RUNNER_TEMP/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends "$RUNNER_TEMP/chrome.deb" fonts-liberation
+          google-chrome --version
+
+      - name: Prepare /slicc
+        run: |
+          if [ -w /slicc ] 2>/dev/null; then exit 0; fi
+          sudo mkdir -p /slicc && sudo chown "$(id -u)" /slicc
+
+      - name: Resume from the previous attempt
+        if: github.run_attempt != '1'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bench-${{ github.run_id }}-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/bench-out
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -111,26 +195,28 @@ jobs:
           source: build
 
       - name: Run and judge
+        timeout-minutes: ${{ fromJSON(needs.plan.outputs.run-minutes) }}
         env:
-          SLICC_JOIN_URL: ${{ steps.start.outputs.join-url }}
-          SLICC_VERSION: ${{ steps.start.outputs.slicc-version }}
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           BEDROCK_REGION: ${{ vars.RUM_AWS_REGION || 'us-west-2' }}
           BENCH_LEADER_SCRIPTS: packages/github-workflow/scripts
-          BENCH_LEADER_LOG: ${{ steps.start.outputs.log-path }}
-          INPUT_SLICC_VERSION: ${{ steps.start.outputs.slicc-version }}
-          INPUT_DURATION: ${{ github.event_name == 'workflow_dispatch' && inputs.duration || '40m' }}
+          INPUT_SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
+          INPUT_DURATION: 350m
           INPUT_MOUNTS: ${{ steps.mounts.outputs.mounts }}
           INPUT_PROVIDER: bedrock-camp
           INPUT_PROVIDER_API_KEY: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           INPUT_PROVIDER_BASE_URL: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
           INPUT_MODEL: bedrock-camp:global.anthropic.claude-sonnet-5
+          INPUT_MASK_JOIN_URL: 'true'
         run: |
           set -euo pipefail
           args=(--models "$BENCH_MODELS" --skills "$BENCH_SKILLS" --repeats "$BENCH_REPEATS"
                 --timeout "$BENCH_TIMEOUT" --judge-model "$BENCH_JUDGE_MODEL"
+                --leaders "$BENCH_LEADERS" --boot-leaders --shard "$BENCH_SHARD"
                 --fresh-leader-every "$BENCH_FRESH_LEADER_EVERY"
-                --harness "${SLICC_VERSION:-unknown}" --out "$RUNNER_TEMP/bench-out")
+                --deadline-minutes "$BENCH_DEADLINE_MINUTES"
+                --max-task-cost "$BENCH_MAX_TASK_COST" --max-cost "$BENCH_MAX_COST"
+                --harness "$SLICC_VERSION" --out "$RUNNER_TEMP/bench-out")
           for set in $BENCH_SETS; do args+=(--set "$set"); done
           if [ -n "$BENCH_TASKS" ]; then args+=(--tasks "$BENCH_TASKS"); fi
           if [ -n "$BENCH_LIMIT" ]; then args+=(--limit "$BENCH_LIMIT"); fi
@@ -138,25 +224,81 @@ jobs:
 
       - name: Collect leader diagnostics
         if: always()
-        env:
-          LEADER_LOG: ${{ steps.start.outputs.log-path }}
         run: |
           set -uo pipefail
           out="$RUNNER_TEMP/bench-out"
           mkdir -p "$out"
-          if [ ! -f "$LEADER_LOG" ]; then echo "no leader log"; exit 0; fi
-          grep -v '\[cdp-proxy\]' "$LEADER_LOG" \
-            | grep -iE 'bench-event|tray|signal|follower|controller|bootstrap|webrtc|ice|turn|dtls|sctp|data ?channel|peer|reconnect|disconnect|websocket|heartbeat|start-leader|stop-leader' \
-            | sed -E 's#/(join|controller|webhook)/[^ /"?]+#/\1/<token>#g' \
-            | cut -c1-400 > "$out/leader-infra.log" || true
-          {
-            echo "leader log lines: $(wc -l < "$LEADER_LOG")"
-            echo "cdp-proxy lines: $(grep -c '\[cdp-proxy\]' "$LEADER_LOG" || true)"
-            echo "infra lines kept: $(wc -l < "$out/leader-infra.log")"
-          } | tee "$out/leader-log-stats.txt"
+          found=0
+          for log in "$RUNNER_TEMP"/slicc-gw-lane*/leader.log; do
+            [ -f "$log" ] || continue
+            found=1
+            lane="$(basename "$(dirname "$log")")"
+            grep -v '\[cdp-proxy\]' "$log" \
+              | grep -iE 'bench-event|tray|signal|follower|controller|bootstrap|webrtc|ice|turn|dtls|sctp|data ?channel|peer|reconnect|disconnect|websocket|heartbeat|start-leader|stop-leader' \
+              | sed -E 's#/(join|controller|webhook)/[^ /"?]+#/\1/<token>#g' \
+              | cut -c1-400 > "$out/leader-infra-$lane.log" || true
+            {
+              echo "$lane leader log lines: $(wc -l < "$log")"
+              echo "$lane cdp-proxy lines: $(grep -c '\[cdp-proxy\]' "$log" || true)"
+              echo "$lane infra lines kept: $(wc -l < "$out/leader-infra-$lane.log")"
+            } | tee -a "$out/leader-log-stats.txt"
+          done
+          [ "$found" = 1 ] || echo "no leader logs"
+
+      - name: Stop leaders
+        if: always()
+        timeout-minutes: 5
+        run: |
+          for home in "$RUNNER_TEMP"/slicc-gw-lane*; do
+            [ -f "$home/state.json" ] || continue
+            SLICC_GW_HOME="$home" node packages/github-workflow/scripts/stop-leader.mjs || true
+          done
+
+      - name: Upload the shard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bench-${{ github.run_id }}-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/bench-out
+          if-no-files-found: ignore
+
+  report:
+    name: Report
+    needs: [plan, bench]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    timeout-minutes: 30
+    env:
+      BENCH_SETS: ${{ github.event_name == 'workflow_dispatch' && inputs.sets || 'packages/bench/tasks/smoke.json' }}
+      BENCH_MODELS: ${{ github.event_name == 'workflow_dispatch' && inputs.models || 'claude-sonnet-5,claude-opus-5-5' }}
+      BENCH_SKILLS: ${{ github.event_name == 'workflow_dispatch' && inputs.skills || 'builtin' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: bench-${{ github.run_id }}-shard-*
+          path: ${{ runner.temp }}/shards
+
+      - name: Merge the shards
+        id: merge
+        run: |
+          set -euo pipefail
+          shards=()
+          for d in "$RUNNER_TEMP"/shards/bench-*-shard-*/; do [ -d "$d" ] && shards+=("$d"); done
+
+
+          if [ ${#shards[@]} -eq 0 ] && [ -n "$(ls -A "$RUNNER_TEMP/shards" 2>/dev/null)" ]; then
+            shards=("$RUNNER_TEMP/shards")
+          fi
+          if [ ${#shards[@]} -eq 0 ]; then echo "::error::no shard left an artifact"; exit 1; fi
+          node packages/bench/scripts/merge.mjs --out "$RUNNER_TEMP/bench-out" "${shards[@]}"
 
       - name: Upload the report
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: bench-report-${{ github.run_id }}
@@ -168,15 +310,19 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload results
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: bench-${{ github.run_id }}
           path: ${{ runner.temp }}/bench-out
           if-no-files-found: ignore
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        with:
+          python-version: '3.13'
+
       - name: Publish to Hugging Face
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_HUB_DISABLE_TELEMETRY: '1'
@@ -193,10 +339,15 @@ jobs:
                 --dataset "$RUNNER_TEMP/hf-current")
           for set in $BENCH_SETS; do args+=(--set "$set"); done
           node packages/bench/scripts/publish.mjs "${args[@]}"
+
+
           hf upload "$BENCH_DATASET" "$RUNNER_TEMP/hf-stage" . --repo-type dataset \
+            --delete 'records/**' \
             --commit-message "Run $run_name: $BENCH_MODELS × $BENCH_SKILLS"
           echo "Published to https://huggingface.co/datasets/$BENCH_DATASET/tree/main/runs/$run_name" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Stop leader
-        if: always()
-        uses: ./packages/github-workflow/actions/stop-leader
+      - name: Fail if a shard did not finish
+        if: needs.bench.result != 'success'
+        run: |
+          echo "::error::at least one shard failed or stopped early (${{ needs.bench.result }}); use \"Re-run failed jobs\" to resume them from their artifacts"
+          exit 1

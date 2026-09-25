@@ -1,0 +1,73 @@
+name: Benchmark reaper
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Only list what would be cancelled'
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: bench-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    name: Reap stale benchmark runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      QUEUE_MINUTES: '60'
+      RUNNING_HOURS: '25'
+      REQUEUES: '2'
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
+    steps:
+      - name: Cancel stale runs
+        run: |
+          set -euo pipefail
+          now="$(date -u +%s)"
+          for status in queued in_progress; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/bench.yml/runs?status=$status&per_page=100" \
+              --jq '.workflow_runs[] | "\(.id) \(.run_attempt)"'
+          done | sort -u | while read -r run attempt; do
+            jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/attempts/$attempt/jobs?per_page=100")"
+            verdict="$(jq -r --argjson now "$now" --argjson q "$((QUEUE_MINUTES * 60))" \
+              --argjson r "$((RUNNING_HOURS * 3600))" '
+              def age(t): $now - (t | fromdateiso8601);
+              [.jobs[] | select(.status == "in_progress")] as $running
+              | if any($running[]; age(.started_at) > $r) then "force-cancel: a job has run for over \($r / 3600) hours"
+                elif ($running | length) == 0
+                  and any(.jobs[]; .status == "queued" and age(.created_at) > $q)
+                then "requeue: queued for over \($q / 60) minutes with nothing running"
+                else empty end' <<<"$jobs")"
+            [ -n "$verdict" ] || continue
+            action="${verdict%%:*}"
+            if [ "$action" = requeue ] && [ "$attempt" -gt "$REQUEUES" ]; then
+              verdict="cancel: still no runner after $REQUEUES re-queue(s)"
+              action=cancel
+            fi
+            echo "run $run (attempt $attempt): $verdict"
+            echo "- [run $run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run): $verdict" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$DRY_RUN" = "true" ]; then continue; fi
+            if [ "$action" = requeue ]; then
+              gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run/force-cancel" >/dev/null \
+                || { echo "::warning::could not cancel run $run"; continue; }
+              for _ in $(seq 1 30); do
+                [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .status)" = completed ] && break
+                sleep 5
+              done
+              gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run/rerun-failed-jobs" >/dev/null \
+                || echo "::warning::could not re-run the failed jobs of run $run"
+              continue
+            fi
+            gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run/$action" >/dev/null \
+              || echo "::warning::could not $action run $run"
+          done

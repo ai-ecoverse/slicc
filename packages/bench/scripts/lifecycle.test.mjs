@@ -2,7 +2,17 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { createJournal, createRecycler, currentLeader, redact, runNode } from './lifecycle.mjs';
+import {
+  bootLane,
+  createJournal,
+  createLock,
+  createRecycler,
+  currentLeader,
+  laneEnv,
+  redact,
+  runNode,
+  stopLeader,
+} from './lifecycle.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'bench-life-'));
 
@@ -191,5 +201,128 @@ describe('redact and the journal', () => {
     );
     createJournal(dir, { leaderLog: join(dir, 'missing', 'leader.log') }).event('end');
     expect(existsSync(join(dir, 'missing'))).toBe(false);
+  });
+});
+
+describe('lanes', () => {
+  it('runs one locked task at a time, and keeps going after a failure', async () => {
+    const lock = createLock();
+    const order = [];
+    const slow = (name, ms, fail) => () =>
+      new Promise((resolve, reject) =>
+        setTimeout(() => {
+          order.push(name);
+          fail ? reject(new Error(name)) : resolve(name);
+        }, ms)
+      );
+    const results = await Promise.allSettled([
+      lock(slow('a', 30)),
+      lock(slow('b', 1, true)),
+      lock(slow('c', 1)),
+    ]);
+    expect(order).toEqual(['a', 'b', 'c']);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+  });
+
+  it('gives each lane its own home and port', () => {
+    expect(laneEnv(2, { SLICC_GW_HOME: '/h', BENCH_LEADER_BASE_PORT: '5800' })).toEqual({
+      SLICC_GW_HOME: '/h-lane2',
+      INPUT_PORT: '5802',
+    });
+    expect(laneEnv(0, { RUNNER_TEMP: '/r' })).toEqual({
+      SLICC_GW_HOME: '/r/slicc-gw-lane0',
+      INPUT_PORT: '5710',
+    });
+    expect(laneEnv(1, {}).SLICC_GW_HOME).toMatch(/slicc-gw-lane1$/);
+  });
+
+  it('boots a lane through the lock and stops it with the stop script', async () => {
+    const run = vi.fn(async () => ({ status: 0, output: '' }));
+    const locked = [];
+    const lock = (fn) => {
+      locked.push(true);
+      return fn();
+    };
+    const calls = [];
+    const lane = await bootLane(1, {
+      scriptsDir: '/s',
+      env: { SLICC_GW_HOME: '/h', A: 'x' },
+      run,
+      lock,
+      read: () => ({ joinUrl: 'https://w/join/l1', startedAt: 0, sliccVersion: '9.9' }),
+      makeLeader: (o) => {
+        o.onCall({ call: 'exec ls' });
+        return { url: o.url };
+      },
+      onCall: (e) => calls.push(e),
+    });
+    expect(lane).toMatchObject({
+      leader: { url: 'https://w/join/l1' },
+      startedAt: '1970-01-01T00:00:00.000Z',
+      sliccVersion: '9.9',
+      leaderLog: '/h-lane1/leader.log',
+    });
+    expect(calls).toEqual([{ call: 'exec ls', lane: 1 }]);
+    expect(run.mock.calls[1][1].env).toMatchObject({
+      SLICC_GW_HOME: '/h-lane1',
+      INPUT_PORT: '5711',
+      A: 'x',
+    });
+    await lane.recycle();
+    await lane.stop();
+    expect(run.mock.calls.at(-1)[0]).toBe('/s/stop-leader.mjs');
+    expect(locked).toHaveLength(3);
+    await expect(
+      stopLeader({ scriptsDir: '/s', env: {}, run: async () => ({ status: 3, output: 'gone' }) })
+    ).rejects.toThrow('stop-leader exited 3: gone');
+  });
+
+  it("restarts a lane that was handed another lane's join URL, and gives up the second time", async () => {
+    const boot = (claims, urls) => {
+      let current = null;
+      return bootLane(1, {
+        scriptsDir: '/s',
+        env: { SLICC_GW_HOME: '/h' },
+        run: async (script) => {
+          if (script.endsWith('start-leader.mjs')) current = urls.shift();
+          return { status: 0, output: '' };
+        },
+        claims,
+        read: () => ({ joinUrl: current, startedAt: 0 }),
+        makeLeader: (o) => o,
+      });
+    };
+    const claims = new Map([[0, 'https://w/join/l0']]);
+    const urls = [
+      'https://w/join/l0',
+      'https://w/join/l1',
+      'https://w/join/l0',
+      'https://w/join/l0',
+    ];
+    const lane = await boot(claims, urls);
+    expect(lane.leader.url).toBe('https://w/join/l1');
+    expect(claims.get(1)).toBe('https://w/join/l1');
+    await expect(lane.recycle()).rejects.toThrow("lane 1 was handed lane 0's join URL twice");
+    await lane.stop();
+    expect(claims.has(1)).toBe(false);
+    const own = new Map([[1, 'https://w/join/old']]);
+    await boot(own, ['https://w/join/old']);
+    expect(own.get(1)).toBe('https://w/join/old');
+  });
+
+  it("marks events in each lane's own leader log", () => {
+    const dir = tmp();
+    const logs = { 0: join(dir, 'l0.log'), 1: join(dir, 'l1.log') };
+    writeFileSync(logs[0], '');
+    writeFileSync(logs[1], '');
+    const journal = createJournal(dir, {
+      now: () => 0,
+      leaderLog: (d) => logs[d.lane ?? 0] ?? null,
+    });
+    journal.event('task', { lane: 1, task_id: 't' });
+    journal.event('start');
+    journal.event('x', { lane: 7 });
+    expect(readFileSync(logs[1], 'utf8')).toContain('task t');
+    expect(readFileSync(logs[0], 'utf8')).toContain('start');
   });
 });

@@ -120,10 +120,7 @@ function writeCombined(stage, records, template) {
 function stageRun(opts, stage) {
   const base = join(stage, 'runs', opts.run);
   const own = recordsIn(opts.out);
-  for (const [f, r] of own) {
-    put(join(base, 'records', f), json(r));
-    put(join(stage, 'records', f), json(r));
-  }
+  for (const [f, r] of own) put(join(base, 'records', f), json(r));
   for (const f of listFiles(join(opts.out, 'results')))
     put(join(base, 'results', f), readFileSync(join(opts.out, 'results', f)));
   for (const f of ['report.md', 'report.json']) {
@@ -134,13 +131,33 @@ function stageRun(opts, stage) {
   return { records: own, traces: traces.length };
 }
 
+export function dropStaleUpstreamRecords(merged, incoming) {
+  const pins = new Map();
+  for (const r of incoming.values()) {
+    if (r.upstream?.commit) pins.set(r.benchmark, r.upstream.commit);
+  }
+  if (!pins.size) return [];
+  const dropped = [];
+  for (const [f, r] of [...merged]) {
+    const pin = pins.get(r.benchmark);
+    if (!pin || r.upstream?.commit === pin) continue;
+    merged.delete(f);
+    dropped.push(f);
+  }
+  return dropped;
+}
+
 export function stage(opts, { readFile = readFileSync } = {}) {
   const template = readFile(CARD_TEMPLATE, 'utf8');
   const merged = opts.dataset ? recordsIn(opts.dataset) : new Map();
   let run = { records: new Map(), traces: 0 };
+  let dropped = [];
   if (opts.out) {
     run = stageRun(opts, opts.stage);
+    dropped = dropStaleUpstreamRecords(merged, run.records);
     for (const [f, r] of run.records) merged.set(f, r);
+
+    for (const [f, r] of merged) put(join(opts.stage, 'records', f), json(r));
   }
   const taskSets = [];
   for (const spec of opts.sets) {
@@ -151,7 +168,13 @@ export function stage(opts, { readFile = readFileSync } = {}) {
     taskSets.push(name);
   }
   writeCombined(opts.stage, [...merged.values()], template);
-  return { records: run.records.size, traces: run.traces, combined: merged.size, taskSets };
+  return {
+    records: run.records.size,
+    traces: run.traces,
+    combined: merged.size,
+    dropped: dropped.length,
+    taskSets,
+  };
 }
 
 export function main(argv = process.argv.slice(2), { log = console.error } = {}) {
@@ -159,6 +182,7 @@ export function main(argv = process.argv.slice(2), { log = console.error } = {})
   const s = stage(opts);
   log(
     `staged ${s.records} run record(s), ${s.traces} encrypted trace(s), ${s.combined} record(s) in the combined report` +
+      (s.dropped ? `, dropped ${s.dropped} from an earlier upstream pin` : '') +
       (s.taskSets.length ? `, task sets ${s.taskSets.join(', ')}` : '')
   );
   return 0;

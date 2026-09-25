@@ -97,13 +97,87 @@ export function createJournal(dir, { urls = () => [], now = Date.now, leaderLog 
     event(type, data = {}) {
       const at = new Date(now()).toISOString();
       append('events.jsonl', { at, type, ...data });
-      if (!leaderLog) return;
+
+      const target = typeof leaderLog === 'function' ? leaderLog(data) : leaderLog;
+      if (!target) return;
       try {
         appendFileSync(
-          leaderLog,
+          target,
           `[bench-event] ${at} ${type}${data.task_id ? ` ${data.task_id}` : ''}\n`
         );
       } catch {}
     },
+  };
+}
+
+export function createLock() {
+  let tail = Promise.resolve();
+  return (fn) => {
+    const run = tail.then(fn, fn);
+    tail = run.catch(() => {});
+    return run;
+  };
+}
+
+export function laneEnv(i, env = process.env) {
+  const base = env.SLICC_GW_HOME || join(env.RUNNER_TEMP || tmpdir(), 'slicc-gw');
+  const port = (Number.parseInt(env.BENCH_LEADER_BASE_PORT, 10) || 5710) + i;
+  return { SLICC_GW_HOME: `${base}-lane${i}`, INPUT_PORT: String(port) };
+}
+
+export async function stopLeader({ scriptsDir, env, run = runNode }) {
+  const scratch = mkdtempSync(join(tmpdir(), 'bench-leader-'));
+  try {
+    const r = await run(join(scriptsDir, 'stop-leader.mjs'), {
+      env: { ...env, GITHUB_OUTPUT: join(scratch, 'output') },
+    });
+    if (r.status !== 0) throw new Error(`stop-leader exited ${r.status}: ${r.output.slice(-400)}`);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+export async function bootLane(
+  i,
+  {
+    scriptsDir,
+    env = process.env,
+    run = runNode,
+    read,
+    lock = createLock(),
+    claims = new Map(),
+    makeLeader,
+    onCall,
+  }
+) {
+  const laneVars = { ...env, ...laneEnv(i, env) };
+  const home = laneVars.SLICC_GW_HOME;
+  const readLane = read ?? (() => readState(home));
+  const recycleOnce = createRecycler({ scriptsDir, env: laneVars, run, read: readLane });
+
+  const recycle = () =>
+    lock(async () => {
+      for (let attempt = 1; ; attempt += 1) {
+        const info = await recycleOnce();
+        const holder = [...claims].find(([lane, url]) => lane !== i && url === info.url)?.[0];
+        if (holder === undefined) {
+          claims.set(i, info.url);
+          return info;
+        }
+        if (attempt >= 2) throw new Error(`lane ${i} was handed lane ${holder}'s join URL twice`);
+      }
+    });
+  const info = await recycle();
+  return {
+    leader: makeLeader({ url: info.url, onCall: (e) => onCall?.({ ...e, lane: i }) }),
+    recycle,
+    stop: () =>
+      lock(async () => {
+        claims.delete(i);
+        await stopLeader({ scriptsDir, env: laneVars, run });
+      }),
+    startedAt: info.startedAt,
+    sliccVersion: info.sliccVersion,
+    leaderLog: join(home, 'leader.log'),
   };
 }

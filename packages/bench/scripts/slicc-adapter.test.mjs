@@ -34,6 +34,7 @@ import {
   traceFromResult,
   transcriptSteps,
   transcriptSummary,
+  watchSpend,
 } from './slicc-adapter.mjs';
 
 const ok = (stdout = '') => ({ stdout, stderr: '', status: 0, timedOut: false });
@@ -581,6 +582,51 @@ describe('transcript export', () => {
     });
   });
 
+  it('stops collecting when its budget runs out, giving each call only what is left', async () => {
+    const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
+    const files = leaderFiles(doc, 1000);
+
+    let t = 0;
+    const slow = (reply) => (cmd, opts) => {
+      t += 5 * 60_000;
+      return typeof reply === 'function' ? reply(cmd, opts) : reply;
+    };
+    const { leader, calls } = fakeLeader({
+      commands: [[/^base64/, ok('QUFB')], ...files.commands].map(([p, r]) => [p, slow(r)]),
+    });
+    const { doc: read, info } = await exportTranscript(leader, '/d', {
+      partBytes: 1000,
+      now: () => t,
+    });
+    expect(read).toBeNull();
+    expect(info).toMatchObject({
+      ok: false,
+      stage: 'budget',
+      reason: 'out of time',
+      detail: 'read: 3 of 1000 bytes',
+      exports: 1,
+      reads: 2,
+      ms: 15 * 60_000,
+    });
+    expect(calls.map((c) => c.opts.timeoutMs)).toEqual([
+      TRANSCRIPT_EXPORT_TIMEOUT_MS,
+      TRANSCRIPT_READ_TIMEOUT_MS,
+      TRANSCRIPT_READ_TIMEOUT_MS,
+    ]);
+    t = 0;
+    const tight = fakeLeader({ commands: files.commands.map(([p, r]) => [p, slow(r)]) });
+    const cut = await exportTranscript(tight.leader, '/d', {
+      partBytes: 1000,
+      budgetMs: 5 * 60_000 + 10_000,
+      now: () => t,
+    });
+    expect(tight.calls[1].opts.timeoutMs).toBe(10_000);
+    expect(cut.info).toMatchObject({ stage: 'budget', reads: 1 });
+    expect(cut.info.detail).toBeUndefined();
+    const none = await exportTranscript(tight.leader, '/d', { budgetMs: 0 });
+    expect(none.info).toMatchObject({ stage: 'budget', exports: 0 });
+  });
+
   it('tries a failed export again, but not one that timed out or never reached the leader', async () => {
     const doc = Buffer.from(JSON.stringify(TRANSCRIPT));
     const files = leaderFiles(doc);
@@ -754,7 +800,12 @@ describe('runTask', () => {
     expect(calls[2].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
     const prompt = calls.find((c) => c.kind === 'cli' && c.args[0] === 'prompt');
     expect(prompt.args).toEqual(['prompt', '-']);
-    expect(prompt.opts).toEqual({ stdin: buildPrompt(task), timeoutMs: 60000, interrupt: true });
+    expect(prompt.opts).toMatchObject({
+      stdin: buildPrompt(task),
+      timeoutMs: 60000,
+      interrupt: true,
+    });
+    expect(prompt.opts.signal).toBeInstanceOf(AbortSignal);
     expect(calls.slice(-4).map(label)).toEqual([
       'playwright-cli tab-list',
       'playwright-cli tab-close',
@@ -935,5 +986,60 @@ describe('runTask', () => {
       capture: { pollMs: 5 },
     });
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('cost cap', () => {
+  const costAt = (total) =>
+    ok(
+      JSON.stringify({
+        scoops: [{ type: 'cone', turns: 1, usage: { totalTokens: 1, cost: { total } } }],
+      })
+    );
+
+  it('aborts once spend since the start passes the cap, and skips failed readings', async () => {
+    const readings = [fail('busy'), costAt(0.5), costAt(2.6)];
+    const { leader } = fakeLeader({
+      commands: [[/^cost --json --all$/, () => readings.shift() ?? costAt(3)]],
+    });
+    const abort = new AbortController();
+    const w = watchSpend(leader, { cost: 0.5, tokens: 0, turns: 0 }, 2, abort, 5);
+    await vi.waitFor(() => expect(abort.signal.aborted).toBe(true));
+    await w.stop();
+    const idle = new AbortController();
+    const quiet = watchSpend(leader, { cost: 0, tokens: 0, turns: 0 }, 100, idle, 5);
+    await quiet.stop();
+    expect(idle.signal.aborted).toBe(false);
+  });
+
+  it('stops a runaway prompt at its cap and says so to the judge', async () => {
+    let spent = 0.1;
+    const { leader } = fakeLeader({
+      verbs: {
+        model: ok('m\n'),
+        prompt: (_args, opts) =>
+          new Promise((resolve) => {
+            const t = setInterval(() => (spent += 1), 5);
+            opts.signal.addEventListener('abort', () => {
+              clearInterval(t);
+              resolve({ stdout: '', stderr: '', status: 130, timedOut: false, aborted: true });
+            });
+          }),
+      },
+      commands: [[/^cost --json --all$/, () => costAt(spent)]],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rc',
+      model: 'm',
+      maxCost: 2,
+      costPollMs: 5,
+      capture: { pollMs: 5 },
+    });
+    expect(result).toMatchObject({ costCapped: true, timedOut: false, exitCode: 130 });
+    const trace = traceFromResult(result);
+    expect(trace.finalResult).toBe('The run was stopped at its cost cap before the cone answered.');
+    expect(trace.metrics.cost_capped).toBe(true);
   });
 });
