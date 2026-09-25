@@ -2029,6 +2029,15 @@ its `--pre-js` has mounted the live VFS. An uncleared
 `setInterval` or hung I/O hangs until the shell job is SIGKILL'd, the
 same way hung I/O hangs real Node.
 
+**Uncaught errors end the program, as in Node.** An unhandled promise
+rejection prints its stack and exits 1, even while timers or I/O are
+still pending. That's Node's default (`--unhandled-rejections=throw`),
+and it covers an Emscripten program whose `main` traps
+(`RuntimeError: memory access out of bounds`): its glue rethrows the
+trap from a promise callback. A throw in a timer callback also exits 1
+with the message. The realm handles both. Neither reaches the kernel
+worker, whose uncaught errors reload the page.
+
 ### Globals API
 
 #### process
