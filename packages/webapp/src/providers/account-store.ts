@@ -12,6 +12,7 @@ import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 
 import {
+  bedrockCampOpenAIEffortMap,
   bedrockCampRegionFromBaseUrl,
   isBedrockCampClaudeModel,
   isBedrockCampCompatible,
@@ -255,6 +256,17 @@ function applyModelMetadata(
   }
 }
 
+function toBedrockCampPickerModel(m: Model<Api>): Model<Api> {
+  const effortMap = bedrockCampOpenAIEffortMap(m);
+  return {
+    ...m,
+    api: 'bedrock-camp-converse' as Api,
+    provider: 'bedrock-camp',
+    reasoning: m.reasoning === true && (isBedrockCampClaudeModel(m) || effortMap !== null),
+    ...(effortMap ? { thinkingLevelMap: { ...effortMap } } : {}),
+  };
+}
+
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     if (providerId === 'bedrock-camp') {
@@ -264,13 +276,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         BEDROCK_CAMP_EXTRA_MODELS as unknown as Model<Api>[]
       )
         .filter((m) => isBedrockCampCompatible(m, region))
-        .map((m) => ({
-          ...m,
-          api: 'bedrock-camp-converse' as Api,
-          provider: 'bedrock-camp',
-
-          reasoning: m.reasoning === true && isBedrockCampClaudeModel(m),
-        }));
+        .map(toBedrockCampPickerModel);
     }
 
     const providerConfig = getProviderConfig(providerId);

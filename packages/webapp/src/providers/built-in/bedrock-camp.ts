@@ -31,6 +31,7 @@ import {
 } from '../claude-model-version.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
+import { type BedrockCampEffortMap, bedrockCampOpenAIEffortMap } from './bedrock-camp-compat.js';
 
 export const config: ProviderConfig = {
   id: 'bedrock-camp',
@@ -48,7 +49,8 @@ export const config: ProviderConfig = {
 const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
 const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
 
-const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5\.6-(?:sol|terra|luna)$/;
+const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE =
+  /\.(?:openai\.(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:sol|luna|astra))|moonshotai\.kimi-k3)$/;
 
 const BEDROCK_RUNTIME_HOST_RE =
   /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
@@ -187,9 +189,14 @@ type BedrockCampLegacyThinkingFields = {
   anthropic_beta?: ['interleaved-thinking-2025-05-14'];
 };
 
+type BedrockCampOpenAIReasoningFields = {
+  reasoning: { effort: string };
+};
+
 type BedrockCampAdditionalModelRequestFields =
   | BedrockCampAdaptiveFields
-  | BedrockCampLegacyThinkingFields;
+  | BedrockCampLegacyThinkingFields
+  | BedrockCampOpenAIReasoningFields;
 
 type BedrockCampInferenceConfig = {
   maxTokens?: number;
@@ -259,6 +266,8 @@ interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload' | 'onRespon
   interleavedThinking?: boolean;
 
   requestMetadata?: Record<string, string>;
+
+  effort?: string;
 }
 
 type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload' | 'onResponse'> & {
@@ -268,6 +277,7 @@ type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload' | 'onRespo
   thinkingDisplay?: BedrockCampThinkingDisplay;
   interleavedThinking?: boolean;
   requestMetadata?: Record<string, string>;
+  effort?: string;
 };
 
 function pickCampExtras(
@@ -280,6 +290,7 @@ function pickCampExtras(
   | 'thinkingDisplay'
   | 'interleavedThinking'
   | 'requestMetadata'
+  | 'effort'
 > {
   return {
     onPayload: options.onPayload,
@@ -288,6 +299,7 @@ function pickCampExtras(
     thinkingDisplay: options.thinkingDisplay,
     interleavedThinking: options.interleavedThinking,
     requestMetadata: options.requestMetadata,
+    effort: options.effort,
   };
 }
 
@@ -571,10 +583,31 @@ function isGovCloudTarget(model: Model<Api>): boolean {
   return id.startsWith('us-gov.') || id.startsWith('arn:aws-us-gov:');
 }
 
+const OPENAI_EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+function openAIReasoningEffort(
+  map: BedrockCampEffortMap,
+  options: BedrockCampOptions
+): string | undefined {
+  if (!options.reasoning) return map.off ?? undefined;
+  if (options.effort === 'max' && map.max) return map.max;
+  const start = OPENAI_EFFORT_ORDER.indexOf(options.reasoning);
+  for (const level of OPENAI_EFFORT_ORDER.slice(Math.max(start, 0))) {
+    const mapped = map[level];
+    if (mapped) return mapped;
+  }
+  return undefined;
+}
+
 function buildAdditionalModelRequestFields(
   model: Model<Api>,
   options: BedrockCampOptions
 ): BedrockCampAdditionalModelRequestFields | undefined {
+  const effortMap = bedrockCampOpenAIEffortMap(model);
+  if (effortMap) {
+    const effort = openAIReasoningEffort(effortMap, options);
+    return effort === undefined ? undefined : { reasoning: { effort } };
+  }
   if (!options.reasoning || !model.reasoning) return undefined;
   if (!isAnthropicClaudeModel(model)) return undefined;
 

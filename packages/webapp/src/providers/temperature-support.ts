@@ -1,6 +1,6 @@
 import { claudeRejectsTemperature } from './claude-model-version.js';
 
-const NON_CLAUDE_REJECTS_TEMPERATURE_RE = /gpt-5[.-]6/;
+const NON_CLAUDE_REJECTS_TEMPERATURE_RE = /gpt-5[.-]6|gpt-6-(?:sol|luna|astra)|kimi-k3(?![\d.])/;
 
 function nonClaudeRejectsTemperature(modelId: string, modelName?: string): boolean {
   const values = modelName ? [modelId, modelName] : [modelId];
