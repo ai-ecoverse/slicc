@@ -27,6 +27,19 @@ import {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The leader was reached but did not open a terminal in time: an overloaded or wedged leader.
+ * The command never ran, so it is safe to retry, and it counts as the leader being down.
+ */
+const TERMINAL_TIMEOUT_RE = /terminal-open timed out/i;
+
+/** A call that never ran on the leader: no connection, or no terminal. */
+export function unreachable(status, stderr) {
+  return (
+    isConnectFailure(status, stderr) || (status !== 0 && TERMINAL_TIMEOUT_RE.test(String(stderr)))
+  );
+}
+
 /** Grace between the timeout signal and SIGKILL, for the CLI to deliver its `abort`. */
 const KILL_GRACE_MS = 10_000;
 
@@ -109,7 +122,7 @@ export function createLeader({
         ...options,
         ...(retrying ? { env: { ...options.env, SLICC_DEBUG: '1' } } : {}),
       });
-      const dialFailed = isConnectFailure(result.status, result.stderr);
+      const dialFailed = unreachable(result.status, result.stderr);
       if (dialFailed && retrying) diagnostics.push(result.stderr);
       if (dialFailed && attempt < CONNECT_RETRIES) {
         await sleep(retryDelayMs);

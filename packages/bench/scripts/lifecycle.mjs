@@ -55,6 +55,12 @@ export function currentLeader(read = readState) {
 /**
  * Stop the current leader and boot a fresh one. `mask` hides the new join URL in the job log,
  * as start-leader does for the first. Throws when the new leader does not come up.
+ *
+ * Fresh means fresh: start-leader reuses `<home>/profile` as Chrome's user-data dir, and the
+ * webapp keeps its VFS, sessions and scoops there. A restart that keeps the profile boots the old
+ * leader's scoops with it: in the first full BU V1 run they carried over from task to task and
+ * across restarts, kept working, and billed later tasks. So the old profile is wiped between
+ * stop and start.
  */
 export function createRecycler({
   scriptsDir,
@@ -66,6 +72,7 @@ export function createRecycler({
   },
 }) {
   return async function recycle() {
+    const profileDir = read()?.profileDir ?? null;
     const scratch = mkdtempSync(join(tmpdir(), 'bench-leader-'));
     // The scripts append outputs for their action; keep a restart's out of this step's.
     const scriptEnv = { ...env, GITHUB_OUTPUT: join(scratch, 'output') };
@@ -73,6 +80,7 @@ export function createRecycler({
       const stop = await run(join(scriptsDir, 'stop-leader.mjs'), { env: scriptEnv });
       if (stop.status !== 0)
         throw new Error(`stop-leader exited ${stop.status}: ${stop.output.slice(-400)}`);
+      if (profileDir) rmSync(profileDir, { recursive: true, force: true });
       const start = await run(join(scriptsDir, 'start-leader.mjs'), { env: scriptEnv });
       if (start.status !== 0)
         throw new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);
