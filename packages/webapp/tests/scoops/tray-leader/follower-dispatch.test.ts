@@ -581,4 +581,107 @@ describe('FollowerDispatch', () => {
     ]);
     expect(onSprinkleInstancesChanged).toHaveBeenCalledTimes(1);
   });
+
+  describe('user_message_ack', () => {
+    const ackFrames = (send: ReturnType<typeof vi.fn>) =>
+      send.mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'user_message_ack');
+
+    const addBystander = (followers: FollowerRegistry) => {
+      const bystanderSend = vi.fn();
+      followers.followers.set('bystander', {
+        bootstrapId: 'bystander',
+        floatType: 'extension',
+        runtime: 'slicc-extension',
+        lastActivity: 1,
+        keepalive: { receivePing: vi.fn(), receivePong: vi.fn() },
+        sync: { send: bystanderSend },
+      } as unknown as ConnectedFollower);
+      return bystanderSend;
+    };
+
+    it('acks an accepted delivery to the sender only, once it settles', async () => {
+      let settle!: () => void;
+      const onFollowerMessage = vi.fn(
+        () =>
+          new Promise<{ scoopJid: string; state: 'accepted' }>((resolve) => {
+            settle = () => resolve({ scoopJid: 'cone_b', state: 'accepted' });
+          })
+      );
+      const { dispatch, followers, send } = createHarness({ onFollowerMessage });
+      const bystanderSend = addBystander(followers);
+
+      dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'm1' });
+      await Promise.resolve();
+      expect(ackFrames(send)).toEqual([]);
+
+      settle();
+      await vi.waitFor(() =>
+        expect(ackFrames(send)).toEqual([
+          { type: 'user_message_ack', messageId: 'm1', scoopJid: 'cone_b', state: 'accepted' },
+        ])
+      );
+      expect(ackFrames(bystanderSend)).toEqual([]);
+    });
+
+    it('acks a refused delivery as rejected with the error', async () => {
+      const onFollowerMessage = vi.fn(async () => ({
+        scoopJid: 'cone',
+        state: 'rejected' as const,
+        error: 'kernel gone',
+      }));
+      const { dispatch, send } = createHarness({ onFollowerMessage });
+      dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'm2' });
+      await vi.waitFor(() =>
+        expect(ackFrames(send)).toEqual([
+          {
+            type: 'user_message_ack',
+            messageId: 'm2',
+            scoopJid: 'cone',
+            state: 'rejected',
+            error: 'kernel gone',
+          },
+        ])
+      );
+    });
+
+    it('sends no ack when the adapter returns no outcome', async () => {
+      const { dispatch, send } = createHarness();
+      dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'm3' });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ackFrames(send)).toEqual([]);
+    });
+
+    it('drops the ack when the sender left before delivery settled', async () => {
+      let settle!: () => void;
+      const onFollowerMessage = vi.fn(
+        () =>
+          new Promise<{ scoopJid: string; state: 'accepted' }>((resolve) => {
+            settle = () => resolve({ scoopJid: 'cone', state: 'accepted' });
+          })
+      );
+      const { dispatch, followers, send } = createHarness({ onFollowerMessage });
+      const bystanderSend = addBystander(followers);
+      dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'm4' });
+      followers.followers.delete('follower');
+      settle();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ackFrames(send)).toEqual([]);
+      expect(ackFrames(bystanderSend)).toEqual([]);
+    });
+
+    it('logs instead of acking when the outcome itself rejects', async () => {
+      const onFollowerMessage = vi.fn(() => Promise.reject(new Error('adapter bug')));
+      const { dispatch, log, send } = createHarness({ onFollowerMessage });
+      dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'm5' });
+      await vi.waitFor(() =>
+        expect(log.warn).toHaveBeenCalledWith(
+          'Follower message delivery outcome failed',
+          expect.objectContaining({ messageId: 'm5', error: 'adapter bug' })
+        )
+      );
+      expect(ackFrames(send)).toEqual([]);
+    });
+  });
 });

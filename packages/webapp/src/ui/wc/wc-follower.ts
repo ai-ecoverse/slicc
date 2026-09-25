@@ -22,8 +22,8 @@ import type { AgentEvent } from '../types.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import {
   FollowerPromptWatch,
-  PROMPT_SILENCE_NOTE,
-  PROMPT_SILENCE_NOTE_SIDE_PANEL,
+  promptRejectedNote,
+  promptSilenceNote,
 } from './follower-prompt-watch.js';
 import { wireWcAttach } from './wc-attach.js';
 import { createFollowerChatHost, type WcChatHost } from './wc-chat-host.js';
@@ -299,11 +299,13 @@ export async function bootFollowerFloat(
   let detachAgentEvents: (() => void) | null = null;
 
   const promptWatch = new FollowerPromptWatch({
-    onSilence: (unitId) => {
+    onSilence: (unitId, received) => {
       if (unitId !== shownUnitId()) return;
-      controller.addAssistantMessage(
-        isExtensionSidePanel ? PROMPT_SILENCE_NOTE_SIDE_PANEL : PROMPT_SILENCE_NOTE
-      );
+      controller.addAssistantMessage(promptSilenceNote(received, isExtensionSidePanel));
+    },
+    onRejected: (unitId, error) => {
+      if (unitId === null || unitId !== shownUnitId()) return;
+      controller.addAssistantMessage(promptRejectedNote(error));
     },
   });
   agentEventListeners.add(() => promptWatch.noteLeaderActivity());
@@ -599,6 +601,8 @@ export async function bootFollowerFloat(
 
       onUserMessage: (text, _messageId, _scoopJid, attachments) =>
         controller.addUserMessage(text, attachments),
+      onOwnUserMessageEcho: (_messageId, scoopJid) => promptWatch.noteReceived(scoopJid),
+      onUserMessageAck: (ack) => promptWatch.noteAck(ack),
 
       onBiscottoMessageState: (_messageId, state) => {
         promptWatch.noteLeaderActivity();

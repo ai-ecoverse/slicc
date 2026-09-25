@@ -25,7 +25,7 @@ import {
 
 describe('tray-sync-protocol', () => {
   it('exposes protocol version 8 and the cherry runtime tag', () => {
-    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(9);
+    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(10);
     expect(CHERRY_RUNTIME_TAG).toBe('slicc-cherry');
   });
 

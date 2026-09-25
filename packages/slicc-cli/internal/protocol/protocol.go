@@ -27,7 +27,10 @@ import "encoding/json"
 
 
 
-const TraySyncProtocolVersion = 9
+
+
+
+const TraySyncProtocolVersion = 10
 
 
 const RuntimeTag = "slicc-cli"

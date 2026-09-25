@@ -403,6 +403,9 @@ export class FollowerSyncManager implements AgentHandle {
       case 'user_message_echo':
         this.handleUserMessageEcho(message);
         break;
+      case 'user_message_ack':
+        this.handleUserMessageAck(message);
+        break;
       case 'status':
         this.options.onStatus?.(message.scoopStatus, message.scoopJid);
         break;
@@ -540,6 +543,7 @@ export class FollowerSyncManager implements AgentHandle {
     if (this.sentMessageIds.has(message.messageId)) {
       this.sentMessageIds.delete(message.messageId);
       log.debug('Skipping own message echo', { messageId: message.messageId });
+      this.options.onOwnUserMessageEcho?.(message.messageId, message.scoopJid);
       return;
     }
     log.info('User message echo received', {
@@ -552,6 +556,20 @@ export class FollowerSyncManager implements AgentHandle {
       message.scoopJid,
       message.attachments
     );
+  }
+
+  private handleUserMessageAck(
+    message: LeaderToFollowerMessage & { type: 'user_message_ack' }
+  ): void {
+    const { messageId, scoopJid, state, error } = message;
+    if (state === 'rejected') log.warn('Leader rejected a user message', { messageId, error });
+    else log.info('Leader accepted a user message', { messageId, scoopJid });
+    this.options.onUserMessageAck?.({
+      messageId,
+      scoopJid,
+      state,
+      ...(error !== undefined ? { error } : {}),
+    });
   }
 
   private handleScoopsList(scoops: ScoopSummary[], activeScoopJid: string): void {

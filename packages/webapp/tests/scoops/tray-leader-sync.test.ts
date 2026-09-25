@@ -320,6 +320,70 @@ describe('LeaderSyncManager', () => {
     });
   });
 
+  describe('user_message_ack', () => {
+    const acks = (channel: FakeChannel) =>
+      channel.parseSent().filter((m) => m.type === 'user_message_ack');
+    const accept = async () => ({ scoopJid: 'cone', state: 'accepted' as const });
+    const seat = (approver: 'off' | 'user') => ({
+      id: 'seat1',
+      label: 'Anna',
+      gates: { message: { approver }, tool: { approver: 'user' as const } },
+    });
+
+    it('acks a full follower’s prompt to that follower and no other', async () => {
+      const { manager } = createManager({ onFollowerMessage: accept });
+      const sender = new FakeChannel();
+      const other = new FakeChannel();
+      manager.addFollower('b1', sender);
+      manager.addFollower('b2', other);
+
+      sender.simulateMessage({ type: 'user_message', text: 'hi', messageId: 'fm1' });
+
+      await vi.waitFor(() =>
+        expect(acks(sender)).toEqual([
+          { type: 'user_message_ack', messageId: 'fm1', scoopJid: 'cone', state: 'accepted' },
+        ])
+      );
+      expect(acks(other)).toEqual([]);
+    });
+
+    it('acks a biscotto’s message once review let it through and it was delivered', async () => {
+      const { manager } = createManager({ onFollowerMessage: accept });
+      const guest = new FakeChannel();
+      manager.addFollower('g1', guest, { trust: 'biscotto', biscotto: seat('off') });
+
+      guest.simulateMessage({ type: 'user_message', text: 'hi', messageId: 'gm1' });
+
+      await vi.waitFor(() =>
+        expect(acks(guest)).toEqual([
+          { type: 'user_message_ack', messageId: 'gm1', scoopJid: 'cone', state: 'accepted' },
+        ])
+      );
+    });
+
+    it('never acks a biscotto’s message that review refused', async () => {
+      const onFollowerMessage = vi.fn(accept);
+      const { manager } = createManager({
+        onFollowerMessage,
+        requestSudoApproval: vi.fn(async () => ({ decision: 'deny' as const })),
+      });
+      const guest = new FakeChannel();
+      manager.addFollower('g1', guest, { trust: 'biscotto', biscotto: seat('user') });
+
+      guest.simulateMessage({ type: 'user_message', text: 'hi', messageId: 'gm2' });
+
+      await vi.waitFor(() =>
+        expect(guest.parseSent()).toContainEqual({
+          type: 'biscotto.message.state',
+          messageId: 'gm2',
+          state: 'rejected',
+        })
+      );
+      expect(onFollowerMessage).not.toHaveBeenCalled();
+      expect(acks(guest)).toEqual([]);
+    });
+  });
+
   it('routes a follower message and abort to THAT follower’s selected unit', () => {
     const { manager, onFollowerMessage, onFollowerAbort } = createManager();
     const channel = new FakeChannel();

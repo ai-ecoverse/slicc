@@ -129,6 +129,10 @@ export interface StartPageFollowerTrayOptions {
 
   onBiscottoMessageState?: FollowerSyncManagerOptions['onBiscottoMessageState'];
 
+  onUserMessageAck?: FollowerSyncManagerOptions['onUserMessageAck'];
+
+  onOwnUserMessageEcho?: FollowerSyncManagerOptions['onOwnUserMessageEcho'];
+
   setChatAgent: (agent: AgentHandle) => void;
 
   browserAPI: BrowserAPI;
@@ -247,6 +251,8 @@ export function startPageFollowerTray(
       onThemeApply: applyFollowerLeaderTheme,
       onSudoApprovalRequest: options.onSudoApprovalRequest,
       onBiscottoMessageState: options.onBiscottoMessageState,
+      onUserMessageAck: options.onUserMessageAck,
+      onOwnUserMessageEcho: options.onOwnUserMessageEcho,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {

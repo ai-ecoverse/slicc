@@ -20,6 +20,15 @@ export interface FollowerSyncManagerOptions {
     state: 'pending' | 'approved' | 'rejected' | 'unanswered'
   ) => void;
 
+  onUserMessageAck?: (ack: {
+    messageId: string;
+    scoopJid: string;
+    state: 'accepted' | 'rejected';
+    error?: string;
+  }) => void;
+
+  onOwnUserMessageEcho?: (messageId: string, scoopJid: string) => void;
+
   onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
 
   onUserMessage?: (

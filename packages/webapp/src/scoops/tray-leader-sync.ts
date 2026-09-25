@@ -41,7 +41,7 @@ import {
   type TrayComputersSource,
 } from './tray-leader/computers-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
-import { FollowerDispatch } from './tray-leader/follower-dispatch.js';
+import { FollowerDispatch, type FollowerMessageOutcome } from './tray-leader/follower-dispatch.js';
 import {
   type ConnectedFollower,
   deriveFloatType,
@@ -80,7 +80,7 @@ import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
 
-export type { FloatType, RemoteExecResult };
+export type { FloatType, FollowerMessageOutcome, RemoteExecResult };
 export { deriveFloatType, isCherryTarget, labelForFollower, selectTeleportPool };
 
 export interface LeaderSyncManagerOptions {
@@ -132,7 +132,7 @@ export interface LeaderSyncManagerOptions {
 
       targetScoopJid?: string;
     }
-  ) => void;
+  ) => void | Promise<FollowerMessageOutcome>;
 
   onFollowerAbort: (targetScoopJid?: string) => void;
 
@@ -260,13 +260,19 @@ export class LeaderSyncManager {
     this.biscottoReview = new BiscottoReview(context, {
       deliver: (pending) => {
         this.followerDispatch.noteInteractionOrigin(pending.bootstrapId);
-        this.options.onFollowerMessage(pending.text, pending.messageId, pending.attachments, {
-          ...(pending.steer ? { steer: true } : {}),
-          biscotto: pending.biscotto,
-          ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
+        const delivery = this.options.onFollowerMessage(
+          pending.text,
+          pending.messageId,
+          pending.attachments,
+          {
+            ...(pending.steer ? { steer: true } : {}),
+            biscotto: pending.biscotto,
+            ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
 
-          targetScoopJid: pending.unitJid,
-        });
+            targetScoopJid: pending.unitJid,
+          }
+        );
+        this.followerDispatch.ackUserMessage(pending.bootstrapId, pending.messageId, delivery);
       },
       notify: (bootstrapId, messageId, state) => {
         this.followerRegistry.followers

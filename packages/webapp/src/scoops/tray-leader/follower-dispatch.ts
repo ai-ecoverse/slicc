@@ -2,6 +2,7 @@ import { stripLocalPathsForRemote } from '../../core/attachments.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from '../lick-manager.js';
 import {
   type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
 } from '../tray-sync-protocol.js';
@@ -61,6 +62,11 @@ export interface FollowerDispatchCollaborators {
     registration: { platform: 'ios'; token: string; environment: 'sandbox' | 'production' }
   ) => void;
 }
+
+export type FollowerMessageOutcome = Omit<
+  Extract<LeaderToFollowerMessage, { type: 'user_message_ack' }>,
+  'type' | 'messageId'
+>;
 
 export class FollowerDispatch {
   constructor(
@@ -332,10 +338,38 @@ export class FollowerDispatch {
     this.noteInteractionOrigin(bootstrapId);
 
     const targetScoopJid = follower?.selectedScoopJid;
-    this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
-      ...(message.steer ? { steer: true } : {}),
-      ...(targetScoopJid ? { targetScoopJid } : {}),
-    });
+    const delivery = this.context.options.onFollowerMessage(
+      message.text,
+      message.messageId,
+      safeAttachments,
+      {
+        ...(message.steer ? { steer: true } : {}),
+        ...(targetScoopJid ? { targetScoopJid } : {}),
+      }
+    );
+    this.ackUserMessage(bootstrapId, message.messageId, delivery);
+  }
+
+  ackUserMessage(
+    bootstrapId: string,
+    messageId: string,
+    delivery: void | Promise<FollowerMessageOutcome>
+  ): void {
+    if (!(delivery instanceof Promise)) return;
+    void delivery.then(
+      (outcome) => {
+        this.context.followers.followers
+          .get(bootstrapId)
+          ?.sync.send({ type: 'user_message_ack', messageId, ...outcome });
+      },
+      (err: unknown) => {
+        this.context.log.warn('Follower message delivery outcome failed', {
+          bootstrapId,
+          messageId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    );
   }
 
   noteInteractionOrigin(bootstrapId: string): void {

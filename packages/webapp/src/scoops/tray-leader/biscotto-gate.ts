@@ -120,6 +120,8 @@ export const BISCOTTO_RECEIVABLE: Record<LeaderToFollowerMessage['type'], boolea
   snapshot_chunk: true,
   agent_event: true,
   user_message_echo: true,
+
+  user_message_ack: true,
   status: true,
   error: true,
   'biscotto.message.state': true,
