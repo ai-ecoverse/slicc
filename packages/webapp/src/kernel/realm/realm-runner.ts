@@ -463,6 +463,9 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     };
 
     errorHandler = (event: Event): void => {
+      // Handled: uncanceled, a realm's uncaught error (a timer throw, a wasm
+      // trap) reaches the kernel worker, which reloads the page (#1330).
+      event.preventDefault?.();
       const message = (event as ErrorEvent).message ?? 'realm error';
       settleDone(
         { stdout: capture.stdout, stderr: capture.stderr + message + '\n', exitCode: 1 },
