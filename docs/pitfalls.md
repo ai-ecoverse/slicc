@@ -1057,6 +1057,16 @@ In the thin extension the hosted leader tab (`https://www.sliccy.ai/?slicc=leade
 
 Historical note: prior to the thin-bridge release, the extension hosted the leader tray socket in `service-worker.ts` and proxied frames into the offscreen document via `ServiceWorkerLeaderTraySocket`/`tray-socket-proxy.ts`. Both modules are gone.
 
+## Leader Peer Connections: Chrome Caps a Page at 500
+
+**The Problem**
+
+Chrome refuses `new RTCPeerConnection()` once a page holds 500 of them (`Cannot create so many PeerConnections`). A closed peer still counts until it is garbage-collected, so any reference that outlives the follower (a map entry, a timer closure) leaks a slot for good. Every `slicc exec` dials a fresh controller and a fresh peer, so a long-running hosted leader that leaks one peer per follower stops accepting followers after roughly 500 dials. The follower sees only `tray connect timed out after 30s`.
+
+**The Solution**
+
+`LeaderTrayPeerManager` (`packages/webapp/src/scoops/tray-webrtc.ts`) releases a peer through `releasePeer()` whenever it can no longer carry traffic: its data channel closes, its connection goes `failed`/`closed`, or it has not connected by its bootstrap's `expiresAt` plus a grace. If peer creation throws, the leader sends `bootstrap.failed` so the follower gets the reason immediately instead of a timeout. To measure headroom on a live leader over CDP, create peers until the constructor throws, close them, and call `HeapProfiler.collectGarbage` afterwards; otherwise the probe's own closed peers eat the headroom it just measured.
+
 ## Silent OAuth renewal must stay windowless (IMS JS redirect)
 
 `launchWebAuthFlow({ interactive: false })` alone flashes / fails for Adobe IMS
