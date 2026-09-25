@@ -37,6 +37,8 @@ const SNAPSHOT_TIMEOUT_MS = 10000;
 
 export interface RemoteWorkUnitClientDeps {
   getSync(): FollowerSyncManager | null;
+  /** A prompt for `id` left this device (the channel accepted it). */
+  onSend?(id: WorkUnitId): void;
 }
 
 /**
@@ -376,6 +378,7 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
       this.localSends.flagUndelivered(messageId);
       return Promise.reject(new Error('the leader channel refused the message'));
     }
+    this.deps.onSend?.(id);
     return Promise.resolve();
   }
 

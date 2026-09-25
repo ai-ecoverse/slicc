@@ -20,6 +20,11 @@ import type { UiRuntimeMode } from '../runtime-mode.js';
 import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentEvent } from '../types.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
+import {
+  FollowerPromptWatch,
+  PROMPT_SILENCE_NOTE,
+  PROMPT_SILENCE_NOTE_SIDE_PANEL,
+} from './follower-prompt-watch.js';
 import { wireWcAttach } from './wc-attach.js';
 import { createFollowerChatHost, type WcChatHost } from './wc-chat-host.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
@@ -414,6 +419,22 @@ export async function bootFollowerFloat(
   const agentEventListeners = new Set<(event: AgentEvent) => void>();
   let detachAgentEvents: (() => void) | null = null;
   /**
+   * Says so when a sent prompt gets no reaction at all from the leader (see
+   * `follower-prompt-watch.ts`). Armed by `workUnits`' send, disarmed by any
+   * agent event, status frame or dropped connection.
+   */
+  const promptWatch = new FollowerPromptWatch({
+    // Only into the thread of the unit the prompt went to: `addAssistantMessage`
+    // writes to whatever is on screen.
+    onSilence: (unitId) => {
+      if (unitId !== shownUnitId()) return;
+      controller.addAssistantMessage(
+        isExtensionSidePanel ? PROMPT_SILENCE_NOTE_SIDE_PANEL : PROMPT_SILENCE_NOTE
+      );
+    },
+  });
+  agentEventListeners.add(() => promptWatch.noteLeaderActivity());
+  /**
    * The model pill's own surface, installed once the catalog wiring below
    * runs. Declared here because a selection repaints it, and a selection can
    * land the moment the channel connects.
@@ -541,7 +562,10 @@ export async function bootFollowerFloat(
        * The follower's half of the client protocol (#2274). `getSync` is lazy, so
        * the channel can arrive whenever it does.
        */
-      workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
+      workUnits = new RemoteWorkUnitClient({
+        getSync: () => follower?.currentSync ?? null,
+        onSend: (id) => promptWatch.noteSent(id),
+      });
 
       // The chat surface is the SHARED one (#2382 D2b): controller, dips, queued
       // pile, tab strip, composer submit/stop and selection all come from
@@ -927,6 +951,8 @@ export async function bootFollowerFloat(
       // having silently dropped it. These notes are local synthetic lines; the
       // approved message itself still arrives through `onUserMessage`.
       onBiscottoMessageState: (_messageId, state) => {
+        // The review gate answering IS the leader reacting to the prompt.
+        promptWatch.noteLeaderActivity();
         switch (state) {
           case 'pending':
             controller.addAssistantMessage('_Sent for review — waiting for the host._');
@@ -948,6 +974,7 @@ export async function bootFollowerFloat(
         }
       },
       onStatus: (status, scoopJid) => {
+        promptWatch.noteLeaderActivity(scoopJid);
         if (shouldApplyFollowerStatus(scoopJid, shownUnitId())) {
           controller.setProcessing(status === 'processing');
         }
@@ -997,6 +1024,8 @@ export async function bootFollowerFloat(
       onConnectionChange: (connected) => {
         boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';
         if (!connected) forgetSessionSelection();
+        // The connection status takes over explaining the wait.
+        if (!connected) promptWatch.noteLeaderActivity();
         setComposerState(connected, connected ? CONNECTED : CONNECTING);
         if (!connected) modelSurface?.reset();
         if (isCherry)

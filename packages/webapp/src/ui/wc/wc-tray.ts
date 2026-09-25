@@ -92,6 +92,7 @@ import {
 import type { AgentHandle, ChatMessage } from '../types.js';
 import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
+import { FollowerPromptWatch, PROMPT_SILENCE_NOTE } from './follower-prompt-watch.js';
 import {
   LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT,
   LEADER_MODEL_CATALOG_CHANGED_EVENT,
@@ -458,6 +459,29 @@ export interface FollowerRole {
   dispose(): void;
 }
 
+/**
+ * A follower role's `RemoteWorkUnitClient`, armed with the same prompt-silence
+ * hint as the dedicated follower mount (`follower-prompt-watch.ts`). The note
+ * goes into the addressed unit's thread only, so it is dropped while another
+ * unit is shown.
+ */
+function watchedFollowerClient(
+  deps: WcTrayDeps,
+  getSync: () => PageFollowerTrayHandle['currentSync'],
+  shownUnitId: () => string | null
+): { workUnits: RemoteWorkUnitClient; promptWatch: FollowerPromptWatch } {
+  const promptWatch = new FollowerPromptWatch({
+    onSilence: (unitId) => {
+      if (unitId === shownUnitId()) deps.getController()?.addAssistantMessage(PROMPT_SILENCE_NOTE);
+    },
+  });
+  const workUnits = new RemoteWorkUnitClient({
+    getSync: () => getSync() ?? null,
+    onSend: (unitId) => promptWatch.noteSent(unitId),
+  });
+  return { workUnits, promptWatch };
+}
+
 export function buildFollowerOptions(
   deps: WcTrayDeps,
   joinUrl: string,
@@ -480,7 +504,7 @@ export function buildFollowerOptions(
    * wiring, rendering through a legacy projection while the other two had
    * moved to `toTabDescriptors`.
    */
-  const workUnits = new RemoteWorkUnitClient({ getSync: () => getSync() ?? null });
+  const { workUnits, promptWatch } = watchedFollowerClient(deps, getSync, () => selectedScoopJid);
   // Unread from the same ledger the leader publishes through: it reads only the
   // presentation state every roster push already carries, so a follower needs no
   // new wire field to dot a tab (and one too old to send `state` simply never
@@ -564,11 +588,13 @@ export function buildFollowerOptions(
    * a subscription still pointed at it would make the re-point a no-op.
    */
   const forgetSession = (): void => {
+    promptWatch.noteLeaderActivity(); // the connection status explains the wait now
     workUnits.resetSelection();
     transcript.forget();
     modelSurface.reset();
   };
   const dispose = (): void => {
+    promptWatch.dispose();
     disposeCapture();
     transcript.forget();
     workUnits.resetSelection();
@@ -592,11 +618,13 @@ export function buildFollowerOptions(
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
       getController()?.addUserMessage(text, attachments),
     onStatus: (status, scoopJid) => {
+      promptWatch.noteLeaderActivity(scoopJid);
       if (shouldApplyFollowerStatus(scoopJid, selectedScoopJid)) {
         getController()?.setProcessing(status === 'processing');
       }
     },
     setChatAgent: (agent) => {
+      promptWatch.followAgentEvents(agent);
       // Send names its unit, exactly as the dedicated follower mount does
       // (#2382 PR A); the agent EVENT stream stays on the sync manager. STOP
       // does not come through this handle — the leader mount's own composer
@@ -626,9 +654,7 @@ export function buildFollowerOptions(
     onGaveUp: () => forgetSession(),
     onConnectionChange: (connected) => {
       deps.refs.switcher.connection = connected ? 'connected' : 'disconnected';
-      if (!connected) {
-        forgetSession();
-      }
+      if (!connected) forgetSession();
     },
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
