@@ -155,6 +155,47 @@ os.unlink('/work/link')
     expect(py('st.st_mode & 0o777')).toBe(0o755);
   });
 
+  it('drops chmod / utime on a mount that stores no metadata instead of failing', () => {
+    const meta = nodeFs.mkdtempSync(join(tmpdir(), 'live-vfs-meta-'));
+    const noMeta = (): never => {
+      throw Object.assign(new Error('metadata changes are not supported by this mount'), {
+        code: 'ENOSYS',
+      });
+    };
+
+    const metaBridge: SyncFsPosixBridge = {
+      ...hostBridge(meta).bridge,
+      chmod: noMeta,
+      utimes: noMeta,
+    };
+    FS.mkdir('/meta');
+    FS.mount(plugin, { root: '/work', bridge: metaBridge }, '/meta');
+    try {
+      py(`
+import os
+fd = os.open('/meta/made.txt', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+os.write(fd, b'abc'); os.close(fd)
+os.chmod('/meta/made.txt', 0o600)
+os.utime('/meta/made.txt', (1000, 2000))
+meta_mode = os.stat('/meta/made.txt').st_mode & 0o777
+`);
+      expect(nodeFs.readFileSync(join(meta, 'made.txt'), 'utf8')).toBe('abc');
+
+      expect(py('meta_mode')).toBe(nodeFs.statSync(join(meta, 'made.txt')).mode & 0o777);
+
+      expect(
+        py(`
+import errno
+try: os.chmod('/meta/missing.txt', 0o600); r = 'ok'
+except OSError as e: r = errno.errorcode[e.errno]
+r`)
+      ).toBe('ENOENT');
+    } finally {
+      FS.unmount('/meta');
+      nodeFs.rmSync(meta, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces POSIX errors as the matching OSError', () => {
     py(`
 import errno, os

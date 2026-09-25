@@ -9,7 +9,7 @@ import type { RealmDoneMsg, RealmErrorMsg } from '../../../src/kernel/realm/real
 interface MockRealm extends Realm {
   fireMessage(data: unknown): void;
 
-  fireError(message: string): void;
+  fireError(message: string): Mock<() => void>;
 
   fireMessageError(): void;
 
@@ -52,8 +52,10 @@ function makeMockRealm(): MockRealm {
     fireMessage(data: unknown): void {
       for (const h of [...messageHandlers]) h({ data } as MessageEvent);
     },
-    fireError(message: string): void {
-      for (const h of [...errorHandlers]) h({ message } as ErrorEvent);
+    fireError(message: string): Mock<() => void> {
+      const preventDefault = vi.fn();
+      for (const h of [...errorHandlers]) h({ message, preventDefault } as unknown as ErrorEvent);
+      return preventDefault;
     },
     fireMessageError(): void {
       for (const h of [...messageErrorHandlers]) h({} as MessageEvent);
@@ -251,6 +253,29 @@ describe('runInRealm', () => {
     const result = await promise;
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('uncaught syntax error');
+  });
+
+  it('cancels the realm error event so it cannot reach the kernel worker', async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const promise = runInRealm({
+      pm,
+      realmFactory: async () => realm,
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code: 'setTimeout(() => { throw new Error("late") })',
+      argv: ['node'],
+      env: {},
+      cwd: '/',
+      filename: '<eval>',
+      ctx,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const preventDefault = realm.fireError('Uncaught Error: late');
+    const result = await promise;
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ exitCode: 1, stderr: 'Uncaught Error: late\n' });
   });
 
   it('surfaces realm messageerror as exit 1', async () => {

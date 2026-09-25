@@ -71,6 +71,8 @@ export const PANEL_TERMINAL_EXECUTION_LIMITS = {
   maxExecutionTimeMs: Number.POSITIVE_INFINITY,
   maxCommandCount: Number.POSITIVE_INFINITY,
   maxLoopIterations: Number.POSITIVE_INFINITY,
+  maxParserTokens: Number.POSITIVE_INFINITY,
+  maxParseIterations: Number.POSITIVE_INFINITY,
 } as const;
 
 export function createPanelTerminalHost(

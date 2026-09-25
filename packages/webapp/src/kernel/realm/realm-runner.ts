@@ -317,6 +317,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     };
 
     errorHandler = (event: Event): void => {
+      event.preventDefault?.();
       const message = (event as ErrorEvent).message ?? 'realm error';
       settleDone(
         { stdout: capture.stdout, stderr: capture.stderr + message + '\n', exitCode: 1 },
