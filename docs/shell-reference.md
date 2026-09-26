@@ -107,7 +107,9 @@ On the browser filesystem, `>>` serializes appends with other VFS mutations, and
 `tar x` batches mode/mtime restoration into one sidecar write via
 `VirtualFS.updateMetadataBatch` so large extracts stay linear. Mounted
 paths in that batch are skipped (unsupported); lone `chmod`/`utimes` on a
-mount still report `ENOSYS`. A successful command always means its
+mount still report `ENOSYS`. `ipk mamba install` batches conda archive
+symlinks via `VirtualFS.symlinkBatch` for the same reason (one sidecar
+write per package). A successful command always means its
 requested supported metadata operation was applied.
 Mounted appends serialize with each other when calls share a database. Other
 mounted mutations and external writers still need backend concurrency control.
@@ -613,7 +615,8 @@ conda channels into the shared prefix `/shared/lib/conda` (alongside npm's
 `https://repo.prefix.dev/emscripten-forge-4x` and
 `https://repo.prefix.dev/conda-forge` (noarch). Records land in
 `/shared/lib/conda/conda-meta/`; `ipk mamba list` and `ipk mamba uninstall <pkg>`
-read and remove them.
+read and remove them. Symlink members in a package are created through
+`VirtualFS.symlinkBatch` (one OPFS sidecar persist per package).
 
 This is a **thin** installer (repodata lookup → download `.tar.bz2` → extract), not
 a full mamba/rattler SAT solve: virtual packages such as `emscripten-abi` are

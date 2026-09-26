@@ -36,5 +36,10 @@ export type {
   WriteFileOptions,
 } from './types.js';
 export { FsError, statsFromDirEntry } from './types.js';
-export type { MetadataUpdate, VfsBackend, VirtualFsOptions } from './virtual-fs.js';
+export type {
+  MetadataUpdate,
+  SymlinkCreate,
+  VfsBackend,
+  VirtualFsOptions,
+} from './virtual-fs.js';
 export { resolveVfsBackendFromEnv, VirtualFS } from './virtual-fs.js';

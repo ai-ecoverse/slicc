@@ -101,6 +101,15 @@ export interface MetadataUpdate {
   mtime?: Date;
 }
 
+/**
+ * One entry for {@link VirtualFS.symlinkBatch}: create a symlink at `path`
+ * pointing to `target` (absolute or relative to the link's directory).
+ */
+export interface SymlinkCreate {
+  target: string;
+  path: string;
+}
+
 export interface VirtualFsOptions {
   /**
    * Identifier for this VFS instance. On `'opfs'` it names the OPFS
@@ -2982,43 +2991,93 @@ export class VirtualFS {
    * @throws FsError EXDEV if target resolves onto a mounted filesystem
    */
   async symlink(target: string, linkPath: string): Promise<void> {
-    const normalizedLinkPath = normalizePath(linkPath);
-    this.assertSymlinkCreateAllowed(target, normalizedLinkPath);
-    // Ensure the parent directory exists and create the link as ONE critical
-    // section under the write lock — same ZenFS concurrent-checkout race as
-    // writeFile (see withWriteLock).
-    const { dir } = splitPath(normalizedLinkPath);
-    await this.withWriteLock(async () => {
-      await this.dropSidecarConsistency();
-      if (dir !== '/') {
-        await this.mkdirRecursiveUnlocked(dir);
-      }
-      try {
-        await this.lfs.symlink(target, normalizedLinkPath);
-      } catch (err) {
-        if (dir !== '/' && err instanceof Error && err.message.includes('ENOENT')) {
-          await this.mkdirRecursiveUnlocked(dir);
-          try {
-            await this.lfs.symlink(target, normalizedLinkPath);
-          } catch (retryErr) {
-            throw convertError(retryErr, normalizedLinkPath);
-          }
-        } else {
-          throw convertError(err, normalizedLinkPath);
-        }
-      }
-      // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
-      // survives a realm reload that happens BEFORE flush()/dispose() — the
-      // git clone/checkout path never flushes, and on the OPFS/WebAccess
-      // backend symlink-ness lives only in the in-memory index until the
-      // sidecar is written. Serializing here (never a concurrent sidecar
-      // write) and only for symlinks (rare vs file writes) keeps a full
-      // clone cheap. No-op on the memory backend. See "Root cause: git
-      // symlink/binary corruption".
-      this.markSidecarDirty(normalizedLinkPath);
-      await this.writeOpfsMetadataSidecarUnlocked();
+    await this.symlinkBatch([{ target, path: linkPath }]);
+  }
+
+  /**
+   * Create many symlinks under one write lock and **one** sidecar persist.
+   * Used by `ipk mamba install` so extracting N symlink members is not N full
+   * sidecar rewrites (same quadratic shape {@link updateMetadataBatch} fixed
+   * for `tar x` chmod/utimes). A single {@link symlink} is this with one
+   * entry — still durable before return (git clone/checkout never flushes;
+   * OPFS symlink-ness lives only in the in-memory index until the sidecar
+   * is written). Empty input is a no-op (no sidecar write).
+   *
+   * @throws FsError EEXIST if a link path already exists
+   * @throws FsError EINVAL if a link path is on a mounted filesystem
+   * @throws FsError EXDEV if a target resolves onto a mounted filesystem
+   */
+  async symlinkBatch(links: readonly SymlinkCreate[]): Promise<void> {
+    if (links.length === 0) return;
+    const prepared = links.map((link) => {
+      const normalizedLinkPath = normalizePath(link.path);
+      this.assertSymlinkCreateAllowed(link.target, normalizedLinkPath);
+      return { target: link.target, normalizedLinkPath };
     });
-    this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
+    const paths = prepared.map((link) => link.normalizedLinkPath);
+    await this.withKindMismatchRetryPaths(paths, () =>
+      this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
+        const notifications: Array<{
+          type: 'create';
+          path: string;
+          entryType: 'symlink';
+        }> = [];
+        try {
+          for (const link of prepared) {
+            await this.createSymlinkUnlocked(link.target, link.normalizedLinkPath);
+            this.markSidecarDirty(link.normalizedLinkPath);
+            notifications.push({
+              type: 'create',
+              path: link.normalizedLinkPath,
+              entryType: 'symlink',
+            });
+          }
+          // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
+          // survives a realm reload that happens BEFORE flush()/dispose() — the
+          // git clone/checkout path never flushes. Serializing here (never a
+          // concurrent sidecar write) keeps a full clone cheap. No-op on the
+          // memory backend. See "Root cause: git symlink/binary corruption".
+          await this.writeOpfsMetadataSidecarUnlocked();
+          this.watcher?.notify(notifications);
+        } catch (err) {
+          // Persist / notify the successful prefix before rethrowing so a later
+          // EEXIST (etc.) does not leave earlier links only in the live index.
+          if (notifications.length > 0) {
+            await this.writeOpfsMetadataSidecarUnlocked();
+            this.watcher?.notify(notifications);
+          }
+          throw err;
+        }
+      })
+    );
+  }
+
+  /**
+   * Create one symlink under the write lock (parent mkdir + ZenFS symlink +
+   * ENOENT retry). Caller marks dirty / persists the sidecar.
+   */
+  private async createSymlinkUnlocked(target: string, normalizedLinkPath: string): Promise<void> {
+    // Ensure the parent directory exists and create the link — same ZenFS
+    // concurrent-checkout race as writeFile (see withWriteLock).
+    const { dir } = splitPath(normalizedLinkPath);
+    if (dir !== '/') {
+      await this.mkdirRecursiveUnlocked(dir);
+    }
+    try {
+      await this.lfs.symlink(target, normalizedLinkPath);
+    } catch (err) {
+      if (dir !== '/' && err instanceof Error && err.message.includes('ENOENT')) {
+        await this.mkdirRecursiveUnlocked(dir);
+        try {
+          await this.lfs.symlink(target, normalizedLinkPath);
+        } catch (retryErr) {
+          throw convertError(retryErr, normalizedLinkPath);
+        }
+      } else {
+        throw convertError(err, normalizedLinkPath);
+      }
+    }
   }
 
   /**

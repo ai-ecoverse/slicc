@@ -11,6 +11,7 @@ import { VirtualFS } from '../../../../src/fs/index.js';
 import { kernelJobTable } from '../../../../src/kernel/job-table.js';
 import { ProcessManager } from '../../../../src/kernel/process-manager.js';
 import { createInProcessJsRealmFactory } from '../../../../src/kernel/realm/realm-inprocess.js';
+import { SYNC_FS_REQUEST_TIMEOUT_MS } from '../../../../src/kernel/realm/sync-fs-wire.js';
 import { DEFAULT_SHELL_PATH } from '../../../../src/shell/jsh-discovery.js';
 import {
   createJshdKernelContext,
@@ -105,8 +106,16 @@ describe('createJshdKernelContext', () => {
   });
 });
 
-/** Wait window for a restored unit to settle — sized for a loaded CI runner, not a laptop. */
-const SETTLE = { timeout: 10_000, interval: 25 };
+/** Wait window for a restored unit to settle.
+ *
+ * Sized past {@link SYNC_FS_REQUEST_TIMEOUT_MS}: the SudoFS gate test uses
+ * `writeFileSync`, which blocks the realm until the sync-fs SW/responder
+ * round-trip finishes. On a loaded merge-queue runner that round-trip can
+ * approach the sync-fs budget before deny returns and the unit leaves
+ * `running` — a 10s window timed out with state still `running` on #3520.
+ */
+const SETTLE = { timeout: SYNC_FS_REQUEST_TIMEOUT_MS + 5_000, interval: 50 };
+const SUDO_GATE_TEST_MS = SETTLE.timeout + 15_000;
 
 describe('restoreEnabledJshdUnits', () => {
   it('relaunches enabled units and skips disabled ones', async () => {
@@ -175,45 +184,52 @@ describe('restoreEnabledJshdUnits', () => {
 
   // The unit has to boot a realm, attempt the write, have SudoFS deny it and
   // settle before either wait below can pass. That takes well under a second
-  // on an idle box, but a loaded CI runner / webapp coverage suite (in-process
-  // realm drain + sync-fs flush through SudoFS) blew through `vi.waitFor`'s
-  // default one-second window with the unit still `running`. Shrinking the
-  // window to 1 ms reproduces that exact failure on demand, so the windows
-  // are sized for load and the test gets a budget to match.
-  it('keeps SudoFS gates so a restored unit cannot write /etc/sudoers.d', async () => {
-    const vfs = await VirtualFS.create({
-      dbName: `jshd-restore-sudo-${dbCounter++}`,
-      wipe: true,
-    });
-    await vfs.mkdir('/etc/sudoers.d', { recursive: true });
-    await vfs.writeFile(
-      '/workspace/pwn.jsh',
-      [
-        "const fs = require('fs');",
-        "fs.writeFileSync('/etc/sudoers.d/pwned', 'NOPASSWD Cmnd *\\n');",
-      ].join('\n')
-    );
-    await writeUnitRecord(
-      vfs,
-      record({ name: 'pwn', argv: ['/workspace/pwn.jsh'], enabled: true, restart: 'no' })
-    );
-    const pm = new ProcessManager();
-    const started = await restoreEnabledJshdUnits({
-      fs: vfs,
-      processManager: pm,
-      realmFactory: inProcess,
-    });
-    expect(started).toContain('pwn');
-    await vi.waitFor(() => {
-      const state = getJshdSupervisor()?.status('pwn')?.state;
-      expect(state).toMatch(/stopped|errored/);
-    }, SETTLE);
-    expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
-    const { readUnitLog } = await import(
-      '../../../../src/shell/supplemental-commands/jshd/store.js'
-    );
-    await vi.waitFor(async () => {
+  // on an idle box, but a loaded CI / merge-queue runner (in-process realm
+  // drain + sync-fs flush through SudoFS) can hold the unit in `running`
+  // until the sync-fs round-trip budget elapses. Shrinking the window to 1 ms
+  // reproduces that exact failure on demand, so the windows track
+  // SYNC_FS_REQUEST_TIMEOUT_MS and the test gets a budget to match.
+  it(
+    'keeps SudoFS gates so a restored unit cannot write /etc/sudoers.d',
+    async () => {
+      const vfs = await VirtualFS.create({
+        dbName: `jshd-restore-sudo-${dbCounter++}`,
+        wipe: true,
+      });
+      await vfs.mkdir('/etc/sudoers.d', { recursive: true });
+      await vfs.writeFile(
+        '/workspace/pwn.jsh',
+        [
+          "const fs = require('fs');",
+          "fs.writeFileSync('/etc/sudoers.d/pwned', 'NOPASSWD Cmnd *\\n');",
+        ].join('\n')
+      );
+      await writeUnitRecord(
+        vfs,
+        record({ name: 'pwn', argv: ['/workspace/pwn.jsh'], enabled: true, restart: 'no' })
+      );
+      const pm = new ProcessManager();
+      const started = await restoreEnabledJshdUnits({
+        fs: vfs,
+        processManager: pm,
+        realmFactory: inProcess,
+      });
+      expect(started).toContain('pwn');
+      const { readUnitLog } = await import(
+        '../../../../src/shell/supplemental-commands/jshd/store.js'
+      );
+      // Settle when the unit exits OR the deny is already logged — either proves
+      // the gate fired. Do not require both in series: under load the first wait
+      // alone used to burn the whole budget while still `running`.
+      await vi.waitFor(async () => {
+        const state = getJshdSupervisor()?.status('pwn')?.state;
+        const log = await readUnitLog(vfs, 'pwn');
+        const settled = state === 'stopped' || state === 'errored' || /approval denied/.test(log);
+        expect(settled).toBe(true);
+      }, SETTLE);
+      expect(await vfs.exists('/etc/sudoers.d/pwned')).toBe(false);
       expect(await readUnitLog(vfs, 'pwn')).toMatch(/approval denied/);
-    }, SETTLE);
-  }, 30_000);
+    },
+    SUDO_GATE_TEST_MS
+  );
 });
