@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SecureFetch } from 'just-bash';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../../src/fs/index.js';
 import {
@@ -118,5 +118,31 @@ describe('mamba-installer', () => {
     expect(await fs.exists(`${CONDA_PREFIX}/lib/libz.a`)).toBe(false);
     expect(await fs.exists(`${CONDA_PREFIX}/lib/libz.so`)).toBe(false);
     expect(await listInstalledCondaPackages(fs)).toEqual([]);
+  });
+
+  it('creates archive symlinks in one batch (not per member)', async () => {
+    const archive = new Uint8Array(readFileSync(FIXTURE));
+    const indexes = new Map<string, RepodataIndex>([[`${CHANNEL}|emscripten-wasm32`, mockIndex()]]);
+    const batchSpy = vi.spyOn(fs, 'symlinkBatch');
+    const singleSpy = vi.spyOn(fs, 'symlink');
+
+    const outcome = await installCondaPackages(['zlib'], {
+      fs,
+      fetch: mockFetch(archive),
+      channels: [CHANNEL],
+      indexes,
+    });
+
+    expect(outcome.errors).toEqual([]);
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    const batch = batchSpy.mock.calls[0]![0];
+    expect(batch.length).toBeGreaterThanOrEqual(2);
+    expect(batch.map((l) => l.path)).toEqual(
+      expect.arrayContaining([`${CONDA_PREFIX}/lib/libz.so`, `${CONDA_PREFIX}/lib/libz.so.1`])
+    );
+    // symlink() must not be used for the extract path (would N× sidecar write).
+    expect(singleSpy).not.toHaveBeenCalled();
+    expect(await fs.readlink(`${CONDA_PREFIX}/lib/libz.so`)).toBe('libz.so.1');
+    expect(await fs.readlink(`${CONDA_PREFIX}/lib/libz.so.1`)).toBe('libz.so.1.3.1');
   });
 });

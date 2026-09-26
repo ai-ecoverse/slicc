@@ -146,8 +146,9 @@ export class VfsAdapter implements IFileSystem {
     this.listingStatsTtlMs = opts?.listingStatsTtlMs ?? LISTING_STAT_TTL_MS;
     // Own-property so just-bash's per-exec umask wrapper (`__jbUmaskFs`), which
     // copies `getOwnPropertyNames` off the instance/prototype, always forwards
-    // this non-IFileSystem extension used by `tar x`.
+    // these non-IFileSystem extensions used by `tar x` / `ipk mamba`.
     this.updateMetadataBatch = this.updateMetadataBatch.bind(this);
+    this.symlinkBatch = this.symlinkBatch.bind(this);
   }
 
   /** Entries primed right now. A diagnostic — an unbounded cache and a
@@ -664,6 +665,19 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(() =>
       this.vfs.updateMetadataBatch(
         updates.map((update) => ({ ...update, path: normalizePath(update.path) }))
+      )
+    );
+  }
+
+  /**
+   * Forward {@link VirtualFS.symlinkBatch} so `ipk mamba` can create many
+   * symlinks with one sidecar write. Not part of just-bash `IFileSystem`.
+   */
+  async symlinkBatch(links: ReadonlyArray<{ target: string; path: string }>): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() =>
+      this.vfs.symlinkBatch(
+        links.map((link) => ({ target: link.target, path: normalizePath(link.path) }))
       )
     );
   }

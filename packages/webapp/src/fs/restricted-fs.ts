@@ -886,10 +886,20 @@ export class RestrictedFS {
   // ── Symlink operations ───────────────────────────────────────────────
 
   async symlink(target: string, linkPath: string): Promise<void> {
-    this.refuseDescriptorTreeOp(linkPath);
-    this.checkWrite(linkPath);
-    await this.checkParentRealpathEscape(linkPath);
-    return this.vfs.symlink(target, linkPath);
+    return this.symlinkBatch([{ target, path: linkPath }]);
+  }
+
+  /**
+   * Gate each link path then apply the batch on the underlying VFS (one
+   * sidecar write). Same ACL surface as repeated {@link symlink}.
+   */
+  async symlinkBatch(links: ReadonlyArray<{ target: string; path: string }>): Promise<void> {
+    for (const link of links) {
+      this.refuseDescriptorTreeOp(link.path);
+      this.checkWrite(link.path);
+      await this.checkParentRealpathEscape(link.path);
+    }
+    return this.vfs.symlinkBatch(links);
   }
 
   async readlink(path: string): Promise<string> {

@@ -303,6 +303,15 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
       return (target as FsMethodBag).updateMetadataBatch(updates);
     };
   }
+  if (has('symlinkBatch')) {
+    overrides.symlinkBatch = async (links: unknown) => {
+      const list = links as ReadonlyArray<{ path: string }>;
+      for (const link of list) {
+        await gate('write', link.path);
+      }
+      return (target as FsMethodBag).symlinkBatch(links);
+    };
+  }
   if (has('mount')) {
     overrides.mount = async (path: unknown, ...rest: unknown[]) => {
       await gate('write', path as string);
