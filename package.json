@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "6.193.0",
+  "version": "6.194.0",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -128,7 +128,7 @@
     "@semantic-release/git": "11.0.1",
     "@size-limit/file": "13.0.3",
     "@tessl/cli": "0.109.0",
-    "@types/node": "24.13.5",
+    "@types/node": "24.13.6",
     "@vitest/browser": "4.1.11",
     "@vitest/browser-playwright": "4.1.11",
     "@vitest/coverage-v8": "4.1.11",
