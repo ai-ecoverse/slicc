@@ -479,6 +479,41 @@ describe('RestrictedFS', () => {
     });
   });
 
+  describe('symlinkBatch nesting escape (#3518)', () => {
+    let batchVfs: VirtualFS;
+    let batchRestricted: RestrictedFS;
+
+    beforeAll(async () => {
+      batchVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-symlink-batch', wipe: true });
+      await batchVfs.mkdir('/scoops/my-scoop', { recursive: true });
+      await batchVfs.mkdir('/shared', { recursive: true });
+      await batchVfs.mkdir('/etc/sudoers.d', { recursive: true });
+      await batchVfs.writeFile('/shared/controlled', 'safe');
+      batchRestricted = new RestrictedFS(batchVfs, ['/scoops/my-scoop/', '/shared/']);
+    });
+
+    it('rejects a batch that nests a later link under an earlier symlink path', async () => {
+      await expect(
+        batchRestricted.symlinkBatch([
+          { target: '/etc/sudoers.d', path: '/shared/pivot' },
+          { target: '/shared/controlled', path: '/shared/pivot/policy' },
+        ])
+      ).rejects.toMatchObject({ code: 'EACCES' });
+      expect(await batchVfs.exists('/shared/pivot')).toBe(false);
+      expect(await batchVfs.exists('/shared/pivot/policy')).toBe(false);
+      expect(await batchVfs.exists('/etc/sudoers.d/policy')).toBe(false);
+    });
+
+    it('still allows sibling symlinks under a writable prefix', async () => {
+      await batchRestricted.symlinkBatch([
+        { target: 'libz.so.1', path: '/shared/libz.so' },
+        { target: 'libz.so.1.3.1', path: '/shared/libz.so.1' },
+      ]);
+      expect(await batchVfs.readlink('/shared/libz.so')).toBe('libz.so.1');
+      expect(await batchVfs.readlink('/shared/libz.so.1')).toBe('libz.so.1.3.1');
+    });
+  });
+
   describe('destination symlink escape', () => {
     let escVfs: VirtualFS;
     let escRestricted: RestrictedFS;

@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { formatBytesBinary } from '../../base/format-bytes.js';
 
 export interface MemoryAttribution {
   url?: string;
@@ -43,19 +44,6 @@ function fail(msg: string): CmdResult {
   return { stdout: '', stderr: `meminfo: ${msg}\n`, exitCode: 1 };
 }
 
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB'];
-  let value = bytes;
-  let unit = 'B';
-  for (const next of units) {
-    if (value < 1024) break;
-    value /= 1024;
-    unit = next;
-  }
-  return `${value.toFixed(1)} ${unit}`;
-}
-
 function attributionLabel(entry: MemoryBreakdownEntry): string {
   if (entry.attribution.length === 0) return '(shared)';
   return entry.attribution
@@ -87,7 +75,7 @@ function parseMeminfoArgs(
 }
 
 function renderHuman(result: MemoryMeasurement): string {
-  const lines = [`total: ${formatBytes(result.bytes)}`];
+  const lines = [`total: ${formatBytesBinary(result.bytes)}`];
   const rows = [...result.breakdown]
     .filter((entry) => entry.bytes > 0)
     .sort((a, b) => b.bytes - a.bytes);
@@ -95,7 +83,7 @@ function renderHuman(result: MemoryMeasurement): string {
     lines.push('', 'BYTES      TYPES                ATTRIBUTION');
     for (const entry of rows) {
       lines.push(
-        `${formatBytes(entry.bytes).padEnd(10)} ${entry.types.join(',').padEnd(20)} ${attributionLabel(entry)}`
+        `${formatBytesBinary(entry.bytes).padEnd(10)} ${entry.types.join(',').padEnd(20)} ${attributionLabel(entry)}`
       );
     }
   }

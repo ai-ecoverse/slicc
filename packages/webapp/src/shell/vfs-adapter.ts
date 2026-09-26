@@ -81,6 +81,7 @@ export class VfsAdapter implements IFileSystem {
     this.listingStatsTtlMs = opts?.listingStatsTtlMs ?? LISTING_STAT_TTL_MS;
 
     this.updateMetadataBatch = this.updateMetadataBatch.bind(this);
+    this.symlinkBatch = this.symlinkBatch.bind(this);
   }
 
   get listingStatsSize(): number {
@@ -472,6 +473,15 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(() =>
       this.vfs.updateMetadataBatch(
         updates.map((update) => ({ ...update, path: normalizePath(update.path) }))
+      )
+    );
+  }
+
+  async symlinkBatch(links: ReadonlyArray<{ target: string; path: string }>): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() =>
+      this.vfs.symlinkBatch(
+        links.map((link) => ({ target: link.target, path: normalizePath(link.path) }))
       )
     );
   }

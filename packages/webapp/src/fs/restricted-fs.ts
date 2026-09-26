@@ -569,10 +569,35 @@ export class RestrictedFS {
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
-    this.refuseDescriptorTreeOp(linkPath);
-    this.checkWrite(linkPath);
-    await this.checkParentRealpathEscape(linkPath);
-    return this.vfs.symlink(target, linkPath);
+    return this.symlinkBatch([{ target, path: linkPath }]);
+  }
+
+  async symlinkBatch(links: ReadonlyArray<{ target: string; path: string }>): Promise<void> {
+    if (links.length === 0) return;
+    const normalized = links.map((link) => ({
+      target: link.target,
+      path: normalizePath(link.path),
+    }));
+    this.rejectNestedSymlinkBatchPaths(normalized.map((link) => link.path));
+    for (const link of normalized) {
+      this.refuseDescriptorTreeOp(link.path);
+      this.checkWrite(link.path);
+      await this.checkParentRealpathEscape(link.path);
+    }
+    return this.vfs.symlinkBatch(normalized);
+  }
+
+  private rejectNestedSymlinkBatchPaths(paths: readonly string[]): void {
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = 0; j < paths.length; j++) {
+        if (i === j) continue;
+        const ancestor = paths[j]!;
+        const descendant = paths[i]!;
+        if (descendant === ancestor || descendant.startsWith(`${ancestor}/`)) {
+          throw new FsError('EACCES', 'permission denied', descendant);
+        }
+      }
+    }
   }
 
   async readlink(path: string): Promise<string> {

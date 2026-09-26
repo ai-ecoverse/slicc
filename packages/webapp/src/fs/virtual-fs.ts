@@ -70,6 +70,11 @@ export interface MetadataUpdate {
   mtime?: Date;
 }
 
+export interface SymlinkCreate {
+  target: string;
+  path: string;
+}
+
 export interface VirtualFsOptions {
   dbName?: string;
 
@@ -2045,34 +2050,68 @@ export class VirtualFS {
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
-    const normalizedLinkPath = normalizePath(linkPath);
-    this.assertSymlinkCreateAllowed(target, normalizedLinkPath);
+    await this.symlinkBatch([{ target, path: linkPath }]);
+  }
 
-    const { dir } = splitPath(normalizedLinkPath);
-    await this.withWriteLock(async () => {
-      await this.dropSidecarConsistency();
-      if (dir !== '/') {
-        await this.mkdirRecursiveUnlocked(dir);
-      }
-      try {
-        await this.lfs.symlink(target, normalizedLinkPath);
-      } catch (err) {
-        if (dir !== '/' && err instanceof Error && err.message.includes('ENOENT')) {
-          await this.mkdirRecursiveUnlocked(dir);
-          try {
-            await this.lfs.symlink(target, normalizedLinkPath);
-          } catch (retryErr) {
-            throw convertError(retryErr, normalizedLinkPath);
-          }
-        } else {
-          throw convertError(err, normalizedLinkPath);
-        }
-      }
-
-      this.markSidecarDirty(normalizedLinkPath);
-      await this.writeOpfsMetadataSidecarUnlocked();
+  async symlinkBatch(links: readonly SymlinkCreate[]): Promise<void> {
+    if (links.length === 0) return;
+    const prepared = links.map((link) => {
+      const normalizedLinkPath = normalizePath(link.path);
+      this.assertSymlinkCreateAllowed(link.target, normalizedLinkPath);
+      return { target: link.target, normalizedLinkPath };
     });
-    this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
+    const paths = prepared.map((link) => link.normalizedLinkPath);
+    await this.withKindMismatchRetryPaths(paths, () =>
+      this.withWriteLock(async () => {
+        await this.dropSidecarConsistency();
+        const notifications: Array<{
+          type: 'create';
+          path: string;
+          entryType: 'symlink';
+        }> = [];
+        try {
+          for (const link of prepared) {
+            await this.createSymlinkUnlocked(link.target, link.normalizedLinkPath);
+            this.markSidecarDirty(link.normalizedLinkPath);
+            notifications.push({
+              type: 'create',
+              path: link.normalizedLinkPath,
+              entryType: 'symlink',
+            });
+          }
+
+          await this.writeOpfsMetadataSidecarUnlocked();
+          this.watcher?.notify(notifications);
+        } catch (err) {
+          if (notifications.length > 0) {
+            await this.writeOpfsMetadataSidecarUnlocked();
+            this.watcher?.notify(notifications);
+          }
+          throw err;
+        }
+      })
+    );
+  }
+
+  private async createSymlinkUnlocked(target: string, normalizedLinkPath: string): Promise<void> {
+    const { dir } = splitPath(normalizedLinkPath);
+    if (dir !== '/') {
+      await this.mkdirRecursiveUnlocked(dir);
+    }
+    try {
+      await this.lfs.symlink(target, normalizedLinkPath);
+    } catch (err) {
+      if (dir !== '/' && err instanceof Error && err.message.includes('ENOENT')) {
+        await this.mkdirRecursiveUnlocked(dir);
+        try {
+          await this.lfs.symlink(target, normalizedLinkPath);
+        } catch (retryErr) {
+          throw convertError(retryErr, normalizedLinkPath);
+        }
+      } else {
+        throw convertError(err, normalizedLinkPath);
+      }
+    }
   }
 
   async readlink(path: string): Promise<string> {

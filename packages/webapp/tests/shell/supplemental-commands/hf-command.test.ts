@@ -324,6 +324,19 @@ describe('createHfCommand', () => {
     );
   });
 
+  it('keeps a nonzero sub-byte rate in the download summary', async () => {
+    let clock = 0;
+    const fetch = makeFetch({ 'owner/name': { files: { tiny: new Uint8Array(1) } } });
+    const slowFetch = (async (url: string, opts?: SecureFetchOptions) => {
+      if (url.includes('/resolve/')) clock += 3000;
+      return fetch(url, opts);
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch: slowFetch, now: () => clock });
+    const r = await cmd.execute(['download', 'owner/name'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/1 downloaded, 0 skipped, 1 B total into .* in 3s \(0\.3 B\/s\)/);
+  });
+
   it('prints no progress lines without a live sink, and no rate when nothing downloaded', async () => {
     const fetch = makeFetch({ 'owner/name': { files: { 'a.txt': bytes('A') } } });
     await fs.mkdir('/m', { recursive: true });
@@ -380,7 +393,7 @@ describe('createHfCommand', () => {
     };
     const cmd = createHfCommand({ fetch });
     const r = await cmd.execute(['download', 'owner/name'], { ...ctxOf(fs), fs: fakeFs } as never);
-    expect(r.stderr).toMatch(/downloaded w \(3\.00 GB\)/);
+    expect(r.stderr).toMatch(/downloaded w \(3\.0 GB\)/);
   });
 });
 

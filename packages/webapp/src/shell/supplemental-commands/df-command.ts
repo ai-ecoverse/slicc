@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { formatBytesBinary } from '../../base/format-bytes.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { probeLegacyIdbExists } from './slicc-fs-cleanup-command.js';
 
@@ -40,23 +41,9 @@ Read-only. See 'df --help' for the underlying command.
 `;
 }
 
-function humanReadable(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = bytes / 1024;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  const formatted =
-    value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
-  return `${formatted} ${units[unitIndex]}`;
-}
-
 function formatBytes(bytes: number | null, human: boolean): string {
   if (bytes === null) return 'unavailable';
-  return human ? humanReadable(bytes) : `${bytes}`;
+  return human ? formatBytesBinary(bytes) : `${bytes}`;
 }
 
 async function buildReport(options: DfCommandOptions): Promise<DfReport> {

@@ -193,15 +193,15 @@ async function writeEntries(
     written.push(entry.path);
   }
 
+  const symlinkBatch: Array<{ target: string; path: string }> = [];
   for (const entry of links) {
     if (entry.path === 'info' || entry.path.startsWith('info/')) continue;
-    const target = joinPath(prefix, entry.path);
-    const lastSlash = target.lastIndexOf('/');
-    if (lastSlash > 0) {
-      await ensureDir(fs, target.slice(0, lastSlash));
-    }
-    await fs.symlink(entry.symlink!, target);
+    const linkPath = joinPath(prefix, entry.path);
+    symlinkBatch.push({ target: entry.symlink!, path: linkPath });
     written.push(entry.path);
+  }
+  if (symlinkBatch.length > 0) {
+    await fs.symlinkBatch(symlinkBatch);
   }
 
   return written;
