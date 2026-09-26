@@ -711,11 +711,13 @@ export class HostFsMountBackend implements MountBackend {
    *
    * Listings are always live POSTs (no listing cache), so every file the
    * walk sees counts as checked: matching / missing body-cache entries are
-   * `unchanged`, and an etag mismatch is `changed` (body dropped). With
-   * `opts.bodies`, each changed path is re-fetched so the body cache is
-   * warm again. Unlike the previous wipe-and-report-zeros stub, a successful
-   * refresh of a populated idle tree reports a non-zero `unchanged` count
-   * (#3435).
+   * `unchanged`, and an etag mismatch (or an unverifiable listing row with a
+   * cached body) is `changed` (body dropped). Cached paths the walk never
+   * reaches are `removed`. Directory symlink cycles are cut by statting each
+   * directory and skipping already-seen `dev:ino` identities. With
+   * `opts.bodies`, each changed path is re-fetched so the body cache is warm
+   * again. A successful refresh of a populated idle tree reports a non-zero
+   * `unchanged` count (#3435).
    */
   async refresh(opts?: { bodies?: boolean }): Promise<RefreshReport> {
     this.assertOpen(this.targetPath);
@@ -726,11 +728,20 @@ export class HostFsMountBackend implements MountBackend {
       unchanged: 0,
       errors: [],
     };
+    const seenFiles = new Set<string>();
+    const seenDirs = new Set<string>();
+    try {
+      const rootStat = await this.stat('');
+      const rootId = this.dirIdentity(rootStat, '');
+      if (rootId) seenDirs.add(rootId);
+    } catch {
+      // Root may be unreadable; the first list error lands in report.errors.
+    }
     const stack: string[] = [''];
     while (stack.length > 0) {
       const dir = stack.pop()!;
       try {
-        await this.refreshDir(dir, report, stack);
+        await this.refreshDir(dir, report, stack, seenDirs, seenFiles);
       } catch (err) {
         report.errors.push({
           path: dir || '/',
@@ -738,16 +749,18 @@ export class HostFsMountBackend implements MountBackend {
         });
       }
     }
+    await this.purgeAbsentBodies(seenFiles, report);
     if (opts?.bodies) await this.refreshBodies(report);
     return report;
   }
 
   /**
-   * Strong ETag the bridge derives from `stat` (`"<size>-<mtime>-<ino>"` in
-   * hex). Listing rows carry the same fields, so refresh can classify without
-   * a per-file `stat`/`read`.
+   * Candidate strong ETags for a listing row. Node encodes raw `mtimeMs`;
+   * Swift encodes `floor(mtimeMs * 1000)` microseconds — both include size
+   * and ino in hex. Refresh accepts either so a Sliccstart mount does not
+   * falsely mark every cached body changed.
    */
-  private etagFromListing(entry: MountDirEntry): string | undefined {
+  private etagsFromListing(entry: MountDirEntry): string[] | undefined {
     if (
       typeof entry.size !== 'number' ||
       typeof entry.lastModified !== 'number' ||
@@ -755,7 +768,30 @@ export class HostFsMountBackend implements MountBackend {
     ) {
       return undefined;
     }
-    return `"${entry.size.toString(16)}-${entry.lastModified.toString(16)}-${entry.ino.toString(16)}"`;
+    const sizeHex = entry.size.toString(16);
+    const inoHex = entry.ino.toString(16);
+    const node = `"${sizeHex}-${entry.lastModified.toString(16)}-${inoHex}"`;
+    const mtimeMicros = Math.floor(Math.max(0, entry.lastModified * 1000));
+    const swift = `"${sizeHex}-${mtimeMicros.toString(16)}-${inoHex}"`;
+    return node === swift ? [node] : [node, swift];
+  }
+
+  private dirIdentity(
+    stat: { dev?: number; ino?: number },
+    pathFallback: string
+  ): string | undefined {
+    if (typeof stat.dev === 'number' && typeof stat.ino === 'number') {
+      return `${stat.dev}:${stat.ino}`;
+    }
+    // Older bridge / raced entry: fall back to the mount-relative path so we
+    // still skip exact re-queues of the same path string.
+    return pathFallback === '' ? undefined : `path:${pathFallback}`;
+  }
+
+  private async markChanged(filePath: string, report: RefreshReport): Promise<void> {
+    this.cacheGeneration += 1;
+    await this.cache.invalidateBody(filePath);
+    report.changed.push(filePath);
   }
 
   private async classifyFile(
@@ -764,12 +800,14 @@ export class HostFsMountBackend implements MountBackend {
     report: RefreshReport
   ): Promise<void> {
     const cached = await this.cache.getBody(filePath);
-    const remoteEtag = this.etagFromListing(entry);
-    if (cached && remoteEtag && cached.etag !== remoteEtag) {
-      this.cacheGeneration += 1;
-      await this.cache.invalidateBody(filePath);
-      report.changed.push(filePath);
-      return;
+    const remoteEtags = this.etagsFromListing(entry);
+    if (cached) {
+      if (!remoteEtags?.includes(cached.etag)) {
+        // Mismatch, or listing lacked validator fields — do not leave a
+        // stale body behind an explicit refresh.
+        await this.markChanged(filePath, report);
+        return;
+      }
     }
     // Listed and (when comparable) cache-coherent — count as checked even
     // when there is no body cache entry yet. Hostfs has no listing cache, so
@@ -778,15 +816,47 @@ export class HostFsMountBackend implements MountBackend {
     report.unchanged++;
   }
 
-  private async refreshDir(dir: string, report: RefreshReport, stack: string[]): Promise<void> {
+  private async refreshDir(
+    dir: string,
+    report: RefreshReport,
+    stack: string[],
+    seenDirs: Set<string>,
+    seenFiles: Set<string>
+  ): Promise<void> {
     const entries = await this.readDir(dir);
     for (const entry of entries) {
       const childPath = dir ? `${dir}/${entry.name}` : entry.name;
       if (entry.kind === 'directory') {
-        stack.push(childPath);
+        try {
+          const st = await this.stat(childPath);
+          const id = this.dirIdentity(st, childPath);
+          if (id && seenDirs.has(id)) continue;
+          if (id) seenDirs.add(id);
+          stack.push(childPath);
+        } catch (err) {
+          report.errors.push({
+            path: childPath,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       } else {
+        seenFiles.add(childPath);
         await this.classifyFile(childPath, entry, report);
       }
+    }
+  }
+
+  private async purgeAbsentBodies(seenFiles: Set<string>, report: RefreshReport): Promise<void> {
+    const cachedPaths = await this.cache.listBodyPaths();
+    let bumped = false;
+    for (const path of cachedPaths) {
+      if (seenFiles.has(path)) continue;
+      if (!bumped) {
+        this.cacheGeneration += 1;
+        bumped = true;
+      }
+      await this.cache.invalidateBody(path);
+      report.removed.push(path);
     }
   }
 
