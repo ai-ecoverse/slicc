@@ -178,9 +178,11 @@ A leader at tray protocol 10 or later acks each follower prompt with
 the prompt (`accepted`) or could not (`rejected`, with an `error`).
 `accepted` means the kernel accepted the handoff — `deliverFollowerMessage`
 awaits `workUnits.send()`, and `LocalWorkUnitClient.send` resolves only after
-the panel-RPC `user-message-ack` from `orchestrator.handleMessage()` — not
-merely after posting to the worker. It still does not mean the agent started:
-a busy or starved kernel can take a prompt that then sits quiet. The leader
+the panel-RPC `user-message-ack` once `orchestrator.handleMessage()` is
+scheduled (or refused in the same turn). The panel bounds that wait (~5s) so a
+dropped transport envelope cannot hang the follower forever; the ack is not
+held for the full agent turn. It still does not mean the agent started: a busy
+or starved kernel can take a prompt that then sits quiet. The leader
 side is `deliverFollowerMessage` in `ui/wc/wc-tray.ts`, which resolves the
 outcome off `workUnits.send()`, and `FollowerDispatch.ackUserMessage`
 (`scoops/tray-leader/follower-dispatch.ts`), which sends it once it settles. A

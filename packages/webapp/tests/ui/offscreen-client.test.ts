@@ -123,6 +123,36 @@ describe('OffscreenClient', () => {
     await expect(refused).rejects.toThrow(/gelatiere has no model/);
   });
 
+  it('bounds sendUserMessage when the kernel never acknowledges', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = client.sendUserMessage({
+        scoopJid: 'cone_123',
+        text: 'hi',
+        messageId: 'msg-timeout',
+      });
+      // Attach the rejection handler before the timer fires so the race
+      // reject is not momentarily unhandled.
+      const assertion = expect(pending).rejects.toThrow(/did not answer in time/);
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects sendUserMessage immediately when the panel is locked', async () => {
+    client.setLocked(true);
+    await expect(
+      client.sendUserMessage({
+        scoopJid: 'cone_123',
+        text: 'hi',
+        messageId: 'msg-locked',
+      })
+    ).rejects.toThrow(/detached/);
+    expect(sentMessages.length).toBe(0);
+  });
+
   it('forwards the steer flag on a steering send and leaves it unset otherwise', () => {
     client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();

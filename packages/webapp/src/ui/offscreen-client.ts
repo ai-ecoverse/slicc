@@ -74,6 +74,16 @@ import { getComputersStore } from './computers-store.js';
  */
 const WEBHOOK_DELIVERY_ACK_TIMEOUT_MS = 2000;
 
+/**
+ * Bound for the panel-RPC that waits on a kernel `user-message-ack`. Matches
+ * the model/thinking RPCs: KernelTransport.send is fire-and-forget and a
+ * locked {@link OffscreenClient.send} drops traffic, so an unbounded wait
+ * would hang `deliverFollowerMessage` forever if the ack never arrives (#3516).
+ * The kernel acks on handoff (not after the full agent turn), so idle turns
+ * do not race this bound.
+ */
+const USER_MESSAGE_ACK_TIMEOUT_MS = 5000;
+
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
@@ -435,6 +445,10 @@ export class OffscreenClient implements KernelClientFacade {
    * send, this carries a `requestId` so a refusal from
    * `orchestrator.handleMessage()` rejects instead of silently leaving
    * the leader to ack `accepted` too early.
+   *
+   * Bounded like the model/thinking RPCs: the transport is fire-and-forget
+   * and {@link send} drops traffic when locked, so an unbounded wait would
+   * hang `deliverFollowerMessage` forever if the ack never arrives (#3516).
    */
   sendUserMessage(input: {
     scoopJid: string;
@@ -444,6 +458,11 @@ export class OffscreenClient implements KernelClientFacade {
     steer?: boolean;
     guestGate?: import('../sudo/types.js').TurnGuestGate;
   }): Promise<void> {
+    if (this.locked) {
+      return Promise.reject(
+        new Error('This window is detached. Close it and use the detached tab.')
+      );
+    }
     const requestId = `um-${uid()}`;
     const ack = new Promise<void>((resolve, reject) => {
       this.pendingUserMessageAcks.set(requestId, { resolve, reject });
@@ -458,7 +477,21 @@ export class OffscreenClient implements KernelClientFacade {
       ...(input.steer ? { steer: true as const } : {}),
       ...(input.guestGate ? { guestGate: input.guestGate } : {}),
     });
-    return ack.finally(() => this.pendingUserMessageAcks.delete(requestId));
+    // Locked mid-send is already rejected above; a restart/detach that drops
+    // the envelope still needs this race so the waiter cannot stick forever.
+    // Clear the timer on settle so a late timeout reject is not an unhandled
+    // rejection after a successful ack.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('the kernel did not answer in time')),
+        USER_MESSAGE_ACK_TIMEOUT_MS
+      );
+    });
+    return Promise.race([ack, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+      this.pendingUserMessageAcks.delete(requestId);
+    });
   }
 
   // -------------------------------------------------------------------------

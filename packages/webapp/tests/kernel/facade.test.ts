@@ -663,4 +663,50 @@ describe('Kernel facade parity', () => {
       })
     );
   });
+
+  it('acks a user-message requestId on handoff without waiting for the agent turn', async () => {
+    // Idle handleMessage awaits the full turn — the panel's ~5s ack bound
+    // must not race that (#3516).
+    let resolveTurn!: () => void;
+    orchestrator.handleMessage.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveTurn = resolve;
+      })
+    );
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            requestId: 'um-3',
+            scoopJid: 'cone_1',
+            text: 'long turn',
+            messageId: 'msg-3',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: {
+          type: 'user-message-ack',
+          requestId: 'um-3',
+          messageId: 'msg-3',
+          scoopJid: 'cone_1',
+          ok: true,
+        },
+      })
+    );
+    expect(orchestrator.createScoopTab).not.toHaveBeenCalled();
+    resolveTurn();
+    await tick();
+    expect(orchestrator.createScoopTab).toHaveBeenCalledWith('cone_1');
+  });
 });

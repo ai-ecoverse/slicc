@@ -156,8 +156,8 @@ export interface LeaderSyncManagerOptions {
    * Returning a delivery outcome is what makes the leader ack the prompt to
    * the follower that sent it (`user_message_ack`, v10). Resolve it once the
    * kernel has taken or refused the prompt (`LocalWorkUnitClient.send` waits
-   * on the panel-RPC `user-message-ack`); it must not reject. `void` sends no
-   * ack.
+   * on the panel-RPC `user-message-ack`, which the kernel emits on handoff
+   * and the panel bounds ~5s); it must not reject. `void` sends no ack.
    */
   onFollowerMessage: (
     text: string,
