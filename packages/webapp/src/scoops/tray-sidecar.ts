@@ -555,40 +555,172 @@ function promptRejectedReason(error: string | undefined): string {
  * so the ack / agent / status switch stays under the complexity gate while still
  * matching the Go CLI's settle rules (`promptAckRejection` + turn endings).
  */
-function handlePromptFrame(
+type PromptTurnState = {
+  sawProcessing: boolean;
+  /** Set by an agent event. A `ready` before this is the startup blip. */
+  seenAgent: boolean;
+  scoopJid: string;
+  authoritative: boolean;
+  /** Named frames waiting until echo, ack, or the single root binds the unit. */
+  held: Map<string, LeaderToFollowerMessage[]>;
+};
+
+function newPromptTurnState(): PromptTurnState {
+  return {
+    sawProcessing: false,
+    seenAgent: false,
+    scoopJid: '',
+    authoritative: false,
+    held: new Map(),
+  };
+}
+
+function promptFrameScoop(message: LeaderToFollowerMessage): string {
+  if (message.type === 'agent_event' || message.type === 'status') return message.scoopJid ?? '';
+  return '';
+}
+
+function holdPromptFrame(
+  state: PromptTurnState,
+  jid: string,
+  message: LeaderToFollowerMessage
+): void {
+  const queued = state.held.get(jid);
+  if (queued) queued.push(message);
+  else state.held.set(jid, [message]);
+}
+
+/** Apply one frame already known to be this prompt's. */
+function applyPromptFrame(
   message: LeaderToFollowerMessage,
-  messageId: string,
   buffer: RunBuffer,
-  state: { sawProcessing: boolean },
+  state: PromptTurnState,
   control: VerbControl
 ): void {
-  if (message.type === 'user_message_ack') {
-    if (message.messageId !== messageId) return;
-    if (message.state === 'rejected') {
-      buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
-      control.finish(1);
-    }
-    // `accepted` (and unknown states) keep waiting for real agent activity.
-    return;
-  }
   if (message.type === 'agent_event') {
     const event = message.event;
     if (event.type === 'content_delta') buffer.push('stdout', event.text);
-    else if (event.type === 'turn_end') control.finish(0);
+    if (
+      event.type === 'content_delta' ||
+      event.type === 'message_start' ||
+      event.type === 'tool_use_start' ||
+      event.type === 'tool_result' ||
+      event.type === 'content_done'
+    ) {
+      state.seenAgent = true;
+    }
+    if (event.type === 'turn_end') control.finish(0);
     else if (event.type === 'error') {
       buffer.push('stderr', `${event.error}\n`);
       control.finish(1);
     }
     return;
   }
-  if (message.type === 'status') {
-    if (message.scoopStatus === 'processing') state.sawProcessing = true;
-    else if (state.sawProcessing) control.finish(0);
+  if (message.type !== 'status') return;
+  if (message.scoopStatus === 'processing') {
+    state.sawProcessing = true;
+    return;
+  }
+  if (!state.sawProcessing) return;
+  if (message.scoopStatus === 'error') {
+    buffer.push('stderr', 'the leader reported the scoop in error\n');
+    control.finish(1);
+    return;
+  }
+  // `initializing` is a unit booting. `ready` before any agent event is the
+  // startup blip a 6.196.0 leader emits before the turn actually starts.
+  if (message.scoopStatus === 'ready' && state.seenAgent) control.finish(0);
+}
+
+function bindPromptUnit(
+  state: PromptTurnState,
+  jid: string,
+  authoritative: boolean,
+  buffer: RunBuffer,
+  control: VerbControl
+): void {
+  if (!jid) return;
+  if (state.scoopJid) {
+    if (!authoritative || state.authoritative || state.scoopJid === jid) return;
+    state.sawProcessing = false;
+    state.seenAgent = false;
+  }
+  state.scoopJid = jid;
+  if (authoritative) state.authoritative = true;
+  const replay = state.held.get(jid) ?? [];
+  if (authoritative) state.held.clear();
+  else state.held.delete(jid);
+  for (const frame of replay) applyPromptFrame(frame, buffer, state, control);
+}
+
+function routePromptFrame(
+  message: LeaderToFollowerMessage,
+  state: PromptTurnState,
+  buffer: RunBuffer,
+  control: VerbControl
+): void {
+  const jid = promptFrameScoop(message);
+  if (jid && state.scoopJid !== jid && !(state.authoritative && state.scoopJid)) {
+    holdPromptFrame(state, jid, message);
+    return;
+  }
+  if (jid && state.scoopJid && jid !== state.scoopJid) return;
+  applyPromptFrame(message, buffer, state, control);
+}
+
+function soleConeJid(message: Extract<LeaderToFollowerMessage, { type: 'scoops.list' }>): string {
+  let cone = '';
+  for (const scoop of message.scoops) {
+    const root = scoop.parentId === null || (scoop.parentId === undefined && scoop.isCone === true);
+    if (!root) continue;
+    if (cone && cone !== scoop.jid) return '';
+    cone = scoop.jid;
+  }
+  return cone;
+}
+
+function handlePromptAck(
+  message: Extract<LeaderToFollowerMessage, { type: 'user_message_ack' }>,
+  messageId: string,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (message.messageId !== messageId) return;
+  if (message.state === 'rejected') {
+    buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
+    control.finish(1);
+    return;
+  }
+  if (message.state === 'accepted') bindPromptUnit(state, message.scoopJid, true, buffer, control);
+}
+
+function handlePromptFrame(
+  message: LeaderToFollowerMessage,
+  messageId: string,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (message.type === 'user_message_ack') {
+    handlePromptAck(message, messageId, buffer, state, control);
+    return;
+  }
+  if (message.type === 'user_message_echo' && message.messageId === messageId) {
+    bindPromptUnit(state, message.scoopJid, true, buffer, control);
+    return;
+  }
+  if (message.type === 'scoops.list') {
+    bindPromptUnit(state, soleConeJid(message), false, buffer, control);
     return;
   }
   if (message.type === 'error') {
     buffer.push('stderr', `${message.error}\n`);
     control.finish(1);
+    return;
+  }
+  if (message.type === 'agent_event' || message.type === 'status') {
+    routePromptFrame(message, state, buffer, control);
   }
 }
 
@@ -698,9 +830,10 @@ export class SidecarRegistry {
    * Send one chat turn and stream the leader's reply.
    *
    * A live browser leader emits no `turn_end` — it signals turn completion by
-   * `scoopStatus` going `processing` → anything else. Both endings are honored,
-   * matching `cmdPrompt` in the Go CLI, because a non-live float does send
-   * `turn_end` and would otherwise hang until the timeout.
+   * `scoopStatus` going `processing` → `ready` on the unit that accepted the
+   * prompt. Another unit's `ready`, or `initializing`, is not this turn.
+   * A non-live float does send `turn_end` and would otherwise hang until the
+   * timeout. Both endings are honored, matching `cmdPrompt` in the Go CLI.
    *
    * A v10 leader also sends `user_message_ack` for this prompt's `messageId`.
    * `rejected` ends the run at once (no turn will follow); `accepted` only
@@ -714,7 +847,7 @@ export class SidecarRegistry {
   ): Promise<SidecarRunResult> {
     const attachment = this.require(name);
     const buffer = new RunBuffer(options.onChunk);
-    const state = { sawProcessing: false };
+    const state = newPromptTurnState();
     const messageId = crypto.randomUUID();
 
     const run = runVerb(attachment, options, buffer, (message, control) => {
