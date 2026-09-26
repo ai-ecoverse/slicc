@@ -239,6 +239,29 @@ export class RemoteMountCache {
     await Promise.all([dropFromStore(LISTING_STORE), dropFromStore(BODY_STORE)]);
   }
 
+  /**
+   * Mount-relative paths that currently have a cached body. Used by hostfs
+   * `refresh` to report `removed` for cache keys the live walk no longer sees.
+   */
+  async listBodyPaths(): Promise<string[]> {
+    const db = await this.openDb();
+    const prefix = `${this.mountId}::`;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(BODY_STORE, 'readonly');
+      const req = tx.objectStore(BODY_STORE).getAllKeys();
+      req.onsuccess = () => {
+        const out: string[] = [];
+        for (const key of req.result as IDBValidKey[]) {
+          if (typeof key === 'string' && key.startsWith(prefix)) {
+            out.push(key.slice(prefix.length));
+          }
+        }
+        resolve(out);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   // --- internal helpers ---
 
   private txPut(db: IDBDatabase, storeName: string, key: string, value: unknown): Promise<void> {
