@@ -25,6 +25,20 @@ export function summaryFileName(benchmark, config) {
   return `SLICC_${safe(config.harness)}_skills_${safe(config.skills)}_model_${safe(config.model)}_bench_${safe(benchmark)}.json`;
 }
 
+/**
+ * Runs per SLICC version their leader reported (`leader.slicc_version`), e.g. `{ '6.194.1': 7,
+ * '6.194.2': 22 }`; `unknown` counts runs recorded without one. Versions drift with releases
+ * during a run (see run.mjs `leaderStamp`), so a configuration can span several.
+ */
+export function versionCounts(rs) {
+  const counts = {};
+  for (const r of rs) {
+    const v = r.leader?.slicc_version ?? 'unknown';
+    counts[v] = (counts[v] ?? 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const ran = (r) => !r.error || r.error_stage === 'judge';
 const judged = (r) => !r.error && typeof r.score === 'number' && !Number.isNaN(r.score);
@@ -72,6 +86,7 @@ export function summarize(records, { runStart } = {}) {
           cost_unknown: done.length - knownValues(done, 'cost').length,
           benchmark: rs[0].benchmark,
           harness: rs[0].config.harness,
+          slicc_versions: versionCounts(rs),
           model: rs[0].config.model,
           skills: rs[0].config.skills,
           judge_model: judgeModels(rs).join(', ') || null,
@@ -160,6 +175,7 @@ function configStats(c, cs) {
     model: c.model,
     skills: c.skills,
     harness: c.harness ?? null,
+    slicc_versions: versionCounts(cs),
     runs: cs.length,
     pass: n('pass'),
     partial: n('partial'),
@@ -227,6 +243,7 @@ export function reportData(records) {
     return {
       benchmark,
       upstream: rs.find((r) => r.upstream)?.upstream ?? null,
+      slicc_versions: versionCounts(rs),
       configs: configs.map((c) =>
         configStats(
           c,
@@ -247,6 +264,17 @@ export const percent = (x) => (x == null ? '–' : `${x >= 0 ? '+' : ''}${(x * 1
 
 function deltaLine(label, d) {
   return `- ${label}: score ${percent(d.score_pct)} (${fmt(d.score_from)} → ${fmt(d.score_to)}), time ${percent(d.duration_pct)} (${signed(d.duration, 0)} s), cost ${percent(d.cost_pct)} (${signed(d.cost, 3)} $) (n=${d.n})`;
+}
+
+/** Which SLICC versions ran, and a warning when runs span several. */
+export function versionLine(counts) {
+  const known = Object.entries(counts).filter(([v]) => v !== 'unknown');
+  const unknown = counts.unknown ?? 0;
+  const list = known.map(([v, n]) => `${v} (${n})`).join(', ');
+  const tail = unknown ? `${list ? '; ' : ''}${unknown} run(s) without a recorded version` : '';
+  if (known.length > 1)
+    return `SLICC versions: ${list}${tail}. **Mixed:** releases shipped during the run, so these scores pool more than one harness.`;
+  return `SLICC version: ${list || 'not recorded'}${known.length ? tail : ''}.`;
 }
 
 function configRow(c) {
@@ -274,7 +302,9 @@ export function reportMarkdown(records, { title = 'SLICC benchmark' } = {}) {
       '',
       '| model | skills | runs | pass | partial | fail | not judged | errors | mean score | mean s | mean $ |',
       '|---|---|---|---|---|---|---|---|---|---|---|',
-      ...b.configs.map(configRow)
+      ...b.configs.map(configRow),
+      '',
+      versionLine(b.slicc_versions)
     );
     const toolKnown = b.configs.filter((c) => c.tool_known);
     if (toolKnown.length) {

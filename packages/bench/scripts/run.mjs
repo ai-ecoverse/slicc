@@ -490,12 +490,18 @@ export function ageSeconds(startedAt, now = Date.now()) {
 }
 
 /** Which leader serves a run: its generation, age in seconds, and its how-manieth task. */
+/**
+ * Which leader ran a run. `slicc_version` is the version that leader reported at boot: a hosted
+ * leader loads its webapp (the agent) from production, so it follows releases whatever sliccy
+ * version the job pinned, and `config.harness` only names that pin.
+ */
 function leaderStamp(lane, id = 0) {
   return {
     lane: id,
     generation: lane.generation,
     age_s: ageSeconds(lane.startedAt),
     task: lane.tasks + 1,
+    slicc_version: lane.sliccVersion ?? null,
   };
 }
 
@@ -515,6 +521,7 @@ async function restartLeader(ctx, reason, log) {
   Object.assign(lane, {
     generation: lane.generation + 1,
     startedAt: next.startedAt ?? new Date().toISOString(),
+    sliccVersion: next.sliccVersion ?? null,
     tasks: 0,
     staged: null,
   });
@@ -602,7 +609,10 @@ async function runFresh(r, ctx, log) {
 function taskEvent(r, { record, result }, lane = 0) {
   return {
     lane,
+    // The run's full identity, so the journal can be matched back to exactly one record.
+    benchmark: r.set.benchmark,
     task_id: r.task.id,
+    repeat: r.repeat,
     model: r.model,
     skills: r.condition.name,
     outcome: record.error ? 'error' : (record.outcome ?? 'ran'),
@@ -637,7 +647,13 @@ async function setupLanes(opts, deps, journal, log, runStart) {
       leader:
         deps.leader ?? createLeader({ url: process.env.SLICC_JOIN_URL, onCall: journal.call }),
       recycle,
-      lane: { generation: 0, startedAt: first?.startedAt ?? runStart, tasks: 0, staged: null },
+      lane: {
+        generation: 0,
+        startedAt: first?.startedAt ?? runStart,
+        sliccVersion: first?.sliccVersion ?? null,
+        tasks: 0,
+        staged: null,
+      },
       leaderLog: process.env.BENCH_LEADER_LOG || null,
       sliccVersion: first?.sliccVersion ?? null,
     },
@@ -672,6 +688,7 @@ async function bootLanes(opts, deps, journal, log) {
         lane: {
           generation: 0,
           startedAt: l.startedAt ?? new Date().toISOString(),
+          sliccVersion: l.sliccVersion ?? null,
           tasks: 0,
           staged: null,
         },

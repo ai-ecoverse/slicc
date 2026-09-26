@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chartLegend, modelSlots, rankingChart, toolUseChart, valueChart } from './charts.mjs';
 import { listFiles } from './publish.mjs';
-import { configKey, percent, reportData } from './results.mjs';
+import { configKey, percent, reportData, versionLine } from './results.mjs';
 
 const esc = (v) =>
   String(v ?? '').replace(
@@ -326,6 +326,7 @@ export function reportHtml(
       const slots = modelSlots(b.configs.map((c) => c.model));
       return `<section>
 <h2>${esc(b.benchmark)} <small>${rs.length} runs, ${new Set(rs.map((r) => r.task_id)).size} tasks</small></h2>
+<p class="muted">${esc(versionLine(b.slicc_versions)).replace('**Mixed:**', '<strong>Mixed:</strong>')}</p>
 <h3>Ranking <small>score = mean rubric score × 100, over judged runs</small></h3>
 ${chartLegend(slots)}
 ${rankingChart(b.configs, slots)}

@@ -889,6 +889,8 @@ describe('leader lifecycle', () => {
     const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
     expect(r1.error).toBeUndefined();
     expect(r1.leader.generation).toBe(1);
+    // The version the restarted leader reported, not the first one's (none here).
+    expect(r1.leader.slicc_version).toBe('9.9');
     expect(events(out).map((e) => e.type)).toContain('leader-down');
     expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
       /restarting the leader \(leader unreachable\)/
@@ -1206,6 +1208,8 @@ describe('lanes and guardrails', () => {
     const ev = events(out);
     expect(ev.filter((e) => e.type === 'leader-ready').map((e) => e.lane)).toEqual([0, 1]);
     expect(ev.find((e) => e.type === 'start')).toMatchObject({ lanes: 2 });
+    // Each task event names its run in full, so the journal maps back to exactly one record.
+    expect(ev.find((e) => e.type === 'task')).toMatchObject({ benchmark: 'Own', repeat: 1 });
     q.mockRestore();
   });
 
