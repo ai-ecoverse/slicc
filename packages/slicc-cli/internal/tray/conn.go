@@ -133,6 +133,15 @@ type Conn struct {
 	// the lifetime of fire-and-forget ICE candidate posts to the connection.
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// inboundTrickle waits until the leader's offer is the remote description.
+	// outboundTrickle waits until our answer has been posted. Either side
+	// gathering during SetLocalDescription emits host candidates before that
+	// description is on the wire; applying them early is what Chrome logs as
+	// "ICE candidates can't be added without any remote session description"
+	// and then drops. The dial falls through to TURN.
+	inboundTrickle  trickleQueue
+	outboundTrickle trickleQueue
 }
 
 // Dial attaches to the leader at joinURL and returns once the data channel is
@@ -328,6 +337,11 @@ func (c *Conn) processEvents(ctx context.Context, sig *signaling.Client, control
 			if _, err := sig.SendAnswer(ctx, controllerID, bootstrapID, answerSDP); err != nil {
 				return "", err
 			}
+			// Candidates gathered while answering were held. The leader can
+			// apply them only once this answer is the remote description.
+			c.outboundTrickle.release(func(cand signaling.IceCandidate) {
+				c.postLocalCandidate(ctx, sig, controllerID, bootstrapID, cand)
+			})
 		case "bootstrap.ice_candidate":
 			if ev.Candidate == nil {
 				continue
@@ -354,6 +368,10 @@ func (c *Conn) processEvents(ctx context.Context, sig *signaling.Client, control
 }
 
 func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signaling.Client, controllerID string, bootstrapIDRef *string) error {
+	// A retry builds a new peer. Candidates gathered for the previous one
+	// belong to its ICE ufrag and must not be applied to this one.
+	c.inboundTrickle.reset()
+	c.outboundTrickle.reset()
 	config := webrtc.Configuration{ICEServers: toPionICE(iceServers)}
 	// Chrome hides host candidates behind mDNS (.local) names; resolve them so a
 	// browser leader on the same host or LAN can connect with host candidates and
@@ -384,7 +402,10 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 		if cand == nil {
 			return
 		}
-		c.sendLocalCandidate(c.ctx, sig, controllerID, bootstrapIDRef, cand)
+		// Belonging to this peer is rechecked under the outbound queue lock,
+		// together with the insert. A retry can pass a check here and resume
+		// only after recreatePeer has installed the replacement.
+		c.queueLocalCandidate(c.ctx, sig, controllerID, bootstrapIDRef, pc, cand)
 	})
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		switch state {
@@ -431,6 +452,13 @@ func (c *Conn) answerOffer(offerSDP string) (string, error) {
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
 		return "", err
 	}
+	// Candidates that arrived in this poll before the offer were held.
+	// They can be added only now.
+	c.inboundTrickle.release(func(cand signaling.IceCandidate) {
+		if err := addICECandidate(pc, cand); err != nil {
+			c.opts.logf("tray: failed to add remote ICE candidate: %v", err)
+		}
+	})
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
 		return "", err
@@ -442,9 +470,19 @@ func (c *Conn) answerOffer(offerSDP string) (string, error) {
 }
 
 func (c *Conn) addRemoteCandidate(cand signaling.IceCandidate) error {
-	c.mu.Lock()
-	pc := c.pc
-	c.mu.Unlock()
+	var addErr error
+	c.inboundTrickle.pushOrSend(cand, func(queued signaling.IceCandidate) {
+		c.mu.Lock()
+		pc := c.pc
+		c.mu.Unlock()
+		if err := addICECandidate(pc, queued); err != nil {
+			addErr = err
+		}
+	})
+	return addErr
+}
+
+func addICECandidate(pc *webrtc.PeerConnection, cand signaling.IceCandidate) error {
 	if pc == nil {
 		return fmt.Errorf("no peer connection")
 	}
@@ -459,13 +497,11 @@ func (c *Conn) addRemoteCandidate(cand signaling.IceCandidate) error {
 	return pc.AddICECandidate(init)
 }
 
-func (c *Conn) sendLocalCandidate(ctx context.Context, sig *signaling.Client, controllerID string, bootstrapIDRef *string, cand *webrtc.ICECandidate) {
-	c.mu.Lock()
-	bootstrapID := *bootstrapIDRef
-	c.mu.Unlock()
-	if bootstrapID == "" {
-		return
-	}
+// queueLocalCandidate holds a gathered candidate until the answer that owns
+// it has been posted. Gathering starts inside SetLocalDescription, which
+// returns before SendAnswer, so the first host candidate would otherwise
+// reach the leader before the answer.
+func (c *Conn) queueLocalCandidate(ctx context.Context, sig *signaling.Client, controllerID string, bootstrapIDRef *string, pc *webrtc.PeerConnection, cand *webrtc.ICECandidate) {
 	init := cand.ToJSON()
 	trayCand := signaling.IceCandidate{Candidate: init.Candidate}
 	trayCand.SDPMid = init.SDPMid
@@ -473,9 +509,34 @@ func (c *Conn) sendLocalCandidate(ctx context.Context, sig *signaling.Client, co
 		idx := int(*init.SDPMLineIndex)
 		trayCand.SDPMLineIndex = &idx
 	}
+	c.outboundTrickle.pushOrSendIf(trayCand, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// Still this peer. A candidate gathered for a peer recreatePeer has
+		// replaced would carry the old ufrag and must not join the new queue.
+		return c.pc == pc
+	}, func(queued signaling.IceCandidate) {
+		c.mu.Lock()
+		if c.pc != pc {
+			c.mu.Unlock()
+			return
+		}
+		bootstrapID := ""
+		if bootstrapIDRef != nil {
+			bootstrapID = *bootstrapIDRef
+		}
+		c.mu.Unlock()
+		c.postLocalCandidate(ctx, sig, controllerID, bootstrapID, queued)
+	})
+}
+
+func (c *Conn) postLocalCandidate(ctx context.Context, sig *signaling.Client, controllerID, bootstrapID string, cand signaling.IceCandidate) {
+	if bootstrapID == "" {
+		return
+	}
 	// Fire-and-forget, matching the TS + iOS followers.
 	go func() {
-		if _, err := sig.SendICECandidate(ctx, controllerID, bootstrapID, trayCand); err != nil {
+		if _, err := sig.SendICECandidate(ctx, controllerID, bootstrapID, cand); err != nil {
 			c.opts.logf("tray: failed to send local ICE candidate: %v", err)
 		}
 	}()

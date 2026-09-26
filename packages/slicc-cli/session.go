@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -93,24 +94,29 @@ func cmdNewSession(ctx context.Context, joinURL string, a newSessionArgs) int {
 		default:
 		}
 	}
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+	conn, err := dialAndSend(
+		func() (*tray.Conn, error) {
+			return tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+		},
+		func(conn *tray.Conn) error {
+			// Drop any snapshot the handshake delivered: only one requested
+			// after new_session says the old conversation is gone.
+			select {
+			case <-fresh:
+			default:
+			}
+			return conn.SendJSON(protocol.NewSession{Type: protocol.TypeNewSession, Action: a.action})
+		},
+	)
 	if err != nil {
 		errLine("new-session", "%s", err)
-		reportRuntimeError("dial", err)
+		var dialErr *dialFailed
+		if errors.As(err, &dialErr) {
+			reportRuntimeError("dial", err)
+		}
 		return 1
 	}
 	defer conn.Close()
-
-	// Drop any snapshot the connection handshake delivered: only one requested
-	// after new_session says the old conversation is gone.
-	select {
-	case <-fresh:
-	default:
-	}
-	if err := conn.SendJSON(protocol.NewSession{Type: protocol.TypeNewSession, Action: a.action}); err != nil {
-		errLine("new-session", "%s", err)
-		return 1
-	}
 	deadline := time.NewTimer(a.timeout)
 	defer deadline.Stop()
 	poll := time.NewTicker(snapshotPoll)
@@ -300,17 +306,23 @@ func (c modelChannels) handle(typ string, raw []byte) {
 // waits for the leader's model.state to confirm it.
 func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 	ch := newModelChannels()
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: ch.handle, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+	conn, err := dialAndSend(
+		func() (*tray.Conn, error) {
+			return tray.Dial(ctx, joinURL, tray.Options{OnMessage: ch.handle, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+		},
+		func(conn *tray.Conn) error {
+			return conn.SendJSON(protocol.ModelsRequest{Type: protocol.TypeModelsRequest})
+		},
+	)
 	if err != nil {
 		errLine("model", "%s", err)
-		reportRuntimeError("dial", err)
+		var dialErr *dialFailed
+		if errors.As(err, &dialErr) {
+			reportRuntimeError("dial", err)
+		}
 		return 1
 	}
 	defer conn.Close()
-	if err := conn.SendJSON(protocol.ModelsRequest{Type: protocol.TypeModelsRequest}); err != nil {
-		errLine("model", "%s", err)
-		return 1
-	}
 
 	deadline := time.NewTimer(a.timeout)
 	defer deadline.Stop()

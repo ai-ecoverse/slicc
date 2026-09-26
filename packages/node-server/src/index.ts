@@ -616,6 +616,11 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
     hosted: RUNTIME_FLAGS.hosted,
     mockKeychain: process.env.SLICC_CHROME_MOCK_KEYCHAIN === '1',
   });
+  if (RUNTIME_FLAGS.hosted) {
+    // Chrome rewrites /proc/cmdline after startup, so this line is the record
+    // that the hosted leader asked for literal host addresses.
+    console.log('[hosted] WebRTC host candidates are literal addresses (mDNS hiding disabled)');
+  }
 
   // Chrome never clears DevToolsActivePort on shutdown, so a stale file from a
   // prior crash/SIGKILL would let our active-port poller win the race with the

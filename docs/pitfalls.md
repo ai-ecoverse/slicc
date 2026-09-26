@@ -1067,6 +1067,10 @@ Chrome refuses `new RTCPeerConnection()` once a page holds 500 of them (`Cannot 
 
 `LeaderTrayPeerManager` (`packages/webapp/src/scoops/tray-webrtc.ts`) releases a peer through `releasePeer()` whenever it can no longer carry traffic: its data channel closes, its connection goes `failed`/`closed`, or it has not connected by its bootstrap's `expiresAt` plus a grace. If peer creation throws, the leader sends `bootstrap.failed` so the follower gets the reason immediately instead of a timeout. To measure headroom on a live leader over CDP, create peers until the constructor throws, close them, and call `HeapProfiler.collectGarbage` afterwards; otherwise the probe's own closed peers eat the headroom it just measured.
 
+Host candidates gather during `setLocalDescription`, which is before the offer or answer is on the wire. Chrome rejects `addIceCandidate` until the remote description is set (`ICE candidates can't be added without any remote session description`) and drops that candidate. Hold local candidates until the offer or answer has been sent, hold remote candidates until `setRemoteDescription` resolves, and apply one bootstrap's signaling in arrival order. The Go follower does the same in `packages/slicc-cli/internal/tray`.
+
+A hosted leader's Chrome also hides the host address behind an mDNS name (`WebRtcHideLocalIpsWithMdns`). The CLI on the same machine then has to resolve `.local`, and when that misses, pion waits two seconds and nominates a relay pair. TURN `CreatePermission` 403s prune that pair and the first send fails with `io: read/write on closed pipe` at about 2.5s. Hosted launches append that feature to the single `--disable-features` flag in `buildChromeLaunchArgs` (`hosted: true` only). Desktop, extension, and Electron keep mDNS. If that first request frame still fails closed, the CLI redials once (`dialAndSend`); a send that succeeded is not repeated.
+
 ## Silent OAuth renewal must stay windowless (IMS JS redirect)
 
 `launchWebAuthFlow({ interactive: false })` alone flashes / fails for Adobe IMS
