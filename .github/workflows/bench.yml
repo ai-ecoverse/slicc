@@ -23,7 +23,8 @@
 #   journaled for a resume.
 # - the run step has its own time limit below the job's, so the diagnostics and uploads after it
 #   always run; `report` runs whenever any shard left an artifact, and "Re-run failed jobs"
-#   resumes a shard from its artifact.
+#   resumes a shard from its artifact. `resume-run` continues an earlier run in a new one (for
+#   other settings, such as another runner template).
 # - bench-reaper.yml cancels runs whose shards wait for a runner that never comes, or outlive
 #   the job limit.
 #
@@ -77,7 +78,10 @@ on:
         default: '4'
       runner:
         description: 'GCE instance template the shards run on (runs-on label)'
-        default: 'gcp-ubuntu-24-04-8core'
+        default: 'gcp-bench-8core'
+      resume-run:
+        description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
+        default: ''
       deadline-minutes:
         description: 'Minutes a shard takes new runs for (its job limit is this plus 45)'
         default: '300'
@@ -126,6 +130,7 @@ jobs:
     env:
       SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shards || '1' }}
       DEADLINE: ${{ github.event_name == 'workflow_dispatch' && inputs.deadline-minutes || '45' }}
+      RESUME_RUN: ${{ inputs.resume-run || '' }}
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -139,6 +144,9 @@ jobs:
           set -euo pipefail
           if ! [[ "$SHARDS" =~ ^[0-9]+$ ]] || [ "$SHARDS" -lt 1 ] || [ "$SHARDS" -gt 20 ]; then
             echo "::error::shards must be 1 to 20, not '$SHARDS'"; exit 1
+          fi
+          if [ -n "$RESUME_RUN" ] && ! [[ "$RESUME_RUN" =~ ^[0-9]+$ ]]; then
+            echo "::error::resume-run must be a run id, not '$RESUME_RUN'"; exit 1
           fi
           if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 1380 ]; then
             echo "::error::deadline-minutes must be 10 to 1380, not '$DEADLINE'"; exit 1
@@ -155,6 +163,9 @@ jobs:
   bench:
     name: Shard ${{ matrix.shard }}
     needs: plan
+    permissions:
+      contents: read
+      actions: read # resume-run downloads another run's shard artifacts
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-ubuntu-24-04-4core' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     strategy:
@@ -229,6 +240,19 @@ jobs:
         with:
           name: bench-${{ github.run_id }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/bench-out
+
+      # `resume-run` continues another run, for example one whose shards need other settings (a
+      # different runner). The shard plan must match, which the same inputs guarantee; a shard
+      # the earlier run never uploaded starts fresh.
+      - name: Resume from an earlier run
+        if: github.run_attempt == '1' && inputs.resume-run != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-${{ inputs.resume-run }}-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/bench-out
+          run-id: ${{ inputs.resume-run }}
+          github-token: ${{ github.token }}
 
       # The runner drives the leaders with `new-session` and `model`, which ship with this ref's
       # CLI and not necessarily with the last release: build it from the checkout.

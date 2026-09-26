@@ -6,27 +6,28 @@ Measures what skills and models change in SLICC. It runs task sets on a SLICC le
 
 **Actions → Benchmark → Run workflow**. The inputs:
 
-| Input                | Default                           | Meaning                                                                                            |
-| -------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                                          |
-| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                                    |
-| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills)                |
-| `repeats`            | `1`                               | Runs per task and configuration                                                                    |
-| `tasks`              | all                               | Task ids, comma-separated                                                                          |
-| `limit`              | all                               | First N tasks of each set                                                                          |
-| `timeout`            | `900`                             | Seconds one agent run may take (BU Bench V2.1: `3600`)                                             |
-| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                                          |
-| `shards`             | `3`                               | Matrix jobs (1–20); shard K of N takes every Nth task, with all its models, skills and repeats     |
-| `max-parallel`       | `3`                               | Shards running at once                                                                             |
-| `leaders`            | `4`                               | Leaders per shard, side by side (1–8), sharing the shard's queue                                   |
-| `runner`             | `gcp-ubuntu-24-04-8core`          | GCE instance template the shards run on                                                            |
-| `deadline-minutes`   | `300`                             | Minutes a shard takes new runs for; its job limit is this plus 45                                  |
-| `max-task-cost`      | `5`                               | Dollars one run may spend before it is stopped (`0`: no cap)                                       |
-| `max-cost`           | `150`                             | Dollars one shard may spend before it stops taking runs (`0`: no cap)                              |
-| `fresh-leader-every` | `1`                               | Restart a leader, with a wiped profile, every N tasks; `1` isolates every task, `0` never restarts |
-| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                                        |
+| Input                | Default                           | Meaning                                                                                                 |
+| -------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `sets`               | `packages/bench/tasks/smoke.json` | `bu-v1`, `bu-v2`, or task-set JSON paths, space-separated                                               |
+| `models`             | `claude-sonnet-5,claude-opus-5-5` | Models for the agent under test                                                                         |
+| `skills`             | `builtin,none`                    | `none`, `builtin`, `builtin+ecoverse` (the leader's skills plus ai-ecoverse/skills)                     |
+| `repeats`            | `1`                               | Runs per task and configuration                                                                         |
+| `tasks`              | all                               | Task ids, comma-separated                                                                               |
+| `limit`              | all                               | First N tasks of each set                                                                               |
+| `timeout`            | `900`                             | Seconds one agent run may take (BU Bench V2.1: `3600`)                                                  |
+| `judge-model`        | `global.openai.gpt-5.6-luna`      | Bedrock model that judges                                                                               |
+| `shards`             | `3`                               | Matrix jobs (1–20); shard K of N takes every Nth task, with all its models, skills and repeats          |
+| `max-parallel`       | `3`                               | Shards running at once                                                                                  |
+| `leaders`            | `4`                               | Leaders per shard, side by side (1–8), sharing the shard's queue                                        |
+| `runner`             | `gcp-bench-8core`                 | GCE instance template the shards run on                                                                 |
+| `resume-run`         | none                              | Continue an earlier run (its id): each shard starts from that run's shard artifact; use the same inputs |
+| `deadline-minutes`   | `300`                             | Minutes a shard takes new runs for; its job limit is this plus 45                                       |
+| `max-task-cost`      | `5`                               | Dollars one run may spend before it is stopped (`0`: no cap)                                            |
+| `max-cost`           | `150`                             | Dollars one shard may spend before it stops taking runs (`0`: no cap)                                   |
+| `fresh-leader-every` | `1`                               | Restart a leader, with a wiped profile, every N tasks; `1` isolates every task, `0` never restarts      |
+| `publish`            | on                                | Publish to the Hugging Face dataset ai-ecoverse/slicc-bench                                             |
 
-**Where it runs.** The shards run on self-hosted runners in the GCP project `ai-ecoverse-493315` ([Cyclenerd/google-cloud-github-runner](https://github.com/Cyclenerd/google-cloud-github-runner)): each job gets its own VM from the GCE instance template that `runner` names, deleted when the job ends. So a benchmark leaves the org's GitHub-hosted runners to everyone else; `report` runs on a small template too (`vars.BENCH_SMALL_RUNNER`, default `gcp-ubuntu-24-04-2core`). `plan` takes seconds on a GitHub-hosted runner, because a GCP VM for it would still hold 2 vCPUs while the shards ask for theirs. The project's quota allows 24 E2 vCPUs, which is three `8core` shards at once. Each leader is a Chrome plus a node-server, about 2 vCPU, so an `8core` shard runs 4. For BU Bench V2.1 (200 tasks, up to an hour each), plan `shards` × `leaders` × `deadline-minutes` / 80 ≥ runs (a run's hour plus 20 minutes of overhead).
+**Where it runs.** The shards run on self-hosted runners in the GCP project `ai-ecoverse-493315` ([Cyclenerd/google-cloud-github-runner](https://github.com/Cyclenerd/google-cloud-github-runner)): each job gets its own VM from the GCE instance template that `runner` names, deleted when the job ends. So a benchmark leaves the org's GitHub-hosted runners to everyone else; `report` runs on a small template too (`vars.BENCH_SMALL_RUNNER`, default `gcp-ubuntu-24-04-2core`). `plan` takes seconds on a GitHub-hosted runner, because a GCP VM for it would still hold 2 vCPUs while the shards ask for theirs. `gcp-bench-8core` is an e2-standard-8 with a 50 GB pd-balanced disk, made by hand from the Terraform `gcp-ubuntu-24-04-8core` template, whose 300 GB pd-ssd let only one shard fit the project's 500 GB regional SSD quota (`SSD_TOTAL_GB`; V2.1 pilot, 2026-09-26). The project's quota allows 24 E2 vCPUs, which is three `8core` shards at once. Each leader is a Chrome plus a node-server, about 2 vCPU, so an `8core` shard runs 4. For BU Bench V2.1 (200 tasks, up to an hour each), plan `shards` × `leaders` × `deadline-minutes` / 80 ≥ runs (a run's hour plus 20 minutes of overhead).
 
 **Guardrails.** A shard stops taking runs once the next might not finish before its deadline (the run's `timeout` plus 20 minutes for the restart, collection and judge; collecting the transcript has 15 of them). It stops a run that has spent `max-task-cost` (the record says `cost_capped`, and the judge is told), and stops taking runs at `max-cost`. The run step's time limit sits 20 minutes past the deadline, below the job's, so the diagnostics and the upload always run. **Re-run failed jobs** resumes a shard from its artifact. `bench-reaper.yml` runs every 30 minutes. When a run's jobs have waited over an hour for a runner while none of its jobs run (a zone out of capacity, a full quota, a dropped webhook), it force-cancels the run and re-runs its failed jobs, up to twice, then only cancels. It force-cancels a run with a job running for over 25 hours.
 
