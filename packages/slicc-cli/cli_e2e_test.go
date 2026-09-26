@@ -275,7 +275,7 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 		go func() {
 			_ = sendJSON(leader.dc, protocol.Status{Type: protocol.TypeStatus, ScoopStatus: "processing"})
 			_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
-				Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+				Type:  protocol.TypeAgentEvent,
 				Event: protocol.AgentEvent{Type: protocol.AgentContentDelta, MessageID: "m1", Text: "PROMPT-E2E-OK"},
 			})
 			_ = sendJSON(leader.dc, protocol.Status{Type: protocol.TypeStatus, ScoopStatus: "ready"})
@@ -324,9 +324,21 @@ func statusFrame(s string) protocol.Status {
 	return protocol.Status{Type: protocol.TypeStatus, ScoopStatus: s}
 }
 
+func statusFrameFor(jid, s string) protocol.Status {
+	st := statusFrame(s)
+	st.ScoopJid = jid
+	return st
+}
+
 func agentFrame(eventType, id, text string) protocol.AgentEventEnvelope {
+	
+	
+	return agentFrameFor("", eventType, id, text)
+}
+
+func agentFrameFor(jid, eventType, id, text string) protocol.AgentEventEnvelope {
 	return protocol.AgentEventEnvelope{
-		Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+		Type: protocol.TypeAgentEvent, ScoopJid: jid,
 		Event: protocol.AgentEvent{Type: eventType, MessageID: id, Text: text, Error: text},
 	}
 }
@@ -499,6 +511,178 @@ func TestCLIPromptIgnoresOtherMessagesAck(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "OWN-TURN-OK") || strings.Contains(stderr, "not yours") {
 		t.Fatalf("stdout = %q, stderr = %q; want the turn, not the foreign rejection", stdout, stderr)
+	}
+}
+
+
+
+
+
+func TestCLIPromptIgnoresOtherScoopReady(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		ack := ackFrame(id, protocol.AckAccepted, "")
+		ack.ScoopJid = "cone-1"
+		return ack
+	}, []any{
+		statusFrameFor("cone-1", "processing"),
+		
+		
+		
+		statusFrameFor("sports", "ready"),
+		statusFrameFor("cone-1", "initializing"),
+		900 * time.Millisecond, 
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m2", "AFTER-SCOOP-OK"),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-SCOOP-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply after the other scoop went ready", stdout)
+	}
+}
+
+
+
+
+func TestCLIPromptStartupReadyDoesNotFinish(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		statusFrame("ready"),
+		900 * time.Millisecond,
+		agentFrame(protocol.AgentContentDelta, "m1", "AFTER-BLIP-OK"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-BLIP-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply after the startup ready", stdout)
+	}
+}
+
+
+
+
+
+
+func TestCLIPromptNamedReadyBeforeAckDoesNotFinish(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var um protocol.UserMessage
+		if json.Unmarshal(msg.Data, &um) != nil || um.Type != "user_message" {
+			return
+		}
+		go func() {
+			_ = sendJSON(leader.dc, statusFrameFor("cone-1", "processing"))
+			_ = sendJSON(leader.dc, statusFrameFor("sports", "ready"))
+			time.Sleep(500 * time.Millisecond)
+			ack := ackFrame(um.MessageID, protocol.AckAccepted, "")
+			ack.ScoopJid = "cone-1"
+			_ = sendJSON(leader.dc, ack)
+			_ = sendJSON(leader.dc, agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "AFTER-ACK-OK"))
+			_ = sendJSON(leader.dc, statusFrameFor("cone-1", "ready"))
+		}()
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-ACK-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply after the late ack", stdout)
+	}
+}
+
+
+
+
+func TestCLIPromptEmptyAckUsesTheConeRoster(t *testing.T) {
+	bin := sliccBinary(t)
+	roster := map[string]any{
+		"type": "scoops.list",
+		"scoops": []any{
+			map[string]any{"jid": "cone-1", "parentId": nil},
+			map[string]any{"jid": "sports", "parentId": "cone-1"},
+		},
+		"activeScoopJid": "cone-1",
+	}
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		ack := ackFrame(id, protocol.AckAccepted, "")
+		ack.ScoopJid = ""
+		return ack
+	}, []any{
+		roster,
+		statusFrameFor("cone-1", "processing"),
+		statusFrameFor("sports", "ready"),
+		900 * time.Millisecond,
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "CONE-ROSTER-OK"),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "CONE-ROSTER-OK") {
+		t.Fatalf("prompt stdout = %q, want the cone's reply", stdout)
+	}
+}
+
+
+
+
+func TestCLIPromptBuffersForeignFramesUntilAck(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var um protocol.UserMessage
+		if json.Unmarshal(msg.Data, &um) != nil || um.Type != "user_message" {
+			return
+		}
+		go func() {
+			_ = sendJSON(leader.dc, agentFrameFor("sports", protocol.AgentContentDelta, "x", "LEAK"))
+			_ = sendJSON(leader.dc, agentFrameFor("sports", protocol.AgentToolUseStart, "x", "bash"))
+			_ = sendJSON(leader.dc, agentFrameFor("sports", protocol.AgentTurnEnd, "x", ""))
+			_ = sendJSON(leader.dc, agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "KEPT"))
+			ack := ackFrame(um.MessageID, protocol.AckAccepted, "")
+			ack.ScoopJid = "cone-1"
+			_ = sendJSON(leader.dc, ack)
+			_ = sendJSON(leader.dc, statusFrameFor("cone-1", "ready"))
+		}()
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if strings.Contains(stdout, "LEAK") || !strings.Contains(stdout, "KEPT") {
+		t.Fatalf("prompt stdout = %q, want only the bound unit's text", stdout)
+	}
+}
+
+
+
+func TestCLIPromptIgnoresOtherScoopTurnEnd(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		ack := ackFrame(id, protocol.AckAccepted, "")
+		ack.ScoopJid = "cone-1"
+		return ack
+	}, []any{
+		agentFrameFor("sports", protocol.AgentTurnEnd, "m-other", ""),
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "OWN-TURN-OK"),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "OWN-TURN-OK") {
+		t.Fatalf("prompt stdout = %q, want the accepted unit's reply", stdout)
 	}
 }
 

@@ -386,40 +386,170 @@ function promptRejectedReason(error: string | undefined): string {
   return reason ? `the leader rejected the prompt: ${reason}` : 'the leader rejected the prompt';
 }
 
-function handlePromptFrame(
+type PromptTurnState = {
+  sawProcessing: boolean;
+
+  seenAgent: boolean;
+  scoopJid: string;
+  authoritative: boolean;
+
+  held: Map<string, LeaderToFollowerMessage[]>;
+};
+
+function newPromptTurnState(): PromptTurnState {
+  return {
+    sawProcessing: false,
+    seenAgent: false,
+    scoopJid: '',
+    authoritative: false,
+    held: new Map(),
+  };
+}
+
+function promptFrameScoop(message: LeaderToFollowerMessage): string {
+  if (message.type === 'agent_event' || message.type === 'status') return message.scoopJid ?? '';
+  return '';
+}
+
+function holdPromptFrame(
+  state: PromptTurnState,
+  jid: string,
+  message: LeaderToFollowerMessage
+): void {
+  const queued = state.held.get(jid);
+  if (queued) queued.push(message);
+  else state.held.set(jid, [message]);
+}
+
+function applyPromptFrame(
   message: LeaderToFollowerMessage,
-  messageId: string,
   buffer: RunBuffer,
-  state: { sawProcessing: boolean },
+  state: PromptTurnState,
   control: VerbControl
 ): void {
-  if (message.type === 'user_message_ack') {
-    if (message.messageId !== messageId) return;
-    if (message.state === 'rejected') {
-      buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
-      control.finish(1);
-    }
-
-    return;
-  }
   if (message.type === 'agent_event') {
     const event = message.event;
     if (event.type === 'content_delta') buffer.push('stdout', event.text);
-    else if (event.type === 'turn_end') control.finish(0);
+    if (
+      event.type === 'content_delta' ||
+      event.type === 'message_start' ||
+      event.type === 'tool_use_start' ||
+      event.type === 'tool_result' ||
+      event.type === 'content_done'
+    ) {
+      state.seenAgent = true;
+    }
+    if (event.type === 'turn_end') control.finish(0);
     else if (event.type === 'error') {
       buffer.push('stderr', `${event.error}\n`);
       control.finish(1);
     }
     return;
   }
-  if (message.type === 'status') {
-    if (message.scoopStatus === 'processing') state.sawProcessing = true;
-    else if (state.sawProcessing) control.finish(0);
+  if (message.type !== 'status') return;
+  if (message.scoopStatus === 'processing') {
+    state.sawProcessing = true;
+    return;
+  }
+  if (!state.sawProcessing) return;
+  if (message.scoopStatus === 'error') {
+    buffer.push('stderr', 'the leader reported the scoop in error\n');
+    control.finish(1);
+    return;
+  }
+
+  if (message.scoopStatus === 'ready' && state.seenAgent) control.finish(0);
+}
+
+function bindPromptUnit(
+  state: PromptTurnState,
+  jid: string,
+  authoritative: boolean,
+  buffer: RunBuffer,
+  control: VerbControl
+): void {
+  if (!jid) return;
+  if (state.scoopJid) {
+    if (!authoritative || state.authoritative || state.scoopJid === jid) return;
+    state.sawProcessing = false;
+    state.seenAgent = false;
+  }
+  state.scoopJid = jid;
+  if (authoritative) state.authoritative = true;
+  const replay = state.held.get(jid) ?? [];
+  if (authoritative) state.held.clear();
+  else state.held.delete(jid);
+  for (const frame of replay) applyPromptFrame(frame, buffer, state, control);
+}
+
+function routePromptFrame(
+  message: LeaderToFollowerMessage,
+  state: PromptTurnState,
+  buffer: RunBuffer,
+  control: VerbControl
+): void {
+  const jid = promptFrameScoop(message);
+  if (jid && state.scoopJid !== jid && !(state.authoritative && state.scoopJid)) {
+    holdPromptFrame(state, jid, message);
+    return;
+  }
+  if (jid && state.scoopJid && jid !== state.scoopJid) return;
+  applyPromptFrame(message, buffer, state, control);
+}
+
+function soleConeJid(message: Extract<LeaderToFollowerMessage, { type: 'scoops.list' }>): string {
+  let cone = '';
+  for (const scoop of message.scoops) {
+    const root = scoop.parentId === null || (scoop.parentId === undefined && scoop.isCone === true);
+    if (!root) continue;
+    if (cone && cone !== scoop.jid) return '';
+    cone = scoop.jid;
+  }
+  return cone;
+}
+
+function handlePromptAck(
+  message: Extract<LeaderToFollowerMessage, { type: 'user_message_ack' }>,
+  messageId: string,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (message.messageId !== messageId) return;
+  if (message.state === 'rejected') {
+    buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
+    control.finish(1);
+    return;
+  }
+  if (message.state === 'accepted') bindPromptUnit(state, message.scoopJid, true, buffer, control);
+}
+
+function handlePromptFrame(
+  message: LeaderToFollowerMessage,
+  messageId: string,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (message.type === 'user_message_ack') {
+    handlePromptAck(message, messageId, buffer, state, control);
+    return;
+  }
+  if (message.type === 'user_message_echo' && message.messageId === messageId) {
+    bindPromptUnit(state, message.scoopJid, true, buffer, control);
+    return;
+  }
+  if (message.type === 'scoops.list') {
+    bindPromptUnit(state, soleConeJid(message), false, buffer, control);
     return;
   }
   if (message.type === 'error') {
     buffer.push('stderr', `${message.error}\n`);
     control.finish(1);
+    return;
+  }
+  if (message.type === 'agent_event' || message.type === 'status') {
+    routePromptFrame(message, state, buffer, control);
   }
 }
 
@@ -509,7 +639,7 @@ export class SidecarRegistry {
   ): Promise<SidecarRunResult> {
     const attachment = this.require(name);
     const buffer = new RunBuffer(options.onChunk);
-    const state = { sawProcessing: false };
+    const state = newPromptTurnState();
     const messageId = crypto.randomUUID();
 
     const run = runVerb(attachment, options, buffer, (message, control) => {

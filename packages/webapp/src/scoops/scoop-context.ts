@@ -91,6 +91,8 @@ export class ScoopContext {
 
   private promptAbortController: AbortController | null = null;
 
+  private turnEpoch = 0;
+
   private processManager: ProcessManager | null = null;
   private currentTurnProcess: Process | null = null;
 
@@ -334,8 +336,17 @@ export class ScoopContext {
     abortController: AbortController,
     turnProcess: Process | null,
     lastError: Error | null,
-    abortSignal: AbortSignal
+    abortSignal: AbortSignal,
+
+    epoch?: number
   ): void {
+    if (epoch !== undefined && epoch !== this.turnEpoch) {
+      if (this.currentTurnProcess !== turnProcess) {
+        finishTurnProcess(this.processManager, turnProcess, { lastError, aborted: true });
+      }
+      return;
+    }
+
     this.runBounds.disarm();
 
     const boundNote = this.runBounds.takeExceededNote();
@@ -446,6 +457,7 @@ export class ScoopContext {
     const abortController = new AbortController();
     this.promptAbortController = abortController;
     const abortSignal = abortController.signal;
+    const epoch = ++this.turnEpoch;
 
     this.isProcessing = true;
     this.setStatus('processing');
@@ -470,11 +482,16 @@ export class ScoopContext {
         return;
       }
 
-      if (!this.disposed && !abortSignal.aborted && this.status !== 'error') {
+      if (
+        epoch === this.turnEpoch &&
+        !this.disposed &&
+        !abortSignal.aborted &&
+        this.status !== 'error'
+      ) {
         this.setStatus('ready');
       }
     } finally {
-      this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal);
+      this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal, epoch);
     }
   }
 

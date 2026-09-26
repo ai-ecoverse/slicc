@@ -313,6 +313,8 @@ const (
 	StreamStderr = "stderr"
 
 	ScoopStatusProcessing = "processing"
+	ScoopStatusReady      = "ready"
+	ScoopStatusError      = "error"
 
 	AckAccepted = "accepted"
 	AckRejected = "rejected"
