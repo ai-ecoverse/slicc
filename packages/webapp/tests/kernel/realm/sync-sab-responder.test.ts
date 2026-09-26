@@ -4,14 +4,16 @@
  * here (the writer never blocks), so everything is plain async.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SyncExecRequest } from '../../../src/kernel/realm/sync-exec-dispatch.js';
-import type { SyncFsRequest, SyncFsResult } from '../../../src/kernel/realm/sync-fs-dispatch.js';
+import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-dispatch.js';
 import {
   mintSyncFsToken,
   revokeSyncFsToken,
 } from '../../../src/kernel/realm/sync-fs-token-registry.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS } from '../../../src/kernel/realm/sync-fs-wire.js';
-import { attachSyncSabResponder } from '../../../src/kernel/realm/sync-sab-responder.js';
+import {
+  attachSyncSabResponder,
+  type SyncSabDispatchRequest,
+} from '../../../src/kernel/realm/sync-sab-responder.js';
 import {
   decodeSabResult,
   SAB_HEADER_BYTES,
@@ -74,7 +76,7 @@ describe('attachSyncSabResponder', () => {
     const sab = new SharedArrayBuffer(SAB_HEADER_BYTES + WINDOW);
     const { header } = sabViews(sab);
     const port = fakePort();
-    const seen: Array<SyncFsRequest | SyncExecRequest> = [];
+    const seen: SyncSabDispatchRequest[] = [];
     const handle = attachSyncSabResponder(port, sab, 'host-token', {
       dispatch: async (req) => {
         seen.push(req);

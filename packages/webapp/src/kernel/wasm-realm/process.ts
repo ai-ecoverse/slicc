@@ -21,8 +21,9 @@ export type WasmSyscall =
 const SYSCALL_OPS: ReadonlySet<string> = new Set(['fd-read', 'fd-write', 'fd-close']);
 
 /** Whether a SAB request is a process syscall (else it is a sync-fs / exec op). */
-export function isWasmSyscall(req: { op?: unknown }): req is WasmSyscall {
-  return typeof req.op === 'string' && SYSCALL_OPS.has(req.op);
+export function isWasmSyscall(req: object): req is WasmSyscall {
+  const op = (req as { op?: unknown }).op;
+  return typeof op === 'string' && SYSCALL_OPS.has(op);
 }
 
 /** Largest read one syscall serves: the SAB bridge drains bigger payloads in rounds anyway. */
