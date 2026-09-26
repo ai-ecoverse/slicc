@@ -17,6 +17,7 @@
  * INPUT_MASK_JOIN_URL, INPUT_CDP_LAUNCH_TIMEOUT.
  */
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -178,26 +179,36 @@ export function readBootInputs() {
   };
 }
 
-/** Poll the loopback static server until index.html answers. */
+/**
+ * Poll until the process we spawned answers `/__slicc_pin` with its token.
+ * A 200 from some other listener, including an orphan of an earlier boot,
+ * does not count. `exited()` is checked every pass so a child that died
+ * with EADDRINUSE fails the boot instead of being mistaken for that orphan.
+ */
 export async function waitForWebapp(
   port,
-  { timeoutMs = 15_000, fetchImpl = globalThis.fetch } = {}
+  { timeoutMs = 15_000, fetchImpl = globalThis.fetch, token, exited } = {}
 ) {
   const deadline = Date.now() + timeoutMs;
   let last = 'no response';
   while (Date.now() < deadline) {
+    const code = exited?.();
+    if (code != null) {
+      throw new Error(`pinned webapp exited before it was ready (${code})`);
+    }
     try {
-      const res = await fetchImpl(`http://127.0.0.1:${port}/`, {
+      const res = await fetchImpl(`http://127.0.0.1:${port}/__slicc_pin`, {
         signal: AbortSignal.timeout(1000),
       });
-      if (res.ok) return;
-      last = `HTTP ${res.status}`;
+      const body = res.ok ? (await res.text()).trim() : '';
+      if (res.ok && (!token || body === token)) return;
+      last = res.ok ? 'listener is not the pinned webapp we started' : `HTTP ${res.status}`;
     } catch (err) {
       last = err instanceof Error ? err.message : String(err);
     }
     await sleep(100);
   }
-  throw new Error(`pinned webapp on port ${port} did not serve index.html (${last})`);
+  throw new Error(`pinned webapp on port ${port} did not claim the port (${last})`);
 }
 
 /**
@@ -219,18 +230,23 @@ export async function launchPinnedWebapp({
     );
   }
   const script = fileURLToPath(new URL('./serve-webapp.mjs', import.meta.url));
+  const token = randomBytes(16).toString('hex');
   const logFd = openSync(logPath, 'a');
   const child = spawnImpl(
     process.execPath,
-    [script, '--root', root, '--port', String(port), '--upstream', upstream],
+    [script, '--root', root, '--port', String(port), '--upstream', upstream, '--identity', token],
     {
       detached: true,
       stdio: ['ignore', logFd, logFd],
     }
   );
+  let exitCode = null;
+  child.on?.('exit', (code, signal) => {
+    exitCode = code ?? signal ?? 'exit';
+  });
   child.unref?.();
   try {
-    await waitImpl(port);
+    await waitImpl(port, { token, exited: () => exitCode });
   } catch (err) {
     if (child.pid) await terminate(child.pid, 2_000);
     const tail = existsSync(logPath) ? readFileSync(logPath, 'utf8').slice(-500) : '';

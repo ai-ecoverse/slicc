@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createWebappHandler,
   listenWebapp,
+  PIN_PROBE_PATH,
   parseServeArgs,
   proxyWorkerRequest,
   resolveWebappFile,
@@ -61,6 +62,31 @@ describe('serve-webapp', () => {
     writeFileSync(join(root, 'blob.bin'), 'x');
     const blob = await fetch(`http://127.0.0.1:${server.port}/blob.bin`);
     expect(blob.headers.get('content-type')).toBe('application/octet-stream');
+  });
+
+  it('returns this process identity on the probe and nothing else', async () => {
+    const root = fixture();
+    let proxied = false;
+    const server = await listenWebapp(root, 0, {
+      identity: 'tok-1',
+      fetchImpl: async () => {
+        proxied = true;
+        return new Response('no', { status: 500 });
+      },
+    });
+    closers.push(server.close);
+    const probe = await fetch(`http://127.0.0.1:${server.port}${PIN_PROBE_PATH}`);
+    expect(probe.status).toBe(200);
+    expect(await probe.text()).toBe('tok-1');
+    const posted = await fetch(`http://127.0.0.1:${server.port}${PIN_PROBE_PATH}`, {
+      method: 'POST',
+    });
+    expect(posted.status).toBe(404);
+    expect(proxied).toBe(false);
+    const anonymous = await listenWebapp(root, 0);
+    closers.push(anonymous.close);
+    const hidden = await fetch(`http://127.0.0.1:${anonymous.port}${PIN_PROBE_PATH}`);
+    expect(hidden.status).toBe(404);
   });
 
   it('refuses the port when IPv6 loopback is already taken', async () => {
@@ -213,9 +239,19 @@ describe('serve-webapp', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(bad.status).toBe(400);
     expect(
-      parseServeArgs(['--root', root, '--port', '8080', '--upstream', 'https://staging.example/'])
+      parseServeArgs([
+        '--root',
+        root,
+        '--port',
+        '8080',
+        '--upstream',
+        'https://staging.example/',
+        '--identity',
+        'tok-1',
+      ])
     ).toMatchObject({
       upstream: 'https://staging.example',
+      identity: 'tok-1',
     });
   });
 });

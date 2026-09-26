@@ -22,6 +22,9 @@ import { extname, join, resolve, sep } from 'node:path';
 import { isMain } from './gh-io.mjs';
 import { PRODUCTION_TRAY_ORIGIN } from './lib.mjs';
 
+/** Probe the launcher polls. The body is this process's identity token. */
+export const PIN_PROBE_PATH = '/__slicc_pin';
+
 /** Headers the browser may send that the worker actually reads. No cookies. */
 const FORWARD_REQUEST_HEADERS = [
   'accept',
@@ -220,8 +223,9 @@ export async function proxyWorkerRequest(req, upstream, fetchImpl) {
 export function createWebappHandler(root, options = {}) {
   const upstream = options.upstream ?? PRODUCTION_TRAY_ORIGIN;
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const identity = options.identity ?? '';
   return (req, res) => {
-    void handleWebappRequest(req, res, root, upstream, fetchImpl).catch(() => {
+    void handleWebappRequest(req, res, root, upstream, fetchImpl, identity).catch(() => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('bad gateway');
     });
@@ -232,13 +236,26 @@ export function createWebappHandler(root, options = {}) {
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  */
-async function handleWebappRequest(req, res, root, upstream, fetchImpl) {
+async function handleWebappRequest(req, res, root, upstream, fetchImpl, identity) {
   let pathname = '/';
   try {
     pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
   } catch {
     res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('bad request');
+    return;
+  }
+  if (pathname === PIN_PROBE_PATH) {
+    if (!identity || (req.method !== 'GET' && req.method !== 'HEAD')) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('not found');
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    res.end(req.method === 'HEAD' ? undefined : identity);
     return;
   }
   if (isWorkerRoute(pathname)) {
@@ -335,6 +352,7 @@ export function parseServeArgs(argv) {
   let root = '';
   let port = Number.NaN;
   let upstream = PRODUCTION_TRAY_ORIGIN;
+  let identity = '';
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--root') {
       root = argv[i + 1] ?? '';
@@ -345,18 +363,23 @@ export function parseServeArgs(argv) {
     } else if (argv[i] === '--upstream') {
       upstream = argv[i + 1] ?? '';
       i += 1;
+    } else if (argv[i] === '--identity') {
+      identity = argv[i + 1] ?? '';
+      i += 1;
     }
   }
   if (!root || !Number.isInteger(port) || port < 1 || port > 65535 || !upstream) {
-    throw new Error('usage: serve-webapp.mjs --root <dist/ui> --port <port> [--upstream <origin>]');
+    throw new Error(
+      'usage: serve-webapp.mjs --root <dist/ui> --port <port> [--upstream <origin>] [--identity <token>]'
+    );
   }
-  return { root: resolve(root), port, upstream: upstream.replace(/\/+$/, '') };
+  return { root: resolve(root), port, upstream: upstream.replace(/\/+$/, ''), identity };
 }
 
 /* v8 ignore start */
 if (isMain(import.meta.url)) {
-  const { root, port, upstream } = parseServeArgs(process.argv.slice(2));
-  listenWebapp(root, port, { upstream })
+  const { root, port, upstream, identity } = parseServeArgs(process.argv.slice(2));
+  listenWebapp(root, port, { upstream, identity })
     .then(() => {
       console.log(`[pin-webapp] serving ${root} at http://localhost:${port}`);
     })

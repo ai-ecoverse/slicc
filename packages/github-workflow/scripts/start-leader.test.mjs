@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FAKE_NODE_SERVER, setup } from '../tests/helpers.mjs';
@@ -175,6 +176,30 @@ describe('start-leader', () => {
     await again.close();
   });
 
+  it('does not treat an orphaned listener as the webapp it just started', async () => {
+    const ui = join(t.root, 'orphan-ui');
+    mkdirSync(ui, { recursive: true });
+    writeFileSync(join(ui, 'index.html'), '<title>stale</title>');
+    const stale = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<title>stale</title>');
+    });
+    await new Promise((resolve) => stale.listen(0, '127.0.0.1', () => resolve()));
+    const port = stale.address().port;
+    try {
+      await expect(
+        launchPinnedWebapp({
+          root: ui,
+          port,
+          logPath: join(t.root, 'orphan.log'),
+          spawnImpl: () => spawn(process.execPath, ['-e', 'process.exit(1)']),
+        })
+      ).rejects.toThrow(/exited before it was ready/);
+    } finally {
+      await new Promise((resolve) => stale.close(() => resolve()));
+    }
+  });
+
   it('reports why the pinned webapp did not come up', async () => {
     const fetchImpl = async () => ({ ok: false, status: 503 });
     await expect(waitForWebapp(9, { timeoutMs: 120, fetchImpl })).rejects.toThrow(/HTTP 503/);
@@ -184,6 +209,25 @@ describe('start-leader', () => {
     await expect(waitForWebapp(9, { timeoutMs: 120, fetchImpl: throwing })).rejects.toThrow(
       /refused/
     );
+    await expect(
+      waitForWebapp(9, {
+        timeoutMs: 200,
+        token: 'ours',
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          text: async () => '<title>stale</title>',
+        }),
+      })
+    ).rejects.toThrow(/not the pinned webapp/);
+    await expect(
+      waitForWebapp(9, {
+        timeoutMs: 5_000,
+        token: 'ours',
+        exited: () => 1,
+        fetchImpl: async () => ({ ok: true, text: async () => 'ours' }),
+      })
+    ).rejects.toThrow(/exited before it was ready \(1\)/);
     const bare = join(t.root, 'no-ui');
     mkdirSync(bare);
     await expect(
