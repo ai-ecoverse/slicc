@@ -42,6 +42,7 @@ import {
   buildConeConfigFiles,
   buildLeaderArgs,
   buildLeaderEnv,
+  PRODUCTION_TRAY_ORIGIN,
   parseBoolean,
   parseDuration,
   parseJoinFile,
@@ -207,6 +208,7 @@ export async function launchPinnedWebapp({
   root,
   port,
   logPath,
+  upstream = PRODUCTION_TRAY_ORIGIN,
   spawnImpl = spawn,
   waitImpl = waitForWebapp,
 }) {
@@ -218,10 +220,14 @@ export async function launchPinnedWebapp({
   }
   const script = fileURLToPath(new URL('./serve-webapp.mjs', import.meta.url));
   const logFd = openSync(logPath, 'a');
-  const child = spawnImpl(process.execPath, [script, '--root', root, '--port', String(port)], {
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-  });
+  const child = spawnImpl(
+    process.execPath,
+    [script, '--root', root, '--port', String(port), '--upstream', upstream],
+    {
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+    }
+  );
   child.unref?.();
   try {
     await waitImpl(port);
@@ -343,6 +349,7 @@ export async function main(options = {}) {
         root: pin.root,
         port: pin.uiPort,
         logPath: join(home, 'ui-server.log'),
+        upstream: pin.trayWorkerBaseUrl,
         spawnImpl: options.spawnImpl,
         waitImpl: options.waitForWebapp,
       });
