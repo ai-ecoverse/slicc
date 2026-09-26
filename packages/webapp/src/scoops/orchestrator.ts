@@ -79,7 +79,6 @@ import {
 } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
-import { mergeFoldedCostIntoLatestFrozen } from './merge-folded-cost-into-frozen.js';
 import { ModelPolicyFile } from './model-policy-file.js';
 import { globalSeedModel } from './model-seed.js';
 import { withMountHeartbeat } from './mount-heartbeat.js';
@@ -1773,6 +1772,11 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoop = this.scoops.get(jid);
     if (!scoop || !this.sharedFs) return false;
     try {
+      // Dynamic: merge pulls frozen-archive-format/writer, which must stay off
+      // the kernel-worker first-load graph (#3437 bundle-size).
+      const { mergeFoldedCostIntoLatestFrozen } = await import(
+        './merge-folded-cost-into-frozen.js'
+      );
       return await mergeFoldedCostIntoLatestFrozen(this.sharedFs, scoop, folded);
     } catch (err) {
       log.warn('Failed to merge folded agent spend into frozen session', {
