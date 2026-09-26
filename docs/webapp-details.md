@@ -224,6 +224,7 @@ never send prompts, so they have no ack UI.
 | Web follower (standalone / hosted tab) | `wc-follower.ts` + `follower-prompt-watch.ts`                             | `follower-prompt-watch.test.ts`, `wc-follower.test.ts`, `wc-tray-prompt-watch.test.ts` |
 | Cherry / extension side panel          | same `wc-follower.ts` mount (`runtimeMode: 'cherry'`)                     | `wc-follower.test.ts` (cherry boots + ack wiring in the shared mount tests)            |
 | Electron overlay (UI follower)         | hosted webapp follower, same mounts                                       | covered by the web follower rows above                                                 |
+| Tray sidecar (`slicc … prompt`)        | `scoops/tray-sidecar.ts` `SidecarRegistry.prompt`                         | `tray-sidecar.test.ts` (rejected ack ends the run; accepted keeps waiting)             |
 | `slicc-cli` `prompt`                   | `commands.go` `promptAckRejection`                                        | `prompt_ack_test.go`, `cli_e2e_test.go`, `internal/protocol/ack_test.go`               |
 | Swift tray follower decode             | `SyncProtocol.swift` `userMessageAck`                                     | `LeaderToFollowerMessageTests.swift`                                                   |
 | iOS bubble / ledger                    | `AppStateDelivery.swift`, `MessageBubble.swift`                           | `UserMessageAckTests.swift`, `SyncProtocolCorpusTests.swift`                           |

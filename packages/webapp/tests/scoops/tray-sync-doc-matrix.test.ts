@@ -206,12 +206,14 @@ describe('tray sync doc matrix ↔ protocol unions', () => {
     expect(ackRow).not.toMatch(/unknown for now/i);
     expect(ackRow).toContain('handed the prompt to its kernel');
     expect(ackRow).toContain("iOS flags the sender's bubble");
-    expect(ackRow).toContain('CLI prints `rejected`');
+    expect(ackRow).toContain('tray sidecar');
+    expect(ackRow).toContain('print `rejected`');
 
     const webappDetails = readFileSync(webappDetailsMdPath, 'utf8');
     expect(webappDetails).toContain('#3482` surface checklist');
     expect(webappDetails).toContain('Cherry / extension side panel');
     expect(webappDetails).toContain('Electron overlay');
+    expect(webappDetails).toContain('Tray sidecar');
     expect(webappDetails).toContain('slicc-cli` `prompt`');
     expect(webappDetails).toContain('iOS bubble / ledger');
   });
