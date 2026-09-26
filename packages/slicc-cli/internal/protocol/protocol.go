@@ -29,9 +29,11 @@ import "encoding/json"
 // not using, so this is bookkeeping a third time.
 //
 // v10 is a LEADER capability too: it acks every delivered `user_message` with
-// `user_message_ack`, sent to the sender alone. `prompt` exits non-zero on a
-// `rejected` ack instead of waiting for a turn that will never start; an older
-// leader sends none, and `prompt` behaves exactly as before.
+// `user_message_ack`, sent to the sender alone, once it handed the prompt to
+// its kernel (`accepted`) or could not (`rejected`). `accepted` is not "the
+// agent started". `prompt` exits non-zero on a `rejected` ack instead of
+// waiting for a turn that will never start; an older leader sends none, and
+// `prompt` behaves exactly as before.
 const TraySyncProtocolVersion = 10
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
@@ -177,9 +179,10 @@ type UserMessageEcho struct {
 }
 
 // UserMessageAck settles one of this follower's own `user_message`s
-// (leader→follower, v10): the leader's delivery into its kernel resolved
-// ("accepted") or failed ("rejected", with a human-readable Error). Sent only
-// to the sender, keyed by the follower's MessageID.
+// (leader→follower, v10): the leader handed the prompt to its kernel
+// ("accepted") or could not ("rejected", with a human-readable Error).
+// "accepted" does not mean the agent started. Sent only to the sender, keyed
+// by the follower's MessageID.
 type UserMessageAck struct {
 	Type      string `json:"type"` // "user_message_ack"
 	MessageID string `json:"messageId"`

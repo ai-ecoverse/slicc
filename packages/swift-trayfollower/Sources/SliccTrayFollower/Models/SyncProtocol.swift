@@ -20,11 +20,14 @@ public enum NewSessionAction: String, Codable {
 /// follower reads it off the leader's `hello` before prefetching other units.
 ///
 /// Version 10 is a LEADER capability too: it acks every delivered
-/// `user_message` with `user_message_ack`, sent to the sender alone.
+/// `user_message` with `user_message_ack`, sent to the sender alone, once it
+/// handed the prompt to its kernel (`accepted`) or could not (`rejected`).
+/// `accepted` is not "the agent started".
 public let traySyncProtocolVersion = 10
 
-/// Outcome of the leader's delivery of a follower's `user_message` into its
-/// kernel. A `state` this build does not know drops the whole
+/// Outcome of the leader handing a follower's `user_message` to its kernel
+/// (`accepted`) or failing to (`rejected`). `accepted` does not mean the agent
+/// started. A `state` this build does not know drops the whole
 /// `user_message_ack` to `.unknown`, so a newer leader cannot tear the channel.
 public enum UserMessageAckState: String, Codable, Equatable {
     case accepted, rejected

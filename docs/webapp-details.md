@@ -209,6 +209,26 @@ Both follower mounts wire the watch through the options bag (`onUserMessageAck`,
 leader-capable float's tray role switch (`wc-tray.ts` `buildFollowerOptions`,
 disposed with the role).
 
+#### `#3482` surface checklist (prompt-sending followers)
+
+Every float that can send a tray `user_message` must surface a `rejected`
+`user_message_ack` where the user is looking, and must **not** treat
+`accepted` as "the agent started". Headless Electron tray followers
+(`node-server` / `swift-server` CDP bridges) and the macOS computer follower
+never send prompts, so they have no ack UI.
+
+| Surface                                | Path                                                                      | Proof                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Protocol + corpus (v10)                | `shared-ts` + `tray-sync-protocol-corpus.ts`                              | `shared-ts/tests/tray-sync-protocol.test.ts`, `tray-sync-corpus.test.ts`               |
+| Leader ack send                        | `tray-leader/follower-dispatch.ts`, `wc-tray.ts` `deliverFollowerMessage` | `tray-leader/follower-dispatch.test.ts`, `tray-leader-sync.test.ts`                    |
+| Web follower (standalone / hosted tab) | `wc-follower.ts` + `follower-prompt-watch.ts`                             | `follower-prompt-watch.test.ts`, `wc-follower.test.ts`, `wc-tray-prompt-watch.test.ts` |
+| Cherry / extension side panel          | same `wc-follower.ts` mount (`runtimeMode: 'cherry'`)                     | `wc-follower.test.ts` (cherry boots + ack wiring in the shared mount tests)            |
+| Electron overlay (UI follower)         | hosted webapp follower, same mounts                                       | covered by the web follower rows above                                                 |
+| Tray sidecar (`slicc … prompt`)        | `scoops/tray-sidecar.ts` `SidecarRegistry.prompt`                         | `tray-sidecar.test.ts` (rejected ack ends the run; accepted keeps waiting)             |
+| `slicc-cli` `prompt`                   | `commands.go` `promptAckRejection`                                        | `prompt_ack_test.go`, `cli_e2e_test.go`, `internal/protocol/ack_test.go`               |
+| Swift tray follower decode             | `SyncProtocol.swift` `userMessageAck`                                     | `LeaderToFollowerMessageTests.swift`                                                   |
+| iOS bubble / ledger                    | `AppStateDelivery.swift`, `MessageBubble.swift`                           | `UserMessageAckTests.swift`, `SyncProtocolCorpusTests.swift`                           |
+
 - A prompt queued behind a visibly running turn never trips it: that turn's
   events count as a reaction, and the queue already explains the wait.
 - **Unit-scoped where the wire allows.** A status frame, echo or ack naming

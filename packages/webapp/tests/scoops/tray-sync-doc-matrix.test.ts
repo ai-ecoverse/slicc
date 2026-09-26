@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TRAY_SYNC_PROTOCOL_VERSION } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import {
   FOLLOWER_TO_LEADER_CORPUS,
@@ -22,6 +23,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const architectureMdPath = resolve(here, '../../../../docs/architecture.md');
+const webappDetailsMdPath = resolve(here, '../../../../docs/webapp-details.md');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -189,5 +191,30 @@ describe('tray sync doc matrix ↔ protocol unions', () => {
         `${mismatches.join('\n')}\n` +
         `Update the column, or the corpus entry if support really changed.`
     ).toEqual([]);
+  });
+
+  it('documents protocol version and user_message_ack surface behavior (#3482)', () => {
+    // The constant and the prose must move together; the matrix cell must not
+    // claim iOS still drops the frame, and the surface checklist must name the
+    // prompt-sending floats that share the web follower mounts.
+    expect(md).toContain(`\`TRAY_SYNC_PROTOCOL_VERSION\` is **${TRAY_SYNC_PROTOCOL_VERSION}**`);
+    expect(md).toContain('**v10 is the `user_message_ack` boundary**');
+    const ackRow = table
+      .split('\n')
+      .find((line) => line.includes('`user_message_ack`') && line.includes('Leader→Follower'));
+    expect(ackRow, 'matrix must list user_message_ack').toBeDefined();
+    expect(ackRow).not.toMatch(/unknown for now/i);
+    expect(ackRow).toContain('handed the prompt to its kernel');
+    expect(ackRow).toContain("iOS flags the sender's bubble");
+    expect(ackRow).toContain('tray sidecar');
+    expect(ackRow).toContain('print `rejected`');
+
+    const webappDetails = readFileSync(webappDetailsMdPath, 'utf8');
+    expect(webappDetails).toContain('#3482` surface checklist');
+    expect(webappDetails).toContain('Cherry / extension side panel');
+    expect(webappDetails).toContain('Electron overlay');
+    expect(webappDetails).toContain('Tray sidecar');
+    expect(webappDetails).toContain('slicc-cli` `prompt`');
+    expect(webappDetails).toContain('iOS bubble / ledger');
   });
 });

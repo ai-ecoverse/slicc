@@ -544,6 +544,54 @@ function runVerb(
   });
 }
 
+/** Format a rejected `user_message_ack` the way the Go CLI's `prompt` does. */
+function promptRejectedReason(error: string | undefined): string {
+  const reason = error?.trim();
+  return reason ? `the leader rejected the prompt: ${reason}` : 'the leader rejected the prompt';
+}
+
+/**
+ * Drive one `prompt` run's inbound frames. Kept outside {@link SidecarRegistry.prompt}
+ * so the ack / agent / status switch stays under the complexity gate while still
+ * matching the Go CLI's settle rules (`promptAckRejection` + turn endings).
+ */
+function handlePromptFrame(
+  message: LeaderToFollowerMessage,
+  messageId: string,
+  buffer: RunBuffer,
+  state: { sawProcessing: boolean },
+  control: VerbControl
+): void {
+  if (message.type === 'user_message_ack') {
+    if (message.messageId !== messageId) return;
+    if (message.state === 'rejected') {
+      buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
+      control.finish(1);
+    }
+    // `accepted` (and unknown states) keep waiting for real agent activity.
+    return;
+  }
+  if (message.type === 'agent_event') {
+    const event = message.event;
+    if (event.type === 'content_delta') buffer.push('stdout', event.text);
+    else if (event.type === 'turn_end') control.finish(0);
+    else if (event.type === 'error') {
+      buffer.push('stderr', `${event.error}\n`);
+      control.finish(1);
+    }
+    return;
+  }
+  if (message.type === 'status') {
+    if (message.scoopStatus === 'processing') state.sawProcessing = true;
+    else if (state.sawProcessing) control.finish(0);
+    return;
+  }
+  if (message.type === 'error') {
+    buffer.push('stderr', `${message.error}\n`);
+    control.finish(1);
+  }
+}
+
 /**
  * The page-side registry of live sidecar attachments.
  *
@@ -653,6 +701,11 @@ export class SidecarRegistry {
    * `scoopStatus` going `processing` → anything else. Both endings are honored,
    * matching `cmdPrompt` in the Go CLI, because a non-live float does send
    * `turn_end` and would otherwise hang until the timeout.
+   *
+   * A v10 leader also sends `user_message_ack` for this prompt's `messageId`.
+   * `rejected` ends the run at once (no turn will follow); `accepted` only
+   * means the leader handed the prompt to its kernel and keeps waiting — same
+   * as `promptAckRejection` in the Go CLI.
    */
   async prompt(
     name: string,
@@ -661,34 +714,17 @@ export class SidecarRegistry {
   ): Promise<SidecarRunResult> {
     const attachment = this.require(name);
     const buffer = new RunBuffer(options.onChunk);
-    let sawProcessing = false;
+    const state = { sawProcessing: false };
+    const messageId = crypto.randomUUID();
 
     const run = runVerb(attachment, options, buffer, (message, control) => {
-      if (message.type === 'agent_event') {
-        const event = message.event;
-        if (event.type === 'content_delta') buffer.push('stdout', event.text);
-        else if (event.type === 'turn_end') control.finish(0);
-        else if (event.type === 'error') {
-          buffer.push('stderr', `${event.error}\n`);
-          control.finish(1);
-        }
-        return;
-      }
-      if (message.type === 'status') {
-        if (message.scoopStatus === 'processing') sawProcessing = true;
-        else if (sawProcessing) control.finish(0);
-        return;
-      }
-      if (message.type === 'error') {
-        buffer.push('stderr', `${message.error}\n`);
-        control.finish(1);
-      }
+      handlePromptFrame(message, messageId, buffer, state, control);
     });
 
     const sent = attachment.send({
       type: 'user_message',
       text,
-      messageId: crypto.randomUUID(),
+      messageId,
       ...(options.steer ? { steer: true } : {}),
     });
     if (!sent) return { stdout: '', stderr: '', exitCode: 1, error: 'failed to send user_message' };
