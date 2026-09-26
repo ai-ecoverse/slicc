@@ -2063,6 +2063,14 @@ export class Bridge implements KernelFacade {
    * route the message to the leader over WebRTC and let the leader's
    * echo populate our buffer; the local orchestrator must stay out of
    * the way.
+   *
+   * When the panel sent a `requestId`, answer with `user-message-ack`
+   * once the prompt is handed to the orchestrator or refused synchronously
+   * (#3505). `handleMessage` awaits the full agent turn when idle, so
+   * waiting on it would race the panel's ~5s ack timeout and hang followers
+   * when the transport drops the envelope (#3516). Ack means "scheduled";
+   * late turn failures ride the error card. The composer's fire-and-forget
+   * path omits `requestId` and gets no ack.
    */
   private async handleUserMessage(
     msg: Extract<PanelToOffscreenMessage, { type: 'user-message' }>
@@ -2077,10 +2085,15 @@ export class Bridge implements KernelFacade {
     if (this.followerSync) {
       // Only a steering send carries the options argument, so the ordinary
       // forward stays a three-argument call.
-      if (msg.steer) {
-        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
-      } else {
-        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+      try {
+        if (msg.steer) {
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
+        } else {
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+        }
+        this.emitUserMessageAck(msg, true);
+      } catch (err) {
+        this.emitUserMessageAck(msg, false, err);
       }
       return;
     }
@@ -2097,8 +2110,73 @@ export class Bridge implements KernelFacade {
       ...(msg.guestGate ? { guestGate: msg.guestGate } : {}),
       ...(msg.steer ? { steer: true as const } : {}),
     };
-    await this.orchestrator?.handleMessage(channelMsg);
-    await this.orchestrator?.createScoopTab(msg.scoopJid);
+    try {
+      if (!this.orchestrator) {
+        throw new Error('kernel not ready');
+      }
+      if (!msg.requestId) {
+        await this.orchestrator.handleMessage(channelMsg);
+        await this.orchestrator.createScoopTab(msg.scoopJid);
+        return;
+      }
+      // Hand off without awaiting the agent turn. Flush one microtask so an
+      // already-settled handleMessage (sync refusal / instant mock) is seen
+      // before we accept; a long idle turn stays pending and must not hold
+      // the ack past the panel's ~5s bound (#3516).
+      const early: { outcome: 'ok' | 'fail' | 'pending'; err?: unknown } = {
+        outcome: 'pending',
+      };
+      const handoff = this.orchestrator.handleMessage(channelMsg);
+      void handoff.then(
+        () => {
+          early.outcome = 'ok';
+        },
+        (err: unknown) => {
+          early.outcome = 'fail';
+          early.err = err;
+        }
+      );
+      await Promise.resolve();
+      if (early.outcome === 'fail') {
+        this.emitUserMessageAck(msg, false, early.err);
+        return;
+      }
+      this.emitUserMessageAck(msg, true);
+      void handoff
+        .then(() => this.orchestrator?.createScoopTab(msg.scoopJid))
+        .catch((err) => {
+          console.error('[kernel-bridge] user-message failed after handoff:', err);
+          this.emit({
+            type: 'error',
+            scoopJid: msg.scoopJid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    } catch (err) {
+      this.emitUserMessageAck(msg, false, err);
+      // Re-throw so the panel-message catch still logs and surfaces an error
+      // card for fire-and-forget sends that have no requestId to reject.
+      if (!msg.requestId) throw err;
+    }
+  }
+
+  /** Settle a panel-RPC waiter for a `user-message` that asked for a verdict. */
+  private emitUserMessageAck(
+    msg: Extract<PanelToOffscreenMessage, { type: 'user-message' }>,
+    ok: boolean,
+    err?: unknown
+  ): void {
+    if (!msg.requestId) return;
+    this.emit({
+      type: 'user-message-ack',
+      requestId: msg.requestId,
+      messageId: msg.messageId,
+      scoopJid: msg.scoopJid,
+      ok,
+      ...(ok
+        ? {}
+        : { error: err instanceof Error ? err.message : err != null ? String(err) : undefined }),
+    });
   }
 
   /**

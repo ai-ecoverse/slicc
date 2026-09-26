@@ -592,4 +592,121 @@ describe('Kernel facade parity', () => {
     // The local orchestrator must NOT have seen the message in follower mode.
     expect(orchestrator.handleMessage).not.toHaveBeenCalled();
   });
+
+  it('answers a user-message requestId with ok once the kernel takes the prompt', async () => {
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            requestId: 'um-1',
+            scoopJid: 'cone_1',
+            text: 'hi',
+            messageId: 'msg-1',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(orchestrator.handleMessage).toHaveBeenCalled();
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: {
+          type: 'user-message-ack',
+          requestId: 'um-1',
+          messageId: 'msg-1',
+          scoopJid: 'cone_1',
+          ok: true,
+        },
+      })
+    );
+  });
+
+  it('answers a user-message requestId with the kernel error when handleMessage refuses', async () => {
+    orchestrator.handleMessage.mockRejectedValueOnce(new Error('gelatiere has no model'));
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            requestId: 'um-2',
+            scoopJid: 'cone_1',
+            text: 'hi',
+            messageId: 'msg-2',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: {
+          type: 'user-message-ack',
+          requestId: 'um-2',
+          messageId: 'msg-2',
+          scoopJid: 'cone_1',
+          ok: false,
+          error: 'gelatiere has no model',
+        },
+      })
+    );
+  });
+
+  it('acks a user-message requestId on handoff without waiting for the agent turn', async () => {
+    // Idle handleMessage awaits the full turn — the panel's ~5s ack bound
+    // must not race that (#3516).
+    let resolveTurn!: () => void;
+    orchestrator.handleMessage.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveTurn = resolve;
+      })
+    );
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            requestId: 'um-3',
+            scoopJid: 'cone_1',
+            text: 'long turn',
+            messageId: 'msg-3',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: {
+          type: 'user-message-ack',
+          requestId: 'um-3',
+          messageId: 'msg-3',
+          scoopJid: 'cone_1',
+          ok: true,
+        },
+      })
+    );
+    expect(orchestrator.createScoopTab).not.toHaveBeenCalled();
+    resolveTurn();
+    await tick();
+    expect(orchestrator.createScoopTab).toHaveBeenCalledWith('cone_1');
+  });
 });

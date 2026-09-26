@@ -167,4 +167,29 @@ describe('tray role-switch follower: prompt silence hint', () => {
     });
     expect(said(promptRejectedNote('kernel gone'))).toHaveLength(0);
   });
+
+  it('a late rejected ack for an older message leaves the second prompt armed', async () => {
+    const { role, handle, notes, said } = mountRole();
+    handle.sendMessage('first', 'm1');
+    handle.sendMessage('second', 'm2');
+    role.options.onUserMessageAck?.({
+      messageId: 'm1',
+      scoopJid: 'cone_1',
+      state: 'rejected',
+      error: 'stale',
+    });
+    expect(said(promptRejectedNote('stale'))).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(notes()).toHaveLength(1);
+  });
+
+  it('a late echo for an older message does not mark the second as received', async () => {
+    const { role, handle, said } = mountRole();
+    handle.sendMessage('first', 'm1');
+    handle.sendMessage('second', 'm2');
+    role.options.onOwnUserMessageEcho?.('m1', 'cone_1');
+    await vi.advanceTimersByTimeAsync(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(said(PROMPT_SILENCE_NOTE)).toHaveLength(1);
+    expect(said(PROMPT_RECEIVED_SILENCE_NOTE)).toHaveLength(0);
+  });
 });

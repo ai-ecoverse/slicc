@@ -10,6 +10,7 @@
  * protocol never sees.
  */
 
+import type { MessageAttachment } from '../../core/attachments.js';
 import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
 import {
   presentationStateFor,
@@ -407,22 +408,26 @@ export class LocalWorkUnitClient implements WorkUnitClient {
    * Deliver a prompt to `id` explicitly, rather than through the agent
    * handle's implicit "currently selected scoop" — the protocol names the
    * unit, so the send must not depend on a selection race.
+   *
+   * Resolves only after the kernel's `user-message-ack`: a refusal from
+   * `orchestrator.handleMessage()` rejects so a follower `accepted` ack
+   * is never sent for a prompt the kernel dropped (#3505).
    */
   send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void> {
     const client = this.deps.getClient();
     if (!client) return Promise.reject(new Error('kernel client not attached'));
-    client.sendRaw({
-      attachments: input.attachments,
-      // The caller's id when it has one: the backend queue is cancelled by it
-      // and the panel's own copy of the message already carries it.
-      messageId: input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    const messageId =
+      input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return client.sendUserMessage({
       scoopJid: id,
       text: input.text,
-      type: 'user-message',
+      messageId,
+      ...(input.attachments
+        ? { attachments: input.attachments as readonly MessageAttachment[] }
+        : {}),
       ...(input.steer ? { steer: true as const } : {}),
       ...(input.guestGate ? { guestGate: input.guestGate } : {}),
-    } as Parameters<OffscreenClient['sendRaw']>[0]);
-    return Promise.resolve();
+    });
   }
 
   /**

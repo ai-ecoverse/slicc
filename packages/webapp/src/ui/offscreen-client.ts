@@ -41,6 +41,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
+  UserMessageAckMsg,
 } from '../kernel/messages.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
@@ -72,6 +73,16 @@ import { getComputersStore } from './computers-store.js';
  * `handleWebhookEvent` is synchronous once the worker has the message.
  */
 const WEBHOOK_DELIVERY_ACK_TIMEOUT_MS = 2000;
+
+/**
+ * Bound for the panel-RPC that waits on a kernel `user-message-ack`. Matches
+ * the model/thinking RPCs: KernelTransport.send is fire-and-forget and a
+ * locked {@link OffscreenClient.send} drops traffic, so an unbounded wait
+ * would hang `deliverFollowerMessage` forever if the ack never arrives (#3516).
+ * The kernel acks on handoff (not after the full agent turn), so idle turns
+ * do not race this bound.
+ */
+const USER_MESSAGE_ACK_TIMEOUT_MS = 5000;
 
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
@@ -259,6 +270,14 @@ export class OffscreenClient implements KernelClientFacade {
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
   private pendingModelAcks = new Map<string, (applied: boolean) => void>();
   /**
+   * Pending `user-message` sends awaiting the kernel's verdict (#3505).
+   * Keyed by `requestId`; settled when a `user-message-ack` envelope arrives.
+   */
+  private pendingUserMessageAcks = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+  /**
    * Pending `request-scoop-transcript` requests awaiting the bridge's
    * reply. Keyed by `requestId`; resolved with the transcript string
    * (or `''` on timeout) when a `scoop-transcript` envelope arrives.
@@ -418,6 +437,61 @@ export class OffscreenClient implements KernelClientFacade {
         }
       },
     };
+  }
+
+  /**
+   * Deliver a prompt to a named unit and resolve only after the kernel's
+   * verdict (#3505). Unlike {@link createAgentHandle}'s fire-and-forget
+   * send, this carries a `requestId` so a refusal from
+   * `orchestrator.handleMessage()` rejects instead of silently leaving
+   * the leader to ack `accepted` too early.
+   *
+   * Bounded like the model/thinking RPCs: the transport is fire-and-forget
+   * and {@link send} drops traffic when locked, so an unbounded wait would
+   * hang `deliverFollowerMessage` forever if the ack never arrives (#3516).
+   */
+  sendUserMessage(input: {
+    scoopJid: string;
+    text: string;
+    messageId: string;
+    attachments?: readonly MessageAttachment[];
+    steer?: boolean;
+    guestGate?: import('../sudo/types.js').TurnGuestGate;
+  }): Promise<void> {
+    if (this.locked) {
+      return Promise.reject(
+        new Error('This window is detached. Close it and use the detached tab.')
+      );
+    }
+    const requestId = `um-${uid()}`;
+    const ack = new Promise<void>((resolve, reject) => {
+      this.pendingUserMessageAcks.set(requestId, { resolve, reject });
+    });
+    this.send({
+      type: 'user-message',
+      requestId,
+      scoopJid: input.scoopJid,
+      text: input.text,
+      messageId: input.messageId,
+      ...(input.attachments ? { attachments: [...input.attachments] } : {}),
+      ...(input.steer ? { steer: true as const } : {}),
+      ...(input.guestGate ? { guestGate: input.guestGate } : {}),
+    });
+    // Locked mid-send is already rejected above; a restart/detach that drops
+    // the envelope still needs this race so the waiter cannot stick forever.
+    // Clear the timer on settle so a late timeout reject is not an unhandled
+    // rejection after a successful ack.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('the kernel did not answer in time')),
+        USER_MESSAGE_ACK_TIMEOUT_MS
+      );
+    });
+    return Promise.race([ack, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+      this.pendingUserMessageAcks.delete(requestId);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1005,6 +1079,10 @@ export class OffscreenClient implements KernelClientFacade {
         this.handleThinkingLevelAck(msg);
         break;
 
+      case 'user-message-ack':
+        this.handleUserMessageAck(msg);
+        break;
+
       case 'scoop-created':
         this.handleScoopCreated(msg as ScoopCreatedMsg);
         break;
@@ -1585,6 +1663,13 @@ export class OffscreenClient implements KernelClientFacade {
       }
     }
     this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);
+  }
+
+  private handleUserMessageAck(msg: UserMessageAckMsg): void {
+    const pending = this.pendingUserMessageAcks.get(msg.requestId);
+    if (!pending) return;
+    if (msg.ok) pending.resolve();
+    else pending.reject(new Error(msg.error?.trim() || 'the kernel refused the message'));
   }
 
   private handleScoopList(msg: ScoopListMsg): void {

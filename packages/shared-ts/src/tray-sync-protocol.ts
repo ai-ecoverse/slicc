@@ -69,8 +69,8 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * Version history (only what a peer must branch on):
  *
  * - **10** — this leader acks every delivered `user_message` with a
- *   `user_message_ack` sent to the sending follower alone, once it handed the
- *   prompt to its kernel (`accepted`) or could not (`rejected`). A follower talking to a leader below 10
+ *   `user_message_ack` sent to the sending follower alone, once its kernel
+ *   took the prompt (`accepted`) or could not (`rejected`). A follower talking to a leader below 10
  *   gets no ack and must keep treating silence as the only signal.
  * - **9** — this leader honours `request_snapshot.peek`: a snapshot of a unit
  *   is returned WITHOUT recording that unit as the peer's selection. An older
@@ -459,10 +459,12 @@ export type LeaderToFollowerMessage =
     }
   /**
    * The leader's verdict on ONE follower's `user_message`, sent to that
-   * follower alone (v10), once the leader handed the prompt to its kernel
-   * (`accepted`) or could not (`rejected`). `accepted` does NOT mean the agent
-   * started: the handoff succeeds at once even while the kernel is busy or
-   * starved, so a follower keeps waiting for real activity. `rejected` carries a
+   * follower alone (v10), once the leader's kernel took the prompt
+   * (`accepted`) or could not (`rejected`). `accepted` means the kernel
+   * accepted the handoff (via `LocalWorkUnitClient.send` waiting on the
+   * panel-RPC `user-message-ack`); it does NOT mean the agent started — a
+   * busy or starved kernel can still take a prompt that then sits quiet, so
+   * a follower keeps waiting for real activity. `rejected` carries a
    * human-readable `error`, and is also sent at once when the leader has no
    * unit to deliver to (then `scoopJid` is `''`). A biscotto gets one only for
    * an approved message that was actually delivered.

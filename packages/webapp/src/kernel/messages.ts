@@ -70,6 +70,14 @@ export interface UserMessageMsg {
   scoopJid: string;
   text: string;
   messageId: string;
+  /**
+   * When set, the kernel answers with {@link UserMessageAckMsg} once
+   * `orchestrator.handleMessage()` has taken the prompt or refused it. The
+   * composer's fire-and-forget path omits it; `LocalWorkUnitClient.send`
+   * always sends one so a follower ack can wait on the kernel's verdict
+   * (#3505).
+   */
+  requestId?: string;
   attachments?: MessageAttachment[];
   /**
    * Steering send (Ctrl/Cmd+Enter in the composer): interrupt a running turn
@@ -83,6 +91,20 @@ export interface UserMessageMsg {
    * kernel only sees the already-decided gate.
    */
   guestGate?: TurnGuestGate;
+}
+
+/**
+ * Kernel → panel: verdict on a `user-message` that carried a `requestId`.
+ * `ok: true` means the kernel took the prompt (queued or started); `ok: false`
+ * carries the refusal reason. Distinct from the tray wire's `user_message_ack`.
+ */
+export interface UserMessageAckMsg {
+  type: 'user-message-ack';
+  requestId: string;
+  messageId: string;
+  scoopJid: string;
+  ok: boolean;
+  error?: string;
 }
 
 /**
@@ -1543,6 +1565,7 @@ export type OffscreenToPanelMessage =
   | AgentSpawnResultMsg
   | SetScoopModelAckMsg
   | SetThinkingLevelAckMsg
+  | UserMessageAckMsg
   | FollowerSprinklesListMsg
   | FollowerSprinkleUpdateMsg
   | FollowerSprinkleFetchResultMsg
