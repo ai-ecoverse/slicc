@@ -32,6 +32,8 @@ import "encoding/json"
 
 
 
+
+
 const TraySyncProtocolVersion = 10
 
 
@@ -175,6 +177,7 @@ type UserMessageEcho struct {
 	MessageID string `json:"messageId,omitempty"`
 	ScoopJid  string `json:"scoopJid,omitempty"`
 }
+
 
 
 

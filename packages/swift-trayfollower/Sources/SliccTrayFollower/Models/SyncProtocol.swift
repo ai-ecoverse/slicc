@@ -21,7 +21,10 @@ public enum NewSessionAction: String, Codable {
 
 
 
+
+
 public let traySyncProtocolVersion = 10
+
 
 
 

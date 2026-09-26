@@ -139,7 +139,7 @@ Built-in VFS paths such as `/tmp` support executable bits through `chmod`.
 Mounted sources report the capability their bridge implements; the host disk's
 capabilities alone do not imply that the mounted metadata operation is supported.
 
-`mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires.
+`mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires. On hostfs the same form applies: a populated idle tree reports a non-zero `unchanged` count of files checked (not `0 unchanged`), so exit 0 plus counts is evidence the walk ran.
 
 ## Index state and bounds (`mount list`)
 

@@ -471,14 +471,142 @@ export class HostFsMountBackend implements MountBackend {
 
   async refresh(opts?: { bodies?: boolean }): Promise<RefreshReport> {
     this.assertOpen(this.targetPath);
-    await this.invalidateCachePrefixes([]);
-    return {
+    const report: RefreshReport = {
       added: [],
       removed: [],
-      changed: opts?.bodies ? ['*'] : [],
+      changed: [],
       unchanged: 0,
       errors: [],
     };
+    const seenFiles = new Set<string>();
+    const seenDirs = new Set<string>();
+    try {
+      const rootStat = await this.stat('');
+      const rootId = this.dirIdentity(rootStat, '');
+      if (rootId) seenDirs.add(rootId);
+    } catch {}
+    const stack: string[] = [''];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      try {
+        await this.refreshDir(dir, report, stack, seenDirs, seenFiles);
+      } catch (err) {
+        report.errors.push({
+          path: dir || '/',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    await this.purgeAbsentBodies(seenFiles, report);
+    if (opts?.bodies) await this.refreshBodies(report);
+    return report;
+  }
+
+  private etagsFromListing(entry: MountDirEntry): string[] | undefined {
+    if (
+      typeof entry.size !== 'number' ||
+      typeof entry.lastModified !== 'number' ||
+      typeof entry.ino !== 'number'
+    ) {
+      return undefined;
+    }
+    const sizeHex = entry.size.toString(16);
+    const inoHex = entry.ino.toString(16);
+    const node = `"${sizeHex}-${entry.lastModified.toString(16)}-${inoHex}"`;
+    const mtimeMicros = Math.floor(Math.max(0, entry.lastModified * 1000));
+    const swift = `"${sizeHex}-${mtimeMicros.toString(16)}-${inoHex}"`;
+    return node === swift ? [node] : [node, swift];
+  }
+
+  private dirIdentity(
+    stat: { dev?: number; ino?: number },
+    pathFallback: string
+  ): string | undefined {
+    if (typeof stat.dev === 'number' && typeof stat.ino === 'number') {
+      return `${stat.dev}:${stat.ino}`;
+    }
+
+    return pathFallback === '' ? undefined : `path:${pathFallback}`;
+  }
+
+  private async markChanged(filePath: string, report: RefreshReport): Promise<void> {
+    this.cacheGeneration += 1;
+    await this.cache.invalidateBody(filePath);
+    report.changed.push(filePath);
+  }
+
+  private async classifyFile(
+    filePath: string,
+    entry: MountDirEntry,
+    report: RefreshReport
+  ): Promise<void> {
+    const cached = await this.cache.getBody(filePath);
+    const remoteEtags = this.etagsFromListing(entry);
+    if (cached) {
+      if (!remoteEtags?.includes(cached.etag)) {
+        await this.markChanged(filePath, report);
+        return;
+      }
+    }
+
+    report.unchanged++;
+  }
+
+  private async refreshDir(
+    dir: string,
+    report: RefreshReport,
+    stack: string[],
+    seenDirs: Set<string>,
+    seenFiles: Set<string>
+  ): Promise<void> {
+    const entries = await this.readDir(dir);
+    for (const entry of entries) {
+      const childPath = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.kind === 'directory') {
+        try {
+          const st = await this.stat(childPath);
+          const id = this.dirIdentity(st, childPath);
+          if (id && seenDirs.has(id)) continue;
+          if (id) seenDirs.add(id);
+          stack.push(childPath);
+        } catch (err) {
+          report.errors.push({
+            path: childPath,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        seenFiles.add(childPath);
+        await this.classifyFile(childPath, entry, report);
+      }
+    }
+  }
+
+  private async purgeAbsentBodies(seenFiles: Set<string>, report: RefreshReport): Promise<void> {
+    const cachedPaths = await this.cache.listBodyPaths();
+    let bumped = false;
+    for (const path of cachedPaths) {
+      if (seenFiles.has(path)) continue;
+      if (!bumped) {
+        this.cacheGeneration += 1;
+        bumped = true;
+      }
+      await this.cache.invalidateBody(path);
+      report.removed.push(path);
+    }
+  }
+
+  private async refreshBodies(report: RefreshReport): Promise<void> {
+    for (const path of report.changed) {
+      try {
+        await this.readFile(path);
+      } catch (err) {
+        report.errors.push({
+          path,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   describe(): MountDescription {

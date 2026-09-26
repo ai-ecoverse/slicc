@@ -381,6 +381,48 @@ function runVerb(
   });
 }
 
+function promptRejectedReason(error: string | undefined): string {
+  const reason = error?.trim();
+  return reason ? `the leader rejected the prompt: ${reason}` : 'the leader rejected the prompt';
+}
+
+function handlePromptFrame(
+  message: LeaderToFollowerMessage,
+  messageId: string,
+  buffer: RunBuffer,
+  state: { sawProcessing: boolean },
+  control: VerbControl
+): void {
+  if (message.type === 'user_message_ack') {
+    if (message.messageId !== messageId) return;
+    if (message.state === 'rejected') {
+      buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
+      control.finish(1);
+    }
+
+    return;
+  }
+  if (message.type === 'agent_event') {
+    const event = message.event;
+    if (event.type === 'content_delta') buffer.push('stdout', event.text);
+    else if (event.type === 'turn_end') control.finish(0);
+    else if (event.type === 'error') {
+      buffer.push('stderr', `${event.error}\n`);
+      control.finish(1);
+    }
+    return;
+  }
+  if (message.type === 'status') {
+    if (message.scoopStatus === 'processing') state.sawProcessing = true;
+    else if (state.sawProcessing) control.finish(0);
+    return;
+  }
+  if (message.type === 'error') {
+    buffer.push('stderr', `${message.error}\n`);
+    control.finish(1);
+  }
+}
+
 export class SidecarRegistry {
   private readonly attachments = new Map<string, SidecarAttachment>();
   private counter = 0;
@@ -467,34 +509,17 @@ export class SidecarRegistry {
   ): Promise<SidecarRunResult> {
     const attachment = this.require(name);
     const buffer = new RunBuffer(options.onChunk);
-    let sawProcessing = false;
+    const state = { sawProcessing: false };
+    const messageId = crypto.randomUUID();
 
     const run = runVerb(attachment, options, buffer, (message, control) => {
-      if (message.type === 'agent_event') {
-        const event = message.event;
-        if (event.type === 'content_delta') buffer.push('stdout', event.text);
-        else if (event.type === 'turn_end') control.finish(0);
-        else if (event.type === 'error') {
-          buffer.push('stderr', `${event.error}\n`);
-          control.finish(1);
-        }
-        return;
-      }
-      if (message.type === 'status') {
-        if (message.scoopStatus === 'processing') sawProcessing = true;
-        else if (sawProcessing) control.finish(0);
-        return;
-      }
-      if (message.type === 'error') {
-        buffer.push('stderr', `${message.error}\n`);
-        control.finish(1);
-      }
+      handlePromptFrame(message, messageId, buffer, state, control);
     });
 
     const sent = attachment.send({
       type: 'user_message',
       text,
-      messageId: crypto.randomUUID(),
+      messageId,
       ...(options.steer ? { steer: true } : {}),
     });
     if (!sent) return { stdout: '', stderr: '', exitCode: 1, error: 'failed to send user_message' };

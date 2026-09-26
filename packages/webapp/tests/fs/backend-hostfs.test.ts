@@ -592,6 +592,166 @@ describe('HostFsMountBackend', () => {
     await backend.close();
     await expect(backend.readFile('x')).rejects.toMatchObject({ code: 'EBADF' });
   });
+
+  describe('refresh', () => {
+    const listTree = (url: string, init?: RequestInit) => {
+      if (String(url).includes('/read') || init?.method === 'GET') {
+        return new Response(new Uint8Array([1]).buffer, {
+          headers: { etag: '"3-5-2a"' },
+        });
+      }
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      if (body.op === 'stat') {
+        if (body.path === 'sub') {
+          return ok({ kind: 'directory', size: 0, mtime: 0, dev: 1, ino: 100 });
+        }
+        if (!body.path) {
+          return ok({ kind: 'directory', size: 0, mtime: 0, dev: 1, ino: 1 });
+        }
+        return ok({ kind: 'file', size: 1, mtime: 0, dev: 1, ino: 2 });
+      }
+      if (body.op === 'list' && body.path === 'sub') {
+        return ok({
+          entries: [{ name: 'nested.txt', kind: 'file', size: 3, lastModified: 5, ino: 42 }],
+        });
+      }
+      if (body.op === 'list') {
+        return ok({
+          entries: [
+            { name: 'a.txt', kind: 'file', size: 3, lastModified: 5, ino: 42 },
+            { name: 'b.txt', kind: 'file', size: 7, lastModified: 9, ino: 43 },
+            { name: 'sub', kind: 'directory' },
+          ],
+        });
+      }
+      return ok({ ok: true });
+    };
+
+    it('counts every listed file as unchanged on an idle populated tree', async () => {
+      const { backend } = backendWith(listTree);
+      const report = await backend.refresh();
+      expect(report.added).toEqual([]);
+      expect(report.removed).toEqual([]);
+      expect(report.changed).toEqual([]);
+      expect(report.unchanged).toBe(3);
+      expect(report.errors).toEqual([]);
+    });
+
+    it('accepts the Swift microsecond ETag as unchanged', async () => {
+      const { backend } = backendWith(listTree);
+      await backend.getCache().putBody('a.txt', new Uint8Array([1]), '"3-1388-2a"');
+      const report = await backend.refresh();
+      expect(report.changed).toEqual([]);
+      expect(report.unchanged).toBe(3);
+      expect(await backend.getCache().getBody('a.txt')).not.toBeNull();
+    });
+
+    it('marks a body-cache etag mismatch as changed without wiping the rest', async () => {
+      const { backend } = backendWith(listTree);
+
+      await backend.getCache().putBody('a.txt', new Uint8Array([9]), '"stale"');
+      const report = await backend.refresh();
+      expect(report.changed).toEqual(['a.txt']);
+      expect(report.unchanged).toBe(2);
+      expect(await backend.getCache().getBody('a.txt')).toBeNull();
+
+      expect(await backend.getCache().getBody('b.txt')).toBeNull();
+    });
+
+    it('invalidates cached bodies when the listing lacks a comparable validator', async () => {
+      const { backend } = backendWith((url, init) => {
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+        if (body.op === 'stat') {
+          return ok({ kind: 'directory', size: 0, mtime: 0, dev: 1, ino: 1 });
+        }
+        if (body.op === 'list') {
+          return ok({
+            entries: [{ name: 'a.txt', kind: 'file', size: 3, lastModified: 5 }],
+          });
+        }
+        return listTree(url, init);
+      });
+      await backend.getCache().putBody('a.txt', new Uint8Array([9]), '"3-5-2a"');
+      const report = await backend.refresh();
+      expect(report.changed).toEqual(['a.txt']);
+      expect(report.unchanged).toBe(0);
+      expect(await backend.getCache().getBody('a.txt')).toBeNull();
+    });
+
+    it('reports removed for body-cache keys absent from the live walk', async () => {
+      const { backend } = backendWith(listTree);
+      await backend.getCache().putBody('gone.txt', new Uint8Array([1]), '"x"');
+      const report = await backend.refresh();
+      expect(report.removed).toEqual(['gone.txt']);
+      expect(await backend.getCache().getBody('gone.txt')).toBeNull();
+      expect(report.unchanged).toBe(3);
+    });
+
+    it('skips directory symlinks that resolve to an already-seen inode', async () => {
+      const listed: string[] = [];
+      const { backend } = backendWith((_url, init) => {
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+        if (body.op === 'stat') {
+          if (!body.path) return ok({ kind: 'directory', size: 0, mtime: 0, dev: 1, ino: 1 });
+          if (body.path === 'a' || body.path === 'loop') {
+            return ok({ kind: 'directory', size: 0, mtime: 0, dev: 1, ino: 10 });
+          }
+          return ok({ kind: 'file', size: 1, mtime: 0, dev: 1, ino: 2 });
+        }
+        if (body.op === 'list') {
+          listed.push(body.path ?? '');
+          if (body.path === 'a') {
+            return ok({
+              entries: [{ name: 'x.txt', kind: 'file', size: 1, lastModified: 1, ino: 20 }],
+            });
+          }
+          return ok({
+            entries: [
+              { name: 'a', kind: 'directory' },
+              { name: 'loop', kind: 'directory' },
+              { name: 'f.txt', kind: 'file', size: 1, lastModified: 1, ino: 30 },
+            ],
+          });
+        }
+        return ok({ ok: true });
+      });
+      const report = await backend.refresh();
+      expect(listed).toEqual(expect.arrayContaining(['', 'a']));
+      expect(listed).not.toContain('loop');
+      expect(report.unchanged).toBe(2);
+      expect(report.errors).toEqual([]);
+    });
+
+    it('with --bodies re-fetches only the changed paths', async () => {
+      let reads = 0;
+      const { backend } = backendWith((url, init) => {
+        if (String(url).includes('/read') || init?.method === 'GET') {
+          reads += 1;
+          return new Response(new Uint8Array([reads]).buffer, {
+            headers: { etag: '"3-5-2a"' },
+          });
+        }
+        return listTree(url, init);
+      });
+      await backend.getCache().putBody('a.txt', new Uint8Array([9]), '"stale"');
+      const report = await backend.refresh({ bodies: true });
+      expect(report.changed).toEqual(['a.txt']);
+      expect(report.unchanged).toBe(2);
+      expect(reads).toBe(1);
+      expect(await backend.getCache().getBody('a.txt')).toMatchObject({ etag: '"3-5-2a"' });
+    });
+
+    it('records list failures on the error list without inventing a fake ~1', async () => {
+      const { backend } = backendWith(
+        () => new Response(JSON.stringify({ code: 'EIO', message: 'bridge down' }), { status: 500 })
+      );
+      const report = await backend.refresh({ bodies: true });
+      expect(report.changed).toEqual([]);
+      expect(report.unchanged).toBe(0);
+      expect(report.errors.length).toBeGreaterThanOrEqual(1);
+      expect(report.errors.some((e) => e.path === '/')).toBe(true);
+    });
+  });
 });
 
 describe('HostFsMountBackend.readFileRange', () => {

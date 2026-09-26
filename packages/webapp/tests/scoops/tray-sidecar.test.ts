@@ -435,6 +435,82 @@ describe('tray sidecar', () => {
       expect(await run).toMatchObject({ stderr: 'rate limited\n', exitCode: 1 });
     });
 
+    it('ends at once on a rejected user_message_ack for this prompt', async () => {
+      const { info, dial } = await attach(registry);
+      const run = registry.prompt(info.name, 'hi');
+      await Promise.resolve();
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: '',
+        state: 'rejected',
+        error: 'no agent to deliver to',
+      });
+
+      expect(await run).toMatchObject({
+        exitCode: 1,
+        stderr: 'the leader rejected the prompt: no agent to deliver to\n',
+      });
+    });
+
+    it('keeps waiting on an accepted user_message_ack', async () => {
+      const { info, dial } = await attach(registry);
+      let settled = false;
+      const run = registry.prompt(info.name, 'hi').then((r) => {
+        settled = true;
+        return r;
+      });
+      await Promise.resolve();
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'cone-1',
+        event: { type: 'turn_end', messageId: 'm1' },
+      });
+      expect(await run).toMatchObject({ exitCode: 0 });
+      expect(settled).toBe(true);
+    });
+
+    it('ignores a rejected ack for a different messageId', async () => {
+      const { info, dial } = await attach(registry);
+      let settled = false;
+      const run = registry.prompt(info.name, 'hi').then((r) => {
+        settled = true;
+        return r;
+      });
+      await Promise.resolve();
+
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId: 'someone-else',
+        scoopJid: 'cone-1',
+        state: 'rejected',
+        error: 'not ours',
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'cone-1',
+        event: { type: 'turn_end', messageId: 'm1' },
+      });
+      await run;
+      expect(settled).toBe(true);
+    });
+
     it('passes --steer through to the wire', async () => {
       const { info, dial } = await attach(registry);
       void registry.prompt(info.name, 'stop', { steer: true });
