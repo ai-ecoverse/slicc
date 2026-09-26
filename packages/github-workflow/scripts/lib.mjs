@@ -267,6 +267,47 @@ export function pinnedUiPort(bridgePort) {
  *   bridgeDevAllowedOrigins: string;
  * }}
  */
+/**
+ * `pin-webapp` is empty or `false` (production UI), `true` (the npm
+ * package's `dist/ui`), or a git ref. A ref is fetched and built once,
+ * then run like the local node harness: that tree's `dist/node-server`
+ * and `dist/ui`.
+ * @param {string | boolean | null | undefined} value
+ * @returns {{ mode: 'off' } | { mode: 'package' } | { mode: 'commit'; ref: string }}
+ */
+export function parsePinWebapp(value) {
+  const raw = String(value ?? '').trim();
+  const word = raw.toLowerCase();
+  if (!raw || ['false', '0', 'no', 'off'].includes(word)) return { mode: 'off' };
+  if (['true', '1', 'yes', 'on', 'release'].includes(word)) return { mode: 'package' };
+  if (raw.startsWith('-') || raw.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(raw)) {
+    throw new Error(`pin-webapp: "${raw}" is not a boolean or a git ref`);
+  }
+  return { mode: 'commit', ref: raw };
+}
+
+/**
+ * Commands that turn a git ref into the same pair the local node harness
+ * runs: `dist/node-server/index.js` and `dist/ui` from one checkout.
+ * `null` unless `pin-webapp` is a commit, tag, or branch.
+ * @param {{ ref: string; dest: string }} options
+ */
+export function planPinnedCommitBuild(options) {
+  const pin = parsePinWebapp(options.ref);
+  if (pin.mode !== 'commit') return null;
+  const dest = options.dest;
+  return {
+    ref: pin.ref,
+    fetch: ['git', 'fetch', '--depth', '1', 'origin', pin.ref],
+    worktree: ['git', 'worktree', 'add', '--detach', dest, 'FETCH_HEAD'],
+    npmCi: ['npm', 'ci'],
+    buildWebapp: ['npm', 'run', 'build', '-w', '@slicc/webapp'],
+    buildServer: ['npm', 'run', 'build', '-w', '@slicc/node-server'],
+    nodeServer: join(dest, 'dist', 'node-server', 'index.js'),
+    webapp: join(dest, 'dist', 'ui'),
+  };
+}
+
 export function resolvePinnedWebapp(options) {
   if (!options.pin) return null;
   if (options.uiOrigin) {

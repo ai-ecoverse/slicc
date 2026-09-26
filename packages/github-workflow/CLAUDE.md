@@ -15,22 +15,23 @@ Two surfaces:
 
 ## Layout
 
-| Path                                   | Purpose                                                                                                                 |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `scripts/lib.mjs`                      | Pure helpers: duration/port/mount parsing, cone-config + `secrets.env` validation, join-file parsing, command builders  |
-| `scripts/gh-io.mjs`                    | Runner I/O: `INPUT_*` reads, `$GITHUB_OUTPUT`/`$GITHUB_ENV`/`$GITHUB_PATH`, masks, state file, liveness, `execOnLeader` |
-| `scripts/start-leader.mjs`             | Install `sliccy`, write credential files, spawn `node-server --hosted`, poll the join file, record state                |
-| `scripts/serve-webapp.mjs`             | Opt-in loopback server for that package's `dist/ui` (`pin-webapp`). Default leaders still load production sliccy.ai     |
-| `scripts/wait-for-deadline.mjs`        | Hold the job until the deadline; fail fast when a watched pid dies                                                      |
-| `scripts/stop-leader.mjs`              | Followers → node-server → leftover Chrome; always exits 0; prints log tails                                             |
-| `scripts/install-cli.mjs`              | Token-authenticated release scan for `slicc-<os>-<arch>`; exports `SLICC_CLI`                                           |
-| `scripts/slicc-run.mjs`                | `prompt` / `exec` with timeout, output file, truncated step output                                                      |
-| `scripts/vfs-file.mjs`                 | Byte-exact read/write of one VFS file over base64                                                                       |
-| `scripts/inject-files.mjs`             | tar+gzip a runner directory, unpack on the leader in one exec                                                           |
-| `scripts/follow.mjs`                   | Detached `slicc … follow <runner>`; records the pid for keep-alive/stop                                                 |
-| `scripts/export-session.mjs`           | `session export` on the leader, then copy the ZIP back                                                                  |
-| `actions/*/action.yml`                 | One composite action per script (plus `keep-alive` over `wait-for-deadline.mjs`)                                        |
-| `tests/fixtures/`, `tests/helpers.mjs` | Fake `slicc` CLI + fake node-server + per-test env scaffolding (excluded from coverage)                                 |
+| Path                                    | Purpose                                                                                                                 |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `scripts/lib.mjs`                       | Pure helpers: duration/port/mount parsing, cone-config + `secrets.env` validation, join-file parsing, command builders  |
+| `scripts/gh-io.mjs`                     | Runner I/O: `INPUT_*` reads, `$GITHUB_OUTPUT`/`$GITHUB_ENV`/`$GITHUB_PATH`, masks, state file, liveness, `execOnLeader` |
+| `scripts/start-leader.mjs`              | Install `sliccy`, write credential files, spawn `node-server --hosted`, poll the join file, record state                |
+| `scripts/serve-webapp.mjs`              | Opt-in loopback server for a built `dist/ui` (`pin-webapp`). Default leaders still load production sliccy.ai            |
+| `scripts/materialize-pinned-commit.mjs` | Fetch a git ref into a worktree and build `dist/node-server` + `dist/ui`, the local node harness layout                 |
+| `scripts/wait-for-deadline.mjs`         | Hold the job until the deadline; fail fast when a watched pid dies                                                      |
+| `scripts/stop-leader.mjs`               | Followers → node-server → leftover Chrome; always exits 0; prints log tails                                             |
+| `scripts/install-cli.mjs`               | Token-authenticated release scan for `slicc-<os>-<arch>`; exports `SLICC_CLI`                                           |
+| `scripts/slicc-run.mjs`                 | `prompt` / `exec` with timeout, output file, truncated step output                                                      |
+| `scripts/vfs-file.mjs`                  | Byte-exact read/write of one VFS file over base64                                                                       |
+| `scripts/inject-files.mjs`              | tar+gzip a runner directory, unpack on the leader in one exec                                                           |
+| `scripts/follow.mjs`                    | Detached `slicc … follow <runner>`; records the pid for keep-alive/stop                                                 |
+| `scripts/export-session.mjs`            | `session export` on the leader, then copy the ZIP back                                                                  |
+| `actions/*/action.yml`                  | One composite action per script (plus `keep-alive` over `wait-for-deadline.mjs`)                                        |
+| `tests/fixtures/`, `tests/helpers.mjs`  | Fake `slicc` CLI + fake node-server + per-test env scaffolding (excluded from coverage)                                 |
 
 ## Build and Test
 

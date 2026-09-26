@@ -17,10 +17,12 @@ import {
   parseJoinFile,
   parseMountLines,
   parseMountMapping,
+  parsePinWebapp,
   parsePort,
   parseSecretsEnv,
   pickCliRelease,
   pinnedUiPort,
+  planPinnedCommitBuild,
   posixDirname,
   requireVfsPath,
   resolvePinnedWebapp,
@@ -187,6 +189,21 @@ describe('pinned webapp', () => {
         bridgePort: 5710,
       }).trayWorkerBaseUrl
     ).toBe('https://www.sliccy.ai');
+  });
+  it('accepts a git ref and plans the node-harness build', () => {
+    expect(parsePinWebapp('')).toEqual({ mode: 'off' });
+    expect(parsePinWebapp('false')).toEqual({ mode: 'off' });
+    expect(parsePinWebapp('true')).toEqual({ mode: 'package' });
+    expect(parsePinWebapp('release')).toEqual({ mode: 'package' });
+    expect(parsePinWebapp('abc1234')).toEqual({ mode: 'commit', ref: 'abc1234' });
+    expect(() => parsePinWebapp('foo bar')).toThrow(/git ref/);
+    expect(() => parsePinWebapp('--upload-pack=evil')).toThrow(/git ref/);
+    const plan = planPinnedCommitBuild({ ref: 'feat/pin', dest: '/tmp/pin' });
+    expect(plan.fetch).toEqual(['git', 'fetch', '--depth', '1', 'origin', 'feat/pin']);
+    expect(plan.worktree).toEqual(['git', 'worktree', 'add', '--detach', '/tmp/pin', 'FETCH_HEAD']);
+    expect(plan.nodeServer).toBe('/tmp/pin/dist/node-server/index.js');
+    expect(plan.webapp).toBe('/tmp/pin/dist/ui');
+    expect(planPinnedCommitBuild({ ref: 'true', dest: '/tmp/pin' })).toBeNull();
   });
   it('rejects a second UI origin and a port that would not fit', () => {
     expect(() =>
