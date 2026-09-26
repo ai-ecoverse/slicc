@@ -87,10 +87,22 @@ type promptTurn struct {
 	// or ack. A roster guess can be replaced by either; an echo cannot be
 	// replaced by a later guess.
 	boundAuthoritative bool
-	// sawProcessingByUnit records `processing` for named units seen before
-	// the prompt's unit is known, so the bind can keep that fact without
-	// keeping a `ready` that may have been a different unit.
-	sawProcessingByUnit map[string]bool
+	// out is where assistant text is written. Nil means stdout. Tests set a
+	// buffer so a foreign unit's deltas can be shown not to leak.
+	out io.Writer
+	// held stores named frames that arrived before this prompt's unit was
+	// known, keyed by scoop. A v10 leader broadcasts every unit's status and
+	// events before `user_message_ack`. Applying them early let another
+	// scoop's `turn_end` finish the prompt, its `content_delta` leak into
+	// stdout, or its `tool_use_start` stick `pendingTools` forever.
+	held map[string][]heldFrame
+}
+
+// heldFrame is one named status or agent event waiting for a bind.
+type heldFrame struct {
+	status string
+	event  *protocol.AgentEvent
+	when   time.Time
 }
 
 // bindScoop remembers the unit this prompt was delivered to (echo or ack).
@@ -106,32 +118,59 @@ func (p *promptTurn) bindConeGuess(jid string) {
 	p.bindUnit(jid, false)
 }
 
-func (p *promptTurn) bindUnit(jid string, authoritative bool) {
+// bindUnit records the prompt's unit and returns the frames to replay for it.
+// A roster guess can be replaced by the echo or the ack; those drop every
+// other unit's buffer. Replacing a guess resets the turn so the previous
+// unit's events do not stick.
+func (p *promptTurn) bindUnit(jid string, authoritative bool) []heldFrame {
 	if jid == "" {
-		return
+		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.scoopJid != "" {
 		if !authoritative || p.boundAuthoritative || p.scoopJid == jid {
-			return
+			return nil
 		}
+		p.resetLocked()
 	}
 	p.scoopJid = jid
 	if authoritative {
 		p.boundAuthoritative = true
 	}
-	p.sawProcessing = p.sawProcessingByUnit[jid]
+	replay := p.held[jid]
+	if authoritative {
+		p.held = nil
+	} else {
+		delete(p.held, jid)
+	}
+	return replay
+}
+
+func (p *promptTurn) resetLocked() {
+	p.seenAgent = false
+	p.sawProcessing = false
 	p.readyAt = time.Time{}
 	p.pendingTools = 0
 }
 
-// forScoop reports whether a frame is about this prompt's unit. Unbound, or a
-// frame that names no unit, stays relevant.
-func (p *promptTurn) forScoop(jid string) bool {
+// take reports whether a frame should be applied now. A named frame for a
+// unit we have not authoritatively bound is stored instead.
+func (p *promptTurn) take(jid string, frame heldFrame) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.scoopJid == "" || jid == "" || jid == p.scoopJid
+	if jid == "" || (p.boundAuthoritative && jid == p.scoopJid) || (p.scoopJid == jid && p.scoopJid != "") {
+		return true
+	}
+	if p.scoopJid != "" && p.boundAuthoritative {
+		return false
+	}
+	p.sawNamed = true
+	if p.held == nil {
+		p.held = map[string][]heldFrame{}
+	}
+	p.held[jid] = append(p.held[jid], frame)
+	return false
 }
 
 // activity records resumed work: any candidate end is withdrawn.
@@ -170,17 +209,8 @@ func (p *promptTurn) status(scoopStatus, scoopJid string, now time.Time) bool {
 	defer p.mu.Unlock()
 	if scoopJid != "" {
 		p.sawNamed = true
-		if scoopStatus == protocol.ScoopStatusProcessing {
-			if p.sawProcessingByUnit == nil {
-				p.sawProcessingByUnit = map[string]bool{}
-			}
-			p.sawProcessingByUnit[scoopJid] = true
-		}
 	}
-	if p.scoopJid == "" && scoopJid != "" {
-		return false
-	}
-	if p.scoopJid != "" && scoopJid != "" && scoopJid != p.scoopJid {
+	if scoopJid != "" && p.scoopJid != scoopJid {
 		return false
 	}
 	// Unnamed status on a leader that also names units is not attributable.
@@ -203,21 +233,6 @@ func (p *promptTurn) status(scoopStatus, scoopJid string, now time.Time) bool {
 	return true
 }
 
-// owns reports whether a terminal frame (an error status) is about this
-// prompt. Named frames do not count until the unit is known, so another
-// unit's error cannot fail the prompt early.
-func (p *promptTurn) owns(jid string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.scoopJid != "" {
-		return jid == "" || jid == p.scoopJid
-	}
-	if jid != "" || p.sawNamed {
-		return false
-	}
-	return true
-}
-
 // settled reports whether the candidate end has stood for `grace`, and if
 // not, how long the caller should wait before asking again (0 = no candidate).
 func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Duration) {
@@ -237,12 +252,20 @@ func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Dur
 	return true, 0
 }
 
-// agentEvent streams one agent event of the prompt's turn and feeds the state
-// machine; finish ends the prompt with an exit code.
-func (p *promptTurn) agentEvent(ev protocol.AgentEvent, finish func(int)) {
+func (p *promptTurn) write(text string) {
+	w := p.out
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprint(w, text)
+}
+
+// applyAgent applies one event already known to belong to this prompt.
+// done is a terminal exit.
+func (p *promptTurn) applyAgent(ev protocol.AgentEvent) (code int, done bool) {
 	switch ev.Type {
 	case protocol.AgentContentDelta:
-		fmt.Print(ev.Text)
+		p.write(ev.Text)
 		p.activity()
 	case protocol.AgentToolUseStart:
 		p.toolStart()
@@ -251,11 +274,131 @@ func (p *promptTurn) agentEvent(ev protocol.AgentEvent, finish func(int)) {
 	case protocol.AgentMessageStart, protocol.AgentContentDone:
 		p.activity()
 	case protocol.AgentTurnEnd:
-		finish(0)
+		return 0, true
 	case protocol.AgentError:
-		errLineAfterStream("prompt", "%s", ev.Error)
-		finish(1)
+		errLineAfterStream("%s", ev.Error)
+		return 1, true
 	}
+	return 0, false
+}
+
+func (p *promptTurn) applyHeld(frame heldFrame) (int, bool) {
+	if frame.event != nil {
+		return p.applyAgent(*frame.event)
+	}
+	if frame.status == protocol.ScoopStatusError {
+		errLineAfterStream("the leader reported %s in error", quotedScoop(p.scoopJid))
+		return 1, true
+	}
+	p.status(frame.status, p.scoopJid, frame.when)
+	return 0, false
+}
+
+func (p *promptTurn) replay(frames []heldFrame) (int, bool) {
+	for _, frame := range frames {
+		if code, done := p.applyHeld(frame); done {
+			return code, true
+		}
+	}
+	return 0, false
+}
+
+func (p *promptTurn) bindAndReplay(jid string, authoritative bool) (int, bool) {
+	return p.replay(p.bindUnit(jid, authoritative))
+}
+
+// ingest is cmdPrompt's frame handler. Named frames wait in per-unit buffers
+// until echo, ack, or the single root binds the prompt; only that unit is
+// replayed.
+func (p *promptTurn) ingest(messageID, typ string, raw []byte, now time.Time) (int, bool) {
+	switch typ {
+	case protocol.TypeAgentEvent:
+		return p.ingestAgent(raw)
+	case protocol.TypeStatus:
+		return p.ingestStatus(raw, now)
+	case protocol.TypeUserMessageEcho:
+		return p.ingestEcho(messageID, raw)
+	case protocol.TypeUserMessageAck:
+		return p.ingestAck(messageID, raw)
+	case "scoops.list":
+		return p.ingestRoster(raw)
+	case protocol.TypeError:
+		return p.ingestWireError(raw)
+	default:
+		return 0, false
+	}
+}
+
+func (p *promptTurn) ingestAgent(raw []byte) (int, bool) {
+	var env protocol.AgentEventEnvelope
+	if json.Unmarshal(raw, &env) != nil {
+		return 0, false
+	}
+	frame := heldFrame{event: &env.Event}
+	if !p.take(env.ScoopJid, frame) {
+		debugLogf("prompt: holding agent_event %s for scoop %q", env.Event.Type, env.ScoopJid)
+		return 0, false
+	}
+	debugLogf("prompt: agent_event %s", env.Event.Type)
+	return p.applyAgent(env.Event)
+}
+
+func (p *promptTurn) ingestStatus(raw []byte, now time.Time) (int, bool) {
+	var s protocol.Status
+	if json.Unmarshal(raw, &s) != nil {
+		return 0, false
+	}
+	if !p.take(s.ScoopJid, heldFrame{status: s.ScoopStatus, when: now}) {
+		debugLogf("prompt: holding status %s for scoop %q", s.ScoopStatus, s.ScoopJid)
+		return 0, false
+	}
+	if s.ScoopStatus == protocol.ScoopStatusError {
+		errLineAfterStream("the leader reported %s in error", quotedScoop(s.ScoopJid))
+		return 1, true
+	}
+	debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
+	p.status(s.ScoopStatus, s.ScoopJid, now)
+	return 0, false
+}
+
+func (p *promptTurn) ingestEcho(messageID string, raw []byte) (int, bool) {
+	var echo protocol.UserMessageEcho
+	if json.Unmarshal(raw, &echo) != nil || echo.MessageID != messageID {
+		return 0, false
+	}
+	debugLogf("prompt: echo names scoop %q", echo.ScoopJid)
+	return p.bindAndReplay(echo.ScoopJid, true)
+}
+
+func (p *promptTurn) ingestAck(messageID string, raw []byte) (int, bool) {
+	if reason, rejected := promptAckRejection(raw, messageID); rejected {
+		errLine("prompt", "%s", reason)
+		return 1, true
+	}
+	var ack protocol.UserMessageAck
+	if json.Unmarshal(raw, &ack) != nil || ack.MessageID != messageID || ack.State != protocol.AckAccepted {
+		return 0, false
+	}
+	debugLogf("prompt: ack names scoop %q", ack.ScoopJid)
+	return p.bindAndReplay(ack.ScoopJid, true)
+}
+
+func (p *promptTurn) ingestRoster(raw []byte) (int, bool) {
+	jid, ok := soleConeJid(raw)
+	if !ok {
+		return 0, false
+	}
+	debugLogf("prompt: roster names cone %q", jid)
+	return p.bindAndReplay(jid, false)
+}
+
+func (p *promptTurn) ingestWireError(raw []byte) (int, bool) {
+	var e struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &e)
+	errLineAfterStream("%s", e.Error)
+	return 1, true
 }
 
 // soleConeJid returns the only root in a `scoops.list` frame.
@@ -348,70 +491,11 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		}
 	}
 	handler := func(typ string, raw []byte) {
-		switch typ {
-		case protocol.TypeAgentEvent:
-			var env protocol.AgentEventEnvelope
-			if json.Unmarshal(raw, &env) != nil {
-				return
-			}
-			if !turn.forScoop(env.ScoopJid) {
-				debugLogf("prompt: ignoring agent_event %s for scoop %q", env.Event.Type, env.ScoopJid)
-				return
-			}
-			debugLogf("prompt: agent_event %s", env.Event.Type)
-			turn.agentEvent(env.Event, finish)
-			wake()
-		case protocol.TypeStatus:
-			var s protocol.Status
-			if json.Unmarshal(raw, &s) != nil {
-				return
-			}
-			if s.ScoopStatus == protocol.ScoopStatusError {
-				if !turn.owns(s.ScoopJid) {
-					debugLogf("prompt: ignoring error status for scoop %q", s.ScoopJid)
-					return
-				}
-				errLineAfterStream("prompt", "the leader reported %s in error", quotedScoop(s.ScoopJid))
-				finish(1)
-				return
-			}
-			debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
-			turn.status(s.ScoopStatus, s.ScoopJid, time.Now())
-			wake()
-		case protocol.TypeUserMessageEcho:
-			var echo protocol.UserMessageEcho
-			if json.Unmarshal(raw, &echo) != nil || echo.MessageID != messageID {
-				return
-			}
-			debugLogf("prompt: echo names scoop %q", echo.ScoopJid)
-			turn.bindScoop(echo.ScoopJid)
-			wake()
-		case protocol.TypeUserMessageAck:
-			if reason, rejected := promptAckRejection(raw, messageID); rejected {
-				errLine("prompt", "%s", reason)
-				finish(1)
-				return
-			}
-			var ack protocol.UserMessageAck
-			if json.Unmarshal(raw, &ack) == nil && ack.MessageID == messageID && ack.State == protocol.AckAccepted {
-				debugLogf("prompt: ack names scoop %q", ack.ScoopJid)
-				turn.bindScoop(ack.ScoopJid)
-				wake()
-			}
-		case "scoops.list":
-			if jid, ok := soleConeJid(raw); ok {
-				debugLogf("prompt: roster names cone %q", jid)
-				turn.bindConeGuess(jid)
-				wake()
-			}
-		case protocol.TypeError:
-			var e struct {
-				Error string `json:"error"`
-			}
-			_ = json.Unmarshal(raw, &e)
-			errLineAfterStream("prompt", "%s", e.Error)
-			finish(1)
+		if code, done := turn.ingest(messageID, typ, raw, time.Now()); done {
+			finish(code)
+			return
 		}
+		wake()
 	}
 
 	conn, err := dialAndSend(
@@ -444,7 +528,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			fmt.Println()
 			return code
 		case <-conn.Done():
-			errLineAfterStream("prompt", "connection closed before the turn completed")
+			errLineAfterStream("connection closed before the turn completed")
 			return 1
 		case <-ctx.Done():
 			// Tell the leader to stop the turn so it doesn't keep spending tokens.
@@ -1074,9 +1158,9 @@ func errLine(verb, format string, args ...any) {
 
 // errLineAfterStream is errLine preceded by a blank line, for a failure that
 // interrupts leader output already streaming on stdout.
-func errLineAfterStream(verb, format string, args ...any) {
+func errLineAfterStream(format string, args ...any) {
 	fmt.Fprintln(os.Stderr)
-	errLine(verb, format, args...)
+	errLine("prompt", format, args...)
 }
 
 // markConnected records a successful connection.

@@ -275,7 +275,7 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 		go func() {
 			_ = sendJSON(leader.dc, protocol.Status{Type: protocol.TypeStatus, ScoopStatus: "processing"})
 			_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
-				Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+				Type:  protocol.TypeAgentEvent,
 				Event: protocol.AgentEvent{Type: protocol.AgentContentDelta, MessageID: "m1", Text: "PROMPT-E2E-OK"},
 			})
 			_ = sendJSON(leader.dc, protocol.Status{Type: protocol.TypeStatus, ScoopStatus: "ready"})
@@ -331,7 +331,9 @@ func statusFrameFor(jid, s string) protocol.Status {
 }
 
 func agentFrame(eventType, id, text string) protocol.AgentEventEnvelope {
-	return agentFrameFor("cone", eventType, id, text)
+	// No unit id: these tests speak for a leader that does not name frames.
+	// A named frame is buffered until the prompt is bound.
+	return agentFrameFor("", eventType, id, text)
 }
 
 func agentFrameFor(jid, eventType, id, text string) protocol.AgentEventEnvelope {
@@ -627,6 +629,37 @@ func TestCLIPromptEmptyAckUsesTheConeRoster(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "CONE-ROSTER-OK") {
 		t.Fatalf("prompt stdout = %q, want the cone's reply", stdout)
+	}
+}
+
+// TestCLIPromptBuffersForeignFramesUntilAck: events for other units arrive
+// before the ack on a v10 leader. They must not print, finish, or leave a
+// pending tool; the bound unit's own frames replay in order.
+func TestCLIPromptBuffersForeignFramesUntilAck(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var um protocol.UserMessage
+		if json.Unmarshal(msg.Data, &um) != nil || um.Type != "user_message" {
+			return
+		}
+		go func() {
+			_ = sendJSON(leader.dc, agentFrameFor("sports", protocol.AgentContentDelta, "x", "LEAK"))
+			_ = sendJSON(leader.dc, agentFrameFor("sports", protocol.AgentToolUseStart, "x", "bash"))
+			_ = sendJSON(leader.dc, agentFrameFor("sports", protocol.AgentTurnEnd, "x", ""))
+			_ = sendJSON(leader.dc, agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "KEPT"))
+			ack := ackFrame(um.MessageID, protocol.AckAccepted, "")
+			ack.ScoopJid = "cone-1"
+			_ = sendJSON(leader.dc, ack)
+			_ = sendJSON(leader.dc, statusFrameFor("cone-1", "ready"))
+		}()
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if strings.Contains(stdout, "LEAK") || !strings.Contains(stdout, "KEPT") {
+		t.Fatalf("prompt stdout = %q, want only the bound unit's text", stdout)
 	}
 }
 

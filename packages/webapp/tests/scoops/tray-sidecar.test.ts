@@ -412,6 +412,12 @@ describe('tray sidecar', () => {
         scoopJid: 'cone-1',
         event: { type: 'turn_end', messageId: 'm1' },
       });
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId: sent.messageId as string,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
 
       expect(await run).toMatchObject({ stdout: 'all good', exitCode: 0 });
     });
@@ -430,6 +436,13 @@ describe('tray sidecar', () => {
         event: { type: 'content_delta', messageId: 'm1', text: 'hello' },
       });
       dial.channel.deliver({ type: 'status', scoopStatus: 'ready', scoopJid: 'cone-1' });
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
 
       expect(await run).toMatchObject({ stdout: 'hello', exitCode: 0 });
     });
@@ -483,6 +496,13 @@ describe('tray sidecar', () => {
         scoopJid: 'cone-1',
         event: { type: 'turn_end', messageId: 'm1' },
       });
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
       await run;
       expect(settled).toBe(true);
     });
@@ -495,6 +515,13 @@ describe('tray sidecar', () => {
         type: 'agent_event',
         scoopJid: 'cone-1',
         event: { type: 'error', error: 'rate limited' },
+      });
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
       });
       expect(await run).toMatchObject({ stderr: 'rate limited\n', exitCode: 1 });
     });
@@ -569,6 +596,13 @@ describe('tray sidecar', () => {
       await Promise.resolve();
       expect(settled).toBe(false);
 
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
       dial.channel.deliver({
         type: 'agent_event',
         scoopJid: 'cone-1',
@@ -576,6 +610,50 @@ describe('tray sidecar', () => {
       });
       await run;
       expect(settled).toBe(true);
+    });
+
+    it('buffers another unit until the ack, then replays only the bound unit', async () => {
+      const { info, dial } = await attach(registry);
+      const run = registry.prompt(info.name, 'hi');
+      await Promise.resolve();
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'sports',
+        event: { type: 'content_delta', messageId: 'x', text: 'LEAK' },
+      });
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'sports',
+        event: { type: 'tool_use_start', messageId: 'x', toolName: 'bash', toolInput: {} },
+      });
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'sports',
+        event: { type: 'turn_end', messageId: 'x' },
+      });
+      dial.channel.deliver({
+        type: 'status',
+        scoopStatus: 'ready',
+        scoopJid: 'sports',
+      });
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'cone-1',
+        event: { type: 'content_delta', messageId: 'm1', text: 'KEPT' },
+      });
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'cone-1',
+        event: { type: 'turn_end', messageId: 'm1' },
+      });
+      expect(await run).toMatchObject({ stdout: 'KEPT', exitCode: 0 });
     });
 
     it('passes --steer through to the wire', async () => {
@@ -592,6 +670,13 @@ describe('tray sidecar', () => {
       const controller = new AbortController();
       const run = registry.prompt(info.name, 'hi', { signal: controller.signal });
       await Promise.resolve();
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
       dial.channel.deliver({
         type: 'agent_event',
         scoopJid: 'cone-1',

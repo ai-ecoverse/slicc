@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
 func TestPromptTurnIgnoresNamedReadyBeforeTheUnitIsKnown(t *testing.T) {
@@ -79,6 +83,68 @@ func TestPromptTurnRosterGuessYieldsToTheAck(t *testing.T) {
 	if !p.status("ready", "scoop-9", now.Add(4*time.Second)) {
 		t.Fatal("the acked unit's ready did not arm")
 	}
+}
+
+func TestPromptTurnBuffersOtherUnitUntilAck(t *testing.T) {
+	var out bytes.Buffer
+	p := &promptTurn{out: &out}
+	now := time.Now()
+	if _, done := p.ingestStatus(statusRaw("ready", "sports"), now); done {
+		t.Fatal("another unit's ready ended the prompt before the ack")
+	}
+	if _, done := p.ingestAgent(agentRaw("sports", protocol.AgentToolUseStart, "LEAK")); done {
+		t.Fatal("another unit's tool_use_start ended the prompt")
+	}
+	if _, done := p.ingestAgent(agentRaw("sports", protocol.AgentContentDelta, "LEAK")); done {
+		t.Fatal("another unit's text ended the prompt")
+	}
+	p.ingestStatus(statusRaw("processing", "cone-1"), now)
+	p.ingestAgent(agentRaw("cone-1", protocol.AgentContentDelta, "ONE"))
+	p.ingestAgent(agentRaw("cone-1", protocol.AgentContentDelta, "TWO"))
+	if out.Len() != 0 || p.pendingTools != 0 {
+		t.Fatalf("before ack stdout=%q pending=%d; foreign frames were applied", out.String(), p.pendingTools)
+	}
+	if _, done := p.ingestAck("mine", ackRaw("mine", "cone-1")); done {
+		t.Fatal("rebinding the cone ended the prompt")
+	}
+	if out.String() != "ONETWO" {
+		t.Fatalf("replayed stdout = %q, want ONETWO in order and nothing from sports", out.String())
+	}
+	if p.pendingTools != 0 {
+		t.Fatal("the other unit's tool_use_start is still pending")
+	}
+	if !p.status("ready", "cone-1", now.Add(time.Second)) {
+		t.Fatal("cone ready after replayed output did not arm")
+	}
+}
+
+func statusRaw(status, jid string) []byte {
+	raw, err := json.Marshal(protocol.Status{Type: protocol.TypeStatus, ScoopStatus: status, ScoopJid: jid})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+func agentRaw(jid, eventType, text string) []byte {
+	raw, err := json.Marshal(protocol.AgentEventEnvelope{
+		Type: protocol.TypeAgentEvent, ScoopJid: jid,
+		Event: protocol.AgentEvent{Type: eventType, MessageID: "m", Text: text, ToolName: text},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+func ackRaw(messageID, jid string) []byte {
+	raw, err := json.Marshal(protocol.UserMessageAck{
+		Type: protocol.TypeUserMessageAck, MessageID: messageID, ScoopJid: jid, State: protocol.AckAccepted,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 func TestSoleConeJid(t *testing.T) {

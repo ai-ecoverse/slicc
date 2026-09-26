@@ -555,12 +555,129 @@ function promptRejectedReason(error: string | undefined): string {
  * so the ack / agent / status switch stays under the complexity gate while still
  * matching the Go CLI's settle rules (`promptAckRejection` + turn endings).
  */
-/** Unbound, or a frame that names no unit, still counts. A named other unit does not. */
-function promptFrameIsForTurn(boundJid: string, scoopJid: string | undefined): boolean {
-  return !boundJid || !scoopJid || scoopJid === boundJid;
+type PromptTurnState = {
+  sawProcessing: boolean;
+  /** Set by an agent event. A `ready` before this is the startup blip. */
+  seenAgent: boolean;
+  scoopJid: string;
+  authoritative: boolean;
+  /** Named frames waiting until echo, ack, or the single root binds the unit. */
+  held: Map<string, LeaderToFollowerMessage[]>;
+};
+
+function newPromptTurnState(): PromptTurnState {
+  return {
+    sawProcessing: false,
+    seenAgent: false,
+    scoopJid: '',
+    authoritative: false,
+    held: new Map(),
+  };
 }
 
-type PromptTurnState = { sawProcessing: boolean; scoopJid: string };
+function promptFrameScoop(message: LeaderToFollowerMessage): string {
+  if (message.type === 'agent_event' || message.type === 'status') return message.scoopJid ?? '';
+  return '';
+}
+
+function holdPromptFrame(
+  state: PromptTurnState,
+  jid: string,
+  message: LeaderToFollowerMessage
+): void {
+  const queued = state.held.get(jid);
+  if (queued) queued.push(message);
+  else state.held.set(jid, [message]);
+}
+
+/** Apply one frame already known to be this prompt's. */
+function applyPromptFrame(
+  message: LeaderToFollowerMessage,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (message.type === 'agent_event') {
+    const event = message.event;
+    if (event.type === 'content_delta') buffer.push('stdout', event.text);
+    if (
+      event.type === 'content_delta' ||
+      event.type === 'message_start' ||
+      event.type === 'tool_use_start' ||
+      event.type === 'tool_result' ||
+      event.type === 'content_done'
+    ) {
+      state.seenAgent = true;
+    }
+    if (event.type === 'turn_end') control.finish(0);
+    else if (event.type === 'error') {
+      buffer.push('stderr', `${event.error}\n`);
+      control.finish(1);
+    }
+    return;
+  }
+  if (message.type !== 'status') return;
+  if (message.scoopStatus === 'processing') {
+    state.sawProcessing = true;
+    return;
+  }
+  if (!state.sawProcessing) return;
+  if (message.scoopStatus === 'error') {
+    buffer.push('stderr', 'the leader reported the scoop in error\n');
+    control.finish(1);
+    return;
+  }
+  // `initializing` is a unit booting. `ready` before any agent event is the
+  // startup blip a 6.196.0 leader emits before the turn actually starts.
+  if (message.scoopStatus === 'ready' && state.seenAgent) control.finish(0);
+}
+
+function bindPromptUnit(
+  state: PromptTurnState,
+  jid: string,
+  authoritative: boolean,
+  buffer: RunBuffer,
+  control: VerbControl
+): void {
+  if (!jid) return;
+  if (state.scoopJid) {
+    if (!authoritative || state.authoritative || state.scoopJid === jid) return;
+    state.sawProcessing = false;
+    state.seenAgent = false;
+  }
+  state.scoopJid = jid;
+  if (authoritative) state.authoritative = true;
+  const replay = state.held.get(jid) ?? [];
+  if (authoritative) state.held.clear();
+  else state.held.delete(jid);
+  for (const frame of replay) applyPromptFrame(frame, buffer, state, control);
+}
+
+function routePromptFrame(
+  message: LeaderToFollowerMessage,
+  state: PromptTurnState,
+  buffer: RunBuffer,
+  control: VerbControl
+): void {
+  const jid = promptFrameScoop(message);
+  if (jid && state.scoopJid !== jid && !(state.authoritative && state.scoopJid)) {
+    holdPromptFrame(state, jid, message);
+    return;
+  }
+  if (jid && state.scoopJid && jid !== state.scoopJid) return;
+  applyPromptFrame(message, buffer, state, control);
+}
+
+function soleConeJid(message: Extract<LeaderToFollowerMessage, { type: 'scoops.list' }>): string {
+  let cone = '';
+  for (const scoop of message.scoops) {
+    const root = scoop.parentId === null || (scoop.parentId === undefined && scoop.isCone === true);
+    if (!root) continue;
+    if (cone && cone !== scoop.jid) return '';
+    cone = scoop.jid;
+  }
+  return cone;
+}
 
 function handlePromptAck(
   message: Extract<LeaderToFollowerMessage, { type: 'user_message_ack' }>,
@@ -575,32 +692,7 @@ function handlePromptAck(
     control.finish(1);
     return;
   }
-  // `accepted` names the unit the kernel took the prompt for. Keep waiting
-  // for that unit's turn; do not let a later ack retarget it.
-  if (message.state === 'accepted' && message.scoopJid && !state.scoopJid) {
-    state.scoopJid = message.scoopJid;
-  }
-}
-
-function handlePromptStatus(
-  message: Extract<LeaderToFollowerMessage, { type: 'status' }>,
-  buffer: RunBuffer,
-  state: PromptTurnState,
-  control: VerbControl
-): void {
-  if (!promptFrameIsForTurn(state.scoopJid, message.scoopJid)) return;
-  if (message.scoopStatus === 'processing') {
-    state.sawProcessing = true;
-    return;
-  }
-  if (!state.sawProcessing) return;
-  if (message.scoopStatus === 'error') {
-    buffer.push('stderr', 'the leader reported the scoop in error\n');
-    control.finish(1);
-    return;
-  }
-  // Only `ready` ends the turn. `initializing` is a unit booting, not idle.
-  if (message.scoopStatus === 'ready') control.finish(0);
+  if (message.state === 'accepted') bindPromptUnit(state, message.scoopJid, true, buffer, control);
 }
 
 function handlePromptFrame(
@@ -614,24 +706,21 @@ function handlePromptFrame(
     handlePromptAck(message, messageId, buffer, state, control);
     return;
   }
-  if (message.type === 'agent_event') {
-    if (!promptFrameIsForTurn(state.scoopJid, message.scoopJid)) return;
-    const event = message.event;
-    if (event.type === 'content_delta') buffer.push('stdout', event.text);
-    else if (event.type === 'turn_end') control.finish(0);
-    else if (event.type === 'error') {
-      buffer.push('stderr', `${event.error}\n`);
-      control.finish(1);
-    }
+  if (message.type === 'user_message_echo' && message.messageId === messageId) {
+    bindPromptUnit(state, message.scoopJid, true, buffer, control);
     return;
   }
-  if (message.type === 'status') {
-    handlePromptStatus(message, buffer, state, control);
+  if (message.type === 'scoops.list') {
+    bindPromptUnit(state, soleConeJid(message), false, buffer, control);
     return;
   }
   if (message.type === 'error') {
     buffer.push('stderr', `${message.error}\n`);
     control.finish(1);
+    return;
+  }
+  if (message.type === 'agent_event' || message.type === 'status') {
+    routePromptFrame(message, state, buffer, control);
   }
 }
 
@@ -758,7 +847,7 @@ export class SidecarRegistry {
   ): Promise<SidecarRunResult> {
     const attachment = this.require(name);
     const buffer = new RunBuffer(options.onChunk);
-    const state = { sawProcessing: false, scoopJid: '' };
+    const state = newPromptTurnState();
     const messageId = crypto.randomUUID();
 
     const run = runVerb(attachment, options, buffer, (message, control) => {
