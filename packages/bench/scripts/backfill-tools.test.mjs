@@ -75,48 +75,123 @@ describe('backfillTools', () => {
       'backfilled 0 run(s); 0 without a transcript to count (left unknown)'
     );
     expect(log).toHaveBeenCalledWith(
-      'stamped the SLICC version on 0 record(s); 0 not found in events.jsonl'
+      'stamped the SLICC version on 0 record(s); 0 left unknown (0 ambiguous: runs sharing a task, model and skills in an older journal)'
     );
     expect(() => main([])).toThrow(/--out/);
   });
 });
 
 describe('backfillVersions', () => {
-  const EVENTS = [
+  const jsonl = (events) => events.map((e) => JSON.stringify(e)).join('\n');
+  const LEGACY = jsonl([
     { type: 'start', slicc_version: '1.0.0' },
     { type: 'leader-ready', lane: 1, generation: 0, slicc_version: '1.0.0' },
     { type: 'task', lane: 0, task_id: 'a', model: 'm', skills: 'none' },
     { type: 'leader-ready', lane: 1, generation: 1, slicc_version: '1.0.1' },
     { type: 'task', lane: 1, task_id: 'b', model: 'm', skills: 'none' },
     { type: 'task', task_id: 'c', model: 'm', skills: 'none' },
-  ]
-    .map((e) => JSON.stringify(e))
-    .join('\n');
+  ]);
 
-  it('maps each task to the last leader boot on its lane', () => {
-    const v = taskVersions(`${EVENTS}\nnot json\n\n`);
-    expect(v.get('a|m|none')).toBe('1.0.0');
-    expect(v.get('b|m|none')).toBe('1.0.1');
-    expect(v.get('c|m|none')).toBe('1.0.0');
+  it('maps older task events to the last leader boot on their lane', () => {
+    const { legacy, exact } = taskVersions(`${LEGACY}\nnot json\n\n`);
+    expect(exact.size).toBe(0);
+    expect(legacy.get('a|m|none')).toEqual(['1.0.0']);
+    expect(legacy.get('b|m|none')).toEqual(['1.0.1']);
+    expect(legacy.get('c|m|none')).toEqual(['1.0.0']);
     // A lane that never reported a boot has no version to give.
     expect(
-      taskVersions('{"type":"task","lane":3,"task_id":"x","model":"m","skills":"s"}').get('x|m|s')
-    ).toBeNull();
+      taskVersions('{"type":"task","lane":3,"task_id":"x","model":"m","skills":"s"}').legacy.get(
+        'x|m|s'
+      )
+    ).toEqual([null]);
+  });
+
+  it('keys new task events by the full run identity, preferring the version they recorded', () => {
+    const { exact } = taskVersions(
+      jsonl([
+        { type: 'start', slicc_version: '1.0.0' },
+        { type: 'task', lane: 0, benchmark: 'B', task_id: 't', repeat: 1, model: 'm', skills: 's' },
+        {
+          type: 'task',
+          lane: 0,
+          benchmark: 'B',
+          task_id: 't',
+          repeat: 2,
+          model: 'm',
+          skills: 's',
+          leader: { slicc_version: '1.0.3' },
+        },
+      ])
+    );
+    expect(exact.get('B|t|m|s|1')).toBe('1.0.0');
+    expect(exact.get('B|t|m|s|2')).toBe('1.0.3');
+  });
+
+  it("takes a resumed invocation's version from its own start", () => {
+    const { legacy } = taskVersions(
+      jsonl([
+        { type: 'start', slicc_version: '1.0.0' },
+        { type: 'task', task_id: 'a', model: 'm', skills: 's' },
+        { type: 'start', slicc_version: '1.0.2' },
+        { type: 'task', task_id: 'b', model: 'm', skills: 's' },
+      ])
+    );
+    expect(legacy.get('a|m|s')).toEqual(['1.0.0']);
+    expect(legacy.get('b|m|s')).toEqual(['1.0.2']);
   });
 
   it('stamps records that lack a version, leaves the rest, and needs a journal', () => {
     const out = mkdtempSync(join(tmpdir(), 'bench-versions-'));
-    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0 });
-    write(join(out, 'events.jsonl'), EVENTS);
-    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0 });
+    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0, ambiguous: 0 });
+    write(join(out, 'events.jsonl'), LEGACY);
+    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0, ambiguous: 0 });
     write(recordPath(out, 'Own', 'none', 'm', 'b', 1), JSON.stringify(record('Own', 'b')));
     const kept = { ...record('Own', 'a'), leader: { lane: 0, slicc_version: '9.9' } };
     write(recordPath(out, 'Own', 'none', 'm', 'a', 1), JSON.stringify(kept));
     write(recordPath(out, 'Own', 'none', 'm', 'z', 1), JSON.stringify(record('Own', 'z')));
-    expect(backfillVersions(out)).toEqual({ stamped: 1, unknown: 1 });
+    expect(backfillVersions(out)).toEqual({ stamped: 1, unknown: 1, ambiguous: 0 });
     const read = (t) => JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', t, 1), 'utf8'));
     expect(read('b').leader).toEqual({ slicc_version: '1.0.1' });
     expect(read('a').leader.slicc_version).toBe('9.9');
     expect(read('z').leader).toBeUndefined();
+  });
+
+  it('leaves runs that share a task, model and skills unknown unless their versions agree', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bench-versions-'));
+    // Two repeats of one task in an older journal, on different releases: no way to tell apart.
+    write(
+      join(out, 'events.jsonl'),
+      jsonl([
+        { type: 'start', slicc_version: '1.0.0' },
+        { type: 'task', task_id: 'r', model: 'm', skills: 'none' },
+        { type: 'task', task_id: 'same', model: 'm', skills: 'none' },
+        { type: 'start', slicc_version: '1.0.1' },
+        { type: 'task', task_id: 'r', model: 'm', skills: 'none' },
+        { type: 'start', slicc_version: '1.0.0' },
+        { type: 'task', task_id: 'same', model: 'm', skills: 'none' },
+        // A rerun of a single run: the last version wins.
+        { type: 'task', task_id: 'once', model: 'm', skills: 'none' },
+        { type: 'start', slicc_version: '1.0.2' },
+        { type: 'task', task_id: 'once', model: 'm', skills: 'none' },
+      ])
+    );
+    for (const [task, repeat] of [
+      ['r', 1],
+      ['r', 2],
+      ['same', 1],
+      ['same', 2],
+      ['once', 1],
+    ])
+      write(
+        recordPath(out, 'Own', 'none', 'm', task, repeat),
+        JSON.stringify({ ...record('Own', task), repeat })
+      );
+    expect(backfillVersions(out)).toEqual({ stamped: 3, unknown: 2, ambiguous: 2 });
+    const read = (t, n) =>
+      JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', t, n), 'utf8'));
+    expect(read('r', 1).leader).toBeUndefined();
+    expect(read('r', 2).leader).toBeUndefined();
+    expect(read('same', 2).leader.slicc_version).toBe('1.0.0');
+    expect(read('once', 1).leader.slicc_version).toBe('1.0.2');
   });
 });

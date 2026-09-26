@@ -609,7 +609,10 @@ async function runFresh(r, ctx, log) {
 function taskEvent(r, { record, result }, lane = 0) {
   return {
     lane,
+    // The run's full identity, so the journal can be matched back to exactly one record.
+    benchmark: r.set.benchmark,
     task_id: r.task.id,
+    repeat: r.repeat,
     model: r.model,
     skills: r.condition.name,
     outcome: record.error ? 'error' : (record.outcome ?? 'ran'),

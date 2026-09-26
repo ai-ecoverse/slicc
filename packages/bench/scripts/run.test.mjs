@@ -1208,6 +1208,8 @@ describe('lanes and guardrails', () => {
     const ev = events(out);
     expect(ev.filter((e) => e.type === 'leader-ready').map((e) => e.lane)).toEqual([0, 1]);
     expect(ev.find((e) => e.type === 'start')).toMatchObject({ lanes: 2 });
+    // Each task event names its run in full, so the journal maps back to exactly one record.
+    expect(ev.find((e) => e.type === 'task')).toMatchObject({ benchmark: 'Own', repeat: 1 });
     q.mockRestore();
   });
 
