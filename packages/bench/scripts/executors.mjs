@@ -46,8 +46,12 @@ export function unreachable(status, stderr) {
  * leader counts as down: the runner restarts it and runs the task again. The result carries
  * `connectionLost` too, so a caller whose command is safe to repeat (reading a file) can try a
  * new connection first. Both messages seen live on 6.190.0 and 6.191.0 leaders (2026-09-25).
+ * A leader that stays connected but never sends its model list (`slicc model`: `the leader sent
+ * no model list within 20s`) is the same unstable peer in its quiet form (V2.1 pilot, 6.194.1):
+ * nothing was selected, and only a restart helped.
  */
-const CONNECTION_LOST_RE = /read\/write on closed pipe|connection closed/i;
+const CONNECTION_LOST_RE =
+  /read\/write on closed pipe|connection closed|the leader sent no model list within/i;
 
 export function connectionLost(status, stderr) {
   return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));

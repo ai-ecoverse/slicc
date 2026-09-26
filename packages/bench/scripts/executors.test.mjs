@@ -145,6 +145,7 @@ describe('createLeader', () => {
       retryDelayMs: 0,
     });
     expect(await dial.exec('ls')).not.toHaveProperty('connectionLost');
+    expect(connectionLost(1, 'slicc model: the leader sent no model list within 20s')).toBe(true);
     expect(connectionLost(0, 'read/write on closed pipe')).toBe(false);
     expect(connectionLost(1, 'no model matches')).toBe(false);
   });

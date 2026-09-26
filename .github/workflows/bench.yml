@@ -13,8 +13,9 @@
 # on a self-hosted GCP runner (Cyclenerd/google-cloud-github-runner in ai-ecoverse-493315;
 # `runs-on` names its GCE instance template) that takes every Nth task (`run.mjs --shard K/N`)
 # and runs it on `leaders` leaders side by side; `report` merges the shards' out dirs
-# (merge.mjs), and publishes once. Every job runs on GCP (`plan` and `report` on
-# `vars.BENCH_SMALL_RUNNER`, default gcp-ubuntu-24-04-2core), off the org's GitHub-hosted pool.
+# (merge.mjs), and publishes once. The shards and `report` (on `vars.BENCH_SMALL_RUNNER`, default
+# gcp-ubuntu-24-04-2core) run on GCP; `plan`, a few seconds, runs GitHub-hosted so its VM cannot
+# take quota the shards need.
 #
 # Guardrails, so a job never goes stale or runs out its time limit with nothing saved:
 # - run.mjs stops taking runs once one might not finish before `--deadline-minutes`, stops a run
@@ -112,9 +113,10 @@ jobs:
   plan:
     name: Plan
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    # Small jobs go on a small GCP VM too: behind a busy GitHub-hosted pool they would hold up
-    # the whole run.
-    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    # GitHub-hosted: it takes seconds, and a GCP VM for it still exists while the shards ask for
+    # theirs. Three 8-core shards fill the project's 24 E2 vCPUs exactly, so the plan's 2 vCPUs
+    # pushed two of them into QUOTA_EXCEEDED (V2.1 pilot, 2026-09-26).
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
       shards: ${{ steps.plan.outputs.shards }}

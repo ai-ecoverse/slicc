@@ -210,8 +210,51 @@ export function addUsage(a, b) {
   return sum;
 }
 
-/** Attempts at a well-formed judgement: the judge is sampled, so a malformed one is asked again. */
-export const JUDGE_ATTEMPTS = 2;
+/**
+ * Attempts at a well-formed judgement. The first is the plain request; each later one is a repair
+ * turn: the judge's own tool call answered with what was wrong with it. Asking the same question
+ * again was not enough: in the 2026-09-26 V2.1 pilot, gpt-5.6-luna left out
+ * `not_assessable_reason` on both attempts for 5 of 28 runs.
+ */
+export const JUDGE_ATTEMPTS = 3;
+
+/**
+ * The request with a repair turn: the judge's rejected tool call, answered as an error that names
+ * each problem, so the next call corrects it rather than being sampled afresh.
+ */
+export function repairBody(body, rejected, errors) {
+  const toolUseId = rejected.toolUseId ?? 'judgement';
+  return {
+    ...body,
+    messages: [
+      ...body.messages,
+      {
+        role: 'assistant',
+        content: [{ toolUse: { toolUseId, name: TOOL_NAME, input: rejected.input } }],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            toolResult: {
+              toolUseId,
+              status: 'error',
+              content: [
+                {
+                  text: [
+                    `The judgement was rejected: ${errors.join('; ')}.`,
+                    `Every finding with status not_assessable must set not_assessable_reason to ${REASONS.join(' or ')}, as the instructions define them; met and violated findings set it to null.`,
+                    `Call ${TOOL_NAME} again with the complete corrected judgement, one finding per rubric item.`,
+                  ].join(' '),
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
 
 /**
  * Findings → score, as upstream's `score()`: met weight / total weight; a missing item and
@@ -298,7 +341,7 @@ export async function converse({
       const data = JSON.parse(text);
       const use = (data.output?.message?.content ?? []).find((c) => c.toolUse)?.toolUse;
       if (!use) throw new Error('judge answered without calling the findings tool');
-      return { input: use.input, usage: data.usage ?? null };
+      return { input: use.input, usage: data.usage ?? null, toolUseId: use.toolUseId };
     }
     last = `HTTP ${res.status}: ${text.slice(0, 300)}`;
     if (res.status >= 400 && res.status < 500 && res.status !== 429) {
@@ -328,33 +371,40 @@ export async function judgeRun({
   timeoutMs,
 }) {
   const itemIds = Object.keys(task.weights);
-  const ask = (includeImages) =>
-    converse({
+  // `last` is the previous attempt's rejected reply and its errors: its repair turn goes along.
+  const ask = (includeImages, last) => {
+    const body = buildConverseBody({ spec, task, trace, includeImages });
+    return converse({
       model,
       apiKey,
       region,
       fetchImpl,
       sleep,
       timeoutMs,
-      body: buildConverseBody({ spec, task, trace, includeImages }),
+      body: last ? repairBody(body, last.reply, last.errors) : body,
     });
+  };
   let imagesSent = trace.screenshots.length > 0;
   let judgement;
   let usage = null;
   let errors = [];
+  let last = null;
+  let repairs = 0;
   for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt += 1) {
     let reply;
     try {
-      reply = await ask(imagesSent);
+      reply = await ask(imagesSent, last);
     } catch (err) {
       if (!err.imageUnsupported || !imagesSent) throw err;
       imagesSent = false;
-      reply = await ask(false);
+      reply = await ask(false, last);
     }
+    if (last) repairs += 1;
     judgement = normalizeJudgement(reply.input);
     usage = addUsage(usage, reply.usage);
     errors = validateJudgement(judgement, itemIds);
     if (!errors.length) break;
+    last = { reply, errors };
   }
   if (errors.length) throw new Error(`judge output is invalid: ${errors.join('; ')}`);
   const agentTexts = [trace.finalResult, ...trace.steps];
@@ -363,5 +413,6 @@ export async function judgeRun({
     result: score(task, judgement, agentTexts),
     usage,
     imagesSent,
+    repairs,
   };
 }
