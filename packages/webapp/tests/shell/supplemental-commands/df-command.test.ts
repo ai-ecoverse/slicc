@@ -84,8 +84,8 @@ describe('df command', () => {
     });
     const result = await cmd.execute(['-h'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/Usage:\s+1\.\d{2} GB/);
-    expect(result.stdout).toMatch(/Quota:\s+9\.\d{2} GB/);
+    expect(result.stdout).toMatch(/Usage:\s+1\.4 GB/);
+    expect(result.stdout).toMatch(/Quota:\s+9\.3 GB/);
     expect(result.stdout).toContain('Legacy IDB:  absent');
   });
 

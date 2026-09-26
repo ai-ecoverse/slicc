@@ -7,6 +7,7 @@
  */
 
 import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
+import { formatBytesSi } from '../../base/format-bytes.js';
 import { splitToolResultImages } from '../../base/image-markers.js';
 import type { MessageAttachment } from '../../core/attachments.js';
 import {
@@ -480,19 +481,8 @@ export function formatEta(ms: number): string {
   return `${h}h${String(m % 60).padStart(2, '0')}m`;
 }
 
-/** "512 B", "1.2 kB", "34.5 MB" — SI units, one decimal below 10. */
-export function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return '';
-  if (n < 1000) return `${Math.round(n)} B`;
-  const units = ['kB', 'MB', 'GB', 'TB'];
-  let v = n / 1000;
-  let i = 0;
-  while (v >= 1000 && i < units.length - 1) {
-    v /= 1000;
-    i += 1;
-  }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-}
+/** "512 B", "1.2 kB", "34.5 MB" — SI units (see `base/format-bytes`). */
+export const formatBytes = formatBytesSi;
 
 const PROGRESS_ATTR = 'data-progress';
 const DOTS_CLASS = 'wcmsg-dots';

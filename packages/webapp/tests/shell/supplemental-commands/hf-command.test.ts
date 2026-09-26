@@ -392,7 +392,7 @@ describe('createHfCommand', () => {
     };
     const cmd = createHfCommand({ fetch });
     const r = await cmd.execute(['download', 'owner/name'], { ...ctxOf(fs), fs: fakeFs } as never);
-    expect(r.stderr).toMatch(/downloaded w \(3\.00 GB\)/);
+    expect(r.stderr).toMatch(/downloaded w \(3\.0 GB\)/);
   });
 });
 

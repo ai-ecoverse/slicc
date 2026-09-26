@@ -24,6 +24,7 @@
  */
 
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
+import { formatBytesBinary } from '../../base/format-bytes.js';
 import type { StreamingFetch } from '../proxied-fetch.js';
 import {
   DEFAULT_HF_CONCURRENCY,
@@ -155,13 +156,6 @@ export function parseDownloadArgs(args: string[]): ParsedDownload | { error: str
   return { repo, files: positional.slice(1), to, revision, force, concurrency, maxInFlightMb };
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
 function formatDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
@@ -221,14 +215,14 @@ export class DownloadProgress {
     if (!last && t - this.lastLineAt < HF_PROGRESS_INTERVAL_MS) return null;
     this.lastLineAt = t;
     const rate = this.rate();
-    let bytes = formatBytes(this.bytesDone);
+    let bytes = formatBytesBinary(this.bytesDone);
     let eta = '';
     if (this.bytesTotal !== undefined) {
-      bytes += ` of ${formatBytes(this.bytesTotal)}`;
+      bytes += ` of ${formatBytesBinary(this.bytesTotal)}`;
       const left = this.bytesTotal - this.bytesDone;
       if (rate > 0 && left > 0) eta = `, ~${formatDuration((left / rate) * 1000)} left`;
     }
-    return `hf: ${this.filesDone}/${this.filesTotal} files, ${bytes}, ${formatBytes(rate)}/s${eta}\n`;
+    return `hf: ${this.filesDone}/${this.filesTotal} files, ${bytes}, ${formatBytesBinary(rate)}/s${eta}\n`;
   }
 }
 
@@ -283,7 +277,7 @@ async function runDownload(
         onFile: (evt) => {
           stderr +=
             evt.status === 'downloaded'
-              ? `hf: downloaded ${evt.file} (${formatBytes(evt.bytes)})\n`
+              ? `hf: downloaded ${evt.file} (${formatBytesBinary(evt.bytes)})\n`
               : `hf: skipped ${evt.file} (already at ${targetDir})\n`;
           tally.file(evt.status, evt.bytes);
           // Status lines are for whoever watches a long download; the result
@@ -295,9 +289,9 @@ async function runDownload(
     });
     const took =
       result.downloaded > 0
-        ? ` in ${formatDuration(tally.elapsedMs())} (${formatBytes(tally.rate())}/s)`
+        ? ` in ${formatDuration(tally.elapsedMs())} (${formatBytesBinary(tally.rate())}/s)`
         : '';
-    const summary = `hf: ${result.downloaded} downloaded, ${result.skipped} skipped, ${formatBytes(result.totalBytes)} total into ${targetDir}${took}\n`;
+    const summary = `hf: ${result.downloaded} downloaded, ${result.skipped} skipped, ${formatBytesBinary(result.totalBytes)} total into ${targetDir}${took}\n`;
     return { stdout: '', stderr: stderr + summary, exitCode: 0 };
   } catch (err) {
     if (err instanceof HfFileDownloadError) {
