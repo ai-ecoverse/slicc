@@ -469,6 +469,25 @@ describe('judgeRun', () => {
     expect(invalid).toHaveBeenCalledTimes(JUDGE_ATTEMPTS);
   });
 
+  it('asks again when the judge answers without calling the tool', async () => {
+    const noTool = () => reply(200, { output: { message: { content: [{ text: 'thinking…' }] } } });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(noTool())
+      .mockResolvedValueOnce(reply(200, TOOL_REPLY));
+    const out = await judgeRun({ spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', fetchImpl });
+    expect(out.result.score).toBe(1);
+    expect(out.repairs).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // The second request is the plain one again: there was no tool call to answer.
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body).messages).toHaveLength(1);
+    const never = vi.fn(async () => noTool());
+    await expect(
+      judgeRun({ spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', fetchImpl: never })
+    ).rejects.toThrow('judge output is invalid: judge answered without calling the findings tool');
+    expect(never).toHaveBeenCalledTimes(JUDGE_ATTEMPTS);
+  });
+
   it('answers a rejected judgement with its errors, and records the repair', async () => {
     const noReason = {
       ...JUDGEMENT,
