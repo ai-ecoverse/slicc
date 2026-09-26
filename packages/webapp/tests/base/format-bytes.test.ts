@@ -18,6 +18,13 @@ describe('formatBytesBinary', () => {
     expect(formatBytes(2048)).toBe(formatBytesBinary(2048));
     expect(formatBytes(2048, { si: false })).toBe('2.0 KB');
   });
+
+  it('preserves nonzero fractional byte rates instead of rounding to 0 B', () => {
+    expect(formatBytesBinary(0.4)).toBe('0.4 B');
+    expect(formatBytesBinary(1 / 3)).toBe('0.3 B');
+    expect(formatBytesBinary(0.04)).toBe('0.04 B');
+    expect(formatBytesBinary(0.004)).toBe('0.01 B');
+  });
 });
 
 describe('formatBytesSi', () => {

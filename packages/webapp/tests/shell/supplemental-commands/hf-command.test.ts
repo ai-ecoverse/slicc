@@ -336,6 +336,20 @@ describe('createHfCommand', () => {
     );
   });
 
+  it('keeps a nonzero sub-byte rate in the download summary', async () => {
+    // 1 byte over 3 s → ~0.33 B/s. formatBytesBinary must not floor that to "0 B/s".
+    let clock = 0;
+    const fetch = makeFetch({ 'owner/name': { files: { tiny: new Uint8Array(1) } } });
+    const slowFetch = (async (url: string, opts?: SecureFetchOptions) => {
+      if (url.includes('/resolve/')) clock += 3000;
+      return fetch(url, opts);
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch: slowFetch, now: () => clock });
+    const r = await cmd.execute(['download', 'owner/name'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/1 downloaded, 0 skipped, 1 B total into .* in 3s \(0\.3 B\/s\)/);
+  });
+
   it('prints no progress lines without a live sink, and no rate when nothing downloaded', async () => {
     const fetch = makeFetch({ 'owner/name': { files: { 'a.txt': bytes('A') } } });
     await fs.mkdir('/m', { recursive: true });

@@ -4,6 +4,8 @@
  * Two bases are intentional and must be chosen explicitly at the call site:
  * - Binary (default / `formatBytesBinary`): ÷1024, units `B/KB/MB/GB/TB/PB`,
  *   one decimal once past bytes — shell commands (`hf`, `meminfo`, `df -h`).
+ *   Sub-byte fractional values (download rates) keep decimals so a nonzero
+ *   transfer never formats as `0 B`.
  * - SI (`formatBytesSi` / `{ si: true }`): ÷1000, units `B/kB/MB/GB/TB`,
  *   one decimal below 10 else round — chat progress (`wc-message-view`).
  *
@@ -34,7 +36,14 @@ export function formatBytes(bytes: number, opts: FormatBytesOptions = {}): strin
     return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
   }
 
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024) {
+    // Integer sizes stay whole. Fractional values (download rates in B/s) keep
+    // decimals so a slow but nonzero transfer never formats as "0 B".
+    if (Number.isInteger(bytes)) return `${bytes} B`;
+    if (bytes >= 0.1) return `${bytes.toFixed(1)} B`;
+    if (bytes > 0) return `${Math.max(0.01, Number(bytes.toFixed(2)))} B`;
+    return '0 B';
+  }
   const units = ['KB', 'MB', 'GB', 'TB', 'PB'] as const;
   let value = bytes;
   let unitIndex = -1;
