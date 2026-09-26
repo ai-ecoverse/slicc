@@ -91,9 +91,10 @@ function makeFakeClient() {
   const client = {
     createAgentHandle: () => handle,
     // The composer sends through the client protocol now (#2382), so the fake
-    // kernel has to answer the two calls the local adapter makes: the raw
-    // `user-message` envelope and the selection it is addressed to.
-    sendRaw: vi.fn(),
+    // kernel has to answer the two calls the local adapter makes: the
+    // `sendUserMessage` RPC (which waits on a kernel verdict) and the
+    // selection it is addressed to.
+    sendUserMessage: vi.fn(async () => undefined),
     emitAgentError: vi.fn(),
     get selectedScoopJid(): string | null {
       return selectedScoopJid;
@@ -172,12 +173,11 @@ describe('prepareWcShell + attachLeaderShell', () => {
     );
     // The prompt reaches the kernel NAMING its unit, and carrying the
     // controller's own message id — the id the queued pile is cancelled by.
-    expect(fake.raw.sendRaw).toHaveBeenCalledWith(
+    expect(fake.raw.sendUserMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: expect.any(String),
         scoopJid: 'cone-1',
         text: 'hello cone',
-        type: 'user-message',
       })
     );
     // The submit handler clears the input card for the next prompt.

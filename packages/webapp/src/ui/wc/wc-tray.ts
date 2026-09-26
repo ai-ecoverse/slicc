@@ -487,7 +487,7 @@ function watchedFollowerClient(
   });
   const workUnits = new RemoteWorkUnitClient({
     getSync: () => getSync() ?? null,
-    onSend: (unitId) => promptWatch.noteSent(unitId),
+    onSend: (unitId, messageId) => promptWatch.noteSent(unitId, messageId),
   });
   return { workUnits, promptWatch };
 }
@@ -702,7 +702,7 @@ function withPromptAcks(
 ): FollowerRole['options'] {
   return {
     ...options,
-    onOwnUserMessageEcho: (_messageId, scoopJid) => promptWatch.noteReceived(scoopJid),
+    onOwnUserMessageEcho: (messageId, scoopJid) => promptWatch.noteReceived(scoopJid, messageId),
     onUserMessageAck: (ack) => promptWatch.noteAck(ack),
   };
 }

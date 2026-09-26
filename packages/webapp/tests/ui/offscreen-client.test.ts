@@ -70,6 +70,57 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.scoopJid).toBe('cone_123');
     expect(envelope.payload.text).toBe('Hello world');
     expect(envelope.payload.messageId).toBe('msg-1');
+    expect(envelope.payload.requestId).toBeUndefined();
+  });
+
+  it('sendUserMessage waits for the kernel verdict and rejects a refusal', async () => {
+    const pending = client.sendUserMessage({
+      scoopJid: 'cone_123',
+      text: 'hi',
+      messageId: 'msg-ack-1',
+    });
+    expect(sentMessages.length).toBe(1);
+    const envelope = sentMessages[0] as { payload: { type: string; requestId: string } };
+    expect(envelope.payload.type).toBe('user-message');
+    expect(envelope.payload.requestId).toMatch(/^um-/);
+
+    // Still pending until the kernel answers.
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    simulateMessage('offscreen', {
+      type: 'user-message-ack',
+      requestId: envelope.payload.requestId,
+      messageId: 'msg-ack-1',
+      scoopJid: 'cone_123',
+      ok: true,
+    });
+    await expect(pending).resolves.toBeUndefined();
+
+    const refused = client.sendUserMessage({
+      scoopJid: 'cone_123',
+      text: 'nope',
+      messageId: 'msg-ack-2',
+    });
+    const refusedEnv = sentMessages.at(-1) as { payload: { requestId: string } };
+    simulateMessage('offscreen', {
+      type: 'user-message-ack',
+      requestId: refusedEnv.payload.requestId,
+      messageId: 'msg-ack-2',
+      scoopJid: 'cone_123',
+      ok: false,
+      error: 'gelatiere has no model',
+    });
+    await expect(refused).rejects.toThrow(/gelatiere has no model/);
   });
 
   it('forwards the steer flag on a steering send and leaves it unset otherwise', () => {

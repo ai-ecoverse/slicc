@@ -2063,6 +2063,10 @@ export class Bridge implements KernelFacade {
    * route the message to the leader over WebRTC and let the leader's
    * echo populate our buffer; the local orchestrator must stay out of
    * the way.
+   *
+   * When the panel sent a `requestId`, answer with `user-message-ack`
+   * once the kernel has taken the prompt or refused it (#3505). The
+   * composer's fire-and-forget path omits `requestId` and gets no ack.
    */
   private async handleUserMessage(
     msg: Extract<PanelToOffscreenMessage, { type: 'user-message' }>
@@ -2077,10 +2081,15 @@ export class Bridge implements KernelFacade {
     if (this.followerSync) {
       // Only a steering send carries the options argument, so the ordinary
       // forward stays a three-argument call.
-      if (msg.steer) {
-        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
-      } else {
-        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+      try {
+        if (msg.steer) {
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
+        } else {
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+        }
+        this.emitUserMessageAck(msg, true);
+      } catch (err) {
+        this.emitUserMessageAck(msg, false, err);
       }
       return;
     }
@@ -2097,8 +2106,38 @@ export class Bridge implements KernelFacade {
       ...(msg.guestGate ? { guestGate: msg.guestGate } : {}),
       ...(msg.steer ? { steer: true as const } : {}),
     };
-    await this.orchestrator?.handleMessage(channelMsg);
-    await this.orchestrator?.createScoopTab(msg.scoopJid);
+    try {
+      if (!this.orchestrator) {
+        throw new Error('kernel not ready');
+      }
+      await this.orchestrator.handleMessage(channelMsg);
+      await this.orchestrator.createScoopTab(msg.scoopJid);
+      this.emitUserMessageAck(msg, true);
+    } catch (err) {
+      this.emitUserMessageAck(msg, false, err);
+      // Re-throw so the panel-message catch still logs and surfaces an error
+      // card for fire-and-forget sends that have no requestId to reject.
+      if (!msg.requestId) throw err;
+    }
+  }
+
+  /** Settle a panel-RPC waiter for a `user-message` that asked for a verdict. */
+  private emitUserMessageAck(
+    msg: Extract<PanelToOffscreenMessage, { type: 'user-message' }>,
+    ok: boolean,
+    err?: unknown
+  ): void {
+    if (!msg.requestId) return;
+    this.emit({
+      type: 'user-message-ack',
+      requestId: msg.requestId,
+      messageId: msg.messageId,
+      scoopJid: msg.scoopJid,
+      ok,
+      ...(ok
+        ? {}
+        : { error: err instanceof Error ? err.message : err != null ? String(err) : undefined }),
+    });
   }
 
   /**

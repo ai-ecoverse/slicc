@@ -174,10 +174,13 @@ Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`,
 ### Follower prompt silence hint
 
 A leader at tray protocol 10 or later acks each follower prompt with
-`user_message_ack`, sent to the sending follower alone once it handed the
-prompt to its kernel (`accepted`) or could not (`rejected`, with an `error`).
-`accepted` does not mean the agent started: the handoff succeeds at once even
-while the kernel is busy or starved. The leader
+`user_message_ack`, sent to the sending follower alone once its kernel took
+the prompt (`accepted`) or could not (`rejected`, with an `error`).
+`accepted` means the kernel accepted the handoff — `deliverFollowerMessage`
+awaits `workUnits.send()`, and `LocalWorkUnitClient.send` resolves only after
+the panel-RPC `user-message-ack` from `orchestrator.handleMessage()` — not
+merely after posting to the worker. It still does not mean the agent started:
+a busy or starved kernel can take a prompt that then sits quiet. The leader
 side is `deliverFollowerMessage` in `ui/wc/wc-tray.ts`, which resolves the
 outcome off `workUnits.send()`, and `FollowerDispatch.ackUserMessage`
 (`scoops/tray-leader/follower-dispatch.ts`), which sends it once it settles. A
@@ -187,11 +190,13 @@ biscotto's message is acked only after review approved it and it was delivered.
 An older leader sends no ack. Its main thread still echoes the message at once,
 but whether its agent ever picks it up only shows as later status frames and
 agent events. `ui/wc/follower-prompt-watch.ts` arms on every accepted send
-(`RemoteWorkUnitClient`'s `onSend`, which names the addressed unit) and disarms
-on **any** reaction from the leader: an agent event, a biscotto review-state
-frame, or a status frame. A dropped connection also disarms it. An `accepted`
-ack does NOT disarm it; it counts like an echo. A `rejected` ack disarms it and
-posts the leader's error as a
+(`RemoteWorkUnitClient`'s `onSend`, which names the addressed unit and message
+id) and disarms on **any** reaction from the leader: an agent event, a biscotto
+review-state frame, or a status frame. A dropped connection also disarms it.
+Echoes and acks whose `messageId` is not the watched one are ignored, so two
+in-flight prompts to the same unit cannot overwrite each other's watches. An
+`accepted` ack does NOT disarm it; it counts like an echo. A `rejected` ack
+disarms it and posts the leader's error as a
 local note ("_The leader got that message but could not start it — …_") in the
 addressed unit's thread. After 30 s of total silence it posts one local note to
 the follower's thread, and the note depends on whether the leader echoed or

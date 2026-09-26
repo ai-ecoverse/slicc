@@ -61,7 +61,7 @@ describe('RemoteWorkUnitClient over a refusing channel', () => {
     const client = new RemoteWorkUnitClient({ getSync: () => sync, onSend });
 
     await client.send('cone_1', { text: 'go' });
-    expect(onSend).toHaveBeenCalledWith('cone_1');
+    expect(onSend).toHaveBeenCalledWith('cone_1', expect.any(String));
     await expect(client.send('cone_1', { text: 'again' })).rejects.toThrow(/refused/);
     expect(onSend).toHaveBeenCalledTimes(1);
   });

@@ -567,7 +567,7 @@ export async function bootFollowerFloat(
        */
       workUnits = new RemoteWorkUnitClient({
         getSync: () => follower?.currentSync ?? null,
-        onSend: (id) => promptWatch.noteSent(id),
+        onSend: (id, messageId) => promptWatch.noteSent(id, messageId),
       });
 
       // The chat surface is the SHARED one (#2382 D2b): controller, dips, queued
@@ -948,7 +948,7 @@ export async function bootFollowerFloat(
       // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
       onUserMessage: (text, _messageId, _scoopJid, attachments) =>
         controller.addUserMessage(text, attachments),
-      onOwnUserMessageEcho: (_messageId, scoopJid) => promptWatch.noteReceived(scoopJid),
+      onOwnUserMessageEcho: (messageId, scoopJid) => promptWatch.noteReceived(scoopJid, messageId),
       onUserMessageAck: (ack) => promptWatch.noteAck(ack),
       // A biscotto's messages are reviewed before they reach the cone. Without
       // this the guest's message simply never appears — it is only echoed back

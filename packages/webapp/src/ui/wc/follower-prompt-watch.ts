@@ -2,7 +2,7 @@
  * Notices a follower prompt the leader never reacts to.
  *
  * A leader at tray protocol 10 or later acks each follower prompt
- * (`user_message_ack`) once it handed the prompt to its kernel (`accepted`)
+ * (`user_message_ack`) once its kernel took the prompt (`accepted`)
  * or could not (`rejected`). An older leader
  * sends no ack: its main thread echoes the message straight back, but whether
  * its agent ever picks it up only shows as later status frames and agent
@@ -19,11 +19,12 @@
  * the leader's page got the text, so they change what the note says, not
  * whether it is posted.
  *
- * It is scoped to the addressed unit where the wire allows: a frame that names
- * ANOTHER unit does not disarm it, and the mount posts the note only while that
- * unit is on screen (otherwise it would land in the wrong thread). Agent events
- * carry no unit, so they disarm unconditionally. Every gap in the scoping errs
- * towards a missing note, never towards a wrong one.
+ * It is scoped to the addressed unit and message where the wire allows: a
+ * frame that names ANOTHER unit or message id does not disarm it, and the
+ * mount posts the note only while that unit is on screen (otherwise it would
+ * land in the wrong thread). Agent events carry no unit, so they disarm
+ * unconditionally. Every gap in the scoping errs towards a missing note,
+ * never towards a wrong one.
  */
 
 /** How long a sent prompt may go without any reaction before the hint. */
@@ -63,6 +64,7 @@ export function promptSilenceNote(received: boolean, sidePanel: boolean): string
 
 /** The fields of a `user_message_ack` the watch acts on. */
 export interface FollowerPromptAck {
+  messageId: string;
   scoopJid: string;
   state: 'accepted' | 'rejected';
   error?: string;
@@ -85,15 +87,21 @@ export interface FollowerPromptWatchDeps {
 export class FollowerPromptWatch {
   #timer: ReturnType<typeof setTimeout> | null = null;
   #unitId: string | null = null;
+  #messageId: string | null = null;
   #received = false;
   #detachAgentEvents: (() => void) | null = null;
 
   constructor(private readonly deps: FollowerPromptWatchDeps) {}
 
-  /** A prompt for `unitId` left this follower: expect the leader to react. */
-  noteSent(unitId: string): void {
+  /**
+   * A prompt for `unitId` left this follower: expect the leader to react.
+   * `messageId` correlates later echoes and acks so a late reaction for an
+   * older prompt cannot disarm or mark-received the one now watched (#3505).
+   */
+  noteSent(unitId: string, messageId: string): void {
     this.#clear();
     this.#unitId = unitId;
+    this.#messageId = messageId;
     this.#timer = setTimeout(() => {
       this.#timer = null;
       this.deps.onSilence(unitId, this.#received);
@@ -102,25 +110,27 @@ export class FollowerPromptWatch {
 
   /**
    * The leader echoed this follower's own prompt: its page has it. Keeps the
-   * watch armed; an echo for another unit is not about this prompt.
+   * watch armed; an echo for another unit or message is not about this prompt.
    */
-  noteReceived(unitId?: string | null): void {
+  noteReceived(unitId?: string | null, messageId?: string | null): void {
     if (!this.#timer) return;
     if (unitId && this.#unitId && unitId !== this.#unitId) return;
+    if (messageId && this.#messageId && messageId !== this.#messageId) return;
     this.#received = true;
   }
 
   /**
    * The leader acked one of this follower's prompts. `accepted` only means the
-   * leader handed the prompt to its kernel, which it does at once even while
-   * the kernel is busy or starved, so it counts like an echo and keeps the
-   * watch armed. `rejected` disarms, and is reported so the mount can say why
-   * the prompt went nowhere.
+   * leader's kernel took the prompt, which it may do while still busy or
+   * starved, so it counts like an echo and keeps the watch armed. `rejected`
+   * disarms, and is reported so the mount can say why the prompt went nowhere.
+   * An ack for another message id is ignored.
    */
   noteAck(ack: FollowerPromptAck): void {
+    if (this.#messageId && ack.messageId !== this.#messageId) return;
     const named = ack.scoopJid.length > 0 ? ack.scoopJid : null;
     if (ack.state === 'accepted') {
-      this.noteReceived(named);
+      this.noteReceived(named, ack.messageId);
       return;
     }
     const unitId = named ?? this.#unitId;
@@ -157,6 +167,7 @@ export class FollowerPromptWatch {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     this.#unitId = null;
+    this.#messageId = null;
     this.#received = false;
   }
 }

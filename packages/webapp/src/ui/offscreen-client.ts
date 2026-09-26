@@ -41,6 +41,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
+  UserMessageAckMsg,
 } from '../kernel/messages.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
@@ -259,6 +260,14 @@ export class OffscreenClient implements KernelClientFacade {
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
   private pendingModelAcks = new Map<string, (applied: boolean) => void>();
   /**
+   * Pending `user-message` sends awaiting the kernel's verdict (#3505).
+   * Keyed by `requestId`; settled when a `user-message-ack` envelope arrives.
+   */
+  private pendingUserMessageAcks = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+  /**
    * Pending `request-scoop-transcript` requests awaiting the bridge's
    * reply. Keyed by `requestId`; resolved with the transcript string
    * (or `''` on timeout) when a `scoop-transcript` envelope arrives.
@@ -418,6 +427,38 @@ export class OffscreenClient implements KernelClientFacade {
         }
       },
     };
+  }
+
+  /**
+   * Deliver a prompt to a named unit and resolve only after the kernel's
+   * verdict (#3505). Unlike {@link createAgentHandle}'s fire-and-forget
+   * send, this carries a `requestId` so a refusal from
+   * `orchestrator.handleMessage()` rejects instead of silently leaving
+   * the leader to ack `accepted` too early.
+   */
+  sendUserMessage(input: {
+    scoopJid: string;
+    text: string;
+    messageId: string;
+    attachments?: readonly MessageAttachment[];
+    steer?: boolean;
+    guestGate?: import('../sudo/types.js').TurnGuestGate;
+  }): Promise<void> {
+    const requestId = `um-${uid()}`;
+    const ack = new Promise<void>((resolve, reject) => {
+      this.pendingUserMessageAcks.set(requestId, { resolve, reject });
+    });
+    this.send({
+      type: 'user-message',
+      requestId,
+      scoopJid: input.scoopJid,
+      text: input.text,
+      messageId: input.messageId,
+      ...(input.attachments ? { attachments: [...input.attachments] } : {}),
+      ...(input.steer ? { steer: true as const } : {}),
+      ...(input.guestGate ? { guestGate: input.guestGate } : {}),
+    });
+    return ack.finally(() => this.pendingUserMessageAcks.delete(requestId));
   }
 
   // -------------------------------------------------------------------------
@@ -1005,6 +1046,10 @@ export class OffscreenClient implements KernelClientFacade {
         this.handleThinkingLevelAck(msg);
         break;
 
+      case 'user-message-ack':
+        this.handleUserMessageAck(msg);
+        break;
+
       case 'scoop-created':
         this.handleScoopCreated(msg as ScoopCreatedMsg);
         break;
@@ -1585,6 +1630,13 @@ export class OffscreenClient implements KernelClientFacade {
       }
     }
     this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);
+  }
+
+  private handleUserMessageAck(msg: UserMessageAckMsg): void {
+    const pending = this.pendingUserMessageAcks.get(msg.requestId);
+    if (!pending) return;
+    if (msg.ok) pending.resolve();
+    else pending.reject(new Error(msg.error?.trim() || 'the kernel refused the message'));
   }
 
   private handleScoopList(msg: ScoopListMsg): void {

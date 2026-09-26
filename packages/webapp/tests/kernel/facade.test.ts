@@ -592,4 +592,75 @@ describe('Kernel facade parity', () => {
     // The local orchestrator must NOT have seen the message in follower mode.
     expect(orchestrator.handleMessage).not.toHaveBeenCalled();
   });
+
+  it('answers a user-message requestId with ok once the kernel takes the prompt', async () => {
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            requestId: 'um-1',
+            scoopJid: 'cone_1',
+            text: 'hi',
+            messageId: 'msg-1',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(orchestrator.handleMessage).toHaveBeenCalled();
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: {
+          type: 'user-message-ack',
+          requestId: 'um-1',
+          messageId: 'msg-1',
+          scoopJid: 'cone_1',
+          ok: true,
+        },
+      })
+    );
+  });
+
+  it('answers a user-message requestId with the kernel error when handleMessage refuses', async () => {
+    orchestrator.handleMessage.mockRejectedValueOnce(new Error('gelatiere has no model'));
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            requestId: 'um-2',
+            scoopJid: 'cone_1',
+            text: 'hi',
+            messageId: 'msg-2',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: {
+          type: 'user-message-ack',
+          requestId: 'um-2',
+          messageId: 'msg-2',
+          scoopJid: 'cone_1',
+          ok: false,
+          error: 'gelatiere has no model',
+        },
+      })
+    );
+  });
 });
