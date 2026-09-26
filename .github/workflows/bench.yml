@@ -96,6 +96,10 @@ on:
       fresh-leader-every:
         description: 'Restart a leader every N tasks with a wiped profile (1: every task is isolated; 0: never)'
         default: '1'
+      pin-webapp:
+        description: 'Serve the pinned sliccy package webapp for the whole run. Off (default) loads production sliccy.ai, which can change when a release ships mid-run'
+        type: boolean
+        default: false
       publish:
         description: 'Publish the results to the Hugging Face dataset ai-ecoverse/slicc-bench'
         type: boolean
@@ -138,8 +142,8 @@ jobs:
         with:
           node-version: '24'
 
-      # Every shard and every leader restart runs the same sliccy, even if one is published
-      # mid-run: the records are comparable only within one harness version.
+      # Every shard and every leader restart runs the same sliccy node-server, even if one
+      # is published mid-run. The webapp still comes from production unless pin-webapp is on.
       - name: Pin the sliccy version and list the shards
         id: plan
         run: |
@@ -282,6 +286,7 @@ jobs:
           BEDROCK_REGION: ${{ vars.RUM_AWS_REGION || 'us-west-2' }}
           BENCH_LEADER_SCRIPTS: packages/github-workflow/scripts
           INPUT_SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
+          INPUT_PIN_WEBAPP: ${{ github.event_name == 'workflow_dispatch' && inputs.pin-webapp && 'true' || 'false' }}
           INPUT_DURATION: 350m
           INPUT_MOUNTS: ${{ steps.mounts.outputs.mounts }}
           INPUT_PROVIDER: bedrock-camp

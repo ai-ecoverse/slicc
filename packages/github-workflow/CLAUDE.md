@@ -20,6 +20,7 @@ Two surfaces:
 | `scripts/lib.mjs`                      | Pure helpers: duration/port/mount parsing, cone-config + `secrets.env` validation, join-file parsing, command builders  |
 | `scripts/gh-io.mjs`                    | Runner I/O: `INPUT_*` reads, `$GITHUB_OUTPUT`/`$GITHUB_ENV`/`$GITHUB_PATH`, masks, state file, liveness, `execOnLeader` |
 | `scripts/start-leader.mjs`             | Install `sliccy`, write credential files, spawn `node-server --hosted`, poll the join file, record state                |
+| `scripts/serve-webapp.mjs`             | Opt-in loopback server for that package's `dist/ui` (`pin-webapp`). Default leaders still load production sliccy.ai     |
 | `scripts/wait-for-deadline.mjs`        | Hold the job until the deadline; fail fast when a watched pid dies                                                      |
 | `scripts/stop-leader.mjs`              | Followers → node-server → leftover Chrome; always exits 0; prints log tails                                             |
 | `scripts/install-cli.mjs`              | Token-authenticated release scan for `slicc-<os>-<arch>`; exports `SLICC_CLI`                                           |
@@ -58,6 +59,7 @@ The live gate is `.github/workflows/github-workflow-smoke.yml`: it boots a real 
 - **Byte-exact file transfer is base64 both ways.** The exec channel carries stdin as bytes but streams stdout as text.
 - **Dial failures retry, executions never do.** The CLI reports a failed WebRTC dial (`tray connect timed out`) before anything reaches the leader, so `execOnLeader` and `slicc-run` retry those up to three times; any other non-zero status is final, because the command may have run.
 - **Hard-coded paths belong to node-server.** `/slicc/cone-config.json` and `/tmp/slicc-join.json` are read/written by `packages/node-server/src/hosted-bootstrap.ts` and `packages/node-server/src/cloud-status.ts`; `CHROME_USER_DATA_DIR` and `SLICC_SECRETS_FILE` are env-configurable and point under `$RUNNER_TEMP/slicc-gw`.
+- **`pin-webapp` is off by default.** node-server serves no UI, so a hosted leader loads `https://www.sliccy.ai` unless this is set. When it is, `serve-webapp.mjs` serves `dist/ui` from the installed `sliccy` package on `localhost:<bridge port + 1000>`, Chrome's `WORKER_BASE_URL` points there, and `SLICC_TRAY_WORKER_BASE_URL` stays on the tray hub (production, unless `tray-worker-base-url` is set). The page origin is added to `BRIDGE_DEV_ALLOWED_ORIGINS` so the loopback bridge accepts it. `ui-origin` cannot be set at the same time. Stop kills the static server pid stored as `uiServer`.
 
 ## Related
 

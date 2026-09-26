@@ -7,7 +7,7 @@ Two ways in:
 - **Reusable workflows** — one `uses:` line, no checkout of this repo needed.
 - **Composite actions** — building blocks for your own job.
 
-Both need network egress to `www.sliccy.ai` (UI + tray hub), npm (node-server), and GitHub releases (the CLI).
+Both need network egress to `www.sliccy.ai` (UI + tray hub), npm (node-server), and GitHub releases (the CLI). `pin-webapp: true` serves the installed package's webapp on the runner instead, and still uses `www.sliccy.ai` as the tray hub.
 
 ## Reusable workflows
 
@@ -47,7 +47,8 @@ What it does, in order: check out your repo (`checkout: true`), boot the leader,
 | `fetch-file`                     | `''`            | VFS path published as the `<artifact-prefix>-file` artifact                                               |
 | `export-session`                 | `false`         | Publish the redacted transcript bundle as `<artifact-prefix>-session`                                     |
 | `expose-follower`                | `false`         | Run `slicc … follow <follower-runner>` on this runner (default runner `bash -c`)                          |
-| `slicc-version`                  | `latest`        | npm version of `sliccy` (node-server)                                                                     |
+| `slicc-version`                  | `latest`        | npm version of `sliccy` (node-server, and the webapp when `pin-webapp` is on)                             |
+| `pin-webapp`                     | `false`         | Serve that package's `dist/ui` locally so production deploys cannot change the agent mid-run              |
 | `cli-version`                    | `latest`        | Release tag of the Go CLI                                                                                 |
 | `slicc-ref`                      | `main`          | Ref of this repo the actions are taken from                                                               |
 | `runs-on`                        | `ubuntu-latest` | Runner label                                                                                              |

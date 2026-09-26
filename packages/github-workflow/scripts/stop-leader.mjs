@@ -60,6 +60,14 @@ export async function main(options = {}) {
       console.log(`[stop-leader] node-server pid=${state.leader} already exited`);
     }
   }
+  if (typeof state.uiServer === 'number') {
+    if (isAlive(state.uiServer)) {
+      console.log(`[stop-leader] stopping pinned webapp pid=${state.uiServer}`);
+      await terminate(state.uiServer, Math.min(grace, 5_000));
+    } else {
+      console.log(`[stop-leader] pinned webapp pid=${state.uiServer} already exited`);
+    }
+  }
   removeCredentialFiles(state.secretsFile);
   console.log('[stop-leader] credential files removed');
   for (const pid of chromePidsForProfile(state.profileDir, options.exec)) {

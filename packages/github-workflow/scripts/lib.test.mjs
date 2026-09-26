@@ -20,8 +20,10 @@ import {
   parsePort,
   parseSecretsEnv,
   pickCliRelease,
+  pinnedUiPort,
   posixDirname,
   requireVfsPath,
+  resolvePinnedWebapp,
   serializeSecretsEnv,
   shellQuote,
   tailLines,
@@ -142,6 +144,60 @@ describe('leader argv and env', () => {
     expect(env.WORKER_BASE_URL).toBe('http://localhost:8787');
     expect(env.SLICC_TRAY_WORKER_BASE_URL).toBe('https://staging.example');
     expect(env.SLICC_CDP_LAUNCH_TIMEOUT_MS).toBe('90000');
+    expect(env.BRIDGE_DEV_ALLOWED_ORIGINS).toBeUndefined();
+  });
+  it('names the pinned UI origin on the bridge allowlist', () => {
+    const env = buildLeaderEnv({
+      base: { BRIDGE_DEV_ALLOWED_ORIGINS: 'http://localhost:1' },
+      port: 5710,
+      secretsFile: '/s',
+      profileDir: '/p',
+      uiOrigin: 'http://localhost:6710',
+      trayWorkerBaseUrl: 'https://www.sliccy.ai',
+      bridgeDevAllowedOrigins: 'http://localhost:6710',
+    });
+    expect(env.BRIDGE_DEV_ALLOWED_ORIGINS).toBe('http://localhost:6710');
+    expect(env.WORKER_BASE_URL).toBe('http://localhost:6710');
+  });
+});
+
+describe('pinned webapp', () => {
+  it('stays off unless asked, and then serves the package UI beside node-server', () => {
+    expect(
+      resolvePinnedWebapp({ pin: false, entry: '/pkg/dist/node-server/index.js', bridgePort: 5710 })
+    ).toBeNull();
+    expect(
+      resolvePinnedWebapp({
+        pin: true,
+        entry: '/pkg/dist/node-server/index.js',
+        bridgePort: 5711,
+        trayWorkerBaseUrl: 'https://staging.example/',
+      })
+    ).toEqual({
+      root: '/pkg/dist/ui',
+      uiPort: 6711,
+      uiOrigin: 'http://localhost:6711',
+      trayWorkerBaseUrl: 'https://staging.example',
+      bridgeDevAllowedOrigins: 'http://localhost:6711',
+    });
+    expect(
+      resolvePinnedWebapp({
+        pin: true,
+        entry: '/pkg/dist/node-server/index.js',
+        bridgePort: 5710,
+      }).trayWorkerBaseUrl
+    ).toBe('https://www.sliccy.ai');
+  });
+  it('rejects a second UI origin and a port that would not fit', () => {
+    expect(() =>
+      resolvePinnedWebapp({
+        pin: true,
+        entry: '/pkg/dist/node-server/index.js',
+        bridgePort: 5710,
+        uiOrigin: 'http://localhost:8787',
+      })
+    ).toThrow(/ui-origin/);
+    expect(() => pinnedUiPort(65000)).toThrow(/not a usable TCP port/);
   });
 });
 

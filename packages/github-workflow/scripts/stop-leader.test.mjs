@@ -63,6 +63,16 @@ describe('stop-leader', () => {
     expect(console.log).toHaveBeenCalledWith('::group::follower 1 log (tail)');
   });
 
+  it('stops the pinned webapp recorded beside the leader', async () => {
+    const ui = idle();
+    children.push(ui);
+    await sleep(50);
+    writeState({ leader: 999999, followers: [], uiServer: ui.pid }, t.home);
+    await main({ graceMs: 2000, exec: () => '' });
+    expect(isAlive(ui.pid)).toBe(false);
+    expect(console.log).toHaveBeenCalledWith(`[stop-leader] stopping pinned webapp pid=${ui.pid}`);
+  });
+
   it('reports an already-exited leader', async () => {
     writeState({ leader: 999999, followers: [] }, t.home);
     await main({ exec: () => '' });
