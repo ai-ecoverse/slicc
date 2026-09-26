@@ -542,6 +542,27 @@ func TestCLIPromptIgnoresOtherScoopReady(t *testing.T) {
 	}
 }
 
+// TestCLIPromptStartupReadyDoesNotFinish: a 6.196.0 leader flips the cone
+// processing → ready within a few milliseconds of accepting the prompt, before
+// any agent event, and only then starts the turn. That ready must not settle.
+func TestCLIPromptStartupReadyDoesNotFinish(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		statusFrame("ready"),
+		900 * time.Millisecond,
+		agentFrame(protocol.AgentContentDelta, "m1", "AFTER-BLIP-OK"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-BLIP-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply after the startup ready", stdout)
+	}
+}
+
 // TestCLIPromptNamedReadyBeforeAckDoesNotFinish: a 6.196.0 leader emits
 // per-unit status as soon as the prompt is queued and only afterwards acks,
 // often with the unit filled in. A `ready` in that gap used to start the

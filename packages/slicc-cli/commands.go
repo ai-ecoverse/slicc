@@ -62,8 +62,15 @@ func promptSettleWindow() time.Duration {
 type promptTurn struct {
 	mu            sync.Mutex
 	sawProcessing bool
-	pendingTools  int
-	readyAt       time.Time // non-zero while a processing→ready flip is the candidate end
+	// seenAgent is set by an agent event for this prompt. A 6.196.0 leader
+	// broadcasts processing → ready in a few milliseconds when the prompt is
+	// accepted, before the turn emits anything, and only later goes processing
+	// again. On a busy bench that second processing arrives after the 2s
+	// settle window, so the startup ready exited 0. A ready before any agent
+	// event is that blip.
+	seenAgent    bool
+	pendingTools int
+	readyAt      time.Time // non-zero while a processing→ready flip is the candidate end
 	// scoopJid is the unit this prompt was delivered to. Empty until an echo,
 	// an ack, or a one-cone roster names it.
 	//
@@ -130,6 +137,7 @@ func (p *promptTurn) forScoop(jid string) bool {
 // activity records resumed work: any candidate end is withdrawn.
 func (p *promptTurn) activity() {
 	p.mu.Lock()
+	p.seenAgent = true
 	p.sawProcessing = true
 	p.readyAt = time.Time{}
 	p.mu.Unlock()
@@ -137,6 +145,7 @@ func (p *promptTurn) activity() {
 
 func (p *promptTurn) toolStart() {
 	p.mu.Lock()
+	p.seenAgent = true
 	p.pendingTools++
 	p.readyAt = time.Time{}
 	p.mu.Unlock()
@@ -187,7 +196,7 @@ func (p *promptTurn) status(scoopStatus, scoopJid string, now time.Time) bool {
 		p.readyAt = time.Time{}
 		return false
 	}
-	if !p.sawProcessing {
+	if !p.sawProcessing || !p.seenAgent {
 		return false
 	}
 	p.readyAt = now

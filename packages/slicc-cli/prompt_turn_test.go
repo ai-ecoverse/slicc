@@ -21,6 +21,7 @@ func TestPromptTurnIgnoresNamedReadyBeforeTheUnitIsKnown(t *testing.T) {
 	if ok, _ := p.settled(now.Add(3*time.Second), time.Second); ok {
 		t.Fatal("bind adopted the other unit's ready")
 	}
+	p.activity()
 	if !p.status("ready", "cone-1", now.Add(4*time.Second)) {
 		t.Fatal("the bound unit's ready did not become a candidate")
 	}
@@ -29,12 +30,33 @@ func TestPromptTurnIgnoresNamedReadyBeforeTheUnitIsKnown(t *testing.T) {
 	}
 }
 
+func TestPromptTurnStartupReadyBeforeAnyAgentEventDoesNotSettle(t *testing.T) {
+	p := &promptTurn{}
+	now := time.Now()
+	p.bindScoop("cone-1")
+	p.status("processing", "cone-1", now)
+	if p.status("ready", "cone-1", now.Add(10*time.Millisecond)) {
+		t.Fatal("ready before any agent event armed a candidate")
+	}
+	if ok, _ := p.settled(now.Add(3*time.Second), time.Second); ok {
+		t.Fatal("startup ready settled")
+	}
+	p.activity()
+	if !p.status("ready", "cone-1", now.Add(4*time.Second)) {
+		t.Fatal("ready after agent output did not arm")
+	}
+	if ok, _ := p.settled(now.Add(6*time.Second), time.Second); !ok {
+		t.Fatal("ready after agent output did not settle")
+	}
+}
+
 func TestPromptTurnLegacyUnnamedStatusStillSettles(t *testing.T) {
 	p := &promptTurn{}
 	now := time.Now()
 	p.status("processing", "", now)
+	p.activity()
 	if !p.status("ready", "", now) {
-		t.Fatal("unnamed ready on a leader that names no units should arm")
+		t.Fatal("unnamed ready after agent output should arm")
 	}
 	if ok, _ := p.settled(now.Add(2*time.Second), time.Second); !ok {
 		t.Fatal("legacy ready did not settle")
@@ -53,6 +75,7 @@ func TestPromptTurnRosterGuessYieldsToTheAck(t *testing.T) {
 	if ok, _ := p.settled(now.Add(3*time.Second), time.Second); ok {
 		t.Fatal("the cone guess's clock survived the ack")
 	}
+	p.activity()
 	if !p.status("ready", "scoop-9", now.Add(4*time.Second)) {
 		t.Fatal("the acked unit's ready did not arm")
 	}
