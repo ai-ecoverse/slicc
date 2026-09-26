@@ -26,7 +26,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       QUEUE_MINUTES: '60'
-      RUNNING_HOURS: '25'
+      RUNNING_HOURS: '9'
       REQUEUES: '2'
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
     steps:

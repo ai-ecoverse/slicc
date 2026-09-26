@@ -46,7 +46,7 @@ on:
         description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
         default: ''
       deadline-minutes:
-        description: 'Minutes a shard takes new runs for (its job limit is this plus 45)'
+        description: 'Minutes a shard takes new runs for, at most 420 (its job limit is this plus 45; runner VMs live 8 h)'
         default: '300'
       max-task-cost:
         description: 'Dollars one run may spend before it is stopped (0: no cap)'
@@ -107,8 +107,10 @@ jobs:
           if [ -n "$RESUME_RUN" ] && ! [[ "$RESUME_RUN" =~ ^[0-9]+$ ]]; then
             echo "::error::resume-run must be a run id, not '$RESUME_RUN'"; exit 1
           fi
-          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 1380 ]; then
-            echo "::error::deadline-minutes must be 10 to 1380, not '$DEADLINE'"; exit 1
+
+
+          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 420 ]; then
+            echo "::error::deadline-minutes must be 10 to 420, not '$DEADLINE'"; exit 1
           fi
 
 
@@ -125,7 +127,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-ubuntu-24-04-4core' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-bench-8core' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     strategy:
       fail-fast: false
@@ -286,7 +288,7 @@ jobs:
     name: Report
     needs: [plan, bench]
     if: ${{ always() && needs.plan.result == 'success' }}
-    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       BENCH_SETS: ${{ github.event_name == 'workflow_dispatch' && inputs.sets || 'packages/bench/tasks/smoke.json' }}

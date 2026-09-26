@@ -75,6 +75,12 @@ describe('reportHtml', () => {
     const html = reportHtml(RECORDS, { title: 'T', generated: 'now' });
     expect(html).toMatch(/^<!doctype html>/);
     expect(html).toContain('<h2>B <small>6 runs, 2 tasks</small></h2>');
+    expect(html).toContain('<p class="muted">SLICC version: not recorded.</p>');
+    const mixed = reportHtml([
+      record('m', 's', 't', { leader: { slicc_version: '1.0.0' } }),
+      record('m', 's', 'u', { leader: { slicc_version: '1.0.1' } }),
+    ]);
+    expect(mixed).toContain('SLICC versions: 1.0.0 (1), 1.0.1 (1). <strong>Mixed:</strong>');
     expect(html.match(/<article class="card">/g)).toHaveLength(4);
     expect(html).toContain('Skills lift <small>relative to none; paired by task');
     const order = [
