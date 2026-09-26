@@ -219,8 +219,11 @@ export function addUsage(a, b) {
 export const JUDGE_ATTEMPTS = 3;
 
 /**
- * The request with a repair turn: the judge's rejected tool call, answered as an error that names
- * each problem, so the next call corrects it rather than being sampled afresh.
+ * The request with a repair turn: the judge's rejected tool call, answered with a result that
+ * names each problem, so the next call corrects it rather than being sampled afresh. The result
+ * carries no `status: 'error'`: Bedrock documents that field for Claude and Nova models only, and
+ * the judge model is configurable. (The default OpenAI judge accepted it in a live probe on
+ * 2026-09-26, and corrected its finding either way.)
  */
 export function repairBody(body, rejected, errors) {
   const toolUseId = rejected.toolUseId ?? 'judgement';
@@ -238,7 +241,6 @@ export function repairBody(body, rejected, errors) {
           {
             toolResult: {
               toolUseId,
-              status: 'error',
               content: [
                 {
                   text: [

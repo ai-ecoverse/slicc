@@ -509,7 +509,9 @@ describe('judgeRun', () => {
       content: [{ toolUse: { toolUseId: 'tu-1', name: 'report_findings', input: noReason } }],
     });
     const result = second.messages[2].content[0].toolResult;
-    expect(result).toMatchObject({ toolUseId: 'tu-1', status: 'error' });
+    expect(result.toolUseId).toBe('tu-1');
+    // No `status`: Bedrock supports it for Claude and Nova only, and the judge is configurable.
+    expect(result).not.toHaveProperty('status');
     expect(result.content[0].text).toContain(
       'The judgement was rejected: finding A2_y is not_assessable without a reason.'
     );
