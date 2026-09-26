@@ -3023,22 +3023,32 @@ export class VirtualFS {
           path: string;
           entryType: 'symlink';
         }> = [];
-        for (const link of prepared) {
-          await this.createSymlinkUnlocked(link.target, link.normalizedLinkPath);
-          this.markSidecarDirty(link.normalizedLinkPath);
-          notifications.push({
-            type: 'create',
-            path: link.normalizedLinkPath,
-            entryType: 'symlink',
-          });
+        try {
+          for (const link of prepared) {
+            await this.createSymlinkUnlocked(link.target, link.normalizedLinkPath);
+            this.markSidecarDirty(link.normalizedLinkPath);
+            notifications.push({
+              type: 'create',
+              path: link.normalizedLinkPath,
+              entryType: 'symlink',
+            });
+          }
+          // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
+          // survives a realm reload that happens BEFORE flush()/dispose() — the
+          // git clone/checkout path never flushes. Serializing here (never a
+          // concurrent sidecar write) keeps a full clone cheap. No-op on the
+          // memory backend. See "Root cause: git symlink/binary corruption".
+          await this.writeOpfsMetadataSidecarUnlocked();
+          this.watcher?.notify(notifications);
+        } catch (err) {
+          // Persist / notify the successful prefix before rethrowing so a later
+          // EEXIST (etc.) does not leave earlier links only in the live index.
+          if (notifications.length > 0) {
+            await this.writeOpfsMetadataSidecarUnlocked();
+            this.watcher?.notify(notifications);
+          }
+          throw err;
         }
-        // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
-        // survives a realm reload that happens BEFORE flush()/dispose() — the
-        // git clone/checkout path never flushes. Serializing here (never a
-        // concurrent sidecar write) keeps a full clone cheap. No-op on the
-        // memory backend. See "Root cause: git symlink/binary corruption".
-        await this.writeOpfsMetadataSidecarUnlocked();
-        this.watcher?.notify(notifications);
       })
     );
   }

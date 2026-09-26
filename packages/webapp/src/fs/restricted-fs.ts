@@ -892,14 +892,43 @@ export class RestrictedFS {
   /**
    * Gate each link path then apply the batch on the underlying VFS (one
    * sidecar write). Same ACL surface as repeated {@link symlink}.
+   *
+   * Rejects batches where one link path is under another link path in the
+   * same batch: pre-batch `checkParentRealpathEscape` would not see the
+   * ancestor symlink yet, so a later member could land outside the sandbox
+   * (e.g. `/shared/pivot → /etc/sudoers.d` then `/shared/pivot/policy`).
    */
   async symlinkBatch(links: ReadonlyArray<{ target: string; path: string }>): Promise<void> {
-    for (const link of links) {
+    if (links.length === 0) return;
+    const normalized = links.map((link) => ({
+      target: link.target,
+      path: normalizePath(link.path),
+    }));
+    this.rejectNestedSymlinkBatchPaths(normalized.map((link) => link.path));
+    for (const link of normalized) {
       this.refuseDescriptorTreeOp(link.path);
       this.checkWrite(link.path);
       await this.checkParentRealpathEscape(link.path);
     }
-    return this.vfs.symlinkBatch(links);
+    return this.vfs.symlinkBatch(normalized);
+  }
+
+  /**
+   * Refuse a batch that nests one link path under another. After the
+   * ancestor is created as a symlink, the descendant would resolve through
+   * it — past the pre-batch parent realpath gate.
+   */
+  private rejectNestedSymlinkBatchPaths(paths: readonly string[]): void {
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = 0; j < paths.length; j++) {
+        if (i === j) continue;
+        const ancestor = paths[j]!;
+        const descendant = paths[i]!;
+        if (descendant === ancestor || descendant.startsWith(`${ancestor}/`)) {
+          throw new FsError('EACCES', 'permission denied', descendant);
+        }
+      }
+    }
   }
 
   async readlink(path: string): Promise<string> {

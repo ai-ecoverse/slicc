@@ -124,4 +124,41 @@ describe('VirtualFS.symlinkBatch', () => {
       await fs.dispose();
     }
   });
+
+  it('persists successful prefix when a later member fails', async () => {
+    const root = createMutableDirectoryHandle({});
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => root.handle } });
+    const dbName = 'symlink-batch-partial-fail';
+    const fs = await VirtualFS.create({ dbName, backend: 'opfs', wipe: true });
+    const directory = await root.handle.getDirectoryHandle(dbName);
+    const readSidecar = async () => {
+      const file = await (await directory.getFileHandle('.metadata.json')).getFile();
+      return JSON.parse(await file.text()) as { entries: Record<string, unknown> };
+    };
+    try {
+      await fs.writeFile('/t0', 'a');
+      await fs.writeFile('/t1', 'b');
+      await fs.writeFile('/taken', 'exists');
+      const flushSpy = vi.spyOn(
+        fs as unknown as { writeOpfsMetadataSidecarUnlocked(): Promise<void> },
+        'writeOpfsMetadataSidecarUnlocked'
+      );
+      await expect(
+        fs.symlinkBatch([
+          { target: '/t0', path: '/ok0' },
+          { target: '/t1', path: '/ok1' },
+          { target: '/t0', path: '/taken' },
+        ])
+      ).rejects.toMatchObject({ code: 'EEXIST' });
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      expect(await fs.readlink('/ok0')).toBe('/t0');
+      expect(await fs.readlink('/ok1')).toBe('/t1');
+      expect((await fs.lstat('/taken')).type).toBe('file');
+      const entries = (await readSidecar()).entries;
+      expect(entries['/ok0']).toBeDefined();
+      expect(entries['/ok1']).toBeDefined();
+    } finally {
+      await fs.dispose();
+    }
+  });
 });
