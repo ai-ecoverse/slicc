@@ -1060,10 +1060,10 @@ describe('cost cap', () => {
 });
 
 describe('a prompt that returns while the agent still works', () => {
-  const costOf = (total, tokens = 1) =>
+  const costOf = (total, tokens = 1, turns = 1) =>
     ok(
       JSON.stringify({
-        scoops: [{ type: 'cone', turns: 1, usage: { totalTokens: tokens, cost: { total } } }],
+        scoops: [{ type: 'cone', turns, usage: { totalTokens: tokens, cost: { total } } }],
       })
     );
   const noSleep = async () => {};
@@ -1087,6 +1087,14 @@ describe('a prompt that returns while the agent still works', () => {
       await stillWorking(leader, { status: 0, stdout: '', aborted: true }, { sleep: noSleep })
     ).toBe(false);
     expect(calls.length).toBe(before);
+    // A model without token or cost accounting still adds turns.
+    const turnsOnly = [costOf(0, 0, 3), costOf(0, 0, 4)];
+    const quietModel = fakeLeader({
+      commands: [[/^cost --json --all$/, () => turnsOnly.shift() ?? costOf(0, 0, 4)]],
+    });
+    expect(await stillWorking(quietModel.leader, quiet, { sleep: noSleep })).toBe(true);
+    const idle = fakeLeader({ commands: [[/^cost --json --all$/, () => costOf(0, 0, 4)]] });
+    expect(await stillWorking(idle.leader, quiet, { sleep: noSleep })).toBe(false);
     // A failed reading proves nothing either way.
     expect(await stillWorking(leader, quiet, { sleep: noSleep })).toBe(false);
   });

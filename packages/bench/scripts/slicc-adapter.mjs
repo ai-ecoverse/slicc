@@ -621,7 +621,7 @@ export const BUSY_PROBE_MS = 20_000;
  * (2026-09-26) `prompt` exited 0 after about 5 s with no answer in 32 of 80 runs while the cone
  * kept working in the same turn; collecting then closed its tabs mid-task and the judge scored
  * an empty or half-done run. Only that signature is probed (exit 0 with no answer): its spend is
- * read twice, `probeMs` apart, and still rising means still working.
+ * read twice, `probeMs` apart, and any growth (cost, tokens or turns) means still working.
  */
 export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sleep }) {
   if (reply.status !== 0 || reply.timedOut || reply.aborted) return false;
@@ -630,7 +630,10 @@ export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sle
   await sleep(probeMs);
   const second = await spend(leader);
   if (!first || !second) return false;
-  return second.cost > first.cost + 1e-9 || second.tokens > first.tokens;
+  // Turns count too: a model without token or cost accounting still adds assistant turns.
+  return (
+    second.cost > first.cost + 1e-9 || second.tokens > first.tokens || second.turns > first.turns
+  );
 }
 
 /**
