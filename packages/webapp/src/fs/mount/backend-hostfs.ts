@@ -707,19 +707,100 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   /**
-   * Drop cached bodies (and optionally re-fetch them). Listings stay live
-   * POSTs — there is nothing to reconcile there.
+   * Re-walk the live host tree and reconcile the body cache.
+   *
+   * Listings are always live POSTs (no listing cache), so every file the
+   * walk sees counts as checked: matching / missing body-cache entries are
+   * `unchanged`, and an etag mismatch is `changed` (body dropped). With
+   * `opts.bodies`, each changed path is re-fetched so the body cache is
+   * warm again. Unlike the previous wipe-and-report-zeros stub, a successful
+   * refresh of a populated idle tree reports a non-zero `unchanged` count
+   * (#3435).
    */
   async refresh(opts?: { bodies?: boolean }): Promise<RefreshReport> {
     this.assertOpen(this.targetPath);
-    await this.invalidateCachePrefixes([]);
-    return {
+    const report: RefreshReport = {
       added: [],
       removed: [],
-      changed: opts?.bodies ? ['*'] : [],
+      changed: [],
       unchanged: 0,
       errors: [],
     };
+    const stack: string[] = [''];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      try {
+        await this.refreshDir(dir, report, stack);
+      } catch (err) {
+        report.errors.push({
+          path: dir || '/',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (opts?.bodies) await this.refreshBodies(report);
+    return report;
+  }
+
+  /**
+   * Strong ETag the bridge derives from `stat` (`"<size>-<mtime>-<ino>"` in
+   * hex). Listing rows carry the same fields, so refresh can classify without
+   * a per-file `stat`/`read`.
+   */
+  private etagFromListing(entry: MountDirEntry): string | undefined {
+    if (
+      typeof entry.size !== 'number' ||
+      typeof entry.lastModified !== 'number' ||
+      typeof entry.ino !== 'number'
+    ) {
+      return undefined;
+    }
+    return `"${entry.size.toString(16)}-${entry.lastModified.toString(16)}-${entry.ino.toString(16)}"`;
+  }
+
+  private async classifyFile(
+    filePath: string,
+    entry: MountDirEntry,
+    report: RefreshReport
+  ): Promise<void> {
+    const cached = await this.cache.getBody(filePath);
+    const remoteEtag = this.etagFromListing(entry);
+    if (cached && remoteEtag && cached.etag !== remoteEtag) {
+      this.cacheGeneration += 1;
+      await this.cache.invalidateBody(filePath);
+      report.changed.push(filePath);
+      return;
+    }
+    // Listed and (when comparable) cache-coherent — count as checked even
+    // when there is no body cache entry yet. Hostfs has no listing cache, so
+    // "added" would mean "never read", not "new on disk", and would leave a
+    // populated idle tree looking unchecked (#3435).
+    report.unchanged++;
+  }
+
+  private async refreshDir(dir: string, report: RefreshReport, stack: string[]): Promise<void> {
+    const entries = await this.readDir(dir);
+    for (const entry of entries) {
+      const childPath = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.kind === 'directory') {
+        stack.push(childPath);
+      } else {
+        await this.classifyFile(childPath, entry, report);
+      }
+    }
+  }
+
+  private async refreshBodies(report: RefreshReport): Promise<void> {
+    for (const path of report.changed) {
+      try {
+        await this.readFile(path);
+      } catch (err) {
+        report.errors.push({
+          path,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   describe(): MountDescription {

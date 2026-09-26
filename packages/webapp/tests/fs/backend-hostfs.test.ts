@@ -612,6 +612,87 @@ describe('HostFsMountBackend', () => {
     await backend.close();
     await expect(backend.readFile('x')).rejects.toMatchObject({ code: 'EBADF' });
   });
+
+  // #3435: a successful refresh of a populated idle tree must report a
+  // non-zero unchanged count so agents can tell "checked everything" from
+  // "checked nothing".
+  describe('refresh', () => {
+    const listTree = (url: string, init?: RequestInit) => {
+      if (String(url).includes('/read') || init?.method === 'GET') {
+        return new Response(new Uint8Array([1]).buffer, {
+          headers: { etag: '"3-5-2a"' },
+        });
+      }
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      if (body.op === 'list' && body.path === 'sub') {
+        return ok({
+          entries: [{ name: 'nested.txt', kind: 'file', size: 3, lastModified: 5, ino: 42 }],
+        });
+      }
+      if (body.op === 'list') {
+        return ok({
+          entries: [
+            { name: 'a.txt', kind: 'file', size: 3, lastModified: 5, ino: 42 },
+            { name: 'b.txt', kind: 'file', size: 7, lastModified: 9, ino: 43 },
+            { name: 'sub', kind: 'directory' },
+          ],
+        });
+      }
+      return ok({ ok: true });
+    };
+
+    it('counts every listed file as unchanged on an idle populated tree', async () => {
+      const { backend } = backendWith(listTree);
+      const report = await backend.refresh();
+      expect(report.added).toEqual([]);
+      expect(report.removed).toEqual([]);
+      expect(report.changed).toEqual([]);
+      expect(report.unchanged).toBe(3);
+      expect(report.errors).toEqual([]);
+    });
+
+    it('marks a body-cache etag mismatch as changed without wiping the rest', async () => {
+      const { backend } = backendWith(listTree);
+      // Seed cache with a stale etag for a.txt (listing says "3-5-2a").
+      await backend.getCache().putBody('a.txt', new Uint8Array([9]), '"stale"');
+      const report = await backend.refresh();
+      expect(report.changed).toEqual(['a.txt']);
+      expect(report.unchanged).toBe(2);
+      expect(await backend.getCache().getBody('a.txt')).toBeNull();
+      // Unrelated path still has no cache entry; refresh did not clearMount.
+      expect(await backend.getCache().getBody('b.txt')).toBeNull();
+    });
+
+    it('with --bodies re-fetches only the changed paths', async () => {
+      let reads = 0;
+      const { backend } = backendWith((url, init) => {
+        if (String(url).includes('/read') || init?.method === 'GET') {
+          reads += 1;
+          return new Response(new Uint8Array([reads]).buffer, {
+            headers: { etag: '"3-5-2a"' },
+          });
+        }
+        return listTree(url, init);
+      });
+      await backend.getCache().putBody('a.txt', new Uint8Array([9]), '"stale"');
+      const report = await backend.refresh({ bodies: true });
+      expect(report.changed).toEqual(['a.txt']);
+      expect(report.unchanged).toBe(2);
+      expect(reads).toBe(1);
+      expect(await backend.getCache().getBody('a.txt')).toMatchObject({ etag: '"3-5-2a"' });
+    });
+
+    it('records list failures on the error list without inventing a fake ~1', async () => {
+      const { backend } = backendWith(
+        () => new Response(JSON.stringify({ code: 'EIO', message: 'bridge down' }), { status: 500 })
+      );
+      const report = await backend.refresh({ bodies: true });
+      expect(report.changed).toEqual([]);
+      expect(report.unchanged).toBe(0);
+      expect(report.errors.length).toBe(1);
+      expect(report.errors[0]?.path).toBe('/');
+    });
+  });
 });
 
 /**
