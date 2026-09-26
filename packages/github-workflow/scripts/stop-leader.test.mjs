@@ -74,9 +74,12 @@ describe('stop-leader', () => {
   });
 
   it('reports an already-exited leader', async () => {
-    writeState({ leader: 999999, followers: [] }, t.home);
+    writeState({ leader: 999999, followers: [], uiServer: 999998 }, t.home);
     await main({ exec: () => '' });
     expect(console.log).toHaveBeenCalledWith('[stop-leader] node-server pid=999999 already exited');
+    expect(console.log).toHaveBeenCalledWith(
+      '[stop-leader] pinned webapp pid=999998 already exited'
+    );
   });
 
   it('chromePidsForProfile parses pgrep output and tolerates failures', () => {

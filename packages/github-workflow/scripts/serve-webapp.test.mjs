@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,6 +29,8 @@ describe('serve-webapp', () => {
     expect(resolveWebappFile(root, '/assets/app.js').file).toMatch(/app\.js$/);
     expect(resolveWebappFile(root, '/assets/missing.js').status).toBe(404);
     expect(resolveWebappFile(root, `/${encodeURIComponent('../etc/passwd')}`).status).toBe(403);
+    expect(resolveWebappFile(root, '/%').status).toBe(400);
+    expect(resolveWebappFile(join(root, 'empty'), '/').status).toBe(404);
     expect(() => parseServeArgs(['--root', root, '--port', '0'])).toThrow(/usage/);
     expect(parseServeArgs(['--root', root, '--port', '8080'])).toMatchObject({ port: 8080 });
   });
@@ -44,5 +47,25 @@ describe('serve-webapp', () => {
     expect(asset.headers.get('content-type')).toContain('javascript');
     const missing = await fetch(`http://127.0.0.1:${server.port}/assets/nope.js`);
     expect(missing.status).toBe(404);
+    const head = await fetch(`http://127.0.0.1:${server.port}/`, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(head.headers.get('document-isolation-policy')).toBe('isolate-and-credentialless');
+    const posted = await fetch(`http://127.0.0.1:${server.port}/`, { method: 'POST' });
+    expect(posted.status).toBe(405);
+    writeFileSync(join(root, 'blob.bin'), 'x');
+    const blob = await fetch(`http://127.0.0.1:${server.port}/blob.bin`);
+    expect(blob.headers.get('content-type')).toBe('application/octet-stream');
+  });
+
+  it('refuses the port when IPv6 loopback is already taken', async () => {
+    const root = fixture();
+    const blocker = createServer();
+    await new Promise((resolve, reject) => {
+      blocker.once('error', reject);
+      blocker.listen(0, '::1', () => resolve());
+    });
+    const port = blocker.address().port;
+    await expect(listenWebapp(root, port)).rejects.toMatchObject({ code: 'EADDRINUSE' });
+    await new Promise((resolve) => blocker.close(() => resolve()));
   });
 });

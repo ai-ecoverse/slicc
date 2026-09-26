@@ -101,10 +101,14 @@ export function createWebappHandler(root) {
       return;
     }
     const stream = createReadStream(target.file);
+    // A readable file can still error after open (unlinked mid-read). macOS
+    // lets the owner read a mode-0 file, so this path is not forced in tests.
+    /* v8 ignore start */
     stream.on('error', () => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
+    /* v8 ignore stop */
     res.writeHead(200, headers);
     stream.pipe(res);
   };
@@ -133,8 +137,9 @@ export function listenWebapp(root, port) {
       v6.once('error', (err) => {
         // No IPv6 loopback (common in some containers). A port conflict is
         // fatal: macOS Chrome resolves localhost to ::1 first.
-        const code = err?.code;
-        if (code === 'EADDRINUSE' || code === 'EACCES') fail(err);
+        // Anything other than a taken or forbidden port means this host has
+        // no IPv6 loopback. v4 is already serving.
+        if (err?.code === 'EADDRINUSE' || err?.code === 'EACCES') fail(err);
         else resolvePromise({ port: bound, close });
       });
       v6.listen(bound, '::1', () => resolvePromise({ port: bound, close }));

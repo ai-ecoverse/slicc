@@ -7,11 +7,13 @@ import { isAlive, readState, terminate } from './gh-io.mjs';
 import {
   bootLeader,
   installNodeServer,
+  launchPinnedWebapp,
   main,
   pollJoinFile,
   readBootInputs,
   removeCredentialFiles,
   resolveNodeServer,
+  waitForWebapp,
   writeCredentialFiles,
 } from './start-leader.mjs';
 
@@ -171,6 +173,49 @@ describe('start-leader', () => {
     const { listenWebapp } = await import('./serve-webapp.mjs');
     const again = await listenWebapp(uiDir, uiPort);
     await again.close();
+  });
+
+  it('reports why the pinned webapp did not come up', async () => {
+    const fetchImpl = async () => ({ ok: false, status: 503 });
+    await expect(waitForWebapp(9, { timeoutMs: 120, fetchImpl })).rejects.toThrow(/HTTP 503/);
+    const throwing = async () => {
+      throw new Error('refused');
+    };
+    await expect(waitForWebapp(9, { timeoutMs: 120, fetchImpl: throwing })).rejects.toThrow(
+      /refused/
+    );
+    const bare = join(t.root, 'no-ui');
+    mkdirSync(bare);
+    await expect(
+      launchPinnedWebapp({ root: bare, port: 9, logPath: join(t.root, 'ui.log') })
+    ).rejects.toThrow(/index.html is missing/);
+    const ui = join(t.root, 'ui-log');
+    mkdirSync(ui);
+    writeFileSync(join(ui, 'index.html'), 'ok');
+    const logPath = join(t.root, 'ui-server.log');
+    writeFileSync(logPath, 'ui failed while binding\n');
+    await expect(
+      launchPinnedWebapp({
+        root: ui,
+        port: 9,
+        logPath,
+        spawnImpl: () => ({ pid: null }),
+        waitImpl: async () => {
+          throw new Error('down');
+        },
+      })
+    ).rejects.toThrow(/down[\s\S]*ui failed while binding/);
+    await expect(
+      launchPinnedWebapp({
+        root: ui,
+        port: 9,
+        logPath: join(t.root, 'missing-ui.log'),
+        spawnImpl: () => ({ pid: null }),
+        waitImpl: async () => {
+          throw 'x';
+        },
+      })
+    ).rejects.toThrow(/^x$/);
   });
 
   it('installs sliccy through npm into a private prefix', () => {
