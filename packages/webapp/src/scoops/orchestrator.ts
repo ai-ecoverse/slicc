@@ -4,7 +4,7 @@ import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import { SessionStore } from '../core/session.js';
-import type { ImageContent } from '../core/types.js';
+import type { AssistantMessage, ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
@@ -226,6 +226,7 @@ export class Orchestrator implements ConeApprovalRouter {
   private costTracker: ScoopCostTracker = new ScoopCostTracker({
     getScoops: () => this.scoops,
     getContexts: () => this.lifecycle.getContexts(),
+    mergeFoldedIntoFrozen: (jid, folded) => this.mergeFoldedCostIntoFrozen(jid, folded),
   });
 
   private completionService: ScoopCompletionService = new ScoopCompletionService({
@@ -279,6 +280,7 @@ export class Orchestrator implements ConeApprovalRouter {
     onLickBackpressure: (jid, info) => this.callbacks.onLickBackpressure?.(jid, info),
     getSessionStore: () => this.sessionStore,
     resetCostTracker: () => this.costTracker.reset(),
+    settleFoldedCost: (jid) => this.costTracker.settleFolded(jid),
     db: {
       saveMessage: (msg) => db.saveMessage(msg),
       deleteMessage: (id) => db.deleteMessage(id),
@@ -1108,6 +1110,26 @@ export class Orchestrator implements ConeApprovalRouter {
     options?: Parameters<ScoopCostTracker['getSessionCosts']>[0]
   ): ReturnType<ScoopCostTracker['getSessionCosts']> {
     return this.costTracker.getSessionCosts(options);
+  }
+
+  private async mergeFoldedCostIntoFrozen(
+    jid: string,
+    folded: readonly AssistantMessage[]
+  ): Promise<boolean> {
+    const scoop = this.scoops.get(jid);
+    if (!scoop || !this.sharedFs) return false;
+    try {
+      const { mergeFoldedCostIntoLatestFrozen } = await import(
+        './merge-folded-cost-into-frozen.js'
+      );
+      return await mergeFoldedCostIntoLatestFrozen(this.sharedFs, scoop, folded);
+    } catch (err) {
+      log.warn('Failed to merge folded agent spend into frozen session', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   async getSessionCostsForCommand(scope: SessionCostScope): Promise<ScoopCostData[]> {

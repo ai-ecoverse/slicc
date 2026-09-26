@@ -143,6 +143,11 @@ a bare alias and a region- or version-qualified id of the same model are
 one entry (a suffixed variant such as \`-fast\` is not), and the entry for
 the model in use now keeps the current spelling.
 
+Silent one-shot children (the \`agent\` command and other scoops with
+\`notifyOnComplete: false\`) fold their usage into the invoking parent when
+they tear down, so their tokens, cost, and model appear on that parent's
+row in the default (live) report — not as a separate dropped entry.
+
 JSON shape: { "budget": <window|null>, "scoops": [ ... ] }
 `;
 }

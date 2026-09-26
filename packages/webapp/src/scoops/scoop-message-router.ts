@@ -66,6 +66,8 @@ export interface ScoopMessageRouterDeps {
 
   resetCostTracker(): void;
 
+  settleFoldedCost?(jid: string): void | Promise<void>;
+
   db: {
     saveMessage(msg: ChannelMessage): Promise<void>;
     deleteMessage(id: string): Promise<void>;
@@ -551,6 +553,8 @@ export class ScoopMessageRouter {
     options: ClearSessionOptions = {}
   ): Promise<void> {
     this.cancelDebounce(jid);
+
+    await this.deps.settleFoldedCost?.(jid);
     if (context) {
       await context.clearSession(options).catch((err) => {
         log.warn('Failed to clear the durable conversation for scoop', {

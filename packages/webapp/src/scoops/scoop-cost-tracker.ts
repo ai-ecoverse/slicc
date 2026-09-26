@@ -62,6 +62,11 @@ export interface ScoopCostTrackerDeps {
   getScoops(): ReadonlyMap<string, RegisteredScoop>;
 
   getContexts(): ReadonlyMap<string, ScoopContext>;
+
+  mergeFoldedIntoFrozen?(
+    jid: string,
+    folded: readonly AssistantMessage[]
+  ): boolean | Promise<boolean>;
 }
 
 export interface CostScopeOptions {
@@ -80,10 +85,13 @@ function modelInUseNow(scoop: RegisteredScoop, latestModel: string): string {
 export function buildScoopCost(
   scoop: RegisteredScoop,
   context: ScoopContext,
-  source: ScoopCostData['source'] = 'live'
+  source: ScoopCostData['source'] = 'live',
+
+  foldedMessages: readonly AssistantMessage[] = []
 ): ScoopCostData | null {
   const messages = context.getAgentMessages();
-  const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+  const ownAssistant = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+  const assistantMsgs = [...ownAssistant, ...foldedMessages];
   if (assistantMsgs.length === 0) return null;
 
   const aggregated = {
@@ -109,9 +117,8 @@ export function buildScoopCost(
     addModelSpelling(buckets, msg.model, msg.usage.cost.total);
   }
 
-  const latest = assistantMsgs.reduce((best, msg) =>
-    msg.timestamp >= best.timestamp ? msg : best
-  );
+  const latestPool = ownAssistant.length > 0 ? ownAssistant : assistantMsgs;
+  const latest = latestPool.reduce((best, msg) => (msg.timestamp >= best.timestamp ? msg : best));
   const currentRaw = modelInUseNow(scoop, latest.model);
   const reported = reportModelSpellings(buckets, currentRaw);
 
@@ -137,29 +144,79 @@ export function buildScoopCost(
   };
 }
 
+function shouldFoldIntoParent(
+  scoop: RegisteredScoop,
+  scoops: ReadonlyMap<string, RegisteredScoop>
+): scoop is RegisteredScoop & { parentJid: string } {
+  return (
+    scoop.notifyOnComplete === false && scoop.parentJid !== null && scoops.has(scoop.parentJid)
+  );
+}
+
 export class ScoopCostTracker {
   private dropped: ScoopCostData[] = [];
 
   private droppedMessages: AssistantMessage[][] = [];
+
+  private foldedByParent = new Map<string, AssistantMessage[]>();
   private readonly deps: ScoopCostTrackerDeps;
 
   constructor(deps: ScoopCostTrackerDeps) {
     this.deps = deps;
   }
 
-  snapshot(jid: string): void {
+  private foldedMessagesFor(jid: string): readonly AssistantMessage[] {
+    return this.foldedByParent.get(jid) ?? [];
+  }
+
+  async settleFolded(jid: string): Promise<void> {
+    const folded = this.foldedByParent.get(jid);
+    this.foldedByParent.delete(jid);
+    if (!folded || folded.length === 0) return;
+
     const scoop = this.deps.getScoops().get(jid);
+    if (!scoop) return;
+
+    const merged = await this.deps.mergeFoldedIntoFrozen?.(jid, folded);
+    if (merged) return;
+
+    const emptyContext = { getAgentMessages: () => [] } as unknown as ScoopContext;
+    const costData = buildScoopCost(scoop, emptyContext, 'dropped', folded);
+    if (!costData) return;
+    this.droppedMessages.push([...folded]);
+    this.dropped.push(costData);
+  }
+
+  snapshot(jid: string): void {
+    const scoops = this.deps.getScoops();
+    const scoop = scoops.get(jid);
     const context = this.deps.getContexts().get(jid);
     if (!scoop || !context) return;
-    const costData = buildScoopCost(scoop, context, 'dropped');
+
+    const messages = context.getAgentMessages();
+    const ownAssistant = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+
+    const foldedIntoSelf = [...this.foldedMessagesFor(jid)];
+
+    if (shouldFoldIntoParent(scoop, scoops)) {
+      if (ownAssistant.length === 0 && foldedIntoSelf.length === 0) return;
+      const parentJid = scoop.parentJid;
+      const existing = this.foldedByParent.get(parentJid) ?? [];
+      this.foldedByParent.set(parentJid, [...existing, ...ownAssistant, ...foldedIntoSelf]);
+
+      this.foldedByParent.delete(jid);
+      return;
+    }
+
+    const costData = buildScoopCost(scoop, context, 'dropped', foldedIntoSelf);
     if (costData) {
       this.dropped.push(costData);
     }
-    const messages = context.getAgentMessages();
-    const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
-    if (assistantMsgs.length > 0) {
-      this.droppedMessages.push(assistantMsgs);
+    const forModelAgg = [...ownAssistant, ...foldedIntoSelf];
+    if (forModelAgg.length > 0) {
+      this.droppedMessages.push(forModelAgg);
     }
+    this.foldedByParent.delete(jid);
   }
 
   getSessionCosts(options: CostScopeOptions = {}): ScoopCostData[] {
@@ -168,7 +225,7 @@ export class ScoopCostTracker {
     for (const scoop of this.deps.getScoops().values()) {
       const context = contexts.get(scoop.jid);
       if (!context) continue;
-      const costData = buildScoopCost(scoop, context);
+      const costData = buildScoopCost(scoop, context, 'live', this.foldedMessagesFor(scoop.jid));
       if (costData) results.push(costData);
     }
     if (options.includeDropped) results.push(...this.dropped);
@@ -177,6 +234,9 @@ export class ScoopCostTracker {
 
   getBurnRate(nowMs = Date.now()): number {
     const assistantMessages = this.droppedMessages.flat();
+    for (const folded of this.foldedByParent.values()) {
+      assistantMessages.push(...folded);
+    }
     for (const context of this.deps.getContexts().values()) {
       for (const message of context.getAgentMessages()) {
         if (message.role === 'assistant') assistantMessages.push(message);
@@ -226,10 +286,11 @@ export class ScoopCostTracker {
     const spellings = new Map<string, ModelSpellings>();
 
     const contexts = this.deps.getContexts();
-    for (const context of contexts.values()) {
+    for (const [jid, context] of contexts) {
       const messages = context.getAgentMessages();
       const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
       this.aggregateMessages(assistantMsgs, modelMap, spellings);
+      this.aggregateMessages(this.foldedMessagesFor(jid), modelMap, spellings);
     }
 
     if (options.includeDropped) {
@@ -247,7 +308,7 @@ export class ScoopCostTracker {
   }
 
   private aggregateMessages(
-    messages: AssistantMessage[],
+    messages: readonly AssistantMessage[],
     modelMap: Map<string, ModelCostData>,
     spellings: Map<string, ModelSpellings>
   ): void {
@@ -279,5 +340,6 @@ export class ScoopCostTracker {
   reset(): void {
     this.dropped = [];
     this.droppedMessages = [];
+    this.foldedByParent.clear();
   }
 }

@@ -409,5 +409,6 @@ describe('cost on a budget provider', () => {
     const result = await createCostCommand().execute(['--help'], ctx);
     expect(result.stdout).toContain('rolling allowance');
     expect(result.stdout).toContain('"budget"');
+    expect(result.stdout).toContain('fold their usage into the invoking parent');
   });
 });

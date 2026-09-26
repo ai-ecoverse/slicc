@@ -20,14 +20,18 @@ describe('ScoopCostTracker', () => {
     jid: string,
     label: string,
     isCone = false,
-    modelId?: string
+    modelId?: string,
+    extras: Partial<Pick<RegisteredScoop, 'parentJid' | 'notifyOnComplete'>> = {}
   ): RegisteredScoop {
     return {
       jid,
       assistantLabel: label,
       isCone,
+
+      ...(isCone ? { parentJid: null } : {}),
       model: modelId ? { provider: 'bedrock-camp', id: modelId } : undefined,
       tab: { id: `tab-${jid}`, type: 'scoop' as const, label },
+      ...extras,
     } as unknown as RegisteredScoop;
   }
 
@@ -118,6 +122,185 @@ describe('ScoopCostTracker', () => {
       { name: 'Live Scoop', source: 'live' },
       { name: 'Dropped Scoop', source: 'dropped' },
     ]);
+  });
+
+  describe('silent agent one-shot fold into parent (#3437)', () => {
+    it('attributes one-shot agent spend to the invoking cone after teardown', () => {
+      const cone = createMockScoop('cone', 'sliccy', true, 'claude-opus-4-6');
+      scoopsMap.set('cone', cone);
+      contextsMap.set(
+        'cone',
+        createMockContext([
+          createAssistantMessage('claude-opus-4-6', 100, 50, 0, 0, 0.1, 0.05, 0, 0, NOW_MS - 10),
+        ])
+      );
+
+      const before = tracker.getSessionCosts();
+      expect(before).toHaveLength(1);
+      expect(before[0].name).toBe('sliccy');
+      expect(before[0].turns).toBe(1);
+      expect(before[0].models).toEqual(['claude-opus-4-6']);
+      expect(before[0].usage.totalTokens).toBe(150);
+      expect(before[0].usage.cost.total).toBeCloseTo(0.15, 10);
+
+      const agent = createMockScoop('agent_quiet_mint', 'agent-quiet-mint', false, undefined, {
+        parentJid: 'cone',
+        notifyOnComplete: false,
+      });
+      scoopsMap.set(agent.jid, agent);
+      contextsMap.set(
+        agent.jid,
+        createMockContext([
+          createAssistantMessage(
+            'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+            200,
+            40,
+            0,
+            0,
+            0.002,
+            0.001,
+            0,
+            0,
+            NOW_MS
+          ),
+        ])
+      );
+
+      tracker.snapshot(agent.jid);
+      scoopsMap.delete(agent.jid);
+      contextsMap.delete(agent.jid);
+
+      const after = tracker.getSessionCosts();
+      expect(after).toHaveLength(1);
+      expect(after[0].name).toBe('sliccy');
+      expect(after[0].turns).toBe(2);
+      expect(after[0].usage.totalTokens).toBe(150 + 240);
+      expect(after[0].usage.cost.total).toBeCloseTo(0.153, 6);
+      expect(after[0].models).toEqual(
+        expect.arrayContaining([
+          'claude-opus-4-6',
+          'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+        ])
+      );
+
+      expect(after[0].model).toBe('claude-opus-4-6');
+
+      const all = tracker.getSessionCosts({ includeDropped: true });
+      expect(all).toHaveLength(1);
+      expect(all[0].usage.cost.total).toBeCloseTo(0.153, 6);
+
+      const models = tracker.getModelCosts();
+      expect(models.map((m) => m.model)).toEqual(
+        expect.arrayContaining([
+          'claude-opus-4-6',
+          'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+        ])
+      );
+    });
+
+    it('still keeps a separate dropped row for a notifying child scoop', () => {
+      const cone = createMockScoop('cone', 'sliccy', true, 'claude-opus-4-6');
+      const child = createMockScoop('worker', 'worker', false, undefined, {
+        parentJid: 'cone',
+        notifyOnComplete: true,
+      });
+      scoopsMap.set('cone', cone);
+      scoopsMap.set('worker', child);
+      contextsMap.set(
+        'cone',
+        createMockContext([createAssistantMessage('claude-opus-4-6', 10, 5, 0, 0, 0.01, 0)])
+      );
+      contextsMap.set(
+        'worker',
+        createMockContext([createAssistantMessage('claude-haiku-4-5', 20, 10, 0, 0, 0.002, 0)])
+      );
+
+      tracker.snapshot('worker');
+      scoopsMap.delete('worker');
+      contextsMap.delete('worker');
+
+      expect(tracker.getSessionCosts()).toMatchObject([
+        { name: 'sliccy', turns: 1, usage: { cost: { total: 0.01 } } },
+      ]);
+      expect(tracker.getSessionCosts({ includeDropped: true })).toMatchObject([
+        { name: 'sliccy', source: 'live' },
+        { name: 'worker', source: 'dropped', models: ['claude-haiku-4-5'] },
+      ]);
+    });
+
+    it('creates a parent cost row from folded spend when the parent has no turns yet', () => {
+      const cone = createMockScoop('cone', 'sliccy', true, 'claude-opus-4-6');
+      scoopsMap.set('cone', cone);
+      contextsMap.set('cone', createMockContext([]));
+
+      expect(tracker.getSessionCosts()).toEqual([]);
+
+      const agent = createMockScoop('agent_x', 'agent-x', false, undefined, {
+        parentJid: 'cone',
+        notifyOnComplete: false,
+      });
+      scoopsMap.set(agent.jid, agent);
+      contextsMap.set(
+        agent.jid,
+        createMockContext([createAssistantMessage('claude-haiku-4-5', 50, 10, 0, 0, 0.001, 0)])
+      );
+      tracker.snapshot(agent.jid);
+      scoopsMap.delete(agent.jid);
+      contextsMap.delete(agent.jid);
+
+      const after = tracker.getSessionCosts();
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({
+        name: 'sliccy',
+        turns: 1,
+        models: ['claude-haiku-4-5'],
+        usage: { totalTokens: 60, cost: { total: 0.001 } },
+      });
+    });
+
+    it('settles folded spend into the dropped ledger at the cone session boundary', async () => {
+      const cone = createMockScoop('cone', 'sliccy', true, 'claude-opus-4-6');
+      scoopsMap.set('cone', cone);
+      contextsMap.set(
+        'cone',
+        createMockContext([
+          createAssistantMessage('claude-opus-4-6', 100, 50, 0, 0, 0.1, 0.05, 0, 0, NOW_MS - 10),
+        ])
+      );
+
+      const agent = createMockScoop('agent_quiet_mint', 'agent-quiet-mint', false, undefined, {
+        parentJid: 'cone',
+        notifyOnComplete: false,
+      });
+      scoopsMap.set(agent.jid, agent);
+      contextsMap.set(
+        agent.jid,
+        createMockContext([
+          createAssistantMessage('claude-haiku-4-5', 200, 40, 0, 0, 0.002, 0.001, 0, 0, NOW_MS),
+        ])
+      );
+      tracker.snapshot(agent.jid);
+      scoopsMap.delete(agent.jid);
+      contextsMap.delete(agent.jid);
+
+      expect(tracker.getSessionCosts()[0].usage.cost.total).toBeCloseTo(0.153, 6);
+
+      await tracker.settleFolded('cone');
+      contextsMap.set('cone', createMockContext([]));
+
+      expect(tracker.getSessionCosts()).toEqual([]);
+      const all = tracker.getSessionCosts({ includeDropped: true });
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({
+        name: 'sliccy',
+        source: 'dropped',
+        models: ['claude-haiku-4-5'],
+      });
+      expect(all[0].usage.cost.total).toBeCloseTo(0.003, 6);
+      expect(tracker.getModelCosts({ includeDropped: true }).map((m) => m.model)).toContain(
+        'claude-haiku-4-5'
+      );
+    });
   });
 
   it('reports the model in use now and collapses alias spellings of one model', () => {
