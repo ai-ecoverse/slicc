@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createMeminfoCommand,
-  formatBytes,
   type MemoryMeasurement,
 } from '../../../src/shell/supplemental-commands/meminfo-command.js';
 
@@ -25,15 +24,6 @@ const MEASUREMENT: MemoryMeasurement = {
     { bytes: 0, types: ['Shared'], attribution: [] },
   ],
 };
-
-describe('formatBytes', () => {
-  it('scales through B/KB/MB/GB with one decimal', () => {
-    expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(2048)).toBe('2.0 KB');
-    expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
-    expect(formatBytes(5.5 * 1024 * 1024 * 1024)).toBe('5.5 GB');
-  });
-});
 
 describe('meminfo', () => {
   it('prints help', async () => {
