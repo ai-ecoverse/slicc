@@ -1,3 +1,4 @@
+import type { MessageAttachment } from '../../core/attachments.js';
 import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
 import {
   presentationStateFor,
@@ -270,17 +271,18 @@ export class LocalWorkUnitClient implements WorkUnitClient {
   send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void> {
     const client = this.deps.getClient();
     if (!client) return Promise.reject(new Error('kernel client not attached'));
-    client.sendRaw({
-      attachments: input.attachments,
-
-      messageId: input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    const messageId =
+      input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return client.sendUserMessage({
       scoopJid: id,
       text: input.text,
-      type: 'user-message',
+      messageId,
+      ...(input.attachments
+        ? { attachments: input.attachments as readonly MessageAttachment[] }
+        : {}),
       ...(input.steer ? { steer: true as const } : {}),
       ...(input.guestGate ? { guestGate: input.guestGate } : {}),
-    } as Parameters<OffscreenClient['sendRaw']>[0]);
-    return Promise.resolve();
+    });
   }
 
   setModel(id: WorkUnitId, model: WorkUnitModel): Promise<boolean | undefined> {

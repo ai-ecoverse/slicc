@@ -389,7 +389,7 @@ export async function bootFollowerFloat(
 
       workUnits = new RemoteWorkUnitClient({
         getSync: () => follower?.currentSync ?? null,
-        onSend: (id) => promptWatch.noteSent(id),
+        onSend: (id, messageId) => promptWatch.noteSent(id, messageId),
       });
 
       const followerHost = createFollowerChatHost({
@@ -601,7 +601,7 @@ export async function bootFollowerFloat(
 
       onUserMessage: (text, _messageId, _scoopJid, attachments) =>
         controller.addUserMessage(text, attachments),
-      onOwnUserMessageEcho: (_messageId, scoopJid) => promptWatch.noteReceived(scoopJid),
+      onOwnUserMessageEcho: (messageId, scoopJid) => promptWatch.noteReceived(scoopJid, messageId),
       onUserMessageAck: (ack) => promptWatch.noteAck(ack),
 
       onBiscottoMessageState: (_messageId, state) => {

@@ -94,20 +94,22 @@ export function makeLocalHarness(): ClientHarness {
     getScoop: (jid: string) => roster.find((scoop) => scoop.jid === jid),
     getScoops: () => roster,
     requestScoopMessages: (jid: string) => transcriptRequests.push(jid),
-    sendRaw: (message: {
-      scoopJid?: string;
-      text?: string;
-      messageId?: string;
+    sendUserMessage: (message: {
+      scoopJid: string;
+      text: string;
+      messageId: string;
       steer?: boolean;
       guestGate?: unknown;
+      attachments?: unknown;
     }) => {
       sent.push({
-        id: message.scoopJid ?? null,
-        text: message.text ?? '',
-        ...(message.messageId ? { messageId: message.messageId } : {}),
+        id: message.scoopJid,
+        text: message.text,
+        messageId: message.messageId,
         ...(message.steer ? { steer: true } : {}),
         ...(message.guestGate ? { guestGate: message.guestGate } : {}),
       });
+      return Promise.resolve();
     },
 
     setScoopModel: (jid: string, model: { provider: string; id: string }) => {

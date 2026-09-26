@@ -34,11 +34,22 @@ export interface UserMessageMsg {
   scoopJid: string;
   text: string;
   messageId: string;
+
+  requestId?: string;
   attachments?: MessageAttachment[];
 
   steer?: boolean;
 
   guestGate?: TurnGuestGate;
+}
+
+export interface UserMessageAckMsg {
+  type: 'user-message-ack';
+  requestId: string;
+  messageId: string;
+  scoopJid: string;
+  ok: boolean;
+  error?: string;
 }
 
 export interface ConeCreateMsg {
@@ -984,6 +995,7 @@ export type OffscreenToPanelMessage =
   | AgentSpawnResultMsg
   | SetScoopModelAckMsg
   | SetThinkingLevelAckMsg
+  | UserMessageAckMsg
   | FollowerSprinklesListMsg
   | FollowerSprinkleUpdateMsg
   | FollowerSprinkleFetchResultMsg

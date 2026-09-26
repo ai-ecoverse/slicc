@@ -79,7 +79,7 @@ function makeFakeClient() {
   const client = {
     createAgentHandle: () => handle,
 
-    sendRaw: vi.fn(),
+    sendUserMessage: vi.fn(async () => undefined),
     emitAgentError: vi.fn(),
     get selectedScoopJid(): string | null {
       return selectedScoopJid;
@@ -156,12 +156,11 @@ describe('prepareWcShell + attachLeaderShell', () => {
       new CustomEvent('submit', { bubbles: true, detail: { value: 'hello cone' } })
     );
 
-    expect(fake.raw.sendRaw).toHaveBeenCalledWith(
+    expect(fake.raw.sendUserMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: expect.any(String),
         scoopJid: 'cone-1',
         text: 'hello cone',
-        type: 'user-message',
       })
     );
 

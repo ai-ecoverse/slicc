@@ -156,10 +156,14 @@ describe('tray sync doc matrix ↔ protocol unions', () => {
       .find((line) => line.includes('`user_message_ack`') && line.includes('Leader→Follower'));
     expect(ackRow, 'matrix must list user_message_ack').toBeDefined();
     expect(ackRow).not.toMatch(/unknown for now/i);
-    expect(ackRow).toContain('handed the prompt to its kernel');
+
+    expect(ackRow).toContain('once its kernel took the prompt');
+    expect(ackRow).toContain('panel-RPC');
+    expect(ackRow).toContain('bounded ~5s');
     expect(ackRow).toContain("iOS flags the sender's bubble");
     expect(ackRow).toContain('tray sidecar');
     expect(ackRow).toContain('print `rejected`');
+    expect(ackRow).toContain('messageId');
 
     const webappDetails = readFileSync(webappDetailsMdPath, 'utf8');
     expect(webappDetails).toContain('#3482` surface checklist');

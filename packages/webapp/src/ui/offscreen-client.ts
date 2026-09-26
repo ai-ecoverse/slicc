@@ -31,6 +31,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
+  UserMessageAckMsg,
 } from '../kernel/messages.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
@@ -56,6 +57,8 @@ import {
 import { getComputersStore } from './computers-store.js';
 
 const WEBHOOK_DELIVERY_ACK_TIMEOUT_MS = 2000;
+
+const USER_MESSAGE_ACK_TIMEOUT_MS = 5000;
 
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
@@ -167,6 +170,11 @@ export class OffscreenClient implements KernelClientFacade {
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
   private pendingModelAcks = new Map<string, (applied: boolean) => void>();
 
+  private pendingUserMessageAcks = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+
   private pendingTranscriptRequests = new Map<string, (transcript: string) => void>();
   private pendingChatMessagesRequests = new Map<
     string,
@@ -269,6 +277,47 @@ export class OffscreenClient implements KernelClientFacade {
         }
       },
     };
+  }
+
+  sendUserMessage(input: {
+    scoopJid: string;
+    text: string;
+    messageId: string;
+    attachments?: readonly MessageAttachment[];
+    steer?: boolean;
+    guestGate?: import('../sudo/types.js').TurnGuestGate;
+  }): Promise<void> {
+    if (this.locked) {
+      return Promise.reject(
+        new Error('This window is detached. Close it and use the detached tab.')
+      );
+    }
+    const requestId = `um-${uid()}`;
+    const ack = new Promise<void>((resolve, reject) => {
+      this.pendingUserMessageAcks.set(requestId, { resolve, reject });
+    });
+    this.send({
+      type: 'user-message',
+      requestId,
+      scoopJid: input.scoopJid,
+      text: input.text,
+      messageId: input.messageId,
+      ...(input.attachments ? { attachments: [...input.attachments] } : {}),
+      ...(input.steer ? { steer: true as const } : {}),
+      ...(input.guestGate ? { guestGate: input.guestGate } : {}),
+    });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('the kernel did not answer in time')),
+        USER_MESSAGE_ACK_TIMEOUT_MS
+      );
+    });
+    return Promise.race([ack, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+      this.pendingUserMessageAcks.delete(requestId);
+    });
   }
 
   getScoops(): RegisteredScoop[] {
@@ -688,6 +737,10 @@ export class OffscreenClient implements KernelClientFacade {
 
       case 'set-thinking-level-ack':
         this.handleThinkingLevelAck(msg);
+        break;
+
+      case 'user-message-ack':
+        this.handleUserMessageAck(msg);
         break;
 
       case 'scoop-created':
@@ -1143,6 +1196,13 @@ export class OffscreenClient implements KernelClientFacade {
       }
     }
     this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);
+  }
+
+  private handleUserMessageAck(msg: UserMessageAckMsg): void {
+    const pending = this.pendingUserMessageAcks.get(msg.requestId);
+    if (!pending) return;
+    if (msg.ok) pending.resolve();
+    else pending.reject(new Error(msg.error?.trim() || 'the kernel refused the message'));
   }
 
   private handleScoopList(msg: ScoopListMsg): void {

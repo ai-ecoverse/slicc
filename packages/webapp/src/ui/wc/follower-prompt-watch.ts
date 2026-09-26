@@ -27,6 +27,7 @@ export function promptSilenceNote(received: boolean, sidePanel: boolean): string
 }
 
 export interface FollowerPromptAck {
+  messageId: string;
   scoopJid: string;
   state: 'accepted' | 'rejected';
   error?: string;
@@ -42,30 +43,34 @@ export interface FollowerPromptWatchDeps {
 export class FollowerPromptWatch {
   #timer: ReturnType<typeof setTimeout> | null = null;
   #unitId: string | null = null;
+  #messageId: string | null = null;
   #received = false;
   #detachAgentEvents: (() => void) | null = null;
 
   constructor(private readonly deps: FollowerPromptWatchDeps) {}
 
-  noteSent(unitId: string): void {
+  noteSent(unitId: string, messageId: string): void {
     this.#clear();
     this.#unitId = unitId;
+    this.#messageId = messageId;
     this.#timer = setTimeout(() => {
       this.#timer = null;
       this.deps.onSilence(unitId, this.#received);
     }, this.deps.silenceMs ?? FOLLOWER_PROMPT_SILENCE_MS);
   }
 
-  noteReceived(unitId?: string | null): void {
+  noteReceived(unitId?: string | null, messageId?: string | null): void {
     if (!this.#timer) return;
     if (unitId && this.#unitId && unitId !== this.#unitId) return;
+    if (messageId && this.#messageId && messageId !== this.#messageId) return;
     this.#received = true;
   }
 
   noteAck(ack: FollowerPromptAck): void {
+    if (this.#messageId && ack.messageId !== this.#messageId) return;
     const named = ack.scoopJid.length > 0 ? ack.scoopJid : null;
     if (ack.state === 'accepted') {
-      this.noteReceived(named);
+      this.noteReceived(named, ack.messageId);
       return;
     }
     const unitId = named ?? this.#unitId;
@@ -93,6 +98,7 @@ export class FollowerPromptWatch {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     this.#unitId = null;
+    this.#messageId = null;
     this.#received = false;
   }
 }

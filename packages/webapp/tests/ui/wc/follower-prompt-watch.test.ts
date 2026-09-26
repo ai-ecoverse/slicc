@@ -32,7 +32,7 @@ describe('FollowerPromptWatch', () => {
   });
 
   it('hints once, naming the addressed unit, when a sent prompt meets total silence', () => {
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS - 1);
     expect(onSilence).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
@@ -42,7 +42,7 @@ describe('FollowerPromptWatch', () => {
   });
 
   it('any unit-less leader reaction before the deadline disarms it', () => {
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS - 1);
     watch.noteLeaderActivity();
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
@@ -50,23 +50,23 @@ describe('FollowerPromptWatch', () => {
   });
 
   it('a status frame for the addressed unit disarms it', () => {
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     watch.noteLeaderActivity('cone_1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
   });
 
   it('a status frame for ANOTHER unit is not a reaction to this prompt', () => {
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     watch.noteLeaderActivity('cone_2');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     expect(onSilence).toHaveBeenCalledWith('cone_1', false);
   });
 
   it('a second send restarts the wait for the newly addressed unit', () => {
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS / 2);
-    watch.noteSent('cone_2');
+    watch.noteSent('cone_2', 'm2');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS - 1);
     expect(onSilence).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
@@ -75,37 +75,45 @@ describe('FollowerPromptWatch', () => {
   });
 
   it('an echo of the prompt keeps it armed but marks it received', () => {
-    watch.noteSent('cone_1');
-    watch.noteReceived('cone_1');
+    watch.noteSent('cone_1', 'm1');
+    watch.noteReceived('cone_1', 'm1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     expect(onSilence).toHaveBeenCalledTimes(1);
     expect(onSilence).toHaveBeenCalledWith('cone_1', true);
   });
 
   it('an echo for ANOTHER unit does not mark this prompt received', () => {
-    watch.noteSent('cone_1');
-    watch.noteReceived('cone_2');
+    watch.noteSent('cone_1', 'm1');
+    watch.noteReceived('cone_2', 'm1');
+    vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(onSilence).toHaveBeenCalledWith('cone_1', false);
+  });
+
+  it('a late echo for an older message does not mark the watched one received', () => {
+    watch.noteSent('cone_1', 'm1');
+    watch.noteSent('cone_1', 'm2');
+    watch.noteReceived('cone_1', 'm1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     expect(onSilence).toHaveBeenCalledWith('cone_1', false);
   });
 
   it('a new send forgets the previous prompt was received', () => {
-    watch.noteSent('cone_1');
-    watch.noteReceived('cone_1');
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
+    watch.noteReceived('cone_1', 'm1');
+    watch.noteSent('cone_1', 'm2');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     expect(onSilence).toHaveBeenCalledWith('cone_1', false);
   });
 
   it('an echo with nothing armed arms nothing', () => {
-    watch.noteReceived('cone_1');
+    watch.noteReceived('cone_1', 'm1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
   });
 
   it('an accepted ack keeps it armed and marks it received', () => {
-    watch.noteSent('cone_1');
-    watch.noteAck({ scoopJid: 'cone_1', state: 'accepted' });
+    watch.noteSent('cone_1', 'm1');
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     expect(onSilence).toHaveBeenCalledTimes(1);
     expect(onSilence).toHaveBeenCalledWith('cone_1', true);
@@ -113,44 +121,61 @@ describe('FollowerPromptWatch', () => {
   });
 
   it('an accepted ack followed by real activity posts nothing', () => {
-    watch.noteSent('cone_1');
-    watch.noteAck({ scoopJid: 'cone_1', state: 'accepted' });
+    watch.noteSent('cone_1', 'm1');
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
     watch.noteLeaderActivity('cone_1');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
   });
 
   it('an accepted ack with nothing armed arms nothing', () => {
-    watch.noteAck({ scoopJid: 'cone_1', state: 'accepted' });
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
   });
 
   it('an accepted ack for ANOTHER unit leaves this prompt armed', () => {
-    watch.noteSent('cone_1');
-    watch.noteAck({ scoopJid: 'cone_2', state: 'accepted' });
+    watch.noteSent('cone_1', 'm1');
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_2', state: 'accepted' });
+    vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(onSilence).toHaveBeenCalledWith('cone_1', false);
+  });
+
+  it('a late accepted ack for an older message leaves the watched prompt unmarked', () => {
+    watch.noteSent('cone_1', 'm1');
+    watch.noteSent('cone_1', 'm2');
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_1', state: 'accepted' });
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
     expect(onSilence).toHaveBeenCalledWith('cone_1', false);
   });
 
   it('a rejected ack disarms it and reports the named unit and error', () => {
-    watch.noteSent('cone_1');
-    watch.noteAck({ scoopJid: 'cone_1', state: 'rejected', error: 'kernel gone' });
+    watch.noteSent('cone_1', 'm1');
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_1', state: 'rejected', error: 'kernel gone' });
     expect(onRejected).toHaveBeenCalledWith('cone_1', 'kernel gone');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
   });
 
+  it('a late rejected ack for an older message does not disarm the watched prompt', () => {
+    watch.noteSent('cone_1', 'm1');
+    watch.noteSent('cone_1', 'm2');
+    watch.noteAck({ messageId: 'm1', scoopJid: 'cone_1', state: 'rejected', error: 'stale' });
+    expect(onRejected).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS);
+    expect(onSilence).toHaveBeenCalledWith('cone_1', false);
+  });
+
   it('a rejected ack that names no unit is reported against the armed one', () => {
-    watch.noteSent('cone_1');
-    watch.noteAck({ scoopJid: '', state: 'rejected', error: 'nothing selected' });
+    watch.noteSent('cone_1', 'm1');
+    watch.noteAck({ messageId: 'm1', scoopJid: '', state: 'rejected', error: 'nothing selected' });
     expect(onRejected).toHaveBeenCalledWith('cone_1', 'nothing selected');
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
   });
 
   it('a unit-less rejected ack with nothing armed reports no unit', () => {
-    watch.noteAck({ scoopJid: '', state: 'rejected' });
+    watch.noteAck({ messageId: 'm9', scoopJid: '', state: 'rejected' });
     expect(onRejected).toHaveBeenCalledWith(null, undefined);
   });
 
@@ -192,7 +217,7 @@ describe('FollowerPromptWatch', () => {
     expect(first.subscribed).toBe(0);
     expect(second.subscribed).toBe(1);
 
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     second.emit();
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
@@ -202,7 +227,7 @@ describe('FollowerPromptWatch', () => {
   });
 
   it('dispose() cancels a pending hint', () => {
-    watch.noteSent('cone_1');
+    watch.noteSent('cone_1', 'm1');
     watch.dispose();
     vi.advanceTimersByTime(FOLLOWER_PROMPT_SILENCE_MS * 2);
     expect(onSilence).not.toHaveBeenCalled();
@@ -210,7 +235,7 @@ describe('FollowerPromptWatch', () => {
 
   it('honors a custom silence window', () => {
     const custom = new FollowerPromptWatch({ onSilence, silenceMs: 1_000 });
-    custom.noteSent('cone_1');
+    custom.noteSent('cone_1', 'm1');
     vi.advanceTimersByTime(1_000);
     expect(onSilence).toHaveBeenCalledTimes(1);
   });

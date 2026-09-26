@@ -1527,10 +1527,15 @@ export class Bridge implements KernelFacade {
       timestamp: Date.now(),
     });
     if (this.followerSync) {
-      if (msg.steer) {
-        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
-      } else {
-        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+      try {
+        if (msg.steer) {
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
+        } else {
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+        }
+        this.emitUserMessageAck(msg, true);
+      } catch (err) {
+        this.emitUserMessageAck(msg, false, err);
       }
       return;
     }
@@ -1547,8 +1552,68 @@ export class Bridge implements KernelFacade {
       ...(msg.guestGate ? { guestGate: msg.guestGate } : {}),
       ...(msg.steer ? { steer: true as const } : {}),
     };
-    await this.orchestrator?.handleMessage(channelMsg);
-    await this.orchestrator?.createScoopTab(msg.scoopJid);
+    try {
+      if (!this.orchestrator) {
+        throw new Error('kernel not ready');
+      }
+      if (!msg.requestId) {
+        await this.orchestrator.handleMessage(channelMsg);
+        await this.orchestrator.createScoopTab(msg.scoopJid);
+        return;
+      }
+
+      const early: { outcome: 'ok' | 'fail' | 'pending'; err?: unknown } = {
+        outcome: 'pending',
+      };
+      const handoff = this.orchestrator.handleMessage(channelMsg);
+      void handoff.then(
+        () => {
+          early.outcome = 'ok';
+        },
+        (err: unknown) => {
+          early.outcome = 'fail';
+          early.err = err;
+        }
+      );
+      await Promise.resolve();
+      if (early.outcome === 'fail') {
+        this.emitUserMessageAck(msg, false, early.err);
+        return;
+      }
+      this.emitUserMessageAck(msg, true);
+      void handoff
+        .then(() => this.orchestrator?.createScoopTab(msg.scoopJid))
+        .catch((err) => {
+          console.error('[kernel-bridge] user-message failed after handoff:', err);
+          this.emit({
+            type: 'error',
+            scoopJid: msg.scoopJid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    } catch (err) {
+      this.emitUserMessageAck(msg, false, err);
+
+      if (!msg.requestId) throw err;
+    }
+  }
+
+  private emitUserMessageAck(
+    msg: Extract<PanelToOffscreenMessage, { type: 'user-message' }>,
+    ok: boolean,
+    err?: unknown
+  ): void {
+    if (!msg.requestId) return;
+    this.emit({
+      type: 'user-message-ack',
+      requestId: msg.requestId,
+      messageId: msg.messageId,
+      scoopJid: msg.scoopJid,
+      ok,
+      ...(ok
+        ? {}
+        : { error: err instanceof Error ? err.message : err != null ? String(err) : undefined }),
+    });
   }
 
   private async handleScoopDrop(scoopJid: string): Promise<void> {
