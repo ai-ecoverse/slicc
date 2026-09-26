@@ -542,6 +542,73 @@ func TestCLIPromptIgnoresOtherScoopReady(t *testing.T) {
 	}
 }
 
+// TestCLIPromptNamedReadyBeforeAckDoesNotFinish: a 6.196.0 leader emits
+// per-unit status as soon as the prompt is queued and only afterwards acks,
+// often with the unit filled in. A `ready` in that gap used to start the
+// settle timer while the prompt was still unbound, so `prompt` exited 0
+// about 2s later.
+func TestCLIPromptNamedReadyBeforeAckDoesNotFinish(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var um protocol.UserMessage
+		if json.Unmarshal(msg.Data, &um) != nil || um.Type != "user_message" {
+			return
+		}
+		go func() {
+			_ = sendJSON(leader.dc, statusFrameFor("cone-1", "processing"))
+			_ = sendJSON(leader.dc, statusFrameFor("sports", "ready"))
+			time.Sleep(500 * time.Millisecond)
+			ack := ackFrame(um.MessageID, protocol.AckAccepted, "")
+			ack.ScoopJid = "cone-1"
+			_ = sendJSON(leader.dc, ack)
+			_ = sendJSON(leader.dc, agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "AFTER-ACK-OK"))
+			_ = sendJSON(leader.dc, statusFrameFor("cone-1", "ready"))
+		}()
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-ACK-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply after the late ack", stdout)
+	}
+}
+
+// TestCLIPromptEmptyAckUsesTheConeRoster: an accepted ack that names no unit
+// must not fall back to "any named ready ends the turn". One root on
+// `scoops.list` is the cone; a scoop's `ready` is not the prompt ending.
+func TestCLIPromptEmptyAckUsesTheConeRoster(t *testing.T) {
+	bin := sliccBinary(t)
+	roster := map[string]any{
+		"type": "scoops.list",
+		"scoops": []any{
+			map[string]any{"jid": "cone-1", "parentId": nil},
+			map[string]any{"jid": "sports", "parentId": "cone-1"},
+		},
+		"activeScoopJid": "cone-1",
+	}
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		ack := ackFrame(id, protocol.AckAccepted, "")
+		ack.ScoopJid = ""
+		return ack
+	}, []any{
+		roster,
+		statusFrameFor("cone-1", "processing"),
+		statusFrameFor("sports", "ready"),
+		900 * time.Millisecond,
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "CONE-ROSTER-OK"),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "CONE-ROSTER-OK") {
+		t.Fatalf("prompt stdout = %q, want the cone's reply", stdout)
+	}
+}
+
 // TestCLIPromptIgnoresOtherScoopTurnEnd: a `turn_end` for a unit that did
 // not accept this prompt is not the prompt's turn.
 func TestCLIPromptIgnoresOtherScoopTurnEnd(t *testing.T) {

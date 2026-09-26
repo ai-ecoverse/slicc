@@ -64,25 +64,59 @@ type promptTurn struct {
 	sawProcessing bool
 	pendingTools  int
 	readyAt       time.Time // non-zero while a processing→ready flip is the candidate end
-	// scoopJid is the unit the leader accepted this prompt for. Empty until
-	// that ack: a v10 leader names it, and status / turn endings for every
-	// OTHER unit (a scoop the cone just fed, the gelatiere settling) must not
-	// end the prompt. Empty scoop ids on later frames stay eligible so an
-	// older leader that omits the field still completes.
+	// scoopJid is the unit this prompt was delivered to. Empty until an echo,
+	// an ack, or a one-cone roster names it.
+	//
+	// A 6.196.0 leader sends per-unit status immediately and the ack only
+	// after the kernel answers. Arming settle on a named `ready` before that
+	// bind is what exited 0 in ~5s: the frame belonged to another unit, and
+	// the ack arrived too late to take it back.
 	scoopJid string
+	// sawNamed is set once any status frame carries a scoop id. A leader that
+	// names units must not be completed by an unnamed `ready` either: that
+	// frame is the displayed unit, which may not be the one running the prompt.
+	sawNamed bool
+	// boundAuthoritative is set when the id came from the prompt's own echo
+	// or ack. A roster guess can be replaced by either; an echo cannot be
+	// replaced by a later guess.
+	boundAuthoritative bool
+	// sawProcessingByUnit records `processing` for named units seen before
+	// the prompt's unit is known, so the bind can keep that fact without
+	// keeping a `ready` that may have been a different unit.
+	sawProcessingByUnit map[string]bool
 }
 
-// bindScoop remembers the unit this prompt was accepted for. The first
-// non-empty id wins; a later ack must not retarget the turn.
+// bindScoop remembers the unit this prompt was delivered to (echo or ack).
+// A `ready` observed before the bind is dropped: it may belong to another
+// unit, and the bound unit sends its own `ready` when its turn ends.
 func (p *promptTurn) bindScoop(jid string) {
+	p.bindUnit(jid, true)
+}
+
+// bindConeGuess uses a one-cone roster when the leader's ack names nobody.
+// The echo or ack replaces it.
+func (p *promptTurn) bindConeGuess(jid string) {
+	p.bindUnit(jid, false)
+}
+
+func (p *promptTurn) bindUnit(jid string, authoritative bool) {
 	if jid == "" {
 		return
 	}
 	p.mu.Lock()
-	if p.scoopJid == "" {
-		p.scoopJid = jid
+	defer p.mu.Unlock()
+	if p.scoopJid != "" {
+		if !authoritative || p.boundAuthoritative || p.scoopJid == jid {
+			return
+		}
 	}
-	p.mu.Unlock()
+	p.scoopJid = jid
+	if authoritative {
+		p.boundAuthoritative = true
+	}
+	p.sawProcessing = p.sawProcessingByUnit[jid]
+	p.readyAt = time.Time{}
+	p.pendingTools = 0
 }
 
 // forScoop reports whether a frame is about this prompt's unit. Unbound, or a
@@ -119,12 +153,31 @@ func (p *promptTurn) toolResult() {
 
 // status returns whether a ready flip became a candidate end.
 //
-// Only `ready` is an idle end. `initializing` and `error` are not success:
-// a unit booting, or one that failed, used to arm the same settle timer as a
-// finished turn and `prompt` exited 0 while the cone was still working.
-func (p *promptTurn) status(scoopStatus string, now time.Time) bool {
+// Only `ready` for the prompt's own unit is an idle end. A named frame
+// before that unit is known is remembered, not settled: production leaders
+// emit another unit's `ready` before the ack. `initializing` is not success.
+func (p *promptTurn) status(scoopStatus, scoopJid string, now time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if scoopJid != "" {
+		p.sawNamed = true
+		if scoopStatus == protocol.ScoopStatusProcessing {
+			if p.sawProcessingByUnit == nil {
+				p.sawProcessingByUnit = map[string]bool{}
+			}
+			p.sawProcessingByUnit[scoopJid] = true
+		}
+	}
+	if p.scoopJid == "" && scoopJid != "" {
+		return false
+	}
+	if p.scoopJid != "" && scoopJid != "" && scoopJid != p.scoopJid {
+		return false
+	}
+	// Unnamed status on a leader that also names units is not attributable.
+	if p.scoopJid == "" && p.sawNamed {
+		return false
+	}
 	if scoopStatus == protocol.ScoopStatusProcessing {
 		p.sawProcessing = true
 		p.readyAt = time.Time{}
@@ -141,11 +194,31 @@ func (p *promptTurn) status(scoopStatus string, now time.Time) bool {
 	return true
 }
 
+// owns reports whether a terminal frame (an error status) is about this
+// prompt. Named frames do not count until the unit is known, so another
+// unit's error cannot fail the prompt early.
+func (p *promptTurn) owns(jid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.scoopJid != "" {
+		return jid == "" || jid == p.scoopJid
+	}
+	if jid != "" || p.sawNamed {
+		return false
+	}
+	return true
+}
+
 // settled reports whether the candidate end has stood for `grace`, and if
 // not, how long the caller should wait before asking again (0 = no candidate).
 func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Named units are on the wire and none of them is known to be ours.
+	// Exiting 0 here is the production failure mode. Wait.
+	if p.sawNamed && p.scoopJid == "" {
+		return false, 0
+	}
 	if p.readyAt.IsZero() || p.pendingTools > 0 {
 		return false, 0
 	}
@@ -174,6 +247,45 @@ func (p *promptTurn) agentEvent(ev protocol.AgentEvent, finish func(int)) {
 		errLineAfterStream("prompt", "%s", ev.Error)
 		finish(1)
 	}
+}
+
+// soleConeJid returns the only root in a `scoops.list` frame.
+//
+// A root is `parentId: null`. An absent `parentId` is not a root unless the
+// old `isCone` flag says so: a v10 leader always sends `parentId`, and a
+// follower must not invent one. Two roots is not a guess.
+func soleConeJid(raw []byte) (string, bool) {
+	var msg struct {
+		Scoops []struct {
+			Jid    string          `json:"jid"`
+			Parent json.RawMessage `json:"parentId"`
+			IsCone *bool           `json:"isCone"`
+		} `json:"scoops"`
+	}
+	if json.Unmarshal(raw, &msg) != nil {
+		return "", false
+	}
+	cone := ""
+	for _, scoop := range msg.Scoops {
+		if scoop.Jid == "" || !rosterRoot(scoop.Parent, scoop.IsCone) {
+			continue
+		}
+		if cone != "" && cone != scoop.Jid {
+			return "", false
+		}
+		cone = scoop.Jid
+	}
+	if cone == "" {
+		return "", false
+	}
+	return cone, true
+}
+
+func rosterRoot(parent json.RawMessage, isCone *bool) bool {
+	if len(parent) > 0 {
+		return string(parent) == "null"
+	}
+	return isCone != nil && *isCone
 }
 
 func quotedScoop(jid string) string {
@@ -245,17 +357,25 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			if json.Unmarshal(raw, &s) != nil {
 				return
 			}
-			if !turn.forScoop(s.ScoopJid) {
-				debugLogf("prompt: ignoring status %s for scoop %q", s.ScoopStatus, s.ScoopJid)
-				return
-			}
 			if s.ScoopStatus == protocol.ScoopStatusError {
+				if !turn.owns(s.ScoopJid) {
+					debugLogf("prompt: ignoring error status for scoop %q", s.ScoopJid)
+					return
+				}
 				errLineAfterStream("prompt", "the leader reported %s in error", quotedScoop(s.ScoopJid))
 				finish(1)
 				return
 			}
 			debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
-			turn.status(s.ScoopStatus, time.Now())
+			turn.status(s.ScoopStatus, s.ScoopJid, time.Now())
+			wake()
+		case protocol.TypeUserMessageEcho:
+			var echo protocol.UserMessageEcho
+			if json.Unmarshal(raw, &echo) != nil || echo.MessageID != messageID {
+				return
+			}
+			debugLogf("prompt: echo names scoop %q", echo.ScoopJid)
+			turn.bindScoop(echo.ScoopJid)
 			wake()
 		case protocol.TypeUserMessageAck:
 			if reason, rejected := promptAckRejection(raw, messageID); rejected {
@@ -265,7 +385,15 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			}
 			var ack protocol.UserMessageAck
 			if json.Unmarshal(raw, &ack) == nil && ack.MessageID == messageID && ack.State == protocol.AckAccepted {
+				debugLogf("prompt: ack names scoop %q", ack.ScoopJid)
 				turn.bindScoop(ack.ScoopJid)
+				wake()
+			}
+		case "scoops.list":
+			if jid, ok := soleConeJid(raw); ok {
+				debugLogf("prompt: roster names cone %q", jid)
+				turn.bindConeGuess(jid)
+				wake()
 			}
 		case protocol.TypeError:
 			var e struct {
