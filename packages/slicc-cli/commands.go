@@ -42,7 +42,9 @@ type inbound struct {
 // message/tool event — withdraws the candidate; a pending tool call (a
 // `tool_use_start` with no `tool_result` yet) blocks it outright, so a slow
 // tool cannot outlast the grace window. A real `turn_end` or an error ends
-// the turn immediately. SLICC_PROMPT_SETTLE overrides the window (tests).
+// the turn immediately. Once the leader acks the prompt, only THAT unit's
+// status and events count: another unit going `ready` is not this turn
+// ending. SLICC_PROMPT_SETTLE overrides the window (tests).
 const promptSettleGrace = 2 * time.Second
 
 func promptSettleWindow() time.Duration {
@@ -62,6 +64,33 @@ type promptTurn struct {
 	sawProcessing bool
 	pendingTools  int
 	readyAt       time.Time // non-zero while a processing→ready flip is the candidate end
+	// scoopJid is the unit the leader accepted this prompt for. Empty until
+	// that ack: a v10 leader names it, and status / turn endings for every
+	// OTHER unit (a scoop the cone just fed, the gelatiere settling) must not
+	// end the prompt. Empty scoop ids on later frames stay eligible so an
+	// older leader that omits the field still completes.
+	scoopJid string
+}
+
+// bindScoop remembers the unit this prompt was accepted for. The first
+// non-empty id wins; a later ack must not retarget the turn.
+func (p *promptTurn) bindScoop(jid string) {
+	if jid == "" {
+		return
+	}
+	p.mu.Lock()
+	if p.scoopJid == "" {
+		p.scoopJid = jid
+	}
+	p.mu.Unlock()
+}
+
+// forScoop reports whether a frame is about this prompt's unit. Unbound, or a
+// frame that names no unit, stays relevant.
+func (p *promptTurn) forScoop(jid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.scoopJid == "" || jid == "" || jid == p.scoopJid
 }
 
 // activity records resumed work: any candidate end is withdrawn.
@@ -89,11 +118,19 @@ func (p *promptTurn) toolResult() {
 }
 
 // status returns whether a ready flip became a candidate end.
+//
+// Only `ready` is an idle end. `initializing` and `error` are not success:
+// a unit booting, or one that failed, used to arm the same settle timer as a
+// finished turn and `prompt` exited 0 while the cone was still working.
 func (p *promptTurn) status(scoopStatus string, now time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if scoopStatus == protocol.ScoopStatusProcessing {
 		p.sawProcessing = true
+		p.readyAt = time.Time{}
+		return false
+	}
+	if scoopStatus != protocol.ScoopStatusReady {
 		p.readyAt = time.Time{}
 		return false
 	}
@@ -137,6 +174,13 @@ func (p *promptTurn) agentEvent(ev protocol.AgentEvent, finish func(int)) {
 		errLineAfterStream("prompt", "%s", ev.Error)
 		finish(1)
 	}
+}
+
+func quotedScoop(jid string) string {
+	if jid == "" {
+		return "the conversation"
+	}
+	return jid
 }
 
 // promptAckRejection reads a `user_message_ack` frame for the prompt sent as
@@ -189,12 +233,25 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			if json.Unmarshal(raw, &env) != nil {
 				return
 			}
+			if !turn.forScoop(env.ScoopJid) {
+				debugLogf("prompt: ignoring agent_event %s for scoop %q", env.Event.Type, env.ScoopJid)
+				return
+			}
 			debugLogf("prompt: agent_event %s", env.Event.Type)
 			turn.agentEvent(env.Event, finish)
 			wake()
 		case protocol.TypeStatus:
 			var s protocol.Status
 			if json.Unmarshal(raw, &s) != nil {
+				return
+			}
+			if !turn.forScoop(s.ScoopJid) {
+				debugLogf("prompt: ignoring status %s for scoop %q", s.ScoopStatus, s.ScoopJid)
+				return
+			}
+			if s.ScoopStatus == protocol.ScoopStatusError {
+				errLineAfterStream("prompt", "the leader reported %s in error", quotedScoop(s.ScoopJid))
+				finish(1)
 				return
 			}
 			debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
@@ -204,6 +261,11 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			if reason, rejected := promptAckRejection(raw, messageID); rejected {
 				errLine("prompt", "%s", reason)
 				finish(1)
+				return
+			}
+			var ack protocol.UserMessageAck
+			if json.Unmarshal(raw, &ack) == nil && ack.MessageID == messageID && ack.State == protocol.AckAccepted {
+				turn.bindScoop(ack.ScoopJid)
 			}
 		case protocol.TypeError:
 			var e struct {

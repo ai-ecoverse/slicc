@@ -324,9 +324,19 @@ func statusFrame(s string) protocol.Status {
 	return protocol.Status{Type: protocol.TypeStatus, ScoopStatus: s}
 }
 
+func statusFrameFor(jid, s string) protocol.Status {
+	st := statusFrame(s)
+	st.ScoopJid = jid
+	return st
+}
+
 func agentFrame(eventType, id, text string) protocol.AgentEventEnvelope {
+	return agentFrameFor("cone", eventType, id, text)
+}
+
+func agentFrameFor(jid, eventType, id, text string) protocol.AgentEventEnvelope {
 	return protocol.AgentEventEnvelope{
-		Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+		Type: protocol.TypeAgentEvent, ScoopJid: jid,
 		Event: protocol.AgentEvent{Type: eventType, MessageID: id, Text: text, Error: text},
 	}
 }
@@ -499,6 +509,59 @@ func TestCLIPromptIgnoresOtherMessagesAck(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "OWN-TURN-OK") || strings.Contains(stderr, "not yours") {
 		t.Fatalf("stdout = %q, stderr = %q; want the turn, not the foreign rejection", stdout, stderr)
+	}
+}
+
+// TestCLIPromptIgnoresOtherScoopReady: the leader broadcasts every unit's
+// status. A scoop going `ready` (or `initializing`) while the accepted unit
+// is still in a tool call must not end `prompt` — that returned exit 0 and
+// an empty reply while the cone kept working (BU Bench V2.1, 2026-09-26).
+func TestCLIPromptIgnoresOtherScoopReady(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		ack := ackFrame(id, protocol.AckAccepted, "")
+		ack.ScoopJid = "cone-1"
+		return ack
+	}, []any{
+		statusFrameFor("cone-1", "processing"),
+		// No tool event yet: the cone is still on its first call. Another
+		// unit going idle, and this unit leaving `processing` for
+		// `initializing`, must not arm the settle timer.
+		statusFrameFor("sports", "ready"),
+		statusFrameFor("cone-1", "initializing"),
+		900 * time.Millisecond, // longer than the 300 ms settle window
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m2", "AFTER-SCOOP-OK"),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-SCOOP-OK") {
+		t.Fatalf("prompt stdout = %q, want the reply after the other scoop went ready", stdout)
+	}
+}
+
+// TestCLIPromptIgnoresOtherScoopTurnEnd: a `turn_end` for a unit that did
+// not accept this prompt is not the prompt's turn.
+func TestCLIPromptIgnoresOtherScoopTurnEnd(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := ackLeader(t, func(id string) protocol.UserMessageAck {
+		ack := ackFrame(id, protocol.AckAccepted, "")
+		ack.ScoopJid = "cone-1"
+		return ack
+	}, []any{
+		agentFrameFor("sports", protocol.AgentTurnEnd, "m-other", ""),
+		statusFrameFor("cone-1", "processing"),
+		agentFrameFor("cone-1", protocol.AgentContentDelta, "m1", "OWN-TURN-OK"),
+		statusFrameFor("cone-1", "ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "OWN-TURN-OK") {
+		t.Fatalf("prompt stdout = %q, want the accepted unit's reply", stdout)
 	}
 }
 

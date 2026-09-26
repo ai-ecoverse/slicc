@@ -434,6 +434,36 @@ describe('tray sidecar', () => {
       expect(await run).toMatchObject({ stdout: 'hello', exitCode: 0 });
     });
 
+    it('does not end the turn when a different scoop goes ready', async () => {
+      const { info, dial } = await attach(registry);
+      let settled = false;
+      const run = registry.prompt(info.name, 'hi').then((r) => {
+        settled = true;
+        return r;
+      });
+      await Promise.resolve();
+      const messageId = dial.channel.framesOfType('user_message')[0].messageId as string;
+      dial.channel.deliver({
+        type: 'user_message_ack',
+        messageId,
+        scoopJid: 'cone-1',
+        state: 'accepted',
+      });
+      dial.channel.deliver({ type: 'status', scoopStatus: 'processing', scoopJid: 'cone-1' });
+      dial.channel.deliver({ type: 'status', scoopStatus: 'ready', scoopJid: 'sports' });
+      dial.channel.deliver({ type: 'status', scoopStatus: 'initializing', scoopJid: 'cone-1' });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      dial.channel.deliver({
+        type: 'agent_event',
+        scoopJid: 'cone-1',
+        event: { type: 'content_delta', messageId: 'm1', text: 'still going' },
+      });
+      dial.channel.deliver({ type: 'status', scoopStatus: 'ready', scoopJid: 'cone-1' });
+      expect(await run).toMatchObject({ stdout: 'still going', exitCode: 0 });
+    });
+
     // A `ready` before any `processing` is just the leader's opening state.
     it('ignores a ready status that never followed processing', async () => {
       const { info, dial } = await attach(registry);

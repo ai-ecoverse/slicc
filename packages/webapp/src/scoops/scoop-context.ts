@@ -129,6 +129,14 @@ export class ScoopContext {
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
   /**
+   * Generation of {@link runTurn}. A superseded turn's `finally` must not
+   * publish `ready` or clear `isProcessing`: a second prompt (a redial that
+   * delivered twice, a resume overlapping a new send) aborts the first, and
+   * the first's cleanup used to mark the live turn idle while its agent kept
+   * running. `prompt` then exited 0.
+   */
+  private turnEpoch = 0;
+  /**
    * Process manager. When set, each turn becomes a `kind:'scoop-turn'` pid —
    * see `scoop-context/turn-process.ts` for the spawn/signal/exit contract.
    * Optional: tests construct `ScoopContext` without one and the inline
@@ -423,8 +431,18 @@ export class ScoopContext {
     abortController: AbortController,
     turnProcess: Process | null,
     lastError: Error | null,
-    abortSignal: AbortSignal
+    abortSignal: AbortSignal,
+    /** Absent for callers that are not a {@link runTurn} generation. */
+    epoch?: number
   ): void {
+    // A newer runTurn already owns the unit. Publishing `ready` here is what
+    // made `prompt` exit while that run was still in `agent.prompt()`.
+    if (epoch !== undefined && epoch !== this.turnEpoch) {
+      if (this.currentTurnProcess !== turnProcess) {
+        finishTurnProcess(this.processManager, turnProcess, { lastError, aborted: true });
+      }
+      return;
+    }
     // Deliberately NOT clearing `turnGuestGates` here. The agent can begin a
     // follow-up turn internally without re-entering `prompt()`, and that turn is
     // still downstream of the guest's message; clearing here let it run
@@ -603,6 +621,7 @@ export class ScoopContext {
     const abortController = new AbortController();
     this.promptAbortController = abortController;
     const abortSignal = abortController.signal;
+    const epoch = ++this.turnEpoch;
 
     this.isProcessing = true;
     this.setStatus('processing');
@@ -631,11 +650,16 @@ export class ScoopContext {
 
       // Only set 'ready' if status hasn't been changed to 'error' by a fatal handler.
       // The turn runner sets 'error' before returning, so we preserve that.
-      if (!this.disposed && !abortSignal.aborted && this.status !== 'error') {
+      if (
+        epoch === this.turnEpoch &&
+        !this.disposed &&
+        !abortSignal.aborted &&
+        this.status !== 'error'
+      ) {
         this.setStatus('ready');
       }
     } finally {
-      this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal);
+      this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal, epoch);
     }
   }
 

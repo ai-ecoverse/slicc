@@ -2240,6 +2240,16 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
     expect(mockStore.syncAgentMessages).toHaveBeenCalledTimes(1);
   });
 
+  it('a superseded turn does not mark the live turn ready', () => {
+    (ctx as any).turnEpoch = 2;
+    (ctx as any).isProcessing = true;
+    (ctx as any).setStatus('processing');
+    const abortController = new AbortController();
+    (ctx as any).cleanupPromptState(abortController, null, null, abortController.signal, 1);
+    expect((ctx as any).isProcessing).toBe(true);
+    expect((ctx as any).status).toBe('processing');
+  });
+
   it('a clean turn end does not flush from cleanup (agent_end owns it)', () => {
     const abortController = new AbortController();
     (ctx as any).cleanupPromptState(abortController, null, null, abortController.signal);

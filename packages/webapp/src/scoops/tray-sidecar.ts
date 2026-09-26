@@ -555,23 +555,67 @@ function promptRejectedReason(error: string | undefined): string {
  * so the ack / agent / status switch stays under the complexity gate while still
  * matching the Go CLI's settle rules (`promptAckRejection` + turn endings).
  */
+/** Unbound, or a frame that names no unit, still counts. A named other unit does not. */
+function promptFrameIsForTurn(boundJid: string, scoopJid: string | undefined): boolean {
+  return !boundJid || !scoopJid || scoopJid === boundJid;
+}
+
+type PromptTurnState = { sawProcessing: boolean; scoopJid: string };
+
+function handlePromptAck(
+  message: Extract<LeaderToFollowerMessage, { type: 'user_message_ack' }>,
+  messageId: string,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (message.messageId !== messageId) return;
+  if (message.state === 'rejected') {
+    buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
+    control.finish(1);
+    return;
+  }
+  // `accepted` names the unit the kernel took the prompt for. Keep waiting
+  // for that unit's turn; do not let a later ack retarget it.
+  if (message.state === 'accepted' && message.scoopJid && !state.scoopJid) {
+    state.scoopJid = message.scoopJid;
+  }
+}
+
+function handlePromptStatus(
+  message: Extract<LeaderToFollowerMessage, { type: 'status' }>,
+  buffer: RunBuffer,
+  state: PromptTurnState,
+  control: VerbControl
+): void {
+  if (!promptFrameIsForTurn(state.scoopJid, message.scoopJid)) return;
+  if (message.scoopStatus === 'processing') {
+    state.sawProcessing = true;
+    return;
+  }
+  if (!state.sawProcessing) return;
+  if (message.scoopStatus === 'error') {
+    buffer.push('stderr', 'the leader reported the scoop in error\n');
+    control.finish(1);
+    return;
+  }
+  // Only `ready` ends the turn. `initializing` is a unit booting, not idle.
+  if (message.scoopStatus === 'ready') control.finish(0);
+}
+
 function handlePromptFrame(
   message: LeaderToFollowerMessage,
   messageId: string,
   buffer: RunBuffer,
-  state: { sawProcessing: boolean },
+  state: PromptTurnState,
   control: VerbControl
 ): void {
   if (message.type === 'user_message_ack') {
-    if (message.messageId !== messageId) return;
-    if (message.state === 'rejected') {
-      buffer.push('stderr', `${promptRejectedReason(message.error)}\n`);
-      control.finish(1);
-    }
-    // `accepted` (and unknown states) keep waiting for real agent activity.
+    handlePromptAck(message, messageId, buffer, state, control);
     return;
   }
   if (message.type === 'agent_event') {
+    if (!promptFrameIsForTurn(state.scoopJid, message.scoopJid)) return;
     const event = message.event;
     if (event.type === 'content_delta') buffer.push('stdout', event.text);
     else if (event.type === 'turn_end') control.finish(0);
@@ -582,8 +626,7 @@ function handlePromptFrame(
     return;
   }
   if (message.type === 'status') {
-    if (message.scoopStatus === 'processing') state.sawProcessing = true;
-    else if (state.sawProcessing) control.finish(0);
+    handlePromptStatus(message, buffer, state, control);
     return;
   }
   if (message.type === 'error') {
@@ -698,9 +741,10 @@ export class SidecarRegistry {
    * Send one chat turn and stream the leader's reply.
    *
    * A live browser leader emits no `turn_end` — it signals turn completion by
-   * `scoopStatus` going `processing` → anything else. Both endings are honored,
-   * matching `cmdPrompt` in the Go CLI, because a non-live float does send
-   * `turn_end` and would otherwise hang until the timeout.
+   * `scoopStatus` going `processing` → `ready` on the unit that accepted the
+   * prompt. Another unit's `ready`, or `initializing`, is not this turn.
+   * A non-live float does send `turn_end` and would otherwise hang until the
+   * timeout. Both endings are honored, matching `cmdPrompt` in the Go CLI.
    *
    * A v10 leader also sends `user_message_ack` for this prompt's `messageId`.
    * `rejected` ends the run at once (no turn will follow); `accepted` only
@@ -714,7 +758,7 @@ export class SidecarRegistry {
   ): Promise<SidecarRunResult> {
     const attachment = this.require(name);
     const buffer = new RunBuffer(options.onChunk);
-    const state = { sawProcessing: false };
+    const state = { sawProcessing: false, scoopJid: '' };
     const messageId = crypto.randomUUID();
 
     const run = runVerb(attachment, options, buffer, (message, control) => {
