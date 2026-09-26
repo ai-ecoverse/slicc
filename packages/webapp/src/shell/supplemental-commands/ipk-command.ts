@@ -30,6 +30,8 @@ import {
 import type { ScriptCatalog } from '../script-catalog.js';
 import { LIFECYCLE_SHORTCUTS, RUN_ALIASES, runNpmScript } from './npm-run.js';
 import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest as isSubHelpRequest } from './subcommand-help.js';
+// `ipk-mamba` (and its bzip2 dep) load lazily — see createIpkCommand.
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -48,7 +50,8 @@ const INSTALL_BOOL_FLAGS = ['-g', '--global', '-D', '--save-dev'] as const;
 
 function usage(name: string): string {
   return `${name} - install packages from the npm registry into node_modules
-       and run package.json scripts
+       and run package.json scripts; also install conda/emscripten-forge
+       packages via '${name} mamba'
 
 Usage:
   ${name} install [-D|--save-dev] [<pkg>[@<spec>] ...]
@@ -56,6 +59,9 @@ Usage:
   ${name} i       [-D|--save-dev] [<pkg>[@<spec>] ...]
   ${name} run     [<script> [-- <args>...]]
   ${name} test | start | stop | restart
+  ${name} mamba install <pkg>[=<version>] ...
+  ${name} mamba list
+  ${name} mamba uninstall <pkg> ...
 
 No-arg forms:
   ${name} install            read cwd package.json and install every entry
@@ -69,6 +75,11 @@ Global installs:
   ${name} uninstall -g <pkg> remove a global package and reconcile the tree
   ${name} list -g            list globally installed direct dependencies
   ${name} root -g            print the global node_modules path
+
+Conda / emscripten-forge (see '${name} mamba --help'):
+  ${name} mamba install <pkg>  install into /shared/lib/conda (emscripten-wasm32)
+  ${name} mamba list           list conda packages in that prefix
+  ${name} mamba uninstall <pkg> remove a conda package from the prefix
 
 Local project (no -g):
   ${name} uninstall <pkg>    remove from cwd package.json and reconcile node_modules
@@ -167,9 +178,7 @@ export function parseGlobalFlagArgs(args: string[]): ParsedGlobalFlagArgs {
  * the script (`npm run lint -- --help` asks lint for its help, not ipk).
  */
 function isHelpRequest(args: string[]): boolean {
-  const separator = args.indexOf('--');
-  const own = separator === -1 ? args : args.slice(0, separator);
-  return own.includes('--help') || own.includes('-h');
+  return isSubHelpRequest(args);
 }
 
 function describeError(err: unknown): string {
@@ -180,6 +189,63 @@ function describeError(err: unknown): string {
 async function refreshGlobalBinCommands(deps: IpkCommandDeps): Promise<void> {
   deps.scriptCatalog?.invalidateJsh();
   await deps.syncScriptCommands?.();
+}
+
+export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
+  const isShorthand = name === 'i';
+  return defineCommand(name, async (args: string[], ctx: CommandContext) => {
+    if (isShorthand) {
+      if (isHelpRequest(args)) {
+        return { stdout: usage(name), stderr: '', exitCode: 0 };
+      }
+      return runInstall(name, args, ctx, deps);
+    }
+
+    // Nested `mamba` owns its own --help (`ipk mamba install --help`).
+    // Dynamic import keeps bzip2 / conda extract out of the kernel-worker
+    // first-load graph (bundle-size gate).
+    if (args[0] === 'mamba') {
+      const { runIpkMamba } = await import('./ipk-mamba.js');
+      return runIpkMamba(name, args.slice(1), ctx, deps);
+    }
+
+    if (isHelpRequest(args)) {
+      return { stdout: usage(name), stderr: '', exitCode: 0 };
+    }
+
+    if (args.length === 0) {
+      return { stdout: usage(name), stderr: `${name}: missing subcommand\n`, exitCode: 1 };
+    }
+
+    const sub = args[0];
+    const rest = args.slice(1);
+    if (INSTALL_ALIASES.has(sub)) {
+      return runInstall(name, rest, ctx, deps);
+    }
+    if (UNINSTALL_ALIASES.has(sub)) {
+      return runUninstall(name, rest, ctx, deps);
+    }
+    if (LIST_ALIASES.has(sub)) {
+      return runList(name, rest, ctx, deps);
+    }
+    if (sub === 'root') {
+      return runRoot(name, rest, ctx, deps);
+    }
+    if (RUN_ALIASES.has(sub)) {
+      return runNpmScript(name, rest, ctx, { fs: deps.fs });
+    }
+    // `npm test` is `npm run test`; the shortcut takes no script argument, so
+    // its own name is the script name and the rest passes through as args.
+    if (LIFECYCLE_SHORTCUTS.has(sub)) {
+      return runNpmScript(name, args, ctx, { fs: deps.fs });
+    }
+
+    return {
+      stdout: '',
+      stderr: `${name}: unknown subcommand '${sub}' (supported: install, uninstall, list, root, run, mamba)\n`,
+      exitCode: 1,
+    };
+  });
 }
 
 async function runManifestInstall(
@@ -393,50 +459,4 @@ async function runRoot(
   const { global } = parseGlobalFlagArgs(args);
   const path = global ? GLOBAL_NODE_MODULES : `${ctx.cwd.replace(/\/$/, '')}/node_modules`;
   return { stdout: `${path}\n`, stderr: '', exitCode: 0 };
-}
-
-export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
-  const isShorthand = name === 'i';
-  return defineCommand(name, async (args: string[], ctx: CommandContext) => {
-    if (isHelpRequest(args)) {
-      return { stdout: usage(name), stderr: '', exitCode: 0 };
-    }
-
-    if (isShorthand) {
-      return runInstall(name, args, ctx, deps);
-    }
-
-    if (args.length === 0) {
-      return { stdout: usage(name), stderr: `${name}: missing subcommand\n`, exitCode: 1 };
-    }
-
-    const sub = args[0];
-    const rest = args.slice(1);
-    if (INSTALL_ALIASES.has(sub)) {
-      return runInstall(name, rest, ctx, deps);
-    }
-    if (UNINSTALL_ALIASES.has(sub)) {
-      return runUninstall(name, rest, ctx, deps);
-    }
-    if (LIST_ALIASES.has(sub)) {
-      return runList(name, rest, ctx, deps);
-    }
-    if (sub === 'root') {
-      return runRoot(name, rest, ctx, deps);
-    }
-    if (RUN_ALIASES.has(sub)) {
-      return runNpmScript(name, rest, ctx, { fs: deps.fs });
-    }
-    // `npm test` is `npm run test`; the shortcut takes no script argument, so
-    // its own name is the script name and the rest passes through as args.
-    if (LIFECYCLE_SHORTCUTS.has(sub)) {
-      return runNpmScript(name, args, ctx, { fs: deps.fs });
-    }
-
-    return {
-      stdout: '',
-      stderr: `${name}: unknown subcommand '${sub}' (supported: install, uninstall, list, root, run)\n`,
-      exitCode: 1,
-    };
-  });
 }

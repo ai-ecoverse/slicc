@@ -158,6 +158,7 @@ const DISPATCHERS: readonly Dispatcher[] = [
 const NOT_DISPATCHERS = new Map<string, string>([
   ['ipx-command.ts', "npx-like runner — `ipx <bin> --help` is the bin's help, not ours"],
   ['computer/parse.ts', 'pure parser — verb dispatch lives in computer/run.ts'],
+  ['ipk-mamba.ts', 'nested under ipk — `ipk mamba <verb> --help` covered in ipk-mamba.test.ts'],
 ]);
 
 /** Read the balanced `{...}` block that starts at `open`. */

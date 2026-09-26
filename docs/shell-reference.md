@@ -605,6 +605,33 @@ Without `-g`, uninstall removes entries from the cwd `package.json` and reconcil
 versions. `npm root -g` prints `/shared/lib/node_modules`; `npm root` without `-g`
 prints `<cwd>/node_modules`.
 
+### `ipk mamba` (conda / emscripten-forge)
+
+`ipk mamba install <pkg>[=<version>]` installs **emscripten-wasm32** packages from
+conda channels into the shared prefix `/shared/lib/conda` (alongside npm's
+`/shared/lib/node_modules`). Default channels are
+`https://repo.prefix.dev/emscripten-forge-4x` and
+`https://repo.prefix.dev/conda-forge` (noarch). Records land in
+`/shared/lib/conda/conda-meta/`; `ipk mamba list` and `ipk mamba uninstall <pkg>`
+read and remove them.
+
+This is a **thin** installer (repodata lookup → download `.tar.bz2` → extract), not
+a full mamba/rattler SAT solve: virtual packages such as `emscripten-abi` are
+skipped, and hard depends are not auto-installed. See `ipk mamba --help` for the
+current limitations.
+
+**When to use which installer**
+
+| Need                                                             | Command                                 | Why                                                                            |
+| ---------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| Forge C/WASM libs (`zlib`, `libpng`, …) into `/shared/lib/conda` | `ipk mamba install <pkg>`               | emscripten-wasm32 conda packages (SIDE_MODULE `.so`, headers, `.a`)            |
+| `convert` / ImageMagick                                          | `ipk add -g @imagemagick/magick-wasm@…` | npm Magick.NET wasm; forge `imagemagick` is link `.a` + CLI JS missing `.wasm` |
+| `ffmpeg` / `ffprobe`                                             | `ipk add -g @ffmpeg/core@…`             | npm `@ffmpeg/core` worker pair; forge `ffmpeg` is static libav `.a` only       |
+| `python` (Pyodide)                                               | `ipk add pyodide@…`                     | no forge `pyodide`; forge `python` is a different (xeus/pyjs) runtime          |
+
+Do not change agent guidance for convert/ffmpeg/python to `ipk mamba` until those
+commands grow loaders that consume the forge layout.
+
 ### `ipx` / `npx` built-in redirects
 
 `ipx` runs JavaScript package bins from the nearest installed `node_modules`, then the
