@@ -82,8 +82,12 @@ export function createRecycler({
         throw new Error(`stop-leader exited ${stop.status}: ${stop.output.slice(-400)}`);
       if (profileDir) rmSync(profileDir, { recursive: true, force: true });
       const start = await run(join(scriptsDir, 'start-leader.mjs'), { env: scriptEnv });
-      if (start.status !== 0)
-        throw new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);
+      if (start.status !== 0) {
+        const err = new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);
+        // All of it, for diagnostics/: the tail alone is Chrome noise more often than not.
+        err.output = start.output;
+        throw err;
+      }
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -104,7 +108,8 @@ export function redact(text, urls = []) {
 /**
  * The run's diagnostic journal, beside its records: `calls.jsonl` (every leader call: what,
  * when, how long, how it ended), `events.jsonl` (task results with leader age and health,
- * restarts, stops), and `diagnostics/` (the CLI's debug output for failed dials). Everything
+ * restarts, stops), and `diagnostics/` (the CLI's debug output for failed dials, the output of
+ * failed leader boots). Everything
  * is redacted of join URLs; nothing holds task text. With `leaderLog`, each event also appends a
  * `[bench-event]` line to the leader's own log (same runner), so its lines read as a timeline.
  */
@@ -126,6 +131,12 @@ export function createJournal(dir, { urls = () => [], now = Date.now, leaderLog 
         e.diagnostics = file;
       }
       append('calls.jsonl', e);
+    },
+    /** Keep a long diagnostic text (redacted) under diagnostics/; returns its path. */
+    diagnostic(name, text) {
+      const file = `diagnostics/${name.replace(/[^A-Za-z0-9-]+/g, '-')}.log`;
+      writeFileSync(join(dir, file), redact(text, urls()));
+      return file;
     },
     event(type, data = {}) {
       const at = new Date(now()).toISOString();
