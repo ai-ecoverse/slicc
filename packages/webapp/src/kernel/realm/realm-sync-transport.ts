@@ -24,10 +24,21 @@ export function resolveSyncSabTransport(
   init: RealmInitMsg,
   port: RealmPortLike
 ): SyncSabTransport | undefined {
-  if (!init.syncSab || typeof Atomics === 'undefined' || typeof Atomics.wait !== 'function') {
-    return undefined;
-  }
+  if (!init.syncSab || !canWaitAtomically()) return undefined;
   return createSyncSabTransport(init.syncSab, port);
+}
+
+function canWaitAtomically(): boolean {
+  return typeof Atomics !== 'undefined' && typeof Atomics.wait === 'function';
+}
+
+/**
+ * Whether {@link resolveSyncFsBridge} will produce a bridge for this realm —
+ * known before the transports are built, e.g. to choose the boot snapshot's
+ * budget (a cache miss falls through to the bridge).
+ */
+export function hasSyncFsBridge(init: RealmInitMsg): boolean {
+  return Boolean(init.syncFsToken) || (Boolean(init.syncSab) && canWaitAtomically());
 }
 
 /**
