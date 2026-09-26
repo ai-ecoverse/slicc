@@ -342,7 +342,11 @@ export async function converse({
     if (res.ok) {
       const data = JSON.parse(text);
       const use = (data.output?.message?.content ?? []).find((c) => c.toolUse)?.toolUse;
-      if (!use) throw new Error('judge answered without calling the findings tool');
+      if (!use) {
+        const err = new Error('judge answered without calling the findings tool');
+        err.noToolCall = true;
+        throw err;
+      }
       return { input: use.input, usage: data.usage ?? null, toolUseId: use.toolUseId };
     }
     last = `HTTP ${res.status}: ${text.slice(0, 300)}`;
@@ -397,6 +401,12 @@ export async function judgeRun({
     try {
       reply = await ask(imagesSent, last);
     } catch (err) {
+      // A reply without the tool call is a malformed judgement too, but has no call to answer
+      // with a repair turn: ask again as before (seen on the pinned smoke run, 2026-09-26).
+      if (err.noToolCall) {
+        errors = [err.message];
+        continue;
+      }
       if (!err.imageUnsupported || !imagesSent) throw err;
       imagesSent = false;
       reply = await ask(false, last);
