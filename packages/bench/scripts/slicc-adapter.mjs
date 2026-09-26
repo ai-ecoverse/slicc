@@ -509,6 +509,21 @@ export function traceFromResult(result) {
 
 export const COST_POLL_MS = 30_000;
 
+export const BUSY_PROBE_MS = 20_000;
+
+export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sleep }) {
+  if (reply.status !== 0 || reply.timedOut || reply.aborted) return false;
+  if (String(reply.stdout ?? '').trim()) return false;
+  const first = await spend(leader);
+  await sleep(probeMs);
+  const second = await spend(leader);
+  if (!first || !second) return false;
+
+  return (
+    second.cost > first.cost + 1e-9 || second.tokens > first.tokens || second.turns > first.turns
+  );
+}
+
 export function watchSpend(leader, before, maxCost, abort, pollMs = COST_POLL_MS) {
   let running = true;
   let wake = null;
@@ -543,6 +558,8 @@ export async function runTask({
   now = Date.now,
   maxCost = 0,
   costPollMs = COST_POLL_MS,
+  busyProbeMs = BUSY_PROBE_MS,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }) {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
@@ -575,6 +592,14 @@ export async function runTask({
     await watcher?.stop();
     const shots = await shooter.stop();
     if (reply.leaderDown) throw failure('slicc prompt', reply);
+
+    if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
+      const err = new Error(
+        `slicc prompt returned after ${Math.round(durationMs / 1000)} s while the agent was still working (its spend kept rising)`
+      );
+      err.stillWorking = true;
+      throw err;
+    }
     const openTabs = (await tabs(leader)).map((t) => t.url);
 
     await closeTabs(leader).catch(() => {});
