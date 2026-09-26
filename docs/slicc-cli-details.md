@@ -107,10 +107,11 @@ than failing as an unknown option.
 flip), 1 on an agent/leader `error`, a closed connection, or a `rejected`
 `user_message_ack`, and 130 on Ctrl+C (after sending `abort`). The ack is a v10
 leader's answer to the prompt's own `messageId`, sent only to this follower:
-`rejected` means the leader could not deliver it into its agent, so no turn
+`rejected` means the leader could not hand the prompt to its kernel, so no turn
 will follow and waiting would hang; the leader's `error` goes to stderr as
-`slicc prompt: the leader rejected the prompt: <error>`. `accepted` changes
-nothing but a debug log line (`SLICC_DEBUG=1`). Acks for other `messageId`s and
+`slicc prompt: the leader rejected the prompt: <error>`. `accepted` means only
+that the leader handed it over (not that the agent started); it changes nothing
+but a debug log line (`SLICC_DEBUG=1`). Acks for other `messageId`s and
 unknown states are ignored, and a leader < 10 sends none, so the exit rules
 above are unchanged against it.
 
