@@ -57,8 +57,12 @@ export function createRecycler({
         throw new Error(`stop-leader exited ${stop.status}: ${stop.output.slice(-400)}`);
       if (profileDir) rmSync(profileDir, { recursive: true, force: true });
       const start = await run(join(scriptsDir, 'start-leader.mjs'), { env: scriptEnv });
-      if (start.status !== 0)
-        throw new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);
+      if (start.status !== 0) {
+        const err = new Error(`start-leader exited ${start.status}: ${start.output.slice(-400)}`);
+
+        err.output = start.output;
+        throw err;
+      }
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -93,6 +97,12 @@ export function createJournal(dir, { urls = () => [], now = Date.now, leaderLog 
         e.diagnostics = file;
       }
       append('calls.jsonl', e);
+    },
+
+    diagnostic(name, text) {
+      const file = `diagnostics/${name.replace(/[^A-Za-z0-9-]+/g, '-')}.log`;
+      writeFileSync(join(dir, file), redact(text, urls()));
+      return file;
     },
     event(type, data = {}) {
       const at = new Date(now()).toISOString();

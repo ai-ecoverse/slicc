@@ -444,7 +444,7 @@ async function restartLeader(ctx, reason, log) {
     tasks: lane.tasks,
   });
   log(`restarting the leader (${reason})`);
-  const next = await ctx.recycle();
+  const next = await bootTwice(() => ctx.recycle(), journal, ctx.id, log);
   ctx.leader.setUrl(next.url);
   Object.assign(lane, {
     generation: lane.generation + 1,
@@ -458,6 +458,25 @@ async function restartLeader(ctx, reason, log) {
     slicc_version: next.sliccVersion,
     boot_ms: Date.now() - t0,
   });
+}
+
+export async function bootTwice(boot, journal, lane, log) {
+  try {
+    return await boot();
+  } catch (err) {
+    const file = err?.output
+      ? journal.diagnostic(`boot-L${lane}-${Date.now()}`, err.output)
+      : undefined;
+    journal.event('leader-boot-failed', {
+      lane,
+      reason: String(err?.message ?? err)
+        .split('\n')[0]
+        .slice(0, 300),
+      ...(file ? { diagnostics: file } : {}),
+    });
+    log(`the new leader did not come up; trying once more${file ? ` (${file})` : ''}`);
+    return boot();
+  }
 }
 
 async function prepareLeader(r, ctx, log) {
@@ -547,15 +566,17 @@ async function bootLanes(opts, deps, journal, log) {
   for (let i = 0; i < opts.leaders; i += 1) {
     const t0 = Date.now();
     try {
-      const l = deps.bootLane
-        ? await deps.bootLane(i, { lock, claims })
-        : await bootLane(i, {
-            scriptsDir: process.env.BENCH_LEADER_SCRIPTS,
-            lock,
-            claims,
-            makeLeader: createLeader,
-            onCall: journal.call,
-          });
+      const boot = () =>
+        deps.bootLane
+          ? deps.bootLane(i, { lock, claims })
+          : bootLane(i, {
+              scriptsDir: process.env.BENCH_LEADER_SCRIPTS,
+              lock,
+              claims,
+              makeLeader: createLeader,
+              onCall: journal.call,
+            });
+      const l = await bootTwice(boot, journal, i, log);
       lanes.push({
         id: i,
         ...l,
@@ -646,7 +667,7 @@ async function laneLoop(runs, lc, queue, state, shared, log) {
     });
     say(`stopping this lane: ${err.message}`);
   } finally {
-    if (lc.lane.staged)
+    if (lc.lane.staged && !lc.stop)
       await restoreSkills(lc.leader).catch((err) =>
         say(`could not restore /workspace/skills: ${err.message}`)
       );

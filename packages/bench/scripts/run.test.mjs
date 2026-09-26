@@ -1022,8 +1022,57 @@ describe('leader lifecycle', () => {
       { ...leader().deps, recycle, log }
     );
     expect(code).toBe(1);
+    expect(recycle).toHaveBeenCalledTimes(2);
     expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-2', 1))).toBe(false);
+    expect(events(out).find((e) => e.type === 'leader-boot-failed')).toMatchObject({
+      lane: 0,
+      reason: 'start-leader exited 1: chrome did not start',
+    });
     expect(events(out).find((e) => e.type === 'stopped').reason).toMatch(/chrome did not start/);
+    q.mockRestore();
+  });
+
+  it('boots a leader once more when the new one does not come up, keeping its output', async () => {
+    const dir = tmp();
+    const out = join(dir, 'o');
+    const q = quiet();
+    let boots = 0;
+    const recycle = vi.fn(async () => {
+      boots += 1;
+      if (boots === 1) {
+        const err = new Error('start-leader exited 1: RECATED_ENDPOINT');
+        err.output =
+          'booting https://w/join/secret-token\n::error::leader did not report a join URL';
+        throw err;
+      }
+      return { url: 'https://w/join/l2', startedAt: new Date().toISOString() };
+    });
+    const log = vi.fn();
+    const code = await main(
+      [
+        '--set',
+        twoTasks(dir),
+        '--models',
+        'm',
+        '--no-judge',
+        '--fresh-leader-every',
+        '1',
+        '--out',
+        out,
+      ],
+      { ...leader().deps, recycle, log }
+    );
+    expect(code).toBe(0);
+    expect(recycle).toHaveBeenCalledTimes(2);
+    const failed = events(out).find((e) => e.type === 'leader-boot-failed');
+    expect(failed.diagnostics).toMatch(/^diagnostics\/boot-L0-\d+\.log$/);
+    const kept = readFileSync(join(out, failed.diagnostics), 'utf8');
+    expect(kept).toContain('leader did not report a join URL');
+    expect(kept).not.toContain('secret-token');
+    expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
+      /the new leader did not come up; trying once more \(diagnostics\/boot-L0-/
+    );
+    expect(existsSync(recordPath(out, 'Own', 'builtin', 'm', 'own-2', 1))).toBe(true);
     q.mockRestore();
   });
 });
@@ -1140,6 +1189,12 @@ describe('lanes and guardrails', () => {
     expect(lanesUsed.sort()).toEqual([0, 0, 1, 1].sort());
     expect(fakes.every((f) => f.commands.includes('slicc prompt -'))).toBe(true);
     expect(stops.every((s) => s.mock.calls.length === 1)).toBe(true);
+
+    expect(
+      fakes.some((f) =>
+        f.commands.some((c) => c.startsWith('if [ -d /workspace/.bench-skills-builtin ]'))
+      )
+    ).toBe(false);
     expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(/\[L1\] \[\d\/4\] own-/);
     const ev = events(out);
     expect(ev.filter((e) => e.type === 'leader-ready').map((e) => e.lane)).toEqual([0, 1]);
