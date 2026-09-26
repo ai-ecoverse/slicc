@@ -43,6 +43,13 @@ inputs:
   ui-origin:
     description: Hosted UI origin Chrome loads (defaults to production sliccy.ai). Sets WORKER_BASE_URL.
     default: ''
+  pin-webapp:
+    description: >-
+      Serve dist/ui from the installed sliccy package on localhost and point
+      Chrome at that origin, so a release mid-run cannot change the agent.
+      The tray hub stays on tray-worker-base-url, or production when that is
+      empty. Mutually exclusive with ui-origin. Default off: production UI.
+    default: 'false'
   tray-worker-base-url:
     description: Tray relay override (sets SLICC_TRAY_WORKER_BASE_URL), e.g. a staging hub.
     default: ''
@@ -119,6 +126,7 @@ runs:
         INPUT_PROVIDER_API_KEY: ${{ inputs.provider-api-key }}
         INPUT_PROVIDER_BASE_URL: ${{ inputs.provider-base-url }}
         INPUT_UI_ORIGIN: ${{ inputs.ui-origin }}
+        INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp }}
         INPUT_TRAY_WORKER_BASE_URL: ${{ inputs.tray-worker-base-url }}
         INPUT_BOOT_TIMEOUT: ${{ inputs.boot-timeout }}
         INPUT_CDP_LAUNCH_TIMEOUT: ${{ inputs.cdp-launch-timeout }}

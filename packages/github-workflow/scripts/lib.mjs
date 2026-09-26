@@ -1,8 +1,14 @@
+import { dirname, join } from 'node:path';
+
 export const MAX_DURATION_MS = 350 * 60 * 1000;
 
 export const DEFAULT_FOLLOW_RUNNER = ['bash', '-c'];
 
 export const DEFAULT_PORT = 5710;
+
+export const PRODUCTION_TRAY_ORIGIN = 'https://www.sliccy.ai';
+
+export const PINNED_UI_PORT_OFFSET = 1000;
 
 export const JOIN_FILE_PATH = '/tmp/slicc-join.json';
 
@@ -123,7 +129,69 @@ export function buildLeaderEnv(options) {
   } else {
     delete env.SLICC_TRAY_WORKER_BASE_URL;
   }
+
+  if (options.bridgeDevAllowedOrigins) {
+    env.BRIDGE_DEV_ALLOWED_ORIGINS = options.bridgeDevAllowedOrigins;
+  }
   return env;
+}
+
+export function webappDirForEntry(entry) {
+  return join(dirname(entry), '..', 'ui');
+}
+
+export function pinnedUiPort(bridgePort) {
+  const port = bridgePort + PINNED_UI_PORT_OFFSET;
+  if (!Number.isInteger(bridgePort) || port < 1 || port > 65535) {
+    throw new Error(
+      `pin-webapp port ${bridgePort}+${PINNED_UI_PORT_OFFSET} is not a usable TCP port`
+    );
+  }
+  return port;
+}
+
+export function parsePinWebapp(value) {
+  const raw = String(value ?? '').trim();
+  const word = raw.toLowerCase();
+  if (!raw || ['false', '0', 'no', 'off'].includes(word)) return { mode: 'off' };
+  if (['true', '1', 'yes', 'on', 'release'].includes(word)) return { mode: 'package' };
+  if (raw.startsWith('-') || raw.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(raw)) {
+    throw new Error(`pin-webapp: "${raw}" is not a boolean or a git ref`);
+  }
+  return { mode: 'commit', ref: raw };
+}
+
+export function planPinnedCommitBuild(options) {
+  const pin = parsePinWebapp(options.ref);
+  if (pin.mode !== 'commit') return null;
+  const dest = options.dest;
+  return {
+    ref: pin.ref,
+    fetch: ['git', 'fetch', '--depth', '1', 'origin', pin.ref],
+    worktree: ['git', 'worktree', 'add', '--detach', dest, 'FETCH_HEAD'],
+    npmCi: ['npm', 'ci'],
+    buildWebapp: ['npm', 'run', 'build', '-w', '@slicc/webapp'],
+    buildServer: ['npm', 'run', 'build', '-w', '@slicc/node-server'],
+    nodeServer: join(dest, 'dist', 'node-server', 'index.js'),
+    webapp: join(dest, 'dist', 'ui'),
+  };
+}
+
+export function resolvePinnedWebapp(options) {
+  if (!options.pin) return null;
+  if (options.uiOrigin) {
+    throw new Error('pin-webapp serves the sliccy package UI; do not also set ui-origin');
+  }
+  const uiPort = pinnedUiPort(options.bridgePort);
+  const uiOrigin = `http://localhost:${uiPort}`;
+  const tray = (options.trayWorkerBaseUrl || PRODUCTION_TRAY_ORIGIN).replace(/\/+$/, '');
+  return {
+    root: webappDirForEntry(options.entry),
+    uiPort,
+    uiOrigin,
+    trayWorkerBaseUrl: tray,
+    bridgeDevAllowedOrigins: uiOrigin,
+  };
 }
 
 const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);

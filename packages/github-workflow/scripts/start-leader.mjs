@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   addMask,
   coneConfigPath,
@@ -25,11 +27,13 @@ import {
   buildConeConfigFiles,
   buildLeaderArgs,
   buildLeaderEnv,
+  PRODUCTION_TRAY_ORIGIN,
   parseBoolean,
   parseDuration,
   parseJoinFile,
   parseMountLines,
   parsePort,
+  resolvePinnedWebapp,
 } from './lib.mjs';
 
 export function installNodeServer(home, version, exec = execFileSync) {
@@ -141,13 +145,94 @@ export function readBootInputs() {
     bootTimeoutMs: parseDuration(input('boot-timeout', { fallback: '180s' })),
     cdpLaunchTimeoutMs: parseDuration(input('cdp-launch-timeout', { fallback: '60s' })),
     maskJoinUrl: parseBoolean(input('mask-join-url'), true),
+    pinWebapp: parseBoolean(input('pin-webapp'), false),
     mounts: parseMountLines(input('mounts', { raw: true }), homedir()),
   };
 }
 
+export async function waitForWebapp(
+  port,
+  { timeoutMs = 15_000, fetchImpl = globalThis.fetch, token, exited } = {}
+) {
+  const deadline = Date.now() + timeoutMs;
+  let last = 'no response';
+  while (Date.now() < deadline) {
+    const code = exited?.();
+    if (code != null) {
+      throw new Error(`pinned webapp exited before it was ready (${code})`);
+    }
+    try {
+      const res = await fetchImpl(`http://127.0.0.1:${port}/__slicc_pin`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      const body = res.ok ? (await res.text()).trim() : '';
+      if (res.ok && (!token || body === token)) return;
+      last = res.ok ? 'listener is not the pinned webapp we started' : `HTTP ${res.status}`;
+    } catch (err) {
+      last = err instanceof Error ? err.message : String(err);
+    }
+    await sleep(100);
+  }
+  throw new Error(`pinned webapp on port ${port} did not claim the port (${last})`);
+}
+
+export async function launchPinnedWebapp({
+  root,
+  port,
+  logPath,
+  upstream = PRODUCTION_TRAY_ORIGIN,
+  spawnImpl = spawn,
+  waitImpl = waitForWebapp,
+}) {
+  const index = join(root, 'index.html');
+  if (!existsSync(index)) {
+    throw new Error(
+      `pin-webapp: ${index} is missing. The published sliccy package ships dist/ui next to dist/node-server.`
+    );
+  }
+  const script = fileURLToPath(new URL('./serve-webapp.mjs', import.meta.url));
+  const token = randomBytes(16).toString('hex');
+  const logFd = openSync(logPath, 'a');
+  const child = spawnImpl(
+    process.execPath,
+    [script, '--root', root, '--port', String(port), '--upstream', upstream, '--identity', token],
+    {
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+    }
+  );
+  let exitCode = null;
+  child.on?.('exit', (code, signal) => {
+    exitCode = code ?? signal ?? 'exit';
+  });
+  child.unref?.();
+  try {
+    await waitImpl(port, { token, exited: () => exitCode });
+  } catch (err) {
+    if (child.pid) await terminate(child.pid, 2_000);
+    const tail = existsSync(logPath) ? readFileSync(logPath, 'utf8').slice(-500) : '';
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(tail ? `${message}\n${tail}` : message);
+  }
+  console.log(`[start-leader] pinned webapp pid=${child.pid} http://localhost:${port}`);
+  return { pid: child.pid, logPath };
+}
+
 export async function bootLeader(opts) {
-  const { home, entry, port, durationMs, bootTimeoutMs, cdpLaunchTimeoutMs, maskJoinUrl, mounts } =
-    opts;
+  const {
+    home,
+    entry,
+    port,
+    durationMs,
+    bootTimeoutMs,
+    cdpLaunchTimeoutMs,
+    maskJoinUrl,
+    mounts,
+    uiOrigin,
+    trayWorkerBaseUrl,
+    bridgeDevAllowedOrigins,
+    uiServer,
+  } = opts;
   const { secretsFile, coneConfigWritten } = writeCredentialFiles(home);
   const profileDir = ensureDir(join(home, 'profile'));
   const logPath = join(home, 'leader.log');
@@ -158,8 +243,9 @@ export async function bootLeader(opts) {
     port,
     secretsFile,
     profileDir,
-    uiOrigin: input('ui-origin'),
-    trayWorkerBaseUrl: input('tray-worker-base-url'),
+    uiOrigin: uiOrigin ?? input('ui-origin'),
+    trayWorkerBaseUrl: trayWorkerBaseUrl ?? input('tray-worker-base-url'),
+    bridgeDevAllowedOrigins,
     cdpLaunchTimeoutMs,
   });
   const args = [entry, ...buildLeaderArgs({ mounts })];
@@ -197,6 +283,7 @@ export async function bootLeader(opts) {
       joinUrl: joinInfo.joinUrl,
       trayId: joinInfo.trayId,
       sliccVersion: joinInfo.sliccVersion,
+      uiServer: typeof uiServer === 'number' ? uiServer : null,
       startedAt,
       deadline,
       followers: [],
@@ -224,10 +311,38 @@ export async function main(options = {}) {
   const home = ensureDir(homeDir());
   const inputs = readBootInputs();
   const entry = resolveNodeServer(home, options.exec);
+  const pin = resolvePinnedWebapp({
+    pin: inputs.pinWebapp,
+    entry,
+    bridgePort: inputs.port,
+    uiOrigin: input('ui-origin'),
+    trayWorkerBaseUrl: input('tray-worker-base-url'),
+  });
   const secretsFile = join(home, 'secrets.env');
+  let ui = null;
   try {
-    return await bootLeader({ home, entry, ...inputs, pollMs: options.pollMs });
+    if (pin) {
+      ui = await launchPinnedWebapp({
+        root: pin.root,
+        port: pin.uiPort,
+        logPath: join(home, 'ui-server.log'),
+        upstream: pin.trayWorkerBaseUrl,
+        spawnImpl: options.spawnImpl,
+        waitImpl: options.waitForWebapp,
+      });
+    }
+    return await bootLeader({
+      home,
+      entry,
+      ...inputs,
+      pollMs: options.pollMs,
+      uiOrigin: pin?.uiOrigin,
+      trayWorkerBaseUrl: pin?.trayWorkerBaseUrl,
+      bridgeDevAllowedOrigins: pin?.bridgeDevAllowedOrigins,
+      uiServer: ui?.pid,
+    });
   } catch (err) {
+    if (ui?.pid) await terminate(ui.pid, 2_000);
     removeCredentialFiles(secretsFile);
     throw err;
   }
