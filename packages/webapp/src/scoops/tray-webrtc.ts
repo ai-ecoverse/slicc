@@ -1,4 +1,5 @@
 import type {
+  BootstrapAnswerMessage,
   FollowerBiscottoIdentity,
   FollowerJoinRequestedMessage,
   FollowerTrust,
@@ -166,6 +167,14 @@ export class LeaderTrayPeerManager {
   private readonly expiryTimers = new Map<string, { cancel: () => void }>();
 
   private readonly connectTimers = new Map<string, { cancel: () => void }>();
+
+  private readonly peerSignal = new Map<string, Promise<void>>();
+
+  private readonly pendingRemoteIce = new Map<string, TrayIceCandidate[]>();
+  private readonly remoteAnswerReady = new Set<string>();
+
+  private readonly pendingLocalIce = new Map<string, TrayIceCandidate[]>();
+  private readonly offerSent = new Set<string>();
   private iceServers: TrayIceServerConfig[] | undefined;
 
   constructor(private readonly options: LeaderTrayPeerManagerOptions) {
@@ -186,9 +195,11 @@ export class LeaderTrayPeerManager {
       }
       await this.handleJoinRequested(message);
     } else if (message.type === 'bootstrap.answer') {
-      await this.peers.get(message.bootstrapId)?.peer.setRemoteDescription(message.answer);
+      await this.enqueuePeerSignal(message.bootstrapId, () => this.applyRemoteAnswer(message));
     } else if (message.type === 'bootstrap.ice_candidate') {
-      await this.peers.get(message.bootstrapId)?.peer.addIceCandidate(message.candidate);
+      await this.enqueuePeerSignal(message.bootstrapId, () =>
+        this.applyRemoteIce(message.bootstrapId, message.candidate)
+      );
     } else if (message.type === 'biscotto.revoked') {
       this.closeBiscottoPeers(message.biscottoId, 'Biscotto revoked');
     }
@@ -210,6 +221,11 @@ export class LeaderTrayPeerManager {
     this.expiryTimers.clear();
     for (const timer of this.connectTimers.values()) timer.cancel();
     this.connectTimers.clear();
+    this.peerSignal.clear();
+    this.pendingRemoteIce.clear();
+    this.remoteAnswerReady.clear();
+    this.pendingLocalIce.clear();
+    this.offerSent.clear();
     this.peers.clear();
     this.options.onPeersChanged?.();
   }
@@ -243,6 +259,8 @@ export class LeaderTrayPeerManager {
         bootstrapId: message.bootstrapId,
         offer: normalizeSessionDescription(peer.localDescription ?? offer, 'offer'),
       });
+
+      this.releaseLocalIce(message.bootstrapId, message.controllerId);
     } catch (error) {
       this.failPeer(message, errorMessage(error));
     }
@@ -279,12 +297,7 @@ export class LeaderTrayPeerManager {
     peer.addEventListener('icecandidate', ({ candidate }) => {
       const normalized = normalizeIceCandidate(candidate);
       if (!normalized) return;
-      this.options.sendControlMessage({
-        type: 'bootstrap.ice_candidate',
-        controllerId: message.controllerId,
-        bootstrapId: message.bootstrapId,
-        candidate: normalized,
-      });
+      this.noteLocalIce(message.bootstrapId, message.controllerId, normalized);
     });
     peer.addEventListener('connectionstatechange', () =>
       this.onLeaderConnectionStateChange(message, peer.connectionState)
@@ -433,6 +446,11 @@ export class LeaderTrayPeerManager {
     this.cancelConnectDeadline(bootstrapId);
     this.expiryTimers.get(bootstrapId)?.cancel();
     this.expiryTimers.delete(bootstrapId);
+    this.peerSignal.delete(bootstrapId);
+    this.pendingRemoteIce.delete(bootstrapId);
+    this.remoteAnswerReady.delete(bootstrapId);
+    this.pendingLocalIce.delete(bootstrapId);
+    this.offerSent.delete(bootstrapId);
     if (active.state.state === 'connected') {
       this.options.onPeerTransportClosed?.(bootstrapId, reason);
     }
@@ -442,6 +460,82 @@ export class LeaderTrayPeerManager {
       log.warn('Leader peer close failed', { bootstrapId, error: errorMessage(error) });
     }
     if (notifyPeersChanged) this.options.onPeersChanged?.();
+  }
+
+  private enqueuePeerSignal(bootstrapId: string, op: () => Promise<void>): Promise<void> {
+    if (!this.peers.has(bootstrapId)) return Promise.resolve();
+    const prev = this.peerSignal.get(bootstrapId) ?? Promise.resolve();
+    const run = prev.then(op, op);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.peerSignal.set(bootstrapId, settled);
+    void settled.then(() => {
+      if (this.peerSignal.get(bootstrapId) === settled && !this.peers.has(bootstrapId)) {
+        this.peerSignal.delete(bootstrapId);
+      }
+    });
+    return run;
+  }
+
+  private async applyRemoteAnswer(message: BootstrapAnswerMessage): Promise<void> {
+    const peer = this.peers.get(message.bootstrapId)?.peer;
+    if (!peer) return;
+    await peer.setRemoteDescription(message.answer);
+    if (!this.peers.has(message.bootstrapId)) return;
+    this.remoteAnswerReady.add(message.bootstrapId);
+    const queued = this.pendingRemoteIce.get(message.bootstrapId) ?? [];
+    this.pendingRemoteIce.delete(message.bootstrapId);
+    for (const candidate of queued) {
+      await this.peers.get(message.bootstrapId)?.peer.addIceCandidate(candidate);
+    }
+  }
+
+  private async applyRemoteIce(bootstrapId: string, candidate: TrayIceCandidate): Promise<void> {
+    if (!this.peers.has(bootstrapId)) return;
+    if (!this.remoteAnswerReady.has(bootstrapId)) {
+      const queued = this.pendingRemoteIce.get(bootstrapId) ?? [];
+      queued.push(candidate);
+      this.pendingRemoteIce.set(bootstrapId, queued);
+      return;
+    }
+    await this.peers.get(bootstrapId)?.peer.addIceCandidate(candidate);
+  }
+
+  private noteLocalIce(
+    bootstrapId: string,
+    controllerId: string,
+    candidate: TrayIceCandidate
+  ): void {
+    if (!this.peers.has(bootstrapId)) return;
+    if (!this.offerSent.has(bootstrapId)) {
+      const queued = this.pendingLocalIce.get(bootstrapId) ?? [];
+      queued.push(candidate);
+      this.pendingLocalIce.set(bootstrapId, queued);
+      return;
+    }
+    this.emitLocalIce(controllerId, bootstrapId, candidate);
+  }
+
+  private releaseLocalIce(bootstrapId: string, controllerId: string): void {
+    this.offerSent.add(bootstrapId);
+    const queued = this.pendingLocalIce.get(bootstrapId) ?? [];
+    this.pendingLocalIce.delete(bootstrapId);
+    for (const candidate of queued) this.emitLocalIce(controllerId, bootstrapId, candidate);
+  }
+
+  private emitLocalIce(
+    controllerId: string,
+    bootstrapId: string,
+    candidate: TrayIceCandidate
+  ): void {
+    this.options.sendControlMessage({
+      type: 'bootstrap.ice_candidate',
+      controllerId,
+      bootstrapId,
+      candidate,
+    });
   }
 
   private failPeer(message: FollowerJoinRequestedMessage, reason: string): void {
@@ -476,6 +570,12 @@ export class FollowerTrayManager {
   private iceServers: TrayIceServerConfig[] | undefined;
   private activePeer: ActiveFollowerPeer | null = null;
   private stopped = false;
+
+  private remoteOfferReady = false;
+  private pendingRemoteIce: TrayIceCandidate[] = [];
+
+  private answerSent = false;
+  private pendingLocalIce: TrayIceCandidate[] = [];
   private readonly status: FollowerTrayStatusSink;
 
   constructor(private readonly options: FollowerTrayManagerOptions) {
@@ -654,6 +754,7 @@ export class FollowerTrayManager {
     this.activePeer?.peer.close();
     this.activePeer?.channel?.close();
     this.activePeer = null;
+    this.resetTrickle();
     this.status.set({
       state: 'inactive',
       joinUrl: null,
@@ -739,26 +840,75 @@ export class FollowerTrayManager {
     bootstrapId: string
   ): Promise<void> {
     for (const event of events) {
-      if (event.type === 'bootstrap.offer') {
-        await activePeer.peer.setRemoteDescription(event.offer);
-        const answer = await activePeer.peer.createAnswer();
-        await activePeer.peer.setLocalDescription(answer);
-        await sendTrayFollowerAnswer({
-          joinUrl: this.options.joinUrl,
-          controllerId,
-          bootstrapId,
-          answer: normalizeSessionDescription(activePeer.peer.localDescription ?? answer, 'answer'),
-          fetchImpl: this.fetchImpl,
-        });
-      } else if (event.type === 'bootstrap.ice_candidate') {
-        await activePeer.peer.addIceCandidate(event.candidate);
-      } else if (event.type === 'bootstrap.failed') {
-        throw new Error(event.failure.message);
-      }
+      await this.applyOneBootstrapEvent(event, activePeer, controllerId, bootstrapId);
     }
   }
 
+  private async applyOneBootstrapEvent(
+    event: TrayBootstrapEvent,
+    activePeer: ActiveFollowerPeer,
+    controllerId: string,
+    bootstrapId: string
+  ): Promise<void> {
+    if (event.type === 'bootstrap.offer') {
+      await this.applyRemoteOffer(event.offer, activePeer, controllerId, bootstrapId);
+      return;
+    }
+    if (event.type === 'bootstrap.ice_candidate') {
+      await this.holdOrAddRemoteIce(activePeer, event.candidate);
+      return;
+    }
+    if (event.type === 'bootstrap.failed') {
+      throw new Error(event.failure.message);
+    }
+  }
+
+  private async holdOrAddRemoteIce(
+    activePeer: ActiveFollowerPeer,
+    candidate: TrayIceCandidate
+  ): Promise<void> {
+    if (!this.remoteOfferReady) {
+      this.pendingRemoteIce.push(candidate);
+      return;
+    }
+    await activePeer.peer.addIceCandidate(candidate);
+  }
+
+  private async applyRemoteOffer(
+    offer: TraySessionDescription,
+    activePeer: ActiveFollowerPeer,
+    controllerId: string,
+    bootstrapId: string
+  ): Promise<void> {
+    await activePeer.peer.setRemoteDescription(offer);
+    this.remoteOfferReady = true;
+    const queued = this.pendingRemoteIce;
+    this.pendingRemoteIce = [];
+    for (const candidate of queued) {
+      await activePeer.peer.addIceCandidate(candidate);
+    }
+    const answer = await activePeer.peer.createAnswer();
+    await activePeer.peer.setLocalDescription(answer);
+    await sendTrayFollowerAnswer({
+      joinUrl: this.options.joinUrl,
+      controllerId,
+      bootstrapId,
+      answer: normalizeSessionDescription(activePeer.peer.localDescription ?? answer, 'answer'),
+      fetchImpl: this.fetchImpl,
+    });
+
+    this.releaseLocalIce(controllerId, bootstrapId);
+  }
+
+  private resetTrickle(): void {
+    this.remoteOfferReady = false;
+    this.pendingRemoteIce = [];
+    this.answerSent = false;
+    this.pendingLocalIce = [];
+  }
+
   private createFollowerPeer(controllerId: string, bootstrapId: string): ActiveFollowerPeer {
+    this.resetTrickle();
     const peer = this.peerConnectionFactory();
     const active: ActiveFollowerPeer = { peer, channel: null, open: false, openError: null };
     peer.addEventListener('connectionstatechange', () => {
@@ -796,21 +946,53 @@ export class FollowerTrayManager {
       });
     });
     peer.addEventListener('icecandidate', ({ candidate }) => {
+      if (this.activePeer?.peer !== peer) return;
       const normalized = normalizeIceCandidate(candidate);
       if (!normalized) return;
-      void sendTrayFollowerIceCandidate({
+      this.noteLocalIce(controllerId, bootstrapId, normalized);
+    });
+    return active;
+  }
+
+  private noteLocalIce(
+    controllerId: string,
+    bootstrapId: string,
+    candidate: TrayIceCandidate
+  ): void {
+    if (!this.answerSent) {
+      this.pendingLocalIce.push(candidate);
+      return;
+    }
+    void this.postLocalIce(controllerId, bootstrapId, candidate);
+  }
+
+  private releaseLocalIce(controllerId: string, bootstrapId: string): void {
+    this.answerSent = true;
+    const queued = this.pendingLocalIce;
+    this.pendingLocalIce = [];
+    for (const candidate of queued) {
+      void this.postLocalIce(controllerId, bootstrapId, candidate);
+    }
+  }
+
+  private async postLocalIce(
+    controllerId: string,
+    bootstrapId: string,
+    candidate: TrayIceCandidate
+  ): Promise<void> {
+    try {
+      await sendTrayFollowerIceCandidate({
         joinUrl: this.options.joinUrl,
         controllerId,
         bootstrapId,
-        candidate: normalized,
+        candidate,
         fetchImpl: this.fetchImpl,
-      }).catch((error) => {
-        log.warn('Failed to send follower ICE candidate', {
-          error: error instanceof Error ? error.message : String(error),
-        });
       });
-    });
-    return active;
+    } catch (error) {
+      log.warn('Failed to send follower ICE candidate', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 

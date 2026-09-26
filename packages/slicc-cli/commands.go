@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -214,20 +215,25 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		}
 	}
 
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+	conn, err := dialAndSend(
+		func() (*tray.Conn, error) {
+			return tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+		},
+		func(conn *tray.Conn) error {
+			return conn.SendJSON(protocol.UserMessage{
+				Type: "user_message", Text: text, MessageID: messageID,
+			})
+		},
+	)
 	if err != nil {
 		errLine("prompt", "%s", err)
-		reportRuntimeError("dial", err)
+		var dialErr *dialFailed
+		if errors.As(err, &dialErr) {
+			reportRuntimeError("dial", err)
+		}
 		return 1
 	}
 	defer conn.Close()
-
-	if err := conn.SendJSON(protocol.UserMessage{
-		Type: "user_message", Text: text, MessageID: messageID,
-	}); err != nil {
-		errLine("prompt", "%s", err)
-		return 1
-	}
 
 	grace := promptSettleWindow()
 	settle := time.NewTimer(time.Hour)
@@ -319,14 +325,6 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 		}
 	}
 
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
-	if err != nil {
-		errLine("exec", "%s", err)
-		reportRuntimeError("dial", err)
-		return 1
-	}
-	defer conn.Close()
-
 	req := protocol.ExecRequest{
 		Type: "exec.request", RequestID: requestID, Command: command,
 	}
@@ -336,10 +334,21 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	} else if stdin != "" {
 		req.Stdin = stdin
 	}
-	if err := conn.SendJSON(req); err != nil {
+	conn, err := dialAndSend(
+		func() (*tray.Conn, error) {
+			return tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+		},
+		func(conn *tray.Conn) error { return conn.SendJSON(req) },
+	)
+	if err != nil {
 		errLine("exec", "%s", err)
+		var dialErr *dialFailed
+		if errors.As(err, &dialErr) {
+			reportRuntimeError("dial", err)
+		}
 		return 1
 	}
+	defer conn.Close()
 
 	select {
 	case code := <-done:

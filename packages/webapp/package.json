@@ -41,6 +41,7 @@
     "@zenfs/core": "2.7.6",
     "@zenfs/dom": "1.2.14",
     "buffer": "6.0.3",
+    "bzip2": "0.1.1",
     "croner": "10.0.1",
     "esbuild-wasm": "0.28.2",
     "esptool-js": "0.6.1",

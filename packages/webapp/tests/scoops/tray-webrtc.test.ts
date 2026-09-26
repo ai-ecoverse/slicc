@@ -681,6 +681,97 @@ describe('tray-webrtc', () => {
 
       expect(onDisconnected).toHaveBeenCalledWith('Peer connection disconnected');
     });
+
+    it('finishes bootstrap while a queued candidate POST is still pending', async () => {
+      const { leader, follower } = createPeerPair();
+      const queuedEvents: TrayBootstrapEvent[] = [];
+      let sequence = 0;
+      const leaderPeerManager = new LeaderTrayPeerManager({
+        peerConnectionFactory: () => leader,
+        sendControlMessage: (message) => {
+          if (message.type !== 'bootstrap.offer') return;
+          sequence += 1;
+          queuedEvents.push({
+            sequence,
+            sentAt: '2026-03-12T00:00:01.000Z',
+            type: 'bootstrap.offer',
+            offer: message.offer,
+          });
+        },
+      });
+      let bootstrap: TrayBootstrapStatus = {
+        controllerId: 'follower-1',
+        bootstrapId: 'bootstrap-1',
+        attempt: 1,
+        state: 'pending',
+        expiresAt: '2026-03-12T00:00:20.000Z',
+        cursor: 0,
+        maxRetries: 3,
+        retriesRemaining: 3,
+        retryAfterMs: null,
+        failure: null,
+      };
+      let icePostStarted = false;
+      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const action = typeof body['action'] === 'string' ? body['action'] : 'attach';
+        if (action === 'attach') {
+          return jsonResponse({
+            trayId: 'tray-1',
+            controllerId: 'follower-1',
+            role: 'follower',
+            leader: { controllerId: 'leader-1', connected: true, reconnectDeadline: null },
+            participantCount: 2,
+            result: { action: 'signal', code: 'LEADER_CONNECTED', bootstrap },
+          });
+        }
+        if (action === 'poll') {
+          const cursor = Number(body['cursor'] ?? 0);
+          const events = queuedEvents.filter((event) => event.sequence > cursor);
+          bootstrap = { ...bootstrap, state: 'offered', cursor: Math.max(cursor, sequence) };
+          return jsonBootstrapResponse(bootstrap, events);
+        }
+        if (action === 'answer') {
+          await leaderPeerManager.handleControlMessage({
+            type: 'bootstrap.answer',
+            trayId: 'tray-1',
+            controllerId: 'follower-1',
+            bootstrapId: 'bootstrap-1',
+            answer: body['answer'] as TraySessionDescription,
+          });
+          return jsonBootstrapResponse({ ...bootstrap, state: 'connected' }, []);
+        }
+        if (action === 'ice-candidate') {
+          icePostStarted = true;
+          return new Promise(() => {});
+        }
+        throw new Error(`Unexpected action: ${action}`);
+      });
+
+      await leaderPeerManager.handleControlMessage({
+        type: 'follower.join_requested',
+        trayId: 'tray-1',
+        controllerId: 'follower-1',
+        runtime: 'slicc-standalone',
+        bootstrapId: 'bootstrap-1',
+        attempt: 1,
+        expiresAt: '2026-03-12T00:00:20.000Z',
+      });
+      const followerManager = new FollowerTrayManager({
+        joinUrl: 'https://tray.example.com/join/tray-1.secret',
+        runtime: 'slicc-standalone',
+        fetchImpl,
+        peerConnectionFactory: () => follower,
+        controllerIdFactory: () => 'follower-1',
+        sleep: async () => {},
+        pollIntervalMs: 0,
+      });
+
+      const connection = await followerManager.start();
+
+      expect(connection.bootstrapId).toBe('bootstrap-1');
+      expect(icePostStarted).toBe(true);
+    });
   });
 });
 

@@ -39,6 +39,24 @@ npm root -g                     # print /shared/lib/node_modules
 
 Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd (delegators run `ipx --global <bin>` so a same-named local package does not shadow the global install). Local uninstall/list/root work without `-g` against the cwd `package.json`.
 
+## Conda / emscripten-forge (`ipk mamba`)
+
+`ipk mamba install <pkg>[=<version>]` installs emscripten-wasm32 packages from emscripten-forge / conda-forge into `/shared/lib/conda` (not `node_modules`). Prefer this for **forge C/WASM libraries** (for example `zlib`, `libpng`) that provide headers, `.a`, and SIDE_MODULE `.so` under that prefix.
+
+Keep using `ipk install` / `ipk add -g` for the **npm** packages that power these built-ins — forge names are not drop-in replacements today:
+
+- `convert` → `ipk add -g @imagemagick/magick-wasm@…` (forge `imagemagick` has no runnable `convert.wasm`)
+- `ffmpeg` → `ipk add -g @ffmpeg/core@…` (forge `ffmpeg` is libav `.a` only)
+- `python` → `ipk add pyodide@…` (no forge `pyodide`)
+
+```bash
+ipk mamba install zlib          # newest indexed build → /shared/lib/conda
+ipk mamba install zlib=1.3.1    # exact version
+ipk mamba list                  # conda-meta inventory
+ipk mamba uninstall zlib
+ipk mamba --help                # channels, prefix, and thin-installer limits
+```
+
 ## Running package.json scripts
 
 `npm run <script>` (also `ipk run`, `npm run-script`, and the `npm test` / `start` / `stop` / `restart` shortcuts) runs a `scripts` entry from the nearest `package.json`, in that package's directory. `npm run` with no script name lists what is available — read that list instead of guessing a script name.

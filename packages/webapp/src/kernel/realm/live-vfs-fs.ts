@@ -536,6 +536,12 @@ function outermostDirs(dirs: readonly string[]): string[] {
   return norm.filter((d) => !norm.some((o) => o !== d && (o === '/' || d.startsWith(`${o}/`))));
 }
 
+function describeMountError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  const errno = (err as { errno?: unknown } | null)?.errno;
+  return typeof errno === 'number' ? `errno ${errno}` : String(err);
+}
+
 export function mountLiveVfsDirs(
   Fs: LiveMountFsApi,
   bridge: SyncFsPosixBridge,
@@ -552,7 +558,7 @@ export function mountLiveVfsDirs(
       Fs.mount(plugin, { root: dir, bridge }, dir);
       mounted.push(dir);
     } catch (err) {
-      warn(`live VFS mount of ${dir} failed: ${err instanceof Error ? err.message : String(err)}`);
+      warn(`live VFS mount of ${dir} failed: ${describeMountError(err)}`);
     }
   }
   return { plugin, mounted };

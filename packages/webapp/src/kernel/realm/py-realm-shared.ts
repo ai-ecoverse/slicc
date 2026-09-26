@@ -559,14 +559,33 @@ async function registerSliccFsModuleSafe(
   }
 }
 
+export function textSink(chunks: string[]): { write: (buffer: Uint8Array) => number } {
+  const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
+  return {
+    write: (buffer: Uint8Array) => {
+      const text = decoder.decode(buffer, { stream: true });
+      if (text) chunks.push(text);
+      return buffer.length;
+    },
+  };
+}
+
+export function flushPythonStreams(pyodide: PyodideInterface): void {
+  try {
+    pyodide.runPython(
+      'import sys as __slicc_sys\nfor __slicc_s in (__slicc_sys.stdout, __slicc_sys.stderr):\n    try:\n        __slicc_s.flush()\n    except Exception:\n        pass\ndel __slicc_sys, __slicc_s'
+    );
+  } catch {}
+}
+
 function configurePyodideIo(
   pyodide: PyodideInterface,
   init: RealmInitMsg,
   stdoutChunks: string[],
   stderrChunks: string[]
 ): void {
-  pyodide.setStdout({ batched: (msg: string) => stdoutChunks.push(msg + '\n') });
-  pyodide.setStderr({ batched: (msg: string) => stderrChunks.push(msg + '\n') });
+  pyodide.setStdout(textSink(stdoutChunks));
+  pyodide.setStderr(textSink(stderrChunks));
 
   let stdinConsumed = false;
   pyodide.setStdin({
@@ -618,6 +637,7 @@ async function executePythonCode(
     exitCode = 1;
   }
 
+  flushPythonStreams(pyodide);
   try {
     pyodide.runPython('del __slicc_code, __slicc_filename, __slicc_argv, __slicc_exit_code');
   } catch {}

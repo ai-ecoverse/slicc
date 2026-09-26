@@ -6,6 +6,8 @@ export interface TarEntry {
   bytes: Uint8Array;
   directory?: boolean;
 
+  symlink?: string;
+
   mode?: number;
 
   mtime?: number;
@@ -15,6 +17,8 @@ export interface ReadTarOptions {
   stripNpmPrefix?: boolean;
   includeDirectories?: boolean;
   preserveRawPaths?: boolean;
+
+  includeSymlinks?: boolean;
 }
 
 const NPM_PREFIX = 'package/';
@@ -232,11 +236,18 @@ function sanitizePath(path: string): string {
   return result;
 }
 
-function resolveUstarPaths(input: Uint8Array, preserveRawPaths: boolean): string[] {
+interface ResolvedTarMeta {
+  path: string;
+
+  linkname: string;
+}
+
+function resolveUstarPaths(input: Uint8Array, preserveRawPaths: boolean): ResolvedTarMeta[] {
   const buffer = input.buffer;
-  const names: string[] = [];
+  const names: ResolvedTarMeta[] = [];
   let offset = 0;
   let nextLongName: string | undefined;
+  let nextLongLink: string | undefined;
   while (offset < buffer.byteLength - 512) {
     const name = readCString(buffer, offset, 100);
     if (name.length === 0) break;
@@ -254,8 +265,13 @@ function resolveUstarPaths(input: Uint8Array, preserveRawPaths: boolean): string
       continue;
     }
 
-    if (typeChar === 'L' || typeChar === 'N' || typeChar === 'K') {
+    if (typeChar === 'L' || typeChar === 'N') {
       nextLongName = readCString(buffer, offset + 512, size);
+      offset += seek;
+      continue;
+    }
+    if (typeChar === 'K') {
+      nextLongLink = readCString(buffer, offset + 512, size);
       offset += seek;
       continue;
     }
@@ -266,11 +282,51 @@ function resolveUstarPaths(input: Uint8Array, preserveRawPaths: boolean): string
       const prefix = readCString(buffer, offset + 345, 155);
       fullPath = prefix.length > 0 ? `${prefix}/${name}` : name;
     }
-    names.push(preserveRawPaths ? fullPath : sanitizePath(fullPath));
+    const headerLink = readCString(buffer, offset + 157, 100);
+    const linkname = nextLongLink || headerLink;
+    names.push({
+      path: preserveRawPaths ? fullPath : sanitizePath(fullPath),
+      linkname,
+    });
     nextLongName = undefined;
+    nextLongLink = undefined;
     offset += seek;
   }
   return names;
+}
+
+function shouldEmitTarItem(
+  item: { type?: string },
+  includeDirectories: boolean,
+  includeSymlinks: boolean
+): boolean {
+  if (item.type === 'symbolicLink') return includeSymlinks;
+  if (item.type === 'directory') return includeDirectories;
+  return item.type === 'file' || item.type === 'contiguousFile';
+}
+
+function tarItemToEntry(
+  item: {
+    name: string;
+    type?: string;
+    data?: Uint8Array;
+    attrs?: { mode?: string; mtime?: number };
+  },
+  meta: ResolvedTarMeta | undefined,
+  stripPrefix: boolean
+): TarEntry {
+  const directory = item.type === 'directory';
+  const symlink = item.type === 'symbolicLink';
+  const path = meta?.path ?? item.name;
+  const mode = Number.parseInt(item.attrs?.mode ?? '', 8);
+  return {
+    path: stripPrefix ? stripNpmPrefix(path) : path,
+    bytes: item.data ? item.data.slice() : new Uint8Array(0),
+    ...(directory ? { directory: true } : {}),
+    ...(symlink && meta?.linkname ? { symlink: meta.linkname } : {}),
+    ...(Number.isFinite(mode) ? { mode: mode & 0o777 } : {}),
+    ...(typeof item.attrs?.mtime === 'number' ? { mtime: item.attrs.mtime } : {}),
+  };
 }
 
 export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEntry[] {
@@ -289,6 +345,7 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
 
   const stripPrefix = options.stripNpmPrefix ?? true;
   const includeDirectories = options.includeDirectories ?? false;
+  const includeSymlinks = options.includeSymlinks ?? false;
   const resolvedPaths = resolveUstarPaths(archive, options.preserveRawPaths ?? false);
 
   const aligned = resolvedPaths.length === items.length;
@@ -298,18 +355,8 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
 
   const entries: TarEntry[] = [];
   items.forEach((item, index) => {
-    const directory = item.type === 'directory';
-    if (!directory && item.type !== 'file' && item.type !== 'contiguousFile') return;
-    if (directory && !includeDirectories) return;
-    const path = aligned ? resolvedPaths[index] : item.name;
-    const mode = Number.parseInt(item.attrs?.mode ?? '', 8);
-    entries.push({
-      path: stripPrefix ? stripNpmPrefix(path) : path,
-      bytes: item.data ? item.data.slice() : new Uint8Array(0),
-      ...(directory ? { directory: true } : {}),
-      ...(Number.isFinite(mode) ? { mode: mode & 0o777 } : {}),
-      ...(typeof item.attrs?.mtime === 'number' ? { mtime: item.attrs.mtime } : {}),
-    });
+    if (!shouldEmitTarItem(item, includeDirectories, includeSymlinks)) return;
+    entries.push(tarItemToEntry(item, aligned ? resolvedPaths[index] : undefined, stripPrefix));
   });
   return entries;
 }

@@ -212,6 +212,25 @@ export function resolveChromeLaunchProfile(options: {
   };
 }
 
+const CHROME_DISABLE_FEATURES = [
+  'LocalNetworkAccessChecks',
+  'LocalNetworkAccessChecksWebSockets',
+  'IntensiveWakeUpThrottling',
+  'HighEfficiencyModeAvailable',
+  'InfiniteTabsFreezing',
+  'InfiniteTabsFreezingOnMemoryPressure',
+  'CPUMeasurementInFreezingPolicy',
+  'MemoryMeasurementInFreezingPolicy',
+  'AllowDevtoolsConnectedDiscard',
+] as const;
+
+const HOSTED_DISABLE_FEATURES = [...CHROME_DISABLE_FEATURES, 'WebRtcHideLocalIpsWithMdns'] as const;
+
+function chromeDisableFeaturesArg(hosted: boolean): string {
+  const features = hosted ? HOSTED_DISABLE_FEATURES : CHROME_DISABLE_FEATURES;
+  return `--disable-features=${features.join(',')}`;
+}
+
 export function buildChromeLaunchArgs(options: {
   cdpPort: number;
   launchUrl: string;
@@ -229,7 +248,7 @@ export function buildChromeLaunchArgs(options: {
 
     '--disable-blink-features=AutomationControlled',
 
-    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard',
+    chromeDisableFeaturesArg(false),
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
@@ -246,6 +265,9 @@ export function buildChromeLaunchArgs(options: {
   }
 
   if (options.hosted) {
+    const base = args.findIndex((arg) => arg.startsWith('--disable-features='));
+    if (base >= 0) args[base] = chromeDisableFeaturesArg(true);
+
     args.push(
       '--headless=new',
       '--no-sandbox',
