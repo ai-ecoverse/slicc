@@ -11,6 +11,7 @@ import {
   JUDGE_TIMEOUT_MS,
   judgeRun,
   normalizeJudgement,
+  repairBody,
   score,
   screenshotsNote,
   truncateMiddle,
@@ -466,6 +467,60 @@ describe('judgeRun', () => {
       judgeRun({ spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', fetchImpl: invalid })
     ).rejects.toThrow(/judge output is invalid/);
     expect(invalid).toHaveBeenCalledTimes(JUDGE_ATTEMPTS);
+  });
+
+  it('answers a rejected judgement with its errors, and records the repair', async () => {
+    const noReason = {
+      ...JUDGEMENT,
+      findings: [
+        { item: 'A1_x', evidence: 'e', status: 'met', not_assessable_reason: null },
+        { item: 'A2_y', evidence: 'e', status: 'not_assessable', not_assessable_reason: null },
+      ],
+    };
+    const fixed = {
+      ...noReason,
+      findings: [
+        noReason.findings[0],
+        { ...noReason.findings[1], not_assessable_reason: 'missing_evidence' },
+      ],
+    };
+    const call = (input) =>
+      reply(200, {
+        output: {
+          message: {
+            content: [{ toolUse: { toolUseId: 'tu-1', name: 'report_findings', input } }],
+          },
+        },
+        usage: { totalTokens: 5 },
+      });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(call(noReason))
+      .mockResolvedValueOnce(call(fixed));
+    const out = await judgeRun({ spec: SPEC, task: TASK, trace: TRACE, apiKey: 'k', fetchImpl });
+    expect(out).toMatchObject({ repairs: 1, usage: { totalTokens: 10 } });
+    expect(out.result.score).toBeCloseTo(0.7);
+    const first = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    const second = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(first.messages).toHaveLength(1);
+    expect(second.messages).toHaveLength(3);
+    expect(second.messages[1]).toEqual({
+      role: 'assistant',
+      content: [{ toolUse: { toolUseId: 'tu-1', name: 'report_findings', input: noReason } }],
+    });
+    const result = second.messages[2].content[0].toolResult;
+    expect(result.toolUseId).toBe('tu-1');
+    // No `status`: Bedrock supports it for Claude and Nova only, and the judge is configurable.
+    expect(result).not.toHaveProperty('status');
+    expect(result.content[0].text).toContain(
+      'The judgement was rejected: finding A2_y is not_assessable without a reason.'
+    );
+    expect(result.content[0].text).toContain('missing_evidence or absent_scope');
+    expect(second.toolConfig).toEqual(first.toolConfig);
+    // A reply without an id still gets a well-formed repair turn.
+    expect(
+      repairBody(first, { input: {} }, ['x']).messages[2].content[0].toolResult.toolUseId
+    ).toBe('judgement');
   });
 
   it('asks again when the judgement is malformed, and accepts quoted flags', async () => {

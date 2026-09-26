@@ -344,7 +344,12 @@ async function judgeInto(record, result, task, { judge, spec, opts }) {
       reward_hacking_suspected: j.judgement.reward_hacking_suspected,
       canary_leak: j.result.canary_leak,
     },
-    judge: { model: opts.judgeModel, images: j.imagesSent, usage: j.usage },
+    judge: {
+      model: opts.judgeModel,
+      images: j.imagesSent,
+      usage: j.usage,
+      ...(j.repairs ? { repairs: j.repairs } : {}),
+    },
   });
   record.digests = taskDigests(task);
   delete record.error;
