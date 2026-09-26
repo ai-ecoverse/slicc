@@ -97,6 +97,8 @@ It is browser-use's BU Bench V2 format, so public sets and our own evals share o
 
 ## Reading the report
 
+**Which SLICC ran.** Hosted leaders load SLICC's webapp from production, so a run tests whatever release is live when its leader boots. A release during a benchmark changes the harness partway through: the report lists the versions behind each benchmark and marks a mix. Each record's `leader.slicc_version` names its own; `config.harness` is only the `sliccy` package the job installed for node-server.
+
 For each set, the report has a row per configuration: runs, pass / partial / fail, errors, mean score, mean time and mean cost. After the rows come two lists:
 
 - **What skills add:** for each model, the lift each skills condition gives over `none` (over the first condition when `none` did not run), as percentages of the baseline: score, time and cost, with the absolute change beside each. `report.html` shows it as the paired mean score without and with the skills, the lift, and the time and cost it saves. A lift from fewer than 10 paired tasks is flagged as a small sample.

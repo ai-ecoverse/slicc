@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { backfillTools, main } from './backfill-tools.mjs';
+import { backfillTools, backfillVersions, main, taskVersions } from './backfill-tools.mjs';
 import { recordPath, tracePath } from './run.mjs';
 import { decryptSetFile, encryptJson } from './upstream.mjs';
 
@@ -74,6 +74,49 @@ describe('backfillTools', () => {
     expect(log).toHaveBeenCalledWith(
       'backfilled 0 run(s); 0 without a transcript to count (left unknown)'
     );
+    expect(log).toHaveBeenCalledWith(
+      'stamped the SLICC version on 0 record(s); 0 not found in events.jsonl'
+    );
     expect(() => main([])).toThrow(/--out/);
+  });
+});
+
+describe('backfillVersions', () => {
+  const EVENTS = [
+    { type: 'start', slicc_version: '1.0.0' },
+    { type: 'leader-ready', lane: 1, generation: 0, slicc_version: '1.0.0' },
+    { type: 'task', lane: 0, task_id: 'a', model: 'm', skills: 'none' },
+    { type: 'leader-ready', lane: 1, generation: 1, slicc_version: '1.0.1' },
+    { type: 'task', lane: 1, task_id: 'b', model: 'm', skills: 'none' },
+    { type: 'task', task_id: 'c', model: 'm', skills: 'none' },
+  ]
+    .map((e) => JSON.stringify(e))
+    .join('\n');
+
+  it('maps each task to the last leader boot on its lane', () => {
+    const v = taskVersions(`${EVENTS}\nnot json\n\n`);
+    expect(v.get('a|m|none')).toBe('1.0.0');
+    expect(v.get('b|m|none')).toBe('1.0.1');
+    expect(v.get('c|m|none')).toBe('1.0.0');
+    // A lane that never reported a boot has no version to give.
+    expect(
+      taskVersions('{"type":"task","lane":3,"task_id":"x","model":"m","skills":"s"}').get('x|m|s')
+    ).toBeNull();
+  });
+
+  it('stamps records that lack a version, leaves the rest, and needs a journal', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bench-versions-'));
+    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0 });
+    write(join(out, 'events.jsonl'), EVENTS);
+    expect(backfillVersions(out)).toEqual({ stamped: 0, unknown: 0 });
+    write(recordPath(out, 'Own', 'none', 'm', 'b', 1), JSON.stringify(record('Own', 'b')));
+    const kept = { ...record('Own', 'a'), leader: { lane: 0, slicc_version: '9.9' } };
+    write(recordPath(out, 'Own', 'none', 'm', 'a', 1), JSON.stringify(kept));
+    write(recordPath(out, 'Own', 'none', 'm', 'z', 1), JSON.stringify(record('Own', 'z')));
+    expect(backfillVersions(out)).toEqual({ stamped: 1, unknown: 1 });
+    const read = (t) => JSON.parse(readFileSync(recordPath(out, 'Own', 'none', 'm', t, 1), 'utf8'));
+    expect(read('b').leader).toEqual({ slicc_version: '1.0.1' });
+    expect(read('a').leader.slicc_version).toBe('9.9');
+    expect(read('z').leader).toBeUndefined();
   });
 });

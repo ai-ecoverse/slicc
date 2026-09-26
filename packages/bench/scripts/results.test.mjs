@@ -9,6 +9,8 @@ import {
   skillsBaseline,
   summarize,
   summaryFileName,
+  versionCounts,
+  versionLine,
 } from './results.mjs';
 
 const S = (model, skills) => ({ harness: '6.183.0', model, skills });
@@ -293,5 +295,54 @@ describe('reportMarkdown', () => {
     const md = reportMarkdown([rec('t1', 'm', 's', 1)]);
     expect(md).not.toContain('What skills add');
     expect(md).not.toContain('What models change');
+  });
+});
+
+describe('SLICC versions', () => {
+  const run = (v) => ({ leader: v === undefined ? {} : { slicc_version: v } });
+
+  it('counts runs per reported version, unknown last-resort', () => {
+    expect(versionCounts([run('6.194.2'), run('6.194.1'), run('6.194.2'), run(undefined)])).toEqual(
+      {
+        '6.194.1': 1,
+        '6.194.2': 2,
+        unknown: 1,
+      }
+    );
+    expect(versionCounts([{}])).toEqual({ unknown: 1 });
+  });
+
+  it('names one version, flags a mix, and says when none was recorded', () => {
+    expect(versionLine({ '6.194.1': 3 })).toBe('SLICC version: 6.194.1 (3).');
+    expect(versionLine({ '6.194.1': 3, unknown: 2 })).toBe(
+      'SLICC version: 6.194.1 (3); 2 run(s) without a recorded version.'
+    );
+    expect(versionLine({ unknown: 4 })).toBe('SLICC version: not recorded.');
+    expect(versionLine({ '6.194.1': 7, '6.194.2': 22 })).toBe(
+      'SLICC versions: 6.194.1 (7), 6.194.2 (22). **Mixed:** releases shipped during the run, so these scores pool more than one harness.'
+    );
+    expect(versionLine({ '6.194.1': 7, '6.194.2': 22, unknown: 1 })).toMatch(
+      /^SLICC versions: 6\.194\.1 \(7\), 6\.194\.2 \(22\); 1 run\(s\) without a recorded version\. \*\*Mixed/
+    );
+  });
+
+  it('carries the versions into result files, report data and the markdown', () => {
+    const rec = (task, v, model = 'm') => ({
+      benchmark: 'B',
+      task_id: task,
+      repeat: 1,
+      config: { harness: 'pin', model, skills: 'none' },
+      score: 1,
+      outcome: 'pass',
+      verdict: true,
+      metrics: { duration: 1, cost: 0.1 },
+      leader: { slicc_version: v },
+    });
+    const records = [rec('a', '1.0.0'), rec('b', '1.0.1'), rec('a', '1.0.1', 'n')];
+    expect(summarize(records)[0].body[0].slicc_versions).toEqual({ '1.0.0': 1, '1.0.1': 1 });
+    const data = reportData(records);
+    expect(data.benchmarks[0].slicc_versions).toEqual({ '1.0.0': 1, '1.0.1': 2 });
+    expect(data.benchmarks[0].configs[1].slicc_versions).toEqual({ '1.0.1': 1 });
+    expect(reportMarkdown(records)).toContain('SLICC versions: 1.0.0 (1), 1.0.1 (2). **Mixed:**');
   });
 });

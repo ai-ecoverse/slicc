@@ -889,6 +889,8 @@ describe('leader lifecycle', () => {
     const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
     expect(r1.error).toBeUndefined();
     expect(r1.leader.generation).toBe(1);
+    // The version the restarted leader reported, not the first one's (none here).
+    expect(r1.leader.slicc_version).toBe('9.9');
     expect(events(out).map((e) => e.type)).toContain('leader-down');
     expect(log.mock.calls.map((c) => c[0]).join('\n')).toMatch(
       /restarting the leader \(leader unreachable\)/
