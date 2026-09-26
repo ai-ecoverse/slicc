@@ -15,7 +15,8 @@ export function unreachable(status, stderr) {
   );
 }
 
-const CONNECTION_LOST_RE = /read\/write on closed pipe|connection closed/i;
+const CONNECTION_LOST_RE =
+  /read\/write on closed pipe|connection closed|the leader sent no model list within/i;
 
 export function connectionLost(status, stderr) {
   return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));

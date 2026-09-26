@@ -78,7 +78,7 @@ jobs:
     name: Plan
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
 
-    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
       shards: ${{ steps.plan.outputs.shards }}

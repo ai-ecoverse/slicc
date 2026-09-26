@@ -903,6 +903,7 @@ describe('leader lifecycle', () => {
     const judge = vi.fn(async () => ({
       result: { score: 1, verdict: true, statuses: {} },
       judgement: { infra_error: false, reward_hacking_suspected: false },
+      repairs: 1,
     }));
     const log = vi.fn();
     const code = await main(['--set', twoTasks(dir), '--models', 'm', '--out', out], {
@@ -918,6 +919,7 @@ describe('leader lifecycle', () => {
     const r1 = JSON.parse(readFileSync(recordPath(out, 'Own', 'builtin', 'm', 'own-1', 1), 'utf8'));
     expect(r1.error).toBeUndefined();
     expect(r1.leader.generation).toBe(1);
+    expect(r1.judge.repairs).toBe(1);
     expect(events(out).find((e) => e.type === 'task' && e.outcome === 'error')).toBeUndefined();
     expect(events(out).find((e) => e.type === 'leader-down')).toMatchObject({ task_id: 'own-1' });
     q.mockRestore();
