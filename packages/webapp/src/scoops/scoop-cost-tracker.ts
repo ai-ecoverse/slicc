@@ -11,7 +11,13 @@
  * so a bare `cost --json` (live scope) would never see them. On snapshot the
  * tracker folds their assistant-message usage into the still-live parent
  * instead of a separate dropped row (#3437). The parent's `models` list then
- * includes the child's model, and `--all` does not double-count.
+ * includes the child's model, and `--all` does not double-count while the
+ * parent is live.
+ *
+ * A New-session clear of that parent must not keep the fold on the fresh
+ * cone: {@link settleFolded} clears the live bucket and either merges the
+ * spend into the cone's newest frozen index row (when the freezer just wrote
+ * one) or retains it on the dropped ledger, so `cost --all` still sees it.
  *
  * The tracker is intentionally read-mostly — it doesn't subscribe to scoop
  * events. The orchestrator calls {@link snapshot} once on unregister, and the
@@ -88,6 +94,16 @@ export interface ScoopCostTrackerDeps {
   getScoops(): ReadonlyMap<string, RegisteredScoop>;
   /** Live scoop contexts keyed by jid. */
   getContexts(): ReadonlyMap<string, ScoopContext>;
+  /**
+   * Optional: merge settled fold spend into the cone's newest frozen index
+   * row (the freezer writes it moments before clear). Return true when the
+   * spend landed there so the tracker can skip the dropped ledger and
+   * `cost --all` does not double-count (#3437 review).
+   */
+  mergeFoldedIntoFrozen?(
+    jid: string,
+    folded: readonly AssistantMessage[]
+  ): boolean | Promise<boolean>;
 }
 
 export interface CostScopeOptions {
@@ -228,6 +244,33 @@ export class ScoopCostTracker {
   /** Assistant turns previously folded into `jid` from silent children. */
   private foldedMessagesFor(jid: string): readonly AssistantMessage[] {
     return this.foldedByParent.get(jid) ?? [];
+  }
+
+  /**
+   * Move silent-child spend attributed to `jid` off the live fold bucket.
+   * Prefers merging into the cone's newest frozen index row when
+   * {@link ScoopCostTrackerDeps.mergeFoldedIntoFrozen} succeeds; otherwise
+   * retains the spend on the dropped ledger so `cost --all` still sees it.
+   * Called at the cone session boundary (New chat) (#3437 review).
+   */
+  async settleFolded(jid: string): Promise<void> {
+    const folded = this.foldedByParent.get(jid);
+    this.foldedByParent.delete(jid);
+    if (!folded || folded.length === 0) return;
+
+    const scoop = this.deps.getScoops().get(jid);
+    if (!scoop) return;
+
+    const merged = await this.deps.mergeFoldedIntoFrozen?.(jid, folded);
+    if (merged) return;
+
+    // No fresh archive (erase / short-session skip) — keep spend on the
+    // dropped ledger so `cost --all` still reports it.
+    const emptyContext = { getAgentMessages: () => [] } as unknown as ScoopContext;
+    const costData = buildScoopCost(scoop, emptyContext, 'dropped', folded);
+    if (!costData) return;
+    this.droppedMessages.push([...folded]);
+    this.dropped.push(costData);
   }
 
   /** Snapshot a scoop's cost data before it is destroyed. */

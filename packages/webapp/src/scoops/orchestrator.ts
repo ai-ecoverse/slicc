@@ -15,7 +15,7 @@ import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import { SessionStore } from '../core/session.js';
-import type { ImageContent } from '../core/types.js';
+import type { AssistantMessage, ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
@@ -79,6 +79,7 @@ import {
 } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
+import { mergeFoldedCostIntoLatestFrozen } from './merge-folded-cost-into-frozen.js';
 import { ModelPolicyFile } from './model-policy-file.js';
 import { globalSeedModel } from './model-seed.js';
 import { withMountHeartbeat } from './mount-heartbeat.js';
@@ -307,6 +308,7 @@ export class Orchestrator implements ConeApprovalRouter {
   private costTracker: ScoopCostTracker = new ScoopCostTracker({
     getScoops: () => this.scoops,
     getContexts: () => this.lifecycle.getContexts(),
+    mergeFoldedIntoFrozen: (jid, folded) => this.mergeFoldedCostIntoFrozen(jid, folded),
   });
   /**
    * Owns the per-scoop response buffer, completion artifact / cone-notify
@@ -395,6 +397,7 @@ export class Orchestrator implements ConeApprovalRouter {
     onLickBackpressure: (jid, info) => this.callbacks.onLickBackpressure?.(jid, info),
     getSessionStore: () => this.sessionStore,
     resetCostTracker: () => this.costTracker.reset(),
+    settleFoldedCost: (jid) => this.costTracker.settleFolded(jid),
     db: {
       saveMessage: (msg) => db.saveMessage(msg),
       deleteMessage: (id) => db.deleteMessage(id),
@@ -1757,6 +1760,27 @@ export class Orchestrator implements ConeApprovalRouter {
     options?: Parameters<ScoopCostTracker['getSessionCosts']>[0]
   ): ReturnType<ScoopCostTracker['getSessionCosts']> {
     return this.costTracker.getSessionCosts(options);
+  }
+
+  /**
+   * At New-session clear: fold silent-agent spend into the cone's newest
+   * frozen index row when the freezer just wrote one (#3437 review).
+   */
+  private async mergeFoldedCostIntoFrozen(
+    jid: string,
+    folded: readonly AssistantMessage[]
+  ): Promise<boolean> {
+    const scoop = this.scoops.get(jid);
+    if (!scoop || !this.sharedFs) return false;
+    try {
+      return await mergeFoldedCostIntoLatestFrozen(this.sharedFs, scoop, folded);
+    } catch (err) {
+      log.warn('Failed to merge folded agent spend into frozen session', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   /** Collect the cost command's live or complete history, including frozen sessions. */

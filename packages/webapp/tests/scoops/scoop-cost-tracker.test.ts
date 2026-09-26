@@ -268,6 +268,54 @@ describe('ScoopCostTracker', () => {
         usage: { totalTokens: 60, cost: { total: 0.001 } },
       });
     });
+
+    it('settles folded spend into the dropped ledger at the cone session boundary', async () => {
+      // Mirrors New chat: clearScoopMessages settles the fold before wiping the
+      // conversation, so the fresh cone does not inherit prior agent one-shots
+      // as live while cost --all still reports the spend (#3437 review).
+      const cone = createMockScoop('cone', 'sliccy', true, 'claude-opus-4-6');
+      scoopsMap.set('cone', cone);
+      contextsMap.set(
+        'cone',
+        createMockContext([
+          createAssistantMessage('claude-opus-4-6', 100, 50, 0, 0, 0.1, 0.05, 0, 0, NOW_MS - 10),
+        ])
+      );
+
+      const agent = createMockScoop('agent_quiet_mint', 'agent-quiet-mint', false, undefined, {
+        parentJid: 'cone',
+        notifyOnComplete: false,
+      });
+      scoopsMap.set(agent.jid, agent);
+      contextsMap.set(
+        agent.jid,
+        createMockContext([
+          createAssistantMessage('claude-haiku-4-5', 200, 40, 0, 0, 0.002, 0.001, 0, 0, NOW_MS),
+        ])
+      );
+      tracker.snapshot(agent.jid);
+      scoopsMap.delete(agent.jid);
+      contextsMap.delete(agent.jid);
+
+      expect(tracker.getSessionCosts()[0].usage.cost.total).toBeCloseTo(0.153, 6);
+
+      // Session boundary: settle the fold, then wipe the cone's own turns.
+      await tracker.settleFolded('cone');
+      contextsMap.set('cone', createMockContext([]));
+
+      expect(tracker.getSessionCosts()).toEqual([]);
+      const all = tracker.getSessionCosts({ includeDropped: true });
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({
+        name: 'sliccy',
+        source: 'dropped',
+        models: ['claude-haiku-4-5'],
+      });
+      expect(all[0].usage.cost.total).toBeCloseTo(0.003, 6);
+      expect(tracker.getModelCosts({ includeDropped: true }).map((m) => m.model)).toContain(
+        'claude-haiku-4-5'
+      );
+    });
   });
 
   it('reports the model in use now and collapses alias spellings of one model', () => {
