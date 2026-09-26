@@ -604,6 +604,16 @@ function outermostDirs(dirs: readonly string[]): string[] {
 }
 
 /**
+ * Emscripten's `FS.ErrnoError` is no `Error` (newer runtimes), so `String(err)`
+ * printed `[object Object]`: name the errno instead.
+ */
+function describeMountError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  const errno = (err as { errno?: unknown } | null)?.errno;
+  return typeof errno === 'number' ? `errno ${errno}` : String(err);
+}
+
+/**
  * Mount `SLICC_LIVE_FS` at each of `dirs` (same path inside the module as in
  * the VFS), registering the plugin on first use. `/` itself is never mounted:
  * it is the module's own root. Returns the plugin and the dirs that mounted.
@@ -624,7 +634,7 @@ export function mountLiveVfsDirs(
       Fs.mount(plugin, { root: dir, bridge }, dir);
       mounted.push(dir);
     } catch (err) {
-      warn(`live VFS mount of ${dir} failed: ${err instanceof Error ? err.message : String(err)}`);
+      warn(`live VFS mount of ${dir} failed: ${describeMountError(err)}`);
     }
   }
   return { plugin, mounted };
