@@ -23,6 +23,7 @@ import {
   stageSkills,
   stageSkillsCommand,
   startCapture,
+  stillWorking,
   TRANSCRIPT_EXPORT_ATTEMPTS,
   TRANSCRIPT_EXPORT_TIMEOUT_MS,
   TRANSCRIPT_PART_BYTES,
@@ -1055,5 +1056,87 @@ describe('cost cap', () => {
     const trace = traceFromResult(result);
     expect(trace.finalResult).toBe('The run was stopped at its cost cap before the cone answered.');
     expect(trace.metrics.cost_capped).toBe(true);
+  });
+});
+
+describe('a prompt that returns while the agent still works', () => {
+  const costOf = (total, tokens = 1, turns = 1) =>
+    ok(
+      JSON.stringify({
+        scoops: [{ type: 'cone', turns, usage: { totalTokens: tokens, cost: { total } } }],
+      })
+    );
+  const noSleep = async () => {};
+
+  it('probes only exit 0 with no answer, and needs two readings', async () => {
+    const readings = [costOf(1, 10), costOf(1.5, 20)];
+    const { leader, calls } = fakeLeader({
+      commands: [[/^cost --json --all$/, () => readings.shift() ?? fail('gone')]],
+    });
+    const quiet = { status: 0, stdout: '  \n', stderr: '' };
+    expect(await stillWorking(leader, quiet, { probeMs: 0, sleep: noSleep })).toBe(true);
+    const before = calls.length;
+    expect(
+      await stillWorking(leader, { status: 0, stdout: 'FINAL ANSWER: x' }, { sleep: noSleep })
+    ).toBe(false);
+    expect(await stillWorking(leader, { status: 130, stdout: '' }, { sleep: noSleep })).toBe(false);
+    expect(
+      await stillWorking(leader, { status: 0, stdout: '', timedOut: true }, { sleep: noSleep })
+    ).toBe(false);
+    expect(
+      await stillWorking(leader, { status: 0, stdout: '', aborted: true }, { sleep: noSleep })
+    ).toBe(false);
+    expect(calls.length).toBe(before);
+    // A model without token or cost accounting still adds turns.
+    const turnsOnly = [costOf(0, 0, 3), costOf(0, 0, 4)];
+    const quietModel = fakeLeader({
+      commands: [[/^cost --json --all$/, () => turnsOnly.shift() ?? costOf(0, 0, 4)]],
+    });
+    expect(await stillWorking(quietModel.leader, quiet, { sleep: noSleep })).toBe(true);
+    const idle = fakeLeader({ commands: [[/^cost --json --all$/, () => costOf(0, 0, 4)]] });
+    expect(await stillWorking(idle.leader, quiet, { sleep: noSleep })).toBe(false);
+    // A failed reading proves nothing either way.
+    expect(await stillWorking(leader, quiet, { sleep: noSleep })).toBe(false);
+  });
+
+  it('records the run as an error before closing its tabs or collecting anything', async () => {
+    let spent = 0.1;
+    const { leader, calls } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('') },
+      commands: [[/^cost --json --all$/, () => costOf((spent += 0.5), Math.round(spent * 100))]],
+    });
+    const sleep = vi.fn(async () => {});
+    const err = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rw',
+      model: 'm',
+      busyProbeMs: 7,
+      sleep,
+      capture: { pollMs: 5 },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(
+      /^slicc prompt returned after \d+ s while the agent was still working/
+    );
+    expect(err.stillWorking).toBe(true);
+    expect(sleep).toHaveBeenCalledWith(7);
+    expect(calls.some((c) => /session export/.test(c.command ?? ''))).toBe(false);
+  });
+
+  it('collects as usual when spend has stopped', async () => {
+    const { leader } = fakeLeader({
+      verbs: { model: ok('m\n'), prompt: ok('') },
+      commands: [[/^cost --json --all$/, () => costOf(0.2, 5)]],
+    });
+    const result = await runTask({
+      leader,
+      task: { id: 't', task: 'x' },
+      runId: 'rq',
+      model: 'm',
+      sleep: async () => {},
+      capture: { pollMs: 5 },
+    });
+    expect(result).toMatchObject({ exitCode: 0, finalText: '' });
   });
 });

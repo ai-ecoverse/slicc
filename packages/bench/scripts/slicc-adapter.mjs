@@ -613,6 +613,29 @@ export function traceFromResult(result) {
 /** How often the cost cap reads the leader's spend while a prompt runs. */
 export const COST_POLL_MS = 30_000;
 
+/** How long a suspicious prompt return is watched for spend that is still rising. */
+export const BUSY_PROBE_MS = 20_000;
+
+/**
+ * Whether the agent is still working although `slicc prompt` returned. In the V2.1 pilot
+ * (2026-09-26) `prompt` exited 0 after about 5 s with no answer in 32 of 80 runs while the cone
+ * kept working in the same turn; collecting then closed its tabs mid-task and the judge scored
+ * an empty or half-done run. Only that signature is probed (exit 0 with no answer): its spend is
+ * read twice, `probeMs` apart, and any growth (cost, tokens or turns) means still working.
+ */
+export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sleep }) {
+  if (reply.status !== 0 || reply.timedOut || reply.aborted) return false;
+  if (String(reply.stdout ?? '').trim()) return false;
+  const first = await spend(leader);
+  await sleep(probeMs);
+  const second = await spend(leader);
+  if (!first || !second) return false;
+  // Turns count too: a model without token or cost accounting still adds assistant turns.
+  return (
+    second.cost > first.cost + 1e-9 || second.tokens > first.tokens || second.turns > first.turns
+  );
+}
+
 /**
  * Stop a prompt that spends more than `maxCost` dollars: poll `cost --json --all` against the
  * reading taken before it, and abort once the difference passes the cap. A reading that fails is
@@ -659,6 +682,8 @@ export async function runTask({
   now = Date.now,
   maxCost = 0,
   costPollMs = COST_POLL_MS,
+  busyProbeMs = BUSY_PROBE_MS,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }) {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
@@ -691,6 +716,14 @@ export async function runTask({
     await watcher?.stop();
     const shots = await shooter.stop();
     if (reply.leaderDown) throw failure('slicc prompt', reply);
+    // Before closing tabs or collecting: a run whose agent is still at work is not judged.
+    if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
+      const err = new Error(
+        `slicc prompt returned after ${Math.round(durationMs / 1000)} s while the agent was still working (its spend kept rising)`
+      );
+      err.stillWorking = true;
+      throw err;
+    }
     const openTabs = (await tabs(leader)).map((t) => t.url);
     // Close what the cone left open before the slower collection: a live page left running
     // keeps the leader busy.
