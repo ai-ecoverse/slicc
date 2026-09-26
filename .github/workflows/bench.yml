@@ -13,9 +13,11 @@
 # on a self-hosted GCP runner (Cyclenerd/google-cloud-github-runner in ai-ecoverse-493315;
 # `runs-on` names its GCE instance template) that takes every Nth task (`run.mjs --shard K/N`)
 # and runs it on `leaders` leaders side by side; `report` merges the shards' out dirs
-# (merge.mjs), and publishes once. The shards and `report` (on `vars.BENCH_SMALL_RUNNER`, default
-# gcp-ubuntu-24-04-2core) run on GCP; `plan`, a few seconds, runs GitHub-hosted so its VM cannot
-# take quota the shards need.
+# (merge.mjs), and publishes once. Only the shards run on GCP, on the lean gcp-bench-8core
+# template, which GCP deletes after 8 hours whatever its state, so no runner VM hangs on.
+# `plan` and `report` take seconds to minutes and run GitHub-hosted: a VM of theirs held quota
+# the shards needed, and a small-template VM started for `report` was taken by another org job
+# with the same label, leaving the report queued (2026-09-26).
 #
 # Guardrails, so a job never goes stale or runs out its time limit with nothing saved:
 # - run.mjs stops taking runs once one might not finish before `--deadline-minutes`, stops a run
@@ -83,7 +85,7 @@ on:
         description: "Continue an earlier Benchmark run (its run id): each shard starts from that run's shard artifact. Use the same sets, tasks, models, skills, repeats and shards"
         default: ''
       deadline-minutes:
-        description: 'Minutes a shard takes new runs for (its job limit is this plus 45)'
+        description: 'Minutes a shard takes new runs for, at most 420 (its job limit is this plus 45; runner VMs live 8 h)'
         default: '300'
       max-task-cost:
         description: 'Dollars one run may spend before it is stopped (0: no cap)'
@@ -148,8 +150,10 @@ jobs:
           if [ -n "$RESUME_RUN" ] && ! [[ "$RESUME_RUN" =~ ^[0-9]+$ ]]; then
             echo "::error::resume-run must be a run id, not '$RESUME_RUN'"; exit 1
           fi
-          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 1380 ]; then
-            echo "::error::deadline-minutes must be 10 to 1380, not '$DEADLINE'"; exit 1
+          # A shard job lasts up to the deadline plus 45 minutes, and gcp-bench-8core VMs are deleted
+          # after 8 hours: 420 keeps a job inside its VM's lifetime.
+          if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]] || [ "$DEADLINE" -lt 10 ] || [ "$DEADLINE" -gt 420 ]; then
+            echo "::error::deadline-minutes must be 10 to 420, not '$DEADLINE'"; exit 1
           fi
           # Expressions can't add: the run step gets the deadline plus 20 minutes for the runs in
           # flight, the job 25 more for setup, diagnostics and the upload.
@@ -166,7 +170,7 @@ jobs:
     permissions:
       contents: read
       actions: read # resume-run downloads another run's shard artifacts
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-ubuntu-24-04-4core' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || vars.BENCH_PR_RUNNER || 'gcp-bench-8core' }}
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.job-minutes) }}
     strategy:
       fail-fast: false
@@ -348,7 +352,7 @@ jobs:
     name: Report
     needs: [plan, bench]
     if: ${{ always() && needs.plan.result == 'success' }}
-    runs-on: ${{ vars.BENCH_SMALL_RUNNER || 'gcp-ubuntu-24-04-2core' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       BENCH_SETS: ${{ github.event_name == 'workflow_dispatch' && inputs.sets || 'packages/bench/tasks/smoke.json' }}

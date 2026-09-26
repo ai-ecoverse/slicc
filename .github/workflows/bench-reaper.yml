@@ -6,8 +6,9 @@
 #   the job queued for a day. The run is force-cancelled (nothing is running, so nothing is
 #   lost) and its failed jobs re-run, which queues them again and asks for a new VM; after
 #   REQUEUES attempts it is only cancelled.
-# - A job running for over RUNNING_HOURS: past any time limit bench.yml can set (deadline 1380
-#   minutes plus 45), so its runner is gone and GitHub has not noticed. Force-cancelled.
+# - A job running for over RUNNING_HOURS: past any time limit bench.yml can set (deadline 420
+#   minutes plus 45; its VMs are deleted after 8 hours), so its runner is gone and GitHub has not
+#   noticed. Force-cancelled.
 #
 # Runs every 30 minutes; dispatch it with `dry-run` to see what it would cancel.
 name: Benchmark reaper
@@ -38,7 +39,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       QUEUE_MINUTES: '60'
-      RUNNING_HOURS: '25'
+      RUNNING_HOURS: '9'
       REQUEUES: '2'
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
     steps:
