@@ -84,6 +84,13 @@ export interface ScoopMessageRouterDeps {
   getSessionStore(): SessionStore | null;
   /** Hook to reset the per-session cost tracker when clearing every scoop's history. */
   resetCostTracker(): void;
+  /**
+   * Settle silent-child spend folded into this scoop before its conversation
+   * is wiped (New session). Moves the fold onto the frozen archive when
+   * possible, otherwise the dropped ledger, so the fresh cone does not
+   * inherit it as live (#3437 review).
+   */
+  settleFoldedCost?(jid: string): void | Promise<void>;
   /** DB seam — kept injectable so tests can stub without monkey-patching the module-scope import. */
   db: {
     saveMessage(msg: ChannelMessage): Promise<void>;
@@ -674,6 +681,9 @@ export class ScoopMessageRouter {
     options: ClearSessionOptions = {}
   ): Promise<void> {
     this.cancelDebounce(jid);
+    // Settle before wiping the conversation: folded silent-agent spend must
+    // leave the live parent bucket or the next session inherits it (#3437).
+    await this.deps.settleFoldedCost?.(jid);
     if (context) {
       // Clears the live list AND both durable representations — the canonical
       // work-unit record and the legacy agent session (#2275). Deleting only

@@ -6,6 +6,19 @@
  * session so the cone can still see the total spend (PR #1091 extracted this
  * out of Orchestrator to keep that class focused on lifecycle).
  *
+ * Silent one-shot children (`notifyOnComplete === false`, e.g. the `agent`
+ * shell command) are different: they are unregistered as soon as they finish,
+ * so a bare `cost --json` (live scope) would never see them. On snapshot the
+ * tracker folds their assistant-message usage into the still-live parent
+ * instead of a separate dropped row (#3437). The parent's `models` list then
+ * includes the child's model, and `--all` does not double-count while the
+ * parent is live.
+ *
+ * A New-session clear of that parent must not keep the fold on the fresh
+ * cone: {@link settleFolded} clears the live bucket and either merges the
+ * spend into the cone's newest frozen index row (when the freezer just wrote
+ * one) or retains it on the dropped ledger, so `cost --all` still sees it.
+ *
  * The tracker is intentionally read-mostly — it doesn't subscribe to scoop
  * events. The orchestrator calls {@link snapshot} once on unregister, and the
  * `cost` shell command reads {@link getSessionCosts} on demand.
@@ -81,6 +94,16 @@ export interface ScoopCostTrackerDeps {
   getScoops(): ReadonlyMap<string, RegisteredScoop>;
   /** Live scoop contexts keyed by jid. */
   getContexts(): ReadonlyMap<string, ScoopContext>;
+  /**
+   * Optional: merge settled fold spend into the cone's newest frozen index
+   * row (the freezer writes it moments before clear). Return true when the
+   * spend landed there so the tracker can skip the dropped ledger and
+   * `cost --all` does not double-count (#3437 review).
+   */
+  mergeFoldedIntoFrozen?(
+    jid: string,
+    folded: readonly AssistantMessage[]
+  ): boolean | Promise<boolean>;
 }
 
 export interface CostScopeOptions {
@@ -126,10 +149,13 @@ function modelInUseNow(scoop: RegisteredScoop, latestModel: string): string {
 export function buildScoopCost(
   scoop: RegisteredScoop,
   context: ScoopContext,
-  source: ScoopCostData['source'] = 'live'
+  source: ScoopCostData['source'] = 'live',
+  /** Assistant turns folded in from silent child scoops (see {@link ScoopCostTracker.snapshot}). */
+  foldedMessages: readonly AssistantMessage[] = []
 ): ScoopCostData | null {
   const messages = context.getAgentMessages();
-  const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+  const ownAssistant = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+  const assistantMsgs = [...ownAssistant, ...foldedMessages];
   if (assistantMsgs.length === 0) return null;
 
   const aggregated = {
@@ -155,9 +181,10 @@ export function buildScoopCost(
     addModelSpelling(buckets, msg.model, msg.usage.cost.total);
   }
 
-  const latest = assistantMsgs.reduce((best, msg) =>
-    msg.timestamp >= best.timestamp ? msg : best
-  );
+  // Prefer the parent's own latest turn for "in use now"; fall back to folded
+  // children only when the parent has never spoken (agent-only spend).
+  const latestPool = ownAssistant.length > 0 ? ownAssistant : assistantMsgs;
+  const latest = latestPool.reduce((best, msg) => (msg.timestamp >= best.timestamp ? msg : best));
   const currentRaw = modelInUseNow(scoop, latest.model);
   const reported = reportModelSpellings(buckets, currentRaw);
 
@@ -183,31 +210,101 @@ export function buildScoopCost(
   };
 }
 
+/**
+ * Silent one-shot children (`notifyOnComplete === false`) whose parent is still
+ * registered fold into that parent on teardown — otherwise their billable
+ * usage vanishes from bare `cost --json` (#3437).
+ */
+function shouldFoldIntoParent(
+  scoop: RegisteredScoop,
+  scoops: ReadonlyMap<string, RegisteredScoop>
+): scoop is RegisteredScoop & { parentJid: string } {
+  return (
+    scoop.notifyOnComplete === false && scoop.parentJid !== null && scoops.has(scoop.parentJid)
+  );
+}
+
 export class ScoopCostTracker {
   /** Preserves cost data for scoops that have been dropped this session. */
   private dropped: ScoopCostData[] = [];
   /** Preserves assistant messages for dropped scoops to enable per-model aggregation. */
   private droppedMessages: AssistantMessage[][] = [];
+  /**
+   * Assistant turns from silent one-shot children, keyed by the still-live
+   * parent jid they folded into. Merged into that parent's live (and later
+   * dropped) cost row so bare `cost --json` keeps the spend (#3437).
+   */
+  private foldedByParent = new Map<string, AssistantMessage[]>();
   private readonly deps: ScoopCostTrackerDeps;
 
   constructor(deps: ScoopCostTrackerDeps) {
     this.deps = deps;
   }
 
+  /** Assistant turns previously folded into `jid` from silent children. */
+  private foldedMessagesFor(jid: string): readonly AssistantMessage[] {
+    return this.foldedByParent.get(jid) ?? [];
+  }
+
+  /**
+   * Move silent-child spend attributed to `jid` off the live fold bucket.
+   * Prefers merging into the cone's newest frozen index row when
+   * {@link ScoopCostTrackerDeps.mergeFoldedIntoFrozen} succeeds; otherwise
+   * retains the spend on the dropped ledger so `cost --all` still sees it.
+   * Called at the cone session boundary (New chat) (#3437 review).
+   */
+  async settleFolded(jid: string): Promise<void> {
+    const folded = this.foldedByParent.get(jid);
+    this.foldedByParent.delete(jid);
+    if (!folded || folded.length === 0) return;
+
+    const scoop = this.deps.getScoops().get(jid);
+    if (!scoop) return;
+
+    const merged = await this.deps.mergeFoldedIntoFrozen?.(jid, folded);
+    if (merged) return;
+
+    // No fresh archive (erase / short-session skip) — keep spend on the
+    // dropped ledger so `cost --all` still reports it.
+    const emptyContext = { getAgentMessages: () => [] } as unknown as ScoopContext;
+    const costData = buildScoopCost(scoop, emptyContext, 'dropped', folded);
+    if (!costData) return;
+    this.droppedMessages.push([...folded]);
+    this.dropped.push(costData);
+  }
+
   /** Snapshot a scoop's cost data before it is destroyed. */
   snapshot(jid: string): void {
-    const scoop = this.deps.getScoops().get(jid);
+    const scoops = this.deps.getScoops();
+    const scoop = scoops.get(jid);
     const context = this.deps.getContexts().get(jid);
     if (!scoop || !context) return;
-    const costData = buildScoopCost(scoop, context, 'dropped');
+
+    const messages = context.getAgentMessages();
+    const ownAssistant = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+    // A parent may carry folded child spend with no turns of its own.
+    const foldedIntoSelf = [...this.foldedMessagesFor(jid)];
+
+    if (shouldFoldIntoParent(scoop, scoops)) {
+      if (ownAssistant.length === 0 && foldedIntoSelf.length === 0) return;
+      const parentJid = scoop.parentJid;
+      const existing = this.foldedByParent.get(parentJid) ?? [];
+      this.foldedByParent.set(parentJid, [...existing, ...ownAssistant, ...foldedIntoSelf]);
+      // Drop the child's own fold bucket so cascade teardown (child → parent)
+      // does not double-count when the parent is snapshotted next.
+      this.foldedByParent.delete(jid);
+      return;
+    }
+
+    const costData = buildScoopCost(scoop, context, 'dropped', foldedIntoSelf);
     if (costData) {
       this.dropped.push(costData);
     }
-    const messages = context.getAgentMessages();
-    const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
-    if (assistantMsgs.length > 0) {
-      this.droppedMessages.push(assistantMsgs);
+    const forModelAgg = [...ownAssistant, ...foldedIntoSelf];
+    if (forModelAgg.length > 0) {
+      this.droppedMessages.push(forModelAgg);
     }
+    this.foldedByParent.delete(jid);
   }
 
   /** Collect cost data from live scoops, optionally including dropped history. */
@@ -217,7 +314,7 @@ export class ScoopCostTracker {
     for (const scoop of this.deps.getScoops().values()) {
       const context = contexts.get(scoop.jid);
       if (!context) continue;
-      const costData = buildScoopCost(scoop, context);
+      const costData = buildScoopCost(scoop, context, 'live', this.foldedMessagesFor(scoop.jid));
       if (costData) results.push(costData);
     }
     if (options.includeDropped) results.push(...this.dropped);
@@ -230,6 +327,9 @@ export class ScoopCostTracker {
    */
   getBurnRate(nowMs = Date.now()): number {
     const assistantMessages = this.droppedMessages.flat();
+    for (const folded of this.foldedByParent.values()) {
+      assistantMessages.push(...folded);
+    }
     for (const context of this.deps.getContexts().values()) {
       for (const message of context.getAgentMessages()) {
         if (message.role === 'assistant') assistantMessages.push(message);
@@ -286,12 +386,13 @@ export class ScoopCostTracker {
     const modelMap = new Map<string, ModelCostData>();
     const spellings = new Map<string, ModelSpellings>();
 
-    // Aggregate live scoops
+    // Aggregate live scoops (plus silent children folded into them).
     const contexts = this.deps.getContexts();
-    for (const context of contexts.values()) {
+    for (const [jid, context] of contexts) {
       const messages = context.getAgentMessages();
       const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
       this.aggregateMessages(assistantMsgs, modelMap, spellings);
+      this.aggregateMessages(this.foldedMessagesFor(jid), modelMap, spellings);
     }
 
     if (options.includeDropped) {
@@ -311,7 +412,7 @@ export class ScoopCostTracker {
 
   /** Helper to aggregate messages into the model map. */
   private aggregateMessages(
-    messages: AssistantMessage[],
+    messages: readonly AssistantMessage[],
     modelMap: Map<string, ModelCostData>,
     spellings: Map<string, ModelSpellings>
   ): void {
@@ -344,5 +445,6 @@ export class ScoopCostTracker {
   reset(): void {
     this.dropped = [];
     this.droppedMessages = [];
+    this.foldedByParent.clear();
   }
 }
