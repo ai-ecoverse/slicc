@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FAKE_NODE_SERVER, setup } from '../tests/helpers.mjs';
@@ -7,11 +8,13 @@ import { isAlive, readState, terminate } from './gh-io.mjs';
 import {
   bootLeader,
   installNodeServer,
+  launchPinnedWebapp,
   main,
   pollJoinFile,
   readBootInputs,
   removeCredentialFiles,
   resolveNodeServer,
+  waitForWebapp,
   writeCredentialFiles,
 } from './start-leader.mjs';
 
@@ -24,6 +27,7 @@ describe('start-leader', () => {
   afterEach(async () => {
     const state = readState(t.home);
     if (state?.leader) await terminate(state.leader, 500);
+    if (state?.uiServer) await terminate(state.uiServer, 500);
     t.teardown();
     vi.restoreAllMocks();
   });
@@ -69,6 +73,7 @@ describe('start-leader', () => {
     expect(log).toContain('PORT=5799');
     expect(log).toContain(`SECRETS=${state.secretsFile}`);
     expect(log).toContain('INPUTS=0');
+    expect(log).toContain('WORKER= TRAY= BRIDGE_ORIGINS= ');
   });
 
   it('masks the join url by default', async () => {
@@ -111,6 +116,150 @@ describe('start-leader', () => {
     await expect(main()).rejects.toThrow(/ceiling/);
     t.inputs({ duration: '1m', mounts: 'bogus' });
     expect(() => readBootInputs()).toThrow(/mounts line 1/);
+  });
+
+  function installFakePackage(port) {
+    const entryDir = join(t.root, 'pkg', 'dist', 'node-server');
+    const uiDir = join(t.root, 'pkg', 'dist', 'ui');
+    mkdirSync(entryDir, { recursive: true });
+    mkdirSync(uiDir, { recursive: true });
+    copyFileSync(FAKE_NODE_SERVER, join(entryDir, 'index.js'));
+    writeFileSync(join(uiDir, 'index.html'), '<!doctype html><title>pinned</title>');
+    writeFileSync(join(uiDir, 'app.js'), 'console.log(1)');
+    t.inputs({
+      'node-server': join(entryDir, 'index.js'),
+      'pin-webapp': 'true',
+      port: String(port),
+      duration: '1m',
+      'boot-timeout': '10s',
+      'mask-join-url': 'false',
+    });
+    return { uiDir, uiPort: port + 1000 };
+  }
+
+  it('serves the package webapp and points the leader at it', async () => {
+    const { uiPort } = installFakePackage(24110);
+    const result = await main({ pollMs: 50 });
+    const state = readState(t.home);
+    expect(state.uiServer).toBeTypeOf('number');
+    expect(isAlive(state.uiServer)).toBe(true);
+    const page = await fetch(`http://127.0.0.1:${uiPort}/`);
+    expect(await page.text()).toContain('pinned');
+    expect(page.headers.get('document-isolation-policy')).toBe('isolate-and-credentialless');
+    const log = readFileSync(state.logPath, 'utf8');
+    expect(log).toContain(`WORKER=http://localhost:${uiPort} `);
+    expect(log).toContain('TRAY=https://www.sliccy.ai ');
+    expect(log).toContain(`BRIDGE_ORIGINS=http://localhost:${uiPort} `);
+    expect(result.pid).toBe(state.leader);
+  });
+
+  it('keeps an explicit tray hub when the webapp is pinned', async () => {
+    installFakePackage(24120);
+    t.inputs({ 'tray-worker-base-url': 'https://staging.example/' });
+    await main({ pollMs: 50 });
+    const log = readFileSync(readState(t.home).logPath, 'utf8');
+    expect(log).toContain('TRAY=https://staging.example ');
+  });
+
+  it('refuses to pin when ui-origin is also set', async () => {
+    installFakePackage(24130);
+    t.inputs({ 'ui-origin': 'https://www.sliccy.ai' });
+    await expect(main({ pollMs: 50 })).rejects.toThrow(/do not also set ui-origin/);
+  });
+
+  it('stops the pinned webapp when the leader never mints a tray', async () => {
+    process.env.FAKE_NODE_SERVER = 'exit';
+    const { uiDir, uiPort } = installFakePackage(24140);
+    await expect(main({ pollMs: 50 })).rejects.toThrow(/exited before minting a join URL/);
+    const { listenWebapp } = await import('./serve-webapp.mjs');
+    const again = await listenWebapp(uiDir, uiPort);
+    await again.close();
+  });
+
+  it('does not treat an orphaned listener as the webapp it just started', async () => {
+    const ui = join(t.root, 'orphan-ui');
+    mkdirSync(ui, { recursive: true });
+    writeFileSync(join(ui, 'index.html'), '<title>stale</title>');
+    const stale = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<title>stale</title>');
+    });
+    await new Promise((resolve) => stale.listen(0, '127.0.0.1', () => resolve()));
+    const port = stale.address().port;
+    try {
+      await expect(
+        launchPinnedWebapp({
+          root: ui,
+          port,
+          logPath: join(t.root, 'orphan.log'),
+          spawnImpl: () => spawn(process.execPath, ['-e', 'process.exit(1)']),
+        })
+      ).rejects.toThrow(/exited before it was ready/);
+    } finally {
+      await new Promise((resolve) => stale.close(() => resolve()));
+    }
+  });
+
+  it('reports why the pinned webapp did not come up', async () => {
+    const fetchImpl = async () => ({ ok: false, status: 503 });
+    await expect(waitForWebapp(9, { timeoutMs: 120, fetchImpl })).rejects.toThrow(/HTTP 503/);
+    const throwing = async () => {
+      throw new Error('refused');
+    };
+    await expect(waitForWebapp(9, { timeoutMs: 120, fetchImpl: throwing })).rejects.toThrow(
+      /refused/
+    );
+    await expect(
+      waitForWebapp(9, {
+        timeoutMs: 200,
+        token: 'ours',
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          text: async () => '<title>stale</title>',
+        }),
+      })
+    ).rejects.toThrow(/not the pinned webapp/);
+    await expect(
+      waitForWebapp(9, {
+        timeoutMs: 5_000,
+        token: 'ours',
+        exited: () => 1,
+        fetchImpl: async () => ({ ok: true, text: async () => 'ours' }),
+      })
+    ).rejects.toThrow(/exited before it was ready \(1\)/);
+    const bare = join(t.root, 'no-ui');
+    mkdirSync(bare);
+    await expect(
+      launchPinnedWebapp({ root: bare, port: 9, logPath: join(t.root, 'ui.log') })
+    ).rejects.toThrow(/index.html is missing/);
+    const ui = join(t.root, 'ui-log');
+    mkdirSync(ui);
+    writeFileSync(join(ui, 'index.html'), 'ok');
+    const logPath = join(t.root, 'ui-server.log');
+    writeFileSync(logPath, 'ui failed while binding\n');
+    await expect(
+      launchPinnedWebapp({
+        root: ui,
+        port: 9,
+        logPath,
+        spawnImpl: () => ({ pid: null }),
+        waitImpl: async () => {
+          throw new Error('down');
+        },
+      })
+    ).rejects.toThrow(/down[\s\S]*ui failed while binding/);
+    await expect(
+      launchPinnedWebapp({
+        root: ui,
+        port: 9,
+        logPath: join(t.root, 'missing-ui.log'),
+        spawnImpl: () => ({ pid: null }),
+        waitImpl: async () => {
+          throw 'x';
+        },
+      })
+    ).rejects.toThrow(/^x$/);
   });
 
   it('installs sliccy through npm into a private prefix', () => {

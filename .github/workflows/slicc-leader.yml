@@ -127,6 +127,10 @@ on:
         description: Hosted UI origin override.
         type: string
         default: ''
+      pin-webapp:
+        description: Serve the sliccy package's webapp on localhost instead of production. Off keeps the production UI.
+        type: boolean
+        default: false
       tray-worker-base-url:
         description: Tray relay override.
         type: string
@@ -245,6 +249,7 @@ jobs:
           provider-api-key: ${{ secrets.SLICC_PROVIDER_API_KEY }}
           provider-base-url: ${{ inputs.provider-base-url }}
           ui-origin: ${{ inputs.ui-origin }}
+          pin-webapp: ${{ inputs.pin-webapp && 'true' || 'false' }}
           tray-worker-base-url: ${{ inputs.tray-worker-base-url }}
           mask-join-url: ${{ inputs.mask-join-url != false }}
 

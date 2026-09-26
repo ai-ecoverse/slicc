@@ -5,8 +5,9 @@
  *
  * Zero dependencies on purpose: composite actions run these scripts from a
  * bare checkout of this repo path on the consumer's runner, where the
- * monorepo's `node_modules` does not exist.
+ * monorepo's `node_modules` does not exist. Node built-ins only.
  */
+import { dirname, join } from 'node:path';
 
 /**
  * GitHub-hosted runners cap a job at 360 minutes. Leave the wrapping
@@ -20,6 +21,20 @@ export const DEFAULT_FOLLOW_RUNNER = ['bash', '-c'];
 
 /** Default `--hosted` bridge port; mirrors node-server's `PORT` default. */
 export const DEFAULT_PORT = 5710;
+
+/**
+ * Production tray hub. A pinned webapp is served on localhost, so the tray
+ * relay must be set explicitly: otherwise node-server would advertise the
+ * UI origin itself as the hub.
+ */
+export const PRODUCTION_TRAY_ORIGIN = 'https://www.sliccy.ai';
+
+/**
+ * Bridge port plus this is the pinned webapp port. Lanes already take
+ * consecutive bridge ports (`5710 + i`); this keeps their UI ports off that
+ * range (`6710 + i`).
+ */
+export const PINNED_UI_PORT_OFFSET = 1000;
 
 /** Hard-coded by node-server's hosted mode (`cloud-status.ts`). */
 export const JOIN_FILE_PATH = '/tmp/slicc-join.json';
@@ -176,6 +191,7 @@ export function buildLeaderArgs(options = {}) {
  *   profileDir: string;
  *   uiOrigin?: string;
  *   trayWorkerBaseUrl?: string;
+ *   bridgeDevAllowedOrigins?: string;
  *   cdpLaunchTimeoutMs?: number;
  * }} options
  * @returns {Record<string, string>}
@@ -199,7 +215,114 @@ export function buildLeaderEnv(options) {
   } else {
     delete env.SLICC_TRAY_WORKER_BASE_URL;
   }
+  // Read once, at process start, by node-server's bridge allowlist. The
+  // frozen list names production and `localhost:5710` only, so a pinned UI
+  // on another port has to be named here or Chrome's /cdp dial is refused.
+  if (options.bridgeDevAllowedOrigins) {
+    env.BRIDGE_DEV_ALLOWED_ORIGINS = options.bridgeDevAllowedOrigins;
+  }
   return env;
+}
+
+/**
+ * Where the published package keeps the built webapp, given the
+ * node-server entry `…/sliccy/dist/node-server/index.js`.
+ * @param {string} entry
+ */
+export function webappDirForEntry(entry) {
+  return join(dirname(entry), '..', 'ui');
+}
+
+/**
+ * Port the pinned webapp listens on for a leader's bridge port.
+ * @param {number} bridgePort
+ */
+export function pinnedUiPort(bridgePort) {
+  const port = bridgePort + PINNED_UI_PORT_OFFSET;
+  if (!Number.isInteger(bridgePort) || port < 1 || port > 65535) {
+    throw new Error(
+      `pin-webapp port ${bridgePort}+${PINNED_UI_PORT_OFFSET} is not a usable TCP port`
+    );
+  }
+  return port;
+}
+
+/**
+ * Opt-in pinned webapp. `null` when pinning is off (production UI, drift
+ * accepted). Throws when `ui-origin` is also set: that input is a different
+ * origin, and pinning would silently ignore it.
+ *
+ * @param {{
+ *   pin: boolean;
+ *   entry: string;
+ *   bridgePort: number;
+ *   uiOrigin?: string;
+ *   trayWorkerBaseUrl?: string;
+ * }} options
+ * @returns {null | {
+ *   root: string;
+ *   uiPort: number;
+ *   uiOrigin: string;
+ *   trayWorkerBaseUrl: string;
+ *   bridgeDevAllowedOrigins: string;
+ * }}
+ */
+/**
+ * `pin-webapp` is empty or `false` (production UI), `true` (the npm
+ * package's `dist/ui`), or a git ref. A ref is fetched and built once,
+ * then run like the local node harness: that tree's `dist/node-server`
+ * and `dist/ui`.
+ * @param {string | boolean | null | undefined} value
+ * @returns {{ mode: 'off' } | { mode: 'package' } | { mode: 'commit'; ref: string }}
+ */
+export function parsePinWebapp(value) {
+  const raw = String(value ?? '').trim();
+  const word = raw.toLowerCase();
+  if (!raw || ['false', '0', 'no', 'off'].includes(word)) return { mode: 'off' };
+  if (['true', '1', 'yes', 'on', 'release'].includes(word)) return { mode: 'package' };
+  if (raw.startsWith('-') || raw.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(raw)) {
+    throw new Error(`pin-webapp: "${raw}" is not a boolean or a git ref`);
+  }
+  return { mode: 'commit', ref: raw };
+}
+
+/**
+ * Commands that turn a git ref into the same pair the local node harness
+ * runs: `dist/node-server/index.js` and `dist/ui` from one checkout.
+ * `null` unless `pin-webapp` is a commit, tag, or branch.
+ * @param {{ ref: string; dest: string }} options
+ */
+export function planPinnedCommitBuild(options) {
+  const pin = parsePinWebapp(options.ref);
+  if (pin.mode !== 'commit') return null;
+  const dest = options.dest;
+  return {
+    ref: pin.ref,
+    fetch: ['git', 'fetch', '--depth', '1', 'origin', pin.ref],
+    worktree: ['git', 'worktree', 'add', '--detach', dest, 'FETCH_HEAD'],
+    npmCi: ['npm', 'ci'],
+    buildWebapp: ['npm', 'run', 'build', '-w', '@slicc/webapp'],
+    buildServer: ['npm', 'run', 'build', '-w', '@slicc/node-server'],
+    nodeServer: join(dest, 'dist', 'node-server', 'index.js'),
+    webapp: join(dest, 'dist', 'ui'),
+  };
+}
+
+export function resolvePinnedWebapp(options) {
+  if (!options.pin) return null;
+  if (options.uiOrigin) {
+    throw new Error('pin-webapp serves the sliccy package UI; do not also set ui-origin');
+  }
+  const uiPort = pinnedUiPort(options.bridgePort);
+  const uiOrigin = `http://localhost:${uiPort}`;
+  const tray = (options.trayWorkerBaseUrl || PRODUCTION_TRAY_ORIGIN).replace(/\/+$/, '');
+  return {
+    root: webappDirForEntry(options.entry),
+    uiPort,
+    uiOrigin,
+    trayWorkerBaseUrl: tray,
+    bridgeDevAllowedOrigins: uiOrigin,
+  };
 }
 
 const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);

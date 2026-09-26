@@ -17,11 +17,15 @@ import {
   parseJoinFile,
   parseMountLines,
   parseMountMapping,
+  parsePinWebapp,
   parsePort,
   parseSecretsEnv,
   pickCliRelease,
+  pinnedUiPort,
+  planPinnedCommitBuild,
   posixDirname,
   requireVfsPath,
+  resolvePinnedWebapp,
   serializeSecretsEnv,
   shellQuote,
   tailLines,
@@ -142,6 +146,75 @@ describe('leader argv and env', () => {
     expect(env.WORKER_BASE_URL).toBe('http://localhost:8787');
     expect(env.SLICC_TRAY_WORKER_BASE_URL).toBe('https://staging.example');
     expect(env.SLICC_CDP_LAUNCH_TIMEOUT_MS).toBe('90000');
+    expect(env.BRIDGE_DEV_ALLOWED_ORIGINS).toBeUndefined();
+  });
+  it('names the pinned UI origin on the bridge allowlist', () => {
+    const env = buildLeaderEnv({
+      base: { BRIDGE_DEV_ALLOWED_ORIGINS: 'http://localhost:1' },
+      port: 5710,
+      secretsFile: '/s',
+      profileDir: '/p',
+      uiOrigin: 'http://localhost:6710',
+      trayWorkerBaseUrl: 'https://www.sliccy.ai',
+      bridgeDevAllowedOrigins: 'http://localhost:6710',
+    });
+    expect(env.BRIDGE_DEV_ALLOWED_ORIGINS).toBe('http://localhost:6710');
+    expect(env.WORKER_BASE_URL).toBe('http://localhost:6710');
+  });
+});
+
+describe('pinned webapp', () => {
+  it('stays off unless asked, and then serves the package UI beside node-server', () => {
+    expect(
+      resolvePinnedWebapp({ pin: false, entry: '/pkg/dist/node-server/index.js', bridgePort: 5710 })
+    ).toBeNull();
+    expect(
+      resolvePinnedWebapp({
+        pin: true,
+        entry: '/pkg/dist/node-server/index.js',
+        bridgePort: 5711,
+        trayWorkerBaseUrl: 'https://staging.example/',
+      })
+    ).toEqual({
+      root: '/pkg/dist/ui',
+      uiPort: 6711,
+      uiOrigin: 'http://localhost:6711',
+      trayWorkerBaseUrl: 'https://staging.example',
+      bridgeDevAllowedOrigins: 'http://localhost:6711',
+    });
+    expect(
+      resolvePinnedWebapp({
+        pin: true,
+        entry: '/pkg/dist/node-server/index.js',
+        bridgePort: 5710,
+      }).trayWorkerBaseUrl
+    ).toBe('https://www.sliccy.ai');
+  });
+  it('accepts a git ref and plans the node-harness build', () => {
+    expect(parsePinWebapp('')).toEqual({ mode: 'off' });
+    expect(parsePinWebapp('false')).toEqual({ mode: 'off' });
+    expect(parsePinWebapp('true')).toEqual({ mode: 'package' });
+    expect(parsePinWebapp('release')).toEqual({ mode: 'package' });
+    expect(parsePinWebapp('abc1234')).toEqual({ mode: 'commit', ref: 'abc1234' });
+    expect(() => parsePinWebapp('foo bar')).toThrow(/git ref/);
+    expect(() => parsePinWebapp('--upload-pack=evil')).toThrow(/git ref/);
+    const plan = planPinnedCommitBuild({ ref: 'feat/pin', dest: '/tmp/pin' });
+    expect(plan.fetch).toEqual(['git', 'fetch', '--depth', '1', 'origin', 'feat/pin']);
+    expect(plan.worktree).toEqual(['git', 'worktree', 'add', '--detach', '/tmp/pin', 'FETCH_HEAD']);
+    expect(plan.nodeServer).toBe('/tmp/pin/dist/node-server/index.js');
+    expect(plan.webapp).toBe('/tmp/pin/dist/ui');
+    expect(planPinnedCommitBuild({ ref: 'true', dest: '/tmp/pin' })).toBeNull();
+  });
+  it('rejects a second UI origin and a port that would not fit', () => {
+    expect(() =>
+      resolvePinnedWebapp({
+        pin: true,
+        entry: '/pkg/dist/node-server/index.js',
+        bridgePort: 5710,
+        uiOrigin: 'http://localhost:8787',
+      })
+    ).toThrow(/ui-origin/);
+    expect(() => pinnedUiPort(65000)).toThrow(/not a usable TCP port/);
   });
 });
 

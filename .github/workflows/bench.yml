@@ -96,6 +96,10 @@ on:
       fresh-leader-every:
         description: 'Restart a leader every N tasks with a wiped profile (1: every task is isolated; 0: never)'
         default: '1'
+      pin-webapp:
+        description: 'Empty: production UI. true: the pinned sliccy package webapp. A commit, tag, or branch: build that revision and run it like the local node harness (its node-server and dist/ui, production tray and flags)'
+        type: string
+        default: ''
       publish:
         description: 'Publish the results to the Hugging Face dataset ai-ecoverse/slicc-bench'
         type: boolean
@@ -138,8 +142,8 @@ jobs:
         with:
           node-version: '24'
 
-      # Every shard and every leader restart runs the same sliccy, even if one is published
-      # mid-run: the records are comparable only within one harness version.
+      # Every shard and every leader restart runs the same sliccy node-server, even if one
+      # is published mid-run. The webapp still comes from production unless pin-webapp is on.
       - name: Pin the sliccy version and list the shards
         id: plan
         run: |
@@ -265,6 +269,18 @@ jobs:
           go-version-file: packages/slicc-cli/go.mod
           cache-dependency-path: packages/slicc-cli/go.sum
 
+      # A git ref is built once, into a detached worktree, the way the local node
+      # harness runs one checkout: node dist/node-server against that tree's
+      # dist/ui. Later restarts reuse the build. `true` skips this and serves
+      # the npm package instead.
+      - name: Build a pinned commit
+        id: pin-commit
+        if: github.event_name == 'workflow_dispatch' && inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && inputs.pin-webapp != 'true'
+        env:
+          INPUT_PIN_WEBAPP: ${{ inputs.pin-webapp }}
+          PIN_DEST: ${{ runner.temp }}/slicc-pin
+        run: node packages/github-workflow/scripts/materialize-pinned-commit.mjs
+
       - name: Install the slicc CLI (built from this checkout)
         uses: ./packages/github-workflow/actions/install-cli
         with:
@@ -282,6 +298,8 @@ jobs:
           BEDROCK_REGION: ${{ vars.RUM_AWS_REGION || 'us-west-2' }}
           BENCH_LEADER_SCRIPTS: packages/github-workflow/scripts
           INPUT_SLICC_VERSION: ${{ needs.plan.outputs.slicc-version }}
+          INPUT_NODE_SERVER: ${{ steps.pin-commit.outputs.node-server }}
+          INPUT_PIN_WEBAPP: ${{ github.event_name == 'workflow_dispatch' && inputs.pin-webapp != '' && inputs.pin-webapp != 'false' && 'true' || 'false' }}
           INPUT_DURATION: 350m
           INPUT_MOUNTS: ${{ steps.mounts.outputs.mounts }}
           INPUT_PROVIDER: bedrock-camp
