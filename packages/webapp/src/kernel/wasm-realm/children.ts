@@ -111,7 +111,7 @@ export class ChildTable {
     try {
       for (const [n, slot] of stdio.entries()) fds.installAt(n, this.openSlot(slot, n, captured));
     } catch (e) {
-      fds.closeAll();
+      await fds.closeAll();
       throw e;
     }
     return this.track(req, fds, captured, this.spawner);
@@ -127,7 +127,7 @@ export class ChildTable {
     try {
       handle = await start(req, fds);
     } catch (e) {
-      fds.closeAll();
+      await fds.closeAll();
       throw e;
     }
     const child: Child = { exited: handle.exited, captured };

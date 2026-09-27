@@ -181,7 +181,7 @@ describe('spawnWasmProcess', () => {
 
   it('answers a write to a pipe with no reader with EPIPE (the worker applies SIGPIPE)', async () => {
     const { read, write } = openPipe();
-    read.release(); // the reader is gone
+    await Promise.resolve(read.release()); // the reader is gone
     const fds = new FdTable();
     fds.install(bytesSource(new Uint8Array(0)));
     fds.install(write);

@@ -174,7 +174,7 @@ export class WasmSession {
       module = await loadModule(this.ctx, req.module);
       req.signal?.throwIfAborted();
     } catch (e) {
-      req.fds.closeAll();
+      await req.fds.closeAll();
       throw e;
     }
     return this.start({ ...req, program: { glue, module } });
@@ -269,7 +269,7 @@ export class WasmSession {
   private runShellChild(req: ChildSpawnRequest, fds: FdTable, ppid: number): ChildHandle {
     const exec = this.ctx.exec;
     if (!exec) {
-      fds.closeAll();
+      void fds.closeAll().catch(() => undefined);
       throw new SpawnError('ENOSYS');
     }
     const { pid, abort } = this.register('shell', req.argv, req.cwd, req.env, ppid);
@@ -305,7 +305,7 @@ export class WasmSession {
         await writeAll(fds, 2, new TextEncoder().encode(`${req.file}: ${message}\n`));
         return 126;
       } finally {
-        fds.closeAll();
+        await fds.closeAll();
         this.shellChildren.delete(controller);
         this.ctx.signal?.removeEventListener('abort', onAbort);
       }
