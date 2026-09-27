@@ -843,7 +843,7 @@ describe('ScoopContext retry cancellation', () => {
 
     // Only the first attempt should have run — stop() aborted backoff before retries.
     expect(attempts).toBe(1);
-    // stop() transitions status to ready; no fatal error should fire on cancellation.
+    // cleanupPromptState publishes ready once the aborted turn settles; no fatal error on cancel.
     expect(callbacks.onFatalError).not.toHaveBeenCalled();
     const statusCalls = (callbacks.onStatusChange as any).mock.calls.map((c: any[]) => c[0]);
     expect(statusCalls).toContain('ready');
@@ -1625,6 +1625,41 @@ describe('ScoopContext — process manager wiring', () => {
     expect(proc.terminatedBy).toBe('SIGINT');
     expect(proc.status).toBe('killed');
     expect(proc.exitCode).toBe(130);
+  });
+
+  it('force-releases a turn whose tool ignores the abort', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const { STOP_FORCE_RELEASE_MS } = await import('../../src/scoops/scoop-context.js');
+    vi.useFakeTimers();
+    try {
+      const pm = new ProcessManager();
+      const callbacks = createMockCallbacks();
+      const ctx = new ScoopContext(
+        testScoop,
+        callbacks,
+        {} as any,
+        undefined,
+        undefined,
+        undefined,
+        pm
+      );
+      injectMockAgent(ctx, () => new Promise(() => {}));
+      const pending = ctx.prompt('stuck');
+      pending.catch(() => {});
+      await vi.advanceTimersByTimeAsync(20);
+      ctx.stop();
+      expect((ctx as unknown as { status: string }).status).toBe('processing');
+      await vi.advanceTimersByTimeAsync(STOP_FORCE_RELEASE_MS);
+      expect((ctx as unknown as { status: string }).status).toBe('ready');
+      expect((ctx as unknown as { isProcessing: boolean }).isProcessing).toBe(false);
+      const proc = pm.list()[0];
+      expect(proc.terminatedBy).toBe('SIGKILL');
+      expect(proc.status).toBe('killed');
+      expect(proc.exitCode).toBe(137);
+      ctx.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('truncates long prompt text in argv[1] for /proc/<pid>/cmdline ergonomics', async () => {

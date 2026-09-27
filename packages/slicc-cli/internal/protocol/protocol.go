@@ -129,6 +129,15 @@ type Abort struct {
 	Type string `json:"type"` // "abort"
 }
 
+// AbortAck is the leader confirming that the aborted unit, and every scoop it
+// owned, is no longer processing. `prompt` does not exit on the interrupt
+// until this arrives.
+type AbortAck struct {
+	Type     string   `json:"type"` // "abort_ack"
+	ScoopJid string   `json:"scoopJid"`
+	Stopped  []string `json:"stopped"`
+}
+
 // Ping is a liveness probe.
 type Ping struct {
 	Type string `json:"type"` // "ping"
@@ -294,6 +303,7 @@ const (
 	TypeAgentEvent      = "agent_event"
 	TypeUserMessageEcho = "user_message_echo"
 	TypeUserMessageAck  = "user_message_ack"
+	TypeAbortAck        = "abort_ack"
 	TypeStatus          = "status"
 	TypeNewSession      = "new_session"
 	TypeRequestSnapshot = "request_snapshot"

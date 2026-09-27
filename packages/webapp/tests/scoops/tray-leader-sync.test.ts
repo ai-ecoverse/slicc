@@ -514,6 +514,32 @@ describe('LeaderSyncManager', () => {
     expect(onFollowerAbort).toHaveBeenCalled();
   });
 
+  it('acks an abort only to the follower that sent it, and only once the stop is confirmed', async () => {
+    const onFollowerAbort = vi.fn(async () => ({
+      confirmed: true,
+      scoopJid: 'cone_b',
+      stopped: ['scoop_1', 'cone_b'],
+    }));
+    const { manager } = createManager({ onFollowerAbort });
+    const channel = new FakeChannel();
+    const other = new FakeChannel();
+    manager.addFollower('b1', channel);
+    manager.addFollower('b2', other);
+
+    channel.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    channel.simulateMessage({ type: 'abort' });
+
+    await vi.waitFor(() =>
+      expect(channel.parseSent()).toContainEqual({
+        type: 'abort_ack',
+        scoopJid: 'cone_b',
+        stopped: ['scoop_1', 'cone_b'],
+      })
+    );
+    expect(other.parseSent().some((message) => message.type === 'abort_ack')).toBe(false);
+    expect(onFollowerAbort).toHaveBeenCalledWith('cone_b');
+  });
+
   it('handles follower request_snapshot by resending current state', () => {
     const { manager } = createManager();
     const channel = new FakeChannel();

@@ -13,9 +13,33 @@ import {
   ownershipChainOf,
   rootOwnerOf,
   rootsOf,
+  stopOrder,
   subtreeOf,
 } from '../../src/work-unit/policy.js';
 import { childRecord, rootRecord, withLegacyRoleFields } from './fixtures.js';
+
+describe('stopOrder', () => {
+  it('stops leaves before the unit that owns them, and nobody else', () => {
+    const units = [
+      { jid: 'cone', parentJid: null },
+      { jid: 'scoop', parentJid: 'cone' },
+      { jid: 'nested', parentJid: 'scoop' },
+      { jid: 'other', parentJid: null },
+    ];
+    expect(stopOrder(units, 'cone')).toEqual(['nested', 'scoop', 'cone']);
+    expect(stopOrder(units, 'scoop')).toEqual(['nested', 'scoop']);
+    expect(stopOrder(units, 'missing')).toEqual(['missing']);
+  });
+
+  it('still walks a nested tree when the roster is a one-shot Map iterator', () => {
+    const units = new Map([
+      ['cone', { jid: 'cone', parentJid: null }],
+      ['scoop', { jid: 'scoop', parentJid: 'cone' }],
+      ['nested', { jid: 'nested', parentJid: 'scoop' }],
+    ]);
+    expect(stopOrder(units.values(), 'cone')).toEqual(['nested', 'scoop', 'cone']);
+  });
+});
 
 describe('work-unit policy', () => {
   it('a root is defined by parentJid === null and nothing else', () => {

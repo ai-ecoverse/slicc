@@ -264,6 +264,28 @@ export function childrenOf<T extends Pick<RegisteredScoop, 'parentJid'>>(
 }
 
 /**
+ * `root` and every unit it owns, children before their parent, so a stop
+ * reaches the leaves first. `root` is last and is included even when it is
+ * no longer in `units` — the caller still names the unit it meant to stop.
+ */
+export function stopOrder<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
+  units: Iterable<T>,
+  root: WorkUnitId
+): string[] {
+  // Materialize once: `Map.values()` and friends are one-shot. Recursing on
+  // the raw iterable would let the first `childrenOf` exhaust it and leave
+  // nested scoops out of the stop order.
+  const roster = [...units];
+  const ids: string[] = [];
+  const visit = (id: WorkUnitId): void => {
+    for (const child of childrenOf(roster, id)) visit(child.jid);
+    ids.push(id);
+  };
+  visit(root);
+  return ids;
+}
+
+/**
  * `rootId`'s unit plus every unit it transitively owns, in registry order.
  * Empty when the root is no longer registered — the caller decides what an
  * empty scope means rather than silently widening back to everything.

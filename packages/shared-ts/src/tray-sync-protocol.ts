@@ -476,6 +476,12 @@ export type LeaderToFollowerMessage =
       state: 'accepted' | 'rejected';
       error?: string;
     }
+  /**
+   * The leader stopped the unit this follower aborted, and every scoop that
+   * unit owned. Sent only to the follower that sent `abort`, and only once
+   * those units are no longer processing. No ack means the stop did not happen.
+   */
+  | { type: 'abort_ack'; scoopJid: string; stopped: string[] }
   | { type: 'status'; scoopStatus: string; scoopJid: string }
   | { type: 'error'; error: string }
   | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }

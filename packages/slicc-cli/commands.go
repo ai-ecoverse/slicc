@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/computer"
@@ -54,6 +55,22 @@ func promptSettleWindow() time.Duration {
 		}
 	}
 	return promptSettleGrace
+}
+
+// abortConfirmBound is how long `prompt` waits, after SIGINT, for the leader
+// to confirm the turn and the scoops it started have stopped. The bench
+// runner's SIGKILL grace is longer than this (20s) so the confirmation, or
+// the failure to get one, is what the process exits with. SLICC_ABORT_CONFIRM
+// overrides it (tests).
+const abortConfirmBoundDefault = 12 * time.Second
+
+func abortConfirmBound() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SLICC_ABORT_CONFIRM")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return abortConfirmBoundDefault
 }
 
 // promptTurn is the turn-completion state machine shared by cmdPrompt's
@@ -490,7 +507,20 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		default:
 		}
 	}
+	// stopping is set once SIGINT asks the leader to abort. acked fires when
+	// that leader says the turn, and the scoops it owned, have stopped.
+	// A turn that happens to finish in the same moment must not exit 0, and
+	// must not consume the single-slot `done` channel ahead of the ack.
+	var stopping atomic.Bool
+	acked := make(chan struct{}, 1)
 	handler := func(typ string, raw []byte) {
+		if typ == protocol.TypeAbortAck && stopping.Load() {
+			select {
+			case acked <- struct{}{}:
+			default:
+			}
+			return
+		}
 		if code, done := turn.ingest(messageID, typ, raw, time.Now()); done {
 			finish(code)
 			return
@@ -518,24 +548,77 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	}
 	defer conn.Close()
 
+	return waitPromptTurn(ctx, conn, turn, done, kick, acked, &stopping)
+}
+
+// waitPromptTurn runs until the turn settles, the leader confirms an abort, or
+// the connection drops. Extracted from cmdPrompt so the SIGINT/ack path does
+// not push that function over the gocognit ceiling.
+func waitPromptTurn(
+	ctx context.Context,
+	conn *tray.Conn,
+	turn *promptTurn,
+	done <-chan int,
+	kick <-chan struct{},
+	acked <-chan struct{},
+	stopping *atomic.Bool,
+) int {
 	grace := promptSettleWindow()
 	settle := time.NewTimer(time.Hour)
 	settle.Stop()
 	defer settle.Stop()
+	// Stopped until SIGINT, same shape as `settle`: a nil channel cannot be
+	// selected, and Reset arms it for the confirm bound.
+	confirmTimer := time.NewTimer(time.Hour)
+	confirmTimer.Stop()
+	defer confirmTimer.Stop()
+	confirm := confirmTimer.C
+	// Drain a tick that won the race with Stop, so the first select does not
+	// treat a disarmed timer as "the leader did not confirm".
+	select {
+	case <-confirm:
+	default:
+	}
+	confirm = nil
+	interrupt := ctx.Done()
 	for {
 		select {
 		case code := <-done:
+			if stopping.Load() {
+				continue
+			}
 			fmt.Println()
 			return code
 		case <-conn.Done():
+			if stopping.Load() {
+				errLine("prompt", "the leader did not confirm the turn stopped")
+				return 1
+			}
 			errLineAfterStream("connection closed before the turn completed")
 			return 1
-		case <-ctx.Done():
-			// Tell the leader to stop the turn so it doesn't keep spending tokens.
-			_ = conn.SendJSON(protocol.Abort{Type: "abort"})
+		case <-interrupt:
+			// One SIGINT. Leave the connection up until the leader confirms,
+			// or the bound passes: closing here used to drop the abort before
+			// the leader read it, and the cone kept spending.
+			interrupt = nil
+			stopping.Store(true)
+			if err := conn.SendJSON(protocol.Abort{Type: "abort"}); err != nil {
+				errLine("prompt", "could not tell the leader to stop: %s", err)
+				return 1
+			}
+			confirmTimer.Reset(abortConfirmBound())
+			confirm = confirmTimer.C
+		case <-acked:
+			fmt.Println()
 			return 130
+		case <-confirm:
+			errLine("prompt", "the leader did not confirm the turn stopped")
+			return 1
 		case <-kick:
 		case <-settle.C:
+		}
+		if stopping.Load() {
+			continue
 		}
 		if ok, wait := turn.settled(time.Now(), grace); ok {
 			fmt.Println()

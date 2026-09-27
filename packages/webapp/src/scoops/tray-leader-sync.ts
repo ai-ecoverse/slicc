@@ -35,6 +35,7 @@ import type {
 } from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
+import type { FollowerAbortOutcome } from './follower-abort.js';
 import type { LickEvent } from './lick-manager.js';
 import { BiscottoReview } from './tray-leader/biscotto-review.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
@@ -187,8 +188,12 @@ export interface LeaderSyncManagerOptions {
    * Handle an abort request from a follower. `targetScoopJid` is that
    * follower's own selection, for the same reason {@link onFollowerMessage}
    * carries one: an abort names a unit, and the leader's selection is not it.
+   *
+   * Resolve `{ confirmed: true }` only once that unit and the scoops it owns
+   * have stopped. The dispatch then acks the follower that sent the abort.
+   * A void return, or `confirmed: false`, sends no ack.
    */
-  onFollowerAbort: (targetScoopJid?: string) => void;
+  onFollowerAbort: (targetScoopJid?: string) => void | Promise<FollowerAbortOutcome | void>;
   /**
    * Handle a follower's request to start a new session (freezer new-chat).
    * The follower has no VFS / cone to run `runNewSessionFreeze` itself; the
