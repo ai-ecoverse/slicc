@@ -26,7 +26,9 @@ export type KernelErrno =
   | 'ESPIPE'
   | 'EINTR'
   | 'ESRCH'
-  | 'ENOTTY';
+  | 'ENOTTY'
+  | 'EPERM'
+  | 'EIO';
 
 export class KernelError extends Error {
   constructor(readonly code: KernelErrno) {

@@ -117,8 +117,8 @@ function pipedStdio(ctx: CommandContext, session: WasmSession, err: Uint8Array[]
  * foreground job), output reaches the screen as it is written.
  */
 function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
-  const tty = new KernelTty({ write: (bytes) => lease.write(bytes) }, (sig) =>
-    session.signalAll(sig)
+  const tty: KernelTty = new KernelTty({ write: (bytes) => lease.write(bytes) }, (sig) =>
+    session.signalTerminal(tty, sig)
   );
   tty.setSize(lease.cols, lease.rows);
   lease.onInput((bytes) => tty.receive(bytes));

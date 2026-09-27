@@ -24,8 +24,10 @@ import {
 } from '../../../kernel/wasm-realm/children.js';
 import type { FdTable, OpenFile } from '../../../kernel/wasm-realm/fd-table.js';
 import { spawnWasmProcess, type WasmProcessHandle } from '../../../kernel/wasm-realm/host.js';
+import { JobTable } from '../../../kernel/wasm-realm/jobs.js';
 import type { ForkState, WasmProgram } from '../../../kernel/wasm-realm/protocol.js';
 import { defaultAction, SIGNAL_BY_NAME } from '../../../kernel/wasm-realm/signals.js';
+import type { KernelTty } from '../../../kernel/wasm-realm/tty.js';
 import { GLOBAL_NODE_MODULES } from '../../ipk/global-prefix.js';
 import { type ProgramFs, scanWasmCommands, type WasmCommand } from '../../ipk/wasm-programs.js';
 import type { JshProcessConfig } from '../../jsh-executor.js';
@@ -146,6 +148,16 @@ async function writeAll(fds: FdTable, fd: number, bytes: Uint8Array): Promise<vo
   }
 }
 
+/** A wasm process as its parent's child table sees it. */
+function childHandle(handle: WasmProcessHandle): ChildHandle {
+  return {
+    pid: handle.pid,
+    exited: handle.exited,
+    termsig: handle.termsig,
+    onState: (listener) => handle.onState(listener),
+  };
+}
+
 export class WasmSession {
   private readonly live = new Set<WasmProcessHandle>();
   /** The running shell children: each one's abort ends it. */
@@ -154,6 +166,10 @@ export class WasmSession {
   private readonly wasmByPid = new Map<number, WasmProcessHandle>();
   private readonly shellByPid = new Map<number, AbortController>();
   private installed: Promise<Map<string, WasmCommand>> | undefined;
+  /** Process groups and sessions of the invocation's wasm processes (job control). */
+  private readonly jobs = new JobTable();
+  /** The invocation's first process: the terminal's foreground until a program picks one. */
+  private leader: number | undefined;
 
   constructor(
     private readonly ctx: CommandContext,
@@ -199,10 +215,13 @@ export class WasmSession {
       spawner: this.spawner(pid),
       forker: this.forker(pid, req),
       kill: (target, sig) => this.kill(target, sig),
+      jobs: this.jobs,
       ...(req.fork ? { fork: req.fork } : {}),
     });
     this.live.add(handle);
     this.wasmByPid.set(pid, handle);
+    this.leader ??= pid;
+    this.jobs.add(pid, req.ppid, (sig) => handle.signal(sig));
     // `kill` / `ps`: SIGKILL and uncaught signals end the worker; caught ones run the handler.
     const unsubscribe = pm?.onSignal((signaled, sig) => {
       if (signaled.pid === pid) handle.signal(SIGNAL_BY_NAME[sig]);
@@ -210,6 +229,7 @@ export class WasmSession {
     void handle.exited.then((code) => {
       this.live.delete(handle);
       this.wasmByPid.delete(pid);
+      this.jobs.remove(pid);
       unsubscribe?.();
       if (this.processConfig) pm?.exit(pid, code);
     });
@@ -218,10 +238,12 @@ export class WasmSession {
 
   /**
    * kill(2) from a program: a process of this session gets any signal; one
-   * elsewhere in the process table gets the signals the table knows. Signal 0
-   * only asks whether the process exists.
+   * elsewhere in the process table gets the signals the table knows. A
+   * negative pid names a process group of the session. Signal 0 only asks
+   * whether the process exists.
    */
   private kill(pid: number, sig: number): boolean {
+    if (pid < 0) return this.jobs.killGroup(-pid, sig);
     const wasm = this.wasmByPid.get(pid);
     if (wasm) {
       if (sig !== 0) wasm.signal(sig);
@@ -240,9 +262,15 @@ export class WasmSession {
     return name !== undefined && pm.signal(pid, name);
   }
 
-  /** Signal every process of the invocation (the terminal's foreground job: ^C, ^Z, SIGWINCH). */
+  /** Signal every process of the invocation. */
   signalAll(sig: number): void {
     for (const handle of this.live) handle.signal(sig);
+  }
+
+  /** A signal from the terminal (^C, ^Z, SIGWINCH): its foreground process group. */
+  signalTerminal(tty: KernelTty, sig: number): void {
+    // The first process leads the invocation's session: its group until a program picks one.
+    if (this.leader !== undefined) this.jobs.signalForeground(tty, this.leader, sig);
   }
 
   /** End every process of the invocation (an abort, the output limit). */
@@ -278,7 +306,7 @@ export class WasmSession {
         ppid,
         fork: state,
       });
-      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
+      return childHandle(handle);
     };
   }
 
@@ -294,7 +322,7 @@ export class WasmSession {
         fds,
         ppid,
       });
-      return { pid: handle.pid, exited: handle.exited, termsig: handle.termsig };
+      return childHandle(handle);
     };
   }
 

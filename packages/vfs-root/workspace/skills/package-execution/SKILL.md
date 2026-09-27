@@ -41,7 +41,7 @@ Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<nam
 
 ## Wasm programs (`wasm`)
 
-A global package that ships wasm-realm programs (a `slicc.commands` manifest in its `package.json`, or an `@ai-ecoverse/wasm-*` package with `bin/<x>` + `bin/<x>.wasm`) makes each program a command: `ipk add -g @ai-ecoverse/wasm-<tool>`, then run it by name. `wasm --list` lists them; `which <name>` shows the package. A built-in of the same name (`sed`, `grep`, `cat`, …) still wins, so run the program with `wasm <name> ARGS...`. `wasm -t <name>` runs it interactively on the panel terminal (a TTY: `wasm -t bash` is a real bash prompt); the agent's own `bash` tool has no terminal to lend.
+A global package that ships wasm-realm programs (a `slicc.commands` manifest in its `package.json`, or an `@ai-ecoverse/wasm-*` package with `bin/<x>` + `bin/<x>.wasm`) makes each program a command: `ipk add -g @ai-ecoverse/wasm-<tool>`, then run it by name. `wasm --list` lists them; `which <name>` shows the package. A built-in of the same name (`sed`, `grep`, `cat`, …) still wins, so run the program with `wasm <name> ARGS...`. `wasm -t <name>` runs it interactively on the panel terminal (a TTY: `wasm -t bash` is a real bash prompt, with job control — ^Z, `jobs`, `fg`, `bg`); the agent's own `bash` tool has no terminal to lend.
 
 ## Conda / emscripten-forge (`ipk mamba`)
 

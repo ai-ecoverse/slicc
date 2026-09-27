@@ -9,6 +9,7 @@ const WASI_ERRNO: Readonly<Partial<Record<string, number>>> = {
   ENOENT: 44,
   ENOSYS: 52,
   ENOTTY: 59,
+  EPERM: 63,
   EPIPE: 64,
   ESPIPE: 70,
   ESRCH: 71,

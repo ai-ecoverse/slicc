@@ -19,6 +19,7 @@ import {
   SpawnError,
 } from './children.js';
 import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
+import type { JobTable } from './jobs.js';
 import type { ForkState } from './protocol.js';
 import { selectFds } from './select.js';
 import { type DefaultAction, defaultAction, isSignal, SIG, sigbit } from './signals.js';
@@ -57,15 +58,45 @@ export type WasmSyscall =
       cwd: string;
       stdio: ChildStdio[];
     }
-  | { op: 'proc-wait'; pid: number; nohang: boolean }
+  | {
+      op: 'proc-wait';
+      pid: number;
+      nohang: boolean;
+      /** WUNTRACED / WCONTINUED: report stops and continues too. */
+      untraced?: boolean;
+      continued?: boolean;
+    }
   | { op: 'proc-captured'; pid: number; slot: number }
   | { op: 'proc-fork'; state: ForkState }
   | { op: 'proc-kill'; pid: number; sig: number }
   | { op: 'proc-exec'; pid: number }
+  | { op: 'proc-setpgid'; pid: number; pgid: number }
+  | { op: 'proc-getpgid'; pid: number }
+  | { op: 'proc-getsid'; pid: number }
+  | { op: 'proc-setsid' }
+  | { op: 'tty-pgrp-get'; fd: number }
+  | { op: 'tty-pgrp-set'; fd: number; pgrp: number }
   | { op: 'sig-mask'; caught: number; ignored: number };
 
 /** The syscalls on a descriptor. */
 type FdSyscall = Extract<WasmSyscall, { op: `fd-${string}` }>;
+
+/** The process-group and session syscalls. */
+type JobSyscall = Extract<
+  WasmSyscall,
+  { op: 'proc-setpgid' | 'proc-getpgid' | 'proc-getsid' | 'proc-setsid' }
+>;
+
+const JOB_OPS: ReadonlySet<string> = new Set([
+  'proc-setpgid',
+  'proc-getpgid',
+  'proc-getsid',
+  'proc-setsid',
+]);
+
+function isJobSyscall(req: WasmSyscall): req is JobSyscall {
+  return JOB_OPS.has(req.op);
+}
 
 function isFdSyscall(req: WasmSyscall): req is FdSyscall {
   return req.op.startsWith('fd-');
@@ -95,6 +126,12 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'proc-fork',
   'proc-kill',
   'proc-exec',
+  'proc-setpgid',
+  'proc-getpgid',
+  'proc-getsid',
+  'proc-setsid',
+  'tty-pgrp-get',
+  'tty-pgrp-set',
   'sig-mask',
 ]);
 
@@ -123,7 +160,12 @@ export interface WasmProcessOptions {
   onPending?: (sig: number) => void;
   /** Whether a published signal still waits for the worker (it interrupts the next blocking call). */
   hasPending?: () => boolean;
+  /** Process groups, sessions and terminal foreground of its invocation (job control). */
+  jobs?: JobTable;
 }
+
+/** A stop or continue, for the parent's waitpid(WUNTRACED) and SIGCHLD. */
+export type StateListener = (state: 'stopped' | 'continued', sig: number) => void;
 
 /**
  * What the kernel does with a signal sent to a process: its default action,
@@ -149,6 +191,13 @@ export class WasmProcess {
    * for that program, so its parent sees it end by the same signal.
    */
   execTermsig: number | undefined;
+  /** The signal that stopped it (0 while running): its syscalls wait for SIGCONT. */
+  private stopped = 0;
+  /** Stops so far: a blocking call a stop interrupted runs again once continued. */
+  private stops = 0;
+  private resumed: Promise<void> = Promise.resolve();
+  private wake: () => void = () => {};
+  private readonly stateListeners: StateListener[] = [];
 
   constructor(
     readonly pid: number,
@@ -156,7 +205,7 @@ export class WasmProcess {
     private readonly options: WasmProcessOptions = {}
   ) {
     this.children = new ChildTable(fds, options.spawner, options.forker);
-    this.children.onChildExit = () => this.signal(SIG.CHLD);
+    this.children.onChildState = () => this.signal(SIG.CHLD);
   }
 
   /**
@@ -170,9 +219,15 @@ export class WasmProcess {
       return sig === SIG.KILL ? 'terminate' : 'forward';
     }
     if (sig === SIG.KILL) return 'terminate';
+    // SIGCONT resumes a stopped process whatever its disposition; SIGSTOP cannot be caught.
+    if (sig === SIG.CONT) this.cont();
+    if (sig === SIG.STOP) return this.stop(sig);
     const bit = sigbit(sig);
     if (this.ignored & bit) return 'ignore';
-    if (!(this.caught & bit)) return defaultAction(sig);
+    if (!(this.caught & bit)) {
+      const action = defaultAction(sig);
+      return action === 'stop' ? this.stop(sig) : action;
+    }
     this.options.onPending?.(sig);
     const blocked = this.interrupt;
     this.interrupt = new AbortController();
@@ -180,10 +235,54 @@ export class WasmProcess {
     return 'deliver';
   }
 
+  /** Hear of its stops and continues (its parent's waitpid(WUNTRACED), SIGCHLD). */
+  onState(listener: StateListener): void {
+    this.stateListeners.push(listener);
+  }
+
+  /**
+   * Stop: its syscalls (and the reply to one in flight) wait for SIGCONT. A
+   * blocked call is interrupted, to run again once continued: a stopped
+   * process must not go on taking the terminal's input, say.
+   */
+  private stop(sig: number): 'stop' {
+    if (this.stopped) return 'stop';
+    this.stopped = sig;
+    this.stops++;
+    this.resumed = new Promise((resolve) => (this.wake = resolve));
+    const blocked = this.interrupt;
+    this.interrupt = new AbortController();
+    blocked.abort();
+    for (const listener of this.stateListeners) listener('stopped', sig);
+    return 'stop';
+  }
+
+  private cont(): void {
+    if (!this.stopped) return;
+    this.stopped = 0;
+    this.wake();
+    for (const listener of this.stateListeners) listener('continued', SIG.CONT);
+  }
+
   async syscall(req: WasmSyscall): Promise<SyncFsResult> {
+    for (;;) {
+      await this.resumed;
+      const stops = this.stops;
+      const result = await this.dispatch(req);
+      // Interrupted by a stop, not for a handler: it runs again once continued.
+      const restart = !result.ok && result.errno === 'EINTR' && this.stops !== stops;
+      if (restart && !this.options.hasPending?.()) continue;
+      // Stopped while the call ran: the answer waits too.
+      await this.resumed;
+      return result;
+    }
+  }
+
+  private async dispatch(req: WasmSyscall): Promise<SyncFsResult> {
     try {
       if (isFdSyscall(req)) return await this.fdSyscall(req);
       if (isTtySyscall(req)) return this.ttySyscall(req);
+      if (isJobSyscall(req)) return this.jobSyscall(req);
       return await this.procSyscall(req);
     } catch (e) {
       if (e instanceof KernelError || e instanceof SpawnError) {
@@ -209,6 +308,7 @@ export class WasmProcess {
       case 'fd-read': {
         const file = this.fds.get(req.fd).file;
         if (!file.read) throw new KernelError('EBADF');
+        if (file.tty) this.checkForeground(file.tty);
         const max = Math.max(0, Math.min(req.max, MAX_READ));
         const signal = pollFile(file).readable ? this.interrupt.signal : this.blockingSignal();
         return { ok: true, kind: 'bytes', bytes: await file.read(max, signal) };
@@ -278,9 +378,10 @@ export class WasmProcess {
     }
   }
 
-  /** Terminal syscalls: termios and window size of an fd that is a terminal (else ENOTTY). */
+  /** Terminal syscalls: termios, window size and foreground group of an fd that is a terminal (else ENOTTY). */
   private ttySyscall(req: TtySyscall): SyncFsResult {
     const tty = this.tty(req.fd);
+    const jobs = this.options.jobs;
     switch (req.op) {
       case 'tty-get':
         return { ok: true, kind: 'json', json: tty.tcgets() };
@@ -289,6 +390,57 @@ export class WasmProcess {
         return { ok: true, kind: 'void' };
       case 'tty-winsz':
         return { ok: true, kind: 'json', json: tty.winsize() };
+      case 'tty-pgrp-get':
+        return { ok: true, kind: 'json', json: jobs ? jobs.tcgetpgrp(tty, this.sid()) : this.pid };
+      case 'tty-pgrp-set':
+        if (jobs) jobs.tcsetpgrp(this.pid, tty, req.pgrp);
+        else if (req.pgrp !== this.pid) throw new KernelError('EPERM');
+        return { ok: true, kind: 'void' };
+    }
+  }
+
+  /**
+   * A read of the terminal by a process outside its foreground group: SIGTTIN
+   * to the process's group, which stops it (the read runs again once it is
+   * continued in the foreground); EIO when it ignores the signal.
+   */
+  private checkForeground(tty: KernelTty): void {
+    const jobs = this.options.jobs;
+    if (!jobs) return;
+    const pgid = this.pgid();
+    if (jobs.tcgetpgrp(tty, this.sid()) === pgid) return;
+    if (this.ignored & sigbit(SIG.TTIN)) throw new KernelError('EIO');
+    jobs.killGroup(pgid, SIG.TTIN);
+    throw new KernelError('EINTR');
+  }
+
+  private pgid(): number {
+    return this.options.jobs?.getpgid(this.pid, 0) ?? this.pid;
+  }
+
+  private sid(): number {
+    return this.options.jobs?.getsid(this.pid, 0) ?? this.pid;
+  }
+
+  /** Process groups and sessions: without a job table, each process is its own. */
+  private jobSyscall(req: JobSyscall): SyncFsResult {
+    const jobs = this.options.jobs;
+    const self = (pid: number): number => {
+      if (pid !== 0 && pid !== this.pid) throw new KernelError('ESRCH');
+      return this.pid;
+    };
+    switch (req.op) {
+      case 'proc-setpgid':
+        if (jobs) jobs.setpgid(this.pid, req.pid, req.pgid);
+        else if (self(req.pid) !== (req.pgid || this.pid)) throw new KernelError('EPERM');
+        return { ok: true, kind: 'void' };
+      case 'proc-getpgid':
+        return { ok: true, kind: 'json', json: jobs?.getpgid(this.pid, req.pid) ?? self(req.pid) };
+      case 'proc-getsid':
+        return { ok: true, kind: 'json', json: jobs?.getsid(this.pid, req.pid) ?? self(req.pid) };
+      case 'proc-setsid':
+        if (!jobs) throw new KernelError('EPERM');
+        return { ok: true, kind: 'json', json: jobs.setsid(this.pid) };
     }
   }
 
@@ -300,7 +452,7 @@ export class WasmProcess {
 
   /** Process and signal syscalls. */
   private async procSyscall(
-    req: Exclude<WasmSyscall, FdSyscall | TtySyscall>
+    req: Exclude<WasmSyscall, FdSyscall | TtySyscall | JobSyscall>
   ): Promise<SyncFsResult> {
     switch (req.op) {
       case 'proc-fork':
@@ -312,12 +464,18 @@ export class WasmProcess {
       }
       case 'proc-wait': {
         const signal = req.nohang ? this.interrupt.signal : this.blockingSignal();
-        const waited = await this.children.wait(req.pid, req.nohang, signal);
+        const flags = { untraced: req.untraced, continued: req.continued };
+        const waited = await this.children.wait(req.pid, req.nohang, signal, flags);
         return { ok: true, kind: 'json', json: waited };
       }
       case 'proc-exec': {
         // execve(): this process now stands for the program it spawned.
         this.execChild = req.pid;
+        this.options.jobs?.exec(this.pid, req.pid);
+        // The program stands for this process: its parent sees it stop and continue.
+        this.children.watch(req.pid, (state, sig) =>
+          state === 'stopped' ? this.stop(sig) : this.cont()
+        );
         try {
           const waited = await this.children.wait(req.pid, false);
           const termsig = waited[1] & 0x7f;
@@ -329,7 +487,10 @@ export class WasmProcess {
       }
       case 'proc-kill':
         if (req.sig !== 0 && !isSignal(req.sig)) throw new KernelError('EINVAL');
-        if (!this.options.kill?.(req.pid, req.sig)) throw new KernelError('ESRCH');
+        // kill(0, sig): the caller's own group; a negative pid names a group.
+        if (!this.options.kill?.(req.pid === 0 ? -this.pgid() : req.pid, req.sig)) {
+          throw new KernelError('ESRCH');
+        }
         return { ok: true, kind: 'void' };
       case 'sig-mask':
         this.caught = req.caught;

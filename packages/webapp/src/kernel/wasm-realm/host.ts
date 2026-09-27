@@ -28,7 +28,8 @@ import {
 } from '../realm/sync-sab-wire.js';
 import type { ChildForker, ChildSpawner } from './children.js';
 import type { FdTable } from './fd-table.js';
-import { isWasmSyscall, WasmProcess } from './process.js';
+import type { JobTable } from './jobs.js';
+import { isWasmSyscall, type StateListener, WasmProcess } from './process.js';
 import {
   type ForkState,
   WASM_PROCESS_ERROR,
@@ -67,8 +68,10 @@ export interface SpawnWasmOptions {
   forker?: ChildForker;
   /** A forked child: resume from the parent's state instead of running main. */
   fork?: ForkState;
-  /** kill(2) the program sends another process: false when there is none (ESRCH). */
+  /** kill(2) the program sends another process (a negative pid: a group): false when there is none (ESRCH). */
   kill?: (pid: number, sig: number) => boolean;
+  /** Process groups and sessions of its invocation. */
+  jobs?: JobTable;
 }
 
 export interface WasmProcessHandle {
@@ -85,6 +88,8 @@ export interface WasmProcessHandle {
   signal(sig: number): void;
   /** The signal that ended the process (its parent's WIFSIGNALED), once it ended by one. */
   termsig(): number | undefined;
+  /** Hear of its stops and continues (its parent's waitpid(WUNTRACED)). */
+  onState(listener: StateListener): void;
 }
 
 /** Exit code of a process whose worker failed outside the program. */
@@ -104,6 +109,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     forker: opts.forker,
     fs: opts.fs,
     kill: opts.kill,
+    jobs: opts.jobs,
     // The worker takes the word after every syscall and runs the handlers.
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
     hasPending: () => Atomics.load(header, SAB_I_SIGNALS) !== 0,
@@ -174,5 +180,12 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
   // A kill's code is 128 + the signal it stands for (137 SIGKILL, 130 an abort's SIGINT).
   const kill = (code = 137): void =>
     finish(code, code > 128 && code < 160 ? code - 128 : undefined);
-  return { pid: opts.pid, exited, kill, signal, termsig: () => endedBy };
+  return {
+    pid: opts.pid,
+    exited,
+    kill,
+    signal,
+    termsig: () => endedBy,
+    onState: (listener) => process.onState(listener),
+  };
 }

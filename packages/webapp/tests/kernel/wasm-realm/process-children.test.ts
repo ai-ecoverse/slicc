@@ -65,6 +65,7 @@ function kernel(answer: (req: Req) => SyncFsResult, data?: string) {
 }
 
 const json = (value: unknown): SyncFsResult => ({ ok: true, kind: 'json', json: value });
+const void0: SyncFsResult = { ok: true, kind: 'void' };
 
 describe('createProcessKernel', () => {
   it('hands kernel descriptors to the kernel and returns at once', () => {
@@ -135,7 +136,7 @@ describe('createProcessKernel', () => {
     expect(refused.k.fork(state)).toBe(-52);
   });
 
-  it('kill(): raises in place for itself, asks the kernel for another pid', () => {
+  it('kill(): raises in place for itself, asks the kernel for another pid or a group', () => {
     const { t, calls } = transport(() => ({ ok: false, errno: 'ESRCH', message: 'ESRCH' }));
     const { Fs } = fs();
     const raise = vi.fn();
@@ -150,14 +151,50 @@ describe('createProcessKernel', () => {
       raise,
     });
     expect(k.kill(9, 15)).toBe(0);
-    expect(k.kill(0, 10)).toBe(0);
-    expect(raise.mock.calls).toEqual([[15], [10]]);
+    expect(raise.mock.calls).toEqual([[15]]);
     expect(k.kill(12, 15)).toBe(-71); // ESRCH
-    expect(k.kill(-12, 15)).toBe(-71); // a group: its leader, until process groups exist
+    expect(k.kill(-12, 15)).toBe(-71);
+    expect(k.kill(0, 10)).toBe(-71); // its own group: the kernel signals every member
     expect(calls).toEqual([
       { op: 'proc-kill', pid: 12, sig: 15 },
-      { op: 'proc-kill', pid: 12, sig: 15 },
+      { op: 'proc-kill', pid: -12, sig: 15 },
+      { op: 'proc-kill', pid: 0, sig: 10 },
     ]);
+  });
+
+  it('process groups, sessions and the terminal’s foreground group go to the kernel', () => {
+    const { k, calls } = kernel((req) => {
+      if (req.op === 'proc-setsid') return { ok: false, errno: 'EPERM', message: 'EPERM' };
+      if (req.op === 'proc-getsid') return { ok: true, kind: 'void' };
+      return req.op === 'proc-setpgid' || req.op === 'tty-pgrp-set' ? void0 : json(7);
+    });
+    expect(k.setpgid(0, 7)).toBe(0);
+    expect(k.getpgid(0)).toBe(7);
+    expect(k.getsid(3)).toBe(-29); // no number: EIO
+    expect(k.setsid()).toBe(-63); // EPERM
+    expect(k.tcgetpgrp(0)).toBe(7);
+    expect(k.tcsetpgrp(1, 7)).toBe(0);
+    expect(k.tcgetpgrp(5)).toBe(-59); // not a kernel descriptor: ENOTTY
+    expect(k.tcsetpgrp(5, 7)).toBe(-59);
+    expect(calls).toEqual([
+      { op: 'proc-setpgid', pid: 0, pgid: 7 },
+      { op: 'proc-getpgid', pid: 0 },
+      { op: 'proc-getsid', pid: 3 },
+      { op: 'proc-setsid' },
+      { op: 'tty-pgrp-get', fd: 0 },
+      { op: 'tty-pgrp-set', fd: 1, pgrp: 7 },
+    ]);
+  });
+
+  it('wait(): WUNTRACED and WCONTINUED ask the kernel for stops and continues', () => {
+    const { k, calls, afterChild } = kernel(() => json([4, 0x137f]));
+    expect(k.wait(-1, true, 2 | 8)).toEqual([4, 0x137f]);
+    expect(k.wait(4, false)).toEqual([4, 0x137f]);
+    expect(calls).toEqual([
+      { op: 'proc-wait', pid: -1, nohang: true, untraced: true, continued: true },
+      { op: 'proc-wait', pid: 4, nohang: false },
+    ]);
+    expect(afterChild).toHaveBeenCalled();
   });
 
   it('execWait(): waits as the exec replacement and returns the wait status', () => {
