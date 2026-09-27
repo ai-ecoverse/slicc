@@ -284,6 +284,7 @@ export async function runWasmProcess(
   else wireKernelStdio(running.FS, streams);
   const pipefs = ownValue<ProcessPipeFs>(running, 'PIPEFS');
   if (pipefs) streams.usePipes(pipefs);
+  streams.useControllingTerminal();
   running.sliccKernel = createProcessKernel({
     transport,
     Fs: running.FS,

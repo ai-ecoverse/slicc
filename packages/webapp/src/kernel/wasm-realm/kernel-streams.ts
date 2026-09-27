@@ -190,6 +190,35 @@ export class KernelStreams {
     };
   }
 
+  /**
+   * Make a terminal device the program opens (`/dev/tty`, or the
+   * `/dev/tty1` that `ttyname()` names) its controlling terminal: the kernel
+   * terminal its stdio is on. A pager such as less reads its keys there.
+   * Without one, Emscripten's own console device stays.
+   */
+  useControllingTerminal(): void {
+    if (typeof this.Fs.open !== 'function') return; // an FS without open(): nothing to route
+    const open = this.Fs.open.bind(this.Fs);
+    this.Fs.open = (path, flags, mode) => {
+      const stream = open(path, flags, mode);
+      // Emscripten gave it one of its console terminals (`stream.tty`). Keep
+      // the description (the access mode asked for) and put it on the kernel
+      // terminal: one more reference to that descriptor.
+      const terminal = stream.tty ? this.controllingTerminal() : undefined;
+      if (terminal !== undefined) this.attach(stream, terminal, true);
+      return stream;
+    };
+  }
+
+  /** The kernel descriptor of the terminal the process's stdio is on. */
+  private controllingTerminal(): number | undefined {
+    for (const fd of [0, 1, 2]) {
+      const stream = this.Fs.getStream(fd);
+      if (stream?.sliccKernelFd !== undefined && stream.tty) return stream.sliccKernelFd;
+    }
+    return undefined;
+  }
+
   /** Make `pipe()` return kernel pipes. */
   usePipes(pipefs: ProcessPipeFs): void {
     const createPipe = pipefs.createPipe.bind(pipefs);
