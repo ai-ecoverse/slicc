@@ -72,6 +72,8 @@ func target(typ string) any {
 		return &ModelSelect{}
 	case TypeModelState:
 		return &ModelState{}
+	case TypeThinkingSet:
+		return &ThinkingSet{}
 	case TypeUserMessageAck:
 		return &UserMessageAck{}
 	case TypeAbortAck:

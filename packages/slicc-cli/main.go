@@ -12,6 +12,7 @@
 
 
 
+
 package main
 
 import (
@@ -136,6 +137,17 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 			return 2
 		}
 		return cmdModel(ctx, joinURL, a)
+	case "thinking":
+		a := parseThinkingArgs(rest)
+		if a.help {
+			usage(os.Stdout)
+			return 0
+		}
+		if a.err != "" {
+			fmt.Fprintf(os.Stderr, "slicc thinking: %s\n", a.err)
+			return 2
+		}
+		return cmdThinking(ctx, joinURL, a)
 	case "watch":
 		
 		
@@ -184,6 +196,15 @@ Usage:
                                       confirm. Takes the exact id or its model part, or a suffix
                                       such as claude-sonnet-5 (Bedrock's global profile wins over
                                       us./eu. twins of the same model).
+  slicc <join-url> thinking [--json] [--timeout 20s] [--allow-downgrade] [<level>]
+                                      With no level, print the level the next prompt will run
+                                      and do not change it. With one of off, minimal, low,
+                                      medium, high, xhigh, or max, set it and wait for the
+                                      leader to report that resolved level. max is sent as
+                                      thinking level xhigh plus effort max. Exits 1 when the
+                                      model or the effort lock resolves a different level
+                                      (--allow-downgrade accepts it and prints that level).
+                                      An unknown level exits 2.
   slicc <join-url> watch [--plain] [scoop]
                                       Tail the leader's live agent output (a scoop jid filters) until Ctrl+C
   slicc <join-url> follow [--no-banner] [--plain] [runner...]

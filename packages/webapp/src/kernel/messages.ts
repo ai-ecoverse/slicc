@@ -266,6 +266,10 @@ export interface SetThinkingLevelAckMsg {
   scoopJid: string;
   level?: ExtensionThinkingLevel;
   effortOverride?: string;
+
+  resolvedLevel?: ExtensionThinkingLevel;
+
+  resolvedEffortOverride?: string;
   applied: boolean;
 }
 

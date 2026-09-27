@@ -168,6 +168,11 @@ export class OffscreenClient implements KernelClientFacade {
   >();
 
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
+
+  private streamThinkingByUnit = new Map<
+    string,
+    { level: ThinkingLevel; effortOverride?: string }
+  >();
   private pendingModelAcks = new Map<string, (applied: boolean) => void>();
 
   private pendingUserMessageAcks = new Map<
@@ -1182,6 +1187,10 @@ export class OffscreenClient implements KernelClientFacade {
     this.pendingModelAcks.get(msg.requestId)?.(msg.applied);
   }
 
+  getStreamThinking(jid: string): { level: ThinkingLevel; effortOverride?: string } | undefined {
+    return this.streamThinkingByUnit.get(jid);
+  }
+
   private handleThinkingLevelAck(msg: SetThinkingLevelAckMsg): void {
     if (msg.applied) {
       const scoop = this.getScoop(msg.scoopJid);
@@ -1193,6 +1202,12 @@ export class OffscreenClient implements KernelClientFacade {
             ? undefined
             : { level: msg.level as ThinkingLevel, effortOverride: msg.effortOverride }
         );
+      }
+      if (msg.resolvedLevel) {
+        this.streamThinkingByUnit.set(msg.scoopJid, {
+          level: msg.resolvedLevel === 'max' ? 'xhigh' : msg.resolvedLevel,
+          ...(msg.resolvedEffortOverride ? { effortOverride: msg.resolvedEffortOverride } : {}),
+        });
       }
     }
     this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);

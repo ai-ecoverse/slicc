@@ -254,11 +254,30 @@ type ModelSelect struct {
 }
 
 
+
+
+
+type ThinkingSet struct {
+	Type           string `json:"type"` 
+	ScoopJid       string `json:"scoopJid"`
+	ThinkingLevel  string `json:"thinkingLevel"`
+	EffortOverride string `json:"effortOverride,omitempty"`
+}
+
+
 type ModelSelectionState struct {
 	ActiveModelID  string `json:"activeModelId"`
 	ScoopJid       string `json:"scoopJid"`
 	ThinkingLevel  string `json:"thinkingLevel,omitempty"`
 	EffortOverride string `json:"effortOverride,omitempty"`
+	
+	
+	
+	
+	ResolvedThinkingLevel string `json:"resolvedThinkingLevel,omitempty"`
+	
+	
+	ResolvedEffortOverride string `json:"resolvedEffortOverride,omitempty"`
 }
 
 
@@ -312,6 +331,7 @@ const (
 	TypeModelsList      = "models.list"
 	TypeModelSelect     = "model.select"
 	TypeModelState      = "model.state"
+	TypeThinkingSet     = "thinking.set"
 	TypeError           = "error"
 
 	

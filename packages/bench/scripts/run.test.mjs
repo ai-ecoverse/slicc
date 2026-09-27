@@ -28,8 +28,18 @@ describe('runConfig', () => {
     expect(runConfig('sliccy@1', 'm', { name: 'none', builtin: false })).toEqual({
       harness: 'sliccy@1',
       model: 'm',
+      thinking: 'default',
       skills: 'none',
       default_skills: false,
+    });
+    expect(
+      runConfig('sliccy@1', 'claude-opus-5-5@max', { name: 'builtin', builtin: true })
+    ).toEqual({
+      harness: 'sliccy@1',
+      model: 'claude-opus-5-5@max',
+      thinking: 'max',
+      skills: 'builtin',
+      default_skills: true,
     });
     expect(
       runConfig('sliccy@1', 'm', { name: 'none+ecoverse', builtin: false }).default_skills
@@ -118,6 +128,12 @@ describe('parseCli', () => {
     expect(() => parseCli(['--set', 'x', '--leader-down-limit', '0'])).toThrow(
       /--leader-down-limit/
     );
+    expect(() => parseCli(['--set', 'x', '--models', 'claude-opus-5-5@turbo'])).toThrow(
+      /alias@level/
+    );
+    expect(
+      parseCli(['--set', 'x', '--models', 'claude-opus-5-5@off,claude-opus-5-5@default']).models
+    ).toEqual(['claude-opus-5-5@off', 'claude-opus-5-5@default']);
     expect(parseCli(['--set', 'x', '--fresh-leader-every', '5'])).toMatchObject({
       freshLeaderEvery: 5,
       leaderDownLimit: 2,
@@ -279,6 +295,7 @@ function leader({ failOn, down = () => false } = {}) {
     const command = `slicc ${args.join(' ')}`;
     commands.push(command);
     if (args[0] === 'model') return reply(command, `bedrock:global.anthropic.${args[1]}\n`);
+    if (args[0] === 'thinking') return reply(command, `${args[1] ?? 'unset'}\n`);
     if (args[0] === 'prompt') {
       clock += 5000;
       spent += 0.01;
@@ -383,12 +400,13 @@ describe('main', () => {
     const order = [
       'slicc new-session --erase',
       'slicc model claude-sonnet-5',
+      'slicc thinking',
       'cost --json --all',
       PROMPT,
       'cost --json --all',
     ].map((c, i, all) => commands.indexOf(c, i ? commands.indexOf(all[i - 1]) + 1 : 0));
     expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]))).toBe(true);
-    expect(commands.findIndex((c) => c.startsWith('session export'))).toBeGreaterThan(order[4]);
+    expect(commands.findIndex((c) => c.startsWith('session export'))).toBeGreaterThan(order[5]);
     expect(commands.filter((c) => c.includes('ls /workspace/skills | wc -l'))).toHaveLength(2);
     expect(commands.some((c) => c.includes('.bench-skills-builtin/. /workspace/skills/'))).toBe(
       true
@@ -401,7 +419,13 @@ describe('main', () => {
       score: 0.5,
       outcome: 'partial',
       verdict: false,
-      config: { harness: 'test', model: 'claude-sonnet-5', skills: 'none' },
+      config: {
+        harness: 'test',
+        model: 'claude-sonnet-5',
+        thinking: 'default',
+        thinking_effective: 'unset',
+        skills: 'none',
+      },
       model_id: 'bedrock:global.anthropic.claude-sonnet-5',
     });
     expect(record.metrics).toMatchObject({ duration: 5, modelsUsed: ['global.anthropic.m'] });

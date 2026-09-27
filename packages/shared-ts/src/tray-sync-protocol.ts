@@ -444,8 +444,14 @@ export interface TrayModelCatalogEntry {
 export interface TrayModelSelectionState {
   activeModelId: string;
   scoopJid: string;
+
   thinkingLevel?: TrayThinkingLevel;
+
   effortOverride?: string;
+
+  resolvedThinkingLevel?: TrayThinkingLevel | 'adaptive';
+
+  resolvedEffortOverride?: string;
 }
 
 export interface ScoopSummary {

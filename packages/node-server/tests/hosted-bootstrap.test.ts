@@ -2,6 +2,7 @@ import express from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildHostedBootstrapPayload,
+  hostedConeConfigPath,
   readHostedConeConfig,
   registerHostedBootstrapEndpoint,
 } from '../src/hosted-bootstrap.js';
@@ -44,6 +45,18 @@ async function getEndpoint(secretStore: SecretStore, addr: string): Promise<Resp
     await new Promise<void>((r) => listening.close(() => r()));
   }
 }
+
+describe('hostedConeConfigPath', () => {
+  it('reads SLICC_CONE_CONFIG_PATH and otherwise stays on /slicc/cone-config.json', () => {
+    const previous = process.env.SLICC_CONE_CONFIG_PATH;
+    delete process.env.SLICC_CONE_CONFIG_PATH;
+    expect(hostedConeConfigPath()).toBe('/slicc/cone-config.json');
+    process.env.SLICC_CONE_CONFIG_PATH = '/tmp/cone-config.json';
+    expect(hostedConeConfigPath()).toBe('/tmp/cone-config.json');
+    if (previous === undefined) delete process.env.SLICC_CONE_CONFIG_PATH;
+    else process.env.SLICC_CONE_CONFIG_PATH = previous;
+  });
+});
 
 describe('GET /api/hosted-bootstrap', () => {
   it('logs unexpected cone-config read failures but treats a missing file as normal', () => {

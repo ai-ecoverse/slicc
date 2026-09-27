@@ -7,7 +7,7 @@ on:
         description: 'Task sets, space-separated: bu-v1, bu-v2, or task-set JSON paths'
         default: 'packages/bench/tasks/smoke.json'
       models:
-        description: 'Models, comma-separated (pi-ai aliases)'
+        description: 'Models, comma-separated. alias@level sets thinking (off, minimal, low, medium, high, xhigh, max, default). A plain alias does not.'
         default: 'claude-sonnet-5,claude-opus-5-5'
       skills:
         description: 'Skills conditions, comma-separated: none, builtin, builtin+ecoverse'

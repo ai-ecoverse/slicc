@@ -8,6 +8,10 @@ import {
   type FollowerAbortOutcome,
 } from '../../scoops/follower-abort.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import {
+  getLockedEffortLevel,
+  reportedThinking,
+} from '../../scoops/scoop-context/thinking-level.js';
 import { TabPersistenceGuard } from '../../scoops/tab-persistence-guard.js';
 import {
   FOLLOWER_STATUS_STORAGE_KEY,
@@ -74,6 +78,7 @@ import {
   getAllAvailableModels,
   getProviderConfig,
   resolveCurrentModel,
+  resolveModelById,
 } from '../provider-settings.js';
 import { createRemoteCdpPageBridge, type RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from '../runtime-identity.js';
@@ -217,6 +222,15 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
         computerMotd: partnerMotds.get(follower.bootstrapId),
       };
     });
+}
+
+function modelTheAgentRuns(pinned: WorkUnitModel | undefined) {
+  try {
+    if (pinned) return resolveModelById(pinned.id, pinned.provider);
+    return resolveCurrentModel();
+  } catch {
+    return undefined;
+  }
 }
 
 function modelCatalogForTray(): TrayModelCatalogEntry[] {
@@ -618,12 +632,30 @@ function leaderModelCallbacks(
       const unit = client.getScoop(scoopJid);
 
       const thinking = unit ? thinkingFor(unit) : {};
+      const requestedLevel = thinking.level === 'max' ? 'xhigh' : thinking.level;
+      const requestedEffort =
+        thinking.level === 'max' ? (thinking.effortOverride ?? 'max') : thinking.effortOverride;
+      const pinned = modelForUnit(units, scoopJid);
+      const resolved = reportedThinking({
+        requested: requestedLevel,
+        effortOverride: requestedEffort,
+        model: modelTheAgentRuns(pinned),
+        locked: getLockedEffortLevel(),
+        agent: client.getStreamThinking?.(scoopJid),
+      });
       return {
-        activeModelId: qualifiedModelIdForUnit(catalog, modelForUnit(units, scoopJid)),
+        activeModelId: qualifiedModelIdForUnit(catalog, pinned),
         scoopJid,
-        thinkingLevel: thinking.level === 'max' ? 'xhigh' : thinking.level,
-        effortOverride:
-          thinking.level === 'max' ? (thinking.effortOverride ?? 'max') : thinking.effortOverride,
+        thinkingLevel: requestedLevel,
+        effortOverride: requestedEffort,
+        ...(resolved
+          ? {
+              resolvedThinkingLevel: resolved.level,
+              ...(resolved.effortOverride
+                ? { resolvedEffortOverride: resolved.effortOverride }
+                : {}),
+            }
+          : {}),
       };
     },
     onFollowerModelSelect: (modelId, scoopJid) => {

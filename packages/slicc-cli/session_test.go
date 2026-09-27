@@ -342,4 +342,198 @@ func TestCLIControlVerbsRejectBadArguments(t *testing.T) {
 	if stdout, _, code := runCLI(t, leader.joinURL, "new-session", "-h"); code != 0 || !strings.Contains(stdout, "model [--json]") {
 		t.Fatalf("new-session -h: exit %d", code)
 	}
+	if _, stderr, code := runCLI(t, leader.joinURL, "thinking", "turbo"); code != 2 || !strings.Contains(stderr, "unknown thinking level") {
+		t.Fatalf("thinking: exit %d %s", code, stderr)
+	}
+	if stdout, _, code := runCLI(t, leader.joinURL, "thinking", "--help"); code != 0 || !strings.Contains(stdout, "thinking [--json]") {
+		t.Fatalf("thinking --help: exit %d", code)
+	}
+}
+
+func thinkingState(level, effort string) protocol.ModelState {
+	return protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{
+		ActiveModelID:          "bedrock-camp:global.anthropic.claude-opus-5-5",
+		ScoopJid:               "cone_1",
+		ThinkingLevel:          level,
+		EffortOverride:         effort,
+		ResolvedThinkingLevel:  level,
+		ResolvedEffortOverride: effort,
+	}}
+}
+
+func TestCLIThinkingReadsTheLeadersLevel(t *testing.T) {
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				thinkingState("", ""),
+			}
+		}
+		return nil
+	})
+	stdout, stderr, code := runCLI(t, leader.joinURL, "thinking")
+	if code != 0 || strings.TrimSpace(stdout) != "unset" {
+		t.Fatalf("exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+	if len(leader.received(protocol.TypeThinkingSet)) != 0 {
+		t.Fatal("a read must not send thinking.set")
+	}
+
+	set := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				thinkingState("xhigh", "max"),
+			}
+		}
+		return nil
+	})
+	stdout, _, code = runCLI(t, set.joinURL, "thinking", "--json")
+	var listing thinkingListing
+	if code != 0 || json.Unmarshal([]byte(stdout), &listing) != nil || listing.Effective != "max" || listing.ThinkingLevel != "xhigh" || listing.EffortOverride != "max" || listing.ScoopJid != "cone_1" {
+		t.Fatalf("json (exit %d): %s", code, stdout)
+	}
+}
+
+func TestCLIThinkingSetsTheLevelAndWaits(t *testing.T) {
+	leader := newControlLeader(t, func(typ string, msg map[string]any) []any {
+		switch typ {
+		case protocol.TypeModelsRequest:
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				thinkingState("xhigh", "max"),
+			}
+		case protocol.TypeThinkingSet:
+			level, _ := msg["thinkingLevel"].(string)
+			effort, _ := msg["effortOverride"].(string)
+			return []any{thinkingState(level, effort)}
+		}
+		return nil
+	})
+	stdout, stderr, code := runCLI(t, leader.joinURL, "thinking", "off")
+	if code != 0 || strings.TrimSpace(stdout) != "off" {
+		t.Fatalf("exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+	sent := leader.received(protocol.TypeThinkingSet)
+	if len(sent) != 1 || sent[0]["thinkingLevel"] != "off" || sent[0]["scoopJid"] != "cone_1" || sent[0]["effortOverride"] != nil {
+		t.Fatalf("thinking.set = %v", sent)
+	}
+
+	maxed := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		switch typ {
+		case protocol.TypeModelsRequest:
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				thinkingState("off", ""),
+			}
+		case protocol.TypeThinkingSet:
+			return []any{thinkingState("xhigh", "max")}
+		}
+		return nil
+	})
+	stdout, stderr, code = runCLI(t, maxed.joinURL, "thinking", "max")
+	if code != 0 || strings.TrimSpace(stdout) != "max" {
+		t.Fatalf("max: exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+	sent = maxed.received(protocol.TypeThinkingSet)
+	if len(sent) != 1 || sent[0]["thinkingLevel"] != "xhigh" || sent[0]["effortOverride"] != "max" {
+		t.Fatalf("max wire = %v", sent)
+	}
+}
+
+func clampedMaxLeader(t *testing.T) *controlLeader {
+	t.Helper()
+	return newControlLeader(t, func(typ string, _ map[string]any) []any {
+		switch typ {
+		case protocol.TypeModelsRequest:
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				thinkingState("", ""),
+			}
+		case protocol.TypeThinkingSet:
+			
+			return []any{protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{
+				ActiveModelID:         "bedrock-camp:global.anthropic.claude-opus-5-5",
+				ScoopJid:              "cone_1",
+				ThinkingLevel:         "xhigh",
+				EffortOverride:        "max",
+				ResolvedThinkingLevel: "high",
+			}}}
+		}
+		return nil
+	})
+}
+
+func TestCLIThinkingRejectsAResolvedLevelThatDiffersFromTheRequest(t *testing.T) {
+	_, stderr, code := runCLI(t, clampedMaxLeader(t).joinURL, "thinking", "--timeout", "2s", "max")
+	if code == 0 || !strings.Contains(stderr, "resolved max to high") {
+		t.Fatalf("exit %d stderr %s", code, stderr)
+	}
+	stdout, stderr, code := runCLI(t, clampedMaxLeader(t).joinURL, "thinking", "--allow-downgrade", "--timeout", "2s", "max")
+	if code != 0 || strings.TrimSpace(stdout) != "high" {
+		t.Fatalf("allow-downgrade: exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+}
+
+func TestCLIThinkingPrintsAdaptiveWhenThatIsTheResolvedLevel(t *testing.T) {
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{
+					ActiveModelID:         "bedrock-camp:global.anthropic.claude-opus-5-5",
+					ScoopJid:              "cone_1",
+					ResolvedThinkingLevel: "adaptive",
+				}},
+			}
+		}
+		return nil
+	})
+	stdout, stderr, code := runCLI(t, leader.joinURL, "thinking")
+	if code != 0 || strings.TrimSpace(stdout) != "adaptive" {
+		t.Fatalf("exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+}
+
+func TestCLIThinkingIgnoresAStaleResolvedOff(t *testing.T) {
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		switch typ {
+		case protocol.TypeModelsRequest:
+			stale := protocol.ModelState{Type: protocol.TypeModelState, State: protocol.ModelSelectionState{
+				ActiveModelID:         "bedrock-camp:global.anthropic.claude-opus-5-5",
+				ScoopJid:              "cone_1",
+				ResolvedThinkingLevel: "off",
+			}}
+			
+			
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				stale,
+				stale,
+			}
+		case protocol.TypeThinkingSet:
+			return []any{thinkingState("low", "")}
+		}
+		return nil
+	})
+	stdout, stderr, code := runCLI(t, leader.joinURL, "thinking", "--timeout", "2s", "low")
+	if code != 0 || strings.TrimSpace(stdout) != "low" {
+		t.Fatalf("exit %d stdout %q stderr %s", code, stdout, stderr)
+	}
+}
+
+func TestCLIThinkingFailsWithoutConfirmation(t *testing.T) {
+	leader := newControlLeader(t, func(typ string, _ map[string]any) []any {
+		if typ == protocol.TypeModelsRequest {
+			return []any{
+				protocol.ModelsList{Type: protocol.TypeModelsList, Models: catalog},
+				thinkingState("high", ""),
+			}
+		}
+		return nil
+	})
+	_, stderr, code := runCLI(t, leader.joinURL, "thinking", "--timeout", "1s", "low")
+	if code != 1 || !strings.Contains(stderr, "did not apply low within 1s (still high)") {
+		t.Fatalf("exit %d stderr %s", code, stderr)
+	}
 }

@@ -23,6 +23,7 @@ import {
 } from './lifecycle.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
+  parseModelSpec,
   parseSkillsCondition,
   restoreSkills,
   runTask,
@@ -84,6 +85,10 @@ export function parseCli(argv) {
     throw new Error('--fresh-leader-every must be 0 (never) or a positive number of tasks');
   if (!Number.isInteger(leaderDownLimit) || leaderDownLimit < 1)
     throw new Error('--leader-down-limit must be a positive integer');
+  const models = list(values.models);
+  if (!values.help) {
+    for (const spec of models) parseModelSpec(spec);
+  }
   const leaders = Number.parseInt(values.leaders, 10);
   if (!Number.isInteger(leaders) || leaders < 1 || leaders > MAX_LEADERS)
     throw new Error(`--leaders must be 1 to ${MAX_LEADERS}`);
@@ -104,7 +109,7 @@ export function parseCli(argv) {
   return {
     help: values.help,
     sets: values.set ?? [],
-    models: list(values.models),
+    models,
     skills: list(values.skills).map(parseSkillsCondition),
     repeats,
     taskIds: values.tasks ? list(values.tasks) : null,
@@ -333,9 +338,11 @@ function failInto(record, stage, err) {
 }
 
 export function runConfig(harness, model, condition) {
+  const spec = parseModelSpec(model);
   return {
     harness,
-    model,
+    model: spec.spec,
+    thinking: spec.thinking,
     skills: condition.name,
     default_skills: Boolean(condition.builtin),
   };
@@ -375,6 +382,7 @@ async function runOne(r, ctx) {
   }
   record.metrics = traceFromResult(result).metrics;
   record.model_id = result.modelId ?? null;
+  record.config.thinking_effective = result.thinkingEffective || null;
 
   const tx = result.transcriptExport;
   if (tx && !tx.ok && [tx.reason, tx.detail].some((s) => /leader-down/.test(s ?? ''))) {

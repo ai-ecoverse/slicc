@@ -16,6 +16,7 @@ import {
   leaderHealth,
   NO_DEFAULT_SKILLS_MISSING,
   parseExportListing,
+  parseModelSpec,
   parseSkillNames,
   parseSkillsCondition,
   parseTabList,
@@ -903,7 +904,7 @@ describe('runTask', () => {
       capture: { pollMs: 5 },
     });
 
-    expect(calls.slice(0, 8).map(label)).toEqual([
+    expect(calls.slice(0, 9).map(label)).toEqual([
       'uptime; meminfo',
       'rm -rf',
       'mkdir -p',
@@ -911,6 +912,7 @@ describe('runTask', () => {
       'playwright-cli tab-close',
       'slicc new-session --erase',
       'slicc model claude-sonnet-5',
+      'slicc thinking',
       'cost --json',
     ]);
     expect(calls[2].opts.stdin).toBe(Buffer.from('hello').toString('base64'));
@@ -932,6 +934,8 @@ describe('runTask', () => {
       runId: 'r1',
       model: 'claude-sonnet-5',
       modelId: 'bedrock-camp:global.anthropic.claude-sonnet-5',
+      thinking: 'default',
+      thinkingEffective: '',
       exitCode: 0,
       timedOut: false,
       finalText: 'FINAL ANSWER: Example Domain\n',
@@ -954,6 +958,136 @@ describe('runTask', () => {
     const exportAt = calls.findIndex((c) => c.command?.startsWith('session export'));
     expect(closeAt).toBeGreaterThan(promptAt);
     expect(closeAt).toBeLessThan(exportAt);
+  });
+
+  it('parses alias@thinking and leaves a plain alias at default', () => {
+    expect(parseModelSpec('claude-opus-5-5')).toEqual({
+      spec: 'claude-opus-5-5',
+      alias: 'claude-opus-5-5',
+      thinking: 'default',
+    });
+    expect(parseModelSpec('claude-opus-5-5@default')).toEqual({
+      spec: 'claude-opus-5-5@default',
+      alias: 'claude-opus-5-5',
+      thinking: 'default',
+    });
+    expect(parseModelSpec('claude-opus-5-5@max')).toEqual({
+      spec: 'claude-opus-5-5@max',
+      alias: 'claude-opus-5-5',
+      thinking: 'max',
+    });
+    expect(parseModelSpec('bedrock-camp:global.anthropic.claude-opus-5-5@off').alias).toBe(
+      'bedrock-camp:global.anthropic.claude-opus-5-5'
+    );
+    expect(() => parseModelSpec('claude-opus-5-5@turbo')).toThrow(/unknown|alias@level/);
+    expect(() => parseModelSpec('@off')).toThrow(/alias@level/);
+  });
+
+  it('sets thinking after the model, and only reads it for default', async () => {
+    const verbs = {
+      'new-session': ok('new session (erase)'),
+      model: ok('bedrock-camp:global.anthropic.claude-opus-5-5\n'),
+      thinking: (args) => ok(`${args[1] ?? 'unset'}\n`),
+      prompt: ok('FINAL ANSWER: x\n'),
+    };
+    const off = fakeLeader({ verbs });
+    const offResult = await runTask({
+      leader: off.leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r-off',
+      model: 'claude-opus-5-5@off',
+      capture: { pollMs: 5 },
+    });
+    const offCli = off.calls.filter((c) => c.kind === 'cli').map((c) => c.args);
+    const modelAt = offCli.findIndex((a) => a[0] === 'model');
+    const thinkingAt = offCli.findIndex((a) => a[0] === 'thinking');
+    const promptAt = offCli.findIndex((a) => a[0] === 'prompt');
+    expect(offCli[modelAt]).toEqual(['model', 'claude-opus-5-5']);
+    expect(offCli[thinkingAt]).toEqual(['thinking', 'off']);
+    expect(modelAt).toBeLessThan(thinkingAt);
+    expect(thinkingAt).toBeLessThan(promptAt);
+    expect(offResult).toMatchObject({
+      model: 'claude-opus-5-5@off',
+      thinking: 'off',
+      thinkingEffective: 'off',
+      modelId: 'bedrock-camp:global.anthropic.claude-opus-5-5',
+    });
+
+    const plain = fakeLeader({ verbs });
+    const plainResult = await runTask({
+      leader: plain.leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r-plain',
+      model: 'claude-opus-5-5',
+      capture: { pollMs: 5 },
+    });
+    const plainThinking = plain.calls.filter((c) => c.kind === 'cli' && c.args[0] === 'thinking');
+    expect(plainThinking).toHaveLength(1);
+    expect(plainThinking[0].args).toEqual(['thinking']);
+    expect(plain.calls.find((c) => c.kind === 'cli' && c.args[0] === 'model').args).toEqual([
+      'model',
+      'claude-opus-5-5',
+    ]);
+    expect(plainResult).toMatchObject({
+      model: 'claude-opus-5-5',
+      thinking: 'default',
+      thinkingEffective: 'unset',
+    });
+
+    const explicit = fakeLeader({ verbs });
+    const explicitResult = await runTask({
+      leader: explicit.leader,
+      task: { id: 't', task: 'x' },
+      runId: 'r-def',
+      model: 'claude-opus-5-5@default',
+      capture: { pollMs: 5 },
+    });
+    expect(explicit.calls.find((c) => c.kind === 'cli' && c.args[0] === 'thinking').args).toEqual([
+      'thinking',
+    ]);
+    expect(explicitResult.model).toBe('claude-opus-5-5@default');
+    expect(explicitResult.thinking).toBe('default');
+  });
+
+  it('does not prompt when the thinking level is rejected', async () => {
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('ok'),
+        model: ok('bedrock-camp:global.anthropic.claude-opus-5-5\n'),
+        thinking: fail('slicc thinking: the leader did not apply off within 20s (still unset)'),
+      },
+    });
+    await expect(
+      runTask({
+        leader,
+        task: { id: 't', task: 'x' },
+        runId: 'r-think-fail',
+        model: 'claude-opus-5-5@off',
+        capture: { pollMs: 5 },
+      })
+    ).rejects.toThrow(/did not apply off/);
+    expect(leader.cli.mock.calls.some((call) => call[0][0] === 'prompt')).toBe(false);
+  });
+
+  it('does not record a resolved level that is not the one requested', async () => {
+    const { leader } = fakeLeader({
+      verbs: {
+        'new-session': ok('ok'),
+        model: ok('bedrock-camp:global.anthropic.claude-opus-5-5\n'),
+        thinking: ok('high\n'),
+        prompt: ok('FINAL ANSWER: x\n'),
+      },
+    });
+    await expect(
+      runTask({
+        leader,
+        task: { id: 't', task: 'x' },
+        runId: 'r-downgrade',
+        model: 'claude-opus-5-5@max',
+        capture: { pollMs: 5 },
+      })
+    ).rejects.toThrow(/resolved max to high/);
+    expect(leader.cli.mock.calls.some((call) => call[0][0] === 'prompt')).toBe(false);
   });
 
   it('stops before the prompt when new-session re-seeded bundled skills', async () => {

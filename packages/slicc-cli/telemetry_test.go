@@ -9,6 +9,7 @@ func TestClassifySubcommand(t *testing.T) {
 	cases := map[string]string{
 		"new-session": "new-session",
 		"model":       "model",
+		"thinking":    "thinking",
 		"prompt":      "prompt",
 		"exec":        "exec",
 		"watch":       "watch",

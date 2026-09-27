@@ -7,10 +7,15 @@ import type { SecretStore } from './secrets/types.js';
 
 export { imsTokenExpiry };
 
-const CONE_CONFIG_PATH = '/slicc/cone-config.json';
+const DEFAULT_CONE_CONFIG_PATH = '/slicc/cone-config.json';
+
+export function hostedConeConfigPath(): string {
+  const override = process.env.SLICC_CONE_CONFIG_PATH?.trim();
+  return override || DEFAULT_CONE_CONFIG_PATH;
+}
 
 export function readHostedConeConfig(
-  path: string = CONE_CONFIG_PATH,
+  path: string = hostedConeConfigPath(),
   read: (path: string, encoding: BufferEncoding) => string = readFileSync,
   warn: (...args: unknown[]) => void = console.warn
 ): string | null {

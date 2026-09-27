@@ -708,14 +708,34 @@ export class ScoopContext {
   }
 
   setThinkingLevel(level: ThinkingLevel | undefined, effortOverride?: string): ThinkingLevel {
-    if (!this.agent) return 'off';
+    if (!this.agent) {
+      log.info('Thinking level stored for a deferred agent', { requested: level });
+      return 'off';
+    }
     if (getLockedEffortLevel()) return this.agent.state.thinkingLevel;
     this.activeEffortOverride = effortOverride;
-    return applyThinkingLevel(this.agent, level);
+    const resolved = applyThinkingLevel(this.agent, level);
+    log.info('Thinking level applied', {
+      requested: level,
+      resolved,
+      model: this.agent.state.model?.id,
+      provider: this.agent.state.model?.provider,
+      reasoning: this.agent.state.model?.reasoning === true,
+    });
+    return resolved;
   }
 
   getThinkingLevel(): ThinkingLevel {
     return this.agent?.state.thinkingLevel ?? 'off';
+  }
+
+  streamThinking(): { level: ThinkingLevel; effortOverride?: string } | null {
+    if (!this.agent) return null;
+    const level = this.agent.state.thinkingLevel;
+    return {
+      level,
+      ...(level !== 'off' && this.activeEffortOverride === 'max' ? { effortOverride: 'max' } : {}),
+    };
   }
 
   dispose(): void {

@@ -51,6 +51,7 @@ import type {
   ScoopStatusMsg,
   SessionBudgetWindow,
   SetScoopModelMsg,
+  SetThinkingLevelAckMsg,
   SetThinkingLevelMsg,
   SprinkleLickOrigin,
   StateSnapshotMsg,
@@ -1483,6 +1484,7 @@ export class Bridge implements KernelFacade {
   private async handleSetThinkingLevel(msg: SetThinkingLevelMsg): Promise<void> {
     if (!this.orchestrator) return;
     let applied = false;
+    let runtime: { level: string; effortOverride?: string } | null = null;
     try {
       applied =
         (await this.orchestrator.setScoopThinkingLevel(
@@ -1490,6 +1492,7 @@ export class Bridge implements KernelFacade {
           msg.level,
           msg.effortOverride
         )) !== null;
+      runtime = this.orchestrator.streamThinking?.(msg.scoopJid) ?? null;
     } catch (err) {
       console.error('[kernel-bridge] set-thinking-level failed:', err);
     }
@@ -1500,6 +1503,17 @@ export class Bridge implements KernelFacade {
       scoopJid: msg.scoopJid,
       level: msg.level,
       effortOverride: msg.effortOverride,
+      ...(runtime
+        ? {
+            resolvedLevel: runtime.level as SetThinkingLevelAckMsg['resolvedLevel'],
+            ...(runtime.effortOverride
+              ? {
+                  resolvedEffortOverride:
+                    runtime.effortOverride as SetThinkingLevelAckMsg['resolvedEffortOverride'],
+                }
+              : {}),
+          }
+        : {}),
       applied,
     });
   }

@@ -841,6 +841,10 @@ export class ScoopLifecycleManager {
     return applied;
   }
 
+  streamThinking(jid: string): { level: ThinkingLevel; effortOverride?: string } | null {
+    return this.getContext(jid)?.streamThinking() ?? null;
+  }
+
   private buildContextCallbacks(jid: string, scoop: RegisteredScoop): ScoopContextCallbacks {
     const { callbacks, completionService, cone } = this.deps;
     const scoops = () => this.deps.getScoops();

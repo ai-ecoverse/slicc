@@ -7,6 +7,7 @@ package main
 
 
 
+
 import (
 	"context"
 	"encoding/json"
@@ -326,7 +327,7 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 	deadline := time.NewTimer(a.timeout)
 	defer deadline.Stop()
-	catalog, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout)
+	catalog, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout, "model")
 	if code >= 0 {
 		return code
 	}
@@ -352,7 +353,7 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 
 
-func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration) ([]protocol.ModelCatalogEntry, protocol.ModelSelectionState, int) {
+func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, verb string) ([]protocol.ModelCatalogEntry, protocol.ModelSelectionState, int) {
 	var catalog []protocol.ModelCatalogEntry
 	var state *protocol.ModelSelectionState
 	for catalog == nil || state == nil {
@@ -362,10 +363,10 @@ func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadli
 		case s := <-ch.states:
 			state = &s
 		case <-deadline:
-			errLine("model", "the leader sent no model list within %s", timeout)
+			errLine(verb, "the leader sent no model list within %s", timeout)
 			return nil, protocol.ModelSelectionState{}, 1
 		case <-conn.Done():
-			errLine("model", "connection closed")
+			errLine(verb, "connection closed")
 			return nil, protocol.ModelSelectionState{}, 1
 		case <-ctx.Done():
 			return nil, protocol.ModelSelectionState{}, 130
@@ -412,5 +413,230 @@ func printModels(asJSON bool, state protocol.ModelSelectionState, catalog []prot
 			mark = "* "
 		}
 		fmt.Fprintf(os.Stdout, "%s%s\t%s\n", mark, m.ModelID, m.ModelName)
+	}
+}
+
+
+
+var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+
+
+type thinkingArgs struct {
+	level          string
+	json           bool
+	allowDowngrade bool
+	timeout        time.Duration
+	help           bool
+	err            string
+}
+
+func parseThinkingArgs(args []string) thinkingArgs {
+	a := thinkingArgs{timeout: modelTimeout}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help":
+			a.help = true
+		case "--json":
+			a.json = true
+		case "--allow-downgrade":
+			a.allowDowngrade = true
+		case "--timeout":
+			if i+1 >= len(args) {
+				a.err = "--timeout needs a duration (e.g. 20s)"
+				return a
+			}
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil || d <= 0 {
+				a.err = fmt.Sprintf("--timeout %q is not a positive duration", args[i+1])
+				return a
+			}
+			a.timeout = d
+			i++
+		default:
+			if strings.HasPrefix(args[i], "-") || a.level != "" {
+				a.err = fmt.Sprintf("unexpected argument %q", args[i])
+				return a
+			}
+			a.level = args[i]
+		}
+	}
+	if a.level != "" && !knownThinkingLevel(a.level) {
+		a.err = fmt.Sprintf("unknown thinking level %q (want %s)", a.level, strings.Join(thinkingLevels, ", "))
+	}
+	return a
+}
+
+func knownThinkingLevel(level string) bool {
+	for _, l := range thinkingLevels {
+		if l == level {
+			return true
+		}
+	}
+	return false
+}
+
+
+
+func thinkingWire(level string) (thinkingLevel, effort string) {
+	if level == "max" {
+		return "xhigh", "max"
+	}
+	return level, ""
+}
+
+
+
+
+func effectiveThinking(s protocol.ModelSelectionState) string {
+	if s.EffortOverride == "max" {
+		return "max"
+	}
+	if s.ThinkingLevel == "" {
+		return "unset"
+	}
+	return s.ThinkingLevel
+}
+
+func thinkingApplied(s protocol.ModelSelectionState, level string) bool {
+	wire, effort := thinkingWire(level)
+	return s.ThinkingLevel == wire && s.EffortOverride == effort
+}
+
+
+
+func resolvedEffective(s protocol.ModelSelectionState) (string, bool) {
+	if s.ResolvedThinkingLevel == "" && s.ResolvedEffortOverride == "" {
+		return "", false
+	}
+	if s.ResolvedEffortOverride == "max" {
+		return "max", true
+	}
+	return s.ResolvedThinkingLevel, true
+}
+
+
+
+func displayThinking(s protocol.ModelSelectionState) string {
+	if effective, ok := resolvedEffective(s); ok {
+		return effective
+	}
+	return effectiveThinking(s)
+}
+
+
+type thinkingListing struct {
+	Effective              string `json:"effective"`
+	ActiveModelID          string `json:"activeModelId,omitempty"`
+	ThinkingLevel          string `json:"thinkingLevel,omitempty"`
+	EffortOverride         string `json:"effortOverride,omitempty"`
+	ResolvedThinkingLevel  string `json:"resolvedThinkingLevel,omitempty"`
+	ResolvedEffortOverride string `json:"resolvedEffortOverride,omitempty"`
+	ScoopJid               string `json:"scoopJid"`
+}
+
+func printThinking(asJSON bool, state protocol.ModelSelectionState) {
+	if asJSON {
+		out, _ := json.MarshalIndent(thinkingListing{
+			Effective:              displayThinking(state),
+			ActiveModelID:          state.ActiveModelID,
+			ThinkingLevel:          state.ThinkingLevel,
+			EffortOverride:         state.EffortOverride,
+			ResolvedThinkingLevel:  state.ResolvedThinkingLevel,
+			ResolvedEffortOverride: state.ResolvedEffortOverride,
+			ScoopJid:               state.ScoopJid,
+		}, "", "  ")
+		fmt.Println(string(out))
+		return
+	}
+	fmt.Println(displayThinking(state))
+}
+
+
+
+func cmdThinking(ctx context.Context, joinURL string, a thinkingArgs) int {
+	ch := newModelChannels()
+	conn, err := dialAndSend(
+		func() (*tray.Conn, error) {
+			return tray.Dial(ctx, joinURL, tray.Options{OnMessage: ch.handle, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+		},
+		func(conn *tray.Conn) error {
+			return conn.SendJSON(protocol.ModelsRequest{Type: protocol.TypeModelsRequest})
+		},
+	)
+	if err != nil {
+		errLine("thinking", "%s", err)
+		var dialErr *dialFailed
+		if errors.As(err, &dialErr) {
+			reportRuntimeError("dial", err)
+		}
+		return 1
+	}
+	defer conn.Close()
+
+	deadline := time.NewTimer(a.timeout)
+	defer deadline.Stop()
+	_, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout, "thinking")
+	if code >= 0 {
+		return code
+	}
+	if a.level == "" {
+		printThinking(a.json, state)
+		return 0
+	}
+	wire, effort := thinkingWire(a.level)
+	msg := protocol.ThinkingSet{
+		Type:          protocol.TypeThinkingSet,
+		ScoopJid:      state.ScoopJid,
+		ThinkingLevel: wire,
+	}
+	if effort != "" {
+		msg.EffortOverride = effort
+	}
+	if err := conn.SendJSON(msg); err != nil {
+		errLine("thinking", "%s", err)
+		return 1
+	}
+	return awaitThinking(ctx, conn, ch, deadline.C, a.timeout, a.level, a.json, a.allowDowngrade, state)
+}
+
+
+
+
+
+
+
+func awaitThinking(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, level string, asJSON, allowDowngrade bool, before protocol.ModelSelectionState) int {
+	last := displayThinking(before)
+	for {
+		select {
+		case s := <-ch.states:
+			if s.ScoopJid != "" && before.ScoopJid != "" && s.ScoopJid != before.ScoopJid {
+				continue
+			}
+			if !thinkingApplied(s, level) {
+				last = displayThinking(s)
+				continue
+			}
+			effective, ok := resolvedEffective(s)
+			if !ok {
+				errLine("thinking", "the leader confirmed %s but did not report the resolved level the next prompt will use", level)
+				return 1
+			}
+			if effective == level || allowDowngrade {
+				printThinking(asJSON, s)
+				return 0
+			}
+			errLine("thinking", "leader resolved %s to %s (activeModelId=%s thinkingLevel=%s effortOverride=%s resolvedThinkingLevel=%s resolvedEffortOverride=%s); the model or the effort lock will not run the requested level (pass --allow-downgrade to accept %s)", level, effective, s.ActiveModelID, s.ThinkingLevel, s.EffortOverride, s.ResolvedThinkingLevel, s.ResolvedEffortOverride, effective)
+			return 1
+		case <-deadline:
+			errLine("thinking", "the leader did not apply %s within %s (still %s)", level, timeout, last)
+			return 1
+		case <-conn.Done():
+			errLine("thinking", "connection closed")
+			return 1
+		case <-ctx.Done():
+			return 130
+		}
 	}
 }

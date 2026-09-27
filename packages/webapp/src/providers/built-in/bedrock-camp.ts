@@ -555,6 +555,15 @@ function convertToolConfig(
   return { tools: bedrockTools, toolChoice: choice };
 }
 
+function claudeAdaptiveEffort(
+  options: BedrockCampOptions,
+  modelId: string,
+  modelName?: string
+): string {
+  if (options.effort === 'max') return 'max';
+  return mapThinkingLevelToEffort(options.reasoning, modelId, modelName);
+}
+
 function mapThinkingLevelToEffort(
   level: ThinkingLevel | undefined,
   modelId: string,
@@ -616,7 +625,9 @@ function buildAdditionalModelRequestFields(
   if (supportsAdaptiveThinking(model.id, model.name)) {
     const adaptive: BedrockCampAdaptiveFields = {
       thinking: { type: 'adaptive', ...(display !== undefined ? { display } : {}) },
-      output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id, model.name) },
+      output_config: {
+        effort: claudeAdaptiveEffort(options, model.id, model.name),
+      },
     };
     return adaptive;
   }

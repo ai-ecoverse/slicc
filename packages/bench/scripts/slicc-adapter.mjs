@@ -46,6 +46,35 @@ async function mustCli(leader, args, options) {
   return r;
 }
 
+export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+export function parseModelSpec(spec) {
+  const text = String(spec).trim();
+  const at = text.lastIndexOf('@');
+  if (at === -1) return { spec: text, alias: text, thinking: 'default' };
+  const alias = text.slice(0, at);
+  const thinking = text.slice(at + 1);
+  if (!alias || (thinking !== 'default' && !THINKING_LEVELS.includes(thinking))) {
+    throw new Error(
+      `model spec ${JSON.stringify(text)} must be an alias or alias@level (${[...THINKING_LEVELS, 'default'].join(', ')})`
+    );
+  }
+  return { spec: text, alias, thinking };
+}
+
+export async function prepareModel(leader, model) {
+  const spec = parseModelSpec(model);
+  const modelId = (await mustCli(leader, ['model', spec.alias])).stdout.trim();
+  const args = spec.thinking === 'default' ? ['thinking'] : ['thinking', spec.thinking];
+  const thinkingEffective = (await mustCli(leader, args)).stdout.trim();
+  if (spec.thinking !== 'default' && thinkingEffective !== spec.thinking) {
+    throw new Error(
+      `slicc thinking resolved ${spec.thinking} to ${thinkingEffective || 'unknown'}`
+    );
+  }
+  return { spec, modelId, thinkingEffective };
+}
+
 export function parseSkillsCondition(text) {
   const parts = String(text)
     .split('+')
@@ -704,7 +733,7 @@ export async function runTask({
     await closeTabs(leader);
     await mustCli(leader, ['new-session', '--erase']);
     if (condition) await assertStagedSkills(leader, condition);
-    const modelId = (await mustCli(leader, ['model', model])).stdout.trim();
+    const prepared = await prepareModel(leader, model);
     const before = await spend(leader);
 
     const started = now();
@@ -779,8 +808,10 @@ export async function runTask({
     const done = now();
     return {
       runId,
-      model,
-      modelId,
+      model: prepared.spec.spec,
+      modelId: prepared.modelId,
+      thinking: prepared.spec.thinking,
+      thinkingEffective: prepared.thinkingEffective,
       exitCode: reply.status,
       timedOut: Boolean(reply.timedOut),
       costCapped: Boolean(reply.aborted),

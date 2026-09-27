@@ -1098,6 +1098,10 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lifecycle.setThinkingLevel(jid, level, effortOverride);
   }
 
+  streamThinking(jid: string): { level: ThinkingLevel; effortOverride?: string } | null {
+    return this.lifecycle.streamThinking(jid);
+  }
+
   reloadAllSkills(): Promise<void> {
     return this.lifecycle.reloadAllSkills();
   }

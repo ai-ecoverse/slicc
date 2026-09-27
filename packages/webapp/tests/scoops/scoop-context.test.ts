@@ -8,6 +8,10 @@ import type { AgentErrorTelemetrySink } from '../../src/core/telemetry-hook.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { buildSudoWiring } from '../../src/scoops/scoop-context/sudo-wiring.js';
 import {
+  reportedThinking,
+  runtimeThinking,
+} from '../../src/scoops/scoop-context/thinking-level.js';
+import {
   abortableSleep,
   isImageProcessingError,
   isNonRetryableError,
@@ -1488,6 +1492,105 @@ describe('resolveThinkingLevel', () => {
     expect(resolveThinkingLevel('medium', model)).toBe('medium');
     expect(resolveThinkingLevel('high', model)).toBe('high');
     expect(resolveThinkingLevel('minimal', model)).toBe('minimal');
+  });
+});
+
+describe('runtimeThinking', () => {
+  const opus55 = {
+    id: 'global.anthropic.claude-opus-5-5',
+    reasoning: true,
+    thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+  } as unknown as Parameters<typeof resolveThinkingLevel>[1];
+  const noXhigh = {
+    id: 'claude-haiku-4-5',
+    reasoning: true,
+  } as unknown as Parameters<typeof resolveThinkingLevel>[1];
+  const noReasoning = {
+    id: 'claude-3-haiku',
+    reasoning: false,
+  } as unknown as Parameters<typeof resolveThinkingLevel>[1];
+
+  it('keeps Opus 5.5 max, because xhigh is supported and the effort override is sent', () => {
+    expect(
+      runtimeThinking({
+        requested: 'xhigh',
+        effortOverride: 'max',
+        model: opus55,
+      })
+    ).toEqual({ level: 'xhigh', effortOverride: 'max', effective: 'max' });
+  });
+
+  it('reports off for a non-reasoning model and drops the effort override', () => {
+    expect(
+      runtimeThinking({
+        requested: 'xhigh',
+        effortOverride: 'max',
+        model: noReasoning,
+      })
+    ).toEqual({ level: 'off', effective: 'off' });
+  });
+
+  it('reports the clamp when xhigh is not advertised', () => {
+    expect(runtimeThinking({ requested: 'xhigh', model: noXhigh }).effective).toBe('high');
+  });
+
+  it('reports adaptive when Opus 5.5 has no thinking level, because off still thinks', () => {
+    expect(reportedThinking({ requested: undefined, model: opus55 })).toEqual({
+      level: 'adaptive',
+    });
+    expect(reportedThinking({ requested: 'off', model: opus55 })).toEqual({ level: 'adaptive' });
+    expect(reportedThinking({ requested: 'off', model: opus55, agent: { level: 'off' } })).toEqual({
+      level: 'adaptive',
+    });
+  });
+
+  it('reports the requested Opus 5.5 level once it is set', () => {
+    expect(reportedThinking({ requested: 'low', model: opus55 })).toEqual({ level: 'low' });
+    expect(
+      reportedThinking({
+        requested: 'xhigh',
+        effortOverride: 'max',
+        model: opus55,
+        agent: { level: 'xhigh', effortOverride: 'max' },
+      })
+    ).toEqual({ level: 'xhigh', effortOverride: 'max' });
+  });
+
+  it('keeps off for a model that can disable thinking', () => {
+    expect(reportedThinking({ requested: undefined, model: noXhigh })).toEqual({ level: 'off' });
+  });
+
+  it('uses the agent stream state after model.set when the catalogue hit cannot reason', () => {
+    const catalogue = {
+      id: 'global.anthropic.claude-opus-5-5',
+      reasoning: false,
+    } as unknown as Parameters<typeof resolveThinkingLevel>[1];
+    expect(
+      reportedThinking({
+        requested: 'low',
+        model: catalogue,
+        agent: { level: 'low' },
+      })
+    ).toEqual({ level: 'low' });
+    expect(
+      reportedThinking({
+        requested: 'xhigh',
+        effortOverride: 'max',
+        model: catalogue,
+        agent: { level: 'xhigh', effortOverride: 'max' },
+      })
+    ).toEqual({ level: 'xhigh', effortOverride: 'max' });
+  });
+
+  it('reports the effort lock instead of the request', () => {
+    expect(
+      runtimeThinking({
+        requested: 'xhigh',
+        effortOverride: 'max',
+        model: opus55,
+        locked: 'medium',
+      })
+    ).toEqual({ level: 'medium', effective: 'medium' });
   });
 });
 
