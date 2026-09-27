@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import { initFeatureFlags, setFeatureFlagOverride } from '../../src/core/feature-flags.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { formatSkillsForPrompt, loadSkills } from '../../src/scoops/skills.js';
+import {
+  createDefaultSharedFiles,
+  createDefaultSkills,
+  formatSkillsForPrompt,
+  loadSkills,
+} from '../../src/scoops/skills.js';
 
 describe('Skills', () => {
   let vfs: VirtualFS;
@@ -253,5 +259,64 @@ Write clean code.
 
       expect(skills).toHaveLength(0);
     });
+  });
+});
+
+describe('no-default-skills', () => {
+  let vfs: VirtualFS;
+  let dbCounter = 0;
+
+  function memoryStorage(): Storage {
+    const values = new Map<string, string>();
+    return {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => void values.set(key, String(value)),
+      removeItem: (key) => void values.delete(key),
+      clear: () => values.clear(),
+      key: (index) => [...values.keys()][index] ?? null,
+      get length() {
+        return values.size;
+      },
+    } as Storage;
+  }
+
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', memoryStorage());
+    initFeatureFlags('standalone');
+    vfs = await VirtualFS.create({ dbName: `test-no-default-skills-${dbCounter++}`, wipe: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('seeds bundled skills when the flag is off, and the prompt lists them', async () => {
+    await createDefaultSkills(vfs);
+    const skills = await loadSkills(vfs, '/workspace/skills');
+    const prompt = formatSkillsForPrompt(skills);
+    expect(skills.some((skill) => skill.metadata.name === 'playwright-cli')).toBe(true);
+    expect(prompt).toContain('playwright-cli');
+    expect(prompt).toContain('/workspace/skills/playwright-cli/SKILL.md');
+  });
+
+  it('does not seed bundled skills when the flag is on, and the prompt lists only what is on disk', async () => {
+    setFeatureFlagOverride('no-default-skills', 'on');
+    await vfs.mkdir('/workspace/skills/custom', { recursive: true });
+    await vfs.writeFile(
+      '/workspace/skills/custom/SKILL.md',
+      '---\nname: custom\ndescription: Already here\n---\nKeep me.\n'
+    );
+
+    await createDefaultSkills(vfs);
+    await createDefaultSharedFiles(vfs);
+
+    await expect(vfs.stat('/workspace/skills/playwright-cli/SKILL.md')).rejects.toThrow();
+    await expect(vfs.stat('/shared/CLAUDE.md')).resolves.toBeTruthy();
+
+    const skills = await loadSkills(vfs, '/workspace/skills');
+    expect(skills.map((skill) => skill.metadata.name)).toEqual(['custom']);
+    const prompt = formatSkillsForPrompt(skills);
+    expect(prompt).toContain('**custom**');
+    expect(prompt).not.toContain('playwright-cli');
   });
 });

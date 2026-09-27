@@ -332,9 +332,18 @@ function failInto(record, stage, err) {
   record.error_stage = stage;
 }
 
+export function runConfig(harness, model, condition) {
+  return {
+    harness,
+    model,
+    skills: condition.name,
+    default_skills: Boolean(condition.builtin),
+  };
+}
+
 async function runOne(r, ctx) {
   const { leader, opts, judge } = ctx;
-  const config = { harness: opts.harness, model: r.model, skills: r.condition.name };
+  const config = runConfig(opts.harness, r.model, r.condition);
   const runId = `${safe(r.task.id).slice(0, 40)}-${safe(r.model)}-${safe(config.skills)}-r${r.repeat}-${Date.now().toString(36)}`;
   const record = {
     benchmark: r.set.benchmark,
@@ -354,6 +363,7 @@ async function runOne(r, ctx) {
       runId,
       model: r.model,
       timeoutSeconds: opts.timeout,
+      condition: r.condition,
       ...(opts.maxTaskCost ? { maxCost: opts.maxTaskCost } : {}),
       ...(ctx.capture ? { capture: ctx.capture } : {}),
       ...(ctx.now ? { now: ctx.now } : {}),
@@ -382,10 +392,17 @@ async function runOne(r, ctx) {
   return { record, result };
 }
 
-export function resumeAction(record, task, { judge, judgeModel, traceExists }) {
+export function defaultSkillsMatch(recorded, expected) {
+  if (expected === undefined) return true;
+  if (recorded === expected) return true;
+  return recorded === undefined && expected === true;
+}
+
+export function resumeAction(record, task, { judge, judgeModel, traceExists, defaultSkills }) {
   if (!record) return 'run';
   const d = taskDigests(task);
   if (!record.digests || record.digests.task_sha !== d.task_sha) return 'run';
+  if (!defaultSkillsMatch(record.config?.default_skills, defaultSkills)) return 'run';
   if (record.error && record.error_stage !== 'judge') return 'run';
   if (!judge) return 'done';
   const stale =
@@ -639,6 +656,7 @@ async function processRun(i, r, runs, ctx, say) {
     judge: Boolean(ctx.judge),
     judgeModel: opts.judgeModel,
     traceExists: before.traceExists,
+    defaultSkills: Boolean(r.condition.builtin),
   });
   if (action === 'done') {
     say(

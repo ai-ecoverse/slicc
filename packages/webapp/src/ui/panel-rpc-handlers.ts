@@ -37,6 +37,7 @@ import {
 import { buildTrayOauthHandlers } from './panel-rpc/oauth-handlers.js';
 import {
   buildComputerTabHandlers,
+  buildFeatureFlagHandler,
   buildLayoutHandler,
   buildThemeHandler,
 } from './panel-rpc/ui-handlers.js';
@@ -167,6 +168,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildMountBridgeHandler(),
     ...buildThemeHandler(),
     ...buildLayoutHandler(),
+    ...buildFeatureFlagHandler(),
     ...buildComputerTabHandlers(),
   };
 }

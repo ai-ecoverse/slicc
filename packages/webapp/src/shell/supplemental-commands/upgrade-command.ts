@@ -3,6 +3,7 @@ import { defineCommand } from 'just-bash';
 import { getLastSeenVersionReader, readSliccVersion } from '../../base/slicc-version.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { threeWayMerge } from '../../git/merge-file-core.js';
+import { noBundledSkillSeed } from '../../kernel/feature-flag-local.js';
 import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 const REPO = 'ai-ecoverse/slicc';
@@ -96,12 +97,14 @@ function releaseRef(version: string): string {
   return version.startsWith('v') ? version : `v${version}`;
 }
 
-function runtimePath(repoPath: string): string | null {
+export function upgradeRuntimePath(repoPath: string): string | null {
   if (!SCOPES.some((prefix) => repoPath.startsWith(prefix))) return null;
   const relative = repoPath.slice(BUNDLED_PREFIX.length);
   if (!relative || relative.split('/').some((part) => part === '.' || part === '..')) {
     return null;
   }
+
+  if (relative.startsWith('/workspace/skills/') && noBundledSkillSeed()) return null;
   return relative;
 }
 
@@ -141,7 +144,7 @@ async function discover(ref: string, fetchFn: SecureFetch): Promise<Map<string, 
   const files = new Map<string, string>();
   for (const item of tree.tree) {
     if (item.type !== 'blob' || typeof item.path !== 'string') continue;
-    const path = runtimePath(item.path);
+    const path = upgradeRuntimePath(item.path);
     if (path) files.set(path, item.path);
   }
   return files;

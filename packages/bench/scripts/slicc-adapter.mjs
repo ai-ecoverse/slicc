@@ -60,6 +60,50 @@ export function parseSkillsCondition(text) {
   return { name: String(text).trim(), builtin: base === 'builtin', extras: parts };
 }
 
+export const FLAGS_PROBE = 'command -v flags';
+export const NO_DEFAULT_SKILLS_MISSING =
+  "this SLICC build can't run the none condition (no no-default-skills flag); pin a webapp that has it with pin-webapp, or wait for a release";
+
+export function skillsFlagCommand(condition) {
+  return `flags set no-default-skills ${condition.builtin ? 'off' : 'on'}`;
+}
+
+export function listSkillNamesCommand(dir) {
+  return `ls ${quote(dir)} || true`;
+}
+
+export function parseSkillNames(text) {
+  return [
+    ...new Set(
+      String(text ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+    ),
+  ].sort();
+}
+
+export function expectedSkillNames(condition, { builtin = [], extras = [] } = {}) {
+  const names = new Set(condition.builtin ? builtin : []);
+  for (const list of extras) for (const name of list) names.add(name);
+  return [...names].sort();
+}
+
+function showNames(names) {
+  if (names.length === 0) return '(empty)';
+  if (names.length > 40) return `${names.slice(0, 40).join(', ')}, … (${names.length})`;
+  return names.join(', ');
+}
+
+export function skillsMismatch(condition, actual, expected) {
+  const a = [...actual].sort();
+  const e = [...expected].sort();
+  if (a.length === e.length && a.every((name, i) => name === e[i])) return null;
+  return (
+    `skills condition ${condition.name}: /workspace/skills has ${showNames(a)} after new-session; ` +
+    `expected ${showNames(e)}. Bundled skills were re-seeded, or the staged set did not stick.`
+  );
+}
+
 export function stageSkillsCommand(condition) {
   const steps = [
     `if [ ! -d ${SKILLS_STASH} ]; then mkdir -p ${SKILLS_STASH} && cp -r ${SKILLS_DIR}/. ${SKILLS_STASH}/; fi`,
@@ -77,13 +121,49 @@ export function restoreSkillsCommand() {
   return `if [ -d ${SKILLS_STASH} ]; then rm -rf ${SKILLS_DIR} && mkdir -p ${SKILLS_DIR} && cp -r ${SKILLS_STASH}/. ${SKILLS_DIR}/; fi`;
 }
 
+async function leaderHasFlags(leader) {
+  const probe = await leader.exec(FLAGS_PROBE);
+  if (probe.leaderDown) throw failure(`leader: \`${FLAGS_PROBE}\``, probe);
+  return probe.status === 0;
+}
+
+async function applySkillsFlag(leader, condition) {
+  if (!(await leaderHasFlags(leader))) {
+    if (!condition.builtin) throw new Error(NO_DEFAULT_SKILLS_MISSING);
+    return;
+  }
+  await must(leader, skillsFlagCommand(condition));
+}
+
 export async function stageSkills(leader, condition) {
+  await applySkillsFlag(leader, condition);
   const r = await must(leader, stageSkillsCommand(condition));
   return Number.parseInt(r.stdout.trim().split('\n').pop(), 10) || 0;
 }
 
 export async function restoreSkills(leader) {
   await must(leader, restoreSkillsCommand());
+  if (await leaderHasFlags(leader)) await must(leader, skillsFlagCommand({ builtin: true }));
+}
+
+async function skillNames(leader, dir) {
+  const r = await must(leader, listSkillNamesCommand(dir));
+  return parseSkillNames(r.stdout);
+}
+
+export async function assertStagedSkills(leader, condition) {
+  const actual = await skillNames(leader, SKILLS_DIR);
+  const builtin = condition.builtin ? await skillNames(leader, SKILLS_STASH) : [];
+  const extras = [];
+  for (const extra of condition.extras) {
+    extras.push(await skillNames(leader, `${EXTRA_SKILLS_ROOT}/${extra}`));
+  }
+  const mismatch = skillsMismatch(
+    condition,
+    actual,
+    expectedSkillNames(condition, { builtin, extras })
+  );
+  if (mismatch) throw new Error(mismatch);
 }
 
 export function parseTabList(text) {
@@ -560,6 +640,7 @@ export async function runTask({
   costPollMs = COST_POLL_MS,
   busyProbeMs = BUSY_PROBE_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  condition = null,
 }) {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
   const dir = `/tmp/bench/${runId}`;
@@ -575,6 +656,7 @@ export async function runTask({
     }
     await closeTabs(leader);
     await mustCli(leader, ['new-session', '--erase']);
+    if (condition) await assertStagedSkills(leader, condition);
     const modelId = (await mustCli(leader, ['model', model])).stdout.trim();
     const before = await spend(leader);
 

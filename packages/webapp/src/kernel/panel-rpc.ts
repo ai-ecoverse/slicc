@@ -281,6 +281,10 @@ export type PanelRpcRequest =
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
     }
+  | {
+      op: 'feature-flag-set';
+      payload: { id: string; value: 'on' | 'off' };
+    }
   | { op: 'usb-list'; payload?: undefined }
   | { op: 'usb-request'; payload: { filters: UsbDeviceFilter[] } }
   | { op: 'usb-device-info'; payload: { handle: string } }
@@ -603,6 +607,7 @@ export interface PanelRpcResults {
   'slicc-cancel': { ok: true };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'feature-flag-set': { overridesJson: string };
   'usb-list': { devices: UsbDeviceInfo[] };
   'usb-request': { device: UsbDeviceInfo };
   'usb-device-info': { device: UsbDeviceInfo };
