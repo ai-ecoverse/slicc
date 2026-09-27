@@ -1,4 +1,11 @@
-export type AgentQuestionKind = 'yes-no' | 'text' | 'number' | 'datetime' | 'date' | 'email';
+export type AgentQuestionKind =
+  | 'yes-no'
+  | 'choice'
+  | 'text'
+  | 'number'
+  | 'datetime'
+  | 'date'
+  | 'email';
 
 export interface AgentQuestion {
   start: number;

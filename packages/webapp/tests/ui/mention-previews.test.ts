@@ -8,8 +8,10 @@ import {
   GITHUB_MENTION_CLASS,
   githubRefOf,
   PREVIEW_ATTR,
+  QUESTION_DEFAULT_ATTR,
   QUESTION_ID_ATTR,
   QUESTION_KIND_ATTR,
+  QUESTION_OPTIONS_ATTR,
   QUESTION_TEXT_ATTR,
   TIME_MENTION_CLASS,
   timeMentionOf,
@@ -132,6 +134,60 @@ describe('decorateMentions — times', () => {
 });
 
 describe('decorateMentions — questions', () => {
+  it('passes bullet choices to the model and renders them inline', async () => {
+    const root = body(
+      '<p>Would you like me to:</p><ul><li>Merge now</li><li>Wait for CI</li></ul>'
+    );
+    const text = 'Would you like me to:\n- Merge now\n- Wait for CI';
+    const parse = vi.fn(async () => [
+      {
+        prompt: 'Would you like me to: Merge now / Wait for CI?',
+        kind: 'either_or',
+        options: ['Merge now', 'Wait for CI'],
+        default: null,
+        multiSelect: false,
+        span: [0, text.length] as [number, number],
+      },
+    ]);
+    await decorateMentions(root, {
+      repoHints: [],
+      questions: true,
+      getQuestionParser: () => ({ parse }),
+    });
+    expect(parse).toHaveBeenCalledWith(text);
+    const controls = root.querySelector('li:last-child > slicc-question-prompt[inline]');
+    expect(controls?.getAttribute(QUESTION_OPTIONS_ATTR)).toBe(
+      JSON.stringify(['Merge now', 'Wait for CI'])
+    );
+    expect(root.textContent).toBe('Would you like me to:Merge nowWait for CI');
+  });
+
+  it('keeps the recommended choice aligned when empty model options are removed', async () => {
+    const question = 'Should I merge now or wait for CI?';
+    const root = body(`<p>${question}</p>`);
+    await decorateMentions(root, {
+      repoHints: [],
+      questions: true,
+      getQuestionParser: () => ({
+        parse: async () => [
+          {
+            prompt: question,
+            kind: 'either_or',
+            options: ['', 'Merge now', 'Wait for CI'],
+            default: 2,
+            multiSelect: false,
+            span: [0, question.length],
+          },
+        ],
+      }),
+    });
+    const controls = root.querySelector('slicc-question-prompt');
+    expect(controls?.getAttribute(QUESTION_OPTIONS_ATTR)).toBe(
+      JSON.stringify(['Merge now', 'Wait for CI'])
+    );
+    expect(controls?.getAttribute(QUESTION_DEFAULT_ATTR)).toBe('1');
+  });
+
   it('wraps each question, across inline elements, with one id and one tab stop', async () => {
     const root = body('<p>I fixed it. Should I delete <code>old.ts</code> too? Done.</p>');
     await decorateMentions(root, { repoHints: [], questions: true });

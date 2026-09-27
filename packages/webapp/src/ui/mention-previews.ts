@@ -1,4 +1,10 @@
-import { type AgentQuestionKind, findAgentQuestions } from '../core/agent-questions.js';
+import type { AgentQuestionParser } from '../core/agent-question-model.js';
+import type { PredictedQuestion } from '../core/agent-question-worker.js';
+import {
+  type AgentQuestionKind,
+  classifyQuestion,
+  findAgentQuestions,
+} from '../core/agent-questions.js';
 import {
   findGithubMentions,
   type GithubRef,
@@ -26,6 +32,10 @@ export const QUESTION_TEXT_ATTR = 'data-question';
 export const QUESTION_KIND_ATTR = 'data-question-kind';
 
 export const QUESTION_ID_ATTR = 'data-question-id';
+export const QUESTION_CONTROLS_ATTR = 'data-question-controls';
+export const QUESTION_OPTIONS_ATTR = 'data-question-options';
+export const QUESTION_DEFAULT_ATTR = 'data-question-default';
+export const QUESTION_MULTI_ATTR = 'data-question-multi';
 
 const GITHUB_ATTRS = {
   owner: 'data-gh-owner',
@@ -48,7 +58,15 @@ export interface AgentQuestionAnswerDetail {
 
 const PROCESSED_ATTR = 'data-mention-previews';
 
-const SKIP_ALWAYS = new Set(['A', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA', 'BUTTON']);
+const SKIP_ALWAYS = new Set([
+  'A',
+  'PRE',
+  'SCRIPT',
+  'STYLE',
+  'TEXTAREA',
+  'BUTTON',
+  'SLICC-QUESTION-PROMPT',
+]);
 const SKIP_INLINE = new Set([...SKIP_ALWAYS, 'CODE', 'KBD', 'SAMP']);
 
 const BLOCK_SELECTOR = 'p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote,dd,dt,figcaption';
@@ -82,6 +100,8 @@ export interface DecorateContext {
   timeContext?: TimeContext;
 
   questions?: boolean;
+
+  getQuestionParser?: () => AgentQuestionParser;
 }
 
 function contentFingerprint(root: HTMLElement): string {
@@ -140,67 +160,121 @@ function markLinks(root: HTMLElement): void {
 
 let questionCounter = 0;
 
-function markQuestions(root: HTMLElement): void {
-  const groups = new Map<Element, Text[]>();
+interface MarkedQuestion {
+  start: number;
+  end: number;
+  text: string;
+  kind: AgentQuestionKind | 'choice';
+  options: string[];
+  defaultIndex: number | null;
+  multiSelect: boolean;
+}
+
+interface QuestionTextSpan {
+  node: Text;
+  block: Element;
+  start: number;
+  end: number;
+}
+
+function modelQuestion(q: PredictedQuestion): MarkedQuestion {
+  const kept = q.options
+    .map((option, index) => ({ option, index }))
+    .filter(({ option }) => Boolean(option));
+  const options = kept.map(({ option }) => option);
+  const defaultIndex =
+    q.default === null ? null : kept.findIndex(({ index }) => index === q.default);
+  return {
+    start: q.span[0],
+    end: q.span[1],
+    text: q.prompt,
+    kind:
+      options.length >= 2
+        ? 'choice'
+        : q.kind === 'yes_no'
+          ? 'yes-no'
+          : (classifyQuestion(q.prompt) ?? 'text'),
+    options,
+    defaultIndex: defaultIndex === -1 ? null : defaultIndex,
+    multiSelect: q.multiSelect,
+  };
+}
+
+function questionText(root: HTMLElement): { text: string; spans: QuestionTextSpan[] } {
+  let text = '';
+  let previousBlock: Element | null = null;
+  const spans: QuestionTextSpan[] = [];
   for (const node of textNodes(root, SKIP_ALWAYS, AGENT_QUESTION_CLASS)) {
-    const block = node.parentElement?.closest(BLOCK_SELECTOR) ?? root;
-    const owner = root.contains(block) ? block : root;
-    const list = groups.get(owner);
-    if (list) list.push(node);
-    else groups.set(owner, [node]);
+    const block =
+      node.parentElement?.closest('li') ?? node.parentElement?.closest(BLOCK_SELECTOR) ?? root;
+    if (previousBlock && block !== previousBlock) text += '\n';
+    if (block.tagName === 'LI' && block !== previousBlock) text += '- ';
+    previousBlock = block;
+    const start = text.length;
+    text += node.data;
+    spans.push({ node, block, start, end: text.length });
   }
+  return { text, spans };
+}
 
-  for (const [block, nodes] of groups) {
-    if (block.querySelector(`.${AGENT_QUESTION_CLASS}`)) continue;
-    let text = '';
-    const spans = nodes.map((node) => {
-      const start = text.length;
-      text += node.data;
-      return { node, start, end: text.length };
+function addQuestion(root: HTMLElement, spans: QuestionTextSpan[], q: MarkedQuestion): void {
+  const pieces = spans.filter(({ start, end }) => q.start < end && q.end > start);
+  if (pieces.length === 0) return;
+  const id = questionIdFor(q.start, root);
+  for (const { node, start, end } of pieces) {
+    if (!node.isConnected) continue;
+    const from = Math.max(q.start, start);
+    const to = Math.min(q.end, end);
+    wrapRanges(node, [{ start: from - start, end: to - start }], () => {
+      const span = node.ownerDocument.createElement('span');
+      span.className = AGENT_QUESTION_CLASS;
+      span.setAttribute(PREVIEW_ATTR, 'question');
+      span.setAttribute(QUESTION_ID_ATTR, id);
+      span.setAttribute(QUESTION_TEXT_ATTR, q.text);
+      span.setAttribute(QUESTION_KIND_ATTR, q.kind);
+      if (pieces[0]?.node === node) span.tabIndex = 0;
+      return span;
     });
-    const questions = findAgentQuestions(text);
-    if (questions.length === 0) continue;
-
-    for (const { node, start, end } of spans) {
-      const ranges: Array<{
-        start: number;
-        end: number;
-        id: string;
-        kind: AgentQuestionKind;
-        text: string;
-        first: boolean;
-      }> = [];
-      for (const q of questions) {
-        const from = Math.max(q.start, start);
-        const to = Math.min(q.end, end);
-        if (from >= to) continue;
-        const id = questionIdFor(q.start, block);
-        ranges.push({
-          start: from - start,
-          end: to - start,
-          id,
-          kind: q.kind,
-          text: q.text,
-          first: from === q.start,
-        });
-      }
-      if (ranges.length === 0) continue;
-      wrapRanges(node, ranges, (_text, i) => {
-        const r = ranges[i];
-        const span = node.ownerDocument.createElement('span');
-        span.className = AGENT_QUESTION_CLASS;
-        span.setAttribute(PREVIEW_ATTR, 'question');
-        if (r) {
-          span.setAttribute(QUESTION_ID_ATTR, r.id);
-          span.setAttribute(QUESTION_TEXT_ATTR, r.text);
-          span.setAttribute(QUESTION_KIND_ATTR, r.kind);
-
-          if (r.first) span.tabIndex = 0;
-        }
-        return span;
-      });
-    }
   }
+  const prompt = root.ownerDocument.createElement('slicc-question-prompt');
+  prompt.setAttribute(QUESTION_CONTROLS_ATTR, id);
+  prompt.setAttribute('inline', '');
+  prompt.setAttribute('question', q.text);
+  prompt.setAttribute('kind', q.kind);
+  prompt.setAttribute(QUESTION_OPTIONS_ATTR, JSON.stringify(q.options));
+  if (q.defaultIndex !== null) prompt.setAttribute(QUESTION_DEFAULT_ATTR, String(q.defaultIndex));
+  if (q.multiSelect) prompt.setAttribute(QUESTION_MULTI_ATTR, '');
+  const lastBlock = pieces[pieces.length - 1]?.block;
+  if (lastBlock === root || lastBlock?.tagName === 'LI') lastBlock.append(prompt);
+  else lastBlock?.after(prompt);
+}
+
+async function markQuestions(root: HTMLElement, ctx: DecorateContext): Promise<void> {
+  if (root.querySelector(`.${AGENT_QUESTION_CLASS}`)) return;
+  const { text, spans } = questionText(root);
+  if (!/[?？]/.test(text) && (!ctx.getQuestionParser || !/:\s*\n/.test(text))) return;
+  let questions: MarkedQuestion[];
+  if (ctx.getQuestionParser) {
+    try {
+      questions = (await ctx.getQuestionParser().parse(text)).map(modelQuestion);
+    } catch {
+      questions = findAgentQuestions(text).map((q) => ({
+        ...q,
+        options: [],
+        defaultIndex: null,
+        multiSelect: false,
+      }));
+    }
+  } else {
+    questions = findAgentQuestions(text).map((q) => ({
+      ...q,
+      options: [],
+      defaultIndex: null,
+      multiSelect: false,
+    }));
+  }
+  if (!root.isConnected) return;
+  for (const q of questions.reverse()) addQuestion(root, spans, q);
 }
 
 const questionIds = new WeakMap<Element, Map<number, string>>();
@@ -339,7 +413,7 @@ async function decorateOnce(
   };
 
   await step('links', () => markLinks(root));
-  if (ctx.questions) await step('questions', () => markQuestions(root));
+  if (ctx.questions) await step('questions', () => markQuestions(root, ctx));
   await step('github', () => markGithub(root, ctx));
   await step('times', () => markTimes(root, ctx));
 

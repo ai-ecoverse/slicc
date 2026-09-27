@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 
-import type { SliccAgentMessage, SliccHoverCard, SliccUserMessage } from '@slicc/webcomponents';
+import type {
+  SliccAgentMessage,
+  SliccHoverCard,
+  SliccInputCard,
+  SliccUserMessage,
+} from '@slicc/webcomponents';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@slicc/webcomponents';
+import type { AgentQuestionParser } from '../../src/core/agent-question-model.js';
 import { formatPathHints, TOOL_PATH_HINTS_ATTR } from '../../src/core/tool-call-paths.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import {
@@ -47,7 +53,12 @@ let card: SliccHoverCard;
 
 function setup(
   thread: HTMLElement,
-  opts: { readOnly?: boolean; fetchHtml?: string } = {}
+  opts: {
+    readOnly?: boolean;
+    fetchHtml?: string;
+    questionParser?: AgentQuestionParser;
+    inputCard?: SliccInputCard;
+  } = {}
 ): { dispose: () => void; fetchFn: ReturnType<typeof vi.fn> } {
   const fetchFn = vi.fn(async () => ({
     status: 200,
@@ -58,12 +69,16 @@ function setup(
   }));
   const dispose = wireMentionPreviews({
     thread,
-    isReadOnly: () => opts.readOnly === true,
+    inputCard: opts.inputCard,
+    isReadOnly: () =>
+      opts.readOnly === true ||
+      opts.inputCard?.closest('slicc-composer')?.hasAttribute('hidden') === true,
     log: silentLog,
     getFetch: () => fetchFn,
     getTimeParser: async () => ({
       parseMany: async (texts) => texts.map(() => ({ spans: [], occurrences: [], rrules: [] })),
     }),
+    getQuestionParser: opts.questionParser ? () => opts.questionParser! : undefined,
     getCard: () => card,
     hoverDelayMs: 0,
   });
@@ -299,6 +314,146 @@ describe('wireMentionPreviews', () => {
     span.click();
     await settle();
     expect(card.querySelector('slicc-question-prompt')?.getAttribute('answer')).toBe('yes');
+    dispose();
+  });
+
+  it('renders model options in the transcript and answers without opening a card', async () => {
+    const thread = document.createElement('div');
+    document.body.append(thread);
+    const text = 'Should I merge now or wait for CI?';
+    const bubble = agent(`<p>${text}</p>`, 'choice-1');
+    thread.append(bubble);
+    const parse = vi.fn(async () => [
+      {
+        prompt: text,
+        kind: 'either_or',
+        options: ['Merge now', 'Wait for CI'],
+        default: 1,
+        multiSelect: false,
+        span: [0, text.length] as [number, number],
+      },
+    ]);
+    const { dispose } = setup(thread, { questionParser: { parse } });
+    await settle();
+    expect(parse).toHaveBeenCalledWith(text);
+    const inline = bubble.querySelector('slicc-question-prompt[inline]');
+    expect(inline?.getAttribute('kind')).toBe('choice');
+    expect(inline?.shadowRoot?.textContent).toContain('Wait for CI');
+    expect(card.open).toBe(false);
+    const answers: AgentQuestionAnswerDetail[] = [];
+    thread.addEventListener(AGENT_QUESTION_ANSWER_EVENT, (event) =>
+      answers.push((event as CustomEvent<AgentQuestionAnswerDetail>).detail)
+    );
+    (inline?.shadowRoot?.querySelectorAll('button[part="choice"]')[1] as HTMLButtonElement).click();
+    expect(answers).toEqual([
+      { question: text, kind: 'choice', answer: 'Wait for CI', messageId: 'choice-1' },
+    ]);
+    expect(inline?.getAttribute('state')).toBe('answered');
+    dispose();
+  });
+
+  it('shows model choices in the composer and clears them when answered or stale', async () => {
+    const thread = document.createElement('div');
+    const composer = document.createElement('slicc-composer');
+    const inputCard = document.createElement('slicc-input-card') as SliccInputCard;
+    composer.append(inputCard);
+    document.body.append(thread, composer);
+    const question = 'Should I merge now or wait for CI?';
+    const bubble = agent(`<p>${question}</p>`, 'choice-composer');
+    thread.append(bubble);
+    const parse = vi.fn(async () => [
+      {
+        prompt: question,
+        kind: 'either_or',
+        options: ['Merge now', 'Wait for CI'],
+        default: 1,
+        multiSelect: false,
+        span: [0, question.length] as [number, number],
+      },
+    ]);
+    const { dispose } = setup(thread, { questionParser: { parse }, inputCard });
+    await settle();
+    const source = bubble.querySelector('slicc-question-prompt');
+    expect(source?.hasAttribute('hidden')).toBe(true);
+    const inComposer = () => inputCard.querySelector('slicc-question-prompt');
+    expect(inComposer()?.shadowRoot?.textContent).toContain('Wait for CI');
+    expect(inComposer()?.getAttribute('composer')).toBe('');
+    inputCard.value = 'Keep my draft';
+    const answers: AgentQuestionAnswerDetail[] = [];
+    thread.addEventListener(AGENT_QUESTION_ANSWER_EVENT, (event) =>
+      answers.push((event as CustomEvent<AgentQuestionAnswerDetail>).detail)
+    );
+    (
+      inComposer()?.shadowRoot?.querySelectorAll('button[part="choice"]')[1] as HTMLButtonElement
+    ).click();
+    expect(answers).toEqual([
+      { question, kind: 'choice', answer: 'Wait for CI', messageId: 'choice-composer' },
+    ]);
+    expect(inComposer()).toBeNull();
+    expect(inputCard.value).toBe('Keep my draft');
+    expect(bubble.querySelector('.agent-question')?.hasAttribute(QUESTION_ANSWERED_ATTR)).toBe(
+      true
+    );
+
+    const next = agent('<p>Should I open another PR?</p>', 'next-question');
+    thread.append(next);
+    await settle();
+    expect(inComposer()).not.toBeNull();
+    composer.setAttribute('hidden', '');
+    await settle();
+    expect(inComposer()).toBeNull();
+    composer.removeAttribute('hidden');
+    await settle();
+    expect(inComposer()).not.toBeNull();
+    inputCard.setAttribute('disabled', '');
+    await settle();
+    expect(inComposer()).toBeNull();
+    inputCard.removeAttribute('disabled');
+    await settle();
+    expect(inComposer()).not.toBeNull();
+    thread.append(user('I will handle it'));
+    await settle();
+    expect(inComposer()).toBeNull();
+    dispose();
+    expect(source?.hasAttribute('hidden')).toBe(false);
+  });
+
+  it('keeps another composer question when a question is answered from its hover card', async () => {
+    const thread = document.createElement('div');
+    const composer = document.createElement('slicc-composer');
+    const inputCard = document.createElement('slicc-input-card') as SliccInputCard;
+    composer.append(inputCard);
+    document.body.append(thread, composer);
+    const first = 'Should I merge now?';
+    const second = 'Should I open a follow-up PR?';
+    const bubble = agent(`<p>${first}</p><p>${second}</p>`, 'two-questions');
+    thread.append(bubble);
+    const parse = vi.fn(async (text: string) =>
+      [first, second].map((prompt) => {
+        const start = text.indexOf(prompt);
+        return {
+          prompt,
+          kind: 'yes_no' as const,
+          options: ['Yes', 'No'],
+          default: null,
+          multiSelect: false,
+          span: [start, start + prompt.length] as [number, number],
+        };
+      })
+    );
+    const { dispose } = setup(thread, { questionParser: { parse }, inputCard });
+    await settle();
+    expect(inputCard.querySelectorAll('slicc-question-prompt')).toHaveLength(2);
+    (bubble.querySelectorAll('.agent-question')[0] as HTMLElement).click();
+    await settle();
+    (
+      card
+        .querySelector('slicc-question-prompt')
+        ?.shadowRoot?.querySelector('button[part="choice"]') as HTMLButtonElement
+    ).click();
+    const remaining = inputCard.querySelectorAll('slicc-question-prompt');
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.getAttribute('question')).toBe(second);
     dispose();
   });
 

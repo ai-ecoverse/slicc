@@ -8,10 +8,12 @@ import '../chat/slicc-chat-thread.js';
 import '../chat/slicc-delegation-line.js';
 import '../chat/slicc-dip.js';
 import '../chat/slicc-lick-card.js';
+import { SliccQuestionPrompt } from '../chat/slicc-question-prompt.js';
 import '../chat/slicc-user-message.js';
 import '../composer/slicc-composer.js';
 import '../composer/slicc-composer-meta.js';
 import '../composer/slicc-input-card.js';
+import type { SliccInputCard } from '../composer/slicc-input-card.js';
 import '../dock/slicc-dock.js';
 import '../freezer/slicc-freezer-card.js';
 import '../freezer/slicc-freezer-new.js';
@@ -457,6 +459,76 @@ export default meta;
 type Story = StoryObj;
 
 export const Collapsed: Story = { render: () => app({ workbench: false, freezer: false }) };
+
+function questionConversation(placement: 'message' | 'composer'): HTMLElement {
+  const frame = app({ workbench: false, freezer: false });
+  const thread = frame.querySelector('slicc-chat-thread');
+  if (!thread) return frame;
+
+  const user = (text: string): HTMLElement => {
+    const message = el('slicc-user-message');
+    message.textContent = text;
+    return message;
+  };
+  const agent = (text: string): HTMLElement => {
+    const message = el('slicc-agent-message');
+    message.append(h('p', null, text));
+    return message;
+  };
+
+  const question = 'Should I merge now or wait for CI?';
+  const latest = el('slicc-agent-message');
+  latest.append(
+    h('p', null, 'The pull request is ready. I ran the targeted checks and added screenshots.'),
+    h('p', null, h('span', { class: 'agent-question', tabindex: '0' }, question))
+  );
+  const prompt = new SliccQuestionPrompt();
+  for (const [name, value] of Object.entries({
+    question,
+    kind: 'choice',
+    state: 'open',
+    'data-question-options': JSON.stringify(['Merge now', 'Wait for CI']),
+    'data-question-default': '1',
+  })) {
+    prompt.setAttribute(name, value);
+  }
+  prompt.addEventListener('question-answer', (event) => {
+    const { answer } = (event as CustomEvent<{ answer: string }>).detail;
+    prompt.setAttribute('answer', answer);
+    prompt.setAttribute('state', 'answered');
+    if (placement === 'composer') inputCard?.setQuestionContent(null);
+  });
+  const inputCard = frame.querySelector('slicc-input-card') as SliccInputCard | null;
+  if (placement === 'composer') {
+    prompt.setAttribute('composer', '');
+    inputCard?.setQuestionContent(prompt);
+  } else {
+    prompt.setAttribute('inline', '');
+    latest.append(prompt);
+  }
+
+  const inner = thread.querySelector('.slicc-thread__inner');
+  inner?.replaceChildren(
+    el('slicc-day-separator', { label: 'Today' }),
+    user('Can you review the changes to the chat UI?'),
+    agent('I found one spacing issue in the transcript and adjusted the composer alignment.'),
+    user('How does it look in the dark theme?'),
+    agent(
+      'The contrast holds up. I also checked the question controls beside the rest of the chat.'
+    ),
+    user('Please open a pull request and include screenshots.'),
+    latest
+  );
+  return frame;
+}
+
+export const QuestionInConversation: Story = {
+  render: () => questionConversation('message'),
+};
+
+export const QuestionInComposer: Story = {
+  render: () => questionConversation('composer'),
+};
 
 export const Open: Story = { render: () => app({ workbench: true, freezer: true }) };
 

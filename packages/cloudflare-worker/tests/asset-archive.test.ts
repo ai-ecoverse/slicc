@@ -8,6 +8,13 @@ describe('matchHashedAssetPath', () => {
     expect(matchHashedAssetPath('/assets/entry-abcd1234.js.map')).toBe(true);
     expect(matchHashedAssetPath('/assets/logo-DEADBEEF.svg')).toBe(true);
     expect(matchHashedAssetPath('/assets/AdobeClean-Regular-CVsq5gF7.otf')).toBe(true);
+    expect(matchHashedAssetPath('/assets/gpu-ask-0123456789abcdef/v13/member0.onnx')).toBe(true);
+    expect(matchHashedAssetPath('/assets/gpu-ask-0123456789abcdef/runtime/inference.wasm')).toBe(
+      true
+    );
+    expect(matchHashedAssetPath('/assets/gpu-ask-0123456789abcdef/runtime/inference.mjs')).toBe(
+      true
+    );
   });
   it('rejects non-asset / un-hashed / traversal / encoded paths', () => {
     expect(matchHashedAssetPath('/index.html')).toBe(false);
@@ -16,6 +23,8 @@ describe('matchHashedAssetPath', () => {
     expect(matchHashedAssetPath('/assets/../secret-abcd1234.js')).toBe(false);
     expect(matchHashedAssetPath('/assets/a%2Fb-abcd1234.js')).toBe(false);
     expect(matchHashedAssetPath('/other/x-abcd1234.js')).toBe(false);
+    expect(matchHashedAssetPath('/assets/gpu-ask/v13/member0.onnx')).toBe(false);
+    expect(matchHashedAssetPath('/assets/gpu-ask-0123456789abcdef/v13/other.txt')).toBe(false);
   });
 });
 

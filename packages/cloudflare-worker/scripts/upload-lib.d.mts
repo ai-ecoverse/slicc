@@ -1,3 +1,5 @@
+export declare function listAssetFiles(dir: string, prefix?: string): Promise<string[]>;
+
 export declare function assertAllHashed(names: string[]): void;
 
 export interface BulkManifestEntry {

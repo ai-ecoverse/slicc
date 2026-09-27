@@ -39,6 +39,16 @@ slicc-input-card .ta {
   max-height: 140px;
   overflow-y: hidden;
 }
+slicc-input-card .slicc-input-card__question {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 11px;
+}
+slicc-input-card .slicc-input-card__question[hidden] {
+  display: none;
+}
 slicc-input-card .ta::placeholder {
   color: var(--txt-3);
   /* Long (LLM-suggested) placeholders ellipsize instead of clipping when
@@ -81,6 +91,7 @@ export class SliccInputCard extends HTMLElement {
   static readonly observedAttributes = ['value', 'placeholder', 'suggestion', 'disabled'];
 
   #card!: HTMLDivElement;
+  #questionRegion!: HTMLDivElement;
   #textarea!: HTMLTextAreaElement;
   #toolbar!: HTMLDivElement;
   #built = false;
@@ -150,6 +161,14 @@ export class SliccInputCard extends HTMLElement {
     this.value = '';
   }
 
+  setQuestionContent(content: HTMLElement | HTMLElement[] | null): void {
+    this.#build();
+    const nodes = content === null ? [] : Array.isArray(content) ? content : [content];
+    this.#questionRegion.replaceChildren(...nodes);
+    this.#questionRegion.hidden = nodes.length === 0;
+    this.toggleAttribute('has-question', nodes.length > 0);
+  }
+
   #build(): void {
     if (this.#built) return;
     this.#built = true;
@@ -163,6 +182,11 @@ export class SliccInputCard extends HTMLElement {
     this.#card = doc.createElement('div');
     this.#card.className = 'slicc-input-card__card';
     this.#card.setAttribute('part', 'card');
+
+    this.#questionRegion = doc.createElement('div');
+    this.#questionRegion.className = 'slicc-input-card__question';
+    this.#questionRegion.setAttribute('part', 'question');
+    this.#questionRegion.hidden = true;
 
     this.#textarea = doc.createElement('textarea');
     this.#textarea.className = 'ta';
@@ -179,7 +203,7 @@ export class SliccInputCard extends HTMLElement {
       this.#toolbar.append(h('slicc-add-menu'), h('slicc-send-button'));
     }
 
-    this.#card.append(this.#textarea, this.#toolbar);
+    this.#card.append(this.#questionRegion, this.#textarea, this.#toolbar);
     this.appendChild(this.#card);
 
     this.#textarea.addEventListener('input', this.#onInput);

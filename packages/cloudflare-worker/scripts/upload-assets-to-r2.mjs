@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
-import { runBulkUploads, totalFileBytes } from './upload-lib.mjs';
+import { listAssetFiles, runBulkUploads, totalFileBytes } from './upload-lib.mjs';
 
 function parseArgs(args) {
   const [bucket, ...rest] = args;
@@ -56,7 +55,7 @@ async function main() {
 
     let files;
     try {
-      files = await fs.readdir(assetDir);
+      files = await listAssetFiles(assetDir);
     } catch (err) {
       console.error(`Failed to read directory ${assetDir}:`, err.message);
       process.exit(1);
