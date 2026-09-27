@@ -8,7 +8,8 @@ import {
   CdpReconnectBackoffError,
   nextCdpReconnectDelayMs,
 } from './cdp-reconnect-policy.js';
-import { raceAbort, throwIfAborted } from './command-abort.js';
+import { throwIfAborted } from './command-abort.js';
+import { FrameContextRegistry } from './frame-context-registry.js';
 import { HarRecorder } from './har-recorder.js';
 import { MAX_TAB_SESSIONS, SessionCache, type TabSession } from './session-cache.js';
 import type {
@@ -19,6 +20,7 @@ import type {
   ViewportOverride,
 } from './tab-handle.js';
 import { TabHandle } from './tab-handle.js';
+import { TabLockManager, type TabLockStats } from './tab-lock-manager.js';
 import type { CDPTransport } from './transport.js';
 import type {
   CDPConnectOptions,
@@ -32,6 +34,9 @@ import type {
   WindowBoundsInput,
   WindowState,
 } from './types.js';
+import { ViewportOverrideStore } from './viewport-override-store.js';
+
+export type { TabLockStats } from './tab-lock-manager.js';
 
 export interface TrayTargetProvider {
   getTargets(): TrayTargetEntry[];
@@ -58,43 +63,8 @@ function isStaleSessionError(err: unknown): boolean {
   return STALE_SESSION_ERRORS.some((needle) => message.includes(needle));
 }
 
-function statsOf(counters: TabLockCounters | undefined): TabLockStats {
-  const c = counters ?? { queueDepth: 0, tabWaitMs: 0, bridgeWaitMs: 0, acquisitions: 0 };
-  return {
-    queueDepth: c.queueDepth,
-    totalWaitMs: c.tabWaitMs + c.bridgeWaitMs,
-    tabWaitMs: c.tabWaitMs,
-    bridgeWaitMs: c.bridgeWaitMs,
-    acquisitions: c.acquisitions,
-  };
-}
-
-interface BridgeHold {
-  release: () => void;
-  owner: symbol;
-  targetId: string | null;
-}
-
 export interface WithTabOptions {
   signal?: AbortSignal | undefined;
-}
-
-export interface TabLockStats {
-  queueDepth: number;
-
-  totalWaitMs: number;
-
-  tabWaitMs: number;
-
-  bridgeWaitMs: number;
-  acquisitions: number;
-}
-
-interface TabLockCounters {
-  queueDepth: number;
-  tabWaitMs: number;
-  bridgeWaitMs: number;
-  acquisitions: number;
 }
 
 export type SessionChangeCallback = (
@@ -178,7 +148,7 @@ export class BrowserAPI implements TabHost {
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
 
-  private _frameContexts = new Map<string, Map<string, number>>();
+  private readonly frames = new FrameContextRegistry();
 
   private readonly sessions = new SessionCache(MAX_TAB_SESSIONS, (targetId, entry) => {
     log.debug('Evicting least-recently-used CDP session', { targetId });
@@ -189,15 +159,9 @@ export class BrowserAPI implements TabHost {
 
   private _sessionReplacedSubs = new Map<string, Set<SessionChangeCallback>>();
 
-  private _tabLocks = new Map<string, Promise<void>>();
+  private readonly locks = new TabLockManager();
 
-  private _bridgeLock: Promise<void> = Promise.resolve();
-
-  private _bridgeHold: BridgeHold | null = null;
-
-  private _bridgeWaiters = 0;
-  private _viewportOverrides = new Map<string, ViewportOverride>();
-  private _tabLockStats = new Map<string, TabLockCounters>();
+  private readonly viewports = new ViewportOverrideStore();
   private _onSessionChange?: SessionChangeCallback | undefined;
 
   private _lastConnectOptions: Partial<CDPConnectOptions> | null = null;
@@ -249,7 +213,7 @@ export class BrowserAPI implements TabHost {
       | undefined;
     const frameId = context?.auxData?.frameId;
     if (context?.auxData?.isDefault === true && frameId && typeof context.id === 'number') {
-      this.frameContexts(sessionId, 'main').set(frameId, context.id);
+      this.frames.for(sessionId, 'main').set(frameId, context.id);
     }
   };
   private readonly handleExecutionContextDestroyed = (params: CdpPayload): void => {
@@ -257,14 +221,14 @@ export class BrowserAPI implements TabHost {
     if (!sessionId) return;
     const contextId = params['executionContextId'];
     if (typeof contextId !== 'number') return;
-    const cache = this._frameContexts.get(`main:${sessionId}`);
+    const cache = this.frames.peek(sessionId, 'main');
     if (!cache) return;
     for (const [frameId, cachedId] of cache) if (cachedId === contextId) cache.delete(frameId);
   };
   private readonly handleExecutionContextsCleared = (params: CdpPayload): void => {
     const sessionId = this.eventSessionId(params);
     if (!sessionId) return;
-    this._frameContexts.get(`main:${sessionId}`)?.clear();
+    this.frames.peek(sessionId, 'main')?.clear();
   };
 
   private eventSessionId(params: CdpPayload): string | null {
@@ -354,26 +318,15 @@ export class BrowserAPI implements TabHost {
     opts?: WithTabOptions
   ): Promise<T> {
     const signal = opts?.signal;
-    throwIfAborted(signal, `starting a command on tab ${targetId}`);
-    const counters = this.tabCounters(targetId);
-    counters.queueDepth += 1;
-    let releaseTab: () => void;
-    try {
-      releaseTab = await this.acquireTabLock(targetId, counters, signal);
-    } catch (err) {
-      counters.queueDepth -= 1;
-      throw err;
-    }
-
-    const unpin = this.sessions.pin(targetId);
-    try {
-      counters.acquisitions += 1;
-      return await this.runOnTab(targetId, fn, signal);
-    } finally {
-      unpin();
-      counters.queueDepth -= 1;
-      releaseTab();
-    }
+    return this.locks.holdTabLock(targetId, signal, async (counters) => {
+      const unpin = this.sessions.pin(targetId);
+      try {
+        counters.acquisitions += 1;
+        return await this.runOnTab(targetId, fn, signal);
+      } finally {
+        unpin();
+      }
+    });
   }
 
   private async runOnTab<T>(
@@ -399,7 +352,7 @@ export class BrowserAPI implements TabHost {
     fn: (tab: TabPage) => Promise<T>,
     signal?: AbortSignal
   ): Promise<T> {
-    const tab = await this.attachHandle(targetId, this.reentrantOwner(targetId), signal);
+    const tab = await this.attachHandle(targetId, this.locks.reentrantOwner(targetId), signal);
 
     throwIfAborted(signal, `about to run a command on tab ${targetId}`);
     const sessionId = tab.sessionId;
@@ -447,145 +400,31 @@ export class BrowserAPI implements TabHost {
   }
 
   getTabLockStats(targetId?: string): TabLockStats {
-    if (targetId !== undefined) return statsOf(this._tabLockStats.get(targetId));
-    const total: TabLockCounters = {
-      queueDepth: 0,
-      tabWaitMs: 0,
-      bridgeWaitMs: 0,
-      acquisitions: 0,
-    };
-    for (const c of this._tabLockStats.values()) {
-      total.queueDepth += c.queueDepth;
-      total.tabWaitMs += c.tabWaitMs;
-      total.bridgeWaitMs += c.bridgeWaitMs;
-      total.acquisitions += c.acquisitions;
-    }
-    return statsOf(total);
-  }
-
-  private tabCounters(targetId: string): TabLockCounters {
-    let counters = this._tabLockStats.get(targetId);
-    if (!counters) {
-      counters = { queueDepth: 0, tabWaitMs: 0, bridgeWaitMs: 0, acquisitions: 0 };
-      this._tabLockStats.set(targetId, counters);
-    }
-    return counters;
-  }
-
-  private async acquireTabLock(
-    targetId: string,
-    counters: TabLockCounters,
-    signal?: AbortSignal
-  ): Promise<() => void> {
-    let release!: () => void;
-    const next = new Promise<void>((r) => {
-      release = r;
-    });
-    const prev = this._tabLocks.get(targetId);
-    this._tabLocks.set(targetId, next);
-    const drop = (): void => {
-      if (this._tabLocks.get(targetId) === next) this._tabLocks.delete(targetId);
-      release();
-    };
-    if (prev) {
-      const waitStart = Date.now();
-      try {
-        await raceAbort(prev, signal, `queued for the lock on tab ${targetId}`);
-      } catch (err) {
-        counters.tabWaitMs += Date.now() - waitStart;
-        void prev.then(drop, drop);
-        throw err;
-      }
-      counters.tabWaitMs += Date.now() - waitStart;
-    }
-    return drop;
-  }
-
-  private async acquireBridgeLock(opts?: {
-    owner?: symbol | undefined;
-
-    targetId?: string | null;
-    counters?: TabLockCounters;
-  }): Promise<() => void> {
-    if (opts?.owner !== undefined && this._bridgeHold?.owner === opts.owner) {
-      return () => undefined;
-    }
-    let release!: () => void;
-    const next = new Promise<void>((r) => {
-      release = r;
-    });
-    const prev = this._bridgeLock;
-    const contended = this._bridgeHold !== null || this._bridgeWaiters > 0;
-    this._bridgeLock = next;
-    if (contended) {
-      this._bridgeWaiters += 1;
-      const waitStart = Date.now();
-      try {
-        await prev;
-      } finally {
-        this._bridgeWaiters -= 1;
-      }
-      if (opts?.counters) opts.counters.bridgeWaitMs += Date.now() - waitStart;
-    }
-    const hold: BridgeHold = {
-      release,
-      owner: Symbol('bridge-hold'),
-      targetId: opts?.targetId ?? null,
-    };
-    this._bridgeHold = hold;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-
-      if (this._bridgeHold === hold) this._bridgeHold = null;
-      release();
-    };
-  }
-
-  private reentrantOwner(targetId: string | null): symbol | undefined {
-    const hold = this._bridgeHold;
-    if (!hold || targetId === null || hold.targetId !== targetId) return undefined;
-    return hold.owner;
+    return this.locks.getStats(targetId);
   }
 
   async runGlobal<T>(targetId: string, fn: () => Promise<T>): Promise<T> {
-    const release = await this.acquireBridgeLock({
-      owner: this.reentrantOwner(targetId),
-      targetId,
-    });
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
+    return this.locks.runGlobal(targetId, fn);
   }
 
   viewportOverride(targetId: string): ViewportOverride | undefined {
-    return this._viewportOverrides.get(targetId);
+    return this.viewports.get(targetId);
   }
 
   recordViewportOverride(targetId: string, vp: ViewportOverride): void {
-    this._viewportOverrides.set(targetId, vp);
+    this.viewports.set(targetId, vp);
   }
 
   frameContexts(sessionId: string, world: ExecutionWorld): Map<string, number> {
-    const key = `${world}:${sessionId}`;
-    let cache = this._frameContexts.get(key);
-    if (!cache) {
-      cache = new Map();
-      this._frameContexts.set(key, cache);
-    }
-    return cache;
+    return this.frames.for(sessionId, world);
   }
 
   private dropFrameContexts(sessionId: string): void {
-    this._frameContexts.delete(`main:${sessionId}`);
-    this._frameContexts.delete(`isolated:${sessionId}`);
+    this.frames.drop(sessionId);
   }
 
   private async reapplyViewportOverride(targetId: string, entry: TabSession): Promise<void> {
-    const vp = this._viewportOverrides.get(targetId);
+    const vp = this.viewports.get(targetId);
     if (!vp) return;
     try {
       await this.handleFor(targetId, entry).applyViewportOverride(vp);
@@ -847,7 +686,7 @@ export class BrowserAPI implements TabHost {
 
   async closePage(targetId: string): Promise<void> {
     await this.ensureConnected();
-    this._viewportOverrides.delete(targetId);
+    this.viewports.delete(targetId);
 
     await this.dropSession(targetId);
 
@@ -896,7 +735,7 @@ export class BrowserAPI implements TabHost {
   }
 
   async attachToPage(targetId: string): Promise<string> {
-    return this.attachToPageOwned(targetId, this.reentrantOwner(targetId));
+    return this.attachToPageOwned(targetId, this.locks.reentrantOwner(targetId));
   }
 
   private async attachToPageOwned(
@@ -904,10 +743,10 @@ export class BrowserAPI implements TabHost {
     owner: symbol | undefined,
     signal?: AbortSignal
   ): Promise<string> {
-    const release = await this.acquireBridgeLock({
+    const release = await this.locks.acquireBridgeLock({
       owner,
       targetId,
-      counters: this.tabCounters(targetId),
+      counters: this.locks.countersFor(targetId),
     });
     try {
       await this.ensureConnected();
@@ -998,12 +837,12 @@ export class BrowserAPI implements TabHost {
   }
 
   async wakeCapture(tab: TabHandle, params: CdpPayload): Promise<CdpPayload> {
-    const release = await this.acquireBridgeLock({
-      owner: this.reentrantOwner(tab.targetId),
+    const release = await this.locks.acquireBridgeLock({
+      owner: this.locks.reentrantOwner(tab.targetId),
       targetId: tab.targetId,
     });
     try {
-      return await this.wakeCaptureLocked(tab, params, this._bridgeHold?.owner);
+      return await this.wakeCaptureLocked(tab, params, this.locks.liveOwner());
     } finally {
       release();
     }
