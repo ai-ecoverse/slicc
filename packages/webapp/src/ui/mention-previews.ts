@@ -226,7 +226,12 @@ interface QuestionTextSpan {
 }
 
 function modelQuestion(q: PredictedQuestion): MarkedQuestion {
-  const options = q.options.filter(Boolean);
+  const kept = q.options
+    .map((option, index) => ({ option, index }))
+    .filter(({ option }) => Boolean(option));
+  const options = kept.map(({ option }) => option);
+  const defaultIndex =
+    q.default === null ? null : kept.findIndex(({ index }) => index === q.default);
   return {
     start: q.span[0],
     end: q.span[1],
@@ -238,7 +243,7 @@ function modelQuestion(q: PredictedQuestion): MarkedQuestion {
           ? 'yes-no'
           : (classifyQuestion(q.prompt) ?? 'text'),
     options,
-    defaultIndex: q.default,
+    defaultIndex: defaultIndex === -1 ? null : defaultIndex,
     multiSelect: q.multiSelect,
   };
 }

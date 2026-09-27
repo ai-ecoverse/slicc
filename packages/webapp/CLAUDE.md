@@ -41,7 +41,7 @@ only here.
   (`getMimeType()` SERVES vs `sniffFileType()` READS)
 - Mention previews (links, GitHub refs, times, agent questions) — `ui/mention-previews.ts` +
   `ui/wc/wire-mention-previews.ts`: links fetch on hover; questions use the lazy `gpu-ask.js` worker
-  and show answer controls inline; answers become a `question` lick
+  and show answer controls in the composer; answers become a `question` lick
   (`docs/webapp-details.md`)
 
 ## Never-Rules

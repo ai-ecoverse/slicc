@@ -38,7 +38,10 @@ export function loadAgentQuestionParser(): AgentQuestionParser {
   parser = {
     parse(text) {
       const id = ++nextId;
-      const baseUrl = new URL('gpu-ask/', new URL(import.meta.env.BASE_URL, location.origin)).href;
+      const baseUrl = new URL(
+        __GPU_ASK_ASSET_BASE__,
+        new URL(import.meta.env.BASE_URL, location.origin)
+      ).href;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         worker.postMessage({ id, text, baseUrl } satisfies QuestionWorkerIn);

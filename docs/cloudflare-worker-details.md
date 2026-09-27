@@ -320,7 +320,8 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
   non-electron SPA responses — per-document cross-origin isolation (SharedArrayBuffer
   for vpod guest networking) without COOP/COEP. The cherry and electron branches must
   stay header-free: they are always embedded and never need SAB.
-- `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys;
+- `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys, including
+  nested `gpu-ask-<hash>/` model and WASM files requested by older tabs;
   `serveAssetWithArchiveFallback` tries `ASSETS`, then R2, then stale-asset reload;
   bucket GC is 14 days.
 

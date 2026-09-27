@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
-import { gpuAskAssetsPlugin } from './vite-plugins/gpu-ask-assets';
+import { gpuAskAssetBasePath, gpuAskAssetsPlugin } from './vite-plugins/gpu-ask-assets';
 import { piAiModelDataGeneratedAt } from './vite-plugins/pi-ai-model-data';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
@@ -499,6 +499,7 @@ export default defineConfig(({ mode }) => ({
     stripFfmpegCoreCdnLiteralPlugin(),
   ],
   define: {
+    __GPU_ASK_ASSET_BASE__: JSON.stringify(gpuAskAssetBasePath),
     __DEV__: JSON.stringify(mode !== 'production'),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),

@@ -12,6 +12,7 @@ import {
   GITHUB_MENTION_CLASS,
   githubRefOf,
   PREVIEW_ATTR,
+  QUESTION_DEFAULT_ATTR,
   QUESTION_ID_ATTR,
   QUESTION_KIND_ATTR,
   QUESTION_OPTIONS_ATTR,
@@ -164,6 +165,32 @@ describe('decorateMentions — questions', () => {
       JSON.stringify(['Merge now', 'Wait for CI'])
     );
     expect(root.textContent).toBe('Would you like me to:Merge nowWait for CI');
+  });
+
+  it('keeps the recommended choice aligned when empty model options are removed', async () => {
+    const question = 'Should I merge now or wait for CI?';
+    const root = body(`<p>${question}</p>`);
+    await decorateMentions(root, {
+      repoHints: [],
+      questions: true,
+      getQuestionParser: () => ({
+        parse: async () => [
+          {
+            prompt: question,
+            kind: 'either_or',
+            options: ['', 'Merge now', 'Wait for CI'],
+            default: 2,
+            multiSelect: false,
+            span: [0, question.length],
+          },
+        ],
+      }),
+    });
+    const controls = root.querySelector('slicc-question-prompt');
+    expect(controls?.getAttribute(QUESTION_OPTIONS_ATTR)).toBe(
+      JSON.stringify(['Merge now', 'Wait for CI'])
+    );
+    expect(controls?.getAttribute(QUESTION_DEFAULT_ATTR)).toBe('1');
   });
 
   it('wraps each question, across inline elements, with one id and one tab stop', async () => {

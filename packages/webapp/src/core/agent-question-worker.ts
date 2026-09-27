@@ -25,12 +25,14 @@ async function predict({ id, text, baseUrl }: QuestionWorkerIn): Promise<void> {
       mjs: `${baseUrl}runtime/inference.mjs`,
     };
     ort.env.wasm.numThreads = 1;
-    model ??= loadAsk(`${baseUrl}v13/`, { ort: ort as never });
+    model ??= loadAsk(`${baseUrl}v13/`, { ort: ort as never }).catch((error: unknown) => {
+      model = undefined;
+      throw error;
+    });
     const { questions, text: normalized } = await parse(await model, text);
     if (normalized !== text) throw new Error('Model normalization changed question offsets');
     self.postMessage({ id, questions } satisfies QuestionWorkerOut);
   } catch (error) {
-    model = undefined;
     self.postMessage({
       id,
       error: error instanceof Error ? error.message : String(error),
