@@ -117,11 +117,35 @@ async function openCdpClient(webSocketDebuggerUrl: string): Promise<CdpClient> {
 
 /**
  * HTTP-backed CdpLike. Implements Target.getTargets via the CDP HTTP /json
- * endpoint. Target.attachToTarget + Page.reload are sent over WebSocket.
+ * endpoint. Target.attachToTarget + Page.reload / Page.navigate ride the
+ * page's own WebSocket (matched by target id when attaching).
  */
 export function createHttpCdp(cdpPort: number): CdpLike {
   let cachedClient: CdpClient | null = null;
   let cachedWebSocketUrl: string | null = null;
+  /** Page target id → debugger WebSocket URL from the last `/json` list. */
+  let pageWsById = new Map<string, string>();
+  let fallbackPageWs: string | null = null;
+
+  const dropCachedClient = (): void => {
+    cachedClient?.close();
+    cachedClient = null;
+    cachedWebSocketUrl = null;
+  };
+
+  const ensureClient = async (preferredWs: string | null): Promise<CdpClient> => {
+    // Prefer an explicit target ws (attach). Otherwise keep the open client so
+    // Page.reload / Page.navigate after attach stay on the same socket.
+    const ws = preferredWs ?? cachedWebSocketUrl ?? fallbackPageWs;
+    if (!ws) {
+      throw new Error('createHttpCdp: no ws url cached — call Target.getTargets first');
+    }
+    if (cachedClient && cachedWebSocketUrl === ws) return cachedClient;
+    dropCachedClient();
+    cachedClient = await openCdpClient(ws);
+    cachedWebSocketUrl = ws;
+    return cachedClient;
+  };
 
   return {
     async send(method, params, sessionId) {
@@ -133,11 +157,13 @@ export function createHttpCdp(cdpPort: number): CdpLike {
           url: string;
           webSocketDebuggerUrl?: string;
         }>;
-        // Stash the first page's ws url for subsequent send() calls in
-        // the same restartLeader cycle.
-        cachedWebSocketUrl =
-          list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)?.webSocketDebuggerUrl ??
-          null;
+        pageWsById = new Map();
+        for (const t of list) {
+          if (t.type === 'page' && t.webSocketDebuggerUrl) {
+            pageWsById.set(t.id, t.webSocketDebuggerUrl);
+          }
+        }
+        fallbackPageWs = pageWsById.values().next().value ?? null;
         return {
           targetInfos: list.map((t) => ({
             id: t.id,
@@ -147,21 +173,18 @@ export function createHttpCdp(cdpPort: number): CdpLike {
           })),
         };
       }
-      if (!cachedClient) {
-        if (!cachedWebSocketUrl) {
-          throw new Error('createHttpCdp: no ws url cached — call Target.getTargets first');
-        }
-        cachedClient = await openCdpClient(cachedWebSocketUrl);
+      let preferredWs: string | null = null;
+      if (method === 'Target.attachToTarget') {
+        const targetId = (params as { targetId?: string } | undefined)?.targetId;
+        if (targetId) preferredWs = pageWsById.get(targetId) ?? null;
       }
+      const client = await ensureClient(preferredWs);
       try {
-        return await cachedClient.send(method, params, sessionId);
+        return await client.send(method, params, sessionId);
       } finally {
-        if (method === 'Page.reload') {
-          // Reload severs the session; drop the client so the next
-          // restartLeader cycle re-opens.
-          cachedClient.close();
-          cachedClient = null;
-          cachedWebSocketUrl = null;
+        // Reload / navigate sever the flat session; drop so the next cycle re-opens.
+        if (method === 'Page.reload' || method === 'Page.navigate') {
+          dropCachedClient();
         }
       }
     },
