@@ -131,6 +131,20 @@ function terminalStdio(lease: TerminalLease, session: WasmSession): Stdio {
   return { fds, collected: () => ({ stdout: '', note: '' }), release: () => lease.release() };
 }
 
+/**
+ * The program's environment: the shell's exports. On the panel terminal,
+ * which is Ghostty's VT core, a `TERM` that is unset or `dumb` becomes
+ * `xterm-256color` (with `COLORTERM=truecolor`), so curses programs use it.
+ */
+function programEnv(ctx: CommandContext, terminal: boolean): Record<string, string> {
+  const env = { ...(ctx.exportedEnv ?? Object.fromEntries(ctx.env)) };
+  if (terminal && (!env.TERM || env.TERM === 'dumb')) {
+    env.TERM = 'xterm-256color';
+    env.COLORTERM ??= 'truecolor';
+  }
+  return env;
+}
+
 function listing(commands: Map<string, WasmCommand>): string {
   const rows = [...commands.values()].sort((a, b) => a.name.localeCompare(b.name));
   const width = Math.max(0, ...rows.map((c) => c.name.length));
@@ -222,7 +236,7 @@ export async function runWasmCommand(
       module: call.module ? ctx.fs.resolvePath(ctx.cwd, call.module) : modulePath(gluePath),
       argv0: call.argv0 ?? gluePath.slice(gluePath.lastIndexOf('/') + 1).replace(/\.js$/, ''),
       args: call.args,
-      env: ctx.exportedEnv ?? Object.fromEntries(ctx.env),
+      env: programEnv(ctx, call.tty === true),
       cwd: ctx.cwd,
       fds,
       signal: ctx.signal,

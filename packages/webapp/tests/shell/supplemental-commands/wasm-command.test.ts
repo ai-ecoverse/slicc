@@ -279,6 +279,7 @@ describe('wasm command', () => {
         release,
       };
       spawn.mockImplementation((opts) => {
+        expect(opts.env).toMatchObject({ TERM: 'xterm-256color', COLORTERM: 'truecolor' });
         const tty = opts.fds.get(0).file.tty;
         expect(opts.fds.get(1).file.tty).toBe(tty);
         expect(opts.fds.get(2).file.tty).toBe(tty);
@@ -307,6 +308,30 @@ describe('wasm command', () => {
       expect(r.stdout).toBe(''); // it went to the screen
       expect(screen.join('')).toBe('hello\r\ntyped\r\n');
       expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a real TERM the shell exports, and leaves piped programs’ env alone', async () => {
+      compile.mockResolvedValue({});
+      const envs: Record<string, string>[] = [];
+      spawn.mockImplementation((opts) => {
+        envs.push(opts.env);
+        return { pid: opts.pid, exited: Promise.resolve(0), kill: vi.fn(), signal: vi.fn() };
+      });
+      const lease = {
+        cols: 80,
+        rows: 24,
+        write: () => {},
+        onInput: () => {},
+        onResize: () => {},
+        release: () => {},
+      };
+      const files = { '/w/sh.js': 'G', '/w/sh.wasm': 'W' };
+      const screen = ctx(files);
+      screen.exportedEnv = { TERM: 'screen-256color' };
+      await runWasmCommand(['-t', 'sh.js'], screen, undefined, { lease: () => lease });
+      await runWasmCommand(['sh.js'], ctx(files));
+      expect(envs[0]).toEqual({ TERM: 'screen-256color' });
+      expect(envs[1]).toEqual({ A: '1' });
     });
 
     it('fails without a terminal to lease', async () => {
