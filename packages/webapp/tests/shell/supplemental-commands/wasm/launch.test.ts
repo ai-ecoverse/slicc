@@ -69,7 +69,7 @@ function fakeProcesses() {
 function processConfig() {
   let next = 500;
   const pm = {
-    spawn: vi.fn(() => ({ pid: next++ })),
+    spawn: vi.fn(() => ({ pid: next++, abort: new AbortController() })),
     exit: vi.fn(),
     onSignal: vi.fn(() => () => {}),
   };
@@ -168,7 +168,7 @@ describe('WasmSession', () => {
       replaceEnv: true,
       stdin: 'piped',
       stdinKind: 'bytes',
-      signal: undefined,
+      signal: expect.any(AbortSignal),
     });
     expect(out).toEqual(['OUT', '2:ERR']);
     expect(pm.spawn).toHaveBeenLastCalledWith(
@@ -207,5 +207,32 @@ describe('WasmSession', () => {
         signal: controller.signal,
       })
     ).rejects.toBeDefined();
+  });
+
+  it('ends a shell child on its own process signal, and on killAll', async () => {
+    fakeProcesses();
+    // An exec that runs until its signal aborts, like `sleep 100`.
+    const exec = vi.fn(
+      (_cmd: string, opts: { signal: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          const stop = () => resolve({ stdout: '', stderr: '', exitCode: 130 });
+          if (opts.signal.aborted) stop();
+          else opts.signal.addEventListener('abort', stop);
+        })
+    ) as unknown as CommandContext['exec'];
+    const { pm, config } = processConfig();
+    const session = new WasmSession(ctx(installed, exec), config, () => {});
+    const spawner = await parentSpawner(session);
+    const req = { file: 'sleep', argv: ['sleep', '100'], env: {}, cwd: '/w' };
+    const first = await spawner(req, stdio());
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(1));
+    // `kill <pid>`: the process manager aborts the record's controller.
+    const record = pm.spawn.mock.results.at(-1)!.value as { abort: AbortController };
+    record.abort.abort();
+    expect(await first.exited).toBe(130);
+    const second = await spawner(req, stdio());
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+    session.killAll(1); // the output limit
+    expect(await second.exited).toBe(130);
   });
 });

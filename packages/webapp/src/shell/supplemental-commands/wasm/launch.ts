@@ -142,6 +142,8 @@ async function writeAll(fds: FdTable, fd: number, bytes: Uint8Array): Promise<vo
 
 export class WasmSession {
   private readonly live = new Set<WasmProcessHandle>();
+  /** The running shell children: each one's abort ends it. */
+  private readonly shellChildren = new Set<AbortController>();
   private installed: Promise<Map<string, WasmCommand>> | undefined;
 
   constructor(
@@ -169,7 +171,7 @@ export class WasmSession {
       throw e;
     }
     const pm = this.processConfig?.processManager;
-    const pid = this.register('wasm', [req.argv0, ...req.args], req.cwd, req.env, req.ppid);
+    const { pid } = this.register('wasm', [req.argv0, ...req.args], req.cwd, req.env, req.ppid);
     const handle = spawnWasmProcess({
       pid,
       program: { glue, module },
@@ -199,6 +201,7 @@ export class WasmSession {
   /** End every process of the invocation (an abort, the output limit). */
   killAll(code: number): void {
     for (const handle of this.live) handle.kill(code);
+    for (const child of this.shellChildren) child.abort();
   }
 
   /**
@@ -241,7 +244,14 @@ export class WasmSession {
       fds.closeAll();
       throw new SpawnError('ENOSYS');
     }
-    const pid = this.register('shell', req.argv, req.cwd, req.env, ppid);
+    const { pid, abort } = this.register('shell', req.argv, req.cwd, req.env, ppid);
+    // Its own abort: `kill <pid>` (and a kill of an ancestor) signals the
+    // process record; an abort of the whole invocation ends it too.
+    const controller = abort ?? new AbortController();
+    const onAbort = () => controller.abort();
+    this.ctx.signal?.addEventListener('abort', onAbort, { once: true });
+    if (this.ctx.signal?.aborted) onAbort();
+    this.shellChildren.add(controller);
     const exited = (async () => {
       try {
         const stdin = fds.has(0) ? await readAll(fds.get(0)) : new Uint8Array(0);
@@ -252,7 +262,7 @@ export class WasmSession {
           replaceEnv: true,
           stdin: latin1(stdin),
           stdinKind: 'bytes',
-          signal: this.ctx.signal,
+          signal: controller.signal,
         });
         const bytesOut = (r as { stdoutKind?: string }).stdoutKind === 'bytes';
         await writeAll(
@@ -268,6 +278,8 @@ export class WasmSession {
         return 126;
       } finally {
         fds.closeAll();
+        this.shellChildren.delete(controller);
+        this.ctx.signal?.removeEventListener('abort', onAbort);
       }
     })();
     if (this.processConfig) {
@@ -276,16 +288,19 @@ export class WasmSession {
     return { pid, exited };
   }
 
-  /** A process-table record (`ps`, `kill`), or a local pid without a table. */
+  /**
+   * A process-table record (`ps`, `kill`) and the abort its signals fire, or
+   * a local pid without a table.
+   */
   private register(
     kind: 'wasm' | 'shell',
     argv: string[],
     cwd: string,
     env: Record<string, string>,
     ppid: number | undefined
-  ): number {
+  ): { pid: number; abort?: AbortController } {
     const config = this.processConfig;
-    if (!config) return nextPid++;
+    if (!config) return { pid: nextPid++ };
     return config.processManager.spawn({
       kind,
       argv,
@@ -293,6 +308,6 @@ export class WasmSession {
       env,
       owner: config.owner,
       ppid: ppid ?? config.getParentPid?.(),
-    }).pid;
+    });
   }
 }
