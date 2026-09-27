@@ -289,7 +289,8 @@ describe('AlmostBashShellHeadless playwright command discoverability', () => {
   it('accepts an external AbortSignal when executing commands programmatically', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
     const controller = new AbortController();
-    const bash = (shell as { bash: { exec: (...args: unknown[]) => Promise<unknown> } }).bash;
+    const bash = (shell as unknown as { bash: { exec: (...args: unknown[]) => Promise<unknown> } })
+      .bash;
     const original = bash.exec.bind(bash);
     const execSpy = vi.spyOn(bash, 'exec').mockImplementation(async (command, opts) => {
       const result = await original(command, opts);
