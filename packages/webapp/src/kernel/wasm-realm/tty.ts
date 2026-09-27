@@ -33,6 +33,7 @@ export interface TtyScreen {
 
 // musl's termios bits and c_cc slots (Linux's).
 const ICRNL = 0o400;
+const IUTF8 = 0o40000;
 const OPOST = 0o1;
 const ONLCR = 0o4;
 const ISIG = 0o1;
@@ -40,6 +41,7 @@ const ICANON = 0o2;
 const ECHO = 0o10;
 const ECHOE = 0o20;
 const ECHOCTL = 0o1000;
+const NOFLSH = 0o200;
 const IEXTEN = 0o100000;
 const VINTR = 0;
 const VQUIT = 1;
@@ -56,7 +58,7 @@ export function defaultTermios(): Termios {
   Object.assign(cCc, { [VEOF]: 0x04, 6: 1, 8: 0x11, 9: 0x13, [VSUSP]: 0x1a });
   Object.assign(cCc, { 12: 0x12, 13: 0x0f, [VWERASE]: 0x17, 15: 0x16 });
   return {
-    c_iflag: ICRNL | 0o2000 /* IXON */ | 0o20000 /* IMAXBEL */ | 0o40000 /* IUTF8 */,
+    c_iflag: ICRNL | 0o2000 /* IXON */ | 0o20000 /* IMAXBEL */ | IUTF8,
     c_oflag: OPOST | ONLCR,
     c_cflag: 0o17 /* B38400 */ | 0o60 /* CS8 */ | 0o200 /* CREAD */,
     c_lflag:
@@ -66,6 +68,11 @@ export function defaultTermios(): Termios {
 }
 
 const encoder = new TextEncoder();
+
+/** A UTF-8 continuation byte (10xxxxxx). */
+function isContinuation(byte: number): boolean {
+  return (byte & 0xc0) === 0x80;
+}
 
 export class KernelTty {
   private termios = defaultTermios();
@@ -162,7 +169,11 @@ export class KernelTty {
     this.edit(byte);
   }
 
-  /** ^C / ^\ / ^Z: the line is dropped and the foreground processes signalled. */
+  /**
+   * ^C / ^\ / ^Z: the foreground processes are signalled, and the input not
+   * yet read — the line being edited and any lines typed ahead — is dropped
+   * (unless NOFLSH), so a command typed before ^C does not run after it.
+   */
   private signalKey(byte: number): boolean {
     const sig =
       byte === this.cc(VINTR)
@@ -174,7 +185,10 @@ export class KernelTty {
             : 0;
     if (!sig || byte === 0) return false;
     if (this.termios.c_lflag & ECHO) this.echo(byte);
-    this.line = [];
+    if (!(this.termios.c_lflag & NOFLSH)) {
+      this.line = [];
+      this.readable = [];
+    }
     this.signal(sig);
     return true;
   }
@@ -183,7 +197,7 @@ export class KernelTty {
   private edit(byte: number): void {
     const echo = (this.termios.c_lflag & ECHO) !== 0;
     if (byte === this.cc(VERASE) || byte === 0x08) {
-      if (this.line.pop() !== undefined && echo) this.output(encoder.encode('\b \b'), false);
+      this.rubOut(this.lastCharLength());
     } else if (byte === this.cc(VKILL)) {
       this.rubOut(this.line.length);
     } else if (byte === this.cc(VWERASE)) {
@@ -211,10 +225,24 @@ export class KernelTty {
     return this.line.length - end;
   }
 
-  /** Drop the last `n` characters of the line, and from the screen when echoing. */
+  /** Bytes of the line's last character: its whole UTF-8 sequence with IUTF8. */
+  private lastCharLength(): number {
+    const { line } = this;
+    let n = Math.min(1, line.length);
+    if (this.termios.c_iflag & IUTF8) {
+      while (n < line.length && isContinuation(line[line.length - n] ?? 0)) n++;
+    }
+    return n;
+  }
+
+  /** Drop the last `n` bytes of the line, and their characters from the screen when echoing. */
   private rubOut(n: number): void {
-    this.line.length -= n;
-    if (n > 0 && this.termios.c_lflag & ECHO) this.output(encoder.encode('\b \b'.repeat(n)), false);
+    const dropped = this.line.splice(this.line.length - n, n);
+    const utf8 = (this.termios.c_iflag & IUTF8) !== 0;
+    const cells = utf8 ? dropped.filter((b) => !isContinuation(b)).length : dropped.length;
+    if (cells > 0 && this.termios.c_lflag & ECHO) {
+      this.output(encoder.encode('\b \b'.repeat(cells)), false);
+    }
   }
 
   /** Echo one byte: a control character as `^X` (ECHOCTL). */

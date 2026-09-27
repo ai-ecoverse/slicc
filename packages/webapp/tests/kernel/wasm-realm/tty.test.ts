@@ -6,15 +6,16 @@ const bytes = (s: string) => new TextEncoder().encode(s);
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
 
 function setup() {
-  const screen: string[] = [];
+  // Echo arrives a byte at a time: decode the whole screen, as the terminal does.
+  const screen: number[] = [];
   const signals: number[] = [];
   const tty = new KernelTty(
-    { write: (b) => void screen.push(text(b)) },
+    { write: (b) => void screen.push(...b) },
     (sig) => void signals.push(sig)
   );
   const file = tty.file();
   const read = (max = 64) => file.file.read!(max);
-  return { tty, file, read, screen: () => screen.join(''), signals };
+  return { tty, file, read, screen: () => text(Uint8Array.from(screen)), signals };
 }
 
 describe('KernelTty', () => {
@@ -47,6 +48,31 @@ describe('KernelTty', () => {
     expect(screen()).toContain('^C');
     tty.receive(bytes('next\n'));
     expect(text(await read())).toBe('next\n');
+  });
+
+  it('a signal key drops lines typed ahead too, unless NOFLSH', async () => {
+    const { tty, read } = setup();
+    tty.receive(bytes('rm -rf build\n\x03'));
+    tty.receive(bytes('ls\n'));
+    expect(text(await read())).toBe('ls\n');
+    const noflsh = tty.tcgets();
+    tty.tcsets({ ...noflsh, c_lflag: noflsh.c_lflag | 0o200 });
+    tty.receive(bytes('kept\n\x03'));
+    expect(text(await read())).toBe('kept\n');
+  });
+
+  it('erase takes a whole UTF-8 character, and one screen cell per character', async () => {
+    const { tty, read, screen } = setup();
+    tty.receive(bytes('caf\u00e9\x7f\u00e8\n'));
+    expect(text(await read())).toBe('caf\u00e8\n');
+    expect(screen()).toBe('caf\u00e9\b \b\u00e8\r\n');
+    tty.receive(bytes('x \u{1F600}\u00e9\x17y\n')); // word erase: 2 characters, 2 cells
+    expect(text(await read())).toBe('x y\n');
+    expect(screen().endsWith('x \u{1F600}\u00e9\b \b\b \by\r\n')).toBe(true);
+    const bytewise = tty.tcgets();
+    tty.tcsets({ ...bytewise, c_iflag: bytewise.c_iflag & ~0o40000 });
+    tty.receive(bytes('\u00e9\x7f\n')); // without IUTF8: one byte
+    expect(Array.from(await read())).toEqual([0xc3, 0x0a]);
   });
 
   it('raw mode: each byte readable at once, no signals when ISIG is off', async () => {
