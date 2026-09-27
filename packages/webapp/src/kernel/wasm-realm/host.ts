@@ -104,6 +104,7 @@ export function spawnWasmProcess(opts: SpawnWasmOptions): WasmProcessHandle {
     kill: opts.kill,
     // The worker takes the word after every syscall and runs the handlers.
     onPending: (sig) => void Atomics.or(header, SAB_I_SIGNALS, sigbit(sig)),
+    hasPending: () => Atomics.load(header, SAB_I_SIGNALS) !== 0,
   });
   const token = mintSyncFsToken({ fs: opts.fs, cwd: opts.cwd });
   const worker = (opts.createWorker ?? defaultWorker)();

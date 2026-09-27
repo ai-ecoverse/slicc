@@ -86,7 +86,7 @@ export class KernelPipe {
   async read(max: number, signal?: AbortSignal): Promise<Uint8Array> {
     while (this.size === 0) {
       if (this.writers === 0) return new Uint8Array(0);
-      await this.waitForChange(signal);
+      await this.changed(signal);
     }
     const out = this.take(Math.min(max, this.size));
     this.wake();
@@ -105,7 +105,7 @@ export class KernelPipe {
       const room = this.capacity - this.size;
       if (room === 0) {
         try {
-          await this.waitForChange(signal);
+          await this.changed(signal);
         } catch (e) {
           if (offset > 0) return offset;
           throw e;
@@ -136,7 +136,11 @@ export class KernelPipe {
     return out;
   }
 
-  private waitForChange(signal?: AbortSignal): Promise<void> {
+  /**
+   * Resolves at the pipe's next change (data in or out, an end closed);
+   * `signal` rejects it with EINTR. What poll(2)/select(2) wait on.
+   */
+  changed(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return Promise.reject(new PipeError('EINTR'));
     return new Promise((resolve, reject) => {
       const onAbort = (): void => {
