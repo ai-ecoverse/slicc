@@ -39,6 +39,24 @@ export class KernelPipe {
     return this.size;
   }
 
+  /** A read would not wait: data is buffered, or every writer is gone (EOF). */
+  get readReady(): boolean {
+    return this.size > 0 || this.writers === 0;
+  }
+
+  /** A write would not wait: there is room, or every reader is gone (EPIPE). */
+  get writeReady(): boolean {
+    return this.size < this.capacity || this.readers === 0;
+  }
+
+  get writersGone(): boolean {
+    return this.writers === 0;
+  }
+
+  get readersGone(): boolean {
+    return this.readers === 0;
+  }
+
   openRead(): void {
     this.readers += 1;
   }

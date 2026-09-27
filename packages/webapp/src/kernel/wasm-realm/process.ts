@@ -12,13 +12,15 @@
  */
 import type { SyncFsResult } from '../realm/sync-fs-wire.js';
 import { type ChildSpawner, type ChildStdio, ChildTable, SpawnError } from './children.js';
-import { type FdTable, KernelError } from './fd-table.js';
+import { type FdTable, KernelError, openPipe, pollFile } from './fd-table.js';
 
 /** The syscalls of a wasm-realm process (the request bodies on the SAB wire). */
 export type WasmSyscall =
   | { op: 'fd-read'; fd: number; max: number }
   | { op: 'fd-write'; fd: number; body: Uint8Array }
   | { op: 'fd-close'; fd: number }
+  | { op: 'fd-pipe' }
+  | { op: 'fd-poll'; fd: number }
   | {
       op: 'proc-spawn';
       file: string;
@@ -34,6 +36,8 @@ const SYSCALL_OPS: ReadonlySet<string> = new Set([
   'fd-read',
   'fd-write',
   'fd-close',
+  'fd-pipe',
+  'fd-poll',
   'proc-spawn',
   'proc-wait',
   'proc-captured',
@@ -77,6 +81,20 @@ export class WasmProcess {
         case 'fd-close':
           this.fds.close(req.fd);
           return { ok: true, kind: 'void' };
+        case 'fd-pipe': {
+          const pipe = openPipe();
+          const read = this.fds.install(pipe.read, 3);
+          let write: number;
+          try {
+            write = this.fds.install(pipe.write, 3);
+          } catch (e) {
+            this.fds.close(read);
+            throw e;
+          }
+          return { ok: true, kind: 'json', json: [read, write] };
+        }
+        case 'fd-poll':
+          return { ok: true, kind: 'json', json: pollFile(this.fds.get(req.fd).file) };
         case 'proc-spawn': {
           const { file, argv, env, cwd, stdio } = req;
           const pid = await this.children.spawn({ file, argv, env, cwd }, stdio);

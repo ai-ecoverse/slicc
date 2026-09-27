@@ -222,6 +222,39 @@ is_dir = err(lambda: os.unlink('/work/sub'))
     expect(py('is_dir')).toBe('EISDIR');
   });
 
+  it('keeps a file unlinked while open for its streams, and never writes it back', () => {
+    // mkstemp, unlink, write, read back: how tac / sort stage a pipe.
+    py(`
+import os
+fd = os.open('/work/tmpXYZ', os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+os.unlink('/work/tmpXYZ')
+os.write(fd, b'staged bytes')
+size = os.fstat(fd).st_size
+os.lseek(fd, 0, 0)
+back = os.read(fd, 100).decode()
+os.ftruncate(fd, 6)
+os.lseek(fd, 0, 0)
+cut = os.read(fd, 100).decode()
+os.close(fd)
+`);
+    expect(py('back')).toBe('staged bytes');
+    expect(py('size')).toBe(12);
+    expect(py('cut')).toBe('staged');
+    expect(nodeFs.existsSync(join(host, 'tmpXYZ'))).toBe(false);
+    expect(py(`os.path.exists('/work/tmpXYZ')`)).toBe(false);
+  });
+
+  it('keeps the bytes an open file had when it is unlinked', () => {
+    py(`
+fd = os.open('/work/hello.txt', os.O_RDONLY)
+os.unlink('/work/hello.txt')
+kept = os.read(fd, 100).decode()
+os.close(fd)
+`);
+    expect(py('kept')).toBe('hello from the vfs\n');
+    expect(nodeFs.existsSync(join(host, 'hello.txt'))).toBe(false);
+  });
+
   it('flushLiveVfs pushes a still-open dirty buffer', () => {
     py(`g = open('/work/open.txt', 'w'); g.write('pending'); g.flush()`);
     expect(nodeFs.readFileSync(join(host, 'open.txt'), 'utf8')).toBe('');

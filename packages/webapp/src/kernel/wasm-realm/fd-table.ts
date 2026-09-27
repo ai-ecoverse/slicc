@@ -22,6 +22,16 @@ export class KernelError extends Error {
   }
 }
 
+/** poll(2) readiness of an open file description. */
+export interface PollState {
+  /** A read would not wait (data, or end of file). */
+  readable: boolean;
+  /** A write would not wait. */
+  writable: boolean;
+  /** The other end of a pipe is gone (POLLHUP for a reader, POLLERR for a writer). */
+  hangup: boolean;
+}
+
 /** What an open file description refers to. */
 export interface KernelFile {
   /** Up to `max` bytes, waiting for data; empty means end of file. Absent: not readable. */
@@ -30,6 +40,13 @@ export interface KernelFile {
   write?(bytes: Uint8Array): Promise<number>;
   /** The last reference is gone. */
   close(): void;
+  /** Readiness; absent means never waits (a byte source, a sink). */
+  poll?(): PollState;
+}
+
+/** A description's readiness: its own answer, or ready in whatever direction it serves. */
+export function pollFile(file: KernelFile): PollState {
+  return file.poll?.() ?? { readable: !!file.read, writable: !!file.write, hangup: false };
 }
 
 /** One open file description: shared by every fd (in any process) dup'd from it. */
@@ -55,7 +72,11 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
   pipe.openRead();
   pipe.openWrite();
   return {
-    read: new OpenFile({ read: (max) => pipe.read(max), close: () => pipe.closeRead() }),
+    read: new OpenFile({
+      read: (max) => pipe.read(max),
+      close: () => pipe.closeRead(),
+      poll: () => ({ readable: pipe.readReady, writable: false, hangup: pipe.writersGone }),
+    }),
     write: new OpenFile({
       write: async (bytes) => {
         try {
@@ -66,6 +87,7 @@ export function openPipe(capacity?: number): { read: OpenFile; write: OpenFile }
         }
       },
       close: () => pipe.closeWrite(),
+      poll: () => ({ readable: false, writable: pipe.writeReady, hangup: pipe.readersGone }),
     }),
   };
 }

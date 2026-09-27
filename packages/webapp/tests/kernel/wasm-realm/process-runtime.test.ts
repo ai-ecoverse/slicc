@@ -5,10 +5,7 @@ import {
   evaluateGlue,
   glueBody,
   kernelSys,
-  type ProcessFs,
-  type ProcessSys,
   SyscallError,
-  wireKernelStdio,
 } from '../../../src/kernel/wasm-realm/process-runtime.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -37,71 +34,33 @@ describe('kernelSys', () => {
     ]);
   });
 
+  it('closes, makes pipes, and polls through the kernel', () => {
+    const seen: unknown[] = [];
+    const replies: Record<string, SyncFsResult> = {
+      'fd-close': { ok: true, kind: 'void' },
+      'fd-pipe': { ok: true, kind: 'json', json: [3, 4] },
+      'fd-poll': {
+        ok: true,
+        kind: 'json',
+        json: { readable: true, writable: false, hangup: false },
+      },
+    };
+    const sys = kernelSys(
+      transport((req) => {
+        seen.push(req);
+        return replies[(req as { op: string }).op]!;
+      })
+    );
+    sys.close(3);
+    expect(sys.pipe()).toEqual([3, 4]);
+    expect(sys.poll(3)).toEqual({ readable: true, writable: false, hangup: false });
+    expect(seen).toEqual([{ op: 'fd-close', fd: 3 }, { op: 'fd-pipe' }, { op: 'fd-poll', fd: 3 }]);
+  });
+
   it('raises a kernel errno as SyscallError', () => {
     const sys = kernelSys(transport(() => ({ ok: false, errno: 'EPIPE', message: 'EPIPE' })));
     expect(() => sys.write(1, bytes('x'))).toThrow(SyscallError);
     expect(() => sys.read(0, 1)).toThrow(expect.objectContaining({ code: 'EPIPE' }));
-  });
-});
-
-describe('wireKernelStdio', () => {
-  class ErrnoError extends Error {
-    constructor(readonly errno: number) {
-      super(`errno ${errno}`);
-    }
-  }
-  type Op = (stream: unknown, buffer: Uint8Array, offset: number, length: number) => number;
-  function fakeFs() {
-    const unset: Op = () => -1;
-    const streams = [0, 1, 2].map(() => ({ stream_ops: { read: unset, write: unset } }));
-    const fs = {
-      getStream: (fd: number) => streams[fd] ?? null,
-      ErrnoError,
-    } as unknown as ProcessFs;
-    return { fs, streams };
-  }
-
-  it('reads and writes fds 0-2 through the kernel, byte-exact', () => {
-    const written: Array<[number, string]> = [];
-    const sys: ProcessSys = {
-      read: (_fd, max) => bytes('stdin data').subarray(0, max),
-      write: (fd, b) => {
-        written.push([fd, text(b)]);
-        return b.length;
-      },
-    };
-    const { fs, streams } = fakeFs();
-    wireKernelStdio(fs, sys);
-    const buf = new Uint8Array(16);
-    const n = streams[0].stream_ops.read(null, buf, 2, 5);
-    expect(n).toBe(5);
-    expect(text(buf.subarray(2, 7))).toBe('stdin');
-    const out = bytes('xxpartial line');
-    expect(streams[1].stream_ops.write(null, out, 2, 12)).toBe(12);
-    streams[2].stream_ops.write(null, bytes('err'), 0, 3);
-    expect(written).toEqual([
-      [1, 'partial line'],
-      [2, 'err'],
-    ]);
-  });
-
-  it('raises a kernel error as the matching Emscripten errno (EPIPE = 64)', () => {
-    const sys: ProcessSys = {
-      read: () => {
-        throw new SyscallError('EBADF');
-      },
-      write: () => {
-        throw new SyscallError('EPIPE');
-      },
-    };
-    const { fs, streams } = fakeFs();
-    wireKernelStdio(fs, sys);
-    expect(() => streams[1].stream_ops.write(null, bytes('y'), 0, 1)).toThrow(
-      expect.objectContaining({ errno: 64 })
-    );
-    expect(() => streams[0].stream_ops.read(null, new Uint8Array(1), 0, 1)).toThrow(
-      expect.objectContaining({ errno: 8 })
-    );
   });
 });
 
@@ -119,6 +78,8 @@ describe('evaluateGlue', () => {
     'var ENV = { HOME: "/" };',
     'var FS = { own: true };',
     'function callMain(args) { return args.length; }',
+    'function sliccRunMain(args) { return -args.length; }',
+    'var PIPEFS = { createPipe() {} };',
   ].join('\n');
 
   it('fills ENV and takes FS and callMain from the glue when it exports neither', () => {
@@ -127,6 +88,26 @@ describe('evaluateGlue', () => {
     evaluateGlue(glue, module);
     expect(module.FS).toEqual({ own: true });
     expect(module.callMain?.(['x', 'y'])).toBe(2);
+    const scoped = module as {
+      sliccRunMain?: (a: string[]) => number;
+      PIPEFS?: object;
+      sliccSigpipe?: () => number;
+    };
+    expect(scoped.sliccRunMain?.(['x'])).toBe(-1);
+    expect(scoped.PIPEFS).toHaveProperty('createPipe');
+    expect(scoped.sliccSigpipe?.()).toBe(-1); // no disposition query linked in
+  });
+
+  it("asks the program's SIGPIPE disposition once it is instantiated", () => {
+    const module: { sliccEnv: object; sliccSigpipe?: () => number } = { sliccEnv: {} };
+    // Emscripten assigns the export after instantiation, i.e. after the glue body ran.
+    evaluateGlue(
+      'var ENV = {}; var _slicc_sigpipe; Module.late = () => { _slicc_sigpipe = () => 1; };',
+      module
+    );
+    expect(module.sliccSigpipe?.()).toBe(-1);
+    (module as unknown as { late: () => void }).late();
+    expect(module.sliccSigpipe?.()).toBe(1);
   });
 
   it('keeps what the glue exports itself', () => {
