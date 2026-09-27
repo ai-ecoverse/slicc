@@ -72,6 +72,22 @@ describe('bedrock-camp picker contents', () => {
     expect(opus?.provider).toBe('bedrock-camp');
   });
 
+  it('resolves Opus 5.5 thinking to the requested level after the model is selected', async () => {
+    storage.set('selected-model', 'bedrock-camp:global.anthropic.claude-sonnet-5');
+    const { resolveModelById } = await import('../../src/providers/account-store.js');
+    const { runtimeThinking } = await import('../../src/scoops/scoop-context/thinking-level.js');
+    // What `slicc model claude-opus-5-5` pins, then what the next prompt runs.
+    const model = resolveModelById('global.anthropic.claude-opus-5-5', 'bedrock-camp');
+    expect(model.id).toBe('global.anthropic.claude-opus-5-5');
+    expect(runtimeThinking({ requested: 'low', model, locked: null })).toMatchObject({
+      level: 'low',
+      effective: 'low',
+    });
+    expect(
+      runtimeThinking({ requested: 'xhigh', effortOverride: 'max', model, locked: null })
+    ).toMatchObject({ level: 'xhigh', effortOverride: 'max', effective: 'max' });
+  });
+
   it('resolves a requested Opus 5.5 id instead of degrading to the selected model', async () => {
     storage.set('selected-model', 'bedrock-camp:us.anthropic.claude-opus-5');
     const { resolveModelById } = await import('../../src/providers/account-store.js');

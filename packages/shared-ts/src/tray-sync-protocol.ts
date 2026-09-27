@@ -963,8 +963,20 @@ export interface TrayModelCatalogEntry {
 export interface TrayModelSelectionState {
   activeModelId: string;
   scoopJid: string;
+  /** Requested level, stored on the unit. */
   thinkingLevel?: TrayThinkingLevel;
+  /** Requested effort override (`max`). */
   effortOverride?: string;
+  /**
+   * Level the next prompt will run, after the model's thinking map, clamping,
+   * and the effort lock. Absent on a leader that only echoes the request.
+   * `adaptive` is not a settable level: an always-on adaptive model (Bedrock
+   * Opus 5.5) reports it when the record is unset or `off`, because omitting
+   * the thinking fields still thinks.
+   */
+  resolvedThinkingLevel?: TrayThinkingLevel | 'adaptive';
+  /** Effort the next prompt will send. `max` only when that override is in force. */
+  resolvedEffortOverride?: string;
 }
 
 // ---------------------------------------------------------------------------

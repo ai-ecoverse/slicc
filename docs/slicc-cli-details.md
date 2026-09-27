@@ -9,6 +9,7 @@ authoritative command list, safety rules, env-var and Makefile references.
 | Path                  | Purpose                                                                              |
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `main.go`             | Arg parsing + subcommand dispatch + Ctrl+C                                           |
+| `session.go`          | `new-session` / `model` / `thinking`                                                 |
 | `commands.go`         | `prompt` / `exec` / `follow` implementations                                         |
 | `internal/protocol/`  | Wire structs mirroring `packages/shared-ts/src/tray-sync-protocol.ts`                |
 | `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry)        |
@@ -119,6 +120,15 @@ that the leader handed it over (not that the agent started); it changes nothing
 but a debug log line (`SLICC_DEBUG=1`). Acks for other `messageId`s and
 unknown states are ignored, and a leader < 10 sends none, so the exit rules
 above are unchanged against it.
+
+## `thinking`
+
+`slicc <join-url> thinking [--json] [--allow-downgrade] [<level>]`, in `session.go`.
+
+- With no level it reads the effective level from the leader's `model.state` and sends nothing. It prints `unset` when the leader sends none, `adaptive` for a model whose thinking cannot be turned off (Opus 5.5), and `max` when `effortOverride` is `max`.
+- With a level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) it sends `thinking.set` and waits for a `model.state` that echoes that set. `max` is not a wire level: the frame is `thinkingLevel: xhigh` plus `effortOverride: max`, the same as the browser follower sends.
+- The leader reports `resolvedThinkingLevel` / `resolvedEffortOverride`: the level the agent sends on the next request, after the model's thinking map and `slicc_locked_effort_level`. The CLI prints that level. It exits 1 if the resolved level differs from the request, or if the leader only echoes the request without resolving it; `--allow-downgrade` accepts the resolved level instead.
+- An unknown level exits 2. No confirming frame exits 1.
 
 ## `watch` rendering
 

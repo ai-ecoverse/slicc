@@ -15,6 +15,8 @@ slicc <join-url> exec "<command>"               Run a command in the leader's sh
 slicc <join-url> new-session [--save|--skip|--erase]
                                                 Start a fresh cone conversation, like "New chat"
 slicc <join-url> model [--json] [<model>]       List the leader's models, or switch the cone to one
+slicc <join-url> thinking [--json] [<level>]    Print the cone's thinking level, or set it and wait.
+                                          An always-on adaptive model reports `adaptive` when unset.
 slicc <join-url> watch [--plain] [scoop]        Tail the agent's output live (a scoop jid filters), until Ctrl+C
 slicc <join-url> follow [--no-banner] [--plain] [runner]
                                                 Stay connected; let the leader run commands on THIS machine
@@ -45,6 +47,15 @@ exact id (`bedrock-camp:global.anthropic.claude-sonnet-5`), the part after the
 provider, or a suffix such as `claude-sonnet-5`. When the only difference
 between matches is the Bedrock region (`global.` vs `us.`), it picks the global
 one. Any other ambiguity fails and lists the candidates.
+
+`thinking` with no level prints the level the next prompt will run and does
+not change it. With a level it sets that level and returns once the leader
+reports the same resolved level. Levels: `off`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, `max`. `max` is sent as thinking level `xhigh` plus effort
+`max`. The leader also reports the level after the model's thinking map, the
+clamp, and the effort lock. If that is not the level you asked for, the
+command exits 1. `--allow-downgrade` accepts the resolved level and prints
+it. An unknown level exits 2.
 
 ```sh
 slicc <url> new-session --erase && slicc <url> model claude-opus-5-5 && slicc <url> prompt @task.md

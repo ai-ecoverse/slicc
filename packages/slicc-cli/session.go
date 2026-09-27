@@ -3,9 +3,10 @@ package main
 // Leader-control verbs a harness needs to drive the cone from outside, as the
 // browser and iOS followers already can: start a fresh conversation
 // (`new-session`, the "New chat" button) and read or pick the cone's model
-// (`model`, the model picker). Both ride tray-sync messages the leader already
-// handles for followers (new_session, models.request, model.select), so the
-// cone does the work exactly as it would for a person.
+// (`model`, the model picker) and read or set its thinking level (`thinking`).
+// They ride tray-sync messages the leader already handles for followers
+// (new_session, models.request, model.select, thinking.set), so the cone does
+// the work exactly as it would for a person.
 
 import (
 	"context"
@@ -326,7 +327,7 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 	deadline := time.NewTimer(a.timeout)
 	defer deadline.Stop()
-	catalog, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout)
+	catalog, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout, "model")
 	if code >= 0 {
 		return code
 	}
@@ -352,7 +353,7 @@ func cmdModel(ctx context.Context, joinURL string, a modelArgs) int {
 
 // awaitCatalog waits for both the catalogue and the cone's model state. A
 // non-negative code means the command is over with that exit status.
-func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration) ([]protocol.ModelCatalogEntry, protocol.ModelSelectionState, int) {
+func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, verb string) ([]protocol.ModelCatalogEntry, protocol.ModelSelectionState, int) {
 	var catalog []protocol.ModelCatalogEntry
 	var state *protocol.ModelSelectionState
 	for catalog == nil || state == nil {
@@ -362,10 +363,10 @@ func awaitCatalog(ctx context.Context, conn *tray.Conn, ch modelChannels, deadli
 		case s := <-ch.states:
 			state = &s
 		case <-deadline:
-			errLine("model", "the leader sent no model list within %s", timeout)
+			errLine(verb, "the leader sent no model list within %s", timeout)
 			return nil, protocol.ModelSelectionState{}, 1
 		case <-conn.Done():
-			errLine("model", "connection closed")
+			errLine(verb, "connection closed")
 			return nil, protocol.ModelSelectionState{}, 1
 		case <-ctx.Done():
 			return nil, protocol.ModelSelectionState{}, 130
@@ -412,5 +413,230 @@ func printModels(asJSON bool, state protocol.ModelSelectionState, catalog []prot
 			mark = "* "
 		}
 		fmt.Fprintf(os.Stdout, "%s%s\t%s\n", mark, m.ModelID, m.ModelName)
+	}
+}
+
+// thinkingLevels is the wire enum plus `max`, which the leader stores as
+// thinkingLevel xhigh and effortOverride max (the composer pill's top tier).
+var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// thinkingArgs is `thinking [--json] [--timeout <dur>] [--allow-downgrade] [<level>]`.
+// An empty level reads the cone's current level and does not change it.
+type thinkingArgs struct {
+	level          string
+	json           bool
+	allowDowngrade bool
+	timeout        time.Duration
+	help           bool
+	err            string
+}
+
+func parseThinkingArgs(args []string) thinkingArgs {
+	a := thinkingArgs{timeout: modelTimeout}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help":
+			a.help = true
+		case "--json":
+			a.json = true
+		case "--allow-downgrade":
+			a.allowDowngrade = true
+		case "--timeout":
+			if i+1 >= len(args) {
+				a.err = "--timeout needs a duration (e.g. 20s)"
+				return a
+			}
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil || d <= 0 {
+				a.err = fmt.Sprintf("--timeout %q is not a positive duration", args[i+1])
+				return a
+			}
+			a.timeout = d
+			i++
+		default:
+			if strings.HasPrefix(args[i], "-") || a.level != "" {
+				a.err = fmt.Sprintf("unexpected argument %q", args[i])
+				return a
+			}
+			a.level = args[i]
+		}
+	}
+	if a.level != "" && !knownThinkingLevel(a.level) {
+		a.err = fmt.Sprintf("unknown thinking level %q (want %s)", a.level, strings.Join(thinkingLevels, ", "))
+	}
+	return a
+}
+
+func knownThinkingLevel(level string) bool {
+	for _, l := range thinkingLevels {
+		if l == level {
+			return true
+		}
+	}
+	return false
+}
+
+// thinkingWire is what thinking.set carries. `max` is not a TrayThinkingLevel;
+// the follower UI sends it as xhigh plus an effort override.
+func thinkingWire(level string) (thinkingLevel, effort string) {
+	if level == "max" {
+		return "xhigh", "max"
+	}
+	return level, ""
+}
+
+// effectiveThinking is the level a person would read off the leader's
+// model.state: effort max wins, and a missing level is unset (the agent
+// treats that as off, which is a different record from an explicit off).
+func effectiveThinking(s protocol.ModelSelectionState) string {
+	if s.EffortOverride == "max" {
+		return "max"
+	}
+	if s.ThinkingLevel == "" {
+		return "unset"
+	}
+	return s.ThinkingLevel
+}
+
+func thinkingApplied(s protocol.ModelSelectionState, level string) bool {
+	wire, effort := thinkingWire(level)
+	return s.ThinkingLevel == wire && s.EffortOverride == effort
+}
+
+// resolvedEffective is the level the next prompt will run. The bool is false
+// when the leader did not report one (it only echoed the request).
+func resolvedEffective(s protocol.ModelSelectionState) (string, bool) {
+	if s.ResolvedThinkingLevel == "" && s.ResolvedEffortOverride == "" {
+		return "", false
+	}
+	if s.ResolvedEffortOverride == "max" {
+		return "max", true
+	}
+	return s.ResolvedThinkingLevel, true
+}
+
+// displayThinking prefers the resolved level. A leader that does not send one
+// falls back to the requested echo, which a read of an older leader still shows.
+func displayThinking(s protocol.ModelSelectionState) string {
+	if effective, ok := resolvedEffective(s); ok {
+		return effective
+	}
+	return effectiveThinking(s)
+}
+
+// thinkingListing is what `thinking --json` prints.
+type thinkingListing struct {
+	Effective              string `json:"effective"`
+	ActiveModelID          string `json:"activeModelId,omitempty"`
+	ThinkingLevel          string `json:"thinkingLevel,omitempty"`
+	EffortOverride         string `json:"effortOverride,omitempty"`
+	ResolvedThinkingLevel  string `json:"resolvedThinkingLevel,omitempty"`
+	ResolvedEffortOverride string `json:"resolvedEffortOverride,omitempty"`
+	ScoopJid               string `json:"scoopJid"`
+}
+
+func printThinking(asJSON bool, state protocol.ModelSelectionState) {
+	if asJSON {
+		out, _ := json.MarshalIndent(thinkingListing{
+			Effective:              displayThinking(state),
+			ActiveModelID:          state.ActiveModelID,
+			ThinkingLevel:          state.ThinkingLevel,
+			EffortOverride:         state.EffortOverride,
+			ResolvedThinkingLevel:  state.ResolvedThinkingLevel,
+			ResolvedEffortOverride: state.ResolvedEffortOverride,
+			ScoopJid:               state.ScoopJid,
+		}, "", "  ")
+		fmt.Println(string(out))
+		return
+	}
+	fmt.Println(displayThinking(state))
+}
+
+// cmdThinking prints the cone's thinking level, or sets it and waits for the
+// leader's model.state to confirm the wire level.
+func cmdThinking(ctx context.Context, joinURL string, a thinkingArgs) int {
+	ch := newModelChannels()
+	conn, err := dialAndSend(
+		func() (*tray.Conn, error) {
+			return tray.Dial(ctx, joinURL, tray.Options{OnMessage: ch.handle, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
+		},
+		func(conn *tray.Conn) error {
+			return conn.SendJSON(protocol.ModelsRequest{Type: protocol.TypeModelsRequest})
+		},
+	)
+	if err != nil {
+		errLine("thinking", "%s", err)
+		var dialErr *dialFailed
+		if errors.As(err, &dialErr) {
+			reportRuntimeError("dial", err)
+		}
+		return 1
+	}
+	defer conn.Close()
+
+	deadline := time.NewTimer(a.timeout)
+	defer deadline.Stop()
+	_, state, code := awaitCatalog(ctx, conn, ch, deadline.C, a.timeout, "thinking")
+	if code >= 0 {
+		return code
+	}
+	if a.level == "" {
+		printThinking(a.json, state)
+		return 0
+	}
+	wire, effort := thinkingWire(a.level)
+	msg := protocol.ThinkingSet{
+		Type:          protocol.TypeThinkingSet,
+		ScoopJid:      state.ScoopJid,
+		ThinkingLevel: wire,
+	}
+	if effort != "" {
+		msg.EffortOverride = effort
+	}
+	if err := conn.SendJSON(msg); err != nil {
+		errLine("thinking", "%s", err)
+		return 1
+	}
+	return awaitThinking(ctx, conn, ch, deadline.C, a.timeout, a.level, a.json, a.allowDowngrade, state)
+}
+
+// awaitThinking waits for a model.state that echoes this set and whose
+// resolved level is the one the next prompt will run. A frame that still
+// echoes the previous request (a model.state already queued before the set,
+// resolved `off`) is not the answer. Matching only the echo, without the
+// resolved level, would record a level the model or the effort lock had
+// already replaced.
+func awaitThinking(ctx context.Context, conn *tray.Conn, ch modelChannels, deadline <-chan time.Time, timeout time.Duration, level string, asJSON, allowDowngrade bool, before protocol.ModelSelectionState) int {
+	last := displayThinking(before)
+	for {
+		select {
+		case s := <-ch.states:
+			if s.ScoopJid != "" && before.ScoopJid != "" && s.ScoopJid != before.ScoopJid {
+				continue
+			}
+			if !thinkingApplied(s, level) {
+				last = displayThinking(s)
+				continue
+			}
+			effective, ok := resolvedEffective(s)
+			if !ok {
+				errLine("thinking", "the leader confirmed %s but did not report the resolved level the next prompt will use", level)
+				return 1
+			}
+			if effective == level || allowDowngrade {
+				printThinking(asJSON, s)
+				return 0
+			}
+			errLine("thinking", "leader resolved %s to %s (activeModelId=%s thinkingLevel=%s effortOverride=%s resolvedThinkingLevel=%s resolvedEffortOverride=%s); the model or the effort lock will not run the requested level (pass --allow-downgrade to accept %s)", level, effective, s.ActiveModelID, s.ThinkingLevel, s.EffortOverride, s.ResolvedThinkingLevel, s.ResolvedEffortOverride, effective)
+			return 1
+		case <-deadline:
+			errLine("thinking", "the leader did not apply %s within %s (still %s)", level, timeout, last)
+			return 1
+		case <-conn.Done():
+			errLine("thinking", "connection closed")
+			return 1
+		case <-ctx.Done():
+			return 130
+		}
 	}
 }

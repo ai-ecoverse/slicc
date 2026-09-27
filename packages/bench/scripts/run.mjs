@@ -12,8 +12,8 @@
  * Fernet-encrypted with the set's own key, as upstream publishes its tasks.
  *
  * Leader: driven from outside with the Go `slicc` CLI (SLICC_CLI) against its join URL
- * (SLICC_JOIN_URL): each task is a prompt to the cone after `new-session --erase` and
- * `model <m>` — see slicc-adapter.mjs.
+ * (SLICC_JOIN_URL): each task is a prompt to the cone after `new-session --erase`,
+ * `model <alias>`, and, unless the spec is `@default`, `thinking <level>` — see slicc-adapter.mjs.
  * In CI (BENCH_LEADER_SCRIPTS set), `--fresh-leader-every N` restarts the leader every N tasks,
  * and an unreachable leader is restarted once and the run retried. `--leader-down-limit K` stops
  * after K runs in a row that could not reach the leader. The out dir keeps a journal for
@@ -46,6 +46,7 @@ import {
 } from './lifecycle.mjs';
 import { reportData, reportMarkdown, summarize } from './results.mjs';
 import {
+  parseModelSpec,
   parseSkillsCondition,
   restoreSkills,
   runTask,
@@ -112,6 +113,10 @@ export function parseCli(argv) {
     throw new Error('--fresh-leader-every must be 0 (never) or a positive number of tasks');
   if (!Number.isInteger(leaderDownLimit) || leaderDownLimit < 1)
     throw new Error('--leader-down-limit must be a positive integer');
+  const models = list(values.models);
+  if (!values.help) {
+    for (const spec of models) parseModelSpec(spec);
+  }
   const leaders = Number.parseInt(values.leaders, 10);
   if (!Number.isInteger(leaders) || leaders < 1 || leaders > MAX_LEADERS)
     throw new Error(`--leaders must be 1 to ${MAX_LEADERS}`);
@@ -132,7 +137,7 @@ export function parseCli(argv) {
   return {
     help: values.help,
     sets: values.set ?? [],
-    models: list(values.models),
+    models,
     skills: list(values.skills).map(parseSkillsCondition),
     repeats,
     taskIds: values.tasks ? list(values.tasks) : null,
@@ -380,9 +385,11 @@ function failInto(record, stage, err) {
  */
 /** Record `config`, including whether this condition seeded bundled skills. */
 export function runConfig(harness, model, condition) {
+  const spec = parseModelSpec(model);
   return {
     harness,
-    model,
+    model: spec.spec,
+    thinking: spec.thinking,
     skills: condition.name,
     default_skills: Boolean(condition.builtin),
   };
@@ -422,6 +429,7 @@ async function runOne(r, ctx) {
   }
   record.metrics = traceFromResult(result).metrics;
   record.model_id = result.modelId ?? null;
+  record.config.thinking_effective = result.thinkingEffective || null;
   // A transcript lost to an unreachable leader would leave the judge only the final answer, and
   // score the leader instead of the agent (a 0.00 in the 2026-09-25 smoke run): the run counts as
   // leader-down, so it is retried on a fresh leader rather than judged without its evidence.

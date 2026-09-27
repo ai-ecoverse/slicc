@@ -37,7 +37,7 @@ Runs task sets on a SLICC leader across **models** and **skills**, judges each r
 Everything is driven from outside through the Go `slicc` CLI against the leader's join URL; nothing bench-specific runs on the leader. A task mimics a person: new chat, pick a model, type.
 
 1. `run.mjs` stages `/workspace/skills` for the condition with `slicc exec`; builtin skills stash in `/workspace/.bench-skills-builtin`. Conditions: `none`, `builtin`, or either `+` extras under `/workspace/bench-skills/<name>/`. **`none` means no bundled skills** via `flags set no-default-skills` — [details](../../docs/bench-runner.md#none-skills-condition).
-2. Per task, `runTask` stages files, closes tabs, runs `slicc new-session --erase` (drops conversation **and** memories) and `slicc model <m>`, then `slicc prompt -` with the task plus upstream's closing instruction (`FINAL ANSWER:`). Skills check after `new-session`. Timeout → SIGINT; CLI exits 130 only after `abort_ack` (exit 1 if no confirm in 12s; SIGKILL at 20s). [Interrupt](../../docs/bench-runner.md#interrupt-and-spend).
+2. Per task, `runTask` stages files, closes tabs, runs `slicc new-session --erase` (drops conversation **and** memories), `slicc model <alias>`, and for `alias@level` `slicc thinking <level>` (`config.thinking` = request, `config.thinking_effective` = what the prompt runs; a mismatch is a run error), then `slicc prompt -` with the task plus upstream's closing instruction (`FINAL ANSWER:`). Skills check after `new-session`. Timeout → SIGINT; CLI exits 130 only after `abort_ack` (exit 1 if no confirm in 12s; SIGKILL at 20s). [Interrupt](../../docs/bench-runner.md#interrupt-and-spend).
 3. While the cone works: poll `playwright-cli tab-list`, screenshot on tab change (or every 15 s). Spend = `cost --json --all` delta (authoritative vs `session export`). Judge trajectory from `session export` (chunked past 8 MiB — [transcript collection](../../docs/bench-runner.md#transcript-collection)). After interrupt, read spend until flat or 3 min; giving up → `leader_down` + lane restart. Order: skills → repeat → task → model.
 4. `resumeAction()` from stored digests/judge — `done`; `rejudge` (changed judge/rubric/weights); `run` (agent failed, task text changed, or `config.default_skills` missing/mismatched — pre-flag `none` artifacts). Errored runs are reported, never fails, but exit 1 so CI can't green on missing runs. Scores: judged only; time/cost: every finished run.
 
@@ -66,7 +66,7 @@ npm run test:coverage:bench
 actionlint .github/workflows/bench.yml .github/workflows/bench-reaper.yml
 ```
 
-Live check against a local dev harness (build the CLI from this checkout for `new-session`/`model`; run `run.mjs` with `SLICC_CLI`, `SLICC_JOIN_URL`, `AWS_BEARER_TOKEN_BEDROCK`): [`README.md`](./README.md#run-it-locally).
+Live check against a local dev harness (build the CLI from this checkout for `new-session`/`model`/`thinking`; run `run.mjs` with `SLICC_CLI`, `SLICC_JOIN_URL`, `AWS_BEARER_TOKEN_BEDROCK`): [`README.md`](./README.md#run-it-locally).
 
 ## Design Rules
 

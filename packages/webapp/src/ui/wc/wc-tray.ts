@@ -17,6 +17,10 @@ import {
   type FollowerAbortOutcome,
 } from '../../scoops/follower-abort.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import {
+  getLockedEffortLevel,
+  reportedThinking,
+} from '../../scoops/scoop-context/thinking-level.js';
 import { TabPersistenceGuard } from '../../scoops/tab-persistence-guard.js';
 import {
   FOLLOWER_STATUS_STORAGE_KEY,
@@ -83,6 +87,7 @@ import {
   getAllAvailableModels,
   getProviderConfig,
   resolveCurrentModel,
+  resolveModelById,
 } from '../provider-settings.js';
 import { createRemoteCdpPageBridge, type RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from '../runtime-identity.js';
@@ -253,6 +258,20 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Telep
         computerMotd: partnerMotds.get(follower.bootstrapId),
       };
     });
+}
+
+function modelTheAgentRuns(pinned: WorkUnitModel | undefined) {
+  try {
+    // Same resolver the agent uses: the unit's pin, or the selected model when
+    // the record has none yet. A missing pin is not "no model". Leaving it
+    // empty made model.state omit the resolved level, and the CLI then
+    // rejected a set the prompt was about to run. A picker hit can also lack
+    // the extra-model reasoning flag; this resolver keeps it.
+    if (pinned) return resolveModelById(pinned.id, pinned.provider);
+    return resolveCurrentModel();
+  } catch {
+    return undefined;
+  }
 }
 
 function modelCatalogForTray(): TrayModelCatalogEntry[] {
@@ -801,17 +820,35 @@ function leaderModelCallbacks(
       const catalog = modelCatalogForTray();
       const unit = client.getScoop(scoopJid);
       // The model of the cone the follower is looking at (a scoop shows its
-      // owning cone's), plus that unit's own thinking level. The model comes
-      // from the leader's OWN summary (#2382 PR C) — this answer and the
-      // leader's pill must not be able to disagree — while the thinking level
-      // stays on the record, which is the only place that carries it.
+      // owning cone's). The model comes from the leader's OWN summary (#2382
+      // PR C). `thinkingLevel` is the requested level on the record.
+      // `resolvedThinkingLevel` is what the next prompt runs: the same clamp
+      // and effort lock the agent applies, against this page's catalogue.
       const thinking = unit ? thinkingFor(unit) : {};
+      const requestedLevel = thinking.level === 'max' ? 'xhigh' : thinking.level;
+      const requestedEffort =
+        thinking.level === 'max' ? (thinking.effortOverride ?? 'max') : thinking.effortOverride;
+      const pinned = modelForUnit(units, scoopJid);
+      const resolved = reportedThinking({
+        requested: requestedLevel,
+        effortOverride: requestedEffort,
+        model: modelTheAgentRuns(pinned),
+        locked: getLockedEffortLevel(),
+        agent: client.getStreamThinking?.(scoopJid),
+      });
       return {
-        activeModelId: qualifiedModelIdForUnit(catalog, modelForUnit(units, scoopJid)),
+        activeModelId: qualifiedModelIdForUnit(catalog, pinned),
         scoopJid,
-        thinkingLevel: thinking.level === 'max' ? 'xhigh' : thinking.level,
-        effortOverride:
-          thinking.level === 'max' ? (thinking.effortOverride ?? 'max') : thinking.effortOverride,
+        thinkingLevel: requestedLevel,
+        effortOverride: requestedEffort,
+        ...(resolved
+          ? {
+              resolvedThinkingLevel: resolved.level,
+              ...(resolved.effortOverride
+                ? { resolvedEffortOverride: resolved.effortOverride }
+                : {}),
+            }
+          : {}),
       };
     },
     onFollowerModelSelect: (modelId, scoopJid) => {
