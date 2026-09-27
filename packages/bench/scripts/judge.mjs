@@ -11,6 +11,14 @@
  */
 
 export const DEFAULT_JUDGE_MODEL = 'global.openai.gpt-5.6-luna';
+
+/**
+ * The judge that takes over when the primary one's judgement is still invalid after its repair
+ * turns. In the V2.1 pilot (2026-09-27), gpt-5.6-luna left `not_assessable_reason` out on 9 of 72
+ * runs even after two repairs; gpt-5.6-sol is its non-Claude sibling and answered the forced
+ * tool call correctly in a live probe.
+ */
+export const DEFAULT_JUDGE_FALLBACK_MODEL = 'global.openai.gpt-5.6-sol';
 const TOOL_NAME = 'report_findings';
 const STATUSES = ['met', 'violated', 'not_assessable'];
 /** Why an item is not assessable (V2.1): the judge cannot see the evidence, or the rubric scopes it out. */
@@ -426,5 +434,24 @@ export async function judgeRun({
     usage,
     imagesSent,
     repairs,
+    model,
   };
+}
+
+/**
+ * `judgeRun` on `model`, and on `fallbackModel` when that judgement is still invalid after its
+ * attempts. Only an invalid judgement falls back; a failed request or a refused key is the same
+ * for either judge. The result names the judge that scored (`model`), and `fallbackFrom` and
+ * `fallbackReason` when it was the fallback.
+ */
+export async function judgeWithFallback({ fallbackModel, ...args }) {
+  const model = args.model ?? DEFAULT_JUDGE_MODEL;
+  try {
+    return await judgeRun({ ...args, model });
+  } catch (err) {
+    const invalid = /^judge output is invalid/.test(String(err?.message));
+    if (!invalid || !fallbackModel || fallbackModel === model) throw err;
+    const j = await judgeRun({ ...args, model: fallbackModel });
+    return { ...j, fallbackFrom: model, fallbackReason: String(err.message).slice(0, 300) };
+  }
 }
