@@ -31,6 +31,12 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL fro
   exits 1 (no turn will follow); `accepted` only logs at debug and keeps
   waiting. A leader < 10 sends no ack, so nothing changes against it
   (`promptAckRejection`).
+- SIGINT does not exit on its own. `prompt` sends `abort` and leaves the
+  connection up until the leader sends `abort_ack` (the unit and every scoop
+  it owned have stopped), then exits 130. If that ack does not arrive within
+  `SLICC_ABORT_CONFIRM` (default 12s), it exits 1 and prints
+  `the leader did not confirm the turn stopped`. Closing on the signal used
+  to drop the abort before the leader read it, and the cone kept spending.
 - `new-session`/`model` (`session.go`) send the follower control messages the
   browser/iOS followers already use (`new_session`, `models.request`,
   `model.select`):

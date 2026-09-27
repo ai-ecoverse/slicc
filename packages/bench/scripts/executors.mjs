@@ -57,8 +57,12 @@ export function connectionLost(status, stderr) {
   return status !== 0 && CONNECTION_LOST_RE.test(String(stderr));
 }
 
-/** Grace between the timeout signal and SIGKILL, for the CLI to deliver its `abort`. */
-const KILL_GRACE_MS = 10_000;
+/**
+ * Grace between SIGINT and SIGKILL. `slicc prompt` waits up to 12s
+ * (`abortConfirmBound`) for the leader to confirm the stop, and exits on its
+ * own with that result. Killing sooner would drop the confirmation.
+ */
+export const KILL_GRACE_MS = 20_000;
 
 /** Bound on any call that does not bring its own (a prompt does): generous, never infinite. */
 export const DEFAULT_CALL_TIMEOUT_MS = 180_000;

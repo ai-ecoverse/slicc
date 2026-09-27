@@ -644,6 +644,10 @@ export class FollowerSyncManager implements AgentHandle {
       case 'biscotto.message.state':
         this.handleBiscottoMessageState(message.messageId, message.state);
         break;
+      case 'abort_ack':
+        // The CLI is the follower that waits on this. A browser follower
+        // aborted nothing it has to reconcile.
+        break;
       case 'exec.request':
       case 'exec.chunk':
       case 'exec.response':

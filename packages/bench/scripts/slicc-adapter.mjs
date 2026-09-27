@@ -730,6 +730,13 @@ export const COST_POLL_MS = 30_000;
 export const BUSY_PROBE_MS = 20_000;
 
 /**
+ * How many gaps an interrupted prompt is watched across before the agent is
+ * treated as not having stopped. At {@link BUSY_PROBE_MS} this is five minutes,
+ * which is the tail after SIGINT — not the old ten-minute export hang.
+ */
+export const STOP_PROBE_INTERVALS = 15;
+
+/**
  * Whether the agent is still working although `slicc prompt` returned. In the V2.1 pilot
  * (2026-09-26) `prompt` exited 0 after about 5 s with no answer in 32 of 80 runs while the cone
  * kept working in the same turn; collecting then closed its tabs mid-task and the judge scored
@@ -744,9 +751,41 @@ export async function stillWorking(leader, reply, { probeMs = BUSY_PROBE_MS, sle
   const second = await spend(leader);
   if (!first || !second) return false;
   // Turns count too: a model without token or cost accounting still adds assistant turns.
+  return spendRising(first, second);
+}
+
+function spendRising(before, after) {
   return (
-    second.cost > first.cost + 1e-9 || second.tokens > first.tokens || second.turns > first.turns
+    after.cost > before.cost + 1e-9 || after.tokens > before.tokens || after.turns > before.turns
   );
+}
+
+/**
+ * After an interrupt, read spend until two readings in a row are flat, and
+ * return the later one so the recorded cost includes what the turn spent
+ * while it was stopping. `stopped: false` means it was still rising at the
+ * end of the watch. A failed reading is skipped, never treated as zero or as
+ * proof that the agent halted.
+ */
+export async function awaitQuiescent(
+  leader,
+  { probeMs = BUSY_PROBE_MS, sleep, maxIntervals = STOP_PROBE_INTERVALS } = {}
+) {
+  let previous = null;
+  let latest = null;
+  for (let i = 0; i < maxIntervals; i += 1) {
+    const now = await spend(leader);
+    if (now) {
+      latest = now;
+      if (previous && !spendRising(previous, now)) return { stopped: true, spend: now };
+      previous = now;
+    }
+    await sleep(probeMs);
+  }
+  const now = await spend(leader);
+  if (now) latest = now;
+  if (previous && now && !spendRising(previous, now)) return { stopped: true, spend: now };
+  return { stopped: false, spend: latest };
 }
 
 /**
@@ -796,6 +835,7 @@ export async function runTask({
   maxCost = 0,
   costPollMs = COST_POLL_MS,
   busyProbeMs = BUSY_PROBE_MS,
+  stopProbeIntervals = STOP_PROBE_INTERVALS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   condition = null,
 }) {
@@ -831,8 +871,26 @@ export async function runTask({
     await watcher?.stop();
     const shots = await shooter.stop();
     if (reply.leaderDown) throw failure('slicc prompt', reply);
+    const interrupted = Boolean(reply.timedOut || reply.aborted || reply.status === 130);
     // Before closing tabs or collecting: a run whose agent is still at work is not judged.
-    if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
+    // An interrupt is watched until spend is flat, and that last reading is the run's cost,
+    // so tokens spent while the turn was stopping are not left off the record.
+    let after = null;
+    if (interrupted) {
+      const quiet = await awaitQuiescent(leader, {
+        probeMs: busyProbeMs,
+        sleep,
+        maxIntervals: stopProbeIntervals,
+      });
+      if (!quiet.stopped) {
+        const err = new Error(
+          `slicc prompt was interrupted after ${Math.round(durationMs / 1000)} s but the agent kept working (its spend kept rising)`
+        );
+        err.stillWorking = true;
+        throw err;
+      }
+      after = quiet.spend;
+    } else if (await stillWorking(leader, reply, { probeMs: busyProbeMs, sleep })) {
       const err = new Error(
         `slicc prompt returned after ${Math.round(durationMs / 1000)} s while the agent was still working (its spend kept rising)`
       );
@@ -844,10 +902,27 @@ export async function runTask({
     // keeps the leader busy.
     await closeTabs(leader).catch(() => {});
 
-    const after = await spend(leader);
+    if (!after) after = await spend(leader);
     const { doc: transcript, info: transcriptExport } = await exportTranscript(leader, dir, {
       now,
     });
+    // session export waits while any scoop is processing. A timeout after the
+    // spend looked flat can still be that wait — the agent resumed. A lost
+    // transcript of a run that is still busy is not scored.
+    if (!transcriptExport.ok && transcriptExport.reason === 'timeout') {
+      const tail = await awaitQuiescent(leader, {
+        probeMs: busyProbeMs,
+        sleep,
+        maxIntervals: 1,
+      });
+      if (!tail.stopped) {
+        const err = new Error(
+          'session export timed out while the agent was still working (its spend kept rising)'
+        );
+        err.stillWorking = true;
+        throw err;
+      }
+    }
     const { taken, images } = await readShots(leader, shots);
     health.after = await leaderHealth(leader, now);
     const done = now();

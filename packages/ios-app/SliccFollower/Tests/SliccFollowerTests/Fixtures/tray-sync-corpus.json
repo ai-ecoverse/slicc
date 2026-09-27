@@ -1,9 +1,21 @@
 {
   "traySyncProtocolVersion": 10,
-  "leaderVariantCount": 48,
+  "leaderVariantCount": 49,
   "followerVariantCount": 43,
   "agentEventVariantCount": 13,
   "leaderToFollower": [
+    {
+      "type": "abort_ack",
+      "ios": "unknown",
+      "message": {
+        "type": "abort_ack",
+        "scoopJid": "cone",
+        "stopped": [
+          "scoop_1",
+          "cone"
+        ]
+      }
+    },
     {
       "type": "agent_event",
       "ios": "decoded",

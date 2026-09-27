@@ -92,12 +92,7 @@ export class FollowerDispatch {
         this.handleFollowerUserMessage(bootstrapId, message);
         break;
       case 'abort':
-        this.context.log.info('Follower abort received', { bootstrapId });
-        // The unit THIS follower is looking at, not the one the leader is
-        // displaying — the same routing `handleModelSelection` already does.
-        this.context.options.onFollowerAbort(
-          this.context.followers.followers.get(bootstrapId)?.selectedScoopJid
-        );
+        this.acknowledgeAbort(bootstrapId);
         break;
       case 'new_session':
         this.handleFollowerNewSession(bootstrapId, message.action);
@@ -376,6 +371,34 @@ export class FollowerDispatch {
       }
     );
     this.ackUserMessage(bootstrapId, message.messageId, delivery);
+  }
+
+  /**
+   * Stop the unit this follower is looking at (not the one the leader is
+   * displaying) and, once that stop is real, tell only this follower.
+   * A handler that does not confirm sends nothing: the follower's own bound
+   * is what reports a stop the leader never acknowledged.
+   */
+  private acknowledgeAbort(bootstrapId: string): void {
+    this.context.log.info('Follower abort received', { bootstrapId });
+    const target = this.context.followers.followers.get(bootstrapId)?.selectedScoopJid;
+    const outcome = this.context.options.onFollowerAbort(target);
+    void Promise.resolve(outcome).then(
+      (result) => {
+        if (!result?.confirmed) return;
+        this.context.followers.followers.get(bootstrapId)?.sync.send({
+          type: 'abort_ack',
+          scoopJid: result.scoopJid,
+          stopped: result.stopped,
+        });
+      },
+      (err: unknown) => {
+        this.context.log.warn('Follower abort outcome failed', {
+          bootstrapId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    );
   }
 
   /**

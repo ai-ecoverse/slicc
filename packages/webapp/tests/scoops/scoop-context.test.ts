@@ -843,7 +843,7 @@ describe('ScoopContext retry cancellation', () => {
 
     // Only the first attempt should have run — stop() aborted backoff before retries.
     expect(attempts).toBe(1);
-    // stop() transitions status to ready; no fatal error should fire on cancellation.
+    // cleanupPromptState publishes ready once the aborted turn settles; no fatal error on cancel.
     expect(callbacks.onFatalError).not.toHaveBeenCalled();
     const statusCalls = (callbacks.onStatusChange as any).mock.calls.map((c: any[]) => c[0]);
     expect(statusCalls).toContain('ready');

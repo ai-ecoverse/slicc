@@ -687,11 +687,10 @@ export class ScoopContext {
     // A stop also cuts off an idle round in flight — its summary would
     // otherwise finish and be adopted over a chat the user is acting on.
     this.idleCompaction?.cancel();
-    this.isProcessing = false;
-    // Preserve an `error` state (a tripped bound set it deliberately, so the
-    // lifecycle doesn't announce completion); a plain user interrupt lands
-    // on `ready` as before.
-    if (this.status !== 'error') this.setStatus('ready');
+    // Do not clear `isProcessing` / publish `ready` here. `cleanupPromptState`
+    // is what marks the turn settled once `runTurn`'s finally runs. Publishing
+    // ready eagerly let `abort_ack` and `session export` treat the unit as
+    // idle while the outstanding `agent.prompt()` was still unwinding.
   }
 
   /** Clear the agent's in-memory conversation history (used by clear-chat). */

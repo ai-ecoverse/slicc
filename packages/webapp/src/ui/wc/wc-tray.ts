@@ -10,6 +10,12 @@
 import type { SliccFloatbar } from '@slicc/webcomponents';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../../kernel/panel-rpc.js';
+import {
+  ABORT_CONFIRM_BOUND_MS,
+  ABORT_CONFIRM_POLL_MS,
+  confirmFollowerStop,
+  type FollowerAbortOutcome,
+} from '../../scoops/follower-abort.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import { TabPersistenceGuard } from '../../scoops/tab-persistence-guard.js';
 import {
@@ -982,14 +988,23 @@ export function createLeaderOptionsFactory(
       deliverFollowerMessage(deps, state, text, messageId, attachments, options),
     // Same routing as the message above: a follower's stop names the unit that
     // follower is looking at, not the one this leader is displaying.
-    onFollowerAbort: (targetScoopJid) => {
+    onFollowerAbort: (targetScoopJid): Promise<FollowerAbortOutcome> => {
       const target = targetScoopJid ?? client.selectedScoopJid;
-      if (!target) return;
-      void deps.workUnits.signal(target, 'stop').catch((err) =>
-        deps.log.warn('follower abort failed', {
-          error: err instanceof Error ? err.message : String(err),
-        })
-      );
+      if (!target) return Promise.resolve({ confirmed: false, scoopJid: '', stopped: [] });
+      return confirmFollowerStop({
+        target,
+        units: () =>
+          deps.workUnits.currentUnits().map((unit) => ({
+            jid: unit.id,
+            parentJid: unit.parentId ?? null,
+          })),
+        stop: (jid) => deps.workUnits.signal(jid, 'stop'),
+        isProcessing: (jid) => client.isProcessing(jid),
+        now: Date.now,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        boundMs: ABORT_CONFIRM_BOUND_MS,
+        pollMs: ABORT_CONFIRM_POLL_MS,
+      });
     },
     onFollowerNewSession: (action) => {
       // Route the follower's freezer new-chat to wc-live's `runNewSession`

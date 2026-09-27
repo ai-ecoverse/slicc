@@ -267,6 +267,8 @@ export const BISCOTTO_RECEIVABLE: Record<LeaderToFollowerMessage['type'], boolea
   user_message_echo: true,
   // Only ever about the guest's OWN delivered message (`follower-dispatch.ts`).
   user_message_ack: true,
+  // A guest that hit stop learns whether its own unit actually stopped.
+  abort_ack: true,
   status: true,
   error: true,
   'biscotto.message.state': true,

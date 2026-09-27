@@ -153,6 +153,10 @@ Options:
   --json       Output as JSON (for programmatic use)
   -h, --help   Show this help message
 
+\`--all\` keeps a dropped scoop's usage after that scoop is gone.
+\`session export\` only includes scoops that are still registered, so a
+transcript can leave out work this report still counts.
+
 The Model column is the model that unit is running now (its provider-qualified
 pin, or the latest turn when it has no pin; a provider-less legacy pin yields
 to that turn when they differ) — not the model with the most turns.
