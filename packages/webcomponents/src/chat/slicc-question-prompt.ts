@@ -56,9 +56,9 @@ function withLocalOffset(value: string): string {
 const STYLE = `
 :host{display:block;width:300px;max-width:100%;color:var(--ink);}
 :host([hidden]){display:none;}
-:host([inline]){width:100%;margin:8px 0 12px;}
+:host([inline]){width:100%;margin:4px 0 10px;}
 .wrap{display:flex;flex-direction:column;gap:10px;padding:12px;}
-:host([inline]) .wrap{padding:10px;border:1px solid color-mix(in srgb,var(--ctx) 20%,transparent);border-radius:10px;background:color-mix(in srgb,var(--ctx) 4%,var(--canvas));}
+:host([inline]) .wrap{padding:0;gap:6px;}
 :host([inline]) .q{display:none;}
 .q{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.35;font-weight:550;}
 .q svg{flex:0 0 auto;margin-top:2px;color:var(--ctx,currentColor);}
@@ -79,6 +79,13 @@ button.primary:hover:not(:disabled){filter:brightness(1.08);background:var(--ctx
 .choices button{flex:0 1 auto;min-height:34px;text-align:left;}
 .choices button.recommended{border-color:var(--ctx,var(--ink));}
 .choices small{font-size:10px;font-weight:500;opacity:.7;}
+:host([inline]) button{flex:0 1 auto;min-height:30px;padding:0 10px;border-radius:7px;font-weight:550;background:color-mix(in srgb,var(--canvas) 78%,transparent);}
+:host([inline]) button.primary{color:var(--ink);background:color-mix(in srgb,var(--ctx) 12%,var(--canvas));border-color:color-mix(in srgb,var(--ctx) 35%,transparent);}
+:host([inline]) button:hover:not(:disabled){background:color-mix(in srgb,var(--ink) 9%,var(--canvas));}
+:host([inline]) button.primary:hover:not(:disabled){background:color-mix(in srgb,var(--ctx) 18%,var(--canvas));filter:none;}
+:host([inline]) .choices button{min-height:30px;}
+:host([inline]) .choices button.recommended{border-color:color-mix(in srgb,var(--ctx) 45%,transparent);}
+:host([inline]) .choices small{opacity:.58;}
 .multi{display:flex;flex-direction:column;gap:8px;align-items:flex-start;}
 .multi label{display:flex;gap:6px;align-items:center;font-size:12.5px;}
 .multi button{flex:none;}
