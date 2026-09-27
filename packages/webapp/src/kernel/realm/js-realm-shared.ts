@@ -61,7 +61,11 @@ import {
 } from './realm-node-shims.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import { createSerialBridge, type RealmSerialApi } from './realm-serial-bridge.js';
-import { resolveSyncFsBridge, resolveSyncSabTransport } from './realm-sync-transport.js';
+import {
+  hasSyncFsBridge,
+  resolveSyncFsBridge,
+  resolveSyncSabTransport,
+} from './realm-sync-transport.js';
 import { createTimerHandleTracker, type TimerHandleTracker } from './realm-timer-handles.js';
 import type {
   RealmDoneMsg,
@@ -74,11 +78,18 @@ import type {
 import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
-import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
+import { SyncFsCache, type SyncFsSnapshot, type SyncFsSnapshotOptions } from './sync-fs-cache.js';
 import type { SyncFsPosixBridge } from './sync-fs-xhr-bridge.js';
 import { createSyncExecSabTransport } from './sync-sab-bridge.js';
 
 const OUTPUT_TAIL_MAX = 64 * 1024;
+
+/**
+ * Time budget of the boot snapshot for a realm with a sync-fs bridge: past it,
+ * the cache fills from the bridge on demand. The unbounded walk of a large
+ * cwd (a hostfs mount) took seconds per realm boot.
+ */
+const BRIDGED_SNAPSHOT_BUDGET_MS = 150;
 
 function appendOutputTail(current: string, chunk: string): string {
   if (!chunk) return current;
@@ -103,11 +114,12 @@ function appendOutputTail(current: string, chunk: string): string {
 export async function initSyncFsCache(
   rpc: RealmRpcClient,
   cwd: string,
-  onError?: (message: string) => void
+  onError?: (message: string) => void,
+  options?: SyncFsSnapshotOptions
 ): Promise<SyncFsCache> {
   let snapshot: SyncFsSnapshot;
   try {
-    snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
+    snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', options ? [cwd, options] : [cwd]);
   } catch (err) {
     onError?.(err instanceof Error ? err.message : String(err));
     snapshot = { entries: [] };
@@ -330,7 +342,12 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const stdio = createRealmStdio(init, writeStdout, writeStderr);
   const fsBridge = createFsBridge(rpc, realmFetch, stdio);
 
-  const syncFs = await initSyncFsCache(rpc, init.cwd, syncFsSnapshotErrorSink(init, writeStderr));
+  const syncFs = await initSyncFsCache(
+    rpc,
+    init.cwd,
+    syncFsSnapshotErrorSink(init, writeStderr),
+    hasSyncFsBridge(init) ? { timeBudgetMs: BRIDGED_SNAPSHOT_BUDGET_MS } : undefined
+  );
   const syncExecBridge = installSyncBridges(init, port, syncFs, fsBridge, stdio);
 
   const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);

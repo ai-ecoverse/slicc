@@ -47,7 +47,25 @@ export interface SyncFsSnapshot {
     truncated?: boolean;
     /** Real byte size — set for truncated entries so `statSync().size` is correct. */
     size?: number;
+    /**
+     * A directory whose children the walk did not all record (it stopped on
+     * its time or entry budget): its cached listing is not authoritative, so
+     * `readdirSync` merges in the live listing (see {@link SyncFsCache.isPartial}).
+     */
+    partial?: boolean;
   }>;
+}
+
+/** Options of the host's `vfs.snapshot` op. */
+export interface SyncFsSnapshotOptions {
+  /**
+   * Stop the walk after this many milliseconds. Only a realm with a sync
+   * bridge passes it: there a cache miss falls through to the bridge, so a
+   * shorter snapshot costs round trips, not correctness. Without it the walk
+   * of a large or remote tree (a hostfs mount as the cwd) held up every realm
+   * boot for seconds.
+   */
+  timeBudgetMs?: number;
 }
 
 export interface SyncFsMutations {
@@ -182,6 +200,7 @@ export class SyncFsCache {
         symlinkTarget: entry.symlinkTarget,
         truncated: entry.truncated,
         size: entry.size,
+        ...(entry.partial ? { partial: true } : {}),
       });
       this.initialPaths.add(normalized);
       this.initialKind.set(normalized, this.entryKind(entry));
@@ -364,9 +383,25 @@ export class SyncFsCache {
     if (!this.tree.has(dir)) this.mkdir(dir, true, true);
   }
 
-  /** True when `path` was synthesized by a write, so its listing is not authoritative (#3193). */
+  /**
+   * True when `path`'s cached listing is not authoritative: synthesized by a
+   * write (#3193), or a directory the boot walk stopped short of.
+   */
   isPartial(path: string): boolean {
     return this.tree.get(normalizePath(path))?.partial === true;
+  }
+  /**
+   * True when `path` or any cached directory below it is {@link isPartial}:
+   * the cache knows only part of that subtree, so an operation on the whole of
+   * it (a recursive remove, a rename) must not be answered from the cache.
+   */
+  hasPartialWithin(path: string): boolean {
+    const normalized = normalizePath(path);
+    const prefix = normalized === '/' ? '/' : `${normalized}/`;
+    for (const [p, entry] of this.tree) {
+      if (entry.partial && (p === normalized || p.startsWith(prefix))) return true;
+    }
+    return false;
   }
 
   /**
