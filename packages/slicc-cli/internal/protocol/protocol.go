@@ -253,12 +253,31 @@ type ModelSelect struct {
 	ScoopJid string `json:"scoopJid,omitempty"`
 }
 
+// ThinkingSet asks the leader to change one unit's thinking level
+// (follower→leader). The leader answers with a model.state broadcast.
+// EffortOverride carries a raw effort above the thinking-level enum (`max`);
+// omit it to clear a previous override.
+type ThinkingSet struct {
+	Type           string `json:"type"` // "thinking.set"
+	ScoopJid       string `json:"scoopJid"`
+	ThinkingLevel  string `json:"thinkingLevel"`
+	EffortOverride string `json:"effortOverride,omitempty"`
+}
+
 // ModelSelectionState is TrayModelSelectionState: the model a cone runs now.
 type ModelSelectionState struct {
 	ActiveModelID  string `json:"activeModelId"`
 	ScoopJid       string `json:"scoopJid"`
 	ThinkingLevel  string `json:"thinkingLevel,omitempty"`
 	EffortOverride string `json:"effortOverride,omitempty"`
+	// ResolvedThinkingLevel is the level the next prompt will run, after the
+	// model's thinking map, clamping, and the effort lock. Empty on a leader
+	// that only echoes the request. `adaptive` means the model cannot disable
+	// thinking, so an unset or `off` record still thinks.
+	ResolvedThinkingLevel string `json:"resolvedThinkingLevel,omitempty"`
+	// ResolvedEffortOverride is the effort the next prompt will send. `max`
+	// when that override is actually in force; empty when it was dropped.
+	ResolvedEffortOverride string `json:"resolvedEffortOverride,omitempty"`
 }
 
 // ModelState reports the model of the cone this follower views (leader→follower).
@@ -312,6 +331,7 @@ const (
 	TypeModelsList      = "models.list"
 	TypeModelSelect     = "model.select"
 	TypeModelState      = "model.state"
+	TypeThinkingSet     = "thinking.set"
 	TypeError           = "error"
 
 	// TypeChunk is the transport-level chunk frame (see ChunkFrame). The `__`

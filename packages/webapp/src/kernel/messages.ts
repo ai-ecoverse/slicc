@@ -423,6 +423,13 @@ export interface SetThinkingLevelAckMsg {
   scoopJid: string;
   level?: ExtensionThinkingLevel;
   effortOverride?: string;
+  /**
+   * Level the next prompt will send, read off the agent after the update.
+   * Distinct from {@link SetThinkingLevelAckMsg.level}, which is the request.
+   */
+  resolvedLevel?: ExtensionThinkingLevel;
+  /** Effort the next prompt will send. `max` only when that override is in force. */
+  resolvedEffortOverride?: string;
   applied: boolean;
 }
 

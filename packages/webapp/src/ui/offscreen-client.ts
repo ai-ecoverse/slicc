@@ -268,6 +268,11 @@ export class OffscreenClient implements KernelClientFacade {
   >();
   /** Pending thinking updates, resolved only after the worker has applied and persisted them. */
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
+  /** Level the agent will send, keyed by unit, from the last thinking ack. */
+  private streamThinkingByUnit = new Map<
+    string,
+    { level: ThinkingLevel; effortOverride?: string }
+  >();
   private pendingModelAcks = new Map<string, (applied: boolean) => void>();
   /**
    * Pending `user-message` sends awaiting the kernel's verdict (#3505).
@@ -1647,6 +1652,14 @@ export class OffscreenClient implements KernelClientFacade {
     this.pendingModelAcks.get(msg.requestId)?.(msg.applied);
   }
 
+  /**
+   * Level and effort the agent will put on the next request, from the last
+   * thinking ack. Absent until a set has completed.
+   */
+  getStreamThinking(jid: string): { level: ThinkingLevel; effortOverride?: string } | undefined {
+    return this.streamThinkingByUnit.get(jid);
+  }
+
   private handleThinkingLevelAck(msg: SetThinkingLevelAckMsg): void {
     if (msg.applied) {
       const scoop = this.getScoop(msg.scoopJid);
@@ -1660,6 +1673,12 @@ export class OffscreenClient implements KernelClientFacade {
             ? undefined
             : { level: msg.level as ThinkingLevel, effortOverride: msg.effortOverride }
         );
+      }
+      if (msg.resolvedLevel) {
+        this.streamThinkingByUnit.set(msg.scoopJid, {
+          level: msg.resolvedLevel === 'max' ? 'xhigh' : msg.resolvedLevel,
+          ...(msg.resolvedEffortOverride ? { effortOverride: msg.resolvedEffortOverride } : {}),
+        });
       }
     }
     this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);

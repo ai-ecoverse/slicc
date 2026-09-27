@@ -1744,6 +1744,11 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lifecycle.setThinkingLevel(jid, level, effortOverride);
   }
 
+  /** Level and effort the next prompt on `jid` will send. */
+  streamThinking(jid: string): { level: ThinkingLevel; effortOverride?: string } | null {
+    return this.lifecycle.streamThinking(jid);
+  }
+
   /** Reload skills on all active scoop contexts (cone + scoops). */
   reloadAllSkills(): Promise<void> {
     return this.lifecycle.reloadAllSkills();

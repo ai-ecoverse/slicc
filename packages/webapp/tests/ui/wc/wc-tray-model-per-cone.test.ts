@@ -25,13 +25,22 @@ import { createLeaderOptionsFactory } from '../../../src/ui/wc/wc-tray.js';
 import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
-vi.mock('../../../src/ui/provider-settings.js', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>(
-    '../../../src/ui/provider-settings.js'
-  );
-  return {
-    ...actual,
-    getAllAvailableModels: () => [
+const { modelGroups, currentModel } = vi.hoisted(() => ({
+  currentModel: {
+    current: {
+      id: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      reasoning: true,
+    } as {
+      id: string;
+      provider: string;
+      reasoning?: boolean;
+      name?: string;
+      thinkingLevelMap?: Record<string, string | null>;
+    },
+  },
+  modelGroups: {
+    current: [
       {
         providerId: 'anthropic',
         providerName: 'Anthropic',
@@ -40,8 +49,22 @@ vi.mock('../../../src/ui/provider-settings.js', async () => {
           { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', reasoning: true },
         ],
       },
-    ],
-    resolveCurrentModel: () => ({ id: 'claude-sonnet-4-6', provider: 'anthropic' }),
+    ] as Array<{
+      providerId: string;
+      providerName: string;
+      models: Array<{ id: string; name: string; reasoning?: boolean }>;
+    }>,
+  },
+}));
+
+vi.mock('../../../src/ui/provider-settings.js', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>(
+    '../../../src/ui/provider-settings.js'
+  );
+  return {
+    ...actual,
+    getAllAvailableModels: () => modelGroups.current,
+    resolveCurrentModel: () => currentModel.current,
   };
 });
 
@@ -58,7 +81,12 @@ function cone(jid: string, folder: string, model?: RegisteredScoop['model']): Re
   };
 }
 
-function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = true) {
+function makeOptions(
+  scoops: RegisteredScoop[],
+  selectedJid: string,
+  applied = true,
+  streamThinking?: (jid: string) => { level: string; effortOverride?: string } | undefined
+) {
   type UnitsListener = (units: readonly WorkUnitSummary[]) => void;
   let pushUnits: UnitsListener | undefined;
   const setScoopModel = vi.fn().mockResolvedValue(applied);
@@ -72,6 +100,7 @@ function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = t
     client: {
       getScoops: () => scoops,
       getScoop: (jid: string) => scoops.find((s) => s.jid === jid),
+      getStreamThinking: streamThinking,
       setScoopModel,
     },
     window,
@@ -227,6 +256,67 @@ describe('follower model selection is per cone (#2310)', () => {
     expect(withOpus.options.getModelSelectionState?.(opusCone.jid).activeModelId).toBe(
       'anthropic:claude-opus-4-6'
     );
+  });
+
+  it('reports the level a deferred agent will apply from the selected model', () => {
+    // Hosted boot can answer thinking.set before the agent exists. The record
+    // still holds the request, and the selected model is what init will run.
+    currentModel.current = {
+      id: 'global.anthropic.claude-opus-5-5',
+      provider: 'bedrock-camp',
+      name: 'Claude Opus 5.5',
+      reasoning: true,
+      thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+    };
+    const bare = cone('cone_1', 'cone');
+    const unset = makeOptions([bare], bare.jid);
+    expect(unset.options.getModelSelectionState?.(bare.jid).resolvedThinkingLevel).toBe('adaptive');
+    bare.thinking = { level: 'low' };
+    const low = makeOptions([bare], bare.jid);
+    expect(low.options.getModelSelectionState?.(bare.jid)).toMatchObject({
+      thinkingLevel: 'low',
+      resolvedThinkingLevel: 'low',
+    });
+  });
+
+  it('reports the agent level for Opus 5.5 after model.set, not a non-reasoning catalogue hit', () => {
+    // The page catalogue can carry the id without the extra-model reasoning
+    // flag. The agent, after model.set, applied the level on the real model.
+    modelGroups.current = [
+      {
+        providerId: 'bedrock-camp',
+        providerName: 'Bedrock',
+        models: [
+          {
+            id: 'global.anthropic.claude-opus-5-5',
+            name: 'Claude Opus 5.5',
+            reasoning: false,
+          },
+        ],
+      },
+    ];
+    const opus = cone('cone_1', 'cone', {
+      provider: 'bedrock-camp',
+      id: 'global.anthropic.claude-opus-5-5',
+    });
+    opus.thinking = { level: 'low' };
+    const low = makeOptions([opus], opus.jid, true, () => ({ level: 'low' }));
+    expect(low.options.getModelSelectionState?.(opus.jid)).toMatchObject({
+      thinkingLevel: 'low',
+      resolvedThinkingLevel: 'low',
+    });
+
+    opus.thinking = { level: 'xhigh', effortOverride: 'max' };
+    const max = makeOptions([opus], opus.jid, true, () => ({
+      level: 'xhigh',
+      effortOverride: 'max',
+    }));
+    expect(max.options.getModelSelectionState?.(opus.jid)).toMatchObject({
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+      resolvedThinkingLevel: 'xhigh',
+      resolvedEffortOverride: 'max',
+    });
   });
 });
 

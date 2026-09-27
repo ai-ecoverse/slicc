@@ -1111,6 +1111,11 @@ export class ScoopLifecycleManager {
     return applied;
   }
 
+  /** What the next prompt on `jid` will send, or null when it has no agent. */
+  streamThinking(jid: string): { level: ThinkingLevel; effortOverride?: string } | null {
+    return this.getContext(jid)?.streamThinking() ?? null;
+  }
+
   /**
    * Build the {@link ScoopContextCallbacks} wired into a scoop's context by
    * {@link createTab}. Mostly thin per-scoop adapters over the orchestrator's

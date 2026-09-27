@@ -183,6 +183,7 @@ describe('bedrock-camp built-in provider', () => {
     ['us.anthropic.claude-opus-4-9', 'xhigh'],
     ['us.anthropic.claude-sonnet-4-6', 'max'],
     ['us.anthropic.claude-sonnet-5', 'xhigh'],
+    ['global.anthropic.claude-opus-5-5', 'xhigh'],
   ])(
     'uses adaptive thinking for Opus/Sonnet ≥ 4.6 (%s -> effort=%s)',
     async (modelId, expectedEffort) => {
@@ -195,6 +196,17 @@ describe('bedrock-camp built-in provider', () => {
       });
     }
   );
+
+  it('sends effort max for adaptive Claude when the composer overrides effort', async () => {
+    const payload = await capturePayload(
+      baseModel({ id: 'global.anthropic.claude-opus-5-5', name: 'Claude Opus 5.5' }),
+      { reasoning: 'xhigh', effort: 'max' }
+    );
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort: 'max' },
+    });
+  });
 
   it('keeps non-adaptive Claude 4.x models on thinking.type=enabled with interleaved beta', async () => {
     const payload = await capturePayload(
@@ -641,11 +653,11 @@ describe('GPT-6 reasoning effort', () => {
     expect(JSON.stringify(payload)).not.toContain('cachePoint');
   });
 
-  it('leaves the Claude path ignoring the effort override', async () => {
+  it('sends effort max for Opus 5 when the composer overrides effort', async () => {
     const payload = await capturePayload(
       baseModel({ id: 'us.anthropic.claude-opus-5', name: 'Claude Opus 5', reasoning: true }),
       { reasoning: 'xhigh', effort: 'max' }
     );
-    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: 'xhigh' });
+    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: 'max' });
   });
 });

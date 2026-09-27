@@ -10,6 +10,7 @@ slicc <join-url> prompt "<text>"             Stream one assistant turn, then exi
 slicc <join-url> exec "<command>"            Run in the leader's shell, stream output
 slicc <join-url> new-session [--save|--skip|--erase]   Fresh cone chat, verified empty
 slicc <join-url> model [--json] [<model>]    List models, or switch the cone
+slicc <join-url> thinking [--json] [<level>] Print the cone's thinking level, or set it
 slicc <join-url> watch [--plain] [scoop]     Tail the leader's live output, read-only
 slicc <join-url> follow [--no-banner] [--plain] [runner]   Stay connected; run cmds via <runner>
 slicc <join-url> follow --eval [repl]        Same, into ONE persistent REPL
@@ -27,7 +28,9 @@ slicc <verb>-cloud [--index N|--session <id>]   Resolve join URL from iCloud, ru
 - SIGINT: `prompt` sends `abort`, waits for `abort_ack`, exits 130; no ack in `SLICC_ABORT_CONFIRM` (12s) → exit 1.
 - `new-session`/`model` (`session.go`) send the same follower control messages
   browser/iOS use: `new-session` polls `request_snapshot` until the transcript has
-  no user message (no ack); `model` resolves an exact catalogue id, awaits `model.state`.
+  no user message (no ack); `model` resolves an exact catalogue id, awaits `model.state`;
+  `thinking <level>` sends `thinking.set`, awaits a `model.state` echoing it, exits 1 if
+  the resolved level differs (`--allow-downgrade`). [Thinking](../../docs/slicc-cli-details.md#thinking).
 - `watch` — passive `tail -f` mirror; sends nothing, reconnects with backoff.
   **Does NOT filter by scoop by default** — the cone's `scoopJid` is a generated
   uid (not `"cone"`); pass a scoop jid to filter. [Render](../../docs/slicc-cli-details.md#watch-rendering).
@@ -72,7 +75,7 @@ macOS only; shells out to `Sliccstart --computer-follow <url> --pair <token>`
 
 `github.com/pion/webrtc/v4` is pure Go — one static binary cross-compiled for
 macOS/Linux/Windows × amd64/arm64 (`CGO_ENABLED=0`, `dist`), interoperating with
-browser leaders + Cloudflare TURN. Layout: `main.go`, `commands.go`, `cloud.go`,
+browser leaders + Cloudflare TURN. Layout: `main.go`, `commands.go`, `session.go`, `cloud.go`,
 `update.go`, `telemetry.go`, plus
 `internal/{protocol,signaling,tray,cloud,computer,execrun,update,logging,ui}/`.
 Per-file map: [details](../../docs/slicc-cli-details.md#layout).

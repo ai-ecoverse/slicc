@@ -349,7 +349,10 @@ interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload' | 'onRespon
   /**
    * Raw effort above pi-ai's ThinkingLevel range. The composer's `max` level
    * arrives as `reasoning: 'xhigh'` plus `effort: 'max'`
-   * (`scoop-context/session-helpers.ts`). Honoured for GPT-6 only.
+   * (`scoop-context/session-helpers.ts`). GPT-6 reads it in
+   * {@link openAIReasoningEffort}. Adaptive Claude reads it as
+   * `output_config.effort`, which is how Opus 5.5 reaches `max` (its
+   * `thinkingLevelMap` names the tier; `xhigh` alone stays `xhigh`).
    */
   effort?: string;
 }
@@ -662,6 +665,16 @@ function convertToolConfig(
 
 // ── Thinking / reasoning fields ─────────────────────────────────────
 
+/** Adaptive Claude effort: a composer `max` override wins over the thinking level. */
+function claudeAdaptiveEffort(
+  options: BedrockCampOptions,
+  modelId: string,
+  modelName?: string
+): string {
+  if (options.effort === 'max') return 'max';
+  return mapThinkingLevelToEffort(options.reasoning, modelId, modelName);
+}
+
 function mapThinkingLevelToEffort(
   level: ThinkingLevel | undefined,
   modelId: string,
@@ -729,7 +742,9 @@ function buildAdditionalModelRequestFields(
   if (supportsAdaptiveThinking(model.id, model.name)) {
     const adaptive: BedrockCampAdaptiveFields = {
       thinking: { type: 'adaptive', ...(display !== undefined ? { display } : {}) },
-      output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id, model.name) },
+      output_config: {
+        effort: claudeAdaptiveEffort(options, model.id, model.name),
+      },
     };
     return adaptive;
   }

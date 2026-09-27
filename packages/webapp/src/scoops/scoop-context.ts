@@ -967,15 +967,46 @@ export class ScoopContext {
    * the change should survive a reload — `ScoopLifecycleManager` handles that.
    */
   setThinkingLevel(level: ThinkingLevel | undefined, effortOverride?: string): ThinkingLevel {
-    if (!this.agent) return 'off';
+    if (!this.agent) {
+      log.info('Thinking level stored for a deferred agent', { requested: level });
+      return 'off';
+    }
     if (getLockedEffortLevel()) return this.agent.state.thinkingLevel;
     this.activeEffortOverride = effortOverride;
-    return applyThinkingLevel(this.agent, level);
+    const resolved = applyThinkingLevel(this.agent, level);
+    log.info('Thinking level applied', {
+      requested: level,
+      resolved,
+      model: this.agent.state.model?.id,
+      provider: this.agent.state.model?.provider,
+      reasoning: this.agent.state.model?.reasoning === true,
+    });
+    return resolved;
   }
 
   /** Currently applied thinking level on the running agent. */
   getThinkingLevel(): ThinkingLevel {
     return this.agent?.state.thinkingLevel ?? 'off';
+  }
+
+  /**
+   * Level and effort the next model request will send, or null when no agent
+   * is running yet (a deferred init has no `agent.state` to read). Callers
+   * must not treat that as `off`: the record's level is applied when the
+   * agent is built, and a fabricated `off` would make `model.state` deny a
+   * level the prompt is about to run.
+   *
+   * Same fields the stream wrapper reads (`agent.state.thinkingLevel`,
+   * `activeEffortOverride`). An override of `max` is omitted when the level
+   * is `off`: the request builder drops it with the reasoning flag.
+   */
+  streamThinking(): { level: ThinkingLevel; effortOverride?: string } | null {
+    if (!this.agent) return null;
+    const level = this.agent.state.thinkingLevel;
+    return {
+      level,
+      ...(level !== 'off' && this.activeEffortOverride === 'max' ? { effortOverride: 'max' } : {}),
+    };
   }
 
   /** Cleanup */
