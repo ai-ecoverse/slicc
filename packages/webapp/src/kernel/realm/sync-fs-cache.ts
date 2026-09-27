@@ -25,7 +25,13 @@ export interface SyncFsSnapshot {
     truncated?: boolean;
 
     size?: number;
+
+    partial?: boolean;
   }>;
+}
+
+export interface SyncFsSnapshotOptions {
+  timeBudgetMs?: number;
 }
 
 export interface SyncFsMutations {
@@ -129,6 +135,7 @@ export class SyncFsCache {
         symlinkTarget: entry.symlinkTarget,
         truncated: entry.truncated,
         size: entry.size,
+        ...(entry.partial ? { partial: true } : {}),
       });
       this.initialPaths.add(normalized);
       this.initialKind.set(normalized, this.entryKind(entry));
@@ -261,6 +268,15 @@ export class SyncFsCache {
 
   isPartial(path: string): boolean {
     return this.tree.get(normalizePath(path))?.partial === true;
+  }
+
+  hasPartialWithin(path: string): boolean {
+    const normalized = normalizePath(path);
+    const prefix = normalized === '/' ? '/' : `${normalized}/`;
+    for (const [p, entry] of this.tree) {
+      if (entry.partial && (p === normalized || p.startsWith(prefix))) return true;
+    }
+    return false;
   }
 
   commitWrite(path: string, content: Uint8Array): void {

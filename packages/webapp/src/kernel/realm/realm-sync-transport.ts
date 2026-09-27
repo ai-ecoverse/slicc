@@ -11,10 +11,16 @@ export function resolveSyncSabTransport(
   init: RealmInitMsg,
   port: RealmPortLike
 ): SyncSabTransport | undefined {
-  if (!init.syncSab || typeof Atomics === 'undefined' || typeof Atomics.wait !== 'function') {
-    return undefined;
-  }
+  if (!init.syncSab || !canWaitAtomically()) return undefined;
   return createSyncSabTransport(init.syncSab, port);
+}
+
+function canWaitAtomically(): boolean {
+  return typeof Atomics !== 'undefined' && typeof Atomics.wait === 'function';
+}
+
+export function hasSyncFsBridge(init: RealmInitMsg): boolean {
+  return Boolean(init.syncFsToken) || (Boolean(init.syncSab) && canWaitAtomically());
 }
 
 export function resolveSyncFsBridge(

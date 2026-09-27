@@ -2,6 +2,7 @@ import { acceptPathLikeArgs, type PathArgLayout } from './fs-path-arg.js';
 import { acceptNodeCallbacks, nodeFsPromises } from './realm-fs-node-callbacks.js';
 import { createNoFdOps, createStdioFdOps, type StdioFdOps } from './realm-fs-stdio-fd.js';
 import type { RealmRpcClient } from './realm-rpc.js';
+import { flushBeforeSyncExec } from './sync-exec-xhr-bridge.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
 import type {
   SyncFsPosixBridge,
@@ -402,6 +403,27 @@ function removeWithBridgeFallback(
   return true;
 }
 
+function liveSubtreeBridge(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  resolved: string
+): SyncFsPosixBridge | undefined {
+  const live = bridge as Partial<SyncFsPosixBridge> | undefined;
+  if (!live?.rename || !live.rmdir || !live.rm || !syncFs.hasPartialWithin(resolved)) {
+    return undefined;
+  }
+  return live as SyncFsPosixBridge;
+}
+
+function runLive(syncFs: SyncFsCache, live: SyncFsPosixBridge, op: () => void): void {
+  flushBeforeSyncExec(syncFs, live);
+  try {
+    op();
+  } finally {
+    syncFs.invalidate();
+  }
+}
+
 interface RemovalDeps {
   syncFs: SyncFsCache;
   bridge: SyncFsXhrBridge | undefined;
@@ -436,8 +458,12 @@ function createRemovalOps(deps: RemovalDeps) {
     writeThrough,
     persistDelete,
   } = deps;
-  const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) =>
-    removeWithBridgeFallback(syncFs, bridge, resolved, opts, persistDelete);
+  const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) => {
+    const live = opts?.requireFile ? undefined : liveSubtreeBridge(syncFs, bridge, resolved);
+    if (!live) return removeWithBridgeFallback(syncFs, bridge, resolved, opts, persistDelete);
+    runLive(syncFs, live, () => (opts?.recursive ? live.rm(resolved) : live.rmdir(resolved)));
+    return true;
+  };
   return {
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
@@ -464,6 +490,12 @@ function createRemovalOps(deps: RemovalDeps) {
     renameSync(oldPath: string, newPath: string): void {
       const src = resolve(oldPath);
       const dest = resolve(newPath);
+
+      const live = liveSubtreeBridge(syncFs, bridge, src);
+      if (live) {
+        runLive(syncFs, live, () => live.rename(src, dest));
+        return;
+      }
       try {
         syncFs.rename(src, dest);
         return;

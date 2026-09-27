@@ -6,6 +6,8 @@ import { createExecBridge } from '../../../src/kernel/realm/realm-exec-bridge.js
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import { hasSyncFsBridge } from '../../../src/kernel/realm/realm-sync-transport.js';
+import type { RealmInitMsg } from '../../../src/kernel/realm/realm-types.js';
 import { SyncFsCache, type SyncFsSnapshot } from '../../../src/kernel/realm/sync-fs-cache.js';
 
 interface PortPair {
@@ -775,6 +777,57 @@ function makeTreeFs(files: Record<string, string>): IFileSystem {
 }
 
 describe('realm RPC: vfs.snapshot budgets', () => {
+  it('a time budget stops the walk and marks unvisited parents partial', async () => {
+    const fs = makeTreeFs({
+      '/workspace/a.txt': 'a',
+      '/workspace/b.txt': 'b',
+      '/workspace/sub/c.txt': 'c',
+    });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+
+    let calls = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => (calls++ < 4 ? 0 : 1000));
+    try {
+      const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', [
+        '/workspace',
+        { timeBudgetMs: 100 },
+      ]);
+      expect(snap.entries).toHaveLength(2);
+      const root = snap.entries.find((e) => e.path === '/workspace');
+      expect(root?.isDirectory).toBe(true);
+      expect(root?.partial).toBe(true);
+      expect(new SyncFsCache(snap).isPartial('/workspace')).toBe(true);
+    } finally {
+      now.mockRestore();
+      client.dispose();
+    }
+  });
+
+  it('without a time budget the walk is complete and nothing is partial', async () => {
+    const fs = makeTreeFs({
+      '/workspace/a.txt': 'a',
+      '/workspace/b.txt': 'b',
+      '/workspace/sub/c.txt': 'c',
+    });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+    expect(snap.entries.map((e) => e.path).sort()).toEqual([
+      '/workspace',
+      '/workspace/a.txt',
+      '/workspace/b.txt',
+      '/workspace/sub',
+      '/workspace/sub/c.txt',
+    ]);
+    expect(snap.entries.some((e) => e.partial)).toBe(false);
+  });
+
   it('over-per-file-cap file becomes a metadata placeholder with real size (Coh#2)', async () => {
     const big = 'a'.repeat(1_100_000);
     const fs = makeTreeFs({
@@ -1083,5 +1136,37 @@ describe('realm RPC: client lifecycle', () => {
     await woke;
     expect(client.pendingCount).toBe(0);
     client.dispose();
+  });
+});
+
+describe('realm: boot snapshot options', () => {
+  it('initSyncFsCache forwards the snapshot options', async () => {
+    const seen: unknown[][] = [];
+    const rpc = {
+      call: async (_channel: string, _op: string, args: unknown[]) => {
+        seen.push(args);
+        return { entries: [] };
+      },
+    } as unknown as RealmRpcClient;
+    await initSyncFsCache(rpc, '/workspace', undefined, { timeBudgetMs: 150 });
+    await initSyncFsCache(rpc, '/workspace');
+    expect(seen).toEqual([['/workspace', { timeBudgetMs: 150 }], ['/workspace']]);
+  });
+
+  it('hasSyncFsBridge: a token or an Atomics-backed shared buffer', () => {
+    const base = {
+      type: 'realm-init',
+      kind: 'js',
+      code: '',
+      argv: [],
+      env: {},
+      cwd: '/',
+      filename: '<eval>',
+    };
+    expect(hasSyncFsBridge(base as RealmInitMsg)).toBe(false);
+    expect(hasSyncFsBridge({ ...base, syncFsToken: 't' } as unknown as RealmInitMsg)).toBe(true);
+    expect(
+      hasSyncFsBridge({ ...base, syncSab: new SharedArrayBuffer(8192) } as unknown as RealmInitMsg)
+    ).toBe(true);
   });
 });

@@ -49,7 +49,7 @@ import type {
   WsSubscriberInfo,
 } from './realm-types.js';
 import { normalizeSyncExecEnv, resolveSyncExecCwd } from './sync-exec-dispatch.js';
-import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
+import type { SyncFsMutations, SyncFsSnapshot, SyncFsSnapshotOptions } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import type { SyncFsToken } from './sync-fs-wire.js';
 import { attachSyncSabResponder } from './sync-sab-responder.js';
@@ -341,7 +341,8 @@ async function dispatchVfs(
     }
     case 'snapshot': {
       const root = typeof args[0] === 'string' ? (args[0] as string) : ctx.cwd;
-      return buildSyncFsSnapshot(ctx, root);
+      const options = args[1] as SyncFsSnapshotOptions | undefined;
+      return buildSyncFsSnapshot(ctx, root, options?.timeBudgetMs);
     }
     case 'flushWrites': {
       const mutations = args[0] as SyncFsMutations;
@@ -364,6 +365,8 @@ interface SnapshotBudget {
   entries: SyncFsSnapshot['entries'];
   totalBytes: number;
   fileCount: number;
+
+  deadline?: number;
 }
 
 function contentBudgetExhausted(budget: SnapshotBudget): boolean {
@@ -372,6 +375,19 @@ function contentBudgetExhausted(budget: SnapshotBudget): boolean {
 
 function entryBudgetExhausted(budget: SnapshotBudget): boolean {
   return budget.entries.length >= SYNC_FS_MAX_ENTRIES;
+}
+
+function walkBudgetExhausted(budget: SnapshotBudget): boolean {
+  return (
+    entryBudgetExhausted(budget) || (budget.deadline !== undefined && Date.now() >= budget.deadline)
+  );
+}
+
+function markPartialParents(budget: SnapshotBudget, pending: readonly string[]): void {
+  const parents = new Set(pending.map((p) => p.slice(0, p.lastIndexOf('/')) || '/'));
+  for (const entry of budget.entries) {
+    if (entry.isDirectory && parents.has(entry.path)) entry.partial = true;
+  }
 }
 
 async function visitSnapshotDir(
@@ -478,10 +494,13 @@ async function walkSnapshotRoot(
   rootPath: string,
   budget: SnapshotBudget
 ): Promise<void> {
-  if (entryBudgetExhausted(budget)) return;
+  if (walkBudgetExhausted(budget)) return;
   const stack: string[] = [rootPath];
   while (stack.length > 0) {
-    if (entryBudgetExhausted(budget)) return;
+    if (walkBudgetExhausted(budget)) {
+      markPartialParents(budget, stack);
+      return;
+    }
     const current = stack.pop()!;
     let lst: { isSymbolicLink?: boolean; size: number } | undefined;
     try {
@@ -505,8 +524,13 @@ async function walkSnapshotRoot(
   }
 }
 
-async function buildSyncFsSnapshot(ctx: CommandContext, root: string): Promise<SyncFsSnapshot> {
+async function buildSyncFsSnapshot(
+  ctx: CommandContext,
+  root: string,
+  timeBudgetMs?: number
+): Promise<SyncFsSnapshot> {
   const budget: SnapshotBudget = { entries: [], totalBytes: 0, fileCount: 0 };
+  if (timeBudgetMs !== undefined) budget.deadline = Date.now() + timeBudgetMs;
 
   await walkSnapshotRoot(ctx, root, budget);
   if (root !== '/tmp') {

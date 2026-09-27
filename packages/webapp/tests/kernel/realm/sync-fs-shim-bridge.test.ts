@@ -780,3 +780,91 @@ test('readdirSync after cache-only rename of a live-only dir does not ENOENT (#3
   expect(shim.readdirSync('/shared/newdir')).toEqual(['probe.txt']);
   expect(shim.readdirSync('/shared').sort()).toEqual(['keep.md', 'newdir']);
 });
+
+function posixBridge(store: Map<string, Uint8Array>, dirs: Set<string>) {
+  const calls: string[] = [];
+  const base = mutatingBridge(store, dirs);
+  const under = (p: string) => [...store.keys()].filter((k) => k.startsWith(`${p}/`));
+  return {
+    calls,
+    bridge: {
+      ...base,
+      rm: (p: string) => {
+        calls.push(`rm ${p}`);
+        base.rm(p);
+      },
+      rmdir: (p: string) => {
+        calls.push(`rmdir ${p}`);
+        if (under(p).length > 0) {
+          throw Object.assign(new Error(`ENOTEMPTY: ${p}`), { code: 'ENOTEMPTY' });
+        }
+        dirs.delete(p);
+      },
+      unlink: (p: string) => {
+        store.delete(p);
+      },
+      rename: (from: string, to: string) => {
+        calls.push(`rename ${from} ${to}`);
+        for (const k of under(from)) {
+          store.set(to + k.slice(from.length), store.get(k)!);
+          store.delete(k);
+        }
+        dirs.delete(from);
+        dirs.add(to);
+      },
+    },
+  };
+}
+
+function partialDir() {
+  const { store, dirs } = liveTree({ '/workspace/d/a.txt': 'a', '/workspace/d/b.txt': 'b' });
+  const syncFs = cache([
+    { path: '/workspace/d', content: new Uint8Array(0), isDirectory: true, partial: true },
+    textEntry('/workspace/d/a.txt', 'a'),
+  ]);
+  return { store, dirs, syncFs, ...posixBridge(store, dirs) };
+}
+
+test('rmdirSync of a partial directory asks the live VFS, which refuses a non-empty one', () => {
+  const { store, syncFs, bridge, calls } = partialDir();
+  const shim = createSyncFsBridge(syncFs, '/workspace', bridge);
+  expect(() => shim.rmdirSync('/workspace/d')).toThrow(/ENOTEMPTY/);
+  expect(calls).toEqual(['rmdir /workspace/d']);
+  expect(store.has('/workspace/d/b.txt')).toBe(true);
+});
+
+test('rmSync -r of a partial directory removes it whole, live', () => {
+  const { store, syncFs, bridge, calls } = partialDir();
+  const shim = createSyncFsBridge(syncFs, '/workspace', bridge);
+  shim.rmSync('/workspace/d', { recursive: true });
+  expect(calls).toEqual(['rm /workspace/d']);
+  expect([...store.keys()]).toEqual([]);
+  expect(shim.existsSync('/workspace/d/b.txt')).toBe(false);
+});
+
+test('renameSync of a partial directory moves it whole, pending cache writes included', () => {
+  const { store, syncFs, bridge, calls } = partialDir();
+  const shim = createSyncFsBridge(syncFs, '/workspace', bridge);
+  shim.writeFileSync('/workspace/d/new.txt', 'n');
+  shim.renameSync('/workspace/d', '/workspace/e');
+  expect(calls).toEqual(['rename /workspace/d /workspace/e']);
+  expect([...store.keys()].sort()).toEqual([
+    '/workspace/e/a.txt',
+    '/workspace/e/b.txt',
+    '/workspace/e/new.txt',
+  ]);
+  expect(shim.readdirSync('/workspace/e').sort()).toEqual(['a.txt', 'b.txt', 'new.txt']);
+});
+
+test('a directory the cache knows completely stays cache-backed', () => {
+  const { store, dirs } = liveTree({ '/workspace/c/a.txt': 'a' });
+  const syncFs = cache([
+    { path: '/workspace/c', content: new Uint8Array(0), isDirectory: true },
+    textEntry('/workspace/c/a.txt', 'a'),
+  ]);
+  const { bridge, calls } = posixBridge(store, dirs);
+  const shim = createSyncFsBridge(syncFs, '/workspace', bridge);
+  shim.renameSync('/workspace/c', '/workspace/moved');
+  expect(calls).toEqual([]);
+  expect(shim.readFileSync('/workspace/moved/a.txt', 'utf8')).toBe('a');
+});
