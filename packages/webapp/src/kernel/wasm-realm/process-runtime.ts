@@ -130,8 +130,24 @@ export function glueBody(glue: string): string {
 const evaluateGlue: GlueEvaluator = (glue, module) => {
   // ENV is the glue's own variable: filled right after the glue body runs,
   // before the (asynchronous) instantiation reads it.
-  new Function('Module', `${glueBody(glue)}\n;Object.assign(ENV, Module.sliccEnv);`)(module);
+  let run: (module: object) => void;
+  try {
+    run = new Function('Module', `${glueBody(glue)}\n;Object.assign(ENV, Module.sliccEnv);`) as (
+      module: object
+    ) => void;
+  } catch (e) {
+    throw e instanceof EvalError ? new Error(EVAL_BLOCKED) : e;
+  }
+  run(module);
 };
+
+/**
+ * The extension float's workers inherit a CSP without `unsafe-eval`, which the
+ * Emscripten glue needs here (the JS realm uses a sandbox iframe instead).
+ */
+export const EVAL_BLOCKED =
+  "the wasm realm evaluates the program's Emscripten glue, and this float's CSP forbids eval " +
+  '(the extension); run it in the CLI or cloud float';
 
 /** Run the program of `init` to completion; resolves to its exit code. */
 export async function runWasmProcess(

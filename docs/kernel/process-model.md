@@ -374,7 +374,7 @@ The wasm realm (#3530) runs a wasm program as a process of its own: one `Dedicat
 - **Descriptors are the kernel's.** Each process has an `FdTable` of reference-counted open file descriptions: pipe ends, a byte source (the command's stdin), output sinks. A pipe (`KernelPipe`) blocks a reader until data or EOF and a writer while full, and fails a writer with `EPIPE` once every reader is gone, so `yes | head -1` ends. A process's exit (or kill) releases its descriptors.
 - **Syscalls ride the SAB bridge.** fds 0-2 of the Emscripten program are wired to `fd-read` / `fd-write` requests over the same Atomics/SAB transport and responder the sync bridges use, with a dispatcher that sends syscalls to the process and file operations to the token-scoped `dispatchSyncFs`. A read on an empty pipe keeps the worker in `Atomics.wait`; the kernel answers when data arrives.
 - **Files** are the live VFS, mounted into the program's FS as `__slicc_mountVfs` does (below). A file written after it was unlinked (a temp file held open by fd) is not supported yet.
-- **Programs** are Emscripten glue linked with `-sENVIRONMENT` including `worker`; the kernel compiles the module (cached per path, size and mtime).
+- **Programs** are Emscripten glue linked with `-sENVIRONMENT` including `worker`; the kernel compiles the module (cached per path, size and mtime). The worker evaluates the glue, which the extension float's CSP (no `unsafe-eval`) forbids: there `wasm` fails with that explanation. CLI and cloud floats run it.
 
 ## Wiring map
 
